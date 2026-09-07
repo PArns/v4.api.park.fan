@@ -150,6 +150,21 @@ export type DowntimeBlockDto = DowntimeFiguresDto | DowntimeWithheldDto;
  */
 export const MAX_PROFILE_AGE_DAYS = 2;
 
+/**
+ * Reasons that describe what we can never see, rather than what we do not yet
+ * have enough of.
+ *
+ * Staleness cannot override these: a park whose source has no DOWN status does
+ * not start reporting because a nightly job caught up, and telling a reader the
+ * figures are "not current" would promise a resolution that cannot arrive.
+ */
+const PERMANENT_REASONS: ReadonlySet<DowntimeWithheldReason> = new Set([
+  "not_down_capable",
+  "park_never_reports",
+  "artefact_regime",
+  "no_schedule",
+]);
+
 export function toDowntimeBlock(
   profile: AttractionDowntimeProfile | null | undefined,
   now: Date = new Date(),
@@ -183,7 +198,18 @@ export function toDowntimeBlock(
       // count and rendered „34 Störungen gemeldet. Für eine belastbare Zahl
       // sind das zu wenige" — refuted by its own number, and guaranteed for
       // every stale publishable ride because the event floor is 24.
-      reason: stale ? "stale_data" : (profile.withheldReason ?? "thin_events"),
+      // A stored reason WINS over staleness when it is permanent. Preferring
+      // stale_data unconditionally told every ride in a blind park that "these
+      // numbers are not current" — implying they will catch up — when the truth
+      // is that this park's source cannot report an outage at all and never
+      // will. Those parks outnumber the near-miss publishable ones by far, so
+      // the wrong branch was also the common one.
+      reason:
+        profile.withheldReason && PERMANENT_REASONS.has(profile.withheldReason)
+          ? profile.withheldReason
+          : stale
+            ? "stale_data"
+            : (profile.withheldReason ?? "thin_events"),
       // Zero for the reasons that are about us. The client must not read it as
       // "no outages happened" — the reason says which kind of zero it is. A
       // stale profile sends its real count: `stale_data`'s copy does not use

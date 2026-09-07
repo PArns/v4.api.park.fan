@@ -63,6 +63,22 @@ export class DowntimeReconstructionProcessor {
    */
   private readonly DEFAULT_WINDOW_DAYS = 30;
 
+  /**
+   * How long a reconstructed row is kept.
+   *
+   * These five tables are plain heap tables — not hypertables, no compression,
+   * no TimescaleDB retention policy — and the nightly job only ever rewrites
+   * its own rolling window, so anything older than that window is written once
+   * and then never touched again. Left alone they grow forever: measured at
+   * ~6800 exposure rows and ~1000 intervals per day, that is roughly 2.5 M rows
+   * and ~730 MB of `attraction_exposure_days` per year.
+   *
+   * 400 days is the longest window anything reads, with slack: profiles look
+   * back 90 days and the recovery curves 180. A row older than this cannot
+   * affect a published figure.
+   */
+  private readonly RETENTION_DAYS = 400;
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly profiles: DowntimeProfileService,
@@ -294,7 +310,24 @@ export class DowntimeReconstructionProcessor {
         `${exposure.length} exposure day(s) in ${Date.now() - startedAt} ms`,
     );
 
-    await this.profiles.rebuild(parkIds);
+    await this.pruneOldRows(asOf);
+
+    // Guarded for the same reason the curve rebuild below is, and the omission
+    // was pure asymmetry: an unguarded throw here fails the BullMQ job, Bull
+    // retries the whole handler, and the reconstruction — the strongly
+    // super-linear part with the ~700 MB temp spill — runs again from the top.
+    // A deterministic error burns all three attempts and leaves
+    // `attraction_downtime_profiles`, the table every ride page reads, silently
+    // frozen. This codebase has been bitten by that shape twice already.
+    try {
+      await this.profiles.rebuild(parkIds);
+    } catch (error) {
+      this.logger.error(
+        `Profile rebuild failed, reconstruction kept: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
 
     // The curves last, and always over every park regardless of `parkIds`: the
     // pooled row is the fallback every park's serving path reads, so rebuilding
@@ -312,6 +345,41 @@ export class DowntimeReconstructionProcessor {
     } catch (error) {
       this.logger.error(
         `Recovery curves failed, reconstruction kept: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Delete what nothing reads any more.
+   *
+   * Its own try/catch and after the write: housekeeping must never cost a
+   * reconstruction that already succeeded. Both deletes are range scans on the
+   * time column each table is keyed by.
+   */
+  private async pruneOldRows(asOf: Date): Promise<void> {
+    const cutoff = new Date(
+      asOf.getTime() - this.RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    );
+    try {
+      const outages = await this.dataSource.query(
+        `DELETE FROM attraction_outages WHERE started_at < $1`,
+        [cutoff],
+      );
+      const exposure = await this.dataSource.query(
+        `DELETE FROM attraction_exposure_days WHERE op_day < $1::date`,
+        [cutoff],
+      );
+      const removed =
+        (Array.isArray(outages) ? 0 : (outages?.[1] ?? 0)) +
+        (Array.isArray(exposure) ? 0 : (exposure?.[1] ?? 0));
+      if (removed > 0) {
+        this.logger.log(`🧹 Pruned rows older than ${this.RETENTION_DAYS}d`);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Retention prune failed, reconstruction kept: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

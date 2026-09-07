@@ -56,4 +56,14 @@ describe("closure-gap statements", () => {
       expect(cycle).toMatch(/lead\(qd\.timestamp\)\s+OVER w AS next_ts/);
     }
   });
+
+  it("the nightly statement honours the curated works period", () => {
+    // The DOWN reconstruction excludes it and the guarantee carries no signal
+    // qualifier — "inside it nothing is reported". A ride mid-rebuild cycles
+    // OPERATING/CLOSED during testing, which is exactly the shape this
+    // statement recognises, so without the exclusion it would fill the whole
+    // declared period with inferred outages.
+    expect(CLOSURE_GAP_INTERVALS_SQL).toContain("curated_out_of_service_from");
+    expect(CLOSURE_GAP_INTERVALS_SQL).toContain("curated_out_of_service_to");
+  });
 });

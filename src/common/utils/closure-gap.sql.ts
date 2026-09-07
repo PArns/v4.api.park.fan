@@ -288,6 +288,25 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
     JOIN cycle c ON c.aid = g.aid
    WHERE s.closers <= ${MAX_SIMULTANEOUS_CLOSERS}
      AND r.days    <  ${MAX_REGULAR_DAYS}
+     -- Not inside a declared works period. The DOWN reconstruction excludes
+     -- this window and the guarantee in curated-out-of-service.util carries no
+     -- signal qualifier: "inside it nothing is reported". A ride mid-rebuild
+     -- cycles OPERATING/CLOSED during testing, which is exactly the shape this
+     -- statement recognises, so without this it would accumulate inferred
+     -- outages for the whole declared period — in the blind parks, which are
+     -- the only ones it serves.
+     AND NOT EXISTS (
+       SELECT 1 FROM attractions ca
+        WHERE ca.id = g.aid
+          AND (ca.curated_out_of_service_from IS NOT NULL
+               OR ca.curated_out_of_service_to IS NOT NULL)
+          AND (ca.curated_out_of_service_from IS NULL
+               OR (g.started_at AT TIME ZONE g.tz)::date
+                  >= ca.curated_out_of_service_from)
+          AND (ca.curated_out_of_service_to IS NULL
+               OR (g.started_at AT TIME ZONE g.tz)::date
+                  <= ca.curated_out_of_service_to)
+     )
      AND g.gap_min >= ${MIN_GAP_MINUTES}
      -- Not a duty cycle. Below the day floor there is not enough to judge, and
      -- the ride is kept.

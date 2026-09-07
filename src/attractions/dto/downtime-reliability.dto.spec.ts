@@ -66,4 +66,32 @@ describe("toDowntimeBlock", () => {
       reason: "not_down_capable",
     });
   });
+
+  it("a permanent reason outranks staleness", () => {
+    // A blind park whose nightly job stalls would otherwise read „diese Zahlen
+    // sind nicht aktuell" — promising a resolution that cannot arrive, because
+    // its source has no DOWN status and never will. Blind, artefact and
+    // no-schedule parks outnumber near-miss publishable rides by far, so the
+    // wrong branch was also the common one.
+    const old = new Date(
+      NOW.getTime() - (MAX_PROFILE_AGE_DAYS + 3) * 86_400_000,
+    );
+    const blind = {
+      ...publishable(old),
+      publishable: false,
+      withheldReason: "park_never_reports",
+    } as AttractionDowntimeProfile;
+    expect(toDowntimeBlock(blind, NOW)).toMatchObject({
+      reason: "park_never_reports",
+    });
+  });
+
+  it("still reports staleness for a ride that was genuinely publishable", () => {
+    const old = new Date(
+      NOW.getTime() - (MAX_PROFILE_AGE_DAYS + 1) * 86_400_000,
+    );
+    expect(toDowntimeBlock(publishable(old), NOW)).toMatchObject({
+      reason: "stale_data",
+    });
+  });
 });
