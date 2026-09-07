@@ -225,4 +225,36 @@ describe("isDurationUsable", () => {
       "park_never_reports",
     );
   });
+
+  it("only withholds for a merge inside the window", () => {
+    // `last_merged_at` is written once and never cleared, so an unbounded check
+    // silenced a ride's figures forever. Stamping park merges — where colliding
+    // rides actually happen, 29 in the USH consolidation alone — would have
+    // made that permanent for a large named set.
+    const windowFrom = new Date("2026-06-09T00:00:00Z");
+    const longAgo = {
+      ...HEALTHY,
+      lastMergedAt: new Date("2026-01-15T00:00:00Z"),
+    };
+    expect(decideProfile(longAgo, "reports", windowFrom).figures).toBe(true);
+
+    const recent = {
+      ...HEALTHY,
+      lastMergedAt: new Date("2026-07-01T00:00:00Z"),
+    };
+    expect(decideProfile(recent, "reports", windowFrom)).toMatchObject({
+      figures: false,
+      reason: "recently_merged",
+    });
+  });
+
+  it("keeps withholding when the caller cannot say where the window starts", () => {
+    // A caller with no windowFrom cannot know the seam has aged out, so the
+    // safe answer is the old one.
+    const merged = {
+      ...HEALTHY,
+      lastMergedAt: new Date("2020-01-01T00:00:00Z"),
+    };
+    expect(decideProfile(merged, "reports").reason).toBe("recently_merged");
+  });
 });

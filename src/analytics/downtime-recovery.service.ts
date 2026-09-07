@@ -203,6 +203,13 @@ const RECOVERY_CURVE_SQL = `
        -- minutes are mostly carried heartbeat is not a measurement. Those
        -- cannot be rescued by censoring, because their TIME is wrong, not just
        -- their ending.
+       -- Reported outages only. A closed_gap interval is stored as recovered by
+       -- construction — the statement that produces it only emits one once the
+       -- ride is running again — so its curve would have zero censoring and be
+       -- survivorship-biased by definition. Nothing reads it (the serving path
+       -- hard-codes "no estimate" for that signal), so this is dead work that
+       -- would become a live bug the moment someone wired it up.
+       AND o.signal = 'down'
        AND NOT o.likely_works_period
        AND NOT o.start_censored
        AND o.operating_minutes > 0

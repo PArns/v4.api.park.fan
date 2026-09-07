@@ -164,6 +164,25 @@ was harmless because both columns are nullable with no default (verified: 226 of
 `default: false`, that 139 ms catalogue edit becomes an operation TimescaleDB
 refuses on compressed chunks.**
 
+### 2f. Known asymmetry: the early-end filter is live-only
+
+`MAX_EARLY_END_SHARE` catches a ride whose day habitually ends before the
+park's — Futuroscope's cinemas score 100 % against a real fault's 8 % — and it
+runs only in `CURRENT_CLOSURE_GAP_SQL`. In the nightly statement the same
+comparison (last OPERATING reading vs that day's published close, per ride per
+day) does not finish: 61 s over seven days as a lateral, past 110 s over 21 even
+hoisted and scoped to candidates.
+
+Safe today because nothing published reads those rows — profiles, coverage and
+the recovery curve all filter `signal = 'down'`. What the nightly job stores for
+`closed_gap` is a record, not a figure.
+
+- [ ] **Make it affordable before anything publishes `closed_gap` history.** The
+      stored rows currently carry cinema noise the live line refuses to show.
+      Most likely shape: a per-(attraction, day) "ended early" flag written by
+      the reconstruction itself, so the share is a cheap count rather than a
+      re-derivation.
+
 ### 3. Done, 2026-09-06
 
 - Phase 0 run: 150 132 events / 90 d over 2228 rides in 78 parks; capability

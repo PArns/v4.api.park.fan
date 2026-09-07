@@ -399,7 +399,7 @@ export class DowntimeProfileService {
 
     const toSave: Partial<AttractionDowntimeProfile>[] = [];
     for (const row of rows) {
-      const decision = decideProfile(row, regimes.get(row.parkId));
+      const decision = decideProfile(row, regimes.get(row.parkId), windowFrom);
       const longest =
         row.longestMinutes == null ? null : Number(row.longestMinutes);
       toSave.push({
@@ -489,6 +489,7 @@ export interface ProfileDecision {
 export function decideProfile(
   row: ProfileInputs,
   regime: DowntimeRegime | undefined,
+  windowFrom?: Date,
 ): ProfileDecision {
   const outages = num(row.outages);
   const usable = num(row.usableDurations);
@@ -514,7 +515,25 @@ export function decideProfile(
   if (regime === "no_schedule") return withhold("no_schedule");
   if (regime === "artefact") return withhold("artefact_regime");
 
-  if (row.lastMergedAt) return withhold("recently_merged");
+  // Only a merge INSIDE the window. The reconstruction has always bounded this
+  // (`a.last_merged_at < scan_start`) and the doc describes the rule as "rides
+  // whose last_merged_at falls in the window" — the profile gate simply never
+  // got the bound, and `last_merged_at` is written once and never cleared, so
+  // any ride that has ever been merged had its figures withheld forever.
+  //
+  // Stamping park merges (which is correct, and where colliding rides actually
+  // happen — 29 in the USH consolidation alone) turned that from a latent bug
+  // into a permanent silence for a large, named set of rides. Without a
+  // `windowFrom` the old behaviour is kept, because a caller that cannot say
+  // when the window starts also cannot say the seam has aged out.
+  if (row.lastMergedAt) {
+    const mergedAt = new Date(row.lastMergedAt);
+    const inWindow =
+      !windowFrom ||
+      !Number.isFinite(mergedAt.getTime()) ||
+      mergedAt >= windowFrom;
+    if (inWindow) return withhold("recently_merged");
+  }
   if (num(row.lifetimeObservedDays) < DOWNTIME_GATES.newRideOperatingDays) {
     return withhold("new_ride");
   }

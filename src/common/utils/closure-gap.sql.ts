@@ -26,11 +26,32 @@ import { normalizedClosingSql } from "./park-open-window.sql";
  * | `MAX_SIMULTANEOUS_CLOSERS` | park-wide events (weather, closing time) | **61.2 %** of raw transitions are 5+ rides in one minute |
  * | MAX_REGULAR_DAYS | a ride with its own shorter hours | 130 ride-hour pairs close on 10+ days at the same hour |
  * | MAX_GAP_DAY_SHARE | a show or duty cycle, which closes at a different time each day | 71 rides carry a gap on 60 %+ of their operating days |
+ *
+ * The live statement applies one more, `MAX_EARLY_END_SHARE`, which this one
+ * deliberately does not — see below.
  * | `MIN_GAP_MINUTES` | one poll of noise | 27.1 % of raw gaps are exactly one 5-minute cycle |
  *
  * Raw transitions over 21 days: 25 759. After all four: **3618**, over 1137
  * rides in 121 parks, with quartiles 15/20/35 minutes — close to the DOWN
  * signal's own 10/25/50 and unlike anything a scheduled closure looks like.
+ *
+ * ## Why the early-end filter is live-only
+ *
+ * `MAX_EARLY_END_SHARE` catches a ride whose DAY habitually ends before the
+ * park's — Futuroscope's cinemas score 100 % against a real fault's 8 %. It
+ * needs, per ride and per day, the last OPERATING reading against that day's
+ * published closing time, and over a 21-day reconstruction that comparison does
+ * not finish: measured at 61 s over seven days as a lateral, and past 110 s
+ * over 21 even hoisted into a grouped CTE and scoped to candidates.
+ *
+ * It is live-only on purpose, and the asymmetry is safe today because nothing
+ * published reads these rows: the profile and coverage queries filter
+ * `signal = 'down'`, and so does the recovery curve. What the nightly job
+ * stores for `closed_gap` is a record, not a figure.
+ *
+ * **This becomes a real defect the moment anything publishes `closed_gap`
+ * history** — the stored rows would carry cinema noise the live line refuses to
+ * show. `todo.md` carries it.
  *
  * ## Only where DOWN is absent
  *
