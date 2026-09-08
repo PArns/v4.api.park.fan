@@ -482,13 +482,19 @@ found 76 name-matched candidates; 47 already report OPERATING (the feed handles
 them), 4 sit in Hansa-Park where the flag deliberately cannot fire, and 25 were
 researched one by one against the operators' own pages. 14 were flagged.
 
-> **"The feed handles them" no longer holds for Europa-Park.** On 2026-06-08,
-> 45 of the park's no-queue attractions flipped from permanently OPERATING to
-> permanently CLOSED and have not reported OPERATING since — playgrounds,
-> carousels, monorail stations, the Coastiality pair. Rides with a real queue
-> are unaffected. The sweep that produced the 47 ran on 2026-08-15, i.e. after
-> the flip, so that number may be stale elsewhere too. Tracked separately; do
-> not read either side of 2026-06-08 as evidence about a season.
+> **"The feed handles them" is not a durable property — Europa-Park lost it.**
+> At **2026-06-07 13:18 UTC** (the flip already in §5.2), 45 of the park's
+> no-queue attractions went from permanently OPERATING to permanently CLOSED and
+> have not reported OPERATING once since — playgrounds, carousels, monorail
+> stations, the Coastiality pair. Rides with a real queue are unaffected.
+>
+> The 47 counted on 2026-08-15 are not thereby wrong; that sweep ran after the
+> flip, so it already reflects it. What the flip costs is the *inference*: a
+> candidate left unflagged because the feed happened to report it OPERATING has
+> nothing holding it there, and Europa-Park's two water playgrounds are the
+> worked example — blanket OPERATING all winter, blanket CLOSED all summer, in
+> neither case a statement about the playground. Tracked separately. Read
+> nothing on either side of that timestamp as evidence about a season.
 
 **Seasonal free-flow areas whose park keeps running around them** — the case
 `open_with_park` alone cannot express, because the flag says "open whenever the

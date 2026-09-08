@@ -399,9 +399,11 @@ SELECT min(timestamp)::date, max(timestamp)::date FROM queue_data;
    140 cm minimum, demolished after 2025-11-02.
 2. Confirm it has no queue, no ride vehicle, no separate ticket.
 3. Establish **seasonality**. If it is seasonal and its park is open year-round,
-   it needs `season_months` before the flag is safe — otherwise a snow
-   playground reads open in July. See §7a for turning the operator's dates into
-   a month list.
+   it needs months before the flag is safe — otherwise a snow playground reads
+   open in July. They go in **`curated_season_months`**, never in `season_months`:
+   that one belongs to `detect-seasonal`, which rewrites it nightly (§4), and
+   `queue-percentile.processor.ts` keys its own guard on `season_months IS NULL`.
+   See §7a for turning the operator's dates into a month list.
 4. Write it through `PATCH /v1/admin/content/attractions/:id` with a `reason`
    and a `sourceUrl`, **not** with `UPDATE attractions SET open_with_park`. The
    endpoint carries the four-step publish order — write, evict, revalidate,
@@ -409,7 +411,7 @@ SELECT min(timestamp)::date, max(timestamp)::date FROM queue_data;
    so the correction lands in the database and not on the page. It also writes
    the audit row that makes the curation reviewable later.
 
-### 7a. Turning an operator's season into `season_months`
+### 7a. Turning an operator's season into `curated_season_months`
 
 `season_months` is months, and a season almost never starts on the 1st. So the
 translation loses days no matter which way it is decided, and the only question
@@ -417,9 +419,26 @@ is which side to lose them on.
 
 **The test: a month goes in unless the operator's season covers no more than a
 tenth of the days the park is open that month.** The open days, not the calendar
-days — `schedule_entries` already holds them, so the denominator is a query
-rather than a judgement, and a month the park sits closed through cannot be got
-wrong at all.
+days — a month the park sits closed through cannot be got wrong at all.
+
+The denominator is a query rather than a judgement, and this is the whole of it:
+
+```sql
+SELECT extract(month FROM s.date)::int AS month, count(DISTINCT s.date) AS open_days
+FROM schedule_entries s
+JOIN parks p ON p.id = s."parkId"
+WHERE p.name = $1
+  AND s."attractionId" IS NULL         -- park-level rows; attraction ones are never written
+  AND s."scheduleType" = 'OPERATING'   -- EXTRA_HOURS and the two event types are not "open to everybody"
+  AND s.date >= $2 AND s.date < $3     -- one full season cycle, not a calendar year
+GROUP BY month ORDER BY month;
+```
+
+`count(DISTINCT s.date)` rather than `count(*)`: a park may publish two rows for
+one day, and duplicate `schedule_entries` are a known open item. Counting days
+is all this needs — anything that needs open *minutes* must go through
+`park-open-window.sql.ts` instead, which also repairs misdated closings and
+flattens overlapping windows.
 
 Worked, from the 2026-09-09 curation:
 
