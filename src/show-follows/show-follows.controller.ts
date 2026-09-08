@@ -111,6 +111,7 @@ export class ShowFollowsController {
     const follow = await this.showFollows.upsert(
       subscription.id,
       found.show.id,
+      body.startTime ? new Date(body.startTime) : null,
     );
     return ShowFollowsController.present(follow, found.show);
   }
@@ -145,6 +146,8 @@ export class ShowFollowsController {
       parkName: park.name,
       parkSlug: park.slug,
       path: frontendShowsPath(park),
+      startTime: follow.startTime ? follow.startTime.toISOString() : null,
+      timezone: park.timezone ?? null,
       createdAt: follow.createdAt.toISOString(),
     };
   }

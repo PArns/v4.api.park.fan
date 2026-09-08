@@ -972,6 +972,33 @@ export class QueueSchedulerService implements OnModuleInit {
       );
     }
 
+    // Followed shows: sweep the finished performances daily at 4:20 AM.
+    //
+    // A follow that named a showtime is a one-off — it identifies one
+    // performance on one day — so once that instant is past the row can never
+    // match again. Left alone it is not just dead weight but visible dead
+    // weight, since /alerts would keep offering a reminder for a show that
+    // ended last Tuesday. Open-ended follows have no end and are not touched;
+    // the grace period lives with the query, in `sweepExpired`.
+    //
+    // Its own repeatable job rather than a branch inside the five-minute
+    // sender: an indexed DELETE has no business running 288 times a day, and
+    // a job that does two unrelated things fails as one.
+    const hasShowFollowSweepCron = await this.hasRepeatableJob(
+      this.pushNotificationsQueue,
+      "show-follow-sweep-cron",
+    );
+    if (!hasShowFollowSweepCron) {
+      await this.pushNotificationsQueue.add(
+        "sweep-expired-follows",
+        {},
+        {
+          repeat: { cron: "20 4 * * *" },
+          jobId: "show-follow-sweep-cron",
+        },
+      );
+    }
+
     // Stored plans: sweep the expired ones daily at 4:45 AM.
     //
     // `Trip.expiresAt` and `sweepExpired()` existed from the start with nothing
