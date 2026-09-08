@@ -34,6 +34,18 @@ not by ride or by reading, so it is now resolved once per day in
 which agree only while a park-day has one entry — all 16 329 park-days in the
 last 30 days have exactly one.
 
+The new CTE is bounded by park-local **date** over **22** days, and both halves
+of that are load-bearing. A timestamp bound would drop today's entry whenever
+the page renders before the park opens, which is exactly when a ride's morning
+readings are judged against it. And the extra day is not slack: readings are cut
+at 21 days in UTC but bucketed by park-local day, so after a DST shift the
+oldest of them lands on local day 22 — measured over every half hour of a
+winter, 42 such instants in each of Europe/Berlin, Europe/London,
+America/New_York and Australia/Sydney, a one-hour band on each of the 21 days
+following the shift. The join is an INNER one, so on a 21-day bound those
+readings are dropped rather than counted, which biases `early_days/days` towards
+a ride looking more regular than it is.
+
 The three historical CTEs (`cycle`, `active`, `early_end`) were also handed the
 whole park roster although they are read only through `LEFT JOIN`s against
 `run_start`; they now take `closed_now`. On its own that changed nothing at a

@@ -575,6 +575,18 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- Bounded by park-local DATE, not by timestamp. A timestamp bound of $3 would
   -- drop today's entry whenever the page renders before the park opens, which
   -- is precisely when a ride's morning readings are being judged against it.
+  --
+  -- The lower bound is 22 days for a 21-day window of readings, and the extra
+  -- day is not slack. The readings are cut at $3 - 21 days in UTC, but their
+  -- day is taken in the park's zone, so a row at the edge of the window lands
+  -- on local day 22 whenever a DST shift has moved it across local midnight.
+  -- Measured over every half hour of a winter in four park zones: 42 such
+  -- instants each -- a one-hour band on each of the 21 days after the shift,
+  -- in Europe/Berlin, Europe/London, America/New_York and Australia/Sydney
+  -- alike. The join is an INNER one, so on the 21-day bound those readings are
+  -- dropped rather than counted, which moves early_days/days in the direction
+  -- of a ride looking more regular than it is. A day nothing references costs
+  -- one row of a CTE that has at most 22.
   park_day_close AS (
     -- Normalized for the same reason park_open is: a raw past-midnight close
     -- would make every day look like it ended early, and this feeds the filter
@@ -587,7 +599,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        AND se."attractionId" IS NULL
        AND se."scheduleType" = 'OPERATING'
        AND (se."openingTime" AT TIME ZONE $2)::date
-           >= ($3::timestamptz AT TIME ZONE $2)::date - 21
+           >= ($3::timestamptz AT TIME ZONE $2)::date - 22
        AND (se."openingTime" AT TIME ZONE $2)::date
            <= ($3::timestamptz AT TIME ZONE $2)::date
      GROUP BY 1
