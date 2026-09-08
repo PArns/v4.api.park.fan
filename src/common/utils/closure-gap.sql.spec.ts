@@ -57,6 +57,43 @@ describe("closure-gap statements", () => {
     }
   });
 
+  it("the live regime test is an EXISTS on the parameter, never a join", () => {
+    // This is the whole performance fix, and it is invisible to the compiler.
+    //
+    // It used to be a CTE brought in with CROSS JOIN. A join is not a guard:
+    // the planner has no reason to evaluate that arm first, so every historical
+    // CTE ran to completion and the test was applied last — 6 s per call, 79 %
+    // of the database, for parks that provably had no row to give. As an
+    // uncorrelated EXISTS it becomes an InitPlan and PostgreSQL emits a
+    // One-Time Filter that never demands the subtree: Europa-Park 939.8 ms to
+    // 2.3 ms, 132 nodes never executed.
+    //
+    // Correlating it with anything from the rows above would silently undo
+    // that, so the assertion pins both halves: it is an EXISTS, and it reads
+    // nothing but $4.
+    expect(CURRENT_CLOSURE_GAP_SQL).not.toContain("CROSS JOIN blind");
+    const exists = CURRENT_CLOSURE_GAP_SQL.match(
+      /EXISTS\s*\(\s*SELECT 1\s+FROM park_downtime_coverage c\s+WHERE([\s\S]*?)\)/,
+    );
+    expect(exists).not.toBeNull();
+    const body = exists![1];
+    expect(body).toContain('c."parkId" = $4::uuid');
+    expect(body).toContain("c.regime = 'never_reports'");
+    // Nothing from the outer query may leak in, or it stops being an InitPlan.
+    expect(body).not.toMatch(/\bs\.|\bpo\.|\bsm\.|\bcy\.|\bac\.|\bee\./);
+  });
+
+  it.each(both)("%s cannot divide a gap share by zero", (_n, sql) => {
+    // `active_days` is COALESCEd to 0 in the nightly CTE and can be 0 in the
+    // live one, and the day-floor test beside it is NOT a guard — SQL does not
+    // promise to evaluate OR left to right. In the live statement one raised
+    // error costs EVERY ride in the park its closure line, because
+    // addClosureGaps catches and returns.
+    expect(sql).toMatch(
+      /gap_days,?\s*0?\)?\s*\n?\s*\/ NULLIF\(\s*\w*\.?active_days, 0\)/,
+    );
+  });
+
   it("the nightly statement honours the curated works period", () => {
     // The DOWN reconstruction excludes it and the guarantee carries no signal
     // qualifier — "inside it nothing is reported". A ride mid-rebuild cycles

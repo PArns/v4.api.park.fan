@@ -7,7 +7,6 @@ import {
   trailingOutageWithElapsedSql,
 } from "../../common/utils/outage-rows.sql";
 import { DowntimeRecoveryCurve } from "../../analytics/entities/downtime-recovery-curve.entity";
-import { ParkDowntimeCoverage } from "../../analytics/entities/park-downtime-coverage.entity";
 import { CURRENT_CLOSURE_GAP_SQL } from "../../common/utils/closure-gap.sql";
 import type { OutageSignal } from "../../analytics/entities/attraction-outage.entity";
 import {
@@ -127,8 +126,6 @@ export class AttractionOutageService {
     private readonly queueDataRepository: Repository<QueueData>,
     @InjectRepository(DowntimeRecoveryCurve)
     private readonly curves: Repository<DowntimeRecoveryCurve>,
-    @InjectRepository(ParkDowntimeCoverage)
-    private readonly coverage: Repository<ParkDowntimeCoverage>,
   ) {}
 
   /**
@@ -169,60 +166,6 @@ export class AttractionOutageService {
   }
 
   private static readonly CURVE_TTL_MS = 30 * 60 * 1000;
-
-  /**
-   * The parks whose feed never says DOWN, cached in process.
-   *
-   * `CURRENT_CLOSURE_GAP_SQL` opens with the same test and CROSS JOINs it onto
-   * the result, which reads as a short-circuit and is not one: PostgreSQL has
-   * no reason to evaluate that arm first, so a park in the `reports` regime ran
-   * every historical CTE in the statement — the per-day early-finish scan, the
-   * duty-cycle window, the park-wide simultaneity count — to arrive at the zero
-   * rows its first line already knew about.
-   *
-   * Measured on production 2026-09-08: 70 % of the statement's calls were for
-   * parks that cannot produce a row, and the statement was 79 % of all database
-   * CPU at the time.
-   *
-   * The gate has to live here because this is the only place that can decline
-   * to ask. Same shape as `curveCache` above and for the same reason:
-   * `park_downtime_coverage` is one row per park, rewritten once a night.
-   *
-   * A park with no row is skipped too — the SQL requires
-   * `regime = 'never_reports'`, so an absent row was already an empty result.
-   */
-  private blindCache: { at: number; ids: Set<string> } | null = null;
-
-  /**
-   * Whether the closure-gap statement can produce anything for this park.
-   *
-   * Fails open: if the roster cannot be read the statement runs as before, so a
-   * failure here costs time and never an answer. The SQL keeps its own `blind`
-   * CTE and stays the authority — this only decides whether to ask.
-   */
-  private async isBlindPark(parkId: string): Promise<boolean> {
-    const now = Date.now();
-    if (
-      !this.blindCache ||
-      now - this.blindCache.at >= AttractionOutageService.CURVE_TTL_MS
-    ) {
-      try {
-        const rows = await this.coverage.find({
-          select: { parkId: true },
-          where: { regime: "never_reports" },
-        });
-        this.blindCache = { at: now, ids: new Set(rows.map((r) => r.parkId)) };
-      } catch (error) {
-        this.logger.warn(
-          `Downtime regimes unavailable, closure-gap gate open: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        return true;
-      }
-    }
-    return this.blindCache.ids.has(parkId);
-  }
 
   private async loadCurves(): Promise<{
     byPark: Map<string, DowntimeRecoveryCurve[]>;
@@ -314,9 +257,17 @@ export class AttractionOutageService {
         trailingOutageWithElapsedSql(),
         [[park.id], since, until, ids],
       );
-      if (rows.length === 0) return out;
 
-      const curves = await this.loadCurves();
+      // No early return on an empty result, and that is the point.
+      //
+      // It used to `return out` here, which is the very thing the NOTE above
+      // forbids, reached by a different road: the closure query is skipped not
+      // because a ride reads DOWN but because the DOWN query found nothing for
+      // it. On the day a blind park emits its first DOWN — a run too short or
+      // too old for the trailing statement to place — that one ride would take
+      // the closure line away from every other ride in the park, silently, on
+      // the path that is the only reason the closure signal exists.
+      const curves = rows.length > 0 ? await this.loadCurves() : null;
 
       for (const row of rows) {
         const elapsed = Number(row.elapsedOperatingMinutes);
@@ -331,7 +282,10 @@ export class AttractionOutageService {
           // with "just started".
           estimate:
             row.hasWindows && Number.isFinite(elapsed)
-              ? estimateOutage(this.curvesFor(curves, park.id, "down"), elapsed)
+              ? estimateOutage(
+                  this.curvesFor(curves!, park.id, "down"),
+                  elapsed,
+                )
               : undefined,
         });
       }
@@ -347,10 +301,19 @@ export class AttractionOutageService {
     }
 
     // The rides that are not reading DOWN may still be sitting in a closure.
-    // Only in a park whose feed never says DOWN — `addClosureGaps` declines to
-    // ask anywhere else, because the statement's own restriction to those parks
-    // does not stop it doing the work first.
-    const notDown = allIds.filter((id) => !ids.includes(id));
+    //
+    // The statement restricts itself to blind parks, and this sentence used to
+    // add "so in a park that reports DOWN this returns nothing and costs one
+    // indexed lookup". It did not. The restriction was a CTE brought in with
+    // CROSS JOIN, which is a join node and not a guard, so every historical CTE
+    // ran first and the test was applied last — 6 s per call, 79 % of the
+    // database, for a park that provably had no row to give. It is an
+    // uncorrelated EXISTS now and the claim is true: PostgreSQL evaluates it
+    // once as an InitPlan and never demands the subtree. Europa-Park went from
+    // 939.8 ms to 2.3 ms. The check stays in the SQL, where the answer's owner
+    // is one join away, rather than becoming a second reader of the regime here.
+    const downIds = new Set(ids);
+    const notDown = allIds.filter((id) => !downIds.has(id));
     if (notDown.length > 0) {
       await this.addClosureGaps(park, notDown, asOf, out);
     }
@@ -372,7 +335,6 @@ export class AttractionOutageService {
     asOf: Date,
     out: Map<string, CurrentOutage>,
   ): Promise<void> {
-    if (!(await this.isBlindPark(park.id))) return;
     try {
       const rows: Array<{
         attractionId: string;

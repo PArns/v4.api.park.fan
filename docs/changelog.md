@@ -14,15 +14,28 @@ of all database execution time** at a mean of 6.0 s per call, and it returned
 both the same shape — a cheap test written first and evaluated last.
 
 **A comment claimed a short-circuit that PostgreSQL has no reason to perform.**
-The statement opens with a `blind` CTE reading `park_downtime_coverage`, and the
-service said "in a park that reports DOWN this returns nothing and costs one
-indexed lookup". It is `CROSS JOIN`ed onto the final select, so the planner
-evaluated every historical CTE first and applied it last. **70 % of the calls
-were for the 122 parks that cannot produce a row.** The gate now lives in
-`AttractionOutageService`, which is the only place that can decline to ask — the
-regimes are cached in process behind the same 30-minute TTL as the recovery
-curves, and the SQL keeps its own `blind` CTE as the authority. Verified after
-deploy: only `never_reports` parks reach the statement.
+The statement opened with a `blind` CTE reading `park_downtime_coverage`, and
+the service said beside the call site "in a park that reports DOWN this returns
+nothing and costs one indexed lookup". It was `CROSS JOIN`ed onto the final
+select, and a join is not a guard: the planner evaluated every historical CTE
+first and applied the test last. **70 % of the calls were for the 122 parks that
+cannot produce a row.**
+
+It is an **uncorrelated `EXISTS` on `$4`** now, in the final `WHERE`. Because it
+reads nothing but a parameter, PostgreSQL evaluates it once as an InitPlan, the
+qual becomes a pseudoconstant, and it emits a One-Time Filter that never demands
+the subtree. Europa-Park (regime `reports`): **939.8 ms → 2.3 ms, 132 nodes
+never executed**; Alton Towers, which is blind, is unchanged because it still
+has to do the work. Across the 113 parks outside `never_reports`: Caribbean Bay
+11 350 → 2.3 ms, Carowinds 4109 → 2.4, Cedar Point 3712 → 2.2.
+
+The check stays in the SQL rather than becoming an in-process cache in the
+service. A cache would have been a second reader of a regime that already has an
+owner, with a staleness window, a fail-open branch and a duplicated
+`'never_reports'` literal — all to work around a planner behaviour the statement
+can express in five lines. `closure-gap.sql.spec.ts` pins the shape, including
+that nothing from the outer query leaks into the `EXISTS`, since correlating it
+would silently undo the whole mechanism.
 
 **One schedule lookup per `queue_data` row.** `early_end` asks when the park shut
 on the day of each reading, through a `LATERAL … LIMIT 1`. At Alton Towers that
@@ -48,15 +61,37 @@ a ride looking more regular than it is.
 
 The three historical CTEs (`cycle`, `active`, `early_end`) were also handed the
 whole park roster although they are read only through `LEFT JOIN`s against
-`run_start`; they now take `closed_now`. On its own that changed nothing at a
-closed park, where `run_start` **is** the roster — the day-close hoist is what
-mattered — but it removes the waste in an open one.
+`run_start`; they now read `run_start` directly. On its own that changes nothing
+at a closed park, where `run_start` **is** the roster — the day-close hoist is
+what mattered there — but it removes the waste in an open one.
 
-Measured old → new, rows byte-identical in every park tested: Paultons Park
-26 601 → 699 ms, Alton Towers 24 560 → 660 ms, Phantasialand 15 192 → 393 ms,
-Chimelong Ocean Kingdom 13 056 → 279 ms, SeaWorld Orlando 8418 → 30 ms, Busch
-Gardens Tampa 896 → 5 ms. In production the statement went from 6009 ms mean and
-79 % of database CPU to 21 ms and 1.3 %.
+Two correctness fixes came out of the same read. `gap_days / active_days` could
+divide by zero: the nightly `cycle` CTE `COALESCE`s `active_days` to 0, and the
+day-floor test beside the division is not a guard, because SQL does not promise
+to evaluate `OR` left to right. A ride whose exposure rows all carry zero
+operating minutes could raise — and in the live statement one raised error costs
+**every** ride in that park its closure line, since `addClosureGaps` catches and
+returns. Both sites take `NULLIF` now. Separately, `getCurrentOutages` returned
+early when the reported-DOWN query came back empty, which is the exact outcome
+the comment twenty lines above forbids, reached by another road: on the day a
+blind park emits its first DOWN with a run too short for the trailing statement
+to place, that one ride took the closure line away from every other ride in the
+park.
+
+Measured old → new, rows byte-identical in every one of the 91 blind parks:
+Futuroscope 31 655 → 24 ms, Paultons Park 26 601 → 699, Alton Towers 24 560 →
+660, LEGOLAND Deutschland 24 196 → 425, Phantasialand 15 192 → 393, Chimelong
+Ocean Kingdom 13 056 → 279. In production, across a 180 s `pg_stat_statements`
+sample, the statement went from **6009 ms mean and 79 % of database CPU to 5 ms
+and 1.1 %**, and total database CPU from 1.03 to 0.48 cores.
+
+Two caveats on those figures, because they are sampled rather than derived. The
+share of database CPU moves with what else is running; a busier sample taken
+minutes apart read 21 ms and 1.3 % for the same code. And the **old** statement's
+cost is itself time-dependent — it scales with how many rides are sitting in a
+`CLOSED` run, so it peaked exactly when a park had just shut and its page was
+still being viewed. Futuroscope measured 31 655 ms at closing time and 2.8 ms
+the same evening.
 
 ### Added — outages read from closures, for the 102 parks whose feed never says DOWN
 
