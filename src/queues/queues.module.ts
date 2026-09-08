@@ -75,6 +75,8 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
 import { ModelComparison } from "../ml/entities/model-comparison.entity";
 import { PushModule } from "../push/push.module";
 import { TripsModule } from "../trips/trips.module";
+import { RideAlertsModule } from "../ride-alerts/ride-alerts.module";
+import { ShowFollowsModule } from "../show-follows/show-follows.module";
 
 @Module({
   imports: [
@@ -234,6 +236,8 @@ import { TripsModule } from "../trips/trips.module";
     PopularityModule,
     PushModule, // Web-push subscriptions and sending
     TripsModule, // The stored plans the notification job walks
+    RideAlertsModule, // Wait-time alerts — checked from WaitTimesProcessor
+    ShowFollowsModule, // Followed shows — the push-notifications job's other half
     RedisModule, // For cache warmup service
     RevalidationModule, // Frontend on-demand revalidation (best-days webhook)
     GeoipModule,

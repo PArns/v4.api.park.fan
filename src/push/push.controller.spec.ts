@@ -25,9 +25,15 @@ describe("PushController", () => {
 
   let controller: PushController;
   let subscribe: jest.Mock;
+  let tripsFind: jest.Mock;
   let trip: unknown;
 
-  const withVapid = <T>(run: () => T): T => {
+  // `await`s the callback INSIDE the try — not `return run()` — because a
+  // callback with more than one `await` would otherwise see `finally` restore
+  // the env vars once its first `await` suspends, not once it actually
+  // finishes. Every test here calls `subscribe` at most once, which never
+  // notices, but the shape is worth getting right rather than relying on that.
+  const withVapid = async <T>(run: () => Promise<T> | T): Promise<T> => {
     const before = {
       pub: process.env.VAPID_PUBLIC_KEY,
       priv: process.env.VAPID_PRIVATE_KEY,
@@ -37,7 +43,7 @@ describe("PushController", () => {
     process.env.VAPID_PRIVATE_KEY = "test-private";
     process.env.VAPID_SUBJECT = "mailto:hello@park.fan";
     try {
-      return run();
+      return await run();
     } finally {
       restore("VAPID_PUBLIC_KEY", before.pub);
       restore("VAPID_PRIVATE_KEY", before.priv);
@@ -53,6 +59,7 @@ describe("PushController", () => {
   beforeEach(async () => {
     subscribe = jest.fn().mockImplementation(async () => ({ id: "sub-1" }));
     trip = { id: VALID.tripId };
+    tripsFind = jest.fn().mockImplementation(async () => trip);
 
     const moduleRef = await Test.createTestingModule({
       controllers: [PushController],
@@ -63,7 +70,7 @@ describe("PushController", () => {
         },
         {
           provide: TripsService,
-          useValue: { find: jest.fn().mockImplementation(async () => trip) },
+          useValue: { find: tripsFind },
         },
       ],
     }).compile();
@@ -145,6 +152,32 @@ describe("PushController", () => {
       await expect(
         controller.subscribe({ ...VALID, topics: ["ride-down"] }),
       ).rejects.toMatchObject({ status: 400 });
+      expect(subscribe).not.toHaveBeenCalled();
+    });
+  });
+
+  it("subscribes with neither tripId nor topics — a ride alert or show follow", async () => {
+    await withVapid(async () => {
+      const { tripId: _tripId, topics: _topics, ...noTripOrTopics } = VALID;
+      await controller.subscribe(noTripOrTopics);
+      // The whole point: no trip to look up, no topic to demand — ride alerts
+      // and show follows are not trip-planner topics at all.
+      expect(tripsFind).not.toHaveBeenCalled();
+      // Passed through as `undefined`, never as `""` or `[]` — those would
+      // tell `PushService.subscribe` to clear a value instead of leaving it.
+      expect(subscribe).toHaveBeenCalledWith(
+        expect.objectContaining({ tripId: undefined, topics: undefined }),
+      );
+    });
+  });
+
+  it("still validates tripId when it IS sent, even without topics", async () => {
+    await withVapid(async () => {
+      trip = null;
+      const { topics: _topics, ...noTopics } = VALID;
+      await expect(controller.subscribe(noTopics)).rejects.toMatchObject({
+        status: 404,
+      });
       expect(subscribe).not.toHaveBeenCalled();
     });
   });

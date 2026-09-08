@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import * as webpush from "web-push";
 import { PushSubscription } from "./entities/push-subscription.entity";
 import {
@@ -9,15 +9,22 @@ import {
   type PushTopic,
 } from "./push-config";
 
-/** What a browser hands over when the visitor says yes. */
+/**
+ * What a browser hands over when the visitor says yes.
+ *
+ * `tripId` and `topics` are absent, not empty, when this call has nothing to
+ * say about the trip planner — a ride-alert or show-follow subscribe never
+ * sends either. `subscribe` has to tell that apart from "clear it", which is
+ * why both are optional here rather than defaulted.
+ */
 export interface SubscribeInput {
   endpoint: string;
   p256dh: string;
   auth: string;
-  tripId: string;
+  tripId?: string;
   locale: string;
   timezone: string | null;
-  topics: PushTopic[];
+  topics?: PushTopic[];
 }
 
 /** One notification, already written in the subscriber's language. */
@@ -75,6 +82,13 @@ export class PushService {
    *
    * `null` when this deploy has no VAPID keys, so the caller can say so instead
    * of storing a subscription nothing will ever send to.
+   *
+   * `tripId` and `topics` are set only when the caller sends them — never
+   * cleared by omission. The same browser subscribes through this one method
+   * for three unrelated reasons (a trip, a followed show, a ride's wait time),
+   * and each call only knows about its own reason; overwriting the other two
+   * with nothing every time would mean turning on a ride alert quietly turns
+   * off someone's trip notifications.
    */
   async subscribe(input: SubscribeInput): Promise<PushSubscription | null> {
     if (!isPushConfigured()) return null;
@@ -84,13 +98,18 @@ export class PushService {
     });
 
     const row =
-      existing ?? this.repository.create({ endpoint: input.endpoint });
+      existing ??
+      this.repository.create({
+        endpoint: input.endpoint,
+        tripId: null,
+        topics: [],
+      });
     row.p256dh = input.p256dh;
     row.auth = input.auth;
-    row.tripId = input.tripId;
+    if (input.tripId !== undefined) row.tripId = input.tripId;
+    if (input.topics !== undefined) row.topics = input.topics;
     row.locale = input.locale;
     row.timezone = input.timezone;
-    row.topics = input.topics;
     // A re-subscribe is the browser saying it is alive. Whatever went wrong
     // before this is not evidence about the subscription that exists now.
     row.failureCount = 0;
@@ -106,6 +125,28 @@ export class PushService {
   /** Every subscription for one trip. */
   async forTrip(tripId: string): Promise<PushSubscription[]> {
     return this.repository.find({ where: { tripId } });
+  }
+
+  /**
+   * The subscription a browser already has, if any.
+   *
+   * For `ride-alerts`/`show-follows`: both refuse a write against an endpoint
+   * with no subscription row, the same "never accept something that can never
+   * notify" rule `PushController.subscribe` applies to a trip.
+   */
+  async findByEndpoint(endpoint: string): Promise<PushSubscription | null> {
+    return this.repository.findOne({ where: { endpoint } });
+  }
+
+  /**
+   * A batch of subscriptions by id, for a job that already knows which ones it
+   * needs — a ride-alert sweep resolves a handful of triggers to subscriptions
+   * in one query rather than one `findOne` per trigger.
+   */
+  async findByIds(ids: string[]): Promise<Map<string, PushSubscription>> {
+    if (ids.length === 0) return new Map();
+    const rows = await this.repository.findBy({ id: In(ids) });
+    return new Map(rows.map((row) => [row.id, row]));
   }
 
   /**
