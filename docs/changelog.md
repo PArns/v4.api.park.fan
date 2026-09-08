@@ -44,10 +44,12 @@ against a table with at most 21 rows to offer. The closing time varies by day,
 not by ride or by reading, so it is now resolved once per day in
 `park_day_close` and joined. Equivalence was verified rather than assumed: the
 `LATERAL` took `LIMIT 1` with no ordering and the caller wrapped it in `max()`,
-which agree only while a park-day has one entry — all 16 329 park-days in the
-last 30 days have exactly one.
+which agree only while a park-day has one entry. Measured over 365 days: **all
+36 226 park-days across every park have exactly one** `OPERATING` entry, 15 589
+of them in the blind parks this statement serves, and not one park-day anywhere
+has two.
 
-The new CTE is bounded by park-local **date** over **22** days, and both halves
+The new CTE is bounded by park-local **date** over **23** days, and both halves
 of that are load-bearing. A timestamp bound would drop today's entry whenever
 the page renders before the park opens, which is exactly when a ride's morning
 readings are judged against it. And the extra day is not slack: readings are cut
@@ -65,7 +67,39 @@ whole park roster although they are read only through `LEFT JOIN`s against
 at a closed park, where `run_start` **is** the roster — the day-close hoist is
 what mattered there — but it removes the waste in an open one.
 
-Two correctness fixes came out of the same read. `gap_days / active_days` could
+### Fixed — the duty-cycle denominator was counted in the wrong zone, unbounded, and over every ride in the database
+
+`active` counts a ride's operating days, and `gap_days / active_days` is what
+separates a fault from a timetable. Three things were wrong with how it was
+counted, and all three moved that ratio.
+
+**The window was cast in the session timezone** while `op_day` is a park-local
+operating day. The two answers disagree for **56 of the 91 blind parks** at any
+given instant — one operating day, against a `MIN_DAYS_FOR_CYCLE_TEST` that sits
+at 5. **The nightly statement had no upper bound at all**, which is the leak
+`reference_sql_rule_replay_windowing` already names: a replay counted every
+operating day from the window start to today. And with **no park filter** it
+computed the figure for every attraction in the database in order to use it for
+the blind ones. The live twin's comment claimed it used "the same window and the
+same threshold ... so live and history agree about what a fault is"; that
+sentence was false in both directions.
+
+It is a behaviour change and it is measured, not assumed. Over 21 days across
+five blind parks the nightly statement goes from **331 intervals over 112 rides
+to 371 over 120**, with the distribution unmoved (mean 33 → 32 minutes, maximum
+210 either way). The direction is the point: a denominator counted one day short
+was calling real faults duty cycles.
+
+The live statement gains the same bounds, and the one case where its output
+changes is the argument for the whole fix. Over 30 instants taken from stored
+`closed_gap` intervals, 29 are identical and one differs — **Dragon Coaster at
+LEGOLAND California, 2026-09-07 20:41**, a closure the nightly reconstruction
+had recorded and the live line had been withholding. Live and history now agree
+about it.
+
+### Fixed — two more, from the same read
+
+`gap_days / active_days` could
 divide by zero: the nightly `cycle` CTE `COALESCE`s `active_days` to 0, and the
 day-floor test beside the division is not a guard, because SQL does not promise
 to evaluate `OR` left to right. A ride whose exposure rows all carry zero
@@ -89,12 +123,13 @@ Measured old → new, rows identical in every one of the 91 blind parks:
 Futuroscope 31 655 → 24 ms, Paultons Park 26 601 → 699, Alton Towers 24 560 →
 660, LEGOLAND Deutschland 24 196 → 425, Phantasialand 15 192 → 393, Chimelong
 Ocean Kingdom 13 056 → 279. In production, across a 180 s `pg_stat_statements`
-sample, the statement went from **6009 ms mean and 79 % of database CPU to 5 ms
-and 1.1 %**, and total database CPU from 1.03 to 0.48 cores.
+sample, the statement went from **6009 ms mean and 79 % of database CPU to 3 ms
+and 1.1 %**, and total database CPU from **1.03 cores to 0.36**.
 
 Two caveats on those figures, because they are sampled rather than derived. The
-share of database CPU moves with what else is running; a busier sample taken
-minutes apart read 21 ms and 1.3 % for the same code. And the **old** statement's
+share of database CPU moves with what else is running, and it was sampled three
+times as the fix landed in pieces: 1.03 cores before, 0.48 after the first two
+changes, 0.36 after the `park_open` gate. And the **old** statement's
 cost is itself time-dependent — it scales with how many rides are sitting in a
 `CLOSED` run, so it peaked exactly when a park had just shut and its page was
 still being viewed. Futuroscope measured 31 655 ms at closing time and 2.8 ms

@@ -281,11 +281,39 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   -- Operating days per ride, resolved ONCE as a grouped scan. As a correlated
   -- subquery inside cycle this ran past two minutes; the same mistake, and
   -- the same fix, as the blind-park check above.
+  -- Bounded on BOTH sides, in PARK-local days, over the rides in scope.
+  --
+  -- It had none of the three. The lower bound alone let a replay count every
+  -- operating day from $2 to today -- the rule this codebase already wrote down
+  -- after a leak of exactly that shape (reference_sql_rule_replay_windowing:
+  -- "> t - interval without <= t leaks all future data"). It is worse than a
+  -- replay artefact on an ordinary incremental run, where scanStart is hours
+  -- old: active_days would then be 0-2 for every ride, always under
+  -- MIN_DAYS_FOR_CYCLE_TEST, so the duty-cycle filter never fired at all and
+  -- shows were stored as faults. And with no park filter it computed the
+  -- figure for every attraction in the database to use it for the blind ones.
+  --
+  -- Park-local because op_day is: casting $2 to ::date takes the SESSION zone,
+  -- UTC in production, and the two disagree for 56 of the 91 blind parks at any
+  -- instant. One day, against a gate that sits at 5. The live twin says it uses
+  -- "the same window and the same threshold" -- that sentence was false in both
+  -- directions until this matched it.
+  --
+  -- The day of slack on the lower bound is the same one park_day_close needs:
+  -- readings are cut in UTC and bucketed park-local, so after a DST shift the
+  -- oldest of them land on the local day before. Without it a gap could be
+  -- counted whose operating day is not, which pushes gap_days / active_days
+  -- above its true value and can pass 1.0 -- the documented tell of the earlier
+  -- bug in this same CTE.
   active AS (
     SELECT e."attractionId" AS aid,
            count(*) FILTER (WHERE e.operating_minutes > 0)::numeric AS active_days
       FROM attraction_exposure_days e
-     WHERE e.op_day >= ($2::timestamptz)::date
+      JOIN attractions a ON a.id = e."attractionId"
+      JOIN blind_parks b ON b.pid = a."parkId"
+      JOIN parks p       ON p.id = a."parkId"
+     WHERE e.op_day >= ($2::timestamptz AT TIME ZONE p.timezone)::date - 1
+       AND e.op_day <= ($3::timestamptz AT TIME ZONE p.timezone)::date
      GROUP BY e."attractionId"
   ),
   cycle AS (
@@ -544,7 +572,19 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        -- more or less. That day drives both the MIN_DAYS_FOR_CYCLE_TEST gate
        -- and the gap_days/active_days ratio, and the gate sits at 5, so a
        -- ride can cross it on the cast alone.
-       AND e.op_day >= ($3::timestamptz AT TIME ZONE $2)::date - 21
+       --
+       -- 22, not 21, and for the reason park_day_close carries: cycle reads
+       -- readings cut at $3 - 21 days in UTC and buckets them park-local, so
+       -- after a DST shift its oldest gap day is local day 22. Counting that
+       -- gap without counting the day it happened on inflates
+       -- gap_days / active_days and can push it past 1.0 — which is the tell
+       -- this CTE has already produced once.
+       AND e.op_day >= ($3::timestamptz AT TIME ZONE $2)::date - 22
+       -- And an upper bound, which this had no more than its nightly twin did.
+       -- $3 is now() in production so nothing lies beyond it today, but a
+       -- pinned as-of — a spec, a replay — would count operating days from
+       -- after the instant being judged.
+       AND e.op_day <= ($3::timestamptz AT TIME ZONE $2)::date
      GROUP BY e."attractionId"
   ),
   -- When the park shut, once per day it published hours for.
@@ -552,15 +592,23 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- This used to be a LATERAL inside early_end, and that put one schedule
   -- lookup on every single queue_data row it read: measured at Alton Towers,
   -- 28 485 executions of one bitmap index scan, 21.5 s of a 24 s statement,
-  -- for a table with at most 21 rows to offer. The park's closing time does
+  -- for a table with at most 23 rows to offer. The park's closing time does
   -- not vary by ride or by reading, so it is resolved once per day here and
   -- joined.
   --
   -- Verified equivalent rather than assumed: the LATERAL took LIMIT 1 with no
   -- ordering and the caller wrapped it in max(), which are the same value only
-  -- while a park-day has one entry. Over the last 30 days all 16 329 park-days
-  -- in the table have exactly one, and max() is the deterministic reading of
-  -- what LIMIT 1 was picking arbitrarily.
+  -- while a park-day has one entry. Measured 2026-09-08 over 365 days: all
+  -- 36 226 park-days across every park have exactly one OPERATING entry, and
+  -- 15 589 of them are in the blind parks this statement serves. Not one
+  -- park-day anywhere has two. max() is then the deterministic reading of what
+  -- LIMIT 1 was picking arbitrarily.
+  --
+  -- If that ever stops holding, max() is the wrong answer rather than a
+  -- different one: a park publishing a morning and an evening block would have
+  -- every morning-only ride score as ending early. park-open-window.sql builds
+  -- the disjoint-union flattener for exactly that, and todo.md carries the
+  -- reasons this statement does not use it yet.
   --
   -- Bounded by park-local DATE, not by timestamp. A timestamp bound of $3 would
   -- drop today's entry whenever the page renders before the park opens, which

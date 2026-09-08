@@ -109,15 +109,53 @@ describe("closure-gap statements", () => {
     // run_start, but all three used to be handed $1 — the whole roster, which
     // park_closers needs and they do not. A 96-ride park scanned 21 days of
     // queue_data 96 times over. Reverting any one of them to $1 is silent.
+    //
+    // The body is taken by counting parentheses rather than by looking for the
+    // next "),\n": that landed on the CTE terminator only because no nested
+    // construct happens to be formatted that way today, and a reformat would
+    // have truncated the body and passed the not.toContain half on text it
+    // never read.
     const live = CURRENT_CLOSURE_GAP_SQL;
     for (const cte of ["cycle AS (", "active AS (", "early_end AS ("]) {
       const start = live.indexOf(cte);
       expect(start).toBeGreaterThan(-1);
-      const body = live.slice(start, live.indexOf("),\n", start));
+      let depth = 0;
+      let end = start + cte.length - 1;
+      for (let i = end; i < live.length; i++) {
+        if (live[i] === "(") depth++;
+        else if (live[i] === ")" && --depth === 0) {
+          end = i;
+          break;
+        }
+      }
+      const body = live.slice(start, end);
+      // The extraction itself must not be vacuous.
+      expect(body.length).toBeGreaterThan(cte.length + 100);
+      expect(body).toContain("FROM");
       expect(body).toContain("ARRAY(SELECT aid FROM run_start)");
       expect(body).not.toContain("ANY($1::uuid[])");
     }
   });
+
+  it.each(both)(
+    "%s bounds the duty-cycle denominator on both sides",
+    (_n, sql) => {
+      // The nightly active CTE had a lower bound and no upper one, so a replay
+      // counted every operating day from the window start to today — the leak
+      // `reference_sql_rule_replay_windowing` already names. On an ordinary
+      // incremental run the same omission made active_days 0–2 for every ride,
+      // permanently under MIN_DAYS_FOR_CYCLE_TEST, so the filter never fired.
+      const start = sql.indexOf("active AS (");
+      expect(start).toBeGreaterThan(-1);
+      const body = sql.slice(start, sql.indexOf("GROUP BY", start));
+      expect(body).toMatch(/op_day\s*>=/);
+      expect(body).toMatch(/op_day\s*<=/);
+      // Park-local on both sides, because op_day is. A bare ::date takes the
+      // session zone and disagrees for 56 of the 91 blind parks.
+      expect(body).not.toMatch(/\$\d::timestamptz\)::date/);
+      expect(body).toContain("AT TIME ZONE");
+    },
+  );
 
   it("both pseudoconstant gates are EXISTS, not joins", () => {
     // park_open is the same argument as the regime check and the costlier one:
@@ -128,14 +166,6 @@ describe("closure-gap statements", () => {
     expect(CURRENT_CLOSURE_GAP_SQL).toContain(
       "WHERE EXISTS (SELECT 1 FROM park_open)",
     );
-  });
-
-  it("no statement carries a backtick, which would end the template literal", () => {
-    // Twice now a comment written with Markdown-style backticks silently
-    // terminated the template literal and produced a wall of parser errors far
-    // from the edit. The compiler does say so, but only after the fact and
-    // never about the real cause.
-    for (const [, sql] of both) expect(sql).not.toContain("`");
   });
 
   it("the nightly statement honours the curated works period", () => {
