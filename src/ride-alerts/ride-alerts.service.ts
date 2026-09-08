@@ -96,32 +96,56 @@ export class RideAlertsService {
   }
 
   /**
-   * Upsert on `(subscriptionId, attractionId)`. Re-arms against the RIDE'S
-   * CURRENT READING rather than unconditionally — a changed threshold, or
-   * simply asking again, is a fresh request to be told, but if the wait is
-   * already under the new threshold that request is already satisfied, and
-   * arming it would fire on the very next poll about the number the visitor
-   * was already looking at when they pressed the button. Unknown (no reading,
-   * not OPERATING, a carried-forward heartbeat) arms rather than withholding —
-   * the same "not sure, don't suppress" default `checkAndNotify` uses for
-   * `isCurrentlyInSeason`.
+   * Upsert on `(subscriptionId, attractionId)` — a real database upsert, not
+   * read-then-write: two concurrent POSTs for the same ride (a double-tap)
+   * used to both pass the `findOne` check, then have the second `save()`'s
+   * INSERT hit the unique index and surface as a bare 500. `ON CONFLICT ...
+   * DO UPDATE` makes the write atomic instead, so the second caller safely
+   * updates the row the first one just created rather than racing it.
+   *
+   * Re-arms against the RIDE'S CURRENT READING rather than unconditionally —
+   * a changed threshold, or simply asking again, is a fresh request to be
+   * told, but if the wait is already under the new threshold that request is
+   * already satisfied, and arming it would fire on the very next poll about
+   * the number the visitor was already looking at when they pressed the
+   * button. Unknown (no reading, not OPERATING, a carried-forward heartbeat)
+   * arms rather than withholding — the same "not sure, don't suppress"
+   * default `checkAndNotify` uses for `isCurrentlyInSeason`.
+   *
+   * `lastTriggeredAt` deliberately stays out of the upserted columns: it is
+   * the sweep's own state, and a re-sent threshold must not erase when this
+   * alert last fired. Left off a fresh row, it takes the column's own
+   * default (null); on conflict, `ON CONFLICT DO UPDATE` only ever touches
+   * columns actually present in `.upsert()`'s entity, so an omitted column
+   * is never part of the `SET` clause and the existing value survives.
    */
   async upsert(
     subscriptionId: string,
     attractionId: string,
     thresholdMinutes: number,
   ): Promise<RideAlert> {
-    const existing = await this.repository.findOne({
-      where: { subscriptionId, attractionId },
-    });
-    const row =
-      existing ?? this.repository.create({ subscriptionId, attractionId });
-    row.thresholdMinutes = thresholdMinutes;
-    row.armed = await this.isBelowThresholdAlreadyUnknownOrFalse(
+    const armed = await this.isBelowThresholdAlreadyUnknownOrFalse(
       attractionId,
       thresholdMinutes,
     );
-    return this.repository.save(row);
+    await this.repository.upsert(
+      {
+        subscriptionId,
+        attractionId,
+        thresholdMinutes,
+        armed,
+        // Set explicitly rather than relying on `@UpdateDateColumn`'s
+        // `onUpdate` — that is triggered by TypeORM's own `save()`
+        // lifecycle, which this raw upsert query does not go through.
+        updatedAt: new Date(),
+      },
+      { conflictPaths: ["subscriptionId", "attractionId"] },
+    );
+    // `.upsert()` returns an `InsertResult`, not the row shape the rest of
+    // this service and its callers expect — one more indexed point lookup
+    // (this is a user-initiated write, not a hot path) is simpler and safer
+    // than parsing `InsertResult.raw`/`generatedMaps` by hand.
+    return (await this.find(subscriptionId, attractionId))!;
   }
 
   /** Whether a fresh alert at `thresholdMinutes` should start armed — see `upsert`. */

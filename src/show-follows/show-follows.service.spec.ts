@@ -22,6 +22,7 @@ describe("ShowFollowsService", () => {
     create: jest.Mock;
     save: jest.Mock;
     delete: jest.Mock;
+    createQueryBuilder: jest.Mock;
   };
   let service: ShowFollowsService;
 
@@ -89,6 +90,49 @@ describe("ShowFollowsService", () => {
           return { affected: 1 };
         },
       ),
+      // Stands in for `INSERT ... ON CONFLICT DO NOTHING`: inserts only if
+      // no row already matches `(subscriptionId, showId)`, otherwise leaves
+      // the existing row untouched — the same thing Postgres does.
+      createQueryBuilder: jest.fn(() => {
+        let pending: Partial<ShowFollow> = {};
+        const builder: {
+          insert: () => typeof builder;
+          into: () => typeof builder;
+          values: (vals: Partial<ShowFollow>) => typeof builder;
+          orIgnore: () => typeof builder;
+          execute: () => Promise<{
+            raw: unknown[];
+            identifiers: unknown[];
+            generatedMaps: unknown[];
+          }>;
+        } = {
+          insert: jest.fn(() => builder),
+          into: jest.fn(() => builder),
+          values: jest.fn((vals: Partial<ShowFollow>) => {
+            pending = vals;
+            return builder;
+          }),
+          orIgnore: jest.fn(() => builder),
+          execute: jest.fn(async () => {
+            const exists = [...followRows.values()].some(
+              (row) =>
+                row.subscriptionId === pending.subscriptionId &&
+                row.showId === pending.showId,
+            );
+            if (!exists) {
+              const stored = {
+                id: `follow-${followRows.size + 1}`,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                ...pending,
+              };
+              followRows.set(stored.id, stored as ShowFollow);
+            }
+            return { raw: [], identifiers: [], generatedMaps: [] };
+          }),
+        };
+        return builder;
+      }),
     };
 
     const showRepo = {
@@ -126,14 +170,30 @@ describe("ShowFollowsService", () => {
     const follow = await service.upsert("sub-1", "show-1");
     expect(follow.subscriptionId).toBe("sub-1");
     expect(follow.showId).toBe("show-1");
-    expect(followRepo.save).toHaveBeenCalledTimes(1);
   });
 
-  it("is a true no-op writing nothing when already followed", async () => {
+  it("is a true no-op leaving the existing row untouched when already followed", async () => {
+    // Both calls issue the same `INSERT ... ON CONFLICT DO NOTHING` — the
+    // no-op happens at the database's conflict resolution, not by skipping
+    // the attempt, which is what makes concurrent double-follows safe.
     const first = await service.upsert("sub-1", "show-1");
     const second = await service.upsert("sub-1", "show-1");
     expect(second).toBe(first);
-    expect(followRepo.save).toHaveBeenCalledTimes(1);
+    expect(followRepo.createQueryBuilder).toHaveBeenCalledTimes(2);
+    expect(followRows.size).toBe(1);
+  });
+
+  it("never 500s on two concurrent upserts of the same follow", async () => {
+    // The property the old read-then-write shape could not guarantee: both
+    // calls racing (unresolved together, not sequentially awaited) settle
+    // without either one throwing.
+    const [first, second] = await Promise.all([
+      service.upsert("sub-1", "show-1"),
+      service.upsert("sub-1", "show-1"),
+    ]);
+    expect(first.showId).toBe("show-1");
+    expect(second.showId).toBe("show-1");
+    expect(followRows.size).toBe(1);
   });
 
   it("removes a follow idempotently", async () => {

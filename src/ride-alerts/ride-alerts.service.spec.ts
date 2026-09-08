@@ -57,6 +57,7 @@ describe("RideAlertsService", () => {
     find: jest.Mock;
     findOne: jest.Mock;
     update: jest.Mock;
+    upsert: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
   };
@@ -129,6 +130,37 @@ describe("RideAlertsService", () => {
         alertRows.set(stored.id, stored as RideAlert);
         return stored;
       }),
+      // A stand-in for `INSERT ... ON CONFLICT (conflictPaths) DO UPDATE`:
+      // finds the row by the conflict columns and merges the given fields
+      // into it (real Postgres only touches columns actually present in the
+      // entity, which is exactly what `Object.assign` does here), or creates
+      // a fresh one.
+      upsert: jest.fn(
+        async (
+          entity: Partial<RideAlert>,
+          options: { conflictPaths: string[] },
+        ) => {
+          const existing = [...alertRows.values()].find((row) =>
+            options.conflictPaths.every(
+              (key) =>
+                (row as unknown as Record<string, unknown>)[key] ===
+                (entity as unknown as Record<string, unknown>)[key],
+            ),
+          );
+          if (existing) {
+            Object.assign(existing, entity);
+          } else {
+            const stored = {
+              id: `alert-${alertRows.size + 1}`,
+              lastTriggeredAt: null,
+              createdAt: new Date(),
+              ...entity,
+            };
+            alertRows.set(stored.id, stored as RideAlert);
+          }
+          return { raw: [], identifiers: [], generatedMaps: [] };
+        },
+      ),
     };
 
     const attractionRepo = {
@@ -442,6 +474,20 @@ describe("RideAlertsService", () => {
       );
       const result = await service.upsert("sub-1", "ride-1", 20);
       expect(result.armed).toBe(true);
+    });
+
+    it("never 500s on two concurrent upserts of the same ride alert (a double-tap)", async () => {
+      // The old read-then-write shape had both calls pass `findOne` before
+      // either wrote, so the second `save()` hit the unique index. The real
+      // `ON CONFLICT DO UPDATE` this now issues makes both calls land safely
+      // regardless of ordering.
+      const [first, second] = await Promise.all([
+        service.upsert("sub-1", "ride-1", 20),
+        service.upsert("sub-1", "ride-1", 25),
+      ]);
+      expect(first.attractionId).toBe("ride-1");
+      expect(second.attractionId).toBe("ride-1");
+      expect(alertRows.size).toBe(1);
     });
   });
 });

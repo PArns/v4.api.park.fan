@@ -42,13 +42,25 @@ export class ShowFollowsService {
     return this.repository.findOne({ where: { subscriptionId, showId } });
   }
 
-  /** Upsert on `(subscriptionId, showId)` — following an already-followed show is a no-op write. */
+  /**
+   * Upsert on `(subscriptionId, showId)` — a real database upsert, not
+   * read-then-write: two concurrent POSTs following the same show used to
+   * both pass the `find` check and then have the second `save()`'s INSERT
+   * hit the unique index and surface as a bare 500. `ON CONFLICT DO NOTHING`
+   * is exactly right here (unlike `RideAlertsService.upsert`, there is no
+   * second field to update on an already-followed show — see this method's
+   * own summary above), so the loser of the race is simply ignored rather
+   * than erroring.
+   */
   async upsert(subscriptionId: string, showId: string): Promise<ShowFollow> {
-    const existing = await this.find(subscriptionId, showId);
-    return (
-      existing ??
-      this.repository.save(this.repository.create({ subscriptionId, showId }))
-    );
+    await this.repository
+      .createQueryBuilder()
+      .insert()
+      .into(ShowFollow)
+      .values({ subscriptionId, showId })
+      .orIgnore()
+      .execute();
+    return (await this.find(subscriptionId, showId))!;
   }
 
   /** Idempotent — unfollowing a show that is not followed is not an error. */
