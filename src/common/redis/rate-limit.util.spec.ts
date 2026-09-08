@@ -56,7 +56,9 @@ describe("rate-limit.util", () => {
   });
 
   describe("checkRateLimit", () => {
-    const args = (overrides: Partial<Parameters<typeof checkRateLimit>[0]>) => ({
+    const args = (
+      overrides: Partial<Parameters<typeof checkRateLimit>[0]>,
+    ) => ({
       redis: redis as never,
       logger,
       label: "Test limiter",
@@ -83,9 +85,7 @@ describe("rate-limit.util", () => {
       const broken = {
         incr: () => Promise.reject(new Error("connection refused")),
       };
-      const verdict = await checkRateLimit(
-        args({ redis: broken as never }),
-      );
+      const verdict = await checkRateLimit(args({ redis: broken as never }));
       expect(verdict).toEqual({ allowed: true, retryAfterSeconds: 0 });
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining("Test limiter"),

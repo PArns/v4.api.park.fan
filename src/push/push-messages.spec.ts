@@ -16,9 +16,7 @@ describe("writeMessage", () => {
 
   it("matches the base language for a regional tag", () => {
     // de-AT and de-CH are German, not a fourth language of their own.
-    expect(writeMessage(notification, "de-AT").title).toBe(
-      "In 15 Min.: Taron",
-    );
+    expect(writeMessage(notification, "de-AT").title).toBe("In 15 Min.: Taron");
   });
 
   it("falls back to English for a locale this table does not carry", () => {

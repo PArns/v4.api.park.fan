@@ -137,7 +137,9 @@ describe("PushNotificationProcessor", () => {
 
   it("sends a due trip notification to a subscribed topic", async () => {
     await withVapid(async () => {
-      pushService.subscriptionsWithTrip.mockResolvedValueOnce([tripSubscription]);
+      pushService.subscriptionsWithTrip.mockResolvedValueOnce([
+        tripSubscription,
+      ]);
       // NOW is 20:00 in Berlin (18:00 UTC, CEST) — 20:15 is a 15-minute lead,
       // inside dueNotifications' 10-20 minute window.
       tripsService.find.mockResolvedValueOnce({
@@ -236,7 +238,11 @@ describe("PushNotificationProcessor", () => {
               days: {
                 "2026-10-17": {
                   entries: [
-                    { id: "e1", attractionName: "Ride", startMinute: 20 * 60 + 15 },
+                    {
+                      id: "e1",
+                      attractionName: "Ride",
+                      startMinute: 20 * 60 + 15,
+                    },
                   ],
                 },
               },
@@ -428,7 +434,9 @@ describe("PushNotificationProcessor", () => {
 
   it("sends both a trip and a show-follow notification in the same tick", async () => {
     await withVapid(async () => {
-      pushService.subscriptionsWithTrip.mockResolvedValueOnce([tripSubscription]);
+      pushService.subscriptionsWithTrip.mockResolvedValueOnce([
+        tripSubscription,
+      ]);
       tripsService.find.mockResolvedValueOnce({
         payload: {
           version: 2,
@@ -487,7 +495,9 @@ describe("PushNotificationProcessor", () => {
 
   it("keeps sending trip notifications when the show-follow half throws", async () => {
     await withVapid(async () => {
-      pushService.subscriptionsWithTrip.mockResolvedValueOnce([tripSubscription]);
+      pushService.subscriptionsWithTrip.mockResolvedValueOnce([
+        tripSubscription,
+      ]);
       tripsService.find.mockResolvedValueOnce({
         payload: {
           version: 2,
@@ -636,7 +646,9 @@ describe("PushNotificationProcessor", () => {
 
   it("keeps sending show-follow notifications when the trip half throws", async () => {
     await withVapid(async () => {
-      pushService.subscriptionsWithTrip.mockResolvedValueOnce([tripSubscription]);
+      pushService.subscriptionsWithTrip.mockResolvedValueOnce([
+        tripSubscription,
+      ]);
       tripsService.find.mockRejectedValueOnce(new Error("db down"));
 
       showFollowsService.allFollows.mockResolvedValueOnce([

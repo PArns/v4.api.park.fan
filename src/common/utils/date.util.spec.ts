@@ -40,9 +40,7 @@ describe("getTomorrowDateInTimezoneAt", () => {
   it("reads the explicit instant, not the wall clock", () => {
     // 22:30 UTC on the 15th is already 00:30 on the 16th in Berlin (CEST).
     const at = new Date("2026-07-15T22:30:00Z").getTime();
-    expect(getTomorrowDateInTimezoneAt(at, "Europe/Berlin")).toBe(
-      "2026-07-17",
-    );
+    expect(getTomorrowDateInTimezoneAt(at, "Europe/Berlin")).toBe("2026-07-17");
   });
 
   it("crosses the spring-forward transition without skipping or repeating a day", () => {

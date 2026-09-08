@@ -19,7 +19,9 @@ describe("PushFollowAccessGuard", () => {
     findByEndpoint = jest
       .fn()
       .mockResolvedValue({ id: "sub-1", endpoint: ENDPOINT });
-    check = jest.fn().mockResolvedValue({ allowed: true, retryAfterSeconds: 0 });
+    check = jest
+      .fn()
+      .mockResolvedValue({ allowed: true, retryAfterSeconds: 0 });
     guard = new PushFollowAccessGuard(
       { findByEndpoint } as unknown as PushService,
       { check } as unknown as PushFollowWriteRateLimitService,
@@ -50,9 +52,9 @@ describe("PushFollowAccessGuard", () => {
 
     it("404s an endpoint with no stored subscription", async () => {
       findByEndpoint.mockResolvedValueOnce(null);
-      await expect(guard.subscriptionOrThrow(ENDPOINT)).rejects.toMatchObject(
-        { status: 404 },
-      );
+      await expect(guard.subscriptionOrThrow(ENDPOINT)).rejects.toMatchObject({
+        status: 404,
+      });
     });
   });
 

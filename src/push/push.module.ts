@@ -30,6 +30,10 @@ import { RedisModule } from "../common/redis/redis.module";
     PushFollowWriteRateLimitService,
     PushFollowAccessGuard,
   ],
-  exports: [PushService, PushFollowWriteRateLimitService, PushFollowAccessGuard],
+  exports: [
+    PushService,
+    PushFollowWriteRateLimitService,
+    PushFollowAccessGuard,
+  ],
 })
 export class PushModule {}

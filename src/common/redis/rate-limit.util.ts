@@ -70,9 +70,7 @@ export async function checkRateLimit(params: {
       retryAfterSeconds: ttl > 0 ? ttl : windowSeconds,
     };
   } catch (error) {
-    logger.warn(
-      `${label} unavailable, allowing: ${(error as Error).message}`,
-    );
+    logger.warn(`${label} unavailable, allowing: ${(error as Error).message}`);
     return { allowed: true, retryAfterSeconds: 0 };
   }
 }
