@@ -3,6 +3,8 @@ import {
   CURRENT_CLOSURE_GAP_SQL,
   LIVE_LOOKBACK_HOURS,
   MAX_GAP_HOURS,
+  MIN_GAP_MINUTES,
+  MIN_PARK_MINUTES_LEFT,
 } from "./closure-gap.sql";
 
 /**
@@ -44,24 +46,6 @@ describe("closure-gap statements", () => {
     expect(CURRENT_CLOSURE_GAP_SQL).toContain(
       `INTERVAL '${LIVE_LOOKBACK_HOURS} hours'`,
     );
-  });
-
-  it("every window function the live cycle CTE reads is selected", () => {
-    // The same-day fix referenced `next_ts` in a subquery that did not select
-    // it. `npm run build` is blind to that; production would have swallowed it.
-    // The window functions live in `run_readings` now, which is the CTE cycle
-    // reads, so that is where they have to be found.
-    const cycle = CURRENT_CLOSURE_GAP_SQL.slice(
-      CURRENT_CLOSURE_GAP_SQL.indexOf("cycle AS ("),
-    );
-    const source = CURRENT_CLOSURE_GAP_SQL.includes("FROM run_readings f")
-      ? CURRENT_CLOSURE_GAP_SQL
-      : cycle;
-    for (const col of ["prev_st", "next_st", "next_ts"]) {
-      if (cycle.includes(`f.${col}`)) {
-        expect(source).toMatch(new RegExp(`OVER w AS ${col}\\b`));
-      }
-    }
   });
 
   it("the live regime test is an EXISTS on the parameter, never a join", () => {
@@ -124,7 +108,9 @@ describe("closure-gap statements", () => {
    */
   const cteBody = (sql: string, name: string): string => {
     const bare = sql.replace(/--[^\n]*/g, "");
-    const head = `${name} AS (`;
+    const head = bare.includes(`${name} AS MATERIALIZED (`)
+      ? `${name} AS MATERIALIZED (`
+      : `${name} AS (`;
     const start = bare.indexOf(head);
     expect(start).toBeGreaterThan(-1);
     let depth = 0;
@@ -140,6 +126,53 @@ describe("closure-gap statements", () => {
     }
     throw new Error(`unterminated CTE ${name}`);
   };
+
+  it("every column the live cycle CTE reads is selected where it reads it", () => {
+    // The same-day fix referenced `next_ts` in a subquery that did not select
+    // it. `npm run build` is blind to that; production would have swallowed it.
+    //
+    // Unconditional, and scoped. The previous version guarded each assertion on
+    // `cycle.includes("f.<col>")`, so renaming the alias disabled the whole test
+    // in the one scenario it guards, and it searched the entire statement so a
+    // column selected in any unrelated CTE satisfied it. Both halves are now
+    // taken from the CTE bodies themselves.
+    const cycle = cteBody(CURRENT_CLOSURE_GAP_SQL, "cycle");
+    const readings = cteBody(CURRENT_CLOSURE_GAP_SQL, "run_readings");
+    const cols = [
+      ...cycle.matchAll(/\b[a-z]\.(prev_st|next_st|next_ts|st|ts|aid)\b/g),
+    ];
+    expect(cols.length).toBeGreaterThan(3);
+    for (const [, col] of cols) {
+      expect(readings).toMatch(new RegExp(`\\bAS ${col}\\b|\\b${col}\\b`));
+    }
+  });
+
+  it("run_readings is materialized, not left to the planner's inlining rule", () => {
+    // Its entire purpose is reading the 21-day slice once instead of twice, and
+    // that rested on "a CTE referenced more than once is materialized". Drop
+    // either reference — early_end moving to parkOpenWindowCtes, say — and
+    // PostgreSQL inlines it, both consumers push the six predicates into the
+    // compressed hypertable again, and nothing fails except CPU.
+    expect(CURRENT_CLOSURE_GAP_SQL).toContain("run_readings AS MATERIALIZED (");
+  });
+
+  it("the cheap per-ride gates run before the historical CTEs, not after", () => {
+    // The same cheap-test-last shape as the two pseudoconstants, one level
+    // down. Both are functions of s.started_at and po.closes_at alone, and in
+    // the last hour of a blind park's day every ride winds down, enters
+    // open_today, and has 21 days materialised a moment before
+    // MIN_PARK_MINUTES_LEFT throws it away.
+    const openToday = cteBody(CURRENT_CLOSURE_GAP_SQL, "open_today");
+    expect(openToday).toContain(`INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'`);
+    expect(openToday).toContain(`INTERVAL '${MIN_GAP_MINUTES} minutes'`);
+  });
+
+  it("the live statement resolves the park's day end in one timezone", () => {
+    // park_open used to normalize with parks.timezone while park_day_close
+    // normalizes with $2 — two sources for one park's day, in one statement,
+    // reached through two different load paths in the callers.
+    expect(CURRENT_CLOSURE_GAP_SQL).not.toContain("JOIN parks p ON p.id");
+  });
 
   it("the live historical CTEs judge the rides in a closure, not the park", () => {
     // All three used to be handed $1 — the whole roster, which park_closers

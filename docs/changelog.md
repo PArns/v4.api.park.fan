@@ -63,9 +63,10 @@ a ride looking more regular than it is.
 
 The three historical CTEs (`cycle`, `active`, `early_end`) were also handed the
 whole park roster although they are read only through `LEFT JOIN`s against
-`run_start`; they now read `run_start` directly. On its own that changes nothing
-at a closed park, where `run_start` **is** the roster — the day-close hoist is
-what mattered there — but it removes the waste in an open one.
+`run_start`; they read `open_today` now, which is smaller still and is the
+population the final select actually joins. On its own that changes nothing at a
+closed park, where `run_start` **is** the roster — the day-close hoist is what
+mattered there — but it removes the waste in an open one.
 
 ### Fixed — the duty-cycle denominator was counted in the wrong zone, unbounded, and over every ride in the database
 

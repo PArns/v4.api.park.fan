@@ -274,7 +274,6 @@ export class AttractionOutageService {
               trailingOutageWithElapsedSql(),
               [[park.id], since, until, ids],
             );
-      downAnswered = true;
 
       // No early return on an empty result, and that is the point: it used to
       // `return out` here, which is the NOTE above reached by a different road.
@@ -318,6 +317,14 @@ export class AttractionOutageService {
           });
         }
       }
+
+      // Set here, after the rows have been READ, not after the query returned.
+      // The flag says the DOWN query got to answer; a throw inside the loop
+      // above means it did not, for the rides it had not reached yet. Setting
+      // it early left those rides looking un-placed to the hand-off below, so
+      // they went to a statement that answers with a different word — the third
+      // road into the same wording hole this flag exists to close.
+      downAnswered = true;
     } catch (error) {
       // A line under a badge is a nicety; the park page is not. The same
       // posture `downYesterday()` takes, and for the same reason: one failing
