@@ -78,7 +78,14 @@ blind park emits its first DOWN with a run too short for the trailing statement
 to place, that one ride took the closure line away from every other ride in the
 park.
 
-Measured old → new, rows byte-identical in every one of the 91 blind parks:
+One pass of the final statement over **every park**, 204 of them: **1.24 s in
+total**, mean 6.1 ms, worst 357 ms (Futuroscope, still open and so still with
+work to do), nothing above a second. Measured per population, the old statement
+took **620.4 s over the 113 parks outside `never_reports` alone** — a population
+it could never return a row for — with a mean of 5491 ms and a worst case of
+20 717 ms at Everland. Rows identical in all 113.
+
+Measured old → new, rows identical in every one of the 91 blind parks:
 Futuroscope 31 655 → 24 ms, Paultons Park 26 601 → 699, Alton Towers 24 560 →
 660, LEGOLAND Deutschland 24 196 → 425, Phantasialand 15 192 → 393, Chimelong
 Ocean Kingdom 13 056 → 279. In production, across a 180 s `pg_stat_statements`
