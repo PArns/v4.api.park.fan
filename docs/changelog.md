@@ -6,6 +6,198 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — the live closure-gap query was 79 % of the database's CPU, and it was answering nothing
+
+Production, 2026-09-08, sampled over 90 s: `CURRENT_CLOSURE_GAP_SQL` was **79 %
+of all database execution time** at a mean of 6.0 s per call, and it returned
+**zero rows in all 91 blind parks** at the moment it was measured. Two defects,
+both the same shape — a cheap test written first and evaluated last.
+
+**A comment claimed a short-circuit that PostgreSQL has no reason to perform.**
+The statement opened with a `blind` CTE reading `park_downtime_coverage`, and
+the service said beside the call site "in a park that reports DOWN this returns
+nothing and costs one indexed lookup". It was `CROSS JOIN`ed onto the final
+select, and a join is not a guard: the planner evaluated every historical CTE
+first and applied the test last. **70 % of the calls were for the 122 parks that
+cannot produce a row.**
+
+It is an **uncorrelated `EXISTS` on `$4`** now, in the final `WHERE`. Because it
+reads nothing but a parameter, PostgreSQL evaluates it once as an InitPlan, the
+qual becomes a pseudoconstant, and it emits a One-Time Filter that never demands
+the subtree. Europa-Park (regime `reports`): **939.8 ms → 2.3 ms, 132 nodes
+never executed**; Alton Towers, which is blind, is unchanged because it still
+has to do the work. Across the 113 parks outside `never_reports`: Caribbean Bay
+11 350 → 2.3 ms, Carowinds 4109 → 2.4, Cedar Point 3712 → 2.2.
+
+The check stays in the SQL rather than becoming an in-process cache in the
+service. A cache would have been a second reader of a regime that already has an
+owner, with a staleness window, a fail-open branch and a duplicated
+`'never_reports'` literal — all to work around a planner behaviour the statement
+can express in five lines. `closure-gap.sql.spec.ts` pins the shape, including
+that nothing from the outer query leaks into the `EXISTS`, since correlating it
+would silently undo the whole mechanism.
+
+**One schedule lookup per `queue_data` row.** `early_end` asks when the park shut
+on the day of each reading, through a `LATERAL … LIMIT 1`. At Alton Towers that
+was **28 485 executions of one bitmap index scan, 21.5 s of a 24 s statement**,
+against a table with at most 23 rows to offer. The closing time varies by day,
+not by ride or by reading, so it is now resolved once per day in
+`park_day_close` and joined. Equivalence was verified rather than assumed: the
+`LATERAL` took `LIMIT 1` with no ordering and the caller wrapped it in `max()`,
+which agree only while a park-day has one entry. Measured over 365 days: **all
+36 226 park-days across every park have exactly one** `OPERATING` entry, 15 589
+of them in the blind parks this statement serves, and not one park-day anywhere
+has two.
+
+The new CTE is bounded by park-local **date** over **23** days, and both halves
+of that are load-bearing. A timestamp bound would drop today's entry whenever
+the page renders before the park opens, which is exactly when a ride's morning
+readings are judged against it. And the extra day is not slack: readings are cut
+at 21 days in UTC but bucketed by park-local day, so after a DST shift the
+oldest of them lands on local day 22 — measured over every half hour of a
+winter, 42 such instants in each of Europe/Berlin, Europe/London,
+America/New_York and Australia/Sydney, a one-hour band on each of the 21 days
+following the shift. The join is an INNER one, so on a 21-day bound those
+readings are dropped rather than counted, which biases `early_days/days` towards
+a ride looking more regular than it is.
+
+The three historical CTEs (`cycle`, `active`, `early_end`) were also handed the
+whole park roster although they are read only through `LEFT JOIN`s against
+`run_start`; they read `open_today` now, which is smaller still and is the
+population the final select actually joins. On its own that changes nothing at a
+closed park, where `run_start` **is** the roster — the day-close hoist is what
+mattered there — but it removes the waste in an open one.
+
+### Changed — the duty-cycle window is 30 days in both statements, because it is a sample size
+
+`MAX_GAP_DAY_SHARE` and `MAX_EARLY_END_SHARE` are shares over a ride's
+**operating** days, so a calendar window does not choose a period of interest —
+it chooses how many samples the denominator gets. A park open at weekends
+contributes a third of what a daily park does over the same span.
+
+It was **21 days live against the nightly job's whole scan window**
+(`DEFAULT_WINDOW_DAYS` 30, wider whenever a running outage pushes the scan
+back), while the live comment claimed the two matched. Measured over the blind
+parks: of **2176 rides judged by both windows, 54 disagree** — 32 dropped at 21
+days that 30 days keeps, 22 the other way — so live and history could publish
+opposite verdicts about one ride.
+
+**The number that decided it was not that disagreement.** It is
+`MIN_DAYS_FOR_CYCLE_TEST`: **49 rides hold fewer than five operating days in 21
+and at least five in 30**, so for them the duty-cycle filter does not fire at
+all and their timetable is published as faults — the failure the filter exists
+to prevent, and larger than the disagreement in either direction. A 21-day
+window holds only 11 to 14 operating days in a seasonal park; LEGOLAND
+California's Dragon Coaster has the same 9 gap days in both windows and a
+denominator of 14 against 23. The short window was harshest on precisely the
+parks with the thinnest calendar. Rides with under ten samples fall from 500 to
+421; the median ride barely moves (20 operating days against 28).
+
+The threshold survives the move, which had to be checked because 0.5 was
+calibrated on a 21-day measurement: the share distribution keeps its shape in
+both windows — mass at 0.2–0.4, and the cliff between the 0.4 bucket (269 rides
+at 21 days, 216 at 30) and the 0.5 bucket (90 either way).
+
+Both statements take `CYCLE_WINDOW_DAYS` now, so the nightly test no longer
+inherits however far its scan happened to reach. At the production window the
+stored output is unchanged (512 intervals over 126 rides either way). Live, 7 of
+30 replayed instants change and 6 of those gain a line — including **Dragon
+Coaster at LEGOLAND California**, a closure the nightly reconstruction had
+stored while the live line withheld it. And it costs nothing measurable:
+`run_readings` is keyed on `open_today`, so the extra nine days are read only
+for the handful of rides actually in a closure — 204 parks in 0.50 s, mean
+2.5 ms.
+
+### Fixed — the duty-cycle denominator was counted in the wrong zone, unbounded, and over every ride in the database
+
+`active` counts a ride's operating days, and `gap_days / active_days` is what
+separates a fault from a timetable. Three things were wrong with how it was
+counted, and all three moved that ratio.
+
+**The window was cast in the session timezone** while `op_day` is a park-local
+operating day. The two answers disagree for **56 of the 91 blind parks** at any
+given instant — one operating day, against a `MIN_DAYS_FOR_CYCLE_TEST` that sits
+at 5. **The nightly statement had no upper bound at all**, which is the leak
+`reference_sql_rule_replay_windowing` already names: a replay counted every
+operating day from the window start to today. And with **no park filter** it
+computed the figure for every attraction in the database in order to use it for
+the blind ones. The live twin's comment claimed it used "the same window and the
+same threshold ... so live and history agree about what a fault is"; that
+sentence was false in both directions.
+
+**On today's data all three fixes are a no-op, and the first attempt at them was
+not.** The nightly statement produces 330 intervals over 112 rides before the
+change and 330 over 112 after it. An earlier version of this fix put a day of
+slack in front of the window — reasoning by analogy with `park_day_close`, which
+needs one — and that moved it to 370 over 120. The analogy is false:
+`park_day_close` is *joined* to days that exist, so an unused day costs a row,
+while this one is *counted*, so an unused day dilutes the denominator by ~4.5 %
+in the direction that publishes a timetable as a fault. The bound is the
+numerator's own edge now, which is also correct after a DST shift without any
+offset. **The whole 330 → 370 movement had been credited here to the timezone
+fix; all of it was the slack.**
+
+Where the upper bound does show is a replay, which is what it is for. Of 30
+instants taken from stored `closed_gap` intervals, 28 are identical and two
+differ — both SeaWorld Orlando, both losing one ride. Judged at 2026-09-06
+22:22, the unbounded denominator was counting **2026-09-07**, a day after the
+instant under judgment: `active_days` 23 against 22 for Abby's Flower Tower and
+Cookie Drop, 22 against 21 for Slimey's Slider, which is enough for one of them
+to cross `MAX_GAP_DAY_SHARE`. In production `$3` is `now()`, so there is no such
+day and the bound is inert — exactly as the nightly figures show.
+
+### Fixed — two more, from the same read
+
+`gap_days / active_days` could
+divide by zero: the nightly `cycle` CTE `COALESCE`s `active_days` to 0, and the
+day-floor test beside the division is not a guard, because SQL does not promise
+to evaluate `OR` left to right. A ride whose exposure rows all carry zero
+operating minutes could raise — and in the live statement one raised error costs
+**every** ride in that park its closure line, since `addClosureGaps` catches and
+returns. Both sites take `NULLIF` now. Separately, `getCurrentOutages` returned
+early when the reported-DOWN query came back empty, which is the exact outcome
+the comment twenty lines above forbids, reached by another road: on the day a
+blind park emits its first DOWN with a run too short for the trailing statement
+to place, that one ride took the closure line away from every other ride in the
+park.
+
+Two more removals came out of narrowing the CTEs, and they are the same defect
+in miniature. `cycle` and `early_end` ended up with six byte-identical
+predicates over the same 21-day slice of the same hypertable, so every call
+decompressed it twice; they share one `run_readings` CTE now. And all of them
+were keyed on `run_start` when the final select INNER JOINs `open_today`, which
+is strictly smaller — so in a park shut all day the whole roster had its 21 days
+computed and thrown away at that join. `park_closers`, the last heavy CTE with
+no guard of its own, takes the same pseudoconstant `EXISTS`.
+
+One pass of the final statement over **every park**, 204 of them: **0.45 s in
+total**, mean 2.2 ms, worst **26.7 ms**, nothing above a second. Measured under
+the shipped build, after the window moved to 30 days and the gates moved above
+the historical CTEs. For scale, Futuroscope — the one park that had real work in
+an earlier sweep — measured **31 655 ms** under the old statement while
+producing nothing at all.
+
+Measured per population, the old statement took **620.4 s over the 113 parks
+outside `never_reports` alone** — a population it could never return a row for —
+with a mean of 5491 ms and a worst case of 20 717 ms at Everland. Rows identical
+in all 113.
+
+Measured old → new, rows identical in every one of the 91 blind parks:
+Futuroscope 31 655 → 24 ms, Paultons Park 26 601 → 699, Alton Towers 24 560 →
+660, LEGOLAND Deutschland 24 196 → 425, Phantasialand 15 192 → 393, Chimelong
+Ocean Kingdom 13 056 → 279. In production, across a 180 s `pg_stat_statements`
+sample, the statement went from **6009 ms mean and 79 % of database CPU to 3 ms
+and 1.1 %**, and total database CPU from **1.03 cores to 0.36**.
+
+Two caveats on those figures, because they are sampled rather than derived. The
+share of database CPU moves with what else is running, and it was sampled three
+times as the fix landed in pieces: 1.03 cores before, 0.48 after the first two
+changes, 0.36 after the `park_open` gate. And the **old** statement's
+cost is itself time-dependent — it scales with how many rides are sitting in a
+`CLOSED` run, so it peaked exactly when a park had just shut and its page was
+still being viewed. Futuroscope measured 31 655 ms at closing time and 2.8 ms
+the same evening.
+
 ### Added — outages read from closures, for the 102 parks whose feed never says DOWN
 
 §1 excluded `CLOSED` while the park is open, and for a good reason (534 of 602

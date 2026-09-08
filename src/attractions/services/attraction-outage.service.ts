@@ -69,10 +69,12 @@ export interface OutageCandidate extends CuratedOutOfServiceSource {
    * predicates are mutually exclusive, so it never ran once in production. The
    * service does its own filtering now, and it needs the status to do it.
    *
-   * It also needs the whole roster for a second reason: the simultaneity filter
-   * counts how many rides shut in the same minute, and over a pre-filtered list
-   * that count is always one. The filter that removes a park-wide closing can
-   * only work over the park.
+   * This used to carry a second reason — that the simultaneity filter "can only
+   * work over the park", so a pre-filtered list would always count one closer.
+   * It is not true and has not been since that filter was written:
+   * `park_closers` counts over `$4`, the park id, and never reads `$1` at all.
+   * `attraction-integration.service` passes a single ride and gets a correct
+   * count. Only the reason above is load-bearing.
    */
   effectiveStatus?: string | null;
 }
@@ -98,9 +100,18 @@ export interface OutageParkContext {
  *
  * ## What it does not do
  *
- * It does not decide whether a ride is down. The caller passes the rides that
- * already read `DOWN` through its own chain, and this answers when that started.
- * Asking it to decide would be a third status chain.
+ * It does not decide whether a ride is down. The caller resolves each ride's
+ * status through its own chain and passes it along, and this answers when the
+ * outage started. Deciding would be a third status chain.
+ *
+ * It does NOT take a pre-filtered DOWN list, and the wording here used to say it
+ * did. Both callers pass whatever they are rendering regardless of status —
+ * `park-integration.service` the page's attractions, `attraction-integration.
+ * service` one ride — because the closure signal exists for parks that never
+ * emit `DOWN`, and filtering to `DOWN` first makes it structurally unreachable
+ * there: the two predicates are mutually exclusive, so it never ran once in
+ * production. A single ride is a valid call; the statement counts simultaneous
+ * closers over the park id, not over what it was handed.
  *
  * It also computes no duration, no rate and no history. A carried heartbeat row
  * is indistinguishable from an observed one apart from `lastUpdated`, so an
@@ -196,8 +207,10 @@ export class AttractionOutageService {
 
   /**
    * @param park - The park the candidates belong to.
-   * @param candidates - The rides that already read `DOWN`, with their curated
-   *   works-period columns.
+   * @param candidates - **Every** ride on the page, with its resolved status and
+   *   its curated works-period columns. Not a pre-filtered DOWN list: see
+   *   `OutageCandidate.effectiveStatus` for the reason, which is that filtering
+   *   made the closure signal structurally unreachable in production.
    * @param asOf - The instant the window is measured back from. A parameter so a
    *   spec can pin it; production passes nothing.
    * @returns attractionId → its running outage, for the rides that have one.
@@ -222,19 +235,16 @@ export class AttractionOutageService {
     // The closure query needs the whole roster — see OutageCandidate.
     const allIds = eligible.map((c) => c.id);
 
-    if (ids.length === 0) {
-      await this.addClosureGaps(park, allIds, asOf, out);
-      return out;
-    }
-
-    // NOTE: the closure query runs after the DOWN query below, for the rides
-    // that are NOT reading DOWN — it is not skipped just because some other
-    // ride in the park is. Gating it on "nobody here is DOWN" looked equivalent
-    // to the SQL's own population check and is not: the regime is recomputed
-    // once a night, so on the day a blind park emits its first-ever DOWN, that
-    // one ride would silently take the closure line away from every other ride
-    // in the park — and because the projection sends `outage` on every poll,
-    // the note would visibly vanish for a ride that had not recovered.
+    // NOTE, and the three ways this has been got wrong: the closure query runs
+    // for every ride the DOWN query did not place, and nothing short of the
+    // statement's own population check may stop it. Not "some other ride in
+    // this park reads DOWN", not "the DOWN query came back empty", and not "the
+    // ride in question reads DOWN". Each of those looked equivalent to the
+    // SQL's check and each silently took the closure line away from rides that
+    // were standing still — on the day a blind park emits its first-ever DOWN,
+    // which is the one day the two signals meet. Because the projection sends
+    // `outage` on every poll, the note visibly vanishes for a ride that had not
+    // recovered.
 
     const since = new Date(
       asOf.getTime() - TRAILING_OUTAGE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
@@ -245,6 +255,10 @@ export class AttractionOutageService {
     // rendering.
     const until = new Date(asOf.getTime() + 60 * 1000);
 
+    // Whether the DOWN query got to answer at all, which is not the same
+    // question as whether it found anything. See the closure hand-off below.
+    let downAnswered = false;
+
     try {
       const rows: Array<{
         attractionId: string;
@@ -253,31 +267,66 @@ export class AttractionOutageService {
         rowsInRun: number;
         elapsedOperatingMinutes: number | string;
         hasWindows: boolean;
-      }> = await this.queueDataRepository.manager.query(
-        trailingOutageWithElapsedSql(),
-        [[park.id], since, until, ids],
-      );
-      if (rows.length === 0) return out;
+      }> =
+        ids.length === 0
+          ? []
+          : await this.queueDataRepository.manager.query(
+              trailingOutageWithElapsedSql(),
+              [[park.id], since, until, ids],
+            );
 
-      const curves = await this.loadCurves();
-
-      for (const row of rows) {
-        const elapsed = Number(row.elapsedOperatingMinutes);
-        out.set(row.attractionId, {
-          startedAt: new Date(row.startedAt),
-          startObserved: row.startObserved === true,
-          rowsInRun: Number(row.rowsInRun) || 0,
-          signal: "down",
-          // A park that publishes no hours has no operating clock, so its
-          // elapsed figure is zero for a reason that has nothing to do with the
-          // ride. Reading a curve at that zero would answer every outage there
-          // with "just started".
-          estimate:
-            row.hasWindows && Number.isFinite(elapsed)
-              ? estimateOutage(this.curvesFor(curves, park.id, "down"), elapsed)
-              : undefined,
+      // No early return on an empty result, and that is the point: it used to
+      // `return out` here, which is the NOTE above reached by a different road.
+      if (rows.length > 0) {
+        // The curves answer "how much longer", which is optional by design —
+        // `estimate` is documented as absent whenever the curve cannot answer.
+        // Letting a failed read of them escape into the catch below would drop
+        // the outage lines this query just placed AND, because `out` would then
+        // be empty, hand every reported-DOWN ride to a statement that answers
+        // with a different word. A missing estimate must not cost a sentence.
+        const curves = await this.loadCurves().catch((error) => {
+          this.logger.warn(
+            `Recovery curves unavailable for park ${park.id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          return {
+            byPark: new Map<string, DowntimeRecoveryCurve[]>(),
+            pooled: [],
+          };
         });
+
+        // Resolved once. curvesFor filters both the park array and the pooled
+        // array on every call, and the signal is the constant "down" for every
+        // row -- eight rides down meant eight identical filterings.
+        const downCurves = this.curvesFor(curves, park.id, "down");
+
+        for (const row of rows) {
+          const elapsed = Number(row.elapsedOperatingMinutes);
+          out.set(row.attractionId, {
+            startedAt: new Date(row.startedAt),
+            startObserved: row.startObserved === true,
+            rowsInRun: Number(row.rowsInRun) || 0,
+            signal: "down",
+            // A park that publishes no hours has no operating clock, so its
+            // elapsed figure is zero for a reason that has nothing to do with
+            // the ride. Reading a curve at that zero would answer every outage
+            // there with "just started".
+            estimate:
+              row.hasWindows && Number.isFinite(elapsed)
+                ? estimateOutage(downCurves, elapsed)
+                : undefined,
+          });
+        }
       }
+
+      // Set here, after the rows have been READ, not after the query returned.
+      // The flag says the DOWN query got to answer; a throw inside the loop
+      // above means it did not, for the rides it had not reached yet. Setting
+      // it early left those rides looking un-placed to the hand-off below, so
+      // they went to a statement that answers with a different word — the third
+      // road into the same wording hole this flag exists to close.
+      downAnswered = true;
     } catch (error) {
       // A line under a badge is a nicety; the park page is not. The same
       // posture `downYesterday()` takes, and for the same reason: one failing
@@ -289,10 +338,37 @@ export class AttractionOutageService {
       );
     }
 
-    // The rides that are not reading DOWN may still be sitting in a closure.
-    // The statement restricts itself to blind parks, so in a park that reports
-    // DOWN this returns nothing and costs one indexed lookup.
-    const notDown = allIds.filter((id) => !ids.includes(id));
+    // Every ride the DOWN query did not place — which INCLUDES the rides that
+    // read DOWN and got nothing back, and EXCLUDES them again when the query
+    // never got to answer.
+    //
+    // The first half closes the last hole in the NOTE's scenario: the one ride
+    // actually standing still had been filtered out of the closure candidates
+    // on the strength of a status whose query had just answered nothing, so it
+    // was the only ride in the park with no line at all.
+    //
+    // It is nearly free rather than free, and the difference is worth stating.
+    // The closure statement only returns rides whose newest STANDBY reading is
+    // CLOSED, while `effectiveStatus` comes from the caller's own precedence
+    // chain over sources this statement never sees. When the two disagree, a
+    // ride badged DOWN can come back `closed_gap` and read „steht still" under
+    // a „Störung"-badge. That is the milder of the two errors on offer: it
+    // understates what we know, where withholding the line entirely leaves the
+    // one ride that IS standing still with nothing at all, and where the
+    // inverse — an inferred outage worded as a reported one — is the direction
+    // `CurrentOutage.signal` forbids outright.
+    //
+    // The second half is the difference between "no outage was found" and "we
+    // could not look", and it is a wording question rather than a coverage one.
+    // On a timeout `out` is empty, so without this every DOWN ride would be
+    // handed to a statement that answers `closed_gap` — and `CurrentOutage.
+    // signal` requires the page to say „steht still" rather than „gemeldet" for
+    // that. A query timing out would silently restate what the operator told
+    // us as something we merely noticed.
+    const downIds = new Set(ids);
+    const notDown = allIds.filter(
+      (id) => !out.has(id) && (downAnswered || !downIds.has(id)),
+    );
     if (notDown.length > 0) {
       await this.addClosureGaps(park, notDown, asOf, out);
     }
@@ -322,9 +398,19 @@ export class AttractionOutageService {
         CURRENT_CLOSURE_GAP_SQL,
         [ids, park.timezone, asOf, park.id],
       );
-      if (rows.length === 0) return;
+      // No `if (rows.length === 0) return` here either. It changed nothing —
+      // the loop below already does nothing on an empty array — but it is the
+      // shape that put the bug in `getCurrentOutages`, waiting for the first
+      // line to be added after the loop.
 
       for (const row of rows) {
+        // Never over a reported one. The caller only asks about rides the DOWN
+        // query did not place, so this should be unreachable — but the write
+        // was unguarded, and an overwrite here does not lose a line, it changes
+        // what the line CLAIMS: `signal` decides between „Störung gemeldet" and
+        // „steht still", and downgrading a reported outage to an inferred one
+        // is the one thing this feature may not do silently.
+        if (out.has(row.attractionId)) continue;
         out.set(row.attractionId, {
           startedAt: new Date(row.startedAt),
           startObserved: true,

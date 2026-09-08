@@ -321,10 +321,17 @@ close, it reports nothing.
 >   predicates, so it never ran once in production while the frontend shipped
 >   copy asserting it did. The callers now pass the whole roster with each
 >   ride's status and the service does its own filtering.
-> - **Simultaneity was counted over the ids passed in**, which on a ride page is
->   one. The filter that separates a park-wide closing from a single fault can
->   only work over the park, so it is a park-scoped CTE now. This was the
->   headline defence against announcing forty faults at 18:10.
+> - **Simultaneity is counted over the PARK**, not over the ids passed in — a
+>   park-scoped CTE keyed on the park id. This is the headline defence against
+>   announcing forty faults at 18:10.
+>
+>   This entry used to add that a pre-filtered candidate list "starves" that
+>   filter, and that was never true: `park_closers` reads the park id and has
+>   never read the candidate array, so the ride-detail path passes a single ride
+>   and gets a correct count. The claim was removed from both code comments that
+>   carried it (2026-09-08) and is corrected here too, because it gave a reader
+>   a documented reason to send the whole roster where one ride is right and
+>   cheap.
 > - **The live statement had no duration floor**, so a ride two minutes into a
 >   closure was announced as a fault — 27 % of raw gaps are one poll cycle.
 

@@ -977,12 +977,17 @@ export class ParkIntegrationService {
       //
       // Filtering to DOWN here made the closure signal unreachable: it exists
       // for parks whose feed never emits DOWN, so "rides reading DOWN" is empty
-      // in exactly the parks it serves, and the query never ran once. It also
-      // starved the simultaneity filter, which counts rides shutting in the
-      // same minute and can only tell a park-wide closing from a fault if it
-      // sees the park. `AttractionOutageService` does the filtering now.
-      // No DOWN precondition: the service decides which signal applies, and
-      // the closure signal exists for parks where no ride ever reads DOWN.
+      // in exactly the parks it serves, and the query never ran once.
+      // `AttractionOutageService` decides which signal applies now.
+      //
+      // This used to add that filtering "also starved the simultaneity filter,
+      // which ... can only tell a park-wide closing from a fault if it sees the
+      // park". That is not true: `park_closers` counts over the park id, never
+      // over the candidate list, and the ride-detail path passes a single ride
+      // and gets a correct count. Removed rather than left standing, because a
+      // comment asserting a property the SQL does not have is the exact defect
+      // this statement was just fixed for.
+      //
       // `wikiEntityId` is the one real precondition — without it neither signal
       // can produce anything, and asking would be a round-trip for a
       // guaranteed empty answer.

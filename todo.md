@@ -1,5 +1,177 @@
 # TODO
 
+## The nightly duty-cycle denominator reads a table the same job rewrites (measured 2026-09-08, not fixed)
+
+`DowntimeReconstructionProcessor` runs `CLOSURE_GAP_INTERVALS_SQL` at
+`downtime-reconstruction.processor.ts:151`, then deletes and rewrites
+`attraction_exposure_days` in the transaction that starts at line 176 (the
+delete is at line 183). So the statement's
+`active` CTE — the denominator of `gap_days / active_days` — reads the rows the
+**previous** run wrote, which stop at that run's `asOf`, while `raw_gaps` (the
+numerator) reads `queue_data` right up to this run's. Today's gap days are
+counted; today's operating day is not.
+
+At a nightly cadence over a 30-day window that is one day in thirty, ~3.3 %, and
+it inflates the ratio — the direction that suppresses genuine faults. It is the
+mirror image of the slack-day defect this PR removed from the same expression,
+and the two do not cancel: one was in the live statement's favour, this one is
+against.
+
+Two edges make it worse than the average: a **first run** and a run after the
+**400-day retention purge** see an empty exposure table, so `active_days` is 0
+for every ride, `active_days < MIN_DAYS_FOR_CYCLE_TEST` passes everything, and
+the duty-cycle filter is off entirely for that run.
+
+The obvious fix does not fit, and this is the measurement that says so. Moving
+the closure statement into the transaction after the exposure insert would let
+it see this run's rows — but **timed 2026-09-08 over all parks with a 30-day
+window, `CLOSURE_GAP_INTERVALS_SQL` takes 30.4 s**. Inside the transaction that
+is half a minute of `DELETE` locks held on both `attraction_outages` and
+`attraction_exposure_days`, every night.
+
+So the real options are a trade rather than a move:
+
+1. **Split the transaction** — write exposure, run the closure query, write
+   outages. Costs the atomicity of the two tables against each other; the
+   profile step that reads them both runs afterwards, so the window is internal
+   to the job, but it is a guarantee being given up rather than a line moved.
+2. **Stop reading the table** — the exposure rows for this window are already in
+   memory as `exposure` before the transaction opens. The statement reads them
+   in two places (`blind_parks`' evidence-hours sum and `active`), so this means
+   passing them in rather than joining.
+3. **Accept it and say so** — one day in thirty, ~3.3 %, in the direction that
+   suppresses faults. Then `MAX_GAP_DAY_SHARE`'s calibration should be read as
+   including it, which nothing currently records.
+
+It is left out of the performance PR because it is that decision, not because it
+is large.
+
+## Three defects, one root: the closure statements bucket by calendar date, everything else buckets by operating window (2026-09-08, not fixed)
+
+`attraction_exposure_days.op_day` is documented as "the park-local date the
+operating WINDOW opened on. Not the calendar date of the minutes themselves. A
+park closing at 02:00 would otherwise split its evening across two rows and lose
+it from both." The closure statements do exactly that splitting: `raw_gaps`, the
+live `cycle` and `early_end` all take `(ts AT TIME ZONE tz)::date`.
+
+Three symptoms follow, and they are one bug:
+
+1. **`gap_days / active_days` divides two different day definitions.** The
+   numerator counts calendar days, the denominator counts window days. In a park
+   closing after local midnight a 00:30 gap is filed under D+1 while the evening
+   it belongs to is filed under D — so the ratio can exceed 1.0, which the
+   `cycle` comment already names as the tell of a wrong count, and every ride in
+   that park is dropped as a duty cycle.
+2. **`early_end` scores the day currently being judged.** `run_readings` covers
+   `[$3 - 21d, $3)`, so today is one of its ~21 days: a ride that broke at 14:00
+   in a park closing at 22:00 has today's `last_operating` more than an hour
+   before today's close, and counts itself as having ended early. On the fourth
+   day of an outage it has contributed four self-generated early days, and
+   `days` is days-with-published-hours rather than 21 — so the longest and most
+   certain outages are the first to cross `MAX_EARLY_END_SHARE` and vanish.
+3. **A past-midnight park loses the signal entirely** — Six Flags Qiddiya City
+   on all 42 published days, plus four parks on one event night each; the
+   measurements are in the section below.
+
+All three are pre-existing, and the fix for all three is the same: attribute a
+reading to the operating window that contains it, which is what
+`parkOpenWindowCtes()` was written to do. The two blockers are unchanged — its
+placeholders are hard-coded `$1..$3`, and switching to window attribution drops
+readings outside opening hours, which changes `last_operating` for **every**
+park rather than only the past-midnight ones. That needs its own before/after
+over the population.
+
+## early_end attributes a reading to its calendar date, not its operating window (measured 2026-09-08, not fixed)
+
+`CURRENT_CLOSURE_GAP_SQL`'s `early_end` buckets each `queue_data` reading by its
+own park-local **date**, then compares it against a closing time anchored to the
+**opening's** date and rolled past midnight by `normalizedClosingSql`. In a park
+that closes after local midnight the two disagree by a day, and the comparison
+`last_operating < closes_at - 60 min` is then true for every reading of every
+day: `early_days / days` converges on 1.0, exceeds `MAX_EARLY_END_SHARE`, and
+the ride is dropped as timetabled. **The closure signal is silently off for that
+park.**
+
+Measured over the last 30 days of published hours in the 91 blind parks:
+
+| park | published days | days closing past local midnight |
+| --- | ---: | ---: |
+| Six Flags Qiddiya City | 42 | **42** |
+| Gardaland | 107 | 1 |
+| Parc Asterix | 74 | 1 |
+| SeaWorld Orlando | 387 | 1 |
+| Busch Gardens Tampa | 387 | 1 |
+
+So one blind park is affected systematically and four on a single event night
+each.
+
+**It is pre-existing.** The `LATERAL` this was hoisted out of correlated on the
+same date equality and used the same normalized close, so the behaviour is
+unchanged — which is why the equivalence check passes and why it is not fixed
+here.
+
+The fix is `parkOpenWindowCtes()` in `park-open-window.sql.ts`, whose docblock
+already names this exact failure ("Anchor a segment to its WINDOW's day, not its
+own date … La Ronde does this every day of the season"). It also flattens
+overlapping windows and guards a null close, which `park_day_close` does not.
+Two things make it a separate change rather than a line:
+
+1. Its parameters are `$1` park filter, `$2`/`$3` window bounds; the live
+   statement's are `$1` attractions, `$2` timezone, `$3` as-of, `$4` park. The
+   helper needs configurable placeholders before either statement can use it.
+2. Joining readings to a window instead of to a date also **drops readings that
+   fall outside opening hours**, and `queue_data` is a change log — rides read
+   `OPERATING` for hours after a park shuts ([[project_queue_data_last_known_value]]).
+   That is more correct, and it changes `last_operating` for **every** park, not
+   only the past-midnight ones. It needs its own before/after over the
+   population, not a note in a performance PR.
+
+Also parked with it: `park_day_close` is a third hand-rolled copy of "when does
+this park's day end" (`park_open` in the same statement is a second), and the
+helper is the place all three should meet.
+
+And one more asymmetry to settle at the same time: the live duty-cycle window is
+a fixed **21 days** while the nightly runs from `scanStart` to `asOf`
+(`DEFAULT_WINDOW_DAYS` 30, wider whenever a running outage pushes the scan
+back). `MAX_GAP_DAY_SHARE` is a share, so the same ride with eight gap days
+reads 8/21 live and 8/30 nightly and the two can land on opposite sides of the
+threshold. The comment claiming "the same window" was corrected on 2026-09-08;
+making it true is a decision about the signal, not a rewording, and belongs with
+the window-attribution work rather than in front of it.
+
+## The ML feature fetch reads 730 days to use ~300 (measured 2026-09-08, not fixed)
+
+`fetch_recent_wait_times()` (`ml-service/predict.py:218`) pulls **730 days** of
+`queue_data` per prediction. Over the three months in `pg_stat_statements` its
+two shapes are **41 % of all database execution time** — 2.0 M calls, ~700 000
+buffer blocks *per call* to return 622 rows — and after the closure-gap fix it is
+the single largest consumer left (83 % of the non-benchmark load in a 180 s
+sample).
+
+The widest frame in the statement is `rolling_avg_90d`, `ROWS BETWEEN 2159
+PRECEDING`. **That counts rows, not days**, and the comment beside it ("90 days
+* 24 hours = 2160 rows") assumes 24 buckets a day. A ride only produces a bucket
+for an hour it was open and reporting, so 2160 rows is roughly 180 days of real
+data, not 90.
+
+Measured against 8 rides at Europa-Park and Phantasialand, diffing every column
+of every row in the last 35 days against the 730-day output:
+
+| lookback | result |
+| --- | --- |
+| 365 d | identical |
+| 300 d | identical |
+| 240 d | **differs** (`rolling_avg_90d`) |
+| 150 d | **differs** |
+
+**Do not just set it to 300.** Those are two of the densest parks in the
+database; a ride with fewer operating hours needs more calendar days to reach
+2160 rows, so the safe floor is a property of the sparsest ride in the batch,
+not a constant. Before changing it, measure bucket density per ride and derive
+the floor from the p1, or replace the row-count frames with `RANGE`-based ones
+so the window means what its comment says. This is the trained-model feature
+path, so the check is byte-identical output, not "close enough".
+
 ## Ride downtime: what is left after the phase 0 run (2026-09-06)
 
 Phase 0 **has been run** against production. The results, the gate that had to be
