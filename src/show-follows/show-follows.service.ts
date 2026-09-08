@@ -46,19 +46,26 @@ export class ShowFollowsService {
    * Upsert on `(subscriptionId, showId)` — a real database upsert, not
    * read-then-write: two concurrent POSTs following the same show used to
    * both pass the `find` check and then have the second `save()`'s INSERT
-   * hit the unique index and surface as a bare 500. `ON CONFLICT DO NOTHING`
-   * is exactly right here (unlike `RideAlertsService.upsert`, there is no
-   * second field to update on an already-followed show — see this method's
-   * own summary above), so the loser of the race is simply ignored rather
-   * than erroring.
+   * hit the unique index and surface as a bare 500.
+   *
+   * `DO UPDATE`, not the `DO NOTHING` this used to do. That was right while
+   * a follow carried nothing but its two keys; `startTime` is a second field
+   * and a real choice, so re-following the same show to move the reminder
+   * from the 17:30 performance to the 19:10 one has to overwrite. Ignoring
+   * it would leave the visitor looking at a dialog that says 19:10 and a row
+   * that still says 17:30.
    */
-  async upsert(subscriptionId: string, showId: string): Promise<ShowFollow> {
+  async upsert(
+    subscriptionId: string,
+    showId: string,
+    startTime: Date | null,
+  ): Promise<ShowFollow> {
     await this.repository
       .createQueryBuilder()
       .insert()
       .into(ShowFollow)
-      .values({ subscriptionId, showId })
-      .orIgnore()
+      .values({ subscriptionId, showId, startTime })
+      .orUpdate(["startTime"], ["subscriptionId", "showId"])
       .execute();
     return (await this.find(subscriptionId, showId))!;
   }

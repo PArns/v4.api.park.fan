@@ -90,16 +90,18 @@ describe("ShowFollowsService", () => {
           return { affected: 1 };
         },
       ),
-      // Stands in for `INSERT ... ON CONFLICT DO NOTHING`: inserts only if
-      // no row already matches `(subscriptionId, showId)`, otherwise leaves
-      // the existing row untouched — the same thing Postgres does.
+      // Stands in for `INSERT ... ON CONFLICT DO UPDATE SET "startTime"`:
+      // inserts when no row matches `(subscriptionId, showId)`, and
+      // otherwise overwrites that row's `startTime` — the same thing
+      // Postgres does, and the reason a re-follow can move the reminder to a
+      // different performance.
       createQueryBuilder: jest.fn(() => {
         let pending: Partial<ShowFollow> = {};
         const builder: {
           insert: () => typeof builder;
           into: () => typeof builder;
           values: (vals: Partial<ShowFollow>) => typeof builder;
-          orIgnore: () => typeof builder;
+          orUpdate: (cols: string[], conflict: string[]) => typeof builder;
           execute: () => Promise<{
             raw: unknown[];
             identifiers: unknown[];
@@ -112,18 +114,21 @@ describe("ShowFollowsService", () => {
             pending = vals;
             return builder;
           }),
-          orIgnore: jest.fn(() => builder),
+          orUpdate: jest.fn(() => builder),
           execute: jest.fn(async () => {
-            const exists = [...followRows.values()].some(
+            const existing = [...followRows.values()].find(
               (row) =>
                 row.subscriptionId === pending.subscriptionId &&
                 row.showId === pending.showId,
             );
-            if (!exists) {
+            if (existing) {
+              existing.startTime = pending.startTime ?? null;
+            } else {
               const stored = {
                 id: `follow-${followRows.size + 1}`,
                 createdAt: new Date(),
                 updatedAt: new Date(),
+                startTime: null,
                 ...pending,
               };
               followRows.set(stored.id, stored as ShowFollow);
@@ -167,17 +172,17 @@ describe("ShowFollowsService", () => {
   });
 
   it("creates a follow on first upsert", async () => {
-    const follow = await service.upsert("sub-1", "show-1");
+    const follow = await service.upsert("sub-1", "show-1", null);
     expect(follow.subscriptionId).toBe("sub-1");
     expect(follow.showId).toBe("show-1");
   });
 
   it("is a true no-op leaving the existing row untouched when already followed", async () => {
-    // Both calls issue the same `INSERT ... ON CONFLICT DO NOTHING` — the
+    // Both calls issue the same `INSERT ... ON CONFLICT DO UPDATE` — the
     // no-op happens at the database's conflict resolution, not by skipping
     // the attempt, which is what makes concurrent double-follows safe.
-    const first = await service.upsert("sub-1", "show-1");
-    const second = await service.upsert("sub-1", "show-1");
+    const first = await service.upsert("sub-1", "show-1", null);
+    const second = await service.upsert("sub-1", "show-1", null);
     expect(second).toBe(first);
     expect(followRepo.createQueryBuilder).toHaveBeenCalledTimes(2);
     expect(followRows.size).toBe(1);
@@ -188,8 +193,8 @@ describe("ShowFollowsService", () => {
     // calls racing (unresolved together, not sequentially awaited) settle
     // without either one throwing.
     const [first, second] = await Promise.all([
-      service.upsert("sub-1", "show-1"),
-      service.upsert("sub-1", "show-1"),
+      service.upsert("sub-1", "show-1", null),
+      service.upsert("sub-1", "show-1", null),
     ]);
     expect(first.showId).toBe("show-1");
     expect(second.showId).toBe("show-1");
@@ -197,29 +202,29 @@ describe("ShowFollowsService", () => {
   });
 
   it("removes a follow idempotently", async () => {
-    await service.upsert("sub-1", "show-1");
+    await service.upsert("sub-1", "show-1", null);
     await service.remove("sub-1", "show-1");
     await expect(service.remove("sub-1", "show-1")).resolves.toBeUndefined();
     expect(await service.find("sub-1", "show-1")).toBeNull();
   });
 
   it("lists only the requested subscription's follows", async () => {
-    await service.upsert("sub-1", "show-1");
-    await service.upsert("sub-2", "show-1");
+    await service.upsert("sub-1", "show-1", null);
+    await service.upsert("sub-2", "show-1", null);
     const list = await service.listForSubscription("sub-1");
     expect(list).toHaveLength(1);
     expect(list[0].subscriptionId).toBe("sub-1");
   });
 
   it("counts per-subscription independently of other subscriptions' follows", async () => {
-    await service.upsert("sub-1", "show-1");
-    await service.upsert("sub-2", "show-1");
+    await service.upsert("sub-1", "show-1", null);
+    await service.upsert("sub-2", "show-1", null);
     expect(await service.countForSubscription("sub-1")).toBe(1);
   });
 
   it("allFollows returns every follow for the notification job to group", async () => {
-    await service.upsert("sub-1", "show-1");
-    await service.upsert("sub-2", "show-1");
+    await service.upsert("sub-1", "show-1", null);
+    await service.upsert("sub-2", "show-1", null);
     expect(await service.allFollows()).toHaveLength(2);
   });
 });

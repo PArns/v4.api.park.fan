@@ -90,6 +90,15 @@ export interface FollowedShowStatus {
 export interface DueShowNotification extends ScheduledStartCopy {
   /** Which show this is about — the caller resolves subscribers by this. */
   showId: string;
+  /**
+   * The exact performance, as the ISO instant it was resolved from.
+   *
+   * The caller needs it to honour a follow that named a showtime of its own:
+   * `dedupeKey` already carries the same string, but reading it back out of a
+   * formatted key would be parsing our own output. A follow with a null
+   * `startTime` ignores this and takes whichever performance comes next.
+   */
+  startTime: string;
 }
 
 /**
@@ -127,6 +136,7 @@ export function dueShowNotifications(
 
       out.push({
         showId: show.showId,
+        startTime: showtime.startTime,
         dedupeKey: `show-start:${show.showId}:${showtime.startTime}`,
         parkName: show.parkName,
         what: show.showName,

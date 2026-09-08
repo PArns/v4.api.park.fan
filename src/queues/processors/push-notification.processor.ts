@@ -218,6 +218,19 @@ export class PushNotificationProcessor {
     }> = [];
     for (const notification of due) {
       for (const follow of followsByShow.get(notification.showId) ?? []) {
+        // A follow that named a performance is about THAT one and no other.
+        // Somebody who picked the 19:10 badge at 17:00 did so because the
+        // 17:30 one is no use to them; sending it anyway would be the app
+        // overruling a choice it asked for. A null `startTime` is the
+        // open-ended follow — whichever performance is next — which is what
+        // a card's bell files and what every row written before the column
+        // existed still means.
+        if (
+          follow.startTime &&
+          follow.startTime.toISOString() !== notification.startTime
+        ) {
+          continue;
+        }
         tasks.push({ notification, follow });
       }
     }

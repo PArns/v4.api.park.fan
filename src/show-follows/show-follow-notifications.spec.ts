@@ -179,6 +179,36 @@ describe("dueShowNotifications", () => {
     expect(dueShowNotifications([], NOW)).toEqual([]);
   });
 
+  it("carries the performance's own instant, so a follow can be matched to it", () => {
+    const startTime = minutesFromNow(30);
+    const due = dueShowNotifications(
+      [show({ showtimes: [{ startTime }] })],
+      NOW,
+    );
+    expect(due[0].startTime).toBe(startTime);
+    // The dedupe key is built from the same string. The processor reads
+    // `startTime` rather than parsing it back out of the key.
+    expect(due[0].dedupeKey).toContain(startTime);
+  });
+
+  it("gives each of a show's due performances its own instant", () => {
+    const due = dueShowNotifications(
+      [
+        show({
+          showtimes: [
+            { startTime: minutesFromNow(25) },
+            { startTime: minutesFromNow(35) },
+          ],
+        }),
+      ],
+      NOW,
+    );
+    expect(due.map((d) => d.startTime)).toEqual([
+      minutesFromNow(25),
+      minutesFromNow(35),
+    ]);
+  });
+
   /**
    * The second window. Somebody who taps the bell twenty minutes before a
    * performance is already past the first one, and used to get nothing at

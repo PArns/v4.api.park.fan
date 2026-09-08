@@ -20,6 +20,7 @@ describe("ShowFollowsController", () => {
       id: "park-1",
       name: "Europa-Park",
       slug: "europa-park",
+      timezone: "Europe/Berlin",
       citySlug: "rust",
       countrySlug: "germany",
       continentSlug: "europe",
@@ -53,11 +54,16 @@ describe("ShowFollowsController", () => {
       countForSubscription: jest.fn().mockResolvedValue(0),
       find: jest.fn().mockResolvedValue(null),
       upsert: jest.fn().mockImplementation(
-        async (subscriptionId: string, showId: string) =>
+        async (
+          subscriptionId: string,
+          showId: string,
+          startTime: Date | null,
+        ) =>
           ({
             id: "follow-1",
             subscriptionId,
             showId,
+            startTime: startTime ?? null,
             createdAt: new Date("2026-09-01T00:00:00.000Z"),
             updatedAt: new Date("2026-09-01T00:00:00.000Z"),
           }) as ShowFollow,
@@ -105,7 +111,7 @@ describe("ShowFollowsController", () => {
       { endpoint: ENDPOINT, showId: "show-1" },
       req(),
     );
-    expect(showFollows.upsert).toHaveBeenCalledWith("sub-1", "show-1");
+    expect(showFollows.upsert).toHaveBeenCalledWith("sub-1", "show-1", null);
     expect(result.path).toBe("/parks/europe/germany/rust/europa-park#shows");
   });
 
@@ -141,7 +147,30 @@ describe("ShowFollowsController", () => {
       MAX_SHOW_FOLLOWS_PER_SUBSCRIPTION,
     );
     await controller.create({ endpoint: ENDPOINT, showId: "show-1" }, req());
-    expect(showFollows.upsert).toHaveBeenCalledWith("sub-1", "show-1");
+    expect(showFollows.upsert).toHaveBeenCalledWith("sub-1", "show-1", null);
+  });
+
+  it("passes a chosen performance through to the row", async () => {
+    const startTime = "2026-09-08T23:10:00.000Z";
+    const result = await controller.create(
+      { endpoint: ENDPOINT, showId: "show-1", startTime },
+      req(),
+    );
+    expect(showFollows.upsert).toHaveBeenCalledWith(
+      "sub-1",
+      "show-1",
+      new Date(startTime),
+    );
+    expect(result.startTime).toBe(startTime);
+  });
+
+  it("reports the park's zone, so a clock time can be read as the park posts it", async () => {
+    const result = await controller.create(
+      { endpoint: ENDPOINT, showId: "show-1" },
+      req(),
+    );
+    expect(result.timezone).toBe("Europe/Berlin");
+    expect(result.startTime).toBeNull();
   });
 
   it("unfollows idempotently", async () => {
