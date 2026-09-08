@@ -18,6 +18,7 @@ import {
 } from "../../show-follows/show-follow-notifications";
 import { LiveStatus } from "../../external-apis/themeparks/themeparks.types";
 import { frontendShowsPath } from "../../common/utils/frontend-url.util";
+import { getTomorrowDateInTimezoneAt } from "../../common/utils/date.util";
 
 /**
  * The job that decides whose phone buzzes.
@@ -252,8 +253,14 @@ export class PushNotificationProcessor {
     }
     if (metaByShow.size === 0) return [];
 
-    // One `getShowtimesOnDate` call per distinct PARK, not per show — a
-    // popular park with many followed shows shares one query.
+    // Two `getShowtimesOnDate` calls per distinct PARK, not per show — a
+    // popular park with many followed shows shares them. Both today's AND
+    // tomorrow's date: a showtime in the first ~35 minutes after local
+    // midnight has a lead window that opens BEFORE that midnight, while
+    // `todayStr` at that moment still names the day before it — querying
+    // only "today" means the one tick where such a showtime is due asks the
+    // wrong day and never finds it. Merged rather than overwritten, since
+    // each date can contribute showtimes for the same show.
     const verifiedTimesByShow = new Map<string, string[]>();
     for (const [parkId, timezone] of timezoneByPark) {
       const todayStr = formatInTimeZone(
@@ -261,32 +268,51 @@ export class PushNotificationProcessor {
         timezone,
         "yyyy-MM-dd",
       );
-      let timesByShow: Map<string, string[]>;
-      try {
-        timesByShow = await this.showsService.getShowtimesOnDate(
-          parkId,
-          timezone,
-          todayStr,
-        );
-      } catch (error) {
-        this.logger.warn(
-          `getShowtimesOnDate failed for park ${parkId}: ${(error as Error)?.message ?? error}`,
-        );
-        continue;
-      }
-      for (const [showId, hhmmTimes] of timesByShow) {
-        if (!metaByShow.has(showId)) continue; // a show in this park nobody follows
-        const isoTimes: string[] = [];
-        for (const hhmm of hhmmTimes) {
-          try {
-            isoTimes.push(
-              fromZonedTime(`${todayStr}T${hhmm}:00`, timezone).toISOString(),
-            );
-          } catch {
-            // A malformed time from the aggregate query — skip just this one.
-          }
+      const tomorrowStr = getTomorrowDateInTimezoneAt(startedMs, timezone);
+
+      for (const dateStr of [todayStr, tomorrowStr]) {
+        let timesByShow: Map<string, string[]>;
+        try {
+          timesByShow = await this.showsService.getShowtimesOnDate(
+            parkId,
+            timezone,
+            dateStr,
+          );
+        } catch (error) {
+          this.logger.warn(
+            `getShowtimesOnDate failed for park ${parkId} on ${dateStr}: ${(error as Error)?.message ?? error}`,
+          );
+          continue;
         }
-        verifiedTimesByShow.set(showId, isoTimes);
+        for (const [showId, hhmmTimes] of timesByShow) {
+          if (!metaByShow.has(showId)) continue; // a show in this park nobody follows
+          const isoTimes = verifiedTimesByShow.get(showId) ?? [];
+          for (const hhmm of hhmmTimes) {
+            try {
+              const instant = fromZonedTime(
+                `${dateStr}T${hhmm}:00`,
+                timezone,
+              );
+              // A local wall-clock time a spring-forward transition skips
+              // (e.g. 02:30 on the one day the clock jumps 02:00 -> 03:00)
+              // has no real instant at all — `fromZonedTime` still returns
+              // one, silently shifted by the DST offset, which round-trips
+              // to a DIFFERENT local time than the one asked for. Caught
+              // here rather than sent: a show cannot start at a time that
+              // did not happen.
+              const roundTrip = formatInTimeZone(
+                instant,
+                timezone,
+                "yyyy-MM-dd'T'HH:mm",
+              );
+              if (roundTrip !== `${dateStr}T${hhmm}`) continue;
+              isoTimes.push(instant.toISOString());
+            } catch {
+              // A malformed time from the aggregate query — skip just this one.
+            }
+          }
+          verifiedTimesByShow.set(showId, isoTimes);
+        }
       }
     }
 

@@ -82,7 +82,34 @@ describe("PushService", () => {
               rows.set(stored.id, stored);
               return stored;
             }),
-            delete: jest.fn(async () => ({ affected: 0 })),
+            update: jest.fn(
+              async (
+                criteria: { endpoint: string; tripId?: string | null },
+                partial: Partial<PushSubscription>,
+              ) => {
+                let affected = 0;
+                for (const row of rows.values()) {
+                  if (
+                    row.endpoint === criteria.endpoint &&
+                    row.tripId === criteria.tripId
+                  ) {
+                    Object.assign(row, partial);
+                    affected += 1;
+                  }
+                }
+                return { affected, raw: [], generatedMaps: [] };
+              },
+            ),
+            delete: jest.fn(async (criteria: { endpoint: string }) => {
+              let affected = 0;
+              for (const [id, row] of rows) {
+                if (row.endpoint === criteria.endpoint) {
+                  rows.delete(id);
+                  affected += 1;
+                }
+              }
+              return { affected, raw: [] };
+            }),
           },
         },
       ],
@@ -186,5 +213,64 @@ describe("PushService", () => {
     const found = await service.findByIds([]);
     expect(found.size).toBe(0);
     expect(findBy).not.toHaveBeenCalled();
+  });
+
+  describe("unsubscribe", () => {
+    it("deletes the row entirely when tripId is omitted", async () => {
+      await withVapid(async () => {
+        const stored = await service.subscribe({
+          ...base,
+          tripId: "t1",
+          topics: ["next-up"],
+        });
+        await service.unsubscribe(base.endpoint);
+        expect(rows.has(stored!.id)).toBe(false);
+      });
+    });
+
+    it("clears only tripId and topics when scoped to a matching trip, leaving the row — and a ride alert or show follow hanging off it — in place", async () => {
+      await withVapid(async () => {
+        const stored = await service.subscribe({
+          ...base,
+          tripId: "t1",
+          topics: ["next-up"],
+        });
+        await service.unsubscribe(base.endpoint, "t1");
+        // The row survives: `ride_alerts`/`show_follows` reference it by
+        // `subscriptionId`, and this is the whole point of the scoping — an
+        // unsubscribe meant for the trip must not cascade through the FK and
+        // take those down too.
+        const row = rows.get(stored!.id)!;
+        expect(row).toBeDefined();
+        expect(row.tripId).toBeNull();
+        expect(row.topics).toEqual([]);
+      });
+    });
+
+    it("does nothing when the tripId sent does not match what is stored", async () => {
+      await withVapid(async () => {
+        const stored = await service.subscribe({
+          ...base,
+          tripId: "t1",
+          topics: ["next-up"],
+        });
+        // A stale or already-cleared trip id must not touch a row it no
+        // longer describes — no delete, no clear.
+        await service.unsubscribe(base.endpoint, "t2");
+        const row = rows.get(stored!.id)!;
+        expect(row.tripId).toBe("t1");
+        expect(row.topics).toEqual(["next-up"]);
+      });
+    });
+
+    it("unsubscribing twice, scoped, is not an error", async () => {
+      await withVapid(async () => {
+        await service.subscribe({ ...base, tripId: "t1", topics: ["next-up"] });
+        await service.unsubscribe(base.endpoint, "t1");
+        await expect(
+          service.unsubscribe(base.endpoint, "t1"),
+        ).resolves.toBeUndefined();
+      });
+    });
   });
 });

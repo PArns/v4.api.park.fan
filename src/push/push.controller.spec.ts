@@ -25,6 +25,7 @@ describe("PushController", () => {
 
   let controller: PushController;
   let subscribe: jest.Mock;
+  let unsubscribe: jest.Mock;
   let tripsFind: jest.Mock;
   let trip: unknown;
 
@@ -58,6 +59,7 @@ describe("PushController", () => {
 
   beforeEach(async () => {
     subscribe = jest.fn().mockImplementation(async () => ({ id: "sub-1" }));
+    unsubscribe = jest.fn().mockResolvedValue(undefined);
     trip = { id: VALID.tripId };
     tripsFind = jest.fn().mockImplementation(async () => trip);
 
@@ -66,7 +68,7 @@ describe("PushController", () => {
       providers: [
         {
           provide: PushService,
-          useValue: { subscribe, unsubscribe: jest.fn() },
+          useValue: { subscribe, unsubscribe },
         },
         {
           provide: TripsService,
@@ -182,6 +184,21 @@ describe("PushController", () => {
     });
   });
 
+  it("refuses a real tripId sent without topics, rather than storing a subscription linked to a trip it will never notify for", async () => {
+    await withVapid(async () => {
+      // `trip` resolves fine here (the default from `beforeEach`) — this is
+      // the gap `tripsFind` alone cannot catch: a trip that exists, and a
+      // caller that forgot `topics`. Passed through, `PushService.subscribe`
+      // would create a brand-new row with a real `tripId` and `topics: []`,
+      // permanently subscribed to nothing.
+      const { topics: _topics, ...noTopics } = VALID;
+      await expect(controller.subscribe(noTopics)).rejects.toMatchObject({
+        status: 400,
+      });
+      expect(subscribe).not.toHaveBeenCalled();
+    });
+  });
+
   it("falls back to English for an unreadable locale rather than refusing", async () => {
     await withVapid(async () => {
       await controller.subscribe({ ...VALID, locale: "not a tag" });
@@ -197,6 +214,29 @@ describe("PushController", () => {
       expect(subscribe).toHaveBeenCalledWith(
         expect.objectContaining({ timezone: null }),
       );
+    });
+  });
+
+  describe("unsubscribe", () => {
+    it("passes tripId through, scoping the service call to that trip alone", async () => {
+      await controller.unsubscribe({
+        endpoint: VALID.endpoint,
+        tripId: VALID.tripId,
+      });
+      expect(unsubscribe).toHaveBeenCalledWith(VALID.endpoint, VALID.tripId);
+    });
+
+    it("passes undefined when tripId is omitted — a full, unscoped forget", async () => {
+      await controller.unsubscribe({ endpoint: VALID.endpoint });
+      expect(unsubscribe).toHaveBeenCalledWith(VALID.endpoint, undefined);
+    });
+
+    it("does not look up a trip — unsubscribing works even for a trip since deleted", async () => {
+      await controller.unsubscribe({
+        endpoint: VALID.endpoint,
+        tripId: VALID.tripId,
+      });
+      expect(tripsFind).not.toHaveBeenCalled();
     });
   });
 });

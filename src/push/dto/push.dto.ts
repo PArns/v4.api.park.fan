@@ -113,6 +113,20 @@ export class PushUnsubscribeDto {
   @IsNotEmpty()
   @MaxLength(2048)
   endpoint: string;
+
+  @ApiProperty({
+    description:
+      "Scopes this to the trip planner alone: only `tripId`/`topics` are " +
+      "cleared, and a ride alert or followed show on the same endpoint is " +
+      "left running. Omit to forget the browser entirely.",
+    example: "n7Qk2Fd3Xb9pLmZa",
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(32)
+  tripId?: string;
 }
 
 export class PushStatusDto {

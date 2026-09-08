@@ -117,9 +117,34 @@ export class PushService {
     return this.repository.save(row);
   }
 
-  /** Forget a browser. Idempotent — unsubscribing twice is not an error. */
-  async unsubscribe(endpoint: string): Promise<void> {
-    await this.repository.delete({ endpoint });
+  /**
+   * Forget a browser's trip subscription, or the browser entirely.
+   *
+   * Idempotent either way. The same row backs three unrelated features (a
+   * trip, a followed show, a ride's wait-time alert), all through the FK
+   * cascade on this table — so an unscoped delete here does not just forget
+   * the trip, it takes `ride_alerts` and `show_follows` down with it via
+   * `onDelete: "CASCADE"`, silently turning off alerts the caller never
+   * mentioned. `tripId` is how a caller says which reason it is unsubscribing
+   * for: sent, this clears only `tripId`/`topics` — the trip-planner half of
+   * the row — and leaves the rest (and the row itself) alone, the same
+   * "only touch what you named" rule `subscribe` already applies on write.
+   * Omitted, it is a real "forget this browser" and deletes the row, cascade
+   * included — right for a caller that means everything, not just the trip.
+   */
+  async unsubscribe(endpoint: string, tripId?: string): Promise<void> {
+    if (tripId === undefined) {
+      await this.repository.delete({ endpoint });
+      return;
+    }
+
+    // Not `delete({ endpoint, tripId })`: a mismatch (this endpoint's trip
+    // moved on, or was already cleared) must do nothing rather than take an
+    // unscoped action against a row it no longer describes.
+    await this.repository.update(
+      { endpoint, tripId },
+      { tripId: null, topics: [] },
+    );
   }
 
   /** Every subscription for one trip. */

@@ -116,7 +116,27 @@ export function isSameDayInTimezone(
  * getTomorrowDateInTimezone("America/Los_Angeles") // "2024-01-02" (UTC-8, still 15:00 on 2024-01-01 local)
  */
 export function getTomorrowDateInTimezone(timezone: string): string {
-  const todayStr = getCurrentDateInTimezone(timezone);
+  return getTomorrowDateInTimezoneAt(Date.now(), timezone);
+}
+
+/**
+ * Same as {@link getTomorrowDateInTimezone}, but "today" is read off an
+ * explicit instant rather than the wall clock — see
+ * {@link getStartOfDayInTimezoneAt} for why business logic needs this form.
+ *
+ * @param atMs - The instant to read "today" from, as epoch milliseconds.
+ * @param timezone - IANA timezone (e.g., "Europe/Berlin", "America/New_York")
+ */
+export function getTomorrowDateInTimezoneAt(
+  atMs: number,
+  timezone: string,
+): string {
+  const todayStr = formatInTimeZone(new Date(atMs), timezone, "yyyy-MM-dd");
+  // Anchored at noon, not midnight: `addDays` walks the Date object's
+  // calendar fields in the runtime's own timezone, and a DST day is 23 or 25
+  // hours long, not 24. Midnight plus a one-hour DST shift can land back on
+  // the SAME calendar day it started on; noon has 12 hours of margin on
+  // either side, more than any real UTC-offset change.
   const noonInTz = fromZonedTime(`${todayStr}T12:00:00`, timezone);
   const tomorrowInTz = addDays(noonInTz, 1);
   return formatInTimeZone(tomorrowInTz, timezone, "yyyy-MM-dd");

@@ -85,7 +85,8 @@ export class PushController {
   @ApiResponse({
     status: 400,
     description:
-      "Malformed subscription, or a `topics` list with no known topic.",
+      "Malformed subscription, a `topics` list with no known topic, or a " +
+      "`tripId` sent without `topics`.",
   })
   @ApiResponse({
     status: 404,
@@ -124,13 +125,19 @@ export class PushController {
 
     // Same shape as tripId: sent, it must resolve to at least one real topic
     // (a stored subscription nothing sends to is the one failure this module
-    // is arranged against). Not sent, it is left alone.
+    // is arranged against). Not sent, it is left alone — except alongside a
+    // `tripId`, where "left alone" on a brand-new row means created with
+    // `topics: []`: linked to a real trip, subscribed to none of its topics,
+    // and silently stuck that way forever, since nothing here ever revisits a
+    // subscription the caller does not name again.
     let topics: PushTopic[] | undefined;
     if (body?.topics !== undefined) {
       topics = normalizeTopics(body.topics);
       if (topics.length === 0) {
         throw new BadRequestException("No known topics requested");
       }
+    } else if (tripId !== undefined) {
+      throw new BadRequestException("tripId requires topics");
     }
 
     const stored = await this.pushService.subscribe({
@@ -157,16 +164,23 @@ export class PushController {
   @Delete("subscriptions")
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
-    summary: "Forget a browser",
+    summary: "Forget a browser, or just its trip",
     description:
       "Idempotent. Unsubscribing an endpoint that is not stored is not an " +
       "error: a browser that revoked permission has no way to know whether its " +
-      "subscription ever reached us.",
+      "subscription ever reached us. Send `tripId` to turn off the trip " +
+      "planner alone — the same endpoint may also carry a ride alert or a " +
+      "followed show, and those stay on. Omit it to forget the browser " +
+      "entirely, which takes them down too.",
   })
   @ApiResponse({ status: 204, description: "Gone, or was never there." })
   async unsubscribe(@Body() body: PushUnsubscribeDto): Promise<void> {
     const endpoint = requireUrl(body?.endpoint, "endpoint");
-    await this.pushService.unsubscribe(endpoint);
+    const tripId =
+      body?.tripId !== undefined
+        ? requireString(body.tripId, "tripId")
+        : undefined;
+    await this.pushService.unsubscribe(endpoint, tripId);
   }
 }
 

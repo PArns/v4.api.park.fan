@@ -408,6 +408,117 @@ describe("PushNotificationProcessor", () => {
     });
   });
 
+  it("notifies about a showtime just after local midnight, whose lead window opens the calendar day before", async () => {
+    await withVapid(async () => {
+      // A fresh `Date.now` for this one test: 23:30 Berlin (CEST) on the
+      // 17th — 30 minutes before a showtime at 00:00 on the 18th, which is
+      // inside the 25-35 minute lead window `dueShowNotifications` uses. At
+      // this exact instant `todayStr` (read off `startedMs`) is still the
+      // 17th, so the old code asked `getShowtimesOnDate` for the 17th and
+      // could never find a showtime dated the 18th.
+      const justBeforeMidnight = Date.parse("2026-10-17T21:30:00.000Z"); // 23:30 CEST
+      jest.spyOn(Date, "now").mockReturnValue(justBeforeMidnight);
+
+      showFollowsService.allFollows.mockResolvedValueOnce([
+        { id: "f1", subscriptionId: "sub-show", showId: "show-1" },
+      ]);
+      showsService.findBatchCurrentStatusByShows.mockResolvedValueOnce(
+        new Map([
+          [
+            "show-1",
+            {
+              status: "OPERATING",
+              showtimes: [],
+              show: {
+                name: "Feuerwerk",
+                park: {
+                  name: "Europa-Park",
+                  slug: "europa-park",
+                  timezone: "Europe/Berlin",
+                  continentSlug: "europe",
+                  countrySlug: "germany",
+                  citySlug: "rust",
+                },
+              },
+            },
+          ],
+        ]),
+      );
+      // Nothing verified for "today" (the 17th) — the showtime belongs to
+      // the 18th, which is exactly the date the fix also has to query.
+      showsService.getShowtimesOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-18"
+            ? new Map([["show-1", ["00:00"]]])
+            : new Map(),
+      );
+      pushService.findByIds.mockResolvedValueOnce(
+        new Map([["sub-show", showSubscription]]),
+      );
+
+      await processor.handleDue({} as never);
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+      expect(pushService.send).toHaveBeenCalledWith(
+        showSubscription,
+        expect.objectContaining({
+          title: expect.stringContaining("Feuerwerk"),
+        }),
+      );
+    });
+  });
+
+  it("does not notify about a showtime that falls in a spring-forward gap", async () => {
+    await withVapid(async () => {
+      // 2026-03-29 is the day Berlin's clocks jump 02:00 -> 03:00 (at 01:00
+      // UTC) — 02:30 local that day never happens. `fromZonedTime` still
+      // resolves it (empirically, to 2026-03-29T00:30:00Z), so "now" is set
+      // 30 minutes before THAT instant: inside `dueShowNotifications`'
+      // 25-35 minute lead window, which is what makes this test meaningful —
+      // without the round-trip guard this exact "now" sends, guarded it
+      // must not, because the source time never happened.
+      const at = Date.parse("2026-03-29T00:00:00.000Z"); // 01:00 CET, before the jump
+      jest.spyOn(Date, "now").mockReturnValue(at);
+
+      showFollowsService.allFollows.mockResolvedValueOnce([
+        { id: "f1", subscriptionId: "sub-show", showId: "show-1" },
+      ]);
+      showsService.findBatchCurrentStatusByShows.mockResolvedValueOnce(
+        new Map([
+          [
+            "show-1",
+            {
+              status: "OPERATING",
+              showtimes: [],
+              show: {
+                name: "Feuerwerk",
+                park: {
+                  name: "Europa-Park",
+                  slug: "europa-park",
+                  timezone: "Europe/Berlin",
+                  continentSlug: "europe",
+                  countrySlug: "germany",
+                  citySlug: "rust",
+                },
+              },
+            },
+          ],
+        ]),
+      );
+      showsService.getShowtimesOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-03-29"
+            ? new Map([["show-1", ["02:30"]]])
+            : new Map(),
+      );
+      pushService.findByIds.mockResolvedValueOnce(
+        new Map([["sub-show", showSubscription]]),
+      );
+
+      await processor.handleDue({} as never);
+      expect(pushService.send).not.toHaveBeenCalled();
+    });
+  });
+
   it("keeps sending show-follow notifications when the trip half throws", async () => {
     await withVapid(async () => {
       pushService.allSubscriptions.mockResolvedValueOnce([tripSubscription]);

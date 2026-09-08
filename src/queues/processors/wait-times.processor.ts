@@ -331,7 +331,7 @@ export class WaitTimesProcessor {
                   await this.rideAlertsService.checkAndNotify(
                     park,
                     [...seenAttractionIds],
-                    Date.now(),
+                    startTime,
                   );
                 }
 
