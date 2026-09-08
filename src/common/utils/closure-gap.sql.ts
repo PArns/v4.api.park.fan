@@ -87,11 +87,16 @@ import { normalizedClosingSql } from "./park-open-window.sql";
  * explanation attached to exactly one of them. A predicate whose reason is
  * written down once and applied five times is the drift this file keeps
  * writing shared helpers to prevent.
+ *
+ * Parenthesised, so it composes. Unbracketed it is `A AND B`, and the first
+ * caller writing `NOT ${'${observedReadingsSql("qd")}'}` would negate only A —
+ * silently admitting exactly the carried rows the paragraph above says
+ * truncated this population at ~65 minutes.
  */
 export function observedReadingsSql(alias: string): string {
-  return `COALESCE(${alias}.data_source, '') NOT IN
-           ('system-reconciliation', 'system-heartbeat')
-       AND NOT COALESCE(${alias}.is_heartbeat, ${alias}."lastUpdated" = ${alias}.timestamp)`;
+  return `(COALESCE(${alias}.data_source, '') NOT IN
+            ('system-reconciliation', 'system-heartbeat')
+        AND NOT COALESCE(${alias}.is_heartbeat, ${alias}."lastUpdated" = ${alias}.timestamp))`;
 }
 
 /** Rides closing in the same minute, above which it is the park and not a ride. */
@@ -120,6 +125,43 @@ export const MAX_GAP_DAY_SHARE = 0.5;
 
 /** Operating days a ride needs before that share means anything. */
 export const MIN_DAYS_FOR_CYCLE_TEST = 5;
+
+/**
+ * How far back both share tests look, in days.
+ *
+ * The window is not a period of interest; it is a **sample size**. Both
+ * `MAX_GAP_DAY_SHARE` and `MAX_EARLY_END_SHARE` are shares over a ride's
+ * OPERATING days, so what a calendar window really decides is how many of those
+ * the denominator gets — and a park open at weekends contributes a third of what
+ * a park open daily does over the same span.
+ *
+ * It was 21 days live against the nightly job's whole scan window
+ * (`DEFAULT_WINDOW_DAYS` 30, wider when a running outage pushes the scan back),
+ * and the live comment claimed the two matched. Measured over the blind parks
+ * on 2026-09-08, of 2176 rides judged by both windows **54 disagree** — 32
+ * dropped at 21 days that 30 days keeps, 22 the other way — so live and history
+ * could publish opposite verdicts about one ride.
+ *
+ * 30, and the decisive number is not that disagreement. It is
+ * `MIN_DAYS_FOR_CYCLE_TEST`: **49 rides hold fewer than five operating days in
+ * 21 and at least five in 30**, so for them the duty-cycle filter does not fire
+ * at all today and their timetable is published as faults — the exact failure
+ * the filter exists to prevent, and larger than the disagreement in either
+ * direction. A 21-day window holds only 11 to 14 operating days in a seasonal
+ * park (LEGOLAND California's Dragon Coaster: the same 9 gap days, a denominator
+ * of 14 against 23), so the short window is harshest on precisely the parks with
+ * the thinnest calendar. Rides with under ten samples fall from 500 to 421.
+ *
+ * The threshold survives the move, which had to be checked because
+ * `MAX_GAP_DAY_SHARE` was calibrated on a 21-day measurement. The share
+ * distribution has the same shape in both windows — mass at 0.2–0.4, and the
+ * cliff between the 0.4 bucket (269 rides at 21 days, 216 at 30) and the 0.5
+ * bucket (90 either way). 0.5 still sits in the gap.
+ *
+ * The median ride barely notices: 20 operating days at 21, 28 at 30. The whole
+ * gain lands where the sample was too thin to mean anything.
+ */
+export const CYCLE_WINDOW_DAYS = 30;
 
 /**
  * Days a ride may close at the same hour before it is read as its own schedule.
@@ -344,7 +386,18 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
       -- hard delete, exposure rows whose attraction no longer resolves would
       -- drop out of the denominator and inflate that ride's gap share.
       JOIN blind_parks b ON b.pid = e."parkId"
-     WHERE e.op_day >= ($2::timestamptz AT TIME ZONE b.tz)::date
+     -- CYCLE_WINDOW_DAYS, not the scan window. The scan runs from scanStart,
+     -- which is DEFAULT_WINDOW_DAYS back and wider whenever a running outage
+     -- pushes it -- so the denominator's length used to depend on how unlucky
+     -- the last month had been, and the live twin's fixed window could reach a
+     -- different verdict about the same ride. The share test gets its own
+     -- window in both statements now; it is a sample size, not a period of
+     -- interest.
+     WHERE e.op_day >= GREATEST(
+             ($2::timestamptz AT TIME ZONE b.tz)::date,
+             (($3::timestamptz - INTERVAL '${CYCLE_WINDOW_DAYS} days')
+              AT TIME ZONE b.tz)::date
+           )
        -- Both edges from the numerator's own instants, for the reason the
        -- lower one carries. src reads qd.timestamp < $3, so its last possible
        -- day is the local day of the instant just before $3 -- which is the
@@ -357,8 +410,14 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
      GROUP BY e."attractionId"
   ),
   cycle AS (
+    -- The numerator over the same window as the denominator above. raw_gaps
+    -- spans the whole scan, which can reach far past it, and counting gap days
+    -- from outside the window they are divided by is how a share exceeds 1.0.
     SELECT g.aid,
-           count(DISTINCT g.op_day)::numeric AS gap_days,
+           count(DISTINCT g.op_day) FILTER (
+             WHERE g.started_at >= $3::timestamptz
+                   - INTERVAL '${CYCLE_WINDOW_DAYS} days'
+           )::numeric                        AS gap_days,
            COALESCE(MAX(ac.active_days), 0)  AS active_days
       FROM raw_gaps g
       LEFT JOIN active ac ON ac.aid = g.aid
@@ -529,6 +588,35 @@ export const CURRENT_CLOSURE_GAP_SQL = `
      )
      GROUP BY n.aid
   ),
+  -- How many rides in the PARK went CLOSED in that same minute.
+  --
+  -- Over $1 alone this count is whatever the caller happened to pass — one,
+  -- on a ride detail page — so the filter that separates a park-wide closing
+  -- from a single fault would always pass. It has to see the park.
+  --
+  -- It cannot be narrowed to the candidates for the reason above, and unlike
+  -- the other CTEs it is an INNER JOIN input in the FROM clause rather than a
+  -- correlated one -- so whether it runs at all when there is nothing to join
+  -- against comes down to which side the planner builds first. The EXISTS makes
+  -- the empty case free unconditionally, and empty is the normal case.
+  --
+  -- Gated on run_start rather than open_today, and defined ABOVE it, because
+  -- open_today now applies this CTE's own threshold. Gating it on open_today
+  -- would be circular, which is the only reason it sat below.
+  park_closers AS (
+    SELECT date_trunc('minute', qd.timestamp) AS minute, count(*) AS closers
+      FROM queue_data qd
+      JOIN attractions a ON a.id = qd."attractionId"
+     WHERE EXISTS (SELECT 1 FROM run_start)
+       AND a."parkId" = $4::uuid
+       AND a.retired_at IS NULL
+       AND qd."queueType" = 'STANDBY'
+       AND qd.status = 'CLOSED'
+       AND ${observedReadingsSql("qd")}
+       AND qd.timestamp >= $3::timestamptz - INTERVAL '${LIVE_LOOKBACK_HOURS} hours'
+       AND qd.timestamp <= $3::timestamptz
+     GROUP BY 1
+  ),
   -- Was it OPERATING earlier the same park-local day?
   --
   -- The two per-ride gates below used to sit in the final WHERE, after the
@@ -544,6 +632,16 @@ export const CURRENT_CLOSURE_GAP_SQL = `
       FROM recent r
       JOIN run_start s ON s.aid = r.aid
       CROSS JOIN park_open po
+      -- The most selective gate in the statement, and it used to sit in the
+      -- final WHERE below three CTEs that had already read 21 days for every
+      -- ride. It is the PR's own headline scenario: Phantasialand flips 40
+      -- rides to CLOSED at 18:10 with the park open until 20:00, so the two
+      -- duration gates pass, all 40 are materialised, and every row is thrown
+      -- away at closers = 40. Materialisation happens for the whole CTE the
+      -- moment it is first demanded, so no join order rescues it.
+      JOIN park_closers sm
+        ON sm.minute = date_trunc('minute', s.started_at)
+       AND sm.closers <= ${MAX_SIMULTANEOUS_CLOSERS}
      WHERE r.st = 'OPERATING'
        AND r.ts < s.started_at
        AND (r.ts AT TIME ZONE $2)::date = (s.started_at AT TIME ZONE $2)::date
@@ -557,16 +655,13 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   ),
   -- Is this ride on a duty cycle rather than broken?
   --
-  -- The same THRESHOLD the nightly statement uses, and the same triple, but not
-  -- the same window: this one is a fixed 21 days while the nightly runs from
-  -- scanStart to asOf, DEFAULT_WINDOW_DAYS 30 and wider whenever a running
-  -- outage pushes the scan back. The comment here said "the same window" and
-  -- that has never been true. It matters because the ratio is a share: the same
-  -- ride with eight gap days reads 8/21 live and 8/30-or-more nightly, so the
-  -- two can land on opposite sides of MAX_GAP_DAY_SHARE and disagree about
-  -- whether it is a fault. todo.md carries it with the rest of the live/history
-  -- divergence; unifying the window is a decision about the signal, not a
-  -- rewording.
+  -- The same threshold, the same triple, and now the same window: both take
+  -- CYCLE_WINDOW_DAYS rather than one taking a fixed 21 days while the other
+  -- took however far the nightly scan happened to reach. The comment here
+  -- claimed they matched long before they did -- see that constant for the
+  -- measurement that chose 30, and for why the number that decided it was not
+  -- the disagreement between the two windows but the 49 rides the shorter one
+  -- left without a duty-cycle test at all.
   --
   -- The three historical CTEs from here down read run_start, not $1, and that
   -- is the difference between judging the rides in a closure and judging the
@@ -610,7 +705,8 @@ export const CURRENT_CLOSURE_GAP_SQL = `
      WHERE qd."attractionId" = ANY(ARRAY(SELECT aid FROM open_today))
        AND qd."queueType" = 'STANDBY'
        AND ${observedReadingsSql("qd")}
-       AND qd.timestamp >= $3::timestamptz - INTERVAL '21 days'
+       AND qd.timestamp >= $3::timestamptz
+           - INTERVAL '${CYCLE_WINDOW_DAYS} days'
        AND qd.timestamp <  $3::timestamptz
     WINDOW w AS (PARTITION BY qd."attractionId" ORDER BY qd.timestamp)
   ),
@@ -666,7 +762,8 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        -- twin, one day of slack moved 330 intervals over 112 rides to 370 over
        -- 120, all of it dilution in the direction that publishes a timetable
        -- as a fault.
-       AND e.op_day >= (($3::timestamptz - INTERVAL '21 days')
+       AND e.op_day >= (($3::timestamptz
+                         - INTERVAL '${CYCLE_WINDOW_DAYS} days')
                         AT TIME ZONE $2)::date
        -- And an upper bound, which this had no more than its nightly twin did.
        -- $3 is now() in production so nothing lies beyond it today, but a
@@ -707,18 +804,20 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- drop today's entry whenever the page renders before the park opens, which
   -- is precisely when a ride's morning readings are being judged against it.
   --
-  -- The lower bound is 22 days for a 21-day window of readings, and the extra
-  -- day is not slack. The readings are cut at $3 - 21 days in UTC, but their
-  -- day is taken in the park's zone, so a row at the edge of the window lands
-  -- on local day 22 whenever a DST shift has moved it across local midnight.
-  -- Measured over every half hour of a winter in four park zones: 42 such
-  -- instants each -- a one-hour band on each of the 21 days after the shift,
+  -- The lower bound is one day WIDER than the reading window, and that day is
+  -- not slack. The readings are cut at $3 minus CYCLE_WINDOW_DAYS in UTC, but
+  -- their day is taken in the park's zone, so a row at the edge of the window
+  -- lands a local day earlier whenever a DST shift has moved it across local
+  -- midnight. Measured over every half hour of a winter in four park zones: 42
+  -- such instants each -- a one-hour band on each of the days after the shift,
   -- in Europe/Berlin, Europe/London, America/New_York and Australia/Sydney
-  -- alike. The join is an INNER one, so on the 21-day bound those readings are
-  -- dropped rather than counted, which moves early_days/days in the direction
-  -- of a ride looking more regular than it is. A day nothing references costs
-  -- one row of a CTE that has at most 23 (the bounds are inclusive on both
-  -- ends: local_date($3) - 22 through local_date($3)).
+  -- alike. The join is an INNER one, so without the extra day those readings
+  -- are dropped rather than counted, which moves early_days/days in the
+  -- direction of a ride looking more regular than it is.
+  --
+  -- Unlike the active denominator, an unused day here costs a row rather than
+  -- diluting anything: this CTE is JOINED to days that exist. The bounds are
+  -- inclusive on both ends, so it holds at most CYCLE_WINDOW_DAYS + 2 rows.
   park_day_close AS (
     -- Normalized for the same reason park_open is: a raw past-midnight close
     -- would make every day look like it ended early, and this feeds the filter
@@ -762,10 +861,12 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        -- than 14 hours from UTC, and se.date is deliberately not used here
        -- because 885 rows carry a date that does not match their opening's
        -- park-local day (npm run repair:schedule-dates).
-       AND se."openingTime" >= $3::timestamptz - INTERVAL '24 days'
+       AND se."openingTime" >= $3::timestamptz
+           - INTERVAL '${CYCLE_WINDOW_DAYS + 3} days'
        AND se."openingTime" <  $3::timestamptz + INTERVAL '2 days'
        AND (se."openingTime" AT TIME ZONE $2)::date
-           >= ($3::timestamptz AT TIME ZONE $2)::date - 22
+           >= ($3::timestamptz AT TIME ZONE $2)::date
+              - ${CYCLE_WINDOW_DAYS + 1}
        AND (se."openingTime" AT TIME ZONE $2)::date
            <= ($3::timestamptz AT TIME ZONE $2)::date
      GROUP BY 1
@@ -786,53 +887,35 @@ export const CURRENT_CLOSURE_GAP_SQL = `
       FROM (
         -- The same slice cycle reads, from run_readings, so the hypertable is
         -- visited once for both.
+        -- Every day BUT the one being judged. A ride standing still right now
+        -- has today's last OPERATING reading well before today's close, so it
+        -- counts itself as having ended early -- and on the fourth day of an
+        -- unrecovered outage it has manufactured four such days against a
+        -- denominator that is only days-with-published-hours. The longest and
+        -- most certain closures were the first to be suppressed as timetables.
         SELECT r.aid,
                (r.ts AT TIME ZONE $2)::date AS d,
                max(r.ts) FILTER (WHERE r.st = 'OPERATING') AS last_operating
           FROM run_readings r
+         WHERE (r.ts AT TIME ZONE $2)::date
+               < ($3::timestamptz AT TIME ZONE $2)::date
          GROUP BY 1, 2
       ) q
       JOIN park_day_close pdc ON pdc.d = q.d
      WHERE q.last_operating IS NOT NULL
      GROUP BY q.aid
-  ),
-  -- How many rides in the PARK went CLOSED in that same minute.
-  --
-  -- Over $1 alone this count is whatever the caller happened to pass — one,
-  -- on a ride detail page — so the filter that separates a park-wide closing
-  -- from a single fault would always pass. It has to see the park.
-  --
-  -- The last heavy CTE that had no guard of its own. It cannot be narrowed to
-  -- the candidates for the reason above, and unlike the other three it is an
-  -- INNER JOIN input in the FROM clause rather than a correlated one — so
-  -- whether it runs at all when there is nothing to join against comes down to
-  -- which side the planner builds first. The EXISTS makes the empty case free
-  -- unconditionally, and empty is the normal case: no ride sitting in a closure
-  -- means no row can come out of this statement anyway.
-  park_closers AS (
-    SELECT date_trunc('minute', qd.timestamp) AS minute, count(*) AS closers
-      FROM queue_data qd
-      JOIN attractions a ON a.id = qd."attractionId"
-     WHERE EXISTS (SELECT 1 FROM open_today)
-       AND a."parkId" = $4::uuid
-       AND a.retired_at IS NULL
-       AND qd."queueType" = 'STANDBY'
-       AND qd.status = 'CLOSED'
-       AND ${observedReadingsSql("qd")}
-       AND qd.timestamp >= $3::timestamptz - INTERVAL '${LIVE_LOOKBACK_HOURS} hours'
-       AND qd.timestamp <= $3::timestamptz
-     GROUP BY 1
   )
   SELECT s.aid                                   AS "attractionId",
          s.started_at                            AS "startedAt",
          sm.closers::int                         AS "simultaneousClosers"
     FROM run_start s
     JOIN open_today o ON o.aid = s.aid
+    -- Re-joined for the reported figure only; the threshold is applied in
+    -- open_today, above the CTEs that cost something.
     JOIN park_closers sm ON sm.minute = date_trunc('minute', s.started_at)
     LEFT JOIN cycle cy ON cy.aid = s.aid
     LEFT JOIN active ac ON ac.aid = s.aid
     LEFT JOIN early_end ee ON ee.aid = s.aid
-   CROSS JOIN park_open po
    -- Only in a park whose feed never says DOWN, and this has to be an EXISTS.
    --
    -- Read from the table that OWNS this answer, not re-derived beside it.
@@ -890,11 +973,14 @@ export const CURRENT_CLOSURE_GAP_SQL = `
               AND c.regime = 'never_reports'
          )
      AND EXISTS (SELECT 1 FROM park_open)
-     AND sm.closers <= ${MAX_SIMULTANEOUS_CLOSERS}
-     -- MIN_PARK_MINUTES_LEFT and MIN_GAP_MINUTES are applied in open_today,
-     -- above the three historical CTEs rather than below them. Repeating them
-     -- here would be free and is left out on purpose: two copies of a filter
-     -- is how this file's predicates have drifted before.
+     -- MAX_SIMULTANEOUS_CLOSERS, MIN_PARK_MINUTES_LEFT and MIN_GAP_MINUTES are
+     -- all applied in open_today, above the CTEs that read history rather than
+     -- below them. Repeating them here would be free and is left out on
+     -- purpose: two copies of a filter is how this file's predicates drifted
+     -- before. park_open is gone from the FROM clause for the same reason --
+     -- both its uses moved up, and a CROSS JOIN kept only as a guard duplicates
+     -- the EXISTS below while risking a row multiplication if LIMIT 1 ever
+     -- leaves park_open.
      -- Not a duty cycle. Below the day floor there is not enough to judge and
      -- the ride is kept, same as the nightly statement — and NULLIF for the
      -- same reason: the left arm is not a guard, because SQL does not promise

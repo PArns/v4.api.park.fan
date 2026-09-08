@@ -296,6 +296,11 @@ export class AttractionOutageService {
           };
         });
 
+        // Resolved once. curvesFor filters both the park array and the pooled
+        // array on every call, and the signal is the constant "down" for every
+        // row -- eight rides down meant eight identical filterings.
+        const downCurves = this.curvesFor(curves, park.id, "down");
+
         for (const row of rows) {
           const elapsed = Number(row.elapsedOperatingMinutes);
           out.set(row.attractionId, {
@@ -309,10 +314,7 @@ export class AttractionOutageService {
             // there with "just started".
             estimate:
               row.hasWindows && Number.isFinite(elapsed)
-                ? estimateOutage(
-                    this.curvesFor(curves, park.id, "down"),
-                    elapsed,
-                  )
+                ? estimateOutage(downCurves, elapsed)
                 : undefined,
           });
         }
@@ -343,9 +345,18 @@ export class AttractionOutageService {
     // The first half closes the last hole in the NOTE's scenario: the one ride
     // actually standing still had been filtered out of the closure candidates
     // on the strength of a status whose query had just answered nothing, so it
-    // was the only ride in the park with no line at all. Passing it in is free
-    // — the closure statement only returns rides whose newest reading is
-    // CLOSED, so a genuinely reported-DOWN ride does not match.
+    // was the only ride in the park with no line at all.
+    //
+    // It is nearly free rather than free, and the difference is worth stating.
+    // The closure statement only returns rides whose newest STANDBY reading is
+    // CLOSED, while `effectiveStatus` comes from the caller's own precedence
+    // chain over sources this statement never sees. When the two disagree, a
+    // ride badged DOWN can come back `closed_gap` and read „steht still" under
+    // a „Störung"-badge. That is the milder of the two errors on offer: it
+    // understates what we know, where withholding the line entirely leaves the
+    // one ride that IS standing still with nothing at all, and where the
+    // inverse — an inferred outage worded as a reported one — is the direction
+    // `CurrentOutage.signal` forbids outright.
     //
     // The second half is the difference between "no outage was found" and "we
     // could not look", and it is a wording question rather than a coverage one.

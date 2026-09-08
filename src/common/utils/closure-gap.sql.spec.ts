@@ -33,6 +33,27 @@ describe("closure-gap statements", () => {
     },
   );
 
+  it.each(both)("%s is structurally a statement, not a fragment", (_n, sql) => {
+    // Reordering the CTEs left `),` in front of the final SELECT, and nothing
+    // here caught it — the statement went to production as a syntax error that
+    // `addClosureGaps` would have swallowed into a warning, which is the exact
+    // failure this file's docblock describes. Two cheap invariants that a
+    // mis-edit trips and the compiler cannot see.
+    const bare = sql
+      .replace(/--[^\n]*/g, (m) => " ".repeat(m.length))
+      .replace(/'[^'\n]*'/g, (m) => " ".repeat(m.length));
+    // The CTE list ends with a closing paren, never a comma.
+    expect(bare).not.toMatch(/\),\s*SELECT\b/);
+    // And every parenthesis is closed.
+    let depth = 0;
+    for (const ch of bare) {
+      if (ch === "(") depth++;
+      else if (ch === ")") depth--;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    }
+    expect(depth).toBe(0);
+  });
+
   it.each(both)("%s bounds how far a gap may reach", (_n, sql) => {
     expect(sql).toContain(`INTERVAL '${MAX_GAP_HOURS} hours'`);
   });
@@ -70,8 +91,12 @@ describe("closure-gap statements", () => {
     const body = exists![1];
     expect(body).toContain('c."parkId" = $4::uuid');
     expect(body).toContain("c.regime = 'never_reports'");
-    // Nothing from the outer query may leak in, or it stops being an InitPlan.
-    expect(body).not.toMatch(/\bs\.|\bpo\.|\bsm\.|\bcy\.|\bac\.|\bee\./);
+    // Nothing from the outer query may leak in, or it stops being an InitPlan
+    // and PostgreSQL stops emitting the One-Time Filter. Asserted as "only c.
+    // and $4 appear", not as a list of today's aliases: an allowlist misses
+    // every alias added later, and correlating through any of them brings the
+    // 6-second statement back with a green suite.
+    expect(body.replace(/c\.|\$4/g, "")).not.toMatch(/\b\w+\./);
   });
 
   it.each(both)("%s cannot divide a gap share by zero", (_n, sql) => {
@@ -107,7 +132,14 @@ describe("closure-gap statements", () => {
    * assertions exist to catch.
    */
   const cteBody = (sql: string, name: string): string => {
-    const bare = sql.replace(/--[^\n]*/g, "");
+    // Comments AND string literals are blanked before the parentheses are
+    // counted: a literal containing a bracket decrements the counter early, and
+    // a truncated body makes every not.toContain below pass on text it never
+    // read — the same vacuous-assertion failure this helper exists to end, one
+    // level down. Blanked to the SAME LENGTH so offsets still address the
+    // original, which is what gets returned: the assertions need the real text.
+    const blank = (m: string) => " ".repeat(m.length);
+    const bare = sql.replace(/--[^\n]*/g, blank).replace(/'[^'\n]*'/g, blank);
     const head = bare.includes(`${name} AS MATERIALIZED (`)
       ? `${name} AS MATERIALIZED (`
       : `${name} AS (`;
@@ -117,7 +149,7 @@ describe("closure-gap statements", () => {
     for (let i = start + head.length - 1; i < bare.length; i++) {
       if (bare[i] === "(") depth++;
       else if (bare[i] === ")" && --depth === 0) {
-        const body = bare.slice(start, i);
+        const body = sql.slice(start, i);
         // The extraction itself must not be vacuous.
         expect(body).toContain("FROM");
         expect(body.length).toBeGreaterThan(head.length + 60);

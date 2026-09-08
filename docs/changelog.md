@@ -68,6 +68,46 @@ population the final select actually joins. On its own that changes nothing at a
 closed park, where `run_start` **is** the roster — the day-close hoist is what
 mattered there — but it removes the waste in an open one.
 
+### Changed — the duty-cycle window is 30 days in both statements, because it is a sample size
+
+`MAX_GAP_DAY_SHARE` and `MAX_EARLY_END_SHARE` are shares over a ride's
+**operating** days, so a calendar window does not choose a period of interest —
+it chooses how many samples the denominator gets. A park open at weekends
+contributes a third of what a daily park does over the same span.
+
+It was **21 days live against the nightly job's whole scan window**
+(`DEFAULT_WINDOW_DAYS` 30, wider whenever a running outage pushes the scan
+back), while the live comment claimed the two matched. Measured over the blind
+parks: of **2176 rides judged by both windows, 54 disagree** — 32 dropped at 21
+days that 30 days keeps, 22 the other way — so live and history could publish
+opposite verdicts about one ride.
+
+**The number that decided it was not that disagreement.** It is
+`MIN_DAYS_FOR_CYCLE_TEST`: **49 rides hold fewer than five operating days in 21
+and at least five in 30**, so for them the duty-cycle filter does not fire at
+all and their timetable is published as faults — the failure the filter exists
+to prevent, and larger than the disagreement in either direction. A 21-day
+window holds only 11 to 14 operating days in a seasonal park; LEGOLAND
+California's Dragon Coaster has the same 9 gap days in both windows and a
+denominator of 14 against 23. The short window was harshest on precisely the
+parks with the thinnest calendar. Rides with under ten samples fall from 500 to
+421; the median ride barely moves (20 operating days against 28).
+
+The threshold survives the move, which had to be checked because 0.5 was
+calibrated on a 21-day measurement: the share distribution keeps its shape in
+both windows — mass at 0.2–0.4, and the cliff between the 0.4 bucket (269 rides
+at 21 days, 216 at 30) and the 0.5 bucket (90 either way).
+
+Both statements take `CYCLE_WINDOW_DAYS` now, so the nightly test no longer
+inherits however far its scan happened to reach. At the production window the
+stored output is unchanged (512 intervals over 126 rides either way). Live, 7 of
+30 replayed instants change and 6 of those gain a line — including **Dragon
+Coaster at LEGOLAND California**, a closure the nightly reconstruction had
+stored while the live line withheld it. And it costs nothing measurable:
+`run_readings` is keyed on `open_today`, so the extra nine days are read only
+for the handful of rides actually in a closure — 204 parks in 0.50 s, mean
+2.5 ms.
+
 ### Fixed — the duty-cycle denominator was counted in the wrong zone, unbounded, and over every ride in the database
 
 `active` counts a ride's operating days, and `gap_days / active_days` is what
