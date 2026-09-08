@@ -94,6 +94,50 @@ describe("closure-gap statements", () => {
     );
   });
 
+  it.each(both)("%s hoists the day close out of the row loop", (_n, sql) => {
+    // The 21.5-s-of-24-s regression, and it is one edit away from returning.
+    // early_end used to resolve the park's closing time through a LATERAL, so
+    // every queue_data row it read carried its own schedule lookup: 28 485
+    // executions of one bitmap index scan at Alton Towers, for a table with at
+    // most 23 rows to offer. Neither statement has any business running a
+    // correlated subquery per reading.
+    expect(sql).not.toContain("JOIN LATERAL");
+  });
+
+  it("the live historical CTEs judge the rides in a closure, not the park", () => {
+    // cycle, active and early_end are read only through LEFT JOINs against
+    // run_start, but all three used to be handed $1 — the whole roster, which
+    // park_closers needs and they do not. A 96-ride park scanned 21 days of
+    // queue_data 96 times over. Reverting any one of them to $1 is silent.
+    const live = CURRENT_CLOSURE_GAP_SQL;
+    for (const cte of ["cycle AS (", "active AS (", "early_end AS ("]) {
+      const start = live.indexOf(cte);
+      expect(start).toBeGreaterThan(-1);
+      const body = live.slice(start, live.indexOf("),\n", start));
+      expect(body).toContain("ARRAY(SELECT aid FROM run_start)");
+      expect(body).not.toContain("ANY($1::uuid[])");
+    }
+  });
+
+  it("both pseudoconstant gates are EXISTS, not joins", () => {
+    // park_open is the same argument as the regime check and the costlier one:
+    // a shut park is where run_start IS the roster, so the three historical
+    // CTEs are at their most expensive exactly when the CROSS JOIN is about to
+    // throw the result away. Alton Towers 586.4 ms to 10.2, Phantasialand
+    // 707.6 to 3.8, both measured after closing time.
+    expect(CURRENT_CLOSURE_GAP_SQL).toContain(
+      "WHERE EXISTS (SELECT 1 FROM park_open)",
+    );
+  });
+
+  it("no statement carries a backtick, which would end the template literal", () => {
+    // Twice now a comment written with Markdown-style backticks silently
+    // terminated the template literal and produced a wall of parser errors far
+    // from the edit. The compiler does say so, but only after the fact and
+    // never about the real cause.
+    for (const [, sql] of both) expect(sql).not.toContain("`");
+  });
+
   it("the nightly statement honours the curated works period", () => {
     // The DOWN reconstruction excludes it and the guarantee carries no signal
     // qualifier — "inside it nothing is reported". A ride mid-rebuild cycles

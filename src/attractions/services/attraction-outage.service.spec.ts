@@ -68,14 +68,15 @@ describe("AttractionOutageService — the closure path", () => {
     ]);
   });
 
-  it("still asks it for the other rides when one ride reads DOWN and has no run", async () => {
-    // The regression this file exists for. Gating the closure query on "nobody
-    // here is DOWN" looks equivalent to the statement's own population check
-    // and is not — and the code reached that outcome by another road: it
-    // returned early when the DOWN query came back empty. On the day a blind
-    // park emits its first DOWN, with a run too short or too old for the
-    // trailing statement to place, that one ride took the closure line away
-    // from every other ride in the park.
+  it("asks it for EVERY ride the DOWN query did not place, the DOWN one included", async () => {
+    // The regression this file exists for, in both its halves.
+    //
+    // It returned early when the DOWN query came back empty, which is the NOTE
+    // reached by a different road — so every other ride in the park lost its
+    // closure line. And the ride that reads DOWN was filtered out of the
+    // candidates on the strength of a status whose query had just answered
+    // nothing, so the one ride actually standing still was the only ride with
+    // no line at all.
     //
     // Both queries take four parameters; the closure one is the query whose
     // fourth is the park id.
@@ -85,6 +86,29 @@ describe("AttractionOutageService — the closure path", () => {
 
     const closureCall = query.mock.calls.find((c) => c[1][3] === PARK.id);
     expect(closureCall).toBeDefined();
+    expect(closureCall![1][0]).toEqual([OPEN_RIDE.id, DOWN_RIDE.id]);
+  });
+
+  it("does not re-ask for a ride the DOWN query already placed", async () => {
+    query.mockImplementation((_sql: string, params: unknown[]) =>
+      Array.isArray(params) && params[3] === PARK.id
+        ? Promise.resolve([])
+        : Promise.resolve([
+            {
+              attractionId: DOWN_RIDE.id,
+              startedAt: new Date("2026-09-08T09:00:00Z"),
+              startObserved: true,
+              rowsInRun: 3,
+              elapsedOperatingMinutes: 45,
+              hasWindows: true,
+            },
+          ]),
+    );
+
+    const out = await service.getCurrentOutages(PARK, [OPEN_RIDE, DOWN_RIDE]);
+
+    expect(out.get(DOWN_RIDE.id)?.signal).toBe("down");
+    const closureCall = query.mock.calls.find((c) => c[1][3] === PARK.id);
     expect(closureCall![1][0]).toEqual([OPEN_RIDE.id]);
   });
 

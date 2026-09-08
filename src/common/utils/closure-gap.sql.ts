@@ -538,7 +538,13 @@ export const CURRENT_CLOSURE_GAP_SQL = `
            count(*) FILTER (WHERE e.operating_minutes > 0)::numeric AS active_days
       FROM attraction_exposure_days e
      WHERE e."attractionId" = ANY(ARRAY(SELECT aid FROM run_start))
-       AND e.op_day >= ($3::timestamptz - INTERVAL '21 days')::date
+       -- Park-local, because op_day is. Casting $3 - 21 days to ::date takes
+       -- the SESSION zone (UTC in production), and the two answers disagree
+       -- for 56 of the 91 blind parks at any given instant — one operating day
+       -- more or less. That day drives both the MIN_DAYS_FOR_CYCLE_TEST gate
+       -- and the gap_days/active_days ratio, and the gate sits at 5, so a
+       -- ride can cross it on the cast alone.
+       AND e.op_day >= ($3::timestamptz AT TIME ZONE $2)::date - 21
      GROUP BY e."attractionId"
   ),
   -- When the park shut, once per day it published hours for.
@@ -570,7 +576,8 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- alike. The join is an INNER one, so on the 21-day bound those readings are
   -- dropped rather than counted, which moves early_days/days in the direction
   -- of a ride looking more regular than it is. A day nothing references costs
-  -- one row of a CTE that has at most 22.
+  -- one row of a CTE that has at most 23 (the bounds are inclusive on both
+  -- ends: local_date($3) - 22 through local_date($3)).
   park_day_close AS (
     -- Normalized for the same reason park_open is: a raw past-midnight close
     -- would make every day look like it ended early, and this feeds the filter
@@ -582,11 +589,18 @@ export const CURRENT_CLOSURE_GAP_SQL = `
      WHERE se."parkId" = $4::uuid
        AND se."attractionId" IS NULL
        AND se."scheduleType" = 'OPERATING'
+       -- Defensive, and currently a no-op: 0 of 10 600 OPERATING park rows in
+       -- the blind parks carry a null close. Without it such a day still joins
+       -- with a NULL closes_at, counts in the days denominator, and can never
+       -- count as an early day -- a denominator inflated with days that cannot
+       -- answer the question, biased towards publishing a timetable as a fault.
+       -- parkOpenWindowCtes guards the same thing for the same reason.
+       AND se."closingTime" IS NOT NULL
        -- The local-date pair is the authority; this pair only lets an index
        -- prune. Wrapping openingTime in AT TIME ZONE ... ::date is not
        -- sargable, so without it the scan reads every OPERATING row the park
        -- has ever published (276 at Alton Towers, 616 at the worst park, 189
-       -- on average) to keep at most 22 — and grows with how far ahead the
+       -- on average) to keep at most 23 — and grows with how far ahead the
        -- park publishes, which has nothing to do with this question.
        --
        -- Two days of slack on each side of what the date pair can select, so
@@ -690,7 +704,26 @@ export const CURRENT_CLOSURE_GAP_SQL = `
    --
    -- Keep it a bare EXISTS on $4 alone. Correlate it with anything from the
    -- rows above and it stops being an InitPlan, which is the whole mechanism.
-   WHERE EXISTS (
+   -- The same argument a second time, and it is the one that costs most.
+   --
+   -- park_open is CROSS JOINed just above, so a shut park already returns
+   -- nothing — but a CROSS JOIN is a join node, not a guard, which is the whole
+   -- point of the paragraph below. And a shut park is the expensive case: every
+   -- ride's newest reading is CLOSED, so run_start IS the roster (45 of 54 at
+   -- Alton Towers) and the three historical CTEs scan 21 days of queue_data for
+   -- all of them, to be discarded by an empty join.
+   --
+   -- That was the peak the old statement was measured at: Futuroscope read
+   -- 31 655 ms at closing time and 2.8 ms the same evening, and it was the
+   -- park having shut rather than any cache. As a pseudoconstant qual:
+   -- Alton Towers 586.4 ms to 10.2, Phantasialand 707.6 to 3.8, both shut for
+   -- the night, 127 nodes never executed. SeaWorld Orlando, still open, is
+   -- unchanged at ~20 ms because it still has the work to do.
+   --
+   -- Redundant with the CROSS JOIN by construction, never instead of it: an
+   -- empty park_open makes the join produce nothing and this produce false.
+   WHERE EXISTS (SELECT 1 FROM park_open)
+     AND EXISTS (
            SELECT 1
              FROM park_downtime_coverage c
             WHERE c."parkId" = $4::uuid

@@ -227,14 +227,16 @@ export class AttractionOutageService {
       return out;
     }
 
-    // NOTE: the closure query runs after the DOWN query below, for the rides
-    // that are NOT reading DOWN — it is not skipped just because some other
-    // ride in the park is. Gating it on "nobody here is DOWN" looked equivalent
-    // to the SQL's own population check and is not: the regime is recomputed
-    // once a night, so on the day a blind park emits its first-ever DOWN, that
-    // one ride would silently take the closure line away from every other ride
-    // in the park — and because the projection sends `outage` on every poll,
-    // the note would visibly vanish for a ride that had not recovered.
+    // NOTE, and the three ways this has been got wrong: the closure query runs
+    // for every ride the DOWN query did not place, and nothing short of the
+    // statement's own population check may stop it. Not "some other ride in
+    // this park reads DOWN", not "the DOWN query came back empty", and not "the
+    // ride in question reads DOWN". Each of those looked equivalent to the
+    // SQL's check and each silently took the closure line away from rides that
+    // were standing still — on the day a blind park emits its first-ever DOWN,
+    // which is the one day the two signals meet. Because the projection sends
+    // `outage` on every poll, the note visibly vanishes for a ride that had not
+    // recovered.
 
     const since = new Date(
       asOf.getTime() - TRAILING_OUTAGE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
@@ -258,36 +260,31 @@ export class AttractionOutageService {
         [[park.id], since, until, ids],
       );
 
-      // No early return on an empty result, and that is the point.
-      //
-      // It used to `return out` here, which is the very thing the NOTE above
-      // forbids, reached by a different road: the closure query is skipped not
-      // because a ride reads DOWN but because the DOWN query found nothing for
-      // it. On the day a blind park emits its first DOWN — a run too short or
-      // too old for the trailing statement to place — that one ride would take
-      // the closure line away from every other ride in the park, silently, on
-      // the path that is the only reason the closure signal exists.
-      const curves = rows.length > 0 ? await this.loadCurves() : null;
+      // No early return on an empty result, and that is the point: it used to
+      // `return out` here, which is the NOTE above reached by a different road.
+      if (rows.length > 0) {
+        const curves = await this.loadCurves();
 
-      for (const row of rows) {
-        const elapsed = Number(row.elapsedOperatingMinutes);
-        out.set(row.attractionId, {
-          startedAt: new Date(row.startedAt),
-          startObserved: row.startObserved === true,
-          rowsInRun: Number(row.rowsInRun) || 0,
-          signal: "down",
-          // A park that publishes no hours has no operating clock, so its
-          // elapsed figure is zero for a reason that has nothing to do with the
-          // ride. Reading a curve at that zero would answer every outage there
-          // with "just started".
-          estimate:
-            row.hasWindows && Number.isFinite(elapsed)
-              ? estimateOutage(
-                  this.curvesFor(curves!, park.id, "down"),
-                  elapsed,
-                )
-              : undefined,
-        });
+        for (const row of rows) {
+          const elapsed = Number(row.elapsedOperatingMinutes);
+          out.set(row.attractionId, {
+            startedAt: new Date(row.startedAt),
+            startObserved: row.startObserved === true,
+            rowsInRun: Number(row.rowsInRun) || 0,
+            signal: "down",
+            // A park that publishes no hours has no operating clock, so its
+            // elapsed figure is zero for a reason that has nothing to do with
+            // the ride. Reading a curve at that zero would answer every outage
+            // there with "just started".
+            estimate:
+              row.hasWindows && Number.isFinite(elapsed)
+                ? estimateOutage(
+                    this.curvesFor(curves, park.id, "down"),
+                    elapsed,
+                  )
+                : undefined,
+          });
+        }
       }
     } catch (error) {
       // A line under a badge is a nicety; the park page is not. The same
@@ -300,20 +297,21 @@ export class AttractionOutageService {
       );
     }
 
-    // The rides that are not reading DOWN may still be sitting in a closure.
+    // Every ride that did not come back with a `down` line, which INCLUDES the
+    // rides that read DOWN and got nothing from the query above.
     //
-    // The statement restricts itself to blind parks, and this sentence used to
-    // add "so in a park that reports DOWN this returns nothing and costs one
-    // indexed lookup". It did not. The restriction was a CTE brought in with
-    // CROSS JOIN, which is a join node and not a guard, so every historical CTE
-    // ran first and the test was applied last — 6 s per call, 79 % of the
-    // database, for a park that provably had no row to give. It is an
-    // uncorrelated EXISTS now and the claim is true: PostgreSQL evaluates it
-    // once as an InitPlan and never demands the subtree. Europa-Park went from
-    // 939.8 ms to 2.3 ms. The check stays in the SQL, where the answer's owner
-    // is one join away, rather than becoming a second reader of the regime here.
-    const downIds = new Set(ids);
-    const notDown = allIds.filter((id) => !downIds.has(id));
+    // Excluding those was the last hole in the scenario the NOTE describes: the
+    // one ride actually standing still ended up the only ride in the park with
+    // no line at all, because it was filtered out of the closure candidates on
+    // the strength of a status whose query had just answered nothing. Passing
+    // it in is free — the closure statement only ever returns rides whose
+    // newest reading is CLOSED, so a genuinely reported-DOWN ride simply does
+    // not match.
+    //
+    // Restricting to blind parks is the statement's own job, in SQL — see the
+    // EXISTS at the bottom of CURRENT_CLOSURE_GAP_SQL for why it is written the
+    // way it is.
+    const notDown = allIds.filter((id) => !out.has(id));
     if (notDown.length > 0) {
       await this.addClosureGaps(park, notDown, asOf, out);
     }

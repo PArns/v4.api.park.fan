@@ -1,5 +1,54 @@
 # TODO
 
+## early_end attributes a reading to its calendar date, not its operating window (measured 2026-09-08, not fixed)
+
+`CURRENT_CLOSURE_GAP_SQL`'s `early_end` buckets each `queue_data` reading by its
+own park-local **date**, then compares it against a closing time anchored to the
+**opening's** date and rolled past midnight by `normalizedClosingSql`. In a park
+that closes after local midnight the two disagree by a day, and the comparison
+`last_operating < closes_at - 60 min` is then true for every reading of every
+day: `early_days / days` converges on 1.0, exceeds `MAX_EARLY_END_SHARE`, and
+the ride is dropped as timetabled. **The closure signal is silently off for that
+park.**
+
+Measured over the last 30 days of published hours in the 91 blind parks:
+
+| park | published days | days closing past local midnight |
+| --- | ---: | ---: |
+| Six Flags Qiddiya City | 42 | **42** |
+| Gardaland | 107 | 1 |
+| Parc Asterix | 74 | 1 |
+| SeaWorld Orlando | 387 | 1 |
+| Busch Gardens Tampa | 387 | 1 |
+
+So one blind park is affected systematically and four on a single event night
+each.
+
+**It is pre-existing.** The `LATERAL` this was hoisted out of correlated on the
+same date equality and used the same normalized close, so the behaviour is
+unchanged — which is why the equivalence check passes and why it is not fixed
+here.
+
+The fix is `parkOpenWindowCtes()` in `park-open-window.sql.ts`, whose docblock
+already names this exact failure ("Anchor a segment to its WINDOW's day, not its
+own date … La Ronde does this every day of the season"). It also flattens
+overlapping windows and guards a null close, which `park_day_close` does not.
+Two things make it a separate change rather than a line:
+
+1. Its parameters are `$1` park filter, `$2`/`$3` window bounds; the live
+   statement's are `$1` attractions, `$2` timezone, `$3` as-of, `$4` park. The
+   helper needs configurable placeholders before either statement can use it.
+2. Joining readings to a window instead of to a date also **drops readings that
+   fall outside opening hours**, and `queue_data` is a change log — rides read
+   `OPERATING` for hours after a park shuts ([[project_queue_data_last_known_value]]).
+   That is more correct, and it changes `last_operating` for **every** park, not
+   only the past-midnight ones. It needs its own before/after over the
+   population, not a note in a performance PR.
+
+Also parked with it: `park_day_close` is a third hand-rolled copy of "when does
+this park's day end" (`park_open` in the same statement is a second), and the
+helper is the place all three should meet.
+
 ## The ML feature fetch reads 730 days to use ~300 (measured 2026-09-08, not fixed)
 
 `fetch_recent_wait_times()` (`ml-service/predict.py:218`) pulls **730 days** of
