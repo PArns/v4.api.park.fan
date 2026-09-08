@@ -1,4 +1,6 @@
 import {
+  SHOW_LATE_LEAD_MAX_MIN,
+  SHOW_LATE_LEAD_MIN,
   SHOW_LEAD_MAX_MIN,
   SHOW_LEAD_MIN,
   dueShowNotifications,
@@ -175,5 +177,68 @@ describe("dueShowNotifications", () => {
 
   it("answers an empty list for no followed shows", () => {
     expect(dueShowNotifications([], NOW)).toEqual([]);
+  });
+
+  /**
+   * The second window. Somebody who taps the bell twenty minutes before a
+   * performance is already past the first one, and used to get nothing at
+   * all for that performance. Whether the SAME follower is spared a second
+   * banner is not decided here but by the dedupe key, which is identical in
+   * both windows — the property pinned below.
+   */
+  describe("the late window", () => {
+    it("notifies about a showtime too close for the first window", () => {
+      const due = dueShowNotifications(
+        [show({ showtimes: [{ startTime: minutesFromNow(10) }] })],
+        NOW,
+      );
+      expect(due).toHaveLength(1);
+      expect(due[0]).toMatchObject({ inMinutes: 10, atTime: "20:10" });
+    });
+
+    it("includes both edges", () => {
+      for (const lead of [SHOW_LATE_LEAD_MIN, SHOW_LATE_LEAD_MAX_MIN]) {
+        expect(
+          dueShowNotifications(
+            [show({ showtimes: [{ startTime: minutesFromNow(lead) }] })],
+            NOW,
+          ),
+        ).toHaveLength(1);
+      }
+    });
+
+    it("excludes both sides of it", () => {
+      for (const lead of [SHOW_LATE_LEAD_MIN - 1, SHOW_LATE_LEAD_MAX_MIN + 1]) {
+        expect(
+          dueShowNotifications(
+            [show({ showtimes: [{ startTime: minutesFromNow(lead) }] })],
+            NOW,
+          ),
+        ).toHaveLength(0);
+      }
+    });
+
+    it("leaves the gap between the two windows quiet", () => {
+      const due = dueShowNotifications(
+        [show({ showtimes: [{ startTime: minutesFromNow(20) }] })],
+        NOW,
+      );
+      expect(due).toHaveLength(0);
+    });
+
+    it("carries the same dedupe key as the first window, so a follower already told stays quiet", () => {
+      const startTime = new Date(NOW + 40 * 60_000).toISOString();
+      const earlyTick = dueShowNotifications(
+        [show({ showtimes: [{ startTime }] })],
+        NOW + 10 * 60_000, // 30 minutes ahead — the first window
+      );
+      const lateTick = dueShowNotifications(
+        [show({ showtimes: [{ startTime }] })],
+        NOW + 30 * 60_000, // 10 minutes ahead — the second
+      );
+      expect(earlyTick).toHaveLength(1);
+      expect(lateTick).toHaveLength(1);
+      expect(lateTick[0].dedupeKey).toBe(earlyTick[0].dedupeKey);
+    });
   });
 });

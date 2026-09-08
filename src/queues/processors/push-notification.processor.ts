@@ -39,7 +39,8 @@ import { PushSubscription } from "../../push/entities/push-subscription.entity";
  * sending the same thing twice.
  *
  * The first is the WINDOW OVERLAP. Both lookaheads are wider than this five-
- * minute tick (10–20 min for a trip block, 25–35 for a show), so an event is
+ * minute tick (10–20 min for a trip block, 25–35 and again 8–14 for a
+ * show — see `SHOW_LATE_LEAD_MIN`), so an event is
  * due on two or three consecutive ticks. That overlap is deliberate — at
  * exactly one tick's width a single missed run drops the notification and
  * nothing retries — and it is paid for here with a Redis key per (endpoint,
