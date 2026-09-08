@@ -6,6 +6,31 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — the four held free-flow playgrounds are curated, and the month rule is written down
+
+`season_months` and `open_with_park` were curated on 2026-09-09 for Europa-Park's
+_Lítill Island_ `[3–9]` and _Water Playground_ `[3–10]`, Everland's _Snow
+playground_ `[12, 1, 2]` and Bellewaerde's _Snowmen Playground_ `[11, 12, 1]`,
+each against the operator's own calendar, each with the source on its audit row.
+Toverland's _Kletterparcours_ was retired with `retired_at = 2025-11-02`.
+
+The open question those curations had been waiting on was **"is March in or
+out?"**, and it is not answerable ride by ride — so the rule is now in
+[Attraction Status & Seasonality §7a](architecture/attraction-status-and-seasonality.md):
+a month goes in when the operator's season covers more than a remainder of the
+days the **park** is open that month. Open days, not calendar days, which makes
+the denominator a `schedule_entries` query rather than a judgement call. That
+puts March in for Europa-Park (season from the 28th, park open from the 22nd)
+and November out (Halloween touches only the 1st, of 30 open days).
+
+Two corrections went with it. §7 told curators to
+`UPDATE attractions SET open_with_park = true` and then evict one Redis key by
+hand; it now points at `PATCH /v1/admin/content/attractions/:id`, which carries
+the full write → evict → revalidate → revalidate-again order and writes the
+audit row. And the Kletterparcours demolition date read 2026-11-02, a year out.
+
+Documentation and curation only — no code changed.
+
 ### Fixed — the live closure-gap query was 79 % of the database's CPU, and it was answering nothing
 
 Production, 2026-09-08, sampled over 90 s: `CURRENT_CLOSURE_GAP_SQL` was **79 %

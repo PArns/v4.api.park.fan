@@ -482,26 +482,47 @@ found 76 name-matched candidates; 47 already report OPERATING (the feed handles
 them), 4 sit in Hansa-Park where the flag deliberately cannot fire, and 25 were
 researched one by one against the operators' own pages. 14 were flagged.
 
+> **"The feed handles them" no longer holds for Europa-Park.** On 2026-06-08,
+> 45 of the park's no-queue attractions flipped from permanently OPERATING to
+> permanently CLOSED and have not reported OPERATING since — playgrounds,
+> carousels, monorail stations, the Coastiality pair. Rides with a real queue
+> are unaffected. The sweep that produced the 47 ran on 2026-08-15, i.e. after
+> the flip, so that number may be stale elsewhere too. Tracked separately; do
+> not read either side of 2026-06-08 as evidence about a season.
+
 **Deliberately not flagged — genuinely seasonal, at parks open year-round:**
 
 - [x] **The season gate exists now** — `isFreeFlowOpen` takes `seasonMonths` +
       the park timezone, and the detector no longer owns the months on a
       free-flow row. What is still missing is the months themselves.
-- [ ] Curate `season_months` for Europa-Park — _Lítill Island_ (summer) and
-      _Water Playground_ (summer + Halloween); Everland — _Snow playground_
-      (winter); Bellewaerde — _Snowmen Playground_ (Christmas event only), then
-      set `open_with_park`. **Needs season-date research first**: "summer" is
-      not a month list, Europa-Park's summer season opens in late March (is 3 in
-      or out?), and Everland's snow-park closing date was never confirmed by a
-      fetched source. These are curation calls against the operator's calendar,
-      not util logic.
+- [x] **Curated, 2026-09-09** — Europa-Park _Lítill Island_ `[3–9]` and
+      _Water Playground_ `[3–10]`, Everland _Snow playground_ `[12, 1, 2]`,
+      Bellewaerde _Snowmen Playground_ `[11, 12, 1]`, all four with
+      `open_with_park`. Sources on each audit row.
+
+      **The rule that answered "is 3 in or out?"**, because the next such
+      curation needs the same answer: a month goes in when the operator's season
+      covers more than a remainder of the days the **park** is open that month.
+      Not the calendar days — the open ones. Europa-Park's summer starts 28
+      March and the park opens on the 22nd, so the season holds 4 of 10 open
+      March days and 3 is in. Halloween ends 1 November while the park is open
+      on 30 November days, so 11 is out for the Water Playground even though the
+      season formally touches it. The same test drops 3 at Everland (the snow
+      park runs to about 1 March, and Everland is open all 31).
+
+      Month granularity cannot express a season that starts mid-month, so every
+      one of these carries a few wrong days a year by construction. The rule
+      picks the side with fewer of them, and `isInSeason`'s own bias settles
+      ties towards open — a missing fact must not invent a restriction.
 - [ ] **Season unknown, water-based, park open year-round** — Peppa Pig
       _Muddy Puddles Splash Pad_, Walibi Rhône-Alpes _Exotic Island 3-6_ and
       _7-12_. Confirmed free-flow, but no source states an operating window, and
       a water play area plausibly closes in cold months. Held rather than
-      guessed. (The splash pads at _seasonal parks_ — Water Country USA,
-      Hurricane Harbor Arlington — were flagged: the park-status gate does the
-      seasonal work there.)
+      guessed. Re-checked 2026-09-09 against the operators' own pages: neither
+      states a window, so the hold stands rather than merely persists. (The
+      splash pads at _seasonal parks_ — Water Country USA, Hurricane Harbor
+      Arlington — were flagged: the park-status gate does the seasonal work
+      there.)
 
 **`season_months` can encode the observation window, not a season:**
 
@@ -531,25 +552,47 @@ researched one by one against the operators' own pages. 14 were flagged.
       client cannot do is tell "out of season" from "no data", because
       `isCurrentlyInSeason` is `null` in both cases.
 
-**Unresolved identities — researched, not concluded:**
+**Unresolved identities — concluded 2026-09-09, except where noted:**
 
-- [ ] Heide Park **"PLAYGROUND"** — no source ties this record to a specific
-      physical area; the park's own attraction overview names no standalone
-      playground. Possibly a feed artefact.
-- [ ] Plopsaland De Panne **"The Pirates' Playground"** — absent from the
-      official sitemap in all four languages, old URLs 404. Evidence points to
-      removal; needs a decision (delete vs keep).
-- [ ] LEGOLAND Korea **"Cole's Rock Climbing"** — the official page's entire
-      body text does not say whether it is a walk-up wall or a staffed harnessed
-      one. Sister parks point free-flow, but that is cross-park inference.
-- [ ] Toverland **"Kletterparcours"** is **gone** — a harnessed high-ropes course
-      (140 cm minimum, 120 kg max), permanently closed after 2 Nov 2025, and its
-      Toverland page 404s. It is still in our DB. Note it was never free-flow:
-      flagging it by name pattern would have advertised a demolished attraction
-      as always open.
-- [ ] Movie Park **"Teenage Mutant Ninja Turtles: License to Drive"** has never
-      once reported OPERATING since its first row on 2025-12-24. Unclear whether
-      it is unopened, removed, or mis-fed.
+- [x] Heide Park **"PLAYGROUND"** is **five playgrounds, not an artefact**. The
+      upstream entity API returns five distinct coordinate pairs inside the park
+      for external ids 15385, 15386, 15387, 15390 and 15391 — it simply gives
+      all five the same name. Four of the five rows only appeared on 18/19
+      August 2026, so the upstream was backfilling, not duplicating. The
+      identity question is closed; whether they should carry `open_with_park`
+      is a separate call nobody has made yet.
+- [x] Plopsaland De Panne **"The Pirates' Playground"** is **no longer listed by
+      the operator**. plopsa.com's sitemap (lastmod 2026-09-06) names
+      `bumbas-speeltuin` and `willies-speeltuin` as the park's playgrounds and
+      no pirate one in any of the four languages; the old URLs answer "Pagina
+      niet gevonden". The pirate theming survives as a ride, a restaurant and a
+      shop. **Deliberately not retired**: the evidence is an absence, and a
+      retirement is a claim about the world that needs a date and a source.
+      Neither exists. Revisit if the operator ever says so.
+- [ ] LEGOLAND Korea **"Cole's Rock Climbing"** — still unstated by the
+      operator. Re-checked 2026-09-09: the Korea page carries one sentence of
+      body text and no restriction block at all. What is new is that LEGOLAND
+      Japan types the same-named installation officially as "Play Area
+      (Covered)", "Freely climb", height restriction "No limit", target age
+      "all" — but that is the same cross-park inference the question already
+      stalled on, so the flag stays off. **What would settle it**: a restriction
+      line on the Korea page, or the park map's legend.
+- [x] Toverland **"Kletterparcours"** — **retired 2026-09-09** with
+      `retired_at = 2025-11-02`. Toverland's own blog says goodbye to it on 3
+      November 2025, the 2004 high-ropes course made way for a holiday resort,
+      and Looopings photographed the cleared site. It was never free-flow
+      (harnessed, 140 cm minimum) — flagging it by name pattern would have
+      advertised a demolished attraction as permanently open.
+- [ ] Movie Park **"Teenage Mutant Ninja Turtles: License to Drive"** — **the
+      feed is wrong, not the ride.** Movie Park lists it as a current
+      nickelodeon LAND attraction, 121–150 cm, season "All Year". We hold 4737
+      rows and every one says CLOSED, across two independent sources
+      (themeparks-wiki to 2026-04-23, queue-times since), and ThemeParks.wiki's
+      live endpoint now returns an empty `liveData`. It is not free-flow — a
+      staffed children's driving school with a height window — so
+      `open_with_park` is the wrong tool. The correction that fits is
+      `curated_is_seasonal = false`; left unwritten here because it was outside
+      the ticket that established this.
 
 **The wider backlog (not yet touched):**
 
