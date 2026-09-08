@@ -85,6 +85,28 @@ export class PushNotificationProcessor {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
+  /**
+   * Daily sweep of follows whose performance is over.
+   *
+   * On this queue rather than a new one: it is the same subject, it runs once
+   * a day against an index, and a queue exists to isolate work that competes
+   * for throughput — this competes with nothing. Same shape as
+   * `TripsMaintenanceProcessor`, down to staying quiet on zero.
+   */
+  @Process("sweep-expired-follows")
+  async handleSweepExpiredFollows(_job: Job): Promise<void> {
+    try {
+      const removed = await this.showFollowsService.sweepExpired();
+      if (removed > 0) {
+        this.logger.log(`🧹 Swept ${removed} expired show follow(s)`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Show-follow sweep failed: ${message}`);
+      throw error;
+    }
+  }
+
   @Process("send-due-notifications")
   async handleDue(_job: Job): Promise<void> {
     // No keypair, no work. Checked here as well as at the subscribe endpoint

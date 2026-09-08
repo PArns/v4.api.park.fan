@@ -25,9 +25,11 @@ describe("ShowFollowsService", () => {
     createQueryBuilder: jest.Mock;
   };
   let service: ShowFollowsService;
+  let deleteCutoff: Date | undefined;
 
   beforeEach(async () => {
     followRows = new Map();
+    deleteCutoff = undefined;
     showRows = new Map([
       [
         "show-1",
@@ -97,8 +99,42 @@ describe("ShowFollowsService", () => {
       // different performance.
       createQueryBuilder: jest.fn(() => {
         let pending: Partial<ShowFollow> = {};
+        // The sweep's chain: .delete().from().where().andWhere().execute() —
+        // standing in for `DELETE ... WHERE "startTime" IS NOT NULL AND
+        // "startTime" < $cutoff`, which is what the real query issues.
+        const deleteBuilder: {
+          from: () => typeof deleteBuilder;
+          where: (sql: string) => typeof deleteBuilder;
+          andWhere: (
+            sql: string,
+            params: { cutoff: Date },
+          ) => typeof deleteBuilder;
+          execute: () => Promise<{ affected: number }>;
+        } = {
+          from: jest.fn(() => deleteBuilder),
+          where: jest.fn(() => deleteBuilder),
+          andWhere: jest.fn((_sql: string, params: { cutoff: Date }) => {
+            deleteCutoff = params.cutoff;
+            return deleteBuilder;
+          }),
+          execute: jest.fn(async () => {
+            let affected = 0;
+            for (const [id, row] of [...followRows]) {
+              if (
+                row.startTime &&
+                deleteCutoff &&
+                row.startTime < deleteCutoff
+              ) {
+                followRows.delete(id);
+                affected += 1;
+              }
+            }
+            return { affected };
+          }),
+        };
         const builder: {
           insert: () => typeof builder;
+          delete: () => typeof deleteBuilder;
           into: () => typeof builder;
           values: (vals: Partial<ShowFollow>) => typeof builder;
           orUpdate: (cols: string[], conflict: string[]) => typeof builder;
@@ -109,6 +145,7 @@ describe("ShowFollowsService", () => {
           }>;
         } = {
           insert: jest.fn(() => builder),
+          delete: jest.fn(() => deleteBuilder),
           into: jest.fn(() => builder),
           values: jest.fn((vals: Partial<ShowFollow>) => {
             pending = vals;
@@ -226,5 +263,59 @@ describe("ShowFollowsService", () => {
     await service.upsert("sub-1", "show-1", null);
     await service.upsert("sub-2", "show-1", null);
     expect(await service.allFollows()).toHaveLength(2);
+  });
+
+  describe("sweepExpired", () => {
+    const HOUR = 60 * 60 * 1000;
+    const NOW = new Date("2026-09-10T12:00:00.000Z");
+
+    const seed = (id: string, startTime: Date | null) => {
+      followRows.set(id, {
+        id,
+        subscriptionId: "sub-1",
+        showId: "show-1",
+        startTime,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as ShowFollow);
+    };
+
+    it("removes a follow whose performance is well past", () => {
+      seed("old", new Date(NOW.getTime() - 48 * HOUR));
+      return service.sweepExpired(NOW).then((removed) => {
+        expect(removed).toBe(1);
+        expect(followRows.size).toBe(0);
+      });
+    });
+
+    it("leaves an open-ended follow alone — it has no performance to expire", async () => {
+      seed("open", null);
+      const removed = await service.sweepExpired(NOW);
+      expect(removed).toBe(0);
+      expect(followRows.has("open")).toBe(true);
+    });
+
+    it("leaves a future performance alone", async () => {
+      seed("later", new Date(NOW.getTime() + 3 * HOUR));
+      const removed = await service.sweepExpired(NOW);
+      expect(removed).toBe(0);
+      expect(followRows.has("later")).toBe(true);
+    });
+
+    it("keeps a performance inside the grace period, so a tick still working on it is not cut off", async () => {
+      seed("justOver", new Date(NOW.getTime() - 2 * HOUR));
+      const removed = await service.sweepExpired(NOW);
+      expect(removed).toBe(0);
+      expect(followRows.has("justOver")).toBe(true);
+    });
+
+    it("sweeps only what is due, leaving the rest", async () => {
+      seed("old", new Date(NOW.getTime() - 72 * HOUR));
+      seed("open", null);
+      seed("later", new Date(NOW.getTime() + HOUR));
+      const removed = await service.sweepExpired(NOW);
+      expect(removed).toBe(1);
+      expect([...followRows.keys()].sort()).toEqual(["later", "open"]);
+    });
   });
 });
