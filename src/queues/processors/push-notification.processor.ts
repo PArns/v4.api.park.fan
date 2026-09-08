@@ -11,14 +11,20 @@ import { isPushConfigured } from "../../push/push-config";
 import { dueNotifications } from "../../push/notification-planner";
 import { writeMessage } from "../../push/push-messages";
 import { ShowFollowsService } from "../../show-follows/show-follows.service";
+import { ShowFollow } from "../../show-follows/entities/show-follow.entity";
 import { ShowsService } from "../../shows/shows.service";
 import {
   dueShowNotifications,
+  type DueShowNotification,
   type FollowedShowStatus,
 } from "../../show-follows/show-follow-notifications";
 import { LiveStatus } from "../../external-apis/themeparks/themeparks.types";
 import { frontendShowsPath } from "../../common/utils/frontend-url.util";
-import { getTomorrowDateInTimezoneAt } from "../../common/utils/date.util";
+import {
+  formatInParkTimezone,
+  getTomorrowDateInTimezoneAt,
+} from "../../common/utils/date.util";
+import { PushSubscription } from "../../push/entities/push-subscription.entity";
 
 /**
  * The job that decides whose phone buzzes.
@@ -62,6 +68,14 @@ export class PushNotificationProcessor {
    */
   private static readonly SENT_TTL_SECONDS = 45 * 60;
 
+  /**
+   * How many show-follow sends to run concurrently — same value and same
+   * reasoning as `RideAlertsService.SEND_BATCH_SIZE`: a popular show
+   * followed by hundreds of browsers must not turn into hundreds of
+   * concurrent outbound HTTPS calls.
+   */
+  private static readonly SEND_BATCH_SIZE = 20;
+
   constructor(
     private readonly pushService: PushService,
     private readonly tripsService: TripsService,
@@ -82,13 +96,16 @@ export class PushNotificationProcessor {
     // a hypertable query erroring on the show side) must not also silence
     // the other half's notifications for this tick, and must not fail the
     // Bull job into an `attempts: 3` retry that resends whichever half DID
-    // succeed the first time.
-    const tripSent = await this.runHalf("trip", () =>
-      this.handleTripNotifications(started),
-    );
-    const showSent = await this.runHalf("show-follow", () =>
-      this.handleShowFollowNotifications(started),
-    );
+    // succeed the first time. Run concurrently, not sequentially — the two
+    // halves touch unrelated tables and neither result depends on the
+    // other, so awaiting them one after another only ever cost wall-clock
+    // time on a five-minute cron with no other reason to serialize them.
+    const [tripSent, showSent] = await Promise.all([
+      this.runHalf("trip", () => this.handleTripNotifications(started)),
+      this.runHalf("show-follow", () =>
+        this.handleShowFollowNotifications(started),
+      ),
+    ]);
 
     const sent = tripSent + showSent;
     if (sent > 0) {
@@ -117,35 +134,50 @@ export class PushNotificationProcessor {
     const byTrip = await this.subscriptionsByTrip();
     if (byTrip.size === 0) return 0;
 
+    // Its own try/catch, not just `runHalf`'s outer one: a throw partway
+    // through (one bad trip's payload, a Redis blip on the tenth iteration)
+    // used to discard every `sent++` from the iterations that already
+    // succeeded, since `runHalf`'s catch answers a flat 0 — reporting a
+    // cycle that sent nine notifications as having sent none, in the one
+    // log line that ever states how many the job wrote to a phone.
     let sent = 0;
-    for (const [tripId, subscriptions] of byTrip) {
-      // One read per trip, not one per subscriber: a family sharing a plan is
-      // four subscriptions against one id.
-      const trip = await this.tripsService.find(tripId);
-      if (!trip) continue;
+    try {
+      for (const [tripId, subscriptions] of byTrip) {
+        // One read per trip, not one per subscriber: a family sharing a plan
+        // is four subscriptions against one id.
+        const trip = await this.tripsService.find(tripId);
+        if (!trip) continue;
 
-      const due = dueNotifications(trip.payload, startedMs);
-      if (due.length === 0) continue;
+        const due = dueNotifications(trip.payload, startedMs);
+        if (due.length === 0) continue;
 
-      for (const subscription of subscriptions) {
-        for (const notification of due) {
-          if (!subscription.topics?.includes(notification.topic)) continue;
-          if (
-            await this.alreadySent(
-              subscription.endpoint,
-              notification.dedupeKey,
-            )
-          ) {
-            continue;
-          }
-          const message = writeMessage(notification, subscription.locale);
-          const ok = await this.pushService.send(subscription, message);
-          if (ok) {
-            await this.markSent(subscription.endpoint, notification.dedupeKey);
-            sent++;
+        for (const subscription of subscriptions) {
+          for (const notification of due) {
+            if (!subscription.topics?.includes(notification.topic)) continue;
+            if (
+              await this.alreadySent(
+                subscription.endpoint,
+                notification.dedupeKey,
+              )
+            ) {
+              continue;
+            }
+            const message = writeMessage(notification, subscription.locale);
+            const ok = await this.pushService.send(subscription, message);
+            if (ok) {
+              await this.markSent(
+                subscription.endpoint,
+                notification.dedupeKey,
+              );
+              sent++;
+            }
           }
         }
       }
+    } catch (error) {
+      this.logger.error(
+        `trip push notifications failed after sending ${sent}: ${(error as Error)?.message ?? error}`,
+      );
     }
     return sent;
   }
@@ -179,23 +211,70 @@ export class PushNotificationProcessor {
       follows.map((f) => f.subscriptionId),
     );
 
-    let sent = 0;
+    const tasks: Array<{
+      notification: DueShowNotification;
+      follow: ShowFollow;
+    }> = [];
     for (const notification of due) {
       for (const follow of followsByShow.get(notification.showId) ?? []) {
-        const subscription = subscriptions.get(follow.subscriptionId);
-        if (!subscription) continue;
-        if (
-          await this.alreadySent(subscription.endpoint, notification.dedupeKey)
-        ) {
-          continue;
-        }
-        const message = writeMessage(notification, subscription.locale);
-        const ok = await this.pushService.send(subscription, message);
-        if (ok) {
-          await this.markSent(subscription.endpoint, notification.dedupeKey);
-          sent++;
+        tasks.push({ notification, follow });
+      }
+    }
+
+    // Batched like `RideAlertsService.sendTrigger`, not one at a time and
+    // not all at once: a popular show followed by hundreds of browsers must
+    // not turn into hundreds of concurrent outbound HTTPS calls, nor stall
+    // behind them one at a time for minutes. `Promise.allSettled` rather
+    // than `Promise.all` because one follower's failed send (a push service
+    // having a bad minute) must not stop the rest of the batch — the same
+    // reason `sendShowFollowNotification` never throws.
+    let sent = 0;
+    for (
+      let i = 0;
+      i < tasks.length;
+      i += PushNotificationProcessor.SEND_BATCH_SIZE
+    ) {
+      const batch = tasks.slice(
+        i,
+        i + PushNotificationProcessor.SEND_BATCH_SIZE,
+      );
+      const results = await Promise.allSettled(
+        batch.map((task) =>
+          this.sendShowFollowNotification(
+            task.notification,
+            task.follow,
+            subscriptions,
+          ),
+        ),
+      );
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          if (result.value) sent++;
+        } else {
+          this.logger.warn(
+            `show-follow send failed: ${(result.reason as Error)?.message ?? result.reason}`,
+          );
         }
       }
+    }
+    return sent;
+  }
+
+  /** One follower's send. Never throws — a failure here must not stop the rest of the batch. */
+  private async sendShowFollowNotification(
+    notification: DueShowNotification,
+    follow: ShowFollow,
+    subscriptions: Map<string, PushSubscription>,
+  ): Promise<boolean> {
+    const subscription = subscriptions.get(follow.subscriptionId);
+    if (!subscription) return false;
+    if (await this.alreadySent(subscription.endpoint, notification.dedupeKey)) {
+      return false;
+    }
+    const message = writeMessage(notification, subscription.locale);
+    const sent = await this.pushService.send(subscription, message);
+    if (sent) {
+      await this.markSent(subscription.endpoint, notification.dedupeKey);
     }
     return sent;
   }
@@ -259,18 +338,30 @@ export class PushNotificationProcessor {
     // midnight has a lead window that opens BEFORE that midnight, while
     // `todayStr` at that moment still names the day before it — querying
     // only "today" means the one tick where such a showtime is due asks the
-    // wrong day and never finds it. Merged rather than overwritten, since
-    // each date can contribute showtimes for the same show.
-    const verifiedTimesByShow = new Map<string, string[]>();
-    for (const [parkId, timezone] of timezoneByPark) {
-      const todayStr = formatInTimeZone(
-        new Date(startedMs),
-        timezone,
-        "yyyy-MM-dd",
-      );
+    // wrong day and never finds it.
+    //
+    // All of them fired at once, not one park-date at a time: each query is
+    // independent (a different park, a different date) and nothing here
+    // reads `verifiedTimesByShow` before every write to it, so awaiting them
+    // one by one only serialized round trips that had no reason to wait on
+    // each other. Merged rather than overwritten once a query resolves,
+    // since each date can contribute showtimes for the same show — safe
+    // without a lock because every write below runs to completion with no
+    // `await` in between the read and the `.set()`, so two results can never
+    // interleave mid-merge.
+    const dateQueries = [...timezoneByPark].flatMap(([parkId, timezone]) => {
+      const todayStr = formatInParkTimezone(new Date(startedMs), timezone);
       const tomorrowStr = getTomorrowDateInTimezoneAt(startedMs, timezone);
+      return [todayStr, tomorrowStr].map((dateStr) => ({
+        parkId,
+        timezone,
+        dateStr,
+      }));
+    });
 
-      for (const dateStr of [todayStr, tomorrowStr]) {
+    const verifiedTimesByShow = new Map<string, string[]>();
+    await Promise.all(
+      dateQueries.map(async ({ parkId, timezone, dateStr }) => {
         let timesByShow: Map<string, string[]>;
         try {
           timesByShow = await this.showsService.getShowtimesOnDate(
@@ -282,17 +373,14 @@ export class PushNotificationProcessor {
           this.logger.warn(
             `getShowtimesOnDate failed for park ${parkId} on ${dateStr}: ${(error as Error)?.message ?? error}`,
           );
-          continue;
+          return;
         }
         for (const [showId, hhmmTimes] of timesByShow) {
           if (!metaByShow.has(showId)) continue; // a show in this park nobody follows
           const isoTimes = verifiedTimesByShow.get(showId) ?? [];
           for (const hhmm of hhmmTimes) {
             try {
-              const instant = fromZonedTime(
-                `${dateStr}T${hhmm}:00`,
-                timezone,
-              );
+              const instant = fromZonedTime(`${dateStr}T${hhmm}:00`, timezone);
               // A local wall-clock time a spring-forward transition skips
               // (e.g. 02:30 on the one day the clock jumps 02:00 -> 03:00)
               // has no real instant at all — `fromZonedTime` still returns
@@ -313,8 +401,8 @@ export class PushNotificationProcessor {
           }
           verifiedTimesByShow.set(showId, isoTimes);
         }
-      }
-    }
+      }),
+    );
 
     const shows: FollowedShowStatus[] = [];
     for (const meta of metaByShow.values()) {

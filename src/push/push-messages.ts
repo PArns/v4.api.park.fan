@@ -43,6 +43,27 @@ type MessageWriter = (notification: ScheduledStartCopy) => {
   body: string;
 };
 
+/**
+ * Resolve a locale to a writer and assemble the `PushMessage`.
+ *
+ * Shared by `writeMessage` and `writeRideAlertMessage`, which used to carry
+ * this identically: "de-AT" and "de-CH" are German, so matching the base tag
+ * rather than the whole string is the difference between a German
+ * notification and an English one for every visitor whose browser reports a
+ * region. Every table here defines `en`, which is the fallback for anything
+ * this project has not translated.
+ */
+function writeFromTable<T extends { dedupeKey: string; url: string }>(
+  writers: Record<string, (notification: T) => { title: string; body: string }>,
+  notification: T,
+  locale: string,
+): PushMessage {
+  const base = locale.split("-")[0]?.toLowerCase() ?? "en";
+  const writer = writers[base] ?? writers.en;
+  const { title, body } = writer(notification);
+  return { title, body, url: notification.url, tag: notification.dedupeKey };
+}
+
 const WRITERS: Record<string, MessageWriter> = {
   de: (n) => ({
     title: `In ${n.inMinutes} Min.: ${n.what}`,
@@ -81,14 +102,7 @@ export function writeMessage(
   notification: ScheduledStartCopy,
   locale: string,
 ): PushMessage {
-  // "de-AT" and "de-CH" are German. Matching the base tag rather than the whole
-  // string is the difference between a German notification and an English one
-  // for every visitor whose browser reports a region.
-  const base = locale.split("-")[0]?.toLowerCase() ?? "en";
-  const writer = WRITERS[base] ?? WRITERS.en;
-  const { title, body } = writer(notification);
-
-  return { title, body, url: notification.url, tag: notification.dedupeKey };
+  return writeFromTable(WRITERS, notification, locale);
 }
 
 /** What a ride-alert notification needs — a wait time now, not a start time. */
@@ -132,14 +146,9 @@ const RIDE_ALERT_WRITERS: Record<string, RideAlertWriter> = {
   }),
 };
 
-/** Same locale-matching as `writeMessage` — see there for why the base tag. */
 export function writeRideAlertMessage(
   notification: RideAlertCopy,
   locale: string,
 ): PushMessage {
-  const base = locale.split("-")[0]?.toLowerCase() ?? "en";
-  const writer = RIDE_ALERT_WRITERS[base] ?? RIDE_ALERT_WRITERS.en;
-  const { title, body } = writer(notification);
-
-  return { title, body, url: notification.url, tag: notification.dedupeKey };
+  return writeFromTable(RIDE_ALERT_WRITERS, notification, locale);
 }

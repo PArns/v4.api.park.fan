@@ -13,6 +13,7 @@ import { PushSubscription } from "../push/entities/push-subscription.entity";
 import { PushService } from "../push/push.service";
 import { writeRideAlertMessage } from "../push/push-messages";
 import { QueueDataService } from "../queue-data/queue-data.service";
+import { QueueData } from "../queue-data/entities/queue-data.entity";
 import {
   QueueType,
   LiveStatus,
@@ -231,37 +232,12 @@ export class RideAlertsService {
           MAX_READING_AGE_MINUTES,
         );
 
-      const readings: RideReading[] = [];
-      for (const id of watchedIds) {
-        const attraction = attractionById.get(id);
-        if (!attraction) continue;
-        // `!== false`, never `=== true` — see season.ts's frontend twin and
-        // the seasonal-attractions REQUIREMENT this mirrors: `null` means
-        // "seasonal, nothing else known" and must not hide a ride we simply
-        // have not understood yet.
-        if (
-          isCurrentlyInSeason(
-            resolveCuratedFacts(attraction),
-            new Date(nowMs),
-          ) === false
-        ) {
-          continue;
-        }
-
-        const standby = (statusByAttraction.get(id) ?? []).find(
-          (row) => row.queueType === QueueType.STANDBY,
-        );
-        if (!standby || standby.status !== LiveStatus.OPERATING) continue;
-        // A carried-forward row, not an observation — see the entity's own
-        // docstring. Alerting on one would fire on a ride nothing has
-        // actually reported for as long as `writeHourlyHeartbeats` has been
-        // filling the gap (up to 24h).
-        if (standby.isHeartbeat) continue;
-        if (standby.waitTime === null || standby.waitTime === undefined) {
-          continue;
-        }
-        readings.push({ attractionId: id, waitTime: standby.waitTime });
-      }
+      const readings = RideAlertsService.buildEligibleReadings(
+        watchedIds,
+        attractionById,
+        statusByAttraction,
+        nowMs,
+      );
       if (readings.length === 0) return;
 
       // A ride CLOSED overnight produces no reading, so `diffRideAlerts`
@@ -323,6 +299,54 @@ export class RideAlertsService {
         `Ride-alert check failed for park ${park.name}: ${(error as Error)?.message ?? error}`,
       );
     }
+  }
+
+  /**
+   * Which of this cycle's watched attractions have a reading worth diffing
+   * against an alert — extracted out of `checkAndNotify` as its own step,
+   * pure given what that method already fetched.
+   *
+   * Three reasons a watched attraction contributes nothing: out of season
+   * (confirmed `false`, never merely unknown — see the `!== false` comment
+   * this mirrors below), no fresh OPERATING STANDBY row at all, or one that
+   * is a carried-forward heartbeat rather than an observation (alerting on
+   * one would fire on a ride nothing has actually reported for as long as
+   * `writeHourlyHeartbeats` has been filling the gap, up to 24h).
+   */
+  private static buildEligibleReadings(
+    watchedIds: string[],
+    attractionById: Map<string, Attraction>,
+    statusByAttraction: Map<string, QueueData[]>,
+    nowMs: number,
+  ): RideReading[] {
+    const readings: RideReading[] = [];
+    for (const id of watchedIds) {
+      const attraction = attractionById.get(id);
+      if (!attraction) continue;
+      // `!== false`, never `=== true` — see season.ts's frontend twin and
+      // the seasonal-attractions REQUIREMENT this mirrors: `null` means
+      // "seasonal, nothing else known" and must not hide a ride we simply
+      // have not understood yet.
+      if (
+        isCurrentlyInSeason(
+          resolveCuratedFacts(attraction),
+          new Date(nowMs),
+        ) === false
+      ) {
+        continue;
+      }
+
+      const standby = (statusByAttraction.get(id) ?? []).find(
+        (row) => row.queueType === QueueType.STANDBY,
+      );
+      if (!standby || standby.status !== LiveStatus.OPERATING) continue;
+      if (standby.isHeartbeat) continue;
+      if (standby.waitTime === null || standby.waitTime === undefined) {
+        continue;
+      }
+      readings.push({ attractionId: id, waitTime: standby.waitTime });
+    }
+    return readings;
   }
 
   /**

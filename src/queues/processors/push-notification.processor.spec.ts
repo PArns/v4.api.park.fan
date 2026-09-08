@@ -1,4 +1,5 @@
 import { Test } from "@nestjs/testing";
+import { Logger } from "@nestjs/common";
 import { PushNotificationProcessor } from "./push-notification.processor";
 import { PushService } from "../../push/push.service";
 import { TripsService } from "../../trips/trips.service";
@@ -205,6 +206,63 @@ describe("PushNotificationProcessor", () => {
     });
   });
 
+  it("reports what it already sent, not zero, when a later trip in the same tick throws", async () => {
+    await withVapid(async () => {
+      const logSpy = jest
+        .spyOn(Logger.prototype, "log")
+        .mockImplementation(() => undefined);
+      try {
+        const secondSubscription = {
+          ...tripSubscription,
+          id: "sub-trip-2",
+          endpoint: "https://fcm.googleapis.com/fcm/send/trip-2",
+          tripId: "trip-2",
+        };
+        // Two distinct trips, each with its own subscriber, so
+        // `subscriptionsByTrip` groups them into two separate iterations —
+        // insertion order is iteration order for a `Map`, so trip-1 (which
+        // sends) runs before trip-2 (which throws).
+        pushService.subscriptionsWithTrip.mockResolvedValueOnce([
+          tripSubscription,
+          secondSubscription,
+        ]);
+        const payload = {
+          version: 2,
+          parks: {
+            p: {
+              slug: "p",
+              name: "P",
+              timezone: "Europe/Berlin",
+              days: {
+                "2026-10-17": {
+                  entries: [
+                    { id: "e1", attractionName: "Ride", startMinute: 20 * 60 + 15 },
+                  ],
+                },
+              },
+            },
+          },
+        };
+        tripsService.find
+          .mockResolvedValueOnce({ payload }) // trip-1: sends
+          .mockRejectedValueOnce(new Error("db down")); // trip-2: throws
+
+        await processor.handleDue({} as never);
+
+        // The one send that happened before the throw actually happened...
+        expect(pushService.send).toHaveBeenCalledTimes(1);
+        // ...and the summary log says so — not the flat 0 a bug in
+        // `handleTripNotifications`'s own error handling used to report by
+        // discarding every `sent++` from before the throw.
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.stringContaining("Sent 1 push notification"),
+        );
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+  });
+
   it("follows have no topic to check — a ShowFollow row alone is consent", async () => {
     await withVapid(async () => {
       showFollowsService.allFollows.mockResolvedValueOnce([
@@ -252,6 +310,63 @@ describe("PushNotificationProcessor", () => {
           title: expect.stringContaining("Feuerwerk"),
         }),
       );
+    });
+  });
+
+  it("sends to every follower of a popular show, spanning more than one send batch", async () => {
+    await withVapid(async () => {
+      // 25 followers on one show — more than the 20-per-batch cap, so this
+      // only passes if the batching loop walks every batch rather than
+      // stopping after the first.
+      const followerCount = 25;
+      const follows = Array.from({ length: followerCount }, (_, i) => ({
+        id: `f${i}`,
+        subscriptionId: `sub-${i}`,
+        showId: "show-1",
+      }));
+      const subscriptionsById = new Map(
+        follows.map((f) => [
+          f.subscriptionId,
+          {
+            ...showSubscription,
+            id: f.subscriptionId,
+            endpoint: `${showSubscription.endpoint}-${f.subscriptionId}`,
+          },
+        ]),
+      );
+
+      showFollowsService.allFollows.mockResolvedValueOnce(follows);
+      showsService.findBatchCurrentStatusByShows.mockResolvedValueOnce(
+        new Map([
+          [
+            "show-1",
+            {
+              status: "OPERATING",
+              showtimes: [
+                { startTime: new Date(NOW + 30 * 60_000).toISOString() },
+              ],
+              show: {
+                name: "Feuerwerk",
+                park: {
+                  name: "Europa-Park",
+                  slug: "europa-park",
+                  timezone: "Europe/Berlin",
+                  continentSlug: "europe",
+                  countrySlug: "germany",
+                  citySlug: "rust",
+                },
+              },
+            },
+          ],
+        ]),
+      );
+      showsService.getShowtimesOnDate.mockResolvedValueOnce(
+        new Map([["show-1", ["20:30"]]]),
+      );
+      pushService.findByIds.mockResolvedValueOnce(subscriptionsById);
+
+      await processor.handleDue({} as never);
+      expect(pushService.send).toHaveBeenCalledTimes(followerCount);
     });
   });
 

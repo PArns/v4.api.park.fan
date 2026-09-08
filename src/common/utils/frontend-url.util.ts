@@ -1,4 +1,4 @@
-import type { GeocodedEntity } from "./url.util";
+import { hasCompleteGeoPath, type GeocodedEntity } from "./url.util";
 
 /**
  * Paths on the FRONTEND site (park.fan), not this API.
@@ -15,7 +15,7 @@ import type { GeocodedEntity } from "./url.util";
 
 /** Null when any geo slug is missing — same guard as `buildGeocodedUrl`. */
 export function frontendParkPath(park: GeocodedEntity): string | null {
-  if (!park.continentSlug || !park.countrySlug || !park.citySlug) return null;
+  if (!hasCompleteGeoPath(park)) return null;
   return `/parks/${park.continentSlug}/${park.countrySlug}/${park.citySlug}/${park.slug}`;
 }
 
