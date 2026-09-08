@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsNotEmpty, IsString, MaxLength } from "class-validator";
+import { IsNotEmpty, IsString, IsUUID, MaxLength } from "class-validator";
 
 /**
  * Every field carries a class-validator decorator for the same reason as
@@ -17,9 +17,7 @@ export class CreateShowFollowDto {
   endpoint: string;
 
   @ApiProperty({ description: "The show to follow." })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(64)
+  @IsUUID()
   showId: string;
 }
 
@@ -31,9 +29,7 @@ export class DeleteShowFollowDto {
   endpoint: string;
 
   @ApiProperty({ description: "The show to stop following." })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(64)
+  @IsUUID()
   showId: string;
 }
 

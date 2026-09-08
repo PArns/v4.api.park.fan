@@ -33,6 +33,16 @@ describe("redactUrl", () => {
     expect(redactUrl("/x?secret=abc")).toBe("/x?secret=***");
   });
 
+  it("redacts a push endpoint — a capability, same as a credential", () => {
+    // GET /v1/push/ride-alerts|show-follows carries it in the query string;
+    // anyone holding it can send that browser a notification.
+    expect(
+      redactUrl(
+        "/v1/push/ride-alerts?endpoint=https://fcm.googleapis.com/fcm/send/e1",
+      ),
+    ).toBe("/v1/push/ride-alerts?endpoint=***");
+  });
+
   it("passes a URL it has nothing to redact through verbatim", () => {
     // Including the malformed ones. Rewriting a URL that needs no redaction
     // would mean the log no longer shows what was actually requested.

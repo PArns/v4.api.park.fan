@@ -321,12 +321,18 @@ export class WaitTimesProcessor {
                   // Ride-alert sweep — this cycle's polled attractions, not
                   // the ones that happened to write a new row: an unchanged
                   // wait time is still a true reading, just one that did not
-                  // trigger `isSignificantChange`'s delta-write. Best-effort
-                  // and self-contained (see the service's own try/catch);
-                  // never allowed to fail this park's cycle.
-                  await this.rideAlertsService.checkAndNotify(park, [
-                    ...attractionIds,
-                  ]);
+                  // trigger `isSignificantChange`'s delta-write. `seenAttractionIds`
+                  // is what this cycle actually reported — NOT `attractionIds`,
+                  // which is the park's whole catalogue and would let the sweep
+                  // read a 6-hour-old (or synthetic heartbeat) row for a ride no
+                  // source mentioned this cycle. Best-effort and self-contained
+                  // (see the service's own try/catch); never allowed to fail
+                  // this park's cycle.
+                  await this.rideAlertsService.checkAndNotify(
+                    park,
+                    [...seenAttractionIds],
+                    Date.now(),
+                  );
                 }
 
                 for (const entityLiveData of otherEntities) {

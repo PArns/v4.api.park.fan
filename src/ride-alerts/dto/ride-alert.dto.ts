@@ -3,6 +3,7 @@ import {
   IsInt,
   IsNotEmpty,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -24,9 +25,7 @@ export class CreateRideAlertDto {
   endpoint: string;
 
   @ApiProperty({ description: "The attraction to watch." })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(64)
+  @IsUUID()
   attractionId: string;
 
   @ApiProperty({
@@ -52,9 +51,7 @@ export class DeleteRideAlertDto {
   endpoint: string;
 
   @ApiProperty({ description: "The attraction to stop watching." })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(64)
+  @IsUUID()
   attractionId: string;
 }
 
@@ -75,6 +72,21 @@ export class RideAlertResponseDto {
   path: string | null;
   @ApiProperty({ example: 20 })
   thresholdMinutes: number;
+  @ApiProperty({
+    description:
+      "Whether the ride is currently out of season (per the curated " +
+      "seasonal-attraction data) — accepted at write time regardless, since " +
+      "a visitor may set this up ahead of a future visit, but the sweep " +
+      "skips an out-of-season ride entirely, so the alert cannot fire " +
+      "until the ride is back in season.",
+  })
+  outOfSeason: boolean;
+  @ApiProperty({
+    description:
+      "Whether this ride has been retired since the alert was created — it " +
+      "can never fire again, and the visitor should be told to remove it.",
+  })
+  retired: boolean;
   @ApiProperty({
     description:
       "Whether the next qualifying reading will fire. False right after this " +

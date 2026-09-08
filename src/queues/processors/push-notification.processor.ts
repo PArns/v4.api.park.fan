@@ -3,6 +3,7 @@ import { Inject, Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { createHash } from "crypto";
 import { Redis } from "ioredis";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { PushService } from "../../push/push.service";
 import { TripsService } from "../../trips/trips.service";
@@ -75,14 +76,38 @@ export class PushNotificationProcessor {
     if (!isPushConfigured()) return;
 
     const started = Date.now();
-    const tripSent = await this.handleTripNotifications(started);
-    const showSent = await this.handleShowFollowNotifications(started);
+    // Isolated, like `WaitTimesProcessor` isolates one park's failure from
+    // the rest of its cycle: a throw in one half (a DB error listing trips,
+    // a hypertable query erroring on the show side) must not also silence
+    // the other half's notifications for this tick, and must not fail the
+    // Bull job into an `attempts: 3` retry that resends whichever half DID
+    // succeed the first time.
+    const tripSent = await this.runHalf("trip", () =>
+      this.handleTripNotifications(started),
+    );
+    const showSent = await this.runHalf("show-follow", () =>
+      this.handleShowFollowNotifications(started),
+    );
 
     const sent = tripSent + showSent;
     if (sent > 0) {
       this.logger.log(
         `Sent ${sent} push notification(s) (${tripSent} trip, ${showSent} show-follow) in ${Date.now() - started}ms`,
       );
+    }
+  }
+
+  private async runHalf(
+    label: string,
+    fn: () => Promise<number>,
+  ): Promise<number> {
+    try {
+      return await fn();
+    } catch (error) {
+      this.logger.error(
+        `${label} push notifications failed: ${(error as Error)?.message ?? error}`,
+      );
+      return 0;
     }
   }
 
@@ -136,30 +161,7 @@ export class PushNotificationProcessor {
     if (follows.length === 0) return 0;
 
     const showIds = [...new Set(follows.map((f) => f.showId))];
-    const statusByShow =
-      await this.showsService.findBatchCurrentStatusByShows(showIds);
-
-    const shows: FollowedShowStatus[] = [];
-    for (const showId of showIds) {
-      const liveData = statusByShow.get(showId);
-      // Not operating, or no live data at all (stale >48h — see
-      // findBatchCurrentStatusByShows): nothing to be due about today.
-      if (!liveData || liveData.status !== LiveStatus.OPERATING) continue;
-      if (!liveData.showtimes || liveData.showtimes.length === 0) continue;
-
-      const show = liveData.show;
-      const park = show?.park;
-      if (!show || !park) continue;
-
-      shows.push({
-        showId,
-        showName: show.name,
-        parkName: park.name,
-        timezone: park.timezone ?? null,
-        url: frontendShowsPath(park) ?? "/",
-        showtimes: liveData.showtimes,
-      });
-    }
+    const shows = await this.followedShowsDueToday(showIds, startedMs);
     if (shows.length === 0) return 0;
 
     const due = dueShowNotifications(shows, startedMs);
@@ -195,6 +197,113 @@ export class PushNotificationProcessor {
       }
     }
     return sent;
+  }
+
+  /**
+   * Followed shows with a VERIFIED showtime for today — never
+   * `findBatchCurrentStatusByShows`'s own `showtimes`, which
+   * `projectShowtimesToToday` remaps onto today's date whatever the
+   * original date actually was (ThemeParks.wiki still serves entries from
+   * 2022) and which has no park-schedule check, so a park shut today but
+   * still showing yesterday's OPERATING row would keep notifying about a
+   * performance that is not happening. `ShowsService.getShowtimesOnDate`
+   * is the one reader that checks a showtime against its OWN embedded date
+   * instead of projecting it, so it is used here for the showtimes
+   * themselves — `findBatchCurrentStatusByShows` is kept only for the
+   * show/park metadata (name, timezone) that reader does not return.
+   */
+  private async followedShowsDueToday(
+    showIds: string[],
+    startedMs: number,
+  ): Promise<FollowedShowStatus[]> {
+    const statusByShow =
+      await this.showsService.findBatchCurrentStatusByShows(showIds);
+
+    interface ShowMeta {
+      showId: string;
+      showName: string;
+      parkName: string;
+      timezone: string;
+      url: string;
+      parkId: string;
+    }
+    const metaByShow = new Map<string, ShowMeta>();
+    const timezoneByPark = new Map<string, string>();
+    for (const showId of showIds) {
+      const liveData = statusByShow.get(showId);
+      // Not operating, or no live data at all (stale >48h — see
+      // findBatchCurrentStatusByShows): nothing to be due about today.
+      if (!liveData || liveData.status !== LiveStatus.OPERATING) continue;
+      const show = liveData.show;
+      const park = show?.park;
+      // No timezone, no verified date to check a showtime against — same
+      // "unknown means skip" rule `dueShowNotifications` applies further on.
+      if (!show || !park || !park.timezone) continue;
+
+      metaByShow.set(showId, {
+        showId,
+        showName: show.name,
+        parkName: park.name,
+        timezone: park.timezone,
+        url: frontendShowsPath(park) ?? "/",
+        parkId: park.id,
+      });
+      timezoneByPark.set(park.id, park.timezone);
+    }
+    if (metaByShow.size === 0) return [];
+
+    // One `getShowtimesOnDate` call per distinct PARK, not per show — a
+    // popular park with many followed shows shares one query.
+    const verifiedTimesByShow = new Map<string, string[]>();
+    for (const [parkId, timezone] of timezoneByPark) {
+      const todayStr = formatInTimeZone(
+        new Date(startedMs),
+        timezone,
+        "yyyy-MM-dd",
+      );
+      let timesByShow: Map<string, string[]>;
+      try {
+        timesByShow = await this.showsService.getShowtimesOnDate(
+          parkId,
+          timezone,
+          todayStr,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `getShowtimesOnDate failed for park ${parkId}: ${(error as Error)?.message ?? error}`,
+        );
+        continue;
+      }
+      for (const [showId, hhmmTimes] of timesByShow) {
+        if (!metaByShow.has(showId)) continue; // a show in this park nobody follows
+        const isoTimes: string[] = [];
+        for (const hhmm of hhmmTimes) {
+          try {
+            isoTimes.push(
+              fromZonedTime(`${todayStr}T${hhmm}:00`, timezone).toISOString(),
+            );
+          } catch {
+            // A malformed time from the aggregate query — skip just this one.
+          }
+        }
+        verifiedTimesByShow.set(showId, isoTimes);
+      }
+    }
+
+    const shows: FollowedShowStatus[] = [];
+    for (const meta of metaByShow.values()) {
+      const isoTimes = verifiedTimesByShow.get(meta.showId);
+      if (!isoTimes || isoTimes.length === 0) continue;
+      shows.push({
+        showId: meta.showId,
+        showName: meta.showName,
+        parkName: meta.parkName,
+        timezone: meta.timezone,
+        url: meta.url,
+        showtimes: isoTimes.map((startTime) => ({ startTime })),
+      });
+    }
+    return shows;
   }
 
   /**

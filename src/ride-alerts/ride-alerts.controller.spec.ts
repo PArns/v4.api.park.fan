@@ -36,8 +36,12 @@ describe("RideAlertsController", () => {
       name: "Taron",
       slug: "taron",
       park: park(),
+      retiredAt: null,
+      isSeasonal: false,
+      seasonMonths: null,
+      seasonOutSince: null,
       ...overrides,
-    }) as Attraction;
+    }) as unknown as Attraction;
 
   let controller: RideAlertsController;
   let rideAlerts: {
@@ -119,9 +123,41 @@ describe("RideAlertsController", () => {
     expect(rideAlerts.upsert).toHaveBeenCalledWith("sub-1", "ride-1", 20);
     expect(result.thresholdMinutes).toBe(20);
     expect(result.armed).toBe(true);
+    expect(result.outOfSeason).toBe(false);
+    expect(result.retired).toBe(false);
     expect(result.path).toBe(
       "/parks/europe/germany/bruehl/phantasialand/taron",
     );
+  });
+
+  it("surfaces a ride confirmed out of season rather than hiding a dormant alert", async () => {
+    // Fixed at 2026-08-21 — August, so a December-only ride is confirmed out.
+    jest.useFakeTimers().setSystemTime(new Date("2026-08-21T12:00:00.000Z"));
+    try {
+      rideAlerts.findAttractionForAlert.mockResolvedValueOnce({
+        attraction: attraction({ isSeasonal: true, seasonMonths: [12] }),
+        park: park(),
+      });
+      const result = await controller.create(
+        { endpoint: ENDPOINT, attractionId: "ride-1", thresholdMinutes: 20 },
+        req(),
+      );
+      expect(result.outOfSeason).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("surfaces a ride retired after the alert was created", async () => {
+    rideAlerts.findAttractionForAlert.mockResolvedValueOnce({
+      attraction: attraction({ retiredAt: new Date("2026-02-15") }),
+      park: park(),
+    });
+    const result = await controller.create(
+      { endpoint: ENDPOINT, attractionId: "ride-1", thresholdMinutes: 20 },
+      req(),
+    );
+    expect(result.retired).toBe(true);
   });
 
   it("refuses a subscription-less endpoint before touching the attraction", async () => {

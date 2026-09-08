@@ -5,13 +5,15 @@ import type { ScheduledStartCopy } from "../push/push-messages";
  * Deciding which followed shows start soon enough to notify about.
  *
  * Pure, mirroring `notification-planner.ts`'s `dueNotifications` — but
- * simpler, because `ShowLiveData.showtimes[].startTime` is already a full,
- * day-projected ISO instant (`ShowsService.projectShowtimesToToday` resolved
- * the park-local time-of-day onto today's actual date, in the park's own
- * zone, before this function ever sees it). Comparing two absolute instants
- * needs no timezone at all — the zone is only read here to FORMAT the
- * display time (`atTime`) in the park's local clock, not to decide whether a
- * showtime is due.
+ * simpler, because the caller (`PushNotificationProcessor.followedShowsDueToday`)
+ * has already turned each `startTime` into a full ISO instant for today
+ * before this function ever sees it, verified against `ShowsService
+ * .getShowtimesOnDate` rather than taken from `projectShowtimesToToday`
+ * (which remaps a showtime onto today's date whatever the original date
+ * actually was, with no check that the park is even open today). Comparing
+ * two absolute instants needs no timezone at all — the zone is only read
+ * here to FORMAT the display time (`atTime`) in the park's local clock, not
+ * to decide whether a showtime is due.
  */
 
 /** How far ahead of a showtime the notification goes out. */

@@ -18,6 +18,10 @@ import { getClientIp } from "../common/utils/request.util";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { frontendAttractionPath } from "../common/utils/frontend-url.util";
 import { getNoLiveWaitTimesReason } from "../parks/data/live-wait-time-sources";
+import {
+  isCurrentlyInSeason,
+  resolveCuratedFacts,
+} from "../attractions/utils/curated-attraction-facts.util";
 import { PushService } from "../push/push.service";
 import { PushFollowWriteRateLimitService } from "../push/push-follow-write-rate-limit.service";
 import {
@@ -160,6 +164,18 @@ export class RideAlertsController {
   }
 
   private async subscriptionOrThrow(endpoint: string) {
+    // `@Query("endpoint")` carries no DTO, so the global `ValidationPipe`
+    // never runs on it (it only validates class-shaped bodies) — a request
+    // with no `endpoint` at all reaches here as `undefined`. TypeORM's
+    // default `invalidWhereValuesBehavior.undefined` is "ignore", so
+    // `findOne({ where: { endpoint: undefined } })` drops the only
+    // condition and returns an arbitrary subscription — a stranger's
+    // alerts. `endpoint` on the write DTOs is already guarded by
+    // `@IsNotEmpty()`, so this only ever fires for the unvalidated query
+    // param, but it is the one place all three handlers share.
+    if (typeof endpoint !== "string" || endpoint.trim().length === 0) {
+      throw new BadRequestException("Missing endpoint");
+    }
     const subscription = await this.pushService.findByEndpoint(endpoint);
     if (!subscription) {
       throw new HttpException(
@@ -191,14 +207,30 @@ export class RideAlertsController {
     attraction: Attraction,
   ): RideAlertResponseDto {
     const park = attraction.park;
+    // The same curated name the notification itself uses
+    // (`RideAlertsService.checkAndNotify` reads it through the identical
+    // helper) — the raw `attraction.name` would name a curated ride
+    // differently in the list than in the banner it is about.
+    const facts = resolveCuratedFacts(attraction);
     return {
       attractionId: alert.attractionId,
-      attractionName: attraction.name,
+      attractionName: facts.name,
       attractionSlug: attraction.slug,
       parkId: park.id,
       parkName: park.name,
       parkSlug: park.slug,
       path: frontendAttractionPath(park, { slug: attraction.slug }),
+      // Accepted at write time regardless (a visitor may reasonably alert on
+      // a winter ride in August, ahead of a trip) — see `create`'s own
+      // comment. Surfaced here so the caller can say so rather than let a
+      // dormant alert look identical to a live one.
+      outOfSeason: isCurrentlyInSeason(facts) === false,
+      // A ride retired AFTER this alert was created — `findAttractionForAlert`
+      // refuses a NEW alert on one already retired, but nothing removes an
+      // existing alert when its ride is retired later, and the FK cascade
+      // only fires if the attraction row itself is deleted, which retirement
+      // is not. Same "surface it rather than let it look live" reasoning.
+      retired: attraction.retiredAt !== null,
       thresholdMinutes: alert.thresholdMinutes,
       armed: alert.armed,
       createdAt: alert.createdAt.toISOString(),

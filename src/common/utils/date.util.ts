@@ -53,14 +53,24 @@ export function getCurrentDateInTimezone(timezone: string): string {
  * // NOT 2026-01-05T00:00:00.000Z (which would be 2026-01-04 19:00 New York time)
  */
 export function getStartOfDayInTimezone(timezone: string): Date {
-  // Get current date in park timezone as string (e.g., "2026-01-05")
-  const dateStr = getCurrentDateInTimezone(timezone);
+  return getStartOfDayInTimezoneAt(Date.now(), timezone);
+}
 
-  // Create a date at midnight in the target timezone
-  // fromZonedTime takes a string/date that IS in the timezone and matches it to the UTC instant
-  const zonedMidnight = fromZonedTime(`${dateStr}T00:00:00`, timezone);
-
-  return zonedMidnight;
+/**
+ * Same as {@link getStartOfDayInTimezone}, but "today" is read off an
+ * explicit instant rather than the wall clock — for business logic that must
+ * not call `new Date()` itself (a decision made against a job's own captured
+ * start time has to give the same answer on a retry as it did the first time).
+ *
+ * @param atMs - The instant to read "today" from, as epoch milliseconds.
+ * @param timezone - IANA timezone (e.g., "America/New_York", "Europe/Paris")
+ */
+export function getStartOfDayInTimezoneAt(
+  atMs: number,
+  timezone: string,
+): Date {
+  const dateStr = formatInTimeZone(new Date(atMs), timezone, "yyyy-MM-dd");
+  return fromZonedTime(`${dateStr}T00:00:00`, timezone);
 }
 
 /**

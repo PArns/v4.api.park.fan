@@ -136,6 +136,13 @@ export class ShowFollowsController {
   }
 
   private async subscriptionOrThrow(endpoint: string) {
+    // Same gap as `RideAlertsController.subscriptionOrThrow`: `@Query()`
+    // has no DTO, so a missing `endpoint` reaches here as `undefined` and
+    // `findOne({ where: { endpoint: undefined } })` would otherwise return
+    // an arbitrary subscription rather than none.
+    if (typeof endpoint !== "string" || endpoint.trim().length === 0) {
+      throw new BadRequestException("Missing endpoint");
+    }
     const subscription = await this.pushService.findByEndpoint(endpoint);
     if (!subscription) {
       throw new HttpException(

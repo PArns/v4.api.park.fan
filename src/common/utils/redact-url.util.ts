@@ -19,8 +19,24 @@
  * is not allowed to reach: verified, refused, logged.
  */
 
-/** Query parameters whose value must never reach the log. */
-const REDACTED_PARAMS = new Set(["pass", "token", "password", "secret"]);
+/**
+ * Query parameters whose value must never reach the log.
+ *
+ * `endpoint` is `GET /v1/push/ride-alerts|show-follows`'s own capability:
+ * `push-notification.processor.ts` hashes it before it goes into a Redis key
+ * for exactly the same reason a credential is redacted here — anyone holding
+ * it can send that browser a notification. It travels in the query string
+ * rather than a body because these are `GET`s, not because it is any less
+ * sensitive than the trip/subscribe endpoints' bodies, which never reach
+ * this function at all.
+ */
+const REDACTED_PARAMS = new Set([
+  "pass",
+  "token",
+  "password",
+  "secret",
+  "endpoint",
+]);
 
 export function redactUrl(url: string): string {
   const cut = url.indexOf("?");

@@ -72,7 +72,10 @@ describe("PushNotificationProcessor", () => {
   };
   let tripsService: { find: jest.Mock };
   let showFollowsService: { allFollows: jest.Mock };
-  let showsService: { findBatchCurrentStatusByShows: jest.Mock };
+  let showsService: {
+    findBatchCurrentStatusByShows: jest.Mock;
+    getShowtimesOnDate: jest.Mock;
+  };
   let redisStore: Map<string, string>;
   let redis: { exists: jest.Mock; set: jest.Mock };
 
@@ -95,6 +98,12 @@ describe("PushNotificationProcessor", () => {
     showFollowsService = { allFollows: jest.fn().mockResolvedValue([]) };
     showsService = {
       findBatchCurrentStatusByShows: jest.fn().mockResolvedValue(new Map()),
+      // The show-follow branch verifies a showtime against
+      // `getShowtimesOnDate` rather than trusting the (possibly stale/
+      // projected) `showtimes` on the status row — see
+      // `followedShowsDueToday`. Defaults to "nothing verified"; tests that
+      // expect a show-follow send configure this explicitly.
+      getShowtimesOnDate: jest.fn().mockResolvedValue(new Map()),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -225,6 +234,12 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
+      // NOW is 20:00 Berlin (CEST, UTC+2); the fixture's showtime is 30 min
+      // later, i.e. 20:30 local — the "verified for today" time
+      // `getShowtimesOnDate` would answer for a genuinely-reported showtime.
+      showsService.getShowtimesOnDate.mockResolvedValueOnce(
+        new Map([["show-1", ["20:30"]]]),
+      );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),
       );
@@ -237,6 +252,37 @@ describe("PushNotificationProcessor", () => {
           title: expect.stringContaining("Feuerwerk"),
         }),
       );
+    });
+  });
+
+  it("does not notify about a showtime findBatchCurrentStatusByShows carries but getShowtimesOnDate never verified", async () => {
+    // The exact gap `followedShowsDueToday` closes: a projected/stale
+    // showtime with nothing to back it up must not fire.
+    await withVapid(async () => {
+      showFollowsService.allFollows.mockResolvedValueOnce([
+        { id: "f1", subscriptionId: "sub-show", showId: "show-1" },
+      ]);
+      showsService.findBatchCurrentStatusByShows.mockResolvedValueOnce(
+        new Map([
+          [
+            "show-1",
+            {
+              status: "OPERATING",
+              showtimes: [
+                { startTime: new Date(NOW + 30 * 60_000).toISOString() },
+              ],
+              show: {
+                name: "Feuerwerk",
+                park: { name: "Europa-Park", timezone: "Europe/Berlin" },
+              },
+            },
+          ],
+        ]),
+      );
+      // Default mock: getShowtimesOnDate verifies nothing for today.
+
+      await processor.handleDue({} as never);
+      expect(pushService.send).not.toHaveBeenCalled();
     });
   });
 
@@ -312,12 +358,96 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
+      showsService.getShowtimesOnDate.mockResolvedValueOnce(
+        new Map([["show-1", ["20:30"]]]),
+      );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),
       );
 
       await processor.handleDue({} as never);
       expect(pushService.send).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("keeps sending trip notifications when the show-follow half throws", async () => {
+    await withVapid(async () => {
+      pushService.allSubscriptions.mockResolvedValueOnce([tripSubscription]);
+      tripsService.find.mockResolvedValueOnce({
+        payload: {
+          version: 2,
+          parks: {
+            p: {
+              slug: "p",
+              name: "P",
+              timezone: "Europe/Berlin",
+              days: {
+                "2026-10-17": {
+                  entries: [
+                    {
+                      id: "e1",
+                      attractionName: "Ride",
+                      startMinute: 20 * 60 + 15,
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      });
+
+      showFollowsService.allFollows.mockRejectedValueOnce(new Error("db down"));
+
+      await processor.handleDue({} as never);
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+      expect(pushService.send).toHaveBeenCalledWith(
+        tripSubscription,
+        expect.objectContaining({ title: expect.stringContaining("Ride") }),
+      );
+    });
+  });
+
+  it("keeps sending show-follow notifications when the trip half throws", async () => {
+    await withVapid(async () => {
+      pushService.allSubscriptions.mockResolvedValueOnce([tripSubscription]);
+      tripsService.find.mockRejectedValueOnce(new Error("db down"));
+
+      showFollowsService.allFollows.mockResolvedValueOnce([
+        { id: "f1", subscriptionId: "sub-show", showId: "show-1" },
+      ]);
+      showsService.findBatchCurrentStatusByShows.mockResolvedValueOnce(
+        new Map([
+          [
+            "show-1",
+            {
+              status: "OPERATING",
+              showtimes: [
+                { startTime: new Date(NOW + 30 * 60_000).toISOString() },
+              ],
+              show: {
+                name: "Feuerwerk",
+                park: { name: "Europa-Park", timezone: "Europe/Berlin" },
+              },
+            },
+          ],
+        ]),
+      );
+      showsService.getShowtimesOnDate.mockResolvedValueOnce(
+        new Map([["show-1", ["20:30"]]]),
+      );
+      pushService.findByIds.mockResolvedValueOnce(
+        new Map([["sub-show", showSubscription]]),
+      );
+
+      await processor.handleDue({} as never);
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+      expect(pushService.send).toHaveBeenCalledWith(
+        showSubscription,
+        expect.objectContaining({
+          title: expect.stringContaining("Feuerwerk"),
+        }),
+      );
     });
   });
 });
