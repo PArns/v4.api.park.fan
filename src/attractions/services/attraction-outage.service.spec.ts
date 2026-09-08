@@ -31,9 +31,11 @@ describe("AttractionOutageService — the closure path", () => {
 
   let service: AttractionOutageService;
   let query: jest.Mock;
+  let curves: { find: jest.Mock };
 
   const build = async () => {
     query = jest.fn().mockResolvedValue([]);
+    curves = { find: jest.fn().mockResolvedValue([]) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AttractionOutageService,
@@ -43,7 +45,7 @@ describe("AttractionOutageService — the closure path", () => {
         },
         {
           provide: getRepositoryToken(DowntimeRecoveryCurve),
-          useValue: { find: jest.fn().mockResolvedValue([]) },
+          useValue: curves,
         },
       ],
     }).compile();
@@ -118,6 +120,54 @@ describe("AttractionOutageService — the closure path", () => {
     await expect(
       service.getCurrentOutages(PARK, [OPEN_RIDE]),
     ).resolves.toBeInstanceOf(Map);
+  });
+
+  it("a failed DOWN query does not hand its rides to the closure statement", async () => {
+    // The distinction between "found nothing" and "could not look", and it is a
+    // wording question. On a timeout `out` is empty, so a filter of "everything
+    // out does not hold" would send every DOWN ride to a statement that answers
+    // `closed_gap` — and that signal may not be worded as reported. A query
+    // timing out would restate what the operator told us as something we merely
+    // noticed.
+    query.mockImplementation((_sql: string, params: unknown[]) =>
+      Array.isArray(params) && params[3] === PARK.id
+        ? Promise.resolve([])
+        : Promise.reject(new Error("statement timeout")),
+    );
+
+    await service.getCurrentOutages(PARK, [OPEN_RIDE, DOWN_RIDE]);
+
+    const closureCall = query.mock.calls.find((c) => c[1][3] === PARK.id);
+    expect(closureCall).toBeDefined();
+    expect(closureCall![1][0]).toEqual([OPEN_RIDE.id]);
+  });
+
+  it("a failed curve read costs the estimate, not the outage line", async () => {
+    // The same guard reached from inside the try: letting loadCurves() escape
+    // would drop the rows the DOWN query just placed and, with `out` empty,
+    // hand those rides to the closure statement after all.
+    curves.find.mockRejectedValue(new Error("statement timeout"));
+    query.mockImplementation((_sql: string, params: unknown[]) =>
+      Array.isArray(params) && params[3] === PARK.id
+        ? Promise.resolve([])
+        : Promise.resolve([
+            {
+              attractionId: DOWN_RIDE.id,
+              startedAt: new Date("2026-09-08T09:00:00Z"),
+              startObserved: true,
+              rowsInRun: 3,
+              elapsedOperatingMinutes: 45,
+              hasWindows: true,
+            },
+          ]),
+    );
+
+    const out = await service.getCurrentOutages(PARK, [OPEN_RIDE, DOWN_RIDE]);
+
+    expect(out.get(DOWN_RIDE.id)?.signal).toBe("down");
+    expect(out.get(DOWN_RIDE.id)?.estimate).toBeUndefined();
+    const closureCall = query.mock.calls.find((c) => c[1][3] === PARK.id);
+    expect(closureCall![1][0]).toEqual([OPEN_RIDE.id]);
   });
 
   it("asks nothing at all for a park that cannot emit DOWN", async () => {

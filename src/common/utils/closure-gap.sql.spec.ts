@@ -104,37 +104,62 @@ describe("closure-gap statements", () => {
     expect(sql).not.toContain("JOIN LATERAL");
   });
 
+  /**
+   * One CTE's body, with `--` comments removed first.
+   *
+   * Two earlier attempts were vacuous in the same way. Slicing to the next
+   * `"),\n"` landed on the terminator only because nothing happened to be
+   * formatted that way; counting parentheses over the raw text breaks on a lone
+   * `)` inside one of the prose comments these CTEs are wrapped in. Both
+   * truncate the body silently, and a `not.toContain` on a truncated body
+   * passes on text it never read — which is exactly the failure these
+   * assertions exist to catch.
+   */
+  const cteBody = (sql: string, name: string): string => {
+    const bare = sql.replace(/--[^\n]*/g, "");
+    const head = `${name} AS (`;
+    const start = bare.indexOf(head);
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = start + head.length - 1; i < bare.length; i++) {
+      if (bare[i] === "(") depth++;
+      else if (bare[i] === ")" && --depth === 0) {
+        const body = bare.slice(start, i);
+        // The extraction itself must not be vacuous.
+        expect(body).toContain("FROM");
+        expect(body.length).toBeGreaterThan(head.length + 60);
+        return body;
+      }
+    }
+    throw new Error(`unterminated CTE ${name}`);
+  };
+
   it("the live historical CTEs judge the rides in a closure, not the park", () => {
     // cycle, active and early_end are read only through LEFT JOINs against
     // run_start, but all three used to be handed $1 — the whole roster, which
     // park_closers needs and they do not. A 96-ride park scanned 21 days of
     // queue_data 96 times over. Reverting any one of them to $1 is silent.
     //
-    // The body is taken by counting parentheses rather than by looking for the
-    // next "),\n": that landed on the CTE terminator only because no nested
-    // construct happens to be formatted that way today, and a reformat would
-    // have truncated the body and passed the not.toContain half on text it
-    // never read.
-    const live = CURRENT_CLOSURE_GAP_SQL;
-    for (const cte of ["cycle AS (", "active AS (", "early_end AS ("]) {
-      const start = live.indexOf(cte);
-      expect(start).toBeGreaterThan(-1);
-      let depth = 0;
-      let end = start + cte.length - 1;
-      for (let i = end; i < live.length; i++) {
-        if (live[i] === "(") depth++;
-        else if (live[i] === ")" && --depth === 0) {
-          end = i;
-          break;
-        }
-      }
-      const body = live.slice(start, end);
-      // The extraction itself must not be vacuous.
-      expect(body.length).toBeGreaterThan(cte.length + 100);
-      expect(body).toContain("FROM");
+    for (const cte of ["cycle", "active", "early_end"]) {
+      const body = cteBody(CURRENT_CLOSURE_GAP_SQL, cte);
       expect(body).toContain("ARRAY(SELECT aid FROM run_start)");
       expect(body).not.toContain("ANY($1::uuid[])");
     }
+  });
+
+  it("the nightly denominator is restricted to the parks it serves", () => {
+    // The third of the three defects in that CTE, and the only one with no
+    // visible symptom: without the join it computes active_days for every
+    // attraction in the database in order to use it for the blind ones. Every
+    // assertion here stays green if it is deleted, the output is unchanged, and
+    // the nightly job is simply slower.
+    const body = cteBody(CLOSURE_GAP_INTERVALS_SQL, "active");
+    expect(body).toContain("JOIN blind_parks");
+    // Through the exposure table's own parkId, which is what its index covers,
+    // and not through attractions — that join also drops exposure rows whose
+    // attraction has since been merged away.
+    expect(body).toContain('b.pid = e."parkId"');
+    expect(body).not.toContain("JOIN attractions");
   });
 
   it.each(both)(
@@ -145,15 +170,18 @@ describe("closure-gap statements", () => {
       // `reference_sql_rule_replay_windowing` already names. On an ordinary
       // incremental run the same omission made active_days 0–2 for every ride,
       // permanently under MIN_DAYS_FOR_CYCLE_TEST, so the filter never fired.
-      const start = sql.indexOf("active AS (");
-      expect(start).toBeGreaterThan(-1);
-      const body = sql.slice(start, sql.indexOf("GROUP BY", start));
+      const body = cteBody(sql, "active");
       expect(body).toMatch(/op_day\s*>=/);
       expect(body).toMatch(/op_day\s*<=/);
       // Park-local on both sides, because op_day is. A bare ::date takes the
       // session zone and disagrees for 56 of the 91 blind parks.
       expect(body).not.toMatch(/\$\d::timestamptz\)::date/);
       expect(body).toContain("AT TIME ZONE");
+      // And no fixed offset in front of the numerator's edge. One day of slack
+      // moved the nightly statement from 330 intervals over 112 rides to 370
+      // over 120 — all dilution, in the direction that publishes a timetable
+      // as a fault.
+      expect(body).not.toMatch(/op_day\s*>=[^\n]*::date\s*-\s*\d/);
     },
   );
 
@@ -164,7 +192,17 @@ describe("closure-gap statements", () => {
     // throw the result away. Alton Towers 586.4 ms to 10.2, Phantasialand
     // 707.6 to 3.8, both measured after closing time.
     expect(CURRENT_CLOSURE_GAP_SQL).toContain(
-      "WHERE EXISTS (SELECT 1 FROM park_open)",
+      "EXISTS (SELECT 1 FROM park_open)",
+    );
+    // Cheapest first: the regime probe is one primary-key lookup and rejects
+    // the 122 parks that make 70 % of the calls, park_open is a schedule scan.
+    // Both are pseudoconstants, so this only orders the InitPlans — but an
+    // expensive test written in front of a cheap one is the shape this whole
+    // change removes.
+    expect(
+      CURRENT_CLOSURE_GAP_SQL.indexOf("FROM park_downtime_coverage c"),
+    ).toBeLessThan(
+      CURRENT_CLOSURE_GAP_SQL.indexOf("EXISTS (SELECT 1 FROM park_open)"),
     );
   });
 

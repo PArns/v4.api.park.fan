@@ -69,10 +69,12 @@ export interface OutageCandidate extends CuratedOutOfServiceSource {
    * predicates are mutually exclusive, so it never ran once in production. The
    * service does its own filtering now, and it needs the status to do it.
    *
-   * It also needs the whole roster for a second reason: the simultaneity filter
-   * counts how many rides shut in the same minute, and over a pre-filtered list
-   * that count is always one. The filter that removes a park-wide closing can
-   * only work over the park.
+   * This used to carry a second reason — that the simultaneity filter "can only
+   * work over the park", so a pre-filtered list would always count one closer.
+   * It is not true and has not been since that filter was written:
+   * `park_closers` counts over `$4`, the park id, and never reads `$1` at all.
+   * `attraction-integration.service` passes a single ride and gets a correct
+   * count. Only the reason above is load-bearing.
    */
   effectiveStatus?: string | null;
 }
@@ -103,11 +105,13 @@ export interface OutageParkContext {
  * outage started. Deciding would be a third status chain.
  *
  * It does NOT take a pre-filtered DOWN list, and the wording here used to say it
- * did. Both callers pass the whole roster — `park-integration.service` the
- * page's attractions, `attraction-integration.service` the ride whatever its
- * status — because the closure signal exists for parks that never emit `DOWN`,
- * where filtering to `DOWN` first made it structurally unreachable, and because
- * the simultaneity filter can only count park-wide closings over the park.
+ * did. Both callers pass whatever they are rendering regardless of status —
+ * `park-integration.service` the page's attractions, `attraction-integration.
+ * service` one ride — because the closure signal exists for parks that never
+ * emit `DOWN`, and filtering to `DOWN` first makes it structurally unreachable
+ * there: the two predicates are mutually exclusive, so it never ran once in
+ * production. A single ride is a valid call; the statement counts simultaneous
+ * closers over the park id, not over what it was handed.
  *
  * It also computes no duration, no rate and no history. A carried heartbeat row
  * is indistinguishable from an observed one apart from `lastUpdated`, so an
@@ -275,7 +279,23 @@ export class AttractionOutageService {
       // No early return on an empty result, and that is the point: it used to
       // `return out` here, which is the NOTE above reached by a different road.
       if (rows.length > 0) {
-        const curves = await this.loadCurves();
+        // The curves answer "how much longer", which is optional by design —
+        // `estimate` is documented as absent whenever the curve cannot answer.
+        // Letting a failed read of them escape into the catch below would drop
+        // the outage lines this query just placed AND, because `out` would then
+        // be empty, hand every reported-DOWN ride to a statement that answers
+        // with a different word. A missing estimate must not cost a sentence.
+        const curves = await this.loadCurves().catch((error) => {
+          this.logger.warn(
+            `Recovery curves unavailable for park ${park.id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          return {
+            byPark: new Map<string, DowntimeRecoveryCurve[]>(),
+            pooled: [],
+          };
+        });
 
         for (const row of rows) {
           const elapsed = Number(row.elapsedOperatingMinutes);

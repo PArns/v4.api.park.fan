@@ -84,18 +84,26 @@ the blind ones. The live twin's comment claimed it used "the same window and the
 same threshold ... so live and history agree about what a fault is"; that
 sentence was false in both directions.
 
-It is a behaviour change and it is measured, not assumed. Over 21 days across
-five blind parks the nightly statement goes from **331 intervals over 112 rides
-to 371 over 120**, with the distribution unmoved (mean 33 → 32 minutes, maximum
-210 either way). The direction is the point: a denominator counted one day short
-was calling real faults duty cycles.
+**On today's data all three fixes are a no-op, and the first attempt at them was
+not.** The nightly statement produces 330 intervals over 112 rides before the
+change and 330 over 112 after it. An earlier version of this fix put a day of
+slack in front of the window — reasoning by analogy with `park_day_close`, which
+needs one — and that moved it to 370 over 120. The analogy is false:
+`park_day_close` is *joined* to days that exist, so an unused day costs a row,
+while this one is *counted*, so an unused day dilutes the denominator by ~4.5 %
+in the direction that publishes a timetable as a fault. The bound is the
+numerator's own edge now, which is also correct after a DST shift without any
+offset. **The whole 330 → 370 movement had been credited here to the timezone
+fix; all of it was the slack.**
 
-The live statement gains the same bounds, and the one case where its output
-changes is the argument for the whole fix. Over 30 instants taken from stored
-`closed_gap` intervals, 29 are identical and one differs — **Dragon Coaster at
-LEGOLAND California, 2026-09-07 20:41**, a closure the nightly reconstruction
-had recorded and the live line had been withholding. Live and history now agree
-about it.
+Where the upper bound does show is a replay, which is what it is for. Of 30
+instants taken from stored `closed_gap` intervals, 28 are identical and two
+differ — both SeaWorld Orlando, both losing one ride. Judged at 2026-09-06
+22:22, the unbounded denominator was counting **2026-09-07**, a day after the
+instant under judgment: `active_days` 23 against 22 for Abby's Flower Tower and
+Cookie Drop, 22 against 21 for Slimey's Slider, which is enough for one of them
+to cross `MAX_GAP_DAY_SHARE`. In production `$3` is `now()`, so there is no such
+day and the bound is inert — exactly as the nightly figures show.
 
 ### Fixed — two more, from the same read
 
@@ -112,12 +120,18 @@ blind park emits its first DOWN with a run too short for the trailing statement
 to place, that one ride took the closure line away from every other ride in the
 park.
 
-One pass of the final statement over **every park**, 204 of them: **1.24 s in
-total**, mean 6.1 ms, worst 357 ms (Futuroscope, still open and so still with
-work to do), nothing above a second. Measured per population, the old statement
-took **620.4 s over the 113 parks outside `never_reports` alone** — a population
-it could never return a row for — with a mean of 5491 ms and a worst case of
-20 717 ms at Everland. Rows identical in all 113.
+One pass of the final statement over **every park**, 204 of them: **2.89 s in
+total**, mean 14.2 ms. A second sweep an hour earlier read 1.24 s and 6.1 ms —
+the difference is park state, not code. Where the statement still costs
+something is exactly where it should: **Futuroscope at 2017 ms**, open with a
+ride in a closure, so `run_start` is non-empty and the three historical CTEs
+have real work. That is the same park the old statement measured at 31 655 ms
+while producing nothing. Every other park is under 155 ms.
+
+Measured per population, the old statement took **620.4 s over the 113 parks
+outside `never_reports` alone** — a population it could never return a row for —
+with a mean of 5491 ms and a worst case of 20 717 ms at Everland. Rows identical
+in all 113.
 
 Measured old → new, rows identical in every one of the 91 blind parks:
 Futuroscope 31 655 → 24 ms, Paultons Park 26 601 → 699, Alton Towers 24 560 →

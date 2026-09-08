@@ -1,5 +1,33 @@
 # TODO
 
+## The nightly duty-cycle denominator reads a table the same job rewrites (measured 2026-09-08, not fixed)
+
+`DowntimeReconstructionProcessor` runs `CLOSURE_GAP_INTERVALS_SQL` at
+`downtime-reconstruction.processor.ts:151`, then deletes and rewrites
+`attraction_exposure_days` in the transaction at line 176. So the statement's
+`active` CTE — the denominator of `gap_days / active_days` — reads the rows the
+**previous** run wrote, which stop at that run's `asOf`, while `raw_gaps` (the
+numerator) reads `queue_data` right up to this run's. Today's gap days are
+counted; today's operating day is not.
+
+At a nightly cadence over a 30-day window that is one day in thirty, ~3.3 %, and
+it inflates the ratio — the direction that suppresses genuine faults. It is the
+mirror image of the slack-day defect this PR removed from the same expression,
+and the two do not cancel: one was in the live statement's favour, this one is
+against.
+
+Two edges make it worse than the average: a **first run** and a run after the
+**400-day retention purge** see an empty exposure table, so `active_days` is 0
+for every ride, `active_days < MIN_DAYS_FOR_CYCLE_TEST` passes everything, and
+the duty-cycle filter is off entirely for that run.
+
+The fix is ordering, not SQL: the closure statement wants to run after the
+exposure rows for this window exist. They are computed by `EXPOSURE_SQL` and
+inserted inside the transaction at line 176, so moving the closure query into
+that transaction after the insert would see them. It is left out of the
+performance PR because it restructures a job that writes, and it needs its own
+before/after over stored intervals rather than a serving-path measurement.
+
 ## early_end attributes a reading to its calendar date, not its operating window (measured 2026-09-08, not fixed)
 
 `CURRENT_CLOSURE_GAP_SQL`'s `early_end` buckets each `queue_data` reading by its
