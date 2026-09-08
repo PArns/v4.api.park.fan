@@ -44,13 +44,17 @@ describe("closure-gap statements", () => {
       .replace(/'[^'\n]*'/g, (m) => " ".repeat(m.length));
     // The CTE list ends with a closing paren, never a comma.
     expect(bare).not.toMatch(/\),\s*SELECT\b/);
-    // And every parenthesis is closed.
+    // And every parenthesis is closed. Tracked in locals and asserted twice
+    // rather than once per character: these statements are 20 KB and 10 KB, so
+    // an expect() in the loop is ~30 000 expectation objects a run.
     let depth = 0;
+    let min = 0;
     for (const ch of bare) {
       if (ch === "(") depth++;
       else if (ch === ")") depth--;
-      expect(depth).toBeGreaterThanOrEqual(0);
+      if (depth < min) min = depth;
     }
+    expect(min).toBe(0);
     expect(depth).toBe(0);
   });
 
@@ -175,7 +179,11 @@ describe("closure-gap statements", () => {
     ];
     expect(cols.length).toBeGreaterThan(3);
     for (const [, col] of cols) {
-      expect(readings).toMatch(new RegExp(`\\bAS ${col}\\b|\\b${col}\\b`));
+      // `AS <col>` only. The previous version alternated with a bare `\\b<col>\\b`,
+      // which subsumes it — so renaming the SELECT alias while leaving the name
+      // anywhere in the CTE (a WHERE clause, a comment) kept the test green in
+      // exactly the scenario it guards.
+      expect(readings).toMatch(new RegExp(`\\bAS ${col}\\b`));
     }
   });
 

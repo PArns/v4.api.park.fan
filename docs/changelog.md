@@ -170,11 +170,12 @@ is strictly smaller — so in a park shut all day the whole roster had its 21 da
 computed and thrown away at that join. `park_closers`, the last heavy CTE with
 no guard of its own, takes the same pseudoconstant `EXISTS`.
 
-One pass of the final statement over **every park**, 204 of them: **0.64 s in
-total**, mean 3.1 ms, worst **172.7 ms**, nothing above a second. That worst
-case is Futuroscope, open with a ride in a closure and so the one park with real
-work to do — the same park the old statement measured at **31 655 ms** while
-producing nothing, and 2017 ms before this round's CTE sharing.
+One pass of the final statement over **every park**, 204 of them: **0.45 s in
+total**, mean 2.2 ms, worst **26.7 ms**, nothing above a second. Measured under
+the shipped build, after the window moved to 30 days and the gates moved above
+the historical CTEs. For scale, Futuroscope — the one park that had real work in
+an earlier sweep — measured **31 655 ms** under the old statement while
+producing nothing at all.
 
 Measured per population, the old statement took **620.4 s over the 113 parks
 outside `never_reports` alone** — a population it could never return a row for —
