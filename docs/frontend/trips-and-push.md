@@ -1,9 +1,15 @@
-# Stored plans and web push (`/v1/trips`, `/v1/push`)
+# Stored plans and web push (`/v1/trips`, `/v1/push`, `/v1/push/ride-alerts`, `/v1/push/show-follows`)
 
 Two endpoints that exist for one reason: the planner has always lived in
 `localStorage`, which is the right default — no account, works offline, belongs
 to nobody but the visitor — and two things a plan is asked for need the server to
 have seen it. **Sharing a link**, and **a notification that knows what is next.**
+
+Push itself grew a second and third reason after that: a visitor wants to know
+when a **specific show** is about to start, or when a **specific ride's** wait
+time drops low enough — neither of which has anything to do with a stored
+plan. Sections 4 and 5 cover those; sections 1–3 are unchanged from when push
+existed only for the trip planner.
 
 ---
 
@@ -61,18 +67,29 @@ ask this before it offers a notification control**: `available: false` means thi
 deploy has no VAPID keypair, and a switch that turns on and does nothing is the
 worst state this feature has.
 
-`POST /v1/push/subscriptions` takes `{ endpoint, p256dh, auth, tripId, locale?,
+`POST /v1/push/subscriptions` takes `{ endpoint, p256dh, auth, tripId?, locale?,
 timezone?, topics? }` and answers 204. It is an **upsert on the endpoint**: a push
 service hands the same URL back every time a page re-subscribes, and inserting
 would deliver every notification once per page load.
+
+**`tripId` and `topics` are both optional, and omitting either is not the same
+as clearing it.** A browser that only wants a ride alert or a followed show
+sends neither — it has nothing to say about the trip planner — and the write
+leaves whatever this endpoint already had for those two fields untouched. Only
+a value that is actually **sent** is validated and stored: `tripId`, if
+present, must name a trip that exists; `topics`, if present, must contain at
+least one topic this deploy sends. The one row in `push_subscriptions` is
+shared by all three features (a trip, a followed show, a ride alert), because
+a push service issues one endpoint per browser regardless of why it
+subscribed.
 
 It refuses, rather than storing something that can never produce a notification:
 
 | status | when |
 | --- | --- |
 | 503 | this deploy has no VAPID keypair |
-| 404 | no trip with that id |
-| 400 | the endpoint is not an https URL **at a known push service**, or no known topic is left |
+| 404 | `tripId` was sent but names no trip |
+| 400 | the endpoint is not an https URL **at a known push service**, or `topics` was sent with no known topic left |
 
 The endpoint host is checked against the four push services (FCM, Mozilla, WNS,
 Apple), extensible through `PUSH_ENDPOINT_HOSTS`. That check is not tidiness: the
@@ -107,21 +124,120 @@ ticks every five minutes — so a block is seen on two or three consecutive runs
 one missed run costs nothing. The duplicate that implies is absorbed by a Redis
 marker per (endpoint, event) and, failing that, by the `tag` on the device.
 
-## 4. Operational notes
+## 4. Ride alerts (`/v1/push/ride-alerts`)
 
-- Neither endpoint is CDN-cacheable. A trip is one visitor's, and a shared edge
-  copy would hand the next reader somebody else's plan.
-- Subscriptions and trips live in **Postgres**, not Redis: this instance runs
-  `allkeys-lru`, so an evicted counter merely resets a rate-limit window, while an
-  evicted subscription is a visitor who silently stops being notified.
+A visitor watches an attraction and asks to be told once its STANDBY wait
+drops below a threshold they pick — independent of any trip, so subscribing
+needs no `tripId` at all (see §3's preserve-on-omit note).
+
+`GET ?endpoint=` lists a browser's alerts; `POST { endpoint, attractionId,
+thresholdMinutes }` upserts one (1–240 minutes); `DELETE { endpoint,
+attractionId }` removes one, idempotently. A cap of 100 alerts per
+subscription exists for the same reason `trips` caps its payload — an
+unauthenticated write endpoint that accepts unbounded writes is a free
+key-value store. Writes are rate-limited per address by the module's own
+Redis counter, same reasoning as `TripWriteRateLimitService`: the global
+throttler is bypassed for our own frontend, which is where all real traffic
+comes from.
+
+The write refuses two things a stored alert could never do anything about:
+
+| status | when |
+| --- | --- |
+| 404 | no subscription for that endpoint, or no such (non-retired) attraction |
+| 400 | `thresholdMinutes` out of range, or this park's wait times can never be read (`getNoLiveWaitTimesReason`) |
+
+Being out of season is **not** refused — an alert may be set up ahead of a
+ride's season, it simply will not fire until the ride is confirmed running
+(`isCurrentlyInSeason(...) !== false`, never `=== true` — the same rule the
+seasonal-attractions doc describes, applied here so an alert cannot fire
+against a ride the detector has merely not understood yet).
+
+**There is no cron for this.** `RideAlertsService.checkAndNotify` runs
+straight out of `WaitTimesProcessor`, once per park per five-minute poll,
+right after that park's attractions are saved — the same cycle that already
+decided whether to write a `queue_data` row, not a fixed rota of its own. It:
+
+1. Skips the whole park if `getNoLiveWaitTimesReason` is set — permanent, not
+   a freshness check.
+2. Filters the polled attraction ids down to the ones anybody has an alert
+   on (almost always none — most rides have no watcher).
+3. Reads each one's current STANDBY reading (status + wait) and drops any
+   that are not `OPERATING`, have no wait time, or are out of season.
+4. Hands the readings and the alert rows to `diffRideAlerts` — a pure
+   function with no I/O of its own (`ride-alerts/ride-alert-transitions.ts`).
+
+`diffRideAlerts` is the whole of the decision, and the whole of the dedupe:
+each `RideAlert` carries an `armed` boolean rather than a Redis marker,
+because a threshold crossing has no lead window to overlap on consecutive
+ticks the way a "starts in 10–20 minutes" trip block does — it is evaluated
+once, on the cycle that produced the reading. `armed: true` means the next
+reading under the threshold fires and flips it to `false`; it flips back to
+`true` only once the wait genuinely rises back to the threshold or above,
+which is what lets the same alert fire again later the same day if a queue
+builds back up and drops a second time.
+
+```json
+{ "title": "Taron: nur noch 15 Min.", "body": "Phantasialand", "url": "/parks/europe/germany/bruehl/phantasialand/taron", "tag": "ride-alert:3f2c…" }
+```
+
+## 5. Followed shows (`/v1/push/show-follows`)
+
+The same shape as ride alerts, minus the threshold: `GET ?endpoint=` lists,
+`POST { endpoint, showId }` upserts (no parameter — following an already-
+followed show is a no-op), `DELETE { endpoint, showId }` unfollows. Same
+100-per-subscription cap, same address-rate-limited writes, same 404 for a
+subscription-less endpoint or a show that does not exist. Unlike a ride,
+there is no "can this park's data ever be trusted" gate — a show is either
+found or it is not.
+
+**This one DOES run on the existing five-minute push cron**, as a second,
+independent branch of the same job that sends trip-planner notifications
+(`PushNotificationProcessor.handleDue`) — a `ShowFollow` row is not a trip
+topic, so it is read alongside, not filtered through, `subscription.topics`.
+Each tick: load every follow, batch-fetch each followed show's current live
+status (`ShowsService.findBatchCurrentStatusByShows`, the same
+staleness-checked, already-day-projected data the park endpoint itself
+serves), and hand the operating ones to `dueShowNotifications` — a pure
+function in `show-follows/show-follow-notifications.ts`.
+
+That function needs **no timezone math to decide whether a showtime is
+due**, unlike `dueNotifications`: `ShowLiveData.showtimes[].startTime` is
+already a full, park-day-projected ISO instant by the time it gets there, so
+subtracting it from "now" is a plain duration. The park's timezone is only
+read to *format* the display clock (`atTime`, e.g. `"20:30"`) — a show whose
+timezone this deploy cannot resolve or format is skipped entirely rather than
+shown in the wrong hour, the same rule §3 follows for trips. The window is
+25–35 minutes before the showtime (wider than the five-minute tick, for the
+same "one missed run costs nothing" reason as the trip window), and the
+dedupe key is the showtime's own ISO string — already unique, so unlike a
+trip block's `startMinute` it needs no separate date component.
+
+```json
+{ "title": "In 30 Min.: Feuerwerk", "body": "20:30 Uhr, Europa-Park", "url": "/parks/europe/germany/rust/europa-park#shows", "tag": "show-start:9ab1…:2026-10-17T18:30:00.000Z" }
+```
+
+## 6. Operational notes
+
+- None of these endpoints is CDN-cacheable. Every one of them answers for one
+  visitor's own data, and a shared edge copy would hand the next reader
+  somebody else's plan, alerts, or follows.
+- Subscriptions, trips, alerts and follows all live in **Postgres**, not
+  Redis: this instance runs `allkeys-lru`, so an evicted counter merely
+  resets a rate-limit window, while an evicted subscription (or an evicted
+  alert) is a visitor who silently stops being notified.
 - A subscription is deleted the first time a push service answers 404 or 410 (the
   browser is gone and the service is saying so) and after 8 consecutive other
-  failures, which reset on the next success.
-- With no VAPID keypair the endpoints answer 503 and the job does not run. Push
-  guards nothing, so taking the API down over a missing key would make every other
-  endpoint depend on a feature nobody asked for.
+  failures, which reset on the next success. `ride_alerts` and `show_follows`
+  cascade with it at the database level — an alert has no purpose once its
+  subscription is gone, so there is no separate sweep job for either.
+- With no VAPID keypair the endpoints answer 503 and neither cron branch does
+  any work. Push guards nothing, so taking the API down over a missing key
+  would make every other endpoint depend on a feature nobody asked for.
 
 ## Related
 
 - [`/plan/day`](./plan-day-endpoint.md) — the per-day series a stored plan is built around
+- [Attraction status and seasonality](../architecture/attraction-status-and-seasonality.md) — the `isCurrentlyInSeason` rule §4's check reuses
+- [Live wait-times availability](./live-wait-times-availability.md) — `getNoLiveWaitTimesReason`, the gate §4 checks per park
 - `.env.example` — `VAPID_*` and `PUSH_ENDPOINT_HOSTS`

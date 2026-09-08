@@ -50,9 +50,15 @@ export class PushSubscription {
   @Column({ type: "text" })
   auth: string;
 
-  /** Which trip this browser wants to hear about. */
-  @Column({ type: "varchar", length: 32 })
-  tripId: string;
+  /**
+   * Which trip this browser wants to hear about, if any.
+   *
+   * Nullable: a browser that only follows a show or a ride's wait time has no
+   * trip at all. `ride_alerts`/`show_follows` hang off this row by `endpoint`
+   * instead, so a subscription is no longer proof of a trip.
+   */
+  @Column({ type: "varchar", length: 32, nullable: true })
+  tripId: string | null;
 
   /**
    * The language to write in, and the zone to reckon in.

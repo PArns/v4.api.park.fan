@@ -49,16 +49,20 @@ export class PushSubscribeDto {
 
   @ApiProperty({
     description:
-      "Which stored trip this browser wants to hear about. The trip must exist — " +
-      "a subscription against an id nobody created can never produce a " +
-      "notification, and would leave the visitor looking at a switch that is on " +
-      "and does nothing.",
+      "Which stored trip this browser wants to hear about. Omit entirely for a " +
+      "subscription that is not about the trip planner (a followed show, a " +
+      "ride's wait-time alert) — omitting never clears a trip already stored " +
+      "for this endpoint. When sent, the trip must exist — a subscription " +
+      "against an id nobody created can never produce a notification, and " +
+      "would leave the visitor looking at a switch that is on and does nothing.",
     example: "n7Qk2Fd3Xb9pLmZa",
+    required: false,
   })
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   @MaxLength(32)
-  tripId: string;
+  tripId?: string;
 
   @ApiProperty({
     description:
@@ -82,7 +86,9 @@ export class PushSubscribeDto {
 
   @ApiProperty({
     description:
-      "What to be told about. Unknown topics are dropped, and a body with no " +
+      "What to be told about, for the trip planner. Omit entirely outside the " +
+      "trip planner — omitting never clears topics already stored for this " +
+      "endpoint. When sent, unknown topics are dropped, and a body with no " +
       "known topic left is refused — a stored subscription for a topic nothing " +
       "sends is a switch that is on and does nothing.",
     enum: PUSH_TOPICS,
@@ -107,6 +113,20 @@ export class PushUnsubscribeDto {
   @IsNotEmpty()
   @MaxLength(2048)
   endpoint: string;
+
+  @ApiProperty({
+    description:
+      "Scopes this to the trip planner alone: only `tripId`/`topics` are " +
+      "cleared, and a ride alert or followed show on the same endpoint is " +
+      "left running. Omit to forget the browser entirely.",
+    example: "n7Qk2Fd3Xb9pLmZa",
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(32)
+  tripId?: string;
 }
 
 export class PushStatusDto {

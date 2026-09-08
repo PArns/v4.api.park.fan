@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { createHash } from "crypto";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { incrementWithWindow } from "../../common/redis/rate-limit.util";
 
 /**
  * A rate limiter the login endpoint owns, rather than the global one.
@@ -175,11 +176,13 @@ export class AdminLoginRateLimitService {
   }
 
   private async bump(key: string, windowSeconds: number): Promise<void> {
-    const count = await this.redis.incr(key);
-    // Only the first failure in a window sets the expiry, so the window is
-    // fixed from the first attempt rather than sliding forward with each one —
-    // a sliding window would let a slow attacker hold the door shut forever.
-    if (count === 1) await this.redis.expire(key, windowSeconds);
+    // `incrementWithWindow` sets the expiry with `NX` on every call rather
+    // than only the first, so the window is still fixed from the first
+    // attempt rather than sliding forward with each one — a sliding window
+    // would let a slow attacker hold the door shut forever — but a crash
+    // between the increment and the expiry no longer leaves the key
+    // permanently uncounted-down (see the util's own docstring).
+    await incrementWithWindow(this.redis, key, windowSeconds);
   }
 }
 

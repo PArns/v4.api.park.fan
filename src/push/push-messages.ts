@@ -1,4 +1,3 @@
-import type { PlannedNotification } from "./notification-planner";
 import type { PushMessage } from "./push.service";
 
 /**
@@ -21,10 +20,49 @@ import type { PushMessage } from "./push.service";
  * site to English and is standing in Brühl wants English.
  */
 
-type MessageWriter = (notification: PlannedNotification) => {
+/**
+ * The shape both `dueNotifications` (trip planner) and `dueShowNotifications`
+ * (followed shows) produce — "something starts soon" has one sentence
+ * regardless of what that something is, so `PlannedNotification`'s extra
+ * `topic` field (which this file never reads — only the processor's
+ * subscriber-gating does) is not part of the contract here.
+ */
+export interface ScheduledStartCopy {
+  dedupeKey: string;
+  parkName: string;
+  /** What is starting: a ride's name, a show's name, or a free block's label. */
+  what: string;
+  inMinutes: number;
+  /** Park-local `HH:mm`. */
+  atTime: string;
+  url: string;
+}
+
+type MessageWriter = (notification: ScheduledStartCopy) => {
   title: string;
   body: string;
 };
+
+/**
+ * Resolve a locale to a writer and assemble the `PushMessage`.
+ *
+ * Shared by `writeMessage` and `writeRideAlertMessage`, which used to carry
+ * this identically: "de-AT" and "de-CH" are German, so matching the base tag
+ * rather than the whole string is the difference between a German
+ * notification and an English one for every visitor whose browser reports a
+ * region. Every table here defines `en`, which is the fallback for anything
+ * this project has not translated.
+ */
+function writeFromTable<T extends { dedupeKey: string; url: string }>(
+  writers: Record<string, (notification: T) => { title: string; body: string }>,
+  notification: T,
+  locale: string,
+): PushMessage {
+  const base = locale.split("-")[0]?.toLowerCase() ?? "en";
+  const writer = writers[base] ?? writers.en;
+  const { title, body } = writer(notification);
+  return { title, body, url: notification.url, tag: notification.dedupeKey };
+}
 
 const WRITERS: Record<string, MessageWriter> = {
   de: (n) => ({
@@ -61,15 +99,56 @@ const WRITERS: Record<string, MessageWriter> = {
  * passed. The push services honour it, and it costs nothing to send.
  */
 export function writeMessage(
-  notification: PlannedNotification,
+  notification: ScheduledStartCopy,
   locale: string,
 ): PushMessage {
-  // "de-AT" and "de-CH" are German. Matching the base tag rather than the whole
-  // string is the difference between a German notification and an English one
-  // for every visitor whose browser reports a region.
-  const base = locale.split("-")[0]?.toLowerCase() ?? "en";
-  const writer = WRITERS[base] ?? WRITERS.en;
-  const { title, body } = writer(notification);
+  return writeFromTable(WRITERS, notification, locale);
+}
 
-  return { title, body, url: notification.url, tag: notification.dedupeKey };
+/** What a ride-alert notification needs — a wait time now, not a start time. */
+export interface RideAlertCopy {
+  dedupeKey: string;
+  attractionName: string;
+  parkName: string;
+  waitTime: number;
+  url: string;
+}
+
+type RideAlertWriter = (notification: RideAlertCopy) => {
+  title: string;
+  body: string;
+};
+
+const RIDE_ALERT_WRITERS: Record<string, RideAlertWriter> = {
+  de: (n) => ({
+    title: `${n.attractionName}: nur noch ${n.waitTime} Min.`,
+    body: n.parkName,
+  }),
+  en: (n) => ({
+    title: `${n.attractionName}: only ${n.waitTime} min now`,
+    body: n.parkName,
+  }),
+  nl: (n) => ({
+    title: `${n.attractionName}: nog maar ${n.waitTime} min.`,
+    body: n.parkName,
+  }),
+  fr: (n) => ({
+    title: `${n.attractionName} : plus que ${n.waitTime} min`,
+    body: n.parkName,
+  }),
+  es: (n) => ({
+    title: `${n.attractionName}: solo ${n.waitTime} min`,
+    body: n.parkName,
+  }),
+  it: (n) => ({
+    title: `${n.attractionName}: solo ${n.waitTime} min`,
+    body: n.parkName,
+  }),
+};
+
+export function writeRideAlertMessage(
+  notification: RideAlertCopy,
+  locale: string,
+): PushMessage {
+  return writeFromTable(RIDE_ALERT_WRITERS, notification, locale);
 }

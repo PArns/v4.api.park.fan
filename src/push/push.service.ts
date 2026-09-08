@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { In, IsNull, Not, Repository } from "typeorm";
 import * as webpush from "web-push";
 import { PushSubscription } from "./entities/push-subscription.entity";
 import {
@@ -9,15 +9,22 @@ import {
   type PushTopic,
 } from "./push-config";
 
-/** What a browser hands over when the visitor says yes. */
+/**
+ * What a browser hands over when the visitor says yes.
+ *
+ * `tripId` and `topics` are absent, not empty, when this call has nothing to
+ * say about the trip planner — a ride-alert or show-follow subscribe never
+ * sends either. `subscribe` has to tell that apart from "clear it", which is
+ * why both are optional here rather than defaulted.
+ */
 export interface SubscribeInput {
   endpoint: string;
   p256dh: string;
   auth: string;
-  tripId: string;
+  tripId?: string;
   locale: string;
   timezone: string | null;
-  topics: PushTopic[];
+  topics?: PushTopic[];
 }
 
 /** One notification, already written in the subscriber's language. */
@@ -75,6 +82,13 @@ export class PushService {
    *
    * `null` when this deploy has no VAPID keys, so the caller can say so instead
    * of storing a subscription nothing will ever send to.
+   *
+   * `tripId` and `topics` are set only when the caller sends them — never
+   * cleared by omission. The same browser subscribes through this one method
+   * for three unrelated reasons (a trip, a followed show, a ride's wait time),
+   * and each call only knows about its own reason; overwriting the other two
+   * with nothing every time would mean turning on a ride alert quietly turns
+   * off someone's trip notifications.
    */
   async subscribe(input: SubscribeInput): Promise<PushSubscription | null> {
     if (!isPushConfigured()) return null;
@@ -84,13 +98,18 @@ export class PushService {
     });
 
     const row =
-      existing ?? this.repository.create({ endpoint: input.endpoint });
+      existing ??
+      this.repository.create({
+        endpoint: input.endpoint,
+        tripId: null,
+        topics: [],
+      });
     row.p256dh = input.p256dh;
     row.auth = input.auth;
-    row.tripId = input.tripId;
+    if (input.tripId !== undefined) row.tripId = input.tripId;
+    if (input.topics !== undefined) row.topics = input.topics;
     row.locale = input.locale;
     row.timezone = input.timezone;
-    row.topics = input.topics;
     // A re-subscribe is the browser saying it is alive. Whatever went wrong
     // before this is not evidence about the subscription that exists now.
     row.failureCount = 0;
@@ -98,9 +117,34 @@ export class PushService {
     return this.repository.save(row);
   }
 
-  /** Forget a browser. Idempotent — unsubscribing twice is not an error. */
-  async unsubscribe(endpoint: string): Promise<void> {
-    await this.repository.delete({ endpoint });
+  /**
+   * Forget a browser's trip subscription, or the browser entirely.
+   *
+   * Idempotent either way. The same row backs three unrelated features (a
+   * trip, a followed show, a ride's wait-time alert), all through the FK
+   * cascade on this table — so an unscoped delete here does not just forget
+   * the trip, it takes `ride_alerts` and `show_follows` down with it via
+   * `onDelete: "CASCADE"`, silently turning off alerts the caller never
+   * mentioned. `tripId` is how a caller says which reason it is unsubscribing
+   * for: sent, this clears only `tripId`/`topics` — the trip-planner half of
+   * the row — and leaves the rest (and the row itself) alone, the same
+   * "only touch what you named" rule `subscribe` already applies on write.
+   * Omitted, it is a real "forget this browser" and deletes the row, cascade
+   * included — right for a caller that means everything, not just the trip.
+   */
+  async unsubscribe(endpoint: string, tripId?: string): Promise<void> {
+    if (tripId === undefined) {
+      await this.repository.delete({ endpoint });
+      return;
+    }
+
+    // Not `delete({ endpoint, tripId })`: a mismatch (this endpoint's trip
+    // moved on, or was already cleared) must do nothing rather than take an
+    // unscoped action against a row it no longer describes.
+    await this.repository.update(
+      { endpoint, tripId },
+      { tripId: null, topics: [] },
+    );
   }
 
   /** Every subscription for one trip. */
@@ -109,17 +153,46 @@ export class PushService {
   }
 
   /**
-   * Every subscription there is, for the job that walks them.
+   * The subscription a browser already has, if any.
    *
-   * Unbounded on purpose and safe for exactly one reason: this table holds one
-   * row per browser that opted IN, which is a number bounded by people rather
-   * than by traffic, and dead rows are deleted the first time a push service
-   * answers 404 or 410 rather than left to accumulate. If that ever stops being
-   * true the fix is a cursor here, not a filter — the job has to see every
-   * subscriber or it silently stops notifying the ones past the limit.
+   * For `ride-alerts`/`show-follows`: both refuse a write against an endpoint
+   * with no subscription row, the same "never accept something that can never
+   * notify" rule `PushController.subscribe` applies to a trip.
    */
-  async allSubscriptions(): Promise<PushSubscription[]> {
-    return this.repository.find();
+  async findByEndpoint(endpoint: string): Promise<PushSubscription | null> {
+    return this.repository.findOne({ where: { endpoint } });
+  }
+
+  /**
+   * A batch of subscriptions by id, for a job that already knows which ones it
+   * needs — a ride-alert sweep resolves a handful of triggers to subscriptions
+   * in one query rather than one `findOne` per trigger.
+   */
+  async findByIds(ids: string[]): Promise<Map<string, PushSubscription>> {
+    if (ids.length === 0) return new Map();
+    const rows = await this.repository.findBy({ id: In(ids) });
+    return new Map(rows.map((row) => [row.id, row]));
+  }
+
+  /**
+   * Every subscription carrying a trip, for the trip half of the
+   * notification job.
+   *
+   * Scoped at the query, not fetched-then-filtered: this table now also
+   * holds ride-alert- and show-follow-only rows with `tripId: null`, and the
+   * job walking these every five minutes has no reason to pull one over the
+   * wire only to discard it a line later — `subscriptionsByTrip` used to do
+   * exactly that against an unfiltered `find()`. Unbounded on `tripId IS NOT
+   * NULL` for the same reason the old unfiltered query was safe unbounded:
+   * this table holds one row per browser that opted in, which is a number
+   * bounded by people rather than by traffic, and dead rows are deleted the
+   * first time a push service answers 404 or 410 rather than left to
+   * accumulate. If that ever stops being true the fix is a cursor here, not
+   * a filter — the job has to see every trip subscriber or it silently
+   * stops notifying the ones past the limit.
+   */
+  async subscriptionsWithTrip(): Promise<PushSubscription[]> {
+    return this.repository.find({ where: { tripId: Not(IsNull()) } });
   }
 
   /**

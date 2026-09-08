@@ -13,6 +13,18 @@ export interface GeocodedEntity {
 }
 
 /**
+ * Whether all three geo slugs a URL needs are present.
+ *
+ * Extracted after the same three-field check was typed out independently in
+ * this file and again in `frontend-url.util.ts`'s `frontendParkPath` — a
+ * fourth (or fifth) copy the next caller adds is a fourth chance to get one
+ * of the three fields wrong.
+ */
+export function hasCompleteGeoPath(entity: GeocodedEntity): boolean {
+  return Boolean(entity.continentSlug && entity.countrySlug && entity.citySlug);
+}
+
+/**
  * Build geocoded URL path for parks and attractions
  *
  * Returns null if any required slug is missing (continent, country, city)
@@ -29,8 +41,7 @@ export function buildGeocodedUrl(
   entity: GeocodedEntity,
   attractionSlug?: string,
 ): string | null {
-  // Validate all required slugs are present
-  if (!entity.continentSlug || !entity.countrySlug || !entity.citySlug) {
+  if (!hasCompleteGeoPath(entity)) {
     return null;
   }
 

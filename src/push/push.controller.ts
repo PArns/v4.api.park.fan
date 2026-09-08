@@ -72,18 +72,26 @@ export class PushController {
   @Post("subscriptions")
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
-    summary: "Subscribe a browser to a trip",
+    summary: "Subscribe a browser",
     description:
       "An upsert on the endpoint, never an insert: a push service hands back " +
       "the same URL every time a page re-subscribes, and inserting would " +
-      "deliver every notification once per page load.",
+      "deliver every notification once per page load. `tripId` and `topics` " +
+      "are optional — a browser that only follows a show or a ride's wait " +
+      "time sends neither, and omitting them never clears a value this " +
+      "endpoint already stored for a different reason (see `PushService.subscribe`).",
   })
   @ApiResponse({ status: 204, description: "Stored." })
   @ApiResponse({
     status: 400,
-    description: "Malformed subscription, or an unknown topic.",
+    description:
+      "Malformed subscription, a `topics` list with no known topic, or a " +
+      "`tripId` sent without `topics`.",
   })
-  @ApiResponse({ status: 404, description: "No such trip." })
+  @ApiResponse({
+    status: 404,
+    description: "`tripId` was sent but no such trip exists.",
+  })
   @ApiResponse({
     status: 503,
     description: "Push is not configured on this deploy.",
@@ -99,17 +107,37 @@ export class PushController {
     const endpoint = requireUrl(body?.endpoint, "endpoint");
     const p256dh = requireString(body?.p256dh, "p256dh");
     const auth = requireString(body?.auth, "auth");
-    const tripId = requireString(body?.tripId, "tripId");
 
-    // The trip has to exist. A subscription against an id nobody created can
-    // never produce a notification — the job walks trips, not subscriptions —
-    // and the visitor would see the switch stay on for a month.
-    const trip = await this.tripsService.find(tripId);
-    if (!trip) throw new HttpException("Trip not found", HttpStatus.NOT_FOUND);
+    // A trip is one reason to subscribe, not the only one. When sent, it has
+    // to exist — a subscription against an id nobody created can never
+    // produce a notification, and the visitor would see the switch stay on
+    // for a month. When absent, this call is not about the trip planner at
+    // all, and `PushService.subscribe` leaves whatever trip this endpoint
+    // already had untouched.
+    let tripId: string | undefined;
+    if (body?.tripId !== undefined) {
+      tripId = requireString(body.tripId, "tripId");
+      const trip = await this.tripsService.find(tripId);
+      if (!trip) {
+        throw new HttpException("Trip not found", HttpStatus.NOT_FOUND);
+      }
+    }
 
-    const topics = normalizeTopics(body?.topics);
-    if (topics.length === 0) {
-      throw new BadRequestException("No known topics requested");
+    // Same shape as tripId: sent, it must resolve to at least one real topic
+    // (a stored subscription nothing sends to is the one failure this module
+    // is arranged against). Not sent, it is left alone — except alongside a
+    // `tripId`, where "left alone" on a brand-new row means created with
+    // `topics: []`: linked to a real trip, subscribed to none of its topics,
+    // and silently stuck that way forever, since nothing here ever revisits a
+    // subscription the caller does not name again.
+    let topics: PushTopic[] | undefined;
+    if (body?.topics !== undefined) {
+      topics = normalizeTopics(body.topics);
+      if (topics.length === 0) {
+        throw new BadRequestException("No known topics requested");
+      }
+    } else if (tripId !== undefined) {
+      throw new BadRequestException("tripId requires topics");
     }
 
     const stored = await this.pushService.subscribe({
@@ -136,16 +164,23 @@ export class PushController {
   @Delete("subscriptions")
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
-    summary: "Forget a browser",
+    summary: "Forget a browser, or just its trip",
     description:
       "Idempotent. Unsubscribing an endpoint that is not stored is not an " +
       "error: a browser that revoked permission has no way to know whether its " +
-      "subscription ever reached us.",
+      "subscription ever reached us. Send `tripId` to turn off the trip " +
+      "planner alone — the same endpoint may also carry a ride alert or a " +
+      "followed show, and those stay on. Omit it to forget the browser " +
+      "entirely, which takes them down too.",
   })
   @ApiResponse({ status: 204, description: "Gone, or was never there." })
   async unsubscribe(@Body() body: PushUnsubscribeDto): Promise<void> {
     const endpoint = requireUrl(body?.endpoint, "endpoint");
-    await this.pushService.unsubscribe(endpoint);
+    const tripId =
+      body?.tripId !== undefined
+        ? requireString(body.tripId, "tripId")
+        : undefined;
+    await this.pushService.unsubscribe(endpoint, tripId);
   }
 }
 

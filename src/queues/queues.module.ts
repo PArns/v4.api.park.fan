@@ -75,6 +75,8 @@ import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-base
 import { ModelComparison } from "../ml/entities/model-comparison.entity";
 import { PushModule } from "../push/push.module";
 import { TripsModule } from "../trips/trips.module";
+import { RideAlertsModule } from "../ride-alerts/ride-alerts.module";
+import { ShowFollowsModule } from "../show-follows/show-follows.module";
 
 @Module({
   imports: [
@@ -198,9 +200,12 @@ import { TripsModule } from "../trips/trips.module";
         },
       },
       // Push notifications: a five-minute tick over the trips somebody
-      // subscribed to. No lock headroom needed — it reads one small table and
-      // one row per trip, and the work it does is bounded by opted-in browsers
-      // rather than by traffic.
+      // subscribed to, plus followed shows (one `getShowtimesOnDate` query
+      // per distinct park among them). No explicit lock headroom — unlike
+      // rope-drop/typical-waits' long synchronous batch runs, this job is
+      // all async I/O with plenty of await points for Bull's lock renewal
+      // to keep up regardless of wall-clock duration; revisit if that stops
+      // being true once this runs against real follow counts.
       { name: "push-notifications" },
       // Stored plans: one daily sweep of the expired ones. Its own queue rather
       // than a second job on the push tick, because it is maintenance on a
@@ -234,6 +239,8 @@ import { TripsModule } from "../trips/trips.module";
     PopularityModule,
     PushModule, // Web-push subscriptions and sending
     TripsModule, // The stored plans the notification job walks
+    RideAlertsModule, // Wait-time alerts — checked from WaitTimesProcessor
+    ShowFollowsModule, // Followed shows — the push-notifications job's other half
     RedisModule, // For cache warmup service
     RevalidationModule, // Frontend on-demand revalidation (best-days webhook)
     GeoipModule,
