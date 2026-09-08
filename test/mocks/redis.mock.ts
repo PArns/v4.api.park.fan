@@ -3,10 +3,11 @@
  *
  * Only the commands the session store and the login limiter actually use, and
  * only the semantics they depend on — string get/set with EX, integer INCR,
- * TTL, EXPIRE, and set membership. Enough to prove that a session expires, that
- * an index is pruned, and that a fixed window does not slide; not enough to
- * pass for Redis, which is the point: a fake that grows features nobody tests
- * becomes a second implementation to keep correct.
+ * TTL, EXPIRE (including its `NX` flag), and set membership. Enough to prove
+ * that a session expires, that an index is pruned, and that a fixed window
+ * does not slide; not enough to pass for Redis, which is the point: a fake
+ * that grows features nobody tests becomes a second implementation to keep
+ * correct.
  *
  * Expiry is checked lazily on read against an injectable clock, so a test can
  * jump forward a day without waiting one.
@@ -73,18 +74,20 @@ export class RedisMock {
     return Math.ceil((entry.expiresAt - this.now()) / 1000);
   }
 
-  async expire(key: string, ttlSeconds: number): Promise<number> {
-    const stringEntry = this.alive(this.strings.get(key));
-    if (stringEntry) {
-      stringEntry.expiresAt = this.now() + ttlSeconds * 1000;
-      return 1;
-    }
-    const setEntry = this.alive(this.sets.get(key));
-    if (setEntry) {
-      setEntry.expiresAt = this.now() + ttlSeconds * 1000;
-      return 1;
-    }
-    return 0;
+  async expire(
+    key: string,
+    ttlSeconds: number,
+    flag?: "NX" | "XX" | "GT" | "LT",
+  ): Promise<number> {
+    const entry =
+      this.alive(this.strings.get(key)) ?? this.alive(this.sets.get(key));
+    if (!entry) return 0;
+    // NX: only set a TTL when the key does not already have one — same
+    // semantics as real Redis 7+, which `incrementWithWindow` relies on to
+    // make its expiry attempt safe to repeat on every call.
+    if (flag === "NX" && entry.expiresAt !== null) return 0;
+    entry.expiresAt = this.now() + ttlSeconds * 1000;
+    return 1;
   }
 
   async incr(key: string): Promise<number> {

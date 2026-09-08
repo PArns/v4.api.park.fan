@@ -1,7 +1,11 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { Redis } from "ioredis";
-import { createHash } from "crypto";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import {
+  checkRateLimit,
+  hashRateLimitKey,
+  type RateLimitVerdict,
+} from "../common/redis/rate-limit.util";
 
 /**
  * A limiter `ride-alerts` and `show-follows` own, rather than the global one —
@@ -26,11 +30,7 @@ const PREFIX: Record<"ride-alert" | "show-follow", string> = {
 const WINDOW_SECONDS = 60 * 60;
 const MAX = 60;
 
-export interface PushFollowWriteVerdict {
-  allowed: boolean;
-  /** Seconds until the caller may try again; 0 when allowed. */
-  retryAfterSeconds: number;
-}
+export type PushFollowWriteVerdict = RateLimitVerdict;
 
 @Injectable()
 export class PushFollowWriteRateLimitService {
@@ -38,38 +38,19 @@ export class PushFollowWriteRateLimitService {
 
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
-  /**
-   * Never throws. Redis being down must not take the feature down with it —
-   * refusing every write because a cache is unavailable trades a bounded abuse
-   * risk for a certain outage, the same trade `TripWriteRateLimitService` makes.
-   */
   async check(
     ip: string | null,
     kind: "ride-alert" | "show-follow",
   ): Promise<PushFollowWriteVerdict> {
     if (!ip) return { allowed: true, retryAfterSeconds: 0 };
 
-    const key = PREFIX[kind] + hash(ip);
-    try {
-      const count = await this.redis.incr(key);
-      if (count === 1) await this.redis.expire(key, WINDOW_SECONDS);
-      if (count <= MAX) return { allowed: true, retryAfterSeconds: 0 };
-
-      const ttl = await this.redis.ttl(key);
-      return {
-        allowed: false,
-        retryAfterSeconds: ttl > 0 ? ttl : WINDOW_SECONDS,
-      };
-    } catch (error) {
-      this.logger.warn(
-        `Push-follow write limiter unavailable, allowing: ${(error as Error).message}`,
-      );
-      return { allowed: true, retryAfterSeconds: 0 };
-    }
+    return checkRateLimit({
+      redis: this.redis,
+      logger: this.logger,
+      label: "Push-follow write limiter",
+      key: PREFIX[kind] + hashRateLimitKey(ip),
+      max: MAX,
+      windowSeconds: WINDOW_SECONDS,
+    });
   }
-}
-
-/** Same reasoning as `TripWriteRateLimitService`'s `hash` — never log a raw address. */
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 32);
 }

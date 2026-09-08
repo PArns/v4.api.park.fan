@@ -72,6 +72,12 @@ describe("PushService", () => {
               },
             ),
             findBy,
+            // Only ever called here as `subscriptionsWithTrip`'s
+            // `{ tripId: Not(IsNull()) }` — this fakes that one shape rather
+            // than re-implementing TypeORM's operators generally.
+            find: jest.fn(async () =>
+              [...rows.values()].filter((row) => row.tripId !== null),
+            ),
             save: jest.fn(async (row: PushSubscription) => {
               const stored: PushSubscription = {
                 ...row,
@@ -213,6 +219,24 @@ describe("PushService", () => {
     const found = await service.findByIds([]);
     expect(found.size).toBe(0);
     expect(findBy).not.toHaveBeenCalled();
+  });
+
+  it("subscriptionsWithTrip excludes a ride-alert- or show-follow-only row with no trip", async () => {
+    await withVapid(async () => {
+      const withTrip = await service.subscribe({
+        ...base,
+        endpoint: "https://fcm.googleapis.com/fcm/send/with-trip",
+        tripId: "t1",
+        topics: ["next-up"],
+      });
+      await service.subscribe({
+        ...base,
+        endpoint: "https://fcm.googleapis.com/fcm/send/no-trip",
+      });
+
+      const result = await service.subscriptionsWithTrip();
+      expect(result.map((row) => row.id)).toEqual([withTrip!.id]);
+    });
   });
 
   describe("unsubscribe", () => {

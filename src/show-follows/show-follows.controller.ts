@@ -14,11 +14,9 @@ import {
 } from "@nestjs/common";
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { Request } from "express";
-import { getClientIp } from "../common/utils/request.util";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { frontendShowsPath } from "../common/utils/frontend-url.util";
-import { PushService } from "../push/push.service";
-import { PushFollowWriteRateLimitService } from "../push/push-follow-write-rate-limit.service";
+import { PushFollowAccessGuard } from "../push/push-follow-access.guard";
 import {
   ShowFollowsService,
   MAX_SHOW_FOLLOWS_PER_SUBSCRIPTION,
@@ -42,8 +40,7 @@ import {
 export class ShowFollowsController {
   constructor(
     private readonly showFollows: ShowFollowsService,
-    private readonly pushService: PushService,
-    private readonly rateLimit: PushFollowWriteRateLimitService,
+    private readonly access: PushFollowAccessGuard,
   ) {}
 
   @Get()
@@ -60,7 +57,7 @@ export class ShowFollowsController {
   async list(
     @Query("endpoint") endpoint: string,
   ): Promise<ShowFollowResponseDto[]> {
-    const subscription = await this.subscriptionOrThrow(endpoint);
+    const subscription = await this.access.subscriptionOrThrow(endpoint);
     const follows = await this.showFollows.listForSubscription(subscription.id);
     return follows.map((follow) =>
       ShowFollowsController.present(follow, follow.show),
@@ -88,8 +85,8 @@ export class ShowFollowsController {
     @Body() body: CreateShowFollowDto,
     @Req() request: Request,
   ): Promise<ShowFollowResponseDto> {
-    await this.guard(request);
-    const subscription = await this.subscriptionOrThrow(body?.endpoint);
+    await this.access.writeGuard(request, "show-follow");
+    const subscription = await this.access.subscriptionOrThrow(body?.endpoint);
 
     const found = await this.showFollows.findShowForFollow(body?.showId);
     if (!found) {
@@ -130,43 +127,9 @@ export class ShowFollowsController {
     @Body() body: DeleteShowFollowDto,
     @Req() request: Request,
   ): Promise<void> {
-    await this.guard(request);
-    const subscription = await this.subscriptionOrThrow(body?.endpoint);
+    await this.access.writeGuard(request, "show-follow");
+    const subscription = await this.access.subscriptionOrThrow(body?.endpoint);
     await this.showFollows.remove(subscription.id, body?.showId);
-  }
-
-  private async subscriptionOrThrow(endpoint: string) {
-    // Same gap as `RideAlertsController.subscriptionOrThrow`: `@Query()`
-    // has no DTO, so a missing `endpoint` reaches here as `undefined` and
-    // `findOne({ where: { endpoint: undefined } })` would otherwise return
-    // an arbitrary subscription rather than none.
-    if (typeof endpoint !== "string" || endpoint.trim().length === 0) {
-      throw new BadRequestException("Missing endpoint");
-    }
-    const subscription = await this.pushService.findByEndpoint(endpoint);
-    if (!subscription) {
-      throw new HttpException(
-        "No push subscription for this endpoint",
-        HttpStatus.NOT_FOUND,
-      );
-    }
-    return subscription;
-  }
-
-  private async guard(request: Request): Promise<void> {
-    const verdict = await this.rateLimit.check(
-      getClientIp(request),
-      "show-follow",
-    );
-    if (verdict.allowed) return;
-    throw new HttpException(
-      {
-        statusCode: HttpStatus.TOO_MANY_REQUESTS,
-        message: "Too many show-follow writes from this address",
-        retryAfterSeconds: verdict.retryAfterSeconds,
-      },
-      HttpStatus.TOO_MANY_REQUESTS,
-    );
   }
 
   private static present(

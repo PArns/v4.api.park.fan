@@ -14,7 +14,6 @@ import {
 } from "@nestjs/common";
 import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { Request } from "express";
-import { getClientIp } from "../common/utils/request.util";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { frontendAttractionPath } from "../common/utils/frontend-url.util";
 import { getNoLiveWaitTimesReason } from "../parks/data/live-wait-time-sources";
@@ -22,8 +21,7 @@ import {
   isCurrentlyInSeason,
   resolveCuratedFacts,
 } from "../attractions/utils/curated-attraction-facts.util";
-import { PushService } from "../push/push.service";
-import { PushFollowWriteRateLimitService } from "../push/push-follow-write-rate-limit.service";
+import { PushFollowAccessGuard } from "../push/push-follow-access.guard";
 import {
   RideAlertsService,
   MAX_RIDE_ALERTS_PER_SUBSCRIPTION,
@@ -50,8 +48,7 @@ import {
 export class RideAlertsController {
   constructor(
     private readonly rideAlerts: RideAlertsService,
-    private readonly pushService: PushService,
-    private readonly rateLimit: PushFollowWriteRateLimitService,
+    private readonly access: PushFollowAccessGuard,
   ) {}
 
   @Get()
@@ -68,7 +65,7 @@ export class RideAlertsController {
   async list(
     @Query("endpoint") endpoint: string,
   ): Promise<RideAlertResponseDto[]> {
-    const subscription = await this.subscriptionOrThrow(endpoint);
+    const subscription = await this.access.subscriptionOrThrow(endpoint);
     const alerts = await this.rideAlerts.listForSubscription(subscription.id);
     return alerts.map((alert) =>
       RideAlertsController.present(alert, alert.attraction),
@@ -102,8 +99,8 @@ export class RideAlertsController {
     @Body() body: CreateRideAlertDto,
     @Req() request: Request,
   ): Promise<RideAlertResponseDto> {
-    await this.guard(request);
-    const subscription = await this.subscriptionOrThrow(body?.endpoint);
+    await this.access.writeGuard(request, "ride-alert");
+    const subscription = await this.access.subscriptionOrThrow(body?.endpoint);
 
     const found = await this.rideAlerts.findAttractionForAlert(
       body?.attractionId,
@@ -158,48 +155,9 @@ export class RideAlertsController {
     @Body() body: DeleteRideAlertDto,
     @Req() request: Request,
   ): Promise<void> {
-    await this.guard(request);
-    const subscription = await this.subscriptionOrThrow(body?.endpoint);
+    await this.access.writeGuard(request, "ride-alert");
+    const subscription = await this.access.subscriptionOrThrow(body?.endpoint);
     await this.rideAlerts.remove(subscription.id, body?.attractionId);
-  }
-
-  private async subscriptionOrThrow(endpoint: string) {
-    // `@Query("endpoint")` carries no DTO, so the global `ValidationPipe`
-    // never runs on it (it only validates class-shaped bodies) — a request
-    // with no `endpoint` at all reaches here as `undefined`. TypeORM's
-    // default `invalidWhereValuesBehavior.undefined` is "ignore", so
-    // `findOne({ where: { endpoint: undefined } })` drops the only
-    // condition and returns an arbitrary subscription — a stranger's
-    // alerts. `endpoint` on the write DTOs is already guarded by
-    // `@IsNotEmpty()`, so this only ever fires for the unvalidated query
-    // param, but it is the one place all three handlers share.
-    if (typeof endpoint !== "string" || endpoint.trim().length === 0) {
-      throw new BadRequestException("Missing endpoint");
-    }
-    const subscription = await this.pushService.findByEndpoint(endpoint);
-    if (!subscription) {
-      throw new HttpException(
-        "No push subscription for this endpoint",
-        HttpStatus.NOT_FOUND,
-      );
-    }
-    return subscription;
-  }
-
-  private async guard(request: Request): Promise<void> {
-    const verdict = await this.rateLimit.check(
-      getClientIp(request),
-      "ride-alert",
-    );
-    if (verdict.allowed) return;
-    throw new HttpException(
-      {
-        statusCode: HttpStatus.TOO_MANY_REQUESTS,
-        message: "Too many ride-alert writes from this address",
-        retryAfterSeconds: verdict.retryAfterSeconds,
-      },
-      HttpStatus.TOO_MANY_REQUESTS,
-    );
   }
 
   private static present(

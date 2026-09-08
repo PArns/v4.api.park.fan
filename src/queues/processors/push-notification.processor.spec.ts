@@ -66,7 +66,7 @@ describe("PushNotificationProcessor", () => {
 
   let processor: PushNotificationProcessor;
   let pushService: {
-    allSubscriptions: jest.Mock;
+    subscriptionsWithTrip: jest.Mock;
     findByIds: jest.Mock;
     send: jest.Mock;
   };
@@ -90,7 +90,7 @@ describe("PushNotificationProcessor", () => {
     };
 
     pushService = {
-      allSubscriptions: jest.fn().mockResolvedValue([]),
+      subscriptionsWithTrip: jest.fn().mockResolvedValue([]),
       findByIds: jest.fn().mockResolvedValue(new Map()),
       send: jest.fn().mockResolvedValue(true),
     };
@@ -130,13 +130,13 @@ describe("PushNotificationProcessor", () => {
 
   it("does nothing when push is not configured", async () => {
     await processor.handleDue({} as never);
-    expect(pushService.allSubscriptions).not.toHaveBeenCalled();
+    expect(pushService.subscriptionsWithTrip).not.toHaveBeenCalled();
     expect(showFollowsService.allFollows).not.toHaveBeenCalled();
   });
 
   it("sends a due trip notification to a subscribed topic", async () => {
     await withVapid(async () => {
-      pushService.allSubscriptions.mockResolvedValueOnce([tripSubscription]);
+      pushService.subscriptionsWithTrip.mockResolvedValueOnce([tripSubscription]);
       // NOW is 20:00 in Berlin (18:00 UTC, CEST) — 20:15 is a 15-minute lead,
       // inside dueNotifications' 10-20 minute window.
       tripsService.find.mockResolvedValueOnce({
@@ -174,7 +174,7 @@ describe("PushNotificationProcessor", () => {
 
   it("does not resend a trip notification already marked sent", async () => {
     await withVapid(async () => {
-      pushService.allSubscriptions.mockResolvedValue([tripSubscription]);
+      pushService.subscriptionsWithTrip.mockResolvedValue([tripSubscription]);
       // 20:00 Berlin + 15 min lead, same as the test above.
       const payload = {
         version: 2,
@@ -313,7 +313,7 @@ describe("PushNotificationProcessor", () => {
 
   it("sends both a trip and a show-follow notification in the same tick", async () => {
     await withVapid(async () => {
-      pushService.allSubscriptions.mockResolvedValueOnce([tripSubscription]);
+      pushService.subscriptionsWithTrip.mockResolvedValueOnce([tripSubscription]);
       tripsService.find.mockResolvedValueOnce({
         payload: {
           version: 2,
@@ -372,7 +372,7 @@ describe("PushNotificationProcessor", () => {
 
   it("keeps sending trip notifications when the show-follow half throws", async () => {
     await withVapid(async () => {
-      pushService.allSubscriptions.mockResolvedValueOnce([tripSubscription]);
+      pushService.subscriptionsWithTrip.mockResolvedValueOnce([tripSubscription]);
       tripsService.find.mockResolvedValueOnce({
         payload: {
           version: 2,
@@ -521,7 +521,7 @@ describe("PushNotificationProcessor", () => {
 
   it("keeps sending show-follow notifications when the trip half throws", async () => {
     await withVapid(async () => {
-      pushService.allSubscriptions.mockResolvedValueOnce([tripSubscription]);
+      pushService.subscriptionsWithTrip.mockResolvedValueOnce([tripSubscription]);
       tripsService.find.mockRejectedValueOnce(new Error("db down"));
 
       showFollowsService.allFollows.mockResolvedValueOnce([

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { In, IsNull, Not, Repository } from "typeorm";
 import * as webpush from "web-push";
 import { PushSubscription } from "./entities/push-subscription.entity";
 import {
@@ -175,17 +175,24 @@ export class PushService {
   }
 
   /**
-   * Every subscription there is, for the job that walks them.
+   * Every subscription carrying a trip, for the trip half of the
+   * notification job.
    *
-   * Unbounded on purpose and safe for exactly one reason: this table holds one
-   * row per browser that opted IN, which is a number bounded by people rather
-   * than by traffic, and dead rows are deleted the first time a push service
-   * answers 404 or 410 rather than left to accumulate. If that ever stops being
-   * true the fix is a cursor here, not a filter — the job has to see every
-   * subscriber or it silently stops notifying the ones past the limit.
+   * Scoped at the query, not fetched-then-filtered: this table now also
+   * holds ride-alert- and show-follow-only rows with `tripId: null`, and the
+   * job walking these every five minutes has no reason to pull one over the
+   * wire only to discard it a line later — `subscriptionsByTrip` used to do
+   * exactly that against an unfiltered `find()`. Unbounded on `tripId IS NOT
+   * NULL` for the same reason the old unfiltered query was safe unbounded:
+   * this table holds one row per browser that opted in, which is a number
+   * bounded by people rather than by traffic, and dead rows are deleted the
+   * first time a push service answers 404 or 410 rather than left to
+   * accumulate. If that ever stops being true the fix is a cursor here, not
+   * a filter — the job has to see every trip subscriber or it silently
+   * stops notifying the ones past the limit.
    */
-  async allSubscriptions(): Promise<PushSubscription[]> {
-    return this.repository.find();
+  async subscriptionsWithTrip(): Promise<PushSubscription[]> {
+    return this.repository.find({ where: { tripId: Not(IsNull()) } });
   }
 
   /**

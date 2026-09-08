@@ -338,17 +338,21 @@ export class PushNotificationProcessor {
    * Grouped in memory rather than with a `DISTINCT` and a second query: this
    * table is one row per browser that opted in, which is a number bounded by
    * people rather than by traffic, and the job runs twelve times an hour.
+   * `subscriptionsWithTrip` already scopes to `tripId IS NOT NULL` at the
+   * query — a ride-alert or show-follow-only row never reaches this method
+   * at all, rather than arriving and being discarded a line later.
    */
   private async subscriptionsByTrip() {
-    const all = await this.pushService.allSubscriptions();
+    const all = await this.pushService.subscriptionsWithTrip();
     const byTrip = new Map<
       string,
-      Awaited<ReturnType<PushService["allSubscriptions"]>>
+      Awaited<ReturnType<PushService["subscriptionsWithTrip"]>>
     >();
     for (const subscription of all) {
-      // A ride-alert or show-follow subscription has no trip at all — not
-      // this loop's concern, and `tripsService.find(null)` is not a lookup
-      // that means anything.
+      // Defensive, not the real filter (the query above is): `tripId` is
+      // typed nullable on the entity, so this just narrows the type for the
+      // `Map<string, …>` key below — `tripsService.find(null)` is not a
+      // lookup that means anything.
       if (!subscription.tripId) continue;
       const list = byTrip.get(subscription.tripId) ?? [];
       list.push(subscription);

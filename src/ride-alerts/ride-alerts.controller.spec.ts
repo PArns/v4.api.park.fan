@@ -7,6 +7,7 @@ import {
 } from "./ride-alerts.service";
 import { PushService } from "../push/push.service";
 import { PushFollowWriteRateLimitService } from "../push/push-follow-write-rate-limit.service";
+import { PushFollowAccessGuard } from "../push/push-follow-access.guard";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { RideAlert } from "./entities/ride-alert.entity";
@@ -100,6 +101,11 @@ describe("RideAlertsController", () => {
         { provide: RideAlertsService, useValue: rideAlerts },
         { provide: PushService, useValue: pushService },
         { provide: PushFollowWriteRateLimitService, useValue: rateLimit },
+        // A real instance, not a mock: the 404/429 behaviour these tests
+        // check now lives in the guard, and the controller only wires into
+        // it — same reasoning as testing `RideAlertsController` itself for
+        // real against mocked services rather than mocking the controller.
+        PushFollowAccessGuard,
       ],
     }).compile();
 

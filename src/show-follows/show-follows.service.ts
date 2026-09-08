@@ -78,11 +78,14 @@ export class ShowFollowsService {
   }
 
   /**
-   * Every follow there is, for the job that walks them — same shape and same
-   * reasoning as `PushService.allSubscriptions()`: this table is bounded by
+   * Every follow there is, for the job that walks them — same reasoning
+   * `PushService.subscriptionsWithTrip()` rests on: this table is bounded by
    * browsers that opted in, not by traffic, and the notification job groups
    * these by `showId` in memory (`PushNotificationProcessor` already does the
    * equivalent grouping by `tripId`) rather than paying a second query.
+   * Unfiltered rather than query-scoped like that sibling, because every row
+   * here IS a follow worth walking — there is no trip-less equivalent to
+   * exclude.
    */
   async allFollows(): Promise<ShowFollow[]> {
     return this.repository.find();

@@ -7,6 +7,7 @@ import {
 } from "./show-follows.service";
 import { PushService } from "../push/push.service";
 import { PushFollowWriteRateLimitService } from "../push/push-follow-write-rate-limit.service";
+import { PushFollowAccessGuard } from "../push/push-follow-access.guard";
 import { Show } from "../shows/entities/show.entity";
 import { Park } from "../parks/entities/park.entity";
 import { ShowFollow } from "./entities/show-follow.entity";
@@ -81,6 +82,9 @@ describe("ShowFollowsController", () => {
         { provide: ShowFollowsService, useValue: showFollows },
         { provide: PushService, useValue: pushService },
         { provide: PushFollowWriteRateLimitService, useValue: rateLimit },
+        // A real instance, not a mock — same reasoning as
+        // `ride-alerts.controller.spec.ts`.
+        PushFollowAccessGuard,
       ],
     }).compile();
 
