@@ -415,22 +415,29 @@ SELECT min(timestamp)::date, max(timestamp)::date FROM queue_data;
 translation loses days no matter which way it is decided, and the only question
 is which side to lose them on.
 
-**The test: a month goes in when the operator's season covers more than a
-remainder of the days the park is open that month.** The open days, not the
-calendar days — a month the park sits closed through cannot be got wrong.
+**The test: a month goes in unless the operator's season covers no more than a
+tenth of the days the park is open that month.** The open days, not the calendar
+days — `schedule_entries` already holds them, so the denominator is a query
+rather than a judgement, and a month the park sits closed through cannot be got
+wrong at all.
 
 Worked, from the 2026-09-09 curation:
 
-| ride | operator's season | month at stake | open days | covered | verdict |
-|---|---|---|---|---|---|
-| Europa-Park, Lítill Island | Summer, 28 Mar – 25 Sep | March | 10 (park opens 22 Mar) | 4 | **in** |
-| Europa-Park, Water Playground | + Halloween to 1 Nov | November | 30 | 1 | **out** |
-| Everland, Snow playground | mid-Dec to about 1 Mar | March | 31 | ~1 | **out** |
+| ride | operator's season | month at stake | open days | covered | share | verdict |
+|---|---|---|---|---|---|---|
+| Europa-Park, Lítill Island | Summer, 28 Mar – 25 Sep | March | 10 (park opens 22 Mar) | 4 | 40 % | **in** |
+| Bellewaerde, Snowmen Playground | Christmas, from 28 Nov | November | 8 | 2 | 25 % | **in** |
+| Europa-Park, Water Playground | + Halloween to 1 Nov | November | 30 (open daily) | 1 | 3 % | **out** |
+| Everland, Snow playground | mid-Dec to about 1 Mar | March | 31 | ~1 | 3 % | **out** |
 
-Two things that make the test cheap: `schedule_entries` already holds the open
-days per park, so the denominator is a query rather than a judgement; and where
-a tie is genuinely close, `isInSeason`'s own bias breaks it towards **open**,
-because a missing fact must not invent a restriction.
+**Why the threshold sits low rather than at a majority.** The two errors are not
+symmetric. Omitting a month is a *hard* close: once a list exists at all,
+`isInSeason` answers purely from it, and the permissive branch that lets a ride
+run only fires for a null or empty list. So dropping March would shut
+Europa-Park's water playgrounds for every open day from the 28th to the 31st.
+Including a month only over-reports on the days between the month's start and
+the season's, which at the edges of a season is often a stretch the park is
+closed through anyway. At the margin, include.
 
 **Seasonality resolves as a pair, and the months can stand alone.** Non-empty
 `curated_season_months` already make `resolveCuratedFacts` report

@@ -490,7 +490,9 @@ researched one by one against the operators' own pages. 14 were flagged.
 > the flip, so that number may be stale elsewhere too. Tracked separately; do
 > not read either side of 2026-06-08 as evidence about a season.
 
-**Deliberately not flagged — genuinely seasonal, at parks open year-round:**
+**Seasonal free-flow areas whose park keeps running around them** — the case
+`open_with_park` alone cannot express, because the flag says "open whenever the
+park is" and these are not:
 
 - [x] **The season gate exists now** — `isFreeFlowOpen` takes `seasonMonths` +
       the park timezone, and the detector no longer owns the months on a
@@ -501,19 +503,23 @@ researched one by one against the operators' own pages. 14 were flagged.
       `open_with_park`. Sources on each audit row.
 
       **The rule that answered "is 3 in or out?"**, because the next such
-      curation needs the same answer: a month goes in when the operator's season
-      covers more than a remainder of the days the **park** is open that month.
-      Not the calendar days — the open ones. Europa-Park's summer starts 28
-      March and the park opens on the 22nd, so the season holds 4 of 10 open
-      March days and 3 is in. Halloween ends 1 November while the park is open
-      on 30 November days, so 11 is out for the Water Playground even though the
-      season formally touches it. The same test drops 3 at Everland (the snow
-      park runs to about 1 March, and Everland is open all 31).
+      curation needs the same answer: a month goes in unless the operator's
+      season covers no more than a tenth of the days the **park** is open that
+      month. Not the calendar days — the open ones. Europa-Park's summer starts
+      28 March and the park opens on the 22nd, so the season holds 4 of 10 open
+      March days (40 %) and 3 is in. Halloween ends 1 November while Europa-Park
+      is open on all 30 November days, so 11 covers 3 % and is out for the Water
+      Playground even though the season formally touches it. Nothing in this
+      round landed near the line: every "in" was 25 % or more, every "out" 3 %.
 
       Month granularity cannot express a season that starts mid-month, so every
-      one of these carries a few wrong days a year by construction. The rule
-      picks the side with fewer of them, and `isInSeason`'s own bias settles
-      ties towards open — a missing fact must not invent a restriction.
+      one of these is wrong on a few days a year by construction. The threshold
+      sits low rather than at a majority because the two errors are not equal:
+      omitting a month is a hard close (once a list exists, `isInSeason` answers
+      only from it — the permissive branch fires solely for a null or empty
+      list), while including one over-reports on days the park is often shut
+      through anyway. Full derivation in
+      `docs/architecture/attraction-status-and-seasonality.md` §7a.
 - [ ] **Season unknown, water-based, park open year-round** — Peppa Pig
       _Muddy Puddles Splash Pad_, Walibi Rhône-Alpes _Exotic Island 3-6_ and
       _7-12_. Confirmed free-flow, but no source states an operating window, and
