@@ -209,8 +209,8 @@ export class AttractionOutageService {
    * @param park - The park the candidates belong to.
    * @param candidates - **Every** ride on the page, with its resolved status and
    *   its curated works-period columns. Not a pre-filtered DOWN list: see
-   *   `OutageCandidate.effectiveStatus` for the two reasons, one of which made
-   *   the closure signal structurally unreachable in production.
+   *   `OutageCandidate.effectiveStatus` for the reason, which is that filtering
+   *   made the closure signal structurally unreachable in production.
    * @param asOf - The instant the window is measured back from. A parameter so a
    *   spec can pin it; production passes nothing.
    * @returns attractionId → its running outage, for the rides that have one.
@@ -257,7 +257,7 @@ export class AttractionOutageService {
 
     // Whether the DOWN query got to answer at all, which is not the same
     // question as whether it found anything. See the closure hand-off below.
-    let downAnswered = ids.length === 0;
+    let downAnswered = false;
 
     try {
       const rows: Array<{
@@ -386,6 +386,13 @@ export class AttractionOutageService {
       // line to be added after the loop.
 
       for (const row of rows) {
+        // Never over a reported one. The caller only asks about rides the DOWN
+        // query did not place, so this should be unreachable — but the write
+        // was unguarded, and an overwrite here does not lose a line, it changes
+        // what the line CLAIMS: `signal` decides between „Störung gemeldet" and
+        // „steht still", and downgrading a reported outage to an inferred one
+        // is the one thing this feature may not do silently.
+        if (out.has(row.attractionId)) continue;
         out.set(row.attractionId, {
           startedAt: new Date(row.startedAt),
           startObserved: true,

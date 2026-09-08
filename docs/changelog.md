@@ -40,7 +40,7 @@ would silently undo the whole mechanism.
 **One schedule lookup per `queue_data` row.** `early_end` asks when the park shut
 on the day of each reading, through a `LATERAL … LIMIT 1`. At Alton Towers that
 was **28 485 executions of one bitmap index scan, 21.5 s of a 24 s statement**,
-against a table with at most 21 rows to offer. The closing time varies by day,
+against a table with at most 23 rows to offer. The closing time varies by day,
 not by ride or by reading, so it is now resolved once per day in
 `park_day_close` and joined. Equivalence was verified rather than assumed: the
 `LATERAL` took `LIMIT 1` with no ordering and the caller wrapped it in `max()`,
@@ -120,13 +120,20 @@ blind park emits its first DOWN with a run too short for the trailing statement
 to place, that one ride took the closure line away from every other ride in the
 park.
 
-One pass of the final statement over **every park**, 204 of them: **2.89 s in
-total**, mean 14.2 ms. A second sweep an hour earlier read 1.24 s and 6.1 ms —
-the difference is park state, not code. Where the statement still costs
-something is exactly where it should: **Futuroscope at 2017 ms**, open with a
-ride in a closure, so `run_start` is non-empty and the three historical CTEs
-have real work. That is the same park the old statement measured at 31 655 ms
-while producing nothing. Every other park is under 155 ms.
+Two more removals came out of narrowing the CTEs, and they are the same defect
+in miniature. `cycle` and `early_end` ended up with six byte-identical
+predicates over the same 21-day slice of the same hypertable, so every call
+decompressed it twice; they share one `run_readings` CTE now. And all of them
+were keyed on `run_start` when the final select INNER JOINs `open_today`, which
+is strictly smaller — so in a park shut all day the whole roster had its 21 days
+computed and thrown away at that join. `park_closers`, the last heavy CTE with
+no guard of its own, takes the same pseudoconstant `EXISTS`.
+
+One pass of the final statement over **every park**, 204 of them: **0.64 s in
+total**, mean 3.1 ms, worst **172.7 ms**, nothing above a second. That worst
+case is Futuroscope, open with a ride in a closure and so the one park with real
+work to do — the same park the old statement measured at **31 655 ms** while
+producing nothing, and 2017 ms before this round's CTE sharing.
 
 Measured per population, the old statement took **620.4 s over the 113 parks
 outside `never_reports` alone** — a population it could never return a row for —

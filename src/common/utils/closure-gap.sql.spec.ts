@@ -46,14 +46,21 @@ describe("closure-gap statements", () => {
     );
   });
 
-  it("every window function referenced in the live cycle CTE is selected", () => {
+  it("every window function the live cycle CTE reads is selected", () => {
     // The same-day fix referenced `next_ts` in a subquery that did not select
     // it. `npm run build` is blind to that; production would have swallowed it.
+    // The window functions live in `run_readings` now, which is the CTE cycle
+    // reads, so that is where they have to be found.
     const cycle = CURRENT_CLOSURE_GAP_SQL.slice(
       CURRENT_CLOSURE_GAP_SQL.indexOf("cycle AS ("),
     );
-    if (cycle.includes("f.next_ts")) {
-      expect(cycle).toMatch(/lead\(qd\.timestamp\)\s+OVER w AS next_ts/);
+    const source = CURRENT_CLOSURE_GAP_SQL.includes("FROM run_readings f")
+      ? CURRENT_CLOSURE_GAP_SQL
+      : cycle;
+    for (const col of ["prev_st", "next_st", "next_ts"]) {
+      if (cycle.includes(`f.${col}`)) {
+        expect(source).toMatch(new RegExp(`OVER w AS ${col}\\b`));
+      }
     }
   });
 
@@ -135,15 +142,25 @@ describe("closure-gap statements", () => {
   };
 
   it("the live historical CTEs judge the rides in a closure, not the park", () => {
-    // cycle, active and early_end are read only through LEFT JOINs against
-    // run_start, but all three used to be handed $1 — the whole roster, which
-    // park_closers needs and they do not. A 96-ride park scanned 21 days of
-    // queue_data 96 times over. Reverting any one of them to $1 is silent.
+    // All three used to be handed $1 — the whole roster, which park_closers
+    // needs and they do not. A 96-ride park scanned 21 days of queue_data 96
+    // times over. Reverting any one of them is silent.
     //
-    for (const cte of ["cycle", "active", "early_end"]) {
+    // The population is open_today, not run_start: the final select INNER JOINs
+    // open_today, so a ride in run_start without it has its 21 days computed
+    // and then discarded. In a park shut all day that is the whole roster
+    // against nothing.
+    for (const cte of ["run_readings", "active"]) {
       const body = cteBody(CURRENT_CLOSURE_GAP_SQL, cte);
-      expect(body).toContain("ARRAY(SELECT aid FROM run_start)");
+      expect(body).toContain("ARRAY(SELECT aid FROM open_today)");
       expect(body).not.toContain("ANY($1::uuid[])");
+    }
+    // And the two that judge those readings share one scan of them rather than
+    // repeating the same six predicates over the same hypertable slice.
+    for (const cte of ["cycle", "early_end"]) {
+      const body = cteBody(CURRENT_CLOSURE_GAP_SQL, cte);
+      expect(body).toContain("run_readings");
+      expect(body).not.toContain("FROM queue_data");
     }
   });
 

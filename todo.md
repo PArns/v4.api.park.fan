@@ -4,7 +4,8 @@
 
 `DowntimeReconstructionProcessor` runs `CLOSURE_GAP_INTERVALS_SQL` at
 `downtime-reconstruction.processor.ts:151`, then deletes and rewrites
-`attraction_exposure_days` in the transaction at line 176. So the statement's
+`attraction_exposure_days` in the transaction that starts at line 176 (the
+delete is at line 183). So the statement's
 `active` CTE — the denominator of `gap_days / active_days` — reads the rows the
 **previous** run wrote, which stop at that run's `asOf`, while `raw_gaps` (the
 numerator) reads `queue_data` right up to this run's. Today's gap days are
@@ -22,9 +23,9 @@ for every ride, `active_days < MIN_DAYS_FOR_CYCLE_TEST` passes everything, and
 the duty-cycle filter is off entirely for that run.
 
 The fix is ordering, not SQL: the closure statement wants to run after the
-exposure rows for this window exist. They are computed by `EXPOSURE_SQL` and
-inserted inside the transaction at line 176, so moving the closure query into
-that transaction after the insert would see them. It is left out of the
+exposure rows for this window exist. They are computed by `OUTAGE_EXPOSURE_SQL` (run at line 137) and inserted
+inside that same transaction, so moving the closure query into it after the
+insert would see them. It is left out of the
 performance PR because it restructures a job that writes, and it needs its own
 before/after over stored intervals rather than a serving-path measurement.
 

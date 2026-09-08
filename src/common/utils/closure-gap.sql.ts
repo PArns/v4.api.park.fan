@@ -217,12 +217,14 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
        ), 0) >= ${MIN_BLIND_EVIDENCE_HOURS}
   ),
   src AS (
-    SELECT a.id AS aid, a."parkId" AS pid, p.timezone AS tz,
+    -- The timezone comes from blind_parks, which now carries it. This used to
+    -- join parks a second time for the same column of the same row, per row of
+    -- the widest scan in the statement.
+    SELECT a.id AS aid, a."parkId" AS pid, b.tz AS tz,
            qd.timestamp AS ts, qd.status::text AS st
       FROM queue_data qd
       JOIN attractions a ON a.id = qd."attractionId"
       JOIN blind_parks b ON b.pid = a."parkId"
-      JOIN parks p ON p.id = a."parkId"
      WHERE qd."queueType" = 'STANDBY'
        AND a.retired_at IS NULL
        AND (a.last_merged_at IS NULL OR a.last_merged_at < $2::timestamptz)
@@ -533,6 +535,37 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- match. Empty is the normal case and has to be the cheap one -- and it is
   -- not the rare one: run_start is empty in every ordinary open park, though
   -- in a park that has shut for the night it IS the roster again.
+  -- The 21 days of readings both historical CTEs judge, read once.
+  --
+  -- cycle and early_end had six byte-identical predicates over the same slice
+  -- of the same hypertable, so every call decompressed the same chunks twice —
+  -- the shape this whole change exists to remove, reintroduced by narrowing
+  -- both to the same population. Materialised here because it is referenced
+  -- more than once, which is what makes it read once.
+  --
+  -- Keyed on open_today rather than run_start, and that is not a nicety.
+  -- open_today is by construction a subset (it joins run_start), and the final
+  -- select INNER JOINs it, so every ride in run_start \\ open_today has its 21
+  -- days computed and then discarded at that join. The difference is the whole
+  -- roster in a park that has been shut all day: run_start is every ride,
+  -- open_today is empty.
+  run_readings AS (
+    SELECT qd."attractionId" AS aid,
+           qd.timestamp      AS ts,
+           qd.status::text   AS st,
+           lag(qd.status::text)  OVER w AS prev_st,
+           lead(qd.status::text) OVER w AS next_st,
+           lead(qd.timestamp)    OVER w AS next_ts
+      FROM queue_data qd
+     WHERE qd."attractionId" = ANY(ARRAY(SELECT aid FROM open_today))
+       AND qd."queueType" = 'STANDBY'
+       AND COALESCE(qd.data_source, '') NOT IN
+           ('system-reconciliation', 'system-heartbeat')
+       AND NOT COALESCE(qd.is_heartbeat, qd."lastUpdated" = qd.timestamp)
+       AND qd.timestamp >= $3::timestamptz - INTERVAL '21 days'
+       AND qd.timestamp <  $3::timestamptz
+    WINDOW w AS (PARTITION BY qd."attractionId" ORDER BY qd.timestamp)
+  ),
   cycle AS (
     -- Days carrying a real GAP, which is the same triple the nightly statement
     -- recognises: OPERATING, then CLOSED, then OPERATING again.
@@ -543,23 +576,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
     SELECT d.aid, count(DISTINCT d.op_day)::numeric AS gap_days
       FROM (
         SELECT aid, (ts AT TIME ZONE $2)::date AS op_day
-          FROM (
-            SELECT qd."attractionId" AS aid,
-                   qd.timestamp      AS ts,
-                   qd.status::text   AS st,
-                   lag(qd.status::text)  OVER w AS prev_st,
-                   lead(qd.status::text) OVER w AS next_st,
-                   lead(qd.timestamp)    OVER w AS next_ts
-              FROM queue_data qd
-             WHERE qd."attractionId" = ANY(ARRAY(SELECT aid FROM run_start))
-               AND qd."queueType" = 'STANDBY'
-               AND COALESCE(qd.data_source, '') NOT IN
-                   ('system-reconciliation', 'system-heartbeat')
-               AND NOT COALESCE(qd.is_heartbeat, qd."lastUpdated" = qd.timestamp)
-               AND qd.timestamp >= $3::timestamptz - INTERVAL '21 days'
-               AND qd.timestamp <  $3::timestamptz
-            WINDOW w AS (PARTITION BY qd."attractionId" ORDER BY qd.timestamp)
-          ) f
+          FROM run_readings f
          WHERE f.st = 'CLOSED'
            AND f.prev_st = 'OPERATING'
            AND f.next_st = 'OPERATING'
@@ -581,7 +598,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
     SELECT e."attractionId" AS aid,
            count(*) FILTER (WHERE e.operating_minutes > 0)::numeric AS active_days
       FROM attraction_exposure_days e
-     WHERE e."attractionId" = ANY(ARRAY(SELECT aid FROM run_start))
+     WHERE e."attractionId" = ANY(ARRAY(SELECT aid FROM open_today))
        -- Park-local, because op_day is. Casting $3 - 21 days to ::date takes
        -- the SESSION zone (UTC in production), and the two answers disagree
        -- for 56 of the 91 blind parks at any given instant — one operating day
@@ -714,18 +731,12 @@ export const CURRENT_CLOSURE_GAP_SQL = `
                    - INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'
            )::numeric AS early_days
       FROM (
-        SELECT qd."attractionId" AS aid,
-               (qd.timestamp AT TIME ZONE $2)::date AS d,
-               max(qd.timestamp) FILTER (WHERE qd.status = 'OPERATING')
-                 AS last_operating
-          FROM queue_data qd
-         WHERE qd."attractionId" = ANY(ARRAY(SELECT aid FROM run_start))
-           AND qd."queueType" = 'STANDBY'
-           AND COALESCE(qd.data_source, '') NOT IN
-               ('system-reconciliation', 'system-heartbeat')
-           AND NOT COALESCE(qd.is_heartbeat, qd."lastUpdated" = qd.timestamp)
-           AND qd.timestamp >= $3::timestamptz - INTERVAL '21 days'
-           AND qd.timestamp <  $3::timestamptz
+        -- The same slice cycle reads, from run_readings, so the hypertable is
+        -- visited once for both.
+        SELECT r.aid,
+               (r.ts AT TIME ZONE $2)::date AS d,
+               max(r.ts) FILTER (WHERE r.st = 'OPERATING') AS last_operating
+          FROM run_readings r
          GROUP BY 1, 2
       ) q
       JOIN park_day_close pdc ON pdc.d = q.d
@@ -737,11 +748,20 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- Over $1 alone this count is whatever the caller happened to pass — one,
   -- on a ride detail page — so the filter that separates a park-wide closing
   -- from a single fault would always pass. It has to see the park.
+  --
+  -- The last heavy CTE that had no guard of its own. It cannot be narrowed to
+  -- the candidates for the reason above, and unlike the other three it is an
+  -- INNER JOIN input in the FROM clause rather than a correlated one — so
+  -- whether it runs at all when there is nothing to join against comes down to
+  -- which side the planner builds first. The EXISTS makes the empty case free
+  -- unconditionally, and empty is the normal case: no ride sitting in a closure
+  -- means no row can come out of this statement anyway.
   park_closers AS (
     SELECT date_trunc('minute', qd.timestamp) AS minute, count(*) AS closers
       FROM queue_data qd
       JOIN attractions a ON a.id = qd."attractionId"
-     WHERE a."parkId" = $4::uuid
+     WHERE EXISTS (SELECT 1 FROM open_today)
+       AND a."parkId" = $4::uuid
        AND a.retired_at IS NULL
        AND qd."queueType" = 'STANDBY'
        AND qd.status = 'CLOSED'
