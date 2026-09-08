@@ -6,6 +6,46 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — the live closure-gap query was 79 % of the database's CPU, and it was answering nothing
+
+Production, 2026-09-08, sampled over 90 s: `CURRENT_CLOSURE_GAP_SQL` was **79 %
+of all database execution time** at a mean of 6.0 s per call, and it returned
+**zero rows in all 91 blind parks** at the moment it was measured. Two defects,
+both the same shape — a cheap test written first and evaluated last.
+
+**A comment claimed a short-circuit that PostgreSQL has no reason to perform.**
+The statement opens with a `blind` CTE reading `park_downtime_coverage`, and the
+service said "in a park that reports DOWN this returns nothing and costs one
+indexed lookup". It is `CROSS JOIN`ed onto the final select, so the planner
+evaluated every historical CTE first and applied it last. **70 % of the calls
+were for the 122 parks that cannot produce a row.** The gate now lives in
+`AttractionOutageService`, which is the only place that can decline to ask — the
+regimes are cached in process behind the same 30-minute TTL as the recovery
+curves, and the SQL keeps its own `blind` CTE as the authority. Verified after
+deploy: only `never_reports` parks reach the statement.
+
+**One schedule lookup per `queue_data` row.** `early_end` asks when the park shut
+on the day of each reading, through a `LATERAL … LIMIT 1`. At Alton Towers that
+was **28 485 executions of one bitmap index scan, 21.5 s of a 24 s statement**,
+against a table with at most 21 rows to offer. The closing time varies by day,
+not by ride or by reading, so it is now resolved once per day in
+`park_day_close` and joined. Equivalence was verified rather than assumed: the
+`LATERAL` took `LIMIT 1` with no ordering and the caller wrapped it in `max()`,
+which agree only while a park-day has one entry — all 16 329 park-days in the
+last 30 days have exactly one.
+
+The three historical CTEs (`cycle`, `active`, `early_end`) were also handed the
+whole park roster although they are read only through `LEFT JOIN`s against
+`run_start`; they now take `closed_now`. On its own that changed nothing at a
+closed park, where `run_start` **is** the roster — the day-close hoist is what
+mattered — but it removes the waste in an open one.
+
+Measured old → new, rows byte-identical in every park tested: Paultons Park
+26 601 → 699 ms, Alton Towers 24 560 → 660 ms, Phantasialand 15 192 → 393 ms,
+Chimelong Ocean Kingdom 13 056 → 279 ms, SeaWorld Orlando 8418 → 30 ms, Busch
+Gardens Tampa 896 → 5 ms. In production the statement went from 6009 ms mean and
+79 % of database CPU to 21 ms and 1.3 %.
+
 ### Added — outages read from closures, for the 102 parks whose feed never says DOWN
 
 §1 excluded `CLOSED` while the park is open, and for a good reason (534 of 602

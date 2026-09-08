@@ -1,5 +1,38 @@
 # TODO
 
+## The ML feature fetch reads 730 days to use ~300 (measured 2026-09-08, not fixed)
+
+`fetch_recent_wait_times()` (`ml-service/predict.py:218`) pulls **730 days** of
+`queue_data` per prediction. Over the three months in `pg_stat_statements` its
+two shapes are **41 % of all database execution time** — 2.0 M calls, ~700 000
+buffer blocks *per call* to return 622 rows — and after the closure-gap fix it is
+the single largest consumer left (83 % of the non-benchmark load in a 180 s
+sample).
+
+The widest frame in the statement is `rolling_avg_90d`, `ROWS BETWEEN 2159
+PRECEDING`. **That counts rows, not days**, and the comment beside it ("90 days
+* 24 hours = 2160 rows") assumes 24 buckets a day. A ride only produces a bucket
+for an hour it was open and reporting, so 2160 rows is roughly 180 days of real
+data, not 90.
+
+Measured against 8 rides at Europa-Park and Phantasialand, diffing every column
+of every row in the last 35 days against the 730-day output:
+
+| lookback | result |
+| --- | --- |
+| 365 d | identical |
+| 300 d | identical |
+| 240 d | **differs** (`rolling_avg_90d`) |
+| 150 d | **differs** |
+
+**Do not just set it to 300.** Those are two of the densest parks in the
+database; a ride with fewer operating hours needs more calendar days to reach
+2160 rows, so the safe floor is a property of the sparsest ride in the batch,
+not a constant. Before changing it, measure bucket density per ride and derive
+the floor from the p1, or replace the row-count frames with `RANGE`-based ones
+so the window means what its comment says. This is the trained-model feature
+path, so the check is byte-identical output, not "close enough".
+
 ## Ride downtime: what is left after the phase 0 run (2026-09-06)
 
 Phase 0 **has been run** against production. The results, the gate that had to be

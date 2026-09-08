@@ -1,4 +1,5 @@
 import { DowntimeRecoveryCurve } from "../analytics/entities/downtime-recovery-curve.entity";
+import { ParkDowntimeCoverage } from "../analytics/entities/park-downtime-coverage.entity";
 import { Module, forwardRef } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { Attraction } from "./entities/attraction.entity";
@@ -38,6 +39,7 @@ import { AttractionRideProfile } from "./entities/attraction-ride-profile.entity
       ScheduleEntry,
       AttractionReviewMark,
       DowntimeRecoveryCurve,
+      ParkDowntimeCoverage,
     ]),
     ThemeParksModule,
     forwardRef(() => ParksModule),

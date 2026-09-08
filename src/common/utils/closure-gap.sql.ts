@@ -480,12 +480,31 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        AND r.ts < s.started_at
        AND (r.ts AT TIME ZONE $2)::date = (s.started_at AT TIME ZONE $2)::date
   ),
+  -- The rides this statement can still emit, and the only ones the three
+  -- historical CTEs below need to know anything about.
+  --
+  -- Each of them is read through a LEFT JOIN against run_start alone, and each
+  -- groups by ride with no cross-ride term, so narrowing them to these ids
+  -- changes no row that is read. Their own comments already claimed this
+  -- ("restricted to the rides actually sitting in a closure right now",
+  -- "restricted to the candidates") -- but the candidates are the WHOLE PARK:
+  -- park_closers needs the roster, so every CTE was handed the same $1. A
+  -- 96-ride park therefore scanned 21 days of queue_data 96 times over and
+  -- threw almost all of it away at a join it never reached.
+  --
+  -- ANY(ARRAY(...)) rather than IN (...) on purpose. The array is an InitPlan,
+  -- so it stays an indexable predicate with runtime chunk exclusion on the
+  -- hypertable; a semi-join would have to scan to find out there is nothing to
+  -- match. Empty is the normal case and has to be the cheap one.
+  --
+  -- run_start is the rides currently sitting in a CLOSED run: 0 or 1 in an
+  -- ordinary park, and 0 in every one of the 91 blind parks at the moment this
+  -- was measured.
+  closed_now AS (SELECT aid FROM run_start),
   -- Is this ride on a duty cycle rather than broken?
   --
   -- Counted over the same window and the same threshold the nightly statement
-  -- uses, so live and history agree about what a fault is. Restricted to the
-  -- rides actually sitting in a closure right now, which is why a per-ride
-  -- scan is affordable here and is not in the historical statement.
+  -- uses, so live and history agree about what a fault is.
   cycle AS (
     -- Days carrying a real GAP, which is the same triple the nightly statement
     -- recognises: OPERATING, then CLOSED, then OPERATING again.
@@ -504,7 +523,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
                    lead(qd.status::text) OVER w AS next_st,
                    lead(qd.timestamp)    OVER w AS next_ts
               FROM queue_data qd
-             WHERE qd."attractionId" = ANY($1::uuid[])
+             WHERE qd."attractionId" = ANY(ARRAY(SELECT aid FROM closed_now))
                AND qd."queueType" = 'STANDBY'
                AND COALESCE(qd.data_source, '') NOT IN
                    ('system-reconciliation', 'system-heartbeat')
@@ -534,42 +553,65 @@ export const CURRENT_CLOSURE_GAP_SQL = `
     SELECT e."attractionId" AS aid,
            count(*) FILTER (WHERE e.operating_minutes > 0)::numeric AS active_days
       FROM attraction_exposure_days e
-     WHERE e."attractionId" = ANY($1::uuid[])
+     WHERE e."attractionId" = ANY(ARRAY(SELECT aid FROM closed_now))
        AND e.op_day >= ($3::timestamptz - INTERVAL '21 days')::date
      GROUP BY e."attractionId"
   ),
+  -- When the park shut, once per day it published hours for.
+  --
+  -- This used to be a LATERAL inside early_end, and that put one schedule
+  -- lookup on every single queue_data row it read: measured at Alton Towers,
+  -- 28 485 executions of one bitmap index scan, 21.5 s of a 24 s statement,
+  -- for a table with at most 21 rows to offer. The park's closing time does
+  -- not vary by ride or by reading, so it is resolved once per day here and
+  -- joined.
+  --
+  -- Verified equivalent rather than assumed: the LATERAL took LIMIT 1 with no
+  -- ordering and the caller wrapped it in max(), which are the same value only
+  -- while a park-day has one entry. Over the last 30 days all 16 329 park-days
+  -- in the table have exactly one, and max() is the deterministic reading of
+  -- what LIMIT 1 was picking arbitrarily.
+  --
+  -- Bounded by park-local DATE, not by timestamp. A timestamp bound of $3 would
+  -- drop today's entry whenever the page renders before the park opens, which
+  -- is precisely when a ride's morning readings are being judged against it.
+  park_day_close AS (
+    -- Normalized for the same reason park_open is: a raw past-midnight close
+    -- would make every day look like it ended early, and this feeds the filter
+    -- that decides a ride is on a timetable.
+    SELECT (se."openingTime" AT TIME ZONE $2)::date AS d,
+           max(${normalizedClosingSql('se."openingTime"', 'se."closingTime"', "$2")})
+             AS closes_at
+      FROM schedule_entries se
+     WHERE se."parkId" = $4::uuid
+       AND se."attractionId" IS NULL
+       AND se."scheduleType" = 'OPERATING'
+       AND (se."openingTime" AT TIME ZONE $2)::date
+           >= ($3::timestamptz AT TIME ZONE $2)::date - 21
+       AND (se."openingTime" AT TIME ZONE $2)::date
+           <= ($3::timestamptz AT TIME ZONE $2)::date
+     GROUP BY 1
+  ),
   -- Does this ride habitually end its day before the park does?
   --
-  -- Restricted to the candidates, so it is one indexed scan each. Compares each
-  -- day's last OPERATING reading against that day's published closing time.
+  -- Compares each day's last OPERATING reading against that day's published
+  -- closing time. The join to park_day_close is an INNER one, as the LATERAL
+  -- was: a day the park published no hours for cannot say whether a ride
+  -- finished early, so it is not counted either way.
   early_end AS (
-    SELECT d.aid,
+    SELECT q.aid,
            count(*)::numeric AS days,
            count(*) FILTER (
-             WHERE d.last_operating < d.closes_at
+             WHERE q.last_operating < pdc.closes_at
                    - INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'
            )::numeric AS early_days
       FROM (
         SELECT qd."attractionId" AS aid,
                (qd.timestamp AT TIME ZONE $2)::date AS d,
                max(qd.timestamp) FILTER (WHERE qd.status = 'OPERATING')
-                 AS last_operating,
-               max(w.closes_at) AS closes_at
+                 AS last_operating
           FROM queue_data qd
-          JOIN LATERAL (
-            -- Normalized for the same reason park_open is: a raw past-midnight
-            -- close would make every day look like it ended early, and this
-            -- feeds the filter that decides a ride is on a timetable.
-            SELECT ${normalizedClosingSql('se."openingTime"', 'se."closingTime"', "$2")} AS closes_at
-              FROM schedule_entries se
-             WHERE se."parkId" = $4::uuid
-               AND se."attractionId" IS NULL
-               AND se."scheduleType" = 'OPERATING'
-               AND (se."openingTime" AT TIME ZONE $2)::date
-                   = (qd.timestamp AT TIME ZONE $2)::date
-             LIMIT 1
-          ) w ON TRUE
-         WHERE qd."attractionId" = ANY($1::uuid[])
+         WHERE qd."attractionId" = ANY(ARRAY(SELECT aid FROM closed_now))
            AND qd."queueType" = 'STANDBY'
            AND COALESCE(qd.data_source, '') NOT IN
                ('system-reconciliation', 'system-heartbeat')
@@ -577,9 +619,10 @@ export const CURRENT_CLOSURE_GAP_SQL = `
            AND qd.timestamp >= $3::timestamptz - INTERVAL '21 days'
            AND qd.timestamp <  $3::timestamptz
          GROUP BY 1, 2
-      ) d
-     WHERE d.last_operating IS NOT NULL
-     GROUP BY d.aid
+      ) q
+      JOIN park_day_close pdc ON pdc.d = q.d
+     WHERE q.last_operating IS NOT NULL
+     GROUP BY q.aid
   ),
   -- How many rides in the PARK went CLOSED in that same minute.
   --
