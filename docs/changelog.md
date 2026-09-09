@@ -32,7 +32,11 @@ typed `number | null` and the DTO said it arrives as `null`, but
 a branch that cannot fire, which a generated client is nonetheless told to
 handle. `recoveryWindow.to` is declared `string | undefined` and left off
 instead, so the shape in the code, in the OpenAPI schema and on the wire are one
-shape.
+shape. `remaining.p75` keeps its type — clients are coded against it, and
+changing it is a contract change rather than a correction — but its description
+now says the key is absent, and `remaining` became a published class
+(`RemainingQuartilesDto`) instead of an inline literal the swagger plugin could
+only emit as a bare `object` with no `p25`, `median` or `p75` in it.
 
 ### Changed — the four held free-flow playgrounds are curated
 

@@ -39,6 +39,45 @@ export class RecoveryWindowDto {
 }
 
 /**
+ * Remaining **operating** minutes at the three quartiles.
+ *
+ * A class rather than the inline object literal it used to be, which the swagger
+ * plugin could only publish as a bare `object`: a client generated from the spec
+ * could not see that `p25`, `median` and `p75` exist at all. No value changed.
+ */
+export class RemainingQuartilesDto {
+  @ApiProperty({
+    description: "Remaining operating minutes at the 25th percentile.",
+    example: 25,
+  })
+  p25: number;
+
+  @ApiProperty({
+    description:
+      "Remaining operating minutes at the median. Never render it without " +
+      "the spread around it — the distribution is heavy-tailed enough that a " +
+      "median on its own reads as a promise.",
+    example: 70,
+  })
+  median: number;
+
+  @ApiProperty({
+    description:
+      "Remaining operating minutes at the 75th percentile. **The key is " +
+      "absent** past roughly two hours, where the curve stops resolving the " +
+      "upper quartile — render it as an open range. The type below says " +
+      "`number | null` and the wire has never carried one: " +
+      "`ExcludeNullInterceptor` strips every null-valued key outside " +
+      "`/v1/admin/*` and `?debug=true`. `recoveryWindow.to` is declared the " +
+      "way it behaves; this field keeps its type because clients are already " +
+      "coded against it.",
+    required: false,
+    example: 255,
+  })
+  p75: number | null;
+}
+
+/**
  * How much longer a running outage usually lasts, measured and never predicted.
  *
  * ## What this is, and what it is not
@@ -105,8 +144,9 @@ export class OutageEstimateDto {
       'quartile — render that as an open range ("ab 2:45 h"), and never render ' +
       "the median without the spread around it.",
     required: false,
+    type: () => RemainingQuartilesDto,
   })
-  remaining?: { p25: number; median: number; p75: number | null };
+  remaining?: RemainingQuartilesDto;
 
   @ApiProperty({
     description:
@@ -117,7 +157,12 @@ export class OutageEstimateDto {
       "park shutting in twenty minutes, ends tomorrow morning. **Absent when " +
       "the park publishes no opening hours**, and absent when its calendar " +
       "does not reach far enough; there is deliberately no wall-clock fallback, " +
-      "because that would answer a different question.",
+      "because that would answer a different question. **`from` may already be " +
+      "in the past** on a cached copy of this payload (up to ~15 min here) — " +
+      'read that as "any moment now", not as an error. The instants are ' +
+      "absolute on purpose: they were computed against the same instant " +
+      "`elapsedMinutes` was, so a stale copy stays internally consistent, where " +
+      "a relative `remaining` silently re-bases itself on the reader's clock.",
     required: false,
     type: () => RecoveryWindowDto,
   })

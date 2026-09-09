@@ -745,6 +745,19 @@ off, so the shape in the code, the shape in the OpenAPI schema and the shape on
 the wire are the same shape. Omitted is the only consistent form on offer here;
 what the interceptor decides, the type should say out loud.
 
+`remaining.p75` keeps `number | null` and therefore keeps the mismatch: clients
+are already coded against that type, and changing it is a contract change rather
+than a correction. What it no longer keeps is silence — the description says the
+key is absent, and `remaining` is a published class now instead of an inline
+literal the swagger plugin could only emit as a bare `object`.
+
+**The instants are absolute, and that is the point of them.** A cached copy of
+this payload (~15 min here) can carry a `from` that has already passed; read it
+as _any moment now_. `from` was computed against the same instant
+`elapsedMinutes` was, so a stale copy stays internally consistent — where a
+relative `remaining` re-bases itself on the reader's clock without saying so, and
+a fifteen-minute-old "50 more minutes" is quietly fifteen minutes too generous.
+
 ### The one caveat that remains
 
 `elapsedMinutes` grows even if the outage has secretly ended: without
