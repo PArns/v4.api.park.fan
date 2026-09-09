@@ -72,6 +72,33 @@ export const DOWNTIME_WITHHELD_REASONS = [
 export type DowntimeWithheldReason = (typeof DOWNTIME_WITHHELD_REASONS)[number];
 
 /**
+ * Reasons that describe what we can never see, rather than what we do not yet
+ * have enough of.
+ *
+ * Both sides of the feature need this exact list, which is why it sits on the
+ * entity and not beside either reader.
+ *
+ * The READ side (`toDowntimeBlock`) lets these win over `stale_data`: a park
+ * whose source has no DOWN status does not start reporting because a nightly
+ * job caught up, and "these numbers are not current" would promise a
+ * resolution that cannot arrive.
+ *
+ * The WRITE side (`DowntimeProfileService`) draws the opposite conclusion from
+ * the same fact. Its rule for a ride that dropped out of a rebuild is "leave
+ * the row, it will age into `stale_data`, which is honest" — and that rule is
+ * exactly what these four defeat. A row carrying one of them can never be
+ * corrected by ageing, so leaving one behind for a ride the rebuild can no
+ * longer re-derive freezes a park-level claim on a ride page for good.
+ */
+export const PERMANENT_WITHHELD_REASONS: ReadonlySet<DowntimeWithheldReason> =
+  new Set([
+    "not_down_capable",
+    "park_never_reports",
+    "artefact_regime",
+    "no_schedule",
+  ]);
+
+/**
  * The published aggregate, one row per ride, rewritten nightly.
  *
  * Nothing reads `attraction_outages` to serve a page. That is deliberate: the

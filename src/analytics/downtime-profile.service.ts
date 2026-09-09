@@ -1,7 +1,10 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, Repository } from "typeorm";
-import { AttractionDowntimeProfile } from "./entities/attraction-downtime-profile.entity";
+import {
+  AttractionDowntimeProfile,
+  PERMANENT_WITHHELD_REASONS,
+} from "./entities/attraction-downtime-profile.entity";
 import type { DowntimeWithheldReason } from "./entities/attraction-downtime-profile.entity";
 import {
   MIN_BLIND_EVIDENCE_HOURS,
@@ -346,6 +349,14 @@ export class DowntimeProfileService {
           FROM attractions a
          WHERE a."parkId" = ANY($5::uuid[])
            AND a.retired_at IS NULL
+           -- Both exclusions are the reconstruction's tracked CTE, because two
+           -- populations that disagree about what a trackable ride is would
+           -- write rows nothing can ever refresh. A free-flow ride has no
+           -- queue and reports CLOSED all day, so it never reaches ex in ANY
+           -- park — giving it a row here, in a regime the read path treats as
+           -- permanent, would freeze "this park publishes no hours" on its
+           -- page for good once the park does publish them.
+           AND COALESCE(a.open_with_park, FALSE) = FALSE
            AND NOT EXISTS (SELECT 1 FROM ex WHERE ex.aid = a.id)
       ),
       pop AS (
@@ -499,20 +510,29 @@ export class DowntimeProfileService {
     //    cannot be told apart from a park nobody asked about.
     // 2. Rides this rebuild kept are excluded, so the rows that survive keep
     //    their identity across the transaction.
-    // 3. **And the ride must actually be gone**, retired or deleted. Dropping
-    //    out of the population is NOT the same as ceasing to exist, and the
-    //    read path cannot tell the difference: a missing row is
+    // 3. **A live ride's row is spared — unless ageing cannot fix what it
+    //    says.** Dropping out of the population is NOT the same as ceasing to
+    //    exist, and the read path cannot tell the difference: a missing row is
     //    `not_down_capable` (`toDowntimeBlock(null)`, resting on "the nightly
-    //    job writes a row for every tracked ride"), which is a statement about
-    //    the park's SOURCE. Deleting a live ride's row would therefore print
-    //    the same wrong refusal the `sched` branch above exists to remove.
-    //    And rides do leave the population while remaining real: the
-    //    reconstruction wipes `attraction_exposure_days` for `op_day >=
-    //    scanStart` and only rewrites what its own population produces, so a
-    //    wide-window run can strip a live ride's exposure rows outright.
-    //    For those the honest outcome is the row it already has, ageing into
-    //    `stale_data` — „these numbers are not current" is true; „this park
-    //    cannot report an outage" is not.
+    //    job writes a row for every tracked ride"), a statement about the
+    //    park's SOURCE. Deleting a live ride's row would print the same wrong
+    //    refusal the `sched` branch above exists to remove. And rides do leave
+    //    the population while remaining real: the reconstruction wipes
+    //    `attraction_exposure_days` for `op_day >= scanStart` and rewrites
+    //    only what its own population produces, so a wide-window run can strip
+    //    a live ride's exposure rows outright. For those the honest outcome is
+    //    the row it already has, ageing into `stale_data` — „these numbers are
+    //    not current" is true where „this park cannot report an outage" is not.
+    //
+    //    That reasoning has one hole, and it is exactly the four reasons in
+    //    `PERMANENT_WITHHELD_REASONS`: the read path lets those WIN over
+    //    `stale_data`, so a row carrying one never ages into anything. A ride
+    //    that took a `no_schedule` row while its park published no hours, and
+    //    that the rebuild can no longer re-derive, would keep telling readers
+    //    the park publishes no hours long after it does. There the row is
+    //    worse than its absence — it is a specific claim about the park,
+    //    contradicted by the opening hours further up the same page — so it
+    //    goes.
     //
     // What this deliberately does not clean up: a park that vanishes from the
     // rebuild entirely (every ride retired, or the park removed) keeps its
@@ -520,18 +540,22 @@ export class DowntimeProfileService {
     // attraction it is drawing — and the alternative is the erasure above.
     const keptIds = toSave.map((p) => p.attractionId as string);
     const rebuiltParkIds = [...new Set(toSave.map((p) => p.parkId as string))];
+    const permanentReasons = [...PERMANENT_WITHHELD_REASONS];
 
     await this.dataSource.transaction(async (manager) => {
       await manager.query(
         `DELETE FROM attraction_downtime_profiles p
           WHERE p."parkId" = ANY($1::uuid[])
             AND NOT (p."attractionId" = ANY($2::uuid[]))
-            AND NOT EXISTS (
-              SELECT 1 FROM attractions a
-               WHERE a.id = p."attractionId"
-                 AND a.retired_at IS NULL
+            AND (
+              NOT EXISTS (
+                SELECT 1 FROM attractions a
+                 WHERE a.id = p."attractionId"
+                   AND a.retired_at IS NULL
+              )
+              OR p.withheld_reason = ANY($3::text[])
             )`,
-        [rebuiltParkIds, keptIds],
+        [rebuiltParkIds, keptIds, permanentReasons],
       );
       const repo = manager.getRepository(AttractionDowntimeProfile);
       for (let i = 0; i < toSave.length; i += 500) {
