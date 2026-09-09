@@ -91,8 +91,9 @@ describe("projectOperatingMinutes", () => {
 
   it("steps over a window that is already over and one with no length", () => {
     const past = win("2026-09-08T08:00:00.000Z", "2026-09-08T18:00:00.000Z");
-    // `normalizedClosingSql` keeps a zero-length row rather than rolling it
-    // forward into an invented 24-hour day, so one can reach this function.
+    // Not something `parkOpenWindowCtes` can produce — `w_ord` filters
+    // `closes_at > opens_at` — but the function is pure and takes a list, so a
+    // hand-built one must not make it count a negative window.
     const degenerate = win(
       "2026-09-09T09:00:00.000Z",
       "2026-09-09T09:00:00.000Z",

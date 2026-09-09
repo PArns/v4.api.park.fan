@@ -47,6 +47,17 @@ export interface OutageEstimate {
    * Absent whenever the lower bound cannot be placed: a park that publishes no
    * hours (there is no operating minute to project onto), or one whose calendar
    * does not reach far enough. Never a wall-clock fallback.
+   *
+   * **It recedes inside a bucket, and that is the conservative direction.**
+   * `remaining` is read at the floored bucket edge, so between 120 and 179
+   * elapsed minutes the same 50 minutes are added to a moving `now` and the
+   * instant slides forward with it. Subtracting the minutes already served
+   * inside the bucket would fix the sliding and import the exponential this
+   * curve exists to refuse: the hazard falls, so an outage that survived to 175
+   * has a LONGER remaining distribution than one at 120, not a shorter one by
+   * the difference. Leaving it unshifted errs late rather than early, which is
+   * the same direction the flooring itself takes. It is visible as a clock time
+   * where it was invisible as "50 min", and it is the same arithmetic.
    */
   recoveryWindow?: RecoveryWindow;
   /** Whether this park carried its own curve or fell back to the pooled one. */

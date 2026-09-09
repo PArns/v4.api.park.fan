@@ -6,6 +6,39 @@ import {
 } from "../../analytics/entities/attraction-outage.entity";
 
 /**
+ * When a running outage is expected to be over, on the wall clock.
+ *
+ * The quartiles of `OutageEstimateDto.remaining` placed on the park's opening
+ * calendar. Its own class rather than an inline shape so the pair has one
+ * published description, and so a client generated off the spec gets a named
+ * type for the one part of the estimate it may render as a time.
+ */
+export class RecoveryWindowDto {
+  @ApiProperty({
+    description:
+      "When the 25th percentile falls, ISO 8601 UTC — the earliest end this " +
+      "estimate is willing to name. Placed on the park's opening calendar, so " +
+      "an outage with more operating minutes left than the park has hours " +
+      "left today lands on the next opening day.",
+    example: "2026-09-09T14:35:00.000Z",
+  })
+  from: string;
+
+  @ApiProperty({
+    description:
+      "When the 75th percentile falls, ISO 8601 UTC. **The key is absent " +
+      "whenever there is no upper bound to give** — past roughly two hours the " +
+      "curve stops resolving the upper quartile, and the park's published " +
+      "calendar may not reach far enough either. It is absent rather than " +
+      "null because `ExcludeNullInterceptor` strips every null-valued key from " +
+      "this surface. Render it as an open range, never as a missing value to " +
+      "fill in.",
+    required: false,
+  })
+  to: string | null;
+}
+
+/**
  * How much longer a running outage usually lasts, measured and never predicted.
  *
  * ## What this is, and what it is not
@@ -38,30 +71,6 @@ import {
  * Every sentence built on this says *reported* — the numerator is
  * "themeparks-wiki said DOWN", not "the ride was broken".
  */
-export class RecoveryWindowDto {
-  @ApiProperty({
-    description:
-      "When the 25th percentile falls, ISO 8601 UTC — the earliest end this " +
-      "estimate is willing to name. Placed on the park's opening calendar, so " +
-      "an outage with more operating minutes left than the park has hours " +
-      "left today lands on the next opening day.",
-    example: "2026-09-09T14:35:00.000Z",
-  })
-  from: string;
-
-  @ApiProperty({
-    description:
-      "When the 75th percentile falls, ISO 8601 UTC. **Absent whenever there " +
-      "is no upper bound to give** — past roughly two hours the curve stops " +
-      "resolving the upper quartile, and the park's published calendar may not " +
-      "reach far enough either. Render that as an open range, never as a " +
-      "missing value to fill in.",
-    required: false,
-    nullable: true,
-  })
-  to: string | null;
-}
-
 export class OutageEstimateDto {
   @ApiProperty({
     description:

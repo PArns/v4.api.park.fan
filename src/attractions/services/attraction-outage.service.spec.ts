@@ -350,6 +350,19 @@ describe("AttractionOutageService — the closure path", () => {
       expect(out.get(DOWN_RIDE.id)?.estimate).toBeUndefined();
     });
 
+    it("does not read the calendar when the curve gave nothing to place", async () => {
+      // The gate is the estimate, not "reads DOWN in a park with hours". A
+      // failed curve read is the case that matters: there is nothing to project
+      // then, and it is exactly the moment the database is already in trouble.
+      curves.find.mockRejectedValue(new Error("statement timeout"));
+      route([OPEN_TODAY]);
+
+      const out = await service.getCurrentOutages(PARK, [DOWN_RIDE], ASOF);
+
+      expect(query.mock.calls.some((c) => isWindowQuery(c[0]))).toBe(false);
+      expect(out.get(DOWN_RIDE.id)?.signal).toBe("down");
+    });
+
     it("reads the calendar once for two renders of the same park", async () => {
       route([OPEN_TODAY]);
 

@@ -718,6 +718,18 @@ Four rules, one per case a spec pins:
   that only opens at weekends and stops short of pretending we can place an
   outage in a park that has shut for the winter.
 
+**The window recedes inside a bucket, and it is the same arithmetic as
+before.** `remaining` is read at the floored bucket edge, so from 120 to 179
+elapsed minutes the same 50 minutes are added to a moving _now_ and the instant
+slides forward with it. Shifting by the minutes already served inside the bucket
+would stop the sliding and import the exponential this curve exists to refuse —
+the hazard falls, so an outage that survived to 175 minutes has a **longer**
+remaining distribution than one at 120, not a shorter one by the difference.
+Unshifted errs late rather than early, the same direction the flooring itself
+takes. A client rendering `remaining` alone has always had this; the window only
+makes it visible as a clock time. Closing it properly means a finer bucket grid,
+not an interpolation.
+
 **A `null` never reaches a client here.** `ExcludeNullInterceptor` deletes every
 null-valued key from every response outside `/v1/admin/*` and `?debug=true`, so
 `to: null` arrives as a missing key — which is also why `remaining.p75` is

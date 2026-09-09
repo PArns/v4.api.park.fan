@@ -85,9 +85,11 @@ export function projectOperatingMinutes(
     if (!Number.isFinite(opens) || !Number.isFinite(closes)) continue;
     if (closes <= fromMs) continue;
     const start = Math.max(opens, fromMs);
-    // A degenerate window carries no minutes. `normalizedClosingSql()` keeps
-    // zero-length rows deliberately rather than rolling them forward into an
-    // invented 24-hour day, so they reach here and must simply be stepped over.
+    // A window with no minutes in it. `parkOpenWindowCtes` drops these in
+    // `w_ord` (`WHERE closes_at > opens_at`), so nothing from that query
+    // reaches here — this is for a caller that builds a list by hand, and it
+    // keeps a zero-length row from consuming the loop's only `continue`-free
+    // path with a negative `available`.
     if (closes <= start) continue;
 
     const available = closes - start;

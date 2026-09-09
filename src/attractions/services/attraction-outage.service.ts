@@ -376,34 +376,51 @@ export class AttractionOutageService {
         // row -- eight rides down meant eight identical filterings.
         const downCurves = this.curvesFor(curves, park.id, "down");
 
-        // The calendar read is one more query, so it is asked for only where it
-        // could answer: a park with no published hours gets no estimate at all
-        // one branch down, and paying for its schedule would be paying for a
-        // row that does not exist.
-        const windows = rows.some(
-          (row) =>
-            row.hasWindows &&
-            Number.isFinite(Number(row.elapsedOperatingMinutes)),
-        )
+        // Estimate first, calendar second, and the order is the point: the
+        // extra query is worth a round trip only where there is a quartile
+        // pair to place, and "reads DOWN in a park with hours" is not that.
+        // An outage under the curve's first bucket, a bucket under the sample
+        // floor and a curve read that just failed all arrive here with nothing
+        // to project — the last of those being exactly the moment the database
+        // is already in trouble.
+        //
+        // A park that publishes no hours has no operating clock, so its elapsed
+        // figure is zero for a reason that has nothing to do with the ride.
+        // Reading a curve at that zero would answer every outage there with
+        // "just started".
+        const estimates = new Map(
+          rows.map((row) => {
+            const elapsed = Number(row.elapsedOperatingMinutes);
+            return [
+              row.attractionId,
+              row.hasWindows && Number.isFinite(elapsed)
+                ? estimateOutage(downCurves, elapsed)
+                : undefined,
+            ] as const;
+          }),
+        );
+        const windows = [...estimates.values()].some((e) => e?.remaining)
           ? await this.loadUpcomingWindows(park.id, asOf)
           : [];
-        const clock = { windows, asOf };
 
         for (const row of rows) {
-          const elapsed = Number(row.elapsedOperatingMinutes);
+          const estimate = estimates.get(row.attractionId);
           out.set(row.attractionId, {
             startedAt: new Date(row.startedAt),
             startObserved: row.startObserved === true,
             rowsInRun: Number(row.rowsInRun) || 0,
             signal: "down",
-            // A park that publishes no hours has no operating clock, so its
-            // elapsed figure is zero for a reason that has nothing to do with
-            // the ride. Reading a curve at that zero would answer every outage
-            // there with "just started".
+            // Re-derived with the calendar rather than patched onto the object,
+            // so `estimateOutage` stays the one place the window comes from.
+            // The call is pure and reads eleven curve rows.
             estimate:
-              row.hasWindows && Number.isFinite(elapsed)
-                ? estimateOutage(downCurves, elapsed, clock)
-                : undefined,
+              estimate && windows.length > 0
+                ? estimateOutage(
+                    downCurves,
+                    Number(row.elapsedOperatingMinutes),
+                    { windows, asOf },
+                  )
+                : estimate,
           });
         }
       }
