@@ -1,8 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import {
-  DOWNTIME_WITHHELD_REASONS,
-  PERMANENT_WITHHELD_REASONS,
-} from "../../analytics/entities/attraction-downtime-profile.entity";
+import { DOWNTIME_WITHHELD_REASONS } from "../../analytics/entities/attraction-downtime-profile.entity";
 import type { DowntimeWithheldReason } from "../../analytics/entities/attraction-downtime-profile.entity";
 import { DOWNTIME_REGIMES } from "../../analytics/entities/park-downtime-coverage.entity";
 import type { DowntimeRegime } from "../../analytics/entities/park-downtime-coverage.entity";
@@ -160,12 +157,13 @@ export const MAX_PROFILE_AGE_DAYS = 2;
  * Staleness cannot override these: a park whose source has no DOWN status does
  * not start reporting because a nightly job caught up, and telling a reader the
  * figures are "not current" would promise a resolution that cannot arrive.
- *
- * Defined on the entity rather than here, because the WRITE side needs the same
- * list: a row carrying one of these can never be corrected by ageing, so the
- * rebuild may not leave one behind for a ride it can no longer re-derive.
  */
-const PERMANENT_REASONS = PERMANENT_WITHHELD_REASONS;
+const PERMANENT_REASONS: ReadonlySet<DowntimeWithheldReason> = new Set([
+  "not_down_capable",
+  "park_never_reports",
+  "artefact_regime",
+  "no_schedule",
+]);
 
 export function toDowntimeBlock(
   profile: AttractionDowntimeProfile | null | undefined,

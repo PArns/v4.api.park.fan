@@ -1,10 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, Repository } from "typeorm";
-import {
-  AttractionDowntimeProfile,
-  PERMANENT_WITHHELD_REASONS,
-} from "./entities/attraction-downtime-profile.entity";
+import { AttractionDowntimeProfile } from "./entities/attraction-downtime-profile.entity";
 import type { DowntimeWithheldReason } from "./entities/attraction-downtime-profile.entity";
 import {
   MIN_BLIND_EVIDENCE_HOURS,
@@ -524,15 +521,20 @@ export class DowntimeProfileService {
     //    the row it already has, ageing into `stale_data` — „these numbers are
     //    not current" is true where „this park cannot report an outage" is not.
     //
-    //    That reasoning has one hole, and it is exactly the four reasons in
-    //    `PERMANENT_WITHHELD_REASONS`: the read path lets those WIN over
-    //    `stale_data`, so a row carrying one never ages into anything. A ride
-    //    that took a `no_schedule` row while its park published no hours, and
-    //    that the rebuild can no longer re-derive, would keep telling readers
-    //    the park publishes no hours long after it does. There the row is
-    //    worse than its absence — it is a specific claim about the park,
-    //    contradicted by the opening hours further up the same page — so it
-    //    goes.
+    //    That reasoning has one hole, and it is `no_schedule` alone. Its rows
+    //    are the only ones whose EXISTENCE depends on the regime: `sched`
+    //    stops sourcing the ride the moment the park publishes hours, and
+    //    `no_schedule` is one of the reasons the read path lets win over
+    //    `stale_data`, so the row can never age into anything either. It would
+    //    keep telling readers the park publishes no hours, contradicted by the
+    //    opening hours further up the same page.
+    //
+    //    Only that one. The other permanent reasons are park-level facts that
+    //    stay true, and their rides come through `ex`, which does not care
+    //    about the regime — deleting a live ride's `park_never_reports` row
+    //    would swap a true refusal for `not_down_capable`, which is false
+    //    about a park whose `wiki_entity_id` is set. (`not_down_capable`
+    //    itself is a wash: the fallback says exactly what the row says.)
     //
     // What this deliberately does not clean up: a park that vanishes from the
     // rebuild entirely (every ride retired, or the park removed) keeps its
@@ -540,7 +542,6 @@ export class DowntimeProfileService {
     // attraction it is drawing — and the alternative is the erasure above.
     const keptIds = toSave.map((p) => p.attractionId as string);
     const rebuiltParkIds = [...new Set(toSave.map((p) => p.parkId as string))];
-    const permanentReasons = [...PERMANENT_WITHHELD_REASONS];
 
     await this.dataSource.transaction(async (manager) => {
       await manager.query(
@@ -553,9 +554,9 @@ export class DowntimeProfileService {
                  WHERE a.id = p."attractionId"
                    AND a.retired_at IS NULL
               )
-              OR p.withheld_reason = ANY($3::text[])
+              OR p.withheld_reason = 'no_schedule'
             )`,
-        [rebuiltParkIds, keptIds, permanentReasons],
+        [rebuiltParkIds, keptIds],
       );
       const repo = manager.getRepository(AttractionDowntimeProfile);
       for (let i = 0; i < toSave.length; i += 500) {

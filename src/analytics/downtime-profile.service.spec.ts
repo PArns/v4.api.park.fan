@@ -7,7 +7,6 @@ import {
   decideProfile,
 } from "./downtime-profile.service";
 import type { ProfileInputs } from "./downtime-profile.service";
-import { PERMANENT_WITHHELD_REASONS } from "./entities/attraction-downtime-profile.entity";
 import { ParkDowntimeCoverage } from "./entities/park-downtime-coverage.entity";
 import { isDurationUsable } from "../queues/processors/downtime-reconstruction.processor";
 
@@ -422,26 +421,30 @@ describe("DowntimeProfileService — the rebuild's population", () => {
       expect(sql).toContain("a.retired_at IS NULL");
     });
 
-    it("makes an exception for a row whose reason ageing can never correct", async () => {
+    it("makes one exception, for the reason that can neither age nor be redone", async () => {
       // The rule above rests on "the row will age into stale_data, which is
-      // honest". The four PERMANENT_WITHHELD_REASONS are exactly what defeats
-      // it — the read path lets them WIN over stale_data — so a row carrying
-      // one never ages into anything. A ride that took a no_schedule row while
-      // its park published no hours, and that the rebuild can no longer
-      // re-derive, would keep saying the park publishes no hours. There the
-      // row is worse than its absence: a specific claim about the park,
-      // contradicted by the opening hours on the same page.
+      // honest". no_schedule defeats it twice over: the read path lets it win
+      // over stale_data, and it is the one reason whose row depends on the
+      // regime — the sched branch stops sourcing the ride the moment the park
+      // publishes hours. The row would go on saying the park publishes no
+      // hours, contradicted by the opening hours on the same page.
+      //
+      // Only that one. The other permanent reasons are park-level facts that
+      // stay true, and their rides come through ex regardless of regime;
+      // deleting a live ride's park_never_reports row would swap a true
+      // refusal for not_down_capable, which is false about a park that has a
+      // source at all.
       await build(
         [coverageRow(REPORTING_PARK)],
         [publishableRow(LIVE_RIDE, REPORTING_PARK)],
       );
       await service.rebuild(null);
 
-      const [sql, params] = managerQuery.mock.calls[0] as [string, unknown[]];
-      expect(sql).toContain("p.withheld_reason = ANY($3::text[])");
-      // Read from the entity, not retyped here: two copies of this list would
-      // be two places for the read and write sides to drift apart.
-      expect(params[2]).toEqual([...PERMANENT_WITHHELD_REASONS]);
+      const sql = managerQuery.mock.calls[0][0] as string;
+      expect(sql).toContain("p.withheld_reason = 'no_schedule'");
+      for (const spared of ["park_never_reports", "artefact_regime"]) {
+        expect(sql).not.toContain(spared);
+      }
     });
 
     it("scopes the delete to the parks the rebuild actually produced rows for", async () => {
