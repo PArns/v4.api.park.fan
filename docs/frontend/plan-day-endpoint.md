@@ -211,16 +211,39 @@ one.
 
 `shows` carries the day's programme, and `source` says who it came from.
 
-**No feed publishes showtimes ahead of the current day.** That was checked at the
-source, not assumed: ThemeParks.wiki's live response for Europa-Park carries 186
-start times for today and, beyond that, only entries it never cleared — some
-dated 2022. Across every park in the database, not one holds a park-local
-showtime for a future day. So for any planned date the choice is to project or to
-say nothing, and saying nothing made `shows` an empty array on every request.
+**No feed publishes showtimes ahead of the current day.** That is measured, not
+assumed. Over the whole retained history of `show_live_data` (snapshots from
+2025-12-24 to 2026-09-08, 4,675,700 of them), all 15,185,105 showtime entries
+were compared against the park-local date of the snapshot that carried them:
+
+| lead over the snapshot's own day | entries | share |
+| --- | --- | --- |
+| negative — a day already past | 120,058 | 0.79 % |
+| 0 days — the operating day itself | 15,064,895 | 99.21 % |
+| +1 day, starting 00:00–05:30 | 109 | 0.0007 % |
+| +1 or +2 days, genuine | 43 | 0.0003 % |
+
+The first row is the feed's own litter, and it is why both SQL paths in
+`ShowsService` filter on the showtime and not only on the snapshot: the oldest
+entry still being served sits **1,396 days** before the snapshot carrying it —
+2022, exactly as the code comments say.
+
+The third row is not foresight either. Those are performances past midnight —
+Universal's late programme, `The Purge: Dangerous Waters` at 00:45,
+`Meet Snowball` at 04:30 — belonging to the operating day that published them,
+which only crosses a date boundary because the clock does. Note that we do
+**not** unfold them the way §5 unfolds opening hours: `getShowtimesOnDate` and
+the pattern rebuild both bucket a showtime by its own park-local calendar date,
+so such a performance is attributed to the following day.
+
+That leaves 43 entries — three per million, in two parks, from snapshots taken
+between 2025-12-23 and 2025-12-27 park-local, with no successor in the eight
+months since. So for any future date the choice is to project or to say nothing,
+and saying nothing made `shows` an empty array on every request.
 
 | source | what it is |
 | --- | --- |
-| `scheduled` | the operator's own times for that day. Today only |
+| `scheduled` | the operator's own times for that day. Today and past days, never a future one |
 | `projected` | what the show ran at on the most recent day with the **same weekday**, with `observedOn` and `sampleDays` beside it |
 
 **Why the weekday matters.** Measured at Europa-Park: "Big Moments – The
@@ -243,7 +266,72 @@ date asked about, or every date more than four weeks out would reject itself.
 A caller must render `projected` differently from `scheduled`. It is what the
 show did, not a promise that it runs; `observedOn` is there so the reader can see
 how fresh that evidence is. An empty `shows` means we have never watched this
-park's shows — a different statement from "this park has no shows".
+park's shows — a different statement from "this park has no shows", though see
+the coverage note below for the one case where those two blur.
+
+### How far ahead showtimes are genuinely known
+
+**Forward, `scheduled` reaches zero days.** Backward it reaches as far as
+`show_live_data` is retained: `getShowtimesOnDate` anchors its snapshot window on
+the date being asked about, so a past day is answered from the snapshots taken on
+it. Measured at Europa-Park on 2026-09-09 — 2026-09-06 returned 32 `scheduled`
+entries, 2026-08-15 returned 34, and 2026-06-01, three months back, still
+returned 29.
+
+The one exception runs the other way, and it is the +1-day row above: a snapshot
+taken today can carry a past-midnight performance dated tomorrow, so *tomorrow*
+can come back with a lone `scheduled` 04:30 entry for a show whose real
+programme is not known yet. Because `buildShows` prefers `scheduled` and stops
+there, that orphan also suppresses the projection for that one show. 109 entries
+in nine months, all at Universal — rare, but not never.
+
+**`projected` has no distance limit at all**, and a caller should know that. The
+freshness guard (`MAX_PATTERN_AGE_DAYS`) measures the pattern against *today*
+rather than against the target date, and the sighting guard (`MIN_PATTERN_DAYS`)
+is a plain count that carries no date at all — so nothing in the path grows
+stricter as the question moves further out. Measured against production for
+Europa-Park on 2026-09-09, the three future Saturdays returned an identical
+answer, with today shown for contrast:
+
+| date asked | entries | source | `observedOn` |
+| --- | --- | --- | --- |
+| 2026-09-09 — today, a Wednesday | 33 | 32 `scheduled`, 1 `projected` | 2026-09-02 |
+| 2026-09-12 — Saturday | 35 | all `projected` | 2026-08-29 / 2026-09-05 |
+| 2026-11-14 — Saturday | 35 | all `projected` | 2026-08-29 / 2026-09-05 |
+| 2027-03-13 — Saturday | 35 | all `projected` | 2026-08-29 / 2026-09-05 |
+
+A March 2027 answer is therefore neither better nor worse than next Saturday's —
+it is the *same* answer, built from a September observation. `observedOn` is the
+only thing that says so, which is why it travels with every projected entry and
+why a UI that drops it hides the one field carrying the uncertainty. **Distance
+from today is not a quality signal here; the age of `observedOn` is.** Past a
+season boundary the projection carries a summer programme onto a spring date,
+and nothing in the pipeline notices.
+
+**Coverage is the other limit, and it is the bigger one.** Of 128 parks that
+have shows in the database, 46 have any weekday pattern at all and 45 can
+project today. The remaining 82 return `[]` for every *future* date — but that
+array covers two different situations, and the DTO's "we have never watched this
+park's shows" is only the first of them:
+
+- 81 of the 82 have never published a single showtime in the whole retained
+  history. For those, `[]` is exactly what the DTO says it is.
+- Aquatica Orlando published showtimes from 2026-03-07 to 2026-05-03 and has
+  been quiet since. It has fallen out of the 56-day `PATTERN_WINDOW_DAYS`, so
+  every future date now reads identically to a park nobody ever watched — while
+  a date inside that spring window still answers `scheduled` from the snapshots
+  taken then.
+
+A seasonal park therefore decays into the "never watched" answer rather than
+into a "not running right now" one, and nothing in the response distinguishes
+them.
+
+Of 4,715 stored patterns, 4,403 clear `observedDays >= 2` and 4,147 clear both
+guards. The two rejections are worth keeping apart: 312 patterns (6.6 %) are
+single-sighting events that must never be projected, while 256 (5.4 %) are
+ordinary patterns that have simply gone stale — kept because
+`PATTERN_WINDOW_DAYS` is 56 days, but no longer projected because
+`MAX_PATTERN_AGE_DAYS` is 28.
 
 ## Related
 
