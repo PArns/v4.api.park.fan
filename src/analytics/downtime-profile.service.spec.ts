@@ -440,10 +440,14 @@ describe("DowntimeProfileService — the rebuild's population", () => {
       );
       await service.rebuild(null);
 
-      const sql = managerQuery.mock.calls[0][0] as string;
-      expect(sql).toContain("p.withheld_reason = 'no_schedule'");
+      const [sql, params] = managerQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain("p.withheld_reason = $3::text");
+      // Bound, not written into the statement: the parameter is typed
+      // DowntimeWithheldReason, so renaming the reason fails to compile
+      // instead of silently killing the arm with this spec still green.
+      expect(params[2]).toBe("no_schedule");
       for (const spared of ["park_never_reports", "artefact_regime"]) {
-        expect(sql).not.toContain(spared);
+        expect(params).not.toContain(spared);
       }
     });
 

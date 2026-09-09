@@ -346,13 +346,18 @@ export class DowntimeProfileService {
           FROM attractions a
          WHERE a."parkId" = ANY($5::uuid[])
            AND a.retired_at IS NULL
-           -- Both exclusions are the reconstruction's tracked CTE, because two
-           -- populations that disagree about what a trackable ride is would
-           -- write rows nothing can ever refresh. A free-flow ride has no
-           -- queue and reports CLOSED all day, so it never reaches ex in ANY
-           -- park — giving it a row here, in a regime the read path treats as
-           -- permanent, would freeze "this park publishes no hours" on its
-           -- page for good once the park does publish them.
+           -- Both exclusions are the reconstruction's tracked CTE, so the two
+           -- populations agree on what a trackable ride is.
+           --
+           -- The free-flow one is about naming the right obstacle. Such a ride
+           -- has no queue and its source reports it CLOSED all day, so it
+           -- publishes nothing in ANY park — in a fully scheduled one it
+           -- already answers not_down_capable. Handing it no_schedule here
+           -- would make one ride's refusal depend on its park's calendar while
+           -- the actual reason is the ride, and naming the wrong obstacle is
+           -- the failure this whole feature exists to avoid. It has no honest
+           -- reason of its own yet; that is PF-73, not a licence to borrow the
+           -- park's.
            AND COALESCE(a.open_with_park, FALSE) = FALSE
            AND NOT EXISTS (SELECT 1 FROM ex WHERE ex.aid = a.id)
       ),
@@ -542,6 +547,11 @@ export class DowntimeProfileService {
     // attraction it is drawing — and the alternative is the erasure above.
     const keptIds = toSave.map((p) => p.attractionId as string);
     const rebuiltParkIds = [...new Set(toSave.map((p) => p.parkId as string))];
+    // Bound as a parameter rather than written into the statement, so the
+    // annotation is what ties it to the union: renaming the reason then fails
+    // to compile here instead of quietly killing the arm and leaving the
+    // frozen row this branch exists to prevent.
+    const unrefreshableReason: DowntimeWithheldReason = "no_schedule";
 
     await this.dataSource.transaction(async (manager) => {
       await manager.query(
@@ -554,9 +564,9 @@ export class DowntimeProfileService {
                  WHERE a.id = p."attractionId"
                    AND a.retired_at IS NULL
               )
-              OR p.withheld_reason = 'no_schedule'
+              OR p.withheld_reason = $3::text
             )`,
-        [rebuiltParkIds, keptIds],
+        [rebuiltParkIds, keptIds, unrefreshableReason],
       );
       const repo = manager.getRepository(AttractionDowntimeProfile);
       for (let i = 0; i < toSave.length; i += 500) {
