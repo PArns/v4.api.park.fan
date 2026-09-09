@@ -189,23 +189,16 @@ describe("Park Analytics (e2e)", () => {
           for (const d of body.byDayOfWeek) {
             expect(VALID_LEVELS).toContain(d.avgCrowdLevel);
           }
-          // Explicit 1-based rank instead of relying on array index; `land`
-          // and `attractionType` are the v3 row fields — always emitted, null
-          // where the park publishes none, so presence is the assertion.
-          body.topAttractions.forEach(
-            (
-              a: {
-                rank: number;
-                land: string | null;
-                attractionType: string | null;
-              },
-              i: number,
-            ) => {
-              expect(a.rank).toBe(i + 1);
-              expect(a).toHaveProperty("land");
-              expect(a).toHaveProperty("attractionType");
-            },
-          );
+          // NOTE: this fixture seeds a park and three attractions but no
+          // `queue_data_aggregates` rows, and that table is what
+          // `queryTopAttractions` reads — so `topAttractions` is [] here and
+          // this loop never runs. It is kept for the day the fixture grows,
+          // but do not read it as coverage: the row shape (rank, land,
+          // attractionType) is pinned in the unit spec instead, at
+          // src/analytics/park-historical-stats.service.spec.ts.
+          body.topAttractions.forEach((a: { rank: number }, i: number) => {
+            expect(a.rank).toBe(i + 1);
+          });
         });
     });
 

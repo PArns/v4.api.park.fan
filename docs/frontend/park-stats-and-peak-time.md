@@ -64,7 +64,7 @@ Historical aggregates. **`schemaVersion: 3`.**
 | `years`         | int (1..5)  | 2       | Look-back window size |
 | `topN`          | int (1..50) | 10      | Number of top attractions |
 | `minSampleDays` | int (≥0)    | 30      | Below this, `meta.displayable` becomes `false` |
-| `minAttractionDays` | int (≥0) | 20      | Measured days a ride needs to enter `topAttractions` |
+| `minAttractionDays` | int (≥1) | 20      | Measured days a ride needs to enter `topAttractions`. `0` is not "no floor" — it falls back to the default, as `minSampleDays=0` does |
 
 ### Response
 
@@ -93,9 +93,11 @@ Historical aggregates. **`schemaVersion: 3`.**
     avgWaitP90: number;
     sampleDays: number;
     rank: number;             // NEW — explicit 1-based rank (not array index)
-    land?: string | null;     // NEW in 3 — curated wins; absent for whole parks,
-                              // so render the column only if a row carries it
-    attractionType?: string | null; // NEW in 3 — free-text `attraction_type`,
+    land: string | null;      // NEW in 3 — curated wins. The key is always
+                              // present; null for a park that publishes no
+                              // land, so render the column only when at least
+                              // one row is non-null
+    attractionType: string | null;  // NEW in 3 — free-text `attraction_type`,
                               // NOT the glossary term ids in ride profiles
   }[];
   meta: {
