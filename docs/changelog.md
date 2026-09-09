@@ -6,7 +6,7 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
-### Changed — the four held free-flow playgrounds are curated, and the month rule is written down
+### Changed — the four held free-flow playgrounds are curated
 
 `curated_season_months` and `open_with_park` were curated on 2026-09-09 for Europa-Park's
 _Lítill Island_ `[3–9]` and _Water Playground_ `[3–10]`, Everland's _Snow
@@ -14,18 +14,11 @@ playground_ `[12, 1, 2]` and Bellewaerde's _Snowmen Playground_ `[11, 12, 1]`,
 each against the operator's own calendar, each with the source on its audit row.
 Toverland's _Kletterparcours_ was retired with `retired_at = 2025-11-02`.
 
-The open question those curations had been waiting on was **"is March in or
-out?"**, and it is not answerable ride by ride — so the rule is now in
+The question they had been held on — how an operator's season becomes a month
+list — is answered once, in
 [Attraction Status & Seasonality §7a](architecture/attraction-status-and-seasonality.md),
 which also spells out that the months go in `curated_season_months` and never in
-the detector's own `season_months`:
-a month goes in unless the operator's season covers no more than a tenth of the
-days the **park** is open that month. Open days, not calendar days, which makes
-the denominator a `schedule_entries` query rather than a judgement call. That
-puts March in for Europa-Park (4 of 10 open days, because the park opens on the
-22nd) and November out for the Water Playground (Halloween touches only the 1st,
-of 30 open days). The threshold sits low deliberately: omitting a month is a
-hard close, since `isInSeason` runs purely off the list once one exists.
+the detector's own `season_months`.
 
 Two corrections went with it. §7 told curators to
 `UPDATE attractions SET open_with_park = true` and then evict one Redis key by

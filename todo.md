@@ -507,23 +507,11 @@ park is" and these are not:
       Bellewaerde _Snowmen Playground_ `[11, 12, 1]`, all four with
       `open_with_park`. Sources on each audit row.
 
-      **The rule that answered "is 3 in or out?"**, because the next such
-      curation needs the same answer: a month goes in unless the operator's
-      season covers no more than a tenth of the days the **park** is open that
-      month. Not the calendar days — the open ones. Europa-Park's summer starts
-      28 March and the park opens on the 22nd, so the season holds 4 of 10 open
-      March days (40 %) and 3 is in. Halloween ends 1 November while Europa-Park
-      is open on all 30 November days, so 11 covers 3 % and is out for the Water
-      Playground even though the season formally touches it. Nothing in this
-      round landed near the line: every "in" was 25 % or more, every "out" 3 %.
-
-      Month granularity cannot express a season that starts mid-month, so every
-      one of these is wrong on a few days a year by construction. The threshold
-      sits low rather than at a majority because the two errors are not equal:
-      omitting a month is a hard close (once a list exists, `isInSeason` answers
-      only from it — the permissive branch fires solely for a null or empty
-      list), while including one over-reports on days the park is often shut
-      through anyway. Full derivation in
+      The rule that answered "is 3 in or out?" — a month goes in unless the
+      operator's season covers no more than a tenth of the days the **park** is
+      open that month — is written down once, with its derivation, the
+      `schedule_entries` query behind the denominator and the one call in this
+      round that is not safe:
       `docs/architecture/attraction-status-and-seasonality.md` §7a.
 - [ ] **Season unknown, water-based, park open year-round** — Peppa Pig
       _Muddy Puddles Splash Pad_, Walibi Rhône-Alpes _Exotic Island 3-6_ and
