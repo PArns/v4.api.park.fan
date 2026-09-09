@@ -29,13 +29,13 @@ export class RecoveryWindowDto {
       "When the 75th percentile falls, ISO 8601 UTC. **The key is absent " +
       "whenever there is no upper bound to give** — past roughly two hours the " +
       "curve stops resolving the upper quartile, and the park's published " +
-      "calendar may not reach far enough either. It is absent rather than " +
-      "null because `ExcludeNullInterceptor` strips every null-valued key from " +
-      "this surface. Render it as an open range, never as a missing value to " +
-      "fill in.",
+      "calendar may not reach far enough either. Absent and never null: a null " +
+      "could not survive `ExcludeNullInterceptor` on this surface anyway, so " +
+      "the type is written the way the wire behaves. Render it as an open " +
+      "range, never as a missing value to fill in.",
     required: false,
   })
-  to: string | null;
+  to?: string;
 }
 
 /**

@@ -154,10 +154,7 @@ describe("estimateOutage — the recovery window", () => {
       windows,
       asOf: new Date("2026-09-09T17:20:00.000Z"),
     });
-    expect(e?.recoveryWindow).toEqual({
-      from: "2026-09-10T08:10:00.000Z",
-      to: null,
-    });
+    expect(e?.recoveryWindow).toEqual({ from: "2026-09-10T08:10:00.000Z" });
   });
 
   it("omits the window, not the estimate, when no calendar is handed over", () => {

@@ -35,19 +35,24 @@ export interface OperatingWindow {
 /**
  * The recovery window as instants, ready to be rendered as clock times.
  *
- * `to` is `null` when there is no upper bound to give — either the curve did not
- * resolve the upper quartile (past roughly two hours it stops), or the calendar
- * on hand does not reach that far. **On the wire that null is an absent key**:
- * `ExcludeNullInterceptor` deletes every null-valued key from every response
- * outside `/v1/admin/*` and `?debug=true`, which is also why `remaining.p75`
- * arrives as a missing key rather than as `null`. A client reads both the same
- * way: no upper bound.
+ * `to` is **absent** when there is no upper bound to give — either the curve did
+ * not resolve the upper quartile (past roughly two hours it stops), or the
+ * calendar on hand does not reach that far.
+ *
+ * Absent rather than `null`, and the type says so rather than leaving it to a
+ * pipeline: `ExcludeNullInterceptor` deletes every null-valued key from every
+ * response outside `/v1/admin/*` and `?debug=true`, so a `null` here could never
+ * have reached a client anyway. That is the gap this ticket found on
+ * `remaining.p75`, whose type promises `number | null` while the API has always
+ * sent a missing key. A field that is absent on the wire is declared absent
+ * here, so nothing downstream — a generated client included — is told to expect
+ * a branch that never fires.
  */
 export interface RecoveryWindow {
   /** ISO 8601 UTC. The 25th percentile, placed on the calendar. */
   from: string;
-  /** ISO 8601 UTC, or null when there is no upper bound to give. */
-  to: string | null;
+  /** ISO 8601 UTC. Absent when there is no upper bound to give. */
+  to?: string;
 }
 
 /**
@@ -106,6 +111,16 @@ export function projectOperatingMinutes(
  * distribution behind it is heavy-tailed enough that the median alone is wrong
  * in the one direction that costs a visitor their afternoon.
  *
+ * **With the park shut, `from` lands on the next opening plus the quartile**,
+ * and that is what the operating-minute clock means rather than an accident of
+ * it: the curve measured nothing about the closed stretch because a closed park
+ * is a pause. A ride repaired overnight is not missing from that measurement —
+ * it appears as a spell ending at the closing boundary, since the next
+ * `OPERATING` reading arrives with the gates. So "surviving past the closing"
+ * already excludes most of them, and projecting the remainder into tomorrow
+ * morning is the model read honestly. It reads more confidently as a clock time
+ * than as "50 more operating minutes"; it is the same claim.
+ *
  * @param windows - The park's upcoming windows, ascending and disjoint.
  * @param asOf - Now, or whatever instant the caller is answering for.
  * @param remaining - `p25` and `p75` off the curve, in operating minutes. `p75`
@@ -129,5 +144,8 @@ export function recoveryWindowFrom(
       ? null
       : projectOperatingMinutes(windows, asOf, remaining.p75);
 
-  return { from: from.toISOString(), to: to ? to.toISOString() : null };
+  // The key is left off rather than set to null: see {@link RecoveryWindow}.
+  return to
+    ? { from: from.toISOString(), to: to.toISOString() }
+    : { from: from.toISOString() };
 }

@@ -713,6 +713,11 @@ Four rules, one per case a spec pins:
   There is deliberately no wall-clock fallback: it would answer a question
   nobody asked, and it would answer it most confidently for the parks we know
   least about.
+- **With the park shut, `from` is the next opening plus the quartile.** That is
+  the operating clock read honestly rather than an artefact of it: a ride
+  repaired overnight is not missing from the measurement, it appears as a spell
+  ending at the closing boundary, because the next `OPERATING` reading arrives
+  with the gates. Surviving past the closing already excludes most of them.
 - **The horizon is 14 days.** The largest upper quartile the curve resolves is
   460 operating minutes, under eight operating hours; fourteen days covers a park
   that only opens at weekends and stops short of pretending we can place an
@@ -730,12 +735,15 @@ takes. A client rendering `remaining` alone has always had this; the window only
 makes it visible as a clock time. Closing it properly means a finer bucket grid,
 not an interpolation.
 
-**A `null` never reaches a client here.** `ExcludeNullInterceptor` deletes every
-null-valued key from every response outside `/v1/admin/*` and `?debug=true`, so
-`to: null` arrives as a missing key — which is also why `remaining.p75` is
-measured absent on production while its type says `number | null`. Omitted is
-therefore the only consistent form on offer, and it is what both fields already
-do.
+**A `null` never reaches a client here, so the type does not claim one.**
+`ExcludeNullInterceptor` deletes every null-valued key from every response
+outside `/v1/admin/*` and `?debug=true`. That is why `remaining.p75` is measured
+absent on production while its type says `number | null` — the type documents a
+branch that cannot fire, and a generated client is told to handle it anyway.
+`recoveryWindow.to` is therefore declared `string | undefined` and simply left
+off, so the shape in the code, the shape in the OpenAPI schema and the shape on
+the wire are the same shape. Omitted is the only consistent form on offer here;
+what the interceptor decides, the type should say out loud.
 
 ### The one caveat that remains
 

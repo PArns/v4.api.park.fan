@@ -28,8 +28,11 @@ know least about. `remaining` is unchanged.
 One documented claim was wrong and is corrected with it: `remaining.p75` is
 typed `number | null` and the DTO said it arrives as `null`, but
 `ExcludeNullInterceptor` strips every null-valued key outside `/v1/admin/*` and
-`?debug=true`, so it has always arrived as a **missing key**. That settles the
-form for the new field too — omitted, like everything else on this surface.
+`?debug=true`, so it has always arrived as a **missing key** — a type describing
+a branch that cannot fire, which a generated client is nonetheless told to
+handle. `recoveryWindow.to` is declared `string | undefined` and left off
+instead, so the shape in the code, in the OpenAPI schema and on the wire are one
+shape.
 
 ### Changed — the four held free-flow playgrounds are curated
 

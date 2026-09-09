@@ -149,7 +149,7 @@ describe("recoveryWindowFrom", () => {
     // having — "back at 13:50 at the earliest, no upper bound we can measure".
     expect(
       recoveryWindowFrom([TODAY, TOMORROW], asOf, { p25: 50, p75: null }),
-    ).toEqual({ from: "2026-09-09T13:50:00.000Z", to: null });
+    ).toEqual({ from: "2026-09-09T13:50:00.000Z" });
   });
 
   it("keeps the range open when the calendar cannot reach the upper quartile", () => {
@@ -157,8 +157,10 @@ describe("recoveryWindowFrom", () => {
     // a tomorrow this park has not published. The lower bound still lands.
     expect(recoveryWindowFrom([TODAY], asOf, { p25: 35, p75: 460 })).toEqual({
       from: "2026-09-09T13:35:00.000Z",
-      to: null,
     });
+    expect(
+      "to" in recoveryWindowFrom([TODAY], asOf, { p25: 35, p75: 460 })!,
+    ).toBe(false);
   });
 
   it("withholds the whole window when the lower bound cannot be placed", () => {
