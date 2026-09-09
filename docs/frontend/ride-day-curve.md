@@ -23,12 +23,14 @@ interface RideDayCurve {
   p90: Array<number | null>;    // historical spread, upper edge
   today: Array<number | null>;  // measured today
   forecast: Array<number | null>; // expected, for hours not yet measured
+  predicted: Array<number | null>; // NEW in 2 — what the model said BEFORE
+                                   // each hour happened, over the whole day
   forecastError: number | null; // the ride's own MAE, minutes
   measuredToday: boolean;
   sampleDays: number;
   timezone: string;
   generatedAt: string;
-  schemaVersion: number;        // 1
+  schemaVersion: number;        // 2
 }
 ```
 

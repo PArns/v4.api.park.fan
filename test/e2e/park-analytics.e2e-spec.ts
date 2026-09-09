@@ -154,7 +154,7 @@ describe("Park Analytics (e2e)", () => {
   });
 
   describe("GET /v1/parks/:continent/:country/:city/:slug/stats", () => {
-    it("returns the v2 historical-stats contract", () => {
+    it("returns the v3 historical-stats contract", () => {
       return request(app.getHttpServer())
         .get("/v1/parks/europe/germany/bruehl/phantasialand/stats")
         .expect(200)
@@ -168,8 +168,11 @@ describe("Park Analytics (e2e)", () => {
           expect(body.meta).toHaveProperty("windowYears");
           expect(body.meta).toHaveProperty("displayable");
           expect(body.meta).toHaveProperty("generatedAt");
-          expect(body.meta.schemaVersion).toBe(2);
+          expect(body.meta.schemaVersion).toBe(3);
           expect(typeof body.meta.displayable).toBe("boolean");
+          // The v3 additions themselves, so the version literal above is not
+          // the only thing standing between this name and a v2 response.
+          expect(typeof body.meta.minAttractionDays).toBe("number");
 
           const VALID_LEVELS = [
             "very_low",
@@ -186,7 +189,13 @@ describe("Park Analytics (e2e)", () => {
           for (const d of body.byDayOfWeek) {
             expect(VALID_LEVELS).toContain(d.avgCrowdLevel);
           }
-          // Explicit 1-based rank instead of relying on array index
+          // NOTE: this fixture seeds a park and three attractions but no
+          // `queue_data_aggregates` rows, and that table is what
+          // `queryTopAttractions` reads — so `topAttractions` is [] here and
+          // this loop never runs. It is kept for the day the fixture grows,
+          // but do not read it as coverage: the row shape (rank, land,
+          // attractionType) is pinned in the unit spec instead, at
+          // src/analytics/park-historical-stats.service.spec.ts.
           body.topAttractions.forEach((a: { rank: number }, i: number) => {
             expect(a.rank).toBe(i + 1);
           });
