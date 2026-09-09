@@ -53,7 +53,7 @@ answer was "none" — §7 step 3 read as if months were always needed and now
 treats both answers as answers.
 
 That closes the sweep at **10 free-flow, 34 operated rides left alone, 1
-undecidable** — §5.2 had estimated "many are free-flow". The one left is
+undecidable** — §5.2 had estimated that many of them would be free-flow. The one left is
 _Rocking Bridge & Chute_, which has no operator page to decide against (403, and
 absent from both the attraction list and the children's page); it may equally be
 gone, which would be `retired_at` rather than the flag.
@@ -71,7 +71,7 @@ Measured the same day with the park `OPERATING`: the 45 serve as 10
 still read "closed" no longer holds — §2.3 turned that into `UNKNOWN`, which is
 the honest answer for a ride no source reports.
 
-Two research traps are written down for the nine parks still unswept: the
+Two research traps are written down for the parks still unswept: the
 operator contradicts itself (_Dwarf City_ is filed under playgrounds and
 describes itself as a ride with wagons and a 2:30 ride time), and two of the 45
 carry ThemeParks.wiki names that appear nowhere on the operator's list.

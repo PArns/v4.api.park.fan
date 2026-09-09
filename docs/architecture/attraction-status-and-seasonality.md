@@ -336,8 +336,9 @@ That leaves the 45, and for them the answer is not a new source but
 carousel with a zero wait is *not* automatically free-flow though — it has an
 operator and can be closed — so each needs researching individually (§7).
 
-**The sweep is done, and the estimate it replaces — "many are free-flow" — was
-too high.** Every one of the 45 was researched against the operator's own pages:
+**The sweep is done, and the estimate that used to stand here — that *many* of
+the 45 would turn out free-flow — was too high.** Every one of them was
+researched against the operator's own pages:
 
 | verdict | rides |
 |---|---|
