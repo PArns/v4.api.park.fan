@@ -495,10 +495,12 @@ with the same rows.
       rules that out as evidence, and its absence from the list may equally mean
       it no longer stands, which would be `retired_at`. Needs a source either
       way; it reads `UNKNOWN` until then.
-- [ ] **The other nine parks in this table have not been swept.** Europa-Park
-      took one pass over 45 rides; Rulantica (18), Universal Studios Singapore
-      (17), the two Wet'n'Wild records (13 + 13), Busch Gardens Tampa (9) and
-      Ocean Park (7) are the same shape of work.
+- [ ] **The other parks have not been swept.** Europa-Park took one pass over 45
+      rides; the six others this item names — Rulantica (18), Universal Studios
+      Singapore (17), the two Wet'n'Wild records (13 + 13), Busch Gardens Tampa
+      (9) and Ocean Park (7) — are the same shape of work. Note the item says
+      **ten** parks and lists seven: three are unaccounted for and want finding
+      before anyone calls the backlog complete.
 
 ## Free-flow attractions & seasonality (2026-08-15)
 

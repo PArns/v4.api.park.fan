@@ -38,24 +38,33 @@ now says the key is absent, and `remaining` became a published class
 (`RemainingQuartilesDto`) instead of an inline literal the swagger plugin could
 only emit as a bare `object` with no `p25`, `median` or `p75` in it.
 
-### Changed — Europa-Park's silenced rides are worked through, and "many are free-flow" was wrong
+### Changed — Europa-Park's silenced rides are worked through, and the free-flow estimate was too high
 
-All **45** Europa-Park attractions that went quiet when ThemeParks.wiki dropped
-them on 2026-06-07 were researched one by one against the operator's own pages.
-Two more are free-flow and were curated on 2026-09-09 through
-`PATCH /v1/admin/content/attractions/:id`: _Limerick Castle_
+All **45** Europa-Park attractions that went quiet after the 2026-06-07
+ThemeParks.wiki drop and stayed quiet were researched one by one against the
+operator's own pages. Two more are free-flow and were curated on 2026-09-09
+through `PATCH /v1/admin/content/attractions/:id`: _Limerick Castle_
 (`d98a7513-2799-42ae-8bf9-1a1d07d1fc54`) and _Paul's Playboat_
 (`ed34c229-1220-4728-ba51-cc10527374ea`), each with its reason and the operator
-page on the audit row. **Neither took `curated_season_months`** — the first
-free-flow rows that correctly take none, because Europa-Park lists both under
-all four of its seasons, so they run exactly when the park runs. §7 step 3 said
-months were always needed and now says to ask.
+page on the audit row. **Neither took `curated_season_months`**, on purpose: the
+operator lists both under all four of its seasons, so they run exactly when the
+park runs. They are the first rows where the season question was put and the
+answer was "none" — §7 step 3 read as if months were always needed and now
+treats both answers as answers.
 
 That closes the sweep at **10 free-flow, 34 operated rides left alone, 1
-undecidable** — §5.2 had estimated "many". The one left is _Rocking Bridge &
-Chute_, which has no operator page to decide against (403, and absent from both
-the attraction list and the children's page); it may equally be gone, which
-would be `retired_at` rather than the flag.
+undecidable** — §5.2 had estimated "many are free-flow". The one left is
+_Rocking Bridge & Chute_, which has no operator page to decide against (403, and
+absent from both the attraction list and the children's page); it may equally be
+gone, which would be `retired_at` rather than the flag.
+
+§5.2 also gets its arithmetic straightened. The **59** it called "silenced
+attractions" is the population that could be hit at all (active rides with no
+`queue_times_entity_id`), and it splits 45 silenced + 4 EP Express stations
+**still reporting** + 10 that never reported OPERATING in the first place. The
+44 in its table is the feed-side count of what stopped arriving that day. And
+the Express stations are no longer "a genuine gap with no remedy available":
+they are the four that kept publishing.
 
 Measured the same day with the park `OPERATING`: the 45 serve as 10
 `OPERATING` and 35 `UNKNOWN`, no `CLOSED` anywhere. The premise that these rides
