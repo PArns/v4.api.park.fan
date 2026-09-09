@@ -5,9 +5,16 @@ import { Entity, PrimaryColumn, Column, Index } from "typeorm";
  *
  * **No source knows showtimes in advance.** Verified against ThemeParks.wiki's
  * live endpoint for Europa-Park (186 times for today, and beyond that only stale
- * entries reaching back to 2022) and against our own data: not one park carries a
- * park-local showtime for a future day. A visitor planning October gets nothing
- * from the feed, and the planner's `shows` field was therefore always `[]`.
+ * entries reaching back to 2022) and measured against our own history: of
+ * 15,185,105 showtime entries, only 152 are dated ahead of the snapshot that
+ * carried them, and 109 of those are past-midnight performances of that same
+ * operating day. The 43 genuinely future-dated entries sit in one Christmas
+ * week of 2025 and have no successor. The stale tail is real and large by
+ * comparison — 120,058 entries dated before their own snapshot, the oldest by
+ * 1,396 days, which is why the rebuild below filters the showtime and not just
+ * the snapshot. A visitor planning October gets nothing from the feed, and the
+ * planner's `shows` field was therefore always `[]`. The full measurement is in
+ * `docs/frontend/plan-day-endpoint.md` §8.
  *
  * So a projection is the only honest answer, and this table is what makes it
  * cheap. Computing it per request is not an option: one park's eight-week window

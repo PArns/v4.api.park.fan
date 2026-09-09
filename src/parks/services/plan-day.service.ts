@@ -263,12 +263,20 @@ export class PlanDayService {
    * The day's shows — the operator's answer where one exists, ours where it does
    * not, and never the two looking alike.
    *
-   * **No feed publishes showtimes beyond the current day.** Checked at the
-   * source rather than assumed: ThemeParks.wiki's live response for Europa-Park
-   * carries 186 start times for today and, past that, only entries it never
-   * cleared — some from 2022. Across every park in the database, not one holds a
-   * park-local showtime for a future day. So a planner asking about October gets
-   * nothing from the feed, and `shows` was an empty array for every date.
+   * **No feed publishes showtimes beyond the current day.** Measured against
+   * production over the whole retained history (snapshots 2025-12-24…2026-09-08;
+   * 15,185,105 showtime entries, 47 parks): 15,064,895 fall on the operating day
+   * their snapshot was taken on and 120,058 fall *before* it — the feed's
+   * uncleared litter, reaching 1,396 days back. Only 152 entries lead their own
+   * snapshot at all, and 109 of those are performances past midnight
+   * (00:00–05:30, Universal's late programme) that belong to the day they were
+   * published on — though nothing here unfolds them the way §5 unfolds opening
+   * hours, so `getShowtimesOnDate` does attribute them to the following day.
+   * That leaves 43 entries genuinely dated one or two days ahead, in two parks,
+   * from snapshots taken between 2025-12-23 and 2025-12-27 park-local, with no
+   * successor in the eight months since. Three per million is not a horizon to
+   * build on, so a planner asking about October gets nothing from the feed, and
+   * `shows` was an empty array for every future date.
    *
    * The projection is the show's own recent behaviour: the times it ran at on
    * the most recent day with the SAME WEEKDAY. That distinction is not decorative
