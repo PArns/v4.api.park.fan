@@ -354,8 +354,9 @@ this table exists to end.
 **The four Express stations are no longer a gap.** This section called them "a
 genuine gap with no remedy available" — measurably not so any more: they are the
 only four of the 59 that ever recorded a wait above zero, up to 65 minutes, and
-they are also the only four still publishing. Whatever silenced the rest did not
-keep them.
+they are also the only four still reporting OPERATING. (The other ten still
+publish rows — they just never say anything but CLOSED.) Whatever silenced the
+rest did not keep them.
 
 That leaves the 45, and for them the answer is not a new source but
 **curation**: some are free-flow and belong under `open_with_park` (§2.2). A
