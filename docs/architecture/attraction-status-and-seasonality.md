@@ -319,11 +319,16 @@ no `queue_times_entity_id`, which is what the drop could reach at all. Split on
 |---|---|
 | **45** | went quiet and stayed quiet: >100 OPERATING rows before 2026-06-07 13:18Z, none since. This is the sweep below. |
 | **4** | the EP Express stations — **still reporting OPERATING**, 11 500–12 400 rows each since the drop. |
-| **10** | never reported OPERATING in their whole history, before or after; every row they have is CLOSED. Seven are winter-only (the two Christmas markets, the ice rink, Winterland, Skitty World, Niflheim, FIS Snowkidz, Winter World of Wonder). *Vintage Cars* and *Yomi Adventure Trail* are not, and the operator lists both as running — a separate gap, tracked in `todo.md`. |
+| **10** | never reported OPERATING in their whole history, before or after; every row they have is CLOSED. Eight are winter-only (the two Christmas markets, the ice rink, Children's carousel Winterland, Skitty World Nordic, Day maze 'Niflheim', FIS Snowkidz, Winter World of Wonder). *Vintage Cars* and *Yomi Adventure Trail* are not, and the operator lists both as running — a separate gap, tracked in `todo.md`. |
 
 ```sql
 -- the 45. The 13:18Z / 14:00Z pair straddles the drop; the >100 floor is what
 -- makes "went quiet" mean a ride that was being reported, not one we barely saw.
+-- `rows_after` is every row of any status, and it is meant to be large: §2.3's
+-- reconciliation keeps writing CLOSED. What defines the set is the second HAVING
+-- clause, "no OPERATING row since" — not this column.
+-- `GROUP BY a.name` is safe HERE and not in general: all 96 active Europa-Park
+-- attractions have distinct names. §5.4 is a park where they do not.
 WITH ep AS (SELECT id FROM parks WHERE slug = 'europa-park' AND "citySlug" = 'rust')
 SELECT a.name,
   count(*) FILTER (WHERE q.status = 'OPERATING' AND q.timestamp <  '2026-06-07 13:18Z') AS op_before,
@@ -340,11 +345,11 @@ ORDER BY op_before DESC;
 The **44** in the table above is the feed-side count of what stopped arriving
 that day; 45 is what stayed gone. Near-identical lists, different questions.
 
-Run without the `queue_times_entity_id` restriction the same cut returns **46**,
-and the extra row — *'Bellevue' Ferris Wheel*, 81 OPERATING rows before and none
-after — is dual-sourced, so it was never in the 59 and is not part of this
-incident. Two different populations, which is exactly the confusion this table
-exists to end.
+Drop the `> 100` floor to `> 0` and the same cut returns **46**. The extra row is
+*'Bellevue' Ferris Wheel* with 81 OPERATING rows before the drop and none after
+— and it is dual-sourced, so it was never in the 59 to begin with. A different
+population and a different threshold, which is exactly the pair of confusions
+this table exists to end.
 
 **The four Express stations are no longer a gap.** This section called them "a
 genuine gap with no remedy available" — measurably not so any more: they are the
@@ -384,10 +389,12 @@ been researched before them, all four needed months, which is what made §7 step
 read as if months were always the answer. They are not.
 
 (The other 26 month-less rows are not evidence either way. Only eight
-`openWithPark` writes exist in `admin_audit_log` at all — two on 2026-08-20/21,
-four on 2026-09-08, these two — because the sweeps before that followed §7's old
-advice and wrote the column with a raw `UPDATE`, which is the reason step 5 now
-says otherwise.)
+`openWithPark` writes exist in `admin_audit_log` at all — two for *Ice skate
+hire* on 2026-08-20/21, the four §7a lists just after midnight on 2026-09-09,
+and these two — because the sweeps before that followed §7's old advice and
+wrote the column with a raw `UPDATE`, which is the reason step 5 now says
+otherwise. Audit dates in this document are park-local; those four are
+2026-09-08 22:38 UTC.)
 
 The one that could not be decided is **Rocking Bridge & Chute**: it is on
 neither the operator's attraction list nor its children's page, and its own page
@@ -499,7 +506,11 @@ SELECT min(timestamp)::date, max(timestamp)::date FROM queue_data;
    set **`curated_is_seasonal = true`** beside them. The pair, not just the
    months. If it produced none, write **neither**: `curated_is_seasonal = true`
    over an empty month list makes `resolveCuratedFacts` report `isSeasonal: true`
-   for an area that runs all year, which is §3.3 backwards.
+   for an area that runs all year, which is §3.3 backwards. Leaving both null is
+   right — the resolved answer then falls back to the synced `is_seasonal`, and
+   Step 2b clears exactly this shape. `curated_is_seasonal = **false**` is the
+   deliberate pin for the one case where that is not enough: a free-flow area the
+   detector keeps calling seasonal because the park shut around it.
    `resolveCuratedFacts` does infer `isSeasonal: true` from non-empty curated
    months alone, so the flag looks redundant — it is not. Step 2b of the nightly
    `detect-seasonal` runs
