@@ -64,7 +64,7 @@ Historical aggregates. **`schemaVersion: 3`.**
 | `years`         | int (1..5)  | 2       | Look-back window size |
 | `topN`          | int (1..50) | 10      | Number of top attractions |
 | `minSampleDays` | int (≥0)    | 30      | Below this, `meta.displayable` becomes `false` |
-| `minAttractionDays` | int (≥1) | 20      | Measured days a ride needs to enter `topAttractions`. `0` is not "no floor" — it falls back to the default, as `minSampleDays=0` does |
+| `minAttractionDays` | int        | 20      | Measured days a ride needs to enter `topAttractions`. Not clamped the way you would expect: `0` falls back to the default (as `minSampleDays=0` does), while a **negative** value clamps to 0 and removes the floor entirely — which is the one-measured-day ranking the default exists to prevent |
 
 ### Response
 
