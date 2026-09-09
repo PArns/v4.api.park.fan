@@ -170,6 +170,9 @@ describe("Park Analytics (e2e)", () => {
           expect(body.meta).toHaveProperty("generatedAt");
           expect(body.meta.schemaVersion).toBe(3);
           expect(typeof body.meta.displayable).toBe("boolean");
+          // The v3 additions themselves, so the version literal above is not
+          // the only thing standing between this name and a v2 response.
+          expect(typeof body.meta.minAttractionDays).toBe("number");
 
           const VALID_LEVELS = [
             "very_low",
@@ -186,10 +189,23 @@ describe("Park Analytics (e2e)", () => {
           for (const d of body.byDayOfWeek) {
             expect(VALID_LEVELS).toContain(d.avgCrowdLevel);
           }
-          // Explicit 1-based rank instead of relying on array index
-          body.topAttractions.forEach((a: { rank: number }, i: number) => {
-            expect(a.rank).toBe(i + 1);
-          });
+          // Explicit 1-based rank instead of relying on array index; `land`
+          // and `attractionType` are the v3 row fields — always emitted, null
+          // where the park publishes none, so presence is the assertion.
+          body.topAttractions.forEach(
+            (
+              a: {
+                rank: number;
+                land: string | null;
+                attractionType: string | null;
+              },
+              i: number,
+            ) => {
+              expect(a.rank).toBe(i + 1);
+              expect(a).toHaveProperty("land");
+              expect(a).toHaveProperty("attractionType");
+            },
+          );
         });
     });
 

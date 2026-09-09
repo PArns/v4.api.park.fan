@@ -64,6 +64,7 @@ Historical aggregates. **`schemaVersion: 3`.**
 | `years`         | int (1..5)  | 2       | Look-back window size |
 | `topN`          | int (1..50) | 10      | Number of top attractions |
 | `minSampleDays` | int (≥0)    | 30      | Below this, `meta.displayable` becomes `false` |
+| `minAttractionDays` | int (≥0) | 20      | Measured days a ride needs to enter `topAttractions` |
 
 ### Response
 
@@ -92,6 +93,10 @@ Historical aggregates. **`schemaVersion: 3`.**
     avgWaitP90: number;
     sampleDays: number;
     rank: number;             // NEW — explicit 1-based rank (not array index)
+    land?: string | null;     // NEW in 3 — curated wins; absent for whole parks,
+                              // so render the column only if a row carries it
+    attractionType?: string | null; // NEW in 3 — free-text `attraction_type`,
+                              // NOT the glossary term ids in ride profiles
   }[];
   meta: {
     parkSlug: string;
@@ -102,6 +107,7 @@ Historical aggregates. **`schemaVersion: 3`.**
     displayable: boolean;     // NEW — render gate (totalSampleDays >= minSampleDays)
     generatedAt: string;      // NEW — ISO 8601 UTC, when the aggregate was computed
     schemaVersion: 3;         // NEW
+    minAttractionDays: number; // NEW in 3 — echoes the query parameter
   };
 }
 ```
