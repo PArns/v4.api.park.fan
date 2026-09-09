@@ -1,5 +1,14 @@
-import { DOWNTIME_GATES, decideProfile } from "./downtime-profile.service";
+import { Test, TestingModule } from "@nestjs/testing";
+import { getRepositoryToken } from "@nestjs/typeorm";
+import { DataSource } from "typeorm";
+import {
+  DOWNTIME_GATES,
+  DowntimeProfileService,
+  decideProfile,
+} from "./downtime-profile.service";
 import type { ProfileInputs } from "./downtime-profile.service";
+import { AttractionDowntimeProfile } from "./entities/attraction-downtime-profile.entity";
+import { ParkDowntimeCoverage } from "./entities/park-downtime-coverage.entity";
 import { isDurationUsable } from "../queues/processors/downtime-reconstruction.processor";
 
 /**
@@ -256,5 +265,288 @@ describe("isDurationUsable", () => {
       lastMergedAt: new Date("2020-01-01T00:00:00Z"),
     };
     expect(decideProfile(merged, "reports").reason).toBe("recently_merged");
+  });
+});
+
+/**
+ * The rebuild itself, over mocked repositories.
+ *
+ * `decideProfile` above is pure and gets the gate-by-gate treatment. What it
+ * cannot see is the three things that decide which rows exist at all: whether a
+ * ride that dropped out loses its row, whether a ride whose park publishes no
+ * hours ever gets one, and whether the date beside the longest outage survives
+ * the trip from the query into the write.
+ */
+describe("DowntimeProfileService — the rebuild's population", () => {
+  const REPORTING_PARK = "11111111-1111-4111-8111-111111111111";
+  const SCHEDULE_LESS_PARK = "22222222-2222-4222-8222-222222222222";
+  const NOT_CAPABLE_PARK = "33333333-3333-4333-8333-333333333333";
+
+  const LIVE_RIDE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const SCHEDULE_LESS_RIDE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+  const LONGEST_STARTED_AT = "2026-07-12T09:30:00.000Z";
+
+  /** A park row shaped so the regime falls out of the two flags under test. */
+  const coverageRow = (
+    parkId: string,
+    { downCapable = true, hasSchedule = true } = {},
+  ) => ({
+    parkId,
+    downCapable,
+    hasSchedule,
+    ridesTracked: 10,
+    ridesWithOutages: 4,
+    outages: 40,
+    singleReadingSpells: 2,
+    onTheHourShare: 0,
+    // Under `minEdgesForResolution`, so the artefact test stays silent and
+    // cannot decide the regime instead of the flag being tested.
+    resolutionEdges: 0,
+    observedOperatingHours: 2000,
+    // Not blind: this park has said DOWN, so `never_reports` cannot fire.
+    hasEverReportedDown: true,
+    medianSpellMinutes: 30,
+  });
+
+  /** A ride over every gate, so a withheld verdict is the test's own doing. */
+  const publishableRow = (attractionId: string, parkId: string) => ({
+    attractionId,
+    parkId,
+    operatingMinutes: 200 * 60,
+    downMinutes: 400,
+    observedDays: 80,
+    outages: 40,
+    usableDurations: 30,
+    censored: 4,
+    firstHalf: 20,
+    secondHalf: 20,
+    worksMinutes: 0,
+    medianMinutes: 25,
+    longestMinutes: 200,
+    longestStartedAt: LONGEST_STARTED_AT,
+    lastMergedAt: null,
+    firstObservedDay: "2025-01-01",
+    lifetimeObservedDays: 400,
+  });
+
+  let service: DowntimeProfileService;
+  let query: jest.Mock;
+  let profileUpsert: jest.Mock;
+  let managerQuery: jest.Mock;
+  /** Every write in order, so "delete before upsert" is checkable. */
+  let writes: string[];
+
+  const build = async (coverageRows: unknown[], profileRows: unknown[]) => {
+    writes = [];
+    query = jest
+      .fn()
+      .mockResolvedValueOnce(coverageRows)
+      .mockResolvedValueOnce(profileRows);
+    profileUpsert = jest.fn().mockImplementation(() => {
+      writes.push("upsert");
+      return Promise.resolve(undefined);
+    });
+    managerQuery = jest.fn().mockImplementation(() => {
+      writes.push("delete");
+      return Promise.resolve(undefined);
+    });
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DowntimeProfileService,
+        {
+          provide: DataSource,
+          useValue: {
+            query,
+            transaction: (cb: (m: unknown) => Promise<void>) =>
+              cb({
+                query: managerQuery,
+                getRepository: () => ({ upsert: profileUpsert }),
+              }),
+          },
+        },
+        {
+          provide: getRepositoryToken(AttractionDowntimeProfile),
+          useValue: { upsert: jest.fn() },
+        },
+        {
+          provide: getRepositoryToken(ParkDowntimeCoverage),
+          useValue: { upsert: jest.fn() },
+        },
+      ],
+    }).compile();
+    service = module.get(DowntimeProfileService);
+  };
+
+  /** The rows handed to the profile upsert, flattened across its batches. */
+  const saved = () =>
+    profileUpsert.mock.calls.flatMap(
+      (call) => call[0] as Record<string, unknown>[],
+    );
+
+  describe("stale rows", () => {
+    it("deletes the profiles of rides that dropped out, before writing", async () => {
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [publishableRow(LIVE_RIDE, REPORTING_PARK)],
+      );
+      await service.rebuild(null);
+
+      expect(managerQuery).toHaveBeenCalledTimes(1);
+      const [sql, params] = managerQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain("DELETE FROM attraction_downtime_profiles");
+      // Scoped both ways: the parks this rebuild produced rows for, minus the
+      // rides it kept. A retired ride in REPORTING_PARK is what falls between.
+      expect(params[0]).toEqual([REPORTING_PARK]);
+      expect(params[1]).toEqual([LIVE_RIDE]);
+
+      // Order is the point. An upsert that lands first would be deleted again.
+      expect(writes).toEqual(["delete", "upsert"]);
+    });
+
+    it("scopes the delete to the parks the rebuild actually produced rows for", async () => {
+      // Two parks known to coverage, one of them with no ride in the result.
+      // Deleting across both would erase the second park's profiles on the
+      // strength of a query that said nothing about it.
+      await build(
+        [coverageRow(REPORTING_PARK), coverageRow(NOT_CAPABLE_PARK)],
+        [publishableRow(LIVE_RIDE, REPORTING_PARK)],
+      );
+      await service.rebuild(null);
+
+      const params = managerQuery.mock.calls[0][1] as unknown[];
+      expect(params[0]).toEqual([REPORTING_PARK]);
+      expect(params[0]).not.toContain(NOT_CAPABLE_PARK);
+    });
+
+    it("deletes nothing when the rebuild produced no rows at all", async () => {
+      // The dangerous case: an exposure table that failed to build returns an
+      // empty population, and a whole-table delete would answer
+      // not_down_capable for every ride in the catalogue the next morning.
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      expect(managerQuery).not.toHaveBeenCalled();
+      expect(profileUpsert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a park that publishes no hours", () => {
+    it("asks the population query for that park's rides, and only that park's", async () => {
+      await build(
+        [
+          coverageRow(REPORTING_PARK),
+          coverageRow(SCHEDULE_LESS_PARK, { hasSchedule: false }),
+          coverageRow(NOT_CAPABLE_PARK, { downCapable: false }),
+        ],
+        [],
+      );
+      await service.rebuild(null);
+
+      const [sql, params] = query.mock.calls[1] as [string, unknown[]];
+      // not_capable stays out: a missing row already says exactly that, so a
+      // written one would only repeat it at the cost of a row per ride.
+      expect(params[4]).toEqual([SCHEDULE_LESS_PARK]);
+      expect(sql).toContain("sched AS (");
+      expect(sql).toContain("UNION ALL");
+    });
+
+    it("resolves the added ride to no_schedule and not to a thinness reason", async () => {
+      // The population fix itself is the test above — this one is about what
+      // the added rows then say. They arrive with zero exposure and zero
+      // observed days, which is also what `thin_exposure` is measured on, so
+      // the regime check has to win. It does, because it runs first; this
+      // pins that ordering against the one population that depends on it.
+      //
+      // Without a row at all the read path reaches toDowntimeBlock(null) and
+      // answers not_down_capable — a statement about the park's SOURCE, which
+      // here is capable. The six no_schedule translations were unreachable.
+      await build(
+        [coverageRow(SCHEDULE_LESS_PARK, { hasSchedule: false })],
+        [
+          {
+            ...publishableRow(SCHEDULE_LESS_RIDE, SCHEDULE_LESS_PARK),
+            operatingMinutes: 0,
+            downMinutes: 0,
+            observedDays: 0,
+          },
+        ],
+      );
+      await service.rebuild(null);
+
+      expect(saved()).toHaveLength(1);
+      expect(saved()[0]).toMatchObject({
+        attractionId: SCHEDULE_LESS_RIDE,
+        publishable: false,
+        withheldReason: "no_schedule",
+      });
+    });
+  });
+
+  describe("the longest outage's date", () => {
+    it("writes it beside the minutes instead of a hardcoded null", async () => {
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [publishableRow(LIVE_RIDE, REPORTING_PARK)],
+      );
+      await service.rebuild(null);
+
+      expect(saved()[0]).toMatchObject({
+        longestMinutes: 200,
+        longestStartedAt: new Date(LONGEST_STARTED_AT),
+      });
+    });
+
+    it("computes it in the same pass as the minutes, tie-broken to the newest", async () => {
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      const sql = query.mock.calls[1][0] as string;
+      expect(sql).toContain("AS longest_started_at");
+      expect(sql).toContain("o.started_at DESC");
+    });
+
+    it("withholds the date wherever it withholds the minutes", async () => {
+      // The doc publishes the two as a pair. A date with no duration beside it
+      // is a sentence with a hole in it.
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [
+          {
+            ...publishableRow(LIVE_RIDE, REPORTING_PARK),
+            outages: DOWNTIME_GATES.minOutages - 1,
+          },
+        ],
+      );
+      await service.rebuild(null);
+
+      expect(saved()[0]).toMatchObject({
+        publishable: false,
+        withheldReason: "thin_events",
+        longestMinutes: null,
+        longestStartedAt: null,
+      });
+    });
+
+    it("leaves it null when no usable outage produced one", async () => {
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [
+          {
+            ...publishableRow(LIVE_RIDE, REPORTING_PARK),
+            longestMinutes: null,
+            longestStartedAt: null,
+          },
+        ],
+      );
+      await service.rebuild(null);
+
+      expect(saved()[0]).toMatchObject({
+        publishable: true,
+        longestMinutes: null,
+        longestStartedAt: null,
+      });
+    });
   });
 });
