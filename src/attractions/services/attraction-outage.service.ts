@@ -8,6 +8,8 @@ import {
 } from "../../common/utils/outage-rows.sql";
 import { DowntimeRecoveryCurve } from "../../analytics/entities/downtime-recovery-curve.entity";
 import { CURRENT_CLOSURE_GAP_SQL } from "../../common/utils/closure-gap.sql";
+import { upcomingOperatingWindowsSql } from "../../common/utils/park-open-window.sql";
+import type { OperatingWindow } from "../../analytics/utils/operating-clock.util";
 import type { OutageSignal } from "../../analytics/entities/attraction-outage.entity";
 import {
   estimateOutage,
@@ -178,6 +180,79 @@ export class AttractionOutageService {
 
   private static readonly CURVE_TTL_MS = 30 * 60 * 1000;
 
+  /**
+   * How far ahead the calendar is read to place a recovery window.
+   *
+   * The largest upper quartile the measured curve resolves is 460 operating
+   * minutes — under eight operating hours, so one or two operating days for a
+   * park that opens daily. Fourteen covers a park that only opens at weekends,
+   * and stops short of pretending we can place an outage in a park that shut
+   * for the season: there the field is absent, which is the same answer a park
+   * with no published hours gets and for the same reason.
+   */
+  private static readonly WINDOW_HORIZON_DAYS = 14;
+
+  /**
+   * Upcoming operating windows per park, cached in process.
+   *
+   * Same reasoning as the curve cache one field up, one degree weaker: a park's
+   * schedule changes rarely, and a list half an hour old still describes the
+   * same days. The cached list is keyed on the park AND reused only for an
+   * `asOf` at or after the one it was fetched for and within the TTL — a spec
+   * pinning a fixed instant must not be answered from a list fetched for a
+   * different one, and wall-clock `Date.now()` would decide that silently.
+   */
+  private windowCache = new Map<
+    string,
+    { asOf: number; windows: OperatingWindow[] }
+  >();
+
+  /**
+   * The park's windows from `asOf` forward, or an empty list.
+   *
+   * Empty is a real answer and not a failure: 21 parks publish no hours at all,
+   * and `recoveryWindowFrom` withholds the field on an empty list. A failed
+   * query answers the same way on purpose — the window is a nicety on top of an
+   * estimate that is itself optional, and it may not cost the outage line the
+   * two statements above it just placed.
+   */
+  private async loadUpcomingWindows(
+    parkId: string,
+    asOf: Date,
+  ): Promise<OperatingWindow[]> {
+    const cached = this.windowCache.get(parkId);
+    const age = cached ? asOf.getTime() - cached.asOf : Infinity;
+    if (cached && age >= 0 && age < AttractionOutageService.CURVE_TTL_MS) {
+      return cached.windows;
+    }
+
+    const until = new Date(
+      asOf.getTime() +
+        AttractionOutageService.WINDOW_HORIZON_DAYS * 24 * 60 * 60 * 1000,
+    );
+    try {
+      const rows: Array<{ opensAt: Date | string; closesAt: Date | string }> =
+        await this.queueDataRepository.manager.query(
+          upcomingOperatingWindowsSql(),
+          [[parkId], asOf, until],
+        );
+      const windows = rows.map((row) => ({
+        opensAt: new Date(row.opensAt),
+        closesAt: new Date(row.closesAt),
+      }));
+      this.windowCache.set(parkId, { asOf: asOf.getTime(), windows });
+      return windows;
+    } catch (error) {
+      this.logger.warn(
+        `Upcoming windows unavailable for park ${parkId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      // Deliberately not cached: a failure is not a schedule.
+      return [];
+    }
+  }
+
   private async loadCurves(): Promise<{
     byPark: Map<string, DowntimeRecoveryCurve[]>;
     pooled: DowntimeRecoveryCurve[];
@@ -301,6 +376,19 @@ export class AttractionOutageService {
         // row -- eight rides down meant eight identical filterings.
         const downCurves = this.curvesFor(curves, park.id, "down");
 
+        // The calendar read is one more query, so it is asked for only where it
+        // could answer: a park with no published hours gets no estimate at all
+        // one branch down, and paying for its schedule would be paying for a
+        // row that does not exist.
+        const windows = rows.some(
+          (row) =>
+            row.hasWindows &&
+            Number.isFinite(Number(row.elapsedOperatingMinutes)),
+        )
+          ? await this.loadUpcomingWindows(park.id, asOf)
+          : [];
+        const clock = { windows, asOf };
+
         for (const row of rows) {
           const elapsed = Number(row.elapsedOperatingMinutes);
           out.set(row.attractionId, {
@@ -314,7 +402,7 @@ export class AttractionOutageService {
             // there with "just started".
             estimate:
               row.hasWindows && Number.isFinite(elapsed)
-                ? estimateOutage(downCurves, elapsed)
+                ? estimateOutage(downCurves, elapsed, clock)
                 : undefined,
           });
         }

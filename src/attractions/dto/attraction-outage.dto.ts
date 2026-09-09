@@ -31,9 +31,37 @@ import {
  * there, so a client that renders only the median will silently show nothing on
  * exactly the long outages a visitor most wants to know about.
  *
+ * `remaining` counts **operating** minutes and may never be added to a clock.
+ * `recoveryWindow` is that same pair already placed on the park's calendar, and
+ * it is the only one of the two a client may render as a time.
+ *
  * Every sentence built on this says *reported* — the numerator is
  * "themeparks-wiki said DOWN", not "the ride was broken".
  */
+export class RecoveryWindowDto {
+  @ApiProperty({
+    description:
+      "When the 25th percentile falls, ISO 8601 UTC — the earliest end this " +
+      "estimate is willing to name. Placed on the park's opening calendar, so " +
+      "an outage with more operating minutes left than the park has hours " +
+      "left today lands on the next opening day.",
+    example: "2026-09-09T14:35:00.000Z",
+  })
+  from: string;
+
+  @ApiProperty({
+    description:
+      "When the 75th percentile falls, ISO 8601 UTC. **Absent whenever there " +
+      "is no upper bound to give** — past roughly two hours the curve stops " +
+      "resolving the upper quartile, and the park's published calendar may not " +
+      "reach far enough either. Render that as an open range, never as a " +
+      "missing value to fill in.",
+    required: false,
+    nullable: true,
+  })
+  to: string | null;
+}
+
 export class OutageEstimateDto {
   @ApiProperty({
     description:
@@ -61,13 +89,30 @@ export class OutageEstimateDto {
 
   @ApiProperty({
     description:
-      "Remaining operating minutes at the 25th, 50th and 75th percentile. " +
-      "`p75` is null past roughly two hours, where the curve stops resolving " +
-      'the upper quartile — render that as an open range ("ab 2:45 h"), and ' +
-      "never render the median without the spread around it.",
+      "Remaining **operating** minutes at the 25th, 50th and 75th percentile — " +
+      "the park's own open minutes, so this is not a duration that may be " +
+      "added to a clock. Use `recoveryWindow` for that. `p75` is **absent** " +
+      "past roughly two hours, where the curve stops resolving the upper " +
+      'quartile — render that as an open range ("ab 2:45 h"), and never render ' +
+      "the median without the spread around it.",
     required: false,
   })
   remaining?: { p25: number; median: number; p75: number | null };
+
+  @ApiProperty({
+    description:
+      "The same quartiles as instants: when the outage is expected to be over, " +
+      "on the wall clock. Derived from `remaining.p25`/`p75` over the park's " +
+      "opening calendar, because operating minutes cannot be turned into a " +
+      "clock time without it — an outage with two operating hours left, in a " +
+      "park shutting in twenty minutes, ends tomorrow morning. **Absent when " +
+      "the park publishes no opening hours**, and absent when its calendar " +
+      "does not reach far enough; there is deliberately no wall-clock fallback, " +
+      "because that would answer a different question.",
+    required: false,
+    type: () => RecoveryWindowDto,
+  })
+  recoveryWindow?: RecoveryWindowDto;
 
   @ApiProperty({
     description:
@@ -158,6 +203,7 @@ export function toOutageDto(
           recoveryWithin30: outage.estimate.recoveryWithin30,
           recoveryWithin60: outage.estimate.recoveryWithin60,
           remaining: outage.estimate.remaining,
+          recoveryWindow: outage.estimate.recoveryWindow,
           basis: outage.estimate.basis,
           // `bucketMinutes` and `sampleSize` deliberately do NOT travel: they
           // are inputs to the decision, and this endpoint answers ~40 000 ride

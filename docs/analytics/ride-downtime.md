@@ -676,6 +676,55 @@ The copy names the condition — _„die schon so lange dauern"_ — because a r
 has to be able to see that the estimate is about this outage's history rather
 than about outages in general.
 
+### The window on the clock (`recoveryWindow`)
+
+`remaining` is in **operating** minutes, so it is not a duration anybody may add
+to a clock. An outage with 120 operating minutes left, in a park that shuts in
+twenty, ends 100 minutes into tomorrow's opening — not two hours from now. That
+is the same asymmetry that makes counting in operating minutes worth doing at
+all: a closed park is a pause.
+
+Turning the one into the other needs the park's opening calendar, and **no
+renderer has it.** On the frontend `AttractionCard` is drawn from eight places
+(park page, favourites, homepage, blog widgets, `/ui`, the guide) and not one of
+them passes a schedule down. The ride page would have `todaySchedule`, so doing
+it there and nowhere else would make the same outage read as a duration on the
+park page and as a clock time one click later. The API already holds the
+calendar — it counts `elapsedMinutes` on it — so the arithmetic is done once,
+here.
+
+`estimate.recoveryWindow` is `{ from, to }`, both ISO 8601 UTC, derived from
+`remaining.p25` and `remaining.p75` by walking the park's flattened `OPERATING`
+windows forward from now (`projectOperatingMinutes`, the pure forward twin of
+the backwards sum in `trailingOutageWithElapsedSql()`; both read the windows
+`parkOpenWindowCtes()` produces, so there is one definition of a closing time and
+not two).
+
+Four rules, one per case a spec pins:
+
+- **It stays a pair.** A single instant would read as a promise, and the
+  distribution is heavy-tailed enough that the median alone is wrong in the
+  direction that costs a visitor their afternoon.
+- **`to` is absent when there is no upper bound to give** — past roughly two
+  hours the curve stops resolving the upper quartile, and a park's published
+  calendar may not reach far enough either. Both render as an open range.
+- **The whole field is absent when the park publishes no hours**, or when the
+  calendar does not reach even the lower quartile (a park shut for the season).
+  There is deliberately no wall-clock fallback: it would answer a question
+  nobody asked, and it would answer it most confidently for the parks we know
+  least about.
+- **The horizon is 14 days.** The largest upper quartile the curve resolves is
+  460 operating minutes, under eight operating hours; fourteen days covers a park
+  that only opens at weekends and stops short of pretending we can place an
+  outage in a park that has shut for the winter.
+
+**A `null` never reaches a client here.** `ExcludeNullInterceptor` deletes every
+null-valued key from every response outside `/v1/admin/*` and `?debug=true`, so
+`to: null` arrives as a missing key — which is also why `remaining.p75` is
+measured absent on production while its type says `number | null`. Omitted is
+therefore the only consistent form on offer, and it is what both fields already
+do.
+
 ### The one caveat that remains
 
 `elapsedMinutes` grows even if the outage has secretly ended: without

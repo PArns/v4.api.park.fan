@@ -6,6 +6,31 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — the outage estimate says when, not just how much longer
+
+`estimate.recoveryWindow` (`{ from, to }`, ISO 8601 UTC) on the outage object.
+`remaining` counts **operating** minutes, so it never was a duration a renderer
+could add to a clock: an outage with two operating hours left, in a park shutting
+in twenty minutes, ends tomorrow morning. Placing it needs the park's opening
+calendar, and no renderer has one — `AttractionCard` is drawn from eight places
+and not one of them passes a schedule — so the API, which already counts
+`elapsedMinutes` on that calendar, walks it forward instead.
+
+`projectOperatingMinutes` (`analytics/utils/operating-clock.util.ts`) is the
+forward twin of the backwards sum in `trailingOutageWithElapsedSql()`, over the
+same windows `parkOpenWindowCtes()` flattens, so there is one definition of a
+closing time rather than two. `to` is withheld where the curve does not resolve
+the upper quartile (past ~2 h) or the calendar does not reach it; the whole field
+is withheld for a park that publishes no hours or one shut past the 14-day
+horizon. No wall-clock fallback: it would be most confident about the parks we
+know least about. `remaining` is unchanged.
+
+One documented claim was wrong and is corrected with it: `remaining.p75` is
+typed `number | null` and the DTO said it arrives as `null`, but
+`ExcludeNullInterceptor` strips every null-valued key outside `/v1/admin/*` and
+`?debug=true`, so it has always arrived as a **missing key**. That settles the
+form for the new field too — omitted, like everything else on this surface.
+
 ### Changed — the four held free-flow playgrounds are curated
 
 `curated_season_months` and `open_with_park` were curated on 2026-09-09 for Europa-Park's

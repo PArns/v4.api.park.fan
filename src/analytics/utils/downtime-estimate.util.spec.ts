@@ -121,3 +121,61 @@ describe("estimateOutage", () => {
     expect(estimateOutage({ park: [], pooled }, NaN)).toBeUndefined();
   });
 });
+
+describe("estimateOutage — the recovery window", () => {
+  const asOf = new Date("2026-09-09T13:00:00.000Z");
+  const windows = [
+    {
+      opensAt: new Date("2026-09-09T08:00:00.000Z"),
+      closesAt: new Date("2026-09-09T18:00:00.000Z"),
+    },
+    {
+      opensAt: new Date("2026-09-10T08:00:00.000Z"),
+      closesAt: new Date("2026-09-10T18:00:00.000Z"),
+    },
+  ];
+
+  it("places the quartiles on the calendar when one is handed over", () => {
+    // The 60-minute bucket: p25 25, p75 255, both inside today.
+    const e = estimateOutage({ park: [], pooled }, 60, { windows, asOf });
+    expect(e?.recoveryWindow).toEqual({
+      from: "2026-09-09T13:25:00.000Z",
+      to: "2026-09-09T17:15:00.000Z",
+    });
+    // And the operating-minute pair is untouched beside it: the frontend still
+    // renders `remaining` until it moves over.
+    expect(e?.remaining).toEqual({ p25: 25, median: 70, p75: 255 });
+  });
+
+  it("carries a window past today's closing rather than into the night", () => {
+    // 17:20, park shuts at 18:00. The 120-minute bucket's p25 of 50 operating
+    // minutes lands ten minutes into tomorrow, not at 18:10 tonight.
+    const e = estimateOutage({ park: [], pooled }, 120, {
+      windows,
+      asOf: new Date("2026-09-09T17:20:00.000Z"),
+    });
+    expect(e?.recoveryWindow).toEqual({
+      from: "2026-09-10T08:10:00.000Z",
+      to: null,
+    });
+  });
+
+  it("omits the window, not the estimate, when no calendar is handed over", () => {
+    // A park with no published hours still gets its probabilities: the
+    // recovery share is measured in operating minutes on both sides and does
+    // not need a clock.
+    const e = estimateOutage({ park: [], pooled }, 60);
+    expect(e).toBeDefined();
+    expect(e?.recoveryWindow).toBeUndefined();
+    expect(e?.recoveryWithin30).toBeCloseTo(0.298);
+  });
+
+  it("omits the window where the curve gave no quartiles to place", () => {
+    // Nothing to derive it from, and a window built off the median alone would
+    // be the single instant the pair exists to avoid.
+    const thin = [row([5, 128412, 0.542, 0.705, null, null, null])];
+    const e = estimateOutage({ park: [], pooled: thin }, 30, { windows, asOf });
+    expect(e?.remaining).toBeUndefined();
+    expect(e?.recoveryWindow).toBeUndefined();
+  });
+});

@@ -116,6 +116,33 @@ export function parkOpenWindowCtes(
 }
 
 /**
+ * The park's flattened `OPERATING` windows that are not over yet, ascending.
+ *
+ * The forward half of the same calendar `trailingOutageWithElapsedSql()` reads
+ * backwards, and it goes through {@link parkOpenWindowCtes} for exactly that
+ * reason: a second window definition is how a park ends up with two different
+ * closing times depending on which question was asked. The repair, the merge and
+ * the operating-day anchoring are all inherited.
+ *
+ * A window that is currently open is included — the bound is on the CLOSING, so
+ * `[opens_at, closes_at)` reaching past `$2` qualifies however long ago it
+ * opened. That is what lets a projection start counting inside today.
+ *
+ * Parameters: `$1` uuid[] park filter, `$2` the instant to look forward from,
+ * `$3` the far end of the horizon.
+ */
+export function upcomingOperatingWindowsSql(): string {
+  return `
+  WITH ${parkOpenWindowCtes({ wikiOnly: true })}
+  SELECT w.opens_at  AS "opensAt",
+         w.closes_at AS "closesAt"
+    FROM win w
+   WHERE w.closes_at > $2::timestamptz
+   ORDER BY w.opens_at
+`;
+}
+
+/**
  * The SQL twin of `normalizeClosingTime()`.
  *
  * A plausible window (positive and at most 24 hours) is returned untouched,
