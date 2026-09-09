@@ -396,15 +396,103 @@ SELECT min(timestamp)::date, max(timestamp)::date FROM queue_data;
 1. **Research it against the operator's own pages** — never from model
    knowledge. A name pattern is not evidence: Toverland's "Kletterparcours"
    looked like a climbing net and was a harnessed high-ropes course with a
-   140 cm minimum, demolished after 2026-11-02.
+   140 cm minimum, demolished after 2025-11-02.
 2. Confirm it has no queue, no ride vehicle, no separate ticket.
-3. Establish **seasonality**. If it is seasonal and its park is open year-round,
-   it needs `season_months` before the flag is safe — otherwise a snow
-   playground reads open in July.
-4. `UPDATE attractions SET open_with_park = true WHERE ...`
-5. Evict the park's `park:integrated:<parkId>` Redis key. A single key, not a
-   global flush — cold rebuilds have saturated the DB before.
+3. Establish **seasonality**. If the park keeps running while the area does not
+   — which is the case for every free-flow row curated so far, whether or not
+   the park itself is open year-round — it needs months before the flag is safe,
+   or a snow playground reads open in July. See §7a.
+4. Write the months to **`curated_season_months`** and set
+   **`curated_is_seasonal = true`** beside them. The pair, not just the months.
+   `resolveCuratedFacts` does infer `isSeasonal: true` from non-empty curated
+   months alone, so the flag looks redundant — it is not. Step 2b of the nightly
+   `detect-seasonal` runs
+   `UPDATE attractions SET is_seasonal = false WHERE open_with_park AND is_seasonal
+   AND season_months IS NULL`, and its `season_months IS NULL` guard reads the
+   **synced** column while curation writes the curated one. On 2026-09-09 not one
+   free-flow row in the database had a non-NULL `season_months`, so that guard
+   protects nothing and Step 2b matches every hand-curated free-flow row. What
+   keeps the resolved answer stable through the night is `curated_is_seasonal`.
+5. Write it through `PATCH /v1/admin/content/attractions/:id` with a `reason`
+   and a `sourceUrl`, **not** with `UPDATE attractions SET open_with_park`. The
+   endpoint carries the four-step publish order — write, evict, revalidate,
+   revalidate again after the CDN window — and a raw UPDATE carries none of it,
+   so the correction lands in the database and not on the page. It also writes
+   the audit row that makes the curation reviewable later.
 
-Currently flagged: 19 attractions across 11 parks. Held deliberately, pending
-season-date research: Europa-Park's two water playgrounds, Everland's snow
-playground, Bellewaerde's Christmas playground. See `todo.md`.
+### 7a. Turning an operator's season into `curated_season_months`
+
+`season_months` is months, and a season almost never starts on the 1st. So the
+translation loses days no matter which way it is decided, and the only question
+is which side to lose them on.
+
+**The test: a month goes in unless the operator's season covers no more than a
+tenth of the days the park is open that month.** The open days, not the calendar
+days — a month the park sits closed through cannot be got wrong at all.
+
+The denominator is a query rather than a judgement, and this is the whole of it:
+
+```sql
+SELECT extract(month FROM s.date)::int AS month, count(DISTINCT s.date) AS open_days
+FROM schedule_entries s
+WHERE s."parkId" = $1                  -- the id. `parks.name` is sync-owned, not unique,
+                                       -- and not even the displayed name (`curated_name`)
+  AND s."attractionId" IS NULL         -- park-level rows; attraction ones are never written
+  AND s."scheduleType" = 'OPERATING'   -- EXTRA_HOURS and the two event types are not "open to everybody"
+  AND s.date >= $2 AND s.date < $3     -- one full season cycle, not a calendar year
+GROUP BY month ORDER BY month;
+```
+
+`count(DISTINCT s.date)` rather than `count(*)`: a park may publish two rows for
+one day, and duplicate `schedule_entries` are a known open item. Counting days
+is all this needs — anything that needs open *minutes* must go through
+`park-open-window.sql.ts` instead, which also repairs misdated closings and
+flattens overlapping windows.
+
+**A month with no rows is ambiguous**, and the query cannot tell you which it
+is: the park is shut all month, or the operator has not published that far yet.
+Run it over a cycle the operator has already released end to end — a completed
+one is safest — and treat a zero in a month you expected to be open as "come
+back later", never as "closed through".
+
+Worked, from the 2026-09-09 curation:
+
+| ride | operator's season | month at stake | open days | covered | share | verdict |
+|---|---|---|---|---|---|---|
+| Europa-Park, Lítill Island | Summer, 28 Mar – 25 Sep | March | 10 (park opens 22 Mar) | 4 | 40 % | **in** |
+| Bellewaerde, Snowmen Playground | Christmas, from 28 Nov | November | 8 | 2 | 25 % | **in** |
+| Europa-Park, Water Playground | + Halloween to 1 Nov | November | 30 (open daily) | 1 | 3 % | **out** |
+| Everland, Snow playground | mid-Dec to about 1 Mar | March | 31 | ~1 | ~3 % | **out**, softly |
+
+**Why the threshold sits low rather than at a majority.** The two errors are not
+symmetric. Omitting a month is a *hard* close: once a list exists at all,
+`isInSeason` answers purely from it, and the permissive branch that lets a ride
+run only fires for a null or empty list. So dropping March would shut
+Europa-Park's water playgrounds for every open day from the 28th to the 31st.
+Including a month only over-reports on the days between the month's start and
+the season's, which at the edges of a season is often a stretch the park is
+closed through anyway. At the margin, include.
+
+**Everland's March is the one call in that table that is not safe**, and it is
+worth naming rather than burying. Everland's own pages never state a closing
+date for the snow park; the ~1 March comes from trade press, and the operator's
+newsroom says only "until March 2026". A close on the 5th or the 8th would put
+March at 16–26 %, which this rule admits. It was excluded because the errors are
+lopsided the other way here: Everland is open all 31 March days, so including
+March on a snow area that shut on the 1st reads open for thirty days it is gone,
+against roughly a week the other way. Revisit when Everland publishes a date.
+
+**Seasonality resolves as a pair, and the months can stand alone.** Non-empty
+`curated_season_months` already make `resolveCuratedFacts` report
+`isSeasonal: true` — the months do not need `curated_is_seasonal` beside them to
+survive the `seasonMonths = !isSeasonal ? null : …` gate. Setting it anyway is
+harmless and pins the value against the nightly detector; setting it to `false`
+takes the months down with it, which is the whole point of the pairing.
+
+Flagged as of 2026-09-09: 30 attractions across 17 parks — the "19 across 11"
+that stood here was already stale. Curated on that date, with the source on each
+audit row: Europa-Park's _Lítill Island_ `[3–9]` and _Water Playground_
+`[3–10]`, Everland's _Snow playground_ `[12, 1, 2]`, Bellewaerde's _Snowmen
+Playground_ `[11, 12, 1]`. Still held for want of any stated operating window:
+Peppa Pig's _Muddy Puddles Splash Pad_ and Walibi Rhône-Alpes' two _Exotic
+Island_ play areas. See `todo.md`.
