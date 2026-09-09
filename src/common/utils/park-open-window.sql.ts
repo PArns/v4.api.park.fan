@@ -128,17 +128,28 @@ export function parkOpenWindowCtes(
  * `[opens_at, closes_at)` reaching past `$2` qualifies however long ago it
  * opened. That is what lets a projection start counting inside today.
  *
+ * ## The park id travels, because `win` is disjoint PER PARK
+ *
+ * `parkOpenWindowCtes` merges overlapping windows within a park and nowhere
+ * else, so two parks' rows interleave here. Anything that sums or walks these —
+ * `projectOperatingMinutes` walks them — must do it one park at a time, or it
+ * counts a minute twice for every pair of parks open at once, which is most
+ * pairs. The filter is a `uuid[]` because the shared CTEs fix `$1` that way; the
+ * column is selected so a caller that passes more than one id has what it needs
+ * to group, rather than a silently wrong total.
+ *
  * Parameters: `$1` uuid[] park filter, `$2` the instant to look forward from,
  * `$3` the far end of the horizon.
  */
 export function upcomingOperatingWindowsSql(): string {
   return `
   WITH ${parkOpenWindowCtes({ wikiOnly: true })}
-  SELECT w.opens_at  AS "opensAt",
+  SELECT w.park_id   AS "parkId",
+         w.opens_at  AS "opensAt",
          w.closes_at AS "closesAt"
     FROM win w
    WHERE w.closes_at > $2::timestamptz
-   ORDER BY w.opens_at
+   ORDER BY w.park_id, w.opens_at
 `;
 }
 

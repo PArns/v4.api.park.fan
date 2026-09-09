@@ -700,7 +700,7 @@ the backwards sum in `trailingOutageWithElapsedSql()`; both read the windows
 `parkOpenWindowCtes()` produces, so there is one definition of a closing time and
 not two).
 
-Four rules, one per case a spec pins:
+Five rules, one per case a spec pins:
 
 - **It stays a pair.** A single instant would read as a promise, and the
   distribution is heavy-tailed enough that the median alone is wrong in the

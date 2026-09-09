@@ -215,6 +215,11 @@ export class AttractionOutageService {
    * query answers the same way on purpose — the window is a nicety on top of an
    * estimate that is itself optional, and it may not cost the outage line the
    * two statements above it just placed.
+   *
+   * **One park per call**, which is why the id is a parameter and not the array
+   * the SQL's `$1` accepts: the windows are merged within a park and not across
+   * parks, so walking two parks' rows as one list would spend the same minute
+   * twice.
    */
   private async loadUpcomingWindows(
     parkId: string,
