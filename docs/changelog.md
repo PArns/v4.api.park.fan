@@ -38,6 +38,37 @@ now says the key is absent, and `remaining` became a published class
 (`RemainingQuartilesDto`) instead of an inline literal the swagger plugin could
 only emit as a bare `object` with no `p25`, `median` or `p75` in it.
 
+### Changed — Europa-Park's silenced rides are worked through, and "many are free-flow" was wrong
+
+All **45** Europa-Park attractions that went quiet when ThemeParks.wiki dropped
+them on 2026-06-07 were researched one by one against the operator's own pages.
+Two more are free-flow and were curated on 2026-09-09 through
+`PATCH /v1/admin/content/attractions/:id`: _Limerick Castle_
+(`d98a7513-2799-42ae-8bf9-1a1d07d1fc54`) and _Paul's Playboat_
+(`ed34c229-1220-4728-ba51-cc10527374ea`), each with its reason and the operator
+page on the audit row. **Neither took `curated_season_months`** — the first
+free-flow rows that correctly take none, because Europa-Park lists both under
+all four of its seasons, so they run exactly when the park runs. §7 step 3 said
+months were always needed and now says to ask.
+
+That closes the sweep at **10 free-flow, 34 operated rides left alone, 1
+undecidable** — §5.2 had estimated "many". The one left is _Rocking Bridge &
+Chute_, which has no operator page to decide against (403, and absent from both
+the attraction list and the children's page); it may equally be gone, which
+would be `retired_at` rather than the flag.
+
+Measured the same day with the park `OPERATING`: the 45 serve as 10
+`OPERATING` and 35 `UNKNOWN`, no `CLOSED` anywhere. The premise that these rides
+still read "closed" no longer holds — §2.3 turned that into `UNKNOWN`, which is
+the honest answer for a ride no source reports.
+
+Two research traps are written down for the nine parks still unswept: the
+operator contradicts itself (_Dwarf City_ is filed under playgrounds and
+describes itself as a ride with wagons and a 2:30 ride time), and two of the 45
+carry ThemeParks.wiki names that appear nowhere on the operator's list.
+
+Documentation and curation only — no code changed.
+
 ### Changed — the four held free-flow playgrounds are curated
 
 `curated_season_months` and `open_with_park` were curated on 2026-09-09 for Europa-Park's

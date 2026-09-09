@@ -478,6 +478,27 @@ with the same rows.
 - [ ] **"Wet'n'Wild" and "Wet 'n' Wild Gold Coast"** both show 13 silenced
       attractions with the same date. That looks like a duplicate park pair for
       the existing duplicate-records work.
+- [x] **Europa-Park worked through, 2026-09-09** — all 45 of its silenced rides
+      researched against the operator's own pages. Ten are free-flow (two of
+      them written that day: _Limerick Castle_ `d98a7513-2799-42ae-8bf9-1a1d07d1fc54`,
+      _Paul's Playboat_ `ed34c229-1220-4728-ba51-cc10527374ea`, both without
+      months because the operator lists them under all four seasons), 34 are
+      operated rides that correctly stay `UNKNOWN`, and one could not be decided.
+      Measured with the park `OPERATING`: 10 `OPERATING`, 35 `UNKNOWN`, no
+      `CLOSED` — §2.3 is holding. Details and the two research traps:
+      `docs/architecture/attraction-status-and-seasonality.md` §5.2.
+- [ ] **Europa-Park _Rocking Bridge & Chute_ has no operator page.** It is on
+      neither the attraction list nor the children's page, and
+      `/de/attraktionen/wackelbruecke-mit-wendelrutsche` answers 403. Fan
+      sources describe a children's play structure (tower, wobbly bridge,
+      spiral slide, max 120 cm), which would be `open_with_park` — but §7 step 1
+      rules that out as evidence, and its absence from the list may equally mean
+      it no longer stands, which would be `retired_at`. Needs a source either
+      way; it reads `UNKNOWN` until then.
+- [ ] **The other nine parks in this table have not been swept.** Europa-Park
+      took one pass over 45 rides; Rulantica (18), Universal Studios Singapore
+      (17), the two Wet'n'Wild records (13 + 13), Busch Gardens Tampa (9) and
+      Ocean Park (7) are the same shape of work.
 
 ## Free-flow attractions & seasonality (2026-08-15)
 

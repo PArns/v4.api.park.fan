@@ -322,11 +322,21 @@ no remedy available. For the rest the answer is not a new source but
 carousel with a zero wait is *not* automatically free-flow though — it has an
 operator and can be closed — so each needs researching individually (§7).
 
-**The sweep is done, and "many" was wrong.** Measured on 2026-09-09 against
-production, the ride-by-ride cut — long OPERATING history, not one OPERATING row
-since — gives **45** silenced Europa-Park attractions (the 44 above is the
-feed-side count; they are near-identical lists, not the same question). Every
-one was researched against the operator's own pages:
+**Three numbers, and they are three different questions.** Measured on
+2026-09-09 against production:
+
+| count | what it is | query |
+|---|---|---|
+| **59** | active Europa-Park rides with **no `queue_times_entity_id`** — the population the drop could reach at all | `retired_at IS NULL AND queue_times_entity_id IS NULL` |
+| **44** | what the feed itself stopped carrying that day — the table above | feed-side |
+| **45** | rides that went quiet and stayed quiet: >100 OPERATING rows before 2026-06-07 13:18Z, none since | the SQL in §6 |
+
+The 59 is a population, not a casualty list, and the paragraph above reads as if
+it were one. 46 rides have no OPERATING row since the drop at all; the >100
+floor drops the one with a thin history. The sweep below works the 45.
+
+**The sweep is done, and "many" was wrong.** Every one of the 45 was researched
+against the operator's own pages:
 
 | verdict | rides |
 |---|---|
@@ -336,11 +346,16 @@ one was researched against the operator's own pages:
 
 The ten are Adventure Playground, Ball Pool, Casa da Aventura, Limerick Castle,
 Little Lamb's Land, Lítill Island, Paul's Playboat, Root Slides, Water
-Playground and Würmchen Wies'n Playground — the last two of them written on
-2026-09-09 (audit `d98a7513-2799-42ae-8bf9-1a1d07d1fc54` for Limerick Castle,
-`ed34c229-1220-4728-ba51-cc10527374ea` for Paul's Playboat). Neither took months:
-the operator lists both under all four of its seasons, so they run exactly when
-the park runs and §7a has nothing to decide.
+Playground and Würmchen Wies'n Playground. Eight were already flagged;
+**Limerick Castle** (audit `d98a7513-2799-42ae-8bf9-1a1d07d1fc54`) and **Paul's
+Playboat** (audit `ed34c229-1220-4728-ba51-cc10527374ea`) were written on
+2026-09-09.
+
+**Those two are the first free-flow rows that took no months**, and that is a
+finding rather than an omission: the operator lists both under all four of its
+seasons — Summer, Halloween, HALLOWinter, Winter — so they run exactly when the
+park runs, and §7a has nothing to decide. Every free-flow row curated before
+them needed months. §7 step 3 now says so.
 
 The one that could not be decided is **Rocking Bridge & Chute**: it is on
 neither the operator's attraction list nor its children's page, and its own page
@@ -439,10 +454,14 @@ SELECT min(timestamp)::date, max(timestamp)::date FROM queue_data;
    looked like a climbing net and was a harnessed high-ropes course with a
    140 cm minimum, demolished after 2025-11-02.
 2. Confirm it has no queue, no ride vehicle, no separate ticket.
-3. Establish **seasonality**. If the park keeps running while the area does not
-   — which is the case for every free-flow row curated so far, whether or not
-   the park itself is open year-round — it needs months before the flag is safe,
-   or a snow playground reads open in July. See §7a.
+3. Establish **seasonality**. If the park keeps running while the area does not,
+   it needs months before the flag is safe, or a snow playground reads open in
+   July. See §7a. **Ask, do not assume:** that was the case for every free-flow
+   row until 2026-09-09, when Europa-Park's Limerick Castle and Paul's Playboat
+   turned out to be listed under all four of the park's seasons and correctly
+   took no months at all (§5.2). An area that runs whenever the park runs is
+   allowed to carry the flag bare — a month list invented to be safe is a hard
+   close for every month left out.
 4. Write the months to **`curated_season_months`** and set
    **`curated_is_seasonal = true`** beside them. The pair, not just the months.
    `resolveCuratedFacts` does infer `isSeasonal: true` from non-empty curated
@@ -530,10 +549,14 @@ survive the `seasonMonths = !isSeasonal ? null : …` gate. Setting it anyway is
 harmless and pins the value against the nightly detector; setting it to `false`
 takes the months down with it, which is the whole point of the pairing.
 
-Flagged as of 2026-09-09: 30 attractions across 17 parks — the "19 across 11"
-that stood here was already stale. Curated on that date, with the source on each
-audit row: Europa-Park's _Lítill Island_ `[3–9]` and _Water Playground_
-`[3–10]`, Everland's _Snow playground_ `[12, 1, 2]`, Bellewaerde's _Snowmen
-Playground_ `[11, 12, 1]`. Still held for want of any stated operating window:
-Peppa Pig's _Muddy Puddles Splash Pad_ and Walibi Rhône-Alpes' two _Exotic
-Island_ play areas. See `todo.md`.
+Flagged as of 2026-09-09, counted after the Europa-Park sweep in §5.2: **32
+attractions across 17 parks** — the "19 across 11" that stood here was already
+stale, and the "30 across 17" that replaced it that morning was overtaken the
+same afternoon. Curated on that date, with the source on each audit row:
+Europa-Park's _Lítill Island_ `[3–9]` and _Water Playground_ `[3–10]`,
+Everland's _Snow playground_ `[12, 1, 2]`, Bellewaerde's _Snowmen Playground_
+`[11, 12, 1]`, and — with **no months, deliberately** — Europa-Park's _Limerick
+Castle_ and _Paul's Playboat_. Exactly four of the 32 carry curated months;
+everything else runs with its park. Still held for want of any stated operating
+window: Peppa Pig's _Muddy Puddles Splash Pad_ and Walibi Rhône-Alpes' two
+_Exotic Island_ play areas. See `todo.md`.
