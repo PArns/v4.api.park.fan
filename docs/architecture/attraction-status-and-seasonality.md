@@ -317,13 +317,54 @@ recorded history: carousels, monorails, panorama trains, boat rides,
 playgrounds, the Christmas market. They lost a *status*, not a wait time.
 
 That reframes the fix. For the four Express stations this is a genuine gap with
-no remedy available. For the other 55 the answer is not a new source but
-**curation**: many are free-flow and belong under `open_with_park` (§2.2) —
-Adventure Playground and Würmchen Wies'n Playground were flagged on 2026-08-15
-and read OPERATING again immediately, and Lítill Island and Water Playground are
-held only pending season dates. A carousel with a zero wait is *not*
-automatically free-flow though — it has an operator and can be closed — so each
-needs researching individually (§7).
+no remedy available. For the rest the answer is not a new source but
+**curation**: some are free-flow and belong under `open_with_park` (§2.2). A
+carousel with a zero wait is *not* automatically free-flow though — it has an
+operator and can be closed — so each needs researching individually (§7).
+
+**The sweep is done, and "many" was wrong.** Measured on 2026-09-09 against
+production, the ride-by-ride cut — long OPERATING history, not one OPERATING row
+since — gives **45** silenced Europa-Park attractions (the 44 above is the
+feed-side count; they are near-identical lists, not the same question). Every
+one was researched against the operator's own pages:
+
+| verdict | rides |
+|---|---|
+| free-flow, `open_with_park` set | **10** |
+| operated ride, correctly left alone | **34** |
+| no operator source to decide on | **1** |
+
+The ten are Adventure Playground, Ball Pool, Casa da Aventura, Limerick Castle,
+Little Lamb's Land, Lítill Island, Paul's Playboat, Root Slides, Water
+Playground and Würmchen Wies'n Playground — the last two of them written on
+2026-09-09 (audit `d98a7513-2799-42ae-8bf9-1a1d07d1fc54` for Limerick Castle,
+`ed34c229-1220-4728-ba51-cc10527374ea` for Paul's Playboat). Neither took months:
+the operator lists both under all four of its seasons, so they run exactly when
+the park runs and §7a has nothing to decide.
+
+The one that could not be decided is **Rocking Bridge & Chute**: it is on
+neither the operator's attraction list nor its children's page, and its own page
+answers 403. A fan description would make it a playground; §7 step 1 rules that
+out as evidence, and its absence from the list may equally mean it no longer
+stands — which would be `retired_at`, not the free-flow flag.
+
+**Two traps this sweep hit, worth knowing before the next park:**
+
+- The operator can contradict itself. **Dwarf City** sits under *playgrounds* on
+  Europa-Park's children's page while its own detail page gives it decorated
+  wagons, a 2:30 ride time and 280 riders/hour. The detail page is the more
+  specific claim and wins; a category filter is a navigation aid, not a fact
+  about the attraction.
+- The name that survives is the wiki's. Two of the 45 (**Rocking Bridge &
+  Chute**, **Children's carousel**) do not appear under those names on the
+  operator's English list at all, so a research pass that only matches names
+  silently drops them.
+
+**What this leaves is not a bug.** Measured the same day with the park
+`OPERATING`, the 45 serve as 10 `OPERATING` and 35 `UNKNOWN` — no `CLOSED`
+anywhere. §2.3 is doing its job: the 34 operated rides say "we cannot read this",
+which is true, and the alternative would be inventing a status for a ride no
+source reports.
 
 ---
 
