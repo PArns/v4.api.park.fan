@@ -154,7 +154,7 @@ describe("Park Analytics (e2e)", () => {
   });
 
   describe("GET /v1/parks/:continent/:country/:city/:slug/stats", () => {
-    it("returns the v2 historical-stats contract", () => {
+    it("returns the v3 historical-stats contract", () => {
       return request(app.getHttpServer())
         .get("/v1/parks/europe/germany/bruehl/phantasialand/stats")
         .expect(200)
@@ -168,7 +168,7 @@ describe("Park Analytics (e2e)", () => {
           expect(body.meta).toHaveProperty("windowYears");
           expect(body.meta).toHaveProperty("displayable");
           expect(body.meta).toHaveProperty("generatedAt");
-          expect(body.meta.schemaVersion).toBe(2);
+          expect(body.meta.schemaVersion).toBe(3);
           expect(typeof body.meta.displayable).toBe("boolean");
 
           const VALID_LEVELS = [

@@ -55,7 +55,7 @@ them anywhere.
 
 ## 2. `GET /v1/parks/{continent}/{country}/{city}/{parkSlug}/stats`
 
-Historical aggregates. **`schemaVersion: 2`.**
+Historical aggregates. **`schemaVersion: 3`.**
 
 ### Query parameters
 
@@ -101,7 +101,7 @@ Historical aggregates. **`schemaVersion: 2`.**
     windowYears: number;      // NEW — use for the "Last X years" subtitle
     displayable: boolean;     // NEW — render gate (totalSampleDays >= minSampleDays)
     generatedAt: string;      // NEW — ISO 8601 UTC, when the aggregate was computed
-    schemaVersion: 2;         // NEW
+    schemaVersion: 3;         // NEW
   };
 }
 ```

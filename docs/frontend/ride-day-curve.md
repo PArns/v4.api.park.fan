@@ -28,7 +28,7 @@ interface RideDayCurve {
   sampleDays: number;
   timezone: string;
   generatedAt: string;
-  schemaVersion: number;        // 1
+  schemaVersion: number;        // 2
 }
 ```
 
