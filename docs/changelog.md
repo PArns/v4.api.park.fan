@@ -6,6 +6,38 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — the outage estimate says when, not just how much longer
+
+`estimate.recoveryWindow` (`{ from, to }`, ISO 8601 UTC) on the outage object.
+`remaining` counts **operating** minutes, so it never was a duration a renderer
+could add to a clock: an outage with two operating hours left, in a park shutting
+in twenty minutes, ends tomorrow morning. Placing it needs the park's opening
+calendar, and no renderer has one — `AttractionCard` is drawn from eight places
+and not one of them passes a schedule — so the API, which already counts
+`elapsedMinutes` on that calendar, walks it forward instead.
+
+`projectOperatingMinutes` (`analytics/utils/operating-clock.util.ts`) is the
+forward twin of the backwards sum in `trailingOutageWithElapsedSql()`, over the
+same windows `parkOpenWindowCtes()` flattens, so there is one definition of a
+closing time rather than two. `to` is withheld where the curve does not resolve
+the upper quartile (past ~2 h) or the calendar does not reach it; the whole field
+is withheld for a park that publishes no hours or one shut past the 14-day
+horizon. No wall-clock fallback: it would be most confident about the parks we
+know least about. `remaining` is unchanged.
+
+One documented claim was wrong and is corrected with it: `remaining.p75` is
+typed `number | null` and the DTO said it arrives as `null`, but
+`ExcludeNullInterceptor` strips every null-valued key outside `/v1/admin/*` and
+`?debug=true`, so it has always arrived as a **missing key** — a type describing
+a branch that cannot fire, which a generated client is nonetheless told to
+handle. `recoveryWindow.to` is declared `string | undefined` and left off
+instead, so the shape in the code, in the OpenAPI schema and on the wire are one
+shape. `remaining.p75` keeps its type — clients are coded against it, and
+changing it is a contract change rather than a correction — but its description
+now says the key is absent, and `remaining` became a published class
+(`RemainingQuartilesDto`) instead of an inline literal the swagger plugin could
+only emit as a bare `object` with no `p25`, `median` or `p75` in it.
+
 ### Changed — the four held free-flow playgrounds are curated
 
 `curated_season_months` and `open_with_park` were curated on 2026-09-09 for Europa-Park's

@@ -676,6 +676,88 @@ The copy names the condition — _„die schon so lange dauern"_ — because a r
 has to be able to see that the estimate is about this outage's history rather
 than about outages in general.
 
+### The window on the clock (`recoveryWindow`)
+
+`remaining` is in **operating** minutes, so it is not a duration anybody may add
+to a clock. An outage with 120 operating minutes left, in a park that shuts in
+twenty, ends 100 minutes into tomorrow's opening — not two hours from now. That
+is the same asymmetry that makes counting in operating minutes worth doing at
+all: a closed park is a pause.
+
+Turning the one into the other needs the park's opening calendar, and **no
+renderer has it.** On the frontend `AttractionCard` is drawn from eight places
+(park page, favourites, homepage, blog widgets, `/ui`, the guide) and not one of
+them passes a schedule down. The ride page would have `todaySchedule`, so doing
+it there and nowhere else would make the same outage read as a duration on the
+park page and as a clock time one click later. The API already holds the
+calendar — it counts `elapsedMinutes` on it — so the arithmetic is done once,
+here.
+
+`estimate.recoveryWindow` is `{ from, to }`, both ISO 8601 UTC, derived from
+`remaining.p25` and `remaining.p75` by walking the park's flattened `OPERATING`
+windows forward from now (`projectOperatingMinutes`, the pure forward twin of
+the backwards sum in `trailingOutageWithElapsedSql()`; both read the windows
+`parkOpenWindowCtes()` produces, so there is one definition of a closing time and
+not two).
+
+Five rules, one per case a spec pins:
+
+- **It stays a pair.** A single instant would read as a promise, and the
+  distribution is heavy-tailed enough that the median alone is wrong in the
+  direction that costs a visitor their afternoon.
+- **`to` is absent when there is no upper bound to give** — past roughly two
+  hours the curve stops resolving the upper quartile, and a park's published
+  calendar may not reach far enough either. Both render as an open range.
+- **The whole field is absent when the park publishes no hours**, or when the
+  calendar does not reach even the lower quartile (a park shut for the season).
+  There is deliberately no wall-clock fallback: it would answer a question
+  nobody asked, and it would answer it most confidently for the parks we know
+  least about.
+- **With the park shut, `from` is the next opening plus the quartile.** That is
+  the operating clock read honestly rather than an artefact of it: a ride
+  repaired overnight is not missing from the measurement, it appears as a spell
+  ending at the closing boundary, because the next `OPERATING` reading arrives
+  with the gates. Surviving past the closing already excludes most of them.
+- **The horizon is 14 days.** The largest upper quartile the curve resolves is
+  460 operating minutes, under eight operating hours; fourteen days covers a park
+  that only opens at weekends and stops short of pretending we can place an
+  outage in a park that has shut for the winter.
+
+**The window recedes inside a bucket, and it is the same arithmetic as
+before.** `remaining` is read at the floored bucket edge, so from 120 to 179
+elapsed minutes the same 50 minutes are added to a moving _now_ and the instant
+slides forward with it. Shifting by the minutes already served inside the bucket
+would stop the sliding and import the exponential this curve exists to refuse —
+the hazard falls, so an outage that survived to 175 minutes has a **longer**
+remaining distribution than one at 120, not a shorter one by the difference.
+Unshifted errs late rather than early, the same direction the flooring itself
+takes. A client rendering `remaining` alone has always had this; the window only
+makes it visible as a clock time. Closing it properly means a finer bucket grid,
+not an interpolation.
+
+**A `null` never reaches a client here, so the type does not claim one.**
+`ExcludeNullInterceptor` deletes every null-valued key from every response
+outside `/v1/admin/*` and `?debug=true`. That is why `remaining.p75` is measured
+absent on production while its type says `number | null` — the type documents a
+branch that cannot fire, and a generated client is told to handle it anyway.
+`recoveryWindow.to` is therefore declared `string | undefined` and simply left
+off, so the shape in the code, the shape in the OpenAPI schema and the shape on
+the wire are the same shape. Omitted is the only consistent form on offer here;
+what the interceptor decides, the type should say out loud.
+
+`remaining.p75` keeps `number | null` and therefore keeps the mismatch: clients
+are already coded against that type, and changing it is a contract change rather
+than a correction. What it no longer keeps is silence — the description says the
+key is absent, and `remaining` is a published class now instead of an inline
+literal the swagger plugin could only emit as a bare `object`.
+
+**The instants are absolute, and that is the point of them.** A cached copy of
+this payload (~15 min here) can carry a `from` that has already passed; read it
+as _any moment now_. `from` was computed against the same instant
+`elapsedMinutes` was, so a stale copy stays internally consistent — where a
+relative `remaining` re-bases itself on the reader's clock without saying so, and
+a fifteen-minute-old "50 more minutes" is quietly fifteen minutes too generous.
+
 ### The one caveat that remains
 
 `elapsedMinutes` grows even if the outage has secretly ended: without
