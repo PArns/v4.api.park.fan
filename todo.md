@@ -295,9 +295,11 @@ What is still open, roughly by consequence:
       withheld past it, with a spec.
 - [x] ~~`OUTAGE_SCAN_START_SQL` unbounded below~~ — floored at twice the
       requested window. 71 open-ended intervals exist that could have pinned it.
-- [ ] **Profiles are still upsert-only and never deleted.** The staleness gate
-      stops them being _served_, but a retired ride keeps a row forever. Give
-      the rebuild the same delete-then-insert the curves use.
+- [x] ~~Profiles are still upsert-only and never deleted~~ — `rebuildProfiles`
+      now deletes then upserts in one transaction (PF-40). Scoped to the parks
+      the rebuild actually produced rows for, not to the whole table: an empty
+      result there would erase every profile in the database on one failed
+      exposure build.
 - [ ] **The nightly DELETE erases history it never rewrites.** It is keyed on
       `parkId` with no ride predicate, but the INSERT population is the
       `tracked` CTE. A ride that leaves `tracked` (merge, retirement, a flip to
@@ -308,17 +310,19 @@ What is still open, roughly by consequence:
       merge with 29 colliding rides). Two raw `DELETE FROM attractions` paths
       stamp nothing either, and no entity declares a relation, so there are no
       FKs to catch the orphans.
-- [ ] **A park with no published hours is served `not_down_capable`, not
-      `no_schedule`.** `rebuildProfiles` sources rides from
-      `attraction_exposure_days`, which needs a schedule to exist, so those
-      rides get no profile row at all and `toDowntimeBlock(null)` falls back to
-      the wrong refusal. Six translations of `no_schedule` are unreachable.
+- [x] ~~A park with no published hours is served `not_down_capable`, not
+      `no_schedule`~~ — the population query gained a `sched` branch that
+      sources the rides of `no_schedule` parks directly from `attractions`
+      (PF-40). Only that regime: `not_capable` already resolves correctly
+      through the missing-row fallback.
 - [ ] **`park_open` in the live closure query re-reads `closingTime` raw**,
       without `normalizedClosingSql()`. Stored history still holds misdated
       closings (a 34-hour day, a 3-year one), and one such row in a blind park
       makes the guard true permanently.
-- [ ] **`longest_started_at` is always written NULL** while §5 lists
-      "longest + date" as publishable — that date can never render.
+- [x] ~~`longest_started_at` is always written NULL~~ — computed in the same
+      aggregate as `longest_minutes` and written beside it (PF-40). Ties go to
+      the most recent spell so two rebuilds over unchanged data agree. Still
+      rendered nowhere; the column now carries a value to render.
 - [ ] **The operating day is keyed off the calendar date** in the closure
       statement, not the window's opening date, so a park closing after midnight
       (La Ronde) drops every gap spanning midnight.

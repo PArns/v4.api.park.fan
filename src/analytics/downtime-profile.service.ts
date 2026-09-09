@@ -121,8 +121,6 @@ export class DowntimeProfileService {
 
   constructor(
     private readonly dataSource: DataSource,
-    @InjectRepository(AttractionDowntimeProfile)
-    private readonly profiles: Repository<AttractionDowntimeProfile>,
     @InjectRepository(ParkDowntimeCoverage)
     private readonly coverage: Repository<ParkDowntimeCoverage>,
   ) {}
@@ -310,6 +308,12 @@ export class DowntimeProfileService {
     windowTo: Date,
     generatedAt: Date,
   ): Promise<void> {
+    // Parks that publish no opening hours. They have no exposure days, so the
+    // `ex` CTE cannot see their rides at all — see the `sched` CTE below.
+    const noScheduleParkIds = [...regimes]
+      .filter(([, regime]) => regime === "no_schedule")
+      .map(([parkId]) => parkId);
+
     const rows: ProfileRow[] = await this.dataSource.query(
       `
       WITH ex AS (
@@ -321,6 +325,46 @@ export class DowntimeProfileService {
          WHERE e.op_day >= $2::date AND e.op_day <= $3::date
            AND ($1::uuid[] IS NULL OR e."parkId" = ANY($1::uuid[]))
          GROUP BY e."attractionId", e."parkId"
+      ),
+      -- Rides in parks that publish no hours.
+      --
+      -- attraction_exposure_days is built FROM the schedule, so a park without
+      -- one contributes no exposure day and none of its rides reaches ex.
+      -- Without a row the read path falls back to not_down_capable
+      -- (toDowntimeBlock(null)), which is a statement about the park's SOURCE
+      -- — and this park has a capable source, it just does not tell us when it
+      -- is open. That is no_schedule, and six translations of it were
+      -- unreachable for this whole class of park.
+      --
+      -- Only the no_schedule regime is sourced here, not every ride in the
+      -- catalogue: not_capable already resolves correctly through the
+      -- missing-row fallback, so adding it would write rows to say what the
+      -- absence of a row already says.
+      sched AS (
+        SELECT a.id AS aid, a."parkId" AS pid, 0 AS operating_minutes,
+               0 AS down_minutes, 0 AS observed_days
+          FROM attractions a
+         WHERE a."parkId" = ANY($5::uuid[])
+           AND a.retired_at IS NULL
+           -- Both exclusions are the reconstruction's tracked CTE, so the two
+           -- populations agree on what a trackable ride is.
+           --
+           -- The free-flow one is about naming the right obstacle. Such a ride
+           -- has no queue and its source reports it CLOSED all day, so it
+           -- publishes nothing in ANY park — in a fully scheduled one it
+           -- already answers not_down_capable. Handing it no_schedule here
+           -- would make one ride's refusal depend on its park's calendar while
+           -- the actual reason is the ride, and naming the wrong obstacle is
+           -- the failure this whole feature exists to avoid. It has no honest
+           -- reason of its own yet; that is PF-73, not a licence to borrow the
+           -- park's.
+           AND COALESCE(a.open_with_park, FALSE) = FALSE
+           AND NOT EXISTS (SELECT 1 FROM ex WHERE ex.aid = a.id)
+      ),
+      pop AS (
+        SELECT * FROM ex
+        UNION ALL
+        SELECT * FROM sched
       ),
       ou AS (
         SELECT o."attractionId" AS aid,
@@ -351,7 +395,22 @@ export class DowntimeProfileService {
                  FILTER (WHERE o.likely_works_period), 0)::int       AS works_minutes,
                MAX(o.operating_minutes) FILTER (WHERE o.duration_usable
                                             AND NOT o.likely_works_period)
-                                                                   AS longest_minutes
+                                                                   AS longest_minutes,
+               -- When the longest one started. longest_minutes alone cannot be
+               -- rendered as the pair the doc publishes ("longest + date"),
+               -- and picking the maximum a second time in TypeScript would
+               -- read the same rows twice to answer half a question.
+               --
+               -- Ties go to the most RECENT spell: two 300-minute outages are
+               -- equally long, and the one a reader is more likely to
+               -- recognise is the newer one. Arbitrary either way — what
+               -- matters is that it is deterministic, so two consecutive
+               -- rebuilds over unchanged data write the same date.
+               (array_agg(o.started_at ORDER BY o.operating_minutes DESC,
+                                                o.started_at DESC)
+                  FILTER (WHERE o.duration_usable
+                            AND NOT o.likely_works_period))[1]
+                                                                   AS longest_started_at
           FROM attraction_outages o
          WHERE o.started_at >= $2::timestamptz AND o.started_at <= $3::timestamptz
            -- Reported outages only: everything this CTE feeds is a published
@@ -365,11 +424,11 @@ export class DowntimeProfileService {
            AND ($1::uuid[] IS NULL OR o."parkId" = ANY($1::uuid[]))
          GROUP BY o."attractionId"
       )
-      SELECT ex.aid                       AS "attractionId",
-             ex.pid                       AS "parkId",
-             ex.operating_minutes         AS "operatingMinutes",
-             ex.down_minutes              AS "downMinutes",
-             ex.observed_days             AS "observedDays",
+      SELECT pop.aid                      AS "attractionId",
+             pop.pid                      AS "parkId",
+             pop.operating_minutes        AS "operatingMinutes",
+             pop.down_minutes             AS "downMinutes",
+             pop.observed_days            AS "observedDays",
              COALESCE(ou.outages, 0)      AS "outages",
              COALESCE(ou.usable, 0)       AS "usableDurations",
              COALESCE(ou.censored, 0)     AS "censored",
@@ -378,22 +437,24 @@ export class DowntimeProfileService {
              ou.works_minutes             AS "worksMinutes",
              ou.median_minutes            AS "medianMinutes",
              ou.longest_minutes           AS "longestMinutes",
+             ou.longest_started_at        AS "longestStartedAt",
              a.last_merged_at             AS "lastMergedAt",
              (SELECT MIN(e2.op_day) FROM attraction_exposure_days e2
-               WHERE e2."attractionId" = ex.aid AND e2.operating_minutes > 0)
+               WHERE e2."attractionId" = pop.aid AND e2.operating_minutes > 0)
                                           AS "firstObservedDay",
              (SELECT COUNT(*) FROM attraction_exposure_days e3
-               WHERE e3."attractionId" = ex.aid AND e3.operating_minutes > 0)::int
+               WHERE e3."attractionId" = pop.aid AND e3.operating_minutes > 0)::int
                                           AS "lifetimeObservedDays"
-        FROM ex
-        JOIN attractions a ON a.id = ex.aid
-        LEFT JOIN ou ON ou.aid = ex.aid
+        FROM pop
+        JOIN attractions a ON a.id = pop.aid
+        LEFT JOIN ou ON ou.aid = pop.aid
       `,
       [
         parkIds,
         isoDay(windowFrom),
         isoDay(windowTo),
         midpoint(windowFrom, windowTo),
+        noScheduleParkIds,
       ],
     );
 
@@ -418,7 +479,13 @@ export class DowntimeProfileService {
             : Math.round(Number(row.medianMinutes))
           : null,
         longestMinutes: decision.figures ? longest : null,
-        longestStartedAt: null,
+        // Tied to `longestMinutes` and not merely to `decision.figures`: the
+        // doc publishes the two as one pair („längste Störung: 4 h, am 12.
+        // Juli"), and half a pair renders as a date with nothing to date.
+        longestStartedAt:
+          decision.figures && longest != null && row.longestStartedAt != null
+            ? new Date(row.longestStartedAt)
+            : null,
         downShare: decision.figures ? decision.downShare : null,
         censoredShare: decision.censoredShare.toFixed(3),
         publishable: decision.figures,
@@ -428,12 +495,88 @@ export class DowntimeProfileService {
     }
 
     if (toSave.length === 0) return;
-    for (let i = 0; i < toSave.length; i += 500) {
-      await this.profiles.upsert(
-        toSave.slice(i, i + 500) as AttractionDowntimeProfile[],
-        ["attractionId"],
+
+    // Delete-then-upsert, after the recovery curves' shape: a row for a ride
+    // that no longer exists must GO, and "the rows that should no longer
+    // exist" is not something an upsert expresses. Retired rides kept theirs
+    // forever, and the staleness gate only stops them being served.
+    //
+    // Three conditions, and the third is the one that took a review to find.
+    //
+    // 1. The park scope is the parks this rebuild actually PRODUCED rows for,
+    //    not `parkIds` and not the whole table. `rebuild(null)` is the nightly
+    //    whole-catalogue run, and a whole-table delete there would let one
+    //    empty result — an exposure table that failed to build, a query that
+    //    returned nothing — erase every profile in the database. A park with
+    //    rows in this rebuild has demonstrably been computed; a park with none
+    //    cannot be told apart from a park nobody asked about.
+    // 2. Rides this rebuild kept are excluded, so the rows that survive keep
+    //    their identity across the transaction.
+    // 3. **A live ride's row is spared — unless ageing cannot fix what it
+    //    says.** Dropping out of the population is NOT the same as ceasing to
+    //    exist, and the read path cannot tell the difference: a missing row is
+    //    `not_down_capable` (`toDowntimeBlock(null)`, resting on "the nightly
+    //    job writes a row for every tracked ride"), a statement about the
+    //    park's SOURCE. Deleting a live ride's row would print the same wrong
+    //    refusal the `sched` branch above exists to remove. And rides do leave
+    //    the population while remaining real: the reconstruction wipes
+    //    `attraction_exposure_days` for `op_day >= scanStart` and rewrites
+    //    only what its own population produces, so a wide-window run can strip
+    //    a live ride's exposure rows outright. For those the honest outcome is
+    //    the row it already has, ageing into `stale_data` — „these numbers are
+    //    not current" is true where „this park cannot report an outage" is not.
+    //
+    //    That reasoning has one hole, and it is `no_schedule` alone. Its rows
+    //    are the only ones whose EXISTENCE depends on the regime: `sched`
+    //    stops sourcing the ride the moment the park publishes hours, and
+    //    `no_schedule` is one of the reasons the read path lets win over
+    //    `stale_data`, so the row can never age into anything either. It would
+    //    keep telling readers the park publishes no hours, contradicted by the
+    //    opening hours further up the same page.
+    //
+    //    Only that one. The other permanent reasons are park-level facts that
+    //    stay true, and their rides come through `ex`, which does not care
+    //    about the regime — deleting a live ride's `park_never_reports` row
+    //    would swap a true refusal for `not_down_capable`, which is false
+    //    about a park whose `wiki_entity_id` is set. (`not_down_capable`
+    //    itself is a wash: the fallback says exactly what the row says.)
+    //
+    // What this deliberately does not clean up: a park that vanishes from the
+    // rebuild entirely (every ride retired, or the park removed) keeps its
+    // rows. Nothing renders them — the read path looks a profile up by the
+    // attraction it is drawing — and the alternative is the erasure above.
+    const keptIds = toSave.map((p) => p.attractionId as string);
+    const rebuiltParkIds = [...new Set(toSave.map((p) => p.parkId as string))];
+    // Bound as a parameter rather than written into the statement, so the
+    // annotation is what ties it to the union: renaming the reason then fails
+    // to compile here instead of quietly killing the arm and leaving the
+    // frozen row this branch exists to prevent.
+    const unrefreshableReason: DowntimeWithheldReason = "no_schedule";
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `DELETE FROM attraction_downtime_profiles p
+          WHERE p."parkId" = ANY($1::uuid[])
+            AND NOT (p."attractionId" = ANY($2::uuid[]))
+            AND (
+              NOT EXISTS (
+                SELECT 1 FROM attractions a
+                 WHERE a.id = p."attractionId"
+                   AND a.retired_at IS NULL
+              )
+              OR p.withheld_reason = $3::text
+            )`,
+        [rebuiltParkIds, keptIds, unrefreshableReason],
       );
-    }
+      const repo = manager.getRepository(AttractionDowntimeProfile);
+      for (let i = 0; i < toSave.length; i += 500) {
+        await repo.upsert(
+          toSave.slice(i, i + 500) as AttractionDowntimeProfile[],
+          ["attractionId"],
+        );
+      }
+    });
+
     const published = toSave.filter((p) => p.publishable).length;
     this.logger.log(
       `📉 Downtime profiles: ${toSave.length} ride(s), ${published} publishable`,
@@ -603,6 +746,13 @@ interface CoverageRow {
 interface ProfileRow extends ProfileInputs {
   attractionId: string;
   firstObservedDay: string | null;
+  /**
+   * When the longest usable outage began.
+   *
+   * Not on {@link ProfileInputs}: no gate reads it, it only travels from the
+   * query into the row beside `longestMinutes`.
+   */
+  longestStartedAt: Date | string | null;
 }
 
 function num(value: number | string | null | undefined): number {
