@@ -7,7 +7,6 @@ import {
   decideProfile,
 } from "./downtime-profile.service";
 import type { ProfileInputs } from "./downtime-profile.service";
-import { AttractionDowntimeProfile } from "./entities/attraction-downtime-profile.entity";
 import { ParkDowntimeCoverage } from "./entities/park-downtime-coverage.entity";
 import { isDurationUsable } from "../queues/processors/downtime-reconstruction.processor";
 
@@ -367,10 +366,6 @@ describe("DowntimeProfileService — the rebuild's population", () => {
           },
         },
         {
-          provide: getRepositoryToken(AttractionDowntimeProfile),
-          useValue: { upsert: jest.fn() },
-        },
-        {
           provide: getRepositoryToken(ParkDowntimeCoverage),
           useValue: { upsert: jest.fn() },
         },
@@ -403,6 +398,27 @@ describe("DowntimeProfileService — the rebuild's population", () => {
 
       // Order is the point. An upsert that lands first would be deleted again.
       expect(writes).toEqual(["delete", "upsert"]);
+    });
+
+    it("only deletes rows whose ride is retired or gone, never a live one", async () => {
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [publishableRow(LIVE_RIDE, REPORTING_PARK)],
+      );
+      await service.rebuild(null);
+
+      // Dropping out of the population is not the same as ceasing to exist,
+      // and the read path cannot tell them apart: a missing row is
+      // not_down_capable, a statement about the park's SOURCE. Rides do leave
+      // the population while remaining real — the reconstruction wipes
+      // attraction_exposure_days for op_day >= scanStart and rewrites only
+      // what its own population produces — so without this predicate a wide
+      // reconstruction run would print the wrong refusal on live ride pages.
+      // The honest outcome there is the row they already have, ageing into
+      // stale_data.
+      const sql = managerQuery.mock.calls[0][0] as string;
+      expect(sql).toContain("NOT EXISTS");
+      expect(sql).toContain("a.retired_at IS NULL");
     });
 
     it("scopes the delete to the parks the rebuild actually produced rows for", async () => {

@@ -121,8 +121,6 @@ export class DowntimeProfileService {
 
   constructor(
     private readonly dataSource: DataSource,
-    @InjectRepository(AttractionDowntimeProfile)
-    private readonly profiles: Repository<AttractionDowntimeProfile>,
     @InjectRepository(ParkDowntimeCoverage)
     private readonly coverage: Repository<ParkDowntimeCoverage>,
   ) {}
@@ -485,24 +483,36 @@ export class DowntimeProfileService {
 
     if (toSave.length === 0) return;
 
-    // Delete-then-upsert, after the recovery curves' shape: a ride that drops
-    // out of the population must LOSE its profile, and "the rows that should no
-    // longer exist" is not something an upsert expresses. Retired rides kept
-    // theirs forever, and the read path has no way to tell a stale row from a
-    // current one beyond `MAX_PROFILE_AGE_DAYS`.
+    // Delete-then-upsert, after the recovery curves' shape: a row for a ride
+    // that no longer exists must GO, and "the rows that should no longer
+    // exist" is not something an upsert expresses. Retired rides kept theirs
+    // forever, and the staleness gate only stops them being served.
     //
-    // Two differences from the curves, both deliberate:
+    // Three conditions, and the third is the one that took a review to find.
     //
-    // 1. The scope is the parks this rebuild actually PRODUCED rows for, not
-    //    `parkIds` and not the whole table. `rebuild(null)` is the nightly
+    // 1. The park scope is the parks this rebuild actually PRODUCED rows for,
+    //    not `parkIds` and not the whole table. `rebuild(null)` is the nightly
     //    whole-catalogue run, and a whole-table delete there would let one
     //    empty result — an exposure table that failed to build, a query that
-    //    returned nothing — erase every profile in the database and answer
-    //    `not_down_capable` for 2000 rides the next morning. A park with rows
-    //    in this rebuild has demonstrably been computed; a park with none
-    //    cannot be distinguished from a park nobody asked about.
-    // 2. It is a DELETE of what is missing rather than of everything, so the
-    //    rows that survive keep their identity across the transaction.
+    //    returned nothing — erase every profile in the database. A park with
+    //    rows in this rebuild has demonstrably been computed; a park with none
+    //    cannot be told apart from a park nobody asked about.
+    // 2. Rides this rebuild kept are excluded, so the rows that survive keep
+    //    their identity across the transaction.
+    // 3. **And the ride must actually be gone**, retired or deleted. Dropping
+    //    out of the population is NOT the same as ceasing to exist, and the
+    //    read path cannot tell the difference: a missing row is
+    //    `not_down_capable` (`toDowntimeBlock(null)`, resting on "the nightly
+    //    job writes a row for every tracked ride"), which is a statement about
+    //    the park's SOURCE. Deleting a live ride's row would therefore print
+    //    the same wrong refusal the `sched` branch above exists to remove.
+    //    And rides do leave the population while remaining real: the
+    //    reconstruction wipes `attraction_exposure_days` for `op_day >=
+    //    scanStart` and only rewrites what its own population produces, so a
+    //    wide-window run can strip a live ride's exposure rows outright.
+    //    For those the honest outcome is the row it already has, ageing into
+    //    `stale_data` — „these numbers are not current" is true; „this park
+    //    cannot report an outage" is not.
     //
     // What this deliberately does not clean up: a park that vanishes from the
     // rebuild entirely (every ride retired, or the park removed) keeps its
@@ -513,9 +523,14 @@ export class DowntimeProfileService {
 
     await this.dataSource.transaction(async (manager) => {
       await manager.query(
-        `DELETE FROM attraction_downtime_profiles
-          WHERE "parkId" = ANY($1::uuid[])
-            AND NOT ("attractionId" = ANY($2::uuid[]))`,
+        `DELETE FROM attraction_downtime_profiles p
+          WHERE p."parkId" = ANY($1::uuid[])
+            AND NOT (p."attractionId" = ANY($2::uuid[]))
+            AND NOT EXISTS (
+              SELECT 1 FROM attractions a
+               WHERE a.id = p."attractionId"
+                 AND a.retired_at IS NULL
+            )`,
         [rebuiltParkIds, keptIds],
       );
       const repo = manager.getRepository(AttractionDowntimeProfile);
