@@ -310,20 +310,116 @@ directly on 2026-08-15:
 Queue-Times and wartezeiten.app publish only the marquee rides. The wiki was the
 only source that ever carried the rest, and it stopped.
 
-**What was actually lost is much smaller than 59 rides.** Of Europa-Park's 59
-silenced attractions, only **four** ever recorded a wait above zero — the EP
-Express stations, up to 65 minutes. The other 55 were walk-on for their entire
-recorded history: carousels, monorails, panorama trains, boat rides,
-playgrounds, the Christmas market. They lost a *status*, not a wait time.
+**What was actually lost is much smaller than 59 rides, and the 59 was never
+the casualty list.** It is the *population* — every active Europa-Park ride with
+no `queue_times_entity_id`, which is what the drop could reach at all. Split on
+2026-09-09 against production, it accounts for itself exactly:
 
-That reframes the fix. For the four Express stations this is a genuine gap with
-no remedy available. For the other 55 the answer is not a new source but
-**curation**: many are free-flow and belong under `open_with_park` (§2.2) —
-Adventure Playground and Würmchen Wies'n Playground were flagged on 2026-08-15
-and read OPERATING again immediately, and Lítill Island and Water Playground are
-held only pending season dates. A carousel with a zero wait is *not*
-automatically free-flow though — it has an operator and can be closed — so each
-needs researching individually (§7).
+| count | what these are |
+|---|---|
+| **45** | went quiet and stayed quiet: >100 OPERATING rows before 2026-06-07 13:18Z, none since. This is the sweep below. |
+| **4** | the EP Express stations — **still reporting OPERATING**, 11 500–12 400 rows each since the drop. |
+| **10** | never reported OPERATING in their whole history, before or after; every row they have is CLOSED. Eight are winter-only (the two Christmas markets, the ice rink, Children's carousel Winterland, Skitty World Nordic, Day maze 'Niflheim', FIS Snowkidz, Winter World of Wonder). *Vintage Cars* and *Yomi Adventure Trail* are not, and the operator lists both as running — a separate gap, tracked in `todo.md`. |
+
+```sql
+-- the 45. The 13:18Z / 14:00Z pair straddles the drop; the >100 floor is what
+-- makes "went quiet" mean a ride that was being reported, not one we barely saw.
+-- `rows_after` is every row of any status, and it is meant to be large: §2.3's
+-- reconciliation keeps writing CLOSED. What defines the set is the second HAVING
+-- clause, "no OPERATING row since" — not this column.
+-- `GROUP BY a.name` is safe HERE and not in general: all 96 active Europa-Park
+-- attractions have distinct names. §5.4 is a park where they do not.
+WITH ep AS (SELECT id FROM parks WHERE slug = 'europa-park' AND "citySlug" = 'rust')
+SELECT a.name,
+  count(*) FILTER (WHERE q.status = 'OPERATING' AND q.timestamp <  '2026-06-07 13:18Z') AS op_before,
+  count(*) FILTER (WHERE q.timestamp >= '2026-06-07 14:00Z')                            AS rows_after
+FROM attractions a
+JOIN queue_data q ON q."attractionId" = a.id
+WHERE a."parkId" = (SELECT id FROM ep) AND a.retired_at IS NULL
+GROUP BY a.name
+HAVING count(*) FILTER (WHERE q.status = 'OPERATING' AND q.timestamp <  '2026-06-07 13:18Z') > 100
+   AND count(*) FILTER (WHERE q.status = 'OPERATING' AND q.timestamp >= '2026-06-07 14:00Z') = 0
+ORDER BY op_before DESC;
+```
+
+The **44** in the table above is the feed-side count of what stopped arriving
+that day; 45 is what stayed gone. Near-identical lists, different questions.
+
+Drop the `> 100` floor to `> 0` and the same cut returns **46**. The extra row is
+*'Bellevue' Ferris Wheel* with 81 OPERATING rows before the drop and none after
+— and it is dual-sourced, so it was never in the 59 to begin with. A different
+population and a different threshold, which is exactly the pair of confusions
+this table exists to end.
+
+**The four Express stations are no longer a gap.** This section called them "a
+genuine gap with no remedy available" — measurably not so any more: they are the
+only four of the 59 that ever recorded a wait above zero, up to 65 minutes, and
+they are also the only four still reporting OPERATING. (The other ten still
+publish rows — they just never say anything but CLOSED.) Whatever silenced the
+rest did not keep them.
+
+That leaves the 45, and for them the answer is not a new source but
+**curation**: some are free-flow and belong under `open_with_park` (§2.2). A
+carousel with a zero wait is *not* automatically free-flow though — it has an
+operator and can be closed — so each needs researching individually (§7).
+
+**The sweep is done, and the estimate that used to stand here — that *many* of
+the 45 would turn out free-flow — was too high.** Every one of them was
+researched against the operator's own pages:
+
+| verdict | rides |
+|---|---|
+| free-flow, `open_with_park` set | **10** |
+| operated ride, correctly left alone | **34** |
+| no operator source to decide on | **1** |
+
+The ten are Adventure Playground, Ball Pool, Casa da Aventura, Limerick Castle,
+Little Lamb's Land, Lítill Island, Paul's Playboat, Root Slides, Water
+Playground and Würmchen Wies'n Playground. Eight were already flagged;
+**Limerick Castle** (audit `d98a7513-2799-42ae-8bf9-1a1d07d1fc54`) and **Paul's
+Playboat** (audit `ed34c229-1220-4728-ba51-cc10527374ea`) were written on
+2026-09-09.
+
+**Both took no months, deliberately**, and that is a finding rather than an
+omission. Most free-flow rows carry no months: of the 32 flagged today, 4 have
+months and 28 do not — these two among them. What sets them apart is not the
+empty list but that somebody **asked**. Europa-Park lists both under all four of
+its seasons — Summer, Halloween, HALLOWinter, Winter — so they run exactly when
+the park runs, and §7a has nothing to decide. Of the four rows whose season had
+been researched before them, all four needed months, which is what made §7 step 3
+read as if months were always the answer. They are not.
+
+(The other 26 month-less rows are not evidence either way. Only eight
+`openWithPark` writes exist in `admin_audit_log` at all — two for *Ice skate
+hire* on 2026-08-20/21, the four §7a lists just after midnight on 2026-09-09,
+and these two — because the sweeps before that followed §7's old advice and
+wrote the column with a raw `UPDATE`, which is the reason step 5 now says
+otherwise. Audit dates in this document are park-local; those four are
+2026-09-08 22:38 UTC.)
+
+The one that could not be decided is **Rocking Bridge & Chute**: it is on
+neither the operator's attraction list nor its children's page, and its own page
+answers 403. A fan description would make it a playground; §7 step 1 rules that
+out as evidence, and its absence from the list may equally mean it no longer
+stands — which would be `retired_at`, not the free-flow flag.
+
+**Two traps this sweep hit, worth knowing before the next park:**
+
+- The operator can contradict itself. **Dwarf City** sits under *playgrounds* on
+  Europa-Park's children's page while its own detail page gives it decorated
+  wagons, a 2:30 ride time and 280 riders/hour. The detail page is the more
+  specific claim and wins; a category filter is a navigation aid, not a fact
+  about the attraction.
+- The name that survives is the wiki's. Two of the 45 (**Rocking Bridge &
+  Chute**, **Children's carousel**) do not appear under those names on the
+  operator's English list at all, so a research pass that only matches names
+  silently drops them.
+
+**What this leaves is not a bug.** Measured the same day with the park
+`OPERATING`, the 45 serve as 10 `OPERATING` and 35 `UNKNOWN` — no `CLOSED`
+anywhere. §2.3 is doing its job: the 34 operated rides say "we cannot read this",
+which is true, and the alternative would be inventing a status for a ride no
+source reports.
 
 ---
 
@@ -398,12 +494,24 @@ SELECT min(timestamp)::date, max(timestamp)::date FROM queue_data;
    looked like a climbing net and was a harnessed high-ropes course with a
    140 cm minimum, demolished after 2025-11-02.
 2. Confirm it has no queue, no ride vehicle, no separate ticket.
-3. Establish **seasonality**. If the park keeps running while the area does not
-   — which is the case for every free-flow row curated so far, whether or not
-   the park itself is open year-round — it needs months before the flag is safe,
-   or a snow playground reads open in July. See §7a.
-4. Write the months to **`curated_season_months`** and set
-   **`curated_is_seasonal = true`** beside them. The pair, not just the months.
+3. Establish **seasonality**, and treat both answers as answers. If the park
+   keeps running while the area does not, it needs months before the flag is
+   safe, or a snow playground reads open in July (§7a). If the operator lists
+   the area under every season the park has, it correctly takes **none** — a
+   null list is `isInSeason`'s "runs all year" and is the state most free-flow
+   rows are in. Europa-Park's Limerick Castle and Paul's Playboat are the worked
+   example (§5.2). What is not allowed is a month list invented to be safe: once
+   a list exists, `isInSeason` answers purely from it, so every month left out
+   is a hard close.
+4. **If step 3 produced months**, write them to **`curated_season_months`** and
+   set **`curated_is_seasonal = true`** beside them. The pair, not just the
+   months. If it produced none, write **neither**: `curated_is_seasonal = true`
+   over an empty month list makes `resolveCuratedFacts` report `isSeasonal: true`
+   for an area that runs all year, which is §3.3 backwards. Leaving both null is
+   right — the resolved answer then falls back to the synced `is_seasonal`, and
+   Step 2b clears exactly this shape. `curated_is_seasonal = **false**` is the
+   deliberate pin for the one case where that is not enough: a free-flow area the
+   detector keeps calling seasonal because the park shut around it.
    `resolveCuratedFacts` does infer `isSeasonal: true` from non-empty curated
    months alone, so the flag looks redundant — it is not. Step 2b of the nightly
    `detect-seasonal` runs
@@ -489,10 +597,14 @@ survive the `seasonMonths = !isSeasonal ? null : …` gate. Setting it anyway is
 harmless and pins the value against the nightly detector; setting it to `false`
 takes the months down with it, which is the whole point of the pairing.
 
-Flagged as of 2026-09-09: 30 attractions across 17 parks — the "19 across 11"
-that stood here was already stale. Curated on that date, with the source on each
-audit row: Europa-Park's _Lítill Island_ `[3–9]` and _Water Playground_
-`[3–10]`, Everland's _Snow playground_ `[12, 1, 2]`, Bellewaerde's _Snowmen
-Playground_ `[11, 12, 1]`. Still held for want of any stated operating window:
-Peppa Pig's _Muddy Puddles Splash Pad_ and Walibi Rhône-Alpes' two _Exotic
-Island_ play areas. See `todo.md`.
+Flagged as of 2026-09-09, counted after the Europa-Park sweep in §5.2: **32
+attractions across 17 parks** — the "19 across 11" that stood here was already
+stale, and the "30 across 17" that replaced it that morning was overtaken the
+same afternoon. Curated on that date, with the source on each audit row:
+Europa-Park's _Lítill Island_ `[3–9]` and _Water Playground_ `[3–10]`,
+Everland's _Snow playground_ `[12, 1, 2]`, Bellewaerde's _Snowmen Playground_
+`[11, 12, 1]`, and — with **no months, deliberately** — Europa-Park's _Limerick
+Castle_ and _Paul's Playboat_. Exactly four of the 32 carry curated months;
+everything else runs with its park. Still held for want of any stated operating
+window: Peppa Pig's _Muddy Puddles Splash Pad_ and Walibi Rhône-Alpes' two
+_Exotic Island_ play areas. See `todo.md`.
