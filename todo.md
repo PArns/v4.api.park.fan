@@ -480,13 +480,21 @@ with the same rows.
       the existing duplicate-records work.
 - [x] **Europa-Park worked through, 2026-09-09** — all 45 of its silenced rides
       researched against the operator's own pages. Ten are free-flow (two of
-      them written that day: _Limerick Castle_ `d98a7513-2799-42ae-8bf9-1a1d07d1fc54`,
-      _Paul's Playboat_ `ed34c229-1220-4728-ba51-cc10527374ea`, both without
+      them written that day, audit rows `d98a7513-2799-42ae-8bf9-1a1d07d1fc54`
+      for _Limerick Castle_ and `ed34c229-1220-4728-ba51-cc10527374ea` for
+      _Paul's Playboat_, both without
       months because the operator lists them under all four seasons), 34 are
       operated rides that correctly stay `UNKNOWN`, and one could not be decided.
       Measured with the park `OPERATING`: 10 `OPERATING`, 35 `UNKNOWN`, no
       `CLOSED` — §2.3 is holding. Details and the two research traps:
       `docs/architecture/attraction-status-and-seasonality.md` §5.2.
+- [ ] **Two Europa-Park rides have never once reported OPERATING.** _Vintage
+      Cars_ (5714 rows) and _Yomi Adventure Trail_ (3636) carry nothing but
+      CLOSED across their whole history, while the operator lists both as
+      running attractions. They are not part of the feed drop — they have no
+      `queue_times_entity_id` either, but they were never reported before it
+      happened. Neither §2.3 nor §2.4 covers a ride that reports and only ever
+      says closed.
 - [ ] **Europa-Park _Rocking Bridge & Chute_ has no operator page.** It is on
       neither the attraction list nor the children's page, and
       `/de/attraktionen/wackelbruecke-mit-wendelrutsche` answers 403. Fan

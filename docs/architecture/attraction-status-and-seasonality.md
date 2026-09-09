@@ -317,13 +317,34 @@ no `queue_times_entity_id`, which is what the drop could reach at all. Split on
 
 | count | what these are |
 |---|---|
-| **45** | went quiet and stayed quiet: >100 OPERATING rows before 2026-06-07 13:18Z, none since (the SQL in §6). This is the sweep below. |
-| **4** | the EP Express stations — **still reporting**, 11 500–12 400 OPERATING rows since the drop. |
-| **10** | never reported OPERATING at all, before or after: the Christmas markets, the ice rink, Winterland, Skitty World, Niflheim, FIS Snowkidz, Winter World of Wonder — plus *Vintage Cars* and *Yomi Adventure Trail*, which are not winter-only and are the §2.4 "still open" case rather than this one. |
+| **45** | went quiet and stayed quiet: >100 OPERATING rows before 2026-06-07 13:18Z, none since. This is the sweep below. |
+| **4** | the EP Express stations — **still reporting OPERATING**, 11 500–12 400 rows each since the drop. |
+| **10** | never reported OPERATING in their whole history, before or after; every row they have is CLOSED. Seven are winter-only (the two Christmas markets, the ice rink, Winterland, Skitty World, Niflheim, FIS Snowkidz, Winter World of Wonder). *Vintage Cars* and *Yomi Adventure Trail* are not, and the operator lists both as running — a separate gap, tracked in `todo.md`. |
+
+```sql
+-- the 45. The 13:18Z / 14:00Z pair straddles the drop; the >100 floor is what
+-- makes "went quiet" mean a ride that was being reported, not one we barely saw.
+WITH ep AS (SELECT id FROM parks WHERE slug = 'europa-park' AND "citySlug" = 'rust')
+SELECT a.name,
+  count(*) FILTER (WHERE q.status = 'OPERATING' AND q.timestamp <  '2026-06-07 13:18Z') AS op_before,
+  count(*) FILTER (WHERE q.timestamp >= '2026-06-07 14:00Z')                            AS rows_after
+FROM attractions a
+JOIN queue_data q ON q."attractionId" = a.id
+WHERE a."parkId" = (SELECT id FROM ep) AND a.retired_at IS NULL
+GROUP BY a.name
+HAVING count(*) FILTER (WHERE q.status = 'OPERATING' AND q.timestamp <  '2026-06-07 13:18Z') > 100
+   AND count(*) FILTER (WHERE q.status = 'OPERATING' AND q.timestamp >= '2026-06-07 14:00Z') = 0
+ORDER BY op_before DESC;
+```
 
 The **44** in the table above is the feed-side count of what stopped arriving
-that day; 45 is what stayed gone. Near-identical lists, different questions. (At
-`op_before > 0` instead of `> 100` it is 46; the floor drops one thin history.)
+that day; 45 is what stayed gone. Near-identical lists, different questions.
+
+Run without the `queue_times_entity_id` restriction the same cut returns **46**,
+and the extra row — *'Bellevue' Ferris Wheel*, 81 OPERATING rows before and none
+after — is dual-sourced, so it was never in the 59 and is not part of this
+incident. Two different populations, which is exactly the confusion this table
+exists to end.
 
 **The four Express stations are no longer a gap.** This section called them "a
 genuine gap with no remedy available" — measurably not so any more: they are the
@@ -354,14 +375,19 @@ Playboat** (audit `ed34c229-1220-4728-ba51-cc10527374ea`) were written on
 2026-09-09.
 
 **Both took no months, deliberately**, and that is a finding rather than an
-omission. Most free-flow rows carry no months — 28 of the 32 flagged today —
-but those were flagged in the 2026-08-15 sweep without the season question ever
-being put. These two are the first where it *was* put and the operator answered
-it: Europa-Park lists both under all four of its seasons — Summer, Halloween,
-HALLOWinter, Winter — so they run exactly when the park runs, and §7a has
-nothing to decide. Of the four rows whose season was researched before them,
-all four needed months, which is what made §7 step 3 read as if months were
-always the answer. They are not.
+omission. Most free-flow rows carry no months: of the 32 flagged today, 4 have
+months and 28 do not — these two among them. What sets them apart is not the
+empty list but that somebody **asked**. Europa-Park lists both under all four of
+its seasons — Summer, Halloween, HALLOWinter, Winter — so they run exactly when
+the park runs, and §7a has nothing to decide. Of the four rows whose season had
+been researched before them, all four needed months, which is what made §7 step 3
+read as if months were always the answer. They are not.
+
+(The other 26 month-less rows are not evidence either way. Only eight
+`openWithPark` writes exist in `admin_audit_log` at all — two on 2026-08-20/21,
+four on 2026-09-08, these two — because the sweeps before that followed §7's old
+advice and wrote the column with a raw `UPDATE`, which is the reason step 5 now
+says otherwise.)
 
 The one that could not be decided is **Rocking Bridge & Chute**: it is on
 neither the operator's attraction list nor its children's page, and its own page
@@ -469,8 +495,11 @@ SELECT min(timestamp)::date, max(timestamp)::date FROM queue_data;
    example (§5.2). What is not allowed is a month list invented to be safe: once
    a list exists, `isInSeason` answers purely from it, so every month left out
    is a hard close.
-4. Write the months to **`curated_season_months`** and set
-   **`curated_is_seasonal = true`** beside them. The pair, not just the months.
+4. **If step 3 produced months**, write them to **`curated_season_months`** and
+   set **`curated_is_seasonal = true`** beside them. The pair, not just the
+   months. If it produced none, write **neither**: `curated_is_seasonal = true`
+   over an empty month list makes `resolveCuratedFacts` report `isSeasonal: true`
+   for an area that runs all year, which is §3.3 backwards.
    `resolveCuratedFacts` does infer `isSeasonal: true` from non-empty curated
    months alone, so the flag looks redundant — it is not. Step 2b of the nightly
    `detect-seasonal` runs
