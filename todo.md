@@ -349,13 +349,51 @@ What is still open, roughly by consequence:
       DELETE, so already-indexed URLs redirect instead of 404ing; neither raw
       path does. Out of PF-111, whose acceptance criteria are about the
       dependent rows rather than the loser's own path.
-- [ ] **`attraction_ride_profiles` is missing from the park-side snapshot.** It
-      carries a `parkId` with `onDelete: "CASCADE"`
-      (`attraction-ride-profile.entity.ts:81`) and appears neither in
-      `PARK_DEPENDENCIES` nor in the `PARK_REFERENCING_TABLES` snapshot, so
-      `parkTablesMissingFrom` cannot see it: a park merge destroys curated track
-      figures, ride types and builders without a log line. The snapshot is dated
-      2026-07-27 and this table postdates it.
+- [ ] **`attraction_ride_profiles` is still unprotected on the _attraction_
+      side.** Its park half is fixed — PF-111 added it to `PARK_DEPENDENCIES`
+      and to the `PARK_REFERENCING_TABLES` snapshot, so a park merge now carries
+      the curated profiles across instead of cascading them. Its `attractionId`
+      carries `onDelete: "CASCADE"` too, and there the losing ride's profile is
+      still destroyed by the `DELETE FROM attractions` both raw paths and
+      `AttractionMergeService.merge` run. It is in neither
+      `ATTRACTION_DEPENDENCIES` nor `ATTRACTION_REFERENCING_TABLES`, so the
+      guard cannot see it either. Left open rather than guessed at, because the
+      answer is not a `MergeStrategy`: `discard` is what happens today and is
+      wrong by the file's own rule (the neighbours it would sit beside —
+      rope-drop, typical-waits — are `discard` because they are _derived_, and
+      this is hand-curated with no feed and no seed); `move` collides, since
+      `attractionId` is both the merge column and the primary key. What it wants
+      is winner-authoritative — take the loser's row only where the survivor has
+      none — the same shape `park_p50_baselines` needs and the same reason it is
+      not a dependency.
+- [ ] **A third park delete in `parks.service.ts` has the whole hole.** The
+      priority merge in `syncParks` (`parkRepository.delete(losingPark.id)`,
+      guarded by an `isEmpty` count over shows/restaurants/attractions) applies
+      neither `PARK_DEPENDENCIES` nor `PARK_INLINE_DEPENDENCIES`, so
+      `park_occupancy` and the two attraction baselines raise 23503 and abort
+      the sync run. Worse than the two PF-111 fixed: this path holds **no
+      transaction**, so the entity moves above it are already committed when the
+      DELETE throws, and it leaves a losing park stripped of its rides and still
+      present. Out of PF-111, which names the other two paths; wrapping this one
+      in a transaction is its own change.
+- [ ] **The blind show and restaurant moves can raise 23505 before any of that
+      is reached.** Both raw paths do `UPDATE shows SET "parkId" = …` and the
+      same for restaurants, against a unique `(parkId, slug)` on either table
+      (`show.entity.ts:33`, `restaurant.entity.ts:33`). Two rows for one park
+      from two sources are exactly the case that produces a shared slug, so the
+      transaction rolls back before the attraction and park steps run at all.
+      `mergeParks.migrateEntities` handles it — match on slug or name,
+      consolidate, delete the loser — and neither raw path does. Not PF-111's
+      scope: it is a collision decision per entity type, not a dependency list.
+- [ ] **A migrated `park_season` can name attractions the same merge deleted.**
+      `park_seasons.attraction_ids` is a jsonb array of attraction ids, and
+      `PARK_DEPENDENCIES` moves the row onto the survivor. Where the merge
+      collided a ride, the id in that array belongs to the deleted loser, and
+      `ParkSeasonService` re-validates the stored array on the next edit — so
+      the season is carried across intact and then refuses every later change
+      with "These attractions are not in this park". The ids would have to be
+      rewritten to the survivors, which the dependency list has no way to
+      express.
 - [x] ~~A park with no published hours is served `not_down_capable`, not
       `no_schedule`~~ — the population query gained a `sched` branch that
       sources the rides of `no_schedule` parks directly from `attractions`
