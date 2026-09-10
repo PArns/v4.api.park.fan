@@ -195,6 +195,32 @@ shape, and a ride the past-day rollup has no row for is omitted rather than draw
 at zero — absence there means the rollup has not reached that day, which is not
 the same statement as an empty queue.
 
+### A ride out of season is absent, not closed
+
+`rides[]` carries only rides that can open on the day being asked about. A
+seasonal ride whose season does not cover that date is left out entirely — not
+listed with a flat curve, not listed with a flag — because it is not one of the
+day's rides. Same rule as the park page's "12 von 45 geöffnet" counter, and the
+same three-valued source: `isCurrentlyInSeason` / `attractionIsOutOfSeason`,
+where `false` closes, `true` opens, and **`null` — "seasonal, and nothing else
+known" — changes nothing**. Most of the catalogue sits on `null`, because the
+detector deliberately names no months under `MIN_OBSERVED_DAYS` of history.
+
+Two things about it are easy to get wrong from the outside:
+
+- **The month is the planned day's, not today's.** A request that arrives in
+  August for 20 December is answered with December's rides, ice rink included.
+- **A past date is not filtered.** `tier: "observed"` is read out of the hourly
+  rollup, and a row there means the ride ran — an observation beats a
+  description of the past.
+
+Nothing upstream does this. `MLService.getParkPredictions` keeps rides with an
+OPERATING reading in the last 90 days, which is a question about the past asked
+on behalf of a date in the future: the two windows cannot line up, in either
+direction. A summer water ride still carrying August's readings in September was
+given a full December forecast, and a ride whose season ended in August stayed
+plannable until roughly the end of November.
+
 ## 7. `leadTimeMae`
 
 The measured mean absolute error for predictions made this far ahead, in minutes,

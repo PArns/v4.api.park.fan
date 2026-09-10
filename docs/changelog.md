@@ -6,6 +6,36 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — `/plan/day` no longer plans a day around a ride that cannot open on it
+
+`rides[]` excluded nothing seasonal. `attractions()` asked for `retiredAt IS
+NULL` and nothing else, and neither the composed nor the measured path looked at
+a season — so a ride the park cannot run on the requested date was served with an
+hourly curve, a `dayPeak` and, where it qualified, `isHeadliner`. The rule it
+broke is site-wide: a ride out of season is not one of the day's rides, absent
+rather than closed.
+
+The filter that looked like it already covered this cannot. `MLService.getPark
+Predictions` keeps rides with an OPERATING reading in the **last 90 days**, which
+is a question about the past asked on behalf of a date in the future, and it goes
+wrong in both directions: a summer water ride still carrying August's readings in
+September was handed a full forecast for 20 December, and a ride whose season
+ended on 31 August stayed plannable until roughly the end of November — the
+shoulder weeks people plan in.
+
+`forecastRides` now drops the ride, keyed on the month of the **planned date**
+rather than today's, through the existing `isCurrentlyInSeason` /
+`resolveCuratedFacts` pair (`=== false`; `null` — "seasonal, and nothing else
+known", which is most of the catalogue — hides nobody). Two deliberate limits:
+`observedRides` is untouched, because a row in the hourly rollup is a measurement
+of the ride having run and an observation beats a description of the past; and a
+ride with a `seasonOutSince` but no months reads out on every date, the same way
+the SQL twin `attractionIsOutOfSeason` reads it, rather than growing a third
+interpretation of seasonality.
+
+No DTO field was added: the frontend would then have to act on it, which leaves
+the wrong plan on screen until that lands.
+
 ### Added — the outage estimate says when, not just how much longer
 
 `estimate.recoveryWindow` (`{ from, to }`, ISO 8601 UTC) on the outage object.

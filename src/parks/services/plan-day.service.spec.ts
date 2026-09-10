@@ -1452,4 +1452,131 @@ describe("PlanDayService", () => {
       expect(plan.context.status).toBe("OPERATING");
     });
   });
+
+  // ── A ride that cannot open on the day being planned ───────────────────────
+  // Nothing upstream filters these. `MLService.getParkPredictions` keeps rides
+  // with an OPERATING reading in the last 90 days, which is a question about
+  // the past asked on behalf of a date in the future — a summer water ride
+  // still carrying August's readings in September is handed a full forecast for
+  // December. So the endpoint had a curve, a `dayPeak` and an `isHeadliner` for
+  // a ride the park cannot run that day.
+  describe("seasonality", () => {
+    /**
+     * A date in a month that is neither this one nor next — so "the planned
+     * month" and "the month the suite runs in" can never be the same value, on
+     * any day of any month.
+     */
+    const otherMonthDate = (): string => {
+      const now = new Date();
+      const at = new Date(now.getFullYear(), now.getMonth() + 2, 10, 12);
+      return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-10`;
+    };
+
+    const monthOf = (date: string) => Number(date.slice(5, 7));
+
+    const allMonthsExcept = (month: number) =>
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].filter((m) => m !== month);
+
+    /** The default fixture, planned for `date`, with `taron` made seasonal. */
+    const planWithSeason = async (
+      date: string,
+      season: Partial<Attraction>,
+    ) => {
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      attractions = [{ ...attractions[0], ...season }];
+      service = await build();
+      return service.buildPlanDay(park, date);
+    };
+
+    it("leaves a ride out of the day it cannot open on", async () => {
+      const date = otherMonthDate();
+
+      const plan = await planWithSeason(date, {
+        isSeasonal: true,
+        seasonMonths: allMonthsExcept(monthOf(date)),
+      });
+
+      // Absent, not closed. A ride that cannot open is not one of the day's
+      // rides at all — the same rule the park page's "12 von 45 geöffnet"
+      // counter follows.
+      expect(plan.rides).toEqual([]);
+    });
+
+    it("asks about the planned month, not the month the request arrives in", async () => {
+      const date = otherMonthDate();
+
+      // In season on the day being planned, out of season today. The old code
+      // had no season check at all, so this passed by accident; a fix that
+      // reached for `new Date()` instead of the date would fail it.
+      const plan = await planWithSeason(date, {
+        isSeasonal: true,
+        seasonMonths: [monthOf(date)],
+      });
+
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+
+    it("keeps a ride whose season is seasonal-but-unknown", async () => {
+      const date = otherMonthDate();
+
+      // `isCurrentlyInSeason` answers `null` here: seasonal, and nothing else
+      // known. The detector says that about everything under MIN_OBSERVED_DAYS
+      // of history, which is most of the catalogue — treating it as "closed"
+      // would empty half the plans in the name of honesty.
+      const plan = await planWithSeason(date, {
+        isSeasonal: true,
+        seasonMonths: null,
+        seasonOutSince: null,
+      });
+
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+
+    it("lets a curated season overrule the detector's months", async () => {
+      const date = otherMonthDate();
+
+      // The detector says this ride does not run in the planned month; a person
+      // has since written down that it is not seasonal at all. The curated
+      // answer takes the whole statement over, months included.
+      const plan = await planWithSeason(date, {
+        isSeasonal: true,
+        seasonMonths: allMonthsExcept(monthOf(date)),
+        curatedIsSeasonal: false,
+      });
+
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+
+    it("does not apply the season to a day that already happened", async () => {
+      const date = pastDate();
+      calendarDay = { ...calendarDay!, date };
+      // Out of season on every date: seasonal, no months, and a detector note
+      // saying when it last ran.
+      attractions = [
+        {
+          ...attractions[0],
+          isSeasonal: true,
+          seasonMonths: null,
+          seasonOutSince: "2026-01-31",
+        },
+      ];
+      hourlyHistory = new Map([
+        ["a-taron", slots([["14:00", 70, 4]])],
+      ]) as never;
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      // The rollup has a row for this ride on this day, which means it ran.
+      // An observation beats a description of the past, so the season may not
+      // delete a measurement.
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+  });
 });
