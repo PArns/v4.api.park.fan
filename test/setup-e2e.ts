@@ -81,29 +81,40 @@ afterAll(async () => {
  * those from being written at all.
  */
 afterEach(async () => {
-  if (redis) {
-    await redis.flushall();
+  // `finally`, so a Redis that refuses to flush does not also cost the run its
+  // table cleanup: this hook is the only isolation left between two test FILES,
+  // and returning early from it hands the next file this file's rows.
+  try {
+    if (redis) {
+      await redis.flushall();
+    }
+  } finally {
+    await truncateAllTables();
+  }
+});
+
+async function truncateAllTables(): Promise<void> {
+  if (!dataSource?.isInitialized) {
+    return;
   }
 
-  if (dataSource?.isInitialized) {
-    const entities = dataSource.entityMetadatas;
+  const entities = dataSource.entityMetadatas;
 
-    // Disable foreign key checks temporarily for faster truncation
-    await dataSource.query("SET session_replication_role = replica;");
+  // Disable foreign key checks temporarily for faster truncation
+  await dataSource.query("SET session_replication_role = replica;");
 
+  try {
     for (const entity of entities) {
-      const tableName = entity.tableName;
-      try {
-        await dataSource.query(`TRUNCATE TABLE "${tableName}" CASCADE;`);
-      } catch (error) {
-        // Ignore errors for tables that don't exist
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        console.warn(`Warning: Could not truncate ${tableName}:`, errorMessage);
-      }
+      // A failure here used to be a `console.warn` about tables that might not
+      // exist. Global setup creates the schema from this same metadata, so
+      // every table does exist and a failure means something else — a lock lost
+      // to a background query, say. Swallowing it was survivable while each
+      // file had its own database; with one shared database it silently seeds
+      // every later file, so it fails the test that caused it instead.
+      await dataSource.query(`TRUNCATE TABLE "${entity.tableName}" CASCADE;`);
     }
-
+  } finally {
     // Re-enable foreign key checks
     await dataSource.query("SET session_replication_role = DEFAULT;");
   }
-});
+}

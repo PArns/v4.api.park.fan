@@ -102,9 +102,12 @@ async function createSchema(database: string): Promise<void> {
     logging: false,
   });
 
-  await dataSource.initialize();
-
+  // Inside the `try`, not before it: `synchronize: true` does its schema work
+  // during `initialize()`, and a failure there leaves a connected pool that
+  // nothing else would ever close.
   try {
+    await dataSource.initialize();
+
     try {
       await dataSource.query(
         "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;",
@@ -153,7 +156,12 @@ async function createSchema(database: string): Promise<void> {
       );
     }
   } finally {
-    await dataSource.destroy();
+    // Guarded, because `initialize()` itself may be what threw, and destroying
+    // a DataSource that never connected throws in its own right — which would
+    // replace the real error with a misleading one.
+    if (dataSource.isInitialized) {
+      await dataSource.destroy();
+    }
   }
 
   console.log("✅ Test database schema created");
