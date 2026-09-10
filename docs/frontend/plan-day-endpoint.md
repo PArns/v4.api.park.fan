@@ -235,6 +235,15 @@ direction. A summer water ride still carrying August's readings in September was
 given a full December forecast, and a ride whose season ended in August stayed
 plannable until roughly the end of November.
 
+**How much of that a park gets back depends on its months.** The near horizon
+needs no months and works everywhere. The far horizon is a calendar question and
+therefore only answerable for a ride that has one, and the detector supplies none
+until `MIN_OBSERVED_DAYS` (330) of watched days — so on a park tracked for less
+than that, a far-date plan is only cleaned up where somebody has curated
+`Betriebsmonate` under `/admin/attractions/<id>`. That is a data gap, not a hole
+in the rule, and it is the honest place for it: the alternative is guessing a
+calendar from a note that says "shut at the moment".
+
 ## 7. `leadTimeMae`
 
 The measured mean absolute error for predictions made this far ahead, in minutes,

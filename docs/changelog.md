@@ -39,9 +39,18 @@ park-open days inside a 60-day window whose current status is CLOSED and clears
 it on the next OPERATING row, so it is a reading of the current state, and a
 three-week refurbishment sets it exactly as well as a season does. Letting it
 reach further would delete a headliner from half a year of plans with no field
-saying why (`claude.md` §4). It costs the fix nothing: a ride with months keeps
-its full reach, and a ride still running today carries no `season_out_since` at
-all.
+saying why (`claude.md` §4). It costs the fix nothing structurally: a ride with
+months keeps its full reach, and a ride still running today carries no
+`season_out_since` at all.
+
+What it does cost is coverage, and that is worth stating plainly rather than
+leaving in the mechanism. The near horizon is fixed for every park. The far
+horizon is a calendar question, so it is only answerable for a ride that has
+months — and the detector writes none below `MIN_OBSERVED_DAYS` (330) of watched
+days, so on a park tracked for less than that the December case is cleaned up
+only where somebody has curated `Betriebsmonate`. A data gap, in the one place
+where filling it by inference would mean guessing a calendar out of a note that
+says "shut at the moment".
 
 Two more limits. `observedRides` is untouched: a row in the hourly rollup is a
 measurement of the ride having run, and an observation beats a description of
