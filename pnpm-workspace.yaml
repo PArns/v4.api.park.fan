@@ -40,7 +40,11 @@ overrides:
   # instrument and the report read `All files | 0 | 0 | 0 | 0`. v8 is the same
   # class with the two import lines rewritten, and it asks for glob ^13.0.6 and
   # minimatch ^10.2.2 by itself — the versions the lines above already force.
-  test-exclude@<8.0.0: '>=8.0.0'
+  # The target is bounded, unlike the glob line: the consumer above declares
+  # `^6.0.0`, so an unbounded `>=8.0.0` would hand it a future major with no
+  # semver fence — and with no CI running test:cov, a return to all-zeros would
+  # be as quiet as this one was.
+  test-exclude@<8.0.0: '>=8.0.0 <9.0.0'
   inflight: npm:lru-cache@11.0.2
   uuid: '>=14.0.0'
   brace-expansion: '>=5.0.9'

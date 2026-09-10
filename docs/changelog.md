@@ -33,8 +33,10 @@ the two import lines rewritten for glob v9+; its public surface
 overrides already force. Nothing else moved: the lockfile diff is three package
 lines. Neither `babel-plugin-istanbul` nor `jest` was touched.
 
-**The real coverage is 45.27 % statements / 34.47 % branches / 44.79 % functions
-/ 45.15 % lines**, against a threshold of 70. `pnpm test:cov` therefore still
+**The real coverage is 45.26 % statements / 34.45 % branches / 44.79 % functions
+/ 45.14 % lines** (three consecutive runs; a run can still move in the second
+decimal, so read it as ~45 / ~34), against a threshold of 70. `pnpm test:cov`
+therefore still
 exits non-zero, now for the reason the threshold exists. The threshold was **not
 lowered** — a number that has measured nothing for a while is expected to be
 violated when it starts measuring again, and quietly configuring that away would
