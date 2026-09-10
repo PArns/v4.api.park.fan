@@ -1,6 +1,8 @@
 import {
   ATTRACTION_DEPENDENCIES,
   PARK_DEPENDENCIES,
+  PARK_INLINE_DEPENDENCIES,
+  PARK_TABLES_HANDLED_INLINE,
   attractionTablesMissingFrom,
   parkTablesMissingFrom,
   applyMergeDependencies,
@@ -94,6 +96,83 @@ describe("merge dependency tables", () => {
     expect(parkTablesMissingFrom(PARK_REFERENCING_TABLES)).toEqual([]);
   });
 
+  /**
+   * `PARK_INLINE_DEPENDENCIES` is the same set of decisions as steps 3-4 of
+   * `mergeParks`, for the two raw paths in `parks.service.ts`. The two lists
+   * are separate objects and would drift silently, so this pins the one
+   * relationship that matters: every inline table is either declared here or
+   * named as one of the four the callers handle themselves.
+   */
+  const PARK_TABLES_HANDLED_BY_THE_CALLER = [
+    // Reparented by both raw paths before the park step; attractions need
+    // collision handling first.
+    "attractions",
+    "shows",
+    "restaurants",
+    // Winner-authoritative, which is not a MergeStrategy.
+    "park_p50_baselines",
+    // Needs the internal_entity_type filter a bare dependency cannot carry.
+    "external_entity_mapping",
+  ];
+
+  it("covers every inline park table either as a dependency or as the caller's job", () => {
+    const covered = new Set([
+      ...PARK_INLINE_DEPENDENCIES.map((d) => d.table),
+      ...PARK_TABLES_HANDLED_BY_THE_CALLER,
+    ]);
+    expect(
+      PARK_TABLES_HANDLED_INLINE.filter((table) => !covered.has(table)),
+    ).toEqual([]);
+    // And nothing here that the inline list does not know about — a table
+    // declared twice under two strategies is worse than one declared nowhere.
+    expect(
+      PARK_INLINE_DEPENDENCIES.map((d) => d.table).filter(
+        (table) =>
+          !(PARK_TABLES_HANDLED_INLINE as readonly string[]).includes(table),
+      ),
+    ).toEqual([]);
+    const both = PARK_INLINE_DEPENDENCIES.map((d) => d.table).filter((table) =>
+      PARK_DEPENDENCIES.some((d) => d.table === table),
+    );
+    expect(both).toEqual([]);
+  });
+
+  it("moves park_occupancy — the one park FK that is NO ACTION", () => {
+    // `park-occupancy.entity.ts` declares `@ManyToOne(() => Park)` with no
+    // `onDelete`. Every other inline table cascades, so forgetting one of those
+    // destroys rows quietly; forgetting this one raises 23503 and rolls the
+    // whole merge back, taking the sync run with it.
+    const occupancy = PARK_INLINE_DEPENDENCIES.find(
+      (d) => d.table === "park_occupancy",
+    );
+    expect(occupancy?.strategy).toBe("move");
+    expect(occupancy?.column).toBe("parkId");
+  });
+
+  it("dedupes headliner_attractions on attractionId before moving the parkId", () => {
+    // Its PK is (parkId, attractionId), and a ride that collided at the
+    // attraction level already carries the survivor's attractionId beside the
+    // ghost's parkId. Without the dedupe that move is a PK violation.
+    const headliners = PARK_INLINE_DEPENDENCIES.find(
+      (d) => d.table === "headliner_attractions",
+    );
+    expect(headliners?.strategy).toBe("move");
+    expect(headliners?.conflictColumns).toEqual(["attractionId"]);
+  });
+
+  it("moves the rope-drop and typical-wait rows with the park rather than cascading them", () => {
+    // Both hang off the park with ON DELETE CASCADE, so a merge that deletes
+    // the ghost before applying PARK_DEPENDENCIES destroys the published
+    // numbers of every ride that just moved across — no error, no log line.
+    for (const table of ["attraction_rope_drop", "attraction_typical_waits"]) {
+      const dep = PARK_DEPENDENCIES.find((d) => d.table === table);
+      expect(dep?.strategy).toBe("move");
+      expect(dep?.column).toBe("parkId");
+      // Their PK is attractionId alone, so moving the parkId cannot collide.
+      expect(dep?.conflictColumns).toBeUndefined();
+    }
+  });
+
   it("reparents park_seasons instead of letting the CASCADE eat them", () => {
     // A season is written by a person reading a park's calendar and exists in
     // no feed. The FK is ON DELETE CASCADE, so an undeclared table is not an
@@ -179,6 +258,7 @@ describe("merge dependency tables", () => {
     for (const dependency of [
       ...ATTRACTION_DEPENDENCIES,
       ...PARK_DEPENDENCIES,
+      ...PARK_INLINE_DEPENDENCIES,
     ]) {
       expect(dependency.table).toMatch(identifier);
       expect(dependency.column).toMatch(identifier);

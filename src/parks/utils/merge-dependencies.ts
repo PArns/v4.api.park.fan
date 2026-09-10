@@ -248,6 +248,73 @@ export const PARK_TABLES_HANDLED_INLINE = [
 ] as const;
 
 /**
+ * The park-scoped tables of `PARK_TABLES_HANDLED_INLINE` that a merge path has
+ * to migrate on its own, expressed as dependencies so the two raw paths in
+ * `parks.service.ts` can hand them to `applyMergeDependencies` instead of
+ * hand-rolling six more UPDATEs. `mergeParks` keeps its own `migrateTableData`
+ * calls; this list is the same set of decisions, in the vocabulary the raw
+ * paths already speak.
+ *
+ * Four of the ten inline tables are deliberately absent:
+ *   - `attractions`, `shows`, `restaurants` — both raw paths already reparent
+ *     them, and attractions need the collision handling that precedes this.
+ *   - `park_p50_baselines` — winner-authoritative rather than move-or-discard
+ *     (`migrateTableData(..., null)`), which is not a `MergeStrategy`. Its
+ *     caller does it by hand, and says why.
+ *   - `external_entity_mapping` — keyed on `internal_entity_id` for every
+ *     entity type at once, so it wants the `internal_entity_type = 'park'`
+ *     filter a bare dependency cannot carry.
+ *
+ * Whether a table is here decides one of two failure modes, both real:
+ * `park_occupancy` is the only one whose FK is NO ACTION (`ManyToOne(() =>
+ * Park)` with no `onDelete`, `park-occupancy.entity.ts`), so leaving it out
+ * raises 23503 on the park DELETE and rolls the merge back. The other four
+ * cascade, so leaving them out destroys them inside a transaction that then
+ * reports success — a park's whole schedule, its daily stats, its weather and
+ * its headliner set.
+ */
+export const PARK_INLINE_DEPENDENCIES: MergeDependency[] = [
+  {
+    table: "park_daily_stats",
+    column: "parkId",
+    strategy: "move",
+    conflictColumns: ["date"],
+  },
+  {
+    table: "schedule_entries",
+    column: "parkId",
+    strategy: "move",
+    conflictColumns: ["date", "scheduleType"],
+  },
+  {
+    // The one that stops the DELETE: FK NO ACTION. Its PK is (id, timestamp),
+    // so the parkId move cannot collide on its own key — the dedupe is about
+    // meaning rather than constraints, and matches `mergeParks`: two occupancy
+    // readings for one park at one instant are not two facts.
+    table: "park_occupancy",
+    column: "parkId",
+    strategy: "move",
+    conflictColumns: ["timestamp"],
+  },
+  {
+    // PK is (parkId, attractionId), so this move CAN collide: a ride that
+    // collided at the attraction level already had its row reparented onto the
+    // survivor by `ATTRACTION_DEPENDENCIES`, and now carries the ghost's
+    // parkId beside the survivor's attractionId.
+    table: "headliner_attractions",
+    column: "parkId",
+    strategy: "move",
+    conflictColumns: ["attractionId"],
+  },
+  {
+    table: "weather_data",
+    column: "parkId",
+    strategy: "move",
+    conflictColumns: ["date"],
+  },
+];
+
+/**
  * Park-referencing tables nothing in the merge accounts for.
  *
  * The attraction side has had this guard from the start; the park side did not,

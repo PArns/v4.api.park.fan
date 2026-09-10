@@ -36,6 +36,8 @@ import {
 import {
   applyMergeDependencies,
   ATTRACTION_DEPENDENCIES,
+  PARK_DEPENDENCIES,
+  PARK_INLINE_DEPENDENCIES,
 } from "./utils/merge-dependencies";
 import {
   isParkOpen,
@@ -340,6 +342,10 @@ export class ParksService {
               // Migrate child entities with collision handling
               await this.parkRepository.manager.transaction(
                 async (transactionalEntityManager) => {
+                  await this.liftTimescaleDecompressionLimit(
+                    transactionalEntityManager,
+                  );
+
                   // 1. Handle Attraction Collisions
                   // Fetch attractions from both parks in one query, then split
                   type GhostAttractionRow = {
@@ -467,7 +473,17 @@ export class ParksService {
                     [existing.id, ghostPark.id],
                   );
 
-                  // 4. Delete the ghost park
+                  // 4. Move everything else the ghost park owns. Without this
+                  // the DELETE below raises 23503 on park_occupancy and the
+                  // inherited rides arrive filed under a park id that is about
+                  // to stop existing.
+                  await this.consolidateMergedPark(
+                    transactionalEntityManager,
+                    existing.id,
+                    ghostPark.id,
+                  );
+
+                  // 5. Delete the ghost park
                   await transactionalEntityManager.delete(Park, ghostPark.id);
                 },
               );
@@ -558,24 +574,14 @@ export class ParksService {
    * because the unique index is on `(external_source, external_entity_id)`
    * alone, so a pair the winner holds cannot also sit on the loser.
    *
-   * The TimescaleDB decompression limit is the caller's job — the docstring of
-   * `applyMergeDependencies` says so, `queue_data` is a hypertable, and a merge
-   * moves far more than the 100000 compressed tuples one statement may
-   * decompress by default. `SET LOCAL`, unlike the plain `SET` the two merge
-   * services use: it ends with the transaction either way, so there is no reset
-   * statement to leak a hard-coded 100000 onto a pooled connection, and none to
-   * answer an already-aborted transaction with 25P02 and bury the error that
-   * caused it.
+   * The TimescaleDB decompression limit belongs to the transaction, not to
+   * this method — see `liftTimescaleDecompressionLimit`.
    */
   private async consolidateMergedAttractions(
     manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
     pairs: Array<{ winnerId: string; loserId: string }>,
   ): Promise<void> {
     if (pairs.length === 0) return;
-
-    await manager.query(
-      "SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
-    );
 
     for (const { winnerId, loserId } of pairs) {
       await manager.query(
@@ -589,6 +595,126 @@ export class ParksService {
         loserId,
       );
     }
+  }
+
+  /**
+   * Lifts the TimescaleDB decompression cap for the rest of the transaction.
+   *
+   * The docstring of `applyMergeDependencies` puts this on the caller, and a
+   * merge needs it twice over: `queue_data` on the attraction side and
+   * `park_occupancy` on the park side are both hypertables, and a merge moves
+   * far more than the 100000 compressed tuples one statement may decompress by
+   * default.
+   *
+   * Issued once, at the top of the merge transaction, rather than inside either
+   * consolidation step: the park step runs whether or not a single attraction
+   * collided, so hanging the GUC off the collision path would leave the park's
+   * own hypertable capped on exactly the merges that have least to move.
+   *
+   * `SET LOCAL`, unlike the plain `SET` the two merge services use: it ends
+   * with the transaction either way, so there is no reset statement to leak a
+   * hard-coded 100000 onto a pooled connection, and none to answer an
+   * already-aborted transaction with 25P02 and bury the error that caused it.
+   */
+  private async liftTimescaleDecompressionLimit(manager: {
+    query: (sql: string, params?: unknown[]) => Promise<unknown>;
+  }): Promise<void> {
+    await manager.query(
+      "SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
+    );
+  }
+
+  /**
+   * Reparents every park-scoped row of a ghost park onto the survivor, for the
+   * two raw merge paths in this file. Runs after the attractions, shows and
+   * restaurants have moved and immediately before `DELETE FROM parks`.
+   *
+   * Both paths used to go straight from the last `UPDATE restaurants` to
+   * `manager.delete(Park, ghostPark.id)`, which is the same failure class as
+   * the attraction side one level up, with the same two halves:
+   *
+   * `park_occupancy` declares `@ManyToOne(() => Park)` with no `onDelete`, so
+   * its FK is NO ACTION and the park DELETE raises **23503** — one statement
+   * later than the attraction DELETE used to, and just as fatal, because
+   * `syncParks` awaits `repairDuplicates()` unguarded. `attraction_p50_baselines`
+   * and `attraction_p90_baselines` carry a denormalised `parkId` under the same
+   * NO ACTION rule and do it for every ride that moved across without colliding.
+   *
+   * Where it does not abort, it loses things quietly. The merge moves
+   * `attractionId` and never the `parkId` beside it, so the inherited history in
+   * `attraction_hourly_history` and `queue_data_aggregates` ends up filed under
+   * a park id that no longer exists — and both are read by park id
+   * (`analytics.service.ts` `WHERE ahh."parkId" = $1::uuid`,
+   * `park-historical-stats.service.ts` on `qda."parkId"`), so the survivor's
+   * statistics never show what the merge existed to preserve. `park_seasons`
+   * and `park_slug_aliases` cascade away with the row, and so do the schedule,
+   * the daily stats, the weather and the headliner set.
+   *
+   * That answers the one question the ticket left open about
+   * `attraction_rope_drop` and `attraction_typical_waits`: today they cascade
+   * out with the ghost park, and `PARK_DEPENDENCIES` has said `move` about both
+   * for as long as it has existed. Applying it here is what makes that true on
+   * these two paths as well — the survivor keeps a rope-drop tip and a P50/P90
+   * pair for every ride it inherited, instead of the ride arriving with its
+   * history and none of its published numbers.
+   *
+   * `ParkMergeService.mergeParks` is the shape this follows: its steps 3-4
+   * (here `PARK_INLINE_DEPENDENCIES` plus the two below) and its step 5b
+   * (`PARK_DEPENDENCIES`), in that order. The order is load-bearing — the
+   * attraction consolidation above discards the losing ride's own
+   * `attraction_p50_baselines` row before this moves the surviving one's
+   * `parkId`, so the two never race for the same row.
+   */
+  private async consolidateMergedPark(
+    manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    winnerParkId: string,
+    loserParkId: string,
+  ): Promise<void> {
+    // Park-level mappings. No FK, so an orphan here survives the DELETE in
+    // silence and the sync stops recognising the feed it came from. The
+    // `internal_entity_type` filter is what `mergeParks` writes and costs
+    // nothing; ids are unique across entity types, so it changes no row either
+    // way, but it says which rows are meant.
+    await manager.query(
+      `UPDATE external_entity_mapping SET "internal_entity_id" = $1
+       WHERE "internal_entity_id" = $2 AND "internal_entity_type" = 'park'`,
+      [winnerParkId, loserParkId],
+    );
+
+    // `park_p50_baselines` is winner-authoritative rather than move-or-discard,
+    // which is why it is not a `MergeDependency`: the row is one per park and
+    // load-bearing (live crowd levels and an ML feature both read it), so the
+    // survivor's own always wins — but where the survivor has none, inheriting
+    // the ghost's beats rating nothing until the next baseline run. Same rule
+    // `mergeParks` applies with `migrateTableData(..., null)`.
+    const winnerBaseline = await manager.query(
+      `SELECT 1 FROM park_p50_baselines WHERE "parkId" = $1 LIMIT 1`,
+      [winnerParkId],
+    );
+    if (Array.isArray(winnerBaseline) && winnerBaseline.length > 0) {
+      await manager.query(
+        `DELETE FROM park_p50_baselines WHERE "parkId" = $1`,
+        [loserParkId],
+      );
+    } else {
+      await manager.query(
+        `UPDATE park_p50_baselines SET "parkId" = $1 WHERE "parkId" = $2`,
+        [winnerParkId, loserParkId],
+      );
+    }
+
+    await applyMergeDependencies(
+      manager,
+      PARK_INLINE_DEPENDENCIES,
+      winnerParkId,
+      loserParkId,
+    );
+    await applyMergeDependencies(
+      manager,
+      PARK_DEPENDENCIES,
+      winnerParkId,
+      loserParkId,
+    );
   }
 
   /**
@@ -640,6 +766,10 @@ export class ParksService {
 
         await this.parkRepository.manager.transaction(
           async (transactionalEntityManager) => {
+            await this.liftTimescaleDecompressionLimit(
+              transactionalEntityManager,
+            );
+
             // 1. Handle Attraction Collisions
             const existingAttractions = await transactionalEntityManager.query(
               `SELECT id, slug, "land_name", "land_external_id" FROM attractions WHERE "parkId" = $1::uuid`,
@@ -716,7 +846,16 @@ export class ParksService {
               [primary!.id, ghostPark.id],
             );
 
-            // 4. Delete the ghost park
+            // 4. Move everything else the ghost park owns — see
+            // `consolidateMergedPark`. The DELETE below is where 23503 lands
+            // once the attraction level stops raising it first.
+            await this.consolidateMergedPark(
+              transactionalEntityManager,
+              primary!.id,
+              ghostPark.id,
+            );
+
+            // 5. Delete the ghost park
             await transactionalEntityManager.delete(Park, ghostPark.id);
           },
         );

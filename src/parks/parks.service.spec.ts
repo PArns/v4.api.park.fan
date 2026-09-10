@@ -9,7 +9,11 @@ import { DestinationsService } from "../destinations/destinations.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { HolidaysService } from "../holidays/holidays.service";
 import { createTestPark } from "../../test/fixtures/park.fixtures";
-import { ATTRACTION_DEPENDENCIES } from "./utils/merge-dependencies";
+import {
+  ATTRACTION_DEPENDENCIES,
+  PARK_DEPENDENCIES,
+  PARK_INLINE_DEPENDENCIES,
+} from "./utils/merge-dependencies";
 
 describe("ParksService", () => {
   let service: ParksService;
@@ -448,7 +452,14 @@ describe("ParksService", () => {
           calls.push({ sql, params });
           return rowsFor(sql, params);
         }),
-        delete: jest.fn().mockResolvedValue({ affected: 1 }),
+        // Recorded into the same list as the raw statements. The park DELETE
+        // goes through the entity manager rather than `query`, and where it
+        // sits relative to the park-scoped moves is the whole question — a set
+        // of assertions over two separate mocks cannot answer it.
+        delete: jest.fn(async (_entity: unknown, id: string) => {
+          calls.push({ sql: "DELETE FROM parks", params: [id] });
+          return { affected: 1 };
+        }),
       };
       mockParkRepository.manager.transaction = jest.fn(
         async (cb: (m: typeof transactionalEntityManager) => Promise<void>) =>
@@ -828,6 +839,253 @@ describe("ParksService", () => {
         -1,
       );
       expect(lastDependency).toBeLessThan(deleteIndex);
+    });
+
+    /**
+     * The same failure one level up, and the reason acceptance criterion 4 of
+     * the attraction ticket stayed half-met: both paths went straight from the
+     * last `UPDATE restaurants` to `manager.delete(Park, ghostPark.id)`.
+     *
+     * `park_occupancy` declares `@ManyToOne(() => Park)` with no `onDelete`, so
+     * that DELETE raises 23503 — one statement later than the attraction DELETE
+     * used to, and just as fatal. Where it does not abort, the merge loses
+     * things silently instead: the moved rides keep a denormalised `parkId`
+     * pointing at the deleted park, and `park_seasons`, `schedule_entries`,
+     * `weather_data`, `attraction_rope_drop` and `attraction_typical_waits`
+     * cascade away inside a transaction that then reports success.
+     *
+     * As with the attraction cases above, these prove the statements are
+     * issued in the right order against a recording manager. Only a real
+     * database can prove the transaction commits.
+     */
+    const parkDependencyTables = [
+      ...PARK_INLINE_DEPENDENCIES.map((d) => d.table),
+      ...PARK_DEPENDENCIES.map((d) => d.table),
+    ];
+
+    const indexOfParkDelete = (calls: Recorded[]) =>
+      calls.findIndex((c) => /DELETE\s+FROM\s+parks/i.test(c.sql));
+
+    const expectParkRowsMovedBeforeTheDelete = (
+      calls: Recorded[],
+      survivingParkId: string,
+      ghostParkId: string,
+    ) => {
+      const touched = dependencyTablesTouched(calls, ghostParkId);
+      for (const table of parkDependencyTables) {
+        expect(touched).toContain(table);
+      }
+
+      const reparented = (table: string) =>
+        calls.find(
+          (c) =>
+            new RegExp(`UPDATE\\s+${table}\\s+SET`, "i").test(c.sql) &&
+            (c.params ?? []).includes(ghostParkId),
+        );
+
+      // The one that stops the DELETE outright.
+      expect(reparented("park_occupancy")?.params).toEqual([
+        survivingParkId,
+        ghostParkId,
+      ]);
+      // The denormalised parkId the attraction merge leaves behind. Read by
+      // park id in analytics.service.ts and park-historical-stats.service.ts,
+      // so a stale value hides the inherited history rather than erroring.
+      expect(reparented("attraction_hourly_history")?.params).toEqual([
+        survivingParkId,
+        ghostParkId,
+      ]);
+      expect(reparented("queue_data_aggregates")?.params).toEqual([
+        survivingParkId,
+        ghostParkId,
+      ]);
+      expect(reparented("attraction_p90_baselines")?.params).toEqual([
+        survivingParkId,
+        ghostParkId,
+      ]);
+      // Cascade-deleted today, and reproducible from no feed.
+      expect(reparented("park_seasons")?.params).toEqual([
+        survivingParkId,
+        ghostParkId,
+      ]);
+      expect(reparented("park_slug_aliases")?.params).toEqual([
+        survivingParkId,
+        ghostParkId,
+      ]);
+      // The open question the ticket left: they move, they do not cascade.
+      expect(reparented("attraction_rope_drop")?.params).toEqual([
+        survivingParkId,
+        ghostParkId,
+      ]);
+      expect(reparented("attraction_typical_waits")?.params).toEqual([
+        survivingParkId,
+        ghostParkId,
+      ]);
+      // Park-level mappings carry no FK, so an orphan survives in silence.
+      const mapping = calls.find(
+        (c) =>
+          /UPDATE\s+external_entity_mapping/i.test(c.sql) &&
+          (c.params ?? []).includes(ghostParkId),
+      );
+      expect(mapping?.sql).toMatch(/internal_entity_type/);
+      expect(mapping?.params).toEqual([survivingParkId, ghostParkId]);
+
+      // Nothing may still point at the ghost park when its row goes.
+      const deleteIndex = indexOfParkDelete(calls);
+      expect(deleteIndex).toBeGreaterThan(-1);
+      const lastParkStatement = calls.reduce(
+        (last, c, i) =>
+          (c.params ?? []).includes(ghostParkId) &&
+          !/DELETE\s+FROM\s+parks/i.test(c.sql)
+            ? i
+            : last,
+        -1,
+      );
+      expect(lastParkStatement).toBeLessThan(deleteIndex);
+    };
+
+    it("moves every park-scoped row of the sync-time ghost merge before the park is deleted", async () => {
+      const attractionRows = [
+        {
+          id: "aaaa1111-0000-0000-0000-000000000001",
+          parkId: syncSurvivingParkId,
+          slug: "taron",
+          queue_times_entity_id: null,
+          land_name: null,
+          land_external_id: null,
+        },
+        {
+          id: "bbbb2222-0000-0000-0000-000000000001",
+          parkId: syncGhostParkId,
+          slug: "taron",
+          queue_times_entity_id: "4711",
+          land_name: "Klugheim",
+          land_external_id: "land-klugheim",
+        },
+        {
+          // Moves across without colliding — the case that carries a stale
+          // parkId into every one of its dependent tables.
+          id: "bbbb2222-0000-0000-0000-000000000002",
+          parkId: syncGhostParkId,
+          slug: "chiapas",
+          queue_times_entity_id: "4712",
+          land_name: "Mexico",
+          land_external_id: "land-mexico",
+        },
+      ];
+
+      const { calls } = primeGhostParkSync(attractionRows);
+
+      await service.syncParks();
+
+      expectParkRowsMovedBeforeTheDelete(
+        calls,
+        syncSurvivingParkId,
+        syncGhostParkId,
+      );
+
+      // The park step runs whether or not anything collided, and
+      // `park_occupancy` is a hypertable, so the decompression cap belongs to
+      // the transaction rather than to the collision path. Still exactly once.
+      const timescale = calls.filter((c) =>
+        /max_tuples_decompressed_per_dml_transaction/.test(c.sql),
+      );
+      expect(timescale.map((c) => c.sql)).toEqual([
+        "SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
+      ]);
+    });
+
+    it("moves every park-scoped row of the repairDuplicates ghost merge before the park is deleted", async () => {
+      const primaryId = "77777777-7777-7777-7777-777777777777";
+      const ghostParkId = "88888888-8888-8888-8888-888888888888";
+      const primaryAttractions = [
+        {
+          id: "cccc3333-0000-0000-0000-000000000001",
+          slug: "troy",
+          land_name: null,
+          land_external_id: null,
+        },
+      ];
+      const ghostAttractions = [
+        {
+          id: "dddd4444-0000-0000-0000-000000000001",
+          slug: "troy",
+          land_name: "Avalon",
+          land_external_id: "land-avalon",
+        },
+        {
+          id: "dddd4444-0000-0000-0000-000000000002",
+          slug: "fenix",
+          land_name: "Avalon",
+          land_external_id: "land-avalon",
+        },
+      ];
+
+      const { calls } = recordTransaction((sql, params) => {
+        if (!/SELECT id, slug/.test(sql)) return [];
+        const [parkId] = (params ?? []) as string[];
+        return parkId === primaryId ? primaryAttractions : ghostAttractions;
+      });
+
+      mockParkRepository.query.mockResolvedValue([
+        { queue_times_entity_id: "4711" },
+      ]);
+      mockParkRepository.find.mockResolvedValue([
+        createTestPark({ id: primaryId, wikiEntityId: "wiki-1" }),
+        createTestPark({ id: ghostParkId, wikiEntityId: null }),
+      ]);
+
+      await service.repairDuplicates();
+
+      expectParkRowsMovedBeforeTheDelete(calls, primaryId, ghostParkId);
+    });
+
+    it("keeps the survivor's own park_p50_baseline and inherits the ghost's only when it has none", async () => {
+      // One row per park, and it is load-bearing: live crowd levels and an ML
+      // feature both read it. The survivor's own always wins, but discarding
+      // the ghost's where the survivor has none would rate the park `unknown`
+      // until the next baseline run for no reason.
+      const primaryId = "99999999-9999-9999-9999-999999999999";
+      const ghostParkId = "aaaaaaaa-9999-9999-9999-999999999999";
+      const primaryAttractions = [
+        { id: "eeee5555-0000-0000-0000-000000000001", slug: "troy" },
+      ];
+
+      const runWith = async (survivorHasBaseline: boolean) => {
+        const { calls } = recordTransaction((sql, params) => {
+          if (/FROM park_p50_baselines/.test(sql)) {
+            return survivorHasBaseline ? [{ "?column?": 1 }] : [];
+          }
+          if (!/SELECT id, slug/.test(sql)) return [];
+          const [parkId] = (params ?? []) as string[];
+          return parkId === primaryId ? primaryAttractions : [];
+        });
+
+        mockParkRepository.query.mockResolvedValue([
+          { queue_times_entity_id: "4711" },
+        ]);
+        mockParkRepository.find.mockResolvedValue([
+          createTestPark({ id: primaryId, wikiEntityId: "wiki-1" }),
+          createTestPark({ id: ghostParkId, wikiEntityId: null }),
+        ]);
+
+        await service.repairDuplicates();
+        return calls.filter((c) => /park_p50_baselines/i.test(c.sql));
+      };
+
+      const withBaseline = await runWith(true);
+      expect(withBaseline.map((c) => c.sql.trim().split(/\s+/)[0])).toEqual([
+        "SELECT",
+        "DELETE",
+      ]);
+      expect(withBaseline[1].params).toEqual([ghostParkId]);
+
+      const withoutBaseline = await runWith(false);
+      expect(withoutBaseline.map((c) => c.sql.trim().split(/\s+/)[0])).toEqual([
+        "SELECT",
+        "UPDATE",
+      ]);
+      expect(withoutBaseline[1].params).toEqual([primaryId, ghostParkId]);
     });
   });
 });
