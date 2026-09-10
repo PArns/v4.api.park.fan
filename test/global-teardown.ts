@@ -13,9 +13,13 @@ export default async function globalTeardown(): Promise<void> {
     return;
   }
 
-  await containers.postgres.stop();
-  console.log("🧹 Test container stopped");
-
-  await containers.redis.stop();
-  console.log("🧹 Redis container stopped");
+  // `finally`, not two awaits in a row: if Postgres refuses to stop, Redis is
+  // still a container nobody will come back for.
+  try {
+    await containers.postgres.stop();
+    console.log("🧹 Test container stopped");
+  } finally {
+    await containers.redis.stop();
+    console.log("🧹 Redis container stopped");
+  }
 }

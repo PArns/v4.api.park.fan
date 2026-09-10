@@ -1,4 +1,5 @@
 import { DataSource } from "typeorm";
+import Redis from "ioredis";
 import * as dotenv from "dotenv";
 import * as path from "path";
 
@@ -9,6 +10,7 @@ dotenv.config({ path: path.resolve(__dirname, "../.env.test") });
 process.env.NODE_ENV = "test";
 
 let dataSource: DataSource;
+let redis: Redis;
 
 /**
  * Per-file E2E setup.
@@ -35,19 +37,46 @@ beforeAll(async () => {
   });
 
   await dataSource.initialize();
+
+  redis = new Redis({
+    host: process.env.REDIS_HOST,
+    port: parseInt(process.env.REDIS_PORT as string, 10),
+    maxRetriesPerRequest: 3,
+    enableOfflineQueue: false,
+  });
 }, 120000);
 
 afterAll(async () => {
   if (dataSource?.isInitialized) {
     await dataSource.destroy();
   }
+
+  if (redis) {
+    if (redis.status === "ready") {
+      await redis.quit().catch(() => undefined);
+    }
+    redis.disconnect();
+  }
 }, 60000);
 
 /**
  * Cleanup between tests
  * - Truncates all tables (preserves schema)
+ * - Empties Redis
+ *
+ * Redis has to be emptied for the same reason the tables do, and it did not
+ * have to be while every file had its own container. One Redis for the whole
+ * run means one file's leftovers are the next file's starting state — and the
+ * worst of those leftovers are not cache keys but Bull's REPEATABLE jobs:
+ * `QueueSchedulerService` registers `wait-times-cron` on a five-minute cron
+ * five seconds after an AppModule spec boots, and a surviving registration lets
+ * `WaitTimesProcessor` fire in the middle of a later, unrelated test.
  */
 afterEach(async () => {
+  if (redis?.status === "ready") {
+    await redis.flushall();
+  }
+
   if (dataSource?.isInitialized) {
     const entities = dataSource.entityMetadatas;
 
