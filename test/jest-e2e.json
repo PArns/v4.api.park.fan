@@ -1,5 +1,9 @@
 {
-  "moduleFileExtensions": ["js", "json", "ts"],
+  "moduleFileExtensions": [
+    "js",
+    "json",
+    "ts"
+  ],
   "rootDir": ".",
   "testEnvironment": "node",
   "testRegex": ".e2e-spec.ts$",
@@ -24,7 +28,9 @@
     "^uuid$": "<rootDir>/mocks/uuid.ts",
     "^marked$": "<rootDir>/mocks/marked.ts"
   },
-  "transformIgnorePatterns": ["node_modules/(?!(uuid|string-similarity|marked)/)"],
+  "transformIgnorePatterns": [
+    "node_modules/(?!(uuid|string-similarity|marked)/)"
+  ],
   "collectCoverageFrom": [
     "../src/**/*.(t|j)s",
     "!../src/main.ts",
@@ -33,7 +39,11 @@
     "!../src/**/*.entity.ts"
   ],
   "coverageDirectory": "../coverage-e2e",
-  "setupFilesAfterEnv": ["<rootDir>/setup-e2e.ts"],
+  "setupFilesAfterEnv": [
+    "<rootDir>/setup-e2e.ts"
+  ],
   "testTimeout": 60000,
-  "maxWorkers": 1
+  "maxWorkers": 1,
+  "globalSetup": "<rootDir>/global-setup.ts",
+  "globalTeardown": "<rootDir>/global-teardown.ts"
 }
