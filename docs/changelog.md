@@ -25,13 +25,22 @@ still reads glob the old way. `test-exclude` arrives through
 `babel-plugin-istanbul` → `@jest/transform` → `jest`, so it is dev-only and
 `pnpm test` never touched it.
 
-Fixed with one scoped override, `test-exclude@<8.0.0: '>=8.0.0'`, in the same
-style as the `minimatch` and `ajv` lines beside it. v8 is the same class with
-the two import lines rewritten for glob v9+; its public surface
+Fixed with one scoped override, `test-exclude@<8.0.0: '>=8.0.0 <9.0.0'`, in the
+same style as the `minimatch` and `ajv` lines beside it. v8 is the same class
+with the two import lines rewritten for glob v9+; its public surface
 (`shouldInstrument`, `globSync`, `glob`) is unchanged, and it asks for
 `glob ^13.0.6` and `minimatch ^10.2.2` on its own, which is what the existing
 overrides already force. Nothing else moved: the lockfile diff is three package
 lines. Neither `babel-plugin-istanbul` nor `jest` was touched.
+
+The **target** is bounded where the `glob` line is not, and deliberately so.
+`babel-plugin-istanbul` declares `test-exclude: ^6.0.0`; an unbounded `>=8.0.0`
+would hand it a future major with no semver fence, which is the shape of the
+fault this entry describes. The `glob: '>=11.0.0'` line has the same problem and
+is **not** fixed here — it reaches `@jest/reporters`, `jest-config`,
+`jest-runtime`, `archiver-utils` and `typeorm`, all declaring `^10.x`, so it
+touches a production boot path and needs its own change with its own
+verification.
 
 **The real coverage is 45.26 % statements / 34.45 % branches / 44.79 % functions
 / 45.14 % lines** (three consecutive runs; a run can still move in the second
