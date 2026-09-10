@@ -195,6 +195,55 @@ shape, and a ride the past-day rollup has no row for is omitted rather than draw
 at zero — absence there means the rollup has not reached that day, which is not
 the same statement as an empty queue.
 
+### A ride out of season is absent, not closed
+
+`rides[]` carries only rides that can open on the day being asked about. A
+seasonal ride whose season does not cover that date is left out entirely — not
+listed with a flat curve, not listed with a flag — because it is not one of the
+day's rides. Same rule as the park page's "12 von 45 geöffnet" counter, and the
+same three-valued source: `isCurrentlyInSeason` / `attractionIsOutOfSeason`,
+where `false` closes, `true` opens, and **`null` — "seasonal, and nothing else
+known" — changes nothing**. Most of the catalogue sits on `null`, because the
+detector deliberately names no months under `MIN_OBSERVED_DAYS` of history.
+
+Three things about it are easy to get wrong from the outside:
+
+- **The month is the planned day's, not today's.** A ride with months on file is
+  judged against December when December is what was asked about, whatever month
+  the request arrives in.
+- **A past date is not filtered.** `tier: "observed"` is read out of the hourly
+  rollup, and a row there means the ride ran — an observation beats a
+  description of the past.
+- **A ride the detector flagged but gave no months only drops out of today and
+  tomorrow.** `season_out_since` is written for a ride fully closed on 7
+  park-open days inside a 60-day window whose current status is CLOSED, and it
+  is cleared again on the next OPERATING row — a reading of the current state,
+  not a calendar. A three-week refurbishment sets it exactly as well as a season
+  does, so letting it reach six months out would delete a headliner from half a
+  year of plans with no field saying why. Past tomorrow only the months decide,
+  and with no months on file the ride stays.
+
+One thing it deliberately does not do: **overrule the season with a live
+reading.** The park page does — a live `OPERATING` row means the season on file
+is behind the park — and this endpoint reads no live status, so for *today* the
+two can disagree about a ride whose season data has gone stale.
+
+Nothing upstream does this. `MLService.getParkPredictions` keeps rides with an
+OPERATING reading in the last 90 days, which is a question about the past asked
+on behalf of a date in the future: the two windows cannot line up, in either
+direction. A summer water ride still carrying August's readings in September was
+given a full December forecast, and a ride whose season ended in August stayed
+plannable until roughly the end of November.
+
+**How much of that a park gets back depends on its months.** The near horizon
+needs no months and works everywhere. The far horizon is a calendar question and
+therefore only answerable for a ride that has one, and the detector supplies none
+until `MIN_OBSERVED_DAYS` (330) of watched days — so on a park tracked for less
+than that, a far-date plan is only cleaned up where somebody has curated
+`Betriebsmonate` under `/admin/attractions/<id>`. That is a data gap, not a hole
+in the rule, and it is the honest place for it: the alternative is guessing a
+calendar from a note that says "shut at the moment".
+
 ## 7. `leadTimeMae`
 
 The measured mean absolute error for predictions made this far ahead, in minutes,
