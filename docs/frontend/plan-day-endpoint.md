@@ -206,13 +206,27 @@ where `false` closes, `true` opens, and **`null` — "seasonal, and nothing else
 known" — changes nothing**. Most of the catalogue sits on `null`, because the
 detector deliberately names no months under `MIN_OBSERVED_DAYS` of history.
 
-Two things about it are easy to get wrong from the outside:
+Three things about it are easy to get wrong from the outside:
 
-- **The month is the planned day's, not today's.** A request that arrives in
-  August for 20 December is answered with December's rides, ice rink included.
+- **The month is the planned day's, not today's.** A ride with months on file is
+  judged against December when December is what was asked about, whatever month
+  the request arrives in.
 - **A past date is not filtered.** `tier: "observed"` is read out of the hourly
   rollup, and a row there means the ride ran — an observation beats a
   description of the past.
+- **A ride the detector flagged but gave no months is out on every date**, not
+  just today. That branch says "shut now, and we cannot tell you when it runs",
+  and there is no month in it to test a December request against. It is a known
+  limit: such a ride stays out of future plans until 330 days of history give it
+  months, or somebody curates them. Ignoring the branch past tomorrow would put
+  most of the catalogue back into every future plan, since the detector names no
+  months under `MIN_OBSERVED_DAYS` — so the loss is a minority of rides against
+  the bug returning for the majority.
+
+One thing it deliberately does not do: **overrule the season with a live
+reading.** The park page does — a live `OPERATING` row means the season on file
+is behind the park — and this endpoint reads no live status, so for *today* the
+two can disagree about a ride whose season data has gone stale.
 
 Nothing upstream does this. `MLService.getParkPredictions` keeps rides with an
 OPERATING reading in the last 90 days, which is a question about the past asked

@@ -485,12 +485,23 @@ export class PlanDayService {
       composed.set(attraction.id, new Map(curve.map((p) => [p.hour, p.wait])));
     }
 
-    const tier: PlanDayTier =
-      measured.hours.size > 0
-        ? "measured"
-        : dayLevels.size > 0
-          ? "composed"
-          : "long_range";
+    // The label describes the method behind the curves that were actually
+    // served, so it counts only rides that survived to `byId`. Both maps arrive
+    // straight from the model and know nothing about seasons or retirements:
+    // asking them for a size labelled a day `measured` on the strength of an
+    // hourly answer for a ride nobody gets back, and every ride that WAS served
+    // then carried `source: "composed"` because its hours disagreed with the
+    // header. A park whose whole hourly answer is out of season now reads
+    // `composed`, or `long_range` where the day level is out of season too.
+    const someServed = (ids: Iterable<string>) => {
+      for (const id of ids) if (byId.has(id)) return true;
+      return false;
+    };
+    const tier: PlanDayTier = someServed(measured.hours.keys())
+      ? "measured"
+      : someServed(dayLevels.keys())
+        ? "composed"
+        : "long_range";
 
     const rides: PlanDayRideDto[] = [];
     for (const attractionId of new Set([
@@ -1101,24 +1112,40 @@ export class PlanDayService {
    *
    * **The month is the PLANNED day's, never today's.** Every other surface in
    * the codebase asks `isCurrentlyInSeason` about now, because it is describing
-   * now; this endpoint is asked about a date up to half a year out. Asking about
-   * today would drop Phantasialand's ice rink out of a plan for 20 December
-   * because the request happened to arrive in August — the exact mirror of the
-   * bug this closes. The date is turned into a local `Date` from its parts, so
-   * `getMonth()` returns the month that is written in the string whatever
-   * timezone the server keeps.
+   * now; this endpoint is asked about a date up to half a year out. A ride with
+   * months on file is therefore judged against December when December is what
+   * was asked about, whatever month the request arrives in. The date is turned
+   * into a local `Date` from its parts, so `getMonth()` returns the month that
+   * is written in the string whatever timezone the server keeps.
    *
    * **`=== false`, never `!== true`.** `isCurrentlyInSeason` has three answers
    * and the third is the point: `null` means "seasonal, and nothing else known",
    * which the detector says about everything under `MIN_OBSERVED_DAYS` of
    * history. It may not hide a ride we have merely not understood yet.
    *
-   * **A ride with a `seasonOutSince` and no months is out on every date**, not
-   * just today — that branch of `isCurrentlyInSeason` carries no month to
-   * compare against. It is the weaker of the two answers, and it is deliberately
-   * left as the shared rule rather than softened here: the SQL twin
-   * (`attractionIsOutOfSeason`) reads it the same way, and a third reading of
-   * seasonality is how two surfaces start disagreeing about one ride.
+   * **A ride with a `seasonOutSince` and no months is out on EVERY date**, and
+   * that is a known limit rather than an oversight. That branch of
+   * `isCurrentlyInSeason` carries no month to compare against — it says "shut
+   * now, and we cannot tell you when it runs" — so a rink the detector has
+   * flagged but not yet dated stays out of a December plan too, until 330 days
+   * of history give it months or somebody curates them
+   * (`/admin/attractions/<id>` → Betriebsmonate).
+   *
+   * The alternative was to ignore that branch past tomorrow, and it is worse
+   * where it matters: the detector deliberately names no months under
+   * `MIN_OBSERVED_DAYS`, so most of the catalogue sits in exactly this case, and
+   * ignoring it would put every one of those rides back into every future plan —
+   * which is the bug this closes, for the majority of rides rather than a
+   * minority. Keeping it also keeps one reading of seasonality: the SQL twin
+   * `attractionIsOutOfSeason` answers the same way, and a third interpretation
+   * is how two surfaces start disagreeing about one ride.
+   *
+   * What this does NOT do is overrule the season with a live reading. The park
+   * page does (`closedByTheSeason` in `park-integration.service.ts`: a live
+   * `OPERATING` row means the season on file is behind the park), and this
+   * service reads no live status, so for TODAY the two can disagree about a ride
+   * whose season data has gone stale. Closing that needs a per-request status
+   * query on a hot path, which is a cost decision of its own.
    */
   private static outOfSeasonOn(
     attraction: Attraction,

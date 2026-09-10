@@ -26,12 +26,21 @@ shoulder weeks people plan in.
 `forecastRides` now drops the ride, keyed on the month of the **planned date**
 rather than today's, through the existing `isCurrentlyInSeason` /
 `resolveCuratedFacts` pair (`=== false`; `null` — "seasonal, and nothing else
-known", which is most of the catalogue — hides nobody). Two deliberate limits:
-`observedRides` is untouched, because a row in the hourly rollup is a measurement
-of the ride having run and an observation beats a description of the past; and a
-ride with a `seasonOutSince` but no months reads out on every date, the same way
-the SQL twin `attractionIsOutOfSeason` reads it, rather than growing a third
-interpretation of seasonality.
+known" — hides nobody). `tier` is now read off the rides that survive the filter
+too, or a day whose whole hourly answer was out of season kept the `measured`
+label while every ride it actually served carried `source: "composed"`.
+
+Three limits, each deliberate. `observedRides` is untouched: a row in the hourly
+rollup is a measurement of the ride having run, and an observation beats a
+description of the past. A ride the detector flagged with a `seasonOutSince` but
+no months is out on **every** date — that branch carries no month to test a
+December request against, and since the detector names no months under
+`MIN_OBSERVED_DAYS` this is most of the catalogue, so ignoring it past tomorrow
+would restore the bug for the majority to spare a minority; the remedy is
+curating `Betriebsmonate`. And the season is **not** overruled by a live reading
+the way the park page's `closedByTheSeason` does it, because this service reads
+no live status — for today the two can disagree about a ride whose season data
+has gone stale.
 
 No DTO field was added: the frontend would then have to act on it, which leaves
 the wrong plan on screen until that lands.

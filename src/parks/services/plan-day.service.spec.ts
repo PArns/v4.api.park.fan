@@ -1553,6 +1553,71 @@ describe("PlanDayService", () => {
       expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
     });
 
+    it("keeps a detector-flagged ride out of every future date, months or not", async () => {
+      const date = otherMonthDate();
+
+      // Seasonal, no months, and a note saying when it last ran. That branch of
+      // `isCurrentlyInSeason` has no month in it to test December against, so it
+      // reads "out" on any date — a known limit, pinned here so nobody softens
+      // it by accident. Softening it would put most of the catalogue back into
+      // every future plan, because the detector deliberately names no months
+      // under MIN_OBSERVED_DAYS; the remedy is curating Betriebsmonate.
+      const plan = await planWithSeason(date, {
+        isSeasonal: true,
+        seasonMonths: null,
+        seasonOutSince: "2026-01-31",
+      });
+
+      expect(plan.rides).toEqual([]);
+    });
+
+    it("does not call a day measured on the strength of a ride it drops", async () => {
+      // The model answers hourly for the ride that is out of season and only
+      // day-level for the one that is not. `tier` is read off what survives, so
+      // this is a composed day — labelling it `measured` would have put the
+      // most trustworthy label on a response whose every hour was composed.
+      const date = dayFromToday(1);
+      const month = monthOf(date);
+      calendarDay = { ...calendarDay!, date };
+      attractions = [
+        {
+          id: "a-rink",
+          slug: "rink",
+          name: "Eisbahn",
+          landName: "Berlin",
+          isSeasonal: true,
+          seasonMonths: allMonthsExcept(month),
+        },
+        { id: "a-taron", slug: "taron", name: "Taron", landName: "Mystery" },
+      ];
+      hourlyPredictions = [10, 11].map((h) => ({
+        attractionId: "a-rink",
+        predictedTime: atParkHour(date, h),
+        predictedWaitTime: 35,
+        predictionType: "hourly",
+      }));
+      dailyPredictions = [
+        {
+          attractionId: "a-taron",
+          predictedTime: `${date}T12:00:00.000Z`,
+          predictedWaitTime: 60,
+          predictionType: "daily",
+          uncertaintyMinutes: 12,
+        },
+      ];
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+      expect(plan.tier).toBe("composed");
+      // And with the header telling the truth, the served hours need no source
+      // of their own.
+      expect(plan.rides[0].hours.every((h) => h.source === undefined)).toBe(
+        true,
+      );
+    });
+
     it("does not apply the season to a day that already happened", async () => {
       const date = pastDate();
       calendarDay = { ...calendarDay!, date };
