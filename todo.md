@@ -305,11 +305,16 @@ What is still open, roughly by consequence:
       `tracked` CTE. A ride that leaves `tracked` (merge, retirement, a flip to
       `open_with_park`, a park losing its schedule) loses its in-window rows
       permanently.
-- [ ] **`last_merged_at` is stamped by one of four merge paths** — not by
-      `ParkMergeService`, which is the one the column was written for (the USH
-      merge with 29 colliding rides). Two raw `DELETE FROM attractions` paths
-      stamp nothing either, and no entity declares a relation, so there are no
-      FKs to catch the orphans.
+- [x] ~~**`last_merged_at` is stamped by one of four merge paths**~~ — half of
+      that was already stale when it was written: `ParkMergeService.consolidateEntities`
+      and `AttractionMergeService.merge` both stamp today. The two raw
+      `DELETE FROM attractions` paths in `parks.service.ts` — the sync-time
+      collision merge inside `syncParks` and the ghost merge in
+      `repairDuplicates` — now stamp every survivor in the same transaction,
+      before the losing row is deleted (PF-42). **Still open, as its own
+      question:** no entity declares a relation for `queue_data`,
+      `wait_time_predictions`, `prediction_accuracy` and the outage tables, so
+      no FK catches rows left pointing at a deleted attraction.
 - [x] ~~A park with no published hours is served `not_down_capable`, not
       `no_schedule`~~ — the population query gained a `sched` branch that
       sources the rides of `no_schedule` parks directly from `attractions`
