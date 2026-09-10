@@ -52,9 +52,17 @@ violated when it starts measuring again, and quietly configuring that away would
 be the second silent version of the same fault. `pnpm test` is unaffected and
 green (1804 passed, 11 skipped).
 
-**Why it stayed hidden:** the repository has no CI configuration at all — no
-`.github/`, no other pipeline file — so `test:cov` only ever ran when somebody
-typed it.
+**Why it stayed hidden: nothing automated runs this repository's own scripts.**
+There is no workflow file in the tree (`git ls-files | grep -c '^.github/'` →
+`0`). Three workflows *are* active, but all three are GitHub **default setup**,
+configured in repository settings rather than committed — they show up with a
+`dynamic/` path: `github-code-scanning/codeql`, `dependabot/dependabot-updates`
+and `dependabot/update-graph`. So a PR does get checks, and they are green, and
+none of them ever invokes `lint`, `test`, `test:cov` or `build`. `test:cov` ran
+only when somebody typed it.
+
+The distinction matters for anyone reading a green PR here: the checks on it
+say the code scanner found nothing, not that the test suite passed.
 
 ### Fixed — `/plan/day` no longer plans a day around a ride that cannot open on it
 
