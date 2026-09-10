@@ -9,6 +9,13 @@ import {
 import type { ProfileInputs } from "./downtime-profile.service";
 import { ParkDowntimeCoverage } from "./entities/park-downtime-coverage.entity";
 import { isDurationUsable } from "../queues/processors/downtime-reconstruction.processor";
+import {
+  OPERATING_SCHEDULE_TYPE,
+  normalizedClosingSql,
+} from "../common/utils/park-open-window.sql";
+
+/** Collapses the SQL's formatting so assertions can match on wording alone. */
+const flatSql = (sql: string) => sql.replace(/\s+/g, " ");
 
 /**
  * The gates are the difference between a figure and a claim about a named
@@ -475,6 +482,69 @@ describe("DowntimeProfileService — the rebuild's population", () => {
 
       expect(managerQuery).not.toHaveBeenCalled();
       expect(profileUpsert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the schedule flag", () => {
+    it("asks for what an exposure day needs, not merely that a row exists", async () => {
+      // The bug this pins: the flag used to be a bare EXISTS on an OPERATING
+      // row, while attraction_exposure_days is built through
+      // parkOpenWindowCtes(), which additionally needs a timezone, both times
+      // present, and a window still positive after the closing-time repair. A
+      // park that cleared the weaker test and failed the stronger one landed in
+      // reports and then reached neither ex nor sched — so its rides answered
+      // not_down_capable, a statement about a source that is in fact capable.
+      //
+      // Asserted against the SAME helper the window CTE calls rather than
+      // against a copy of its text: the repair is a hand-written twin of the
+      // write path and is only useful while every reader of it agrees.
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      const sql = flatSql(query.mock.calls[0][0] as string);
+      const flag = sql.slice(
+        sql.indexOf("EXISTS ("),
+        sql.indexOf('AS "hasSchedule"'),
+      );
+
+      expect(flag).toContain('se."attractionId" IS NULL');
+      expect(flag).toContain(
+        `se."scheduleType" = '${OPERATING_SCHEDULE_TYPE}'`,
+      );
+      expect(flag).toContain("p.timezone IS NOT NULL");
+      expect(flag).toContain('se."openingTime" IS NOT NULL');
+      expect(flag).toContain('se."closingTime" IS NOT NULL');
+      expect(flag).toContain(
+        flatSql(
+          normalizedClosingSql(
+            'se."openingTime"',
+            'se."closingTime"',
+            "p.timezone",
+          ),
+        ),
+      );
+    });
+
+    it("still asks EVER rather than inside the measured window", async () => {
+      // The one divergence that is deliberate. An exposure day also needs a
+      // window inside the period being measured; this flag does not, because
+      // no_schedule is a statement about the park's PUBLISHING and a park whose
+      // season starts next week publishes fine. Pinned so the next reader of
+      // the comment above cannot quietly "finish" the alignment: the flag's
+      // subquery must not carry a bound on openingTime.
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      const sql = flatSql(query.mock.calls[0][0] as string);
+      const flag = sql.slice(
+        sql.indexOf("EXISTS ("),
+        sql.indexOf('AS "hasSchedule"'),
+      );
+
+      expect(flag).not.toContain("$2");
+      expect(flag).not.toContain("$3");
+      expect(flag).not.toContain("now()");
+      expect(flag).not.toContain("CURRENT_DATE");
     });
   });
 

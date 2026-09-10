@@ -8,6 +8,10 @@ import {
   ParkDowntimeCoverage,
 } from "./entities/park-downtime-coverage.entity";
 import type { DowntimeRegime } from "./entities/park-downtime-coverage.entity";
+import {
+  OPERATING_SCHEDULE_TYPE,
+  normalizedClosingSql,
+} from "../common/utils/park-open-window.sql";
 
 /**
  * Thresholds, all of them provisional.
@@ -162,11 +166,48 @@ export class DowntimeProfileService {
       `
       SELECT p.id                                        AS "parkId",
              (p.wiki_entity_id IS NOT NULL)              AS "downCapable",
+             -- The SAME thing an exposure day needs, not merely "a row exists".
+             --
+             -- attraction_exposure_days is built through parkOpenWindowCtes(),
+             -- which drops a schedule row carrying no closing time, a park with
+             -- no timezone, and a window that is still not positive after
+             -- normalizedClosingSql() has repaired it. A weaker test here puts
+             -- such a park in reports, where its rides reach neither ex nor the
+             -- sched CTE below -- so they fall back to not_down_capable, a
+             -- statement about the park's SOURCE, on a park whose source is
+             -- capable and merely undated. That is the one refusal this whole
+             -- branch exists to replace.
+             --
+             -- Measured against production on 2026-09-10 the population is
+             -- empty: all 213 parks carry a timezone and not one of 36 324
+             -- park-level OPERATING rows is missing either time. This closes
+             -- the gap before a source opens it, and moves nobody today.
+             --
+             -- What is deliberately NOT mirrored is the window. An exposure day
+             -- also needs a window inside the period being measured, and this
+             -- test asks EVER. The two are allowed to disagree there, because
+             -- the regimes answer different questions: no_schedule is a
+             -- statement about the park's publishing -- "we do not know when it
+             -- is open" -- and a park that publishes a season starting next
+             -- week is not that park. Measured on the same day, 2 parks with 34
+             -- rides between them sit in exactly that gap (a Halloween event
+             -- whose 23 rows are all in the future, and a park whose last row
+             -- predates the exposure table's retention). They get the wrong
+             -- refusal too, and the honest answer for them is a THIRD state
+             -- rather than borrowing this one -- which is its own ticket.
              EXISTS (
                SELECT 1 FROM schedule_entries se
                 WHERE se."parkId" = p.id
                   AND se."attractionId" IS NULL
-                  AND se."scheduleType" = 'OPERATING'
+                  AND se."scheduleType" = '${OPERATING_SCHEDULE_TYPE}'
+                  AND p.timezone IS NOT NULL
+                  AND se."openingTime" IS NOT NULL
+                  AND se."closingTime" IS NOT NULL
+                  AND ${normalizedClosingSql(
+                    'se."openingTime"',
+                    'se."closingTime"',
+                    "p.timezone",
+                  )} > se."openingTime"
              )                                           AS "hasSchedule",
              COUNT(DISTINCT a.id) FILTER (WHERE a.retired_at IS NULL)::int
                                                          AS "ridesTracked",
