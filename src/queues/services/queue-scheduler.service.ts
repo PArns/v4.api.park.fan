@@ -1,4 +1,9 @@
-import { Injectable, OnModuleInit, Logger } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 
@@ -21,8 +26,9 @@ import { Queue } from "bull";
  * - geoip-update: Every 48 hours (GeoLite2-City for nearby endpoint)
  */
 @Injectable()
-export class QueueSchedulerService implements OnModuleInit {
+export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(QueueSchedulerService.name);
+  private registerTimer?: NodeJS.Timeout;
 
   constructor(
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
@@ -70,11 +76,25 @@ export class QueueSchedulerService implements OnModuleInit {
     }
 
     // Wait a bit to let bootstrap complete first
-    setTimeout(() => {
+    this.registerTimer = setTimeout(() => {
+      this.registerTimer = undefined;
       this.registerScheduledJobs().catch((err) => {
         this.logger.error("Failed to register scheduled jobs", err);
       });
     }, 5000); // 5 second delay
+  }
+
+  /**
+   * Same shape as the seed timer in DbSeedService: a delay that outlives the
+   * app it was started for. Five seconds is short enough to be invisible in
+   * production and long enough for a fast test to shut down first, and the
+   * callback then writes repeatable jobs into queues that are already closing.
+   */
+  onModuleDestroy(): void {
+    if (this.registerTimer) {
+      clearTimeout(this.registerTimer);
+      this.registerTimer = undefined;
+    }
   }
 
   private async registerScheduledJobs(): Promise<void> {

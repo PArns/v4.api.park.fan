@@ -1,4 +1,4 @@
-import { Module, Global } from "@nestjs/common";
+import { Module, Global, Inject, OnModuleDestroy } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import Redis from "ioredis";
 
@@ -68,4 +68,30 @@ export const REDIS_CLIENT = "REDIS_CLIENT";
   ],
   exports: [REDIS_CLIENT],
 })
-export class RedisModule {}
+export class RedisModule implements OnModuleDestroy {
+  constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
+
+  /**
+   * Nest closes what implements a lifecycle hook, and an ioredis client has
+   * none — so `app.close()` used to leave the connection open. In production
+   * that is invisible: the process exits and the kernel takes the socket. In a
+   * test it is the thing that never ends. `retryStrategy` above never gives up,
+   * so once the test's Redis container stops, the client re-arms a reconnect
+   * timer every 50 ms → 2 s, forever, and the Jest process stays alive after
+   * the last assertion has passed.
+   *
+   * That timer is also invisible to `--detectOpenHandles`: it is created after
+   * the test file's async hooks are gone, and modern Node no longer lists
+   * timers in `process._getActiveHandles()`.
+   *
+   * `disconnect()` is what stops it — `quit()` alone is graceful but leaves the
+   * retry loop armed when the server is already gone, so it is only attempted
+   * on a connection that is actually up.
+   */
+  async onModuleDestroy(): Promise<void> {
+    if (this.redis.status === "ready") {
+      await this.redis.quit().catch(() => undefined);
+    }
+    this.redis.disconnect();
+  }
+}

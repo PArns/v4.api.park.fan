@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { InjectQueue } from "@nestjs/bull";
 import { Repository, MoreThan } from "typeorm";
@@ -28,8 +33,9 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
  * 3. Jobs run asynchronously via Bull queues
  */
 @Injectable()
-export class DbSeedService implements OnModuleInit {
+export class DbSeedService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DbSeedService.name);
+  private seedTimer?: NodeJS.Timeout;
 
   constructor(
     @InjectRepository(Park)
@@ -64,11 +70,27 @@ export class DbSeedService implements OnModuleInit {
     );
 
     // Run async to not block app startup
-    setTimeout(() => {
+    this.seedTimer = setTimeout(() => {
+      this.seedTimer = undefined;
       this.checkAndSeed().catch((err) => {
         this.logger.error("Failed to auto-seed database", err);
       });
     }, SEED_DELAY_MS);
+  }
+
+  /**
+   * A ten-minute timer outlives anything shorter than itself, and an E2E suite
+   * is shorter than itself: the app is torn down after ~30 s, the timer fires
+   * minutes later and asks a DataSource that no longer has a driver, which is
+   * where `TypeORMError: Driver not Connected` came from. Cancelling it on
+   * teardown is also what makes the seed a property of a *running* app rather
+   * than of the process that once started one.
+   */
+  onModuleDestroy(): void {
+    if (this.seedTimer) {
+      clearTimeout(this.seedTimer);
+      this.seedTimer = undefined;
+    }
   }
 
   /**
