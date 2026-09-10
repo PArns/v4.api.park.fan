@@ -312,17 +312,36 @@ What is still open, roughly by consequence:
       collision merge inside `syncParks` and the ghost merge in
       `repairDuplicates` — now stamp every survivor in the same transaction,
       before the losing row is deleted (PF-42).
-- [ ] **Both raw merge paths abort before that stamp can commit**, and the
+- [x] ~~**Both raw merge paths abort before that stamp can commit**~~, and the
       "no FK catches the orphans" half of the bullet above was wrong: `queue_data`,
       `wait_time_predictions`, `prediction_accuracy` and `ml_prediction_anomalies`
       all declare `@ManyToOne(() => Attraction)` with no `onDelete`, so the FK is
       NO ACTION and `DELETE FROM attractions` **raises 23503** rather than leaving
-      orphans. On top of that `repairDuplicates` writes
+      orphans. On top of that `repairDuplicates` wrote
       `prediction_accuracy."attractionId"`, a column that does not exist (it is
-      `attraction_id`) → 42703, and moves 3 of the 19 tables in
-      `ATTRACTION_DEPENDENCIES`. `applyMergeDependencies` is the existing fix and
-      already survived the USH cold run; both blocks should call it instead of
-      hand-rolling three UPDATEs.
+      `attraction_id`) → 42703, and moved 3 of the tables in
+      `ATTRACTION_DEPENDENCIES`. Both blocks now go through
+      `consolidateMergedAttractions`, which is `applyMergeDependencies` over
+      `ATTRACTION_DEPENDENCIES` inside the TimescaleDB decompression bracket —
+      the same shape as `ParkMergeService.consolidateEntityData`, which already
+      survived the USH cold run (PF-102).
+- [ ] **The ghost _park_ delete has the same hole one level up**, and it costs
+      twice. Both raw paths finish with `manager.delete(Park, ghostPark.id)`
+      without applying `PARK_DEPENDENCIES`, and the merge only moves
+      `attractionId`, never the denormalised `parkId` beside it. So (a)
+      `park_occupancy`, `attraction_p50_baselines.parkId` and
+      `attraction_p90_baselines.parkId` declare `@ManyToOne(() => Park)` with no
+      `onDelete`, which can abort the transaction one statement later than it
+      used to; and (b) where it does not abort, the inherited rows still name the
+      deleted park and are read by nobody —
+      `park-historical-stats.service.ts:766/791/849/913` filters
+      `queue_data_aggregates` by `qda."parkId"`, so the survivor's stats never
+      show the history the merge exists to carry over. Silent, and not caught by
+      any FK. Out of PF-102, which is scoped to the attraction merge and its
+      acceptance criteria; `PARK_DEPENDENCIES` already describes what each table
+      needs. Written up as PF-111, which also has to decide what happens to
+      `attraction_rope_drop` and `attraction_typical_waits` — both cascade off
+      the park, so today they are destroyed rather than moved.
 - [x] ~~A park with no published hours is served `not_down_capable`, not
       `no_schedule`~~ — the population query gained a `sched` branch that
       sources the rides of `no_schedule` parks directly from `attractions`

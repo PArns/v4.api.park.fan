@@ -34,6 +34,10 @@ import {
   hasRecentQueueData,
 } from "./utils/park-merge.util";
 import {
+  applyMergeDependencies,
+  ATTRACTION_DEPENDENCIES,
+} from "./utils/merge-dependencies";
+import {
   isParkOpen,
   RideStatusData,
 } from "../common/utils/status-calculator.util";
@@ -401,13 +405,14 @@ export class ParksService {
                     // `ParkMergeService.consolidateEntities` and
                     // `AttractionMergeService.merge` do: the merge happened
                     // whether or not this particular row inherited a column.
-                    // The seam here is not reparented history — this block moves
-                    // none — but the Queue-Times id: where the survivor had none
-                    // of its own it has one now, and from this instant that feed
+                    // There are two seams, and both need the stamp. The ghost's
+                    // `queue_data` is reparented onto the survivor below, so its
+                    // history becomes two interleaved series flapping between
+                    // OPERATING and DOWN at the same instant; and the survivor
+                    // inherits the Queue-Times id, so from this moment that feed
                     // writes into a row the wiki feed has been writing into all
-                    // along, so one series carries two sources across a single
-                    // timestamp. The nightly downtime reconstruction reads that
-                    // as genuine outages unless the ride is held out until the
+                    // along. The nightly downtime reconstruction reads either as
+                    // genuine outages unless the ride is held out until the
                     // stamp ages out.
                     await transactionalEntityManager.query(
                       `UPDATE attractions a
@@ -418,6 +423,18 @@ export class ParksService {
                        FROM (VALUES ${values.join(", ")}) AS v(id, land_name, land_external_id, qt_id)
                        WHERE a.id = v.id`,
                       params,
+                    );
+                    // Every dependent row of each ghost moves onto its
+                    // survivor before the ghost is deleted. Without this the
+                    // DELETE below raises 23503 and takes the whole sync run
+                    // with it — `repairDuplicates()` is awaited unguarded at
+                    // the end of `syncParks`.
+                    await this.consolidateMergedAttractions(
+                      transactionalEntityManager,
+                      collisions.map((c) => ({
+                        winnerId: c.matchId,
+                        loserId: c.ghost.id,
+                      })),
                     );
                     await transactionalEntityManager.query(
                       `DELETE FROM attractions WHERE id = ANY($1::uuid[])`,
@@ -515,6 +532,66 @@ export class ParksService {
   }
 
   /**
+   * Reparents every dependent row of a losing attraction onto the survivor, for
+   * the two raw merge paths in this file.
+   *
+   * Both used to hand-roll this, and both were wrong in the same three ways:
+   * `repairDuplicates` moved 3 of the tables in `ATTRACTION_DEPENDENCIES` and
+   * wrote `prediction_accuracy."attractionId"`, a column that does not exist
+   * (42703); the collision block in `syncParks` moved nothing at all and
+   * trusted the losing row's history to disappear with it. It does not:
+   * `queue_data`, `wait_time_predictions`, `prediction_accuracy` and
+   * `ml_prediction_anomalies` declare `@ManyToOne(() => Attraction)` with no
+   * `onDelete`, so the FK is NO ACTION and the `DELETE FROM attractions` raises
+   * 23503 instead of leaving orphans behind. Either way the transaction rolled
+   * back, which is why the `last_merged_at` stamp both paths write could never
+   * commit.
+   *
+   * `ParkMergeService.consolidateEntityData` is the shape this follows, down to
+   * moving `external_entity_mapping` first. That table carries no FK, so an
+   * orphaned row survives the DELETE in silence, and the reader that matters
+   * never sees it: `wait-times.processor.ts` loads mappings by
+   * `internalEntityId IN (<the park's live attractions>)`, so a
+   * `queue-times:<id>` row still naming the deleted ghost drops that ride's
+   * Queue-Times readings until the `entity-mappings` job re-upserts it. The
+   * reference deletes colliding rows before the move; that is dead code here,
+   * because the unique index is on `(external_source, external_entity_id)`
+   * alone, so a pair the winner holds cannot also sit on the loser.
+   *
+   * The TimescaleDB decompression limit is the caller's job — the docstring of
+   * `applyMergeDependencies` says so, `queue_data` is a hypertable, and a merge
+   * moves far more than the 100000 compressed tuples one statement may
+   * decompress by default. `SET LOCAL`, unlike the plain `SET` the two merge
+   * services use: it ends with the transaction either way, so there is no reset
+   * statement to leak a hard-coded 100000 onto a pooled connection, and none to
+   * answer an already-aborted transaction with 25P02 and bury the error that
+   * caused it.
+   */
+  private async consolidateMergedAttractions(
+    manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    pairs: Array<{ winnerId: string; loserId: string }>,
+  ): Promise<void> {
+    if (pairs.length === 0) return;
+
+    await manager.query(
+      "SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
+    );
+
+    for (const { winnerId, loserId } of pairs) {
+      await manager.query(
+        `UPDATE external_entity_mapping SET "internal_entity_id" = $1 WHERE "internal_entity_id" = $2`,
+        [winnerId, loserId],
+      );
+      await applyMergeDependencies(
+        manager,
+        ATTRACTION_DEPENDENCIES,
+        winnerId,
+        loserId,
+      );
+    }
+  }
+
+  /**
    * Scans for and merges duplicate parks based on shared Queue-Times IDs.
    * This fixes "Split Brain" issues where a park exists separately from Wiki and Queue-Times sources.
    */
@@ -589,8 +666,7 @@ export class ParksService {
                 //    survivor. The land columns are filled in only where they
                 //    are empty; `last_merged_at` is unconditional, because the
                 //    merge happened whether or not anything was inherited —
-                //    steps 3 to 5 below reparent this ghost's `queue_data`,
-                //    `wait_time_predictions` and `prediction_accuracy` onto the
+                //    step 2 below reparents this ghost's `queue_data` onto the
                 //    survivor, whose history is then two interleaved series
                 //    flapping between OPERATING and DOWN at the same instant.
                 //    The stamp is what holds the ride out of the nightly
@@ -604,39 +680,14 @@ export class ParksService {
                   [ghostAttr.land_name, ghostAttr.land_external_id, match.id],
                 );
 
-                // 2. Move External Mappings (Queue-Times ID mappings) from Ghost to Primary
-                await transactionalEntityManager.query(
-                  `UPDATE external_entity_mapping 
-                   SET "internal_entity_id" = $1 
-                   WHERE "internal_entity_id" = $2`,
-                  [match.id, ghostAttr.id],
+                // 2. Move the Queue-Times mapping and every dependent row, not
+                //    the three tables this block used to name by hand.
+                await this.consolidateMergedAttractions(
+                  transactionalEntityManager,
+                  [{ winnerId: match.id, loserId: ghostAttr.id }],
                 );
 
-                // 3. Move Queue Data (Wait Times History)
-                await transactionalEntityManager.query(
-                  `UPDATE queue_data 
-                   SET "attractionId" = $1 
-                   WHERE "attractionId" = $2::uuid`,
-                  [match.id, ghostAttr.id],
-                );
-
-                // 4. Move Wait Time Predictions
-                await transactionalEntityManager.query(
-                  `UPDATE wait_time_predictions 
-                   SET "attractionId" = $1 
-                   WHERE "attractionId" = $2::uuid`,
-                  [match.id, ghostAttr.id],
-                );
-
-                // 5. Move Prediction Accuracy Records
-                await transactionalEntityManager.query(
-                  `UPDATE prediction_accuracy 
-                   SET "attractionId" = $1 
-                   WHERE "attractionId" = $2::uuid`,
-                  [match.id, ghostAttr.id],
-                );
-
-                // 6. Delete the ghost attraction
+                // 3. Delete the ghost attraction
                 await transactionalEntityManager.query(
                   `DELETE FROM attractions WHERE id = $1`,
                   [ghostAttr.id],
