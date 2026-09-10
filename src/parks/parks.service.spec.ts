@@ -404,6 +404,15 @@ describe("ParksService", () => {
    * `AttractionMergeService.merge` stamp it; the two raw sync-time merge
    * blocks in this service did not, so a collision merge left the seam
    * looking like genuine outages.
+   *
+   * What these two cases prove is that the statement is issued, for every
+   * survivor, before the losing row is deleted. They cannot prove it commits:
+   * the fake manager below answers every statement, while against a real
+   * database both blocks abort further down — `repairDuplicates` writes
+   * `prediction_accuracy."attractionId"` (the column is `attraction_id`) and
+   * neither block moves more than 3 of the 19 tables in
+   * `ATTRACTION_DEPENDENCIES`, so the `DELETE FROM attractions` runs into the
+   * NO ACTION foreign keys. That is its own ticket; see todo.md.
    */
   describe("raw attraction merges stamp last_merged_at", () => {
     type Recorded = { sql: string; params?: unknown[] };
