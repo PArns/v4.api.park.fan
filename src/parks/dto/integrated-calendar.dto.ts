@@ -218,6 +218,41 @@ export class HeadlinerWaitForecast {
     example: 45,
   })
   waitTime: number;
+
+  @ApiProperty({
+    description:
+      "Half-width of the uncertainty band in minutes, from the model's own " +
+      "top quantile (alpha=0.95) minus its median — the same quantity, off the " +
+      "same live prediction, as `rides[].uncertaintyMinutes` on `/plan/day`. " +
+      "The two can still disagree about whether a band EXISTS for today or " +
+      "tomorrow: `/plan/day` also falls back to the widest of a ride's hourly " +
+      "bands, which reach 24 hours out, while this field reads the day-level " +
+      "prediction alone. " +
+      "Deliberately not rounded to 5: a band is a difference, not a posted " +
+      "wait time. Do not compute an interval off `waitTime` with it either — " +
+      "that number is rounded to 5 and floored at 10 while the band is " +
+      "measured against the raw median, so on a very quiet ride the " +
+      "subtraction goes negative. " +
+      "ABSENT where the model reports no spread — which is NOT a band of " +
+      "width zero and must not be drawn as one. That is the ordinary case " +
+      "near today rather than an edge: days 1-60 are usually answered by the " +
+      "TFT, whose `tft_forecasts` rows carry no spread at all, and CatBoost " +
+      "(which has one) fills in only where TFT does not reach. A literal `0` " +
+      "is different again and does travel (a spread that rounded to under a " +
+      "minute), so test `!= null` and never truthiness. Absent means null " +
+      "here or a stripped key on the wire — `ExcludeNullInterceptor` removes " +
+      "null-valued keys outside `/v1/admin/*`. A PAST day is built from " +
+      "recorded peaks, an observation having no band, and says so with " +
+      "`actual: true` — with one caveat that is the month cache rather than " +
+      "this field: a cached month entry that outlives park-local midnight can " +
+      "still serve yesterday with the forecast, and its band, that was " +
+      "written while it was tomorrow. Read `actual` and the date, not the " +
+      "presence of a band, to tell the two apart.",
+    required: false,
+    nullable: true,
+    example: 12,
+  })
+  uncertaintyMinutes?: number | null;
 }
 
 /**

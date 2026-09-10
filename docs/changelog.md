@@ -6,6 +6,83 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — the calendar's headliner forecast carries the model's band, and the docs stop calling q0.95 unserved
+
+`headlinerForecast.rides[]` on `GET /v1/parks/…/calendar` listed
+`attractionId`, `name` and `waitTime`, and dropped the uncertainty band on the
+last mapping before the response. Everything upstream of that mapping already
+carried it: `predict.py` computes `q0.95 − q0.5`, `PredictionResponse` declares
+it, `wait_time_predictions.uncertainty_minutes` stores it, and `PredictionDto`
+hands it to `CalendarService` — `buildHeadlinerForecasts` simply did not copy
+the field. It does now, off the same live prediction `rides[].uncertaintyMinutes`
+on `/plan/day` reads — the ml-service answer through `getParkPredictions`, not
+the stored `wait_time_predictions` rows, which are the writer's copy and which
+only the attraction endpoint serves — written the same way (`?? null`) and read
+the same way: a **half-width**, the model's own top quantile minus its median,
+unrounded, because the wait is a posted number and rounds to 5 while a band is a
+difference between two quantiles and a 2-minute spread must not round to
+nothing. It is not an interval to compute off `waitTime` either: that number is
+rounded and floored at 10 while the band is measured against the raw median.
+
+**No band is the ordinary case close to today**, not an edge — and the reason is
+which model answered rather than the date. `getServingDailyPredictions` merges
+TFT over CatBoost for days 1-60, and `tft_forecasts` holds `attraction_id,
+target_date, forecast_date, predicted_peak, model_version, created_at` with no
+spread at all, so a TFT-answered day carries none. CatBoost brings its band
+wherever TFT does not reach — a ride it has no row for, the 3-day staleness
+guard, an empty result — inside those 60 days as well as on the long tail. A missing band means "not known" and may not be
+read as "narrow". A literal `0` is a different case and does travel:
+`use_uncertainty` in `predict.py` is decided once per batch and
+`int(round(spread))` takes a per-row spread under half a minute to zero, which
+is a measurement rather than an absence — hence `?? null` and not `|| null`, and
+`!= null` rather than truthiness on the reading side. Past days keep
+`actual: true` and get no band at all: they are recorded peaks, and an
+observation has no band, the same reasoning `PlanDayService.observedRides`
+already writes down.
+
+One gap this uncovered and did not fix, because it predates the band and is not
+about it: `assembleFromMonthCaches` re-derives `isToday`, `crowdLevel` and
+`todayCrowdLevel` against a fresh `today` — the block there enumerates exactly
+which day-relative fields go stale in a month-keyed cache — but not
+`headlinerForecast`. So while a cached month entry survives past park-local
+midnight, yesterday can still be served with the forecast it was written with
+instead of its recorded peaks, `actual: true` and all. Filed as its own issue.
+
+Three things the first draft of this entry got wrong, all corrected here rather
+than shipped. The `null` was going to be **omitted** to save bytes, on the
+assumption that `/plan/day` sends the key and the calendar would not:
+`ExcludeNullInterceptor` strips null-valued keys from every response outside
+`/v1/admin/*` and `?debug=true`, so both endpoints already answer identically
+and there were no bytes to save — the difference existed only in the prose. The band was described as
+`waitTime ± value`, which the flooring makes false on a quiet ride. And both the
+DTO and this entry said "the same column", where in fact the calendar and
+`/plan/day` read the live ml-service answer and only the attraction endpoint
+reads the column — a sentence that would have sent the next debugger to the
+database.
+
+Where the two endpoints do differ is which row they read. `/plan/day` falls back
+to the widest of a ride's **hourly** bands, which reach 24 hours out, while the
+calendar reads the day-level prediction alone, so for today and tomorrow
+`/plan/day` can publish a band the calendar has none for, on the same ride and
+the same date.
+
+`docs/ml/quantile-serving-and-calibration.md` said q0.95 was **not served**,
+which was true when it was written and stopped being true once the band shipped.
+Its TL;DR row now says what actually leaves the service — the distance
+`q0.95 − q0.5`, never a wait — with the three endpoints that publish it, the
+interceptor that decides how an absent band looks on the wire, and the rules for
+reading a missing or zero one. The `alpha=0.95` bullet keeps its warning: the
+quantile itself is still never served as a display or crowd value.
+
+Not in this change, and each for a stated reason: the TFT's own spread (its
+StudentT head could produce one, `tft_forecasts` has nowhere to put it), the
+frontend rendering the band in the calendar's day detail (it draws `~45 min` per
+ride and reads no band there yet), and declaring `status` on
+`PredictionResponse` (it activates the `pred.status === "OPERATING" ||
+pred.status === null` filter in `MLService.storePredictions` and changes what
+accuracy scoring covers, which wants the coverage numbers read against the
+database first).
+
 ### Fixed — `pnpm test:cov` measured nothing, and the 70 % threshold was guarding it
 
 Every file failed to instrument. A coverage run printed 282 `Failed to collect
