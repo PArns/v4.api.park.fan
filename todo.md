@@ -305,11 +305,24 @@ What is still open, roughly by consequence:
       `tracked` CTE. A ride that leaves `tracked` (merge, retirement, a flip to
       `open_with_park`, a park losing its schedule) loses its in-window rows
       permanently.
-- [ ] **`last_merged_at` is stamped by one of four merge paths** — not by
-      `ParkMergeService`, which is the one the column was written for (the USH
-      merge with 29 colliding rides). Two raw `DELETE FROM attractions` paths
-      stamp nothing either, and no entity declares a relation, so there are no
-      FKs to catch the orphans.
+- [x] ~~**`last_merged_at` is stamped by one of four merge paths**~~ — half of
+      that was already stale when it was written: `ParkMergeService.consolidateEntities`
+      and `AttractionMergeService.merge` both stamp today. The two raw
+      `DELETE FROM attractions` paths in `parks.service.ts` — the sync-time
+      collision merge inside `syncParks` and the ghost merge in
+      `repairDuplicates` — now stamp every survivor in the same transaction,
+      before the losing row is deleted (PF-42).
+- [ ] **Both raw merge paths abort before that stamp can commit**, and the
+      "no FK catches the orphans" half of the bullet above was wrong: `queue_data`,
+      `wait_time_predictions`, `prediction_accuracy` and `ml_prediction_anomalies`
+      all declare `@ManyToOne(() => Attraction)` with no `onDelete`, so the FK is
+      NO ACTION and `DELETE FROM attractions` **raises 23503** rather than leaving
+      orphans. On top of that `repairDuplicates` writes
+      `prediction_accuracy."attractionId"`, a column that does not exist (it is
+      `attraction_id`) → 42703, and moves 3 of the 19 tables in
+      `ATTRACTION_DEPENDENCIES`. `applyMergeDependencies` is the existing fix and
+      already survived the USH cold run; both blocks should call it instead of
+      hand-rolling three UPDATEs.
 - [x] ~~A park with no published hours is served `not_down_capable`, not
       `no_schedule`~~ — the population query gained a `sched` branch that
       sources the rides of `no_schedule` parks directly from `attractions`

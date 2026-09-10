@@ -396,11 +396,25 @@ export class ParksService {
                         ghost.queue_times_entity_id,
                       );
                     });
+                    // `last_merged_at` is stamped on every survivor in the same
+                    // statement, and unconditionally, exactly as
+                    // `ParkMergeService.consolidateEntities` and
+                    // `AttractionMergeService.merge` do: the merge happened
+                    // whether or not this particular row inherited a column.
+                    // The seam here is not reparented history — this block moves
+                    // none — but the Queue-Times id: where the survivor had none
+                    // of its own it has one now, and from this instant that feed
+                    // writes into a row the wiki feed has been writing into all
+                    // along, so one series carries two sources across a single
+                    // timestamp. The nightly downtime reconstruction reads that
+                    // as genuine outages unless the ride is held out until the
+                    // stamp ages out.
                     await transactionalEntityManager.query(
                       `UPDATE attractions a
                        SET "land_name" = COALESCE(v.land_name, a."land_name"),
                            "land_external_id" = COALESCE(v.land_external_id, a."land_external_id"),
-                           "queue_times_entity_id" = COALESCE(v.qt_id, a."queue_times_entity_id")
+                           "queue_times_entity_id" = COALESCE(v.qt_id, a."queue_times_entity_id"),
+                           "last_merged_at" = NOW()
                        FROM (VALUES ${values.join(", ")}) AS v(id, land_name, land_external_id, qt_id)
                        WHERE a.id = v.id`,
                       params,
@@ -571,11 +585,21 @@ export class ParksService {
               if (match) {
                 // COLLISION: Merge data, move mappings, delete ghost attraction
 
-                // 1. Copy Land Data if missing in primary
+                // 1. Copy Land Data if missing in primary, and stamp the
+                //    survivor. The land columns are filled in only where they
+                //    are empty; `last_merged_at` is unconditional, because the
+                //    merge happened whether or not anything was inherited —
+                //    steps 3 to 5 below reparent this ghost's `queue_data`,
+                //    `wait_time_predictions` and `prediction_accuracy` onto the
+                //    survivor, whose history is then two interleaved series
+                //    flapping between OPERATING and DOWN at the same instant.
+                //    The stamp is what holds the ride out of the nightly
+                //    downtime reconstruction until it ages out.
                 await transactionalEntityManager.query(
-                  `UPDATE attractions 
+                  `UPDATE attractions
                    SET "land_name" = COALESCE("land_name", $1),
-                       "land_external_id" = COALESCE("land_external_id", $2)
+                       "land_external_id" = COALESCE("land_external_id", $2),
+                       "last_merged_at" = NOW()
                    WHERE id = $3`,
                   [ghostAttr.land_name, ghostAttr.land_external_id, match.id],
                 );
