@@ -325,23 +325,75 @@ What is still open, roughly by consequence:
       `ATTRACTION_DEPENDENCIES` inside the TimescaleDB decompression bracket —
       the same shape as `ParkMergeService.consolidateEntityData`, which already
       survived the USH cold run (PF-102).
-- [ ] **The ghost _park_ delete has the same hole one level up**, and it costs
-      twice. Both raw paths finish with `manager.delete(Park, ghostPark.id)`
-      without applying `PARK_DEPENDENCIES`, and the merge only moves
-      `attractionId`, never the denormalised `parkId` beside it. So (a)
-      `park_occupancy`, `attraction_p50_baselines.parkId` and
-      `attraction_p90_baselines.parkId` declare `@ManyToOne(() => Park)` with no
-      `onDelete`, which can abort the transaction one statement later than it
-      used to; and (b) where it does not abort, the inherited rows still name the
-      deleted park and are read by nobody —
-      `park-historical-stats.service.ts:766/791/849/913` filters
-      `queue_data_aggregates` by `qda."parkId"`, so the survivor's stats never
-      show the history the merge exists to carry over. Silent, and not caught by
-      any FK. Out of PF-102, which is scoped to the attraction merge and its
-      acceptance criteria; `PARK_DEPENDENCIES` already describes what each table
-      needs. Written up as PF-111, which also has to decide what happens to
-      `attraction_rope_drop` and `attraction_typical_waits` — both cascade off
-      the park, so today they are destroyed rather than moved.
+- [x] ~~**The ghost _park_ delete has the same hole one level up**~~, and it cost
+      twice: both raw paths finished with `manager.delete(Park, ghostPark.id)`
+      without applying `PARK_DEPENDENCIES`, and the merge moved `attractionId`
+      and never the denormalised `parkId` beside it. Both now call
+      `consolidateMergedPark` immediately before that DELETE — `mergeParks`
+      steps 3-4 as `PARK_INLINE_DEPENDENCIES`, then its step 5b as
+      `PARK_DEPENDENCIES`, in that order, plus the two that shape cannot carry
+      (`park_p50_baselines` is winner-authoritative, `external_entity_mapping`
+      wants the `internal_entity_type` filter). The audit behind it, since the
+      ticket asked which of `PARK_TABLES_HANDLED_INLINE` were needed: of the ten
+      inline tables three were already reparented (attractions, shows,
+      restaurants) and the other seven were all needed. `park_occupancy` is the
+      only park FK that is NO ACTION, so it is the only one that could abort the
+      transaction; the rest cascade, so leaving them out destroyed a park's
+      schedule, daily stats, weather, headliner set and seasons inside a
+      transaction that reported success. The two the ticket left open decide the
+      same way: `attraction_rope_drop` and `attraction_typical_waits` **move**,
+      which is what `PARK_DEPENDENCIES` has always said about them — applying it
+      before the DELETE is what makes that true here (PF-111).
+- [ ] **A ghost park's own URL is not preserved when the raw paths delete it.**
+      `mergeParks` inserts a `ParkSlugAlias` for the loser's path before the
+      DELETE, so already-indexed URLs redirect instead of 404ing; neither raw
+      path does. Out of PF-111, whose acceptance criteria are about the
+      dependent rows rather than the loser's own path.
+- [ ] **`attraction_ride_profiles` is still unprotected on the _attraction_
+      side.** Its park half is fixed — PF-111 added it to `PARK_DEPENDENCIES`
+      and to the `PARK_REFERENCING_TABLES` snapshot, so a park merge now carries
+      the curated profiles across instead of cascading them. Its `attractionId`
+      carries `onDelete: "CASCADE"` too, and there the losing ride's profile is
+      still destroyed by the `DELETE FROM attractions` both raw paths and
+      `AttractionMergeService.merge` run. It is in neither
+      `ATTRACTION_DEPENDENCIES` nor `ATTRACTION_REFERENCING_TABLES`, so the
+      guard cannot see it either. Left open rather than guessed at, because the
+      answer is not a `MergeStrategy`: `discard` is what happens today and is
+      wrong by the file's own rule (the neighbours it would sit beside —
+      rope-drop, typical-waits — are `discard` because they are _derived_, and
+      this is hand-curated with no feed and no seed); `move` collides, since
+      `attractionId` is both the merge column and the primary key. What it wants
+      is winner-authoritative — take the loser's row only where the survivor has
+      none — the same shape `park_p50_baselines` needs and the same reason it is
+      not a dependency.
+- [ ] **A third park delete in `parks.service.ts` has the whole hole.** The
+      priority merge in `syncParks` (`parkRepository.delete(losingPark.id)`,
+      guarded by an `isEmpty` count over shows/restaurants/attractions) applies
+      neither `PARK_DEPENDENCIES` nor `PARK_INLINE_DEPENDENCIES`, so
+      `park_occupancy` and the two attraction baselines raise 23503 and abort
+      the sync run. Worse than the two PF-111 fixed: this path holds **no
+      transaction**, so the entity moves above it are already committed when the
+      DELETE throws, and it leaves a losing park stripped of its rides and still
+      present. Out of PF-111, which names the other two paths; wrapping this one
+      in a transaction is its own change.
+- [ ] **The blind show and restaurant moves can raise 23505 before any of that
+      is reached.** Both raw paths do `UPDATE shows SET "parkId" = …` and the
+      same for restaurants, against a unique `(parkId, slug)` on either table
+      (`show.entity.ts:33`, `restaurant.entity.ts:33`). Two rows for one park
+      from two sources are exactly the case that produces a shared slug, so the
+      transaction rolls back before the attraction and park steps run at all.
+      `mergeParks.migrateEntities` handles it — match on slug or name,
+      consolidate, delete the loser — and neither raw path does. Not PF-111's
+      scope: it is a collision decision per entity type, not a dependency list.
+- [ ] **A migrated `park_season` can name attractions the same merge deleted.**
+      `park_seasons.attraction_ids` is a jsonb array of attraction ids, and
+      `PARK_DEPENDENCIES` moves the row onto the survivor. Where the merge
+      collided a ride, the id in that array belongs to the deleted loser, and
+      `ParkSeasonService` re-validates the stored array on the next edit — so
+      the season is carried across intact and then refuses every later change
+      with "These attractions are not in this park". The ids would have to be
+      rewritten to the survivors, which the dependency list has no way to
+      express.
 - [x] ~~A park with no published hours is served `not_down_capable`, not
       `no_schedule`~~ — the population query gained a `sched` branch that
       sources the rides of `no_schedule` parks directly from `attractions`
