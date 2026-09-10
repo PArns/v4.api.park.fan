@@ -312,17 +312,27 @@ What is still open, roughly by consequence:
       collision merge inside `syncParks` and the ghost merge in
       `repairDuplicates` — now stamp every survivor in the same transaction,
       before the losing row is deleted (PF-42).
-- [ ] **Both raw merge paths abort before that stamp can commit**, and the
+- [x] ~~**Both raw merge paths abort before that stamp can commit**~~, and the
       "no FK catches the orphans" half of the bullet above was wrong: `queue_data`,
       `wait_time_predictions`, `prediction_accuracy` and `ml_prediction_anomalies`
       all declare `@ManyToOne(() => Attraction)` with no `onDelete`, so the FK is
       NO ACTION and `DELETE FROM attractions` **raises 23503** rather than leaving
-      orphans. On top of that `repairDuplicates` writes
+      orphans. On top of that `repairDuplicates` wrote
       `prediction_accuracy."attractionId"`, a column that does not exist (it is
-      `attraction_id`) → 42703, and moves 3 of the 19 tables in
-      `ATTRACTION_DEPENDENCIES`. `applyMergeDependencies` is the existing fix and
-      already survived the USH cold run; both blocks should call it instead of
-      hand-rolling three UPDATEs.
+      `attraction_id`) → 42703, and moved 3 of the tables in
+      `ATTRACTION_DEPENDENCIES`. Both blocks now go through
+      `consolidateMergedAttractions`, which is `applyMergeDependencies` over
+      `ATTRACTION_DEPENDENCIES` inside the TimescaleDB decompression bracket —
+      the same shape as `ParkMergeService.consolidateEntityData`, which already
+      survived the USH cold run (PF-102).
+- [ ] **The ghost _park_ delete has the same hole one level up.** Both raw paths
+      finish with `manager.delete(Park, ghostPark.id)` without applying
+      `PARK_DEPENDENCIES`. `park_occupancy`, `attraction_p50_baselines.parkId`
+      and `attraction_p90_baselines.parkId` declare `@ManyToOne(() => Park)` with
+      no `onDelete`, and the denormalised `parkId` of a reparented ride still
+      points at the ghost — so the transaction can now abort one statement later
+      than it used to. Not part of PF-102, which is scoped to the attraction
+      merge and its acceptance criteria.
 - [x] ~~A park with no published hours is served `not_down_capable`, not
       `no_schedule`~~ — the population query gained a `sched` branch that
       sources the rides of `no_schedule` parks directly from `attractions`

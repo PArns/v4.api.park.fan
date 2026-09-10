@@ -34,6 +34,10 @@ import {
   hasRecentQueueData,
 } from "./utils/park-merge.util";
 import {
+  applyMergeDependencies,
+  ATTRACTION_DEPENDENCIES,
+} from "./utils/merge-dependencies";
+import {
   isParkOpen,
   RideStatusData,
 } from "../common/utils/status-calculator.util";
@@ -419,6 +423,18 @@ export class ParksService {
                        WHERE a.id = v.id`,
                       params,
                     );
+                    // Every dependent row of each ghost moves onto its
+                    // survivor before the ghost is deleted. Without this the
+                    // DELETE below raises 23503 and takes the whole sync run
+                    // with it — `repairDuplicates()` is awaited unguarded at
+                    // the end of `syncParks`.
+                    await this.consolidateMergedAttractions(
+                      transactionalEntityManager,
+                      collisions.map((c) => ({
+                        winnerId: c.matchId,
+                        loserId: c.ghost.id,
+                      })),
+                    );
                     await transactionalEntityManager.query(
                       `DELETE FROM attractions WHERE id = ANY($1::uuid[])`,
                       [collisions.map((c) => c.ghost.id)],
@@ -515,6 +531,57 @@ export class ParksService {
   }
 
   /**
+   * Reparents every dependent row of a losing attraction onto the survivor, for
+   * the two raw merge paths in this file.
+   *
+   * Both used to hand-roll this, and both were wrong in the same three ways:
+   * `repairDuplicates` moved 3 of the tables in `ATTRACTION_DEPENDENCIES` and
+   * wrote `prediction_accuracy."attractionId"`, a column that does not exist
+   * (42703); the collision block in `syncParks` moved nothing at all and
+   * trusted the losing row's history to disappear with it. It does not:
+   * `queue_data`, `wait_time_predictions`, `prediction_accuracy` and
+   * `ml_prediction_anomalies` declare `@ManyToOne(() => Attraction)` with no
+   * `onDelete`, so the FK is NO ACTION and the `DELETE FROM attractions` raises
+   * 23503 instead of leaving orphans behind. Either way the transaction rolled
+   * back, which is why the `last_merged_at` stamp both paths write could never
+   * commit.
+   *
+   * `ParkMergeService.consolidateEntityData` is the shape this follows,
+   * including the two things that are easy to leave out:
+   *
+   * - the TimescaleDB decompression limit, which `applyMergeDependencies` names
+   *   as the caller's job in its own docstring — `queue_data` is a hypertable
+   *   and a merge touches far more than 100000 compressed tuples;
+   * - resetting it afterwards rather than in a `finally`. A failed statement
+   *   aborts the surrounding transaction, so the reset would itself fail with
+   *   25P02 and bury the error that caused it. Nothing leaks: PostgreSQL undoes
+   *   a non-`LOCAL` `SET` when the transaction it ran in rolls back.
+   */
+  private async consolidateMergedAttractions(
+    manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    pairs: Array<{ winnerId: string; loserId: string }>,
+  ): Promise<void> {
+    if (pairs.length === 0) return;
+
+    await manager.query(
+      "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
+    );
+
+    for (const { winnerId, loserId } of pairs) {
+      await applyMergeDependencies(
+        manager,
+        ATTRACTION_DEPENDENCIES,
+        winnerId,
+        loserId,
+      );
+    }
+
+    await manager.query(
+      "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 100000",
+    );
+  }
+
+  /**
    * Scans for and merges duplicate parks based on shared Queue-Times IDs.
    * This fixes "Split Brain" issues where a park exists separately from Wiki and Queue-Times sources.
    */
@@ -589,8 +656,7 @@ export class ParksService {
                 //    survivor. The land columns are filled in only where they
                 //    are empty; `last_merged_at` is unconditional, because the
                 //    merge happened whether or not anything was inherited —
-                //    steps 3 to 5 below reparent this ghost's `queue_data`,
-                //    `wait_time_predictions` and `prediction_accuracy` onto the
+                //    step 3 below reparents this ghost's `queue_data` onto the
                 //    survivor, whose history is then two interleaved series
                 //    flapping between OPERATING and DOWN at the same instant.
                 //    The stamp is what holds the ride out of the nightly
@@ -612,31 +678,14 @@ export class ParksService {
                   [match.id, ghostAttr.id],
                 );
 
-                // 3. Move Queue Data (Wait Times History)
-                await transactionalEntityManager.query(
-                  `UPDATE queue_data 
-                   SET "attractionId" = $1 
-                   WHERE "attractionId" = $2::uuid`,
-                  [match.id, ghostAttr.id],
+                // 3. Move every dependent row, not the three this block used
+                //    to name by hand.
+                await this.consolidateMergedAttractions(
+                  transactionalEntityManager,
+                  [{ winnerId: match.id, loserId: ghostAttr.id }],
                 );
 
-                // 4. Move Wait Time Predictions
-                await transactionalEntityManager.query(
-                  `UPDATE wait_time_predictions 
-                   SET "attractionId" = $1 
-                   WHERE "attractionId" = $2::uuid`,
-                  [match.id, ghostAttr.id],
-                );
-
-                // 5. Move Prediction Accuracy Records
-                await transactionalEntityManager.query(
-                  `UPDATE prediction_accuracy 
-                   SET "attractionId" = $1 
-                   WHERE "attractionId" = $2::uuid`,
-                  [match.id, ghostAttr.id],
-                );
-
-                // 6. Delete the ghost attraction
+                // 4. Delete the ghost attraction
                 await transactionalEntityManager.query(
                   `DELETE FROM attractions WHERE id = $1`,
                   [ghostAttr.id],

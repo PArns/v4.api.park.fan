@@ -9,6 +9,7 @@ import { DestinationsService } from "../destinations/destinations.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { HolidaysService } from "../holidays/holidays.service";
 import { createTestPark } from "../../test/fixtures/park.fixtures";
+import { ATTRACTION_DEPENDENCIES } from "./utils/merge-dependencies";
 
 describe("ParksService", () => {
   let service: ParksService;
@@ -465,47 +466,31 @@ describe("ParksService", () => {
     const indexOfAttractionDelete = (calls: Recorded[]) =>
       calls.findIndex((c) => /DELETE\s+FROM\s+attractions/i.test(c.sql));
 
-    it("stamps every survivor of the sync-time collision merge, before the ghosts are deleted", async () => {
-      const survivingParkId = "11111111-1111-1111-1111-111111111111";
-      const ghostParkId = "22222222-2222-2222-2222-222222222222";
-      // Two collisions, so a stamp that only covered the last one processed
-      // would be visible here.
-      const attractionRows = [
-        {
-          id: "aaaa1111-0000-0000-0000-000000000001",
-          parkId: survivingParkId,
-          slug: "taron",
-          queue_times_entity_id: null,
-          land_name: null,
-          land_external_id: null,
-        },
-        {
-          id: "aaaa1111-0000-0000-0000-000000000002",
-          parkId: survivingParkId,
-          slug: "black-mamba",
-          queue_times_entity_id: null,
-          land_name: null,
-          land_external_id: null,
-        },
-        {
-          id: "bbbb2222-0000-0000-0000-000000000001",
-          parkId: ghostParkId,
-          slug: "taron",
-          queue_times_entity_id: "4711",
-          land_name: "Klugheim",
-          land_external_id: "land-klugheim",
-        },
-        {
-          id: "bbbb2222-0000-0000-0000-000000000002",
-          parkId: ghostParkId,
-          slug: "black-mamba",
-          queue_times_entity_id: "4712",
-          land_name: "Deep in Africa",
-          land_external_id: "land-africa",
-        },
-      ];
+    /**
+     * Tables the merge issued a statement against for one losing attraction.
+     *
+     * `applyMergeDependencies` binds the loser id as a parameter on every
+     * statement it makes — the discard DELETE, the conflict DELETE and the
+     * reparenting UPDATE alike — so the set of tables reached for a given loser
+     * is readable straight off the recorded calls.
+     */
+    const dependencyTablesTouched = (calls: Recorded[], loserId: string) =>
+      new Set(
+        calls
+          .filter((c) => (c.params ?? []).includes(loserId))
+          .map((c) => /(?:UPDATE|DELETE\s+FROM)\s+(\w+)/i.exec(c.sql)?.[1])
+          .filter((table): table is string => Boolean(table)),
+      );
 
-      const { calls } = recordTransaction((sql) =>
+    const syncSurvivingParkId = "11111111-1111-1111-1111-111111111111";
+    const syncGhostParkId = "22222222-2222-2222-2222-222222222222";
+
+    /**
+     * Wires up the mocks `syncParks` needs to reach its ghost-park merge, with
+     * `attractionRows` answering the one SELECT inside the transaction.
+     */
+    const primeGhostParkSync = (attractionRows: unknown[]) => {
+      const { calls, transactionalEntityManager } = recordTransaction((sql) =>
         /SELECT id, "parkId", slug/.test(sql) ? attractionRows : [],
       );
 
@@ -529,7 +514,7 @@ describe("ParksService", () => {
         timezone: "Europe/Berlin",
       });
       mockParkRepository.find.mockResolvedValue([
-        createTestPark({ id: survivingParkId, externalId: "ext-park-1" }),
+        createTestPark({ id: syncSurvivingParkId, externalId: "ext-park-1" }),
       ]);
       mockParkRepository.update.mockResolvedValue({ affected: 1 });
       mockParkRepository.createQueryBuilder.mockImplementation(() => ({
@@ -542,12 +527,55 @@ describe("ParksService", () => {
         select: jest.fn().mockReturnThis(),
         getRawMany: jest.fn().mockResolvedValue([]),
         getOne: jest.fn().mockResolvedValue({
-          id: ghostParkId,
+          id: syncGhostParkId,
           name: "Phantasialand (Queue-Times)",
         }),
       }));
       // repairDuplicates runs at the end of syncParks — nothing to repair.
       mockParkRepository.query.mockResolvedValue([]);
+
+      return { calls, transactionalEntityManager };
+    };
+
+    it("stamps every survivor of the sync-time collision merge, before the ghosts are deleted", async () => {
+      // Two collisions, so a stamp that only covered the last one processed
+      // would be visible here.
+      const attractionRows = [
+        {
+          id: "aaaa1111-0000-0000-0000-000000000001",
+          parkId: syncSurvivingParkId,
+          slug: "taron",
+          queue_times_entity_id: null,
+          land_name: null,
+          land_external_id: null,
+        },
+        {
+          id: "aaaa1111-0000-0000-0000-000000000002",
+          parkId: syncSurvivingParkId,
+          slug: "black-mamba",
+          queue_times_entity_id: null,
+          land_name: null,
+          land_external_id: null,
+        },
+        {
+          id: "bbbb2222-0000-0000-0000-000000000001",
+          parkId: syncGhostParkId,
+          slug: "taron",
+          queue_times_entity_id: "4711",
+          land_name: "Klugheim",
+          land_external_id: "land-klugheim",
+        },
+        {
+          id: "bbbb2222-0000-0000-0000-000000000002",
+          parkId: syncGhostParkId,
+          slug: "black-mamba",
+          queue_times_entity_id: "4712",
+          land_name: "Deep in Africa",
+          land_external_id: "land-africa",
+        },
+      ];
+
+      const { calls } = primeGhostParkSync(attractionRows);
 
       await service.syncParks();
 
@@ -629,6 +657,164 @@ describe("ParksService", () => {
       expect(firstDelete).toBeGreaterThan(-1);
       expect(calls.indexOf(stamps[0])).toBeLessThan(firstDelete);
       expect(transactionalEntityManager.delete).toHaveBeenCalled();
+    });
+
+    // The two cases above prove the stamp is issued. They cannot prove it
+    // survives, and against a real database it did not: the DELETE that
+    // follows raises 23503 on four NO ACTION foreign keys, and
+    // `repairDuplicates` first raises 42703 on a column that does not exist.
+    // What both paths were missing is the helper the two proper merge services
+    // already use.
+    it("moves every declared dependency of the sync-time collision merge onto the survivor, before the ghosts are deleted", async () => {
+      const attractionRows = [
+        {
+          id: "aaaa1111-0000-0000-0000-000000000001",
+          parkId: syncSurvivingParkId,
+          slug: "taron",
+          queue_times_entity_id: null,
+          land_name: null,
+          land_external_id: null,
+        },
+        {
+          id: "bbbb2222-0000-0000-0000-000000000001",
+          parkId: syncGhostParkId,
+          slug: "taron",
+          queue_times_entity_id: "4711",
+          land_name: "Klugheim",
+          land_external_id: "land-klugheim",
+        },
+      ];
+      const survivor = attractionRows[0].id;
+      const ghost = attractionRows[1].id;
+
+      const { calls } = primeGhostParkSync(attractionRows);
+
+      await service.syncParks();
+
+      // This block used to move nothing at all and trust the ghost's history
+      // to vanish with the row.
+      const touched = dependencyTablesTouched(calls, ghost);
+      for (const dep of ATTRACTION_DEPENDENCIES) {
+        expect(touched).toContain(dep.table);
+      }
+
+      // `queue_data` and `ml_prediction_anomalies` are the two the ticket
+      // names: the first is the history a merge must not lose, the second the
+      // FK that stops the DELETE outright.
+      const reparented = (table: string) =>
+        calls.find(
+          (c) =>
+            new RegExp(`UPDATE\\s+${table}\\s+SET`, "i").test(c.sql) &&
+            (c.params ?? []).includes(ghost),
+        );
+      expect(reparented("queue_data")?.params).toEqual([survivor, ghost]);
+      expect(reparented("ml_prediction_anomalies")?.params).toEqual([
+        survivor,
+        ghost,
+      ]);
+
+      // Nothing may still be pointing at the ghost when its row goes.
+      const deleteIndex = indexOfAttractionDelete(calls);
+      expect(deleteIndex).toBeGreaterThan(-1);
+      const lastDependency = calls.reduce(
+        (last, c, i) => ((c.params ?? []).includes(ghost) ? i : last),
+        -1,
+      );
+      expect(lastDependency).toBeLessThan(deleteIndex);
+
+      // `queue_data` is a hypertable, so the merge moves far more than the
+      // default 100000 compressed tuples one statement may decompress.
+      const timescale = calls.filter((c) =>
+        /max_tuples_decompressed_per_dml_transaction/.test(c.sql),
+      );
+      expect(timescale.map((c) => c.sql)).toEqual([
+        "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
+        "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 100000",
+      ]);
+    });
+
+    it("moves every declared dependency of the repairDuplicates ghost merge, and writes no attractionId onto prediction_accuracy", async () => {
+      const primaryId = "55555555-5555-5555-5555-555555555555";
+      const ghostParkId = "66666666-6666-6666-6666-666666666666";
+      const primaryAttractions = [
+        {
+          id: "cccc3333-0000-0000-0000-000000000001",
+          slug: "troy",
+          land_name: null,
+          land_external_id: null,
+        },
+      ];
+      const ghostAttractions = [
+        {
+          id: "dddd4444-0000-0000-0000-000000000001",
+          slug: "troy",
+          land_name: "Avalon",
+          land_external_id: "land-avalon",
+        },
+      ];
+      const survivor = primaryAttractions[0].id;
+      const ghost = ghostAttractions[0].id;
+
+      const { calls } = recordTransaction((sql, params) => {
+        if (!/SELECT id, slug/.test(sql)) return [];
+        const [parkId] = (params ?? []) as string[];
+        return parkId === primaryId ? primaryAttractions : ghostAttractions;
+      });
+
+      mockParkRepository.query.mockResolvedValue([
+        { queue_times_entity_id: "4711" },
+      ]);
+      mockParkRepository.find.mockResolvedValue([
+        createTestPark({ id: primaryId, wikiEntityId: "wiki-1" }),
+        createTestPark({ id: ghostParkId, wikiEntityId: null }),
+      ]);
+
+      await service.repairDuplicates();
+
+      // Three tables before; the helper knows the rest.
+      const touched = dependencyTablesTouched(calls, ghost);
+      for (const dep of ATTRACTION_DEPENDENCIES) {
+        expect(touched).toContain(dep.table);
+      }
+
+      // The three it did move must still land on the survivor.
+      const reparented = (table: string) =>
+        calls.find(
+          (c) =>
+            new RegExp(`UPDATE\\s+${table}\\s+SET`, "i").test(c.sql) &&
+            (c.params ?? []).includes(ghost),
+        );
+      expect(reparented("queue_data")?.params).toEqual([survivor, ghost]);
+      expect(reparented("wait_time_predictions")?.params).toEqual([
+        survivor,
+        ghost,
+      ]);
+      expect(reparented("prediction_accuracy")?.params).toEqual([
+        survivor,
+        ghost,
+      ]);
+
+      // The column is `attraction_id`. The hand-written UPDATE named
+      // `attractionId`, which is 42703 on every collision this path handles.
+      const predictionAccuracy = calls.filter((c) =>
+        /prediction_accuracy/i.test(c.sql),
+      );
+      expect(predictionAccuracy.length).toBeGreaterThan(0);
+      for (const call of predictionAccuracy) {
+        expect(call.sql).not.toMatch(/"attractionId"/);
+      }
+
+      const deleteIndex = indexOfAttractionDelete(calls);
+      expect(deleteIndex).toBeGreaterThan(-1);
+      const lastDependency = calls.reduce(
+        (last, c, i) =>
+          (c.params ?? []).includes(ghost) &&
+          !/DELETE\s+FROM\s+attractions/i.test(c.sql)
+            ? i
+            : last,
+        -1,
+      );
+      expect(lastDependency).toBeLessThan(deleteIndex);
     });
   });
 });
