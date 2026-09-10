@@ -2,6 +2,7 @@ import { DataSource } from "typeorm";
 import Redis from "ioredis";
 import * as dotenv from "dotenv";
 import * as path from "path";
+import { ML_FORECAST_TABLES } from "./helpers/ml-forecast-tables";
 
 // Load .env.test BEFORE any other modules
 dotenv.config({ path: path.resolve(__dirname, "../.env.test") });
@@ -98,20 +99,29 @@ async function truncateAllTables(): Promise<void> {
     return;
   }
 
-  const entities = dataSource.entityMetadatas;
+  // `entityMetadatas` is every table TypeORM knows, which is every table the
+  // schema had until the merge tables that no entity owns were added to it.
+  // Those four are not in the metadata and would therefore never be emptied —
+  // one spec's forecast rows would be the next spec's starting state, and the
+  // merge assertions here count rows.
+  const tableNames = [
+    ...dataSource.entityMetadatas.map((entity) => entity.tableName),
+    ...ML_FORECAST_TABLES,
+  ];
 
   // Disable foreign key checks temporarily for faster truncation
   await dataSource.query("SET session_replication_role = replica;");
 
   try {
-    for (const entity of entities) {
+    for (const tableName of tableNames) {
       // A failure here used to be a `console.warn` about tables that might not
-      // exist. Global setup creates the schema from this same metadata, so
-      // every table does exist and a failure means something else — a lock lost
+      // exist. Global setup creates all of these — the entities from this same
+      // metadata, the four others from their writers' own DDL — so every table
+      // does exist and a failure means something else — a lock lost
       // to a background query, say. Swallowing it was survivable while each
       // file had its own database; with one shared database it silently seeds
       // every later file, so it fails the test that caused it instead.
-      await dataSource.query(`TRUNCATE TABLE "${entity.tableName}" CASCADE;`);
+      await dataSource.query(`TRUNCATE TABLE "${tableName}" CASCADE;`);
     }
   } finally {
     // Re-enable foreign key checks

@@ -6,6 +6,7 @@ import { RedisContainer, StartedRedisContainer } from "@testcontainers/redis";
 import { DataSource } from "typeorm";
 import * as dotenv from "dotenv";
 import * as path from "path";
+import { createMlForecastTables } from "./helpers/ml-forecast-tables";
 
 /**
  * One TimescaleDB and one Redis for the whole E2E run.
@@ -155,6 +156,13 @@ async function createSchema(database: string): Promise<void> {
         errorMessage,
       );
     }
+
+    // The four merge tables no entity owns, so `synchronize` above never made
+    // them. Unguarded on purpose, unlike the extensions and the hypertable: a
+    // suite that starts without these does not degrade, it reports a missing
+    // relation from inside the merge transaction and blames the merge.
+    await createMlForecastTables(dataSource);
+    console.log("✅ ML forecast tables created (no entity owns these)");
   } finally {
     // Guarded, because `initialize()` itself may be what threw, and destroying
     // a DataSource that never connected throws in its own right — which would

@@ -61,6 +61,7 @@
 - [Date & Time Rules](docs/development/datetime-handling.md) - **CRITICAL**: Timezone handling rules.
 - [Timezone Audit](docs/development/timezone-audit.md) - Audit of all time operations against park timezone (2026-02-08).
 - [Scripts Overview](docs/development/scripts.md) - Script categories and npm-run commands.
+- [The merge path's E2E gate](docs/development/e2e-merge-coverage.md) - **2026-09-10**: why `repairDuplicates` had no E2E until now — **four** of its 34 tables have no TypeORM entity (`pcn/shape/tft/catboost_daily_forecasts`), so `synchronize` never made them and the merge aborted with 42P01 before any assertion ran. The rule that replaces it: **read each `CREATE TABLE` from the file that issues it, never copy the DDL** — a copy drifts the moment a sub-service adds a column. Includes the schema guard (`to_regclass` over all 34), the truncation list, and the counter-check that proves the spec is not empty (`a045850~1` → 42703, `a045850` → 23503, `main` → green). Corrects PAR-100/PAR-121, which both say eight.
 - [Full-DB Validation Checklist](docs/development/full-db-validation-checklist.md) - **2026-06-17**: post-deploy/staging checks for the P50/P90 + caching work — crowd-level calibration invariants, the new SQL (per-attraction & historical-stats typical-day-peak), cache invalidation, single-flight, quantile monotonicity. The dev/CI container has no DB, so these self-calibrating changes are verified against real parks here.
 
 ### 🖥️ Frontend

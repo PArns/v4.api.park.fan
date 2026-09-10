@@ -6,6 +6,65 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — the merge transaction is finally tested against a real database
+
+`ParksService.repairDuplicates()` — the raw park-merge path — had no E2E
+coverage at all. Not oversight: four of the 34 tables in
+`ATTRACTION_DEPENDENCIES` / `PARK_DEPENDENCIES` / `PARK_INLINE_DEPENDENCIES` /
+`PARK_TABLES_HANDLED_INLINE` have no TypeORM entity (`pcn_forecasts`,
+`shape_forecasts`, `tft_forecasts`, `catboost_daily_forecasts`), so
+`synchronize` never created them in the test schema and `applyMergeDependencies`
+aborted on the first one with 42P01 before a single assertion could run. Anyone
+attempting a merge test hit that wall on the first try.
+
+That matters because a unit test with a recorded manager proves a statement is
+**issued**, never that the transaction **commits** — which is how the three
+faults PR #245 fixed survived: 42703 on a column that does not exist, 23503 on a
+NO ACTION foreign key, 23505 on a unique key the reparenting UPDATE walks into.
+All three are invisible to a recorded manager and roll the whole merge back,
+including the `last_merged_at` stamp both raw paths write.
+
+`test/helpers/ml-forecast-tables.ts` closes the gap by **extracting each
+`CREATE TABLE` statement from the file that issues it** (`pcn-service/db.py`,
+`shape-service/db.py`, `nf-service/db.py`,
+`src/queues/processors/nf-forecast.processor.ts`) rather than copying the DDL. A
+copy is a second definition of a schema this repo owns no migration for and
+drifts the moment a sub-service adds a column — the suite would keep passing
+against a table production no longer has. If a statement moves or is renamed the
+extraction throws at setup, naming the file, instead of resurfacing as a 42P01
+that reads like a merge bug.
+
+`test/e2e/park-merge.e2e-spec.ts` then runs a real collision merge and asserts on
+state **after** the call returns: ghost park and ghost ride gone, `queue_data`
+5 + 3 = 8 on the winner with zero orphans, `ml_prediction_anomalies` carried on
+both `attraction_id` and the denormalised `park_id`, the colliding
+`prediction_accuracy` and `pcn_forecasts` rows discarded while the others move,
+`attraction_p50_baselines` discarded-then-reparented in that order,
+`last_merged_at` stamped, and the curated season plus the occupancy reading
+surviving the park DELETE. A second test guards the schema itself: every table
+in the four lists must answer `to_regclass`, so a new dependency on a table with
+neither an entity nor an entry in the helper fails by name.
+
+Two supporting fixes: `test/setup-e2e.ts` truncates the four entity-less tables
+alongside `entityMetadatas` (they were in no metadata, so they were never
+emptied and one spec's rows became the next spec's starting state), and
+`test/global-setup.ts` creates them unguarded — unlike the extensions and the
+hypertable, a suite that starts without these does not degrade, it blames the
+merge for a missing relation.
+
+**Counter-checked, because a green test proves nothing until it can go red.**
+Rolling back only `parks.service.ts` and `merge-dependencies.ts`: `a045850~1`
+fails with **42703** at `parks.service.ts:632`, `a045850` with **23503** on
+`park_occupancy`, `main` is green. Each stand dies on a different statement, one
+level further in — which is the answer to why this survived so long.
+
+Correction to PAR-100 and PAR-121, which both say eight tables lack an entity:
+the four `*_p50/p90_baselines` have had entities since before `e099daa`. The
+count is four. The earlier measurement used `CREATE TABLE IF NOT EXISTS`, a
+silent no-op on a table `synchronize` had already made.
+
+Docs: [The merge path's E2E gate](development/e2e-merge-coverage.md).
+
 ### Added — the calendar's headliner forecast carries the model's band, and the docs stop calling q0.95 unserved
 
 `headlinerForecast.rides[]` on `GET /v1/parks/…/calendar` listed
