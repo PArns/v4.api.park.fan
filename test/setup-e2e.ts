@@ -38,12 +38,20 @@ beforeAll(async () => {
 
   await dataSource.initialize();
 
+  // `lazyConnect` + an awaited `connect()`, so that a Redis this file cannot
+  // reach fails the run here. Constructing eagerly and gating the cleanup on
+  // `status === "ready"` would let a client that never connects turn the
+  // between-tests flush into a silent no-op — and ioredis swallows connection
+  // errors while nothing listens for them.
   redis = new Redis({
     host: process.env.REDIS_HOST,
     port: parseInt(process.env.REDIS_PORT as string, 10),
     maxRetriesPerRequest: 3,
     enableOfflineQueue: false,
+    lazyConnect: true,
   });
+
+  await redis.connect();
 }, 120000);
 
 afterAll(async () => {
@@ -52,9 +60,7 @@ afterAll(async () => {
   }
 
   if (redis) {
-    if (redis.status === "ready") {
-      await redis.quit().catch(() => undefined);
-    }
+    await redis.quit().catch(() => undefined);
     redis.disconnect();
   }
 }, 60000);
@@ -66,14 +72,16 @@ afterAll(async () => {
  *
  * Redis has to be emptied for the same reason the tables do, and it did not
  * have to be while every file had its own container. One Redis for the whole
- * run means one file's leftovers are the next file's starting state — and the
- * worst of those leftovers are not cache keys but Bull's REPEATABLE jobs:
- * `QueueSchedulerService` registers `wait-times-cron` on a five-minute cron
- * five seconds after an AppModule spec boots, and a surviving registration lets
- * `WaitTimesProcessor` fire in the middle of a later, unrelated test.
+ * run means one file's leftovers are the next file's starting state: cached
+ * responses, admin sessions, popularity counters.
+ *
+ * It is deliberately not the last line of defence against a leftover Bull
+ * REPEATABLE job — one written between the final flush and `app.close()` would
+ * slip past this. `SKIP_QUEUE_BOOTSTRAP=true` in `.env.test` is what keeps
+ * those from being written at all.
  */
 afterEach(async () => {
-  if (redis?.status === "ready") {
+  if (redis) {
     await redis.flushall();
   }
 
