@@ -405,13 +405,14 @@ export class ParksService {
                     // `ParkMergeService.consolidateEntities` and
                     // `AttractionMergeService.merge` do: the merge happened
                     // whether or not this particular row inherited a column.
-                    // The seam here is not reparented history — this block moves
-                    // none — but the Queue-Times id: where the survivor had none
-                    // of its own it has one now, and from this instant that feed
+                    // There are two seams, and both need the stamp. The ghost's
+                    // `queue_data` is reparented onto the survivor below, so its
+                    // history becomes two interleaved series flapping between
+                    // OPERATING and DOWN at the same instant; and the survivor
+                    // inherits the Queue-Times id, so from this moment that feed
                     // writes into a row the wiki feed has been writing into all
-                    // along, so one series carries two sources across a single
-                    // timestamp. The nightly downtime reconstruction reads that
-                    // as genuine outages unless the ride is held out until the
+                    // along. The nightly downtime reconstruction reads either as
+                    // genuine outages unless the ride is held out until the
                     // stamp ages out.
                     await transactionalEntityManager.query(
                       `UPDATE attractions a
@@ -665,7 +666,7 @@ export class ParksService {
                 //    survivor. The land columns are filled in only where they
                 //    are empty; `last_merged_at` is unconditional, because the
                 //    merge happened whether or not anything was inherited —
-                //    step 3 below reparents this ghost's `queue_data` onto the
+                //    step 2 below reparents this ghost's `queue_data` onto the
                 //    survivor, whose history is then two interleaved series
                 //    flapping between OPERATING and DOWN at the same instant.
                 //    The stamp is what holds the ride out of the nightly

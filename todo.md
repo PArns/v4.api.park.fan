@@ -339,7 +339,9 @@ What is still open, roughly by consequence:
       show the history the merge exists to carry over. Silent, and not caught by
       any FK. Out of PF-102, which is scoped to the attraction merge and its
       acceptance criteria; `PARK_DEPENDENCIES` already describes what each table
-      needs.
+      needs. Written up as PF-111, which also has to decide what happens to
+      `attraction_rope_drop` and `attraction_typical_waits` — both cascade off
+      the park, so today they are destroyed rather than moved.
 - [x] ~~A park with no published hours is served `not_down_capable`, not
       `no_schedule`~~ — the population query gained a `sched` branch that
       sources the rides of `no_schedule` parks directly from `attractions`
