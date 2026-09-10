@@ -231,6 +231,7 @@ describe("CalendarService › headliner forecast & neighbour holidays (private)"
         attractionId: string;
         predictedTime: string;
         predictedWaitTime: number;
+        uncertaintyMinutes?: number | null;
       }>,
       headlinerIds: Set<string>,
       names: Map<string, string>,
@@ -316,6 +317,99 @@ describe("CalendarService › headliner forecast & neighbour holidays (private)"
       ]); // 63→65, 47→45
       expect(f.avgWait).toBe(55); // mean 55 → 55
     });
+
+    it("carries each ride's uncertainty band unrounded beside its rounded wait", () => {
+      // The wait is a posted number and gets rounded to 5; the band is a
+      // difference between two quantiles and must not be, or a 12-minute
+      // spread reads as 10 and a 2-minute one disappears.
+      const predictions = [
+        {
+          attractionId: "a",
+          predictedTime: "2026-06-13T12:00:00",
+          predictedWaitTime: 63,
+          uncertaintyMinutes: 12,
+        },
+        {
+          attractionId: "b",
+          predictedTime: "2026-06-13T12:00:00",
+          predictedWaitTime: 47,
+          uncertaintyMinutes: 2,
+        },
+      ];
+      const names = new Map([
+        ["a", "Taron"],
+        ["b", "Chiapas"],
+      ]);
+
+      const f = call(predictions, new Set(["a", "b"]), names).get("2026-06-13");
+
+      expect(
+        f.rides.map(
+          (r: { waitTime: number; uncertaintyMinutes?: number | null }) => [
+            r.waitTime,
+            r.uncertaintyMinutes,
+          ],
+        ),
+      ).toEqual([
+        [65, 12],
+        [45, 2],
+      ]);
+    });
+
+    it("reports no band as null where the prediction has none, never as 0", () => {
+      // The normal case within 60 days: those rows come from the TFT, which
+      // emits no spread. No band means "not known" — a zero-wide band would be
+      // a claim about precision. Null rather than an omitted key so the shape
+      // matches /plan/day and the attraction endpoint; ExcludeNullInterceptor
+      // takes the key off the wire either way.
+      const predictions = [
+        {
+          attractionId: "a",
+          predictedTime: "2026-06-13T12:00:00",
+          predictedWaitTime: 50,
+        },
+        {
+          attractionId: "b",
+          predictedTime: "2026-06-13T12:00:00",
+          predictedWaitTime: 40,
+          uncertaintyMinutes: null,
+        },
+      ];
+      const names = new Map([
+        ["a", "Taron"],
+        ["b", "Chiapas"],
+      ]);
+
+      const rides = call(predictions, new Set(["a", "b"]), names).get(
+        "2026-06-13",
+      ).rides;
+
+      expect(rides).toHaveLength(2);
+      for (const ride of rides) {
+        expect(ride.uncertaintyMinutes).toBeNull();
+      }
+    });
+
+    it("keeps a zero-wide band that the model really reported", () => {
+      // 0 is not the same as absent, so `?? null` has to let it through where
+      // `|| null` would not: the model measured a spread and it rounded to
+      // zero minutes.
+      const predictions = [
+        {
+          attractionId: "a",
+          predictedTime: "2026-06-13T12:00:00",
+          predictedWaitTime: 50,
+          uncertaintyMinutes: 0,
+        },
+      ];
+      const f = call(
+        predictions,
+        new Set(["a"]),
+        new Map([["a", "Taron"]]),
+      ).get("2026-06-13");
+
+      expect(f.rides[0].uncertaintyMinutes).toBe(0);
+    });
   });
 
   describe("buildHistoricalHeadlinerForecasts", () => {
@@ -351,6 +445,24 @@ describe("CalendarService › headliner forecast & neighbour holidays (private)"
         ["Chiapas", 40], // 38→40
       ]);
       expect(f.avgWait).toBe(45); // mean 45 → 45
+    });
+
+    it("gives a past day no uncertainty band at all", () => {
+      // These are recorded peaks. An observation has no band, and a zero-wide
+      // one would claim a precision nobody measured — same rule as
+      // PlanDayService.observedRides. Here the key is genuinely never written,
+      // which `actual: true` already announces.
+      const daily = new Map([
+        ["2026-06-10", [{ attractionId: "a", peak: 52 }]],
+      ]);
+      const out = (service as any).buildHistoricalHeadlinerForecasts(
+        daily,
+        new Map([["a", "Taron"]]),
+      );
+
+      expect("uncertaintyMinutes" in out.get("2026-06-10").rides[0]).toBe(
+        false,
+      );
     });
   });
 

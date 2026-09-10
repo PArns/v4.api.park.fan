@@ -1240,6 +1240,34 @@ export class CalendarService {
    * expected wait (named, capped to {@link HEADLINER_FORECAST_TOP_N}) and the
    * average wait across all headliners. This is what turns "high" into "Taron
    * ~55 min, Chiapas ~45 min, …" so a visitor can read the calibration directly.
+   *
+   * Each ride carries the model's own band (`uncertaintyMinutes`) beside its
+   * wait, off the same live prediction `/plan/day`'s `rides[]` reads (the
+   * ml-service answer through {@link MLService.getParkPredictions}, not the
+   * stored `wait_time_predictions` rows, which are the writer's copy) and
+   * written the same way (`?? null`), so the two endpoints answer alike. On
+   * the wire the null is gone either way: `ExcludeNullInterceptor` strips
+   * null-valued keys outside `/v1/admin/*` and `?debug=true`, so a client sees
+   * the key or nothing and `value != null` covers both.
+   *
+   * No band is the ordinary case near today, not an edge — but the reason is
+   * which model answered, not the date. `getServingDailyPredictions` merges
+   * TFT over CatBoost for days 1-60 and `tft_forecasts` holds a
+   * `predicted_peak` and no spread, so a TFT-answered day has none; CatBoost
+   * brings its band wherever TFT does not reach (a ride it has no row for, the
+   * 3-day staleness guard, an empty result), inside those 60 days too. A
+   * client must read a missing band as "not known", never as "narrow".
+   *
+   * Where the two endpoints CAN disagree is a ride today or tomorrow:
+   * `/plan/day` also falls back to the widest of that ride's hourly bands,
+   * which reach 24 hours out, and this path reads the day-level row only.
+   *
+   * A model-reported `0` is a measurement and is forwarded — `predict.py`
+   * rounds a sub-half-minute spread to zero — which is why `?? null` is right
+   * here and `|| null` would not be.
+   *
+   * The average deliberately gets none. A mean of five bands is not the band
+   * around the mean, and nothing downstream reads `avgWait` as a distribution.
    */
   private buildHeadlinerForecasts(
     predictions: PredictionDto[],
@@ -1275,6 +1303,7 @@ export class CalendarService {
           attractionId: p.attractionId,
           name: names.get(p.attractionId)!,
           waitTime: round5(p.predictedWaitTime),
+          uncertaintyMinutes: p.uncertaintyMinutes ?? null,
         }));
 
       if (rides.length === 0) continue;
@@ -1291,6 +1320,11 @@ export class CalendarService {
    * `actual: true`. Same top-N + round-to-5 treatment as the forecast, and
    * the same statistic (a day peak per ride, meaned across rides) so the two
    * halves of the calendar are comparable across the today/tomorrow seam.
+   *
+   * What it does NOT carry is `uncertaintyMinutes`, on the same reasoning
+   * `PlanDayService.observedRides` writes down: an observation has no band, and
+   * a width of zero would be a claim about precision rather than the absence of
+   * a claim. `actual: true` already says which side of today a day is on.
    */
   private buildHistoricalHeadlinerForecasts(
     dailyPeaks: Map<string, { attractionId: string; peak: number }[]>,

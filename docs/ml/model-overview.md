@@ -6,7 +6,7 @@ The ML Service is a standalone Python application responsible for predicting wai
 
 ## Model Architecture
 
-- **Algorithm**: CatBoost with a multi-quantile loss (`loss_function = MultiQuantile:alpha=0.5,0.8,0.95`, Gradient Boosting on Decision Trees). One model emits three quantiles: **q0.5** is served for the honest wait-time display, **q0.8** is served as the crowd-level signal (busy-calibrated), and **q0.95** is trained but not served.
+- **Algorithm**: CatBoost with a multi-quantile loss (`loss_function = MultiQuantile:alpha=0.5,0.8,0.95`, Gradient Boosting on Decision Trees). One model emits three quantiles: **q0.5** is served for the honest wait-time display, **q0.8** is served as the crowd-level signal (busy-calibrated), and **q0.95** is never served as a wait — only as a distance from the median (`q0.95 − q0.5` → `uncertaintyMinutes`), which is the band a client draws. See [Quantile Serving & Calibration](./quantile-serving-and-calibration.md#where-the-q095-band-surfaces).
 - **Problem Type**: Regression (Predicting wait time in minutes)
 - **Input Features**:
   - `day_of_week`: 0-6 (Mon-Sun)

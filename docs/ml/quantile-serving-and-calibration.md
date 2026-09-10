@@ -1,6 +1,7 @@
 # ML Quantile Serving & Crowd-Level Calibration
 
-> Status: current as of 2026-06-17. Companion to
+> Status: current as of 2026-09-10 (q0.95 serving row corrected; band added to
+> the calendar's `headlinerForecast.rides[]`). Companion to
 > [`model-overview.md`](./model-overview.md) and
 > [`../analytics/crowd-levels.md`](../analytics/crowd-levels.md).
 
@@ -12,11 +13,82 @@ user-facing number, and the calibration/consistency fixes that keep them honest.
 | Source | Trains | Serves | Used as |
 |---|---|---|---|
 | **CatBoost** (`ml-service`) | `MultiQuantile:alpha=0.5,0.8,0.95` | **q0.5** → `predictedWaitTime`; **q0.8** → crowd signal | displayed wait (median) + crowd level |
-| CatBoost q0.95 | trained | **not served** | uncertainty band width only (headroom) |
+| CatBoost q0.95 | trained | **served as a distance, never as a wait**: `q0.95 − q0.5` → `uncertaintyMinutes` | the half-width of the band, a spread rather than an interval to compute off the published wait |
 | **TFT** (`nf-service`) | daily **P90** target (`NF_TARGET_PERCENTILE=0.9`, StudentT) | distribution **median** → `predicted_peak` | a per-day forecast of the daily-P90 peak |
 
 Crowd level is **always** `predicted wait ÷ typical-day-peak` downstream — never a
 raw quantile. The quantiles only shape *which wait number* feeds that ratio.
+
+### Where the q0.95 band surfaces
+
+Until 2026-06 the row above read "not served", and that was true: the quantile was
+trained and thrown away. It is a published field now, and the two statements are
+easy to confuse, because **q0.95 is still never served as a wait time**. What
+travels is the *distance* `q0.95 − q0.5`, read as the half-width of a band around
+the median, computed in `predict.py` (`uncertainty_minutes`) and declared on
+`PredictionResponse` (`main.py`), which is what keeps pydantic from dropping it.
+
+From there two different reads publish it. The attraction endpoint serves the
+**stored** rows (`wait_time_predictions.uncertainty_minutes`, via
+`getAttractionPredictionsWithFallback`); `/plan/day` and the calendar serve the
+**live** ml-service answer out of its Redis cache (`getParkPredictions`), and for
+them the stored table is the writer's copy that no read path touches.
+
+| Endpoint | Field |
+|---|---|
+| `GET /v1/attractions/…` | `hourlyForecast[].uncertaintyMinutes` |
+| `GET /v1/parks/…/plan/day` | `rides[].uncertaintyMinutes` (the ride's day band; `hours[]` carries none) |
+| `GET /v1/parks/…/calendar` | `headlinerForecast.rides[].uncertaintyMinutes` |
+
+All three write `?? null` and all three answer the same way on the wire: the
+`null` never leaves the process, because `ExcludeNullInterceptor` strips
+null-valued keys everywhere outside `/v1/admin/*` and `?debug=true`. So a client
+gets the key or gets nothing, **`value != null` is the test**, an `=== null`
+branch is dead code on a public response, and truthiness is wrong for a separate
+reason below.
+
+Three rules hold across them, and all three are about what a missing number
+means:
+
+- **Absent is not narrow.** No band means the model reported no usable spread — a
+  single-quantile model, a collapsed ensemble, or a source that emits no quantiles
+  at all (`use_uncertainty` in `predict.py`). It is not a band of width zero and
+  must not be drawn as one.
+- **A literal `0` is a measurement, and it does occur.** `use_uncertainty` is
+  decided once per batch, and `int(round(spread))` takes a per-row spread under
+  half a minute to `0`. Such a row is forwarded as `0` rather than dropped: the
+  model did report a spread, and it is smaller than the unit this field is in.
+- **A near-term calendar day usually has no band, because of which model answered
+  it.** `getServingDailyPredictions` merges TFT over CatBoost for days 1-60, and
+  `tft_forecasts` stores `predicted_peak` and no spread, so a TFT-answered day
+  carries none. It is not a rule about the date: CatBoost fills in wherever TFT
+  does not reach — a ride TFT has no row for (`farCatboost`), a stalled
+  nf-service caught by the 3-day staleness guard, an empty TFT result — and those
+  days do carry a band inside the same 60. The TFT's StudentT head could produce
+  one; persisting it is not built.
+
+Where the endpoints genuinely differ is which row they read, not how they
+serialize it. `/plan/day` falls back to the widest of a ride's **hourly** bands,
+which reach 24 hours ahead; the calendar reads the day-level prediction alone. So
+for today and tomorrow `/plan/day` can answer where `headlinerForecast` does not,
+for the same ride on the same date. Neither is wrong: different rows, different
+purposes.
+
+The band is measured against the model's **raw** median, while the published wait
+is rounded to 5 and floored at 10 (`predict.py`). It is therefore the model's
+spread and not an interval to derive from the published number arithmetically —
+on a ride whose raw median sits below the floor, `wait − band` goes negative.
+Same on all three endpoints.
+
+A past calendar day is built by `buildHistoricalHeadlinerForecasts` instead,
+which marks it `actual: true` and writes no band at all: those are recorded
+peaks, and an observation has no band (same reasoning as `/plan/day`'s observed
+tier). One gap, and it is the month cache rather than this rule:
+`assembleFromMonthCaches` re-derives `isToday`, `crowdLevel` and
+`todayCrowdLevel` against a fresh `today` but not `headlinerForecast`, so for as
+long as a cached month entry survives past park-local midnight, yesterday can
+still be served with the forecast — and now its band — that was written while it
+was tomorrow.
 
 ## CatBoost (ml-service) — per-purpose MultiQuantile serving
 
@@ -29,8 +101,10 @@ model emits three quantiles per row; each has a distinct purpose:
   **busy-calibrated** signal that drives the crowd level. (q0.95 was measured and
   rejected for crowd: it over-shoots busy days, bias +16.5.)
 - **`alpha=0.95`** — trained as **headroom for the uncertainty band only**
-  (`config.py:104`). It is **never** served as a display or crowd value. ⚠️ Do not
-  wire q0.95 to the crowd level — the team explicitly rejected it.
+  (`config.py:104`). It is **never** served as a display or crowd value; what
+  leaves the service is the distance `q0.95 − q0.5` (see "Where the q0.95 band
+  surfaces" above). ⚠️ Do not wire q0.95 to the crowd level — the team explicitly
+  rejected it.
 
 ### Non-crossing (monotonic) quantiles — fix
 
