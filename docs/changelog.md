@@ -6,6 +6,64 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — `pnpm test:cov` measured nothing, and the 70 % threshold was guarding it
+
+Every file failed to instrument. A coverage run printed 282 `Failed to collect
+coverage` blocks, one per source file, each with the same stack: `promisify`
+called on an object, from `test-exclude@6.0.0/index.js:5`. The report then ended
+at `All files | 0 | 0 | 0 | 0`, the `coverageThreshold` in `jest.config.json`
+found four zeros against 70 and failed the run — so the command looked like a
+coverage problem for as long as it had been an instrumentation one, and any
+Definition of Done that named the threshold could not be met by anyone.
+
+The cause is ours, not upstream. `test-exclude@6` does
+`promisify(require('glob'))`, which needs glob to export a function; from glob v9
+it exports an object. Nothing in the tree still asks for glob 7 — but
+`pnpm-workspace.yaml` carries an unscoped `glob: '>=11.0.0'` override, and that
+override reaches `test-exclude` too, handing glob 13 to the one package that
+still reads glob the old way. `test-exclude` arrives through
+`babel-plugin-istanbul` → `@jest/transform` → `jest`, so it is dev-only and
+`pnpm test` never touched it.
+
+Fixed with one scoped override, `test-exclude@<8.0.0: '>=8.0.0 <9.0.0'`, in the
+same style as the `minimatch` and `ajv` lines beside it. v8 is the same class
+with the two import lines rewritten for glob v9+; its public surface
+(`shouldInstrument`, `globSync`, `glob`) is unchanged, and it asks for
+`glob ^13.0.6` and `minimatch ^10.2.2` on its own, which is what the existing
+overrides already force. Nothing else moved: the lockfile diff is three package
+lines. Neither `babel-plugin-istanbul` nor `jest` was touched.
+
+The **target** is bounded where the `glob` line is not, and deliberately so.
+`babel-plugin-istanbul` declares `test-exclude: ^6.0.0`; an unbounded `>=8.0.0`
+would hand it a future major with no semver fence, which is the shape of the
+fault this entry describes. The `glob: '>=11.0.0'` line has the same problem and
+is **not** fixed here — it reaches `@jest/reporters`, `jest-config`,
+`jest-runtime`, `archiver-utils` and `typeorm`, all declaring `^10.x`, so it
+touches a production boot path and needs its own change with its own
+verification.
+
+**The real coverage is 45.26 % statements / 34.45 % branches / 44.79 % functions
+/ 45.14 % lines** (three consecutive runs; a run can still move in the second
+decimal, so read it as ~45 / ~34), against a threshold of 70. `pnpm test:cov`
+therefore still
+exits non-zero, now for the reason the threshold exists. The threshold was **not
+lowered** — a number that has measured nothing for a while is expected to be
+violated when it starts measuring again, and quietly configuring that away would
+be the second silent version of the same fault. `pnpm test` is unaffected and
+green (1804 passed, 11 skipped).
+
+**Why it stayed hidden: nothing automated runs this repository's own scripts.**
+There is no workflow file in the tree (`git ls-files | grep -c '^.github/'` →
+`0`). Three workflows *are* active, but all three are GitHub **default setup**,
+configured in repository settings rather than committed — they show up with a
+`dynamic/` path: `github-code-scanning/codeql`, `dependabot/dependabot-updates`
+and `dependabot/update-graph`. So a PR does get checks, and they are green, and
+none of them ever invokes `lint`, `test`, `test:cov` or `build`. `test:cov` ran
+only when somebody typed it.
+
+The distinction matters for anyone reading a green PR here: the checks on it
+say the code scanner found nothing, not that the test suite passed.
+
 ### Fixed — `/plan/day` no longer plans a day around a ride that cannot open on it
 
 `rides[]` excluded nothing seasonal. `attractions()` asked for `retiredAt IS
