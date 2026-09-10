@@ -33,6 +33,14 @@ overrides:
   formidable: '>=3.5.1'
   superagent: '>=9.0.2'
   glob: '>=11.0.0'
+  # ...and test-exclude@6 is the one package in the tree that still reads glob as
+  # a function: `promisify(require('glob'))` at index.js:5, which throws from
+  # glob v9 on. It is dev-only (babel-plugin-istanbul -> @jest/transform), so
+  # nothing noticed except `pnpm test:cov`, where every single file failed to
+  # instrument and the report read `All files | 0 | 0 | 0 | 0`. v8 is the same
+  # class with the two import lines rewritten, and it asks for glob ^13.0.6 and
+  # minimatch ^10.2.2 by itself — the versions the lines above already force.
+  test-exclude@<8.0.0: '>=8.0.0'
   inflight: npm:lru-cache@11.0.2
   uuid: '>=14.0.0'
   brace-expansion: '>=5.0.9'

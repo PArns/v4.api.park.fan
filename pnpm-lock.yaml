@@ -21,6 +21,7 @@ overrides:
   formidable: '>=3.5.1'
   superagent: '>=9.0.2'
   glob: '>=11.0.0'
+  test-exclude@<8.0.0: '>=8.0.0'
   inflight: npm:lru-cache@11.0.2
   uuid: '>=14.0.0'
   brace-expansion: '>=5.0.9'
@@ -3531,9 +3532,9 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  test-exclude@6.0.0:
-    resolution: {integrity: sha512-cAGWPIyOHU6zlmg88jwm7VRyXnMN7iV68OGAbYDk/Mh/xC/pzVPlQtY6ngoIH/5/tciuhGfvESU8GrHrcxD56w==}
-    engines: {node: '>=8'}
+  test-exclude@8.0.0:
+    resolution: {integrity: sha512-ZOffsNrXYggvU1mDGHk54I96r26P8SyMjO5slMKSc7+IWmtB/MQKnEC2fP51imB3/pT6YK5cT5E8f+Dd9KdyOQ==}
+    engines: {node: 20 || >=22}
 
   testcontainers@12.1.0:
     resolution: {integrity: sha512-YjDLqIITuhGLMnM10yhg3oV6lIG5IMpz1R1DPBZoOOks83q7i7IVpeSWRTiyl7roozjiyLmwIoLK/KY8OnZmIA==}
@@ -5506,7 +5507,7 @@ snapshots:
       '@istanbuljs/load-nyc-config': 1.1.0
       '@istanbuljs/schema': 0.1.6
       istanbul-lib-instrument: 6.0.3
-      test-exclude: 6.0.0
+      test-exclude: 8.0.0
     transitivePeerDependencies:
       - supports-color
 
@@ -7659,11 +7660,11 @@ snapshots:
       commander: 2.20.3
       source-map-support: 0.5.21
 
-  test-exclude@6.0.0:
+  test-exclude@8.0.0:
     dependencies:
       '@istanbuljs/schema': 0.1.6
       glob: 13.0.6
-      minimatch: 3.1.4
+      minimatch: 10.2.3
 
   testcontainers@12.1.0:
     dependencies:
