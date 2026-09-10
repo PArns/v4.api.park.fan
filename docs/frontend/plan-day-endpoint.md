@@ -214,14 +214,14 @@ Three things about it are easy to get wrong from the outside:
 - **A past date is not filtered.** `tier: "observed"` is read out of the hourly
   rollup, and a row there means the ride ran — an observation beats a
   description of the past.
-- **A ride the detector flagged but gave no months is out on every date**, not
-  just today. That branch says "shut now, and we cannot tell you when it runs",
-  and there is no month in it to test a December request against. It is a known
-  limit: such a ride stays out of future plans until 330 days of history give it
-  months, or somebody curates them. Ignoring the branch past tomorrow would put
-  most of the catalogue back into every future plan, since the detector names no
-  months under `MIN_OBSERVED_DAYS` — so the loss is a minority of rides against
-  the bug returning for the majority.
+- **A ride the detector flagged but gave no months only drops out of today and
+  tomorrow.** `season_out_since` is written for a ride fully closed on 7
+  park-open days inside a 60-day window whose current status is CLOSED, and it
+  is cleared again on the next OPERATING row — a reading of the current state,
+  not a calendar. A three-week refurbishment sets it exactly as well as a season
+  does, so letting it reach six months out would delete a headliner from half a
+  year of plans with no field saying why. Past tomorrow only the months decide,
+  and with no months on file the ride stays.
 
 One thing it deliberately does not do: **overrule the season with a live
 reading.** The park page does — a live `OPERATING` row means the season on file

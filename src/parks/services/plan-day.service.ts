@@ -86,6 +86,17 @@ export class PlanDayService {
   private static readonly HOURLY_HORIZON_DAYS = 1;
 
   /**
+   * How far "this ride is shut at the moment" still describes the day asked about.
+   *
+   * Today and tomorrow, the same reach `downYesterday` gives itself and for the
+   * same reason: both are readings of the current state rather than facts about
+   * a date. It bounds one branch of {@link outOfSeasonOn} — a detector note with
+   * no months behind it — and nothing else; a ride whose season months are on
+   * file is judged on them at every horizon.
+   */
+  private static readonly SEASON_NOW_HORIZON_DAYS = 1;
+
+  /**
    * Rides the historical shape may cover.
    *
    * 60 rather than the 20 this asked for at first, and it costs nothing: the
@@ -433,7 +444,12 @@ export class PlanDayService {
     // other way for up to 90 days after a season ends — the shoulder weeks
     // somebody is most likely to be planning in.
     const plannable = attractions.filter(
-      (a) => !PlanDayService.outOfSeasonOn(a, dateStr),
+      (a) =>
+        !PlanDayService.outOfSeasonOn(
+          a,
+          dateStr,
+          leadDays <= PlanDayService.SEASON_NOW_HORIZON_DAYS,
+        ),
     );
     const byId = new Map(plannable.map((a) => [a.id, a]));
     const bySlug = new Map(plannable.map((a) => [a.slug, a]));
@@ -485,21 +501,30 @@ export class PlanDayService {
       composed.set(attraction.id, new Map(curve.map((p) => [p.hour, p.wait])));
     }
 
-    // The label describes the method behind the curves that were actually
-    // served, so it counts only rides that survived to `byId`. Both maps arrive
-    // straight from the model and know nothing about seasons or retirements:
-    // asking them for a size labelled a day `measured` on the strength of an
+    // `measured` describes the method behind the curves that were actually
+    // served, so it counts only rides that survived to `byId`. The map arrives
+    // straight from the model and knows nothing about seasons or retirements:
+    // asking it for a size labelled a day `measured` on the strength of an
     // hourly answer for a ride nobody gets back, and every ride that WAS served
     // then carried `source: "composed"` because its hours disagreed with the
-    // header. A park whose whole hourly answer is out of season now reads
-    // `composed`, or `long_range` where the day level is out of season too.
-    const someServed = (ids: Iterable<string>) => {
-      for (const id of ids) if (byId.has(id)) return true;
-      return false;
-    };
-    const tier: PlanDayTier = someServed(measured.hours.keys())
+    // header.
+    //
+    // The `composed`/`long_range` line deliberately stays on the raw
+    // `dayLevels`. `long_range` is published as "the model has produced no day
+    // level for this date" (see the DTO), and a fully seasonal park in its off
+    // months would otherwise be labelled that way while the model had in fact
+    // answered for every ride — a statement about our reach, made about their
+    // calendar.
+    let someMeasuredServed = false;
+    for (const id of measured.hours.keys()) {
+      if (byId.has(id)) {
+        someMeasuredServed = true;
+        break;
+      }
+    }
+    const tier: PlanDayTier = someMeasuredServed
       ? "measured"
-      : someServed(dayLevels.keys())
+      : dayLevels.size > 0
         ? "composed"
         : "long_range";
 
@@ -1123,22 +1148,28 @@ export class PlanDayService {
    * which the detector says about everything under `MIN_OBSERVED_DAYS` of
    * history. It may not hide a ride we have merely not understood yet.
    *
-   * **A ride with a `seasonOutSince` and no months is out on EVERY date**, and
-   * that is a known limit rather than an oversight. That branch of
-   * `isCurrentlyInSeason` carries no month to compare against — it says "shut
-   * now, and we cannot tell you when it runs" — so a rink the detector has
-   * flagged but not yet dated stays out of a December plan too, until 330 days
-   * of history give it months or somebody curates them
-   * (`/admin/attractions/<id>` → Betriebsmonate).
+   * **A `seasonOutSince` with no months only speaks for the near horizon**, and
+   * that is the one place this departs from the other readers of these columns.
+   * Everywhere else the question is "is it running now", so the distinction
+   * cannot arise; here it decides how far a fact reaches.
    *
-   * The alternative was to ignore that branch past tomorrow, and it is worse
-   * where it matters: the detector deliberately names no months under
-   * `MIN_OBSERVED_DAYS`, so most of the catalogue sits in exactly this case, and
-   * ignoring it would put every one of those rides back into every future plan —
-   * which is the bug this closes, for the majority of rides rather than a
-   * minority. Keeping it also keeps one reading of seasonality: the SQL twin
-   * `attractionIsOutOfSeason` answers the same way, and a third interpretation
-   * is how two surfaces start disagreeing about one ride.
+   * Read the detector rather than the field name. `season_out_since` is written
+   * by `QueuePercentileProcessor` for a ride fully CLOSED on **7 park-open days
+   * inside a 60-day window** whose **current status is CLOSED**, and it is
+   * cleared as soon as the ride reports OPERATING again. That is a statement
+   * about now, refreshed nightly — not a calendar. A three-week technical
+   * closure satisfies it exactly as well as a season does, and months only
+   * arrive at `MIN_OBSERVED_DAYS` (330) of history, so a headliner shut for
+   * refurbishment in September would otherwise vanish from a plan for
+   * 20 December with no field saying why. An absent fact may not become a
+   * confident one (`claude.md` §4).
+   *
+   * So past {@link SEASON_NOW_HORIZON_DAYS} the note is dropped and only the
+   * calendar question is left — which, with no months on file, answers `null`
+   * and keeps the ride. It costs nothing where this ticket's own examples live:
+   * a ride WITH months is judged on months at every horizon, and a ride still
+   * running today carries no `seasonOutSince` at all, so the far-date case was
+   * never this branch's to answer.
    *
    * What this does NOT do is overrule the season with a live reading. The park
    * page does (`closedByTheSeason` in `park-integration.service.ts`: a live
@@ -1146,14 +1177,18 @@ export class PlanDayService {
    * service reads no live status, so for TODAY the two can disagree about a ride
    * whose season data has gone stale. Closing that needs a per-request status
    * query on a hot path, which is a cost decision of its own.
+   *
+   * @param nearHorizon - Whether "shut now" still speaks for the day asked about.
    */
   private static outOfSeasonOn(
     attraction: Attraction,
     dateStr: string,
+    nearHorizon: boolean,
   ): boolean {
+    const facts = resolveCuratedFacts(attraction);
     return (
       isCurrentlyInSeason(
-        resolveCuratedFacts(attraction),
+        nearHorizon ? facts : { ...facts, seasonOutSince: null },
         PlanDayService.localNoonOf(dateStr),
       ) === false
     );

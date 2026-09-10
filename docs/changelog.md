@@ -26,21 +26,28 @@ shoulder weeks people plan in.
 `forecastRides` now drops the ride, keyed on the month of the **planned date**
 rather than today's, through the existing `isCurrentlyInSeason` /
 `resolveCuratedFacts` pair (`=== false`; `null` — "seasonal, and nothing else
-known" — hides nobody). `tier` is now read off the rides that survive the filter
-too, or a day whose whole hourly answer was out of season kept the `measured`
-label while every ride it actually served carried `source: "composed"`.
+known" — hides nobody). `measured` is now read off the rides that survive the
+filter too, or a day whose whole hourly answer was out of season kept that label
+while every ride it actually served carried `source: "composed"`.
 
-Three limits, each deliberate. `observedRides` is untouched: a row in the hourly
-rollup is a measurement of the ride having run, and an observation beats a
-description of the past. A ride the detector flagged with a `seasonOutSince` but
-no months is out on **every** date — that branch carries no month to test a
-December request against, and since the detector names no months under
-`MIN_OBSERVED_DAYS` this is most of the catalogue, so ignoring it past tomorrow
-would restore the bug for the majority to spare a minority; the remedy is
-curating `Betriebsmonate`. And the season is **not** overruled by a live reading
-the way the park page's `closedByTheSeason` does it, because this service reads
-no live status — for today the two can disagree about a ride whose season data
-has gone stale.
+The two halves of `isCurrentlyInSeason` are given different reach, and that is
+the one place this departs from the other readers of these columns — everywhere
+else the question is "is it running now", so the distinction cannot arise.
+**Months decide at every horizon.** A bare `season_out_since` decides only for
+today and tomorrow: the detector writes it for a ride fully closed on 7
+park-open days inside a 60-day window whose current status is CLOSED and clears
+it on the next OPERATING row, so it is a reading of the current state, and a
+three-week refurbishment sets it exactly as well as a season does. Letting it
+reach further would delete a headliner from half a year of plans with no field
+saying why (`claude.md` §4). It costs the fix nothing: a ride with months keeps
+its full reach, and a ride still running today carries no `season_out_since` at
+all.
+
+Two more limits. `observedRides` is untouched: a row in the hourly rollup is a
+measurement of the ride having run, and an observation beats a description of
+the past. And the season is **not** overruled by a live reading the way the park
+page's `closedByTheSeason` does it, because this service reads no live status —
+for today the two can disagree about a ride whose season data has gone stale.
 
 No DTO field was added: the frontend would then have to act on it, which leaves
 the wrong plan on screen until that lands.

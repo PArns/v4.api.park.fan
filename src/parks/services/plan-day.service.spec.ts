@@ -1553,18 +1553,41 @@ describe("PlanDayService", () => {
       expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
     });
 
-    it("keeps a detector-flagged ride out of every future date, months or not", async () => {
+    // `season_out_since` with no months is the detector saying "shut at the
+    // moment": 7 fully-closed park-open days in a 60-day window, current status
+    // CLOSED, cleared again on the next OPERATING row. A three-week refurbishment
+    // sets it exactly as well as a season does, and months only arrive after 330
+    // watched days — so how far it reaches is the whole question.
+    const flaggedShutNow = {
+      isSeasonal: true,
+      seasonMonths: null,
+      seasonOutSince: "2026-01-31",
+    };
+
+    it("drops a ride the detector says is shut right now from today's plan", async () => {
+      const plan = await planWithSeason(today(), flaggedShutNow);
+
+      expect(plan.rides).toEqual([]);
+    });
+
+    it("does not let 'shut right now' reach a date months away", async () => {
+      // Same row, a date past the near horizon. Without months there is no
+      // calendar to test that date against, and "shut in September" is not
+      // evidence about 20 December — a headliner under refurbishment would
+      // otherwise disappear from half a year of plans with no field saying why.
+      const plan = await planWithSeason(otherMonthDate(), flaggedShutNow);
+
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+
+    it("still judges a ride with months on file at any horizon", async () => {
+      // The half that does carry a calendar keeps its full reach, which is why
+      // bounding the branch above costs the fix nothing.
       const date = otherMonthDate();
 
-      // Seasonal, no months, and a note saying when it last ran. That branch of
-      // `isCurrentlyInSeason` has no month in it to test December against, so it
-      // reads "out" on any date — a known limit, pinned here so nobody softens
-      // it by accident. Softening it would put most of the catalogue back into
-      // every future plan, because the detector deliberately names no months
-      // under MIN_OBSERVED_DAYS; the remedy is curating Betriebsmonate.
       const plan = await planWithSeason(date, {
         isSeasonal: true,
-        seasonMonths: null,
+        seasonMonths: allMonthsExcept(monthOf(date)),
         seasonOutSince: "2026-01-31",
       });
 
