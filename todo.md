@@ -325,14 +325,21 @@ What is still open, roughly by consequence:
       `ATTRACTION_DEPENDENCIES` inside the TimescaleDB decompression bracket —
       the same shape as `ParkMergeService.consolidateEntityData`, which already
       survived the USH cold run (PF-102).
-- [ ] **The ghost _park_ delete has the same hole one level up.** Both raw paths
-      finish with `manager.delete(Park, ghostPark.id)` without applying
-      `PARK_DEPENDENCIES`. `park_occupancy`, `attraction_p50_baselines.parkId`
-      and `attraction_p90_baselines.parkId` declare `@ManyToOne(() => Park)` with
-      no `onDelete`, and the denormalised `parkId` of a reparented ride still
-      points at the ghost — so the transaction can now abort one statement later
-      than it used to. Not part of PF-102, which is scoped to the attraction
-      merge and its acceptance criteria.
+- [ ] **The ghost _park_ delete has the same hole one level up**, and it costs
+      twice. Both raw paths finish with `manager.delete(Park, ghostPark.id)`
+      without applying `PARK_DEPENDENCIES`, and the merge only moves
+      `attractionId`, never the denormalised `parkId` beside it. So (a)
+      `park_occupancy`, `attraction_p50_baselines.parkId` and
+      `attraction_p90_baselines.parkId` declare `@ManyToOne(() => Park)` with no
+      `onDelete`, which can abort the transaction one statement later than it
+      used to; and (b) where it does not abort, the inherited rows still name the
+      deleted park and are read by nobody —
+      `park-historical-stats.service.ts:766/791/849/913` filters
+      `queue_data_aggregates` by `qda."parkId"`, so the survivor's stats never
+      show the history the merge exists to carry over. Silent, and not caught by
+      any FK. Out of PF-102, which is scoped to the attraction merge and its
+      acceptance criteria; `PARK_DEPENDENCIES` already describes what each table
+      needs.
 - [x] ~~A park with no published hours is served `not_down_capable`, not
       `no_schedule`~~ — the population query gained a `sched` branch that
       sources the rides of `no_schedule` parks directly from `attractions`

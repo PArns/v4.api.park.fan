@@ -722,14 +722,22 @@ describe("ParksService", () => {
       );
       expect(lastDependency).toBeLessThan(deleteIndex);
 
+      // `external_entity_mapping` has no FK, so an orphan here is silent: the
+      // wait-times processor loads mappings by the park's live attraction ids
+      // and would stop resolving this ride's Queue-Times readings.
+      expect(reparented("external_entity_mapping")?.params).toEqual([
+        survivor,
+        ghost,
+      ]);
+
       // `queue_data` is a hypertable, so the merge moves far more than the
-      // default 100000 compressed tuples one statement may decompress.
+      // default 100000 compressed tuples one statement may decompress. `LOCAL`,
+      // so nothing has to reset it and no pooled connection keeps the value.
       const timescale = calls.filter((c) =>
         /max_tuples_decompressed_per_dml_transaction/.test(c.sql),
       );
       expect(timescale.map((c) => c.sql)).toEqual([
-        "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
-        "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 100000",
+        "SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
       ]);
     });
 
@@ -790,6 +798,11 @@ describe("ParksService", () => {
         ghost,
       ]);
       expect(reparented("prediction_accuracy")?.params).toEqual([
+        survivor,
+        ghost,
+      ]);
+      // Moved by this path before the refactor too, now from the shared helper.
+      expect(reparented("external_entity_mapping")?.params).toEqual([
         survivor,
         ghost,
       ]);

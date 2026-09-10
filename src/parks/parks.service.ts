@@ -546,16 +546,25 @@ export class ParksService {
    * back, which is why the `last_merged_at` stamp both paths write could never
    * commit.
    *
-   * `ParkMergeService.consolidateEntityData` is the shape this follows,
-   * including the two things that are easy to leave out:
+   * `ParkMergeService.consolidateEntityData` is the shape this follows, down to
+   * moving `external_entity_mapping` first. That table carries no FK, so an
+   * orphaned row survives the DELETE in silence, and the reader that matters
+   * never sees it: `wait-times.processor.ts` loads mappings by
+   * `internalEntityId IN (<the park's live attractions>)`, so a
+   * `queue-times:<id>` row still naming the deleted ghost drops that ride's
+   * Queue-Times readings until the `entity-mappings` job re-upserts it. The
+   * reference deletes colliding rows before the move; that is dead code here,
+   * because the unique index is on `(external_source, external_entity_id)`
+   * alone, so a pair the winner holds cannot also sit on the loser.
    *
-   * - the TimescaleDB decompression limit, which `applyMergeDependencies` names
-   *   as the caller's job in its own docstring — `queue_data` is a hypertable
-   *   and a merge touches far more than 100000 compressed tuples;
-   * - resetting it afterwards rather than in a `finally`. A failed statement
-   *   aborts the surrounding transaction, so the reset would itself fail with
-   *   25P02 and bury the error that caused it. Nothing leaks: PostgreSQL undoes
-   *   a non-`LOCAL` `SET` when the transaction it ran in rolls back.
+   * The TimescaleDB decompression limit is the caller's job — the docstring of
+   * `applyMergeDependencies` says so, `queue_data` is a hypertable, and a merge
+   * moves far more than the 100000 compressed tuples one statement may
+   * decompress by default. `SET LOCAL`, unlike the plain `SET` the two merge
+   * services use: it ends with the transaction either way, so there is no reset
+   * statement to leak a hard-coded 100000 onto a pooled connection, and none to
+   * answer an already-aborted transaction with 25P02 and bury the error that
+   * caused it.
    */
   private async consolidateMergedAttractions(
     manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
@@ -564,10 +573,14 @@ export class ParksService {
     if (pairs.length === 0) return;
 
     await manager.query(
-      "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
+      "SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
     );
 
     for (const { winnerId, loserId } of pairs) {
+      await manager.query(
+        `UPDATE external_entity_mapping SET "internal_entity_id" = $1 WHERE "internal_entity_id" = $2`,
+        [winnerId, loserId],
+      );
       await applyMergeDependencies(
         manager,
         ATTRACTION_DEPENDENCIES,
@@ -575,10 +588,6 @@ export class ParksService {
         loserId,
       );
     }
-
-    await manager.query(
-      "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 100000",
-    );
   }
 
   /**
@@ -670,22 +679,14 @@ export class ParksService {
                   [ghostAttr.land_name, ghostAttr.land_external_id, match.id],
                 );
 
-                // 2. Move External Mappings (Queue-Times ID mappings) from Ghost to Primary
-                await transactionalEntityManager.query(
-                  `UPDATE external_entity_mapping 
-                   SET "internal_entity_id" = $1 
-                   WHERE "internal_entity_id" = $2`,
-                  [match.id, ghostAttr.id],
-                );
-
-                // 3. Move every dependent row, not the three this block used
-                //    to name by hand.
+                // 2. Move the Queue-Times mapping and every dependent row, not
+                //    the three tables this block used to name by hand.
                 await this.consolidateMergedAttractions(
                   transactionalEntityManager,
                   [{ winnerId: match.id, loserId: ghostAttr.id }],
                 );
 
-                // 4. Delete the ghost attraction
+                // 3. Delete the ghost attraction
                 await transactionalEntityManager.query(
                   `DELETE FROM attractions WHERE id = $1`,
                   [ghostAttr.id],
