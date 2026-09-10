@@ -71,6 +71,7 @@ describe("merge dependency tables", () => {
     "attraction_hourly_history",
     "attraction_p50_baselines",
     "attraction_p90_baselines",
+    "attraction_ride_profiles",
     "attraction_rope_drop",
     "attraction_typical_waits",
     "attractions",
@@ -113,6 +114,9 @@ describe("merge dependency tables", () => {
     "park_p50_baselines",
     // Needs the internal_entity_type filter a bare dependency cannot carry.
     "external_entity_mapping",
+    // Park-level and per-ride rows in one table, told apart by a nullable
+    // column a row-wise IN cannot compare.
+    "schedule_entries",
   ];
 
   it("covers every inline park table either as a dependency or as the caller's job", () => {
@@ -158,6 +162,30 @@ describe("merge dependency tables", () => {
     );
     expect(headliners?.strategy).toBe("move");
     expect(headliners?.conflictColumns).toEqual(["attractionId"]);
+  });
+
+  it("moves the curated ride profiles with the park rather than cascading them", () => {
+    // Third of the same family as park_seasons and park_slug_aliases: hand
+    // written, ON DELETE CASCADE, and reproducible from no feed — nothing in
+    // this codebase writes attraction_ride_profiles at all. It went unnoticed
+    // because the merge used to abort before it ever reached the park DELETE.
+    const profiles = PARK_DEPENDENCIES.find(
+      (d) => d.table === "attraction_ride_profiles",
+    );
+    expect(profiles?.strategy).toBe("move");
+    expect(profiles?.column).toBe("parkId");
+    // PK is attractionId alone, so moving the parkId cannot collide.
+    expect(profiles?.conflictColumns).toBeUndefined();
+  });
+
+  it("keeps schedule_entries out of the dependency lists", () => {
+    // Its rows are park-level or per-ride, told apart by a nullable column, and
+    // `applyMergeDependencies` compares conflict keys with a row-wise IN — NULL
+    // there is NULL, never true. Whichever key it were given would be wrong for
+    // half the table, so the caller compares the three columns itself.
+    for (const list of [PARK_DEPENDENCIES, PARK_INLINE_DEPENDENCIES]) {
+      expect(list.find((d) => d.table === "schedule_entries")).toBeUndefined();
+    }
   });
 
   it("moves the rope-drop and typical-wait rows with the park rather than cascading them", () => {

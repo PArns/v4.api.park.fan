@@ -921,6 +921,32 @@ describe("ParksService", () => {
         survivingParkId,
         ghostParkId,
       ]);
+      // Hand-curated, written by nothing in this codebase, ON DELETE CASCADE.
+      expect(reparented("attraction_ride_profiles")?.params).toEqual([
+        survivingParkId,
+        ghostParkId,
+      ]);
+
+      // The schedule moves whole, and its per-ride rows are only dropped where
+      // the survivor holds the same day, type AND ride. A key of (date, type)
+      // alone reads across the nullable attractionId and takes the ghost's
+      // entire per-ride schedule with it.
+      const scheduleDelete = calls.find(
+        (c) =>
+          /DELETE\s+FROM\s+schedule_entries/i.test(c.sql) &&
+          (c.params ?? []).includes(ghostParkId),
+      );
+      expect(scheduleDelete?.sql).toMatch(
+        /"attractionId"\s+IS NOT DISTINCT FROM/,
+      );
+      expect(scheduleDelete?.params).toEqual([survivingParkId, ghostParkId]);
+      expect(reparented("schedule_entries")?.params).toEqual([
+        survivingParkId,
+        ghostParkId,
+      ]);
+      expect(calls.indexOf(scheduleDelete!)).toBeLessThan(
+        calls.indexOf(reparented("schedule_entries")!),
+      );
       // Park-level mappings carry no FK, so an orphan survives in silence.
       const mapping = calls.find(
         (c) =>

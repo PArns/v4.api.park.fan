@@ -197,6 +197,19 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
     strategy: "move",
     conflictColumns: ["alertId"],
   },
+  {
+    // The third of the "curated, cascade-deleted, irreplaceable" cases, and
+    // the one that had gone unnoticed because the merge used to abort before
+    // reaching the park DELETE. Same lifecycle as `park_seasons`: no feed, no
+    // seed job, no writer in this codebase — the rows ARE the source of truth
+    // and are edited straight into the database, so a cascade takes a ride's
+    // track elements, its ride types and its builder with no way back. The
+    // parkId beside the attractionId is the denormalised one, so it has to
+    // move for every ride the merge reparents.
+    table: "attraction_ride_profiles",
+    column: "parkId",
+    strategy: "move",
+  },
   { table: "attraction_p50_baselines", column: "parkId", strategy: "move" },
   { table: "attraction_p90_baselines", column: "parkId", strategy: "move" },
   { table: "attraction_rope_drop", column: "parkId", strategy: "move" },
@@ -255,7 +268,7 @@ export const PARK_TABLES_HANDLED_INLINE = [
  * calls; this list is the same set of decisions, in the vocabulary the raw
  * paths already speak.
  *
- * Four of the ten inline tables are deliberately absent:
+ * Five of the ten inline tables are deliberately absent:
  *   - `attractions`, `shows`, `restaurants` — both raw paths already reparent
  *     them, and attractions need the collision handling that precedes this.
  *   - `park_p50_baselines` — winner-authoritative rather than move-or-discard
@@ -264,6 +277,12 @@ export const PARK_TABLES_HANDLED_INLINE = [
  *   - `external_entity_mapping` — keyed on `internal_entity_id` for every
  *     entity type at once, so it wants the `internal_entity_type = 'park'`
  *     filter a bare dependency cannot carry.
+ *   - `schedule_entries` — its rows are park-level OR attraction-level, and
+ *     the difference is a nullable column. `applyMergeDependencies` compares
+ *     conflict keys with a row-wise `IN`, and a NULL inside one of those makes
+ *     the comparison NULL rather than true, so no key that mentions
+ *     `attractionId` can dedupe a park-level row and no key that omits it can
+ *     spare a per-ride one. The caller uses `IS NOT DISTINCT FROM` instead.
  *
  * Whether a table is here decides one of two failure modes, both real:
  * `park_occupancy` is the only one whose FK is NO ACTION (`ManyToOne(() =>
@@ -279,12 +298,6 @@ export const PARK_INLINE_DEPENDENCIES: MergeDependency[] = [
     column: "parkId",
     strategy: "move",
     conflictColumns: ["date"],
-  },
-  {
-    table: "schedule_entries",
-    column: "parkId",
-    strategy: "move",
-    conflictColumns: ["date", "scheduleType"],
   },
   {
     // The one that stops the DELETE: FK NO ACTION. Its PK is (id, timestamp),
