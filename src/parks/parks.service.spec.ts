@@ -417,6 +417,23 @@ describe("ParksService", () => {
   describe("raw attraction merges stamp last_merged_at", () => {
     type Recorded = { sql: string; params?: unknown[] };
 
+    // `jest.clearAllMocks()` clears calls, not implementations. Both cases
+    // below replace the query builder and the transaction runner, so without
+    // this the next test added to this file would inherit a `getOne` that
+    // resolves to a ghost park and silently take the merge branch.
+    const defaultCreateQueryBuilder =
+      mockParkRepository.createQueryBuilder.getMockImplementation();
+    const defaultTransaction = mockParkRepository.manager.transaction;
+
+    afterEach(() => {
+      if (defaultCreateQueryBuilder) {
+        mockParkRepository.createQueryBuilder.mockImplementation(
+          defaultCreateQueryBuilder,
+        );
+      }
+      mockParkRepository.manager.transaction = defaultTransaction;
+    });
+
     /**
      * Runs `parkRepository.manager.transaction` against a recording manager.
      * `rowsFor` answers the SELECTs; everything else resolves empty.

@@ -397,14 +397,18 @@ export class ParksService {
                       );
                     });
                     // `last_merged_at` is stamped on every survivor in the same
-                    // statement, exactly as `ParkMergeService.consolidateEntities`
-                    // and `AttractionMergeService.merge` do. Here the seam is not
-                    // reparented history but the inherited `queue_times_entity_id`:
-                    // from this instant the Queue-Times feed writes into a row the
-                    // wiki feed has been writing into all along, so the survivor's
-                    // series carries two sources across one timestamp. The nightly
-                    // downtime reconstruction reads that as genuine outages unless
-                    // the ride is held out until the stamp ages out.
+                    // statement, and unconditionally, exactly as
+                    // `ParkMergeService.consolidateEntities` and
+                    // `AttractionMergeService.merge` do: the merge happened
+                    // whether or not this particular row inherited a column.
+                    // The seam here is not reparented history — this block moves
+                    // none — but the Queue-Times id: where the survivor had none
+                    // of its own it has one now, and from this instant that feed
+                    // writes into a row the wiki feed has been writing into all
+                    // along, so one series carries two sources across a single
+                    // timestamp. The nightly downtime reconstruction reads that
+                    // as genuine outages unless the ride is held out until the
+                    // stamp ages out.
                     await transactionalEntityManager.query(
                       `UPDATE attractions a
                        SET "land_name" = COALESCE(v.land_name, a."land_name"),
