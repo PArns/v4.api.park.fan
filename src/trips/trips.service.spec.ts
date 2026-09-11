@@ -12,9 +12,60 @@ import { Trip } from "./entities/trip.entity";
 describe("TripsService", () => {
   let service: TripsService;
   let rows: Map<string, Trip>;
+  /** `push_subscriptions`, only the two columns `remove` is allowed to touch. */
+  let subscriptions: Array<{
+    endpoint: string;
+    tripId: string | null;
+    topics: string[];
+  }>;
+  /** True only while the transaction callback is running. */
+  let inTransaction: boolean;
 
   beforeEach(async () => {
     rows = new Map();
+    subscriptions = [];
+    inTransaction = false;
+
+    // Every write `remove` makes has to happen through this manager, and the
+    // guards below fail the test if one escapes the transaction: a cleared
+    // pointer that commits without the delete leaves a plan nobody is told
+    // about, and a delete that commits without the clear leaves the
+    // five-minute job walking a trip that is gone.
+    const manager: {
+      transaction: jest.Mock;
+      update: jest.Mock;
+      delete: jest.Mock;
+    } = {
+      transaction: jest.fn(async (run: (m: unknown) => Promise<unknown>) => {
+        inTransaction = true;
+        try {
+          return await run(manager);
+        } finally {
+          inTransaction = false;
+        }
+      }),
+      update: jest.fn(
+        async (
+          _entity: unknown,
+          where: { tripId: string },
+          patch: { tripId: null; topics: string[] },
+        ) => {
+          if (!inTransaction) throw new Error("update outside the transaction");
+          let affected = 0;
+          for (const row of subscriptions) {
+            if (row.tripId !== where.tripId) continue;
+            row.tripId = patch.tripId;
+            row.topics = patch.topics;
+            affected++;
+          }
+          return { affected };
+        },
+      ),
+      delete: jest.fn(async (_entity: unknown, id: string) => {
+        if (!inTransaction) throw new Error("delete outside the transaction");
+        return { affected: rows.delete(id) ? 1 : 0 };
+      }),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -36,6 +87,7 @@ describe("TripsService", () => {
               return rows.get(where.id) ?? null;
             }),
             delete: jest.fn(async () => ({ affected: 0 })),
+            manager,
           },
         },
       ],
@@ -121,5 +173,62 @@ describe("TripsService", () => {
 
   it("answers null for an id that was never issued", async () => {
     expect(await service.find("nope")).toBeNull();
+  });
+
+  describe("remove", () => {
+    it("deletes the trip and clears the subscriptions pointing at it", async () => {
+      const created = await service.create(plan());
+      const other = await service.create(plan());
+      subscriptions.push(
+        { endpoint: "https://push.example/a", tripId: created.id, topics: ["x"] },
+        { endpoint: "https://push.example/b", tripId: created.id, topics: ["y"] },
+        { endpoint: "https://push.example/c", tripId: other.id, topics: ["z"] },
+      );
+
+      expect(await service.remove(created.id)).toBe(true);
+
+      expect(rows.has(created.id)).toBe(false);
+      // The subscription row survives — it is the browser's, not the trip's,
+      // and it still carries that browser's ride alerts and followed shows.
+      expect(subscriptions).toHaveLength(3);
+      expect(
+        subscriptions.filter((row) => row.tripId === created.id),
+      ).toHaveLength(0);
+      expect(subscriptions[0].topics).toEqual([]);
+      // A second trip's subscriber is untouched, so the clear is scoped to the
+      // id and is not an unscoped wipe that happens to pass the assertion above.
+      expect(subscriptions[2]).toEqual({
+        endpoint: "https://push.example/c",
+        tripId: other.id,
+        topics: ["z"],
+      });
+      expect(rows.has(other.id)).toBe(true);
+    });
+
+    it("removes a trip nobody subscribed to", async () => {
+      const created = await service.create(plan());
+      expect(await service.remove(created.id)).toBe(true);
+      expect(rows.has(created.id)).toBe(false);
+    });
+
+    it("reports an id that was never issued as nothing to remove", async () => {
+      expect(await service.remove("an-id-nobody-made")).toBe(false);
+    });
+
+    it("leaves an expired trip to the sweep, and writes nothing", async () => {
+      const created = await service.create(plan());
+      subscriptions.push({
+        endpoint: "https://push.example/a",
+        tripId: created.id,
+        topics: ["x"],
+      });
+      rows.get(created.id)!.expiresAt = new Date(Date.now() - 1000);
+
+      // `find` is the only place that decides what exists, so an expired trip
+      // is absent here exactly as it is on GET and PUT.
+      expect(await service.remove(created.id)).toBe(false);
+      expect(rows.has(created.id)).toBe(true);
+      expect(subscriptions[0].tripId).toBe(created.id);
+    });
   });
 });

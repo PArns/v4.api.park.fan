@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { LessThan, Repository } from "typeorm";
 import { randomBytes } from "crypto";
 import { Trip } from "./entities/trip.entity";
+import { PushSubscription } from "../push/entities/push-subscription.entity";
 
 /**
  * Reading and writing a stored plan.
@@ -78,6 +79,47 @@ export class TripsService {
     trip.payload = payload;
     trip.expiresAt = TripsService.expiry();
     return this.tripRepository.save(trip);
+  }
+
+  /**
+   * Delete a trip, and clear every pointer at it. `false` when there was
+   * nothing live at that id.
+   *
+   * Deleting matters because the alternative is worse than keeping the plan:
+   * the browser forgets the id when push is switched off, so the visitor can no
+   * longer reach the row while anybody who kept the id — a log, a backup, an old
+   * device — still can. Switching off would make a plan unreachable rather than
+   * gone.
+   *
+   * **The pointer is cleared, the subscription is not.** `push_subscriptions`
+   * carries a loose `tripId` — a plain column, no foreign key, because a trip
+   * has its own lifecycle and TTL — and the same row also serves that browser's
+   * ride alerts and followed shows, which hang off `subscriptionId`. So this
+   * does exactly what `PushService.unsubscribe(endpoint, tripId)` does for one
+   * endpoint, one level wider: `tripId: null, topics: []` for every subscriber
+   * of this trip. Deleting the row would take a browser's ride alerts with a
+   * plan it has nothing to do with.
+   *
+   * Both writes in one transaction: a cleared pointer without the delete leaves
+   * a plan nobody is told about, and a delete without the clear leaves
+   * subscriptions the five-minute job walks forever for a trip that is gone.
+   *
+   * An expired trip counts as absent and is left to `sweepExpired`, so `find`
+   * stays the only place that decides what exists.
+   */
+  async remove(id: string): Promise<boolean> {
+    const trip = await this.find(id);
+    if (!trip) return false;
+
+    await this.tripRepository.manager.transaction(async (manager) => {
+      await manager.update(
+        PushSubscription,
+        { tripId: id },
+        { tripId: null, topics: [] },
+      );
+      await manager.delete(Trip, id);
+    });
+    return true;
   }
 
   /** Rows past their expiry. Returns how many went. */
