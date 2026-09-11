@@ -65,6 +65,14 @@ export interface ScheduleSyncEntry {
   purchases?: ScheduleEntry["purchases"];
 }
 
+/**
+ * Aborts the priority merge's transaction when its losing park still holds a
+ * child row, so the reparenting rolls back with the DELETE that could not
+ * happen. Caught by `mergePriorityDuplicateLoserSafely` and nowhere else — it
+ * is a rollback signal, not a failure of the sync run around it.
+ */
+class PriorityMergeIncompleteError extends Error {}
+
 @Injectable()
 export class ParksService {
   private readonly logger = new Logger(ParksService.name);
@@ -249,7 +257,10 @@ export class ParksService {
                 null;
 
               if (losingPark && losingPark.id !== duplicate.id) {
-                await this.mergePriorityDuplicateLoser(duplicate, losingPark);
+                await this.mergePriorityDuplicateLoserSafely(
+                  duplicate,
+                  losingPark,
+                );
               }
 
               existing = duplicate;
@@ -767,6 +778,16 @@ export class ParksService {
     winner: Park,
     loser: Park,
   ): Promise<void> {
+    // Both sibling paths establish this before they call anything: the ghost
+    // lookup filters `park.id != :currentId`, and `repairDuplicates` builds its
+    // ghost list with `filter((p) => p.id !== primary.id)`. Here it would be
+    // the call site's inequality test, which is one edit away from a park that
+    // merges into itself — and that case is not a no-op. Every ride would
+    // collide with itself, so the whole park's attractions would be handed to
+    // `consolidateMergedAttractions` as their own losers and then deleted, one
+    // statement before the park.
+    if (winner.id === loser.id) return;
+
     await this.parkRepository.manager.transaction(
       async (transactionalEntityManager) => {
         await this.liftTimescaleDecompressionLimit(transactionalEntityManager);
@@ -808,12 +829,21 @@ export class ParksService {
         }
 
         if (collisions.length > 0) {
-          // Land info and the Queue-Times id are filled in only where the
-          // survivor lacks them; `last_merged_at` is unconditional, as on both
-          // other paths. The losing row's `queue_data` is reparented onto the
-          // survivor below, so its history becomes two interleaved series, and
-          // the stamp is what holds the ride out of the nightly downtime
-          // reconstruction until it ages out.
+          // `COALESCE(v.x, a.x)` — the LOSER's land info and Queue-Times id win
+          // where it has them, and the survivor's value is the fallback. That is
+          // the ghost path's expression verbatim, and the two existing paths do
+          // not agree with each other about it: `repairDuplicates` writes
+          // `COALESCE(a.x, $1)` and keeps the survivor's. This follows the ghost
+          // path because it is the same branch of `syncParks` and the loser is
+          // the fresher read of the two. Reconciling the two precedences is a
+          // decision about both of them, not a side effect of adding a third.
+          //
+          // `last_merged_at` is unconditional, as on both other paths: the
+          // losing row's `queue_data` is reparented onto the survivor below, so
+          // its history becomes two interleaved series flapping between
+          // OPERATING and DOWN at the same instant, and the stamp is what holds
+          // the ride out of the nightly downtime reconstruction until it ages
+          // out.
           const values: string[] = [];
           const params: Array<string | null> = [];
           collisions.forEach(({ loserRow, matchId }, i) => {
@@ -875,12 +905,22 @@ export class ParksService {
           (restaurantResult?.[1] || 0);
 
         // 4. The emptiness check the original ended on. Every show, restaurant
-        // and ride of the loser has just been moved or merged away, so this is
-        // an invariant rather than a gate — but it is the one thing standing
-        // between a concurrent insert and a DELETE that takes it with the park.
-        // A leftover is not an error: the loser legitimately survives, keeps
-        // everything that points at it, and the moves above stay committed,
-        // because they are correct either way.
+        // and ride of the loser has just been moved or merged away, so a
+        // leftover means somebody inserted one while this ran.
+        //
+        // It aborts the merge rather than keeping the park, and the difference
+        // matters: the rides that DID move carry a denormalised `parkId` in
+        // `attraction_hourly_history`, `queue_data_aggregates`, the two
+        // baselines, `attraction_rope_drop`, `attraction_typical_waits` and
+        // `attraction_ride_profiles`, and only `consolidateMergedPark` below
+        // moves it. Committing the moves without that step files the inherited
+        // history under a park id the survivor does not have, and both readers
+        // go by park id (`analytics.service.ts`,
+        // `park-historical-stats.service.ts`), so the survivor's statistics
+        // would quietly show nothing for the rides it just gained. Rolling back
+        // leaves both parks exactly as they were and the next sync retries —
+        // which is what "the moves and the DELETE commit together, or neither
+        // does" has to mean.
         const remaining = await transactionalEntityManager.query(
           `SELECT
             (SELECT COUNT(*) FROM shows WHERE "parkId" = $1::uuid) as shows,
@@ -895,10 +935,9 @@ export class ParksService {
           remaining[0].attractions === "0";
 
         if (!isEmpty) {
-          this.logger.warn(
-            `⚠️ Priority merge left "${loser.name}" non-empty (shows=${remaining[0].shows}, restaurants=${remaining[0].restaurants}, attractions=${remaining[0].attractions}); keeping the park.`,
+          throw new PriorityMergeIncompleteError(
+            `Priority merge left "${loser.name}" non-empty (shows=${remaining[0].shows}, restaurants=${remaining[0].restaurants}, attractions=${remaining[0].attractions})`,
           );
-          return;
         }
 
         // 5. Everything else the loser owns, then the row itself. Same order as
@@ -917,6 +956,28 @@ export class ParksService {
         }
       },
     );
+  }
+
+  /**
+   * Rolls the priority merge back without taking the sync run with it.
+   *
+   * The abort is deliberate and the swallow is too: the merge has not happened,
+   * both parks stand as they did, and the next sync tries again. Anything else
+   * thrown inside that transaction is a real failure and keeps propagating.
+   */
+  private async mergePriorityDuplicateLoserSafely(
+    winner: Park,
+    loser: Park,
+  ): Promise<void> {
+    try {
+      await this.mergePriorityDuplicateLoser(winner, loser);
+    } catch (error: unknown) {
+      if (error instanceof PriorityMergeIncompleteError) {
+        this.logger.warn(`⚠️ ${error.message}; rolled back, park kept.`);
+        return;
+      }
+      throw error;
+    }
   }
 
   /**

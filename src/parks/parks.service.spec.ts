@@ -1334,10 +1334,12 @@ describe("ParksService", () => {
       );
     });
 
-    it("keeps the loser and its rows where something is left behind, rather than deleting the park around it", async () => {
+    it("aborts the whole merge where something is left behind, instead of committing the moves without the delete", async () => {
       // Every child has just been moved or merged away, so a leftover means a
-      // concurrent insert. The park then legitimately survives and keeps
-      // everything pointing at it — no park-scoped move, no DELETE.
+      // concurrent insert. Keeping the park and committing anyway would leave
+      // every moved ride's denormalised parkId pointing at a park the survivor
+      // is not — `consolidateMergedPark` is the only thing that moves it, and
+      // it sits below this check. So the transaction rolls back instead.
       const { calls } = recordTransaction((sql) => {
         if (/SELECT id, "parkId", slug/.test(sql)) return [];
         if (/SELECT\s*\n?\s*\(SELECT COUNT/.test(sql)) {
@@ -1345,13 +1347,64 @@ describe("ParksService", () => {
         }
         return [];
       });
+      // Rejecting is the whole point and the only thing that separates this
+      // from an early `return`: a recording manager commits nothing either way,
+      // but a real transaction only rolls the reparenting back if the callback
+      // throws. So the inner method must reject...
+      await expect(runPriorityMerge()).rejects.toThrow(/non-empty/);
 
-      await runPriorityMerge();
+      // ...and the wrapper must swallow exactly that, so one contested merge
+      // does not take the sync run with it.
+      const rejected = jest.fn();
+      await (
+        service as unknown as {
+          mergePriorityDuplicateLoserSafely: (
+            w: Park,
+            l: Park,
+          ) => Promise<void>;
+        }
+      )
+        .mergePriorityDuplicateLoserSafely(
+          createTestPark({ id: priorityWinnerId, name: "Phantasialand" }),
+          createTestPark({ id: priorityLoserId, name: "Phantasialand (QT)" }),
+        )
+        .catch(rejected);
+      expect(rejected).not.toHaveBeenCalled();
 
+      // Nothing past the count ran, so nothing was committed without its DELETE.
       expect(indexOfParkDelete(calls)).toBe(-1);
       expect(
         calls.filter((c) => /UPDATE\s+park_occupancy/i.test(c.sql)),
       ).toEqual([]);
+    });
+
+    it("refuses to merge a park into itself, whatever the call site believes", async () => {
+      // Every ride would collide with itself, so the whole park's attractions
+      // would go to consolidateMergedAttractions as their own losers and then
+      // be deleted, one statement before the park. Both sibling paths establish
+      // this before they call anything; this one may not depend on that.
+      const { calls } = primePriorityMerge([
+        {
+          id: "eeee6666-0000-0000-0000-000000000001",
+          parkId: priorityWinnerId,
+          slug: "taron",
+          queue_times_entity_id: null,
+          land_name: null,
+          land_external_id: null,
+        },
+      ]);
+      const samePark = createTestPark({
+        id: priorityWinnerId,
+        name: "Phantasialand",
+      });
+
+      await (
+        service as unknown as {
+          mergePriorityDuplicateLoser: (w: Park, l: Park) => Promise<void>;
+        }
+      ).mergePriorityDuplicateLoser(samePark, samePark);
+
+      expect(calls).toEqual([]);
     });
 
     it("is not reachable from syncParks: the priority merge's loser lookup can only miss", async () => {
