@@ -39,12 +39,16 @@
  *
  * The two writers are mutually exclusive at any instant: `writeHourlyHeartbeats`
  * only keeps a ride whose `attraction:last-seen` is inside 24h, and
- * reverse-reconciliation only writes when that same key is missing or older.
- * So a ride cannot be heartbeated and reconciled at the same time, and none of
- * the 97 has a heartbeat row at all (measured 2026-09-11). What is not
- * established is whether any caller's freshness window is wide enough to span
- * the changeover and hold both kinds — PAR-162 asks that question rather than
- * asserting a defect.
+ * reverse-reconciliation only writes when that same key is missing or older. So
+ * a ride is never heartbeated and reconciled in the same cycle, and none of the
+ * 97 has a heartbeat row at all (measured 2026-09-11).
+ *
+ * That leaves the **first 24 hours after a feed drops a ride**, when it gets
+ * heartbeats and no reconciliation at all: every row in that window carries the
+ * real feed's `dataSource`, so this test says "not absent" and the ride keeps
+ * asserting whatever it last said. The window closes by itself, and after it
+ * the rows are reconciliation and this test is right again. PAR-162 is whether
+ * a day of a stale status is worth changing the definition for.
  *
  * See §5.2a of `docs/architecture/attraction-status-and-seasonality.md` for the
  * three groups and the two checks that tell them apart.

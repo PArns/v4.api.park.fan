@@ -673,10 +673,10 @@ comparison**, and the detector currently has no way to say so (PAR-160).
 
 **Is a "closure" ours or the operator's?**
 ```sql
-SELECT data_source, status, count(*), max(timestamp)::date
+SELECT data_source, is_heartbeat, status, count(*), max(timestamp)::date
   FROM queue_data
  WHERE "attractionId" = '<id>' AND timestamp > now() - interval '3 days'
- GROUP BY 1,2;
+ GROUP BY 1,2,3;
 ```
 `system-reconciliation` means no upstream source reported the ride, and the
 reverse-reconciliation write is ours. Two things that looks like and is not: an
