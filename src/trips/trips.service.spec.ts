@@ -217,6 +217,24 @@ describe("TripsService", () => {
     expect(found?.payload).toEqual({ version: 2, parks: { b: { slug: "b" } } });
   });
 
+  it("takes the row before replacing a plan, inside the transaction", async () => {
+    const created = await service.create(plan());
+    manager.save.mockClear();
+
+    await service.update(created.id, plan());
+
+    // Both halves matter and neither is ceremony. `save()` INSERTs when the row
+    // it loaded has gone, so a PUT racing a DELETE would put the plan back at
+    // the same id with a fresh 400-day expiry — after the browser dropped the
+    // id. And a save on the repository rather than on the transaction's manager
+    // would commit on its own, outside the lock that makes the read meaningful.
+    expect(manager.findOne).toHaveBeenCalledWith(
+      Trip,
+      expect.objectContaining({ lock: { mode: "pessimistic_write" } }),
+    );
+    expect(manager.save).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses to create a trip at an id the caller chose", async () => {
     // Otherwise an attacker picks their own ids, and with them overwrites a
     // trip by guessing one.
