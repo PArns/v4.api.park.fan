@@ -366,19 +366,30 @@ What is still open, roughly by consequence:
       is winner-authoritative — take the loser's row only where the survivor has
       none — the same shape `park_p50_baselines` needs and the same reason it is
       not a dependency.
-- [ ] **A third park delete in `parks.service.ts` has the whole hole.** The
+- [x] ~~**A third park delete in `parks.service.ts` has the whole hole.**~~ The
       priority merge in `syncParks` (`parkRepository.delete(losingPark.id)`,
-      guarded by an `isEmpty` count over shows/restaurants/attractions) applies
+      guarded by an `isEmpty` count over shows/restaurants/attractions) applied
       neither `PARK_DEPENDENCIES` nor `PARK_INLINE_DEPENDENCIES`, so
-      `park_occupancy` and the two attraction baselines raise 23503 and abort
-      the sync run. Worse than the two PF-111 fixed: this path holds **no
-      transaction**, so the entity moves above it are already committed when the
-      DELETE throws, and it leaves a losing park stripped of its rides and still
-      present. Out of PF-111, which names the other two paths; wrapping this one
-      in a transaction is its own change.
+      `park_occupancy` and the two attraction baselines raised 23503 and aborted
+      the sync run. Worse than the two PF-111 fixed: the path held **no
+      transaction**, so the entity moves above it were already committed when the
+      DELETE threw, and it left a losing park stripped of its rides and still
+      present. PAR-103 moved it into `mergePriorityDuplicateLoser`: one
+      transaction, the TimescaleDB decompression bracket, attractions
+      partitioned by slug (the unique `(parkId, slug)` makes a blind move a
+      23505, so they now move by id and colliding losers go through
+      `consolidateMergedAttractions`), and `consolidateMergedPark` immediately
+      before the park row goes.
+      **And the block is not reachable today**, which nobody had noticed: it is
+      entered only when no park carries the incoming `externalId`, and its
+      loser is looked up by that same `externalId` from the map whose hit skips
+      the branch. The fix is right under either reading and the derivation is
+      pinned at the call site, in the method docblock and as a spec case — but
+      whether the block should exist at all is PAR-142. Shows and restaurants
+      stay blind moves here; that is the next entry.
 - [ ] **The blind show and restaurant moves can raise 23505 before any of that
-      is reached.** Both raw paths do `UPDATE shows SET "parkId" = …` and the
-      same for restaurants, against a unique `(parkId, slug)` on either table
+      is reached.** All three raw paths do `UPDATE shows SET "parkId" = …` and
+      the same for restaurants, against a unique `(parkId, slug)` on either table
       (`show.entity.ts:33`, `restaurant.entity.ts:33`). Two rows for one park
       from two sources are exactly the case that produces a shared slug, so the
       transaction rolls back before the attraction and park steps run at all.
