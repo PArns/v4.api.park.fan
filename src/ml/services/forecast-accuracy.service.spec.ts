@@ -157,6 +157,36 @@ describe("ForecastAccuracyService.lookup", () => {
   it("returns undefined for a distance in the past", () => {
     expect(ForecastAccuracyService.lookup(full, 10, -1)).toBeUndefined();
   });
+
+  it("only ever widens AWAY from the distance asked about", () => {
+    // The property the "errs larger" invariant rests on: the bucket a widened
+    // lookup lands on must have an upper edge at or beyond the ideal one, so its
+    // mean is taken over distances reaching further out and never nearer. If a
+    // future bucket re-cuts the existing edges instead of refining them, this is
+    // the assertion that should fail.
+    const edges: Record<string, number> = {
+      d1: 1,
+      d3: 3,
+      d7: 7,
+      d14: 14,
+      d30: 30,
+      d60: 60,
+    };
+    const preDeploy = profileOf(
+      cell("quiet", "d1", 8.6),
+      cell("quiet", "d7", 9.0),
+      cell("quiet", "d30", 10.7),
+      cell("quiet", "d60", 12.5),
+    );
+    for (let lead = 0; lead <= 60; lead++) {
+      const ideal = ForecastAccuracyService.bucketFor(lead);
+      const got = ForecastAccuracyService.lookup(preDeploy, 10, lead);
+      expect(got).toBeDefined();
+      expect(edges[got!.leadBucket]).toBeGreaterThanOrEqual(edges[ideal!]);
+      // And it still covers the distance asked about.
+      expect(edges[got!.leadBucket]).toBeGreaterThanOrEqual(lead);
+    }
+  });
 });
 
 describe("the two classifiers together", () => {

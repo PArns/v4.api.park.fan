@@ -176,11 +176,37 @@ export class ForecastAccuracyService {
    * 2. A bucket that stops being measurable disappears from the table by design
    *    (see `rebuild()`), so an absent cell is a normal state and not an error.
    *
-   * Widening rather than narrowing is the safe direction: a coarser bucket is a
-   * longer distance and therefore a LARGER error, so the answer errs towards "at
-   * least this wrong" — the same reasoning `PredictionLeadSnapshotService`
-   * applies from the other side. It never reaches past the last bucket, so past
-   * 60 days the answer stays undefined.
+   * Widening rather than narrowing is the safe direction: the answer errs towards
+   * "at least this wrong" rather than understating — the same reasoning
+   * `PredictionLeadSnapshotService` applies from the other side. It never reaches
+   * past the last bucket, so past 60 days the answer stays undefined.
+   *
+   * THAT INVARIANT RESTS ON TWO THINGS, and both are measured rather than assumed:
+   *
+   * 1. **MAE rises with lead in every band** — 8.6→12.5 quiet, 12.9→16.5 mid,
+   *    21.5→25.5 busy over 1→60 days. A coarser bucket is a longer distance, so
+   *    its mean is the larger one. Were the curve non-monotone this would not
+   *    follow.
+   * 2. **The bucket list only ever gets refined, never re-cut.** `d3` and `d14`
+   *    split existing buckets; they do not move `d1/d7/d30/d60`'s edges. So a
+   *    stale coarse bucket shares its LOWER edge with the ideal bucket and extends
+   *    only further out — its mean is taken over a superset reaching away from the
+   *    distance asked about, never towards it.
+   *
+   * Verified against production on 2026-09-11 for the two cells this change adds,
+   * both compared inside ONE 45-day window (comparing across windows is how this
+   * invariant first looked violated):
+   *
+   * ```
+   *   band    new d3   widens to old d7      new d14   widens to old d30
+   *   busy     21.63          22.47           24.31          24.83
+   *   mid      13.22          13.49           14.65          15.26
+   *   quiet     8.70           8.88            9.89          10.44
+   * ```
+   *
+   * A future bucket that re-cuts rather than refines the existing edges would
+   * break point 2, and this method would then need to compare edges rather than
+   * walk the list.
    */
   static lookup(
     profile: Map<string, ForecastAccuracyProfile>,

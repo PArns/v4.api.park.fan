@@ -436,10 +436,10 @@ Two fields, both measured rather than asserted: `rides[].expectedError` and the
 `accuracy` block on the response.
 
 ```jsonc
-"accuracy": { "basis": "measured", "typicalError": 15.4, "sampleSize": 1140009 },
+"accuracy": { "basis": "measured", "typicalError": 15.4, "sampleSize": 742010 },
 "rides": [
-  { "attractionSlug": "taron", "dayPeak": 60, "expectedError": 23.9 },
-  { "attractionSlug": "raik",  "dayPeak": 20, "expectedError": 10.9 }
+  { "attractionSlug": "taron", "dayPeak": 60, "expectedError": 25.1 },
+  { "attractionSlug": "raik",  "dayPeak": 20, "expectedError": 10.7 }
 ]
 ```
 
@@ -455,14 +455,24 @@ its 60-day bucket reports sixty days after that.
 **`expectedError` is per ride because the error has two axes**, and by a lot —
 45 days of forecasts scored against the realised day-P90:
 
-| predicted | 1 day | 7 days | 30 days | 60 days |
-| --- | --- | --- | --- | --- |
-| ≥ 60 min | 21.4 | 22.0 | 23.9 | 25.0 |
-| 30–59 min | 12.7 | 13.5 | 15.3 | 16.6 |
-| < 30 min | 8.4 | 9.1 | 10.9 | 13.0 |
+| predicted | ≤1 day | ≤3 days | ≤7 days | ≤14 days | ≤30 days | ≤60 days |
+| --- | --- | --- | --- | --- | --- | --- |
+| ≥ 60 min | 21.5 | 21.6 | 22.9 | 24.3 | 25.1 | 25.5 |
+| 30–59 min | 12.9 | 13.2 | 13.6 | 14.7 | 15.5 | 16.5 |
+| < 30 min | 8.6 | 8.7 | 9.0 | 9.9 | 10.7 | 12.5 |
 
 One figure per day would understate a headliner by ten minutes and overstate a
 small ride by four.
+
+Each column is an **upper edge**: a 10-day request reads the `≤14 days` column, and
+a request past 60 days gets no column at all (`basis: "unmeasured"`). The grid was
+four columns until 2026-09-11 and is now six, matching the distances the forward
+archive samples.
+
+**Do not turn a row into a multiplier.** Every band widens by roughly the same four
+minutes from one day out to sixty — but that is +19 % on a busy ride against +45 %
+on a quiet one, so the growth is a number of minutes and not a proportion. Read the
+cell; do not scale the prediction.
 
 **It is a typical miss, not a bound.** Roughly half of days land further out, so
 it reads as "give or take" and must not be drawn as a range that contains the

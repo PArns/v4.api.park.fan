@@ -654,10 +654,10 @@ export class PlanDayService {
             // bucket this distance ideally wanted: `lookup` may have widened to a
             // coarser one, and summing the ideal bucket would report 0 next to a
             // `measured` basis on the day after a deploy that adds a bucket.
-            sampleSize:
-              usedCells.size > 0
-                ? [...usedCells].reduce((a, c) => a + c.sampleSize, 0)
-                : undefined,
+            //
+            // Unconditional because this arm requires `scored.length > 0`, and a
+            // scored ride is by definition one whose cell went into `usedCells`.
+            sampleSize: [...usedCells].reduce((a, c) => a + c.sampleSize, 0),
           }
         : { basis: "unmeasured" };
 
