@@ -460,7 +460,12 @@ plainly:
 | window | what comes back |
 |---|---|
 | 120 days, `>= 6` | 8 rows: Europa-Park **44**, Rulantica 18, Wet'n'Wild 13 + 13, Mid-America **9**, Traumatica 7, USJ 6, Ocean Park 6 |
-| 270 days, `>= 5` | 16 rows — those eight plus Knott's 9 (last OPERATING 2026-04-14), Fiesta Texas 15 (04-12), USS 17 (04-25), Gröna Lund 14 (01-05), Bellewaerde 8 (02-11), Cinecittà World 6 (01-19), Everland 6 (02-07), Hollywood 5 (05-17) |
+| 270 days, `>= 5` | 16 rows, 204 rides: Europa-Park 46, Rulantica 18, USS 17, Fiesta Texas 15, Gröna Lund 14, Mid-America 13, Wet'n'Wild 13 + 13, Knott's 9, Bellewaerde 8, USJ 8, Traumatica 7, Cinecittà World 6, Ocean Park 6, Everland 6, Hollywood 5 |
+
+The eight the shorter window cannot see are USS (last OPERATING 2026-04-25),
+Fiesta Texas (04-12), Knott's (04-14), Gröna Lund (01-05), Bellewaerde (02-11),
+Cinecittà World (01-19), Everland (02-07) and Hollywood, which the old `>= 6`
+floor excluded rather than the window.
 
 **Eight of the sixteen are invisible at 120 days** — including every one whose
 drop is older than that, which is to say the very cases the cut exists to find.
@@ -492,10 +497,11 @@ interchangeable**:
 2. **`GET /v1/entity/{id}` upstream.** Does the entity still exist, under which
    `entityType`, and does the park's `/children` and `/live` still list it?
 
-Check 1 has to be decided **per ride** and only then counted per park — two of
-the twelve parks (Mid-America, Universal Studios Japan) have rides on both
-sides of it, and a `GROUP BY (park, data_source)` would show them twice without
-saying which rides went where:
+Check 1 has to be decided **per ride** and only then counted per park — five of
+the sixteen (Mid-America, Bellewaerde, Cinecittà World, Everland, Universal
+Studios Japan) have rides on both sides of it, and a
+`GROUP BY (park, data_source)` would show them twice without saying which rides
+went where:
 
 The predicate is `observedReadingsSql()` from `closure-gap.sql.ts`, not a bare
 `data_source <> 'system-reconciliation'`: a heartbeat carries the previous row's
@@ -576,8 +582,8 @@ moved, and clean up these 17).
 
 **Group B is neither "recategorised" nor "removed" — it is a third thing.** 106
 of the 125 have a wiki entity; every one of those was looked up in its park's
-`/children` and `/live`, and the 8 sampled from the 33 missing from `/children`
-were fetched individually as `GET /v1/entity/{id}` as well. All eight came back
+`/children` and `/live`, and 8 of the 41 that are missing from `/children` were
+fetched individually as `GET /v1/entity/{id}` as well. All eight came back
 intact: `entityType` still `ATTRACTION`, `parentId` still the right park. What
 differs is whether the park's own index still lists them:
 
@@ -603,8 +609,8 @@ dropped cluster.
 
 So there are two shapes inside group B. Europa-Park (44 of 46), Rulantica and
 Mid-America are still listed as children and only lost their live rows;
-Knott's, Fiesta Texas and Hollywood fell out of the children index as well —
-*while the entity document kept working*. Europa-Park's remaining two, *Children's
+Knott's, Fiesta Texas, Bellewaerde, Hollywood and Everland fell out of the
+children index as well — *while the entity document kept working*. Europa-Park's remaining two, *Children's
 carousel* and the *'Bellevue' Ferris Wheel*, sit in the second shape. `GET
 /v1/entity/6e2fd5cd-959a-4fc2-92e4-f8170fe320f7` returns Knott's *Games and
 Arcade* in full, `parentId` correct; Knott's own `/children` (134 entries) does
