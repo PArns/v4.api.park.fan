@@ -65,6 +65,14 @@ export interface ScheduleSyncEntry {
   purchases?: ScheduleEntry["purchases"];
 }
 
+/**
+ * Aborts the priority merge's transaction when its losing park still holds a
+ * child row, so the reparenting rolls back with the DELETE that could not
+ * happen. Caught by `mergePriorityDuplicateLoserSafely` and nowhere else — it
+ * is a rollback signal, not a failure of the sync run around it.
+ */
+class PriorityMergeIncompleteError extends Error {}
+
 @Injectable()
 export class ParksService {
   private readonly logger = new Logger(ParksService.name);
@@ -223,63 +231,36 @@ export class ParksService {
               }
 
               // TRUE MERGE: Migrate child entities (shows, restaurants)
-              // losingPark would have been found at the externalId check above; null here is safe
+              //
+              // `losingPark` is provably `null` on every reachable run, and the
+              // comment that used to sit here read that the wrong way round
+              // ("would have been found at the externalId check above; null here
+              // is safe"). It is not an accident that it is null, it is the
+              // condition of standing here at all: `existing` (see the lookup
+              // above this `if (!existing)` block) is set from this very map,
+              // falling back to a global `findOne` on the same externalId. A hit
+              // in either skips this branch, so reaching it means both missed,
+              // and the map cannot then answer. The branch is entered *because*
+              // no park carries this externalId — so there is no losing park to
+              // merge away, and `mergePriorityDuplicateLoser` never runs.
+              //
+              // It is still written as if it did. The block below used to delete
+              // a park outside any transaction and without moving what points at
+              // it; three sibling issues are rebuilding the same file, and one
+              // change to the lookup above turns that into a live destructive
+              // path. Whether the block should exist at all is a separate
+              // question (PAR-142) — while it exists, it behaves like the other
+              // two raw merge paths.
               const losingPark =
                 (mappedData.externalId &&
                   parksByExternalId.get(mappedData.externalId)) ||
                 null;
 
               if (losingPark && losingPark.id !== duplicate.id) {
-                // Silent migration - log only summary
-
-                let totalMigrated = 0;
-
-                // Migrate Shows
-                const showCount = await this.parkRepository.manager.query(
-                  `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
-                  [duplicate.id, losingPark.id],
+                await this.mergePriorityDuplicateLoserSafely(
+                  duplicate,
+                  losingPark,
                 );
-                totalMigrated += showCount[1] || 0;
-
-                // Migrate Restaurants
-                const restaurantCount = await this.parkRepository.manager.query(
-                  `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
-                  [duplicate.id, losingPark.id],
-                );
-                totalMigrated += restaurantCount[1] || 0;
-
-                // Migrate Attractions
-                const attractionCount = await this.parkRepository.manager.query(
-                  `UPDATE attractions SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
-                  [duplicate.id, losingPark.id],
-                );
-                totalMigrated += attractionCount[1] || 0;
-
-                // Check if losing park is now empty
-                const remaining = await this.parkRepository.manager.query(
-                  `SELECT 
-                    (SELECT COUNT(*) FROM shows WHERE "parkId" = $1::uuid) as shows,
-                    (SELECT COUNT(*) FROM restaurants WHERE "parkId" = $1::uuid) as restaurants,
-                    (SELECT COUNT(*) FROM attractions WHERE "parkId" = $1::uuid) as attractions
-                  `,
-                  [losingPark.id],
-                );
-
-                const isEmpty =
-                  remaining[0].shows === "0" &&
-                  remaining[0].restaurants === "0" &&
-                  remaining[0].attractions === "0";
-
-                if (isEmpty) {
-                  // Safe to delete losing park - all entities have been migrated
-                  await this.parkRepository.delete(losingPark.id);
-                }
-
-                if (totalMigrated > 0) {
-                  this.logger.log(
-                    `🔀 Migrated ${totalMigrated} entities from "${losingPark.name}" to "${duplicate.name}"`,
-                  );
-                }
               }
 
               existing = duplicate;
@@ -746,6 +727,257 @@ export class ParksService {
       winnerParkId,
       loserParkId,
     );
+  }
+
+  /**
+   * The third raw merge path: `syncParks`' priority merge, where a name
+   * duplicate outranks the incoming park and absorbs it.
+   *
+   * **This never runs today.** Its caller reaches the branch only when no park
+   * carries the incoming `externalId`, and the losing park is looked up by that
+   * same `externalId` — see the comment at the call site for the three cases.
+   * Whether the block should exist at all is PAR-142; what it may not be while
+   * it does exist is a `DELETE FROM parks` that behaves worse than the two paths
+   * beside it, on a file three open issues are rebuilding.
+   *
+   * It used to be four statements on `parkRepository.manager` and a
+   * `parkRepository.delete()`, with no transaction between them, and it was
+   * wrong in the two ways the other paths were wrong before PAR-99:
+   *
+   * The DELETE raises **23503**. `park_occupancy`, `attraction_p50_baselines`
+   * and `attraction_p90_baselines` declare `@ManyToOne(() => Park)` with no
+   * `onDelete`, so their FK is NO ACTION. Where it does get through,
+   * `park_seasons`, `park_slug_aliases`, `schedule_entries`, `weather_data`,
+   * `park_daily_stats`, `attraction_rope_drop`, `attraction_typical_waits` and
+   * `attraction_ride_profiles` cascade away — three of them hand-curated and
+   * written by no feed in this codebase. `consolidateMergedPark` is what answers
+   * both, and it has to run before the park row goes.
+   *
+   * And **without a transaction the failure is not a no-op.** The child moves
+   * were committed one statement at a time, so a 23503 on the DELETE left a
+   * losing park stripped of its shows, restaurants and rides but still present
+   * and still served. The next sync could not even see it: `isEmpty` is true
+   * again, so it retried the same DELETE and got the same 23503, for ever. One
+   * transaction is the whole fix for that — either the moves and the DELETE
+   * commit together, or neither does.
+   *
+   * **Attractions need collision handling, and that is a constraint rather than
+   * a preference.** `attractions` carries `@Index(["parkId", "slug"], { unique:
+   * true })`, so a blind `UPDATE attractions SET "parkId"` raises **23505** the
+   * moment both parks know a ride by the same slug — which is the normal case
+   * for two rows describing one park. The ghost path one level up already
+   * partitions by slug; this does the same, and hands the colliding losers to
+   * `consolidateMergedAttractions` so their `queue_data` and predictions land on
+   * the survivor instead of blocking its DELETE.
+   *
+   * `shows` and `restaurants` stay blind moves here, exactly as they are on the
+   * other two paths: they have the same unresolved collision question, and it is
+   * PAR-104's, not this one's.
+   */
+  private async mergePriorityDuplicateLoser(
+    winner: Park,
+    loser: Park,
+  ): Promise<void> {
+    // Both sibling paths establish this before they call anything: the ghost
+    // lookup filters `park.id != :currentId`, and `repairDuplicates` builds its
+    // ghost list with `filter((p) => p.id !== primary.id)`. Here it would be
+    // the call site's inequality test, which is one edit away from a park that
+    // merges into itself — and that case is not a no-op. Every ride would
+    // collide with itself, so the whole park's attractions would be handed to
+    // `consolidateMergedAttractions` as their own losers and then deleted, one
+    // statement before the park.
+    if (winner.id === loser.id) return;
+
+    await this.parkRepository.manager.transaction(
+      async (transactionalEntityManager) => {
+        await this.liftTimescaleDecompressionLimit(transactionalEntityManager);
+
+        // 1. Attractions, partitioned by slug against the unique index.
+        type PriorityMergeAttractionRow = {
+          id: string;
+          parkId: string;
+          slug: string;
+          queue_times_entity_id: string | null;
+          land_name: string | null;
+          land_external_id: string | null;
+        };
+        const bothParkAttractions: PriorityMergeAttractionRow[] =
+          await transactionalEntityManager.query(
+            `SELECT id, "parkId", slug, "queue_times_entity_id", "land_name", "land_external_id" FROM attractions WHERE "parkId" = ANY($1::uuid[])`,
+            [[winner.id, loser.id]],
+          );
+        const winnerBySlug = new Map<string, PriorityMergeAttractionRow>(
+          bothParkAttractions
+            .filter((a) => a.parkId === winner.id)
+            .map((a) => [a.slug, a]),
+        );
+
+        const collisions: Array<{
+          loserRow: PriorityMergeAttractionRow;
+          matchId: string;
+        }> = [];
+        const movedIds: string[] = [];
+        for (const loserAttr of bothParkAttractions.filter(
+          (a) => a.parkId === loser.id,
+        )) {
+          const match = winnerBySlug.get(loserAttr.slug);
+          if (match) {
+            collisions.push({ loserRow: loserAttr, matchId: match.id });
+          } else {
+            movedIds.push(loserAttr.id);
+          }
+        }
+
+        if (collisions.length > 0) {
+          // `COALESCE(v.x, a.x)` — the LOSER's land info and Queue-Times id win
+          // where it has them, and the survivor's value is the fallback. That is
+          // the ghost path's expression verbatim, and the two existing paths do
+          // not agree with each other about it: `repairDuplicates` writes
+          // `COALESCE(a.x, $1)` and keeps the survivor's. This follows the ghost
+          // path because it is the same branch of `syncParks` and the loser is
+          // the fresher read of the two. Reconciling the two precedences is a
+          // decision about both of them, not a side effect of adding a third.
+          //
+          // `last_merged_at` is unconditional, as on both other paths: the
+          // losing row's `queue_data` is reparented onto the survivor below, so
+          // its history becomes two interleaved series flapping between
+          // OPERATING and DOWN at the same instant, and the stamp is what holds
+          // the ride out of the nightly downtime reconstruction until it ages
+          // out.
+          const values: string[] = [];
+          const params: Array<string | null> = [];
+          collisions.forEach(({ loserRow, matchId }, i) => {
+            const o = i * 4;
+            values.push(`($${o + 1}::uuid, $${o + 2}, $${o + 3}, $${o + 4})`);
+            params.push(
+              matchId,
+              loserRow.land_name,
+              loserRow.land_external_id,
+              loserRow.queue_times_entity_id,
+            );
+          });
+          await transactionalEntityManager.query(
+            `UPDATE attractions a
+             SET "land_name" = COALESCE(v.land_name, a."land_name"),
+                 "land_external_id" = COALESCE(v.land_external_id, a."land_external_id"),
+                 "queue_times_entity_id" = COALESCE(v.qt_id, a."queue_times_entity_id"),
+                 "last_merged_at" = NOW()
+             FROM (VALUES ${values.join(", ")}) AS v(id, land_name, land_external_id, qt_id)
+             WHERE a.id = v.id`,
+            params,
+          );
+          await this.consolidateMergedAttractions(
+            transactionalEntityManager,
+            collisions.map((c) => ({
+              winnerId: c.matchId,
+              loserId: c.loserRow.id,
+            })),
+          );
+          await transactionalEntityManager.query(
+            `DELETE FROM attractions WHERE id = ANY($1::uuid[])`,
+            [collisions.map((c) => c.loserRow.id)],
+          );
+        }
+
+        if (movedIds.length > 0) {
+          await transactionalEntityManager.query(
+            `UPDATE attractions SET "parkId" = $1 WHERE id = ANY($2::uuid[])`,
+            [winner.id, movedIds],
+          );
+        }
+
+        // 2. Shows
+        const showResult = await transactionalEntityManager.query(
+          `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
+          [winner.id, loser.id],
+        );
+
+        // 3. Restaurants
+        const restaurantResult = await transactionalEntityManager.query(
+          `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
+          [winner.id, loser.id],
+        );
+
+        const totalMigrated =
+          collisions.length +
+          movedIds.length +
+          (showResult?.[1] || 0) +
+          (restaurantResult?.[1] || 0);
+
+        // 4. The emptiness check the original ended on. Every show, restaurant
+        // and ride of the loser has just been moved or merged away, so a
+        // leftover means somebody inserted one while this ran.
+        //
+        // It aborts the merge rather than keeping the park, and the difference
+        // matters: the rides that DID move carry a denormalised `parkId` in
+        // `attraction_hourly_history`, `queue_data_aggregates`, the two
+        // baselines, `attraction_rope_drop`, `attraction_typical_waits` and
+        // `attraction_ride_profiles`, and only `consolidateMergedPark` below
+        // moves it. Committing the moves without that step files the inherited
+        // history under a park id the survivor does not have, and both readers
+        // go by park id (`analytics.service.ts`,
+        // `park-historical-stats.service.ts`), so the survivor's statistics
+        // would quietly show nothing for the rides it just gained. Rolling back
+        // leaves both parks exactly as they were and the next sync retries —
+        // which is what "the moves and the DELETE commit together, or neither
+        // does" has to mean.
+        const remaining = await transactionalEntityManager.query(
+          `SELECT
+            (SELECT COUNT(*) FROM shows WHERE "parkId" = $1::uuid) as shows,
+            (SELECT COUNT(*) FROM restaurants WHERE "parkId" = $1::uuid) as restaurants,
+            (SELECT COUNT(*) FROM attractions WHERE "parkId" = $1::uuid) as attractions
+          `,
+          [loser.id],
+        );
+        const isEmpty =
+          remaining[0].shows === "0" &&
+          remaining[0].restaurants === "0" &&
+          remaining[0].attractions === "0";
+
+        if (!isEmpty) {
+          throw new PriorityMergeIncompleteError(
+            `Priority merge left "${loser.name}" non-empty (shows=${remaining[0].shows}, restaurants=${remaining[0].restaurants}, attractions=${remaining[0].attractions})`,
+          );
+        }
+
+        // 5. Everything else the loser owns, then the row itself. Same order as
+        // the other two paths: nothing may still point at it when it goes.
+        await this.consolidateMergedPark(
+          transactionalEntityManager,
+          winner.id,
+          loser.id,
+        );
+        await transactionalEntityManager.delete(Park, loser.id);
+
+        if (totalMigrated > 0) {
+          this.logger.log(
+            `🔀 Migrated ${totalMigrated} entities from "${loser.name}" to "${winner.name}"`,
+          );
+        }
+      },
+    );
+  }
+
+  /**
+   * Rolls the priority merge back without taking the sync run with it.
+   *
+   * The abort is deliberate and the swallow is too: the merge has not happened,
+   * both parks stand as they did, and the next sync tries again. Anything else
+   * thrown inside that transaction is a real failure and keeps propagating.
+   */
+  private async mergePriorityDuplicateLoserSafely(
+    winner: Park,
+    loser: Park,
+  ): Promise<void> {
+    try {
+      await this.mergePriorityDuplicateLoser(winner, loser);
+    } catch (error: unknown) {
+      if (error instanceof PriorityMergeIncompleteError) {
+        this.logger.warn(`⚠️ ${error.message}; rolled back, park kept.`);
+        return;
+      }
+      throw error;
+    }
   }
 
   /**

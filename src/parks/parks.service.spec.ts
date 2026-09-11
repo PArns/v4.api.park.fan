@@ -34,6 +34,7 @@ describe("ParksService", () => {
     save: jest.fn(),
     update: jest.fn(),
     count: jest.fn(),
+    delete: jest.fn(),
     query: jest.fn(),
     createQueryBuilder: jest.fn(() => ({
       leftJoinAndSelect: jest.fn().mockReturnThis(),
@@ -71,6 +72,7 @@ describe("ParksService", () => {
   const mockScheduleRepository = {
     find: jest.fn(),
     findOne: jest.fn(),
+    count: jest.fn(),
     save: jest.fn(),
     update: jest.fn(),
     delete: jest.fn(),
@@ -1166,6 +1168,304 @@ describe("ParksService", () => {
       await service.repairDuplicates();
 
       expectParkRowsMovedBeforeTheDelete(calls, primaryId, ghostParkId);
+    });
+
+    /**
+     * The third raw path: `syncParks`' priority merge. It is driven directly
+     * rather than through `syncParks`, because `syncParks` cannot reach it —
+     * the case below this one is what pins that down, and PAR-142 decides
+     * whether the block stays. Until then it may not be the one park DELETE in
+     * this file that runs outside a transaction and without moving what points
+     * at the park.
+     */
+    const priorityWinnerId = "abababab-1111-1111-1111-111111111111";
+    const priorityLoserId = "cdcdcdcd-2222-2222-2222-222222222222";
+
+    const primePriorityMerge = (attractionRows: unknown[]) =>
+      recordTransaction((sql) => {
+        if (/SELECT id, "parkId", slug/.test(sql)) return attractionRows;
+        // The emptiness check that guards the DELETE: everything moved.
+        if (/SELECT\s*\n?\s*\(SELECT COUNT/.test(sql)) {
+          return [{ shows: "0", restaurants: "0", attractions: "0" }];
+        }
+        return [];
+      });
+
+    const runPriorityMerge = async () =>
+      (
+        service as unknown as {
+          mergePriorityDuplicateLoser: (w: Park, l: Park) => Promise<void>;
+        }
+      ).mergePriorityDuplicateLoser(
+        createTestPark({ id: priorityWinnerId, name: "Phantasialand" }),
+        createTestPark({
+          id: priorityLoserId,
+          name: "Phantasialand (Queue-Times)",
+        }),
+      );
+
+    it("moves every park-scoped row of the priority merge before the park is deleted", async () => {
+      const { calls } = primePriorityMerge([
+        {
+          id: "eeee6666-0000-0000-0000-000000000001",
+          parkId: priorityWinnerId,
+          slug: "taron",
+          queue_times_entity_id: null,
+          land_name: null,
+          land_external_id: null,
+        },
+        {
+          id: "ffff7777-0000-0000-0000-000000000001",
+          parkId: priorityLoserId,
+          slug: "taron",
+          queue_times_entity_id: "4711",
+          land_name: "Klugheim",
+          land_external_id: "land-klugheim",
+        },
+        {
+          // Moves across without colliding, so it carries a stale parkId into
+          // every one of its dependent tables.
+          id: "ffff7777-0000-0000-0000-000000000002",
+          parkId: priorityLoserId,
+          slug: "chiapas",
+          queue_times_entity_id: "4712",
+          land_name: "Mexico",
+          land_external_id: "land-mexico",
+        },
+      ]);
+
+      await runPriorityMerge();
+
+      expectParkRowsMovedBeforeTheDelete(
+        calls,
+        priorityWinnerId,
+        priorityLoserId,
+      );
+
+      // `park_occupancy` is a hypertable and the park step runs whether or not
+      // a ride collided, so the cap belongs to the transaction. Exactly once.
+      expect(
+        calls
+          .filter((c) =>
+            /max_tuples_decompressed_per_dml_transaction/.test(c.sql),
+          )
+          .map((c) => c.sql),
+      ).toEqual([
+        "SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
+      ]);
+    });
+
+    it("partitions the priority merge's attractions by slug instead of moving them blindly into the unique index", async () => {
+      const collidingLoser = "ffff7777-0000-0000-0000-000000000001";
+      const movingLoser = "ffff7777-0000-0000-0000-000000000002";
+      const survivor = "eeee6666-0000-0000-0000-000000000001";
+
+      const { calls } = primePriorityMerge([
+        {
+          id: survivor,
+          parkId: priorityWinnerId,
+          slug: "taron",
+          queue_times_entity_id: null,
+          land_name: null,
+          land_external_id: null,
+        },
+        {
+          id: collidingLoser,
+          parkId: priorityLoserId,
+          slug: "taron",
+          queue_times_entity_id: "4711",
+          land_name: "Klugheim",
+          land_external_id: "land-klugheim",
+        },
+        {
+          id: movingLoser,
+          parkId: priorityLoserId,
+          slug: "chiapas",
+          queue_times_entity_id: "4712",
+          land_name: "Mexico",
+          land_external_id: "land-mexico",
+        },
+      ]);
+
+      await runPriorityMerge();
+
+      // A blind `UPDATE attractions SET "parkId" = $1 WHERE "parkId" = $2` is
+      // 23505 against the unique (parkId, slug) the moment both parks know a
+      // ride by the same slug. Rides move by id, never by park.
+      expect(
+        calls.filter(
+          (c) =>
+            /UPDATE\s+attractions\s+SET\s+"parkId"/i.test(c.sql) &&
+            /WHERE\s+"parkId"/i.test(c.sql),
+        ),
+      ).toEqual([]);
+      const movedById = calls.find((c) =>
+        /UPDATE\s+attractions\s+SET\s+"parkId"\s*=\s*\$1\s+WHERE\s+id\s*=\s*ANY/i.test(
+          c.sql,
+        ),
+      );
+      expect(movedById?.params).toEqual([priorityWinnerId, [movingLoser]]);
+
+      // The colliding loser is stamped onto its survivor, drained of its
+      // dependent rows, and only then deleted.
+      const stamps = attractionStamps(calls);
+      expect(stamps).toHaveLength(1);
+      expect(stamps[0].params).toEqual([
+        survivor,
+        "Klugheim",
+        "land-klugheim",
+        "4711",
+      ]);
+
+      const touched = dependencyTablesTouched(calls, collidingLoser);
+      for (const dep of ATTRACTION_DEPENDENCIES) {
+        expect(touched).toContain(dep.table);
+      }
+
+      const attractionDelete = calls.find((c) =>
+        /DELETE\s+FROM\s+attractions/i.test(c.sql),
+      );
+      expect(attractionDelete?.params).toEqual([[collidingLoser]]);
+      expect(calls.indexOf(stamps[0])).toBeLessThan(
+        calls.indexOf(attractionDelete!),
+      );
+      expect(calls.indexOf(attractionDelete!)).toBeLessThan(
+        indexOfParkDelete(calls),
+      );
+    });
+
+    it("aborts the whole merge where something is left behind, instead of committing the moves without the delete", async () => {
+      // Every child has just been moved or merged away, so a leftover means a
+      // concurrent insert. Keeping the park and committing anyway would leave
+      // every moved ride's denormalised parkId pointing at a park the survivor
+      // is not — `consolidateMergedPark` is the only thing that moves it, and
+      // it sits below this check. So the transaction rolls back instead.
+      const { calls } = recordTransaction((sql) => {
+        if (/SELECT id, "parkId", slug/.test(sql)) return [];
+        if (/SELECT\s*\n?\s*\(SELECT COUNT/.test(sql)) {
+          return [{ shows: "1", restaurants: "0", attractions: "0" }];
+        }
+        return [];
+      });
+      // Rejecting is the whole point and the only thing that separates this
+      // from an early `return`: a recording manager commits nothing either way,
+      // but a real transaction only rolls the reparenting back if the callback
+      // throws. So the inner method must reject...
+      await expect(runPriorityMerge()).rejects.toThrow(/non-empty/);
+
+      // ...and the wrapper must swallow exactly that, so one contested merge
+      // does not take the sync run with it.
+      const rejected = jest.fn();
+      await (
+        service as unknown as {
+          mergePriorityDuplicateLoserSafely: (
+            w: Park,
+            l: Park,
+          ) => Promise<void>;
+        }
+      )
+        .mergePriorityDuplicateLoserSafely(
+          createTestPark({ id: priorityWinnerId, name: "Phantasialand" }),
+          createTestPark({ id: priorityLoserId, name: "Phantasialand (QT)" }),
+        )
+        .catch(rejected);
+      expect(rejected).not.toHaveBeenCalled();
+
+      // Nothing past the count ran, so nothing was committed without its DELETE.
+      expect(indexOfParkDelete(calls)).toBe(-1);
+      expect(
+        calls.filter((c) => /UPDATE\s+park_occupancy/i.test(c.sql)),
+      ).toEqual([]);
+    });
+
+    it("refuses to merge a park into itself, whatever the call site believes", async () => {
+      // Every ride would collide with itself, so the whole park's attractions
+      // would go to consolidateMergedAttractions as their own losers and then
+      // be deleted, one statement before the park. Both sibling paths establish
+      // this before they call anything; this one may not depend on that.
+      const { calls } = primePriorityMerge([
+        {
+          id: "eeee6666-0000-0000-0000-000000000001",
+          parkId: priorityWinnerId,
+          slug: "taron",
+          queue_times_entity_id: null,
+          land_name: null,
+          land_external_id: null,
+        },
+      ]);
+      const samePark = createTestPark({
+        id: priorityWinnerId,
+        name: "Phantasialand",
+      });
+
+      await (
+        service as unknown as {
+          mergePriorityDuplicateLoser: (w: Park, l: Park) => Promise<void>;
+        }
+      ).mergePriorityDuplicateLoser(samePark, samePark);
+
+      expect(calls).toEqual([]);
+    });
+
+    it("is not reachable from syncParks: the priority merge's loser lookup can only miss", async () => {
+      // `existing` is read from the same map, falling back to a global findOne
+      // on the same externalId. A hit in either skips the duplicate branch, so
+      // standing in it means both missed and the map cannot answer — the branch
+      // is entered *because* no park carries this externalId. PAR-142 decides
+      // whether the block stays; this is what makes a change to the lookup fail
+      // loudly instead of quietly arming a park DELETE.
+      const { calls } = recordTransaction(() => []);
+
+      mockDestinationsService.findAll.mockResolvedValue({
+        data: [{ id: "dest-1" }],
+      });
+      mockDestinationsService.findByExternalId.mockResolvedValue({
+        id: "dest-1",
+      });
+      mockThemeParksClient.getDestinations.mockResolvedValue({
+        destinations: [{ id: "ext-dest-1", parks: [{ id: "ext-park-1" }] }],
+      });
+      mockThemeParksClient.getEntity.mockResolvedValue({ id: "ext-park-1" });
+      mockThemeParksMapper.mapPark.mockReturnValue({
+        externalId: "ext-park-1",
+        name: "Phantasialand",
+        slug: "phantasialand",
+        latitude: 50.8,
+        longitude: 6.87,
+        timezone: "Europe/Berlin",
+      });
+      // A name duplicate under a DIFFERENT externalId: the only shape that
+      // reaches the priority branch at all.
+      mockParkRepository.find.mockResolvedValue([
+        createTestPark({
+          id: priorityWinnerId,
+          externalId: "ext-park-other",
+          name: "Phantasialand",
+        }),
+      ]);
+      mockParkRepository.findOne.mockResolvedValue(null);
+      mockParkRepository.update.mockResolvedValue({ affected: 1 });
+      mockScheduleRepository.count.mockResolvedValue(0);
+      mockParkRepository.query.mockResolvedValue([]);
+      mockParkRepository.manager.query.mockResolvedValue([]);
+
+      await service.syncParks();
+
+      // First: prove the run actually stood in the priority branch, or the two
+      // absences below are green for the wrong reason. Only that branch keeps
+      // an existing park without a matching externalId — had the name-duplicate
+      // detection or the priority comparison not fired, `existing` would still
+      // be null and the incoming park would have been inserted instead.
+      expect(mockParkRepository.save).not.toHaveBeenCalled();
+      expect(mockParkRepository.update).toHaveBeenCalledWith(
+        priorityWinnerId,
+        expect.objectContaining({ name: "Phantasialand" }),
+      );
+
+      // And there, the loser lookup missed: no park was merged away, no
+      // statement inside a transaction, no DELETE outside one either.
+      expect(calls).toEqual([]);
+      expect(mockParkRepository.delete).not.toHaveBeenCalled();
     });
 
     it("keeps the survivor's own park_p50_baseline and inherits the ghost's only when it has none", async () => {
