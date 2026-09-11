@@ -1,4 +1,24 @@
 import { ForecastAccuracyService } from "./forecast-accuracy.service";
+import { ForecastAccuracyProfile } from "../entities/forecast-accuracy-profile.entity";
+
+/** A profile row with only the fields the lookup and its callers read. */
+const cell = (
+  predictedBand: string,
+  leadBucket: string,
+  mae: number,
+  sampleSize = 1000,
+): ForecastAccuracyProfile =>
+  ({
+    predictedBand,
+    leadBucket,
+    mae,
+    sampleSize,
+    meanActual: 40,
+    computedAt: new Date("2026-09-11T03:10:00Z"),
+  }) as ForecastAccuracyProfile;
+
+const profileOf = (...rows: ForecastAccuracyProfile[]) =>
+  new Map(rows.map((r) => [`${r.predictedBand}|${r.leadBucket}`, r]));
 
 /**
  * The two pure classifiers. They are static and tiny, and they decide which
@@ -63,6 +83,79 @@ describe("ForecastAccuracyService.bandFor", () => {
     // A 0-minute prediction is a prediction. It bands `quiet` and gets `quiet`'s
     // measured error; it must not fall out of the profile.
     expect(ForecastAccuracyService.bandFor(0)).toBe("quiet");
+  });
+});
+
+describe("ForecastAccuracyService.lookup", () => {
+  /** The full grid the nightly rebuild writes once this ships. */
+  const full = profileOf(
+    cell("quiet", "d1", 8.6),
+    cell("quiet", "d3", 8.7),
+    cell("quiet", "d7", 9.0),
+    cell("quiet", "d14", 9.9),
+    cell("quiet", "d30", 10.7),
+    cell("quiet", "d60", 12.5),
+    cell("busy", "d1", 21.5),
+    cell("busy", "d3", 21.6),
+    cell("busy", "d14", 24.3),
+  );
+
+  it("returns the exact cell for the distance and band", () => {
+    expect(full.size).toBe(9);
+    expect(ForecastAccuracyService.lookup(full, 10, 3)?.mae).toBe(8.7);
+    expect(ForecastAccuracyService.lookup(full, 90, 1)?.mae).toBe(21.5);
+    expect(ForecastAccuracyService.lookup(full, 10, 60)?.mae).toBe(12.5);
+  });
+
+  it("widens to the next coarser bucket when the exact cell is missing", () => {
+    // `busy` has no d7 row here, so a 5-day question takes d14 — a longer
+    // distance and therefore a larger error, never a shorter one.
+    expect(ForecastAccuracyService.lookup(full, 90, 5)?.leadBucket).toBe("d14");
+    expect(ForecastAccuracyService.lookup(full, 90, 5)?.mae).toBe(24.3);
+  });
+
+  it("survives the day after a deploy that adds a bucket", () => {
+    // THE REGRESSION THIS METHOD EXISTS FOR. `rebuild()` replaces the grid once a
+    // night, so right after a deploy production still holds the previous four
+    // buckets. A plain `band|bucket` get would miss on the two new keys and drop
+    // a measured day to `unmeasured`; widening keeps a figure on the wire.
+    const preDeploy = profileOf(
+      cell("quiet", "d1", 8.6),
+      cell("quiet", "d7", 9.0),
+      cell("quiet", "d30", 10.7),
+      cell("quiet", "d60", 12.5),
+    );
+    // 2 days out wants the new `d3`; 10 days out wants the new `d14`.
+    expect(ForecastAccuracyService.lookup(preDeploy, 10, 2)?.leadBucket).toBe(
+      "d7",
+    );
+    expect(ForecastAccuracyService.lookup(preDeploy, 10, 10)?.leadBucket).toBe(
+      "d30",
+    );
+    // And the pre-existing distances are untouched.
+    expect(ForecastAccuracyService.lookup(preDeploy, 10, 1)?.leadBucket).toBe(
+      "d1",
+    );
+  });
+
+  it("never reaches past the last bucket", () => {
+    // Past 60 days there is no measurement at all, and widening must not invent
+    // one by handing back the 60-day cell.
+    expect(ForecastAccuracyService.lookup(full, 10, 61)).toBeUndefined();
+    expect(ForecastAccuracyService.lookup(full, 10, 365)).toBeUndefined();
+  });
+
+  it("returns undefined for a band with no rows at any distance", () => {
+    // `mid` is absent from the fixture entirely.
+    expect(ForecastAccuracyService.lookup(full, 45, 7)).toBeUndefined();
+  });
+
+  it("returns undefined on an empty profile rather than throwing", () => {
+    expect(ForecastAccuracyService.lookup(new Map(), 45, 7)).toBeUndefined();
+  });
+
+  it("returns undefined for a distance in the past", () => {
+    expect(ForecastAccuracyService.lookup(full, 10, -1)).toBeUndefined();
   });
 });
 

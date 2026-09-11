@@ -158,4 +158,42 @@ export class ForecastAccuracyService {
     if (predictedWait >= 30) return "mid";
     return "quiet";
   }
+
+  /**
+   * The measured cell for a ride, or undefined when this distance has none.
+   *
+   * Looks up `band|bucket` and, if that cell is absent, WIDENS to the next
+   * coarser bucket that is present. Two reasons it is a method rather than a
+   * string built at the call site:
+   *
+   * 1. **The stored grid and this code are deployed separately.** `rebuild()`
+   *    replaces the table wholesale once a night, so between a deploy that adds a
+   *    bucket and the next nightly run the table still holds the previous set. A
+   *    plain lookup returns nothing for the new keys, and `/plan/day` would drop
+   *    from a measured figure to `unmeasured` for up to a day — at distances that
+   *    reported one before the deploy. That is a silent regression, and it is
+   *    exactly what adding `d3` and `d14` would have caused.
+   * 2. A bucket that stops being measurable disappears from the table by design
+   *    (see `rebuild()`), so an absent cell is a normal state and not an error.
+   *
+   * Widening rather than narrowing is the safe direction: a coarser bucket is a
+   * longer distance and therefore a LARGER error, so the answer errs towards "at
+   * least this wrong" — the same reasoning `PredictionLeadSnapshotService`
+   * applies from the other side. It never reaches past the last bucket, so past
+   * 60 days the answer stays undefined.
+   */
+  static lookup(
+    profile: Map<string, ForecastAccuracyProfile>,
+    predictedWait: number,
+    leadDays: number,
+  ): ForecastAccuracyProfile | undefined {
+    const band = ForecastAccuracyService.bandFor(predictedWait);
+    if (leadDays < 0) return undefined;
+    for (const bucket of LEAD_BUCKETS) {
+      if (leadDays > bucket.maxDays) continue;
+      const cell = profile.get(`${band}|${bucket.key}`);
+      if (cell) return cell;
+    }
+    return undefined;
+  }
 }

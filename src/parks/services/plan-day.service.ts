@@ -7,6 +7,7 @@ import { MLService } from "../../ml/ml.service";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { PredictionLeadSnapshotService } from "../../ml/services/prediction-lead-snapshot.service";
 import { ForecastAccuracyService } from "../../ml/services/forecast-accuracy.service";
+import { ForecastAccuracyProfile } from "../../ml/entities/forecast-accuracy-profile.entity";
 import { ParkHistoricalStatsService } from "../../analytics/park-historical-stats.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { AttractionHourlyHistory } from "../../analytics/entities/attraction-hourly-history.entity";
@@ -417,9 +418,10 @@ export class PlanDayService {
     if (attractions.length === 0)
       return { tier: "composed", rides: [], accuracy: { basis: "unmeasured" } };
 
-    // How wrong a forecast at this distance usually is. Nine measured cells, so
-    // it is read whole and looked up per ride; `null` past the last bucket, which
-    // is the honest answer rather than the nearest one.
+    // How wrong a forecast at this distance usually is. Eighteen measured cells
+    // (three predicted bands × six lead buckets), so it is read whole and looked
+    // up per ride; `null` past the last bucket, which is the honest answer rather
+    // than the nearest one.
     const leadBucket = ForecastAccuracyService.bucketFor(leadDays);
     const accuracy = leadBucket
       ? await this.accuracyService.getProfile().catch((err: Error) => {
@@ -529,6 +531,10 @@ export class PlanDayService {
         : "long_range";
 
     const rides: PlanDayRideDto[] = [];
+    // The accuracy cells actually quoted, so `sampleSize` below counts the
+    // comparisons behind what was served rather than behind a bucket that may
+    // have been widened away from.
+    const usedCells = new Set<ForecastAccuracyProfile>();
     for (const attractionId of new Set([
       ...measured.hours.keys(),
       ...composed.keys(),
@@ -594,9 +600,13 @@ export class PlanDayService {
       const level = dayLevels.get(attractionId);
       const dayPeak =
         level?.predictedWaitTime ?? Math.max(...hours.map((p) => p.wait));
-      const cell = accuracy?.get(
-        `${ForecastAccuracyService.bandFor(dayPeak)}|${leadBucket}`,
-      );
+      // Widens to a coarser bucket when this distance's cell is absent — which
+      // is the normal state for the day after a deploy that adds a bucket, since
+      // the stored grid is only replaced by the nightly rebuild.
+      const cell = accuracy
+        ? ForecastAccuracyService.lookup(accuracy, dayPeak, leadDays)
+        : undefined;
+      if (cell) usedCells.add(cell);
       rides.push({
         attractionSlug: attraction.slug,
         attractionName: attraction.name,
@@ -640,11 +650,14 @@ export class PlanDayService {
                   scored.length) *
                   10,
               ) / 10,
-            sampleSize: leadBucket
-              ? [...(accuracy?.values() ?? [])]
-                  .filter((c) => c.leadBucket === leadBucket)
-                  .reduce((a, c) => a + c.sampleSize, 0)
-              : undefined,
+            // The comparisons behind the figures actually served, not behind the
+            // bucket this distance ideally wanted: `lookup` may have widened to a
+            // coarser one, and summing the ideal bucket would report 0 next to a
+            // `measured` basis on the day after a deploy that adds a bucket.
+            sampleSize:
+              usedCells.size > 0
+                ? [...usedCells].reduce((a, c) => a + c.sampleSize, 0)
+                : undefined,
           }
         : { basis: "unmeasured" };
 
