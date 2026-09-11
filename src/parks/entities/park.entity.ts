@@ -276,6 +276,15 @@ export class Park {
    * Ingest-side only, and therefore absent from the API payload: it describes a
    * source's formatting, not the park. What a reader sees of it is the corrected
    * closing time.
+   *
+   * **Per park, not per source**, and that is a real limit rather than an
+   * oversight. Four writers reach `saveScheduleData` — the ThemeParks.wiki
+   * metadata sync, its live-data fallback, and the Wartezeiten.app daily sync —
+   * and the flag applies to whichever of them writes next. It holds today
+   * because a park is fed by one schedule source in practice (Wartezeiten.app
+   * covers German parks, the flagged ones are not among them). A park fed by
+   * two sources, only one of which misprints midnight, would need this on the
+   * source instead.
    */
   @Column({
     name: "curated_uses_twelve_hour_clock",
