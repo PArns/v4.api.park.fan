@@ -359,11 +359,35 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   -- the DAY rather than the window identity is what makes that one operating
   -- day, which is the rule as written.
   --
-  -- The same value leaves as "startOpDay", which the processor uses to key
-  -- outage starts into attraction_exposure_days. That table's op_day has
-  -- always come from win, so a midnight-wrap gap used to file itself under a
-  -- day the exposure table has no row for — the exact trap the processor's own
-  -- comment describes for statement 1.
+  -- ## What the fallback does at a window's edge, and why it is left there
+  --
+  -- An edge outside every window takes the calendar day, so a gap that STARTS
+  -- inside opening hours and ENDS after the close is judged by comparing the
+  -- start's operating day against the end's calendar day. In an ordinary park
+  -- those two are the same date and the gap is kept — which is exactly what
+  -- the old code did, by coincidence rather than by rule. In a park that
+  -- closes after midnight they differ, so a gap opening at 01:50 and
+  -- recovering at 02:10 past a 02:00 close is now dropped where the old
+  -- comparison kept it.
+  --
+  -- Deliberate, and in the direction this file always takes: the ride shut ten
+  -- minutes before the end of the operating day and "came back" after it,
+  -- which is the shape MIN_PARK_MINUTES_LEFT refuses live. Withholding a
+  -- doubtful fault beats publishing a timetable as one.
+  --
+  -- The alternative was to define the operating day as [opens_at, NEXT
+  -- window's opens_at) rather than [opens_at, closes_at), which would have
+  -- kept it — and would also have admitted an ordinary park's overnight
+  -- closure (shut 17:50, an OPERATING reading at 03:50, ten hours, inside
+  -- MAX_GAP_HOURS), i.e. precisely what the same-day filter exists to remove.
+  -- Containment is the conservative half of that trade.
+  --
+  -- The value leaves as "startOpDay". Nothing reads that column for a closure
+  -- gap today — the processor builds its starts map from statement 1 only —
+  -- but statement 1's own startOpDay IS keyed into attraction_exposure_days,
+  -- whose op_day has always come from win, and this is the same quantity in
+  -- the same units as that one. A calendar day here was a second notion of
+  -- "the day of an outage" in a job that writes both.
   gap_edges AS (
     SELECT s.aid, s.pid, s.tz, s.ts, s.next_ts,
            COALESCE(wo.op_day, (s.ts AT TIME ZONE s.tz)::date)
@@ -723,6 +747,21 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        AND sm.closers <= ${MAX_SIMULTANEOUS_CLOSERS}
      WHERE r.st = 'OPERATING'
        AND r.ts < s.started_at
+       -- STILL THE CALENDAR DAY, where the nightly twin now takes the day from
+       -- the window that contains the reading. A park closing after midnight
+       -- therefore keeps this gate shut all night: park_open normalizes and
+       -- returns a row at 00:30, and this line throws the ride out anyway
+       -- because its last OPERATING reading carries yesterday's date. La Ronde,
+       -- every night of its season.
+       --
+       -- Not fixed here on purpose, and the reason is not the two lines. This
+       -- statement needs the operating day of an ARBITRARY instant across 30
+       -- days rather than of now, so park_day_close has to carry the opening
+       -- and open_today, cycle and early_end all move with it — inside the
+       -- statement that measured 79 % of the database's CPU, whose plan rests
+       -- on InitPlans and one materialised CTE. That is an EXPLAIN ANALYZE
+       -- against real data, not an edit. PAR-129 carries it, with the
+       -- measurements it owes.
        AND (r.ts AT TIME ZONE $2)::date = (s.started_at AT TIME ZONE $2)::date
        -- Winding down with the park is not breaking.
        AND po.closes_at >= s.started_at
@@ -810,8 +849,18 @@ export const CURRENT_CLOSURE_GAP_SQL = `
          WHERE f.st = 'CLOSED'
            AND f.prev_st = 'OPERATING'
            AND f.next_st = 'OPERATING'
-           -- The SAME bounds raw_gaps applies, and the comment above claimed
-           -- these were already here. Without them a ride that shuts at night
+           -- The same bounds raw_gaps applies — with one exception since the
+           -- nightly statement moved to the operating day: raw_gaps compares
+           -- window-derived days here, this still compares calendar dates. The
+           -- two agree for every park that closes before midnight, which is
+           -- almost all of them, and diverge for the rest — so the same ride
+           -- can count a different number of gap_days against the same
+           -- MAX_GAP_DAY_SHARE on the two sides. PAR-129, together with the
+           -- open_today gate above; the note is here so the divergence is
+           -- written down rather than inferred from a diff.
+           --
+           -- The comment above claimed these bounds were already here before
+           -- they were. Without them a ride that shuts at night
            -- and opens next morning satisfies the triple, so every ordinary
            -- operating day counts as a gap day and the ratio converges on 1.0 —
            -- which would suppress the live line for exactly the rides that have

@@ -207,10 +207,23 @@ export class DowntimeReconstructionProcessor {
     // without being in that set: the closure-gap statement serves `blind_parks`
     // and, unlike `tracked`, does not exclude free-flow rides.
     //
-    // The direction of the remaining gap is deliberate. A ride still in the
-    // population that produced nothing this run keeps what it had, rather than
-    // having it deleted — a stale row a later run can still correct, against a
-    // loss no run can undo.
+    // The direction of the remaining gap is deliberate, and it is worth being
+    // precise about how wide it is. A ride that produced nothing at all this
+    // run keeps what it had rather than having it deleted. For anything in
+    // `tracked` that is not a gap: the ride still gets an exposure row for
+    // every operating day its park published, so it is covered and its window
+    // is still rewritten whole — which is what lets a ride that has newly
+    // crossed `MAX_GAP_DAY_SHARE` lose its stored gaps.
+    //
+    // What is left is the one population that is written without being
+    // tracked: a free-flow (`open_with_park`) ride in a blind park, which the
+    // closure-gap statement does not exclude and the exposure statement does.
+    // If such a ride stops producing gaps, its `closed_gap` rows stay until the
+    // 400-day prune. Nothing published reads them — the profile, coverage and
+    // recovery-curve queries all filter `signal = 'down'`, as `closure-gap.sql`
+    // says in its own docblock — so today that costs a row and no figure. It is
+    // still the right trade if that ever changes: a stale row a later run can
+    // correct, against a loss no run can undo.
     //
     // `idx_attraction_outages_ride` is (`attractionId`, `started_at`), and the
     // exposure table's primary key is (`attractionId`, `op_day`), so the

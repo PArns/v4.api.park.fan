@@ -160,10 +160,17 @@ describe("DowntimeReconstructionProcessor", () => {
   };
 
   it("deletes only the rides this run covered, so a ride that left `tracked` keeps its history", async () => {
-    // `kept` is the ride that fell out: it has stored rows in the window from
-    // an earlier run and appears in nothing this one returned. Under the old
-    // park-wide predicate its rows went with everybody else's and were never
-    // written back.
+    // The ride that fell out is not a fixture and cannot be: it exists only as
+    // rows in a table the processor never reads. What the processor decides is
+    // the PREDICATE, so what has to be pinned is that the predicate is an
+    // allowlist and that it is closed — every id in it came from this run's
+    // results, so any id that did not (a merged, retired or newly free-flow
+    // ride) is untouched by construction.
+    //
+    // Asserting exact equality rather than `arrayContaining` is the whole
+    // point. A containment check passes just as well on the old park-wide
+    // delete with an extra `= ANY(...)` bolted on that happens to list
+    // everybody, and it passes on any future widening of the set.
     await run({
       intervals: [interval("ride-down")],
       exposure: [exposureDay("ride-down"), exposureDay("ride-quiet")],
@@ -172,9 +179,10 @@ describe("DowntimeReconstructionProcessor", () => {
     const { outages, exposure } = deletes();
     for (const del of [outages, exposure]) {
       expect(del.sql).toContain('"attractionId" = ANY($3::uuid[])');
-      const ids = del.params[2] as string[];
-      expect(ids).toEqual(expect.arrayContaining(["ride-down", "ride-quiet"]));
-      expect(ids).not.toContain("ride-gone");
+      expect([...(del.params[2] as string[])].sort()).toEqual([
+        "ride-down",
+        "ride-quiet",
+      ]);
     }
   });
 

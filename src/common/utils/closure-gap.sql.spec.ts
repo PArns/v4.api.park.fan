@@ -27,9 +27,25 @@ describe("closure-gap statements", () => {
   ] as const;
 
   it("the live statement recognises a gap as a same-park-local-day return", () => {
+    // This used to run over both statements. It does not any more, and the
+    // split is the point rather than an oversight: the nightly statement takes
+    // its day from the window that contains the reading, this one still takes
+    // the calendar date, and the assertion below is what keeps that a written
+    // decision instead of a silent drift.
+    //
+    // A gap in a park closing after midnight is therefore filed in the history
+    // and invisible on the live surface, and the two count different gap_days
+    // against the same MAX_GAP_DAY_SHARE. PAR-129 carries the repair, which
+    // needs an EXPLAIN ANALYZE against real data rather than an edit — the
+    // whole plan of this statement rests on InitPlans and one materialised
+    // CTE. When it lands, this test moves to the operating-day form and the
+    // two go back to being asserted together.
     expect(CURRENT_CLOSURE_GAP_SQL).toMatch(
       /AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/,
     );
+    // And the divergence is named where a reader of the SQL will hit it,
+    // not only here.
+    expect(CURRENT_CLOSURE_GAP_SQL).toContain("PAR-129");
   });
 
   it("the nightly statement keys the return on the OPERATING day, not the calendar", () => {
