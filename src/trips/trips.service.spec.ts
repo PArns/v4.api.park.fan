@@ -2,6 +2,7 @@ import { Test } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { TripsService } from "./trips.service";
 import { Trip } from "./entities/trip.entity";
+import { PushSubscription } from "../push/entities/push-subscription.entity";
 
 /**
  * The id is the whole of the authorisation, so the properties worth pinning are
@@ -12,9 +13,130 @@ import { Trip } from "./entities/trip.entity";
 describe("TripsService", () => {
   let service: TripsService;
   let rows: Map<string, Trip>;
+  /** `push_subscriptions`, only the two columns `remove` is allowed to touch. */
+  let subscriptions: Array<{
+    endpoint: string;
+    tripId: string | null;
+    topics: string[];
+  }>;
+  /** True only while the transaction callback is running. */
+  let inTransaction: boolean;
+  /** The fake `EntityManager`, so a test can make one statement misbehave. */
+  let manager: {
+    transaction: jest.Mock;
+    findOne: jest.Mock;
+    save: jest.Mock;
+    update: jest.Mock;
+    delete: jest.Mock;
+    createQueryBuilder: jest.Mock;
+  };
 
   beforeEach(async () => {
     rows = new Map();
+    subscriptions = [];
+    inTransaction = false;
+
+    // Every write `remove` makes has to happen through this manager, and the
+    // guards below fail the test if one escapes the transaction: a cleared
+    // pointer that commits without the delete leaves a plan nobody is told
+    // about, and a delete that commits without the clear leaves the
+    // five-minute job walking a trip that is gone.
+    manager = {
+      transaction: jest.fn(async (run: (m: unknown) => Promise<unknown>) => {
+        inTransaction = true;
+        try {
+          return await run(manager);
+        } finally {
+          inTransaction = false;
+        }
+      }),
+      findOne: jest.fn(
+        async (entity: unknown, { where }: { where: { id: string } }) => {
+          if (entity !== Trip)
+            throw new Error("findOne against a foreign table");
+          return rows.get(where.id) ?? null;
+        },
+      ),
+      save: jest.fn(async (trip: Trip) => {
+        if (!inTransaction) throw new Error("save outside the transaction");
+        const stored: Trip = { ...trip };
+        stored.createdAt ??= new Date();
+        stored.updatedAt = new Date();
+        rows.set(stored.id, stored);
+        return stored;
+      }),
+      update: jest.fn(
+        async (
+          entity: unknown,
+          where: { tripId: string },
+          patch: { tripId: null; topics: string[] },
+        ) => {
+          if (!inTransaction) throw new Error("update outside the transaction");
+          // The entity is checked, not ignored: swapping the two tables round
+          // would delete a browser's subscription and cascade its ride alerts
+          // away, and every assertion below would still pass.
+          if (entity !== PushSubscription) {
+            throw new Error("update against the wrong table");
+          }
+          let affected = 0;
+          for (const row of subscriptions) {
+            if (row.tripId !== where.tripId) continue;
+            row.tripId = patch.tripId;
+            row.topics = patch.topics;
+            affected++;
+          }
+          return { affected };
+        },
+      ),
+      delete: jest.fn(
+        async (entity: unknown, criteria: string | { expiresAt: unknown }) => {
+          if (!inTransaction) throw new Error("delete outside the transaction");
+          if (entity !== Trip)
+            throw new Error("delete against the wrong table");
+          if (typeof criteria === "string") {
+            return { affected: rows.delete(criteria) ? 1 : 0 };
+          }
+          // The sweep: everything already past its expiry.
+          let affected = 0;
+          const now = Date.now();
+          for (const [id, row] of [...rows]) {
+            if (row.expiresAt.getTime() >= now) continue;
+            rows.delete(id);
+            affected++;
+          }
+          return { affected };
+        },
+      ),
+      // The sweep's pointer clear is one set-based statement, so the fake
+      // reproduces its predicate rather than its SQL: every subscription whose
+      // `tripId` no longer resolves to a row in `trips`.
+      createQueryBuilder: jest.fn(() => ({
+        update: (entity: unknown) => {
+          if (entity !== PushSubscription) {
+            throw new Error("sweep cleared the wrong table");
+          }
+          return {
+            set: (patch: { tripId: null; topics: string[] }) => ({
+              where: () => ({
+                andWhere: () => ({
+                  execute: async () => {
+                    if (!inTransaction) {
+                      throw new Error("sweep cleared outside the transaction");
+                    }
+                    for (const row of subscriptions) {
+                      if (!row.tripId) continue;
+                      if (rows.has(row.tripId)) continue;
+                      row.tripId = patch.tripId;
+                      row.topics = patch.topics;
+                    }
+                  },
+                }),
+              }),
+            }),
+          };
+        },
+      })),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -36,6 +158,7 @@ describe("TripsService", () => {
               return rows.get(where.id) ?? null;
             }),
             delete: jest.fn(async () => ({ affected: 0 })),
+            manager,
           },
         },
       ],
@@ -94,6 +217,24 @@ describe("TripsService", () => {
     expect(found?.payload).toEqual({ version: 2, parks: { b: { slug: "b" } } });
   });
 
+  it("takes the row before replacing a plan, inside the transaction", async () => {
+    const created = await service.create(plan());
+    manager.save.mockClear();
+
+    await service.update(created.id, plan());
+
+    // Both halves matter and neither is ceremony. `save()` INSERTs when the row
+    // it loaded has gone, so a PUT racing a DELETE would put the plan back at
+    // the same id with a fresh 400-day expiry — after the browser dropped the
+    // id. And a save on the repository rather than on the transaction's manager
+    // would commit on its own, outside the lock that makes the read meaningful.
+    expect(manager.findOne).toHaveBeenCalledWith(
+      Trip,
+      expect.objectContaining({ lock: { mode: "pessimistic_write" } }),
+    );
+    expect(manager.save).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses to create a trip at an id the caller chose", async () => {
     // Otherwise an attacker picks their own ids, and with them overwrites a
     // trip by guessing one.
@@ -121,5 +262,169 @@ describe("TripsService", () => {
 
   it("answers null for an id that was never issued", async () => {
     expect(await service.find("nope")).toBeNull();
+  });
+
+  describe("remove", () => {
+    it("deletes the trip and clears the subscriptions pointing at it", async () => {
+      const created = await service.create(plan());
+      const other = await service.create(plan());
+      subscriptions.push(
+        {
+          endpoint: "https://push.example/a",
+          tripId: created.id,
+          topics: ["x"],
+        },
+        {
+          endpoint: "https://push.example/b",
+          tripId: created.id,
+          topics: ["y"],
+        },
+        { endpoint: "https://push.example/c", tripId: other.id, topics: ["z"] },
+      );
+
+      expect(await service.remove(created.id)).toBe(true);
+
+      expect(rows.has(created.id)).toBe(false);
+      // The subscription row survives — it is the browser's, not the trip's,
+      // and it still carries that browser's ride alerts and followed shows.
+      expect(subscriptions).toHaveLength(3);
+      expect(
+        subscriptions.filter((row) => row.tripId === created.id),
+      ).toHaveLength(0);
+      expect(subscriptions[0].topics).toEqual([]);
+      // A second trip's subscriber is untouched, so the clear is scoped to the
+      // id and is not an unscoped wipe that happens to pass the assertion above.
+      expect(subscriptions[2]).toEqual({
+        endpoint: "https://push.example/c",
+        tripId: other.id,
+        topics: ["z"],
+      });
+      expect(rows.has(other.id)).toBe(true);
+    });
+
+    it("removes a trip nobody subscribed to", async () => {
+      const created = await service.create(plan());
+      expect(await service.remove(created.id)).toBe(true);
+      expect(rows.has(created.id)).toBe(false);
+    });
+
+    it("reports an id that was never issued as nothing to remove", async () => {
+      expect(await service.remove("an-id-nobody-made")).toBe(false);
+    });
+
+    it("leaves an expired trip to the sweep, and writes nothing", async () => {
+      const created = await service.create(plan());
+      subscriptions.push({
+        endpoint: "https://push.example/a",
+        tripId: created.id,
+        topics: ["x"],
+      });
+      rows.get(created.id)!.expiresAt = new Date(Date.now() - 1000);
+
+      // `find` is the only place that decides what exists, so an expired trip
+      // is absent here exactly as it is on GET and PUT.
+      expect(await service.remove(created.id)).toBe(false);
+      expect(rows.has(created.id)).toBe(true);
+      expect(subscriptions[0].tripId).toBe(created.id);
+    });
+
+    it("takes the row before writing, and takes it before the subscriptions", async () => {
+      const created = await service.create(plan());
+      subscriptions.push({
+        endpoint: "https://push.example/a",
+        tripId: created.id,
+        topics: ["x"],
+      });
+
+      await service.remove(created.id);
+
+      // Without the lock a PUT in flight would `save()` the plan back at the
+      // same id with a fresh 400-day expiry — after the browser had already
+      // dropped the id, which is the state this endpoint exists to prevent.
+      expect(manager.findOne).toHaveBeenCalledWith(
+        Trip,
+        expect.objectContaining({ lock: { mode: "pessimistic_write" } }),
+      );
+      // And `trips` before `push_subscriptions`, the order `sweepExpired`
+      // takes them in. The other way round the two deadlock.
+      expect(manager.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+        manager.update.mock.invocationCallOrder[0],
+      );
+      expect(manager.update.mock.invocationCallOrder[0]).toBeLessThan(
+        manager.delete.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("clears nothing when a concurrent delete got there first", async () => {
+      const created = await service.create(plan());
+      subscriptions.push({
+        endpoint: "https://push.example/a",
+        tripId: created.id,
+        topics: ["x"],
+      });
+      // The winner committed while this one waited for the row.
+      rows.delete(created.id);
+
+      expect(await service.remove(created.id)).toBe(false);
+      expect(manager.update).not.toHaveBeenCalled();
+      expect(subscriptions[0].tripId).toBe(created.id);
+    });
+  });
+
+  describe("sweepExpired", () => {
+    it("clears the pointers at the trips it deletes", async () => {
+      const stale = await service.create(plan());
+      const live = await service.create(plan());
+      rows.get(stale.id)!.expiresAt = new Date(Date.now() - 1000);
+      subscriptions.push(
+        { endpoint: "https://push.example/a", tripId: stale.id, topics: ["x"] },
+        { endpoint: "https://push.example/b", tripId: live.id, topics: ["y"] },
+      );
+
+      expect(await service.sweepExpired()).toBe(1);
+
+      expect(rows.has(stale.id)).toBe(false);
+      expect(rows.has(live.id)).toBe(true);
+      // Otherwise the five-minute notification job walks this subscription for
+      // the life of the browser, for a trip that is gone.
+      expect(subscriptions[0]).toMatchObject({ tripId: null, topics: [] });
+      // And the live trip's subscriber is untouched.
+      expect(subscriptions[1]).toMatchObject({
+        tripId: live.id,
+        topics: ["y"],
+      });
+    });
+
+    it("collects pointers orphaned by every sweep before this one", async () => {
+      // Those sweeps deleted trips and cleared nothing, so there are rows out
+      // there holding an id that was never in `trips` during this process's
+      // lifetime. Asking which pointers no longer resolve collects them without
+      // a migration; asking which trips this run deleted never would.
+      subscriptions.push({
+        endpoint: "https://push.example/old",
+        tripId: "aTripSweptLongAgo",
+        topics: ["x"],
+      });
+
+      expect(await service.sweepExpired()).toBe(0);
+
+      expect(subscriptions[0]).toMatchObject({ tripId: null, topics: [] });
+    });
+
+    it("deletes the trips before it touches the subscriptions", async () => {
+      const stale = await service.create(plan());
+      rows.get(stale.id)!.expiresAt = new Date(Date.now() - 1000);
+
+      await service.sweepExpired();
+
+      // Same order as `remove`, in one transaction. The other way round the two
+      // deadlock on the pair, and Postgres answers that by aborting one of
+      // them — a visitor's delete with a 500, or the nightly sweep with
+      // nothing swept.
+      expect(manager.transaction).toHaveBeenCalledTimes(1);
+      expect(manager.delete.mock.invocationCallOrder[0]).toBeLessThan(
+        manager.createQueryBuilder.mock.invocationCallOrder[0],
+      );
+    });
   });
 });

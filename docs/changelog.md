@@ -6,6 +6,52 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — `DELETE /v1/trips/{id}`
+
+A stored plan can be deleted. The endpoint exists because of what happens without
+it: the browser forgets the trip id when the visitor switches push off, so the
+row stayed for the remaining `TTL_DAYS = 400` — reachable by anybody who still
+had the id from a log, a backup or an old device, and by its owner not at all.
+Switching off made a plan unreachable rather than gone.
+
+Same authorisation as the `PUT`, because there is only one: whoever knows the id
+may. **204** when the row goes, **404** when nothing is behind the id, **429**
+over the write limit. A malformed id answers 404 like it does on `GET`/`PUT` and
+never reaches the database — 400 would say which ids are shaped like real ones,
+on a route whose whole security model is that an id is a secret. An expired trip
+answers 404 and is left to the sweep, so `TripsService.find` stays the only place
+that decides what exists.
+
+The delete clears the `tripId` on every push subscription pointing at the trip,
+in the **same transaction**, and keeps those rows — a subscription is the
+browser's rather than the trip's, and the same row carries that browser's ride
+alerts and followed shows, which hang off `subscriptionId`. It is what
+`PushService.unsubscribe(endpoint, tripId)` already does for one endpoint, one
+level wider. Splitting the two writes would leave either a plan nobody is told
+about or a subscription the five-minute job walks forever for a trip that is
+gone.
+
+Counted against the **update** bucket, not a third one: an id the caller already
+had to know, no new row, and a separate bucket would be a fresh allowance for
+guessing ids.
+
+Three things around it moved with it, each one a way the new verb could have
+been undone:
+
+- **`update()` now takes the row before writing it.** `save()` INSERTs when the
+  row it loaded has since gone, so a `PUT` in flight while somebody deleted
+  their plan put it back — same id, fresh 400-day expiry, after the browser had
+  already dropped the id. Unreachable to its owner, readable by anyone who kept
+  it: the exact state the delete exists to prevent.
+- **`sweepExpired()` clears pointers too, and asks which no longer resolve**
+  rather than which trips it just deleted. Every sweep before this one deleted
+  trips and cleared nothing, so the question in that form also collects the
+  orphans already out there, without a migration.
+- **`trips` is locked before `push_subscriptions` in all three.** The sweep held
+  them in the opposite order to the delete, which is a deadlock Postgres
+  resolves by aborting one — a visitor's delete answering 500, or a night with
+  nothing swept.
+
 ### Fixed — `/plan/day`'s docs promised "every ride", and the 60-ride cap had never been measured
 
 Documentation only; no behaviour changed, and nothing needed to.

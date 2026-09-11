@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpException,
@@ -126,6 +127,46 @@ export class TripsController {
     );
     if (!trip) throw new HttpException("Trip not found", HttpStatus.NOT_FOUND);
     return TripsController.present(trip);
+  }
+
+  @Delete(":id")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: "Delete a stored plan",
+    description:
+      "Same rule as the PUT: whoever knows the id may. The browser forgets the " +
+      "id when the visitor switches push off, so without this the plan would " +
+      "become unreachable to its owner rather than gone, while anyone who kept " +
+      "the id could still read and overwrite it for the rest of its 400 days. " +
+      "Clears the `tripId` on every push subscription pointing here in the same " +
+      "transaction, but keeps those rows: the same subscription also carries " +
+      "that browser's ride alerts and followed shows.",
+  })
+  @ApiParam({ name: "id", example: "n7Qk2Fd3Xb9pLmZa" })
+  @ApiResponse({ status: 204, description: "The trip is gone." })
+  @ApiResponse({
+    status: 404,
+    description:
+      "No such trip — an id that was never issued, one already deleted, one " +
+      "that has expired, or one that cannot be a trip id at all.",
+  })
+  @ApiResponse({
+    status: 429,
+    description: "Too many writes from this address.",
+  })
+  async remove(
+    @Param("id") id: string,
+    @Req() request: Request,
+  ): Promise<void> {
+    // The update bucket, not a third one: like a PUT this needs an id the
+    // caller already had to know and it does not add a row, so it is the
+    // cheaper of the two limits — and a separate bucket would let a script
+    // spend a fresh allowance guessing ids.
+    await this.guard(request, "update");
+    const removed = await this.tripsService.remove(TripsController.tripId(id));
+    if (!removed) {
+      throw new HttpException("Trip not found", HttpStatus.NOT_FOUND);
+    }
   }
 
   /** The limiter, before any work. Throws 429 with a `Retry-After` figure. */

@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { LessThan, Repository } from "typeorm";
 import { randomBytes } from "crypto";
 import { Trip } from "./entities/trip.entity";
+import { PushSubscription } from "../push/entities/push-subscription.entity";
 
 /**
  * Reading and writing a stored plan.
@@ -51,8 +52,20 @@ export class TripsService {
    */
   async find(id: string): Promise<Trip | null> {
     const trip = await this.tripRepository.findOne({ where: { id } });
+    return TripsService.live(trip, Date.now());
+  }
+
+  /**
+   * The one place a row becomes a trip that exists.
+   *
+   * All three of `find`, `update` and `remove` need it, and the two writers ask
+   * inside their own transaction, so the rule is here rather than copied — two
+   * copies would be free to disagree about what "expired" means, on the same
+   * id, between two verbs of one route.
+   */
+  private static live(trip: Trip | null, nowMs: number): Trip | null {
     if (!trip) return null;
-    if (trip.expiresAt.getTime() <= Date.now()) return null;
+    if (trip.expiresAt.getTime() <= nowMs) return null;
     return trip;
   }
 
@@ -68,24 +81,128 @@ export class TripsService {
    * instead of quietly creating a trip at an id the caller chose. That would
    * hand an attacker the ability to pick their own ids, and with it the ability
    * to overwrite a trip by guessing one.
+   *
+   * **The row is taken before it is written**, which reads like ceremony for a
+   * single-row write and is what stops a PUT from undoing a DELETE. `save()`
+   * INSERTs when the row it loaded has since gone, so a write in flight while
+   * somebody deletes their plan would put it back, at the same id, with a fresh
+   * 400-day expiry — and the browser has already dropped that id, so the plan
+   * would be unreachable to its owner and readable by anyone who kept it. That
+   * is precisely the state the delete exists to prevent.
    */
   async update(
     id: string,
     payload: Record<string, unknown>,
   ): Promise<Trip | null> {
-    const trip = await this.find(id);
-    if (!trip) return null;
-    trip.payload = payload;
-    trip.expiresAt = TripsService.expiry();
-    return this.tripRepository.save(trip);
+    return this.tripRepository.manager.transaction(async (manager) => {
+      const trip = TripsService.live(
+        await manager.findOne(Trip, {
+          where: { id },
+          lock: { mode: "pessimistic_write" },
+        }),
+        Date.now(),
+      );
+      if (!trip) return null;
+      trip.payload = payload;
+      trip.expiresAt = TripsService.expiry();
+      return manager.save(trip);
+    });
   }
 
-  /** Rows past their expiry. Returns how many went. */
-  async sweepExpired(): Promise<number> {
-    const result = await this.tripRepository.delete({
-      expiresAt: LessThan(new Date()),
+  /**
+   * Delete a trip, and clear every pointer at it. `false` when there was
+   * nothing live at that id.
+   *
+   * Deleting matters because the alternative is worse than keeping the plan:
+   * the browser forgets the id when push is switched off, so the visitor can no
+   * longer reach the row while anybody who kept the id — a log, a backup, an old
+   * device — still can. Switching off would make a plan unreachable rather than
+   * gone.
+   *
+   * **The pointer is cleared, the subscription is not.** `push_subscriptions`
+   * carries a loose `tripId` — a plain column, no foreign key, because a trip
+   * has its own lifecycle and TTL — and the same row also serves that browser's
+   * ride alerts and followed shows, which hang off `subscriptionId`. So this
+   * does exactly what `PushService.unsubscribe(endpoint, tripId)` does for one
+   * endpoint, one level wider: `tripId: null, topics: []` for every subscriber
+   * of this trip. Deleting the row would take a browser's ride alerts with a
+   * plan it has nothing to do with.
+   *
+   * Both writes in one transaction: a cleared pointer without the delete leaves
+   * a plan nobody is told about, and a delete without the clear leaves
+   * subscriptions the five-minute job walks forever for a trip that is gone.
+   *
+   * An expired trip counts as absent and is left to `sweepExpired`, which
+   * clears the same pointers — `live` is the only place that decides what
+   * exists, for both verbs.
+   *
+   * The lookup happens INSIDE the transaction and takes the row, like the PUT:
+   * with the check outside, two deletes racing on one id would both see a trip
+   * and both answer 204 against a route that documents 404 for an id with
+   * nothing behind it, and a PUT could put the deleted plan back.
+   *
+   * `trips` is taken before `push_subscriptions`, and `sweepExpired` does the
+   * same in the same order. Two writers that lock the same pair the other way
+   * round deadlock, and Postgres resolves that by aborting one — here either a
+   * visitor's delete answering 500 or a skipped nightly sweep.
+   */
+  async remove(id: string): Promise<boolean> {
+    return this.tripRepository.manager.transaction(async (manager) => {
+      const trip = TripsService.live(
+        await manager.findOne(Trip, {
+          where: { id },
+          lock: { mode: "pessimistic_write" },
+        }),
+        Date.now(),
+      );
+      if (!trip) return false;
+
+      await manager.update(
+        PushSubscription,
+        { tripId: id },
+        { tripId: null, topics: [] },
+      );
+      await manager.delete(Trip, id);
+      return true;
     });
-    const removed = result.affected ?? 0;
+  }
+
+  /**
+   * Rows past their expiry. Returns how many went.
+   *
+   * Then clears every pointer left dangling, for the reason `remove` clears its
+   * own: a subscription holding the id of a trip that is gone is walked by the
+   * five-minute notification job for the life of the browser, and that job's
+   * `tripId IS NOT NULL` query cannot tell it from a live one.
+   *
+   * The clear asks **which pointers no longer resolve**, not which trips this
+   * run deleted. Two reasons, and the first is why it runs second: `trips`
+   * before `push_subscriptions` is the order `remove` takes them in, and two
+   * writers that lock one pair the other way round deadlock. The second is that
+   * it makes the job self-healing — every sweep before this one deleted trips
+   * and cleared nothing, so there are orphans out there older than this code,
+   * and asking the question this way collects them without a migration.
+   *
+   * Set-based rather than a list of ids: how many trips expire in a day is not
+   * a number this bounds. `trips.id` is a primary key, so the subquery yields
+   * no NULL and `NOT IN` is safe.
+   */
+  async sweepExpired(): Promise<number> {
+    const removed = await this.tripRepository.manager.transaction(
+      async (manager) => {
+        const result = await manager.delete(Trip, {
+          expiresAt: LessThan(new Date()),
+        });
+        await manager
+          .createQueryBuilder()
+          .update(PushSubscription)
+          .set({ tripId: null, topics: [] })
+          .where(`"tripId" IS NOT NULL`)
+          .andWhere(`"tripId" NOT IN (SELECT id FROM trips)`)
+          .execute();
+        return result.affected ?? 0;
+      },
+    );
     if (removed > 0) this.logger.log(`Swept ${removed} expired trip(s)`);
     return removed;
   }
