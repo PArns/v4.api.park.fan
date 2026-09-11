@@ -21,12 +21,11 @@ describe("TripsService", () => {
   }>;
   /** True only while the transaction callback is running. */
   let inTransaction: boolean;
-  /** The instant the sweep's two statements agreed on, for the fake. */
-  let sweepNow: Date | undefined;
   /** The fake `EntityManager`, so a test can make one statement misbehave. */
   let manager: {
     transaction: jest.Mock;
     findOne: jest.Mock;
+    save: jest.Mock;
     update: jest.Mock;
     delete: jest.Mock;
     createQueryBuilder: jest.Mock;
@@ -36,7 +35,6 @@ describe("TripsService", () => {
     rows = new Map();
     subscriptions = [];
     inTransaction = false;
-    sweepNow = undefined;
 
     // Every write `remove` makes has to happen through this manager, and the
     // guards below fail the test if one escapes the transaction: a cleared
@@ -59,6 +57,14 @@ describe("TripsService", () => {
           return rows.get(where.id) ?? null;
         },
       ),
+      save: jest.fn(async (trip: Trip) => {
+        if (!inTransaction) throw new Error("save outside the transaction");
+        const stored: Trip = { ...trip };
+        stored.createdAt ??= new Date();
+        stored.updatedAt = new Date();
+        rows.set(stored.id, stored);
+        return stored;
+      }),
       update: jest.fn(
         async (
           entity: unknown,
@@ -90,10 +96,11 @@ describe("TripsService", () => {
           if (typeof criteria === "string") {
             return { affected: rows.delete(criteria) ? 1 : 0 };
           }
-          // The sweep: everything already past its expiry at `sweepNow`.
+          // The sweep: everything already past its expiry.
           let affected = 0;
+          const now = Date.now();
           for (const [id, row] of [...rows]) {
-            if (row.expiresAt.getTime() >= sweepNow!.getTime()) continue;
+            if (row.expiresAt.getTime() >= now) continue;
             rows.delete(id);
             affected++;
           }
@@ -102,7 +109,7 @@ describe("TripsService", () => {
       ),
       // The sweep's pointer clear is one set-based statement, so the fake
       // reproduces its predicate rather than its SQL: every subscription whose
-      // trip is already past `:now`.
+      // `tripId` no longer resolves to a row in `trips`.
       createQueryBuilder: jest.fn(() => ({
         update: (entity: unknown) => {
           if (entity !== PushSubscription) {
@@ -110,27 +117,21 @@ describe("TripsService", () => {
           }
           return {
             set: (patch: { tripId: null; topics: string[] }) => ({
-              where: (_sql: string, params: { now: Date }) => {
-                sweepNow = params.now;
-                return {
+              where: () => ({
+                andWhere: () => ({
                   execute: async () => {
                     if (!inTransaction) {
                       throw new Error("sweep cleared outside the transaction");
                     }
                     for (const row of subscriptions) {
-                      const trip = row.tripId
-                        ? rows.get(row.tripId)
-                        : undefined;
-                      if (!trip) continue;
-                      if (trip.expiresAt.getTime() >= params.now.getTime()) {
-                        continue;
-                      }
+                      if (!row.tripId) continue;
+                      if (rows.has(row.tripId)) continue;
                       row.tripId = patch.tripId;
                       row.topics = patch.topics;
                     }
                   },
-                };
-              },
+                }),
+              }),
             }),
           };
         },
@@ -309,26 +310,46 @@ describe("TripsService", () => {
       expect(subscriptions[0].tripId).toBe(created.id);
     });
 
-    it("answers 'nothing to remove' when a concurrent delete got there first", async () => {
+    it("takes the row before writing, and takes it before the subscriptions", async () => {
       const created = await service.create(plan());
       subscriptions.push({
         endpoint: "https://push.example/a",
         tripId: created.id,
         topics: ["x"],
       });
-      // The row is gone between the lookup and the DELETE. The DELETE's own
-      // `affected` has to answer, not the read — otherwise two deletes racing
-      // on one id both report 204 on a route that documents 404 for an id with
-      // nothing behind it.
-      manager.findOne.mockImplementationOnce(async () => {
-        const trip = rows.get(created.id)!;
-        rows.delete(created.id);
-        return trip;
+
+      await service.remove(created.id);
+
+      // Without the lock a PUT in flight would `save()` the plan back at the
+      // same id with a fresh 400-day expiry — after the browser had already
+      // dropped the id, which is the state this endpoint exists to prevent.
+      expect(manager.findOne).toHaveBeenCalledWith(
+        Trip,
+        expect.objectContaining({ lock: { mode: "pessimistic_write" } }),
+      );
+      // And `trips` before `push_subscriptions`, the order `sweepExpired`
+      // takes them in. The other way round the two deadlock.
+      expect(manager.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+        manager.update.mock.invocationCallOrder[0],
+      );
+      expect(manager.update.mock.invocationCallOrder[0]).toBeLessThan(
+        manager.delete.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("clears nothing when a concurrent delete got there first", async () => {
+      const created = await service.create(plan());
+      subscriptions.push({
+        endpoint: "https://push.example/a",
+        tripId: created.id,
+        topics: ["x"],
       });
+      // The winner committed while this one waited for the row.
+      rows.delete(created.id);
 
       expect(await service.remove(created.id)).toBe(false);
-      // And the loser clears nothing: the winner already did.
       expect(manager.update).not.toHaveBeenCalled();
+      expect(subscriptions[0].tripId).toBe(created.id);
     });
   });
 
@@ -356,14 +377,36 @@ describe("TripsService", () => {
       });
     });
 
-    it("clears and deletes against the same instant, inside one transaction", async () => {
+    it("collects pointers orphaned by every sweep before this one", async () => {
+      // Those sweeps deleted trips and cleared nothing, so there are rows out
+      // there holding an id that was never in `trips` during this process's
+      // lifetime. Asking which pointers no longer resolve collects them without
+      // a migration; asking which trips this run deleted never would.
+      subscriptions.push({
+        endpoint: "https://push.example/old",
+        tripId: "aTripSweptLongAgo",
+        topics: ["x"],
+      });
+
+      expect(await service.sweepExpired()).toBe(0);
+
+      expect(subscriptions[0]).toMatchObject({ tripId: null, topics: [] });
+    });
+
+    it("deletes the trips before it touches the subscriptions", async () => {
       const stale = await service.create(plan());
       rows.get(stale.id)!.expiresAt = new Date(Date.now() - 1000);
+
       await service.sweepExpired();
-      // Two `new Date()` calls would let a row expire between the clear and the
-      // delete and be deleted with its pointer still standing.
+
+      // Same order as `remove`, in one transaction. The other way round the two
+      // deadlock on the pair, and Postgres answers that by aborting one of
+      // them — a visitor's delete with a 500, or the nightly sweep with
+      // nothing swept.
       expect(manager.transaction).toHaveBeenCalledTimes(1);
-      expect(sweepNow).toBeInstanceOf(Date);
+      expect(manager.delete.mock.invocationCallOrder[0]).toBeLessThan(
+        manager.createQueryBuilder.mock.invocationCallOrder[0],
+      );
     });
   });
 });
