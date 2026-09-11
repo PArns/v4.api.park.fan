@@ -155,6 +155,15 @@ export class DowntimeReconstructionProcessor {
     // Its own try/catch: it is an addition for parks that would otherwise have
     // no history at all, and its failure must not cost the reconstruction.
     let closureGaps: ClosureGapRow[] = [];
+    // Whether this run is in a position to rewrite a `closed_gap` row at all.
+    //
+    // An empty result and a failed statement look the same downstream and mean
+    // opposite things: one says the window holds no closure gaps, the other
+    // says this run does not know. The delete below has to tell them apart, or
+    // swallowing the error here silently erases the whole signal — which is the
+    // same data loss `coveredIds` exists to prevent, reached through the
+    // catch block instead of through the population.
+    let closureGapsRead = true;
     try {
       closureGaps = (await this.dataSource.query(CLOSURE_GAP_INTERVALS_SQL, [
         parkIds,
@@ -162,6 +171,7 @@ export class DowntimeReconstructionProcessor {
         asOf,
       ])) as ClosureGapRow[];
     } catch (error) {
+      closureGapsRead = false;
       this.logger.warn(
         `Closure-gap reconstruction failed, DOWN intervals kept: ${
           error instanceof Error ? error.message : String(error)
@@ -236,12 +246,27 @@ export class DowntimeReconstructionProcessor {
       ]),
     ];
 
+    // A run that could not READ the closure gaps may not delete them.
+    //
+    // The two statements write one table under two signals, and only one of
+    // them is allowed to fail quietly. When it does, `coveredIds` still names
+    // every blind-park ride — they come through `exposure`, which succeeded —
+    // so an unqualified delete strips their stored `closed_gap` rows and only
+    // the `down` rows are written back. Same permanence as before: nothing else
+    // writes this table and the rolling window moves on tomorrow.
+    //
+    // Restricting the delete to `down` is exactly as wide as what this run can
+    // rewrite, which is the rule the whole predicate follows.
+    const rewritableSignals = closureGapsRead
+      ? ""
+      : `\n            AND signal = 'down'`;
+
     await this.dataSource.transaction(async (manager) => {
       await manager.query(
         `DELETE FROM attraction_outages
           WHERE started_at >= $1
             AND ($2::uuid[] IS NULL OR "parkId" = ANY($2::uuid[]))
-            AND "attractionId" = ANY($3::uuid[])`,
+            AND "attractionId" = ANY($3::uuid[])${rewritableSignals}`,
         [scanStart, parkIds, coveredIds],
       );
       await manager.query(

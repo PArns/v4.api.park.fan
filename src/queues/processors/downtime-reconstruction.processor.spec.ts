@@ -35,6 +35,8 @@ describe("DowntimeReconstructionProcessor", () => {
     intervals?: Array<Record<string, unknown>>;
     exposure?: Array<Record<string, unknown>>;
     closureGaps?: Array<Record<string, unknown>>;
+    /** Make the closure-gap statement throw, the one failure the job swallows. */
+    closureGapsFail?: boolean;
     scanStart?: Date;
   }
 
@@ -94,7 +96,12 @@ describe("DowntimeReconstructionProcessor", () => {
       }
       if (sql === OUTAGE_INTERVALS_SQL) return fixture.intervals ?? [];
       if (sql === OUTAGE_EXPOSURE_SQL) return fixture.exposure ?? [];
-      if (sql === CLOSURE_GAP_INTERVALS_SQL) return fixture.closureGaps ?? [];
+      if (sql === CLOSURE_GAP_INTERVALS_SQL) {
+        if (fixture.closureGapsFail) {
+          throw new Error('relation "attraction_exposure_days" does not exist');
+        }
+        return fixture.closureGaps ?? [];
+      }
       // The retention prune, which runs on the DataSource rather than in the
       // transaction.
       return [];
@@ -212,6 +219,45 @@ describe("DowntimeReconstructionProcessor", () => {
     expect(outages.params[2]).toEqual([]);
     expect(exposure.params[2]).toEqual([]);
     expect(inserted).toHaveLength(0);
+  });
+
+  it("does not delete the closure gaps it could not read", async () => {
+    // The one statement of the three that is allowed to fail quietly, and the
+    // catch block is a second route to the same data loss: `coveredIds` still
+    // names every blind-park ride, because those come through `exposure`, which
+    // succeeded. An unqualified delete then strips their stored `closed_gap`
+    // rows while only the `down` rows are written back.
+    //
+    // An empty result and a failed statement are not the same claim, so the
+    // delete has to see the difference — which is why the flag exists rather
+    // than `closureGaps.length`.
+    await run({
+      exposure: [exposureDay("ride-a")],
+      intervals: [interval("ride-a")],
+      closureGapsFail: true,
+    });
+
+    const { outages, exposure } = deletes();
+    expect(outages.sql).toContain("signal = 'down'");
+    // Only the outage table carries the signal; the closure-gap statement
+    // writes no exposure day, so that delete is unqualified either way.
+    expect(exposure.sql).not.toContain("signal");
+    // And the run still covers the ride, so its DOWN history is rewritten
+    // whole. Restricting the signal must not turn the delete off.
+    expect(outages.params[2]).toEqual(["ride-a"]);
+  });
+
+  it("deletes both signals when the closure-gap statement merely found nothing", async () => {
+    // The other half of the same distinction. A successful statement returning
+    // no rows IS a statement about the window: the gaps that used to be there
+    // are gone — a ride that newly crossed MAX_GAP_DAY_SHARE, say — and the
+    // stored rows have to go with them.
+    await run({
+      exposure: [exposureDay("ride-a")],
+      closureGaps: [],
+    });
+
+    expect(deletes().outages.sql).not.toContain("signal");
   });
 
   it("keeps the range and park bounds it always had", async () => {

@@ -499,7 +499,42 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
      -- historical gaps is stored as a fault. The equal-span rule is the real
      -- invariant; equal LENGTHS were a proxy for it that breaks whenever the
      -- inputs differ.
-     WHERE e.op_day >= ($2::timestamptz AT TIME ZONE b.tz)::date
+     -- The numerator's own lowest operating day, which stopped being
+     -- local_date($2) when raw_gaps moved off the calendar.
+     --
+     -- op_day is now the containing window's opening date, so in a park that
+     -- closes after midnight a gap read just after $2 can carry the PREVIOUS
+     -- local day. Left as a bare local_date($2), the denominator then excludes
+     -- an operating day the numerator counted — the ratio goes up, and up is
+     -- the direction that suppresses a real fault as a duty cycle. The same
+     -- one-day skew the slack day caused, mirrored.
+     --
+     -- Two candidates, lowest wins, because the numerator has two sources for
+     -- a day: a reading inside a window contributes that window's op_day, and
+     -- the earliest window a reading at or after $2 can fall in is the earliest
+     -- one still running at $2; a reading outside every window contributes its
+     -- calendar day, and the earliest of those is local_date($2).
+     --
+     -- For every park that closes before midnight the two are the same date,
+     -- so this bound is unchanged in value and the measured 330/112 stands.
+     -- LEAST, not COALESCE alone: when the park is shut at $2 the earliest
+     -- window still to come opens LATER than $2, and its op_day would move the
+     -- bound forward rather than back.
+     --
+     -- And COALESCE as well as LEAST, which is redundant in PostgreSQL and
+     -- kept: LEAST here skips a NULL argument, where the same function returns
+     -- NULL in several other dialects. A bound that silently became NULL would
+     -- drop every row of the denominator and pass the whole gap-share test for
+     -- every ride — too quiet a failure to leave resting on which engine the
+     -- word LEAST is read by.
+     WHERE e.op_day >= LEAST(
+             ($2::timestamptz AT TIME ZONE b.tz)::date,
+             COALESCE((SELECT MIN(w.op_day)
+                         FROM win w
+                        WHERE w.park_id = b.pid
+                          AND w.closes_at > $2::timestamptz),
+                      ($2::timestamptz AT TIME ZONE b.tz)::date)
+           )
        -- Both edges from the numerator's own instants, for the reason the
        -- lower one carries. src reads qd.timestamp < $3, so its last possible
        -- day is the local day of the instant just before $3 -- which is the
@@ -507,6 +542,14 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
        -- midnight. Across 24 zones and a 91-park sweep some park sits there
        -- routinely, and counting a day the numerator cannot reach is the same
        -- ~4.5 % dilution the slack day was, in the same direction.
+       --
+       -- This edge needs no window treatment, unlike the lower one. An
+       -- instant's op_day is the date of a window that opened at or BEFORE it,
+       -- so it can only ever be at or below that instant's local date — the
+       -- bound can therefore not exclude a day the numerator reaches, whatever
+       -- the park's closing hour. It can be one day loose in a wrap park, and
+       -- loose here dilutes rather than suppresses, which is the safe side of
+       -- this particular ratio.
        AND e.op_day <= (($3::timestamptz - INTERVAL '1 microsecond')
                         AT TIME ZONE b.tz)::date
      GROUP BY e."attractionId"
