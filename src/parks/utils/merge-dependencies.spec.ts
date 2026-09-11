@@ -1,11 +1,16 @@
 import {
   ATTRACTION_DEPENDENCIES,
+  PARK_CHILD_ENTITIES,
   PARK_DEPENDENCIES,
   PARK_INLINE_DEPENDENCIES,
   PARK_TABLES_HANDLED_INLINE,
+  RESTAURANT_DEPENDENCIES,
+  SHOW_DEPENDENCIES,
+  applyMergeDependencies,
   attractionTablesMissingFrom,
   parkTablesMissingFrom,
-  applyMergeDependencies,
+  restaurantTablesMissingFrom,
+  showTablesMissingFrom,
 } from "./merge-dependencies";
 
 /**
@@ -291,13 +296,114 @@ describe("merge dependency tables", () => {
     ]);
   });
 
+  /**
+   * The show side, and it is the park side's problem rather than the
+   * attraction side's twin: `shows` carries a unique `(parkId, slug)`, so the
+   * losing row cannot simply be reparented and has to be deleted — at which
+   * point these three decide whether anything survives it.
+   *
+   * Snapshot from the entities on 2026-09-11. `external_entity_mapping` is
+   * moved by the caller before the dependencies and is excluded by the guard
+   * itself, exactly as on the attraction side.
+   */
+  const SHOW_REFERENCING_TABLES = [
+    "external_entity_mapping",
+    "show_follows",
+    "show_live_data",
+    "show_schedule_patterns",
+  ];
+
+  const RESTAURANT_REFERENCING_TABLES = [
+    "external_entity_mapping",
+    "restaurant_live_data",
+  ];
+
+  it("declares a strategy for every table that references a show or a restaurant", () => {
+    expect(showTablesMissingFrom(SHOW_REFERENCING_TABLES)).toEqual([]);
+    expect(restaurantTablesMissingFrom(RESTAURANT_REFERENCING_TABLES)).toEqual(
+      [],
+    );
+  });
+
+  it("keeps a losing show's history, its projected week and its followers", () => {
+    // Three tables, three different failure modes, and only the third is
+    // visible without a database: show_live_data and show_follows are ON
+    // DELETE CASCADE, so forgetting them destroys a show's entire showtime
+    // history and somebody's push reminder inside a transaction that then
+    // reports success. show_schedule_patterns has no FK at all and would be
+    // left pointing at a row that is gone.
+    const byTable = new Map(SHOW_DEPENDENCIES.map((d) => [d.table, d]));
+
+    // PK (id, timestamp) — its own surrogate id, so no observation is dropped.
+    expect(byTable.get("show_live_data")).toMatchObject({
+      column: "showId",
+      strategy: "move",
+    });
+    expect(byTable.get("show_live_data")?.conflictColumns).toBeUndefined();
+
+    // PK (show_id, weekday): the survivor's own Saturday wins, the loser's
+    // remaining weekdays fill the gaps.
+    expect(byTable.get("show_schedule_patterns")).toMatchObject({
+      // `show_id`, not `showId`: the name goes into raw SQL and this table has
+      // no camelCase column.
+      column: "show_id",
+      strategy: "move",
+      conflictColumns: ["weekday"],
+    });
+
+    // Unique (subscriptionId, showId). The only row on any of these lists a
+    // person set by hand, and one reminder per show is what they asked for.
+    expect(byTable.get("show_follows")).toMatchObject({
+      column: "showId",
+      strategy: "move",
+      conflictColumns: ["subscriptionId"],
+    });
+
+    // Nothing about a show is derived-and-replaceable, so nothing is discarded.
+    expect(SHOW_DEPENDENCIES.filter((d) => d.strategy === "discard")).toEqual(
+      [],
+    );
+  });
+
+  it("moves a losing restaurant's live data rather than cascading it", () => {
+    expect(RESTAURANT_DEPENDENCIES).toEqual([
+      {
+        table: "restaurant_live_data",
+        column: "restaurantId",
+        strategy: "move",
+      },
+    ]);
+  });
+
+  it("pairs each park child entity with its own dependency list", () => {
+    // The table name is interpolated into SQL by `migrateParkChildEntities`,
+    // so it comes from this closed set rather than from a parameter. Pairing
+    // it with the wrong list would move a show's rows for a restaurant.
+    expect(PARK_CHILD_ENTITIES.map((e) => e.table)).toEqual([
+      "shows",
+      "restaurants",
+    ]);
+    expect(
+      PARK_CHILD_ENTITIES.find((e) => e.table === "shows")?.dependencies,
+    ).toBe(SHOW_DEPENDENCIES);
+    expect(
+      PARK_CHILD_ENTITIES.find((e) => e.table === "restaurants")?.dependencies,
+    ).toBe(RESTAURANT_DEPENDENCIES);
+  });
+
   it("uses safe SQL identifiers everywhere", () => {
     const identifier = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+    for (const table of PARK_CHILD_ENTITIES.map((e) => e.table)) {
+      expect(table).toMatch(identifier);
+    }
 
     for (const dependency of [
       ...ATTRACTION_DEPENDENCIES,
       ...PARK_DEPENDENCIES,
       ...PARK_INLINE_DEPENDENCIES,
+      ...SHOW_DEPENDENCIES,
+      ...RESTAURANT_DEPENDENCIES,
     ]) {
       expect(dependency.table).toMatch(identifier);
       expect(dependency.column).toMatch(identifier);

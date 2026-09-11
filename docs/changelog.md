@@ -6,6 +6,44 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a shared show slug no longer rolls the whole park merge back
+
+Both raw merge paths in `parks.service.ts` moved a losing park's shows and
+restaurants with `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2`, under a
+comment that admitted the gap: *"Blind update OK if slugs distinctive, else
+duplicate logic needed? mostly safe for now"*. Both tables carry a unique
+`(parkId, slug)` (`show.entity.ts`, `restaurant.entity.ts`), and a ghost park is
+by definition the same park from a second source — so `aquanura` or `raveleijn`
+on both rows is the ordinary case, not the exception. The UPDATE raised **23505**
+and the transaction rolled back **before** the attraction step and the park step,
+which made everything the two previous fixes put there unreachable on exactly the
+merges that had something to merge.
+
+Shows and restaurants are now partitioned by slug, like the attractions above
+them: the colliding losers are drained onto the survivor and deleted by id, the
+rest move by id. Two new lists say what "drained" means, and they answer the part
+of this that is not a constraint violation — deleting the losing show is what
+sets the CASCADEs off:
+
+- **`show_live_data`** (FK CASCADE) — the losing show's entire showtime history,
+  and the only record of what it ever played. Moved; PK `(id, timestamp)`, so
+  nothing is dropped.
+- **`show_follows`** (FK CASCADE) — a visitor's push reminder, set by hand, and
+  the notification would simply never have arrived. Moved, keeping the survivor's
+  row where one subscriber followed both.
+- **`show_schedule_patterns`** (no FK at all) — would have been left pointing at
+  a row that is gone. Moved, deduped on `weekday`; the nightly rebuild would
+  reach the same answer, but not before tomorrow.
+- **`restaurant_live_data`** (FK CASCADE) — the restaurant side's only dependent
+  table, same shape.
+
+`external_entity_mapping` moves first for all three entity types now, through the
+shared `consolidateMergedEntities`. Matching is by slug alone rather than slug or
+name as in `ParkMergeService.migrateEntities`: the slug is what the constraint is
+about, and two rows the database is willing to keep apart are a curation
+question. The third, unreachable raw path (the priority merge) still moves both
+blind — it is being rebuilt separately.
+
 ### Added — `DELETE /v1/trips/{id}`
 
 A stored plan can be deleted. The endpoint exists because of what happens without

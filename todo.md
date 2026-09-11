@@ -423,15 +423,28 @@ What is still open, roughly by consequence:
       pinned at the call site, in the method docblock and as a spec case — but
       whether the block should exist at all is PAR-142. Shows and restaurants
       stay blind moves here; that is the next entry.
-- [ ] **The blind show and restaurant moves can raise 23505 before any of that
-      is reached.** All three raw paths do `UPDATE shows SET "parkId" = …` and
-      the same for restaurants, against a unique `(parkId, slug)` on either table
-      (`show.entity.ts:33`, `restaurant.entity.ts:33`). Two rows for one park
-      from two sources are exactly the case that produces a shared slug, so the
-      transaction rolls back before the attraction and park steps run at all.
-      `mergeParks.migrateEntities` handles it — match on slug or name,
-      consolidate, delete the loser — and neither raw path does. Not PF-111's
-      scope: it is a collision decision per entity type, not a dependency list.
+- [x] ~~**The blind show and restaurant moves can raise 23505 before any of
+      that is reached.**~~ Both raw paths did `UPDATE shows SET "parkId" = …`
+      and the same for restaurants, against a unique `(parkId, slug)` on either
+      table (`show.entity.ts:33`, `restaurant.entity.ts:33`). Two rows for one
+      park from two sources are exactly the case that produces a shared slug, so
+      the transaction rolled back before the attraction and park steps ran at
+      all. PAR-104 partitions both by slug in `migrateParkChildEntities` — the
+      colliding losers are drained through `SHOW_DEPENDENCIES` /
+      `RESTAURANT_DEPENDENCIES` and deleted by id, the rest move by id.
+      Matching is on the slug alone, not slug-or-name as in
+      `mergeParks.migrateEntities`: the slug is what the constraint is about,
+      and merging two rows the database keeps apart is a curation decision that
+      belongs on the admin path.
+      **What the delete would otherwise have taken with it**, now answered by
+      the two lists: `show_live_data` (CASCADE — the losing show's whole
+      showtime history), `show_follows` (CASCADE — a visitor's push reminder),
+      `show_schedule_patterns` (no FK — orphans), `restaurant_live_data`
+      (CASCADE). All moved; nothing about a show or a restaurant is
+      derived-and-replaceable, so nothing is discarded.
+      **The third raw path still moves both blind.** The priority merge is
+      unreachable (PAR-142) and was being rebuilt in parallel by PAR-103, so
+      applying the helper there is its own change — PAR-148.
 - [ ] **A migrated `park_season` can name attractions the same merge deleted.**
       `park_seasons.attraction_ids` is a jsonb array of attraction ids, and
       `PARK_DEPENDENCIES` moves the row onto the survivor. Where the merge

@@ -13,6 +13,8 @@ import {
   ATTRACTION_DEPENDENCIES,
   PARK_DEPENDENCIES,
   PARK_INLINE_DEPENDENCIES,
+  RESTAURANT_DEPENDENCIES,
+  SHOW_DEPENDENCIES,
 } from "./utils/merge-dependencies";
 
 describe("ParksService", () => {
@@ -601,21 +603,48 @@ describe("ParksService", () => {
     const syncGhostParkId = "22222222-2222-2222-2222-222222222222";
 
     /**
-     * Wires up the mocks `syncParks` needs to reach its ghost-park merge, with
-     * `attractionRows` answering the one SELECT inside the transaction.
+     * Rows for the child-entity SELECT of `migrateParkChildEntities`, keyed by
+     * table. Its statement reads `SELECT id, "parkId", slug FROM <table>`,
+     * which the attraction matcher below must not answer — that one selects
+     * three more columns and is told apart by them rather than by the table
+     * name, so the two regexes stay disjoint.
+     */
+    type ChildRow = { id: string; parkId: string; slug: string };
+    const childRowsFor =
+      (rowsByTable: { shows?: ChildRow[]; restaurants?: ChildRow[] }) =>
+      (sql: string) => {
+        const table = /SELECT id, "parkId", slug FROM (\w+)/.exec(sql)?.[1];
+        return table ? (rowsByTable[table as "shows"] ?? []) : undefined;
+      };
+
+    /**
+     * Wires up the mocks `syncParks` needs to reach its ghost-park merge.
      *
-     * `parks` overrides the two park rows. The ghost's default is the shape the
-     * merge cases below need and nothing more — an id and a name — which is
-     * also the honest default for step 5c: a row with no slugs has no path to
-     * preserve, so those cases neither expect nor get an alias.
+     * `attractionRows` answers the attraction SELECT inside the transaction and
+     * `options.shows` / `options.restaurants` the shows/restaurants one.
+     *
+     * `options.survivor` / `options.ghost` override the two park rows. The
+     * ghost's default is the shape the merge cases below need and nothing more
+     * — an id and a name — which is also the honest default for step 5c: a row
+     * with no slugs has no path to preserve, so those cases neither expect nor
+     * get an alias.
      */
     const primeGhostParkSync = (
       attractionRows: unknown[],
-      parks: { survivor?: Partial<Park>; ghost?: Partial<Park> } = {},
+      options: {
+        shows?: ChildRow[];
+        restaurants?: ChildRow[];
+        survivor?: Partial<Park>;
+        ghost?: Partial<Park>;
+      } = {},
     ) => {
-      const { calls, transactionalEntityManager } = recordTransaction((sql) =>
-        /SELECT id, "parkId", slug/.test(sql) ? attractionRows : [],
-      );
+      const children = childRowsFor(options);
+      const { calls, transactionalEntityManager } = recordTransaction((sql) => {
+        if (/SELECT id, "parkId", slug, "queue_times_entity_id"/.test(sql)) {
+          return attractionRows;
+        }
+        return children(sql) ?? [];
+      });
 
       mockDestinationsService.findAll.mockResolvedValue({
         data: [{ id: "dest-1" }],
@@ -640,7 +669,7 @@ describe("ParksService", () => {
         createTestPark({
           id: syncSurvivingParkId,
           externalId: "ext-park-1",
-          ...parks.survivor,
+          ...options.survivor,
         }),
       ]);
       mockParkRepository.update.mockResolvedValue({ affected: 1 });
@@ -656,7 +685,7 @@ describe("ParksService", () => {
         getOne: jest.fn().mockResolvedValue({
           id: syncGhostParkId,
           name: "Phantasialand (Queue-Times)",
-          ...parks.ghost,
+          ...options.ghost,
         }),
       }));
       // repairDuplicates runs at the end of syncParks — nothing to repair.
@@ -956,6 +985,213 @@ describe("ParksService", () => {
         -1,
       );
       expect(lastDependency).toBeLessThan(deleteIndex);
+    });
+
+    /**
+     * Shows and restaurants carry the same unique `(parkId, slug)` as
+     * attractions, and both raw paths moved them blind — under a comment that
+     * said so out loud: "Blind update OK if slugs distinctive, else duplicate
+     * logic needed? mostly safe for now".
+     *
+     * A ghost park is the same park from a second source, so a shared slug is
+     * the ordinary case and the UPDATE raises **23505** — before the attraction
+     * step and before the park step, which is what made everything the two
+     * cases above assert unreachable on exactly the merges that had something
+     * to merge.
+     *
+     * A statement is asserted absent here and that is worth the sentence: the
+     * whole defect IS a statement, so the cases below pin both that the blind
+     * form is gone and that the id-scoped one carries the right rows.
+     */
+    const expectNoBlindChildMove = (calls: Recorded[]) => {
+      for (const table of ["shows", "restaurants"]) {
+        expect(
+          calls.filter((c) =>
+            new RegExp(
+              `UPDATE\\s+${table}\\s+SET\\s+"parkId"[\\s\\S]*WHERE\\s+"parkId"`,
+              "i",
+            ).test(c.sql),
+          ),
+        ).toEqual([]);
+      }
+    };
+
+    const childStatement = (
+      calls: Recorded[],
+      verb: "UPDATE" | "DELETE FROM",
+      table: string,
+    ) =>
+      calls.find((c) =>
+        new RegExp(`^\\s*${verb}\\s+${table}\\b`, "i").test(c.sql),
+      );
+
+    it("partitions the sync-time ghost merge's shows and restaurants by slug instead of moving them into the unique index", async () => {
+      const survivingShow = "5150c0de-0000-0000-0000-00000000000a";
+      const ghostCollidingShow = "5150c0de-0000-0000-0000-00000000000b";
+      const ghostMovingShow = "5150c0de-0000-0000-0000-00000000000c";
+      const survivingRestaurant = "4e57c0de-0000-0000-0000-00000000000a";
+      const ghostCollidingRestaurant = "4e57c0de-0000-0000-0000-00000000000b";
+
+      const { calls } = primeGhostParkSync([], {
+        shows: [
+          {
+            id: survivingShow,
+            parkId: syncSurvivingParkId,
+            slug: "raveleijn",
+          },
+          {
+            id: ghostCollidingShow,
+            parkId: syncGhostParkId,
+            slug: "raveleijn",
+          },
+          {
+            id: ghostMovingShow,
+            parkId: syncGhostParkId,
+            slug: "aquanura",
+          },
+        ],
+        restaurants: [
+          {
+            id: survivingRestaurant,
+            parkId: syncSurvivingParkId,
+            slug: "polles-keuken",
+          },
+          {
+            id: ghostCollidingRestaurant,
+            parkId: syncGhostParkId,
+            slug: "polles-keuken",
+          },
+        ],
+      });
+
+      await service.syncParks();
+
+      expectNoBlindChildMove(calls);
+
+      // The one that does not collide moves by id.
+      expect(childStatement(calls, "UPDATE", "shows")?.params).toEqual([
+        syncSurvivingParkId,
+        [ghostMovingShow],
+      ]);
+      // Every restaurant of the ghost collided, so there is nothing to move.
+      expect(childStatement(calls, "UPDATE", "restaurants")).toBeUndefined();
+
+      // The colliding ones are drained of their dependent rows and deleted by
+      // id — the delete is what the CASCADEs hang off, so it may not come
+      // before the moves.
+      for (const dep of SHOW_DEPENDENCIES) {
+        expect(dependencyTablesTouched(calls, ghostCollidingShow)).toContain(
+          dep.table,
+        );
+      }
+      for (const dep of RESTAURANT_DEPENDENCIES) {
+        expect(
+          dependencyTablesTouched(calls, ghostCollidingRestaurant),
+        ).toContain(dep.table);
+      }
+
+      const showDelete = childStatement(calls, "DELETE FROM", "shows");
+      expect(showDelete?.params).toEqual([[ghostCollidingShow]]);
+      const restaurantDelete = childStatement(
+        calls,
+        "DELETE FROM",
+        "restaurants",
+      );
+      expect(restaurantDelete?.params).toEqual([[ghostCollidingRestaurant]]);
+
+      const lastDependency = calls.reduce(
+        (last, c, i) =>
+          (c.params ?? []).includes(ghostCollidingShow) &&
+          !/DELETE\s+FROM\s+shows/i.test(c.sql)
+            ? i
+            : last,
+        -1,
+      );
+      expect(lastDependency).toBeGreaterThan(-1);
+      expect(lastDependency).toBeLessThan(calls.indexOf(showDelete!));
+      // And all of it before the park goes, or the CASCADE takes the survivor's
+      // inherited rows with the ghost park.
+      expect(calls.indexOf(restaurantDelete!)).toBeLessThan(
+        indexOfParkDelete(calls),
+      );
+    });
+
+    it("keeps a colliding show's history, its schedule pattern and its follower on the survivor", async () => {
+      // The three tables fail in three different ways, and only one of them is
+      // an error: `show_live_data` and `show_follows` are ON DELETE CASCADE, so
+      // the losing row's whole showtime history and somebody's push reminder
+      // disappear inside a transaction that then reports success;
+      // `show_schedule_patterns` carries no FK at all and would be left
+      // pointing at a show that is gone.
+      const primaryId = "77777777-7777-7777-7777-777777777777";
+      const ghostParkId = "88888888-8888-8888-8888-888888888888";
+      const survivor = "5150c0de-1111-0000-0000-00000000000a";
+      const ghost = "5150c0de-1111-0000-0000-00000000000b";
+
+      const { calls } = recordTransaction((sql) => {
+        if (/SELECT id, "parkId", slug FROM shows/.test(sql)) {
+          return [
+            { id: survivor, parkId: primaryId, slug: "raveleijn" },
+            { id: ghost, parkId: ghostParkId, slug: "raveleijn" },
+          ];
+        }
+        return [];
+      });
+
+      mockParkRepository.query.mockResolvedValue([
+        { queue_times_entity_id: "4711" },
+      ]);
+      mockParkRepository.find.mockResolvedValue([
+        createTestPark({ id: primaryId, wikiEntityId: "wiki-1" }),
+        createTestPark({ id: ghostParkId, wikiEntityId: null }),
+      ]);
+
+      await service.repairDuplicates();
+
+      expectNoBlindChildMove(calls);
+
+      const reparented = (table: string) =>
+        calls.find(
+          (c) =>
+            new RegExp(`UPDATE\\s+${table}\\s+SET`, "i").test(c.sql) &&
+            (c.params ?? []).includes(ghost),
+        );
+      expect(reparented("show_live_data")?.params).toEqual([survivor, ghost]);
+      expect(reparented("show_follows")?.params).toEqual([survivor, ghost]);
+      expect(reparented("show_schedule_patterns")?.params).toEqual([
+        survivor,
+        ghost,
+      ]);
+      // No FK, so an orphan here survives the DELETE in silence — same shape as
+      // the attraction side.
+      expect(reparented("external_entity_mapping")?.params).toEqual([
+        survivor,
+        ghost,
+      ]);
+
+      // Both keyed tables drop the row the survivor already holds before the
+      // move, or the UPDATE trips their own unique key instead of the park's.
+      const dedupe = (table: string) =>
+        calls.find(
+          (c) =>
+            new RegExp(`DELETE\\s+FROM\\s+${table}\\b`, "i").test(c.sql) &&
+            (c.params ?? []).includes(ghost),
+        );
+      expect(dedupe("show_schedule_patterns")?.sql).toMatch(/"weekday"/);
+      expect(dedupe("show_follows")?.sql).toMatch(/"subscriptionId"/);
+      for (const table of ["show_schedule_patterns", "show_follows"]) {
+        expect(calls.indexOf(dedupe(table)!)).toBeLessThan(
+          calls.indexOf(reparented(table)!),
+        );
+      }
+      // The time series has no key of its own, so nothing is ever dropped.
+      expect(dedupe("show_live_data")).toBeUndefined();
+
+      const showDelete = childStatement(calls, "DELETE FROM", "shows");
+      expect(showDelete?.params).toEqual([[ghost]]);
+      expect(calls.indexOf(reparented("show_live_data")!)).toBeLessThan(
+        calls.indexOf(showDelete!),
+      );
     });
 
     /**
