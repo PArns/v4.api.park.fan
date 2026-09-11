@@ -1099,8 +1099,8 @@ export class ParksService {
         // the other two paths: nothing may still point at it when it goes.
         await this.consolidateMergedPark(
           transactionalEntityManager,
-          winner.id,
-          loser.id,
+          winner,
+          loser,
         );
         await transactionalEntityManager.delete(Park, loser.id);
 
