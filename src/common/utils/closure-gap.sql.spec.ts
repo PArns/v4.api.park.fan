@@ -67,7 +67,9 @@ describe("closure-gap statements", () => {
     // The emitted day is the window-derived one too: it leaves as "startOpDay"
     // and the processor keys outage starts into attraction_exposure_days with
     // it, whose op_day has always come from win.
-    expect(gaps).toContain("start_op_day                              AS op_day");
+    expect(gaps).toContain(
+      "start_op_day                              AS op_day",
+    );
   });
 
   it.each(both)("%s is structurally a statement, not a fragment", (_n, sql) => {

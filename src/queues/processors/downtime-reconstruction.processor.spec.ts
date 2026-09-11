@@ -126,8 +126,8 @@ describe("DowntimeReconstructionProcessor", () => {
 
     const dataSource = {
       query,
-      transaction: jest.fn(
-        async (cb: (m: typeof manager) => Promise<void>) => cb(manager),
+      transaction: jest.fn(async (cb: (m: typeof manager) => Promise<void>) =>
+        cb(manager),
       ),
     };
 

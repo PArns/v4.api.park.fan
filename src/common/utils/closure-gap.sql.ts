@@ -1,5 +1,8 @@
 import { MIN_BLIND_EVIDENCE_HOURS } from "../../analytics/entities/park-downtime-coverage.entity";
-import { normalizedClosingSql, parkOpenWindowCtes } from "./park-open-window.sql";
+import {
+  normalizedClosingSql,
+  parkOpenWindowCtes,
+} from "./park-open-window.sql";
 import { RECONCILIATION_SOURCE } from "./source-absent-status.util";
 import { HEARTBEAT_SOURCE } from "./outage-rows.sql";
 /**
