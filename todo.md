@@ -563,9 +563,9 @@ with the same rows.
 
 - [x] ~~Ten parks lost a block of attractions from the wiki's **live** feed on a
       single day each~~ — **answered 2026-09-11 against production (PAR-38).**
-      The same query returns **12 parks and 170 rides**, and they split three
-      ways by who writes their last rows; the classification, the queries and
-      the per-park verdicts are §5.2a of
+      The same query over a 270-day window returns **12 parks and 170 rides**,
+      and they split three ways; the classification, the two checks it takes to
+      tell them apart and the per-park verdicts are §5.2a of
       `docs/architecture/attraction-status-and-seasonality.md`. In short:
       **17** at Universal Studios Singapore were recategorised upstream
       (`ATTRACTION` → `SHOW`, ids unchanged, live data still arriving — already
@@ -578,10 +578,11 @@ with the same rows.
       recovered on its own on 2026-08-17 after 65 days.
 
       Two claims in the old text were wrong and are worth not repeating:
-      "every affected ride lacks a `queue_times_entity_id`" (**50 of 170 carry
-      one**, including all nine at Busch Gardens Tampa), and the implied
-      mitigation of broadening Queue-Times matching — Queue-Times dropped the
-      same ids the wiki did at Knott's, so there is nothing to broaden onto.
+      "every affected ride lacks a `queue_times_entity_id`" (**50 of the 170
+      carry one**, and all nine at Busch Gardens Tampa carried one while they
+      were out), and the implied mitigation of broadening Queue-Times matching
+      — Queue-Times dropped the same ids the wiki did at Knott's, so there is
+      nothing to broaden onto.
 - [x] ~~**"Wet'n'Wild" and "Wet 'n' Wild Gold Coast"** both show 13 silenced
       attractions with the same date~~ — **confirmed a duplicate pair on
       2026-09-11**: identical coordinates to seven decimals, same city, same
