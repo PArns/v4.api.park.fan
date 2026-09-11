@@ -396,6 +396,13 @@ filtered**: it is the operator's statement about that day against our detector's
 statement about a year, and an operator publishing a time for a date we call out
 of season is the operator correcting us.
 
+Unlike the ride rules this one **does** apply to a past date, and the difference
+is what is being filtered. A past day's rides come from a measurement, and a
+description of the past may not delete an observation; a projection is no such
+thing — it is our inference from a pattern seen in the last four weeks. The
+observation for a past day is the `scheduled` half, and that passes through
+untouched.
+
 A caller must render `projected` differently from `scheduled`. It is what the
 show did, not a promise that it runs; `observedOn` is there so the reader can see
 how fresh that evidence is. An empty `shows` means we have never watched this

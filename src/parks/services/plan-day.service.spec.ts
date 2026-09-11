@@ -1392,6 +1392,33 @@ describe("PlanDayService", () => {
         expect(plan.shows.map((s) => s.source)).toEqual(["projected"]);
       });
 
+      it("applies to a past date too, which the ride rules do not", async () => {
+        // The rides stop at today's edge because a past day is answered from a
+        // measurement. A projection is not one: it is our inference from a
+        // pattern seen in the last four weeks, and a Halloween programme
+        // belongs no more in last January than in next December. The
+        // observation for a past day is the `scheduled` half, and that is not
+        // filtered — see the case below.
+        const date = pastDate();
+        calendarDay = { ...calendarDay!, date };
+        parkShows = [
+          {
+            id: "s-1",
+            slug: "big-moments",
+            name: "Big Moments",
+            isSeasonal: true,
+            seasonMonths: allMonthsExcept(monthOf(date)),
+          },
+        ];
+        patterns = new Map([
+          ["s-1", pattern({ lastObservedOn: todayMinus(3) })],
+        ]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows).toEqual([]);
+      });
+
       it("still serves a showtime the operator published for that day", async () => {
         // The operator's statement about the day, against our detector's
         // statement about a year. Publishing a time for a date we call out of

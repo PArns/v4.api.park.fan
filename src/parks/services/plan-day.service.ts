@@ -422,6 +422,17 @@ export class PlanDayService {
    * about the day; this is ours about a pattern. `source` already tells the two
    * apart, and an operator publishing a time for a date they call out of season
    * is the operator correcting our detector.
+   *
+   * **And unlike the rides, this does apply to a past date.** The ride rules get
+   * their future-only bound for free by living in `forecastRides`, and the
+   * reason they need it is that a past day is answered from a MEASUREMENT — a
+   * row in the rollup says the ride ran, and a description of the past may not
+   * delete an observation. There is no such row behind a projection: it is our
+   * inference about a day, built from a pattern measured in the last four weeks,
+   * and a Halloween programme belongs no more in last January than in next
+   * December. A past day's observation is the `scheduled` half, and that half
+   * passes through untouched — `getShowtimesOnDate` answers a past date from the
+   * snapshots taken on it, months back.
    */
   private static showOutOfSeasonOn(
     show: { isSeasonal?: boolean | null; seasonMonths?: number[] | null },
@@ -1104,8 +1115,7 @@ export class PlanDayService {
    * `Promise.all` rather than behind it. It asks about the excluded ids only,
    * and it is bounded in time for the same reason `downYesterday` is — an
    * unbounded `DISTINCT ON` over the hypertable decompresses every chunk
-   * (measured at ~6 s isolated in `attractions.service.ts`'s own note). Two days
-   * keeps even a park that only re-emits CLOSED rows overnight.
+   * (measured at ~6 s isolated in `attractions.service.ts`'s own note).
    *
    * **Which row counts.** The STANDBY one where the ride has it, the newest
    * otherwise — the shape `attractions.service.ts` already uses for "current
@@ -1366,12 +1376,12 @@ export class PlanDayService {
    * running today carries no `seasonOutSince` at all, so the far-date case was
    * never this branch's to answer.
    *
-   * What this does NOT do is overrule the season with a live reading. The park
-   * page does (`closedByTheSeason` in `park-integration.service.ts`: a live
-   * `OPERATING` row means the season on file is behind the park), and this
-   * service reads no live status, so for TODAY the two can disagree about a ride
-   * whose season data has gone stale. Closing that needs a per-request status
-   * query on a hot path, which is a cost decision of its own.
+   * What this does NOT do is overrule the season with a live reading — that is
+   * {@link runningNow}'s job, applied to this function's answer rather than
+   * inside it, and it reaches today alone. So a detector note with no months
+   * behind it still drops a ride from TOMORROW's plan on the strength of a
+   * reading today contradicts, which is the half of the park page's rule that is
+   * not closed yet.
    *
    * @param nearHorizon - Whether "shut now" still speaks for the day asked about.
    */
