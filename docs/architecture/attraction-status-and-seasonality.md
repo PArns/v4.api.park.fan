@@ -1,10 +1,16 @@
 # Attraction Status & Seasonality
 
-> **2026-08-15.** Written after an investigation that started with two
-> playgrounds reading CLOSED and ended with ~140 attractions across ten parks
-> doing the same for the wrong reason, a background job that had been dead for
-> 73 days, and every `season_months` value in the database turning out to
-> describe our recording window rather than a season.
+> **2026-08-15, re-measured 2026-09-11.** Written after an investigation that
+> started with two playgrounds reading CLOSED and ended with a large cluster of
+> attractions across ten parks doing the same for the wrong reason, a background
+> job that had been dead for 73 days, and every `season_months` value in the
+> database turning out to describe our recording window rather than a season.
+>
+> The cluster figure was "~140 attractions across ten parks" and did not survive
+> being measured: **125 rides are genuinely silent, 62 of the same cut were
+> never silent at all, and 17 were recategorised upstream.** §5.2a has the split
+> and the two checks that produce it; every number in §5.2 above it is the older
+> reading.
 
 This document is the one place that says **who owns which cell** and **what an
 absent fact is allowed to become**. Both questions have been answered
@@ -507,7 +513,7 @@ The predicate is `observedReadingsSql()` from `closure-gap.sql.ts`, not a bare
 `data_source <> 'system-reconciliation'`: a heartbeat carries the previous row's
 `data_source` forward, so the loose form would read a feed that stopped
 yesterday as one that is still writing. (Both forms happen to return the same
-twelve-park split here — checked — but only because none of these rides is
+sixteen-park split here — checked — but only because none of these rides is
 being carried.)
 
 `$1` is the `silent_set` column of the §6 cluster query (unnest it across the

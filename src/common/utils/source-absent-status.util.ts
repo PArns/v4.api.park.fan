@@ -39,11 +39,13 @@
  * reading here — only `is_heartbeat` tells them apart, which is why
  * `observedReadingsSql()` checks it and this does not.
  *
- * The two writers are mutually exclusive at any instant: `writeHourlyHeartbeats`
- * only keeps a ride whose `attraction:last-seen` is inside 24h, and
- * reverse-reconciliation only writes when that same key is missing or older. So
- * a ride is never heartbeated and reconciled in the same cycle, and none of
- * those 125 has a heartbeat row at all (measured 2026-09-11).
+ * The two writers are all but exclusive: `writeHourlyHeartbeats` only keeps a
+ * ride whose `attraction:last-seen` is inside 24h, and reverse-reconciliation
+ * only writes when that same key is missing or older. The guards meet at the
+ * boundary rather than partitioning it, and a failed Redis `mget` makes every
+ * ride look never-seen — but in the ordinary case a ride is not heartbeated and
+ * reconciled in the same cycle, and none of those 125 has a heartbeat row at
+ * all (measured 2026-09-11).
  *
  * That leaves the **first 24 hours after a feed drops a ride**, when it gets
  * heartbeats and no reconciliation at all: every row in that window carries the
