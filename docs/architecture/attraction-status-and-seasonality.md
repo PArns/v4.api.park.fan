@@ -460,9 +460,23 @@ plainly:
 | 270 days, `>= 5` | 12 rows, incl. Knott's 9 (last OPERATING 2026-04-14), Fiesta Texas 15 (04-12), USS 17 (04-25), Hollywood 5 |
 
 The three parks with the oldest drops are invisible at 120 days — the very
-cases the cut exists to find — and Europa-Park's 44 is itself a 120-day
-artefact of exactly this kind: two of its rides went quiet earlier than the
-window and only appear in the 46.
+cases the cut exists to find.
+
+**And while we are counting Europa-Park, it carries three different numbers in
+this section, all correct.** They are not versions of one figure:
+
+| | what it counts |
+|---|---|
+| **44** | entities that stopped arriving in the feed on 2026-06-07 — the feed-side event |
+| **45** | the sweep population above: rides with >100 OPERATING rows before the drop and none since |
+| **46** | today's 270-day cut, which is the sweep's own `> 0` variant: the 45 plus the dual-sourced *'Bellevue' Ferris Wheel* (81 OPERATING rows before, none after) |
+
+The 120-day run happens to return 44 as well, by dropping *Children's carousel*
+(last OPERATING 2026-04-14) and the Ferris wheel (2026-01-18) out of the 46.
+That is a coincidence of arithmetic and not the same 44 — one is a feed event,
+the other a window artefact. The sweep's verdicts cover the 45; the Ferris
+wheel has none, and correctly so: it is dual-sourced and was never part of the
+population this section is about.
 
 Two follow-up checks turn that count into an answer, and **they are not
 interchangeable**:
@@ -676,11 +690,15 @@ SELECT p.id, p.name, p."citySlug", count(*),
 ```
 Identical min/max dates = a feed event, not N independent closures.
 
-**Group by `p.id`, never `p.slug` or `p.name`.** `slug` is not unique — there
-are two `disneyland-park` rows, Anaheim and Paris, and grouping over it adds
-them together. A display name is not an identity either, in both directions:
-§5.5's two rows are one park under two names, so a name grouping reports it
-twice.
+**Group by `p.id`, never `p.slug` or `p.name`.** Neither is an identity.
+`slug` is not unique — there are two `disneyland-park` rows, Anaheim and Paris,
+and grouping over it silently adds two parks into one. A display name can be
+edited or curated and is no safer.
+
+Grouping correctly will not rescue you from §5.5, though, and it is worth being
+clear which problem is which: there, **two `parks` rows are one real park**, so
+every grouping — id included — reports it twice. No query fixes that; only a
+merge does.
 
 **Widen the window past 120 days when chasing a specific drop.** A ride whose
 last OPERATING row falls outside the window has no `last_op` and vanishes from

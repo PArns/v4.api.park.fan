@@ -21,10 +21,13 @@
  * upstream and still report, into `show_live_data`. Busch Gardens Tampa came
  * back by itself after 65 days, and all nine of its rides had a Queue-Times
  * mapping — so "no Queue-Times mapping to fall back on" is not the tell it was
- * taken for either (50 of the 170 silent rides carry one).
+ * taken for either: 50 of the 170 rides the cluster query returns carry one.
  *
- * What is left for this guard is 97 rides across seven parks, of which only
- * Europa-Park's and Rulantica's are operating rides. See §5.2a of
+ * What this guard covers is **97 genuinely silent rides across seven parks**,
+ * of which only Europa-Park's and Rulantica's are operating rides rather than
+ * arcades, museums and out-of-season mazes — plus, for now, the 17 Singapore
+ * rows, which are equally source-absent here because their feed moved to
+ * `show_live_data`. They stop counting once PAR-159 retires them. See §5.2a of
  * `docs/architecture/attraction-status-and-seasonality.md` for the three
  * groups and the two checks that tell them apart.
  *
