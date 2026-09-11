@@ -32,11 +32,19 @@
  * rows — equally source-absent here, because their feed moved to
  * `show_live_data`. They stop counting once PAR-159 retires them.
  *
- * Note what the test below does NOT do: a carried heartbeat keeps the previous
- * row's `dataSource`, so a ride reached only by heartbeats is not source-absent
- * by this definition even though nothing fresh arrived. It does not bite today
- * — none of those 97 has a heartbeat row at all, measured — but the rides it
- * would bite for are exactly the ones this guard exists for. PAR-162.
+ * One thing the test below does not look at: a carried heartbeat keeps the
+ * previous row's `dataSource`, so a heartbeat row is indistinguishable from a
+ * reading here — only `is_heartbeat` tells them apart, which is why
+ * `observedReadingsSql()` checks it and this does not.
+ *
+ * The two writers are mutually exclusive at any instant: `writeHourlyHeartbeats`
+ * only keeps a ride whose `attraction:last-seen` is inside 24h, and
+ * reverse-reconciliation only writes when that same key is missing or older.
+ * So a ride cannot be heartbeated and reconciled at the same time, and none of
+ * the 97 has a heartbeat row at all (measured 2026-09-11). What is not
+ * established is whether any caller's freshness window is wide enough to span
+ * the changeover and hold both kinds — PAR-162 asks that question rather than
+ * asserting a defect.
  *
  * See §5.2a of `docs/architecture/attraction-status-and-seasonality.md` for the
  * three groups and the two checks that tell them apart.

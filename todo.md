@@ -543,8 +543,11 @@ CLOSED on all three surfaces. What is **not** fixed is what the detector does
 with the same rows.
 
 - [ ] `detect-seasonal` reads `current_status = 'CLOSED'` and the OPERATING
-      history, both of which still describe the frozen feed. So the ~140
-      feed-dropped attractions keep being marked seasonal, and the months it
+      history, both of which still describe the frozen feed. So the
+      feed-dropped attractions keep being marked seasonal — **97 of them, not
+      the ~140 this used to say**, measured 2026-09-11 (PAR-38); the other 73
+      of that figure were either recategorised upstream or never silent at
+      all. The months it
       derives are the observation-window artefact **at scale**: all 44
       Europa-Park rides carry the identical list `[1,2,3,4,5,6,12]`, which is
       simply "every month before the feed went silent". In August that reads as
@@ -617,12 +620,22 @@ with the same rows.
       rules that out as evidence, and its absence from the list may equally mean
       it no longer stands, which would be `retired_at`. Needs a source either
       way; it reads `UNKNOWN` until then.
-- [ ] **The other parks have not been swept.** Europa-Park took one pass over 45
-      rides; the six others this item names — Rulantica (18), Universal Studios
-      Singapore (17), the two Wet'n'Wild records (13 + 13), Busch Gardens Tampa
-      (9) and Ocean Park (7) — are the same shape of work. Note the item says
-      **ten** parks and lists seven: three are unaccounted for and want finding
-      before anyone calls the backlog complete.
+- [ ] **The other parks have not been swept, and the list of them changed on
+      2026-09-11** (PAR-38, §5.2a of
+      `docs/architecture/attraction-status-and-seasonality.md`). Four of the six
+      parks this item used to name need no sweep at all: Universal Studios
+      Singapore's 17 were recategorised to `SHOW` and still report, both
+      Wet'n'Wild rows and Ocean Park were never silent, and Busch Gardens Tampa
+      came back by itself. "Ten parks, seven listed, three unaccounted for" was
+      an artefact of a 120-day window, not a gap in the list.
+
+      What is actually left, after Europa-Park's 45: **Rulantica (18)** and
+      **Mid-America Parks (3)** — the only other silent rides that are operating
+      attractions rather than arcades, museums or out-of-season mazes. Six Flags
+      Fiesta Texas (15), Knott's Berry Farm (9) and Universal Studios Hollywood
+      (5) are silent too, but a Fright Fest maze that is out of season and an
+      arcade with no queue are not free-flow candidates and a sweep would spend
+      a day saying so.
 
 ## Free-flow attractions & seasonality (2026-08-15)
 
