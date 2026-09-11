@@ -471,6 +471,59 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   -- Taking the numerator's expression handles the DST case for free: on an
   -- ordinary day it is local_date($2), and after a shift it is whatever day the
   -- oldest reading actually landed on, because it is the same conversion.
+  -- The lowest operating day the numerator can reach, resolved ONCE per park.
+  --
+  -- A grouped CTE rather than a scalar subquery in the WHERE below, and that is
+  -- not tidiness: correlated on the park, it would be a SubPlan re-executed for
+  -- every attraction_exposure_days row the scan touches — roughly 6800 a day —
+  -- against a CTE the planner cannot index. This file has paid that bill twice
+  -- already and written both receipts a few lines apart: the blind-park check
+  -- at 70 s as a correlated NOT EXISTS, and the operating-day count past two
+  -- minutes as a correlated subquery inside cycle. Same mistake, same fix.
+  --
+  -- Cheap here: blind_parks LEFT JOIN win is about 91 parks against the
+  -- window's schedule rows, grouped straight back down to one row per park.
+  --
+  -- LEFT, so a park that published no hours in the window still gets a floor.
+  -- An inner join would drop it from this CTE, the join below would drop its
+  -- exposure rows with it, and every one of its rides would sit at
+  -- active_days = 0 — which passes the duty-cycle arm unconditionally and
+  -- stores its whole history as faults.
+  --
+  -- Why from_day is two candidates with the lowest winning. op_day stopped
+  -- being local_date($2) when raw_gaps moved onto the window's opening date:
+  -- in a park that closes after midnight a gap read just after $2 can carry
+  -- the PREVIOUS local day, so a bare local_date($2) floor would exclude an
+  -- operating day the numerator counted and push the gap-share ratio up — the
+  -- direction that suppresses a real fault as a duty cycle. The numerator has
+  -- two sources for a day: a reading inside a window contributes that window's
+  -- op_day (and the earliest window a reading at or after $2 can fall in is the
+  -- earliest one still running at $2, MIN(op_day) FILTER closes_at > $2), a
+  -- reading outside every window contributes its calendar day (earliest
+  -- local_date($2)). For every park that closes before midnight the two are
+  -- the same date, so the bound is unchanged in value and the measured 330/112
+  -- stands.
+  --
+  -- LEAST, not the filtered MIN alone: when the park is shut at $2 the earliest
+  -- window still to come opens LATER than $2, and its op_day would move the
+  -- floor forward rather than back. And COALESCE inside, redundant in
+  -- PostgreSQL's NULL-skipping LEAST but kept: the same function returns NULL
+  -- on a NULL argument in other dialects, and a floor that silently became
+  -- NULL would drop every denominator row and pass the gap-share test for
+  -- every ride — too quiet a failure to rest on which engine reads the word.
+  active_floor AS (
+    SELECT b.pid,
+           LEAST(
+             ($2::timestamptz AT TIME ZONE b.tz)::date,
+             COALESCE(
+               MIN(w.op_day) FILTER (WHERE w.closes_at > $2::timestamptz),
+               ($2::timestamptz AT TIME ZONE b.tz)::date
+             )
+           ) AS from_day
+      FROM blind_parks b
+      LEFT JOIN win w ON w.park_id = b.pid
+     GROUP BY b.pid, b.tz
+  ),
   active AS (
     SELECT e."attractionId" AS aid,
            count(*) FILTER (WHERE e.operating_minutes > 0)::numeric AS active_days
@@ -482,6 +535,7 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
       -- hard delete, exposure rows whose attraction no longer resolves would
       -- drop out of the denominator and inflate that ride's gap share.
       JOIN blind_parks b ON b.pid = e."parkId"
+      JOIN active_floor f ON f.pid = e."parkId"
      -- The SCAN window, which is what this statement's numerator spans.
      --
      -- One rule governs both statements: the denominator covers the same span
@@ -499,42 +553,11 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
      -- historical gaps is stored as a fault. The equal-span rule is the real
      -- invariant; equal LENGTHS were a proxy for it that breaks whenever the
      -- inputs differ.
-     -- The numerator's own lowest operating day, which stopped being
-     -- local_date($2) when raw_gaps moved off the calendar.
      --
-     -- op_day is now the containing window's opening date, so in a park that
-     -- closes after midnight a gap read just after $2 can carry the PREVIOUS
-     -- local day. Left as a bare local_date($2), the denominator then excludes
-     -- an operating day the numerator counted — the ratio goes up, and up is
-     -- the direction that suppresses a real fault as a duty cycle. The same
-     -- one-day skew the slack day caused, mirrored.
-     --
-     -- Two candidates, lowest wins, because the numerator has two sources for
-     -- a day: a reading inside a window contributes that window's op_day, and
-     -- the earliest window a reading at or after $2 can fall in is the earliest
-     -- one still running at $2; a reading outside every window contributes its
-     -- calendar day, and the earliest of those is local_date($2).
-     --
-     -- For every park that closes before midnight the two are the same date,
-     -- so this bound is unchanged in value and the measured 330/112 stands.
-     -- LEAST, not COALESCE alone: when the park is shut at $2 the earliest
-     -- window still to come opens LATER than $2, and its op_day would move the
-     -- bound forward rather than back.
-     --
-     -- And COALESCE as well as LEAST, which is redundant in PostgreSQL and
-     -- kept: LEAST here skips a NULL argument, where the same function returns
-     -- NULL in several other dialects. A bound that silently became NULL would
-     -- drop every row of the denominator and pass the whole gap-share test for
-     -- every ride — too quiet a failure to leave resting on which engine the
-     -- word LEAST is read by.
-     WHERE e.op_day >= LEAST(
-             ($2::timestamptz AT TIME ZONE b.tz)::date,
-             COALESCE((SELECT MIN(w.op_day)
-                         FROM win w
-                        WHERE w.park_id = b.pid
-                          AND w.closes_at > $2::timestamptz),
-                      ($2::timestamptz AT TIME ZONE b.tz)::date)
-           )
+     -- The lower bound is active_floor.from_day, the numerator's own lowest
+     -- reachable operating day, resolved once per park above — see that CTE for
+     -- why it is two candidates and not a bare local_date($2).
+     WHERE e.op_day >= f.from_day
        -- Both edges from the numerator's own instants, for the reason the
        -- lower one carries. src reads qd.timestamp < $3, so its last possible
        -- day is the local day of the instant just before $3 -- which is the

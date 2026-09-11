@@ -51,10 +51,14 @@ export type DowntimeEndReason = (typeof DOWNTIME_END_REASONS)[number];
  * denominator lives in `attraction_exposure_days` and holds minutes only, so
  * nothing there can be summed back into an event count.
  *
- * Rows are rewritten, not appended: the reconstruction deletes every outage of
- * the parks it covers from `scan_start` forward and re-inserts, so a multi-day
- * outage that has grown since yesterday replaces itself instead of leaving a
- * fragment behind.
+ * Rows are rewritten, not appended: the reconstruction deletes the outages of
+ * the rides it covered this run from `scan_start` forward and re-inserts, so a
+ * multi-day outage that has grown since yesterday replaces itself instead of
+ * leaving a fragment behind. The delete is scoped to the covered rides, not the
+ * whole park: a ride that leaves the tracked population between two runs (a
+ * merge, a retirement, a flip to free-flow) would otherwise have its history
+ * deleted and never rewritten. See the `coveredIds` note in
+ * `DowntimeReconstructionProcessor`.
  */
 @Entity("attraction_outages")
 @Index(["parkId", "startedAt"])
