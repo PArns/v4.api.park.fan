@@ -32,6 +32,13 @@ arrived — an ML service having a bad minute, a park the run skipped — went o
 composed data under the `measured` label, which is the one failure the whole
 design is arranged against.
 
+**And "built" means served, not merely offered.** `measured` requires an hour
+that is in the response, which is one step further than "the model answered for a
+ride the day kept". A ride can survive every filter, carry the model's own hourly
+answer and still leave nothing behind — `hours` comes out empty when every hour
+the model spoke for lies below that ride's own opening hour (§9) — and the header
+then described a response in which every single hour was composed.
+
 There is no fixed "daily horizon" constant. `predict.py` walks the park's
 schedule, so the daily forecast ends where the operator's published calendar
 does: 181 to 362 days across the live parks, averaging 193. A hard-coded 60 was
@@ -223,10 +230,35 @@ Three things about it are easy to get wrong from the outside:
   year of plans with no field saying why. Past tomorrow only the months decide,
   and with no months on file the ride stays.
 
-One thing it deliberately does not do: **overrule the season with a live
-reading.** The park page does — a live `OPERATING` row means the season on file
-is behind the park — and this endpoint reads no live status, so for *today* the
-two can disagree about a ride whose season data has gone stale.
+**A live `OPERATING` row overrules the season, for today.** The park page has
+always had this rule — a ride you can queue for is behind a season that has gone
+stale, not the other way round — and until this endpoint read a live status the
+two surfaces could answer differently about one ride on one day. The window for
+that is not one night: `detect-seasonal` is a daily job and has already been out
+for **73 days** without anyone noticing.
+
+It costs 0 or 1 extra query per request, never more, and the one runs inside the
+existing parallel batch rather than behind it. It is skipped unless something
+could actually change: not today's park-local date, park CLOSED for the day, or —
+the common case — nothing excluded by the season at all. It asks only about the
+rides the season excluded, and only an explicit `OPERATING` rescues one, which is
+what keeps a park we cannot read out of it: a feed that only ever writes CLOSED,
+and reverse-reconciliation's own CLOSED stamps, both fail the test.
+
+A reading counts back to **the day's own opening, and never less than six
+hours** — the park page's own cutoff rule, where the opening is a floor under how
+much history is kept rather than a ceiling over it, because a queue row is
+written on change plus an hourly heartbeat and the current reading for a ride
+that has not moved can predate the gates. Where the operator published no
+opening, the six hours are the whole window. Neither a flat interval nor
+park-local midnight would do: the first rescues a ride off yesterday evening, the
+second off last night's session on a park that runs past midnight — both claims
+about an operating day that is not the one being planned.
+
+It corrects **today**, which is the only day a live row speaks about. A detector
+note with no months behind it reaches one day further (§6), so a ride running
+today can still be absent from tomorrow's plan off that same note — the
+`seasonOutSince` half of the rule, tracked separately.
 
 Nothing upstream does this. `MLService.getParkPredictions` keeps rides with an
 OPERATING reading in the last 90 days, which is a question about the past asked
@@ -243,6 +275,40 @@ than that, a far-date plan is only cleaned up where somebody has curated
 `Betriebsmonate` under `/admin/attractions/<id>`. That is a data gap, not a hole
 in the rule, and it is the honest place for it: the alternative is guessing a
 calendar from a note that says "shut at the moment".
+
+### A ride inside a hand-written works period is absent too
+
+The season is **detected**; a works period is **written**. An editor states it
+under `/admin/attractions/<id>` as `curated_out_of_service_from` /
+`curated_out_of_service_to`, park-local, **both bounds inclusive**, and either
+bound may stand alone — `from` with no `to` is the usual shape while work is
+running and nobody has said when it ends.
+
+It is the stronger of the two statements on every axis: a person rather than a
+detector, a date range rather than a month, and set-or-not-set rather than the
+season's three values, so it needs none of that column's caution. It is also the
+one thing the season demonstrably cannot express — `season_out_since` is
+satisfied by a three-week rebuild exactly as well as by a winter, and months only
+arrive at 330 watched days. The window sat in the same table the whole time and
+this endpoint did not read it, so a ride marked out from 16 January to 3 March
+was served for 10 February with a full curve, a `dayPeak` and possibly
+`isHeadliner`.
+
+Three boundaries are worth stating outright:
+
+- **Asked about the planned day**, not about today. `isCuratedOutOfService`
+  defaults to the park's today, and today is not what this endpoint was asked
+  about.
+- **Not applied to a past date**, same as the season. The reconstruction *does*
+  apply the same window to history (`outage-reconstruction.sql.ts` tests it
+  against the day the outage started), but what it suppresses there is an outage
+  **inferred from silence**; a row in the hourly rollup is the opposite of
+  silence. And a window covering a day the ride demonstrably queued is a window
+  that wants correcting — hiding the measurement would hide the correction.
+- **A live reading does not overrule it.** The exception above is the season's
+  alone. Inside a works period the same window already suppresses a live *DOWN*
+  reading in the outage path; letting an `OPERATING` row through here would
+  delete its purpose exactly where an editor took the trouble to state it.
 
 ## 7. `leadTimeMae`
 
@@ -313,6 +379,31 @@ at Europa-Park on exactly one Thursday in July, and projecting it forward would
 have put a concert on every remaining Thursday of the year — and it must have
 been seen in the last 28 days, measured against **today** rather than against the
 date asked about, or every date more than four weeks out would reject itself.
+
+**A third guard is the show's own season.** `shows` carries `is_seasonal` and
+`season_months`, written by the same nightly detector that writes the rides', and
+a projection is dropped where the season says `false` for the **planned** month —
+same three values as the rides, so `null` ("seasonal, and nothing else known")
+changes nothing. The case it exists for: a Halloween show last seen on
+1 November, asked about on the 5th for a plan on 20 December. The pattern is four
+days old and the weekday matches, so neither of the other two guards was ever
+going to catch it.
+
+Two differences from the ride rule, both of them properties of the table rather
+than decisions. There is no near-horizon bound, because `shows` has no
+`season_out_since` — the column that makes "shut right now" reach further than it
+should does not exist there, so the only thing to read is a calendar, and a
+calendar is as good six months out as tomorrow. And a **`scheduled` time is never
+filtered**: it is the operator's statement about that day against our detector's
+statement about a year, and an operator publishing a time for a date we call out
+of season is the operator correcting us.
+
+Unlike the ride rules this one **does** apply to a past date, and the difference
+is what is being filtered. A past day's rides come from a measurement, and a
+description of the past may not delete an observation; a projection is no such
+thing — it is our inference from a pattern seen in the last four weeks. The
+observation for a past day is the `scheduled` half, and that passes through
+untouched.
 
 A caller must render `projected` differently from `scheduled`. It is what the
 show did, not a promise that it runs; `observedOn` is there so the reader can see

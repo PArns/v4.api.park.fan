@@ -6,6 +6,47 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — `/plan/day` reads the works window, the live status and the hours it served
+
+Four gaps in `PlanDayService`, three of them on the same thirty lines, all of
+them follow-ups from the season filter under "`/plan/day` no longer plans a day
+around a ride that cannot open on it" below.
+
+**A hand-written works period never reached the endpoint.**
+`curated_out_of_service_from` / `_to` were not even in `attractions()`'s select
+list, so a ride an editor had marked out for 16 January to 3 March was served for
+10 February with a full curve, a `dayPeak` and possibly `isHeadliner`. It is the
+stronger of the two statements — a person rather than a detector, a date range
+rather than a month, set-or-not-set rather than the season's three values — and
+it is the one thing the season cannot express, since `season_out_since` is
+satisfied by a three-week rebuild exactly as well as by a winter. Asked with the
+**planned** date and the park's timezone; not applied to a past date, for the
+same reason the season is not.
+
+**A live `OPERATING` row now overrules a stale season, for today.** The park page
+has had the rule all along and this endpoint read no live status, so the two
+could answer differently about one ride on one day — for longer than a night, as
+`detect-seasonal` has already been out for 73 days once. The cost is **0 or 1
+extra query per request**: it asks only about the rides the season excluded, only
+when the planned date is the park's today and the park is not CLOSED, and it runs
+inside the existing parallel batch. It does **not** overrule a curated works
+period; that window already outranks a live reading in the outage path.
+
+**A show out of season is no longer projected.** `shows` carries `is_seasonal`
+and `season_months` from the same nightly detector, and nobody read them here: a
+Halloween show last seen on 1 November was projected into 20 December, four days
+"fresh" and on the right weekday. A published `scheduled` time is never filtered —
+that is the operator correcting our detector, not the reverse.
+
+**`tier: "measured"` is decided after the ride loop**, off the hours that were
+actually served rather than off membership of the ride map. A ride can survive
+every filter, carry the model's hourly answer and still leave nothing behind when
+every hour the model spoke for lies below its own opening hour; the header then
+claimed `measured` over a response in which every hour was composed.
+
+`plan-day.service.spec.ts` 62 → 84 cases, 8 of which fail against the previous
+service. Contract: [plan-day-endpoint.md §6, §8](frontend/plan-day-endpoint.md).
+
 ### Added — a per-park override for schedule sources that publish a 12-hour clock
 
 `parks.curated_uses_twelve_hour_clock`. Some sources publish a 12-hour clock

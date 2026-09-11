@@ -35,6 +35,8 @@ describe("PlanDayService", () => {
   let profile: unknown;
   let attractions: Array<Partial<Attraction>>;
   let downRows: Array<{ attractionId: string }>;
+  /** The latest live reading per ride, for the season exception. */
+  let liveRows: Array<{ attractionId: string; status: string }>;
   let headlinerIds: Set<string>;
   let headlinerFails: boolean;
   let queryCalls: unknown[][];
@@ -50,7 +52,13 @@ describe("PlanDayService", () => {
   >;
   let profileMock: jest.Mock;
   let leadMaeMock: jest.Mock;
-  let parkShows: Array<{ id: string; slug: string; name: string }>;
+  let parkShows: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    isSeasonal?: boolean;
+    seasonMonths?: number[] | null;
+  }>;
   let scheduledTimes: Map<string, string[]>;
   let patterns: Map<string, unknown>;
 
@@ -63,11 +71,17 @@ describe("PlanDayService", () => {
           useValue: {
             find: jest.fn().mockImplementation(async () => attractions),
             manager: {
+              // Two raw statements reach this mock and they answer different
+              // questions, so it dispatches on the SQL rather than handing the
+              // same rows to both. `queryCalls` is what the cost of the live
+              // lookup is counted from.
               query: jest
                 .fn()
                 .mockImplementation(async (...args: unknown[]) => {
                   queryCalls.push(args);
-                  return downRows;
+                  return String(args[0]).includes("DISTINCT ON")
+                    ? liveRows
+                    : downRows;
                 }),
             },
           },
@@ -156,6 +170,7 @@ describe("PlanDayService", () => {
       { id: "a-taron", slug: "taron", name: "Taron", landName: "Mystery" },
     ];
     downRows = [];
+    liveRows = [];
     headlinerIds = new Set<string>();
     headlinerFails = false;
     queryCalls = [];
@@ -236,6 +251,22 @@ describe("PlanDayService", () => {
 
   /** The day after a `YYYY-MM-DD`. */
   const dayAfter = (date: string) => dayShift(date, 1);
+
+  /**
+   * A date in a month that is neither this one nor next — so "the planned
+   * month" and "the month the suite runs in" can never be the same value, on
+   * any day of any month.
+   */
+  const otherMonthDate = (): string => {
+    const now = new Date();
+    const at = new Date(now.getFullYear(), now.getMonth() + 2, 10, 12);
+    return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-10`;
+  };
+
+  const monthOf = (date: string) => Number(date.slice(5, 7));
+
+  const allMonthsExcept = (month: number) =>
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].filter((m) => m !== month);
 
   /** The UTC instant of a park-local hour on a park-local date. */
   const atParkHour = (date: string, hour: number): string => {
@@ -1289,6 +1320,134 @@ describe("PlanDayService", () => {
 
       expect(plan.shows.map((s) => s.showSlug)).toEqual(["early", "late"]);
     });
+
+    // The Halloween case, which both existing guards wave through: a show last
+    // seen on 1 November, asked about on the 5th for a plan on 20 December. The
+    // pattern is four days old and the weekday matches, so nothing in front of
+    // the projection was ever going to catch it.
+    describe("out of season", () => {
+      it("does not project a show into a month its season does not cover", async () => {
+        const date = otherMonthDate();
+        calendarDay = { ...calendarDay!, date };
+        parkShows = [
+          {
+            id: "s-1",
+            slug: "big-moments",
+            name: "Big Moments",
+            isSeasonal: true,
+            seasonMonths: allMonthsExcept(monthOf(date)),
+          },
+        ];
+        patterns = new Map([
+          ["s-1", pattern({ lastObservedOn: todayMinus(3) })],
+        ]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows).toEqual([]);
+      });
+
+      it("keeps a show whose season is seasonal-but-unknown", async () => {
+        // `null`, the same third value the rides have: seasonal, and nothing
+        // else known. It may not delete a programme we have simply not watched
+        // for long enough to give months to.
+        const date = otherMonthDate();
+        calendarDay = { ...calendarDay!, date };
+        parkShows = [
+          {
+            id: "s-1",
+            slug: "big-moments",
+            name: "Big Moments",
+            isSeasonal: true,
+            seasonMonths: null,
+          },
+        ];
+        patterns = new Map([
+          ["s-1", pattern({ lastObservedOn: todayMinus(3) })],
+        ]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows.map((s) => s.source)).toEqual(["projected"]);
+      });
+
+      it("asks about the planned month, not the month the request arrives in", async () => {
+        const date = otherMonthDate();
+        calendarDay = { ...calendarDay!, date };
+        parkShows = [
+          {
+            id: "s-1",
+            slug: "big-moments",
+            name: "Big Moments",
+            isSeasonal: true,
+            seasonMonths: [monthOf(date)],
+          },
+        ];
+        patterns = new Map([
+          ["s-1", pattern({ lastObservedOn: todayMinus(3) })],
+        ]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows.map((s) => s.source)).toEqual(["projected"]);
+      });
+
+      it("applies to a past date too, which the ride rules do not", async () => {
+        // The rides stop at today's edge because a past day is answered from a
+        // measurement. A projection is not one: it is our inference from a
+        // pattern seen in the last four weeks, and a Halloween programme
+        // belongs no more in last January than in next December. The
+        // observation for a past day is the `scheduled` half, and that is not
+        // filtered — see the case below.
+        const date = pastDate();
+        calendarDay = { ...calendarDay!, date };
+        parkShows = [
+          {
+            id: "s-1",
+            slug: "big-moments",
+            name: "Big Moments",
+            isSeasonal: true,
+            seasonMonths: allMonthsExcept(monthOf(date)),
+          },
+        ];
+        patterns = new Map([
+          ["s-1", pattern({ lastObservedOn: todayMinus(3) })],
+        ]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows).toEqual([]);
+      });
+
+      it("still serves a showtime the operator published for that day", async () => {
+        // The operator's statement about the day, against our detector's
+        // statement about a year. Publishing a time for a date we call out of
+        // season is the operator correcting us, not us catching them.
+        const date = otherMonthDate();
+        calendarDay = { ...calendarDay!, date };
+        parkShows = [
+          {
+            id: "s-1",
+            slug: "big-moments",
+            name: "Big Moments",
+            isSeasonal: true,
+            seasonMonths: allMonthsExcept(monthOf(date)),
+          },
+        ];
+        scheduledTimes = new Map([["s-1", ["20:00"]]]);
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows).toEqual([
+          {
+            showSlug: "big-moments",
+            showName: "Big Moments",
+            times: ["20:00"],
+            source: "scheduled",
+          },
+        ]);
+      });
+    });
   });
 
   // ── A day that already happened ────────────────────────────────────────────
@@ -1461,22 +1620,6 @@ describe("PlanDayService", () => {
   // December. So the endpoint had a curve, a `dayPeak` and an `isHeadliner` for
   // a ride the park cannot run that day.
   describe("seasonality", () => {
-    /**
-     * A date in a month that is neither this one nor next — so "the planned
-     * month" and "the month the suite runs in" can never be the same value, on
-     * any day of any month.
-     */
-    const otherMonthDate = (): string => {
-      const now = new Date();
-      const at = new Date(now.getFullYear(), now.getMonth() + 2, 10, 12);
-      return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-10`;
-    };
-
-    const monthOf = (date: string) => Number(date.slice(5, 7));
-
-    const allMonthsExcept = (month: number) =>
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].filter((m) => m !== month);
-
     /** The default fixture, planned for `date`, with `taron` made seasonal. */
     const planWithSeason = async (
       date: string,
@@ -1665,6 +1808,441 @@ describe("PlanDayService", () => {
       // An observation beats a description of the past, so the season may not
       // delete a measurement.
       expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+  });
+
+  // ── The hand-written works period ──────────────────────────────────────────
+  // The strongest statement in the table about a particular day, and the
+  // endpoint did not select the columns. A ride marked out from 16 January to
+  // 3 March was served for 10 February with a full curve.
+  describe("a curated works period", () => {
+    /** The default fixture, planned for `date`, with `taron` out of service. */
+    const planWithWindow = async (
+      date: string,
+      window: Partial<Attraction>,
+      extra: Partial<Attraction> = {},
+    ) => {
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      attractions = [{ ...attractions[0], ...window, ...extra }];
+      service = await build();
+      return service.buildPlanDay(park, date);
+    };
+
+    it("leaves a ride out of a day its window covers", async () => {
+      const date = farDate();
+
+      const plan = await planWithWindow(date, {
+        curatedOutOfServiceFrom: dayShift(date, -10),
+        curatedOutOfServiceTo: dayShift(date, 10),
+      });
+
+      // Absent, not closed — the same answer the season gives, and for the
+      // same reason: it is not one of the day's rides.
+      expect(plan.rides).toEqual([]);
+    });
+
+    it("plans a ride whose window ends before the day", async () => {
+      const date = farDate();
+
+      const plan = await planWithWindow(date, {
+        curatedOutOfServiceFrom: dayShift(date, -20),
+        curatedOutOfServiceTo: dayShift(date, -1),
+      });
+
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+
+    it("covers both bounds of the window", async () => {
+      // Inclusive at both ends, per the column's own contract: a window that
+      // ends on the 3rd covers the 3rd. The off-by-one would be invisible —
+      // one ride, one day a year, at each end.
+      const date = farDate();
+
+      const opening = await planWithWindow(date, {
+        curatedOutOfServiceFrom: date,
+        curatedOutOfServiceTo: dayShift(date, 30),
+      });
+      expect(opening.rides).toEqual([]);
+
+      const closing = await planWithWindow(date, {
+        curatedOutOfServiceFrom: dayShift(date, -30),
+        curatedOutOfServiceTo: date,
+      });
+      expect(closing.rides).toEqual([]);
+    });
+
+    it("handles a window with only a start, which is the usual one", async () => {
+      // Work is running and nobody has said when it ends. Open-ended forward,
+      // so every later date is inside it.
+      const date = farDate();
+
+      const plan = await planWithWindow(date, {
+        curatedOutOfServiceFrom: dayShift(date, -5),
+        curatedOutOfServiceTo: null,
+      });
+
+      expect(plan.rides).toEqual([]);
+    });
+
+    it("handles a window with only an end", async () => {
+      const date = farDate();
+
+      const inside = await planWithWindow(date, {
+        curatedOutOfServiceFrom: null,
+        curatedOutOfServiceTo: dayShift(date, 5),
+      });
+      expect(inside.rides).toEqual([]);
+
+      const after = await planWithWindow(date, {
+        curatedOutOfServiceFrom: null,
+        curatedOutOfServiceTo: dayShift(date, -5),
+      });
+      expect(after.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+
+    it("asks about the planned day, not about today", async () => {
+      // `isCuratedOutOfService` defaults to the park's today, and today is not
+      // what this endpoint was asked about. A window that covers the request's
+      // own date and not the planned one may not empty the plan.
+      const date = farDate();
+
+      const plan = await planWithWindow(date, {
+        curatedOutOfServiceFrom: dayFromToday(-1),
+        curatedOutOfServiceTo: dayFromToday(1),
+      });
+
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+
+    it("does not apply the window to a day that already happened", async () => {
+      const date = pastDate();
+      calendarDay = { ...calendarDay!, date };
+      attractions = [
+        {
+          ...attractions[0],
+          curatedOutOfServiceFrom: dayShift(date, -30),
+          curatedOutOfServiceTo: dayShift(date, 30),
+        },
+      ];
+      hourlyHistory = new Map([
+        ["a-taron", slots([["14:00", 70, 4]])],
+      ]) as never;
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      // The rollup has a row for this ride on this day, so it ran. The
+      // reconstruction applies the same window to history, but what it
+      // suppresses there is an outage INFERRED from silence; a rollup row is
+      // the opposite of silence. And a window covering a day the ride
+      // demonstrably queued is a window that wants correcting — hiding the
+      // measurement would hide the correction.
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+    });
+  });
+
+  // ── A live reading against a stale season ──────────────────────────────────
+  describe("a ride that is running despite its season", () => {
+    /** Seasonal, no months, flagged shut right now — dropped from today. */
+    const shutNow: Partial<Attraction> = {
+      isSeasonal: true,
+      seasonMonths: null,
+      seasonOutSince: "2026-01-31",
+    };
+
+    const planToday = async (over: Partial<Attraction> = {}) => {
+      const date = today();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      attractions = [{ ...attractions[0], ...shutNow, ...over }];
+      service = await build();
+      return service.buildPlanDay(park, date);
+    };
+
+    /** Raw statements that are the live lookup, not `downYesterday`. */
+    const liveLookups = () =>
+      queryCalls.filter((c) => String(c[0]).includes("DISTINCT ON"));
+
+    it("keeps a ride the feed reports OPERATING today", async () => {
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+      const plan = await planToday();
+
+      // The park page has had this rule all along: a live OPERATING row means
+      // the season on file is behind the park. Two surfaces disagreeing about
+      // one ride on one day is what this closes.
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+      expect(liveLookups()).toHaveLength(1);
+    });
+
+    it("asks only about the excluded rides, back to the day's own opening", async () => {
+      // Both parameters are the cost story. The id list is what keeps this off
+      // every ride in the park. The cutoff is the park page's own rule — today's
+      // opening, floored at six hours — and not a flat interval, which would
+      // rescue a ride off a reading that belongs to another operating day.
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+      const date = today();
+      const opening = new Date(Date.now() - 9 * 60 * 60 * 1000);
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        hours: {
+          openingTime: opening.toISOString(),
+          closingTime: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+        },
+      };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      attractions = [{ ...attractions[0], ...shutNow }];
+      service = await build();
+      await service.buildPlanDay(park, date);
+
+      const [, params] = liveLookups()[0] as [string, unknown[]];
+      expect(params[0]).toEqual(["a-taron"]);
+      expect(params[1]).toEqual(opening);
+    });
+
+    it("never looks back less than the floor, whatever the park published", async () => {
+      // A park that opened twenty minutes ago has almost no window, and a queue
+      // row is written on change plus an hourly heartbeat — so the reading for a
+      // ride that has not moved predates the gates. The opening is a floor under
+      // the window, not a ceiling over it.
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+      const date = today();
+      const opening = new Date(Date.now() - 20 * 60 * 1000);
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        hours: {
+          openingTime: opening.toISOString(),
+          closingTime: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
+        },
+      };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      attractions = [{ ...attractions[0], ...shutNow }];
+      service = await build();
+      await service.buildPlanDay(park, date);
+
+      const [, params] = liveLookups()[0] as [string, unknown[]];
+      const since = params[1] as Date;
+      expect(since.getTime()).toBeLessThan(opening.getTime());
+      // Six hours, to the minute the call was made.
+      expect(Date.now() - since.getTime()).toBeGreaterThanOrEqual(
+        6 * 60 * 60 * 1000,
+      );
+      expect(Date.now() - since.getTime()).toBeLessThan(
+        6 * 60 * 60 * 1000 + 60_000,
+      );
+    });
+
+    it("leaves it out when the feed says anything else", async () => {
+      liveRows = [{ attractionId: "a-taron", status: "CLOSED" }];
+
+      const plan = await planToday();
+
+      expect(plan.rides).toEqual([]);
+      expect(liveLookups()).toHaveLength(1);
+    });
+
+    it("does not ask when the season excludes nothing", async () => {
+      // The common case, and the reason this costs nothing: with no ride to
+      // rescue there is nothing to look up.
+      const date = today();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+      expect(liveLookups()).toHaveLength(0);
+    });
+
+    it("does not ask about a date that is not today", async () => {
+      // There is no live row for a day that has not happened, so a query for
+      // one would be a cost with no answer behind it.
+      const date = otherMonthDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      attractions = [
+        {
+          ...attractions[0],
+          isSeasonal: true,
+          seasonMonths: allMonthsExcept(monthOf(date)),
+        },
+      ];
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides).toEqual([]);
+      expect(liveLookups()).toHaveLength(0);
+    });
+
+    it("does not ask under a park that is closed for the day", async () => {
+      // The park page's `effectiveStatus` is CLOSED for every ride under a
+      // closed park, so nothing below it may claim to be running — and the
+      // condition here has to be the same one, not a second reading of it.
+      const date = today();
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        status: "CLOSED",
+        hours: {
+          openingTime: `${date}T07:00:00.000Z`,
+          closingTime: `${date}T16:00:00.000Z`,
+        },
+      };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      attractions = [{ ...attractions[0], ...shutNow }];
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides).toEqual([]);
+      expect(liveLookups()).toHaveLength(0);
+    });
+
+    it("does not let a live reading overrule a hand-written works period", async () => {
+      // A person wrote the window down, and inside it the same window already
+      // suppresses a live DOWN reading in the outage path. Letting an
+      // OPERATING row through would delete its purpose exactly where an editor
+      // took the trouble to state it.
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+      const plan = await planToday({
+        curatedOutOfServiceFrom: dayFromToday(-3),
+        curatedOutOfServiceTo: dayFromToday(3),
+      });
+
+      expect(plan.rides).toEqual([]);
+      expect(liveLookups()).toHaveLength(0);
+    });
+  });
+
+  // ── The label over the hours that were actually served ─────────────────────
+  describe("the tier is read off what was served", () => {
+    it("does not say measured when every served hour is composed", async () => {
+      // The ride the model answered hourly for opens at 17:00, and both its
+      // model hours are before that — so it is dropped by `hours.length === 0`
+      // and leaves nothing behind. The header used to say `measured` over a
+      // response in which every remaining hour was composed.
+      const date = dayFromToday(1);
+      calendarDay = { ...calendarDay!, date };
+      attractions = [
+        { id: "a-taron", slug: "taron", name: "Taron", landName: "Mystery" },
+        { id: "a-late", slug: "late", name: "Late Ride", landName: "Berlin" },
+      ];
+      profile = {
+        hours: [10, 14, 18],
+        attractions: [
+          {
+            attractionSlug: "taron",
+            attractionName: "Taron",
+            land: "Mystery",
+            p50: [30, 60, 20],
+            sampleDays: 141,
+          },
+        ],
+      };
+      dailyPredictions = [
+        {
+          attractionId: "a-taron",
+          predictedTime: `${date}T12:00:00.000Z`,
+          predictedWaitTime: 60,
+          predictionType: "daily",
+          uncertaintyMinutes: 12,
+        },
+      ];
+      hourlyPredictions = [10, 11].map((h) => ({
+        attractionId: "a-late",
+        predictedTime: atParkHour(date, h),
+        predictedWaitTime: 35,
+        predictionType: "hourly",
+      }));
+      rideOpenings = new Map([["a-late|09:00", "17:00"]]);
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+      expect(plan.tier).toBe("composed");
+      // And with the header telling the truth, the served hours carry no
+      // source of their own.
+      expect(plan.rides[0].hours.every((h) => h.source === undefined)).toBe(
+        true,
+      );
+    });
+
+    it("still says measured when one served hour came from the model", async () => {
+      // The other side of the same rule, so that fixing the label does not
+      // quietly cost the tier where it is earned.
+      const date = dayFromToday(1);
+      calendarDay = { ...calendarDay!, date };
+      hourlyPredictions = [10, 11].map((h) => ({
+        attractionId: "a-taron",
+        predictedTime: atParkHour(date, h),
+        predictedWaitTime: 35,
+        predictionType: "hourly",
+      }));
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("measured");
+      const hours = plan.rides[0].hours;
+      expect(
+        hours.filter((h) => h.source === undefined).map((h) => h.hour),
+      ).toEqual([10, 11]);
+      // Everything the shape filled in disagrees with the header and says so.
+      expect(
+        hours.filter((h) => h.hour > 11).every((h) => h.source === "composed"),
+      ).toBe(true);
     });
   });
 });
