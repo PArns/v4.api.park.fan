@@ -561,18 +561,35 @@ with the same rows.
 
 ## Upstream: ThemeParks.wiki dropped whole clusters of attractions
 
-- [ ] Ten parks lost a block of attractions from the wiki's **live** feed on a
-      single day each — Europa-Park and Rulantica on 2026-06-07, Universal
-      Studios Singapore on 2026-04-25, both Wet'n'Wild records on 2026-06-29,
-      Busch Gardens Tampa 2026-06-13, Ocean Park 2026-06-30. The entities may
-      still exist; only the live rows stopped. Worth establishing whether they
-      were recategorised upstream (and can be re-matched), or genuinely dropped.
-      Every affected ride lacks a `queue_times_entity_id` — the ones with a
-      Queue-Times mapping kept working, which is both the tell and a hint at the
-      mitigation: broaden Queue-Times matching for these parks.
-- [ ] **"Wet'n'Wild" and "Wet 'n' Wild Gold Coast"** both show 13 silenced
-      attractions with the same date. That looks like a duplicate park pair for
-      the existing duplicate-records work.
+- [x] ~~Ten parks lost a block of attractions from the wiki's **live** feed on a
+      single day each~~ — **answered 2026-09-11 against production (PAR-38).**
+      The same query returns **12 parks and 170 rides**, and they split three
+      ways by who writes their last rows; the classification, the queries and
+      the per-park verdicts are §5.2a of
+      `docs/architecture/attraction-status-and-seasonality.md`. In short:
+      **17** at Universal Studios Singapore were recategorised upstream
+      (`ATTRACTION` → `SHOW`, ids unchanged, live data still arriving — already
+      re-matched into `shows`, the stale `attractions` rows are what is left —
+      PAR-159),
+      **97** are genuinely silent with the entity document still intact
+      upstream, and **56 were never silent at all** — the wiki or Queue-Times
+      keeps writing CLOSED for them and they are simply shut (Wet'n'Wild in the
+      southern winter, Traumatica until autumn, Ocean Park). Busch Gardens Tampa
+      recovered on its own on 2026-08-17 after 65 days.
+
+      Two claims in the old text were wrong and are worth not repeating:
+      "every affected ride lacks a `queue_times_entity_id`" (**50 of 170 carry
+      one**, including all nine at Busch Gardens Tampa), and the implied
+      mitigation of broadening Queue-Times matching — Queue-Times dropped the
+      same ids the wiki did at Knott's, so there is nothing to broaden onto.
+- [x] ~~**"Wet'n'Wild" and "Wet 'n' Wild Gold Coast"** both show 13 silenced
+      attractions with the same date~~ — **confirmed a duplicate pair on
+      2026-09-11**: identical coordinates to seven decimals, same city, same
+      `park_type`, 13 attractions each. `GET /v1/admin/duplicate-parks` does not
+      see it (`total: 0`): every branch of `findDuplicates` needs a name
+      similarity ≥ 0.85 and the pair scores 0.6923 on ` Gold Coast` alone.
+      Detector fix is PAR-160, the merge itself stays a separate decision —
+      §5.5 of `docs/architecture/attraction-status-and-seasonality.md`.
 - [x] **Europa-Park worked through, 2026-09-09** — all 45 of its silenced rides
       researched against the operator's own pages. Ten are free-flow (two of
       them written that day, audit rows `d98a7513-2799-42ae-8bf9-1a1d07d1fc54`

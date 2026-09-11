@@ -282,8 +282,15 @@ Two lessons:
   triggering the job by hand to verify something unrelated.
 
 ### 5.2 ThemeParks.wiki dropped whole clusters of attractions
-Ten parks lost a block of attractions from the wiki's **live** feed on a single
-day each:
+
+> **Re-measured against production on 2026-09-11 (PAR-38). Half of the opening
+> claim below did not survive it.** "A cluster went quiet" turned out to be
+> three different events wearing the same symptom, and one column tells them
+> apart: **who wrote the ride's last rows**. Read §5.2a before using any number
+> from the paragraph that follows it.
+
+The reading of 2026-08-15 — ten parks that lost a block of attractions from the
+wiki's **live** feed on a single day each:
 
 | park | rides | date |
 |---|---|---|
@@ -294,9 +301,17 @@ day each:
 | Busch Gardens Tampa | 9 | 2026-06-13 |
 | Ocean Park | 7 | 2026-06-30 |
 
-**Every affected ride lacks a `queue_times_entity_id`** — the dual-sourced ones
-kept working. Ten weeks later Europa-Park's page still showed a Ball Pool and a
-London Bus as closed, in August. §2.3 is the fix for the symptom.
+It also said **every affected ride lacks a `queue_times_entity_id`** — the
+dual-sourced ones kept working. That is false as a rule: of the 170 rides the
+same query returns today, **50 carry one**, among them eight of the nine at
+Knott's Berry Farm, which are as silent as the rest. Busch Gardens Tampa is the
+sharper counter-example: **all nine** of its rides carry a Queue-Times id and
+all nine went quiet anyway on 2026-06-13. A Queue-Times mapping is not armour —
+where the wiki dropped a non-ride facility, Queue-Times usually dropped it too.
+What the sentence described correctly was Europa-Park, where it was measured.
+
+Ten weeks later Europa-Park's page still showed a Ball Pool and a London Bus as
+closed, in August. §2.3 is the fix for the symptom.
 
 **There is no other source to switch to.** All three live sources were checked
 directly on 2026-08-15:
@@ -309,6 +324,105 @@ directly on 2026-08-15:
 
 Queue-Times and wartezeiten.app publish only the marquee rides. The wiki was the
 only source that ever carried the rest, and it stopped.
+
+#### 5.2a Three events, one symptom — measured 2026-09-11
+
+The §6 query ("which parks have a silenced cluster?") answers "which rides
+stopped saying OPERATING". That is not the same question as "which rides did we
+lose", and the gap between them is where the 2026-08-15 reading went wrong. Run
+over 270 days, grouped by `parks.id` and not by name — `Wet'n'Wild` and
+`Wet 'n' Wild Gold Coast` are two rows in one city and collapse into one under
+`GROUP BY p.name` — it returns **12 parks and 170 rides**, not ten and 121.
+
+Add one column and the 170 fall into three groups that want three different
+answers. The column is `data_source` over the last three days, restricted to
+the silent rides themselves:
+
+```sql
+-- who still writes rows for a "silent" ride? `system-reconciliation` alone
+-- means no source reports it; anything else means the feed is fine and the
+-- ride is simply closed.
+SELECT p.name, q.data_source, q.status, count(*), count(DISTINCT q."attractionId")
+  FROM queue_data q
+  JOIN attractions a ON a.id = q."attractionId"
+  JOIN parks p ON p.id = a."parkId"
+ WHERE q."attractionId" = ANY($1::uuid[])          -- the silent set
+   AND q.timestamp > now() - interval '3 days'
+ GROUP BY 1,2,3;
+```
+
+| group | what it is | parks · rides |
+|---|---|---|
+| **A · recategorised upstream** | same entity id, `entityType` changed, live data still flowing | Universal Studios Singapore 17 |
+| **B · genuinely silent** | only `system-reconciliation` writes; no source reports them | Europa-Park 46, Rulantica 18, Six Flags Fiesta Texas 15, Knott's Berry Farm 9, Universal Studios Hollywood 5, Mid-America Parks 3, Universal Studios Japan 1 — **97** |
+| **C · not silent at all, just closed** | the wiki or Queue-Times keeps writing CLOSED, newest row today | Wet'n'Wild 13, Wet'n'Wild Gold Coast 13, Mid-America Parks 10, Traumatica 7, Universal Studios Japan 7, Ocean Park 6 — **56** |
+
+**Group C is the correction that matters**, because three of the six parks named
+in the 2026-08-15 table live there. Wet'n'Wild is in the southern winter,
+Traumatica is Europa-Park's Halloween event and does not open until autumn, and
+Ocean Park's six are reported CLOSED by the wiki every few minutes. Nothing
+dropped; a 30-day "no OPERATING" cut simply cannot tell a lost ride from a shut
+one. **Busch Gardens Tampa** belongs here too, one step further on: its nine
+went quiet on 2026-06-13 and **came back by themselves on 2026-08-17**, a
+65-day gap, all nine dual-sourced.
+
+**Group A is solved upstream and broken here.** On 2026-04-25 the wiki moved 17
+Universal Studios Singapore entities from `ATTRACTION` to `SHOW` — meet &
+greets and character sets, which is what they are. The ids never changed, and
+`GET /v1/entity/{park}/live` carries all 17 today (5 OPERATING, 12 CLOSED). The
+sync followed the change and created 17 **shows**, which receive 4,493
+`show_live_data` rows in three days. What it did not do is retire the
+`attractions` row: all 17 externalIds now exist **twice**, once alive as a show
+and once dead as a ride that `system-reconciliation` keeps marking CLOSED.
+Re-matching by id is therefore not the remedy — the match already happened, and
+the leftover is a data-repair job (PAR-159: retire the row whose `entityType`
+moved, and clean up these 17).
+
+**Group B is neither "recategorised" nor "removed" — it is a third thing.**
+Every one of the 97 was checked against `GET /v1/entity/{id}`: the entity
+document is intact, `entityType` is still `ATTRACTION` and `parentId` still
+points at the right park. What differs is whether the park's own index still
+lists it:
+
+| park | in `/children` | in `/live` |
+|---|---|---|
+| Europa-Park | 44 of 46 | 0 |
+| Rulantica | 18 of 18 | 0 |
+| Mid-America Parks | 3 of 3 | 0 |
+| Knott's Berry Farm | 0 of 9 | 0 |
+| Six Flags Fiesta Texas | 0 of 15 | 0 |
+| Universal Studios Hollywood | 0 of 5 | 0 |
+
+Universal Studios Japan's single entry is not in that table because it has no
+wiki entity to look up: *Sesame Street 4-D Movie Magic™* is a Queue-Times-only
+ride (`qt-ride-12083`), and Queue-Times **does** publish it — with the same
+shape of mapping as its neighbour *Shrek's 4-D Adventure™*, which gets real
+`queue-times` rows while this one gets only reconciliation. That is its own
+defect (PAR-161), not a dropped cluster.
+
+So there are two shapes even inside group B: Europa-Park and Rulantica are
+still listed as children and only lost their live rows, while Knott's, Fiesta
+Texas and Hollywood fell out of the children index as well — *while the entity
+document kept working*. `GET /v1/entity/6e2fd5cd-959a-4fc2-92e4-f8170fe320f7`
+returns Knott's *Games and Arcade* in full, `parentId` correct; Knott's own
+`/children` (134 entries) does not contain it. **A re-match by id has nothing
+to re-match to** in either shape: the id we hold is the id upstream still
+publishes.
+
+What the two shapes have in common is subject matter. Fiesta Texas's 15 are the
+entire Fright Fest maze line-up, gone from the index when the season ended.
+Knott's nine are an arcade, a blacksmith, two museums, a schoolhouse and a gold
+panning trough — facilities, not rides, and Queue-Times dropped the same eight
+ids it once published (park 61 returns 46 rides today, none of them these).
+Hollywood's are limited-run walkthroughs. Only Europa-Park and Rulantica lost
+*operating rides*, which is why the sweep below found work to do there and
+would find much less anywhere else.
+
+**The practical consequence for anyone reading a cluster count:** the number on
+its own says nothing. Two follow-up queries decide what it means — the
+`data_source` split above (is any source still writing?) and `GET
+/v1/entity/{id}` (does upstream still know it, and as what?). Until both have
+been run, a "silenced cluster" is a symptom, not a finding.
 
 **What was actually lost is much smaller than 59 rides, and the 59 was never
 the casualty list.** It is the *population* — every active Europa-Park ride with
@@ -442,6 +556,29 @@ called `PLAYGROUND`. Their names agree perfectly, so name matching offered them
 as *safe* auto-merges. Two ids from the **same** source are that source saying
 these are two things; auto-merge now requires a pair to span two sources.
 
+### 5.5 Two rows for one water park, and the detector cannot see them
+
+`Wet'n'Wild` (wiki `ee018a72-…`, created 2026-04-08) and `Wet 'n' Wild Gold
+Coast` (`qt-park-146`, created 2026-06-22) are the same park in Oxenford,
+Queensland. They carry **the same latitude and longitude to seven decimals**
+(-27.9149499, 153.3167716), the same city and the same `park_type`, and hold 13
+attractions each — the same 13 slides, reported by the wiki under one row and by
+Queue-Times under the other.
+
+`GET /v1/admin/duplicate-parks` returns `{"total":0,"pairs":[]}`. Every branch of
+`ParkValidatorService.findDuplicates` requires a name similarity of at least
+0.85, and this pair scores **0.6923**: `calculateStringSimilarity` strips
+whitespace, so `Wet'n'Wild` against `Wet 'n' Wild` would be a perfect 1.0, and
+it is the three characters of ` Gold Coast` that drop it below every threshold.
+Geography never gets a vote of its own — `geoProximity` only ever appears in a
+conjunction with a name score.
+
+The lesson is the mirror image of §5.4. There, two identical names had to be
+kept apart because they came from one source; here, two rows that agree on
+*every* physical fact are kept apart because their names disagree. **A distance
+of 0.000 km between two parks is a stronger statement than any string
+comparison**, and the detector currently has no way to say so (PAR-160).
+
 ---
 
 ## 6. Diagnostic SQL
@@ -463,15 +600,21 @@ WITH last_op AS (
          max(timestamp) AS last_row
     FROM queue_data WHERE timestamp > now() - interval '120 days' GROUP BY 1
 )
-SELECT p.name, count(*), min(l.last_op)::date, max(l.last_op)::date
+SELECT p.id, p.name, p."citySlug", count(*),
+       min(l.last_op)::date, max(l.last_op)::date
   FROM last_op l
   JOIN attractions a ON a.id = l."attractionId"
   JOIN parks p ON p.id = a."parkId"
  WHERE l.last_op < now() - interval '30 days'
    AND l.last_row > now() - interval '2 days'
- GROUP BY p.name HAVING count(*) >= 6 ORDER BY 2 DESC;
+ GROUP BY p.id, p.name, p."citySlug" HAVING count(*) >= 6 ORDER BY 4 DESC;
 ```
-Identical min/max dates = a feed event, not N independent closures.
+Identical min/max dates = a feed event, not N independent closures. **Group by
+`p.id`, never `p.name` or `p.slug`** — neither is unique (§5.5, and there are
+two `disneyland-park` slugs), so a name grouping silently adds two parks
+together. The count this returns is a symptom and not yet a finding: §5.2a's
+`data_source` split says whether any source still reports the rides, and
+`GET /v1/entity/{id}` says whether upstream still knows them and as what.
 
 **Are month lists artefacts?**
 ```sql
