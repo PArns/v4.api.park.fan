@@ -3,10 +3,25 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { ForecastAccuracyProfile } from "../entities/forecast-accuracy-profile.entity";
 
-/** The lead buckets, as upper edges in days. `null` means past the last one. */
+/**
+ * The lead buckets, as upper edges in days. `null` means past the last one.
+ *
+ * The same six distances `PredictionLeadSnapshotService.LEAD_BUCKETS` samples
+ * forward, and for the same reason: dense where the curve moves, sparse where it
+ * flattens. They were four here (`d1/d7/d30/d60`) while the forward archive
+ * already used six, so one question had two answers depending on which table was
+ * asked — `d3` and `d14` close that.
+ *
+ * Adding them costs nothing but resolution. Measured over the 45-day window on
+ * 2026-09-11, every one of the 18 cells clears {@link MIN_SAMPLE} by an order of
+ * magnitude (the smallest, `busy|d1`, holds 6,132 comparisons), so the two new
+ * columns are published rather than suppressed.
+ */
 const LEAD_BUCKETS = [
   { key: "d1", maxDays: 1 },
+  { key: "d3", maxDays: 3 },
   { key: "d7", maxDays: 7 },
+  { key: "d14", maxDays: 14 },
   { key: "d30", maxDays: 30 },
   { key: "d60", maxDays: 60 },
 ] as const;
@@ -22,9 +37,10 @@ const MIN_SAMPLE = 500;
  * the band is the predicted level rather than the realised one.
  *
  * The measurement is retrospective and possible only because `tft_forecasts`
- * keeps every origin: for a target day it holds what was said 1, 7, 30 and 60
- * days out, so the error curve can be computed from history instead of waiting
- * for one to accumulate. CatBoost has no such record — its daily rows are
+ * keeps every origin: for a target day it holds what was said at every distance
+ * from 1 to 60 days out — all 60 densely populated, 17.8 M rows on 2026-09-11 —
+ * so the error curve can be computed from history instead of waiting for one to
+ * accumulate. CatBoost has no such record — its daily rows are
  * rewritten until only the last survives — which is why nothing past 60 days can
  * be answered here yet.
  */
@@ -68,7 +84,9 @@ export class ForecastAccuracyService {
                      WHEN f.predicted_peak >= 30 THEN 'mid'
                      ELSE 'quiet' END AS predicted_band,
                 CASE WHEN (f.target_date - f.forecast_date) <= 1  THEN 'd1'
+                     WHEN (f.target_date - f.forecast_date) <= 3  THEN 'd3'
                      WHEN (f.target_date - f.forecast_date) <= 7  THEN 'd7'
+                     WHEN (f.target_date - f.forecast_date) <= 14 THEN 'd14'
                      WHEN (f.target_date - f.forecast_date) <= 30 THEN 'd30'
                      ELSE 'd60' END AS lead_bucket,
                 abs(f.predicted_peak - t.actual) AS err,
@@ -118,8 +136,9 @@ export class ForecastAccuracyService {
   /**
    * The whole profile, keyed `band|leadBucket`.
    *
-   * Small enough (nine cells) that a caller reads all of it and looks up per
-   * ride; there is nothing to page and nothing to filter.
+   * Small enough (18 cells: three bands × six lead buckets) that a caller reads
+   * all of it and looks up per ride; there is nothing to page and nothing to
+   * filter.
    */
   async getProfile(): Promise<Map<string, ForecastAccuracyProfile>> {
     const rows = await this.repository.find();

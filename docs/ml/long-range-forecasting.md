@@ -7,6 +7,13 @@ rather than from the docstrings, and accuracy measured against realised days.
 Every number here comes from the production database on 2026-09-03. The SQL is in
 [`scripts/shape-backtest.sql`](../../scripts/shape-backtest.sql).
 
+**Updated 2026-09-11 (PAR-17):** §6 gains the measured state of the forward
+archive, §7 the six-bucket served grid that now matches §2's own rows, and §8 the
+reason a per-ride error curve is not available. Those figures were re-measured on
+2026-09-11; the §2 table above is the 2026-09-03 measurement and is left as it
+was — the window has since moved by a week and the curve is unchanged within
+drift (11.66 → 15.09 then, 11.84 → 14.96 now).
+
 ---
 
 ## 1. The four models and how far they reach
@@ -140,6 +147,29 @@ Until then, past 60 days the planner has exactly one model and no measurement of
 it — which is why `/plan/day` labels that range and `leadTimeMae` answers `null`
 rather than a number.
 
+**Measured state of the forward archive on 2026-09-11**, seven days in (PAR-17):
+
+| `lead_days` | rows | scored | MAE | first target | last target |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 4,623 | 2,420 | 20.78 | 2026-09-04 | 2026-09-12 |
+| 3 | 4,385 | 1,125 | 22.43 | 2026-09-06 | 2026-09-14 |
+| 7 | 4,721 | 0 | — | 2026-09-10 | 2026-09-18 |
+| 14 | 4,837 | 0 | — | 2026-09-17 | 2026-09-25 |
+| 30 | 5,206 | 0 | — | 2026-10-03 | 2026-10-11 |
+| 60 | 5,072 | 0 | — | 2026-11-02 | 2026-11-10 |
+
+Exactly the shape the entity predicts: the far buckets hold rows but no *scores*,
+because their target dates have not arrived. Against `MIN_SCORED = 100`, buckets 1
+and 3 publish and the rest answer `null`. **The 60-day bucket cannot report before
+2026-11-02.** Nothing can accelerate that, and a run that finds `null` there has
+found the designed answer rather than a fault.
+
+Note also that these two numbers (20.8, 22.4) are much larger than the TFT figures
+in §2 — they score the **daily serving path over the headliner set**, not TFT's
+retrospective grid, so the two are not comparable line for line. The forward
+archive's value is the far buckets nobody can measure any other way; its near
+buckets are a sanity check, not a second opinion.
+
 ## 7. What the planner now says out loud
 
 The error curve above is not only a finding, it is served. `forecast_accuracy_profile`
@@ -148,6 +178,58 @@ measurement, and `/plan/day` attaches `expectedError` per ride and an `accuracy`
 block per day — with `basis: "unmeasured"` past 60 days, which is the flag that
 stops a planner presenting an unchecked number as a plan. See
 [the endpoint doc](../frontend/plan-day-endpoint.md).
+
+The grid is **six lead buckets** (`d1/d3/d7/d14/d30/d60`), the same distances the
+forward archive samples. It was four until PAR-17 (2026-09-11): `d1/d7/d30/d60`,
+which coarsened §2's own six rows on the way into the served grid and meant a
+question about 10 days out was answered by the 30-day cell. All 18 cells clear the
+500-comparison floor by an order of magnitude, so nothing is suppressed:
+
+| predicted | ≤1d | ≤3d | ≤7d | ≤14d | ≤30d | ≤60d |
+| --- | --- | --- | --- | --- | --- | --- |
+| ≥ 60 min | 21.5 | 21.6 | 22.9 | 24.3 | 25.1 | 25.5 |
+| 30–59 min | 12.9 | 13.2 | 13.6 | 14.7 | 15.5 | 16.5 |
+| < 30 min | 8.6 | 8.7 | 9.0 | 9.9 | 10.7 | 12.5 |
+
+**Read the rows, not just the trend.** Every band widens by roughly the same four
+minutes across the sixty days — but that is **+19 % on a busy ride and +45 % on a
+quiet one**. "The band grows with distance" is therefore a statement about minutes,
+not proportions, and a multiplier on the prediction would get one end badly wrong
+in each direction. This is why the served figure is a looked-up cell and never a
+factor.
+
+## 8. Why there is no per-ride error curve
+
+The obvious next axis is the ride itself, and it is not available. Measured over
+the same 45-day window on 2026-09-11: of **2,643** rides, **not one** clears even
+100 comparisons in all six buckets, and the average ride's thinnest bucket holds
+**18**.
+
+| bucket | distinct leads | rides | max n/ride | avg n/ride | rides ≥ 100 | rides ≥ 500 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `d1` | 1 | 2,625 | 45 | 18.4 | 0 | 0 |
+| `d3` | 2 | 2,634 | 90 | 36.6 | 0 | 0 |
+| `d7` | 4 | 2,633 | 179 | 73.3 | 976 | 0 |
+| `d14` | 7 | 2,589 | 308 | 127.0 | 1,297 | 0 |
+| `d30` | 16 | 2,528 | 704 | 293.5 | 1,633 | 716 |
+| `d60` | 30 | 2,324 | 1,089 | 464.1 | 1,683 | 1,055 |
+
+The cause is arithmetic, not sparsity: **`d1` spans exactly one lead distance**, so
+a ride contributes at most one comparison per target day — 45 in a 45-day window,
+and 45 is the observed maximum. No threshold that means anything is reachable
+there.
+
+And **feasibility runs opposite to usefulness.** `d30` and `d60` do clear 500 for
+716 and 1,055 rides — but only by pooling 16 and 30 distinct lead distances, so
+"this ride's error at 30 days" would really be a mean over a 16-day-wide span. The
+near buckets a planner reads most are exactly the ones that cannot carry a per-ride
+figure. Widening the window until they could would average two model versions into
+one number, which is the thing the 45-day choice exists to avoid.
+
+So the second axis stays the **predicted band**, which every ride shares and which
+carries most of the spread anyway: the grid above moves by 13 minutes down a column
+and by 4 across a row. Splitting by ride would buy resolution on the weaker axis at
+the price of measuring noise on the stronger one.
 
 ## Related
 

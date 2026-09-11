@@ -6,6 +6,46 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — the served error grid is six lead buckets, and the per-ride curve is measured as impossible
+
+`forecast_accuracy_profile` bucketed lead time into four distances
+(`d1/d7/d30/d60`) while the forward archive
+(`PredictionLeadSnapshotService.LEAD_BUCKETS`) already sampled six
+(`1/3/7/14/30/60`). One question therefore had two answers depending on which
+table was asked, and the served grid coarsened
+[`long-range-forecasting.md`](ml/long-range-forecasting.md) §2's own six rows on
+the way in — a question about 10 days out was answered by the 30-day cell.
+`ForecastAccuracyService` now uses the same six. Measured against production on
+2026-09-11, all 18 cells (3 bands × 6 buckets) clear the 500-comparison floor by
+an order of magnitude, the thinnest being `busy|d1` at 6,132, so the two new
+columns are published rather than suppressed.
+
+The curve itself is unchanged and gentle: **MAE 11.84 → 14.96 minutes from one
+day out to sixty** (+26 %), with `mean_actual` flat at 38.7 → 38.0, so the
+widening is the model and not a drift of the population. But **each band widens
+by about the same four minutes, which is +19 % on a busy ride and +45 % on a
+quiet one** — recorded because it is the reason the served figure is a looked-up
+cell and never a multiplier on the prediction.
+
+**A per-ride error curve is not available, and that is now measured rather than
+assumed.** Of 2,643 rides, none clears even 100 comparisons in all six buckets;
+the average ride's thinnest bucket holds 18. The cause is arithmetic: `d1` spans
+exactly one lead distance, so a ride contributes at most one comparison per
+target day — 45 in a 45-day window, which is also the observed maximum.
+Feasibility runs opposite to usefulness, too: `d30` and `d60` clear 500 for 716
+and 1,055 rides only by pooling 16 and 30 distinct lead distances, so a per-ride
+figure there would be a mean over a 16-day-wide span. Full tables in
+[`long-range-forecasting.md`](ml/long-range-forecasting.md) §8.
+
+Also recorded there (§6): the forward archive is seven days old, so buckets 7–60
+hold rows but **no scores** — their target dates have not arrived. The 60-day
+bucket cannot report before **2026-11-02**. A run that finds `null` there has
+found the designed answer, not a fault.
+
+`ForecastAccuracyService` had no spec; `bucketFor`/`bandFor` now have one (7
+cases) pinning every bucket edge, the round-**up** direction, and the `null` past
+60 days that makes `/plan/day` say `unmeasured`.
+
 ### Added — the merge transaction is finally tested against a real database
 
 `ParksService.repairDuplicates()` — the raw park-merge path — had no E2E
