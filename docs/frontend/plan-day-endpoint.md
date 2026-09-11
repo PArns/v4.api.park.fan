@@ -2,10 +2,12 @@
 
 `GET /v1/parks/:continent/:country/:city/:parkSlug/plan/day?date=YYYY-MM-DD`
 
-The series a trip planner draws: every ride's expected wait for each open hour
-of one date, plus that day's own context (hours, crowd level, weather, holiday
-flags). `date` defaults to today in the park's timezone; a malformed one is a
-400 rather than a day of nulls that reads like a closed park.
+The series a trip planner draws: the expected wait for each open hour of one
+date, for every ride the day can be answered for — never only the headliners,
+and never the park's whole catalogue either (§6, *Which rides a day carries*) —
+plus that day's own context (hours, crowd level, weather, holiday flags). `date`
+defaults to today in the park's timezone; a malformed one is a 400 rather than a
+day of nulls that reads like a closed park.
 
 Cached 15 minutes at the edge. There is no origin-side response cache — the
 pieces underneath it (calendar month, hourly profile, ML predictions) each have
@@ -201,6 +203,50 @@ A ride is **omitted** rather than drawn flat when there is nothing to give it a
 shape, and a ride the past-day rollup has no row for is omitted rather than drawn
 at zero — absence there means the rollup has not reached that day, which is not
 the same statement as an empty queue.
+
+### Which rides a day carries — and the cap that does not bite
+
+`rides[]` is not the park's catalogue, and it has never been the five headliners
+the calendar carries. **On a composed day** — the common case, anything past the
+model's 24-hour hourly reach — a ride is carried only where two independent
+answers meet: the day level has to speak for it, *and* the last year has to have
+given it an hour shape. Neither alone is enough, and the resulting set is smaller
+than either, because the filters below (season, works window, retired) cut it
+again afterwards. A `measured` ride enters by a different door and needs no
+shape: the ride loop unions the model's hourly rows with the composed ones, so
+today and tomorrow can carry a ride the shape has never covered
+(`sampleDays: 0`). An `observed` day is the rollup's own list.
+
+Measured against production on 2026-09-11, for 2026-09-18 at seven days' lead —
+composed tier, so both answers are required:
+
+| park | shaped rides | rides with a TFT day level | `rides[]` |
+| --- | --- | --- | --- |
+| Alton Towers | 32 | 40 | 32 |
+| Europa-Park | 29 | 39 | 29 |
+| Universal Studios Japan | 43 | 25 | 22 |
+
+Alton Towers and Europa-Park are held by the shape, exactly — every shaped ride
+is served. Universal Studios Japan is held by the day level: 43 rides carry a
+shape, 25 a TFT row for that date, and 22 survive those filters on top.
+
+**The `SHAPE_RIDES = 60` cap does not bite anywhere.** The cap is applied to the
+`eligible` CTE — the rides clearing `minAttractionDays = 20` days at
+`MIN_SAMPLES_PER_HOUR = 2`, counted *before* the per-hour `MIN_DAYS_PER_HOUR`
+test that decides which of them end up with a usable shape. Across all 120 parks
+that have a measurable hourly profile at all, that eligible set peaks at 43 rides
+(Universal Studios Japan, of which all 43 do get a shape) and averages 16.2 — not
+one park reaches even 50.
+
+So the cap is headroom rather than a limit, which is worth writing down because
+of what happens on the day a park crosses it: `getParkHourlyProfile`'s SQL clamps
+its over-fetch to `Math.min(topN * 3, 60)`
+(`park-historical-stats.service.ts`), so at `topN = 60` the over-fetch is zero,
+and the park would lose both the rides past the cap **and** the peak-hour re-rank
+the over-fetch exists for. Silently, and in that order.
+
+The number to watch is therefore the eligible set, not the park's attraction
+count — Hansa-Park's 82 attractions are not 82 shapes.
 
 ### A ride out of season is absent, not closed
 

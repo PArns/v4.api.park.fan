@@ -117,6 +117,18 @@ export class PlanDayService {
    * everything past `topN`. Asking for 20 therefore ran the same query and
    * discarded two thirds of it — Phantasialand's ride list went from 34 to 16
    * between tomorrow and the day after, which reads as rides closing.
+   *
+   * At 60 it is headroom rather than a cap, measured 2026-09-11 against
+   * production. The number it caps is the `eligible` CTE — rides clearing
+   * `minAttractionDays` days at `MIN_SAMPLES_PER_HOUR`, counted before the
+   * per-hour `MIN_DAYS_PER_HOUR` test that decides which of them end up with a
+   * usable shape. Of the 120 parks with a measurable hourly profile that set
+   * peaks at 43 rides (Universal Studios Japan) and averages 16.2; none reaches
+   * 50. Raising it further is not free, though, and that is the reason this
+   * number is worth watching rather than nudging: `min(topN * 3, 60)` means the
+   * over-fetch is already zero HERE, so the first park to cross 60 loses both
+   * the rides past the cap and the peak-hour re-rank the over-fetch exists for.
+   * See docs/frontend/plan-day-endpoint.md §6.
    */
   private static readonly SHAPE_RIDES = 60;
 
