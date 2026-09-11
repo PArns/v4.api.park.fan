@@ -26,10 +26,11 @@
  * taken for either: 50 of the 170 rides the cluster query returns carry one.
  *
  * What this guard was reaching for on 2026-09-11 is **97 genuinely silent
- * rides across seven parks**, of which only Europa-Park's and Rulantica's are
- * operating rides rather than arcades, museums and out-of-season mazes — plus,
- * for now, the 17 Singapore rows, equally source-absent here because their
- * feed moved to `show_live_data`. They stop counting once PAR-159 retires them.
+ * rides across seven parks**. The operating rides among them are Europa-Park's,
+ * Rulantica's and three working coasters at Mid-America Parks; the rest are
+ * arcades, museums and out-of-season mazes. Add, for now, the 17 Singapore
+ * rows — equally source-absent here, because their feed moved to
+ * `show_live_data`. They stop counting once PAR-159 retires them.
  *
  * Note what the test below does NOT do: a carried heartbeat keeps the previous
  * row's `dataSource`, so a ride reached only by heartbeats is not source-absent

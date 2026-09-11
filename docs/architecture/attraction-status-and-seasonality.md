@@ -304,7 +304,7 @@ names seven, in six rows:
 
 It also said **every affected ride lacks a `queue_times_entity_id`** — the
 dual-sourced ones kept working. That is false as a rule: of the 170 rides the
-same query returns today, **50 carry one**, among them eight of the nine at
+widened cut in §5.2a returns, **50 carry one**, among them eight of the nine at
 Knott's Berry Farm, which are as silent as the rest. Busch Gardens Tampa is the
 sharper counter-example, from outside that set: **all nine** of its rides carry
 a Queue-Times id and all nine went quiet anyway on 2026-06-13. They are not
@@ -446,8 +446,9 @@ early confusion lives in the gap between them.
 
 Re-run on 2026-09-11 **over 270 days instead of 120**, with the `HAVING` floor
 at 5 rides instead of 6 and grouped by `parks.id`, it returns **12 parks and
-170 rides**. 270 days reaches the whole of `queue_data` retention (oldest row
-2025-12-24), and the window is where most of the difference from the
+170 rides** — twelve `parks` rows, that is, and 11 real parks: §5.5's pair is
+one water park entered twice, so its 13 slides are counted twice too. 270 days
+reaches the whole of `queue_data` retention (oldest row 2025-12-24), and the window is where most of the difference from the
 2026-08-15 reading comes from, not the four weeks between the two runs. The
 reason is worth keeping: **a ride whose last OPERATING row falls outside the
 window has no `last_op` at all, so it drops out of the result entirely instead
@@ -538,11 +539,12 @@ arrives in `show_live_data`, against a `shows` row that shares nothing with the
 attraction but the upstream `externalId`. Only check 2 sees that.
 
 **Group C is the correction that matters**, because three of the seven parks
-the 2026-08-15 table names in its six rows live there. Wet'n'Wild is in the southern winter,
-Traumatica is Europa-Park's Halloween event and does not open until autumn, and
-Ocean Park's six are reported CLOSED by the wiki every few minutes. Nothing
-dropped; a 30-day "no OPERATING" cut simply cannot tell a lost ride from a shut
-one.
+the 2026-08-15 table names in its six rows live there: both Wet'n'Wild rows,
+which are in the southern winter, and Ocean Park, whose six are reported CLOSED
+by the wiki every few minutes. Traumatica — Europa-Park's Halloween event,
+which does not open until autumn — is the same shape and was simply never in
+that table. Nothing dropped in any of them; a 30-day "no OPERATING" cut cannot
+tell a lost ride from a shut one.
 
 **Busch Gardens Tampa is a fourth case and is over.** Its nine went quiet on
 2026-06-13 and **came back by themselves on 2026-08-17** — a 65-day gap, all
@@ -600,9 +602,13 @@ Knott's nine are two arcades, a blacksmith, a livery stable, two museums, a
 schoolhouse, Independence Hall and a gold panning trough — facilities, not
 rides, and Queue-Times dropped the same eight of them it once published (park
 61 returns 46 rides today, none of these among them).
-Hollywood's are limited-run walkthroughs. Only Europa-Park and Rulantica lost
-*operating rides*, which is why the sweep above found work to do there and
-would find much less anywhere else.
+Hollywood's are limited-run walkthroughs. Only Europa-Park, Rulantica and
+Mid-America Parks lost *operating rides* — and Mid-America's three are the
+sharpest of the lot, since *MR. FREEZE: Reverse Blast*, *JUSTICE LEAGUE* and
+*THE JOKER: Carnival of Chaos* are working coasters at an open park, listed as
+children upstream and absent from its live feed. (Universal Studios Japan's one
+is the Queue-Times defect above, not a drop.) That is why the sweep above found
+work to do at Europa-Park and would find much less at most of the others.
 
 **The practical consequence for anyone reading a cluster count:** the number on
 its own says nothing, and neither does check 1 on its own. Both have to run
@@ -680,7 +686,7 @@ WITH last_op AS (
   SELECT "attractionId",
          max(timestamp) FILTER (WHERE status='OPERATING') AS last_op,
          max(timestamp) AS last_row
-    FROM queue_data WHERE timestamp > now() - interval '120 days' GROUP BY 1
+    FROM queue_data WHERE timestamp > now() - interval '270 days' GROUP BY 1
 )
 SELECT p.id, p.name, p."citySlug", count(*),
        min(l.last_op)::date, max(l.last_op)::date
@@ -689,7 +695,7 @@ SELECT p.id, p.name, p."citySlug", count(*),
   JOIN parks p ON p.id = a."parkId"
  WHERE l.last_op < now() - interval '30 days'
    AND l.last_row > now() - interval '2 days'
- GROUP BY p.id, p.name, p."citySlug" HAVING count(*) >= 6 ORDER BY 4 DESC;
+ GROUP BY p.id, p.name, p."citySlug" HAVING count(*) >= 5 ORDER BY 4 DESC;
 ```
 Identical min/max dates = a feed event, not N independent closures.
 
@@ -703,7 +709,8 @@ clear which problem is which: there, **two `parks` rows are one real park**, so
 every grouping — id included — reports it twice. No query fixes that; only a
 merge does.
 
-**Widen the window past 120 days when chasing a specific drop.** A ride whose
+**The window is 270 days and the floor 5 on purpose** — this used to read 120
+and 6, which on 2026-09-11 hid four of the twelve clusters (§5.2a). A ride whose
 last OPERATING row falls outside the window has no `last_op` and vanishes from
 the result rather than showing up as silent; §5.2a used 270 days, which covers
 the whole of `queue_data` retention. And remember the
