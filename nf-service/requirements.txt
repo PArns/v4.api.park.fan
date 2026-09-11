@@ -1,5 +1,9 @@
 # FastAPI & Server
-fastapi==0.127.0
+fastapi==0.141.1
+# starlette is transitive (via fastapi) but pinned on purpose: everything below
+# 1.3.1 is unpatched (PYSEC-2026-161/248/249/2280/2281) and fastapi's own floor
+# (starlette>=0.46.0) would not keep us above it.
+starlette==1.6.0
 uvicorn[standard]==0.39.0
 pydantic==2.12.5
 pydantic-settings==2.11.0
