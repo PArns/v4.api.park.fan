@@ -220,9 +220,17 @@ export const SHOW_DEPENDENCIES: MergeDependency[] = [
     // `attraction_ride_profiles` on the park list, and the only one of the
     // three whose owner is a stranger who would simply never hear from us
     // again. Unique on `(subscriptionId, showId)`, so a subscriber who
-    // followed both rows keeps the winner's: one reminder for one show is what
-    // they asked for either way, and a duplicate would be a second
+    // followed both rows keeps the winner's: the unique index allows one
+    // reminder per subscriber per show, and a second row would be a second
     // notification for the same performance.
+    //
+    // Which of the two survives is arbitrary where they mean different things
+    // — `startTime` null is "whichever is next" (the card's bell) and a set one
+    // names a single performance (a showtime badge), and the winner's row wins
+    // either way. Recorded as PAR-151 rather than decided here: before this
+    // list existed the CASCADE deleted the losing row outright, so the
+    // subscriber now keeps a working reminder for the same show in every
+    // branch, and picking between them is a product question.
     //
     // `ride_alerts` is the attraction-side twin of this row, with the same
     // CASCADE and the same unique `(subscriptionId, attractionId)`, and it is
