@@ -277,7 +277,18 @@ describe("merge dependency tables", () => {
     // These keep already-indexed URLs alive; the FK is ON DELETE CASCADE, so
     // leaving them out of the merge destroys them without a trace.
     expect(aliases?.strategy).toBe("move");
-    expect(aliases?.conflictColumns).toEqual(["slug"]);
+    // The whole path, because the unique index is the whole path and carries no
+    // `parkId`. On `slug` alone the dedupe DELETE reached across the other
+    // three: `disneyland-park` is Anaheim AND Paris, and a merge would have
+    // dropped the ghost's redirect over a winner row that shares nothing but
+    // the last segment. Widened, it matches only rows that genuinely could not
+    // move — which under a table-wide unique index is none.
+    expect(aliases?.conflictColumns).toEqual([
+      "continentSlug",
+      "countrySlug",
+      "citySlug",
+      "slug",
+    ]);
   });
 
   it("uses safe SQL identifiers everywhere", () => {
@@ -341,6 +352,29 @@ describe("applyMergeDependencies", () => {
 
     expect(firstSql).toMatch(/^DELETE FROM prediction_accuracy/);
     expect(secondSql).toMatch(/^UPDATE prediction_accuracy/);
+  });
+
+  it("dedupes park_slug_aliases on the whole path, so a shared last segment keeps its redirect", async () => {
+    // The one entry here whose unique key spans four columns. On `slug` alone
+    // the DELETE below read `("slug") IN (SELECT "slug" …)` and dropped every
+    // ghost alias whose last segment the winner happened to use somewhere else
+    // in the world — `disneyland-park` is Anaheim and Paris, and the row it
+    // deleted is a redirect with no feed behind it.
+    const aliases = PARK_DEPENDENCIES.find(
+      (d) => d.table === "park_slug_aliases",
+    )!;
+
+    await applyMergeDependencies(manager, [aliases], "winner-id", "loser-id");
+
+    const [deleteSql, deleteParams] = manager.query.mock.calls[0];
+    expect(deleteSql).toMatch(/^DELETE FROM park_slug_aliases/);
+    expect(deleteParams).toEqual(["loser-id", "winner-id"]);
+    for (const column of ["continentSlug", "countrySlug", "citySlug", "slug"]) {
+      expect(deleteSql).toContain(`"${column}"`);
+    }
+    // And the move still happens — a narrower key would have been visible here
+    // as a missing statement, not as a wrong one.
+    expect(manager.query.mock.calls[1][0]).toMatch(/^UPDATE park_slug_aliases/);
   });
 
   it("issues no delete for a table that cannot collide", async () => {

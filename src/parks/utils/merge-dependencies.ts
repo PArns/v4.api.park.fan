@@ -175,7 +175,20 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
     table: "park_slug_aliases",
     column: "parkId",
     strategy: "move",
-    conflictColumns: ["slug"],
+    // All four slugs, because the unique index is all four
+    // (`park-slug-alias.entity.ts`) and it does not include `parkId` — a path
+    // is unambiguous across the whole table, not per park. On `slug` alone the
+    // dedupe DELETE read across the other three and dropped ghost rows that
+    // could never have collided: `disneyland-park` is Anaheim AND Paris, so a
+    // ghost holding `north-america/united-states/anaheim/disneyland-park` lost
+    // its redirect to a winner holding the Paris path, silently and for good —
+    // these rows have no feed and no way back. Written out, the key is inert:
+    // two rows cannot share a path, so the DELETE matches nothing, and the
+    // UPDATE cannot violate the index either because it changes `parkId` and
+    // the indexed tuple stays put. That is the point. The narrower key was the
+    // only thing here that could destroy a row, and it is the one column of the
+    // four that repeats across cities.
+    conflictColumns: ["continentSlug", "countrySlug", "citySlug", "slug"],
   },
   {
     // The same "curated, cascade-deleted, irreplaceable" case as the aliases

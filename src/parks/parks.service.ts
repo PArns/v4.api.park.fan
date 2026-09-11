@@ -42,6 +42,7 @@ import {
   PARK_DEPENDENCIES,
   PARK_INLINE_DEPENDENCIES,
 } from "./utils/merge-dependencies";
+import { captureParkPath, samePath } from "./services/park-rename.service";
 import {
   isParkOpen,
   RideStatusData,
@@ -457,14 +458,16 @@ export class ParksService {
                     [existing.id, ghostPark.id],
                   );
 
-                  // 4. Move everything else the ghost park owns. Without this
-                  // the DELETE below raises 23503 on park_occupancy and the
+                  // 4. Move everything else the ghost park owns, and keep the
+                  // path it was served under alive. Without the first the
+                  // DELETE below raises 23503 on park_occupancy and the
                   // inherited rides arrive filed under a park id that is about
-                  // to stop existing.
+                  // to stop existing; without the second the ghost's own URLs
+                  // 404 instead of redirecting.
                   await this.consolidateMergedPark(
                     transactionalEntityManager,
-                    existing.id,
-                    ghostPark.id,
+                    existing,
+                    ghostPark,
                   );
 
                   // 5. Delete the ghost park
@@ -643,17 +646,27 @@ export class ParksService {
    * history and none of its published numbers.
    *
    * `ParkMergeService.mergeParks` is the shape this follows: its steps 3-4
-   * (here `PARK_INLINE_DEPENDENCIES` plus the two below) and its step 5b
-   * (`PARK_DEPENDENCIES`), in that order. The order is load-bearing — the
-   * attraction consolidation above discards the losing ride's own
-   * `attraction_p50_baselines` row before this moves the surviving one's
-   * `parkId`, so the two never race for the same row.
+   * (here `PARK_INLINE_DEPENDENCIES` plus the two below), its step 5b
+   * (`PARK_DEPENDENCIES`) and its step 5c (the ghost's own path), in that
+   * order. The order is load-bearing twice over — the attraction consolidation
+   * above discards the losing ride's own `attraction_p50_baselines` row before
+   * this moves the surviving one's `parkId`, so the two never race for the same
+   * row; and 5b moves the ghost's existing aliases before 5c adds the path it
+   * was itself served under, so a ghost that had already been renamed once
+   * arrives with its whole history rather than only its last URL.
+   *
+   * Takes the two parks rather than their ids because step 5c needs the four
+   * slugs that make up the ghost's public path, and they exist nowhere but on
+   * the row that is about to be deleted.
    */
   private async consolidateMergedPark(
     manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
-    winnerParkId: string,
-    loserParkId: string,
+    winner: Park,
+    loser: Park,
   ): Promise<void> {
+    const winnerParkId = winner.id;
+    const loserParkId = loser.id;
+
     // Park-level mappings. No FK, so an orphan here survives the DELETE in
     // silence and the sync stops recognising the feed it came from. The
     // `internal_entity_type` filter is what `mergeParks` writes and costs
@@ -727,6 +740,44 @@ export class ParksService {
       winnerParkId,
       loserParkId,
     );
+
+    // The ghost's own path was live and indexed. It is not a hypothetical URL:
+    // the park stood in the database with its own four slugs, so it stood in
+    // the sitemap, so it stood in the index — `mergeParks` names the case it
+    // was written for, the Tampa row for Universal Islands of Adventure serving
+    // an empty page in six locales. The rows in `park_slug_aliases` move above;
+    // this path exists nowhere but as columns on the row the caller deletes one
+    // statement later, so without this every one of those URLs answers 404
+    // instead of redirecting to the survivor.
+    //
+    // `mergeParks` step 5c, and deliberately the same two guards rather than a
+    // second reading of them: no alias where either park is missing a slug
+    // (`captureParkPath` returns null), and none where both were served under
+    // the same path (`samePath`) — pointing a path at the park that already
+    // answers it would only add a row the lookup has to step over.
+    const loserPath = captureParkPath(loser);
+    const winnerPath = captureParkPath(winner);
+    if (loserPath && winnerPath && !samePath(loserPath, winnerPath)) {
+      // What `orIgnore()` compiles to in `mergeParks`, written out because this
+      // method speaks raw SQL throughout. It is not decoration: the path is
+      // unique across the table, and a survivor that already carries this exact
+      // path — from an earlier rename, or from a repair run that merged the
+      // same pair before — would otherwise raise 23505 and take the whole sync
+      // transaction with it, `repairDuplicates()` being awaited unguarded at
+      // the end of `syncParks`.
+      await manager.query(
+        `INSERT INTO park_slug_aliases ("parkId", "continentSlug", "countrySlug", "citySlug", "slug")
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT DO NOTHING`,
+        [
+          winnerParkId,
+          loserPath.continentSlug,
+          loserPath.countrySlug,
+          loserPath.citySlug,
+          loserPath.slug,
+        ],
+      );
+    }
   }
 
   /**
@@ -1109,13 +1160,14 @@ export class ParksService {
               [primary!.id, ghostPark.id],
             );
 
-            // 4. Move everything else the ghost park owns — see
-            // `consolidateMergedPark`. The DELETE below is where 23503 lands
-            // once the attraction level stops raising it first.
+            // 4. Move everything else the ghost park owns, and keep the path it
+            // was served under alive — see `consolidateMergedPark`. The DELETE
+            // below is where 23503 lands once the attraction level stops
+            // raising it first.
             await this.consolidateMergedPark(
               transactionalEntityManager,
-              primary!.id,
-              ghostPark.id,
+              primary!,
+              ghostPark,
             );
 
             // 5. Delete the ghost park

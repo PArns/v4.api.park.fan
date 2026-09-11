@@ -603,8 +603,16 @@ describe("ParksService", () => {
     /**
      * Wires up the mocks `syncParks` needs to reach its ghost-park merge, with
      * `attractionRows` answering the one SELECT inside the transaction.
+     *
+     * `parks` overrides the two park rows. The ghost's default is the shape the
+     * merge cases below need and nothing more — an id and a name — which is
+     * also the honest default for step 5c: a row with no slugs has no path to
+     * preserve, so those cases neither expect nor get an alias.
      */
-    const primeGhostParkSync = (attractionRows: unknown[]) => {
+    const primeGhostParkSync = (
+      attractionRows: unknown[],
+      parks: { survivor?: Partial<Park>; ghost?: Partial<Park> } = {},
+    ) => {
       const { calls, transactionalEntityManager } = recordTransaction((sql) =>
         /SELECT id, "parkId", slug/.test(sql) ? attractionRows : [],
       );
@@ -629,7 +637,11 @@ describe("ParksService", () => {
         timezone: "Europe/Berlin",
       });
       mockParkRepository.find.mockResolvedValue([
-        createTestPark({ id: syncSurvivingParkId, externalId: "ext-park-1" }),
+        createTestPark({
+          id: syncSurvivingParkId,
+          externalId: "ext-park-1",
+          ...parks.survivor,
+        }),
       ]);
       mockParkRepository.update.mockResolvedValue({ affected: 1 });
       mockParkRepository.createQueryBuilder.mockImplementation(() => ({
@@ -644,6 +656,7 @@ describe("ParksService", () => {
         getOne: jest.fn().mockResolvedValue({
           id: syncGhostParkId,
           name: "Phantasialand (Queue-Times)",
+          ...parks.ghost,
         }),
       }));
       // repairDuplicates runs at the end of syncParks — nothing to repair.
@@ -1514,6 +1527,146 @@ describe("ParksService", () => {
         "UPDATE",
       ]);
       expect(withoutBaseline[1].params).toEqual([primaryId, ghostParkId]);
+    });
+
+    /**
+     * `mergeParks` step 5c, missing on both raw paths.
+     *
+     * The rows in `park_slug_aliases` are moved by `PARK_DEPENDENCIES` — that
+     * is the ghost's older paths, and it was already true. What was not is the
+     * path the ghost itself was served under: it exists nowhere as a row, only
+     * as four columns on the park that the next statement deletes. A ghost park
+     * is not a theoretical URL — it stood in the database with its own slug, so
+     * in the sitemap, so in the index — and without an alias every one of those
+     * URLs answers 404 rather than redirecting to the survivor.
+     */
+    describe("the ghost park's own path survives the delete", () => {
+      const aliasInserts = (calls: Recorded[]) =>
+        calls.filter((c) => /INSERT INTO park_slug_aliases/i.test(c.sql));
+
+      /** The 5b move, which has to happen before the 5c insert. */
+      const indexOfAliasMove = (calls: Recorded[]) =>
+        calls.findIndex((c) => /UPDATE\s+park_slug_aliases\s+SET/i.test(c.sql));
+
+      const ghostPath = {
+        continentSlug: "europe",
+        countrySlug: "germany",
+        citySlug: "bruehl",
+        slug: "phantasialand-queue-times",
+      };
+
+      it("aliases the ghost's path onto the survivor before the sync-time merge deletes it", async () => {
+        const { calls } = primeGhostParkSync([], {
+          survivor: { ...ghostPath, slug: "phantasialand" },
+          ghost: ghostPath,
+        });
+
+        await service.syncParks();
+
+        const inserts = aliasInserts(calls);
+        expect(inserts).toHaveLength(1);
+        // The survivor's id against the ghost's four slugs — the other way
+        // round would point the survivor's live URL at a park that is gone.
+        expect(inserts[0].params).toEqual([
+          syncSurvivingParkId,
+          ghostPath.continentSlug,
+          ghostPath.countrySlug,
+          ghostPath.citySlug,
+          ghostPath.slug,
+        ]);
+        // A path already recorded — an earlier rename, or the same pair merged
+        // once before — must not abort a transaction that `syncParks` awaits
+        // unguarded. `orIgnore()` in `mergeParks`, written out here.
+        expect(inserts[0].sql).toMatch(/ON CONFLICT DO NOTHING/i);
+
+        // Afterwards is too late: the row carrying those slugs is gone.
+        const insertIndex = calls.indexOf(inserts[0]);
+        expect(insertIndex).toBeLessThan(indexOfParkDelete(calls));
+        // And after 5b, so a ghost that had already been renamed once arrives
+        // with its whole history and not just its last URL.
+        expect(indexOfAliasMove(calls)).toBeGreaterThan(-1);
+        expect(indexOfAliasMove(calls)).toBeLessThan(insertIndex);
+      });
+
+      it("aliases the ghost's path onto the survivor before the repairDuplicates merge deletes it", async () => {
+        const primaryId = "bbbbbbbb-1111-1111-1111-111111111111";
+        const ghostParkId = "bbbbbbbb-2222-2222-2222-222222222222";
+        const { calls } = recordTransaction(() => []);
+
+        mockParkRepository.query.mockResolvedValue([
+          { queue_times_entity_id: "4711" },
+        ]);
+        mockParkRepository.find.mockResolvedValue([
+          createTestPark({
+            id: primaryId,
+            wikiEntityId: "wiki-1",
+            ...ghostPath,
+            slug: "phantasialand",
+          }),
+          createTestPark({
+            id: ghostParkId,
+            wikiEntityId: null,
+            ...ghostPath,
+          }),
+        ]);
+
+        await service.repairDuplicates();
+
+        const inserts = aliasInserts(calls);
+        expect(inserts).toHaveLength(1);
+        expect(inserts[0].params).toEqual([
+          primaryId,
+          ghostPath.continentSlug,
+          ghostPath.countrySlug,
+          ghostPath.citySlug,
+          ghostPath.slug,
+        ]);
+        expect(inserts[0].sql).toMatch(/ON CONFLICT DO NOTHING/i);
+        expect(calls.indexOf(inserts[0])).toBeLessThan(
+          indexOfParkDelete(calls),
+        );
+      });
+
+      it("writes no alias where both parks were served under the same path", async () => {
+        // `repairDuplicates` merges parks that share a Queue-Times id, and two
+        // rows of one park can perfectly well carry the same four slugs. An
+        // alias pointing a path at the park that already answers it is a row
+        // the lookup has to step over for nothing.
+        const primaryId = "cccccccc-1111-1111-1111-111111111111";
+        const ghostParkId = "cccccccc-2222-2222-2222-222222222222";
+        const { calls } = recordTransaction(() => []);
+
+        mockParkRepository.query.mockResolvedValue([
+          { queue_times_entity_id: "4711" },
+        ]);
+        mockParkRepository.find.mockResolvedValue([
+          createTestPark({ id: primaryId, wikiEntityId: "wiki-1" }),
+          createTestPark({ id: ghostParkId, wikiEntityId: null }),
+        ]);
+
+        await service.repairDuplicates();
+
+        // The merge itself ran — otherwise this case proves nothing about the
+        // alias and everything about a branch that was never entered.
+        expect(indexOfParkDelete(calls)).toBeGreaterThan(-1);
+        expect(aliasInserts(calls)).toHaveLength(0);
+      });
+
+      it("writes no alias for a park whose path is incomplete", async () => {
+        // `captureParkPath` returns null as soon as one of the four slugs is
+        // missing, and three quarters of a path is not a URL anyone could have
+        // indexed. Three of four here, so the guard is what refuses and not an
+        // empty row.
+        const { calls } = primeGhostParkSync([], {
+          survivor: { ...ghostPath, slug: "phantasialand" },
+          ghost: { ...ghostPath, citySlug: undefined },
+        });
+
+        await service.syncParks();
+
+        expect(indexOfParkDelete(calls)).toBeGreaterThan(-1);
+        expect(aliasInserts(calls)).toHaveLength(0);
+      });
     });
   });
 });
