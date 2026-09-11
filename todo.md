@@ -545,8 +545,9 @@ with the same rows.
 - [ ] `detect-seasonal` reads `current_status = 'CLOSED'` and the OPERATING
       history, both of which still describe the frozen feed. So the
       feed-dropped attractions keep being marked seasonal. **The population is
-      114, not the ~140 this used to say** (measured 2026-09-11, PAR-38): 97
-      genuinely silent rides plus Universal Studios Singapore's 17, whose feed
+      142, not the ~140 this used to say** (measured 2026-09-11, PAR-38 — the
+      figures are close by coincidence, not agreement): 125 genuinely silent
+      rides plus Universal Studios Singapore's 17, whose feed
       moved to `show_live_data` and whose stale `attractions` rows carry the
       same frozen CLOSED history until PAR-159 retires them. The rest of the
       old ~140 were rides that were never silent at all. The months it
@@ -568,23 +569,23 @@ with the same rows.
 
 - [x] ~~Ten parks lost a block of attractions from the wiki's **live** feed on a
       single day each~~ — **answered 2026-09-11 against production (PAR-38).**
-      The same query over a 270-day window returns **12 parks and 170 rides**,
-      and they split three ways; the classification, the two checks it takes to
+      The same query over a 270-day window returns **16 park rows (15 real
+      parks) and 204 rides**, and they split three ways; the classification, the two checks it takes to
       tell them apart and the per-park verdicts are §5.2a of
       `docs/architecture/attraction-status-and-seasonality.md`. In short:
       **17** at Universal Studios Singapore were recategorised upstream
       (`ATTRACTION` → `SHOW`, ids unchanged, live data still arriving — already
       re-matched into `shows`, the stale `attractions` rows are what is left —
       PAR-159),
-      **97** are genuinely silent — 96 of them with the entity document still
-      intact upstream, the 97th a Queue-Times-only ride that is its own defect
-      (PAR-161) — and **56 were never silent at all** — the wiki or Queue-Times
+      **125** are genuinely silent — 106 of them have a wiki entity and it is
+      still intact upstream; the other 19 are Queue-Times-only ids, one of which
+      is its own defect (PAR-161) — and **62 were never silent at all** — the wiki or Queue-Times
       keeps writing CLOSED for them and they are simply shut (Wet'n'Wild in the
       southern winter, Traumatica until autumn, Ocean Park). Busch Gardens Tampa
       recovered on its own on 2026-08-17 after 65 days.
 
       Two claims in the old text were wrong and are worth not repeating:
-      "every affected ride lacks a `queue_times_entity_id`" (**50 of the 170
+      "every affected ride lacks a `queue_times_entity_id`" (**84 of the 204
       carry one**, and all nine at Busch Gardens Tampa carried one while they
       were out), and the implied mitigation of broadening Queue-Times matching
       — Queue-Times dropped the same ids the wiki did at Knott's, so there is

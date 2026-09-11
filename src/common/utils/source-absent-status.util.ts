@@ -23,12 +23,14 @@
  * upstream and still report, into `show_live_data`. Busch Gardens Tampa came
  * back by itself after 65 days, and all nine of its rides had a Queue-Times
  * mapping — so "no Queue-Times mapping to fall back on" is not the tell it was
- * taken for either: 50 of the 170 rides the cluster query returns carry one.
+ * taken for either: 84 of the 204 rides the cluster query returns carry one.
  *
- * What this guard was reaching for on 2026-09-11 is **97 genuinely silent
- * rides across seven parks**. The operating rides among them are Europa-Park's,
- * Rulantica's and three operating rides at Mid-America Parks; the rest are
- * arcades, museums and out-of-season mazes. Add, for now, the 17 Singapore
+ * What this guard was reaching for on 2026-09-11 is **125 genuinely silent
+ * rides across eleven parks**. The operating rides among them are
+ * Europa-Park's, Rulantica's and three at Mid-America Parks; the rest are
+ * arcades, museums and — the dominant theme — the attractions of seasonal
+ * events that left the feed when the event ended. Add, for now, the 17
+ * Singapore
  * rows — equally source-absent here, because their feed moved to
  * `show_live_data`. They stop counting once PAR-159 retires them.
  *
@@ -40,8 +42,8 @@
  * The two writers are mutually exclusive at any instant: `writeHourlyHeartbeats`
  * only keeps a ride whose `attraction:last-seen` is inside 24h, and
  * reverse-reconciliation only writes when that same key is missing or older. So
- * a ride is never heartbeated and reconciled in the same cycle, and none of the
- * 97 has a heartbeat row at all (measured 2026-09-11).
+ * a ride is never heartbeated and reconciled in the same cycle, and none of
+ * those 125 has a heartbeat row at all (measured 2026-09-11).
  *
  * That leaves the **first 24 hours after a feed drops a ride**, when it gets
  * heartbeats and no reconciliation at all: every row in that window carries the

@@ -303,12 +303,13 @@ names seven, in six rows:
 | Ocean Park | 7 | 2026-06-30 |
 
 It also said **every affected ride lacks a `queue_times_entity_id`** — the
-dual-sourced ones kept working. That is false as a rule: of the 170 rides the
-widened cut in §5.2a returns, **50 carry one**, among them eight of the nine at
+dual-sourced ones kept working. That is false as a rule: of the 204 rides the
+widened cut in §5.2a returns, **84 carry one**, among them eight of the nine
+at
 Knott's Berry Farm, which are as silent as the rest. Busch Gardens Tampa is the
 sharper counter-example, from outside that set: **all nine** of its rides carry
 a Queue-Times id and all nine went quiet anyway on 2026-06-13. They are not
-among the 170 because they came back — §5.2a. A Queue-Times mapping is not armour —
+among the 204 because they came back — §5.2a. A Queue-Times mapping is not armour —
 where the wiki dropped a non-ride facility, Queue-Times usually dropped it too.
 What the sentence described correctly was Europa-Park, where it was measured.
 
@@ -445,10 +446,11 @@ same question as "which rides did we lose", and the whole of this section's
 early confusion lives in the gap between them.
 
 Re-run on 2026-09-11 **over 270 days instead of 120**, with the `HAVING` floor
-at 5 rides instead of 6 and grouped by `parks.id`, it returns **12 parks and
-170 rides** — twelve `parks` rows, that is, and 11 real parks: §5.5's pair is
-one water park entered twice, so its 13 slides are counted twice too. 270 days
-reaches the whole of `queue_data` retention (oldest row 2025-12-24), and the window is where most of the difference from the
+at 5 rides instead of 6 and grouped by `parks.id`, it returns **16 park rows
+and 204 rides** — 15 real parks, since §5.5's pair is one water park entered
+twice and its 13 slides are counted twice with it. 270 days reaches the whole
+of `queue_data` retention (oldest row 2025-12-24), and the window is where most
+of the difference from the
 2026-08-15 reading comes from, not the four weeks between the two runs. The
 reason is worth keeping: **a ride whose last OPERATING row falls outside the
 window has no `last_op` at all, so it drops out of the result entirely instead
@@ -458,10 +460,10 @@ plainly:
 | window | what comes back |
 |---|---|
 | 120 days, `>= 6` | 8 rows: Europa-Park **44**, Rulantica 18, Wet'n'Wild 13 + 13, Mid-America **9**, Traumatica 7, USJ 6, Ocean Park 6 |
-| 270 days, `>= 5` | 12 rows, incl. Knott's 9 (last OPERATING 2026-04-14), Fiesta Texas 15 (04-12), USS 17 (04-25), Hollywood 5 |
+| 270 days, `>= 5` | 16 rows — those eight plus Knott's 9 (last OPERATING 2026-04-14), Fiesta Texas 15 (04-12), USS 17 (04-25), Gröna Lund 14 (01-05), Bellewaerde 8 (02-11), Cinecittà World 6 (01-19), Everland 6 (02-07), Hollywood 5 (05-17) |
 
-The three parks with the oldest drops are invisible at 120 days — the very
-cases the cut exists to find.
+**Eight of the sixteen are invisible at 120 days** — including every one whose
+drop is older than that, which is to say the very cases the cut exists to find.
 
 **And while we are counting Europa-Park, it carries three different numbers in
 this section, all correct.** They are not versions of one figure:
@@ -502,9 +504,10 @@ yesterday as one that is still writing. (Both forms happen to return the same
 twelve-park split here — checked — but only because none of these rides is
 being carried.)
 
-Run check 1 **straight after** the cluster query and every ride in `$1` has a
-row inside the three days, since the set was built with `last_row > now() - 2
-days`. Run it later and that stops being true: a ride that has since been
+`$1` is the `silent_set` column of the §6 cluster query (unnest it across the
+rows you care about, or pass one park's array). Run check 1 **straight after**
+that query and every ride in it has a row inside the three days, since the set
+was built with `last_row > now() - 2 days`. Run it later and that stops being true: a ride that has since been
 retired gets no reverse-reconciliation rows either, falls out of the `src` CTE,
 and is then counted in neither column with nothing in the output to say so. If
 the two are not run together, drive the join from `unnest($1)` with a `LEFT
@@ -535,8 +538,8 @@ SELECT p.id, p.name,
 | group | what it is | parks · rides |
 |---|---|---|
 | **A · recategorised upstream** | same entity id, `entityType` changed, live data still flowing — into a *different table* | Universal Studios Singapore 17 |
-| **B · genuinely silent** | nothing reports them, and upstream still carries the entity | Europa-Park 46, Rulantica 18, Six Flags Fiesta Texas 15, Knott's Berry Farm 9, Universal Studios Hollywood 5, Mid-America Parks 3, Universal Studios Japan 1 — **97** |
-| **C · not silent at all, just closed** | the wiki or Queue-Times keeps writing CLOSED, newest row today | Wet'n'Wild 13, Wet'n'Wild Gold Coast 13, Mid-America Parks 10, Traumatica 7, Universal Studios Japan 7, Ocean Park 6 — **56** |
+| **B · genuinely silent** | nothing reports them, and where there is an entity to look up, upstream still carries it | Europa-Park 46, Rulantica 18, Fiesta Texas 15, Gröna Lund 14, Knott's 9, Bellewaerde 6, Hollywood 5, Cinecittà World 4, Everland 4, Mid-America 3, USJ 1 — **125** |
+| **C · not silent at all, just closed** | the wiki or Queue-Times keeps writing CLOSED, newest row today | Wet'n'Wild 13, Wet'n'Wild Gold Coast 13, Mid-America 10, Traumatica 7, USJ 7, Ocean Park 6, Bellewaerde 2, Cinecittà World 2, Everland 2 — **62** |
 
 **Check 1 alone cannot tell A from B, and that is the trap worth naming.** It
 separates C from everything else and nothing more. Group A's `attractions` rows
@@ -555,7 +558,7 @@ tell a lost ride from a shut one.
 
 **Busch Gardens Tampa is a fourth case and is over.** Its nine went quiet on
 2026-06-13 and **came back by themselves on 2026-08-17** — a 65-day gap, all
-nine dual-sourced. It is not in the 170 at all, because a ride that reports
+nine dual-sourced. It is not in the 204 at all, because a ride that reports
 OPERATING again no longer satisfies `last_op < now() - 30 days`. Worth knowing
 before the next cluster is treated as permanent.
 
@@ -571,11 +574,12 @@ Re-matching by id is therefore not the remedy — the match already happened, an
 the leftover is a data-repair job (PAR-159: retire the row whose `entityType`
 moved, and clean up these 17).
 
-**Group B is neither "recategorised" nor "removed" — it is a third thing.** All
-96 of the 97 that have a wiki entity at all were checked against `GET
-/v1/entity/{id}`: the entity document is intact, `entityType` is still
-`ATTRACTION` and `parentId` still points at the right park. What differs is
-whether the park's own index still lists it:
+**Group B is neither "recategorised" nor "removed" — it is a third thing.** 106
+of the 125 have a wiki entity; every one of those was looked up in its park's
+`/children` and `/live`, and the 8 sampled from the 33 missing from `/children`
+were fetched individually as `GET /v1/entity/{id}` as well. All eight came back
+intact: `entityType` still `ATTRACTION`, `parentId` still the right park. What
+differs is whether the park's own index still lists them:
 
 | park | in `/children` | in `/live` |
 |---|---|---|
@@ -584,9 +588,13 @@ whether the park's own index still lists it:
 | Mid-America Parks | 3 of 3 | 0 |
 | Knott's Berry Farm | 0 of 9 | 0 |
 | Six Flags Fiesta Texas | 0 of 15 | 0 |
+| Bellewaerde | 0 of 6 | 0 |
 | Universal Studios Hollywood | 0 of 5 | 0 |
+| Everland | 0 of 4 | 0 |
 
-The 97th has no wiki entity to look up: *Sesame Street 4-D Movie Magic™* at
+The other 19 have no wiki entity to look up — Gröna Lund's 14 and Cinecittà
+World's 4 are Queue-Times-only parks, and so is the last one: *Sesame Street
+4-D Movie Magic™* at
 Universal Studios Japan is a Queue-Times-only ride (`qt-ride-12083`), and
 Queue-Times **does** publish it — with the same shape of mapping as its
 neighbour *Shrek's 4-D Adventure™*, which gets real `queue-times` rows while
@@ -603,14 +611,24 @@ Arcade* in full, `parentId` correct; Knott's own `/children` (134 entries) does
 not contain it. **A re-match by id has nothing to re-match to** in either
 shape: the id we hold is the id upstream still publishes.
 
-What the two shapes have in common is subject matter. Fiesta Texas's 15 are the
-entire Fright Fest maze line-up, gone from the index when the season ended.
+What the two shapes have in common is subject matter, and one theme dominates:
+**an event ends and its attractions leave the feed with it.** Fiesta Texas's 15
+are the entire Fright Fest maze line-up. Bellewaerde's six are Santa's Balloons,
+Santa's Kitchen, Santa's Candyshop, Rudolph's Ride, Winter Express and the Aztec
+Roller, last seen 2026-02-11. Cinecittà World's four are the Casa di Babbo
+Natale, the Nevicata di Natale, the ice rink and a Christmas face-painting
+stall, last seen 2026-01-19. Everland's four are Snowyard, a snow playground and
+both Snow Buster courses, gone since February. Gröna Lund's 14 — a summer park
+in Stockholm — all stop on the same day, 2026-01-05, and include most of its
+haunted-house line-up. None of them is a lost ride; all of them are a season
+that closed and took its entities out of the index.
 Knott's nine are two arcades, a blacksmith, a livery stable, two museums, a
 schoolhouse, Independence Hall and a gold panning trough — facilities, not
 rides, and Queue-Times dropped the same eight of them it once published (park
 61 returns 46 rides today, none of these among them).
-Hollywood's are limited-run walkthroughs. Only Europa-Park, Rulantica and
-Mid-America Parks lost *operating rides* — and Mid-America's three are the
+Knott's nine and Hollywood's five are the exception to the theme — facilities
+and limited-run walkthroughs rather than a season. Only Europa-Park, Rulantica
+and Mid-America Parks lost *operating rides* — and Mid-America's three are the
 sharpest of the lot: *MR. FREEZE: Reverse Blast*, *JUSTICE LEAGUE* and *THE
 JOKER: Carnival of Chaos* — a launch coaster, a dark ride and a flat ride — are
 operating attractions at an open park, listed as children upstream and absent
@@ -697,7 +715,8 @@ WITH last_op AS (
     FROM queue_data WHERE timestamp > now() - interval '270 days' GROUP BY 1
 )
 SELECT p.id, p.name, p."citySlug", count(*),
-       min(l.last_op)::date, max(l.last_op)::date
+       min(l.last_op)::date, max(l.last_op)::date,
+       array_agg(a.id) AS silent_set   -- feeds §5.2a's check 1 as $1
   FROM last_op l
   JOIN attractions a ON a.id = l."attractionId"
   JOIN parks p ON p.id = a."parkId"
@@ -705,6 +724,10 @@ SELECT p.id, p.name, p."citySlug", count(*),
    AND l.last_row > now() - interval '2 days'
  GROUP BY p.id, p.name, p."citySlug" HAVING count(*) >= 5 ORDER BY 4 DESC;
 ```
+`silent_set` is there so the follow-up in §5.2a has something to take: check 1
+is parameterised on the ride ids, and they exist nowhere else — the rest of
+this query is per-park aggregates, and reconstructing the set by hand means
+re-applying the `HAVING` floor too.
 Identical min/max dates = a feed event, not N independent closures.
 
 **Group by `p.id`, never `p.slug` or `p.name`.** Neither is an identity.
@@ -718,7 +741,7 @@ every grouping — id included — reports it twice. No query fixes that; only a
 merge does.
 
 **The window is 270 days and the floor 5 on purpose** — this used to read 120
-and 6, which on 2026-09-11 hid four of the twelve clusters (§5.2a). A ride whose
+and 6, which on 2026-09-11 hid eight of the sixteen clusters (§5.2a). A ride whose
 last OPERATING row falls outside the window has no `last_op` and vanishes from
 the result rather than showing up as silent.
 
