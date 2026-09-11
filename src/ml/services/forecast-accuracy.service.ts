@@ -3,10 +3,25 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { ForecastAccuracyProfile } from "../entities/forecast-accuracy-profile.entity";
 
-/** The lead buckets, as upper edges in days. `null` means past the last one. */
+/**
+ * The lead buckets, as upper edges in days. `null` means past the last one.
+ *
+ * The same six distances `PredictionLeadSnapshotService.LEAD_BUCKETS` samples
+ * forward, and for the same reason: dense where the curve moves, sparse where it
+ * flattens. They were four here (`d1/d7/d30/d60`) while the forward archive
+ * already used six, so one question had two answers depending on which table was
+ * asked — `d3` and `d14` close that.
+ *
+ * Adding them costs nothing but resolution. Measured over the 45-day window on
+ * 2026-09-11, every one of the 18 cells clears {@link MIN_SAMPLE} by an order of
+ * magnitude (the smallest, `busy|d1`, holds 6,132 comparisons), so the two new
+ * columns are published rather than suppressed.
+ */
 const LEAD_BUCKETS = [
   { key: "d1", maxDays: 1 },
+  { key: "d3", maxDays: 3 },
   { key: "d7", maxDays: 7 },
+  { key: "d14", maxDays: 14 },
   { key: "d30", maxDays: 30 },
   { key: "d60", maxDays: 60 },
 ] as const;
@@ -22,9 +37,10 @@ const MIN_SAMPLE = 500;
  * the band is the predicted level rather than the realised one.
  *
  * The measurement is retrospective and possible only because `tft_forecasts`
- * keeps every origin: for a target day it holds what was said 1, 7, 30 and 60
- * days out, so the error curve can be computed from history instead of waiting
- * for one to accumulate. CatBoost has no such record — its daily rows are
+ * keeps every origin: for a target day it holds what was said at every distance
+ * from 1 to 60 days out — all 60 densely populated, 17.8 M rows on 2026-09-11 —
+ * so the error curve can be computed from history instead of waiting for one to
+ * accumulate. CatBoost has no such record — its daily rows are
  * rewritten until only the last survives — which is why nothing past 60 days can
  * be answered here yet.
  */
@@ -68,7 +84,9 @@ export class ForecastAccuracyService {
                      WHEN f.predicted_peak >= 30 THEN 'mid'
                      ELSE 'quiet' END AS predicted_band,
                 CASE WHEN (f.target_date - f.forecast_date) <= 1  THEN 'd1'
+                     WHEN (f.target_date - f.forecast_date) <= 3  THEN 'd3'
                      WHEN (f.target_date - f.forecast_date) <= 7  THEN 'd7'
+                     WHEN (f.target_date - f.forecast_date) <= 14 THEN 'd14'
                      WHEN (f.target_date - f.forecast_date) <= 30 THEN 'd30'
                      ELSE 'd60' END AS lead_bucket,
                 abs(f.predicted_peak - t.actual) AS err,
@@ -118,8 +136,9 @@ export class ForecastAccuracyService {
   /**
    * The whole profile, keyed `band|leadBucket`.
    *
-   * Small enough (nine cells) that a caller reads all of it and looks up per
-   * ride; there is nothing to page and nothing to filter.
+   * Small enough (18 cells: three bands × six lead buckets) that a caller reads
+   * all of it and looks up per ride; there is nothing to page and nothing to
+   * filter.
    */
   async getProfile(): Promise<Map<string, ForecastAccuracyProfile>> {
     const rows = await this.repository.find();
@@ -138,5 +157,69 @@ export class ForecastAccuracyService {
     if (predictedWait >= 60) return "busy";
     if (predictedWait >= 30) return "mid";
     return "quiet";
+  }
+
+  /**
+   * The measured cell for a ride, or undefined when this distance has none.
+   *
+   * Looks up `band|bucket` and, if that cell is absent, WIDENS to the next
+   * coarser bucket that is present. Two reasons it is a method rather than a
+   * string built at the call site:
+   *
+   * 1. **The stored grid and this code are deployed separately.** `rebuild()`
+   *    replaces the table wholesale once a night, so between a deploy that adds a
+   *    bucket and the next nightly run the table still holds the previous set. A
+   *    plain lookup returns nothing for the new keys, and `/plan/day` would drop
+   *    from a measured figure to `unmeasured` for up to a day — at distances that
+   *    reported one before the deploy. That is a silent regression, and it is
+   *    exactly what adding `d3` and `d14` would have caused.
+   * 2. A bucket that stops being measurable disappears from the table by design
+   *    (see `rebuild()`), so an absent cell is a normal state and not an error.
+   *
+   * Widening rather than narrowing is the safe direction: the answer errs towards
+   * "at least this wrong" rather than understating — the same reasoning
+   * `PredictionLeadSnapshotService` applies from the other side. It never reaches
+   * past the last bucket, so past 60 days the answer stays undefined.
+   *
+   * THAT INVARIANT RESTS ON TWO THINGS, and both are measured rather than assumed:
+   *
+   * 1. **MAE rises with lead in every band** — 8.6→12.5 quiet, 12.9→16.5 mid,
+   *    21.5→25.5 busy over 1→60 days. A coarser bucket is a longer distance, so
+   *    its mean is the larger one. Were the curve non-monotone this would not
+   *    follow.
+   * 2. **The bucket list only ever gets refined, never re-cut.** `d3` and `d14`
+   *    split existing buckets; they do not move `d1/d7/d30/d60`'s edges. So a
+   *    stale coarse bucket shares its LOWER edge with the ideal bucket and extends
+   *    only further out — its mean is taken over a superset reaching away from the
+   *    distance asked about, never towards it.
+   *
+   * Verified against production on 2026-09-11 for the two cells this change adds,
+   * both compared inside ONE 45-day window (comparing across windows is how this
+   * invariant first looked violated):
+   *
+   * ```
+   *   band    new d3   widens to old d7      new d14   widens to old d30
+   *   busy     21.63          22.47           24.31          24.83
+   *   mid      13.22          13.49           14.65          15.26
+   *   quiet     8.70           8.88            9.89          10.44
+   * ```
+   *
+   * A future bucket that re-cuts rather than refines the existing edges would
+   * break point 2, and this method would then need to compare edges rather than
+   * walk the list.
+   */
+  static lookup(
+    profile: Map<string, ForecastAccuracyProfile>,
+    predictedWait: number,
+    leadDays: number,
+  ): ForecastAccuracyProfile | undefined {
+    const band = ForecastAccuracyService.bandFor(predictedWait);
+    if (leadDays < 0) return undefined;
+    for (const bucket of LEAD_BUCKETS) {
+      if (leadDays > bucket.maxDays) continue;
+      const cell = profile.get(`${band}|${bucket.key}`);
+      if (cell) return cell;
+    }
+    return undefined;
   }
 }
