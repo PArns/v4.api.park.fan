@@ -82,10 +82,9 @@ describe("closure-gap statements", () => {
     expect(gaps).not.toMatch(/AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/);
     // The emitted day is the window-derived one too: it leaves as "startOpDay"
     // and the processor keys outage starts into attraction_exposure_days with
-    // it, whose op_day has always come from win.
-    expect(gaps).toContain(
-      "start_op_day                              AS op_day",
-    );
+    // it, whose op_day has always come from win. Matched on the tokens, not the
+    // column alignment — the rest of the file reflows this SQL freely.
+    expect(gaps).toMatch(/\bstart_op_day\s+AS op_day\b/);
   });
 
   it.each(both)("%s is structurally a statement, not a fragment", (_n, sql) => {
