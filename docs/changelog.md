@@ -6,6 +6,39 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — `/plan/day`'s docs promised "every ride", and the 60-ride cap had never been measured
+
+Documentation only; no behaviour changed, and nothing needed to.
+
+The endpoint doc opened with "every ride's expected wait for each open hour of
+one date", without qualification. Measured against production on 2026-09-11 for
+2026-09-18, seven days out — a composed day, where a ride needs the day level to
+speak for it **and** the last year to have given it an hour shape: Universal
+Studios Japan serves **22** rides of the 43 that carry a shape, because only 25
+of them have a TFT row for that date. Alton Towers serves 32 of 32 and
+Europa-Park 29 of 29 — both held by the shape rather than the level. Which of the
+two binds is not the same park to park, and on a `measured` day neither does: the
+ride loop unions the model's hourly rows with the composed ones, so today and
+tomorrow can carry a ride the shape has never covered.
+
+**And the `SHAPE_RIDES = 60` cap does not bite anywhere.** The cap applies to the
+`eligible` CTE — rides clearing 20 measured days, counted before the per-hour
+test that decides which of them get a usable shape. Of the 120 parks that have a
+measurable hourly profile at all, that set peaks at 43 rides and averages 16.2;
+not one reaches 50. So the cap is headroom rather than a limit — which is worth
+recording, because the day a park crosses it, it loses two things at once: the
+rides past the cap, and the peak-hour re-rank that `getParkHourlyProfile`'s
+`Math.min(topN * 3, 60)` over-fetch exists for, since at `topN = 60` that
+over-fetch is already zero. The number to watch is the eligible set, not the
+park's attraction count — Hansa-Park's 82 attractions are not 82 shapes.
+
+A measurement trap that came with it, for anyone counting per park:
+**`parks.slug` is not unique.** `disneyland-park` is both Anaheim and Paris;
+grouped by slug the two add up to 54 and invent the only figure above 50 in the
+catalogue. Group by `parks.id`.
+
+Contract: [plan-day-endpoint.md §6](frontend/plan-day-endpoint.md).
+
 ### Fixed — `/plan/day` reads the works window, the live status and the hours it served
 
 Four gaps in `PlanDayService`, three of them on the same thirty lines, all of
