@@ -9,10 +9,19 @@ Every number here comes from the production database on 2026-09-03. The SQL is i
 
 **Updated 2026-09-11 (PAR-17):** §6 gains the measured state of the forward
 archive, §7 the six-bucket served grid that now matches §2's own rows, and §8 the
-reason a per-ride error curve is not available. Those figures were re-measured on
-2026-09-11; the §2 table above is the 2026-09-03 measurement and is left as it
-was — the window has since moved by a week and the curve is unchanged within
-drift (11.66 → 15.09 then, 11.84 → 14.96 now).
+reason a per-ride error curve is not available. **Every figure in those three
+sections is reproducible from
+[`scripts/lead-time-error.sql`](../../scripts/lead-time-error.sql)** — six
+read-only queries, run against production and verified to execute clean. Re-run
+them when the model, the window or the park set moves; the numbers below are a
+snapshot and will drift. (The `shape-backtest.sql` named above does not exist in
+the repo — a pre-existing broken reference, logged as PAR-124; it is not the
+source of the new sections.)
+
+The §2 table below is left as the 2026-09-03 measurement: the window has since
+moved by a week and the curve is unchanged within drift (11.66 → 15.09 then,
+11.84 → 14.96 now), so re-cutting it would churn the numbers without changing
+what they say.
 
 ---
 

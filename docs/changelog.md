@@ -42,9 +42,52 @@ hold rows but **no scores** — their target dates have not arrived. The 60-day
 bucket cannot report before **2026-11-02**. A run that finds `null` there has
 found the designed answer, not a fault.
 
-`ForecastAccuracyService` had no spec; `bucketFor`/`bandFor` now have one (7
-cases) pinning every bucket edge, the round-**up** direction, and the `null` past
-60 days that makes `/plan/day` say `unmeasured`.
+### Fixed — a widened lookup instead of a day of `unmeasured` after the deploy
+
+Adding two buckets would have caused a silent regression that no unit test could
+see, because it lives in the gap between code and stored data: `rebuild()`
+replaces `forecast_accuracy_profile` **wholesale, once a night**, so between the
+deploy and the next nightly run the table still holds the previous four buckets.
+`bucketFor(2)` then returns `d3` and `bucketFor(10)` returns `d14`, neither of
+which is in the table, and the old string-built `get("band|bucket")` missed —
+dropping every ride's `expectedError` and the whole day to
+`accuracy.basis: "unmeasured"`, at distances that carried a measured figure
+*before* the deploy. Up to ~24 h, with nothing logged.
+
+`ForecastAccuracyService.lookup()` replaces that access: when the exact cell is
+absent it widens to the next coarser bucket present. Widening can only overstate
+the error, and that rests on two measured properties rather than an assertion —
+MAE is monotone in lead in every band, and the bucket list is only ever *refined*
+(`d3`/`d14` split existing buckets without moving `d1/d7/d30/d60`'s edges), so a
+stale coarse bucket shares its lower edge with the ideal one and reaches only
+further out. Checked inside one 45-day window: busy 24.31 → 24.83, mid
+14.65 → 15.26, quiet 9.89 → 10.44. It never reaches past the last bucket, so past
+60 days stays `unmeasured`.
+
+Two consumer-visible contracts moved with it, both documented in
+`plan-day.dto.ts`: `accuracy.basis: "measured"` no longer promises the figure came
+from *this* distance's bucket (it is the nearest measured bucket at or beyond it),
+and `accuracy.sampleSize` is now the weight behind the figures actually quoted —
+the sum over the distinct cells the day's rides read, which spans more than one
+bucket when a band fell back. Previously it summed the ideal bucket's cells and
+would have reported `0` beside `basis: "measured"` in exactly that window.
+
+### Added — the measurement SQL is in the repo, and a spec for the classifiers
+
+`scripts/lead-time-error.sql` — the six read-only queries behind
+[`long-range-forecasting.md`](ml/long-range-forecasting.md) §6–§8: the forward
+archive's scored state, `tft_forecasts`' lead coverage, the 18-cell grid, the
+per-ride ceiling, and the widening invariant. Verified to run clean against
+production. The doc previously cited `scripts/shape-backtest.sql`, which does not
+exist in the repo; that broken reference predates this change and is logged as
+PAR-124, but the new sections no longer depend on it.
+
+`ForecastAccuracyService` had no spec at all; `bucketFor`, `bandFor` and the new
+`lookup` now have one — 15 cases pinning every bucket edge, the round-**up**
+direction, the `null` past 60 days that makes `/plan/day` say `unmeasured`, the
+four-bucket deploy-skew case above, and a walk over every lead from 0 to 60
+asserting that a widened lookup only ever moves *away* from the distance asked
+about.
 
 ### Added — the merge transaction is finally tested against a real database
 
