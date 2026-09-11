@@ -471,12 +471,14 @@ this section, all correct.** They are not versions of one figure:
 | **45** | the sweep population above: rides with >100 OPERATING rows before the drop and none since |
 | **46** | today's 270-day cut, which is the sweep's own `> 0` variant: the 45 plus the dual-sourced *'Bellevue' Ferris Wheel* (81 OPERATING rows before, none after) |
 
-The 120-day run happens to return 44 as well, by dropping *Children's carousel*
-(last OPERATING 2026-04-14) and the Ferris wheel (2026-01-18) out of the 46.
-That is a coincidence of arithmetic and not the same 44 — one is a feed event,
-the other a window artefact. The sweep's verdicts cover the 45; the Ferris
-wheel has none, and correctly so: it is dual-sourced and was never part of the
-population this section is about.
+The 120-day run returns 44 as well, by dropping *Children's carousel* (last
+OPERATING 2026-04-14) and the Ferris wheel (2026-01-18) out of the 46 — and
+since the carousel went quiet eight weeks before 2026-06-07, it was never part
+of the feed event either. The two 44s are very probably the same rides. They
+are still answers to different questions, and the feed-side list was never
+written down, so this is a likelihood and not a proof. The sweep's verdicts
+cover the 45; the Ferris wheel has none, and correctly so — it is dual-sourced
+and was never part of the population this section is about.
 
 Two follow-up checks turn that count into an answer, and **they are not
 interchangeable**:
@@ -504,10 +506,10 @@ construction, since the set requires `last_row > now() - 2 days`.
 -- check 1: does anything other than reconciliation still OBSERVE this ride?
 WITH src AS (
   SELECT q."attractionId",
-         bool_or(COALESCE(q.data_source, '') NOT IN
+         COALESCE(bool_or(COALESCE(q.data_source, '') NOT IN
                    ('system-reconciliation', 'system-heartbeat')
                  AND NOT COALESCE(q.is_heartbeat,
-                                  q."lastUpdated" = q.timestamp)) AS still_reported
+                                  q."lastUpdated" = q.timestamp)), false) AS still_reported
     FROM queue_data q
    WHERE q."attractionId" = ANY($1::uuid[])          -- the silent set
      AND q.timestamp > now() - interval '3 days'
@@ -662,8 +664,9 @@ SELECT data_source, status, count(*), max(timestamp)::date
  WHERE "attractionId" = '<id>' AND timestamp > now() - interval '3 days'
  GROUP BY 1,2;
 ```
-`system-reconciliation` means nothing wrote a `queue_data` row for it. Usually
-that is "no source is reporting it" — but not always: an entity the wiki has
+`system-reconciliation` means no upstream source reported the ride, and the
+reverse-reconciliation write is ours. Two things that looks like and is not: an
+entity the wiki has
 recategorised to `SHOW` keeps reporting into `show_live_data`, under the same
 upstream `externalId` but a different internal row, while its stale
 `attractions` row sees only reconciliation (§5.2a, group A). And a

@@ -16,20 +16,29 @@
  * Universal Studios Singapore, both Wet'n'Wild records, Busch Gardens Tampa
  * and Ocean Park: roughly 140 attractions across ten parks" — did not survive
  * being measured (PAR-38, 2026-09-11). Wet'n'Wild and Ocean Park were never
- * silent: the feed reports them CLOSED every few minutes and they are shut for
- * the season. Universal Studios Singapore's 17 were recategorised to `SHOW`
+ * silent: the feed reports them CLOSED every few minutes, so whatever has them
+ * shut — the southern winter for Wet'n'Wild, something else at year-round
+ * Ocean Park — it is not our data going missing.
+ * Universal Studios Singapore's 17 were recategorised to `SHOW`
  * upstream and still report, into `show_live_data`. Busch Gardens Tampa came
  * back by itself after 65 days, and all nine of its rides had a Queue-Times
  * mapping — so "no Queue-Times mapping to fall back on" is not the tell it was
  * taken for either: 50 of the 170 rides the cluster query returns carry one.
  *
- * What this guard covers is **97 genuinely silent rides across seven parks**,
- * of which only Europa-Park's and Rulantica's are operating rides rather than
- * arcades, museums and out-of-season mazes — plus, for now, the 17 Singapore
- * rows, which are equally source-absent here because their feed moved to
- * `show_live_data`. They stop counting once PAR-159 retires them. See §5.2a of
- * `docs/architecture/attraction-status-and-seasonality.md` for the three
- * groups and the two checks that tell them apart.
+ * What this guard was reaching for on 2026-09-11 is **97 genuinely silent
+ * rides across seven parks**, of which only Europa-Park's and Rulantica's are
+ * operating rides rather than arcades, museums and out-of-season mazes — plus,
+ * for now, the 17 Singapore rows, equally source-absent here because their
+ * feed moved to `show_live_data`. They stop counting once PAR-159 retires them.
+ *
+ * Note what the test below does NOT do: a carried heartbeat keeps the previous
+ * row's `dataSource`, so a ride reached only by heartbeats is not source-absent
+ * by this definition even though nothing fresh arrived. It does not bite today
+ * — none of those 97 has a heartbeat row at all, measured — but the rides it
+ * would bite for are exactly the ones this guard exists for. PAR-162.
+ *
+ * See §5.2a of `docs/architecture/attraction-status-and-seasonality.md` for the
+ * three groups and the two checks that tell them apart.
  *
  * This says the honest thing instead, and it is the rule the codebase already
  * applies one level up — a park whose wait times we cannot read puts its rides
