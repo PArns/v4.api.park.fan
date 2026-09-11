@@ -344,11 +344,26 @@ What is still open, roughly by consequence:
       same way: `attraction_rope_drop` and `attraction_typical_waits` **move**,
       which is what `PARK_DEPENDENCIES` has always said about them — applying it
       before the DELETE is what makes that true here (PF-111).
-- [ ] **A ghost park's own URL is not preserved when the raw paths delete it.**
-      `mergeParks` inserts a `ParkSlugAlias` for the loser's path before the
-      DELETE, so already-indexed URLs redirect instead of 404ing; neither raw
-      path does. Out of PF-111, whose acceptance criteria are about the
-      dependent rows rather than the loser's own path.
+- [x] ~~**A ghost park's own URL is not preserved when the raw paths delete
+      it.**~~ `mergeParks` inserts a `ParkSlugAlias` for the loser's path before
+      the DELETE, so already-indexed URLs redirect instead of 404ing; neither
+      raw path did. Step 5c now sits at the end of `consolidateMergedPark`,
+      which is the one place both raw paths meet, and runs after the 5b move of
+      `park_slug_aliases` — so a ghost that had already been renamed once
+      arrives with its whole history and not just its last URL. The guards are
+      `mergeParks`' own rather than a second reading of them: `captureParkPath`
+      on both sides (a park missing one of its four slugs has no path to
+      preserve) and `samePath` (an alias pointing a path at the park that
+      already answers it is a row the lookup steps over for nothing). The insert
+      is raw `ON CONFLICT DO NOTHING` rather than the query builder's
+      `orIgnore()`, because `consolidateMergedPark` speaks raw SQL throughout
+      and is typed on `{ query }` — same statement, and it lands in the same
+      recorded call list as the park DELETE, which is the only way a test can
+      see that it happens first. `consolidateMergedPark` takes the two `Park`
+      entities instead of their ids for this: the ghost's four slugs exist
+      nowhere but on the row the caller deletes one statement later. Out of
+      PF-111, whose acceptance criteria were about the dependent rows rather
+      than the loser's own path (PAR-107).
 - [ ] **`attraction_ride_profiles` is still unprotected on the _attraction_
       side.** Its park half is fixed — PF-111 added it to `PARK_DEPENDENCIES`
       and to the `PARK_REFERENCING_TABLES` snapshot, so a park merge now carries
