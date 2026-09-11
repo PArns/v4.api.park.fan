@@ -374,7 +374,8 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
    * Recompute how wrong the daily forecast typically is.
    *
    * Retrospective, so it needs no waiting: `tft_forecasts` keeps every origin, so
-   * the error at 1, 7, 30 and 60 days out can be measured from history. Nightly
+   * the error at each of the six bucket distances (1, 3, 7, 14, 30, 60 days out)
+   * can be measured from history. Nightly
    * because the answer follows the model, and a figure a planner shows as "give
    * or take" must not be a constant somebody wrote once.
    */

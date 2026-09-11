@@ -367,8 +367,14 @@ export class PlanDayAccuracyDto {
     enum: ["measured", "unmeasured"],
     description:
       "Whether anything is known about how wrong this day's numbers are.\n\n" +
-      "`measured` — the forecast at this distance has been scored against " +
-      "realised days, and every ride carries an `expectedError`.\n\n" +
+      "`measured` — the forecast has been scored against realised days, and " +
+      "every ride carries an `expectedError`. The figure comes from the nearest " +
+      "measured lead bucket AT OR BEYOND this distance, which is usually this " +
+      "distance's own bucket but falls back to a coarser one when that cell is " +
+      "absent — a bucket that has stopped clearing its sample floor, or the day " +
+      "after a deploy adds a bucket the nightly rebuild has not written yet. " +
+      "A coarser bucket is a longer distance and so a larger error, so the " +
+      "figure errs towards 'at least this wrong' and never understates.\n\n" +
       "`unmeasured` — **past 60 days**, where the only model left is CatBoost " +
       "and its accuracy at that distance has never been measurable: the nightly " +
       "run rewrites a day's prediction until only the last survives, so of its " +
@@ -391,9 +397,13 @@ export class PlanDayAccuracyDto {
 
   @ApiProperty({
     required: false,
-    example: 1016092,
+    example: 742010,
     description:
-      "Scored comparisons behind the figures for this lead distance.",
+      "Scored comparisons behind the figures actually quoted on this day — the " +
+      "sum over the distinct grid cells the day's rides read. Normally that is " +
+      "one lead bucket across the bands in play; where a band fell back to a " +
+      "coarser bucket (see `basis`) it spans more than one, so read it as the " +
+      "weight behind these numbers rather than as the size of one bucket.",
   })
   sampleSize?: number;
 }
