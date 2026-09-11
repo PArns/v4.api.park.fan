@@ -1451,8 +1451,19 @@ describe("ParksService", () => {
 
       await service.syncParks();
 
-      // No park was merged away: no transaction statement, and above all no
-      // DELETE outside one either.
+      // First: prove the run actually stood in the priority branch, or the two
+      // absences below are green for the wrong reason. Only that branch keeps
+      // an existing park without a matching externalId — had the name-duplicate
+      // detection or the priority comparison not fired, `existing` would still
+      // be null and the incoming park would have been inserted instead.
+      expect(mockParkRepository.save).not.toHaveBeenCalled();
+      expect(mockParkRepository.update).toHaveBeenCalledWith(
+        priorityWinnerId,
+        expect.objectContaining({ name: "Phantasialand" }),
+      );
+
+      // And there, the loser lookup missed: no park was merged away, no
+      // statement inside a transaction, no DELETE outside one either.
       expect(calls).toEqual([]);
       expect(mockParkRepository.delete).not.toHaveBeenCalled();
     });
