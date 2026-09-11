@@ -159,6 +159,147 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
 ];
 
 /**
+ * Every table referencing `shows`, with what a merge must do to it.
+ *
+ * A show collides for the same reason a ride does, and more often: the unique
+ * index is `(parkId, slug)` (`show.entity.ts`), and two park rows from two
+ * sources describe one park, so a shared slug is the normal case rather than
+ * the exception. The blind `UPDATE shows SET "parkId"` both raw paths in
+ * `parks.service.ts` used to issue therefore raised **23505** and rolled the
+ * whole merge back before the attraction and park steps ran at all.
+ *
+ * Resolving the collision means deleting the losing show, and the three tables
+ * below fail in three different ways when that happens without them — the same
+ * spread the attraction list above was written against:
+ *
+ *   - `show_live_data`       FK CASCADE   → the whole showtime history of the
+ *                            losing row disappears inside a transaction that
+ *                            then reports success. It is the only record of
+ *                            what that show ever played.
+ *   - `show_follows`         FK CASCADE   → somebody's push reminder for that
+ *                            show is deleted with it. Nothing tells them; the
+ *                            notification simply never arrives.
+ *   - `show_schedule_patterns` no FK at all → the rows survive pointing at a
+ *                            show that is gone.
+ *
+ * The two raw merge paths in `parks.service.ts` apply this list.
+ * `ParkMergeService.consolidateEntityData` does not — it applies a dependency
+ * list to attractions only, and ends on "Note: Add show/restaurant specific
+ * consolidation if needed" (PAR-150). Whatever answers that comment has to be
+ * this list rather than a second one: two different answers to one question are
+ * worse than the open question.
+ */
+export const SHOW_DEPENDENCIES: MergeDependency[] = [
+  {
+    // The show's own time series, and a hypertable — the caller must have
+    // lifted `timescaledb.max_tuples_decompressed_per_dml_transaction`, which
+    // both raw paths do at the top of the merge transaction. PK is
+    // `(id, timestamp)`, its own surrogate id, so changing `showId` cannot
+    // collide and no snapshot is ever dropped.
+    table: "show_live_data",
+    column: "showId",
+    strategy: "move",
+  },
+  {
+    // The projected weekday programme (`ShowSchedulePattern`). PK is
+    // `(show_id, weekday)`, so the winner's own row for a weekday wins and the
+    // loser's remaining weekdays fill the gaps.
+    //
+    // `move` rather than `discard` although `rebuildSchedulePatterns` replaces
+    // the table wholesale every night: the rebuild reads `show_live_data`,
+    // which has just moved onto the survivor, so it would reach the same answer
+    // — but not before tomorrow. Moving the rows costs one statement and keeps
+    // `/plan/day` projecting the show's Saturday in the meantime.
+    table: "show_schedule_patterns",
+    column: "show_id",
+    strategy: "move",
+    conflictColumns: ["weekday"],
+  },
+  {
+    // A visitor's reminder — set by hand, like `park_seasons` and
+    // `attraction_ride_profiles` on the park list, and the only one of the
+    // three whose owner is a stranger who would simply never hear from us
+    // again. Unique on `(subscriptionId, showId)`, so a subscriber who
+    // followed both rows keeps the winner's: the unique index allows one
+    // reminder per subscriber per show, and a second row would be a second
+    // notification for the same performance.
+    //
+    // Which of the two survives is arbitrary where they mean different things
+    // — `startTime` null is "whichever is next" (the card's bell) and a set one
+    // names a single performance (a showtime badge), and the winner's row wins
+    // either way. Recorded as PAR-151 rather than decided here: before this
+    // list existed the CASCADE deleted the losing row outright, so the
+    // subscriber now keeps a working reminder for the same show in every
+    // branch, and picking between them is a product question.
+    //
+    // `ride_alerts` is the attraction-side twin of this row, with the same
+    // CASCADE and the same unique `(subscriptionId, attractionId)`, and it is
+    // NOT on `ATTRACTION_DEPENDENCIES` — see PAR-149.
+    table: "show_follows",
+    column: "showId",
+    strategy: "move",
+    conflictColumns: ["subscriptionId"],
+  },
+];
+
+/**
+ * Every table referencing `restaurants`, with what a merge must do to it.
+ *
+ * The same unique `(parkId, slug)` as shows (`restaurant.entity.ts`) and the
+ * same 23505, with one dependent table rather than three: nobody follows a
+ * restaurant and nothing projects its week.
+ */
+export const RESTAURANT_DEPENDENCIES: MergeDependency[] = [
+  {
+    // PK `(id, timestamp)`, hypertable, FK CASCADE — exactly `show_live_data`'s
+    // case one table over.
+    table: "restaurant_live_data",
+    column: "restaurantId",
+    strategy: "move",
+  },
+];
+
+/**
+ * The two child entities a park merge reparents wholesale, each with the
+ * dependency list of its own losing rows.
+ *
+ * A closed constant rather than a parameter, because the table name is
+ * interpolated into SQL: a caller that takes it from the outside has to prove
+ * it is a bare identifier, and a caller that iterates this cannot be handed
+ * anything else. Attractions are deliberately absent — they need land columns
+ * merged and `last_merged_at` stamped before the losing row goes, which is
+ * neither of these two entities' case.
+ */
+export const PARK_CHILD_ENTITIES = [
+  { table: "shows", dependencies: SHOW_DEPENDENCIES },
+  { table: "restaurants", dependencies: RESTAURANT_DEPENDENCIES },
+] as const;
+
+/**
+ * Tables from `known` that no show merge strategy is declared for.
+ *
+ * `external_entity_mapping` is excluded the same way it is on the attraction
+ * side: it is keyed on `internal_entity_id` across every entity type at once
+ * and is moved by the caller, before the dependencies.
+ */
+export function showTablesMissingFrom(known: string[]): string[] {
+  const declared = new Set([
+    ...SHOW_DEPENDENCIES.map((d) => d.table),
+    "external_entity_mapping",
+  ]);
+  return known.filter((table) => !declared.has(table)).sort();
+}
+
+/** The restaurant counterpart of `showTablesMissingFrom`. */
+export function restaurantTablesMissingFrom(known: string[]): string[] {
+  const declared = new Set([
+    ...RESTAURANT_DEPENDENCIES.map((d) => d.table),
+    "external_entity_mapping",
+  ]);
+  return known.filter((table) => !declared.has(table)).sort();
+}
+
+/**
  * Park-scoped tables the merge must handle beyond the nine it already migrates.
  *
  * `park_slug_aliases` is the one with teeth: its FK is ON DELETE CASCADE, and
@@ -283,7 +424,10 @@ export const PARK_TABLES_HANDLED_INLINE = [
  *
  * Five of the ten inline tables are deliberately absent:
  *   - `attractions`, `shows`, `restaurants` — both raw paths already reparent
- *     them, and attractions need the collision handling that precedes this.
+ *     them, and all three need the collision handling that precedes this
+ *     (`ATTRACTION_DEPENDENCIES`, `SHOW_DEPENDENCIES`,
+ *     `RESTAURANT_DEPENDENCIES`), because all three carry a unique
+ *     `(parkId, slug)`.
  *   - `park_p50_baselines` — winner-authoritative rather than move-or-discard
  *     (`migrateTableData(..., null)`), which is not a `MergeStrategy`. Its
  *     caller does it by hand, and says why.

@@ -39,6 +39,8 @@ import {
 import {
   applyMergeDependencies,
   ATTRACTION_DEPENDENCIES,
+  MergeDependency,
+  PARK_CHILD_ENTITIES,
   PARK_DEPENDENCIES,
   PARK_INLINE_DEPENDENCIES,
 } from "./utils/merge-dependencies";
@@ -446,16 +448,14 @@ export class ParksService {
                     );
                   }
 
-                  // 2. Migrate Shows (Blind update OK if slugs distinctive, else duplicate logic needed? mostly safe for now)
-                  await transactionalEntityManager.query(
-                    `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
-                    [existing.id, ghostPark.id],
-                  );
-
-                  // 3. Migrate Restaurants
-                  await transactionalEntityManager.query(
-                    `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
-                    [existing.id, ghostPark.id],
+                  // 2./3. Shows and restaurants, partitioned by slug against
+                  // their own unique `(parkId, slug)` — see
+                  // `migrateParkChildEntities`. A blind move here used to raise
+                  // 23505 and take the two steps below with it.
+                  await this.migrateParkChildEntities(
+                    transactionalEntityManager,
+                    existing.id,
+                    ghostPark.id,
                   );
 
                   // 4. Move everything else the ghost park owns, and keep the
@@ -568,6 +568,29 @@ export class ParksService {
     manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
     pairs: Array<{ winnerId: string; loserId: string }>,
   ): Promise<void> {
+    await this.consolidateMergedEntities(
+      manager,
+      ATTRACTION_DEPENDENCIES,
+      pairs,
+    );
+  }
+
+  /**
+   * The body of `consolidateMergedAttractions`, for any entity type that has a
+   * dependency list: mapping first, then the declared tables.
+   *
+   * Shows and restaurants reach it through `migrateParkChildEntities`. Nothing
+   * about the sequence is attraction-specific — the mapping table is keyed on
+   * `internal_entity_id` for every entity type at once, and `external_source`
+   * plus `external_entity_id` are unique across all of them, so a pair the
+   * winner already holds cannot also sit on the loser and no conflict delete is
+   * needed for any of the three.
+   */
+  private async consolidateMergedEntities(
+    manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    dependencies: MergeDependency[],
+    pairs: Array<{ winnerId: string; loserId: string }>,
+  ): Promise<void> {
     if (pairs.length === 0) return;
 
     for (const { winnerId, loserId } of pairs) {
@@ -575,12 +598,93 @@ export class ParksService {
         `UPDATE external_entity_mapping SET "internal_entity_id" = $1 WHERE "internal_entity_id" = $2`,
         [winnerId, loserId],
       );
-      await applyMergeDependencies(
-        manager,
-        ATTRACTION_DEPENDENCIES,
-        winnerId,
-        loserId,
+      await applyMergeDependencies(manager, dependencies, winnerId, loserId);
+    }
+  }
+
+  /**
+   * Moves a losing park's shows and restaurants onto the survivor, resolving
+   * the ones both parks know by the same slug instead of walking into the
+   * unique index.
+   *
+   * Both raw merge paths used to issue a blind
+   * `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2` and the same for
+   * restaurants, under a comment that admitted it: "Blind update OK if slugs
+   * distinctive, else duplicate logic needed? mostly safe for now". It is not.
+   * Both tables carry `@Index(["parkId", "slug"], { unique: true })`, and a
+   * ghost park is by definition the same park from a second source — so
+   * `aquanura` on both rows is the ordinary case, the UPDATE raises **23505**,
+   * and the transaction rolls back **before** the attraction step and the park
+   * step have run at all. Everything PAR-90 and PAR-99 fixed one and two levels
+   * down was therefore unreachable on exactly the merges that had something to
+   * merge.
+   *
+   * Matching is by slug alone, like the attraction partition above it and
+   * unlike `ParkMergeService.migrateEntities`, which also matches on name. The
+   * slug is what the constraint is about; two rows the database is willing to
+   * keep apart are a curation question, and that path has a person behind it.
+   *
+   * What happens to a losing show's dependent rows is `SHOW_DEPENDENCIES`, and
+   * it is the answer to the part of this that is not a constraint violation:
+   * `show_live_data` and `show_follows` cascade, so deleting the losing row
+   * without them destroys its showtime history and somebody's push reminder
+   * inside a transaction that reports success; `show_schedule_patterns` has no
+   * FK and would be left pointing at a row that is gone. Restaurants have
+   * `restaurant_live_data` and nothing else.
+   *
+   * Callers must hold a transaction and must have lifted the TimescaleDB
+   * decompression cap — both live-data tables are hypertables. Runs before
+   * `consolidateMergedPark`, because that is where the park row's own
+   * dependents move and this must not still be adding rows to the loser.
+   */
+  private async migrateParkChildEntities(
+    manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+    winnerParkId: string,
+    loserParkId: string,
+  ): Promise<void> {
+    for (const { table, dependencies } of PARK_CHILD_ENTITIES) {
+      const rows = (await manager.query(
+        `SELECT id, "parkId", slug FROM ${table} WHERE "parkId" = ANY($1::uuid[])`,
+        [[winnerParkId, loserParkId]],
+      )) as Array<{ id: string; parkId: string; slug: string }>;
+
+      const winnerBySlug = new Map<string, string>(
+        rows
+          .filter((row) => row.parkId === winnerParkId)
+          .map((row) => [row.slug, row.id]),
       );
+
+      const collisions: Array<{ winnerId: string; loserId: string }> = [];
+      const movedIds: string[] = [];
+      for (const row of rows.filter((r) => r.parkId === loserParkId)) {
+        const match = winnerBySlug.get(row.slug);
+        if (match) {
+          collisions.push({ winnerId: match, loserId: row.id });
+        } else {
+          movedIds.push(row.id);
+        }
+      }
+
+      if (collisions.length > 0) {
+        await this.consolidateMergedEntities(manager, dependencies, collisions);
+        await manager.query(`DELETE FROM ${table} WHERE id = ANY($1::uuid[])`, [
+          collisions.map((c) => c.loserId),
+        ]);
+        this.logger.log(
+          `    Merged ${collisions.length} colliding ${table} into the survivor`,
+        );
+      }
+
+      // By id, never by `parkId`: the rows that collided are gone, but a second
+      // statement scoped to the losing park would be exactly the blind update
+      // this method exists to replace if one were ever inserted between the
+      // SELECT and here.
+      if (movedIds.length > 0) {
+        await manager.query(
+          `UPDATE ${table} SET "parkId" = $1 WHERE id = ANY($2::uuid[])`,
+          [winnerParkId, movedIds],
+        );
+      }
     }
   }
 
@@ -1148,16 +1252,12 @@ export class ParksService {
               }
             }
 
-            // 2. Migrate Shows
-            await transactionalEntityManager.query(
-              `UPDATE shows SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
-              [primary!.id, ghostPark.id],
-            );
-
-            // 3. Migrate Restaurants
-            await transactionalEntityManager.query(
-              `UPDATE restaurants SET "parkId" = $1 WHERE "parkId" = $2::uuid`,
-              [primary!.id, ghostPark.id],
+            // 2./3. Shows and restaurants, partitioned by slug against their
+            // own unique `(parkId, slug)` — see `migrateParkChildEntities`.
+            await this.migrateParkChildEntities(
+              transactionalEntityManager,
+              primary!.id,
+              ghostPark.id,
             );
 
             // 4. Move everything else the ghost park owns, and keep the path it
