@@ -8,13 +8,25 @@
  * closed the ride, when all that happened is that our data stopped arriving.
  *
  * The damage is measurable. On 2026-06-07 ThemeParks.wiki dropped 44
- * Europa-Park attractions and 18 Rulantica ones from its live feed — every one
- * of them an attraction with no Queue-Times mapping to fall back on. Ten weeks
+ * Europa-Park attractions and 18 Rulantica ones from its live feed. Ten weeks
  * later the park page still showed a Ball Pool, a London Bus and a Dwarf City
- * as closed, in August, at one of the busiest parks in Europe. The same
- * signature (one date, a whole cluster of rides) appears at Universal Studios
- * Singapore, both Wet'n'Wild records, Busch Gardens Tampa and Ocean Park:
- * roughly 140 attractions across ten parks.
+ * as closed, in August, at one of the busiest parks in Europe.
+ *
+ * The rest of what used to stand here — "the same signature appears at
+ * Universal Studios Singapore, both Wet'n'Wild records, Busch Gardens Tampa
+ * and Ocean Park: roughly 140 attractions across ten parks" — did not survive
+ * being measured (PAR-38, 2026-09-11). Wet'n'Wild and Ocean Park were never
+ * silent: the feed reports them CLOSED every few minutes and they are shut for
+ * the season. Universal Studios Singapore's 17 were recategorised to `SHOW`
+ * upstream and still report, into `show_live_data`. Busch Gardens Tampa came
+ * back by itself after 65 days, and all nine of its rides had a Queue-Times
+ * mapping — so "no Queue-Times mapping to fall back on" is not the tell it was
+ * taken for either (50 of the 170 silent rides carry one).
+ *
+ * What is left for this guard is 97 rides across seven parks, of which only
+ * Europa-Park's and Rulantica's are operating rides. See §5.2a of
+ * `docs/architecture/attraction-status-and-seasonality.md` for the three
+ * groups and the two checks that tell them apart.
  *
  * This says the honest thing instead, and it is the rule the codebase already
  * applies one level up — a park whose wait times we cannot read puts its rides

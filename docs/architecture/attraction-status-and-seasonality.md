@@ -289,8 +289,9 @@ Two lessons:
 > apart. Read **§5.2a**, at the end of this section, before using any number
 > from the paragraphs that follow.
 
-The reading of 2026-08-15 — ten parks that lost a block of attractions from the
-wiki's **live** feed on a single day each:
+The reading of 2026-08-15 — parks that lost a block of attractions from the
+wiki's **live** feed on a single day each. It was written up as ten; the table
+names seven, in six rows:
 
 | park | rides | date |
 |---|---|---|
@@ -477,11 +478,22 @@ the twelve parks (Mid-America, Universal Studios Japan) have rides on both
 sides of it, and a `GROUP BY (park, data_source)` would show them twice without
 saying which rides went where:
 
+The predicate is `observedReadingsSql()` from `closure-gap.sql.ts`, not a bare
+`data_source <> 'system-reconciliation'`: a heartbeat carries the previous row's
+`data_source` forward, so the loose form would read a feed that stopped
+yesterday as one that is still writing. (Both forms happen to return the same
+twelve-park split here — checked — but only because none of these rides is
+being carried.) Every ride in the silent set has a row inside the window by
+construction, since the set requires `last_row > now() - 2 days`.
+
 ```sql
--- check 1: does anything other than reconciliation still write this ride?
+-- check 1: does anything other than reconciliation still OBSERVE this ride?
 WITH src AS (
   SELECT q."attractionId",
-         bool_or(q.data_source <> 'system-reconciliation') AS still_reported
+         bool_or(COALESCE(q.data_source, '') NOT IN
+                   ('system-reconciliation', 'system-heartbeat')
+                 AND NOT COALESCE(q.is_heartbeat,
+                                  q."lastUpdated" = q.timestamp)) AS still_reported
     FROM queue_data q
    WHERE q."attractionId" = ANY($1::uuid[])          -- the silent set
      AND q.timestamp > now() - interval '3 days'
@@ -506,7 +518,8 @@ SELECT p.id, p.name,
 separates C from everything else and nothing more. Group A's `attractions` rows
 look exactly like group B's — only `system-reconciliation`, 1,190 rows in three
 days — because their live data no longer arrives in `queue_data` at all. It
-arrives in `show_live_data`, under the same id. Only check 2 sees that.
+arrives in `show_live_data`, against a `shows` row that shares nothing with the
+attraction but the upstream `externalId`. Only check 2 sees that.
 
 **Group C is the correction that matters**, because three of the seven parks
 the 2026-08-15 table names in its six rows live there. Wet'n'Wild is in the southern winter,
@@ -555,10 +568,11 @@ neighbour *Shrek's 4-D Adventure™*, which gets real `queue-times` rows while
 this one gets only reconciliation. That is its own defect (PAR-161), not a
 dropped cluster.
 
-So there are two shapes inside group B: Europa-Park and Rulantica are still
-listed as children and only lost their live rows, while Knott's, Fiesta Texas
-and Hollywood fell out of the children index as well — *while the entity
-document kept working*. `GET
+So there are two shapes inside group B. Europa-Park (44 of 46), Rulantica and
+Mid-America are still listed as children and only lost their live rows;
+Knott's, Fiesta Texas and Hollywood fell out of the children index as well —
+*while the entity document kept working*. Europa-Park's remaining two, *Children's
+carousel* and the *'Bellevue' Ferris Wheel*, sit in the second shape. `GET
 /v1/entity/6e2fd5cd-959a-4fc2-92e4-f8170fe320f7` returns Knott's *Games and
 Arcade* in full, `parentId` correct; Knott's own `/children` (134 entries) does
 not contain it. **A re-match by id has nothing to re-match to** in either
@@ -636,8 +650,12 @@ SELECT data_source, status, count(*), max(timestamp)::date
 ```
 `system-reconciliation` means nothing wrote a `queue_data` row for it. Usually
 that is "no source is reporting it" — but not always: an entity the wiki has
-recategorised to `SHOW` keeps reporting into `show_live_data` under the same id
-while its stale `attractions` row sees only reconciliation (§5.2a, group A).
+recategorised to `SHOW` keeps reporting into `show_live_data`, under the same
+upstream `externalId` but a different internal row, while its stale
+`attractions` row sees only reconciliation (§5.2a, group A). And a
+`data_source` that is neither of the system sources is not by itself a live
+reading — a heartbeat carries the previous row's source forward, which is what
+`observedReadingsSql()` exists to exclude.
 
 **Which parks have a silenced cluster?**
 ```sql
