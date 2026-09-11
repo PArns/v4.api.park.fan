@@ -61,9 +61,31 @@ WHERE (s."closingTime" AT TIME ZONE p.timezone)::time = '12:00:00'
 ```
 
 Measured against production on 2026-09-11 that returns **five rows in one park**
-— Six Flags Qiddiya City, `opens 15:00 / closes 12:00`, 2026-04-17 through
-05-15. The flag does not rewrite those stored rows; it changes what the next
-sync of that park writes.
+— Six Flags Qiddiya City, 2026-04-17 through 05-15, stored as a 21-hour day.
+
+**It finds candidates, not cases, and the difference can cost you a curation.**
+The query reads *stored* rows, which are post-normalization, and two different
+raw shapes land on an identical stored row:
+
+| What the source sent                    | What `normalizeClosingTime` did              | Stored | Flag fires |
+| --------------------------------------- | -------------------------------------------- | ------ | ---------- |
+| close `12:00` on the **opening's** date | before opening → re-anchored, rolled forward | 21 h   | **yes**    |
+| close `12:00` on the **next** date      | nothing — 21 h is a plausible window         | 21 h   | **no**     |
+
+`correctTwelveHourClockClose` needs the raw closing to precede the raw opening,
+and normalization has already overwritten the one value that says whether it
+did. Written on the second kind, the column does nothing at all, silently: the
+next sync rewrites the same 21-hour day and no log line mentions it.
+
+So before flagging a *new* park, read the source's own payload for one of the
+days (`https://api.themeparks.wiki/v1/entity/{externalId}/schedule`) and look at
+the closing's **date**, not only its time. Afterwards, confirm against the next
+sync that the row actually moved. For Qiddiya the raw shape is on record —
+`opens 15:00 / closes 12:00`, same date, from the 2026-07-27 sweep in `todo.md`
+— which is the first kind.
+
+The flag does not rewrite stored rows either way; it changes what the next sync
+of that park writes.
 
 ### Fast passes, across two rows
 

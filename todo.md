@@ -967,6 +967,14 @@ WHERE (s."closingTime" AT TIME ZONE p.timezone)::time = '12:00:00'
 **Not backfilled.** The flag changes what the next sync of that park writes; the
 five stored rows are a separate decision.
 
+**And that query finds candidates, not cases.** It reads stored rows, which are
+post-normalization: a close stamped `12:00` on the *opening's* date (the fault —
+re-anchored and rolled forward) is by then indistinguishable from one stamped
+`12:00` on the *next* date (a source publishing an over-long day, stored
+verbatim). The flag only fires on the first, and on the second it does nothing
+without saying so. Check the raw payload's closing **date** before writing it on
+a new park — `docs/admin/curation.md`.
+
 **Also still open from the same sweep:**
 
 - [ ] One `schedule_entries` row with an equal opening and closing (Universal Volcano
