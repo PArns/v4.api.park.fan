@@ -500,8 +500,15 @@ The predicate is `observedReadingsSql()` from `closure-gap.sql.ts`, not a bare
 `data_source` forward, so the loose form would read a feed that stopped
 yesterday as one that is still writing. (Both forms happen to return the same
 twelve-park split here — checked — but only because none of these rides is
-being carried.) Every ride in the silent set has a row inside the window by
-construction, since the set requires `last_row > now() - 2 days`.
+being carried.)
+
+Run check 1 **straight after** the cluster query and every ride in `$1` has a
+row inside the three days, since the set was built with `last_row > now() - 2
+days`. Run it later and that stops being true: a ride that has since been
+retired gets no reverse-reconciliation rows either, falls out of the `src` CTE,
+and is then counted in neither column with nothing in the output to say so. If
+the two are not run together, drive the join from `unnest($1)` with a `LEFT
+JOIN` so a missing ride shows up as a third category instead of disappearing.
 
 ```sql
 -- check 1: does anything other than reconciliation still OBSERVE this ride?
