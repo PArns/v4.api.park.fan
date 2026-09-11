@@ -1,5 +1,5 @@
 import { MIN_BLIND_EVIDENCE_HOURS } from "../../analytics/entities/park-downtime-coverage.entity";
-import { normalizedClosingSql } from "./park-open-window.sql";
+import { normalizedClosingSql, parkOpenWindowCtes } from "./park-open-window.sql";
 import { RECONCILIATION_SOURCE } from "./source-absent-status.util";
 import { HEARTBEAT_SOURCE } from "./outage-rows.sql";
 /**
@@ -251,7 +251,8 @@ export const MAX_GAP_HOURS = 12;
  * and it was killed by the server at 30 days.
  */
 export const CLOSURE_GAP_INTERVALS_SQL = `
-  WITH blind_parks AS (
+  WITH ${parkOpenWindowCtes()},
+  blind_parks AS (
     -- Resolved ONCE per park, not once per row. As a correlated NOT EXISTS
     -- inside the row scan this took 70 s over 21 days; hoisted out it is a
     -- single grouped pass and the whole statement runs in about 6.
@@ -273,14 +274,20 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
     -- coverage entity describes as having "too little observation to say":
     -- reports at the profile gate, blind here, collecting inferred intervals
     -- that their own profile would count as reported ones.
-    SELECT p.id AS pid, p.timezone AS tz
-      FROM parks p
-     WHERE p.wiki_entity_id IS NOT NULL
-       AND ($1::uuid[] IS NULL OR p.id = ANY($1::uuid[]))
-       AND NOT EXISTS (
+    -- Through park_tz rather than a second scan of parks, now that
+    -- parkOpenWindowCtes() is in this statement for the operating day. It
+    -- already applies both halves of what this WHERE used to spell out again
+    -- ($1 and wiki_entity_id) plus timezone IS NOT NULL — which was implicit
+    -- here anyway: AT TIME ZONE NULL is strict, so a park without a zone
+    -- produced a NULL op_day and every one of its rows fell out at the
+    -- same-day comparison below. Two copies of one park filter is the drift
+    -- this file keeps extracting helpers to prevent.
+    SELECT z.park_id AS pid, z.tz AS tz
+      FROM park_tz z
+     WHERE NOT EXISTS (
          SELECT 1 FROM queue_data d
            JOIN attractions da ON da.id = d."attractionId"
-          WHERE da."parkId" = p.id
+          WHERE da."parkId" = z.park_id
             AND d."queueType" = 'STANDBY'
             AND d.status = 'DOWN'
        )
@@ -288,7 +295,7 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
          SELECT SUM(ed.operating_minutes) / 60.0
            FROM attraction_exposure_days ed
            JOIN attractions ea ON ea.id = ed."attractionId"
-          WHERE ea."parkId" = p.id
+          WHERE ea."parkId" = z.park_id
        ), 0) >= ${MIN_BLIND_EVIDENCE_HOURS}
   ),
   src AS (
@@ -315,21 +322,76 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
       FROM src
     WINDOW w AS (PARTITION BY aid ORDER BY ts)
   ),
+  -- The operating day of each edge of a candidate gap, from the WINDOW that
+  -- contains it rather than from the calendar.
+  --
+  -- The operating day of anything inside a window is the park-local date the
+  -- window OPENED on — park-open-window.sql §3, which the two DOWN statements
+  -- of this same nightly job already key on. Read off the calendar instead, a
+  -- park that closes after midnight has its evening split in two: the 23:30
+  -- reading lands on one date and the 00:30 reading on the next, the same-day
+  -- test below fails, and the gap is dropped. La Ronde does that every day of
+  -- its season, and it is the case the comment on park_open in the live
+  -- statement already names.
+  --
+  -- Three things this is deliberately NOT:
+  --
+  -- 1. **Not an INNER join.** A gap outside every published window keeps the
+  --    calendar day it had, through the COALESCE. An inner join would silently
+  --    narrow the population to rides that broke inside opening hours — a
+  --    change to what this statement measures, which is a different question
+  --    from where its days come from.
+  -- 2. **Not a second window definition.** win comes from
+  --    parkOpenWindowCtes(), so the closing-time repair, the disjoint-union
+  --    flattening and the day anchoring are inherited rather than rewritten.
+  -- 3. **Not on the wide scan.** It hangs off the candidate transitions
+  --    (~25 000 over 21 days), not off src, which reads every STANDBY reading
+  --    the blind parks produced in the window. The st/prev_st/next_st filters
+  --    are quals on the outer side of both LEFT JOINs, so they still prune
+  --    first.
+  --
+  -- win is disjoint per park, so each join matches at most one row. Two
+  -- windows CAN share an op_day (a park publishing a morning and an evening
+  -- block, which the flattener merges only when they overlap) — and comparing
+  -- the DAY rather than the window identity is what makes that one operating
+  -- day, which is the rule as written.
+  --
+  -- The same value leaves as "startOpDay", which the processor uses to key
+  -- outage starts into attraction_exposure_days. That table's op_day has
+  -- always come from win, so a midnight-wrap gap used to file itself under a
+  -- day the exposure table has no row for — the exact trap the processor's own
+  -- comment describes for statement 1.
+  gap_edges AS (
+    SELECT s.aid, s.pid, s.tz, s.ts, s.next_ts,
+           COALESCE(wo.op_day, (s.ts AT TIME ZONE s.tz)::date)
+             AS start_op_day,
+           COALESCE(wb.op_day, (s.next_ts AT TIME ZONE s.tz)::date)
+             AS end_op_day
+      FROM seq s
+      LEFT JOIN win wo
+        ON wo.park_id = s.pid
+       AND s.ts >= wo.opens_at
+       AND s.ts <  wo.closes_at
+      LEFT JOIN win wb
+        ON wb.park_id = s.pid
+       AND s.next_ts >= wb.opens_at
+       AND s.next_ts <  wb.closes_at
+     WHERE s.st = 'CLOSED'
+       AND s.prev_st = 'OPERATING'
+       AND s.next_st = 'OPERATING'
+       AND s.next_ts IS NOT NULL
+       AND s.next_ts < s.ts + INTERVAL '${MAX_GAP_HOURS} hours'
+  ),
   raw_gaps AS (
     SELECT aid, pid, tz,
            ts        AS started_at,
            next_ts   AS ended_at,
-           (ts AT TIME ZONE tz)::date            AS op_day,
+           start_op_day                              AS op_day,
            EXTRACT(HOUR FROM ts AT TIME ZONE tz)::int AS closed_hour,
            EXTRACT(EPOCH FROM (next_ts - ts)) / 60.0  AS gap_min
-      FROM seq
-     WHERE st = 'CLOSED'
-       AND prev_st = 'OPERATING'
-       AND next_st = 'OPERATING'
-       AND next_ts IS NOT NULL
-       AND next_ts < ts + INTERVAL '${MAX_GAP_HOURS} hours'
-       -- Back the same operating day. A park shutting does not reopen.
-       AND (next_ts AT TIME ZONE tz)::date = (ts AT TIME ZONE tz)::date
+      FROM gap_edges
+     -- Back the same operating day. A park shutting does not reopen.
+     WHERE start_op_day = end_op_day
   ),
   simultaneity AS (
     SELECT pid, date_trunc('minute', started_at) AS minute, count(*) AS closers
@@ -460,12 +522,15 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
         WHERE ca.id = g.aid
           AND (ca.curated_out_of_service_from IS NOT NULL
                OR ca.curated_out_of_service_to IS NOT NULL)
+          -- g.op_day, not a third conversion of the same instant. It is the
+          -- operating day the gap belongs to, and after the fix above the two
+          -- differ for exactly the parks this change is about: a 00:30 gap in
+          -- a midnight-wrap park is part of the previous day's operation, so a
+          -- works period declared for that day covers it.
           AND (ca.curated_out_of_service_from IS NULL
-               OR (g.started_at AT TIME ZONE g.tz)::date
-                  >= ca.curated_out_of_service_from)
+               OR g.op_day >= ca.curated_out_of_service_from)
           AND (ca.curated_out_of_service_to IS NULL
-               OR (g.started_at AT TIME ZONE g.tz)::date
-                  <= ca.curated_out_of_service_to)
+               OR g.op_day <= ca.curated_out_of_service_to)
      )
      AND g.gap_min >= ${MIN_GAP_MINUTES}
      -- Not a duty cycle. Below the day floor there is not enough to judge, and

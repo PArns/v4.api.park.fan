@@ -24,12 +24,20 @@ import { AttractionExposureDay } from "../../analytics/entities/attraction-expos
  * shape used here is the one `refreshOperatingDayRollup` settled on for the same
  * reason. The park filter exists for a targeted repair, not for the nightly run.
  *
- * ## Delete-then-insert, per covered range
+ * ## Delete-then-insert, per covered range AND per covered ride
  *
  * An outage is an interval that can GROW between two runs. Upserting on
  * `(attractionId, startedAt)` would leave yesterday's shorter copy behind
  * whenever the stitch merged two runs into one, and the event count would drift
  * upward every night. So the covered range is deleted first and rewritten whole.
+ *
+ * **Covered is a set of rides, not a park.** Keyed on `parkId` alone, the delete
+ * erases the whole park's window and the insert only replaces what the
+ * statements returned — so a ride that left the `tracked` population since
+ * yesterday loses its reconstructed history permanently. The delete therefore
+ * names the rides this run actually covered; see `coveredIds` at the call site
+ * for how that set is read off the results already in hand, and for why an empty
+ * run now deletes nothing instead of everything.
  *
  * ## The scan starts where the data says, not where the calendar does
  *
@@ -174,18 +182,61 @@ export class DowntimeReconstructionProcessor {
 
     let suspectDays = 0;
 
+    // The rides THIS run covered, which is what the deletes below may clear.
+    //
+    // The deletes used to be keyed on `parkId` alone, so they erased every row
+    // of the park in the window and re-inserted only what the statements
+    // returned. A ride that left the `tracked` population between two runs — a
+    // merge (`last_merged_at` moves inside the scan window), `retired_at`, a
+    // flip to `open_with_park`, the park losing its schedule or its
+    // `wiki_entity_id` — was therefore deleted and never rewritten. Not stale:
+    // gone, and gone for good, because the reconstruction only ever rewrites
+    // its own rolling window and nothing else writes these two tables.
+    //
+    // The exposure table loses the same way and hurts twice over: it is the
+    // DENOMINATOR of everything published about downtime, and of the
+    // duty-cycle share in `closure-gap.sql`, where a missing operating day
+    // moves the ratio in the direction that publishes a timetable as a fault.
+    //
+    // The population needs no query of its own. `OUTAGE_EXPOSURE_SQL` selects
+    // `FROM tracked t JOIN park_open po`, one row per tracked ride per
+    // operating day its park published in the window — so the ids in
+    // `exposure` ARE this run's `tracked` set, minus rides whose park had no
+    // operating day at all, which can produce nothing to write either.
+    // `intervals` and `closureGaps` are added because a ride may be written
+    // without being in that set: the closure-gap statement serves `blind_parks`
+    // and, unlike `tracked`, does not exclude free-flow rides.
+    //
+    // The direction of the remaining gap is deliberate. A ride still in the
+    // population that produced nothing this run keeps what it had, rather than
+    // having it deleted — a stale row a later run can still correct, against a
+    // loss no run can undo.
+    //
+    // `idx_attraction_outages_ride` is (`attractionId`, `started_at`), and the
+    // exposure table's primary key is (`attractionId`, `op_day`), so the
+    // narrower predicate is the one both indexes are built for.
+    const coveredIds = [
+      ...new Set([
+        ...exposure.map((row) => row.attractionId),
+        ...intervals.map((row) => row.attractionId),
+        ...closureGaps.map((row) => row.attractionId),
+      ]),
+    ];
+
     await this.dataSource.transaction(async (manager) => {
       await manager.query(
         `DELETE FROM attraction_outages
           WHERE started_at >= $1
-            AND ($2::uuid[] IS NULL OR "parkId" = ANY($2::uuid[]))`,
-        [scanStart, parkIds],
+            AND ($2::uuid[] IS NULL OR "parkId" = ANY($2::uuid[]))
+            AND "attractionId" = ANY($3::uuid[])`,
+        [scanStart, parkIds, coveredIds],
       );
       await manager.query(
         `DELETE FROM attraction_exposure_days
           WHERE op_day >= $1::date
-            AND ($2::uuid[] IS NULL OR "parkId" = ANY($2::uuid[]))`,
-        [scanStart, parkIds],
+            AND ($2::uuid[] IS NULL OR "parkId" = ANY($2::uuid[]))
+            AND "attractionId" = ANY($3::uuid[])`,
+        [scanStart, parkIds, coveredIds],
       );
 
       for (const batch of chunked(intervals, 500)) {

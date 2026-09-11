@@ -26,12 +26,49 @@ describe("closure-gap statements", () => {
     ["live", CURRENT_CLOSURE_GAP_SQL],
   ] as const;
 
-  it.each(both)(
-    "%s recognises a gap as a same-park-local-day return",
-    (_n, sql) => {
-      expect(sql).toMatch(/AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/);
-    },
-  );
+  it("the live statement recognises a gap as a same-park-local-day return", () => {
+    expect(CURRENT_CLOSURE_GAP_SQL).toMatch(
+      /AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/,
+    );
+  });
+
+  it("the nightly statement keys the return on the OPERATING day, not the calendar", () => {
+    // A park that closes after midnight has its evening split across two
+    // calendar dates: the 23:30 reading lands on one and the 00:30 reading on
+    // the next, so a raw `::date` comparison fails and the gap is dropped. La
+    // Ronde does that every day of its season — the case park_open in the live
+    // statement already names, and the case park-open-window.sql §3 exists for.
+    //
+    // Asserted as three separate things because each can be reverted on its
+    // own and only the combination is the fix.
+    const edges = cteBody(CLOSURE_GAP_INTERVALS_SQL, "gap_edges");
+    const gaps = cteBody(CLOSURE_GAP_INTERVALS_SQL, "raw_gaps");
+
+    // 1. The day comes from the window that contains the instant, and the
+    //    window comes from the shared builder rather than a second definition
+    //    of "when is this park open".
+    expect(CLOSURE_GAP_INTERVALS_SQL).toContain("win AS (");
+    expect(edges).toMatch(/LEFT JOIN win wo\b/);
+    expect(edges).toMatch(/LEFT JOIN win wb\b/);
+    expect(edges).toContain("wo.op_day");
+    expect(edges).toContain("wb.op_day");
+
+    // 2. LEFT, with the calendar day as the fallback. An INNER join would
+    //    narrow the population to gaps inside published hours, which is a
+    //    different change from this one.
+    expect(edges).toMatch(/COALESCE\(wo\.op_day,[\s\S]{0,60}?::date\)/);
+    expect(edges).toMatch(/COALESCE\(wb\.op_day,[\s\S]{0,60}?::date\)/);
+
+    // 3. And the same-day test compares those two days — never the raw casts
+    //    again. This is the assertion that fails if someone "simplifies" the
+    //    comparison back into raw_gaps.
+    expect(gaps).toContain("start_op_day = end_op_day");
+    expect(gaps).not.toMatch(/AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/);
+    // The emitted day is the window-derived one too: it leaves as "startOpDay"
+    // and the processor keys outage starts into attraction_exposure_days with
+    // it, whose op_day has always come from win.
+    expect(gaps).toContain("start_op_day                              AS op_day");
+  });
 
   it.each(both)("%s is structurally a statement, not a fragment", (_n, sql) => {
     // Reordering the CTEs left `),` in front of the final SELECT, and nothing
