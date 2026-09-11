@@ -364,6 +364,16 @@ What is still open, roughly by consequence:
       nowhere but on the row the caller deletes one statement later. Out of
       PF-111, whose acceptance criteria were about the dependent rows rather
       than the loser's own path (PAR-107).
+      The self-review found the same promise broken one line above it, so the
+      dedupe key of `park_slug_aliases` in `PARK_DEPENDENCIES` moved with it:
+      the unique index is all four slugs and carries no `parkId`, but the key
+      said `["slug"]`, so the 5b DELETE read across the other three and dropped
+      ghost aliases that could never have collided — `disneyland-park` is
+      Anaheim and Paris, so a ghost's Anaheim redirect died over a winner's
+      Paris one. Widened to the whole path it is inert by construction (two rows
+      cannot share a path, and the UPDATE moves `parkId` while the indexed tuple
+      stays put), which is the state this table should have been in from the
+      start. It applies to `mergeParks` too, through the shared constant.
 - [ ] **`attraction_ride_profiles` is still unprotected on the _attraction_
       side.** Its park half is fixed — PF-111 added it to `PARK_DEPENDENCIES`
       and to the `PARK_REFERENCING_TABLES` snapshot, so a park merge now carries
