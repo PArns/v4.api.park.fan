@@ -22,7 +22,10 @@ import {
 } from "../common/utils/date.util";
 import { addDays, subDays } from "date-fns";
 import { normalizeRegionCode } from "../common/utils/region.util";
-import { normalizeClosingTime } from "../common/utils/operating-window.util";
+import {
+  correctTwelveHourClockClose,
+  normalizeClosingTime,
+} from "../common/utils/operating-window.util";
 import {
   calculateHolidayInfo,
   HolidayEntry,
@@ -1058,7 +1061,13 @@ export class ParksService {
     // 1. Fetch Park geo data for holiday checking
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "countryCode", "regionCode", "timezone"],
+      select: [
+        "id",
+        "countryCode",
+        "regionCode",
+        "timezone",
+        "curatedUsesTwelveHourClock",
+      ],
     });
 
     // 2. Normalize date + type once per entry; reused by the holiday prefetch,
@@ -1228,15 +1237,25 @@ export class ParksService {
       const openingTime = entry.openingTime
         ? new Date(entry.openingTime)
         : null;
-      // Sources misdate the closing time in both directions (a past-midnight
-      // close stamped with the day's own date reads as CLOSED all day; an
-      // overshot day or typo'd year never closes at all). The time-of-day is
-      // the trustworthy part — see normalizeClosingTime.
-      const closingTime = normalizeClosingTime(
-        openingTime,
-        entry.closingTime ? new Date(entry.closingTime) : null,
-        park!.timezone,
-      );
+      const rawClosingTime = entry.closingTime
+        ? new Date(entry.closingTime)
+        : null;
+      // Two repairs, and the order matters. A park flagged as publishing a
+      // 12-hour clock gets read that way first, because the signal it needs —
+      // the closing falling before the opening — is what the generic repair
+      // consumes. Everything else: sources misdate the closing time in both
+      // directions (a past-midnight close stamped with the day's own date reads
+      // as CLOSED all day; an overshot day or typo'd year never closes at all),
+      // and there the time-of-day is the trustworthy part.
+      const closingTime =
+        (park!.curatedUsesTwelveHourClock
+          ? correctTwelveHourClockClose(
+              openingTime,
+              rawClosingTime,
+              park!.timezone,
+            )
+          : null) ??
+        normalizeClosingTime(openingTime, rawClosingTime, park!.timezone);
 
       const scheduleEntry: Partial<ScheduleEntry> = {
         parkId,

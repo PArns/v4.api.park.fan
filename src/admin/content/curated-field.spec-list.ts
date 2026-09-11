@@ -328,6 +328,20 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "ein Park aus wie einer, der über Nacht geschlossen hat.",
   },
   {
+    key: "curatedUsesTwelveHourClock",
+    label: "Quelle nutzt 12-Stunden-Uhr",
+    type: "boolean",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Datenquellen",
+    hint:
+      'Nur setzen, wenn der Fahrplan dieses Parks Mitternacht als „12:00" ' +
+      "meldet — erkennbar an einer Schlusszeit, die vor der Öffnung liegt und " +
+      "auf genau 12:00 fällt. Dann wird sie als Mitternacht des Folgetages " +
+      "gelesen. Parks ohne die Angabe bleiben unberührt, und ein echter " +
+      "Mittagsschluss (Wasserparks, Weihnachtsmärkte) auch.",
+  },
+  {
     key: "curatedWebsite",
     label: "Offizielle Website",
     type: "url",

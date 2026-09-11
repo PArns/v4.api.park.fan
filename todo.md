@@ -921,26 +921,51 @@ rewrite every legitimate noon closing (water parks and Christmas markets do clos
 noon). The distinguishing signal is `closing < opening`, which the normalizer has
 already consumed. Guessing further means inventing data.
 
-**How:**
+**Built, 2026-09-11 (PAR-33):** the narrower option — a per-park
+`curated_uses_twelve_hour_clock` flag, applied by `correctTwelveHourClockClose`
+on the raw pair *before* `normalizeClosingTime`, only when the raw closing is
+`< opening` **and** lands on exactly 12:00 park-local. It then reads as midnight
+on the following park-local day. The static-file option above is dead:
+`src/attractions/data/manual-attraction-metadata.ts` no longer exists, and
+curated facts are sibling columns on the entity today.
 
-- Curate the affected park/date pairs the way ride heights are curated
-  (`src/attractions/data/manual-attraction-metadata.ts` is the pattern): an explicit
-  park + date + corrected closing time, applied in `saveScheduleData` after
-  `normalizeClosingTime`.
-- Or narrower: a per-park "source uses a 12-hour clock" flag, applied only when the
-  raw closing is `< opening` **and** lands at exactly 12:00.
-- Detect new cases with the audit query in `docs/troubleshooting/db-health-runbook.md`
-  style:
+- [x] The mechanism. `src/common/utils/operating-window.util.ts`, gated in
+      `saveScheduleData`; the editor picks the field up from
+      `PARK_CURATED_FIELDS` with no frontend change.
+- [ ] **The curated value itself, for Six Flags Qiddiya City.** It is an admin
+      write and the column only exists in production after this deploy, so it
+      cannot be done in the same pass. Until it is written, the five rows below
+      stay as they are.
 
-  ```sql
-  SELECT p.name, s.date,
-         (s."openingTime" AT TIME ZONE p.timezone)::time AS opens,
-         (s."closingTime" AT TIME ZONE p.timezone)::time AS closes
-  FROM schedule_entries s JOIN parks p ON p.id = s."parkId"
-  WHERE s."closingTime" - s."openingTime" > interval '16 hours';
-  ```
+**The population, re-measured against production on 2026-09-11 — it is smaller
+than this section says.** Reported were 7 rows in 2 parks; the 12-hour-clock
+pattern (closing exactly 12:00 park-local, on a later date than the opening)
+now matches **5 rows in 1 park**:
 
-- Effort: ~half a day including the curated list.
+| Park                   | Days                       | Stored        | Status |
+| ---------------------- | -------------------------- | ------------- | ------ |
+| Six Flags Qiddiya City | 2026-04-17/24, 05-01/08/15 | 15:00 → 12:00 | still wrong, 21 h day |
+| Kings Dominion         | 2026-09-18, 09-25          | 18:00 → 00:00 | **correct since the 2026-08-09 sync** |
+
+Kings Dominion's source publishes midnight properly now and
+`normalizeClosingTime` rolls it forward on its own; there is nothing to flag
+there, and flagging it anyway would be writing a curated fact nothing supports.
+The `> interval '16 hours'` query below also returns 106 Fantawild rows that are
+a different thing entirely (`00:00 → 23:59`, a near-full-day row), so prefer the
+narrower predicate when looking for *this* fault:
+
+```sql
+SELECT p.name, s.date,
+       (s."openingTime" AT TIME ZONE p.timezone)::time AS opens,
+       (s."closingTime" AT TIME ZONE p.timezone)::time AS closes
+FROM schedule_entries s JOIN parks p ON p.id = s."parkId"
+WHERE (s."closingTime" AT TIME ZONE p.timezone)::time = '12:00:00'
+  AND (s."closingTime" AT TIME ZONE p.timezone)::date
+      > (s."openingTime" AT TIME ZONE p.timezone)::date;
+```
+
+**Not backfilled.** The flag changes what the next sync of that park writes; the
+five stored rows are a separate decision.
 
 **Also still open from the same sweep:**
 

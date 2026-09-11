@@ -402,6 +402,108 @@ describe("ParksService", () => {
   });
 
   /**
+   * A source that publishes a 12-hour clock unlabelled reports a midnight close
+   * as `12:00`. Six Flags Qiddiya City does: `opens 15:00 / closes 12:00`, five
+   * days in 2026, which the generic repair turns into a 21-hour operating day —
+   * right during the evening, wrong for the eleven hours afterwards.
+   *
+   * `correctTwelveHourClockClose` is unit-tested on its own; what these cover is
+   * the gate, because the gate is the whole design. The same `12:00` means two
+   * different things depending on one curated column, and a park nobody flagged
+   * has to come out of `saveScheduleData` byte-identical.
+   */
+  describe("saveScheduleData — the 12-hour-clock override", () => {
+    const parkId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+    // Verbatim shape of the Qiddiya rows: opens 15:00, closes 12:00 SAME day.
+    const qiddiyaEntry = {
+      date: "2026-04-17",
+      type: "OPERATING",
+      openingTime: "2026-04-17T15:00:00+03:00", // 12:00Z
+      closingTime: "2026-04-17T12:00:00+03:00", // 09:00Z — three hours before opening
+    };
+    const QIDDIYA_OPENS = "2026-04-17T12:00:00.000Z";
+    /** 00:00 Riyadh on the 18th: a nine-hour evening. */
+    const READ_AS_MIDNIGHT = "2026-04-17T21:00:00.000Z";
+    /** What the generic repair alone produces: 12:00 Riyadh on the 18th. */
+    const RE_ANCHORED = "2026-04-18T09:00:00.000Z";
+
+    function aRiyadhPark(usesTwelveHourClock: boolean | null) {
+      return {
+        id: parkId,
+        countryCode: "SA",
+        regionCode: null,
+        timezone: "Asia/Riyadh",
+        curatedUsesTwelveHourClock: usesTwelveHourClock,
+      };
+    }
+
+    function savedEntry() {
+      expect(mockScheduleRepository.save).toHaveBeenCalledTimes(1);
+      const [inserted] = mockScheduleRepository.save.mock.calls[0] as [
+        Array<{ openingTime: Date; closingTime: Date }>,
+      ];
+      return inserted[0];
+    }
+
+    beforeEach(() => {
+      mockHolidaysService.getHolidays.mockResolvedValue([]);
+      mockScheduleRepository.save.mockResolvedValue([]);
+      mockScheduleRepository.query.mockResolvedValue([]);
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder([]),
+      );
+    });
+
+    it("reads a flagged park's noon close as midnight", async () => {
+      mockParkRepository.findOne.mockResolvedValue(aRiyadhPark(true));
+
+      await service.saveScheduleData(parkId, [qiddiyaEntry]);
+
+      const entry = savedEntry();
+      expect(entry.openingTime.toISOString()).toBe(QIDDIYA_OPENS);
+      expect(entry.closingTime.toISOString()).toBe(READ_AS_MIDNIGHT);
+      expect(entry.closingTime.getTime() - entry.openingTime.getTime()).toBe(
+        9 * 60 * 60 * 1000,
+      );
+    });
+
+    it("leaves the same row to the generic repair when the park is not flagged", async () => {
+      mockParkRepository.findOne.mockResolvedValue(aRiyadhPark(null));
+
+      await service.saveScheduleData(parkId, [qiddiyaEntry]);
+
+      const entry = savedEntry();
+      expect(entry.closingTime.toISOString()).toBe(RE_ANCHORED);
+      // 21 h — the state this ticket describes, deliberately unchanged for
+      // every park nobody has written the flag on.
+      expect(entry.closingTime.getTime() - entry.openingTime.getTime()).toBe(
+        21 * 60 * 60 * 1000,
+      );
+    });
+
+    it("leaves a genuine noon closing alone even on a flagged park", async () => {
+      // The flag says the source misprints midnight, not that noon never
+      // happens. A half-day that closes at 12:00 AFTER opening is a real one,
+      // and this is the case a blanket "reinterpret 12:00" rule would destroy.
+      mockParkRepository.findOne.mockResolvedValue(aRiyadhPark(true));
+
+      await service.saveScheduleData(parkId, [
+        {
+          date: "2026-04-18",
+          type: "OPERATING",
+          openingTime: "2026-04-18T09:00:00+03:00", // 06:00Z
+          closingTime: "2026-04-18T12:00:00+03:00", // 09:00Z — a three-hour morning
+        },
+      ]);
+
+      const entry = savedEntry();
+      expect(entry.openingTime.toISOString()).toBe("2026-04-18T06:00:00.000Z");
+      expect(entry.closingTime.toISOString()).toBe("2026-04-18T09:00:00.000Z");
+    });
+  });
+
+  /**
    * `last_merged_at` tells the nightly downtime reconstruction
    * (`outage-reconstruction.sql.ts`, `closure-gap.sql.ts`) that a ride's
    * history holds two interleaved series and must be held out of the current
