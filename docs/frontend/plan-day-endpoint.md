@@ -245,6 +245,19 @@ rides the season excluded, and only an explicit `OPERATING` rescues one, which i
 what keeps a park we cannot read out of it: a feed that only ever writes CLOSED,
 and reverse-reconciliation's own CLOSED stamps, both fail the test.
 
+A reading counts back to **park-local midnight of that day, and never less than
+six hours** — the shape the park page's own cutoff uses, where the day's start is
+a floor under how much history is kept rather than a ceiling over it. The floor
+is what carries a park that runs past midnight: at 00:30 the park-local day is
+half an hour old and the ride's last word is from the other side of it. A flat
+window would rescue a ride off yesterday evening, which is a claim about the
+wrong day.
+
+It corrects **today**, which is the only day a live row speaks about. A detector
+note with no months behind it reaches one day further (§6), so a ride running
+today can still be absent from tomorrow's plan off that same note — the
+`seasonOutSince` half of the rule, tracked separately.
+
 Nothing upstream does this. `MLService.getParkPredictions` keeps rides with an
 OPERATING reading in the last 90 days, which is a question about the past asked
 on behalf of a date in the future: the two windows cannot line up, in either

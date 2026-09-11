@@ -99,6 +99,16 @@ export class PlanDayService {
   private static readonly SEASON_NOW_HORIZON_DAYS = 1;
 
   /**
+   * Floor under the live-status window in {@link runningNow}, in hours.
+   *
+   * Six, the same number `QueueDataService.getValidDataCutoff` falls back to. A
+   * queue row is written when a value changes plus an hourly heartbeat, so the
+   * current reading for a ride that has not moved can be older than the day it
+   * belongs to — which is why the window has a floor at all.
+   */
+  private static readonly LIVE_STATUS_FLOOR_HOURS = 6;
+
+  /**
    * Rides the historical shape may cover.
    *
    * 60 rather than the 20 this asked for at first, and it costs nothing: the
@@ -536,7 +546,7 @@ export class PlanDayService {
               hours: new Map<string, Map<number, number>>(),
               bands: new Map<string, number>(),
             }),
-        this.runningNow(park, parkStatus, leadDays, seasonOnly),
+        this.runningNow(park, parkStatus, dateStr, leadDays, seasonOnly),
       ]);
 
     for (const id of runningNow) blocked.delete(id);
@@ -1106,12 +1116,24 @@ export class PlanDayService {
    * cannot be read out of it: a feed that only ever writes CLOSED (Hansa-Park's
    * 82 rides) and reverse-reconciliation's CLOSED stamps both fail the test.
    *
+   * **How far back a reading still counts.** Park-local midnight of the day
+   * being planned, and never less than {@link LIVE_STATUS_FLOOR_HOURS} — the
+   * shape `getValidDataCutoff` uses on the park page, where today's opening is a
+   * FLOOR under how much history is kept rather than a ceiling over it. Midnight
+   * stands in for the opening because no schedule is loaded here, and it is
+   * never later than one. The floor is what covers a park that runs past
+   * midnight: at 00:30 the park-local day is half an hour old, and the ride's
+   * last word is from 23:30 on the other side of it. A flat window instead — the
+   * 48 hours this first carried — rescues a ride off yesterday evening's row,
+   * which is a claim about the wrong day and one the park page would not make.
+   *
    * A failure costs the exception, not the day: without it the ride stays out,
    * which is where it was before this method existed.
    */
   private async runningNow(
     park: Park,
     parkStatus: string,
+    dateStr: string,
     leadDays: number,
     candidateIds: string[],
   ): Promise<Set<string>> {
@@ -1126,11 +1148,13 @@ export class PlanDayService {
                   qd."attractionId" AS "attractionId", qd.status AS status
              FROM queue_data qd
             WHERE qd."attractionId" = ANY($1::uuid[])
-              AND qd.timestamp >= $2
+              AND qd.timestamp >= LEAST(
+                    ($3::date::timestamp AT TIME ZONE $2),
+                    NOW() - INTERVAL '${PlanDayService.LIVE_STATUS_FLOOR_HOURS} hours')
             ORDER BY qd."attractionId",
                      CASE WHEN qd."queueType" = 'STANDBY' THEN 0 ELSE 1 END,
                      qd.timestamp DESC`,
-          [candidateIds, new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)],
+          [candidateIds, park.timezone, dateStr],
         );
       for (const row of rows as Array<{ attractionId: string; status: string }>)
         if (row.status === "OPERATING") out.add(row.attractionId);

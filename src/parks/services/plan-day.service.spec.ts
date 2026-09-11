@@ -1959,6 +1959,22 @@ describe("PlanDayService", () => {
       expect(liveLookups()).toHaveLength(1);
     });
 
+    it("asks only about the excluded rides, and only about today's readings", async () => {
+      // The three parameters are the whole cost story: the id list is what keeps
+      // this off every ride in the park, and the date plus the timezone are what
+      // make the window "today, park-local" rather than a flat interval that
+      // would rescue a ride off yesterday evening's row.
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+      await planToday();
+
+      const [sql, params] = liveLookups()[0] as [string, unknown[]];
+      expect(params[0]).toEqual(["a-taron"]);
+      expect(params[1]).toBe(park.timezone);
+      expect(params[2]).toBe(today());
+      expect(sql).toContain("LEAST");
+    });
+
     it("leaves it out when the feed says anything else", async () => {
       liveRows = [{ attractionId: "a-taron", status: "CLOSED" }];
 
