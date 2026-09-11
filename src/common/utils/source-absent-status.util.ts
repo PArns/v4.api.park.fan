@@ -27,7 +27,7 @@
  *
  * What this guard was reaching for on 2026-09-11 is **97 genuinely silent
  * rides across seven parks**. The operating rides among them are Europa-Park's,
- * Rulantica's and three working coasters at Mid-America Parks; the rest are
+ * Rulantica's and three operating rides at Mid-America Parks; the rest are
  * arcades, museums and out-of-season mazes. Add, for now, the 17 Singapore
  * rows — equally source-absent here, because their feed moved to
  * `show_live_data`. They stop counting once PAR-159 retires them.

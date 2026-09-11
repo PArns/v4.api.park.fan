@@ -604,9 +604,10 @@ rides, and Queue-Times dropped the same eight of them it once published (park
 61 returns 46 rides today, none of these among them).
 Hollywood's are limited-run walkthroughs. Only Europa-Park, Rulantica and
 Mid-America Parks lost *operating rides* — and Mid-America's three are the
-sharpest of the lot, since *MR. FREEZE: Reverse Blast*, *JUSTICE LEAGUE* and
-*THE JOKER: Carnival of Chaos* are working coasters at an open park, listed as
-children upstream and absent from its live feed. (Universal Studios Japan's one
+sharpest of the lot: *MR. FREEZE: Reverse Blast*, *JUSTICE LEAGUE* and *THE
+JOKER: Carnival of Chaos* — a launch coaster, a dark ride and a flat ride — are
+operating attractions at an open park, listed as children upstream and absent
+from its live feed. (Universal Studios Japan's one
 is the Queue-Times defect above, not a drop.) That is why the sweep above found
 work to do at Europa-Park and would find much less at most of the others.
 
@@ -712,8 +713,15 @@ merge does.
 **The window is 270 days and the floor 5 on purpose** — this used to read 120
 and 6, which on 2026-09-11 hid four of the twelve clusters (§5.2a). A ride whose
 last OPERATING row falls outside the window has no `last_op` and vanishes from
-the result rather than showing up as silent; §5.2a used 270 days, which covers
-the whole of `queue_data` retention. And remember the
+the result rather than showing up as silent.
+
+**270 is not a structural number and will go stale.** Nothing deletes from
+`queue_data`; the oldest row is 2025-12-24, which was 261 days before the
+2026-09-11 run, so 270 days reached the whole archive *then*. The archive keeps
+growing and the window does not. The rule is "reach past the drop you are
+chasing" — check `min(timestamp)` below and widen accordingly, or Knott's
+(last OPERATING 2026-04-14) will drop out of this query the same way it dropped
+out of the 120-day one. And remember the
 count this returns is a symptom, not a finding. Two checks decide what it
 means, and both are needed: §5.2a's `data_source` split says whether any source
 still writes the rides, and `GET /v1/entity/{id}` says whether upstream still
