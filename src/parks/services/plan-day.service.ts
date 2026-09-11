@@ -37,6 +37,7 @@ import {
   isCurrentlyInSeason,
   resolveCuratedFacts,
 } from "../../attractions/utils/curated-attraction-facts.util";
+import { isCuratedOutOfService } from "../../attractions/utils/curated-out-of-service.util";
 
 /**
  * One day, ride by ride, hour by hour — the series a trip planner draws.
@@ -268,6 +269,7 @@ export class PlanDayService {
       lastHour,
       profile,
       hoursSource === "schedule" ? parkOpensAt : null,
+      status,
     );
     base.tier = built.tier;
     base.rides = built.rides;
@@ -353,6 +355,7 @@ export class PlanDayService {
       const pattern = patterns.get(show.id);
       if (!pattern || pattern.times.length === 0) continue;
       if (pattern.observedDays < PlanDayService.MIN_PATTERN_DAYS) continue;
+      if (PlanDayService.showOutOfSeasonOn(show, dateStr)) continue;
       // Measured against TODAY, never against the target date: a pattern is
       // stale because nobody has seen it lately, not because the day asked
       // about is far away. Measuring against the target would reject every
@@ -382,6 +385,50 @@ export class PlanDayService {
     );
   }
 
+  /**
+   * Whether a show's season says it cannot run on the day being planned.
+   *
+   * The ride rule one level out, and the case it was written for is a real one:
+   * a Halloween show last seen on 1 November, asked about on the 5th for a plan
+   * on 20 December. Both guards in front of the projection pass — the pattern is
+   * four days old, the weekday matches — and neither of them is asking about a
+   * calendar. `Show` carries `isSeasonal` and `seasonMonths`, written by the
+   * same nightly detector that writes the rides' (`queue-percentile.processor`
+   * handles shows in that job), and nobody was reading them here.
+   *
+   * Same three values, same `=== false`: `null` means "seasonal, nothing else
+   * known" and may not hide a programme we have merely not watched long enough.
+   * Asked about the PLANNED month, like the rides.
+   *
+   * **The near-horizon split from the rides does not arise here, and that is a
+   * property of the table rather than a decision.** `season_out_since` is what
+   * makes "shut right now" reach further than it should, and `shows` has no
+   * such column — nor any curated pair. So the only thing this can read is a
+   * calendar, and a calendar is exactly as good six months out as it is
+   * tomorrow. If the detector ever learns to write a shut-now note for shows,
+   * this needs the same horizon bound the rides have.
+   *
+   * **A published showtime is never filtered.** It is the operator's statement
+   * about the day; this is ours about a pattern. `source` already tells the two
+   * apart, and an operator publishing a time for a date they call out of season
+   * is the operator correcting our detector.
+   */
+  private static showOutOfSeasonOn(
+    show: { isSeasonal?: boolean | null; seasonMonths?: number[] | null },
+    dateStr: string,
+  ): boolean {
+    return (
+      isCurrentlyInSeason(
+        {
+          isSeasonal: Boolean(show.isSeasonal),
+          seasonMonths: show.seasonMonths ?? null,
+          seasonOutSince: null,
+        },
+        PlanDayService.localNoonOf(dateStr),
+      ) === false
+    );
+  }
+
   /** Today, in the park's timezone. */
   private today(park: Park): string {
     return formatInParkTimezone(new Date(), park.timezone);
@@ -407,6 +454,8 @@ export class PlanDayService {
     profile: ParkHourlyProfileDto | null,
     /** The park's own opening as `HH:mm`, when it published one. */
     parkOpensAt: string | null,
+    /** The day's park status, for the live-reading exception below. */
+    parkStatus: string,
   ): Promise<{
     tier: PlanDayTier;
     rides: PlanDayRideDto[];
@@ -445,23 +494,37 @@ export class PlanDayService {
     // September gets a full forecast for 20 December. The same gap runs the
     // other way for up to 90 days after a season ends — the shoulder weeks
     // somebody is most likely to be planning in.
-    const plannable = attractions.filter(
-      (a) =>
-        !PlanDayService.outOfSeasonOn(
-          a,
-          dateStr,
-          leadDays <= PlanDayService.SEASON_NOW_HORIZON_DAYS,
-        ),
+    const nearHorizon = leadDays <= PlanDayService.SEASON_NOW_HORIZON_DAYS;
+    // Split rather than filtered, because the excluded half is what the live
+    // reading below is allowed to ask about — and asking only about those rides
+    // is what keeps that query from being a per-request cost on every park.
+    const blocked = new Set(
+      attractions
+        .filter((a) =>
+          PlanDayService.cannotOpenOn(a, park.timezone, dateStr, nearHorizon),
+        )
+        .map((a) => a.id),
     );
-    const byId = new Map(plannable.map((a) => [a.id, a]));
-    const bySlug = new Map(plannable.map((a) => [a.slug, a]));
+    // The exception is the SEASON's alone. A live `OPERATING` row means the
+    // detector is behind the park; it means nothing of the sort about a works
+    // period, which a person wrote down and which already outranks a live
+    // reading in the other direction (`attraction-outage.service.ts` reports no
+    // fault inside one). Overruling it here would delete the window's whole
+    // purpose exactly where an editor took the trouble to state it.
+    const seasonOnly = attractions
+      .filter(
+        (a) =>
+          blocked.has(a.id) &&
+          !isCuratedOutOfService(a, park.timezone, dateStr),
+      )
+      .map((a) => a.id);
 
     // Both are per-park sets keyed by attraction id, and neither is worth
     // serialising behind the other. The headliner set is the park's CURATED
     // answer — never re-derived from `dayPeak`, because a headliner having a
     // quiet Tuesday is still a headliner, and a planner that pointed at the
     // day's tallest bars instead would recommend whatever happens to be busy.
-    const [dayLevels, downIds, headlinerIds, openings, measured] =
+    const [dayLevels, downIds, headlinerIds, openings, measured, runningNow] =
       await Promise.all([
         this.dayLevels(park, dateStr),
         this.downYesterday(park, dateStr),
@@ -473,7 +536,13 @@ export class PlanDayService {
               hours: new Map<string, Map<number, number>>(),
               bands: new Map<string, number>(),
             }),
+        this.runningNow(park, parkStatus, leadDays, seasonOnly),
       ]);
+
+    for (const id of runningNow) blocked.delete(id);
+    const plannable = attractions.filter((a) => !blocked.has(a.id));
+    const byId = new Map(plannable.map((a) => [a.id, a]));
+    const bySlug = new Map(plannable.map((a) => [a.slug, a]));
 
     // The composed curve per ride, the sample count behind its shape, and the
     // land the profile names it in — that one prefers the curated column, which
@@ -502,33 +571,6 @@ export class PlanDayService {
       if (!curve) continue;
       composed.set(attraction.id, new Map(curve.map((p) => [p.hour, p.wait])));
     }
-
-    // `measured` describes the method behind the curves that were actually
-    // served, so it counts only rides that survived to `byId`. The map arrives
-    // straight from the model and knows nothing about seasons or retirements:
-    // asking it for a size labelled a day `measured` on the strength of an
-    // hourly answer for a ride nobody gets back, and every ride that WAS served
-    // then carried `source: "composed"` because its hours disagreed with the
-    // header.
-    //
-    // The `composed`/`long_range` line deliberately stays on the raw
-    // `dayLevels`. `long_range` is published as "the model has produced no day
-    // level for this date" (see the DTO), and a fully seasonal park in its off
-    // months would otherwise be labelled that way while the model had in fact
-    // answered for every ride — a statement about our reach, made about their
-    // calendar.
-    let someMeasuredServed = false;
-    for (const id of measured.hours.keys()) {
-      if (byId.has(id)) {
-        someMeasuredServed = true;
-        break;
-      }
-    }
-    const tier: PlanDayTier = someMeasuredServed
-      ? "measured"
-      : dayLevels.size > 0
-        ? "composed"
-        : "long_range";
 
     const rides: PlanDayRideDto[] = [];
     // The accuracy cells actually quoted, so `sampleSize` below counts the
@@ -575,24 +617,19 @@ export class PlanDayService {
         PlanDayService.minutesOf(opensAt) >
           PlanDayService.minutesOf(parkOpensAt);
 
+      // Every hour carries its origin here; the ones that agree with the day's
+      // tier lose it again below, once the tier is known. Written the other way
+      // round the tier would have to be guessed before the loop that decides it.
       const hours: PlanDayHourDto[] = [];
       for (let h = rideOpenHour; h <= closeHour; h++) {
         const fromModel = measuredHours?.get(h);
         if (fromModel !== undefined) {
-          hours.push({
-            hour: h,
-            wait: fromModel,
-            ...(tier === "measured" ? {} : { source: "measured" as const }),
-          });
+          hours.push({ hour: h, wait: fromModel, source: "measured" });
           continue;
         }
         const fromShape = composedHours?.get(h);
         if (fromShape !== undefined) {
-          hours.push({
-            hour: h,
-            wait: fromShape,
-            ...(tier === "composed" ? {} : { source: "composed" as const }),
-          });
+          hours.push({ hour: h, wait: fromShape, source: "composed" });
         }
       }
       if (hours.length === 0) continue;
@@ -628,6 +665,38 @@ export class PlanDayService {
         ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
         ...(headlinerIds.has(attractionId) ? { isHeadliner: true } : {}),
       });
+    }
+
+    // `measured` describes the method behind the hours that were actually
+    // SERVED, which is one step further than membership of `byId`. A ride can
+    // survive the season filter, carry the model's own hourly answer, and still
+    // leave nothing behind: `hours.length === 0` drops it when every hour the
+    // model spoke for lies below its own `rideOpenHour`. The header then said
+    // `measured` over a response in which every single hour was composed — the
+    // most trustworthy label on the data it does not describe, which is the one
+    // failure this endpoint's design is arranged against.
+    //
+    // The `composed`/`long_range` line deliberately stays on the raw
+    // `dayLevels`. `long_range` is published as "the model has produced no day
+    // level for this date" (see the DTO), and a fully seasonal park in its off
+    // months would otherwise be labelled that way while the model had in fact
+    // answered for every ride — a statement about our reach, made about their
+    // calendar.
+    const tier: PlanDayTier = rides.some((r) =>
+      r.hours.some((h) => h.source === "measured"),
+    )
+      ? "measured"
+      : dayLevels.size > 0
+        ? "composed"
+        : "long_range";
+
+    // `source` says "this hour did not come from where the header says", so an
+    // hour that agrees with the tier drops it. Both halves are one rule and are
+    // applied in one place, which is what keeps them from drifting apart.
+    for (const ride of rides) {
+      for (const hour of ride.hours) {
+        if (hour.source === tier) delete hour.source;
+      }
     }
 
     // Busiest first: a planner reads the top of this list to decide what to
@@ -988,6 +1057,92 @@ export class PlanDayService {
     return out;
   }
 
+  /**
+   * Rides among `candidateIds` whose latest live reading says `OPERATING`.
+   *
+   * The exception the park page has had all along, brought to the planner. There
+   * it reads:
+   *
+   * ```ts
+   * const closedByTheSeason =
+   *   attraction.isCurrentlyInSeason === false &&
+   *   attraction.effectiveStatus !== "OPERATING";
+   * ```
+   *
+   * with the reason beside it: a live `OPERATING` row means the season on file
+   * is behind the park, and a ride you can queue for belongs in the day. Two
+   * surfaces answering differently about one ride on one day is the failure this
+   * closes — and the window is not one night wide, because `detect-seasonal` is
+   * a daily job that has already been out for **73 days** without anyone
+   * noticing (`docs/architecture/attraction-status-and-seasonality.md`).
+   *
+   * **What it costs, which is the question this part was held back for.** There
+   * is no cached park-wide status to borrow: `park-integration.service.ts`
+   * computes it inside the full park payload's ride loop, and
+   * `attractions.service.ts` has the `DISTINCT ON` shape only as a join inside a
+   * list query. So it is a query of its own — and it is **skipped** unless
+   * something would actually change:
+   *
+   * - not today's park-local date (`leadDays !== 0`) → no query. For any other
+   *   date there is no live row that could overrule anything.
+   * - park CLOSED for the day → no query, because the park page's
+   *   `effectiveStatus` is CLOSED for every ride under a closed park and nothing
+   *   below it may claim to be running.
+   * - nothing excluded by the season → no query, which is the common case.
+   *
+   * So: **0 or 1 extra query per request**, and the one runs inside the existing
+   * `Promise.all` rather than behind it. It asks about the excluded ids only,
+   * and it is bounded in time for the same reason `downYesterday` is — an
+   * unbounded `DISTINCT ON` over the hypertable decompresses every chunk
+   * (measured at ~6 s isolated in `attractions.service.ts`'s own note). Two days
+   * keeps even a park that only re-emits CLOSED rows overnight.
+   *
+   * **Which row counts.** The STANDBY one where the ride has it, the newest
+   * otherwise — the shape `attractions.service.ts` already uses for "current
+   * status". The park page's own `queueData[0]` is the alphabetically first
+   * queue type, which is an accident of its `ORDER BY` rather than a decision,
+   * and copying it would be copying the accident. Nothing here is rescued
+   * without an explicit `OPERATING`, which is what keeps the two parks that
+   * cannot be read out of it: a feed that only ever writes CLOSED (Hansa-Park's
+   * 82 rides) and reverse-reconciliation's CLOSED stamps both fail the test.
+   *
+   * A failure costs the exception, not the day: without it the ride stays out,
+   * which is where it was before this method existed.
+   */
+  private async runningNow(
+    park: Park,
+    parkStatus: string,
+    leadDays: number,
+    candidateIds: string[],
+  ): Promise<Set<string>> {
+    const out = new Set<string>();
+    if (leadDays !== 0 || parkStatus === "CLOSED") return out;
+    if (candidateIds.length === 0) return out;
+
+    try {
+      const rows: Array<{ attractionId: string }> =
+        await this.attractionRepository.manager.query(
+          `SELECT DISTINCT ON (qd."attractionId")
+                  qd."attractionId" AS "attractionId", qd.status AS status
+             FROM queue_data qd
+            WHERE qd."attractionId" = ANY($1::uuid[])
+              AND qd.timestamp >= $2
+            ORDER BY qd."attractionId",
+                     CASE WHEN qd."queueType" = 'STANDBY' THEN 0 ELSE 1 END,
+                     qd.timestamp DESC`,
+          [candidateIds, new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)],
+        );
+      for (const row of rows as Array<{ attractionId: string; status: string }>)
+        if (row.status === "OPERATING") out.add(row.attractionId);
+    } catch (error) {
+      this.logger.warn(
+        `Plan day: live status unavailable for ${park.slug}: ${(error as Error).message}`,
+      );
+    }
+
+    return out;
+  }
+
   /** Day-level prediction per attraction for one date. */
   private async dayLevels(
     park: Park,
@@ -1116,13 +1271,14 @@ export class PlanDayService {
   }
 
   /**
-   * Every ride the park still has, seasonality included.
+   * Every ride the park still has, seasonality and works periods included.
    *
-   * The five season columns are selected but NOT filtered on here, because the
-   * two callers want opposite things from them: {@link forecastRides} drops a
-   * ride that cannot open on the day it is planning ({@link outOfSeasonOn}),
-   * and {@link observedRides} must not, since a row in the hourly rollup is a
-   * measurement of the ride having run.
+   * The five season columns and the two curated works-period columns are
+   * selected but NOT filtered on here, because the two callers want opposite
+   * things from them: {@link forecastRides} drops a ride that cannot open on
+   * the day it is planning ({@link cannotOpenOn}), and {@link observedRides}
+   * must not, since a row in the hourly rollup is a measurement of the ride
+   * having run.
    */
   private async attractions(park: Park): Promise<Attraction[]> {
     return this.attractionRepository.find({
@@ -1139,6 +1295,8 @@ export class PlanDayService {
         "seasonOutSince",
         "curatedIsSeasonal",
         "curatedSeasonMonths",
+        "curatedOutOfServiceFrom",
+        "curatedOutOfServiceTo",
       ],
     });
   }
@@ -1204,6 +1362,42 @@ export class PlanDayService {
         nearHorizon ? facts : { ...facts, seasonOutSince: null },
         PlanDayService.localNoonOf(dateStr),
       ) === false
+    );
+  }
+
+  /**
+   * Whether anything on file says this ride cannot open on the day being planned.
+   *
+   * Two statements, and they are not the same kind of thing. The season is
+   * DETECTED — months inferred from a year of watching, three-valued, wrong
+   * about a refurbishment in a way nobody can see from outside. A curated works
+   * period is WRITTEN: an editor stated under `/admin/attractions/<id>` that the
+   * ride is out from the 16th to the 3rd, park-local, both bounds inclusive. It
+   * is the stronger of the two on every axis — a person rather than a detector,
+   * a date range rather than a month, and set-or-not-set rather than the season's
+   * `null`, so it needs none of that column's caution.
+   *
+   * It is also the one the season demonstrably cannot express:
+   * `season_out_since` is satisfied by a three-week rebuild exactly as well as
+   * by a winter, and months only arrive at `MIN_OBSERVED_DAYS` (330) of history.
+   * The window was sitting in the same table the whole time and this endpoint
+   * never read it, so a ride an editor had marked out for January and February
+   * was served for 10 February with a full curve, a `dayPeak` and possibly
+   * `isHeadliner`.
+   *
+   * Asked with the PLANNED date and the PARK's timezone, for the same reason the
+   * season is asked about the planned month: `isCuratedOutOfService` defaults to
+   * the park's today, and today is not what this endpoint was asked about.
+   */
+  private static cannotOpenOn(
+    attraction: Attraction,
+    timezone: string,
+    dateStr: string,
+    nearHorizon: boolean,
+  ): boolean {
+    return (
+      PlanDayService.outOfSeasonOn(attraction, dateStr, nearHorizon) ||
+      isCuratedOutOfService(attraction, timezone, dateStr)
     );
   }
 
