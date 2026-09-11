@@ -6,23 +6,46 @@ import { Entity, PrimaryColumn, Column } from "typeorm";
  *
  * A planner has to be able to say "give or take a quarter of an hour", and it
  * cannot get that from one number: the error depends on both axes and by a lot.
- * Measured against the realised day-P90 over 45 days (2.5 M comparisons):
+ * Measured against the realised day-P90 over 45 days, 2.5 M comparisons
+ * (2026-09-11, six lead buckets — the two middle columns were added by PAR-17):
  *
  * ```
- *   predicted        <=7d    8-30d   31-60d
- *   >= 60 min        21.9     23.9     25.0
- *   30-59 min        13.4     15.4     16.6
- *   <  30 min         9.0     10.9     13.0
+ *   predicted       <=1d    <=3d    <=7d   <=14d   <=30d   <=60d
+ *   >= 60 min       21.5    21.6    22.9    24.3    25.1    25.5
+ *   30-59 min       12.9    13.2    13.6    14.7    15.5    16.5
+ *   <  30 min        8.6     8.7     9.0     9.9    10.7    12.5
  * ```
  *
  * A single per-day figure would understate a headliner's error by ten minutes
  * and overstate a quiet ride's by four. Hence two axes.
+ *
+ * READ THE ROWS, NOT JUST THE TREND. Each band widens by about the same four
+ * minutes from one day out to sixty — but that is +19 % on a busy ride and +45 %
+ * on a quiet one, so "the band grows with distance" is a statement about minutes
+ * and not about proportions. A multiplier applied to the prediction would get
+ * the quiet end badly wrong in one direction and the busy end in the other.
  *
  * WHY THE BAND IS THE **PREDICTED** LEVEL and never the realised one. Grouping by
  * the outcome is the trap that makes any well-calibrated model look badly biased
  * — conditioning on the result reproduces regression to the mean — and it is the
  * reason `shape_comparisons`' bias column cannot be read at face value. The
  * predicted level is also the only one available when the answer is served.
+ *
+ * WHY THERE IS NO PER-RIDE AXIS. Not a decision about effort — a ceiling.
+ * Measured on 2026-09-11 over the same 45-day window: of 2,643 rides, **none**
+ * clears even 100 comparisons in all six buckets, and the average ride's thinnest
+ * bucket holds 18. The reason is arithmetic rather than sparsity: the `d1` bucket
+ * spans exactly ONE lead distance, so a ride can contribute at most one
+ * comparison per target day — 45 in a 45-day window, and 45 is also the observed
+ * maximum.
+ *
+ * Worse, feasibility runs opposite to usefulness. `d30` and `d60` do clear 500
+ * for 716 and 1,055 rides, but only by pooling 16 and 30 distinct lead distances:
+ * "this ride's error at 30 days" would really be a mean over a 16-day-wide span.
+ * The near buckets a planner reads most are precisely the ones that cannot carry
+ * a per-ride figure, and widening the window until they could would average two
+ * model versions into one number — the thing the 45-day choice above exists to
+ * avoid. So the second axis is the predicted band, which every ride shares.
  *
  * WHY IT IS MEASURED RATHER THAN CONFIGURED. These numbers move with the model,
  * the season and the parks in the set. A constant in the code would be right on
@@ -43,7 +66,10 @@ export class ForecastAccuracyProfile {
   @PrimaryColumn({ name: "predicted_band", type: "varchar", length: 8 })
   predictedBand: string;
 
-  /** `d1`, `d7`, `d30` or `d60` — the upper edge of the lead bucket, in days. */
+  /**
+   * `d1`, `d3`, `d7`, `d14`, `d30` or `d60` — the upper edge of the bucket, in
+   * days. The same six distances the forward archive samples.
+   */
   @PrimaryColumn({ name: "lead_bucket", type: "varchar", length: 8 })
   leadBucket: string;
 
