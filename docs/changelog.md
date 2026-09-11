@@ -44,7 +44,7 @@ every filter, carry the model's hourly answer and still leave nothing behind whe
 every hour the model spoke for lies below its own opening hour; the header then
 claimed `measured` over a response in which every hour was composed.
 
-`plan-day.service.spec.ts` +19 cases, 8 of which fail against the previous
+`plan-day.service.spec.ts` 62 → 84 cases, 8 of which fail against the previous
 service. Contract: [plan-day-endpoint.md §6, §8](frontend/plan-day-endpoint.md).
 
 ### Added — a per-park override for schedule sources that publish a 12-hour clock

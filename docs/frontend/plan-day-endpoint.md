@@ -245,13 +245,15 @@ rides the season excluded, and only an explicit `OPERATING` rescues one, which i
 what keeps a park we cannot read out of it: a feed that only ever writes CLOSED,
 and reverse-reconciliation's own CLOSED stamps, both fail the test.
 
-A reading counts back to **park-local midnight of that day, and never less than
-six hours** — the shape the park page's own cutoff uses, where the day's start is
-a floor under how much history is kept rather than a ceiling over it. The floor
-is what carries a park that runs past midnight: at 00:30 the park-local day is
-half an hour old and the ride's last word is from the other side of it. A flat
-window would rescue a ride off yesterday evening, which is a claim about the
-wrong day.
+A reading counts back to **the day's own opening, and never less than six
+hours** — the park page's own cutoff rule, where the opening is a floor under how
+much history is kept rather than a ceiling over it, because a queue row is
+written on change plus an hourly heartbeat and the current reading for a ride
+that has not moved can predate the gates. Where the operator published no
+opening, the six hours are the whole window. Neither a flat interval nor
+park-local midnight would do: the first rescues a ride off yesterday evening, the
+second off last night's session on a park that runs past midnight — both claims
+about an operating day that is not the one being planned.
 
 It corrects **today**, which is the only day a live row speaks about. A detector
 note with no months behind it reaches one day further (§6), so a ride running

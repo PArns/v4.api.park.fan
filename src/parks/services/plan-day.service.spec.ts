@@ -1986,20 +1986,75 @@ describe("PlanDayService", () => {
       expect(liveLookups()).toHaveLength(1);
     });
 
-    it("asks only about the excluded rides, and only about today's readings", async () => {
-      // The three parameters are the whole cost story: the id list is what keeps
-      // this off every ride in the park, and the date plus the timezone are what
-      // make the window "today, park-local" rather than a flat interval that
-      // would rescue a ride off yesterday evening's row.
+    it("asks only about the excluded rides, back to the day's own opening", async () => {
+      // Both parameters are the cost story. The id list is what keeps this off
+      // every ride in the park. The cutoff is the park page's own rule — today's
+      // opening, floored at six hours — and not a flat interval, which would
+      // rescue a ride off a reading that belongs to another operating day.
       liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
 
-      await planToday();
+      const date = today();
+      const opening = new Date(Date.now() - 9 * 60 * 60 * 1000);
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        hours: {
+          openingTime: opening.toISOString(),
+          closingTime: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+        },
+      };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      attractions = [{ ...attractions[0], ...shutNow }];
+      service = await build();
+      await service.buildPlanDay(park, date);
 
-      const [sql, params] = liveLookups()[0] as [string, unknown[]];
+      const [, params] = liveLookups()[0] as [string, unknown[]];
       expect(params[0]).toEqual(["a-taron"]);
-      expect(params[1]).toBe(park.timezone);
-      expect(params[2]).toBe(today());
-      expect(sql).toContain("LEAST");
+      expect(params[1]).toEqual(opening);
+    });
+
+    it("never looks back less than the floor, whatever the park published", async () => {
+      // A park that opened twenty minutes ago has almost no window, and a queue
+      // row is written on change plus an hourly heartbeat — so the reading for a
+      // ride that has not moved predates the gates. The opening is a floor under
+      // the window, not a ceiling over it.
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+      const date = today();
+      const opening = new Date(Date.now() - 20 * 60 * 1000);
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        hours: {
+          openingTime: opening.toISOString(),
+          closingTime: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
+        },
+      };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      attractions = [{ ...attractions[0], ...shutNow }];
+      service = await build();
+      await service.buildPlanDay(park, date);
+
+      const [, params] = liveLookups()[0] as [string, unknown[]];
+      const since = params[1] as Date;
+      expect(since.getTime()).toBeLessThan(opening.getTime());
+      // Six hours, to the minute the call was made.
+      expect(Date.now() - since.getTime()).toBeGreaterThanOrEqual(
+        6 * 60 * 60 * 1000,
+      );
+      expect(Date.now() - since.getTime()).toBeLessThan(
+        6 * 60 * 60 * 1000 + 60_000,
+      );
     });
 
     it("leaves it out when the feed says anything else", async () => {
