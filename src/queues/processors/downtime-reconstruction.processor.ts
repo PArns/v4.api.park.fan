@@ -55,10 +55,30 @@ export class DowntimeReconstructionProcessor {
    *
    * **30, not 120, and the reason is measured.** The two statements cost 0.43 s
    * over one day, 3.6 s over seven and 22 s over thirty — but ~7 minutes over
-   * 180, so the cost is strongly super-linear, and the temp spill grows with it
-   * (30 days already writes ~700 MB for statement 1). They run under one
-   * `Promise.all`, so a 120-day nightly run spills several GB concurrently every
-   * night to recompute intervals that have not changed since yesterday.
+   * 180, so statement time is strongly super-linear (~19x for 6x the window),
+   * and the temp spill grows with it (30 days already writes ~700 MB for
+   * statement 1). They run under one `Promise.all`, so a 120-day nightly run
+   * spills several GB concurrently every night to recompute intervals that have
+   * not changed since yesterday.
+   *
+   * Measured end to end against production on 2026-09-11, all parks, 24 cores
+   * at load 1.3-4.2 — the staged first fill, so these are whole-job times and
+   * not statement times:
+   *
+   * | window | 30 d  | 60 d  | 90 d  | 120 d | 180 d   | 270 d   |
+   * | ------ | ----- | ----- | ----- | ----- | ------- | ------- |
+   * | time   | 118 s | 207 s | 356 s | 558 s | 1 037 s | 1 713 s |
+   *
+   * Six times the window costs 8.8x the whole job, an apparent exponent of
+   * about **1.2**. Read that as a planning figure for a staged fill and not as
+   * a correction of the ~19x above: these are different quantities. The 19x is
+   * statement time, while the job also does `pruneOldRows` (fixed 400-day
+   * cutoff), `profiles.rebuild` (90 days) and `recovery.rebuild` — work that
+   * barely moves with `windowDays` and therefore flattens the curve at the
+   * short end. The two statements may well still grow at the older rate; what
+   * this table establishes is the wall-clock cost of the call, which is what a
+   * hand-run fill is planned against. The absolute figures age upward as the
+   * table grows, so plan against the shape rather than the seconds.
    *
    * A rolling 30 days is enough for the nightly job because the table
    * accumulates: an interval written last month stays written, and the profile
@@ -67,7 +87,9 @@ export class DowntimeReconstructionProcessor {
    * that is open or started earlier, so a long outage is not truncated.
    *
    * The FIRST fill is a different job and is not this one: it needs the whole
-   * history and belongs in 30-day stages, run by hand. See `todo.md`.
+   * history and belongs in 30-day stages, run by hand. It was run that way on
+   * 2026-09-11 and reached `queue_data`'s own floor of 2025-12-24; see
+   * `docs/analytics/ride-downtime.md`, "The first production fill, staged".
    */
   private readonly DEFAULT_WINDOW_DAYS = 30;
 

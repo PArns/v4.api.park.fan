@@ -221,7 +221,11 @@ observation to say, stay `reports`, and are withheld by the ride-level event
 floor anyway.
 
 Regimes in production after the change: 100 `reports`, 91 `never_reports`, 16
-`not_capable`, 6 `no_schedule`.
+`not_capable`, 6 `no_schedule`. Those counts were taken on 42 days of history
+and **moved to 97/94/16/6 once the staged fill of 2026-09-11 supplied 261** —
+three of the eleven "too little observation to say" parks crossed the evidence
+floor. See "The first production fill, staged" below before treating a
+difference from 100/91 as a regression.
 
 ### A second signal, for the parks the first one cannot reach
 
@@ -354,6 +358,61 @@ been written, so its failure must be logged, not retried.
 so the two merged into a single row carrying 71 rides and 4979 outages. Grouping
 is on `parkId` now, and the rows carry `parkCity` so a human can tell them
 apart.
+
+### The first production fill, staged
+
+Phase 3's tables were filled for real on **2026-09-11**, against the production
+database, through `POST /v1/admin/rebuild-downtime`. Recorded here because the
+numbers exist nowhere else: the endpoint takes a **trailing window** and no
+from/to — the query parameter is **`days`** (`?days=270`), which the controller
+passes on as the job's `windowDays`, clamped 1-400. `?windowDays=…` is not the
+parameter and is ignored, which buys a silent 30-day default run. So "30-day
+stages" means
+30 -> 60 -> 90 -> ..., each stage recomputing its whole window from scratch and
+superseding the one before it. Every stage therefore leaves a self-consistent
+table, which is what makes stopping between two of them safe.
+
+| Window | Intervals | Closure gaps | Exposure days | Duration |
+| ------ | --------- | ------------ | ------------- | --------- |
+| 30 d   | 38 619    | 3 316        | 256 032       | 118 s     |
+| 60 d   | 57 792    | 3 330        | 359 865       | 207 s     |
+| 90 d   | 90 112    | 4 186        | 506 846       | 356 s     |
+| 120 d  | 114 639   | 4 584        | 633 245       | 558 s     |
+| 180 d  | 138 969   | 4 740        | 809 573       | 1 037 s   |
+| 270 d  | 154 150   | 5 000        | 936 141       | 1 713 s   |
+
+The last stage reaches the source's own floor: `queue_data`'s oldest chunk
+starts **2025-12-24**, and `attraction_outages` now spans 2025-12-24 to
+2026-09-11 — 154 150 DOWN intervals over 2 313 rides in 80 parks, and 5 000
+closure gaps over 1 135 rides in 81 parks, against 37 353 / 3 230 over 42 days
+before. `downtime_recovery_curves` went from 202 rows to 414.
+
+**No stage logged the minute-invariant warning**, none fell back to the
+requested window on the scan-start lookup, and the closure-gap statement failed
+in none of them. Host load stayed between 1.3 and 4.2 on 24 cores and the live
+API kept serving throughout.
+
+**Three parks moved from `reports` to `never_reports`** (100/91/16/6 before,
+97/94/16/6 after). That is the expected direction and the point of the fill: a
+park is `never_reports` only if it never emits DOWN _and_ clears
+`MIN_BLIND_EVIDENCE_HOURS`. On 42 days those three sat below the evidence floor
+and fell to `reports` by default; on 261 days they clear it, and the regime they
+get is the one they had all along.
+
+**Closure gaps do not scale with the window, and that is the population, not a
+filter.** Six times the window buys 3.6x the DOWN intervals but only 1.4x the
+gaps, because the gap signal is confined to `blind_parks`. Per month the
+historical end is genuinely thin — 102 gaps in December against 1 548 in
+August — since far fewer blind parks were tracked then.
+
+**Which is also why the ~2600-per-21-days alarm cannot be carried across
+windows by dividing.** The rule was calibrated on a 21-day reconstruction and
+the quantity is not linear in the window, so normalising a 270-day count down to
+21 days understates it and a 30-day count normalises to ~2320 — indistinguishable
+from the threshold it is supposed to trip. Compare a nightly run against the
+nightly runs before it, at the same window, and treat a jump there as the
+regression; the per-stage counts above are the baseline for the 30-day case
+(3 316), not a rate.
 
 The question this answers: _how often and for how long are rides down, and can we say when the next
 outage is coming and how long it will last?_

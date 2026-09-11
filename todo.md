@@ -224,13 +224,15 @@ The five new tables (`attraction_outages`, `attraction_exposure_days`,
       nothing proceeds.** Candidates are easy now: 1324 rides clear the event
       floor, and the densest histories are Parque Warner Madrid, Cedar Point,
       Movie Park Germany and Canada's Wonderland.
-- [ ] **First reconstruction fill, in stages.** `POST /v1/admin/rebuild-downtime`
-      with a window of **30 days at a time**, not 120 in one call. Measured: 6x
-      the window costs ~19x the time, 30 days already spills ~700 MB of temp for
-      statement 1, and the two statements run under one `Promise.all`. The
-      processor logs any exposure day failing the minute invariant — that check
-      already passed read-only over 88 814 days with 0 violations, so a warning
-      here means the write path, not the arithmetic.
+- [x] **First reconstruction fill, in stages.** Done **2026-09-11** in stages of
+      30 → 60 → 90 → 120 → 180 → 270 days through
+      `POST /v1/admin/rebuild-downtime?days=<n>`; it reached `queue_data`'s own
+      floor of 2025-12-24. The minute invariant held in every stage (0
+      warnings), matching the 88 814 days it had already passed read-only. The
+      "6x the window costs ~19x the time" figure is **statement** time; the
+      whole job measured 118 s → 1 713 s across those stages, an apparent 8.8x
+      for 6x the window. Per-stage counts and the regime shift are in
+      `docs/analytics/ride-downtime.md`, "The first production fill, staged".
 - [ ] **Thirty days after the columns ship: `GET /v1/admin/downtime-erasure`.**
       How much of the DOWN signal `ConflictResolverService` deletes, in rows and
       in the minutes they carried. Still the number that decides whether §6's
@@ -256,9 +258,14 @@ Both fixed in the same push; both are in
   regime with an evidence threshold of 1500 observed operating hours.
 
 - [ ] **Verify after the next nightly run (05:00):** `downtime_recovery_curves`
-      is non-empty (expect ~174 rows, 11 pooled), and `park_downtime_coverage`
-      shows roughly 100 `reports` / 91 `never_reports` / 16 `not_capable` /
-      6 `no_schedule`.
+      is non-empty, and `park_downtime_coverage` shows the expected regime
+      split. **Both expectations moved with the staged fill of 2026-09-11**
+      (`docs/analytics/ride-downtime.md`, "The first production fill, staged"):
+      the curves went from 202 rows to **414**, and the split from
+      100/91/16/6 to **97 `reports` / 94 `never_reports` / 16 `not_capable` /
+      6 `no_schedule`** — three parks crossed the blind-evidence floor once 261
+      days of history existed. Compare against those, not against the older
+      ~174 / 100 / 91.
 
 ### 2c. The closure signal (2026-09-07)
 
@@ -272,8 +279,12 @@ emits DOWN. Details in
       channels. The wording already refuses to say „gemeldet", but a wrong
       interval is still a wrong interval.
 - [ ] **Watch the first nightly run with both statements.** The log line now
-      reads `N interval(s), M closure gap(s)`. Expect roughly 2600 gaps over a
-      21-day window; a much larger number means a filter stopped working.
+      reads `N interval(s), M closure gap(s)`. The ~2600-per-21-days figure was
+      calibrated on a 21-day reconstruction and **does not carry to another
+      window by dividing** — the count is not linear in the window. At the
+      nightly 30 days the staged fill of 2026-09-11 measured **3 316** gaps, and
+      over 270 days 5 000. Compare a nightly run against the nightly runs before
+      it at the same window; a jump there is the filter regression to look for.
 - [ ] **Check the closure-gap recovery curve once it exists.** Its population
       has no censoring by construction, so if its quartiles come out far from
       the measured 15/20/35 something is wrong with the interval definition
