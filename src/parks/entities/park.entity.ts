@@ -254,6 +254,45 @@ export class Park {
   })
   curatedNoWaitTimesReason: string | null;
 
+  /**
+   * Whether this park's schedule source publishes a 12-hour clock as if it
+   * were a 24-hour one — so a midnight close arrives as `12:00`.
+   *
+   * `normalizeClosingTime` repairs a closing time whose *date* is wrong, which
+   * covers almost everything, but it cannot repair one whose *time-of-day* is
+   * wrong: `opens 15:00 / closes 12:00` re-anchors into a 21-hour operating
+   * day that is right during the actual hours and wrong all night. The
+   * distinguishing signal — the closing being before the opening — is the very
+   * thing the re-anchoring consumes, so by the time the value looks wrong,
+   * there is nothing left to tell it apart from a park that genuinely closes at
+   * noon. Water parks and Christmas markets do.
+   *
+   * Hence a per-park statement rather than a rule: reinterpreting every `12:00`
+   * would silently rewrite legitimate noon closings across the catalogue, and
+   * this is the one place where "we know this particular source is broken" can
+   * be written down without guessing. It fires on nothing else — see
+   * `correctTwelveHourClockClose`.
+   *
+   * Ingest-side only, and therefore absent from the API payload: it describes a
+   * source's formatting, not the park. What a reader sees of it is the corrected
+   * closing time.
+   *
+   * **Per park, not per source**, and that is a real limit rather than an
+   * oversight. Four writers reach `saveScheduleData` — the ThemeParks.wiki
+   * metadata sync, its live-data fallback, and the Wartezeiten.app daily sync —
+   * and the flag applies to whichever of them writes next. It holds today
+   * because a park is fed by one schedule source in practice (Wartezeiten.app
+   * covers German parks, the flagged ones are not among them). A park fed by
+   * two sources, only one of which misprints midnight, would need this on the
+   * source instead.
+   */
+  @Column({
+    name: "curated_uses_twelve_hour_clock",
+    type: "boolean",
+    nullable: true,
+  })
+  curatedUsesTwelveHourClock: boolean | null;
+
   // ─── the facts no feed carries ────────────────────────────────────────────
   // Everything below has exactly one writer, a human, and is here for the same
   // reason `has_single_rider` is on the attraction: neither ThemeParks.wiki nor

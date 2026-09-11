@@ -144,6 +144,7 @@ export const CURATED_PARK_COLUMNS = [
   "curatedParkType",
   "curatedArticleDe",
   "curatedNoWaitTimesReason",
+  "curatedUsesTwelveHourClock",
   "curatedWebsite",
   "curatedTicketsUrl",
   "curatedWikipediaUrl",

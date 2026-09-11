@@ -6,6 +6,41 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — a per-park override for schedule sources that publish a 12-hour clock
+
+`parks.curated_uses_twelve_hour_clock`. Some sources publish a 12-hour clock
+without labelling it, so a midnight close arrives as `12:00`.
+`normalizeClosingTime` cannot repair that: it trusts the time-of-day and fixes
+the date, while here the time-of-day is the part that is wrong, and the one
+signal that separates it from a park genuinely closing at noon — the closing
+falling *before* the opening — is exactly what the re-anchoring consumes. A
+blanket "reinterpret 12:00" would rewrite every real noon closing in the
+catalogue; water parks and Christmas markets have those.
+
+So it is a per-park statement, applied by `correctTwelveHourClockClose` on the
+**raw** pair before `normalizeClosingTime` runs, and only when the closing is
+before the opening *and* lands on exactly `12:00` park-local. It then reads as
+midnight on the following park-local day. Every other hour, every park without
+the flag, and every noon close that sits after opening go through the old path
+byte-identical.
+
+Measured against production on 2026-09-11, the pattern exists in **one park**,
+five rows: Six Flags Qiddiya City, `opens 15:00 / closes 12:00`, 2026-04-17
+through 05-15, stored as a 21-hour operating day — right during the evening,
+wrong for the eleven hours after. Kings Dominion, the second park named in the
+original report (`todo.md`, 2026-07-27), no longer carries it: its two Haunt
+evenings read `18:00 → 00:00` next day since the 2026-08-09 sync.
+
+The flag does not rewrite stored rows; it changes what the next sync writes.
+Curating it for a park is an admin write, not part of this change — the editor
+picks the field up from the descriptor with no frontend change.
+
+One thing the DST work turned up on the way: `fromZonedTime(day + "T00:00:00")`
+resolves a **missing** midnight backwards, to 23:00 on the day before, in the
+zones that spring forward at midnight itself (Santiago, Havana). Asking for the
+start of a local day that way is an hour early there; `correctTwelveHourClockClose`
+checks the result and steps to the first hour that exists.
+
 ### Changed — the served error grid is six lead buckets, and the per-ride curve is measured as impossible
 
 `forecast_accuracy_profile` bucketed lead time into four distances

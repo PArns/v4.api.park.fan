@@ -183,6 +183,7 @@ describe("CURATED_PARK_DB_COLUMNS", () => {
       "curated_park_type",
       "curated_article_de",
       "curated_no_wait_times_reason",
+      "curated_uses_twelve_hour_clock",
       "curated_website",
       "curated_tickets_url",
       "curated_wikipedia_url",

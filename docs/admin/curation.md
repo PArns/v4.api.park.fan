@@ -31,9 +31,61 @@ and the whole `attraction_ride_profiles` table except its `stats` column.
 ### Parks
 
 Corrections to a synced column: `curated_name`, `curated_park_type`. Plus
-`curated_no_wait_times_reason` and the internal `curation_note`. Before this
-there were none at all — the only park-level curation was a hardcoded list in
-`live-wait-time-sources.ts`.
+`curated_no_wait_times_reason`, `curated_uses_twelve_hour_clock` and the
+internal `curation_note`. Before this there were none at all — the only
+park-level curation was a hardcoded list in `live-wait-time-sources.ts`.
+
+**`curated_uses_twelve_hour_clock` is the odd one**, and worth knowing about
+before somebody looks for it in a payload: it changes what is *ingested*, not
+what is served. A source that publishes a 12-hour clock unlabelled reports a
+midnight close as `12:00`, and `normalizeClosingTime` cannot repair that — it
+trusts the time-of-day and fixes the date, while here the time-of-day is the
+part that is wrong. The only signal separating it from a park that genuinely
+closes at noon is the closing falling *before* the opening, which the
+re-anchoring consumes. So the flag runs first, on the raw pair, and only for a
+park somebody has written it on: see `correctTwelveHourClockClose`
+(`src/common/utils/operating-window.util.ts`).
+
+Set it from the audit query, never on a hunch — a blanket "reinterpret 12:00"
+would rewrite every legitimate noon closing in the catalogue, and water parks
+and Christmas markets have those:
+
+```sql
+SELECT p.name, s.date,
+       (s."openingTime" AT TIME ZONE p.timezone)::time AS opens,
+       (s."closingTime" AT TIME ZONE p.timezone)::time AS closes
+FROM schedule_entries s JOIN parks p ON p.id = s."parkId"
+WHERE (s."closingTime" AT TIME ZONE p.timezone)::time = '12:00:00'
+  AND (s."closingTime" AT TIME ZONE p.timezone)::date
+      > (s."openingTime" AT TIME ZONE p.timezone)::date;
+```
+
+Measured against production on 2026-09-11 that returns **five rows in one park**
+— Six Flags Qiddiya City, 2026-04-17 through 05-15, stored as a 21-hour day.
+
+**It finds candidates, not cases, and the difference can cost you a curation.**
+The query reads *stored* rows, which are post-normalization, and two different
+raw shapes land on an identical stored row:
+
+| What the source sent                    | What `normalizeClosingTime` did              | Stored | Flag fires |
+| --------------------------------------- | -------------------------------------------- | ------ | ---------- |
+| close `12:00` on the **opening's** date | before opening → re-anchored, rolled forward | 21 h   | **yes**    |
+| close `12:00` on the **next** date      | nothing — 21 h is a plausible window         | 21 h   | **no**     |
+
+`correctTwelveHourClockClose` needs the raw closing to precede the raw opening,
+and normalization has already overwritten the one value that says whether it
+did. Written on the second kind, the column does nothing at all, silently: the
+next sync rewrites the same 21-hour day and no log line mentions it.
+
+So before flagging a *new* park, read the source's own payload for one of the
+days (`https://api.themeparks.wiki/v1/entity/{externalId}/schedule`) and look at
+the closing's **date**, not only its time. Afterwards, confirm against the next
+sync that the row actually moved. For Qiddiya the raw shape is on record —
+`opens 15:00 / closes 12:00`, same date, from the 2026-07-27 sweep in `todo.md`
+— which is the first kind.
+
+The flag does not rewrite stored rows either way; it changes what the next sync
+of that park writes.
 
 ### Fast passes, across two rows
 
