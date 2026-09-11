@@ -28,6 +28,58 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * @param timezone - Park timezone (IANA), used to read the local time-of-day
  * @returns The closing time, corrected only when the window is impossible
  */
+export function normalizeClosingTime(
+  openingTime: Date | null | undefined,
+  closingTime: Date,
+  timezone: string,
+): Date;
+export function normalizeClosingTime(
+  openingTime: Date | null | undefined,
+  closingTime: Date | null | undefined,
+  timezone: string,
+): Date | null;
+export function normalizeClosingTime(
+  openingTime: Date | null | undefined,
+  closingTime: Date | null | undefined,
+  timezone: string,
+): Date | null {
+  if (!openingTime || !closingTime) {
+    return closingTime ?? null;
+  }
+
+  const span = closingTime.getTime() - openingTime.getTime();
+  // Plausible window, or a degenerate zero-length one we must not invent a day for.
+  if (span >= 0 && span <= DAY_MS) {
+    return closingTime;
+  }
+
+  try {
+    const openingDate = formatInTimeZone(openingTime, timezone, "yyyy-MM-dd");
+    const closingClock = formatInTimeZone(closingTime, timezone, "HH:mm:ss");
+
+    let anchored = fromZonedTime(`${openingDate}T${closingClock}`, timezone);
+    if (Number.isNaN(anchored.getTime())) {
+      return closingTime;
+    }
+    if (anchored.getTime() <= openingTime.getTime()) {
+      // Past-midnight close: same clock time on the following park-local day.
+      // Re-resolved through the timezone so a DST shift in that night keeps the
+      // local closing time rather than a fixed 24 h offset.
+      const nextDate = formatInTimeZone(
+        new Date(anchored.getTime() + DAY_MS),
+        timezone,
+        "yyyy-MM-dd",
+      );
+      anchored = fromZonedTime(`${nextDate}T${closingClock}`, timezone);
+    }
+
+    return Number.isNaN(anchored.getTime()) ? closingTime : anchored;
+  } catch {
+    // Unusable timezone — leave the source value untouched rather than guess.
+    return closingTime;
+  }
+}
+
 /**
  * Reads the closing time of a source that publishes a 12-hour clock unlabelled,
  * where a midnight close arrives as `12:00`.
@@ -100,61 +152,10 @@ export function correctTwelveHourClockClose(
         return null;
       }
     }
-    return Number.isNaN(corrected.getTime()) ? null : corrected;
+    return corrected;
   } catch {
-    // Unusable timezone — leave it to the generic repair rather than guess.
+    // Unusable timezone, or an invalid date `formatInTimeZone` refuses —
+    // leave it to the generic repair rather than guess.
     return null;
-  }
-}
-
-export function normalizeClosingTime(
-  openingTime: Date | null | undefined,
-  closingTime: Date,
-  timezone: string,
-): Date;
-export function normalizeClosingTime(
-  openingTime: Date | null | undefined,
-  closingTime: Date | null | undefined,
-  timezone: string,
-): Date | null;
-export function normalizeClosingTime(
-  openingTime: Date | null | undefined,
-  closingTime: Date | null | undefined,
-  timezone: string,
-): Date | null {
-  if (!openingTime || !closingTime) {
-    return closingTime ?? null;
-  }
-
-  const span = closingTime.getTime() - openingTime.getTime();
-  // Plausible window, or a degenerate zero-length one we must not invent a day for.
-  if (span >= 0 && span <= DAY_MS) {
-    return closingTime;
-  }
-
-  try {
-    const openingDate = formatInTimeZone(openingTime, timezone, "yyyy-MM-dd");
-    const closingClock = formatInTimeZone(closingTime, timezone, "HH:mm:ss");
-
-    let anchored = fromZonedTime(`${openingDate}T${closingClock}`, timezone);
-    if (Number.isNaN(anchored.getTime())) {
-      return closingTime;
-    }
-    if (anchored.getTime() <= openingTime.getTime()) {
-      // Past-midnight close: same clock time on the following park-local day.
-      // Re-resolved through the timezone so a DST shift in that night keeps the
-      // local closing time rather than a fixed 24 h offset.
-      const nextDate = formatInTimeZone(
-        new Date(anchored.getTime() + DAY_MS),
-        timezone,
-        "yyyy-MM-dd",
-      );
-      anchored = fromZonedTime(`${nextDate}T${closingClock}`, timezone);
-    }
-
-    return Number.isNaN(anchored.getTime()) ? closingTime : anchored;
-  } catch {
-    // Unusable timezone — leave the source value untouched rather than guess.
-    return closingTime;
   }
 }
