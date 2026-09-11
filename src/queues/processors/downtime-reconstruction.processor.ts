@@ -24,12 +24,20 @@ import { AttractionExposureDay } from "../../analytics/entities/attraction-expos
  * shape used here is the one `refreshOperatingDayRollup` settled on for the same
  * reason. The park filter exists for a targeted repair, not for the nightly run.
  *
- * ## Delete-then-insert, per covered range
+ * ## Delete-then-insert, per covered range AND per covered ride
  *
  * An outage is an interval that can GROW between two runs. Upserting on
  * `(attractionId, startedAt)` would leave yesterday's shorter copy behind
  * whenever the stitch merged two runs into one, and the event count would drift
  * upward every night. So the covered range is deleted first and rewritten whole.
+ *
+ * **Covered is a set of rides, not a park.** Keyed on `parkId` alone, the delete
+ * erases the whole park's window and the insert only replaces what the
+ * statements returned — so a ride that left the `tracked` population since
+ * yesterday loses its reconstructed history permanently. The delete therefore
+ * names the rides this run actually covered; see `coveredIds` at the call site
+ * for how that set is read off the results already in hand, and for why an empty
+ * run now deletes nothing instead of everything.
  *
  * ## The scan starts where the data says, not where the calendar does
  *
@@ -147,6 +155,15 @@ export class DowntimeReconstructionProcessor {
     // Its own try/catch: it is an addition for parks that would otherwise have
     // no history at all, and its failure must not cost the reconstruction.
     let closureGaps: ClosureGapRow[] = [];
+    // Whether this run is in a position to rewrite a `closed_gap` row at all.
+    //
+    // An empty result and a failed statement look the same downstream and mean
+    // opposite things: one says the window holds no closure gaps, the other
+    // says this run does not know. The delete below has to tell them apart, or
+    // swallowing the error here silently erases the whole signal — which is the
+    // same data loss `coveredIds` exists to prevent, reached through the
+    // catch block instead of through the population.
+    let closureGapsRead = true;
     try {
       closureGaps = (await this.dataSource.query(CLOSURE_GAP_INTERVALS_SQL, [
         parkIds,
@@ -154,6 +171,7 @@ export class DowntimeReconstructionProcessor {
         asOf,
       ])) as ClosureGapRow[];
     } catch (error) {
+      closureGapsRead = false;
       this.logger.warn(
         `Closure-gap reconstruction failed, DOWN intervals kept: ${
           error instanceof Error ? error.message : String(error)
@@ -174,18 +192,89 @@ export class DowntimeReconstructionProcessor {
 
     let suspectDays = 0;
 
+    // The rides THIS run covered, which is what the deletes below may clear.
+    //
+    // The deletes used to be keyed on `parkId` alone, so they erased every row
+    // of the park in the window and re-inserted only what the statements
+    // returned. A ride that left the `tracked` population between two runs — a
+    // merge (`last_merged_at` moves inside the scan window), `retired_at`, a
+    // flip to `open_with_park`, the park losing its schedule or its
+    // `wiki_entity_id` — was therefore deleted and never rewritten. Not stale:
+    // gone, and gone for good, because the reconstruction only ever rewrites
+    // its own rolling window and nothing else writes these two tables.
+    //
+    // The exposure table loses the same way and hurts twice over: it is the
+    // DENOMINATOR of everything published about downtime, and of the
+    // duty-cycle share in `closure-gap.sql`, where a missing operating day
+    // moves the ratio in the direction that publishes a timetable as a fault.
+    //
+    // The population needs no query of its own. `OUTAGE_EXPOSURE_SQL` selects
+    // `FROM tracked t JOIN park_open po`, one row per tracked ride per
+    // operating day its park published in the window — so the ids in
+    // `exposure` ARE this run's `tracked` set, minus rides whose park had no
+    // operating day at all, which can produce nothing to write either.
+    // `intervals` and `closureGaps` are added because a ride may be written
+    // without being in that set: the closure-gap statement serves `blind_parks`
+    // and, unlike `tracked`, does not exclude free-flow rides.
+    //
+    // The direction of the remaining gap is deliberate, and it is worth being
+    // precise about how wide it is. A ride that produced nothing at all this
+    // run keeps what it had rather than having it deleted. For anything in
+    // `tracked` that is not a gap: the ride still gets an exposure row for
+    // every operating day its park published, so it is covered and its window
+    // is still rewritten whole — which is what lets a ride that has newly
+    // crossed `MAX_GAP_DAY_SHARE` lose its stored gaps.
+    //
+    // What is left is the one population that is written without being
+    // tracked: a free-flow (`open_with_park`) ride in a blind park, which the
+    // closure-gap statement does not exclude and the exposure statement does.
+    // If such a ride stops producing gaps, its `closed_gap` rows stay until the
+    // 400-day prune. Nothing published reads them — the profile, coverage and
+    // recovery-curve queries all filter `signal = 'down'`, as `closure-gap.sql`
+    // says in its own docblock — so today that costs a row and no figure. It is
+    // still the right trade if that ever changes: a stale row a later run can
+    // correct, against a loss no run can undo.
+    //
+    // `idx_attraction_outages_ride` is (`attractionId`, `started_at`), and the
+    // exposure table's primary key is (`attractionId`, `op_day`), so the
+    // narrower predicate is the one both indexes are built for.
+    const coveredIds = [
+      ...new Set([
+        ...exposure.map((row) => row.attractionId),
+        ...intervals.map((row) => row.attractionId),
+        ...closureGaps.map((row) => row.attractionId),
+      ]),
+    ];
+
+    // A run that could not READ the closure gaps may not delete them.
+    //
+    // The two statements write one table under two signals, and only one of
+    // them is allowed to fail quietly. When it does, `coveredIds` still names
+    // every blind-park ride — they come through `exposure`, which succeeded —
+    // so an unqualified delete strips their stored `closed_gap` rows and only
+    // the `down` rows are written back. Same permanence as before: nothing else
+    // writes this table and the rolling window moves on tomorrow.
+    //
+    // Restricting the delete to `down` is exactly as wide as what this run can
+    // rewrite, which is the rule the whole predicate follows.
+    const rewritableSignals = closureGapsRead
+      ? ""
+      : `\n            AND signal = 'down'`;
+
     await this.dataSource.transaction(async (manager) => {
       await manager.query(
         `DELETE FROM attraction_outages
           WHERE started_at >= $1
-            AND ($2::uuid[] IS NULL OR "parkId" = ANY($2::uuid[]))`,
-        [scanStart, parkIds],
+            AND ($2::uuid[] IS NULL OR "parkId" = ANY($2::uuid[]))
+            AND "attractionId" = ANY($3::uuid[])${rewritableSignals}`,
+        [scanStart, parkIds, coveredIds],
       );
       await manager.query(
         `DELETE FROM attraction_exposure_days
           WHERE op_day >= $1::date
-            AND ($2::uuid[] IS NULL OR "parkId" = ANY($2::uuid[]))`,
-        [scanStart, parkIds],
+            AND ($2::uuid[] IS NULL OR "parkId" = ANY($2::uuid[]))
+            AND "attractionId" = ANY($3::uuid[])`,
+        [scanStart, parkIds, coveredIds],
       );
 
       for (const batch of chunked(intervals, 500)) {
