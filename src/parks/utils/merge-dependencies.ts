@@ -181,6 +181,13 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
  *                            notification simply never arrives.
  *   - `show_schedule_patterns` no FK at all → the rows survive pointing at a
  *                            show that is gone.
+ *
+ * The two raw merge paths in `parks.service.ts` apply this list.
+ * `ParkMergeService.consolidateEntityData` does not — it applies a dependency
+ * list to attractions only, and ends on "Note: Add show/restaurant specific
+ * consolidation if needed" (PAR-150). Whatever answers that comment has to be
+ * this list rather than a second one: two different answers to one question are
+ * worse than the open question.
  */
 export const SHOW_DEPENDENCIES: MergeDependency[] = [
   {
@@ -209,12 +216,17 @@ export const SHOW_DEPENDENCIES: MergeDependency[] = [
     conflictColumns: ["weekday"],
   },
   {
-    // A visitor's reminder, and the only entry on any of these lists that a
-    // person set by hand and would notice going missing. Unique on
-    // `(subscriptionId, showId)`, so a subscriber who followed both rows keeps
-    // the winner's — one reminder for one show is what they asked for either
-    // way, and a duplicate would be a second notification for the same
-    // performance.
+    // A visitor's reminder — set by hand, like `park_seasons` and
+    // `attraction_ride_profiles` on the park list, and the only one of the
+    // three whose owner is a stranger who would simply never hear from us
+    // again. Unique on `(subscriptionId, showId)`, so a subscriber who
+    // followed both rows keeps the winner's: one reminder for one show is what
+    // they asked for either way, and a duplicate would be a second
+    // notification for the same performance.
+    //
+    // `ride_alerts` is the attraction-side twin of this row, with the same
+    // CASCADE and the same unique `(subscriptionId, attractionId)`, and it is
+    // NOT on `ATTRACTION_DEPENDENCIES` — see PAR-149.
     table: "show_follows",
     column: "showId",
     strategy: "move",

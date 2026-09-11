@@ -41,8 +41,15 @@ sets the CASCADEs off:
 shared `consolidateMergedEntities`. Matching is by slug alone rather than slug or
 name as in `ParkMergeService.migrateEntities`: the slug is what the constraint is
 about, and two rows the database is willing to keep apart are a curation
-question. The third, unreachable raw path (the priority merge) still moves both
-blind — it is being rebuilt separately.
+question.
+
+Two places still delete a show without draining it, both found by the review of
+this change and both out of its scope. `ParkMergeService.consolidateEntityData`
+applies its dependency list to attractions only and ends on "Note: Add
+show/restaurant specific consolidation if needed" — on the path an admin and
+`park-repair.service.ts` actually reach (PAR-150). And the third raw path in
+`parks.service.ts`, the priority merge, still moves both blind; it is
+unreachable today and is being rebuilt separately (PAR-148).
 
 ### Added — `DELETE /v1/trips/{id}`
 
