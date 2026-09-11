@@ -571,8 +571,9 @@ with the same rows.
       (`ATTRACTION` → `SHOW`, ids unchanged, live data still arriving — already
       re-matched into `shows`, the stale `attractions` rows are what is left —
       PAR-159),
-      **97** are genuinely silent with the entity document still intact
-      upstream, and **56 were never silent at all** — the wiki or Queue-Times
+      **97** are genuinely silent — 96 of them with the entity document still
+      intact upstream, the 97th a Queue-Times-only ride that is its own defect
+      (PAR-161) — and **56 were never silent at all** — the wiki or Queue-Times
       keeps writing CLOSED for them and they are simply shut (Wet'n'Wild in the
       southern winter, Traumatica until autumn, Ocean Park). Busch Gardens Tampa
       recovered on its own on 2026-08-17 after 65 days.

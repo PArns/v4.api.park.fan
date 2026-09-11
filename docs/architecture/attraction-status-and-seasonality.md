@@ -305,8 +305,9 @@ It also said **every affected ride lacks a `queue_times_entity_id`** — the
 dual-sourced ones kept working. That is false as a rule: of the 170 rides the
 same query returns today, **50 carry one**, among them eight of the nine at
 Knott's Berry Farm, which are as silent as the rest. Busch Gardens Tampa is the
-sharper counter-example: **all nine** of its rides carry a Queue-Times id and
-all nine went quiet anyway on 2026-06-13. A Queue-Times mapping is not armour —
+sharper counter-example, from outside that set: **all nine** of its rides carry
+a Queue-Times id and all nine went quiet anyway on 2026-06-13. They are not
+among the 170 because they came back — §5.2a. A Queue-Times mapping is not armour —
 where the wiki dropped a non-ride facility, Queue-Times usually dropped it too.
 What the sentence described correctly was Europa-Park, where it was measured.
 
@@ -442,11 +443,25 @@ The §6 query answers "which rides stopped saying OPERATING". That is not the
 same question as "which rides did we lose", and the whole of this section's
 early confusion lives in the gap between them.
 
-Re-run on 2026-09-11 **over 270 days instead of 120** — long enough to reach
-back past the oldest of these drops without falling off the `queue_data`
-retention floor of 2025-12-24 — and grouped by `parks.id`, it returns **12
-parks and 170 rides**. The widened window is most of the difference from the
-2026-08-15 reading; three further months of drift are the rest.
+Re-run on 2026-09-11 **over 270 days instead of 120**, with the `HAVING` floor
+at 5 rides instead of 6 and grouped by `parks.id`, it returns **12 parks and
+170 rides**. 270 days reaches the whole of `queue_data` retention (oldest row
+2025-12-24), and the window is where most of the difference from the
+2026-08-15 reading comes from, not the four weeks between the two runs. The
+reason is worth keeping: **a ride whose last OPERATING row falls outside the
+window has no `last_op` at all, so it drops out of the result entirely instead
+of showing up as silent.** The same query run both ways on 2026-09-11 says it
+plainly:
+
+| window | what comes back |
+|---|---|
+| 120 days, `>= 6` | 8 rows: Europa-Park **44**, Rulantica 18, Wet'n'Wild 13 + 13, Mid-America **9**, Traumatica 7, USJ 6, Ocean Park 6 |
+| 270 days, `>= 5` | 12 rows, incl. Knott's 9 (last OPERATING 2026-04-14), Fiesta Texas 15 (04-12), USS 17 (04-25), Hollywood 5 |
+
+The three parks with the oldest drops are invisible at 120 days — the very
+cases the cut exists to find — and Europa-Park's 44 is itself a 120-day
+artefact of exactly this kind: two of its rides went quiet earlier than the
+window and only appear in the 46.
 
 Two follow-up checks turn that count into an answer, and **they are not
 interchangeable**:
@@ -457,16 +472,28 @@ interchangeable**:
 2. **`GET /v1/entity/{id}` upstream.** Does the entity still exist, under which
    `entityType`, and does the park's `/children` and `/live` still list it?
 
+Check 1 has to be decided **per ride** and only then counted per park — two of
+the twelve parks (Mid-America, Universal Studios Japan) have rides on both
+sides of it, and a `GROUP BY (park, data_source)` would show them twice without
+saying which rides went where:
+
 ```sql
--- check 1: who still writes rows for a "silent" ride?
-SELECT p.id, p.name, q.data_source, q.status,
-       count(*), count(DISTINCT q."attractionId")
-  FROM queue_data q
-  JOIN attractions a ON a.id = q."attractionId"
+-- check 1: does anything other than reconciliation still write this ride?
+WITH src AS (
+  SELECT q."attractionId",
+         bool_or(q.data_source <> 'system-reconciliation') AS still_reported
+    FROM queue_data q
+   WHERE q."attractionId" = ANY($1::uuid[])          -- the silent set
+     AND q.timestamp > now() - interval '3 days'
+   GROUP BY 1
+)
+SELECT p.id, p.name,
+       count(*) FILTER (WHERE NOT src.still_reported) AS really_silent,
+       count(*) FILTER (WHERE     src.still_reported) AS merely_closed
+  FROM src
+  JOIN attractions a ON a.id = src."attractionId"
   JOIN parks p ON p.id = a."parkId"
- WHERE q."attractionId" = ANY($1::uuid[])          -- the silent set
-   AND q.timestamp > now() - interval '3 days'
- GROUP BY 1, 2, 3, 4;
+ GROUP BY p.id, p.name ORDER BY 3 DESC;
 ```
 
 | group | what it is | parks · rides |
@@ -481,8 +508,8 @@ look exactly like group B's — only `system-reconciliation`, 1,190 rows in thre
 days — because their live data no longer arrives in `queue_data` at all. It
 arrives in `show_live_data`, under the same id. Only check 2 sees that.
 
-**Group C is the correction that matters**, because three of the six parks
-named in the 2026-08-15 table live there. Wet'n'Wild is in the southern winter,
+**Group C is the correction that matters**, because three of the seven parks
+the 2026-08-15 table names in its six rows live there. Wet'n'Wild is in the southern winter,
 Traumatica is Europa-Park's Halloween event and does not open until autumn, and
 Ocean Park's six are reported CLOSED by the wiki every few minutes. Nothing
 dropped; a 30-day "no OPERATING" cut simply cannot tell a lost ride from a shut
@@ -539,9 +566,10 @@ shape: the id we hold is the id upstream still publishes.
 
 What the two shapes have in common is subject matter. Fiesta Texas's 15 are the
 entire Fright Fest maze line-up, gone from the index when the season ended.
-Knott's nine are an arcade, a blacksmith, two museums, a schoolhouse and a gold
-panning trough — facilities, not rides, and Queue-Times dropped the same eight
-ids it once published (park 61 returns 46 rides today, none of them these).
+Knott's nine are two arcades, a blacksmith, a livery stable, two museums, a
+schoolhouse, Independence Hall and a gold panning trough — facilities, not
+rides, and Queue-Times dropped the same eight of them it once published (park
+61 returns 46 rides today, none of these among them).
 Hollywood's are limited-run walkthroughs. Only Europa-Park and Rulantica lost
 *operating rides*, which is why the sweep above found work to do there and
 would find much less anywhere else.
@@ -584,7 +612,8 @@ Queue-Times under the other.
 `ParkValidatorService.findDuplicates` requires a name similarity of at least
 0.85, and this pair scores **0.6923**: `calculateStringSimilarity` strips
 whitespace, so `Wet'n'Wild` against `Wet 'n' Wild` would be a perfect 1.0, and
-it is the three characters of ` Gold Coast` that drop it below every threshold.
+it is the nine characters of `GoldCoast` — eight bigrams the other name cannot
+match — that drop it below every threshold.
 Geography never gets a vote of its own — `geoProximity` only ever appears in a
 conjunction with a name score.
 
@@ -635,8 +664,10 @@ them together. A display name is not an identity either, in both directions:
 §5.5's two rows are one park under two names, so a name grouping reports it
 twice.
 
-**Widen the window past 120 days when chasing a specific drop** — §5.2a used
-270, which is as far back as `queue_data` retention reaches — and remember the
+**Widen the window past 120 days when chasing a specific drop.** A ride whose
+last OPERATING row falls outside the window has no `last_op` and vanishes from
+the result rather than showing up as silent; §5.2a used 270 days, which covers
+the whole of `queue_data` retention. And remember the
 count this returns is a symptom, not a finding. Two checks decide what it
 means, and both are needed: §5.2a's `data_source` split says whether any source
 still writes the rides, and `GET /v1/entity/{id}` says whether upstream still
