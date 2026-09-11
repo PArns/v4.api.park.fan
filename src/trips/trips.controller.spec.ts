@@ -26,14 +26,21 @@ describe("TripsController · DELETE", () => {
 
   beforeEach(async () => {
     remove = jest.fn().mockResolvedValue(true);
-    check = jest.fn().mockResolvedValue({ allowed: true, retryAfterSeconds: 0 });
+    check = jest
+      .fn()
+      .mockResolvedValue({ allowed: true, retryAfterSeconds: 0 });
 
     const moduleRef = await Test.createTestingModule({
       controllers: [TripsController],
       providers: [
         {
           provide: TripsService,
-          useValue: { create: jest.fn(), find: jest.fn(), update: jest.fn(), remove },
+          useValue: {
+            create: jest.fn(),
+            find: jest.fn(),
+            update: jest.fn(),
+            remove,
+          },
         },
         { provide: TripWriteRateLimitService, useValue: { check } },
       ],

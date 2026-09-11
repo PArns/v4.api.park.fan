@@ -28,13 +28,29 @@ authorisation:
 - A `PUT` to an id that does not exist is a **404**, not a create. Creating at a
   caller-chosen id would let an attacker pick their own ids and overwrite a trip
   by guessing one.
+- `DELETE /v1/trips/:id` removes it, by the same rule: whoever knows the id may.
+  **204** when the row goes, **404** when there is nothing behind the id, **429**
+  when the address is over the write limit.
+
+**Deleting exists because switching push off must not make a plan unreachable
+instead of gone.** The browser forgets the id at that moment; anybody who kept it
+— a log, a backup, an old device — could otherwise read and overwrite the plan
+for the rest of its 400 days, while its owner could not reach it at all.
+
+Deleting also clears the `tripId` on every push subscription pointing at the
+trip, in the same transaction, and **keeps those rows**: a subscription is the
+browser's, not the trip's, and the same row carries that browser's ride alerts
+and followed shows. It is exactly what `POST /v1/push/unsubscribe` with a
+`tripId` does for one endpoint, one level wider.
 
 **A UI that shows the link has to say this plainly.** It is a shareable secret,
 not a private document.
 
 An expired trip reads as absent (404), because whether the sweep has run yet is
 not the caller's business. Trips live 400 days from their last write and a daily
-job removes the rest.
+job removes the rest. That holds for `DELETE` too — an expired row answers 404
+and is left to the sweep, so there is one definition of what exists rather than
+one per verb.
 
 ## 2. What counts as a plan
 
@@ -58,7 +74,12 @@ Everything below that skeleton is passed through untouched.
 Writes are rate-limited per address — 20 creates and 600 updates an hour — by the
 module's own limiter rather than the global throttler, which skips our own
 frontend and would therefore have enforced the limit against everybody except the
-planner.
+planner. A `DELETE` counts against the **update** bucket rather than one of its
+own: it needs an id the caller already knew and it adds no row, and a third
+bucket would hand a script a fresh allowance for guessing ids. The count happens
+before the lookup on every verb, so a miss costs an attempt exactly as a hit
+does — otherwise enumeration would be free, since a miss is the only answer an
+enumeration ever gets.
 
 ## 3. Push: ask before offering the switch
 

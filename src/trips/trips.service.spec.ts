@@ -180,8 +180,16 @@ describe("TripsService", () => {
       const created = await service.create(plan());
       const other = await service.create(plan());
       subscriptions.push(
-        { endpoint: "https://push.example/a", tripId: created.id, topics: ["x"] },
-        { endpoint: "https://push.example/b", tripId: created.id, topics: ["y"] },
+        {
+          endpoint: "https://push.example/a",
+          tripId: created.id,
+          topics: ["x"],
+        },
+        {
+          endpoint: "https://push.example/b",
+          tripId: created.id,
+          topics: ["y"],
+        },
         { endpoint: "https://push.example/c", tripId: other.id, topics: ["z"] },
       );
 
