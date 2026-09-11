@@ -947,10 +947,11 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     //
     // It runs AFTER that one deliberately: both read the same `queue_data`
     // chunks, and overlapping them means decompressing each chunk twice at
-    // once. Its own window is 120 days rather than one, because an outage is an
-    // interval that can grow — a run that was open yesterday has to be re-read
-    // from its own beginning, and the scan start comes from the data for the
-    // same reason.
+    // once. Its own window is many days rather than one, because an outage is
+    // an interval that can grow — a run that was open yesterday has to be
+    // re-read from its own beginning, and the scan start comes from the data
+    // for the same reason. The cron enqueues no `windowDays`, so the window is
+    // the processor's `DEFAULT_WINDOW_DAYS` of **30**, not 120.
     const hasDowntimeCron = await this.hasRepeatableJob(
       this.downtimeQueue,
       "downtime-reconstruction-cron",

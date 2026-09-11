@@ -298,8 +298,10 @@ export class AdminController {
   @ApiQuery({
     name: "days",
     required: false,
-    description: "Window in days. Default 120, clamped to 1-400.",
-    example: 120,
+    description:
+      "Trailing window in days, counted back from now. Omitted, the job's own " +
+      "DEFAULT_WINDOW_DAYS of 30 applies — not 120. Clamped to 1-400.",
+    example: 30,
   })
   async rebuildDowntime(
     @Query("days") days?: string,
