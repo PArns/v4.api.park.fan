@@ -52,8 +52,20 @@ export class TripsService {
    */
   async find(id: string): Promise<Trip | null> {
     const trip = await this.tripRepository.findOne({ where: { id } });
+    return TripsService.live(trip, Date.now());
+  }
+
+  /**
+   * The one place a row becomes a trip that exists.
+   *
+   * `find` and `remove` both need it and `remove` has to ask inside its own
+   * transaction, so the rule is here rather than copied — two copies would be
+   * free to disagree about what "expired" means, on the same id, between two
+   * verbs of one route.
+   */
+  private static live(trip: Trip | null, nowMs: number): Trip | null {
     if (!trip) return null;
-    if (trip.expiresAt.getTime() <= Date.now()) return null;
+    if (trip.expiresAt.getTime() <= nowMs) return null;
     return trip;
   }
 
@@ -104,30 +116,67 @@ export class TripsService {
    * a plan nobody is told about, and a delete without the clear leaves
    * subscriptions the five-minute job walks forever for a trip that is gone.
    *
-   * An expired trip counts as absent and is left to `sweepExpired`, so `find`
-   * stays the only place that decides what exists.
+   * An expired trip counts as absent and is left to `sweepExpired`, which
+   * clears the same pointers — `live` is the only place that decides what
+   * exists, for both verbs.
+   *
+   * The lookup happens INSIDE the transaction and the DELETE's own `affected`
+   * is what answers, not the read: with the check outside, two deletes racing
+   * on one id would both see a trip and both answer 204 against a route that
+   * documents 404 for an id with nothing behind it.
    */
   async remove(id: string): Promise<boolean> {
-    const trip = await this.find(id);
-    if (!trip) return false;
+    return this.tripRepository.manager.transaction(async (manager) => {
+      const trip = TripsService.live(
+        await manager.findOne(Trip, { where: { id } }),
+        Date.now(),
+      );
+      if (!trip) return false;
 
-    await this.tripRepository.manager.transaction(async (manager) => {
+      const result = await manager.delete(Trip, id);
+      if (!result.affected) return false;
+
       await manager.update(
         PushSubscription,
         { tripId: id },
         { tripId: null, topics: [] },
       );
-      await manager.delete(Trip, id);
+      return true;
     });
-    return true;
   }
 
-  /** Rows past their expiry. Returns how many went. */
+  /**
+   * Rows past their expiry. Returns how many went.
+   *
+   * Clears the pointers at them first, for the reason `remove` does: a
+   * subscription left holding the id of a trip this just deleted is walked by
+   * the five-minute notification job for the life of the browser, and its
+   * `tripId IS NOT NULL` query cannot tell it from a live one.
+   *
+   * Both statements read the same instant and run in one transaction, so a row
+   * cannot expire between them and be deleted with its pointer left standing.
+   * Set-based rather than a list of ids: how many trips expire in a day is not
+   * a number this bounds.
+   */
   async sweepExpired(): Promise<number> {
-    const result = await this.tripRepository.delete({
-      expiresAt: LessThan(new Date()),
-    });
-    const removed = result.affected ?? 0;
+    const now = new Date();
+    const removed = await this.tripRepository.manager.transaction(
+      async (manager) => {
+        await manager
+          .createQueryBuilder()
+          .update(PushSubscription)
+          .set({ tripId: null, topics: [] })
+          .where(
+            `"tripId" IN (SELECT id FROM trips WHERE "expiresAt" < :now)`,
+            { now },
+          )
+          .execute();
+        const result = await manager.delete(Trip, {
+          expiresAt: LessThan(now),
+        });
+        return result.affected ?? 0;
+      },
+    );
     if (removed > 0) this.logger.log(`Swept ${removed} expired trip(s)`);
     return removed;
   }

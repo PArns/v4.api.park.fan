@@ -79,13 +79,18 @@ describe("TripsController · DELETE", () => {
     expect(check).toHaveBeenCalledWith("203.0.113.7", "update");
   });
 
-  it("answers 429 with a retry figure, and does not touch the trip", async () => {
+  it("answers 429 over the limit, and does not touch the trip", async () => {
     check.mockResolvedValue({ allowed: false, retryAfterSeconds: 1800 });
     await expect(controller.remove(ID, request())).rejects.toMatchObject({
       status: 429,
-      response: { retryAfterSeconds: 1800 },
     });
     expect(remove).not.toHaveBeenCalled();
+    // Deliberately NOT asserting `retryAfterSeconds` on the wire, though this
+    // route puts it in the exception body exactly as POST and PUT do:
+    // `HttpExceptionFilter` rebuilds every error response from `message` and
+    // `error` alone, so the figure never leaves the process and no
+    // `Retry-After` header is set either. Pinning it here would promise a
+    // client something it cannot read — see PAR-146.
   });
 
   it("spends an attempt even on an id that is not there", async () => {
