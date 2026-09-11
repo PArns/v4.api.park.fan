@@ -35,6 +35,23 @@ Counted against the **update** bucket, not a third one: an id the caller already
 had to know, no new row, and a separate bucket would be a fresh allowance for
 guessing ids.
 
+Three things around it moved with it, each one a way the new verb could have
+been undone:
+
+- **`update()` now takes the row before writing it.** `save()` INSERTs when the
+  row it loaded has since gone, so a `PUT` in flight while somebody deleted
+  their plan put it back — same id, fresh 400-day expiry, after the browser had
+  already dropped the id. Unreachable to its owner, readable by anyone who kept
+  it: the exact state the delete exists to prevent.
+- **`sweepExpired()` clears pointers too, and asks which no longer resolve**
+  rather than which trips it just deleted. Every sweep before this one deleted
+  trips and cleared nothing, so the question in that form also collects the
+  orphans already out there, without a migration.
+- **`trips` is locked before `push_subscriptions` in all three.** The sweep held
+  them in the opposite order to the delete, which is a deadlock Postgres
+  resolves by aborting one — a visitor's delete answering 500, or a night with
+  nothing swept.
+
 ### Fixed — `/plan/day`'s docs promised "every ride", and the 60-ride cap had never been measured
 
 Documentation only; no behaviour changed, and nothing needed to.

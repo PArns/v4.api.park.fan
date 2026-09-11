@@ -41,7 +41,16 @@ Deleting also clears the `tripId` on every push subscription pointing at the
 trip, in the same transaction, and **keeps those rows**: a subscription is the
 browser's, not the trip's, and the same row carries that browser's ride alerts
 and followed shows. It is exactly what `POST /v1/push/unsubscribe` with a
-`tripId` does for one endpoint, one level wider.
+`tripId` does for one endpoint, one level wider. The nightly sweep does the same
+for what it removes — it clears every pointer that no longer resolves, so a
+subscription is never left holding an id the notification job will chase for the
+life of the browser.
+
+Both writers take the row (`SELECT … FOR UPDATE`) before they touch it, and both
+take `trips` before `push_subscriptions`. The first is what stops a `PUT` in
+flight from putting a just-deleted plan back at the same id with a fresh expiry,
+after the browser has already dropped that id; the second is what stops the
+delete and the sweep from deadlocking on the pair.
 
 **A UI that shows the link has to say this plainly.** It is a shareable secret,
 not a private document.
