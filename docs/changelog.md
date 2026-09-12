@@ -11,7 +11,7 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 `pnpm-workspace.yaml` carried `glob: '>=11.0.0'`: unselected, so it applied to
 every consumer in the tree regardless of what they declared, and unbounded, so
 it would hand over glob 14, 15 and beyond sight-unseen. It is now written like
-the `minimatch`, `ajv` and `js-yaml` lines beside it:
+the `minimatch` and `ajv` lines beside it — selected and with an upper end:
 
 ```yaml
 glob@<11.0.0: '>=11.0.0 <14.0.0'

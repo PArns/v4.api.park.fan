@@ -38,34 +38,32 @@ overrides:
   path-to-regexp@>=8.0.0 <8.4.0: '>=8.4.0'
   formidable: '>=3.5.1'
   superagent: '>=9.0.2'
-  # glob is selected and bounded like the minimatch/ajv/js-yaml lines above,
-  # rather than applied to every consumer with no upper end. Measured on
-  # 2026-09-12: seven packages depend on glob and five of them ask for 13 on
-  # their own (@jest/reporters, jest-config, jest-runtime, test-exclude@8,
-  # @nestjs/cli) — the selector takes the override off those five entirely.
-  # Two still declare ^10 and are the whole reason the line exists:
-  # archiver-utils@5 (dev, testcontainers -> archiver) and typeorm@0.3.31,
-  # which resolves `entities` from a string glob via `glob.sync()` in
-  # DirectoryExportedClassesLoader — i.e. on the production boot path, not in
-  # a test run. Both land on the same 13.0.6 as before.
-  # The upper end is the point: an unbounded `>=11.0.0` handed TypeORM every
-  # future major sight-unseen, and no workflow in this repo runs a script that
-  # would notice (see PAR-96, where exactly that shape cost `pnpm test:cov`
-  # every instrumented file, silently). Raise the ceiling deliberately, after
-  # checking that `glob.sync()` still means what it means today.
-  # What the selector does NOT do, so nobody reads more safety into it than it
-  # has: pnpm matches a selector by *intersection*, not containment, so this
-  # line keeps fencing a consumer as long as its declared range overlaps
-  # `<11.0.0` at all — a widened `^10.5.0 || ^11.0.0` would still be caught.
-  # The line stops applying only once a consumer's range clears 11 entirely
-  # (`^11.0.0`, `^13.0.6`), and then it goes quiet with no error and no lockfile
-  # line. The `minimatch@>=10.0.0 <10.2.3` line above is the worked example:
-  # test-exclude@8 declares `^10.2.2`, which is no subset of that range, and it
-  # resolves to the pinned 10.2.3 while the rest of the tree is on 10.2.5.
-  # This matters soon: typeorm 1.x drops the glob dependency altogether, so the
-  # day this repo upgrades past 0.3.31, re-measure rather than assume. Whoever
-  # moves typeorm checks who is left under this line; today it would be
-  # archiver-utils alone, and archiver-utils is dev-only.
+  # glob is selected and bounded like the minimatch and ajv lines above, rather
+  # than applied to every consumer with no upper end. Measured 2026-09-12:
+  # seven packages depend on glob and five ask for 13 on their own
+  # (@jest/reporters, jest-config, jest-runtime, test-exclude@8, @nestjs/cli),
+  # so the selector takes the override off those five entirely. Two still
+  # declare ^10 and are the reason the line exists: archiver-utils@5 (dev,
+  # testcontainers -> archiver) and typeorm@0.3.31, which resolves `entities`
+  # from a string pattern via `glob.sync()` in DirectoryExportedClassesLoader —
+  # the production boot path, not a test run. Both land on 13.0.6 as before.
+  # The upper end is the point. An unbounded `>=11.0.0` handed TypeORM every
+  # future major sight-unseen, and no workflow in this repo runs a package.json
+  # script that would notice (see PAR-96, where exactly that shape cost
+  # `pnpm test:cov` every instrumented file, silently). Raising the ceiling is
+  # a deliberate act with a check attached: that `glob.sync()` still means what
+  # it means today.
+  # Selector semantics, because it is easy to read more fence into this than it
+  # has: pnpm matches by *intersection*, not containment, so the line keeps
+  # catching a consumer whose range merely overlaps `<11.0.0` — a widened
+  # `^10.5.0 || ^11.0.0` would still be caught. It stops applying once a range
+  # clears 11 entirely. The `minimatch@>=10.0.0 <10.2.3` line above is the
+  # worked example: test-exclude@8 declares `^10.2.2`, no subset of that range,
+  # and lands on the pinned 10.2.3 — while eslint, out of the line's reach,
+  # sits on 10.2.5.
+  # typeorm 1.x drops the glob dependency altogether, so whoever upgrades past
+  # 0.3.31 re-measures who is left under this line rather than assuming; today
+  # that would be archiver-utils alone, and archiver-utils is dev-only.
   glob@<11.0.0: '>=11.0.0 <14.0.0'
   # ...and test-exclude@6 was the one package in the tree that read glob as a
   # function: `promisify(require('glob'))` at index.js:5, which throws from
@@ -75,7 +73,7 @@ overrides:
   # class with the two import lines rewritten, and it asks for glob ^13.0.6 by
   # itself — so the glob selector above no longer matches it. It does still
   # take `minimatch@>=10.0.0 <10.2.3` above: it declares `^10.2.2`, which
-  # intersects that range, so it lands on the pinned 10.2.3 rather than 10.2.5.
+  # intersects that range, so it lands on the pinned 10.2.3.
   # The target is bounded, like the glob line above. Mind the selector if this
   # line is ever re-cut: the consumer is babel-plugin-istanbul@8.0.0 and it
   # declares `^7.0.1` (measured 2026-09-12), not the `^6.0.0` this comment was
