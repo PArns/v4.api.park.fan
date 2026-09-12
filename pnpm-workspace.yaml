@@ -38,7 +38,22 @@ overrides:
   path-to-regexp@>=8.0.0 <8.4.0: '>=8.4.0'
   formidable: '>=3.5.1'
   superagent: '>=9.0.2'
-  glob: '>=11.0.0'
+  # glob is selected and bounded like the minimatch/ajv/js-yaml lines above,
+  # rather than applied to every consumer with no upper end. Measured on
+  # 2026-09-12: seven packages depend on glob and five of them ask for 13 on
+  # their own (@jest/reporters, jest-config, jest-runtime, test-exclude@8,
+  # @nestjs/cli) — the selector takes the override off those five entirely.
+  # Two still declare ^10 and are the whole reason the line exists:
+  # archiver-utils@5 (dev, testcontainers -> archiver) and typeorm@0.3.31,
+  # which resolves `entities` from a string glob via `glob.sync()` in
+  # DirectoryExportedClassesLoader — i.e. on the production boot path, not in
+  # a test run. Both land on the same 13.0.6 as before.
+  # The upper end is the point: an unbounded `>=11.0.0` handed TypeORM every
+  # future major sight-unseen, and no workflow in this repo runs a script that
+  # would notice (see PAR-96, where exactly that shape cost `pnpm test:cov`
+  # every instrumented file, silently). Raise the ceiling deliberately, after
+  # checking that `glob.sync()` still means what it means today.
+  glob@<11.0.0: '>=11.0.0 <14.0.0'
   # ...and test-exclude@6 is the one package in the tree that still reads glob as
   # a function: `promisify(require('glob'))` at index.js:5, which throws from
   # glob v9 on. It is dev-only (babel-plugin-istanbul -> @jest/transform), so
@@ -46,7 +61,7 @@ overrides:
   # instrument and the report read `All files | 0 | 0 | 0 | 0`. v8 is the same
   # class with the two import lines rewritten, and it asks for glob ^13.0.6 and
   # minimatch ^10.2.2 by itself — the versions the lines above already force.
-  # The target is bounded, unlike the glob line: the consumer above declares
+  # The target is bounded, like the glob line above: the consumer here declares
   # `^6.0.0`, so an unbounded `>=8.0.0` would hand it a future major with no
   # semver fence — and with no CI running test:cov, a return to all-zeros would
   # be as quiet as this one was.
