@@ -115,12 +115,19 @@ reads it when **every** current queue row was written by reverse-reconciliation
 
 That row records "our data stopped arriving", and it was being served as "the
 operator closed this ride". On 2026-06-07 ThemeParks.wiki dropped 44
-Europa-Park attractions and 18 Rulantica ones from its live feed, all of them
-rides with no Queue-Times mapping to fall back on. Ten weeks later the park page
-still showed a Ball Pool, a London Bus and a Dwarf City as closed, in August.
-The same signature — one date, a whole cluster of rides — appears at Universal
-Studios Singapore, both Wet'n'Wild records, Busch Gardens Tampa and Ocean Park:
-roughly 140 attractions across ten parks.
+Europa-Park attractions and 18 Rulantica ones from its live feed. Ten weeks
+later the park page still showed a Ball Pool, a London Bus and a Dwarf City as
+closed, in August.
+
+The same signature — one date, a whole cluster of rides — shows up at a dozen
+more parks, and measuring it on 2026-09-11 cut it down (PAR-38): **125 rides
+across eleven parks are genuinely silent**, mostly the attractions of seasonal
+events that left the feed when the event ended. Three clusters that used to be
+counted here are not silent at all — both Wet'n'Wild records and Ocean Park are
+reported CLOSED by the feed every few minutes — Universal Studios Singapore's 17
+were recategorised upstream and still report, and Busch Gardens Tampa came back
+by itself after 65 days. "No Queue-Times mapping to fall back on" is not the
+tell either: 84 of the 204 rides in that cut carry one.
 
 For a client this means:
 

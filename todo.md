@@ -592,8 +592,14 @@ CLOSED on all three surfaces. What is **not** fixed is what the detector does
 with the same rows.
 
 - [ ] `detect-seasonal` reads `current_status = 'CLOSED'` and the OPERATING
-      history, both of which still describe the frozen feed. So the ~140
-      feed-dropped attractions keep being marked seasonal, and the months it
+      history, both of which still describe the frozen feed. So the
+      feed-dropped attractions keep being marked seasonal. **The population is
+      142, not the ~140 this used to say** (measured 2026-09-11, PAR-38 — the
+      figures are close by coincidence, not agreement): 125 genuinely silent
+      rides plus Universal Studios Singapore's 17, whose feed
+      moved to `show_live_data` and whose stale `attractions` rows carry the
+      same frozen CLOSED history until PAR-159 retires them. The rest of the
+      old ~140 were rides that were never silent at all. The months it
       derives are the observation-window artefact **at scale**: all 44
       Europa-Park rides carry the identical list `[1,2,3,4,5,6,12]`, which is
       simply "every month before the feed went silent". In August that reads as
@@ -610,18 +616,37 @@ with the same rows.
 
 ## Upstream: ThemeParks.wiki dropped whole clusters of attractions
 
-- [ ] Ten parks lost a block of attractions from the wiki's **live** feed on a
-      single day each — Europa-Park and Rulantica on 2026-06-07, Universal
-      Studios Singapore on 2026-04-25, both Wet'n'Wild records on 2026-06-29,
-      Busch Gardens Tampa 2026-06-13, Ocean Park 2026-06-30. The entities may
-      still exist; only the live rows stopped. Worth establishing whether they
-      were recategorised upstream (and can be re-matched), or genuinely dropped.
-      Every affected ride lacks a `queue_times_entity_id` — the ones with a
-      Queue-Times mapping kept working, which is both the tell and a hint at the
-      mitigation: broaden Queue-Times matching for these parks.
-- [ ] **"Wet'n'Wild" and "Wet 'n' Wild Gold Coast"** both show 13 silenced
-      attractions with the same date. That looks like a duplicate park pair for
-      the existing duplicate-records work.
+- [x] ~~Ten parks lost a block of attractions from the wiki's **live** feed on a
+      single day each~~ — **answered 2026-09-11 against production (PAR-38).**
+      The same query over a 270-day window returns **16 park rows (15 real
+      parks) and 204 rides**, and they split three ways; the classification, the two checks it takes to
+      tell them apart and the per-park verdicts are §5.2a of
+      `docs/architecture/attraction-status-and-seasonality.md`. In short:
+      **17** at Universal Studios Singapore were recategorised upstream
+      (`ATTRACTION` → `SHOW`, ids unchanged, live data still arriving — already
+      re-matched into `shows`, the stale `attractions` rows are what is left —
+      PAR-159),
+      **125** are genuinely silent — 106 of them have a wiki entity and it is
+      still intact upstream; the other 19 are Queue-Times-only ids, one of which
+      is its own defect (PAR-161) — and **62 were never silent at all** — the wiki or Queue-Times
+      keeps writing CLOSED for them and they are simply shut (Wet'n'Wild in the
+      southern winter, Traumatica until autumn, Ocean Park). Busch Gardens Tampa
+      recovered on its own on 2026-08-17 after 65 days.
+
+      Two claims in the old text were wrong and are worth not repeating:
+      "every affected ride lacks a `queue_times_entity_id`" (**84 of the 204
+      carry one**, and all nine at Busch Gardens Tampa carried one while they
+      were out), and the implied mitigation of broadening Queue-Times matching
+      — Queue-Times dropped the same ids the wiki did at Knott's, so there is
+      nothing to broaden onto.
+- [x] ~~**"Wet'n'Wild" and "Wet 'n' Wild Gold Coast"** both show 13 silenced
+      attractions with the same date~~ — **confirmed a duplicate pair on
+      2026-09-11**: identical coordinates to seven decimals, same city, same
+      `park_type`, 13 attractions each. `GET /v1/admin/duplicate-parks` does not
+      see it (`total: 0`): every branch of `findDuplicates` needs a name
+      similarity ≥ 0.85 and the pair scores 0.6923 on ` Gold Coast` alone.
+      Detector fix is PAR-160, the merge itself stays a separate decision —
+      §5.5 of `docs/architecture/attraction-status-and-seasonality.md`.
 - [x] **Europa-Park worked through, 2026-09-09** — all 45 of its silenced rides
       researched against the operator's own pages. Ten are free-flow (two of
       them written that day, audit rows `d98a7513-2799-42ae-8bf9-1a1d07d1fc54`
@@ -647,12 +672,26 @@ with the same rows.
       rules that out as evidence, and its absence from the list may equally mean
       it no longer stands, which would be `retired_at`. Needs a source either
       way; it reads `UNKNOWN` until then.
-- [ ] **The other parks have not been swept.** Europa-Park took one pass over 45
-      rides; the six others this item names — Rulantica (18), Universal Studios
-      Singapore (17), the two Wet'n'Wild records (13 + 13), Busch Gardens Tampa
-      (9) and Ocean Park (7) — are the same shape of work. Note the item says
-      **ten** parks and lists seven: three are unaccounted for and want finding
-      before anyone calls the backlog complete.
+- [x] ~~**The three unaccounted-for parks want finding.**~~ Found on 2026-09-11
+      (PAR-38): re-running the original 120-day cut returns eight parks, and the
+      three the 2026-08-15 table never listed are **Traumatica (7)**,
+      **Mid-America Parks (9)** and **Universal Studios Japan (6)**. Seven
+      listed plus these three is the "ten".
+- [ ] **The other parks have not been swept, and the list of them shrank on
+      2026-09-11** (PAR-38, §5.2a of
+      `docs/architecture/attraction-status-and-seasonality.md`). Five of the six
+      parks this item used to name need no sweep at all: Universal Studios
+      Singapore's 17 were recategorised to `SHOW` and still report, both
+      Wet'n'Wild rows and Ocean Park were never silent, and Busch Gardens Tampa
+      came back by itself on 2026-08-17.
+
+      That leaves **Rulantica (18)** from the original list, and the wider cut
+      adds **Mid-America Parks (3)** — between them the only silent rides that
+      are operating attractions rather than arcades, museums or out-of-season
+      mazes. Six Flags Fiesta Texas (15), Knott's Berry Farm (9) and Universal
+      Studios Hollywood (5) are silent too, but a Fright Fest maze out of season
+      and an arcade with no queue are not free-flow candidates and a sweep would
+      spend a day saying so.
 
 ## Free-flow attractions & seasonality (2026-08-15)
 
