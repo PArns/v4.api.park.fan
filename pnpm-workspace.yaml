@@ -53,6 +53,14 @@ overrides:
   # would notice (see PAR-96, where exactly that shape cost `pnpm test:cov`
   # every instrumented file, silently). Raise the ceiling deliberately, after
   # checking that `glob.sync()` still means what it means today.
+  # What the selector does NOT do, so nobody reads more safety into it than it
+  # has: it fences a consumer only while that consumer keeps declaring a sub-11
+  # range. If typeorm widened to `^10.5.0 || ^11.0.0`, the selector would stop
+  # matching silently — no error, no lockfile line. That is not hypothetical:
+  # typeorm 1.x drops the glob dependency altogether, so the day this repo
+  # upgrades past 0.3.31, re-measure rather than assume. Whoever moves typeorm
+  # checks who is left under this line; today it would be archiver-utils alone,
+  # and archiver-utils is dev-only.
   glob@<11.0.0: '>=11.0.0 <14.0.0'
   # ...and test-exclude@6 is the one package in the tree that still reads glob as
   # a function: `promisify(require('glob'))` at index.js:5, which throws from
@@ -60,11 +68,16 @@ overrides:
   # nothing noticed except `pnpm test:cov`, where every single file failed to
   # instrument and the report read `All files | 0 | 0 | 0 | 0`. v8 is the same
   # class with the two import lines rewritten, and it asks for glob ^13.0.6 and
-  # minimatch ^10.2.2 by itself — the versions the lines above already force.
-  # The target is bounded, like the glob line above: the consumer here declares
-  # `^6.0.0`, so an unbounded `>=8.0.0` would hand it a future major with no
-  # semver fence — and with no CI running test:cov, a return to all-zeros would
-  # be as quiet as this one was.
+  # minimatch ^10.2.2 by itself — so it needs neither of the lines above: the
+  # glob selector no longer matches it at all, and its minimatch resolves to
+  # 10.2.5 on its own, past that line's `<10.2.3` ceiling.
+  # The target is bounded, like the glob line above. Mind the selector if this
+  # line is ever re-cut: the consumer is babel-plugin-istanbul@8.0.0 and it
+  # declares `^7.0.1` (measured 2026-09-12) — selecting on a remembered
+  # `^6.0.0` would take the override off and return test:cov to all-zeros as
+  # quietly as it went the first time. An unbounded `>=8.0.0` would be the
+  # opposite mistake: a future major with no semver fence, and with no CI
+  # running test:cov, just as quiet.
   test-exclude@<8.0.0: '>=8.0.0 <9.0.0'
   inflight: npm:lru-cache@11.0.2
   uuid: '>=14.0.0'
