@@ -54,30 +54,38 @@ overrides:
   # every instrumented file, silently). Raise the ceiling deliberately, after
   # checking that `glob.sync()` still means what it means today.
   # What the selector does NOT do, so nobody reads more safety into it than it
-  # has: it fences a consumer only while that consumer keeps declaring a sub-11
-  # range. If typeorm widened to `^10.5.0 || ^11.0.0`, the selector would stop
-  # matching silently — no error, no lockfile line. That is not hypothetical:
-  # typeorm 1.x drops the glob dependency altogether, so the day this repo
-  # upgrades past 0.3.31, re-measure rather than assume. Whoever moves typeorm
-  # checks who is left under this line; today it would be archiver-utils alone,
-  # and archiver-utils is dev-only.
+  # has: pnpm matches a selector by *intersection*, not containment, so this
+  # line keeps fencing a consumer as long as its declared range overlaps
+  # `<11.0.0` at all — a widened `^10.5.0 || ^11.0.0` would still be caught.
+  # The line stops applying only once a consumer's range clears 11 entirely
+  # (`^11.0.0`, `^13.0.6`), and then it goes quiet with no error and no lockfile
+  # line. The `minimatch@>=10.0.0 <10.2.3` line above is the worked example:
+  # test-exclude@8 declares `^10.2.2`, which is no subset of that range, and it
+  # resolves to the pinned 10.2.3 while the rest of the tree is on 10.2.5.
+  # This matters soon: typeorm 1.x drops the glob dependency altogether, so the
+  # day this repo upgrades past 0.3.31, re-measure rather than assume. Whoever
+  # moves typeorm checks who is left under this line; today it would be
+  # archiver-utils alone, and archiver-utils is dev-only.
   glob@<11.0.0: '>=11.0.0 <14.0.0'
-  # ...and test-exclude@6 is the one package in the tree that still reads glob as
-  # a function: `promisify(require('glob'))` at index.js:5, which throws from
+  # ...and test-exclude@6 was the one package in the tree that read glob as a
+  # function: `promisify(require('glob'))` at index.js:5, which throws from
   # glob v9 on. It is dev-only (babel-plugin-istanbul -> @jest/transform), so
   # nothing noticed except `pnpm test:cov`, where every single file failed to
   # instrument and the report read `All files | 0 | 0 | 0 | 0`. v8 is the same
-  # class with the two import lines rewritten, and it asks for glob ^13.0.6 and
-  # minimatch ^10.2.2 by itself — so it needs neither of the lines above: the
-  # glob selector no longer matches it at all, and its minimatch resolves to
-  # 10.2.5 on its own, past that line's `<10.2.3` ceiling.
+  # class with the two import lines rewritten, and it asks for glob ^13.0.6 by
+  # itself — so the glob selector above no longer matches it. It does still
+  # take `minimatch@>=10.0.0 <10.2.3` above: it declares `^10.2.2`, which
+  # intersects that range, so it lands on the pinned 10.2.3 rather than 10.2.5.
   # The target is bounded, like the glob line above. Mind the selector if this
   # line is ever re-cut: the consumer is babel-plugin-istanbul@8.0.0 and it
-  # declares `^7.0.1` (measured 2026-09-12) — selecting on a remembered
-  # `^6.0.0` would take the override off and return test:cov to all-zeros as
-  # quietly as it went the first time. An unbounded `>=8.0.0` would be the
-  # opposite mistake: a future major with no semver fence, and with no CI
-  # running test:cov, just as quiet.
+  # declares `^7.0.1` (measured 2026-09-12), not the `^6.0.0` this comment was
+  # first written against. An unbounded `>=8.0.0` would be the opposite
+  # mistake: a future major with no semver fence, and with no CI running
+  # test:cov, just as quiet.
+  # Whether this line is still load-bearing at all is a separate question and
+  # deliberately not answered here (PAR-166): test-exclude@7.0.2 already reads
+  # `const { glob } = require('glob')`, so the crash this override was cut for
+  # may no longer exist below 8.
   test-exclude@<8.0.0: '>=8.0.0 <9.0.0'
   inflight: npm:lru-cache@11.0.2
   uuid: '>=14.0.0'
