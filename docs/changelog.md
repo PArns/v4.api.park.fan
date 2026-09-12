@@ -6,6 +6,34 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — the `glob` override is selected and bounded, so a future major cannot reach TypeORM's boot path
+
+`pnpm-workspace.yaml` carried `glob: '>=11.0.0'`: unselected, so it applied to
+every consumer in the tree regardless of what they declared, and unbounded, so
+it would hand over glob 14, 15 and beyond sight-unseen. It is now written like
+the `minimatch`, `ajv` and `js-yaml` lines beside it:
+
+```yaml
+glob@<11.0.0: '>=11.0.0 <14.0.0'
+```
+
+Measured on 2026-09-12, seven packages depend on `glob` and **five ask for 13
+on their own** — `@jest/reporters`, `jest-config`, `jest-runtime`,
+`test-exclude@8` (from the PAR-96 fix) and `@nestjs/cli`. The selector takes
+the override off those five entirely. Two still declare `^10` and are the whole
+reason the line exists: `archiver-utils@5` (dev-only, testcontainers →
+archiver) and **`typeorm@0.3.31`**, which resolves `entities` from the string
+pattern in `typeorm.config.ts` through `glob.sync()` in
+`DirectoryExportedClassesLoader` — the production boot path, not a test run.
+
+Nothing moves today: the lockfile diff is the override string and nothing else,
+and all seven still resolve to `glob@13.0.6`. The upper bound is the point. No
+workflow in this repo runs a `package.json` script (see PAR-96, where exactly
+this shape silently cost `test:cov` every instrumented file), so a breaking
+glob major would first be noticed as a container that does not come up. Raising
+the ceiling is now a deliberate act with a check attached: that `glob.sync()`
+still means what it means today.
+
 ### Fixed — a shared show slug no longer rolls the whole park merge back
 
 Both raw merge paths in `parks.service.ts` moved a losing park's shows and
