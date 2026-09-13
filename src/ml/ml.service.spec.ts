@@ -340,6 +340,35 @@ describe("MLService", () => {
       expect(preds[0].uncertaintyMinutes).toBeNull();
     });
 
+    it("treats a row written before the column existed as no band at all", async () => {
+      // The night between the deploy that adds `uncertainty_p95` and the next
+      // nightly rebuild: the cell is there, the band is NULL. It must read as
+      // "not known" — and it must NOT flow into the confidence term, where
+      // `null / wait` is 0 and would award the highest possible confidence to
+      // the one row that measured nothing.
+      mockForecastAccuracyService.getProfile.mockResolvedValue(
+        new Map([["quiet|d1", cell("quiet", "d1", 8.6, null as any)]]),
+      );
+      arrange([{ targetDate: plus(1), peak: 20 }]);
+
+      const preds = await service.getTftDailyPredictions(parkId, 60);
+
+      expect(preds[0].uncertaintyMinutes).toBeNull();
+      // 85 - 1*0.15 = 84.85, rounded to one decimal like every other answer.
+      expect(preds[0].confidence).toBe(84.9);
+    });
+
+    it("forwards a measured zero rather than dropping it", async () => {
+      mockForecastAccuracyService.getProfile.mockResolvedValue(
+        new Map([["quiet|d1", cell("quiet", "d1", 8.6, 0)]]),
+      );
+      arrange([{ targetDate: plus(1), peak: 20 }]);
+
+      const preds = await service.getTftDailyPredictions(parkId, 60);
+
+      expect(preds[0].uncertaintyMinutes).toBe(0);
+    });
+
     it("replaces the invented 0.7 with CatBoost's own 0-100 formula", async () => {
       mockForecastAccuracyService.getProfile.mockResolvedValue(
         new Map([["quiet|d1", cell("quiet", "d1", 8.6, 23.8)]]),

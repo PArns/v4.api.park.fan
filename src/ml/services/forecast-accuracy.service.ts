@@ -129,15 +129,19 @@ export class ForecastAccuracyService {
       sampleSize: Number(r.sample_size),
       mae: Math.round(Number(r.mae) * 10) / 10,
       meanActual: Math.round(Number(r.mean_actual) * 10) / 10,
-      // Never below the MAE: the 95th percentile of a distribution cannot sit
-      // under the mean of its own absolute values unless the cell is degenerate,
-      // and a band narrower than the typical miss would be a false promise. The
-      // clamp is a guard against that arithmetic impossibility, not a tuning
-      // knob — on production data it has never bound (the smallest measured
-      // ratio is 2.1x).
+      // Floored at zero, and at nothing else. The percentile is of a SIGNED
+      // residual, so a cell that systematically over-forecasts can produce a
+      // negative one — which does not mean "a narrower band" but "this cell
+      // essentially never runs long", and serving it as a width would be
+      // meaningless. It is deliberately NOT floored at the MAE: that would
+      // compare a signed percentile against a mean of absolute values and, for
+      // such a cell, publish the MAE as an upward band the data does not
+      // support. Never observed in production — the smallest measured value is
+      // 25.3 on `quiet|d1`, and the smallest p95/MAE ratio 2.1x — so this floor
+      // is a definition, not a correction.
       uncertaintyP95: Math.max(
         Math.round(Number(r.uncertainty_p95) * 10) / 10,
-        Math.round(Number(r.mae) * 10) / 10,
+        0,
       ),
       computedAt,
     }));

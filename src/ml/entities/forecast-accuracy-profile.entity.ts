@@ -112,9 +112,24 @@ export class ForecastAccuracyProfile {
    * of realised days against a nominal 95 %. The MAE-wide band, by comparison,
    * covers 67.8 % to 88.7 % — a "typical miss" and not a bound, exactly as
    * {@link mae} says of itself.
+   *
+   * NULLABLE, AND THE REASON IS THE DEPLOY AND NOT THE STATISTIC. `rebuild()`
+   * always writes it, so a freshly built row always has one. But this column is
+   * being added to a table that has held rows since PAR-17, and the schema comes
+   * from `synchronize` rather than a migration: `ALTER TABLE ... ADD COLUMN real
+   * NOT NULL` against a non-empty table is rejected outright by Postgres
+   * (`column "uncertainty_p95" of relation ... contains null values`, verified on
+   * a throwaway instance against the 18 rows production holds), and the API would
+   * not have finished booting. A `DEFAULT 0` would boot and be worse: it would
+   * publish a zero-wide band, which reads as certainty rather than as absence.
+   *
+   * So between the deploy and that night's rebuild the existing rows carry NULL,
+   * every caller treats that as "no cell" — the same path as a bucket that has
+   * no row at all — and `uncertaintyMinutes` stays absent for one night rather
+   * than becoming a number nobody measured.
    */
-  @Column({ name: "uncertainty_p95", type: "real" })
-  uncertaintyP95: number;
+  @Column({ name: "uncertainty_p95", type: "real", nullable: true })
+  uncertaintyP95: number | null;
 
   /** Mean realised wait in the bucket, so a reader can size the error. */
   @Column({ name: "mean_actual", type: "real" })

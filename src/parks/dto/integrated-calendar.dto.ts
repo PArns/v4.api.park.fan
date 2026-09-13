@@ -221,23 +221,34 @@ export class HeadlinerWaitForecast {
 
   @ApiProperty({
     description:
-      "Half-width of the uncertainty band in minutes, from the model's own " +
-      "top quantile (alpha=0.95) minus its median — the same quantity, off the " +
-      "same live prediction, as `rides[].uncertaintyMinutes` on `/plan/day`. " +
-      "The two can still disagree about whether a band EXISTS for today or " +
-      "tomorrow: `/plan/day` also falls back to the widest of a ride's hourly " +
-      "bands, which reach 24 hours out, while this field reads the day-level " +
-      "prediction alone. " +
+      "How many minutes longer than `waitTime` the wait can plausibly run — an " +
+      "upper half-width, off the same live prediction as " +
+      "`rides[].uncertaintyMinutes` on `/plan/day`. The two can still disagree " +
+      "about whether a band EXISTS for today or tomorrow: `/plan/day` also " +
+      "falls back to the widest of a ride's hourly bands, which reach 24 hours " +
+      "out, while this field reads the day-level prediction alone. " +
+      "WHICH STATISTIC IT IS DEPENDS ON WHICH MODEL ANSWERED, AND THEY DO NOT " +
+      "AGREE. Days the TFT serves (roughly 1-60) carry the MEASURED 95th " +
+      "percentile of that predicted-band x lead-bucket cell's realised " +
+      "residuals (PAR-111), covering 92-98% of days. CatBoost, which answers " +
+      "beyond that and wherever TFT has no row, reports its own top trained " +
+      "quantile (alpha=0.95) minus its median — measured, that covers 53-57%, " +
+      "so it is roughly a third as wide for the same real uncertainty. The " +
+      "figure therefore STEPS DOWN around day 60 even though the near term is " +
+      "the better-forecast one: do not compare a band on one side of that seam " +
+      "against one on the other, and do not read the narrower one as the more " +
+      "certain day. See docs/ml/quantile-serving-and-calibration.md. " +
       "Deliberately not rounded to 5: a band is a difference, not a posted " +
       "wait time. Do not compute an interval off `waitTime` with it either — " +
       "that number is rounded to 5 and floored at 10 while the band is " +
       "measured against the raw median, so on a very quiet ride the " +
       "subtraction goes negative. " +
-      "ABSENT where the model reports no spread — which is NOT a band of " +
-      "width zero and must not be drawn as one. That is the ordinary case " +
-      "near today rather than an edge: days 1-60 are usually answered by the " +
-      "TFT, whose `tft_forecasts` rows carry no spread at all, and CatBoost " +
-      "(which has one) fills in only where TFT does not reach. A literal `0` " +
+      "ABSENT means NOT KNOWN — which is NOT a band of width zero and must " +
+      "not be drawn as one. It is now the exception rather than the ordinary " +
+      "case near today: until PAR-111 the TFT days carried no band at all, " +
+      "because `tft_forecasts` stores a point and no spread; they are absent " +
+      "now only where the measured grid has no cell for that distance, or for " +
+      "the one night between a deploy and the nightly rebuild. A literal `0` " +
       "is different again and does travel (a spread that rounded to under a " +
       "minute), so test `!= null` and never truthiness. Absent means null " +
       "here or a stripped key on the wire — `ExcludeNullInterceptor` removes " +

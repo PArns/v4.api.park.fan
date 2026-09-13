@@ -949,11 +949,12 @@ export class MLService {
           predictedWaitTime,
           cell?.uncertaintyP95,
         ),
-        // Absent, not zero, where the grid has no cell for this distance: a
-        // zero-wide band draws as a confident hairline, and `?? null` rather
-        // than `|| null` is what keeps a genuine 0 (see the calendar's
-        // buildHeadlinerForecasts docblock).
-        uncertaintyMinutes: cell ? Math.round(cell.uncertaintyP95) : null,
+        // Absent, not zero, where the grid has no cell for this distance OR
+        // holds one that predates the column (the night between the deploy and
+        // the next rebuild): a zero-wide band draws as a confident hairline.
+        // `!= null` covers both, and keeps a genuine measured 0.
+        uncertaintyMinutes:
+          cell?.uncertaintyP95 != null ? Math.round(cell.uncertaintyP95) : null,
         crowdLevel: "moderate" as const, // placeholder — consumers recompute from predictedWaitTime
         baseline: 0,
         modelVersion: "tft",
@@ -1003,10 +1004,14 @@ export class MLService {
   private static dailyConfidence(
     leadDays: number,
     predictedWaitTime: number,
-    band: number | undefined,
+    band: number | null | undefined,
   ): number {
     const timeConfidence = Math.max(30, 85 - Math.max(0, leadDays) * 0.15);
-    if (band === undefined || predictedWaitTime <= 0) {
+    // `== null` and not `=== undefined`: a row written before `uncertainty_p95`
+    // existed carries NULL, and `null / wait` is 0, which would hand that row a
+    // model term of 100 — the highest possible confidence, on the one row that
+    // has measured nothing.
+    if (band == null || predictedWaitTime <= 0) {
       return Math.round(timeConfidence * 10) / 10;
     }
     const relative = Math.min(band / Math.max(predictedWaitTime, 1), 1);

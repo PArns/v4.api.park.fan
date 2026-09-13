@@ -1250,13 +1250,20 @@ export class CalendarService {
    * null-valued keys outside `/v1/admin/*` and `?debug=true`, so a client sees
    * the key or nothing and `value != null` covers both.
    *
-   * No band is the ordinary case near today, not an edge — but the reason is
-   * which model answered, not the date. `getServingDailyPredictions` merges
-   * TFT over CatBoost for days 1-60 and `tft_forecasts` holds a
-   * `predicted_peak` and no spread, so a TFT-answered day has none; CatBoost
-   * brings its band wherever TFT does not reach (a ride it has no row for, the
-   * 3-day staleness guard, an empty result), inside those 60 days too. A
-   * client must read a missing band as "not known", never as "narrow".
+   * WHICH MODEL ANSWERED STILL DECIDES WHAT THE BAND IS, but no longer whether
+   * there is one. `getServingDailyPredictions` merges TFT over CatBoost for
+   * days 1-60, and `tft_forecasts` holds a `predicted_peak` and no spread — so
+   * until PAR-111 a TFT-answered day had no band at all, which was the ordinary
+   * case near today. Those days now carry the MEASURED 95th percentile of their
+   * cell's residuals (`ForecastAccuracyProfile.uncertaintyP95`), covering
+   * 92-98% of realised days. CatBoost still brings its own trained spread
+   * wherever TFT does not reach (a ride it has no row for, the 3-day staleness
+   * guard, an empty result, any day past 60), and that spread measures 53-57%
+   * coverage — roughly a third the width for the same real uncertainty. The
+   * calendar therefore steps down around day 60, and the step is two statistics
+   * meeting rather than a change in certainty (PAR-167). A client must read a
+   * missing band as "not known", never as "narrow", and must not compare two
+   * bands across that seam.
    *
    * Where the two endpoints CAN disagree is a ride today or tomorrow:
    * `/plan/day` also falls back to the widest of that ride's hourly bands,
