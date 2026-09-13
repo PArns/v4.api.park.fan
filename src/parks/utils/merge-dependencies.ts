@@ -659,8 +659,14 @@ async function applyWinnerAuthoritative(
   }
 
   // Before the DELETE, not after: this is the only trace the row leaves.
+  //
+  // "the row already on" rather than "its own row": where a merge folds several
+  // losers into one winner, the row standing there may be the first loser's,
+  // inherited a moment ago. Naming it as the survivor's would tell a reader the
+  // survivor had a curation of its own, which is the one thing they would check
+  // before deciding whether the dropped one is worth typing back in.
   logger.warn(
-    `🗑️  ${dep.table}: keeping ${winnerId}'s own row and dropping ${loserId}'s — ` +
+    `🗑️  ${dep.table}: keeping the row already on ${winnerId} and dropping ${loserId}'s — ` +
       losing.map((row) => JSON.stringify(row)).join(" | "),
   );
   await manager.query(`DELETE FROM ${dep.table} WHERE "${dep.column}" = $1`, [
