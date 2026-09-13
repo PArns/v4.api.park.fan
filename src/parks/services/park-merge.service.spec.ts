@@ -160,11 +160,22 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
   const MOVING_SHOW = "5150c0de-0000-0000-0000-00000000000c";
   const WINNER_RESTAURANT = "4e57c0de-0000-0000-0000-00000000000a";
   const LOSER_RESTAURANT = "4e57c0de-0000-0000-0000-00000000000b";
+  const WINNER_RIDE = "21de0000-0000-0000-0000-00000000000a";
+  const LOSER_RIDE = "21de0000-0000-0000-0000-00000000000b";
 
   type Recorded = { sql: string; params?: unknown[] };
   const calls: Recorded[] = [];
 
+  /** Off by default: most cases here are about a merge with no ride in it. */
+  let ridesCollide = false;
+
   const rowsFor = (table: string, parkId: string) => {
+    if (table === "attractions") {
+      if (!ridesCollide) return [];
+      return parkId === WINNER_PARK
+        ? [{ id: WINNER_RIDE, slug: "baron-1898", name: "Baron 1898" }]
+        : [{ id: LOSER_RIDE, slug: "baron-1898", name: "Baron 1898" }];
+    }
     if (table === "shows") {
       return parkId === WINNER_PARK
         ? [{ id: WINNER_SHOW, slug: "raveleijn", name: "Raveleijn" }]
@@ -253,6 +264,7 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     calls.length = 0;
+    ridesCollide = false;
 
     manager.findOne.mockImplementation(
       async (_e: unknown, opts: any) =>
@@ -324,34 +336,63 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
     expect(result.migratedRestaurants).toBe(1);
   });
 
-  it("lifts the TimescaleDB decompression cap around the live-data moves", async () => {
-    // `show_live_data` and `restaurant_live_data` are hypertables, and the
-    // docstring of `applyMergeDependencies` puts the cap on its caller.
+  it("lifts the TimescaleDB decompression cap once, before anything moves, and never re-caps it", async () => {
+    // `queue_data`, `show_live_data`, `restaurant_live_data` and
+    // `park_occupancy` are all hypertables, and the docstring of
+    // `applyMergeDependencies` puts the cap on its caller. The counter is per
+    // transaction, so a reset to 100000 after one of those moves re-caps a
+    // transaction that has already spent the budget, and the next hypertable
+    // — `park_occupancy` in step 4, which runs whether or not anything
+    // collided — aborts the whole merge.
     await service.mergeParks(WINNER_PARK, LOSER_PARK);
 
     const lifted = calls
       .map((c, i) => ({ i, sql: c.sql }))
       .filter(({ sql }) =>
-        /max_tuples_decompressed_per_dml_transaction = 0/.test(sql),
-      )
-      .map(({ i }) => i);
+        /max_tuples_decompressed_per_dml_transaction = 0\b/.test(sql),
+      );
+    expect(lifted).toHaveLength(1);
+    expect(lifted[0].sql).toMatch(/^\s*SET LOCAL\b/);
 
     const liveDataMove = calls.findIndex(
       (c) =>
         /show_live_data/.test(c.sql) && (c.params ?? []).includes(LOSER_SHOW),
     );
     expect(liveDataMove).toBeGreaterThan(-1);
-    expect(lifted.some((i) => i < liveDataMove)).toBe(true);
+    expect(lifted[0].i).toBeLessThan(liveDataMove);
+
+    expect(
+      calls.filter((c) =>
+        /max_tuples_decompressed_per_dml_transaction = \d/.test(c.sql),
+      ),
+    ).toHaveLength(1);
   });
 
-  it("stamps last_merged_at for a colliding ride only — shows and restaurants have no such column", async () => {
+  it("does not stamp last_merged_at when no ride collided — it is a column on attractions", async () => {
     await service.mergeParks(WINNER_PARK, LOSER_PARK);
 
-    // No attraction collided in this fixture (the SELECT answers []), so the
-    // stamp must not have been issued at all.
     expect(
       calls.filter((c) => /UPDATE attractions SET last_merged_at/i.test(c.sql)),
     ).toHaveLength(0);
-    expect(ATTRACTION_DEPENDENCIES.length).toBeGreaterThan(0);
+  });
+
+  it("still stamps last_merged_at when a ride does collide", async () => {
+    // The statement moved into a nested branch when the three entity types
+    // were folded into one path; without this the show fixture above would be
+    // just as green with the stamp dropped altogether.
+    ridesCollide = true;
+
+    await service.mergeParks(WINNER_PARK, LOSER_PARK);
+
+    const stamp = calls.find((c) =>
+      /UPDATE attractions SET last_merged_at/i.test(c.sql),
+    );
+    expect(stamp?.params).toEqual([WINNER_RIDE]);
+
+    // And the ride's own dependency list ran, on the same path.
+    const touched = tablesTouched(LOSER_RIDE);
+    for (const dep of ATTRACTION_DEPENDENCIES) {
+      expect(touched).toContain(dep.table);
+    }
   });
 });

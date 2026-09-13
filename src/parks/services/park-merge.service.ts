@@ -104,6 +104,27 @@ export class ParkMergeService {
         result.winnerName = winner.name;
         result.loserName = loser.name;
 
+        // 0. Lift the TimescaleDB decompression cap for the whole transaction.
+        //
+        // Four hypertables move below — `queue_data` per colliding ride,
+        // `show_live_data` and `restaurant_live_data` per colliding show or
+        // restaurant, and `park_occupancy` in step 4 — and a merge moves far
+        // more than the 100000 compressed tuples one transaction may
+        // decompress by default.
+        //
+        // Once, here, rather than around each collision: the counter is
+        // per-transaction, so a per-collision reset to 100000 re-caps a
+        // transaction that has already spent the budget and aborts the merge
+        // at the next hypertable — the park step runs whether or not anything
+        // collided, so it would be the one to die. `SET LOCAL` for the same
+        // reason `parks.service.ts` uses it: it ends with the transaction, so
+        // there is no reset statement to leak a hard-coded 100000 onto a
+        // pooled connection, and none to answer an already-aborted
+        // transaction with 25P02 and bury the error that caused it.
+        await manager.query(
+          "SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
+        );
+
         // 1. Consolidate Park-Level Metadata & IDs
         result.skippedSourceIds = await this.consolidateEntityIds(
           manager,
@@ -455,14 +476,11 @@ export class ParkMergeService {
       throw new Error(msg);
     }
 
-    // Temporarily lift decompression limit for TimescaleDB. All three types
-    // move a hypertable: `queue_data` for an attraction, `show_live_data`
-    // and `restaurant_live_data` for the other two, and the docstring of
-    // `applyMergeDependencies` puts the cap on its caller.
-    await manager.query(
-      "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
-    );
-
+    // All three types move a hypertable here — `queue_data` for an
+    // attraction, `show_live_data` and `restaurant_live_data` for the other
+    // two — and the docstring of `applyMergeDependencies` puts the
+    // decompression cap on its caller. `mergeParks` lifts it once for the
+    // whole transaction (step 0).
     await applyMergeDependencies(manager, dependencies, winnerId, loserId);
 
     if (type === "attractions") {
@@ -485,10 +503,6 @@ export class ParkMergeService {
         [winnerId],
       );
     }
-
-    await manager.query(
-      "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 100000",
-    );
   }
 
   /**
