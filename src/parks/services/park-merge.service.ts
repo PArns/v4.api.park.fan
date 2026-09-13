@@ -11,7 +11,10 @@ import { captureParkPath, samePath } from "./park-rename.service";
 import {
   ATTRACTION_DEPENDENCIES,
   PARK_DEPENDENCIES,
+  RESTAURANT_DEPENDENCIES,
+  SHOW_DEPENDENCIES,
   applyMergeDependencies,
+  type MergeDependency,
 } from "../utils/merge-dependencies";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -86,6 +89,20 @@ export class ParkMergeService {
       errors: [],
     };
 
+    if (winnerId === loserId) {
+      // A park cannot be merged into itself, and the merge does not notice on
+      // its own: every entity matches itself in `migrateEntities`, so the park
+      // consolidates against its own rows and then deletes them. The pair
+      // comes straight out of the admin endpoint's request body
+      // (`park1Id`/`park2Id` → `determineMergeWinner`, which compares the two
+      // parks without asking whether they are one), so the guard belongs here
+      // rather than at one of the two call sites.
+      const msg = `Refusing to merge park ${winnerId} into itself`;
+      this.logger.error(`❌ ${msg}`);
+      result.errors.push(msg);
+      throw new Error(msg);
+    }
+
     try {
       await this.dataSource.transaction(async (manager) => {
         // Load both parks
@@ -100,6 +117,27 @@ export class ParkMergeService {
 
         result.winnerName = winner.name;
         result.loserName = loser.name;
+
+        // 0. Lift the TimescaleDB decompression cap for the whole transaction.
+        //
+        // Four hypertables move below — `queue_data` per colliding ride,
+        // `show_live_data` and `restaurant_live_data` per colliding show or
+        // restaurant, and `park_occupancy` in step 4 — and a merge moves far
+        // more than the 100000 compressed tuples one transaction may
+        // decompress by default.
+        //
+        // Once, here, rather than around each collision: the counter is
+        // per-transaction, so a per-collision reset to 100000 re-caps a
+        // transaction that has already spent the budget and aborts the merge
+        // at the next hypertable — the park step runs whether or not anything
+        // collided, so it would be the one to die. `SET LOCAL` for the same
+        // reason `parks.service.ts` uses it: it ends with the transaction, so
+        // there is no reset statement to leak a hard-coded 100000 onto a
+        // pooled connection, and none to answer an already-aborted
+        // transaction with 25P02 and bury the error that caused it.
+        await manager.query(
+          "SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
+        );
 
         // 1. Consolidate Park-Level Metadata & IDs
         result.skippedSourceIds = await this.consolidateEntityIds(
@@ -391,7 +429,44 @@ export class ParkMergeService {
   }
 
   /**
+   * The dependency list each entity type of `migrateEntities` hands to
+   * `applyMergeDependencies` before its losing row is deleted.
+   *
+   * One lookup rather than three branches, and the same three lists the two
+   * raw paths in `parks.service.ts` use — a second, differing answer to "what
+   * happens to a losing show's dependent rows" would be worse than the open
+   * question this replaces (PAR-104, PAR-150).
+   */
+  private static readonly ENTITY_DEPENDENCIES: Record<
+    string,
+    MergeDependency[]
+  > = {
+    attractions: ATTRACTION_DEPENDENCIES,
+    shows: SHOW_DEPENDENCIES,
+    restaurants: RESTAURANT_DEPENDENCIES,
+  };
+
+  /**
    * Moves all dependent data (queue_data, mappings, etc.) from one entity to another.
+   *
+   * Every entity type goes through the same step, because the collision is
+   * resolved the same way for all three: `migrateEntities` deletes the losing
+   * row right after this returns, and everything hanging off it either
+   * cascades with it or is left pointing at nothing. For a show that is its
+   * whole showtime history (`show_live_data`), a visitor's push reminder
+   * (`show_follows`) and the projected weekday programme
+   * (`show_schedule_patterns`); for a restaurant, `restaurant_live_data`. This
+   * used to end on "Note: Add show/restaurant specific consolidation if
+   * needed", so those four tables were destroyed inside a transaction that
+   * then reported success — on the one merge path a person triggers and the
+   * repair service runs unattended.
+   *
+   * The same step, not yet the same coverage: `ride_alerts` is the attraction
+   * twin of `show_follows`, with the same CASCADE and the same "a stranger
+   * who would simply never hear from us again", and it is still off
+   * `ATTRACTION_DEPENDENCIES` (PAR-149). A colliding show keeps its follower
+   * here while a colliding ride loses its alerts — putting that list right is
+   * what closes the gap, and this path picks it up the moment it does.
    */
   private async consolidateEntityData(
     manager: any,
@@ -410,38 +485,45 @@ export class ParkMergeService {
       [winnerId, loserId],
     );
 
+    const dependencies: MergeDependency[] | undefined =
+      ParkMergeService.ENTITY_DEPENDENCIES[type];
+    if (!dependencies) {
+      // A fourth child entity would otherwise get the mapping move above and
+      // nothing else, then be deleted — which is exactly the silence this
+      // method is being fixed for. Inside the merge transaction, so it rolls
+      // back rather than reporting success.
+      const msg = `No merge dependency list declared for entity type "${type}" — add one to ENTITY_DEPENDENCIES`;
+      this.logger.error(msg);
+      throw new Error(msg);
+    }
+
+    // All three types move a hypertable here — `queue_data` for an
+    // attraction, `show_live_data` and `restaurant_live_data` for the other
+    // two — and the docstring of `applyMergeDependencies` puts the
+    // decompression cap on its caller. `mergeParks` lifts it once for the
+    // whole transaction (step 0).
+    await applyMergeDependencies(manager, dependencies, winnerId, loserId);
+
     if (type === "attractions") {
-      // Temporarily lift decompression limit for TimescaleDB
-      await manager.query(
-        "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
-      );
-
-      await applyMergeDependencies(
-        manager,
-        ATTRACTION_DEPENDENCIES,
-        winnerId,
-        loserId,
-      );
-
       // Stamp the survivor, exactly as `AttractionMergeService.merge` does.
       //
       // This is the path the column was written for. A park merge is where
-      // colliding rides actually happen — the USH consolidation had 29 of them
-      // — and `applyMergeDependencies` reparents `queue_data` with no
+      // colliding rides actually happen — the USH consolidation had 29 of
+      // them — and `applyMergeDependencies` reparents `queue_data` with no
       // `conflictColumns`, so the survivor now carries two interleaved series
       // that flap between OPERATING and DOWN at the same instant. Without the
       // stamp the next nightly reconstruction reads that seam as genuine
       // outages, and `recently_merged` never fires.
+      //
+      // Attractions only, and not because a show's series is any cleaner:
+      // `last_merged_at` is a column on `attractions`, read by the downtime
+      // reconstruction, and neither shows nor restaurants have one or a
+      // reconstruction to skip.
       await manager.query(
         `UPDATE attractions SET last_merged_at = NOW() WHERE id = $1`,
         [winnerId],
       );
-
-      await manager.query(
-        "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 100000",
-      );
     }
-    // Note: Add show/restaurant specific consolidation if needed
   }
 
   /**

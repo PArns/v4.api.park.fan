@@ -182,12 +182,12 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
  *   - `show_schedule_patterns` no FK at all → the rows survive pointing at a
  *                            show that is gone.
  *
- * The two raw merge paths in `parks.service.ts` apply this list.
- * `ParkMergeService.consolidateEntityData` does not — it applies a dependency
- * list to attractions only, and ends on "Note: Add show/restaurant specific
- * consolidation if needed" (PAR-150). Whatever answers that comment has to be
- * this list rather than a second one: two different answers to one question are
- * worse than the open question.
+ * All three merge paths apply this list: the two raw ones in
+ * `parks.service.ts`, and `ParkMergeService.consolidateEntityData`, which used
+ * to apply a dependency list to attractions only and end on "Note: Add
+ * show/restaurant specific consolidation if needed" (PAR-150). It answers that
+ * comment with this list rather than a second one: two different answers to one
+ * question are worse than the open question.
  */
 export const SHOW_DEPENDENCIES: MergeDependency[] = [
   {
