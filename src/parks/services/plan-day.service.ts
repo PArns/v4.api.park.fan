@@ -292,6 +292,7 @@ export class PlanDayService {
       profile,
       hoursSource === "schedule" ? parkOpensAt : null,
       status,
+      day?.hours?.openingTime ?? null,
     );
     base.tier = built.tier;
     base.rides = built.rides;
@@ -489,6 +490,11 @@ export class PlanDayService {
     parkOpensAt: string | null,
     /** The day's park status, for the live-reading exception below. */
     parkStatus: string,
+    /**
+     * The day's published opening, when the operator stated one. It bounds the
+     * live reading in {@link runningNow} and nothing else.
+     */
+    publishedOpening: Date | string | null,
   ): Promise<{
     tier: PlanDayTier;
     rides: PlanDayRideDto[];
@@ -569,7 +575,13 @@ export class PlanDayService {
               hours: new Map<string, Map<number, number>>(),
               bands: new Map<string, number>(),
             }),
-        this.runningNow(park, parkStatus, dateStr, leadDays, seasonOnly),
+        this.runningNow(
+          park,
+          parkStatus,
+          publishedOpening,
+          leadDays,
+          seasonOnly,
+        ),
       ]);
 
     for (const id of runningNow) blocked.delete(id);
@@ -1138,16 +1150,26 @@ export class PlanDayService {
    * cannot be read out of it: a feed that only ever writes CLOSED (Hansa-Park's
    * 82 rides) and reverse-reconciliation's CLOSED stamps both fail the test.
    *
-   * **How far back a reading still counts.** Park-local midnight of the day
-   * being planned, and never less than {@link LIVE_STATUS_FLOOR_HOURS} — the
-   * shape `getValidDataCutoff` uses on the park page, where today's opening is a
-   * FLOOR under how much history is kept rather than a ceiling over it. Midnight
-   * stands in for the opening because no schedule is loaded here, and it is
-   * never later than one. The floor is what covers a park that runs past
-   * midnight: at 00:30 the park-local day is half an hour old, and the ride's
-   * last word is from 23:30 on the other side of it. A flat window instead — the
-   * 48 hours this first carried — rescues a ride off yesterday evening's row,
-   * which is a claim about the wrong day and one the park page would not make.
+   * **How far back a reading still counts.** The day's own published opening,
+   * and never less than {@link LIVE_STATUS_FLOOR_HOURS} — `getValidDataCutoff`'s
+   * rule on the park page, where the opening is a FLOOR under how much history
+   * is kept rather than a ceiling over it. The floor is what makes the opening
+   * safe to use: a queue row is written on change plus an hourly heartbeat, so
+   * the current reading for a ride that has not moved predates the gates, and a
+   * park that opened twenty minutes ago would otherwise have almost no window.
+   * Where the operator published no opening, the six hours are the whole window.
+   *
+   * Neither of the two shapes this passed through would do. A flat interval —
+   * the 48 hours it first carried — rescues a ride off yesterday evening's row.
+   * Park-local midnight, which stood here while the docs and the spec already
+   * said otherwise, rescues one off **last night's session on a park that runs
+   * past midnight**: La Ronde's day ends at 02:00, so a 01:30 row sits after the
+   * planned day's midnight and before its opening, and midnight lets it through.
+   * Both are claims about an operating day that is not the one being planned.
+   *
+   * The opening is in hand from the day already loaded, which is why the cutoff
+   * is computed here and passed as a parameter rather than derived in SQL from
+   * the date and the timezone.
    *
    * A failure costs the exception, not the day: without it the ride stays out,
    * which is where it was before this method existed.
@@ -1155,13 +1177,27 @@ export class PlanDayService {
   private async runningNow(
     park: Park,
     parkStatus: string,
-    dateStr: string,
+    /** The day's published opening, when the operator stated one. */
+    openingTime: Date | string | null | undefined,
     leadDays: number,
     candidateIds: string[],
   ): Promise<Set<string>> {
     const out = new Set<string>();
     if (leadDays !== 0 || parkStatus === "CLOSED") return out;
     if (candidateIds.length === 0) return out;
+
+    const floor = new Date(
+      Date.now() - PlanDayService.LIVE_STATUS_FLOOR_HOURS * 60 * 60 * 1000,
+    );
+    const opening = openingTime
+      ? openingTime instanceof Date
+        ? openingTime
+        : new Date(openingTime)
+      : null;
+    const since =
+      opening && !Number.isNaN(opening.getTime()) && opening < floor
+        ? opening
+        : floor;
 
     try {
       const rows: Array<{ attractionId: string }> =
@@ -1170,13 +1206,11 @@ export class PlanDayService {
                   qd."attractionId" AS "attractionId", qd.status AS status
              FROM queue_data qd
             WHERE qd."attractionId" = ANY($1::uuid[])
-              AND qd.timestamp >= LEAST(
-                    ($3::date::timestamp AT TIME ZONE $2),
-                    NOW() - INTERVAL '${PlanDayService.LIVE_STATUS_FLOOR_HOURS} hours')
+              AND qd.timestamp >= $2
             ORDER BY qd."attractionId",
                      CASE WHEN qd."queueType" = 'STANDBY' THEN 0 ELSE 1 END,
                      qd.timestamp DESC`,
-          [candidateIds, park.timezone, dateStr],
+          [candidateIds, since],
         );
       for (const row of rows as Array<{ attractionId: string; status: string }>)
         if (row.status === "OPERATING") out.add(row.attractionId);
