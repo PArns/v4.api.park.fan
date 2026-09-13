@@ -87,6 +87,35 @@ export class ForecastAccuracyProfile {
   @Column({ name: "mae", type: "real" })
   mae: number;
 
+  /**
+   * The 95th percentile of the SIGNED residual `actual - predicted`, in minutes:
+   * how far above the served number the day can land before it is a one-in-twenty
+   * day. This is the band, and {@link mae} is not — see below.
+   *
+   * MEASURED, NOT A MULTIPLE OF THE MAE. The two are different statistics of the
+   * same residual distribution and the ratio between them is not constant: on
+   * 2026-09-12 it runs 2.7x on `quiet|d1` and 2.1x on `busy|d1`, because the
+   * quiet end's residuals are the more skewed. A band derived by scaling the MAE
+   * would be wrong at one end whichever factor were chosen — the same reason the
+   * class docblock gives for not scaling the prediction itself.
+   *
+   * ONE-SIDED, AND UPWARDS. A visitor plans against the queue being longer than
+   * promised, not shorter, and the residual distribution is not symmetric: at
+   * `quiet|d60` it reaches +35.7 above and only -9.5 below. Serving the upper
+   * half-width also matches what CatBoost's `uncertaintyMinutes` claims to be
+   * (its top trained quantile minus its served median), so the two sit on the
+   * same axis even where they disagree on width.
+   *
+   * OUT-OF-SAMPLE CALIBRATED, which is the whole reason it can be published.
+   * Fitted on target days -45..-15 and checked against -15..-1 (2026-09-13,
+   * production), every one of the 18 cells covers between **92.3 % and 97.9 %**
+   * of realised days against a nominal 95 %. The MAE-wide band, by comparison,
+   * covers 67.8 % to 88.7 % — a "typical miss" and not a bound, exactly as
+   * {@link mae} says of itself.
+   */
+  @Column({ name: "uncertainty_p95", type: "real" })
+  uncertaintyP95: number;
+
   /** Mean realised wait in the bucket, so a reader can size the error. */
   @Column({ name: "mean_actual", type: "real" })
   meanActual: number;

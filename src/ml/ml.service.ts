@@ -38,6 +38,8 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { ScheduleType } from "../parks/entities/schedule-entry.entity";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
+import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
+import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.entity";
 import { persistenceBlendServe } from "./utils/persistence-blend.util";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
@@ -82,6 +84,7 @@ export class MLService {
     private scheduleEntryRepository: Repository<ScheduleEntry>,
     private configService: ConfigService,
     private predictionAccuracyService: PredictionAccuracyService,
+    private forecastAccuracyService: ForecastAccuracyService,
     private weatherService: WeatherService,
     private analyticsService: AnalyticsService,
     @Inject(forwardRef(() => HolidaysService))
@@ -849,6 +852,32 @@ export class MLService {
    * PredictionDto so it drops straight into the calendar/yearly crowd-level path
    * (which recompute crowdLevel from predictedWaitTime; the placeholder fields here
    * are not read). Cached per park-day (TFT only changes on the nightly run).
+   *
+   * THE BAND IS MEASURED HERE, BECAUSE THE MODEL DOES NOT CARRY ONE.
+   * `tft_forecasts` holds a `predicted_peak` and nothing else, so until now every
+   * day inside this horizon reached the calendar with `uncertaintyMinutes`
+   * absent — 155 of 155 headliner entries at Europa-Park on 2026-09-13 — while
+   * CatBoost brought one from day 60 on. The product said less about its
+   * uncertainty over the near future than over the far one.
+   *
+   * What fills it is {@link ForecastAccuracyProfile.uncertaintyP95}: the 95th
+   * percentile of this cell's realised residuals, looked up by predicted band and
+   * lead distance, out-of-sample calibrated to 92-98 % coverage. The alternative
+   * of scaling the prediction is measured wrong in the entity docblock, and the
+   * alternative of serving the MAE would put `/plan/day`'s `expectedError` under
+   * a second name.
+   *
+   * IT IS NOT THE SAME STATISTIC CATBOOST SERVES, AND THAT IS VISIBLE AT DAY 60.
+   * CatBoost's `uncertaintyMinutes` is its top trained quantile minus its served
+   * median — a model-internal spread. Measured against realised days over 45
+   * days (2026-09-13, production), that spread covers **52.7 % (quiet), 54.8 %
+   * (mid) and 56.7 % (busy)** of outcomes, not the 95 % its name claims, so it
+   * runs roughly a third the width of the measured band. The calendar therefore
+   * steps down at the seam. Putting CatBoost's side on this same basis is the
+   * fix, and it is not possible yet: its error past 60 days has never been
+   * measurable, and `prediction_lead_snapshots` cannot report the `d60` bucket
+   * before 2026-11-02. Tracked as PAR-167; do not "smooth" the seam by narrowing
+   * this side, which would mean serving a band nobody measured.
    */
   async getTftDailyPredictions(
     parkId: string,
@@ -889,21 +918,100 @@ export class MLService {
       [parkId, today, days],
     );
 
-    const preds: PredictionDto[] = rows.map((r) => ({
-      attractionId: r.attractionId,
-      predictedTime: `${r.targetDate}T12:00:00`,
-      predictedWaitTime: Math.max(0, Math.round(Number(r.peak))),
-      predictionType: "daily",
-      confidence: 0.7,
-      crowdLevel: "moderate", // placeholder — consumers recompute from predictedWaitTime
-      baseline: 0,
-      modelVersion: "tft",
-    }));
+    // The measured error grid, for the band and the confidence below. One read
+    // for the whole park-day: 18 rows, already the shape `lookup` wants. A
+    // failure here costs the band, not the forecast — the rest of this method
+    // does not depend on it.
+    const accuracy = await this.forecastAccuracyService
+      .getProfile()
+      .catch((e: unknown) => {
+        this.logger.warn(
+          `TFT band unavailable for ${parkId}: ${e instanceof Error ? e.message : e}`,
+        );
+        return new Map<string, ForecastAccuracyProfile>();
+      });
+
+    const preds: PredictionDto[] = rows.map((r) => {
+      const predictedWaitTime = Math.max(0, Math.round(Number(r.peak)));
+      const leadDays = MLService.daysBetween(today, r.targetDate);
+      const cell = ForecastAccuracyService.lookup(
+        accuracy,
+        predictedWaitTime,
+        leadDays,
+      );
+      return {
+        attractionId: r.attractionId,
+        predictedTime: `${r.targetDate}T12:00:00`,
+        predictedWaitTime,
+        predictionType: "daily" as const,
+        confidence: MLService.dailyConfidence(
+          leadDays,
+          predictedWaitTime,
+          cell?.uncertaintyP95,
+        ),
+        // Absent, not zero, where the grid has no cell for this distance: a
+        // zero-wide band draws as a confident hairline, and `?? null` rather
+        // than `|| null` is what keeps a genuine 0 (see the calendar's
+        // buildHeadlinerForecasts docblock).
+        uncertaintyMinutes: cell ? Math.round(cell.uncertaintyP95) : null,
+        crowdLevel: "moderate" as const, // placeholder — consumers recompute from predictedWaitTime
+        baseline: 0,
+        modelVersion: "tft",
+      };
+    });
 
     await this.redis
       .set(cacheKey, JSON.stringify(preds), "EX", this.TTL_DAILY_PREDICTIONS)
       .catch(() => undefined);
     return preds;
+  }
+
+  /**
+   * Whole days between two park-local `YYYY-MM-DD` dates.
+   *
+   * Both anchored at UTC midnight on purpose: they are already park-local
+   * calendar dates, so the only job left is to count days, and parsing them in a
+   * zone that observes DST would make one day of the year 23 or 25 hours long
+   * and round the wrong way.
+   */
+  private static daysBetween(from: string, to: string): number {
+    return Math.round(
+      (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+        86_400_000,
+    );
+  }
+
+  /**
+   * A confidence figure for a TFT day, on the same scale and by the same formula
+   * CatBoost uses (`predict.py:2037-2062`): 60 % from how far ahead the day is,
+   * 40 % from how wide the band is relative to the prediction, each floored at 30.
+   *
+   * It replaces the constant `0.7` that sat here, which was wrong twice over.
+   * It was invented — no part of it came from the model or from a measurement —
+   * and it was on the WRONG SCALE: CatBoost emits 30-100 from the formula above,
+   * so at the seam between the two models a consumer reading `confidence` saw it
+   * jump by a factor of a hundred. Anything comparing the two silently preferred
+   * whichever side happened to be CatBoost's.
+   *
+   * The 40 % term is fed from {@link ForecastAccuracyProfile.uncertaintyP95} —
+   * measured, where CatBoost feeds it a trained quantile spread. That is the
+   * "same basis" the band comes from, so the two numbers on a row cannot
+   * disagree. Where the grid has no cell, this falls back to the time term
+   * alone, which is exactly what `predict.py` does when a model reports no
+   * spread.
+   */
+  private static dailyConfidence(
+    leadDays: number,
+    predictedWaitTime: number,
+    band: number | undefined,
+  ): number {
+    const timeConfidence = Math.max(30, 85 - Math.max(0, leadDays) * 0.15);
+    if (band === undefined || predictedWaitTime <= 0) {
+      return Math.round(timeConfidence * 10) / 10;
+    }
+    const relative = Math.min(band / Math.max(predictedWaitTime, 1), 1);
+    const modelConfidence = Math.max(30, 100 * (1 - relative));
+    return Math.round((0.6 * timeConfidence + 0.4 * modelConfidence) * 10) / 10;
   }
 
   /**

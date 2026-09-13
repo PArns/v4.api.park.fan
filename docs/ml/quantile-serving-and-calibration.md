@@ -15,6 +15,7 @@ user-facing number, and the calibration/consistency fixes that keep them honest.
 | **CatBoost** (`ml-service`) | `MultiQuantile:alpha=0.5,0.8,0.95` | **q0.5** → `predictedWaitTime`; **q0.8** → crowd signal | displayed wait (median) + crowd level |
 | CatBoost q0.95 | trained | **served as a distance, never as a wait**: `q0.95 − q0.5` → `uncertaintyMinutes` | the half-width of the band, a spread rather than an interval to compute off the published wait |
 | **TFT** (`nf-service`) | daily **P90** target (`NF_TARGET_PERCENTILE=0.9`, StudentT) | distribution **median** → `predicted_peak` | a per-day forecast of the daily-P90 peak |
+| TFT band | **nothing** — `tft_forecasts` stores a point and no spread | `forecast_accuracy_profile.uncertainty_p95` → `uncertaintyMinutes` | a **measured** 95th percentile of that cell's realised residuals, not a model output (PAR-111) |
 
 Crowd level is **always** `predicted wait ÷ typical-day-peak` downstream — never a
 raw quantile. The quantiles only shape *which wait number* feeds that ratio.
@@ -133,6 +134,71 @@ quantile of the P90 target was rejected (it over-inflates quiet days). Anyone
 adding prediction intervals or a calibration check on top of nf-service must not
 read `predicted_peak` as an upper quantile. (Docstrings in
 `nf-service/forecast.py`, `db.py`, `config.py` say this inline.)
+
+## The TFT band is measured, and it does not match CatBoost's at the seam
+
+**2026-09-13, PAR-111.** The row above is the one exception to "the quantiles come
+from the model": the TFT has none to give. `tft_forecasts` holds
+`predicted_peak` and no spread, so every calendar day the TFT answered reached a
+visitor with `uncertaintyMinutes` absent — measured on the live API that day, **155
+of 155** headliner entries at Europa-Park inside the TFT horizon, while CatBoost
+brought a band from day 59 on. The product said less about its uncertainty over
+the near future than over the far one.
+
+**What fills it.** `ForecastAccuracyService.rebuild()` already measures the TFT's
+realised error per predicted band × lead bucket; it now also stores
+`uncertainty_p95`, the 95th percentile of the **signed** residual
+`actual − predicted_peak` — the distance above the served number, which is the
+direction a visitor plans against. `getTftDailyPredictions` looks the cell up per
+row and serves it. No new table, no migration beyond the column, and the nightly
+rebuild keeps it current.
+
+**It is calibrated.** Fitted on target days −45…−15 and checked on −15…−1, all 18
+cells cover between **92.3 % and 97.9 %** of realised days against a nominal 95 %:
+
+```
+band   bucket  n_eval   width  coverage      (MAE width, for contrast)
+busy   d1        1517    45.9    94.8 %         20.8 → 81.1 %
+busy   d60      42918    61.0    97.5 %         25.0 → 86.0 %
+mid    d1        4387    30.1    93.1 %         12.5 → 78.2 %
+mid    d60     125225    45.7    97.3 %         16.8 → 84.5 %
+quiet  d1        7011    23.8    92.3 %          8.1 → 67.8 %
+quiet  d60     182939    38.1    97.8 %         13.2 → 79.2 %
+```
+
+The MAE column is why the band is a second figure rather than the one already
+there: an MAE-wide band is a typical miss (68–89 %), and `/plan/day` already
+serves it under its own name, `expectedError`. Two names, two statistics.
+
+**And now the part that is a finding rather than a change.** CatBoost's
+`uncertaintyMinutes` is `q0.95 − q0.5` of its own predictive distribution.
+Measured the same way over the same 45 days (n = 5,112 — `deduplicatePredictions`
+keeps one row per target day, so effectively lead 1):
+
+| predicted band | n | mean band | MAE | q0.95 of residual | **coverage** |
+|---|---|---|---|---|---|
+| busy | 224 | 30.2 | 35.2 | 80.6 | **56.7 %** |
+| mid | 1,180 | 19.2 | 22.4 | 58.0 | **54.8 %** |
+| quiet | 3,708 | 12.3 | 15.7 | 45.5 | **52.7 %** |
+
+A band named for alpha=0.95 that contains 53–57 % of outcomes. It is not wrong
+about what it is — it is the model's *trained* spread, faithfully reported — but
+it is badly under-dispersed against reality, and its magnitude lands on the MAE
+row rather than the q0.95 row.
+
+**So the calendar steps down at day 60**: quiet goes ~38 → ~11. The step is an
+artefact of two different statistics meeting, not of the near term being less
+certain. Do not close it by narrowing the measured side; the fix is to put
+CatBoost's side on the same empirical basis, and **that is not possible yet** —
+its error past 60 days has never been measurable (`deduplicatePredictions` again),
+and `prediction_lead_snapshots` cannot report the `d60` bucket before
+**2026-11-02**. Until then the seam is documented rather than smoothed. Tracked
+as PAR-167.
+
+**`confidence` moved too.** The TFT path emitted a flat `0.7` — invented, and on
+the wrong scale, since `predict.py` emits 30–100. It now runs CatBoost's own
+formula (60 % distance term, 40 % spread term, each floored at 30) fed from the
+measured band, so the two models answer on one scale.
 
 ## Daily serving merge + stampede guard
 

@@ -7,6 +7,7 @@ const cell = (
   leadBucket: string,
   mae: number,
   sampleSize = 1000,
+  uncertaintyP95 = mae * 2.5,
 ): ForecastAccuracyProfile =>
   ({
     predictedBand,
@@ -14,6 +15,7 @@ const cell = (
     mae,
     sampleSize,
     meanActual: 40,
+    uncertaintyP95,
     computedAt: new Date("2026-09-11T03:10:00Z"),
   }) as ForecastAccuracyProfile;
 
@@ -203,5 +205,48 @@ describe("the two classifiers together", () => {
     // The key shape `plan-day.service.ts` builds when it looks a ride up.
     expect(keys).toContain("busy|d3");
     expect(keys).toContain("quiet|d14");
+  });
+});
+
+/**
+ * The band is a second figure on the same row, and the two must not be confused
+ * at the point of use: `mae` is `/plan/day`'s `expectedError` ("a typical miss")
+ * and `uncertaintyP95` is the calendar's `uncertaintyMinutes` ("it can reach this
+ * far"). A lookup returns the row, so the guard that matters is that a caller
+ * asking for one distance cannot be handed the other's row.
+ */
+describe("ForecastAccuracyService.lookup carries the band", () => {
+  it("returns the p95 of the cell the distance actually falls in", () => {
+    const profile = profileOf(
+      cell("quiet", "d1", 8.6, 1000, 23.8),
+      cell("quiet", "d7", 9.0, 1000, 26.4),
+      cell("quiet", "d60", 13.2, 1000, 38.1),
+    );
+
+    expect(ForecastAccuracyService.lookup(profile, 20, 1)?.uncertaintyP95).toBe(
+      23.8,
+    );
+    expect(ForecastAccuracyService.lookup(profile, 20, 7)?.uncertaintyP95).toBe(
+      26.4,
+    );
+    expect(
+      ForecastAccuracyService.lookup(profile, 20, 45)?.uncertaintyP95,
+    ).toBe(38.1);
+  });
+
+  it("widens to the coarser cell's band, which is the wider one", () => {
+    // `d1` and `d3` absent — the state between a deploy that adds a bucket and
+    // the next nightly rebuild. Widening must not narrow the band.
+    const profile = profileOf(cell("mid", "d7", 13.6, 1000, 32.8));
+
+    const narrow = ForecastAccuracyService.lookup(profile, 45, 1);
+    expect(narrow?.leadBucket).toBe("d7");
+    expect(narrow?.uncertaintyP95).toBe(32.8);
+  });
+
+  it("has nothing to widen to past the last bucket", () => {
+    const profile = profileOf(cell("mid", "d60", 16.4, 1000, 45.7));
+
+    expect(ForecastAccuracyService.lookup(profile, 45, 61)).toBeUndefined();
   });
 });

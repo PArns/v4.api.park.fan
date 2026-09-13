@@ -11,11 +11,13 @@ import {
   ScheduleType,
 } from "../parks/entities/schedule-entry.entity";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
+import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { getCurrentDateInTimezone } from "../common/utils/date.util";
 
 describe("MLService", () => {
   let service: MLService;
@@ -88,6 +90,7 @@ describe("MLService", () => {
     findOne: jest.fn(),
     find: jest.fn(),
     createQueryBuilder: jest.fn(),
+    query: jest.fn(),
   };
 
   const mockScheduleEntryRepository = {
@@ -98,6 +101,12 @@ describe("MLService", () => {
   // Mock Services
   const mockPredictionAccuracyService = {
     recordPredictions: jest.fn().mockResolvedValue(0),
+  };
+
+  // The measured error grid the TFT band and confidence are read from. Empty by
+  // default so the tests that do not care about the band get the "no cell" path.
+  const mockForecastAccuracyService = {
+    getProfile: jest.fn().mockResolvedValue(new Map()),
   };
 
   const mockWeatherService = {
@@ -156,6 +165,10 @@ describe("MLService", () => {
           useValue: mockPredictionAccuracyService,
         },
         {
+          provide: ForecastAccuracyService,
+          useValue: mockForecastAccuracyService,
+        },
+        {
           provide: WeatherService,
           useValue: mockWeatherService,
         },
@@ -181,6 +194,7 @@ describe("MLService", () => {
     service = module.get<MLService>(MLService);
 
     jest.clearAllMocks();
+    mockForecastAccuracyService.getProfile.mockResolvedValue(new Map());
   });
 
   it("should be defined", () => {
@@ -241,6 +255,112 @@ describe("MLService", () => {
 
       expect(result).toEqual(cachedData);
       expect(mockRedis.get).toHaveBeenCalled();
+    });
+  });
+
+  describe("getTftDailyPredictions (the measured band)", () => {
+    const parkId = "park-band";
+    const today = getCurrentDateInTimezone("Europe/Berlin");
+    const plus = (n: number) =>
+      new Date(Date.parse(`${today}T00:00:00Z`) + n * 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+
+    const cell = (
+      predictedBand: string,
+      leadBucket: string,
+      mae: number,
+      uncertaintyP95: number,
+    ) =>
+      ({
+        predictedBand,
+        leadBucket,
+        sampleSize: 10_000,
+        mae,
+        meanActual: 40,
+        uncertaintyP95,
+        computedAt: new Date(),
+      }) as any;
+
+    /** Rows as the raw query returns them: one ride, one target day each. */
+    const arrange = (rows: Array<{ targetDate: string; peak: number }>) => {
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        timezone: "Europe/Berlin",
+      });
+      mockRedis.get.mockResolvedValue(null);
+      mockRedis.set.mockResolvedValue("OK");
+      mockAttractionRepository.query.mockResolvedValue(
+        rows.map((r, i) => ({
+          attractionId: `attr-${i}`,
+          targetDate: r.targetDate,
+          peak: String(r.peak),
+        })),
+      );
+    };
+
+    it("carries the cell's p95 as uncertaintyMinutes, picked by band AND lead", async () => {
+      mockForecastAccuracyService.getProfile.mockResolvedValue(
+        new Map([
+          ["quiet|d1", cell("quiet", "d1", 8.6, 23.8)],
+          ["quiet|d60", cell("quiet", "d60", 13.2, 38.1)],
+          ["busy|d1", cell("busy", "d1", 20.8, 45.9)],
+        ]),
+      );
+      arrange([
+        { targetDate: plus(1), peak: 20 }, // quiet, d1
+        { targetDate: plus(45), peak: 20 }, // quiet, widens to d60
+        { targetDate: plus(1), peak: 80 }, // busy, d1
+      ]);
+
+      const preds = await service.getTftDailyPredictions(parkId, 60);
+
+      expect(preds.map((p) => p.uncertaintyMinutes)).toEqual([24, 38, 46]);
+    });
+
+    it("leaves the band absent — not zero — when the grid has no cell", async () => {
+      mockForecastAccuracyService.getProfile.mockResolvedValue(new Map());
+      arrange([{ targetDate: plus(1), peak: 20 }]);
+
+      const preds = await service.getTftDailyPredictions(parkId, 60);
+
+      expect(preds[0].uncertaintyMinutes).toBeNull();
+    });
+
+    it("still serves the forecast when the grid cannot be read", async () => {
+      mockForecastAccuracyService.getProfile.mockRejectedValue(
+        new Error("relation does not exist"),
+      );
+      arrange([{ targetDate: plus(1), peak: 20 }]);
+
+      const preds = await service.getTftDailyPredictions(parkId, 60);
+
+      expect(preds).toHaveLength(1);
+      expect(preds[0].predictedWaitTime).toBe(20);
+      expect(preds[0].uncertaintyMinutes).toBeNull();
+    });
+
+    it("replaces the invented 0.7 with CatBoost's own 0-100 formula", async () => {
+      mockForecastAccuracyService.getProfile.mockResolvedValue(
+        new Map([["quiet|d1", cell("quiet", "d1", 8.6, 23.8)]]),
+      );
+      arrange([{ targetDate: plus(1), peak: 20 }]);
+
+      const preds = await service.getTftDailyPredictions(parkId, 60);
+
+      // time = 85 - 1*0.15 = 84.85; relative = min(23.8/20, 1) = 1 → model
+      // floors at 30; 0.6*84.85 + 0.4*30 = 62.9. On CatBoost's scale, not 0.7.
+      expect(preds[0].confidence).toBeCloseTo(62.9, 1);
+    });
+
+    it("falls back to the time term alone where there is no band", async () => {
+      mockForecastAccuracyService.getProfile.mockResolvedValue(new Map());
+      arrange([{ targetDate: plus(40), peak: 20 }]);
+
+      const preds = await service.getTftDailyPredictions(parkId, 60);
+
+      // 85 - 40*0.15 = 79.0, and nothing blended in.
+      expect(preds[0].confidence).toBeCloseTo(79.0, 1);
     });
   });
 
