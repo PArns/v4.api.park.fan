@@ -385,23 +385,36 @@ What is still open, roughly by consequence:
       cannot share a path, and the UPDATE moves `parkId` while the indexed tuple
       stays put), which is the state this table should have been in from the
       start. It applies to `mergeParks` too, through the shared constant.
-- [ ] **`attraction_ride_profiles` is still unprotected on the _attraction_
-      side.** Its park half is fixed — PF-111 added it to `PARK_DEPENDENCIES`
-      and to the `PARK_REFERENCING_TABLES` snapshot, so a park merge now carries
-      the curated profiles across instead of cascading them. Its `attractionId`
-      carries `onDelete: "CASCADE"` too, and there the losing ride's profile is
-      still destroyed by the `DELETE FROM attractions` both raw paths and
-      `AttractionMergeService.merge` run. It is in neither
+- [x] ~~**`attraction_ride_profiles` is still unprotected on the _attraction_
+      side.**~~ Its park half was fixed by PF-111 (`PARK_DEPENDENCIES` plus the
+      `PARK_REFERENCING_TABLES` snapshot); its `attractionId` carries
+      `onDelete: "CASCADE"` too, so the losing ride's curated profile was
+      destroyed by the `DELETE FROM attractions` that both raw paths,
+      `ParkMergeService.consolidateEntityData` and
+      `AttractionMergeService.mergeAttractions` run — and it sat in neither
       `ATTRACTION_DEPENDENCIES` nor `ATTRACTION_REFERENCING_TABLES`, so the
-      guard cannot see it either. Left open rather than guessed at, because the
-      answer is not a `MergeStrategy`: `discard` is what happens today and is
+      guard written for exactly this could not see it. The answer was left open
+      because it is not a `MergeStrategy`: `discard` is what happened and is
       wrong by the file's own rule (the neighbours it would sit beside —
       rope-drop, typical-waits — are `discard` because they are _derived_, and
-      this is hand-curated with no feed and no seed); `move` collides, since
-      `attractionId` is both the merge column and the primary key. What it wants
-      is winner-authoritative — take the loser's row only where the survivor has
-      none — the same shape `park_p50_baselines` needs and the same reason it is
-      not a dependency.
+      this is hand-curated with no feed and no seed), while `move` collides,
+      since `attractionId` is both the merge column and the primary key.
+      PAR-105 makes it one: `MergeStrategy` has a third value,
+      `winner-authoritative` — inherit the loser's row where the survivor has
+      none, otherwise keep the survivor's and drop the loser's. Patrick's
+      decision on the ticket was the logged variant, so the branch reads the
+      losing row before it decides and `applyMergeDependencies` writes its
+      contents as a warning before the DELETE, the same bargain
+      `logDroppedCuration` strikes for the curated park columns: a hand-written
+      value that ceases to exist leaves a line somebody can find. Which of two
+      competing profiles survives is a curation question, and it is answered
+      with "the winner's". One entry on the shared list reaches all four merge
+      paths, because every one of them hands `ATTRACTION_DEPENDENCIES` to
+      `applyMergeDependencies`. The park entry stays where it is and on its own
+      column: it carries the denormalised `parkId` of a profile whose ride has
+      already moved, and every park path runs the attraction step first.
+      `park_p50_baselines` is the same rule hand-rolled twice and predates the
+      strategy; folding it in is PAR-178.
 - [x] ~~**A third park delete in `parks.service.ts` has the whole hole.**~~ The
       priority merge in `syncParks` (`parkRepository.delete(losingPark.id)`,
       guarded by an `isEmpty` count over shows/restaurants/attractions) applied
