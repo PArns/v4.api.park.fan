@@ -413,10 +413,11 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
   {
     // The third of the "curated, cascade-deleted, irreplaceable" cases, and
     // the one that had gone unnoticed because the merge used to abort before
-    // reaching the park DELETE. Same lifecycle as `park_seasons`: no feed, no
-    // seed job, no writer in this codebase — the rows ARE the source of truth
-    // and are edited straight into the database, so a cascade takes a ride's
-    // track elements, its ride types and its builder with no way back. The
+    // reaching the park DELETE. Same lifecycle as `park_seasons`: no feed and
+    // no seed job — the rows ARE the source of truth, written only by a person
+    // (straight into the database, or through `AdminRideProfileService`), so a
+    // cascade takes a ride's track elements, its ride types and its builder
+    // with no way back and nothing would rebuild them. The
     // parkId beside the attractionId is the denormalised one, so it has to
     // move for every ride the merge reparents.
     table: "attraction_ride_profiles",
@@ -612,6 +613,17 @@ function asRows(result: unknown): Array<Record<string, unknown>> {
  * same is true of `logDroppedCuration`, and the trade is the same one: a log
  * line that is occasionally too pessimistic beats one that is never written
  * because the statement it describes threw.
+ *
+ * "The winner's own row" is read fresh each call, and where one merge folds
+ * SEVERAL losers into one winner that matters: `ParkMergeService
+ * .migrateEntities` matches a loser to a winner by slug OR name, and a name is
+ * not unique inside a park, so two losers can arrive at the same survivor. The
+ * first one's row is inherited, and the second is then measured against THAT
+ * row rather than against anything the winner brought. Which of the two
+ * curations survives is decided by the order of an unordered SELECT, so it is
+ * arbitrary — better than the cascade that used to take both, worse than a
+ * rule, and the reason the drop is logged rather than only counted. Ranking
+ * the rows by what they say instead is the open question on PAR-179.
  */
 async function applyWinnerAuthoritative(
   manager: MergeQueryRunner,
@@ -677,6 +689,18 @@ export async function applyMergeDependencies(
   winnerId: string,
   loserId: string,
 ): Promise<void> {
+  // One id for both sides is not a no-op here, it is a wipe: `discard` deletes
+  // the winner's own rows, a conflict key matches every row against itself so
+  // the dedupe DELETE empties the table for that entity, and the branch below
+  // reads one row as both sides and drops it. Every caller checks this today
+  // and `parks.service.ts` says in as many words that the check is one edit
+  // away from not being there. Cheaper to refuse than to be careful.
+  if (winnerId === loserId) {
+    throw new Error(
+      `Cannot apply merge dependencies with one id on both sides (${winnerId})`,
+    );
+  }
+
   for (const dep of dependencies) {
     assertSafeIdentifier(dep.table);
     assertSafeIdentifier(dep.column);

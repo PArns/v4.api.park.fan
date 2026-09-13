@@ -179,9 +179,10 @@ describe("merge dependency tables", () => {
 
   it("moves the curated ride profiles with the park rather than cascading them", () => {
     // Third of the same family as park_seasons and park_slug_aliases: hand
-    // written, ON DELETE CASCADE, and reproducible from no feed — nothing in
-    // this codebase writes attraction_ride_profiles at all. It went unnoticed
-    // because the merge used to abort before it ever reached the park DELETE.
+    // written, ON DELETE CASCADE, and reproducible from no feed — the only
+    // writers of attraction_ride_profiles are a person at the database and a
+    // person in the admin. It went unnoticed because the merge used to abort
+    // before it ever reached the park DELETE.
     const profiles = PARK_DEPENDENCIES.find(
       (d) => d.table === "attraction_ride_profiles",
     );
@@ -480,6 +481,24 @@ describe("applyMergeDependencies", () => {
         "l",
       ),
     ).rejects.toThrow(/identifier/i);
+
+    expect(manager.query).not.toHaveBeenCalled();
+  });
+
+  it("refuses one id on both sides, before any statement", async () => {
+    // Not a no-op: `discard` would delete the winner's own rows, a conflict key
+    // matches every row against itself so the dedupe DELETE would empty the
+    // table for that entity, and the winner-authoritative branch would read one
+    // row as both sides and drop it. Every caller guards today; this is so that
+    // the one that stops guarding fails loudly instead of quietly.
+    await expect(
+      applyMergeDependencies(
+        manager,
+        ATTRACTION_DEPENDENCIES,
+        "same-id",
+        "same-id",
+      ),
+    ).rejects.toThrow(/both sides/i);
 
     expect(manager.query).not.toHaveBeenCalled();
   });

@@ -98,8 +98,16 @@ describe("ParkMergeService — the loser's path", () => {
   });
 
   it("records nothing when both parks shared a path", async () => {
-    manager.findOne.mockImplementation(async () =>
-      park({ id: "x", name: "IOA", citySlug: "orlando" }),
+    // Two rows, one path — which is the case, two sources describing one park
+    // in one city. They used to be one object under one id, which is a state
+    // the database cannot hold and which `applyMergeDependencies` now refuses:
+    // with both ids equal its dedupe DELETEs match every row against itself.
+    manager.findOne.mockImplementation(async (_e: unknown, opts: any) =>
+      park({
+        id: opts.where.id === "winner" ? "winner" : "loser",
+        name: "IOA",
+        citySlug: "orlando",
+      }),
     );
 
     await service.mergeParks("winner", "loser");
@@ -112,8 +120,12 @@ describe("ParkMergeService — the loser's path", () => {
     // park list and the attraction pages all change — regardless of whether
     // the surviving park's own URL moved. Without this the frontend serves
     // the deleted park for up to 24h.
-    manager.findOne.mockImplementation(async () =>
-      park({ id: "x", name: "IOA", citySlug: "orlando" }),
+    manager.findOne.mockImplementation(async (_e: unknown, opts: any) =>
+      park({
+        id: opts.where.id === "winner" ? "winner" : "loser",
+        name: "IOA",
+        citySlug: "orlando",
+      }),
     );
 
     await service.mergeParks("winner", "loser");
