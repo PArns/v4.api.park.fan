@@ -2057,6 +2057,62 @@ describe("PlanDayService", () => {
       );
     });
 
+    it("does not reach back into last night's session on a park that runs past midnight", async () => {
+      // The case park-local midnight got wrong, and the reason the cutoff is
+      // the opening (docs §6). La Ronde's operating day ends at 02:00, so a
+      // reading from 01:30 lies AFTER the planned day's park-local midnight and
+      // BEFORE its opening — midnight lets it through and rescues the ride into
+      // a day that row says nothing about.
+      //
+      // The clock is fixed because the assertion needs three instants in a
+      // known order (midnight < last night's row < opening < now − 6 h), and
+      // that ordering is a statement about the time of day.
+      jest.useFakeTimers().setSystemTime(new Date("2026-09-13T16:00:00.000Z"));
+      try {
+        liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+        const date = today(); // 2026-09-13, Europe/Berlin
+        // 22:00Z on the 12th is 00:00 on the 13th in Berlin.
+        const parkLocalMidnight = new Date("2026-09-12T22:00:00.000Z");
+        const lastNightsRow = new Date("2026-09-12T23:30:00.000Z"); // 01:30 local
+        const opening = new Date("2026-09-13T08:00:00.000Z"); // 10:00 local
+        calendarDay = {
+          ...calendarDay!,
+          date,
+          hours: {
+            openingTime: opening.toISOString(),
+            // 02:00 local the next morning: the day runs past midnight.
+            closingTime: "2026-09-14T00:00:00.000Z",
+          },
+        };
+        dailyPredictions = [
+          {
+            ...(dailyPredictions[0] as object),
+            predictedTime: `${date}T12:00:00.000Z`,
+          },
+        ];
+        attractions = [{ ...attractions[0], ...shutNow }];
+        service = await build();
+        await service.buildPlanDay(park, date);
+
+        const [, params] = liveLookups()[0] as [string, unknown[]];
+        const since = params[1] as Date;
+
+        // The opening decides: six hours back from 18:00 local is 12:00, later
+        // than the opening, so the opening is the wider of the two.
+        expect(since).toEqual(opening);
+        // What that buys, stated as the row it excludes.
+        expect(lastNightsRow.getTime()).toBeLessThan(since.getTime());
+        // And the row is one midnight would have admitted, which is what makes
+        // this a test of the change rather than of the floor.
+        expect(lastNightsRow.getTime()).toBeGreaterThan(
+          parkLocalMidnight.getTime(),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it("leaves it out when the feed says anything else", async () => {
       liveRows = [{ attractionId: "a-taron", status: "CLOSED" }];
 

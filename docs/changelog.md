@@ -6,6 +6,35 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — `/plan/day`'s live-status window cuts at the day's own opening, which is what the spec and the docs had said since PAR-93
+
+PR #253's last commit, `73b8246` ("cut the live window at the day's own opening,
+not at midnight"), changed `plan-day.service.spec.ts`, `plan-day-endpoint.md`
+and this file — and not `plan-day.service.ts`. The finding was described,
+tested and documented, never implemented; `runningNow` kept cutting at
+`LEAST($3::date::timestamp AT TIME ZONE $2, NOW() - INTERVAL '6 hours')`, and
+`pnpm test` has been red on `main` ever since (2 of 1 874 cases, both in the
+"a ride that is running despite its season" block).
+
+The cutoff is now computed where the opening already is — `buildPlanDay` has
+the calendar day in hand — and passed down as a single `Date`: the published
+opening where the operator stated one, floored at `LIVE_STATUS_FLOOR_HOURS`,
+which is `getValidDataCutoff`'s own rule on the park page. The SQL takes it as
+`qd.timestamp >= $2`, so the statement no longer needs the timezone or the date
+string at all.
+
+What the change buys is one row: on a park whose operating day ends at 02:00, a
+reading from 01:30 lies **after** the planned day's park-local midnight and
+**before** its opening. Midnight admitted it and rescued the ride into a day
+that row says nothing about; the opening does not. The six-hour floor is
+untouched, and it is still the only thing that carries the other direction — at
+00:30 park-local the day is half an hour old and the ride's last word is from
+23:30, which stays inside the window.
+
+Three cases cover it in `plan-day.service.spec.ts`, all three red against the
+service on `origin/main`: the two that were already there, plus the
+past-midnight park on a fixed clock.
+
 ### Changed — the `glob` override is selected and bounded, so a future major cannot reach TypeORM's boot path
 
 `pnpm-workspace.yaml` carried `glob: '>=11.0.0'`: unselected, so it applied to
