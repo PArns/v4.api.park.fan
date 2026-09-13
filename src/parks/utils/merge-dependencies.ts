@@ -1,4 +1,6 @@
-export type MergeStrategy = "move" | "discard";
+import { Logger } from "@nestjs/common";
+
+export type MergeStrategy = "move" | "discard" | "winner-authoritative";
 
 export interface MergeDependency {
   /** Table holding rows that point at the entity being merged away. */
@@ -9,6 +11,13 @@ export interface MergeDependency {
    * `move`    — reparent the loser's rows onto the winner (keeps the data).
    * `discard` — drop them; the winner's own row is authoritative and the
    *             value is derived, so keeping both would be meaningless.
+   * `winner-authoritative` — move them only where the winner holds nothing;
+   *             otherwise drop them, after logging what is being dropped.
+   *             For a row that is one per entity, hand-written and
+   *             reproducible from no feed: `discard` would destroy a curation
+   *             the winner has no equivalent of, and `move` cannot be used at
+   *             all where the merge column is also the primary key, because
+   *             the UPDATE then collides with the winner's own row.
    */
   strategy: MergeStrategy;
   /**
@@ -155,6 +164,48 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     table: "attraction_typical_waits",
     column: "attractionId",
     strategy: "discard",
+  },
+
+  // --- curated, one row per ride, reproducible from no feed ---
+  {
+    // The odd one out on this list, and the reason `winner-authoritative`
+    // exists. Its three neighbours above — rope drop, typical waits, the two
+    // baselines — are `discard` because they are DERIVED: the nightly jobs
+    // rewrite the survivor's row from the queue history that has just moved
+    // onto it. This row is not derived from anything. Nothing in this codebase
+    // writes it (`attraction-ride-profile.entity.ts`: "these rows ARE the
+    // source of truth and are edited directly in the database"), so a person
+    // typed the track elements, the ride types and the builder, and a
+    // cascade — the FK is ON DELETE CASCADE — takes them with no way back.
+    // Same family as `park_seasons` and `park_slug_aliases` one list over.
+    //
+    // `move` is not available: `attractionId` is the merge column AND the
+    // primary key (`@PrimaryColumn("uuid") attractionId`), so an UPDATE onto a
+    // survivor that already has a profile is a PK violation that rolls the
+    // whole merge back. `conflictColumns` cannot express it either — that
+    // dedupe deletes the LOSER's row whenever the key collides, which here is
+    // every single time the survivor has a profile, i.e. `discard` wearing a
+    // different hat.
+    //
+    // So: the survivor's own profile always wins, the loser's is inherited
+    // only into an empty cell, and where one is dropped `applyMergeDependencies`
+    // logs its contents first — the same bargain `logDroppedCuration` strikes
+    // for the curated park columns, and for the same reason: a hand-written
+    // value that ceases to exist should at least leave a line somebody can
+    // find. Which of two competing profiles survives is a curation question
+    // and is decided here by "the winner's", per PAR-105.
+    //
+    // The park-side twin of this entry (`PARK_DEPENDENCIES`, column `parkId`,
+    // `move`) is a different job and both are needed: that one carries the
+    // denormalised parkId of a profile whose ride has already moved, this one
+    // decides what happens when the ride itself is merged away. Every park
+    // path runs the attraction step first, so they compose in that order.
+    //
+    // Postdates the cold run named above — it is pinned by
+    // `merge-dependencies.spec.ts` rather than by a production rehearsal.
+    table: "attraction_ride_profiles",
+    column: "attractionId",
+    strategy: "winner-authoritative",
   },
 ];
 
@@ -428,9 +479,13 @@ export const PARK_TABLES_HANDLED_INLINE = [
  *     (`ATTRACTION_DEPENDENCIES`, `SHOW_DEPENDENCIES`,
  *     `RESTAURANT_DEPENDENCIES`), because all three carry a unique
  *     `(parkId, slug)`.
- *   - `park_p50_baselines` — winner-authoritative rather than move-or-discard
- *     (`migrateTableData(..., null)`), which is not a `MergeStrategy`. Its
- *     caller does it by hand, and says why.
+ *   - `park_p50_baselines` — winner-authoritative, hand-rolled by both callers
+ *     (`migrateTableData(..., null)` in `mergeParks`, an explicit SELECT and
+ *     branch in `consolidateMergedPark`) since before there was a
+ *     `winner-authoritative` strategy to declare instead. The two are the same
+ *     rule, so folding it in is a simplification and not a fix — and it is a
+ *     change to the park half, which PAR-105 kept out of scope. Recorded as
+ *     PAR-178.
  *   - `external_entity_mapping` — keyed on `internal_entity_id` for every
  *     entity type at once, so it wants the `internal_entity_type = 'park'`
  *     filter a bare dependency cannot carry.
@@ -502,6 +557,13 @@ export function parkTablesMissingFrom(known: string[]): string[] {
   return known.filter((table) => !declared.has(table)).sort();
 }
 
+/**
+ * Named for the file rather than for a service: every merge path calls in here,
+ * and a line about a curation that has just ceased to exist has to be findable
+ * without knowing which of the four paths issued it.
+ */
+const logger = new Logger("MergeDependencies");
+
 /** Table and column names are interpolated into SQL, so they must be bare names. */
 const SAFE_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
@@ -509,6 +571,75 @@ function assertSafeIdentifier(value: string): void {
   if (!SAFE_IDENTIFIER.test(value)) {
     throw new Error(`Unsafe SQL identifier in merge dependency: "${value}"`);
   }
+}
+
+interface MergeQueryRunner {
+  query: (sql: string, params?: unknown[]) => Promise<unknown>;
+}
+
+/** A `SELECT` through the minimal manager interface, as rows. */
+function asRows(result: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(result)
+    ? (result as Array<Record<string, unknown>>)
+    : [];
+}
+
+/**
+ * Inherits the loser's row only where the winner has none, and says what it
+ * drops when it cannot.
+ *
+ * Three statements at most, and the first one is the point: reading the losing
+ * rows before deciding is what makes the log line possible. Without it the
+ * DELETE is indistinguishable from `discard` — the values are gone and the only
+ * record that they existed went with them.
+ *
+ * Written for a table holding one row per entity. It handles several rows
+ * correctly (all of them move, or all of them are logged and dropped), but
+ * "the winner's row wins" stops meaning anything obvious once there are many,
+ * so a new entry using this strategy should be one-per-entity in fact and not
+ * only in the common case.
+ */
+async function applyWinnerAuthoritative(
+  manager: MergeQueryRunner,
+  dep: MergeDependency,
+  winnerId: string,
+  loserId: string,
+): Promise<void> {
+  const losing = asRows(
+    await manager.query(
+      `SELECT * FROM ${dep.table} WHERE "${dep.column}" = $1`,
+      [loserId],
+    ),
+  );
+  // Nothing to inherit, and nothing to lose either. Leaving early keeps the
+  // ordinary merge — the overwhelming majority, since almost no ride carries a
+  // curated profile — at one statement instead of three, and stops the log
+  // from announcing a loss that did not happen.
+  if (losing.length === 0) return;
+
+  const winnerHolds = asRows(
+    await manager.query(
+      `SELECT 1 FROM ${dep.table} WHERE "${dep.column}" = $1 LIMIT 1`,
+      [winnerId],
+    ),
+  );
+
+  if (winnerHolds.length === 0) {
+    await manager.query(
+      `UPDATE ${dep.table} SET "${dep.column}" = $1 WHERE "${dep.column}" = $2`,
+      [winnerId, loserId],
+    );
+    return;
+  }
+
+  // Before the DELETE, not after: this is the only trace the row leaves.
+  logger.warn(
+    `🗑️  ${dep.table}: keeping ${winnerId}'s own row and dropping ${loserId}'s — ` +
+      losing.map((row) => JSON.stringify(row)).join(" | "),
+  );
+  await manager.query(`DELETE FROM ${dep.table} WHERE "${dep.column}" = $1`, [
+    loserId,
+  ]);
 }
 
 /**
@@ -520,11 +651,14 @@ function assertSafeIdentifier(value: string): void {
  * UPDATE trips the constraint and rolls the entire merge back. Everything
  * else is reparented, so no time series is lost.
  *
+ * A `winner-authoritative` entry is the third case and reads the table before
+ * it writes to it — see `applyWinnerAuthoritative`.
+ *
  * Callers must already hold a transaction, and for TimescaleDB tables must
  * have lifted `timescaledb.max_tuples_decompressed_per_dml_transaction`.
  */
 export async function applyMergeDependencies(
-  manager: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  manager: MergeQueryRunner,
   dependencies: MergeDependency[],
   winnerId: string,
   loserId: string,
@@ -533,6 +667,21 @@ export async function applyMergeDependencies(
     assertSafeIdentifier(dep.table);
     assertSafeIdentifier(dep.column);
     dep.conflictColumns?.forEach(assertSafeIdentifier);
+    // A key on a winner-authoritative entry would be read by nothing: that
+    // branch decides on the winner having any row at all, not on a matching
+    // one. Declaring both is somebody expecting a dedupe that never runs, and
+    // the type cannot say so — `strategy` and `conflictColumns` are fields of
+    // one interface because half the callers read `conflictColumns` off a list
+    // they have not narrowed.
+    if (
+      dep.strategy === "winner-authoritative" &&
+      dep.conflictColumns?.length
+    ) {
+      throw new Error(
+        `Merge dependency "${dep.table}" declares conflictColumns with the ` +
+          `winner-authoritative strategy, which ignores them`,
+      );
+    }
   }
 
   for (const dep of dependencies) {
@@ -541,6 +690,11 @@ export async function applyMergeDependencies(
         `DELETE FROM ${dep.table} WHERE "${dep.column}" = $1`,
         [loserId],
       );
+      continue;
+    }
+
+    if (dep.strategy === "winner-authoritative") {
+      await applyWinnerAuthoritative(manager, dep, winnerId, loserId);
       continue;
     }
 

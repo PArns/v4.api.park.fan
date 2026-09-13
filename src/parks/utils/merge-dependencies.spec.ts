@@ -1,3 +1,4 @@
+import { Logger } from "@nestjs/common";
 import {
   ATTRACTION_DEPENDENCIES,
   PARK_CHILD_ENTITIES,
@@ -33,6 +34,11 @@ describe("merge dependency tables", () => {
    * Snapshot of every table referencing attractions, taken from the live
    * catalog on 2026-07-27. If a new one appears, this test fails and whoever
    * added it has to declare a merge strategy.
+   *
+   * `attraction_ride_profiles` is younger than that snapshot and was therefore
+   * invisible to the very guard that exists to catch it — every attraction
+   * merge cascaded the curated profile away in silence until PAR-105. Added
+   * here in the same commit that declares its strategy.
    */
   const ATTRACTION_REFERENCING_TABLES = [
     "attraction_accuracy_stats",
@@ -40,6 +46,7 @@ describe("merge dependency tables", () => {
     "attraction_hourly_history",
     "attraction_p50_baselines",
     "attraction_p90_baselines",
+    "attraction_ride_profiles",
     "attraction_rope_drop",
     "attraction_typical_waits",
     "catboost_daily_forecasts",
@@ -115,7 +122,8 @@ describe("merge dependency tables", () => {
     "attractions",
     "shows",
     "restaurants",
-    // Winner-authoritative, which is not a MergeStrategy.
+    // Winner-authoritative, hand-rolled by both callers since before there was
+    // a strategy of that name to declare instead (PAR-178).
     "park_p50_baselines",
     // Needs the internal_entity_type filter a bare dependency cannot carry.
     "external_entity_mapping",
@@ -251,6 +259,44 @@ describe("merge dependency tables", () => {
       expect(dependency?.strategy).toBe("move");
       expect(dependency?.conflictColumns?.length).toBeGreaterThan(0);
     }
+  });
+
+  it("inherits a curated ride profile rather than discarding or moving it", () => {
+    // The decision on PAR-105, and the reason the strategy exists at all.
+    //
+    // Its neighbours on the discard list are derived — the nightly jobs rewrite
+    // the survivor's rope drop and typical waits from the queue history that
+    // just moved onto it. A ride profile is written by a person and by nothing
+    // else, so `discard` deletes a curation with no way back; and `move` cannot
+    // be used at all, because `attractionId` is the primary key and the UPDATE
+    // would collide with the survivor's own row.
+    const profiles = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "attraction_ride_profiles",
+    );
+
+    expect(profiles?.strategy).toBe("winner-authoritative");
+    expect(profiles?.column).toBe("attractionId");
+    // No conflictColumns: that dedupe deletes the LOSER's row whenever the key
+    // collides, which for a PK-keyed table is every time the winner has a row —
+    // `discard` under another name, and the opposite of what was decided.
+    expect(profiles?.conflictColumns).toBeUndefined();
+  });
+
+  it("keeps the attraction and the park entry for ride profiles, on different columns", () => {
+    // Two entries, one table, and both are needed: the park list carries the
+    // denormalised parkId of a profile whose ride has already been reparented,
+    // this one decides what happens when the ride itself is merged away. Every
+    // park path runs the attraction step first, so they compose in that order.
+    const onAttraction = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "attraction_ride_profiles",
+    );
+    const onPark = PARK_DEPENDENCIES.find(
+      (d) => d.table === "attraction_ride_profiles",
+    );
+
+    expect(onAttraction?.column).toBe("attractionId");
+    expect(onPark?.column).toBe("parkId");
+    expect(onPark?.strategy).toBe("move");
   });
 
   it("discards only single-row-per-attraction baselines", () => {
@@ -481,6 +527,118 @@ describe("applyMergeDependencies", () => {
     // And the move still happens — a narrower key would have been visible here
     // as a missing statement, not as a wrong one.
     expect(manager.query.mock.calls[1][0]).toMatch(/^UPDATE park_slug_aliases/);
+  });
+
+  /**
+   * The winner-authoritative branch, which is the only one that READS before it
+   * writes — and has to, because the log line it owes is the sole record of a
+   * hand-written row that is about to cease to exist.
+   */
+  describe("winner-authoritative", () => {
+    const profiles = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "attraction_ride_profiles",
+    )!;
+
+    it("refuses an entry that declares a conflict key it would ignore", async () => {
+      // The branch decides on the winner holding ANY row, so a key here is
+      // read by nothing — somebody would be expecting a dedupe that never
+      // runs. Thrown before the first statement, like the identifier check.
+      await expect(
+        applyMergeDependencies(
+          manager,
+          [
+            {
+              table: "attraction_ride_profiles",
+              column: "attractionId",
+              strategy: "winner-authoritative",
+              conflictColumns: ["parkId"],
+            },
+          ],
+          "winner-id",
+          "loser-id",
+        ),
+      ).rejects.toThrow(/conflictColumns/);
+
+      expect(manager.query).not.toHaveBeenCalled();
+    });
+
+    it("touches nothing when the loser has no row", async () => {
+      manager.query.mockResolvedValueOnce([]);
+
+      await applyMergeDependencies(
+        manager,
+        [profiles],
+        "winner-id",
+        "loser-id",
+      );
+
+      // One SELECT and no write at all: the overwhelming majority of merges,
+      // since almost no ride carries a curated profile.
+      expect(manager.query).toHaveBeenCalledTimes(1);
+      expect(manager.query.mock.calls[0][0]).toMatch(
+        /^SELECT \* FROM attraction_ride_profiles/,
+      );
+    });
+
+    it("moves the loser's row when the winner has none", async () => {
+      manager.query
+        .mockResolvedValueOnce([{ attractionId: "loser-id", elements: [] }])
+        .mockResolvedValueOnce([]);
+
+      await applyMergeDependencies(
+        manager,
+        [profiles],
+        "winner-id",
+        "loser-id",
+      );
+
+      const [, , thirdSql, ...rest] = manager.query.mock.calls.map(
+        ([sql]: [string]) => sql,
+      );
+      expect(rest).toEqual([]);
+      expect(thirdSql).toMatch(/^UPDATE attraction_ride_profiles/);
+      expect(manager.query.mock.calls[2][1]).toEqual(["winner-id", "loser-id"]);
+    });
+
+    it("drops the loser's row when the winner has one, naming it first", async () => {
+      const losing = {
+        attractionId: "loser-id",
+        elements: ["lifthill", "vertical-loop"],
+        types: ["launch-coaster"],
+      };
+      manager.query.mockResolvedValueOnce([losing]).mockResolvedValueOnce([{}]);
+      const warn = jest
+        .spyOn(Logger.prototype, "warn")
+        .mockImplementation(() => undefined);
+
+      await applyMergeDependencies(
+        manager,
+        [profiles],
+        "winner-id",
+        "loser-id",
+      );
+
+      const [, , thirdSql] = manager.query.mock.calls.map(
+        ([sql]: [string]) => sql,
+      );
+      expect(thirdSql).toMatch(/^DELETE FROM attraction_ride_profiles/);
+      expect(manager.query.mock.calls[2][1]).toEqual(["loser-id"]);
+
+      // The assertion that matters is not that something was logged but that
+      // the log carries the row: a warning saying only "a profile was dropped"
+      // is as unrecoverable as no warning at all.
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = warn.mock.calls[0][0] as string;
+      expect(line).toContain("vertical-loop");
+      expect(line).toContain("launch-coaster");
+
+      // And it is written BEFORE the DELETE. A log line after a statement that
+      // throws is a log line that never happens.
+      expect(warn.mock.invocationCallOrder[0]).toBeLessThan(
+        manager.query.mock.invocationCallOrder[2],
+      );
+      warn.mockRestore();
+    });
   });
 
   it("issues no delete for a table that cannot collide", async () => {

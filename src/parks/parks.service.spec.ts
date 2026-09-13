@@ -549,6 +549,36 @@ describe("ParksService", () => {
      * Runs `parkRepository.manager.transaction` against a recording manager.
      * `rowsFor` answers the SELECTs; everything else resolves empty.
      */
+    /**
+     * The two reads the `winner-authoritative` branch makes before it decides
+     * what happens to a losing ride's curated profile, answered for every case
+     * below: the loser HAS one and the survivor has none.
+     *
+     * That is the case the strategy exists for — the profile is hand-written,
+     * reproducible from no feed, and the FK is ON DELETE CASCADE — so it is the
+     * one worth wiring into the shared harness rather than into one case. It is
+     * also what keeps `attraction_ride_profiles` visible to
+     * `dependencyTablesTouched`: with no losing row the branch correctly issues
+     * no write at all, and a table the merge touched only by reading is
+     * indistinguishable there from one it forgot.
+     */
+    const curatedRideProfileReads = (
+      sql: string,
+      params?: unknown[],
+    ): unknown[] | undefined => {
+      if (/SELECT \* FROM attraction_ride_profiles/i.test(sql)) {
+        return [
+          {
+            attractionId: params?.[0],
+            elements: ["lifthill", "vertical-loop"],
+            types: ["launch-coaster"],
+          },
+        ];
+      }
+      if (/SELECT 1 FROM attraction_ride_profiles/i.test(sql)) return [];
+      return undefined;
+    };
+
     const recordTransaction = (
       rowsFor: (sql: string, params?: unknown[]) => unknown[],
     ) => {
@@ -556,7 +586,7 @@ describe("ParksService", () => {
       const transactionalEntityManager = {
         query: jest.fn(async (sql: string, params?: unknown[]) => {
           calls.push({ sql, params });
-          return rowsFor(sql, params);
+          return curatedRideProfileReads(sql, params) ?? rowsFor(sql, params);
         }),
         // Recorded into the same list as the raw statements. The park DELETE
         // goes through the entity manager rather than `query`, and where it
@@ -866,6 +896,15 @@ describe("ParksService", () => {
         );
       expect(reparented("queue_data")?.params).toEqual([survivor, ghost]);
       expect(reparented("ml_prediction_anomalies")?.params).toEqual([
+        survivor,
+        ghost,
+      ]);
+
+      // And the curated ride profile of the ghost, which the survivor has none
+      // of: it is inherited rather than cascaded away with the DELETE below.
+      // Nothing in this codebase writes that row, so there is no second copy
+      // and no job that would rebuild it.
+      expect(reparented("attraction_ride_profiles")?.params).toEqual([
         survivor,
         ghost,
       ]);
