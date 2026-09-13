@@ -539,6 +539,11 @@ describe("applyMergeDependencies", () => {
       (d) => d.table === "attraction_ride_profiles",
     )!;
 
+    // Restored here rather than at the end of the one case that spies: a
+    // failing assertion never reaches the line after it, and a `Logger` left
+    // mocked would silence every warning for the rest of the file.
+    afterEach(() => jest.restoreAllMocks());
+
     it("refuses an entry that declares a conflict key it would ignore", async () => {
       // The branch decides on the winner holding ANY row, so a key here is
       // read by nothing — somebody would be expecting a dedupe that never
@@ -637,7 +642,6 @@ describe("applyMergeDependencies", () => {
       expect(warn.mock.invocationCallOrder[0]).toBeLessThan(
         manager.query.mock.invocationCallOrder[2],
       );
-      warn.mockRestore();
     });
   });
 

@@ -172,11 +172,11 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // exists. Its three neighbours above — rope drop, typical waits, the two
     // baselines — are `discard` because they are DERIVED: the nightly jobs
     // rewrite the survivor's row from the queue history that has just moved
-    // onto it. This row is not derived from anything. Nothing in this codebase
-    // writes it (`attraction-ride-profile.entity.ts`: "these rows ARE the
-    // source of truth and are edited directly in the database"), so a person
-    // typed the track elements, the ride types and the builder, and a
-    // cascade — the FK is ON DELETE CASCADE — takes them with no way back.
+    // onto it. This row is not derived from anything: there is no feed and no
+    // seed job, only an editor typing the track elements, the ride types and
+    // the builder — by hand into the database, or through
+    // `AdminRideProfileService.upsert`. A cascade — the FK is ON DELETE
+    // CASCADE — takes that with no way back, and no job would rebuild it.
     // Same family as `park_seasons` and `park_slug_aliases` one list over.
     //
     // `move` is not available: `attractionId` is the merge column AND the
@@ -194,6 +194,14 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // value that ceases to exist should at least leave a line somebody can
     // find. Which of two competing profiles survives is a curation question
     // and is decided here by "the winner's", per PAR-105.
+    //
+    // That decision is not free, and the log line is where it is paid for:
+    // `AdminRideProfileService.upsert` will create a row from a manufacturer
+    // name alone, with `elements` and `types` empty, so a stub on the survivor
+    // outranks a fully walked-through layout on the loser. Rarely — it needs
+    // two rows for one ride in one park and a profile on BOTH — and the
+    // alternative (rank the rows by how much they say) is a second curation
+    // decision that is not this list's to make. Recorded as PAR-179.
     //
     // The park-side twin of this entry (`PARK_DEPENDENCIES`, column `parkId`,
     // `move`) is a different job and both are needed: that one carries the
@@ -598,6 +606,12 @@ function asRows(result: unknown): Array<Record<string, unknown>> {
  * "the winner's row wins" stops meaning anything obvious once there are many,
  * so a new entry using this strategy should be one-per-entity in fact and not
  * only in the common case.
+ *
+ * The warning is written inside the caller's transaction, so a merge that
+ * rolls back further down leaves a line about a row that still exists. The
+ * same is true of `logDroppedCuration`, and the trade is the same one: a log
+ * line that is occasionally too pessimistic beats one that is never written
+ * because the statement it describes threw.
  */
 async function applyWinnerAuthoritative(
   manager: MergeQueryRunner,

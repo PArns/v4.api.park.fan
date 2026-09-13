@@ -52,10 +52,12 @@ export interface RideStats extends RideMeasurements {
  * clobber it.
  *
  * Lifecycle: there is no upstream feed and no seed job — these rows ARE the
- * source of truth and are edited directly in the database. Nothing in this
- * codebase writes them, so a deploy can never overwrite the curation. The one
- * exception is `stats` below, which `RideStatsService` imports from Wikidata
- * into its own column.
+ * source of truth, so a deploy can never overwrite the curation and no job
+ * would rebuild a row that is lost. They are written in exactly two places,
+ * both of them a person deciding: straight into the database, and
+ * `AdminRideProfileService.upsert` behind the admin's ride-profile editor.
+ * `stats` below is the one column neither of them owns — `RideStatsService`
+ * imports it from Wikidata.
  *
  * The `elements` / `types` arrays are jsonb with GIN indexes so the reverse
  * lookup ("which rides have a zero-g roll") is a single indexed containment
