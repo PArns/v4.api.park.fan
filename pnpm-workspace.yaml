@@ -38,18 +38,52 @@ overrides:
   path-to-regexp@>=8.0.0 <8.4.0: '>=8.4.0'
   formidable: '>=3.5.1'
   superagent: '>=9.0.2'
-  glob: '>=11.0.0'
-  # ...and test-exclude@6 is the one package in the tree that still reads glob as
-  # a function: `promisify(require('glob'))` at index.js:5, which throws from
+  # glob is selected and bounded like the minimatch and ajv lines above, rather
+  # than applied to every consumer with no upper end. Measured 2026-09-12:
+  # seven packages depend on glob and five ask for 13 on their own
+  # (@jest/reporters, jest-config, jest-runtime, test-exclude@8, @nestjs/cli),
+  # so the selector takes the override off those five entirely. Two still
+  # declare ^10 and are the reason the line exists: archiver-utils@5 (dev,
+  # testcontainers -> archiver) and typeorm@0.3.31, which resolves `entities`
+  # from a string pattern via `glob.sync()` in DirectoryExportedClassesLoader —
+  # the production boot path, not a test run. Both land on 13.0.6 as before.
+  # The upper end is the point. An unbounded `>=11.0.0` handed TypeORM every
+  # future major sight-unseen, and no workflow in this repo runs a package.json
+  # script that would notice (see PAR-96, where exactly that shape cost
+  # `pnpm test:cov` every instrumented file, silently). Raising the ceiling is
+  # a deliberate act with a check attached: that `glob.sync()` still means what
+  # it means today.
+  # Selector semantics, because it is easy to read more fence into this than it
+  # has: pnpm matches by *intersection*, not containment, so the line keeps
+  # catching a consumer whose range merely overlaps `<11.0.0` — a widened
+  # `^10.5.0 || ^11.0.0` would still be caught. It stops applying once a range
+  # clears 11 entirely. The `minimatch@>=10.0.0 <10.2.3` line above is the
+  # worked example: test-exclude@8 declares `^10.2.2`, no subset of that range,
+  # and lands on the pinned 10.2.3 — while eslint, out of the line's reach,
+  # sits on 10.2.5.
+  # typeorm 1.x drops the glob dependency altogether, so whoever upgrades past
+  # 0.3.31 re-measures who is left under this line rather than assuming; today
+  # that would be archiver-utils alone, and archiver-utils is dev-only.
+  glob@<11.0.0: '>=11.0.0 <14.0.0'
+  # ...and test-exclude@6 was the one package in the tree that read glob as a
+  # function: `promisify(require('glob'))` at index.js:5, which throws from
   # glob v9 on. It is dev-only (babel-plugin-istanbul -> @jest/transform), so
   # nothing noticed except `pnpm test:cov`, where every single file failed to
   # instrument and the report read `All files | 0 | 0 | 0 | 0`. v8 is the same
-  # class with the two import lines rewritten, and it asks for glob ^13.0.6 and
-  # minimatch ^10.2.2 by itself — the versions the lines above already force.
-  # The target is bounded, unlike the glob line: the consumer above declares
-  # `^6.0.0`, so an unbounded `>=8.0.0` would hand it a future major with no
-  # semver fence — and with no CI running test:cov, a return to all-zeros would
-  # be as quiet as this one was.
+  # class with the two import lines rewritten, and it asks for glob ^13.0.6 by
+  # itself — so the glob selector above no longer matches it. It does still
+  # take `minimatch@>=10.0.0 <10.2.3` above: it declares `^10.2.2`, which
+  # intersects that range, so it lands on the pinned 10.2.3.
+  # The target is bounded, like the glob line above. Mind the selector if this
+  # line is ever re-cut: the consumer is babel-plugin-istanbul@8.0.0 and it
+  # declares `^7.0.1` (measured 2026-09-12), not the `^6.0.0` this comment was
+  # first written against. An unbounded `>=8.0.0` would be the opposite
+  # mistake: a future major with no semver fence, and with no CI running
+  # test:cov, just as quiet.
+  # Whether this line is still load-bearing at all is a separate question and
+  # deliberately not answered here (PAR-166): test-exclude@7.0.2 already reads
+  # `const { glob } = require('glob')`, so the crash this override was cut for
+  # may no longer exist below 8.
   test-exclude@<8.0.0: '>=8.0.0 <9.0.0'
   inflight: npm:lru-cache@11.0.2
   uuid: '>=14.0.0'
