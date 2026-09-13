@@ -89,6 +89,20 @@ export class ParkMergeService {
       errors: [],
     };
 
+    if (winnerId === loserId) {
+      // A park cannot be merged into itself, and the merge does not notice on
+      // its own: every entity matches itself in `migrateEntities`, so the park
+      // consolidates against its own rows and then deletes them. The pair
+      // comes straight out of the admin endpoint's request body
+      // (`park1Id`/`park2Id` → `determineMergeWinner`, which compares the two
+      // parks without asking whether they are one), so the guard belongs here
+      // rather than at one of the two call sites.
+      const msg = `Refusing to merge park ${winnerId} into itself`;
+      this.logger.error(`❌ ${msg}`);
+      result.errors.push(msg);
+      throw new Error(msg);
+    }
+
     try {
       await this.dataSource.transaction(async (manager) => {
         // Load both parks
@@ -435,7 +449,7 @@ export class ParkMergeService {
   /**
    * Moves all dependent data (queue_data, mappings, etc.) from one entity to another.
    *
-   * Every entity type gets the same treatment, because the collision is
+   * Every entity type goes through the same step, because the collision is
    * resolved the same way for all three: `migrateEntities` deletes the losing
    * row right after this returns, and everything hanging off it either
    * cascades with it or is left pointing at nothing. For a show that is its
@@ -446,6 +460,13 @@ export class ParkMergeService {
    * needed", so those four tables were destroyed inside a transaction that
    * then reported success — on the one merge path a person triggers and the
    * repair service runs unattended.
+   *
+   * The same step, not yet the same coverage: `ride_alerts` is the attraction
+   * twin of `show_follows`, with the same CASCADE and the same "a stranger
+   * who would simply never hear from us again", and it is still off
+   * `ATTRACTION_DEPENDENCIES` (PAR-149). A colliding show keeps its follower
+   * here while a colliding ride loses its alerts — putting that list right is
+   * what closes the gap, and this path picks it up the moment it does.
    */
   private async consolidateEntityData(
     manager: any,

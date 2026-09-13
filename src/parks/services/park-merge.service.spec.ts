@@ -368,6 +368,18 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
     ).toHaveLength(1);
   });
 
+  it("refuses to merge a park into itself instead of consolidating it against its own rows", async () => {
+    // Every entity would match itself in `migrateEntities`, so the park would
+    // be drained of its mappings, its followers and its schedule patterns and
+    // then have its shows and restaurants deleted. The ids come out of the
+    // admin endpoint's request body.
+    await expect(service.mergeParks(WINNER_PARK, WINNER_PARK)).rejects.toThrow(
+      /itself/i,
+    );
+
+    expect(calls).toHaveLength(0);
+  });
+
   it("does not stamp last_merged_at when no ride collided — it is a column on attractions", async () => {
     await service.mergeParks(WINNER_PARK, LOSER_PARK);
 
