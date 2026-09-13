@@ -8,6 +8,7 @@ import { Attraction } from "../attractions/entities/attraction.entity";
 import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { ConfigService } from "@nestjs/config";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
+import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { HolidaysService } from "../holidays/holidays.service";
@@ -74,6 +75,12 @@ describe("MLService QueueType Safeguards", () => {
           useValue: { get: jest.fn() },
         },
         { provide: PredictionAccuracyService, useValue: {} },
+        {
+          provide: ForecastAccuracyService,
+          // Nothing here reaches the TFT band; an empty grid is the "no cell"
+          // path and keeps this spec about what it is about.
+          useValue: { getProfile: jest.fn().mockResolvedValue(new Map()) },
+        },
         {
           provide: WeatherService,
           useValue: { getHourlyForecast: jest.fn().mockResolvedValue([]) },

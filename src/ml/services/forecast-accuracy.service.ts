@@ -33,6 +33,14 @@ const MIN_SAMPLE = 500;
  * How wrong the daily forecast typically is — measured, and served so a planner
  * can say "give or take a quarter of an hour" without inventing the quarter.
  *
+ * Two figures per cell, and they answer different questions. {@link
+ * ForecastAccuracyProfile.mae} is the typical miss, served as `/plan/day`'s
+ * `expectedError`. {@link ForecastAccuracyProfile.uncertaintyP95} is the upper
+ * 95th percentile of the same residuals, served as `uncertaintyMinutes` on the
+ * days the TFT answers — where there is no trained quantile to read one from.
+ * Keeping both is the point: a band that equalled the MAE would put the same
+ * number under two names, and the two names promise different things.
+ *
  * See {@link ForecastAccuracyProfile} for why the answer needs two axes and why
  * the band is the predicted level rather than the realised one.
  *
@@ -68,6 +76,7 @@ export class ForecastAccuracyService {
       sample_size: string;
       mae: string;
       mean_actual: string;
+      uncertainty_p95: string;
     }> = await this.repository.manager.query(
       `WITH truth AS (
          SELECT qda."attractionId"::uuid AS aid,
@@ -90,6 +99,10 @@ export class ForecastAccuracyService {
                      WHEN (f.target_date - f.forecast_date) <= 30 THEN 'd30'
                      ELSE 'd60' END AS lead_bucket,
                 abs(f.predicted_peak - t.actual) AS err,
+                -- SIGNED, and in this direction: the band is served as "the wait
+                -- may be this much LONGER", so the tail that matters is the one
+                -- where the day beat the forecast.
+                (t.actual - f.predicted_peak) AS resid,
                 t.actual
            FROM tft_forecasts f
            JOIN truth t ON t.aid = f.attraction_id AND t.day = f.target_date
@@ -101,7 +114,9 @@ export class ForecastAccuracyService {
        SELECT predicted_band, lead_bucket,
               count(*)::text     AS sample_size,
               avg(err)::text     AS mae,
-              avg(actual)::text  AS mean_actual
+              avg(actual)::text  AS mean_actual,
+              (percentile_cont(0.95) WITHIN GROUP (ORDER BY resid))::text
+                                 AS uncertainty_p95
          FROM j
         GROUP BY 1, 2
        HAVING count(*) >= ${MIN_SAMPLE}`,
@@ -114,6 +129,26 @@ export class ForecastAccuracyService {
       sampleSize: Number(r.sample_size),
       mae: Math.round(Number(r.mae) * 10) / 10,
       meanActual: Math.round(Number(r.mean_actual) * 10) / 10,
+      // NULL below zero, not clamped to zero. The percentile is of a SIGNED
+      // residual, so a cell that systematically over-forecasts produces a
+      // negative one — and that is not "a band of width zero", it is a
+      // different fact about the cell ("it essentially never runs long"). Zero
+      // is a measurement here and travels as one, which is exactly why a
+      // negative must not be rounded up into it: the band would read as
+      // maximum certainty, and `dailyConfidence` would hand its model term a
+      // 100, on the cell that supports the claim least. NULL puts it on the
+      // "no cell" path instead, where a caller already reads it as not known.
+      //
+      // Deliberately NOT floored at the MAE either: that compares a signed
+      // percentile against a mean of absolute values, and for such a cell it
+      // would publish the MAE as an upward band the data does not support.
+      //
+      // Never observed in production — the smallest measured value is 25.3 on
+      // `quiet|d1`, the smallest p95/MAE ratio 2.1x.
+      uncertaintyP95:
+        Number(r.uncertainty_p95) < 0
+          ? null
+          : Math.round(Number(r.uncertainty_p95) * 10) / 10,
       computedAt,
     }));
 
@@ -180,6 +215,15 @@ export class ForecastAccuracyService {
    * "at least this wrong" rather than understating — the same reasoning
    * `PredictionLeadSnapshotService` applies from the other side. It never reaches
    * past the last bucket, so past 60 days the answer stays undefined.
+   *
+   * FOR `uncertaintyP95` THE SAME WIDENING IS ALL BUT MONOTONE, AND THE EXCEPTION
+   * IS NAMED HERE RATHER THAN ROUNDED AWAY. Measured 2026-09-13 over 45 days, the
+   * band rises with lead in fifteen of the eighteen steps; the one that falls is
+   * `busy` from `d1` (46.16) to `d3` (45.85), by 0.31 minutes. So a `busy|d1`
+   * lookup that has to widen understates by a third of a minute rather than
+   * overstating — inside the rounding the field itself applies, and far inside
+   * the 500-comparison sampling noise of the cell. It is recorded because the MAE
+   * invariant below is stated as a fact and this one cannot be.
    *
    * THAT INVARIANT RESTS ON TWO THINGS, and both are measured rather than assumed:
    *

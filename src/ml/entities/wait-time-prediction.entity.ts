@@ -70,6 +70,21 @@ export class WaitTimePrediction {
   // draw the band. NULL means the model reported no real spread — a different
   // statement from a zero-wide band, which would draw as a confident hairline.
   //
+  // THE NAME OVERSTATES WHAT THIS COLUMN HOLDS, and it is worth knowing which
+  // way. The spread is the model's own, so it measures the width CatBoost was
+  // trained to produce and not the width its forecasts actually miss by:
+  // measured over 45 days against the realised day-P90 (2026-09-13, production,
+  // n=5,112 — most past daily rows are deduplicated away, so effectively a
+  // lead-1 sample), an alpha=0.95 band that should contain 95 % of outcomes
+  // contains 52.7 % (quiet), 54.8 % (mid) and 56.7 % (busy). Its magnitude sits
+  // near the MAE, not near the measured 95th percentile of the residuals.
+  //
+  // This column is the WRITER's copy and stays as the model reports it — the
+  // scoreboard needs the model's own claim. What the calendar SERVES for days
+  // 1-60 is a different, measured figure (ForecastAccuracyProfile.uncertaintyP95),
+  // because the TFT has no trained quantile at all. Do not reconcile the two by
+  // narrowing the served one.
+  //
   // smallint, not float: a spread of 9.7 against 10 minutes is not a distinction
   // anybody acts on, and this is the heaviest-written table in the system. Two
   // bytes, and nothing at all while NULL — the row already carries a null bitmap

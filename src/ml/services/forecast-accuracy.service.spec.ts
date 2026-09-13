@@ -7,6 +7,7 @@ const cell = (
   leadBucket: string,
   mae: number,
   sampleSize = 1000,
+  uncertaintyP95 = mae * 2.5,
 ): ForecastAccuracyProfile =>
   ({
     predictedBand,
@@ -14,6 +15,7 @@ const cell = (
     mae,
     sampleSize,
     meanActual: 40,
+    uncertaintyP95,
     computedAt: new Date("2026-09-11T03:10:00Z"),
   }) as ForecastAccuracyProfile;
 
@@ -203,5 +205,111 @@ describe("the two classifiers together", () => {
     // The key shape `plan-day.service.ts` builds when it looks a ride up.
     expect(keys).toContain("busy|d3");
     expect(keys).toContain("quiet|d14");
+  });
+});
+
+/**
+ * The band is a second figure on the same row, and the two must not be confused
+ * at the point of use: `mae` is `/plan/day`'s `expectedError` ("a typical miss")
+ * and `uncertaintyP95` is the calendar's `uncertaintyMinutes` ("it can reach this
+ * far"). A lookup returns the row, so the guard that matters is that a caller
+ * asking for one distance cannot be handed the other's row.
+ */
+describe("ForecastAccuracyService.lookup carries the band", () => {
+  it("returns the p95 of the cell the distance actually falls in", () => {
+    const profile = profileOf(
+      cell("quiet", "d1", 8.6, 1000, 23.8),
+      cell("quiet", "d7", 9.0, 1000, 26.4),
+      cell("quiet", "d60", 13.2, 1000, 38.1),
+    );
+
+    expect(ForecastAccuracyService.lookup(profile, 20, 1)?.uncertaintyP95).toBe(
+      23.8,
+    );
+    expect(ForecastAccuracyService.lookup(profile, 20, 7)?.uncertaintyP95).toBe(
+      26.4,
+    );
+    expect(
+      ForecastAccuracyService.lookup(profile, 20, 45)?.uncertaintyP95,
+    ).toBe(38.1);
+  });
+
+  it("widens to the coarser cell's band, which is the wider one", () => {
+    // `d1` and `d3` absent — the state between a deploy that adds a bucket and
+    // the next nightly rebuild. Widening must not narrow the band.
+    const profile = profileOf(cell("mid", "d7", 13.6, 1000, 32.8));
+
+    const narrow = ForecastAccuracyService.lookup(profile, 45, 1);
+    expect(narrow?.leadBucket).toBe("d7");
+    expect(narrow?.uncertaintyP95).toBe(32.8);
+  });
+
+  it("has nothing to widen to past the last bucket", () => {
+    const profile = profileOf(cell("mid", "d60", 16.4, 1000, 45.7));
+
+    expect(ForecastAccuracyService.lookup(profile, 45, 61)).toBeUndefined();
+  });
+});
+
+/**
+ * `rebuild()`'s mapping from raw rows to entities. The SQL itself needs a
+ * database and is exercised against production by hand; what is pinned here is
+ * the one rule the query cannot express — a negative signed percentile is not a
+ * band and must not become one.
+ */
+describe("ForecastAccuracyService.rebuild maps the band", () => {
+  const raw = (uncertaintyP95: string, mae = "10.0") => ({
+    predicted_band: "quiet",
+    lead_bucket: "d1",
+    sample_size: "1000",
+    mae,
+    mean_actual: "40.0",
+    uncertainty_p95: uncertaintyP95,
+  });
+
+  const runWith = async (rows: ReturnType<typeof raw>[]) => {
+    const inserted: Record<string, unknown>[] = [];
+    const manager = {
+      query: jest.fn().mockResolvedValue(rows),
+      transaction: jest.fn(
+        async (fn: (tx: unknown) => Promise<void>) =>
+          await fn({
+            clear: jest.fn(),
+            insert: jest.fn(
+              (_e: unknown, rowsIn: Record<string, unknown>[]) => {
+                inserted.push(...rowsIn);
+              },
+            ),
+          }),
+      ),
+    };
+    const service = new ForecastAccuracyService({
+      manager,
+    } as never);
+    await service.rebuild();
+    return inserted;
+  };
+
+  it("rounds a positive percentile to one decimal", async () => {
+    const [row] = await runWith([raw("25.316768193244922")]);
+    expect(row.uncertaintyP95).toBe(25.3);
+  });
+
+  it("keeps a measured zero, which is a statement and not an absence", async () => {
+    const [row] = await runWith([raw("0")]);
+    expect(row.uncertaintyP95).toBe(0);
+  });
+
+  it("stores NULL for a cell that never runs long, rather than a zero band", async () => {
+    // A systematically over-forecasting cell: every residual negative. Rounding
+    // this up to 0 would publish the narrowest possible band — read as maximum
+    // certainty — on the cell that supports it least.
+    const [row] = await runWith([raw("-5.25", "17.5")]);
+    expect(row.uncertaintyP95).toBeNull();
+  });
+
+  it("never substitutes the MAE, which counts something else", async () => {
+    const [row] = await runWith([raw("-5.25", "17.5")]);
+    expect(row.uncertaintyP95).not.toBe(17.5);
   });
 });

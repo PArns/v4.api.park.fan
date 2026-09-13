@@ -119,9 +119,21 @@ export class PlanDayRideDto {
     nullable: true,
     example: 12,
     description:
-      "Half-width of the uncertainty band in minutes, from the model's own " +
-      "top quantile minus its median. Absent where the model reports no " +
-      "spread — which is NOT a band of width zero and must not be drawn as one.",
+      "How many minutes longer than `dayPeak` the wait can plausibly run — an " +
+      "upper half-width, not an interval to subtract as well. Absent means NOT " +
+      "KNOWN and is NOT a band of width zero; a literal 0 is a measurement and " +
+      "does travel, so test `!= null` and never truthiness. " +
+      "TWO SOURCES, AND THEY ARE NOT THE SAME STATISTIC. Inside the TFT's " +
+      "60-day reach — which is every day this endpoint plans, since it is " +
+      "always today or tomorrow — it is the MEASURED 95th percentile of that " +
+      "predicted-band x lead-bucket cell's realised residuals (PAR-111), which " +
+      "covers 92-98% of days. Where CatBoost answers instead it is that " +
+      "model's own top trained quantile minus its median, which measured " +
+      "covers only 53-57%, so it runs roughly a third as wide for the same " +
+      "real uncertainty. Do not read a narrower band here as a more certain " +
+      "day without checking which one you have. " +
+      "It is a different question from `expectedError`, which is the TYPICAL " +
+      "miss (the same cell's MAE) rather than how far the day can reach.",
   })
   uncertaintyMinutes?: number | null;
 

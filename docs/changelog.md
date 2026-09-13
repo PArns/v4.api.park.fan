@@ -34,6 +34,58 @@ glob major would first be noticed as a container that does not come up. Raising
 the ceiling is now a deliberate act with a check attached: that `glob.sync()`
 still means what it means today.
 
+### Added — the calendar's first 60 days finally carry an uncertainty band, and it is measured
+
+`tft_forecasts` stores a `predicted_peak` and no spread, so every calendar day
+the TFT answered reached a visitor with `uncertaintyMinutes` absent — **155 of
+155** headliner entries at Europa-Park on 2026-09-13, against a CatBoost band
+from day 59 on. The near future said less about its own uncertainty than the far
+future did, and the `confidence` beside it was a hard-coded `0.7`.
+
+`forecast_accuracy_profile` gains **`uncertainty_p95`**: the 95th percentile of
+the signed residual `actual − predicted_peak` for that predicted band × lead
+bucket, computed by the same nightly `rebuild()` that already measures the MAE
+there. `getTftDailyPredictions` looks it up per row and serves it. Fitted on
+target days −45…−15 and checked on −15…−1, all 18 cells cover between **92.3 %
+and 97.9 %** of realised days against a nominal 95 %.
+
+It is a second figure and not the one already stored on purpose: an MAE-wide band
+covers 68–89 %, and `/plan/day` serves the MAE under its own name
+(`expectedError`). Scaling the prediction was rejected on measurement — the
+p95/MAE ratio runs 2.1× busy against 2.7× quiet, so no single factor fits both
+ends.
+
+Three details worth carrying forward: the column is **nullable** (the table has
+held rows since PAR-17 and its schema comes from `synchronize`, so
+`ADD COLUMN real NOT NULL` would have stopped the API from booting, and a
+`DEFAULT 0` would have published a zero-wide band); a **negative** measured
+percentile is stored as NULL rather than clamped to 0, because a cell that never
+runs long has not got a narrow band; and the lookup buckets by
+`target_date - forecast_date`, matching what `rebuild()` measures, so the 3-day
+staleness guard cannot hand a stale forecast a band from a shorter distance.
+
+`confidence` on the TFT path now runs CatBoost's own formula (60 % distance term,
+40 % spread term, each floored at 30) fed from that measured band. The `0.7` was
+invented *and* on the wrong scale: CatBoost emits 30–100, so a consumer comparing
+the two across the seam saw a hundredfold step.
+
+### Documented — CatBoost's `uncertaintyMinutes` covers 53–57 %, not 95 %
+
+Found while checking whether the new band would create a visible step at day 60.
+CatBoost's band is `q0.95 − q0.5` of its own predictive distribution, and it is
+reported faithfully — but measured against realised days over 45 days (n = 5,112;
+`deduplicatePredictions` keeps one row per target day, so effectively lead 1) it
+contains **52.7 %** (quiet), **54.8 %** (mid) and **56.7 %** (busy) of outcomes.
+Its magnitude sits on the MAE row, not the q0.95 row.
+
+So the calendar does step down at day 60 (quiet ~38 → ~11), and the step is two
+different statistics meeting rather than a real change in certainty. It is
+**documented rather than smoothed**: narrowing the measured side would mean
+serving a width nobody measured, and putting CatBoost's side on the same basis is
+not yet possible — its error past 60 days has never been measurable, and
+`prediction_lead_snapshots` cannot report the `d60` bucket before **2026-11-02**.
+Tracked as PAR-167.
+
 ### Fixed — a shared show slug no longer rolls the whole park merge back
 
 Both raw merge paths in `parks.service.ts` moved a losing park's shows and
