@@ -129,20 +129,26 @@ export class ForecastAccuracyService {
       sampleSize: Number(r.sample_size),
       mae: Math.round(Number(r.mae) * 10) / 10,
       meanActual: Math.round(Number(r.mean_actual) * 10) / 10,
-      // Floored at zero, and at nothing else. The percentile is of a SIGNED
-      // residual, so a cell that systematically over-forecasts can produce a
-      // negative one — which does not mean "a narrower band" but "this cell
-      // essentially never runs long", and serving it as a width would be
-      // meaningless. It is deliberately NOT floored at the MAE: that would
-      // compare a signed percentile against a mean of absolute values and, for
-      // such a cell, publish the MAE as an upward band the data does not
-      // support. Never observed in production — the smallest measured value is
-      // 25.3 on `quiet|d1`, and the smallest p95/MAE ratio 2.1x — so this floor
-      // is a definition, not a correction.
-      uncertaintyP95: Math.max(
-        Math.round(Number(r.uncertainty_p95) * 10) / 10,
-        0,
-      ),
+      // NULL below zero, not clamped to zero. The percentile is of a SIGNED
+      // residual, so a cell that systematically over-forecasts produces a
+      // negative one — and that is not "a band of width zero", it is a
+      // different fact about the cell ("it essentially never runs long"). Zero
+      // is a measurement here and travels as one, which is exactly why a
+      // negative must not be rounded up into it: the band would read as
+      // maximum certainty, and `dailyConfidence` would hand its model term a
+      // 100, on the cell that supports the claim least. NULL puts it on the
+      // "no cell" path instead, where a caller already reads it as not known.
+      //
+      // Deliberately NOT floored at the MAE either: that compares a signed
+      // percentile against a mean of absolute values, and for such a cell it
+      // would publish the MAE as an upward band the data does not support.
+      //
+      // Never observed in production — the smallest measured value is 25.3 on
+      // `quiet|d1`, the smallest p95/MAE ratio 2.1x.
+      uncertaintyP95:
+        Number(r.uncertainty_p95) < 0
+          ? null
+          : Math.round(Number(r.uncertainty_p95) * 10) / 10,
       computedAt,
     }));
 

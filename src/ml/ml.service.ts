@@ -851,7 +851,11 @@ export class MLService {
    * nf-service falls back to CatBoost instead of serving old forecasts. Returned as
    * PredictionDto so it drops straight into the calendar/yearly crowd-level path
    * (which recompute crowdLevel from predictedWaitTime; the placeholder fields here
-   * are not read). Cached per park-day (TFT only changes on the nightly run).
+   * are not read). Cached per park-day: both inputs move on a nightly run — the
+   * TFT forecast itself, and the accuracy grid the band comes from
+   * (`rebuild-accuracy-profile`) — so a cached park-day can carry the previous
+   * night's band for at most the 13-hour TTL, which is the same staleness the
+   * forecast beside it already has.
    *
    * THE BAND IS MEASURED HERE, BECAUSE THE MODEL DOES NOT CARRY ONE.
    * `tft_forecasts` holds a `predicted_peak` and nothing else, so until now every
@@ -900,12 +904,17 @@ export class MLService {
     const rows: Array<{
       attractionId: string;
       targetDate: string;
+      forecastDate: string;
       peak: string;
     }> = await this.attractionRepository.query(
       `
         SELECT DISTINCT ON (f.attraction_id, f.target_date)
           f.attraction_id::text   AS "attractionId",
           f.target_date::text      AS "targetDate",
+          -- The band is keyed on how far ahead the forecast was MADE, not on
+          -- how far ahead the day is from today; those differ by up to the
+          -- staleness guard below. See the lookup in the mapper.
+          f.forecast_date::text    AS "forecastDate",
           f.predicted_peak::float  AS peak
         FROM tft_forecasts f
         JOIN attractions a
@@ -933,7 +942,13 @@ export class MLService {
 
     const preds: PredictionDto[] = rows.map((r) => {
       const predictedWaitTime = Math.max(0, Math.round(Number(r.peak)));
-      const leadDays = MLService.daysBetween(today, r.targetDate);
+      // From the forecast's OWN origin, not from today. `rebuild()` buckets by
+      // `target_date - forecast_date`, and the staleness guard above admits a
+      // forecast up to three days old — so a stalled nf-service would otherwise
+      // be handed the band measured for a distance three days SHORTER than the
+      // one it actually forecast at. That narrows the band exactly when it
+      // should widen, which is the one direction `lookup` is built to avoid.
+      const leadDays = MLService.daysBetween(r.forecastDate, r.targetDate);
       const cell = ForecastAccuracyService.lookup(
         accuracy,
         predictedWaitTime,

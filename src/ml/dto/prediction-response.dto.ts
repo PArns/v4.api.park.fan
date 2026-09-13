@@ -87,7 +87,10 @@ export class PredictionDto {
   currentWaitTime?: number;
 
   @ApiProperty({
-    description: "Adjusted confidence score when deviation detected (0-1)",
+    description:
+      "Adjusted confidence score when deviation detected: half of " +
+      "`confidence`, so it shares that field's 30-100 scale and not the 0-1 " +
+      "this said. Halving is applied in `park-integration.service.ts`.",
     required: false,
   })
   confidenceAdjusted?: number;
@@ -117,7 +120,12 @@ export class PredictionItemDto {
   @ApiProperty({ description: "Predicted wait time in minutes" })
   predictedWaitTime: number;
 
-  @ApiProperty({ description: "Prediction confidence score (0-1)" })
+  @ApiProperty({
+    description:
+      "Prediction confidence score, 30-100 — the same scale as " +
+      "`PredictionDto.confidence`, which is what fills it. It said 0-1 and " +
+      "never was.",
+  })
   confidence: number;
 }
 

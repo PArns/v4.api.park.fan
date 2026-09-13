@@ -153,6 +153,19 @@ direction a visitor plans against. `getTftDailyPredictions` looks the cell up pe
 row and serves it. No new table, no migration beyond the column, and the nightly
 rebuild keeps it current.
 
+**Three details that are load-bearing rather than incidental.** The column is
+**nullable**, because the table has held rows since PAR-17 and its schema comes
+from `synchronize`: `ALTER TABLE ... ADD COLUMN real NOT NULL` against a
+non-empty table is rejected by Postgres outright, and a `DEFAULT 0` would boot
+and then publish a zero-wide band, which reads as certainty. A **negative**
+measured percentile is stored as NULL rather than clamped to 0 — a cell that
+systematically over-forecasts has not got a narrow band, it has a different fact
+about it, and a 0 would read as maximum certainty on the cell that supports it
+least. And the lookup buckets by **`target_date - forecast_date`**, the same key
+`rebuild()` measures on, not by the distance from today: the 3-day staleness
+guard means a stalled nf-service would otherwise be handed the band measured for
+a distance three days shorter than the one it actually forecast at.
+
 **It is calibrated.** Fitted on target days −45…−15 and checked on −15…−1, all 18
 cells cover between **92.3 % and 97.9 %** of realised days against a nominal 95 %:
 

@@ -270,7 +270,7 @@ describe("MLService", () => {
       predictedBand: string,
       leadBucket: string,
       mae: number,
-      uncertaintyP95: number,
+      uncertaintyP95: number | null,
     ) =>
       ({
         predictedBand,
@@ -282,8 +282,14 @@ describe("MLService", () => {
         computedAt: new Date(),
       }) as any;
 
-    /** Rows as the raw query returns them: one ride, one target day each. */
-    const arrange = (rows: Array<{ targetDate: string; peak: number }>) => {
+    /**
+     * Rows as the raw query returns them: one ride, one target day each.
+     * `forecastDate` defaults to today — a forecast made this morning — and is
+     * passed explicitly where the point is that it was not.
+     */
+    const arrange = (
+      rows: Array<{ targetDate: string; peak: number; forecastDate?: string }>,
+    ) => {
       mockParkRepository.findOne.mockResolvedValue({
         id: parkId,
         timezone: "Europe/Berlin",
@@ -294,6 +300,7 @@ describe("MLService", () => {
         rows.map((r, i) => ({
           attractionId: `attr-${i}`,
           targetDate: r.targetDate,
+          forecastDate: r.forecastDate ?? today,
           peak: String(r.peak),
         })),
       );
@@ -316,6 +323,24 @@ describe("MLService", () => {
       const preds = await service.getTftDailyPredictions(parkId, 60);
 
       expect(preds.map((p) => p.uncertaintyMinutes)).toEqual([24, 38, 46]);
+    });
+
+    it("buckets by the forecast's own age, not by how far off the day is", async () => {
+      // The staleness guard admits a forecast up to three days old. A forecast
+      // made 3 days ago for a day 5 days out was made at a distance of 8, and
+      // the band measured at 8 is the wider one — taking the d7 cell because
+      // "today + 5" reads as d7 would narrow it exactly when it should widen.
+      mockForecastAccuracyService.getProfile.mockResolvedValue(
+        new Map([
+          ["quiet|d7", cell("quiet", "d7", 9.0, 26.4)],
+          ["quiet|d14", cell("quiet", "d14", 9.9, 28.4)],
+        ]),
+      );
+      arrange([{ targetDate: plus(5), peak: 20, forecastDate: plus(-3) }]);
+
+      const preds = await service.getTftDailyPredictions(parkId, 60);
+
+      expect(preds[0].uncertaintyMinutes).toBe(28); // d14, not d7
     });
 
     it("leaves the band absent — not zero — when the grid has no cell", async () => {
@@ -347,7 +372,7 @@ describe("MLService", () => {
       // `null / wait` is 0 and would award the highest possible confidence to
       // the one row that measured nothing.
       mockForecastAccuracyService.getProfile.mockResolvedValue(
-        new Map([["quiet|d1", cell("quiet", "d1", 8.6, null as any)]]),
+        new Map([["quiet|d1", cell("quiet", "d1", 8.6, null)]]),
       );
       arrange([{ targetDate: plus(1), peak: 20 }]);
 

@@ -55,6 +55,15 @@ covers 68–89 %, and `/plan/day` serves the MAE under its own name
 p95/MAE ratio runs 2.1× busy against 2.7× quiet, so no single factor fits both
 ends.
 
+Three details worth carrying forward: the column is **nullable** (the table has
+held rows since PAR-17 and its schema comes from `synchronize`, so
+`ADD COLUMN real NOT NULL` would have stopped the API from booting, and a
+`DEFAULT 0` would have published a zero-wide band); a **negative** measured
+percentile is stored as NULL rather than clamped to 0, because a cell that never
+runs long has not got a narrow band; and the lookup buckets by
+`target_date - forecast_date`, matching what `rebuild()` measures, so the 3-day
+staleness guard cannot hand a stale forecast a band from a shorter distance.
+
 `confidence` on the TFT path now runs CatBoost's own formula (60 % distance term,
 40 % spread term, each floored at 30) fed from that measured band. The `0.7` was
 invented *and* on the wrong scale: CatBoost emits 30–100, so a consumer comparing

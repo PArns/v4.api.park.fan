@@ -250,3 +250,66 @@ describe("ForecastAccuracyService.lookup carries the band", () => {
     expect(ForecastAccuracyService.lookup(profile, 45, 61)).toBeUndefined();
   });
 });
+
+/**
+ * `rebuild()`'s mapping from raw rows to entities. The SQL itself needs a
+ * database and is exercised against production by hand; what is pinned here is
+ * the one rule the query cannot express — a negative signed percentile is not a
+ * band and must not become one.
+ */
+describe("ForecastAccuracyService.rebuild maps the band", () => {
+  const raw = (uncertaintyP95: string, mae = "10.0") => ({
+    predicted_band: "quiet",
+    lead_bucket: "d1",
+    sample_size: "1000",
+    mae,
+    mean_actual: "40.0",
+    uncertainty_p95: uncertaintyP95,
+  });
+
+  const runWith = async (rows: ReturnType<typeof raw>[]) => {
+    const inserted: Record<string, unknown>[] = [];
+    const manager = {
+      query: jest.fn().mockResolvedValue(rows),
+      transaction: jest.fn(
+        async (fn: (tx: unknown) => Promise<void>) =>
+          await fn({
+            clear: jest.fn(),
+            insert: jest.fn(
+              (_e: unknown, rowsIn: Record<string, unknown>[]) => {
+                inserted.push(...rowsIn);
+              },
+            ),
+          }),
+      ),
+    };
+    const service = new ForecastAccuracyService({
+      manager,
+    } as never);
+    await service.rebuild();
+    return inserted;
+  };
+
+  it("rounds a positive percentile to one decimal", async () => {
+    const [row] = await runWith([raw("25.316768193244922")]);
+    expect(row.uncertaintyP95).toBe(25.3);
+  });
+
+  it("keeps a measured zero, which is a statement and not an absence", async () => {
+    const [row] = await runWith([raw("0")]);
+    expect(row.uncertaintyP95).toBe(0);
+  });
+
+  it("stores NULL for a cell that never runs long, rather than a zero band", async () => {
+    // A systematically over-forecasting cell: every residual negative. Rounding
+    // this up to 0 would publish the narrowest possible band — read as maximum
+    // certainty — on the cell that supports it least.
+    const [row] = await runWith([raw("-5.25", "17.5")]);
+    expect(row.uncertaintyP95).toBeNull();
+  });
+
+  it("never substitutes the MAE, which counts something else", async () => {
+    const [row] = await runWith([raw("-5.25", "17.5")]);
+    expect(row.uncertaintyP95).not.toBe(17.5);
+  });
+});
