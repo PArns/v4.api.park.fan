@@ -885,6 +885,26 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    // Plan-day coverage: Daily at 9am, after the night's aggregation and the
+    // day-level forecasts (TFT 07:00, accuracy 08:30) have landed. Measures how
+    // many open parks `/plan/day` cannot answer for 30 days out.
+    const hasPlanDayCoverageCron = await this.hasRepeatableJob(
+      this.statsQueue,
+      "plan-day-coverage-cron",
+    );
+    if (!hasPlanDayCoverageCron) {
+      await this.statsQueue.add(
+        "plan-day-coverage",
+        {},
+        {
+          repeat: {
+            cron: "0 9 * * *", // Daily at 9am UTC
+          },
+          jobId: "plan-day-coverage-cron",
+        },
+      );
+    }
+
     // P50 Baseline: Daily at 3am (after percentile calculation at 2am)
     const hasP50ParkBaselineCron = await this.hasRepeatableJob(
       this.p50BaselineQueue,

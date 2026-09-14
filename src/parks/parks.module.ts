@@ -9,6 +9,8 @@ import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
 import { PlanDayService } from "./services/plan-day.service";
+import { PlanDayCoverageService } from "./services/plan-day-coverage.service";
+import { PlanDayCoverage } from "./entities/plan-day-coverage.entity";
 import { BestDaysService } from "./services/best-days.service";
 import { ParkValidatorService } from "./services/park-validator.service";
 import { ParkRepairService } from "./services/park-repair.service";
@@ -52,6 +54,7 @@ import { PopularityModule } from "../popularity/popularity.module";
       AttractionAccuracyStats,
       ExternalEntityMapping,
       Attraction,
+      PlanDayCoverage,
     ]),
     ThemeParksModule,
     DestinationsModule,
@@ -80,6 +83,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     ParkEnrichmentService,
     CalendarService,
     PlanDayService,
+    PlanDayCoverageService,
     BestDaysService,
     ParkValidatorService,
     ParkRepairService,
@@ -94,6 +98,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     TypeOrmModule, // CRITICAL: Export TypeOrmModule so other modules can inject ParkRepository
     ParkEnrichmentService,
     CalendarService,
+    PlanDayCoverageService,
     BestDaysService,
     ParkValidatorService,
     ParkRepairService,

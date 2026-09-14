@@ -1,5 +1,6 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { LiveWaitTimesDto } from "./live-wait-times.dto";
+import type { PlanDayUnavailableReason } from "../utils/plan-day-availability.util";
 
 /**
  * How a number in this response was arrived at. It travels with every curve
@@ -420,6 +421,78 @@ export class PlanDayAccuracyDto {
   sampleSize?: number;
 }
 
+/**
+ * The published list, derived from a map keyed by the union rather than written
+ * out beside it.
+ *
+ * `as const satisfies readonly PlanDayUnavailableReason[]` only checks that the
+ * listed values are valid, not that all of them are listed — so a new member of
+ * the union would drop out of the OpenAPI enum without a word. Keying a
+ * `Record` by the union makes the compiler demand every one. That drift is
+ * exactly how `unknown` stayed out of the published `AttractionStatus` contract
+ * for months (`claude.md` §4).
+ */
+const UNAVAILABLE_REASON_SET: Record<PlanDayUnavailableReason, true> = {
+  park_closed: true,
+  hours_unknown: true,
+  no_rides_on_file: true,
+  no_wait_time_source: true,
+  never_measured: true,
+  feed_stale: true,
+  rides_cannot_open: true,
+  data_unavailable: true,
+  no_observations: true,
+  insufficient_history: true,
+  no_hourly_shape: true,
+  no_forecast: true,
+};
+
+export const PLAN_DAY_UNAVAILABLE_REASONS = Object.keys(
+  UNAVAILABLE_REASON_SET,
+) as PlanDayUnavailableReason[];
+
+export class PlanDayUnavailableDto {
+  @ApiProperty({
+    enum: PLAN_DAY_UNAVAILABLE_REASONS,
+    description:
+      "Why this day carries no ride curves. Present ONLY when `rides` is " +
+      "empty, and then always — an empty list without one is a bug.\n\n" +
+      "`rides: []` on its own meant four different things at once and a caller " +
+      "could tell none of them apart: measured against production on " +
+      "2026-09-14, 19 of the 73 parks with an operating day on 2026-10-14 came " +
+      "back empty, for six different reasons. A client that renders all of them " +
+      "as a quiet park prints an invented number for a park nobody measures; " +
+      "one that renders all of them as an error tells a visitor of Hansa-Park " +
+      "something is broken when nothing is.\n\n" +
+      "`data_unavailable` is the odd one: a service behind this endpoint did " +
+      "not answer, so why the list is empty is not known. It is not a data gap " +
+      "and must not be counted as one.\n\n" +
+      "`no_wait_time_source` is an ANSWER — that park publishes wait times " +
+      "nowhere readable, so no plan is coming, today or ever. `park_closed`, " +
+      "`rides_cannot_open` and `no_rides_on_file` are answers about the park. " +
+      "The rest are gaps on our side: `never_measured` and " +
+      "`insufficient_history` close as history accumulates, `no_hourly_shape` " +
+      "when the park's rides start sharing hours, `no_forecast` with the next " +
+      "model run — and `feed_stale` is a FAULT, a park that still schedules " +
+      "operating days while its readings stopped weeks ago.",
+  })
+  reason: PlanDayUnavailableReason;
+
+  @ApiProperty({
+    required: false,
+    example: 96,
+    description:
+      "Days since the last usable wait-time reading from this park, counted " +
+      "from TODAY and not from the date asked about — the feed is a property " +
+      "of the park, not of the day, so on a past date this says how long the " +
+      "silence has lasted rather than how old it was then. Present on " +
+      "`feed_stale` and omitted everywhere else, including `never_measured`, " +
+      "where there is no last reading to count from, and `data_unavailable`, " +
+      "where the question got no answer.",
+  })
+  staleDays?: number;
+}
+
 export class PlanDayDto {
   @ApiProperty({ example: "phantasialand" })
   parkSlug: string;
@@ -479,6 +552,15 @@ export class PlanDayDto {
 
   @ApiProperty({ type: [PlanDayRideDto] })
   rides: PlanDayRideDto[];
+
+  @ApiProperty({
+    required: false,
+    type: PlanDayUnavailableDto,
+    description:
+      "Why `rides` is empty. Present exactly when it is, so a caller tests " +
+      "this field rather than guessing from the length of a list.",
+  })
+  ridesUnavailable?: PlanDayUnavailableDto;
 
   @ApiProperty({
     type: [PlanDayShowDto],

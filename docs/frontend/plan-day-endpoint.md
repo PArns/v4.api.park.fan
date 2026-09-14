@@ -625,6 +625,165 @@ The profile is rebuilt nightly at 03:10 rather than configured: these numbers
 follow the model, the season and the park set, and a constant would be right on
 the day it was written and quietly wrong afterwards.
 
+## 11. A day with no rides says why
+
+`rides: []` is a real answer and, until PAR-194, an ambiguous one. It meant
+"this park publishes no wait times anywhere we can read", "the feed stopped in
+June", "we have readings but not enough of them yet" and "something is broken",
+all at once, and nothing in the response separated them. A client that drew all
+four as a quiet park printed an invented number for a park nobody measures; one
+that drew all four as an error told a Hansa-Park visitor something was wrong
+when nothing was.
+
+Every empty `rides` now carries `ridesUnavailable.reason`, and a non-empty one
+never does — so the test is the field, not the length of a list.
+
+### What was measured
+
+Against production on **2026-09-14**, every park with a park-wide `OPERATING`
+schedule entry for **2026-10-14** (lead 30 days), one `/plan/day` call each:
+
+| parks open | with rides | **with `rides: []`** |
+| --- | --- | --- |
+| 73 | 54 | **19 (26 %)** |
+
+And those 19 split six ways:
+
+| reason | parks | what was measured |
+| --- | --- | --- |
+| `no_rides_on_file` | 1 | Discovery Cove Orlando: no ride in the catalog |
+| `no_wait_time_source` | 1 | Hansa-Park: 82 rides, never a qualifying reading, and the reason is curated |
+| `never_measured` | 1 | Paradise Country: 12 rides, not one reading ever |
+| `feed_stale` | 2 | La Ronde (last reading 2026-06-10, **96 days**), Wet'n'Wild (2026-06-29, **77 days**) |
+| `insufficient_history` | 12 | readings arrive, no ride reaches the profile's 20-measured-day floor: Kentucky Kingdom, Peppa Pig, Aquatica Orlando, Ocean Park, Lotte World, 7× Fantawild |
+| `no_hourly_shape` | 2 | Knott's Berry Farm (17 rides over the floor, best 111 days) and Six Flags Mexico (11 / 33) — and still no hour to draw |
+
+The last row is the one worth reading twice. Knott's Berry Farm has more
+measured history than most parks that answer; four of its rides report around
+the clock and the rest only between 10:00 and 21:00, so **no single hour is
+carried by enough of the ranked set** to become a column of the park's day shape
+(`visibleHours` in `park-historical-stats.service.ts`). Every `p50` row comes
+back empty, `composeDayCurve` returns `null` for every ride, and the park falls
+out of the planner with a year of data behind it.
+
+### The reasons
+
+`park_closed` — the operator's own word about the day. It stands whatever
+failed on our side, and it is answered without asking about the feed.
+`hours_unknown` — neither a published nor an observed window, and only reported
+when both sources that could have produced one actually answered, the park has
+rides, and its feed is alive. Every empty plan goes through the same ladder,
+including this one: deciding it on the spot is how a park that publishes no
+readable wait times came back as a data gap that closes on its own.
+
+`no_rides_on_file` · `no_wait_time_source` · `rides_cannot_open` — properties of
+the **park**. `no_wait_time_source` is the only one that will never change:
+that park publishes wait times nowhere readable (see
+[live-wait-times-availability.md](./live-wait-times-availability.md)), so a
+client should present it as an answer and not as a gap.
+
+`never_measured` · `feed_stale` · `insufficient_history` · `no_hourly_shape` ·
+`no_forecast` · `no_observations` — gaps on our side, and every one of them
+closes on its own except `feed_stale`, which is a **fault**: a park that still
+schedules operating days while its readings stopped weeks ago. It carries
+`staleDays`. `no_observations` is the past-day form: a date already walked is
+answered from the 15-minute rollup, so no shape was scaled and no day level was
+read, and neither may be reported as missing.
+
+`data_unavailable` is the odd one out and the reason the other eleven stay
+honest. **Seven** things this endpoint asks swallow their own failure to keep
+the response serving — the calendar, the hourly profile, the daily forecast,
+the hourly forecast, the 15-minute rollup, the live-status lookup and the
+feed-recency statement — and every one of them degrades to something that reads
+as an answer. That is right for serving and a lie for diagnosis: without this
+reason, a profile service having a bad minute reported `insufficient_history`,
+an analytics outage reported `no_observations` ("the rollup holds nothing for
+this park" — a statement about the park made out of a statement about us), a
+failed recency query reported a feed measured seconds ago, and a calendar
+outage reported `hours_unknown` — which bites hardest at lead 30, where most
+parks have no published hours and the observed-hours fallback is the only
+window there is.
+
+It is neither a data gap nor a property of the park: it is **unmeasured**, and
+the sweep counts it apart from both.
+
+The order in which they are tested is a statement about evidence rather than a
+preference, and it runs in four tiers: the park's and the day's own facts, then
+the feed, then whether the question could be asked at all, then what we have
+about the rides. Two steps inside it were bought with a finding each.
+
+`rides_cannot_open` is tested **after** the feed. `season_out_since` is written
+by a detector that reads the feed, so on a park silent since June "out of
+season" is our own bookkeeping and not the operator's word — reporting it there
+would be the substitution `claude.md` §4 exists to ban.
+
+And the **live-status** failure is kept apart from the other six. It is the only
+one that can empty the plannable set — it is what lifts a ride back out of the
+season filter — so it is tested immediately above `rides_cannot_open` while the
+rest are tested below. Lumping them together made a forecast hiccup report
+`data_unavailable` where the park was simply unreadable, which moves a
+structural park out of the count it belongs in.
+
+### The one query this costs
+
+Everything but feed recency is already in hand when the ride list turns out
+empty. That one fact costs a statement, and it runs **only** in that branch: the
+54 parks that answered on the sweep date paid nothing.
+
+It is asked in two steps, because the answer only has three shapes — never,
+under the threshold, over it — and the cheap step settles the common one. Bounded
+to 30 days the aggregate reads one end of the hypertable; unbounded it has no
+chunk to exclude and walks the whole retained history. Measured at Knott's Berry
+Farm against production on 2026-09-14:
+
+| statement | time | buffers |
+| --- | --- | --- |
+| bounded to 30 days | **35 ms** | 16,194 |
+| no bound | 185 ms | 61,795 |
+
+The answer is memoised per park for five minutes, because how long a feed has
+been silent is a property of the park and not of the date asked about, while the
+HTTP cache is keyed per URL with the date in it — without that, walking one
+permanently empty park across dates re-runs both steps for every one of them. A
+failed statement is not memoised: the next request asks again rather than
+repeating an outage for five minutes.
+
+So the twelve `insufficient_history` parks pay the 35 ms, and only the handful
+that turn out to be silent pay the full scan — which is exactly where the exact
+number is wanted, because that is where `feed_stale` and `never_measured` part.
+
+It reads `queue_data` rather than `queue_data_aggregates`, which looks like the
+cheaper source and is the wrong one: the rollup only keeps an hour that saw
+three readings, so Peppa Pig Theme Park and Aquatica Orlando have **no aggregate
+row at all** while their feeds delivered thousands of readings in the last 30
+days. Asking the rollup would report a live park as never measured.
+
+### The number is watched
+
+`plan_day_coverage` holds one row per open park per day — planned date, lead
+distance, ride count, reason — written by the `plan-day-coverage` job on the
+`stats` queue at 09:00 UTC, after the night's aggregation and the day-level
+forecasts. It calls the real `buildPlanDay` rather than re-deriving the rules in
+SQL, because the first time a second implementation disagrees it is the counter
+that is wrong.
+
+The row keeps the **reason**, not just the count, because the count alone cannot
+fall for the right cause: a park nobody can read and a park whose feed broke
+last night both add one. `isStructuralPlanDayReason` draws that line, so the
+watched number is the one that can reach zero, and `isUnknownPlanDayReason`
+draws the second: a park the sweep could not get an answer about is unmeasured
+and belongs in neither half.
+
+`parksOpen` is counted from the schedule, not from the rows the sweep managed to
+write. A denominator that shrinks with every failure makes a systematic outage
+read as an improving coverage rate — the one way this number could lie in the
+reassuring direction.
+
+The 26 % above was found by a post-deploy verification run looking for something
+else entirely ([PAR-42](https://linear.app/parkfan/issue/PAR-42)). A park whose
+feed has died still answers 200, with an opening window, a crowd level and a
+drawn axis — only the ride list is empty, and nothing counted those.
+
 ## Related
 
 - [Ride P50/P90 stats](./ride-typical-waits.md) — the typical/busy peak pair on the attraction detail endpoint

@@ -30,7 +30,15 @@ import {
   PlanDayShowDto,
   PlanDayTier,
 } from "../dto/plan-day.dto";
-import type { PlanDayAccuracyDto } from "../dto/plan-day.dto";
+import type {
+  PlanDayAccuracyDto,
+  PlanDayUnavailableDto,
+} from "../dto/plan-day.dto";
+import {
+  classifyPlanDayUnavailable,
+  FEED_STALE_DAYS,
+  type PlanDayAvailabilityInput,
+} from "../utils/plan-day-availability.util";
 import { buildLiveWaitTimes } from "../dto/live-wait-times.dto";
 import { resolveCuratedPark } from "../utils/curated-park-facts.util";
 import {
@@ -69,9 +77,41 @@ import { isCuratedOutOfService } from "../../attractions/utils/curated-out-of-se
  * label, and the hours the 24-hour window did not reach were simply missing,
  * which cut the evening off a park that closes at 22:00.
  */
+/** How long a park's measured feed recency is reused across requests. */
+const FEED_RECENCY_TTL_MS = 5 * 60_000;
+
+/** What {@link PlanDayService.explainEmptyPlan} needs that only the build knows. */
+interface PlanDayEmptyCounts {
+  rideCount: number;
+  plannableRideCount: number;
+  profiledRideCount: number;
+  shapedRideCount: number;
+  hasDayLevels: boolean;
+  /** A past date, answered from the rollup rather than from a forecast. */
+  observed: boolean;
+  /**
+   * The hourly profile or the daily forecast could not be fetched. Both are
+   * behind a `catch` that degrades to "nothing", which is right for serving and
+   * wrong for diagnosis — see `data_unavailable`.
+   */
+  dependencyUnavailable: boolean;
+  /** The live-status lookup failed — the only one that can empty `plannable`. */
+  plannableUnavailable: boolean;
+}
+
 @Injectable()
 export class PlanDayService {
   private readonly logger = new Logger(PlanDayService.name);
+
+  /**
+   * Per-park feed recency, so a permanently empty park costs one measurement
+   * rather than one per date asked about. In-process on purpose: it is a
+   * cheap-to-rebuild hint, not a fact anything is served from.
+   */
+  private readonly feedRecency = new Map<
+    string,
+    { value: Promise<number | null | "unknown">; until: number }
+  >();
 
   /**
    * Where the python service's hourly generation stops
@@ -172,7 +212,9 @@ export class PlanDayService {
     // One day rather than a month — the caller asked about one day, and the
     // calendar's month cache would answer with 92 KB to serve 1 KB of it.
     const day = await this.loadDay(park, dateStr);
-    const status = day?.status ?? "UNKNOWN";
+    const calendarUnavailable = day === "unavailable";
+    const theDay = calendarUnavailable ? null : day;
+    const status = theDay?.status ?? "UNKNOWN";
 
     // The historical shape, needed both to compose curves and to fall back on
     // for opening hours. An observed day wants neither: it is answered from
@@ -180,13 +222,16 @@ export class PlanDayService {
     // every ride in the park. Composing a shape onto a past date would draw a
     // forecast for a day the visitor walked.
     const profile = isFuture ? await this.loadProfile(park) : null;
+    // `getParkHourlyProfile` always returns a DTO, empty or not, so a `null`
+    // here is only ever the `catch` inside `loadProfile`.
+    const profileUnavailable = isFuture && profile === null;
 
-    let openHour = this.hourIn(day?.hours?.openingTime, park.timezone);
+    let openHour = this.hourIn(theDay?.hours?.openingTime, park.timezone);
     // The park's opening to the minute, not just the hour: a ride opening at
     // 09:45 in a park that opens at 09:00 shares its hour and is still 45
     // minutes later, which is exactly what a visitor needs told.
-    const parkOpensAt = this.hhmmIn(day?.hours?.openingTime, park.timezone);
-    let closeHour = this.hourIn(day?.hours?.closingTime, park.timezone);
+    const parkOpensAt = this.hhmmIn(theDay?.hours?.openingTime, park.timezone);
+    let closeHour = this.hourIn(theDay?.hours?.closingTime, park.timezone);
     let hoursSource: PlanDayHoursSource | undefined =
       openHour !== null && closeHour !== null ? "schedule" : undefined;
 
@@ -217,18 +262,18 @@ export class PlanDayService {
       openHour,
       closeHour,
       ...(hoursSource ? { hoursSource } : {}),
-      crowdLevel: day?.crowdLevel ?? null,
+      crowdLevel: theDay?.crowdLevel ?? null,
       // No climate normal substituted past the forecast's reach. A made-up rain
       // probability would silently move every bar on the day, and the caller
       // cannot tell an invented one from a real one.
-      weather: (day?.weather as Record<string, unknown> | undefined) ?? null,
-      isHoliday: Boolean(day?.isHoliday),
-      isBridgeDay: Boolean(day?.isBridgeDay),
-      isSchoolVacation: Boolean(day?.isSchoolVacation),
+      weather: (theDay?.weather as Record<string, unknown> | undefined) ?? null,
+      isHoliday: Boolean(theDay?.isHoliday),
+      isBridgeDay: Boolean(theDay?.isBridgeDay),
+      isSchoolVacation: Boolean(theDay?.isSchoolVacation),
       // Derived here rather than read: the calendar carries no isWeekend, and
       // every surface that wanted one was deriving it from the date separately.
       isWeekend: this.isWeekend(dateStr),
-      neighborHolidays: (day?.neighborHolidays ?? []) as unknown as Array<
+      neighborHolidays: (theDay?.neighborHolidays ?? []) as unknown as Array<
         Record<string, unknown>
       >,
       // Off the ENTITY, not off the day: whether a source exists is a property
@@ -258,6 +303,30 @@ export class PlanDayService {
     // saying so is the answer. The tier stays the nominal one for the distance:
     // with no curves there is no method to characterise.
     if (openHour === null || closeHour === null) {
+      // Through the same ladder as every other empty plan rather than decided
+      // here. Deciding it here is how this branch answered `hours_unknown` for
+      // a park that publishes no readable wait times at all — a closable data
+      // gap reported for a park that will never have one — and how an outage in
+      // either half that produces a window (the calendar's published hours, the
+      // profile's observed ones) read as the same gap. A stated closure still
+      // short-circuits inside the ladder, and costs nothing.
+      const attractions =
+        status === "CLOSED" ? [] : await this.attractions(park);
+      base.ridesUnavailable = await this.explainEmptyPlan(
+        park,
+        status,
+        {
+          rideCount: attractions.length,
+          plannableRideCount: attractions.length,
+          profiledRideCount: 0,
+          shapedRideCount: 0,
+          hasDayLevels: false,
+          observed: !isFuture,
+          dependencyUnavailable: calendarUnavailable || profileUnavailable,
+          plannableUnavailable: false,
+        },
+        false,
+      );
       return base;
     }
 
@@ -272,14 +341,40 @@ export class PlanDayService {
 
     if (!isFuture) {
       base.tier = "observed";
-      base.rides = await this.observedRides(
+      const attractions = await this.attractions(park);
+      const observed = await this.observedRides(
         park,
         dateStr,
         openHour,
         lastHour,
-        new Map((await this.attractions(park)).map((a) => [a.id, a])),
+        new Map(attractions.map((a) => [a.id, a])),
         await this.headlinerIds(park),
       );
+      base.rides = observed.rides;
+      if (base.rides.length === 0) {
+        // A past day is answered from the rollup alone, so the two forecast
+        // questions cannot arise: nothing was composed and no day level was
+        // asked for. `observed` stops the ladder before them rather than
+        // handing them values they never had — a reason invented to satisfy a
+        // classifier is the same failure as an empty list with no reason.
+        base.ridesUnavailable = await this.explainEmptyPlan(park, status, {
+          rideCount: attractions.length,
+          plannableRideCount: attractions.length,
+          profiledRideCount: 0,
+          shapedRideCount: 0,
+          hasDayLevels: false,
+          observed: true,
+          // The rollup swallows its own failure to keep the response serving.
+          // Without this, an analytics outage answered `no_observations` — "the
+          // rollup holds nothing for this park" — which is a statement about
+          // the park made out of a statement about us.
+          // Not `calendarUnavailable`: a past date has no observed-hours
+          // fallback, so a failed calendar leaves no window and the guard above
+          // answers instead. Reaching here means the calendar answered.
+          dependencyUnavailable: observed.unavailable,
+          plannableUnavailable: false,
+        });
+      }
       return base;
     }
 
@@ -292,12 +387,191 @@ export class PlanDayService {
       profile,
       hoursSource === "schedule" ? parkOpensAt : null,
       status,
-      day?.hours?.openingTime ?? null,
+      theDay?.hours?.openingTime ?? null,
+      calendarUnavailable,
     );
     base.tier = built.tier;
     base.rides = built.rides;
     base.accuracy = built.accuracy;
+    if (base.rides.length === 0) {
+      base.ridesUnavailable = await this.explainEmptyPlan(
+        park,
+        status,
+        built.diagnostics,
+      );
+    }
     return base;
+  }
+
+  /**
+   * Why an empty plan is empty.
+   *
+   * Everything but one fact is already in hand by the time this runs — the ride
+   * list, the season filter, the hour profile, the day levels, the curated
+   * source flag. The exception is how long the park's feed has been silent, and
+   * that costs a query.
+   *
+   * **It is paid only here.** A park that produced curves never reaches this
+   * method, so the 54 parks that answered on the sweep date pay nothing, and
+   * the 19 that did not pay one aggregate over their own rides (measured 0.1–
+   * 0.35 s per park against production). The alternative — carrying feed
+   * recency on every request — would buy the same answer on every response that
+   * does not need it.
+   *
+   * Read from `queue_data` rather than from `queue_data_aggregates`, which
+   * looks like the cheaper source and is the wrong one: the rollup only keeps
+   * an hour that saw three readings, so Peppa Pig and Aquatica Orlando have no
+   * aggregate row at all while their feeds delivered thousands of readings in
+   * the last 30 days. Asking the rollup would report a live park as never
+   * measured.
+   */
+  private async explainEmptyPlan(
+    park: Park,
+    status: string,
+    counts: PlanDayEmptyCounts,
+    hoursKnown = true,
+  ): Promise<PlanDayUnavailableDto> {
+    const noWaitTimeSource =
+      resolveCuratedPark(park).noWaitTimesReason !== null;
+    // Three answers that stand above the feed in the ladder, so asking about it
+    // could not change the verdict: a stated closure, an empty catalog, and a
+    // curated park that has no feed to ask about in the first place.
+    const staleDays =
+      status === "CLOSED" || counts.rideCount === 0 || noWaitTimeSource
+        ? null
+        : await this.feedStaleDays(park);
+
+    const input: PlanDayAvailabilityInput = {
+      status,
+      hoursKnown,
+      noWaitTimeSource,
+      staleDays,
+      ...counts,
+    };
+    const reason = classifyPlanDayUnavailable(input);
+    return {
+      reason,
+      ...(reason === "feed_stale" && typeof staleDays === "number"
+        ? { staleDays }
+        : {}),
+    };
+  }
+
+  /**
+   * Whole days since this park last produced a wait-time reading the rollup
+   * would accept, or `null` when it never has.
+   *
+   * The filter is the aggregator's own (`queue-percentile.processor.ts`), not a
+   * looser one: a park whose rides only ever report CLOSED has a busy feed and
+   * no wait times, and counting those rows would call it healthy.
+   */
+  private async feedStaleDays(park: Park): Promise<number | null | "unknown"> {
+    // Memoised per park, because how long a feed has been silent is a property
+    // of the PARK and not of the date asked about — while the HTTP cache is
+    // keyed per URL, date included. Without this, walking one permanently empty
+    // park across dates re-runs both steps for every one of them, and the
+    // second step is the unbounded scan. Minutes, not hours: a feed that comes
+    // back should stop being called stale within a poll cycle or two.
+    const cached = this.feedRecency.get(park.id);
+    if (cached && cached.until > Date.now()) return cached.value;
+
+    // The PROMISE goes in the map, not its result. Storing the value only
+    // deduplicates requests that arrive after the first one finished, and the
+    // first one is the expensive one: two parallel first requests for the same
+    // empty park would each run both statements, including the unbounded scan.
+    const pending = this.measureFeedStaleDays(park);
+    this.feedRecency.set(park.id, {
+      value: pending,
+      until: Date.now() + FEED_RECENCY_TTL_MS,
+    });
+
+    // Dropped on "unknown" AND on a rejection, in both cases only if this entry
+    // is still the one we put there, so a later measurement is not thrown away.
+    // A cached rejection would re-throw the same five-minute-old failure at
+    // every later request; not reachable today, because both statements catch,
+    // and cheaper to make impossible than to keep checking.
+    const forget = () => {
+      if (this.feedRecency.get(park.id)?.value === pending)
+        this.feedRecency.delete(park.id);
+    };
+    let value: number | null | "unknown";
+    try {
+      value = await pending;
+    } catch (error) {
+      forget();
+      throw error;
+    }
+    if (value === "unknown") forget();
+    return value;
+  }
+
+  private async measureFeedStaleDays(
+    park: Park,
+  ): Promise<number | null | "unknown"> {
+    // Asked in two steps, because the answer only has three shapes — never,
+    // under the threshold, or over it — and the cheap step settles the common
+    // one. Bounded to the threshold, the aggregate reads one end of the
+    // hypertable: 35 ms and 16 k buffers against production, against 185 ms and
+    // 61 k for the same statement without the bound, which has no chunk to
+    // exclude and walks the whole retained history.
+    const recent = await this.lastQualifyingReading(park, FEED_STALE_DAYS);
+    if (recent === "unknown") return "unknown";
+    if (recent !== null) {
+      return Math.max(
+        0,
+        Math.floor((Date.now() - recent.getTime()) / 86_400_000),
+      );
+    }
+    // Nothing inside the window. Only now is the exact distance worth the full
+    // scan — and only here does it matter, because this is where `feed_stale`
+    // and `never_measured` part company.
+    const ever = await this.lastQualifyingReading(park, null);
+    if (ever === "unknown") return "unknown";
+    if (ever === null) return null;
+    return Math.max(0, Math.floor((Date.now() - ever.getTime()) / 86_400_000));
+  }
+
+  /**
+   * The park's last reading the rollup would accept, optionally bounded to the
+   * last `withinDays` days.
+   *
+   * The filter is the aggregator's own (`queue-percentile.processor.ts`), not a
+   * looser one: a park whose rides only ever report CLOSED has a busy feed and
+   * no wait times, and counting those rows would call it healthy.
+   */
+  private async lastQualifyingReading(
+    park: Park,
+    withinDays: number | null,
+  ): Promise<Date | null | "unknown"> {
+    const params: unknown[] = [park.id];
+    if (withinDays !== null) params.push(withinDays);
+    const rows: Array<{ last: Date | null }> | "unknown" =
+      await this.attractionRepository.manager
+        .query(
+          `SELECT max(q.timestamp) AS last
+           FROM queue_data q
+           JOIN attractions a ON a.id = q."attractionId"
+          WHERE a."parkId" = $1
+            AND a.retired_at IS NULL
+            ${withinDays !== null ? `AND q.timestamp >= NOW() - ($2 || ' days')::interval` : ""}
+            AND q.status = 'OPERATING'
+            AND q."queueType" = 'STANDBY'
+            AND q."waitTime" IS NOT NULL`,
+          params,
+        )
+        .catch((err: Error) => {
+          this.logger.warn(
+            `Plan day: feed recency unavailable for ${park.slug}: ${err.message}`,
+          );
+          // Neither answer, and that is the point. `null` would claim this park
+          // has never been measured; a date of now would claim a dead feed is
+          // healthy AND push the verdict down into the data gaps, where the
+          // nightly sweep files an outage as a gap that closes on its own.
+          return "unknown" as const;
+        });
+    if (rows === "unknown") return "unknown";
+    const last = rows[0]?.last ? new Date(rows[0].last) : null;
+    return last && !Number.isNaN(last.getTime()) ? last : null;
   }
 
   /**
@@ -495,16 +769,42 @@ export class PlanDayService {
      * live reading in {@link runningNow} and nothing else.
      */
     publishedOpening: Date | string | null,
+    /**
+     * Whether the calendar itself failed. It reaches here because the profile's
+     * observed window can produce hours without it, so a forecast day can be
+     * built on a calendar outage and must not report a data gap for it.
+     */
+    calendarUnavailable: boolean,
   ): Promise<{
     tier: PlanDayTier;
     rides: PlanDayRideDto[];
     accuracy: PlanDayAccuracyDto;
+    /**
+     * The counts behind an empty `rides`, so the reason can be named without
+     * asking the same questions a second time. Carried on every response and
+     * read only when there is nothing to serve.
+     */
+    diagnostics: PlanDayEmptyCounts;
   }> {
     const withinHourly = leadDays <= PlanDayService.HOURLY_HORIZON_DAYS;
 
     const attractions = await this.attractions(park);
     if (attractions.length === 0)
-      return { tier: "composed", rides: [], accuracy: { basis: "unmeasured" } };
+      return {
+        tier: "composed",
+        rides: [],
+        accuracy: { basis: "unmeasured" },
+        diagnostics: {
+          rideCount: 0,
+          plannableRideCount: 0,
+          profiledRideCount: 0,
+          shapedRideCount: 0,
+          hasDayLevels: false,
+          observed: false,
+          dependencyUnavailable: calendarUnavailable,
+          plannableUnavailable: false,
+        },
+      };
 
     // How wrong a forecast at this distance usually is. Eighteen measured cells
     // (three predicted bands × six lead buckets), so it is read whole and looked
@@ -563,7 +863,7 @@ export class PlanDayService {
     // answer — never re-derived from `dayPeak`, because a headliner having a
     // quiet Tuesday is still a headliner, and a planner that pointed at the
     // day's tallest bars instead would recommend whatever happens to be busy.
-    const [dayLevels, downIds, headlinerIds, openings, measured, runningNow] =
+    const [levels, downIds, headlinerIds, openings, measured, runningNow] =
       await Promise.all([
         this.dayLevels(park, dateStr),
         this.downYesterday(park, dateStr),
@@ -574,6 +874,7 @@ export class PlanDayService {
           : Promise.resolve({
               hours: new Map<string, Map<number, number>>(),
               bands: new Map<string, number>(),
+              unavailable: false,
             }),
         this.runningNow(
           park,
@@ -584,7 +885,8 @@ export class PlanDayService {
         ),
       ]);
 
-    for (const id of runningNow) blocked.delete(id);
+    const dayLevels = levels.levels;
+    for (const id of runningNow.ids) blocked.delete(id);
     const plannable = attractions.filter((a) => !blocked.has(a.id));
     const byId = new Map(plannable.map((a) => [a.id, a]));
     const bySlug = new Map(plannable.map((a) => [a.slug, a]));
@@ -595,9 +897,21 @@ export class PlanDayService {
     const composed = new Map<string, Map<number, number>>();
     const sampleDays = new Map<string, number>();
     const land = new Map<string, string | null>();
+    // Two counts, and the gap between them is a diagnosis. `profiled` is the
+    // rides that cleared the profile's own measured-days floor; `shaped` is
+    // those of them that also have a measured hour to scale from. A park can
+    // clear the first and not the second — the profile's hour axis is decided
+    // across the whole park, so a park whose rides do not share hours has rides
+    // with empty rows (`no_hourly_shape`).
+    let profiledRideCount = 0;
+    let shapedRideCount = 0;
     for (const shape of profile?.attractions ?? []) {
       const attraction = bySlug.get(shape.attractionSlug);
       if (!attraction) continue;
+      profiledRideCount++;
+      if (shape.p50.some((value) => value !== null && Number.isFinite(value))) {
+        shapedRideCount++;
+      }
       sampleDays.set(attraction.id, shape.sampleDays);
       if (shape.land) land.set(attraction.id, shape.land);
 
@@ -775,7 +1089,28 @@ export class PlanDayService {
           }
         : { basis: "unmeasured" };
 
-    return { tier, rides, accuracy: summary };
+    return {
+      tier,
+      rides,
+      accuracy: summary,
+      diagnostics: {
+        rideCount: attractions.length,
+        plannableRideCount: plannable.length,
+        profiledRideCount,
+        shapedRideCount,
+        hasDayLevels: dayLevels.size > 0,
+        observed: false,
+        // `profile === null` is only ever the catch in `loadProfile`; the
+        // service itself always returns a DTO, empty or not.
+        // Not `calendarUnavailable`: past the hours guard the window came from
+        // somewhere, and nothing the calendar carries decides whether a ride
+        // gets a curve. Reporting it here moved parks that are simply
+        // unreadable into the "could not measure" bucket.
+        dependencyUnavailable:
+          profile === null || levels.unavailable || measured.unavailable,
+        plannableUnavailable: runningNow.unavailable,
+      },
+    };
   }
 
   /**
@@ -804,13 +1139,19 @@ export class PlanDayService {
   ): Promise<{
     hours: Map<string, Map<number, number>>;
     bands: Map<string, number>;
+    unavailable: boolean;
   }> {
+    let unavailable = false;
     const stored = await this.mlService
       .getParkPredictions(park.id, "hourly")
       .catch((err: Error) => {
         this.logger.warn(
           `Plan day: hourly predictions unavailable for ${park.slug}: ${err.message}`,
         );
+        // Degrade for serving, remember for diagnosis: inside the hourly
+        // horizon this is the difference between "the model said nothing about
+        // this day" and "the model was not asked".
+        unavailable = true;
         return { predictions: [] as PredictionDto[] };
       });
 
@@ -862,7 +1203,7 @@ export class PlanDayService {
       if (means.size > 0) hours.set(attractionId, means);
     }
 
-    return { hours, bands };
+    return { hours, bands, unavailable };
   }
 
   /**
@@ -905,17 +1246,21 @@ export class PlanDayService {
     closeHour: number,
     byId: Map<string, Attraction>,
     headlinerIds: ReadonlySet<string>,
-  ): Promise<PlanDayRideDto[]> {
+  ): Promise<{ rides: PlanDayRideDto[]; unavailable: boolean }> {
     // The day's own row, and — only where the day runs past midnight — the next
     // date's, whose small hours belong to it. Asked together: two indexed reads
     // against a primary key, and the second is not asked for at all on an
     // ordinary day.
-    const [own, afterMidnight] = await Promise.all([
+    const [ownRows, afterMidnightRows] = await Promise.all([
       this.hourlyHistory(park, dateStr),
       closeHour > 23
         ? this.hourlyHistory(park, PlanDayService.plusDays(dateStr, 1))
         : Promise.resolve(new Map<string, AttractionHourlyHistory>()),
     ]);
+    const unavailable = ownRows === null || afterMidnightRows === null;
+    const own = ownRows ?? new Map<string, AttractionHourlyHistory>();
+    const afterMidnight =
+      afterMidnightRows ?? new Map<string, AttractionHourlyHistory>();
 
     // attraction → { hour → [weightedSum, weight], the day's peak }
     const measured = new Map<
@@ -994,9 +1339,12 @@ export class PlanDayService {
       });
     }
 
-    return rides.sort((a, b) =>
-      a.attractionName.localeCompare(b.attractionName),
-    );
+    return {
+      unavailable,
+      rides: rides.sort((a, b) =>
+        a.attractionName.localeCompare(b.attractionName),
+      ),
+    };
   }
 
   /**
@@ -1181,10 +1529,11 @@ export class PlanDayService {
     openingTime: Date | string | null | undefined,
     leadDays: number,
     candidateIds: string[],
-  ): Promise<Set<string>> {
+  ): Promise<{ ids: Set<string>; unavailable: boolean }> {
     const out = new Set<string>();
-    if (leadDays !== 0 || parkStatus === "CLOSED") return out;
-    if (candidateIds.length === 0) return out;
+    if (leadDays !== 0 || parkStatus === "CLOSED")
+      return { ids: out, unavailable: false };
+    if (candidateIds.length === 0) return { ids: out, unavailable: false };
 
     const floor = new Date(
       Date.now() - PlanDayService.LIVE_STATUS_FLOOR_HOURS * 60 * 60 * 1000,
@@ -1218,23 +1567,32 @@ export class PlanDayService {
       this.logger.warn(
         `Plan day: live status unavailable for ${park.slug}: ${(error as Error).message}`,
       );
+      // Without this the season filter simply keeps every ride it blocked, and
+      // the empty plan reads `rides_cannot_open` — which
+      // `isStructuralPlanDayReason` calls a property of the park and files
+      // permanently out of the watched number.
+      return { ids: out, unavailable: true };
     }
 
-    return out;
+    return { ids: out, unavailable: false };
   }
 
   /** Day-level prediction per attraction for one date. */
   private async dayLevels(
     park: Park,
     dateStr: string,
-  ): Promise<Map<string, PredictionDto>> {
+  ): Promise<{ levels: Map<string, PredictionDto>; unavailable: boolean }> {
     const out = new Map<string, PredictionDto>();
+    let unavailable = false;
     const serving = await this.mlService
       .getServingDailyPredictions(park.id)
       .catch((err: Error) => {
         this.logger.warn(
           `Plan day: daily predictions unavailable for ${park.slug}: ${err.message}`,
         );
+        // Degrading to "no levels" keeps the response serving; remembering that
+        // it was a failure keeps the empty-plan reason from calling it one.
+        unavailable = true;
         return { predictions: [] as PredictionDto[] };
       });
 
@@ -1243,7 +1601,7 @@ export class PlanDayService {
       // Freshest wins where a park has more than one row for the day.
       out.set(p.attractionId, p);
     }
-    return out;
+    return { levels: out, unavailable };
   }
 
   /**
@@ -1273,8 +1631,12 @@ export class PlanDayService {
         this.logger.warn(
           `Plan day: calendar unavailable for ${park.slug} on ${dateStr}: ${err.message}`,
         );
-        return null;
+        // Distinct from "the calendar has no row for this day": the first is an
+        // outage, the second is a fact about the park's schedule, and they
+        // reach the same empty response.
+        return "unavailable" as const;
       });
+    if (response === "unavailable") return "unavailable";
     return response?.days?.find((d) => d.date === dateStr) ?? null;
   }
 
@@ -1520,14 +1882,17 @@ export class PlanDayService {
   private async hourlyHistory(
     park: Park,
     dateStr: string,
-  ): Promise<Map<string, AttractionHourlyHistory>> {
+  ): Promise<Map<string, AttractionHourlyHistory> | null> {
     return this.analyticsService
       .getParkHourlyHistory(park.id, dateStr)
       .catch((err: Error) => {
         this.logger.warn(
           `Plan day: hourly history unavailable for ${park.slug} on ${dateStr}: ${err.message}`,
         );
-        return new Map<string, AttractionHourlyHistory>();
+        // `null`, not an empty map. The rollup holding nothing for this day and
+        // the rollup being unreachable produce the same empty ride list, and
+        // only one of them is a statement about the park.
+        return null;
       });
   }
 
