@@ -877,7 +877,7 @@ and both fail **silently** — that is what makes them worth tracking.
       Konjunktion** — ein sauberer Lauf *ausgeloest durch den Cron*. Der naechste
       Lauf nach einem 06:30 UTC greppt das Log nach **beiden** Zweigen: der
       Clean-Zeile und `🎢 Ride-profile term audit could not run`
-      (`curated-data.processor.ts:105`, feuert bei unerreichbarem Frontend).
+      (`curated-data.processor.ts:105-106`, feuert bei unerreichbarem Frontend).
       Dass der Handler *durchlaeuft*, ist ueber den Admin-GET
       `/v1/admin/ride-profile-term-audit` belegt, der dieselbe
       `rideProfileAudit.audit()` synchron faehrt: `152` gespeicherte Term-IDs,

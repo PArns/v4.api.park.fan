@@ -81,7 +81,7 @@ This is the part worth keeping, because every one of them *looks* like a wrap bu
 
 | Park | Wrap days sampled | Actual cause |
 | ---- | ----------------- | ------------ |
-| La Ronde | 5 | Both upstream feeds silent since June → **PAR-192**. Also answers `0` on non-wrap days. |
+| La Ronde | 5 | Both upstream feeds silent since June → **PAR-192**. Also answers `0` on non-wrap days. Numbers below. |
 | Six Flags Mexico | 5 | Rolled up every day, **0 qualifying samples** every day (41 rows, 0 slots). Also `0` on non-wrap days. |
 | Movieland | 1 | No `queue_data` row has ever existed for it. |
 | Mirabilandia | 1 | Serves 20 rides on a past non-wrap day; returns `0` for *every* future date, wrap or not. |
@@ -90,6 +90,28 @@ This is the part worth keeping, because every one of them *looks* like a wrap bu
 
 All six are data availability. None of them answers differently on a wrap day than it
 does on a comparable non-wrap day, which is the test that separates the two causes.
+
+La Ronde is the one that most looks like a wrap bug — it wraps on 91 of the 91 days in
+the window — so its numbers belong here rather than only in PAR-192:
+
+```sql
+SELECT q.data_source, q.is_heartbeat, count(*), max(q.timestamp)
+FROM queue_data q JOIN attractions a ON a.id = q."attractionId"
+WHERE a."parkId" = '143165d2-31a6-4404-86b3-7d96617758a0'
+  AND q.timestamp > now() - interval '120 days'
+GROUP BY 1,2 ORDER BY max(q.timestamp) DESC;
+```
+
+| data_source | rows | last row | silent for |
+| ----------- | ---- | -------- | ---------- |
+| queue-times | 7 269 | 2026-06-24 | **82 days** |
+| themeparks-wiki | 32 163 | 2026-06-17 | **89 days** |
+
+No heartbeat rows. Both upstream APIs still answer and still know the park — they just
+carry nothing: `api.themeparks.wiki/v1/entity/…/live` returns `liveData: []` and
+`queue-times.com/parks/48/queue_times.json` returns `{"lands":[],"rides":[]}`, while
+Cedar Point through the same API returns 86 live entries. The schedule meanwhile runs
+351 further operating days, to 2027-08-31.
 
 Four of the six turned out to be instances of something wider, measured afterwards and
 filed as **PAR-194**: at lead 30, **19 of the 73 parks that are open that day serve no
@@ -270,7 +292,7 @@ the glossary is the superset.
 unproven is the conjunction — a clean run *triggered by the cron* — and the cheapest
 way to close it is to read the log after any 06:30 UTC run, looking for **either**
 branch: the clean line above or `🎢 Ride-profile term audit could not run`
-(`curated-data.processor.ts:105`), which is what an unreachable frontend produces.
+(`curated-data.processor.ts:105-106`), which is what an unreachable frontend produces.
 
 ---
 
