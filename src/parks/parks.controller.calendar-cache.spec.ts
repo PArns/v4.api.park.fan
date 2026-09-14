@@ -236,8 +236,10 @@ describe("ParksController › /calendar Cache-Control", () => {
       expect(maxAge).toBeGreaterThanOrEqual(secondsLeftThisHour() - 2);
       expect(sMaxAge).toBe(maxAge);
       // A minute of grace past the boundary, so the CDN does not revalidate every park at
-      // :00 into the live aggregation.
+      // :00 into the live aggregation — a minute, and not none: this endpoint's slow path is
+      // a live aggregation of one query per day, which is why the file has this test at all.
       expect(swr).toBeLessThanOrEqual(60);
+      expect(swr).toBeGreaterThan(0);
     });
 
     it("is the only thing shortened — the same range without a curve keeps its window", async () => {
@@ -310,6 +312,11 @@ describe("ParksController › /calendar Cache-Control", () => {
       [dayOn(parkDate(-1))],
       [dayOn(parkDate(0))],
       [dayOn(parkDate(45))],
+      // The hour branch belongs in this loop too: it is the one that caps SWR at a fixed 60
+      // instead of deriving it, so it is the one that could lose it to a `Math.min` against
+      // something smaller without any other assertion going red.
+      [dayWithHourlyOn(parkDate(0))],
+      [dayWithHourlyOn(parkDate(45))],
     ]) {
       await mountWithDays(days);
       const res = makeRes();

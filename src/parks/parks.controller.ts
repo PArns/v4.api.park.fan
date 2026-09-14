@@ -418,10 +418,14 @@ export class ParksController {
       "Per-day `influencingHolidays` (the neighbouring-region holidays that drive up crowds) are OMITTED by " +
       "default — they were ~98% of the payload and no consumer of this endpoint reads them; opt back in with " +
       "`?include=influencingHolidays`. Cache TTL: dynamic — a week for a range that ended " +
-      "before today, a day for a pure-future range, the rest of the park's day for a range " +
-      "containing today, and the rest of the current hour whenever the response actually " +
-      "carries an `hourly` curve, because that curve is a countdown over the next few open " +
-      "hours rather than a statement about a day.",
+      "before today, a day for a range that lies entirely in the future, the rest of the " +
+      "park's day for a range containing today. A response that actually carries an " +
+      "`hourly` curve is capped at the rest of the current hour instead, day fields and " +
+      "all: that curve is a countdown over the next few open hours, not a statement about " +
+      "a day, and it moves on the hour. Since `includeHourly` defaults to `today+tomorrow`, " +
+      "a range reaching today or tomorrow carries one unless you ask for " +
+      "`includeHourly=none` — which is what a caller wanting a long-lived copy of the day " +
+      "fields should send.",
   })
   @ApiParam({
     name: "continent",
@@ -618,16 +622,22 @@ export class ParksController {
     // countdown for everyone else until the park's own midnight (measured from outside:
     // `cf-cache-status: HIT`, `age: 3651`, first hour still 11).
     //
-    // So a response that CARRIES an hourly curve may not outlive the hour it was built in.
-    // The test is the response, not the `includeHourly` parameter: a request that asks for
-    // hourly on a range with no curve to give (a pure-future month) keeps the day, and so
-    // does the calendar grid, which asks with `includeHourly=none`. The day fields are only
-    // shortened on the one request that also carries the countdown, and that request is a
-    // single day.
+    // So a copy of a response that CARRIES an hourly curve may not be SERVED past the hour
+    // it was served in. That is the honest form of the guarantee, and it is weaker than
+    // "the hour the curve describes": the curve in the body is already up to ~45 min old
+    // when it leaves here, because `getParkPredictions` reads a 30-min Redis entry
+    // (`ml.service.ts`) and the current month's calendar is cached 15 min
+    // (`calendar.service.ts`). A header shorter than this hour would therefore buy nothing
+    // — the origin has nothing newer to give. What it does buy is the end of the 24-hour
+    // freeze: no copy survives into an hour whose curve has moved on.
     //
-    // The origin already moves at this pace and does not need the header to be shorter than
-    // this: the park's hourly ML predictions are cached 30 min (`ml.service.ts`) and the
-    // current month's calendar 15 min (`calendar.service.ts`).
+    // The test is the RESPONSE, not the `includeHourly` parameter — `includeHourly` defaults
+    // to `today+tomorrow`, so the parameter would shorten pure-future ranges that never
+    // carry a curve at all. Which way that cuts: any range that does reach today or tomorrow
+    // takes the hour, its day fields included, up to the 90-day maximum. A caller who wants
+    // a long-lived copy of the day fields asks with `includeHourly=none` and gets exactly
+    // the window it had — that is the calendar grid, and it is what the `hourly` docs on
+    // this route now say.
     const carriesHourlyCurve = response.days.some((d) => d.hourly?.length);
     const secondsLeftThisHour = ttlSecondsToNextBoundary(60 * 60 * 1000);
     const servedTTL = carriesHourlyCurve
