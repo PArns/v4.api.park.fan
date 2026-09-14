@@ -61,6 +61,60 @@ floor under a count that is supposed to fall. The 26 % was found by a
 verification run looking for something else; nothing counted it.
 
 Full detail: `docs/frontend/plan-day-endpoint.md` §11.
+
+### Fixed — two competing ride profiles are ranked by what they say, and the merge preview names the one it would delete
+
+PAR-105 gave `attraction_ride_profiles` the `winner-authoritative` strategy and
+answered "which of two competing profiles survives" with "the winner's". That
+ranks two curations by which _attraction_ happened to survive, which is a
+property of the merge and not of the rows, and
+`AdminRideProfileService.upsert` writes a row from a manufacturer name alone:
+`elements` and `types` are then `[]`, so a one-field stub on the survivor beat
+a fourteen-element layout on the loser and the layout was gone, with a log line
+as the only way back. The same rule also let the order of an unordered `SELECT`
+decide wherever one merge folds several losers into one survivor
+(`ParkMergeService.migrateEntities` matches by slug **or** name, and a name is
+not unique inside a park): the first loser's row was inherited, and the second
+was then measured against _that_ row rather than against anything the survivor
+brought.
+
+`MergeDependency` takes an optional `richness` now, and the ride-profile entry
+is the only one on any of the five lists that declares it — pinned by a test,
+because PAR-179's decision names the scope as well as the rule. An entry
+without it behaves exactly as before. `rideProfileRichness` counts one point
+per track element, one per ride type and one per curated field that is set
+(including each of the four measurements inside `curated_stats`), and a tie
+still keeps the survivor's row, so the ranking can only ever save content that
+would otherwise be deleted. `stats` and `stats_updated_at` are deliberately not
+counted: they are imported from Wikidata by `RideStatsService`, and counting
+them would let an import outrank a curation, which is the inversion the
+function exists to prevent. `inversions: 0` counts as stated rather than as
+missing — a curated zero is a fact somebody looked up.
+
+Where the loser's row is the richer one, the survivor's is logged and deleted
+first and the loser's is then moved onto it: `attractionId` is both the merge
+column and the primary key, so the `UPDATE` would otherwise raise 23505 and
+roll the whole merge back.
+
+The second half is the rehearsal. `AttractionMergeService.previewMerge`
+reported the surviving slug, the removed slug and the inherited columns, and
+said nothing about the dependent rows — including the one the merge destroys
+for good. Its docstring promised the opposite ("derived by the same functions
+the real merge uses, so the preview cannot drift from the act"). The decision
+now lives in `decideWinnerAuthoritative` and the read around it in
+`planWinnerAuthoritative`, and both the merge and the preview go through them,
+so there is one derivation rather than two. `AttractionMergePreview` carries
+`droppedCurations: Array<{ table, from: "winner" | "loser", row }>` — the row
+itself, not a count, because nothing would rebuild it. It is driven off
+`ATTRACTION_DEPENDENCIES` rather than a table name, so a curated table added to
+that list is reported without a second edit. `discard` entries stay out: the
+baselines, the rope drop and the typical waits are derived and the nightly jobs
+rewrite them from the history that has just moved onto the survivor.
+
+How often two rows for one ride in one park **both** carry a profile is
+unmeasured from here: it needs `findDuplicatePairs` against production. Tracked
+as PAR-205.
+
 ### Changed — the coverage threshold is the measured floor, and it is run as a ratchet
 
 `coverageThreshold.global` in `jest.config.json` asked for 70 % on all four

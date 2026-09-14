@@ -9,7 +9,9 @@ import {
   SHOW_DEPENDENCIES,
   applyMergeDependencies,
   attractionTablesMissingFrom,
+  decideWinnerAuthoritative,
   parkTablesMissingFrom,
+  rideProfileRichness,
   restaurantTablesMissingFrom,
   showTablesMissingFrom,
 } from "./merge-dependencies";
@@ -281,6 +283,26 @@ describe("merge dependency tables", () => {
     // collides, which for a PK-keyed table is every time the winner has a row —
     // `discard` under another name, and the opposite of what was decided.
     expect(profiles?.conflictColumns).toBeUndefined();
+  });
+
+  it("ranks two competing ride profiles, and ranks nothing else", () => {
+    // PAR-179: where both sides hold a curated profile the richer one wins,
+    // because "the winner's row wins" ranked them by which attraction happened
+    // to survive. Patrick's decision names the scope as well as the rule — the
+    // exception is for this one table — so the second assertion is half of it.
+    const profiles = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "attraction_ride_profiles",
+    );
+    expect(profiles?.richness).toBe(rideProfileRichness);
+
+    const ranked = [
+      ...ATTRACTION_DEPENDENCIES,
+      ...PARK_DEPENDENCIES,
+      ...PARK_INLINE_DEPENDENCIES,
+      ...SHOW_DEPENDENCIES,
+      ...RESTAURANT_DEPENDENCIES,
+    ].filter((d) => d.richness);
+    expect(ranked).toEqual([profiles]);
   });
 
   it("keeps the attraction and the park entry for ride profiles, on different columns", () => {
@@ -624,13 +646,19 @@ describe("applyMergeDependencies", () => {
       expect(manager.query.mock.calls[2][1]).toEqual(["winner-id", "loser-id"]);
     });
 
-    it("drops the loser's row when the winner has one, naming it first", async () => {
+    it("drops the loser's row when the winner's says more, naming it first", async () => {
       const losing = {
         attractionId: "loser-id",
-        elements: ["lifthill", "vertical-loop"],
+        elements: ["lifthill"],
         types: ["launch-coaster"],
       };
-      manager.query.mockResolvedValueOnce([losing]).mockResolvedValueOnce([{}]);
+      manager.query.mockResolvedValueOnce([losing]).mockResolvedValueOnce([
+        {
+          attractionId: "winner-id",
+          elements: ["lifthill", "vertical-loop", "zero-g-roll"],
+          types: ["launch-coaster"],
+        },
+      ]);
       const warn = jest
         .spyOn(Logger.prototype, "warn")
         .mockImplementation(() => undefined);
@@ -642,18 +670,20 @@ describe("applyMergeDependencies", () => {
         "loser-id",
       );
 
-      const [, , thirdSql] = manager.query.mock.calls.map(
+      const [, , thirdSql, ...rest] = manager.query.mock.calls.map(
         ([sql]: [string]) => sql,
       );
       expect(thirdSql).toMatch(/^DELETE FROM attraction_ride_profiles/);
       expect(manager.query.mock.calls[2][1]).toEqual(["loser-id"]);
+      // No move afterwards: the winner keeps the row it already had.
+      expect(rest).toEqual([]);
 
       // The assertion that matters is not that something was logged but that
       // the log carries the row: a warning saying only "a profile was dropped"
       // is as unrecoverable as no warning at all.
       expect(warn).toHaveBeenCalledTimes(1);
       const line = warn.mock.calls[0][0] as string;
-      expect(line).toContain("vertical-loop");
+      expect(line).toContain("lifthill");
       expect(line).toContain("launch-coaster");
 
       // And it is written BEFORE the DELETE. A log line after a statement that
@@ -661,6 +691,272 @@ describe("applyMergeDependencies", () => {
       expect(warn.mock.invocationCallOrder[0]).toBeLessThan(
         manager.query.mock.invocationCallOrder[2],
       );
+    });
+
+    it("keeps the winner's row on a tie", async () => {
+      // PAR-179 decided the ranking and this boundary with it: equal richness
+      // keeps the survivor's row. So the rule can only ever save content that
+      // would otherwise be deleted, and never moves a curation for its own
+      // sake — the single-field stub on each side is the same curation twice.
+      manager.query
+        .mockResolvedValueOnce([{ attractionId: "loser-id", model: "Blitz" }])
+        .mockResolvedValueOnce([
+          { attractionId: "winner-id", model: "Infinity" },
+        ]);
+      jest.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+
+      await applyMergeDependencies(
+        manager,
+        [profiles],
+        "winner-id",
+        "loser-id",
+      );
+
+      const [, , thirdSql, ...rest] = manager.query.mock.calls.map(
+        ([sql]: [string]) => sql,
+      );
+      expect(thirdSql).toMatch(/^DELETE FROM attraction_ride_profiles/);
+      expect(manager.query.mock.calls[2][1]).toEqual(["loser-id"]);
+      expect(rest).toEqual([]);
+    });
+
+    it("takes the loser's row when it says more, deleting the winner's first", async () => {
+      // The stub, which is what PAR-179 is about: `AdminRideProfileService
+      // .upsert` writes a row from a manufacturer name alone, and under the old
+      // rule that one field beat a fourteen-element layout purely because it sat
+      // on the surviving attraction.
+      const losing = {
+        attractionId: "loser-id",
+        elements: ["lifthill", "vertical-loop", "zero-g-roll"],
+        types: ["launch-coaster"],
+      };
+      manager.query.mockResolvedValueOnce([losing]).mockResolvedValueOnce([
+        {
+          attractionId: "winner-id",
+          elements: [],
+          types: [],
+          manufacturer_name: "Mack Rides",
+        },
+      ]);
+      const warn = jest
+        .spyOn(Logger.prototype, "warn")
+        .mockImplementation(() => undefined);
+
+      await applyMergeDependencies(
+        manager,
+        [profiles],
+        "winner-id",
+        "loser-id",
+      );
+
+      const [, , thirdSql, fourthSql, ...rest] = manager.query.mock.calls.map(
+        ([sql]: [string]) => sql,
+      );
+      expect(rest).toEqual([]);
+
+      // The winner's stub goes first. `attractionId` is the primary key, so the
+      // move below cannot land on an id that is still occupied — the UPDATE
+      // would raise 23505 and roll the whole merge back.
+      expect(thirdSql).toMatch(/^DELETE FROM attraction_ride_profiles/);
+      expect(manager.query.mock.calls[2][1]).toEqual(["winner-id"]);
+      expect(fourthSql).toMatch(/^UPDATE attraction_ride_profiles/);
+      expect(manager.query.mock.calls[3][1]).toEqual(["winner-id", "loser-id"]);
+
+      // The dropped row is the WINNER's here, and the line has to carry it for
+      // the same reason as above: it is hand-written and nothing rebuilds it.
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = warn.mock.calls[0][0] as string;
+      expect(line).toContain("Mack Rides");
+      expect(warn.mock.invocationCallOrder[0]).toBeLessThan(
+        manager.query.mock.invocationCallOrder[2],
+      );
+    });
+
+    it("reads the winner's row in full only where the entry ranks rows", async () => {
+      // Two shapes of the same probe, and the difference is not cosmetic: the
+      // ranking needs the row's contents, an entry without `richness` needs
+      // only to know whether one exists, and a table with no index-only answer
+      // should not be made to produce one for nothing.
+      manager.query
+        .mockResolvedValueOnce([{ attractionId: "loser-id" }])
+        .mockResolvedValueOnce([]);
+      await applyMergeDependencies(
+        manager,
+        [{ ...profiles, richness: undefined }],
+        "winner-id",
+        "loser-id",
+      );
+      expect(manager.query.mock.calls[1][0]).toMatch(
+        /^SELECT 1 FROM attraction_ride_profiles .* LIMIT 1$/,
+      );
+
+      manager.query.mockClear();
+      manager.query
+        .mockResolvedValueOnce([{ attractionId: "loser-id" }])
+        .mockResolvedValueOnce([]);
+      await applyMergeDependencies(
+        manager,
+        [profiles],
+        "winner-id",
+        "loser-id",
+      );
+      expect(manager.query.mock.calls[1][0]).toMatch(
+        /^SELECT \* FROM attraction_ride_profiles/,
+      );
+    });
+
+    it("refuses richness on a strategy that never reads it", async () => {
+      // The mirror of the conflictColumns check, and the more expensive of the
+      // two: here somebody believes their curation is being ranked while the
+      // row is reparented or deleted without ever being read.
+      await expect(
+        applyMergeDependencies(
+          manager,
+          [
+            {
+              table: "attraction_ride_profiles",
+              column: "attractionId",
+              strategy: "discard",
+              richness: rideProfileRichness,
+            },
+          ],
+          "winner-id",
+          "loser-id",
+        ),
+      ).rejects.toThrow(/richness/);
+
+      expect(manager.query).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The ranking itself, away from any database. It is a curation decision
+   * expressed as arithmetic (PAR-179), so what it counts is the assertion.
+   */
+  describe("rideProfileRichness", () => {
+    it("counts elements, types and every curated field that is set", () => {
+      expect(
+        rideProfileRichness({
+          elements: ["lifthill", "first-drop", "vertical-loop"],
+          types: ["launch-coaster", "terrain-coaster"],
+          manufacturer_name: "Mack Rides",
+          manufacturer_term_id: "mack-rides",
+          model: "Blitz Coaster",
+          opened_year: 2016,
+          inversions: 0,
+          curated_stats: {
+            topSpeedKmh: 100,
+            heightM: null,
+            lengthM: 1200,
+            durationSeconds: null,
+          },
+        }),
+      ).toBe(3 + 2 + 5 + 2);
+    });
+
+    it("scores an empty row 0 and a manufacturer-only stub 1", () => {
+      // The two ends of the case this exists for: `AdminRideProfileService
+      // .upsert` creates the stub from a manufacturer name alone, with both
+      // arrays empty.
+      expect(rideProfileRichness({ elements: [], types: [] })).toBe(0);
+      expect(
+        rideProfileRichness({
+          elements: [],
+          types: [],
+          manufacturer_name: "Mack Rides",
+        }),
+      ).toBe(1);
+    });
+
+    it("counts inversions: 0 as stated, not as missing", () => {
+      // A curated zero says "this coaster has no inversions", which is a fact
+      // somebody looked up. A falsy check would read it as an empty cell and
+      // rank a row below one that never answered the question.
+      expect(rideProfileRichness({ inversions: 0 })).toBe(1);
+      expect(rideProfileRichness({ inversions: null })).toBe(0);
+      expect(rideProfileRichness({})).toBe(0);
+    });
+
+    it("ignores the Wikidata-imported stats", () => {
+      // `stats` is written by RideStatsService, not by a person. Counting it
+      // would let an import outrank a curation, which is the inversion this
+      // function exists to prevent — and it arrives on rows nobody has touched.
+      expect(
+        rideProfileRichness({
+          elements: [],
+          types: [],
+          stats: {
+            topSpeedKmh: 100,
+            heightM: 40,
+            lengthM: 1200,
+            durationSeconds: 90,
+            source: "wikidata",
+            sourceId: "Q319081",
+          },
+          stats_updated_at: new Date(),
+        }),
+      ).toBe(0);
+    });
+
+    it("survives a row whose json columns are absent or not arrays", () => {
+      // The rows come from `SELECT *` through a raw query, so nothing in the
+      // type system stands between the driver and this function.
+      expect(rideProfileRichness({ elements: null, types: undefined })).toBe(0);
+      expect(rideProfileRichness({ curated_stats: null })).toBe(0);
+    });
+  });
+
+  /**
+   * The decision, without the database. `previewMerge` reports from exactly
+   * this function, which is what keeps a rehearsal from drifting from the act.
+   */
+  describe("decideWinnerAuthoritative", () => {
+    const profiles = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "attraction_ride_profiles",
+    )!;
+
+    it("names the side that loses its row, in both directions", () => {
+      const rich = { elements: ["lifthill", "vertical-loop"], types: [] };
+      const stub = { elements: [], types: [], manufacturer_name: "Mack" };
+
+      expect(decideWinnerAuthoritative(profiles, [rich], [stub])).toEqual({
+        action: "take-loser",
+        dropped: [stub],
+        droppedFrom: "winner",
+      });
+      expect(decideWinnerAuthoritative(profiles, [stub], [rich])).toEqual({
+        action: "keep-winner",
+        dropped: [stub],
+        droppedFrom: "loser",
+      });
+    });
+
+    it("drops nothing where only one side holds a row", () => {
+      const row = { elements: ["lifthill"], types: [] };
+
+      expect(decideWinnerAuthoritative(profiles, [], [row])).toEqual({
+        action: "nothing",
+        dropped: [],
+        droppedFrom: null,
+      });
+      expect(decideWinnerAuthoritative(profiles, [row], [])).toEqual({
+        action: "inherit",
+        dropped: [],
+        droppedFrom: null,
+      });
+    });
+
+    it("keeps the winner's row for an entry that declares no ranking", () => {
+      // The old rule, unchanged, for every entry that does not opt in. PAR-179
+      // is an exception for one table and has to stay one.
+      const plain = { ...profiles, richness: undefined };
+      const rich = { elements: ["lifthill", "vertical-loop"], types: [] };
+
+      expect(decideWinnerAuthoritative(plain, [rich], [{}])).toEqual({
+        action: "keep-winner",
+        dropped: [rich],
+        droppedFrom: "loser",
+      });
     });
   });
 

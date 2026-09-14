@@ -26,6 +26,79 @@ export interface MergeDependency {
    * UPDATE violates the constraint and aborts the whole merge transaction.
    */
   conflictColumns?: string[];
+  /**
+   * How much a row of this table says, as a number. Only read by
+   * `winner-authoritative`, and only where it is declared.
+   *
+   * Without it that strategy keeps the winner's row whenever the winner holds
+   * one — which ranks two curations by which ATTRACTION happened to survive,
+   * a property of the merge rather than of the rows. With it, the richer row
+   * survives and a tie still keeps the winner's, so the rule only ever moves
+   * content that would otherwise have been deleted.
+   *
+   * Declared on exactly one entry (`attraction_ride_profiles`, PAR-179).
+   * Leaving it off everywhere else is the decision, not an omission: for a
+   * derived row "richer" says nothing, and for a curated one somebody has to
+   * define what more means before a merge may act on it.
+   */
+  richness?: (row: Record<string, unknown>) => number;
+}
+
+/** Fields of a ride profile a person fills in, one point each when set. */
+const CURATED_RIDE_PROFILE_FIELDS = [
+  "manufacturer_name",
+  "manufacturer_term_id",
+  "model",
+  "opened_year",
+  "inversions",
+] as const;
+
+/** The four measurements inside `curated_stats`, one point each when set. */
+const CURATED_RIDE_STAT_FIELDS = [
+  "topSpeedKmh",
+  "heightM",
+  "lengthM",
+  "durationSeconds",
+] as const;
+
+/**
+ * How much a curated ride profile says: one point per track element, one per
+ * ride type, one per curated field that is set.
+ *
+ * The definition is PAR-179's, and the point of it is the stub.
+ * `AdminRideProfileService.upsert` creates a row from a manufacturer name
+ * alone, with `elements` and `types` empty — a profile scoring 1 against a
+ * fully walked-through layout scoring twenty. Ranking by content is what stops
+ * the stub from outranking the layout merely by sitting on the surviving row.
+ *
+ * `stats` and `stats_updated_at` are deliberately NOT counted: they are
+ * imported from Wikidata by `RideStatsService`, so counting them would let an
+ * automatic import outrank a curation — the exact inversion this function
+ * exists to prevent. `curated_stats` IS counted, per measurement rather than
+ * as a single flag, because it is hand-assembled like everything else here.
+ *
+ * Takes a raw row (`SELECT *`), so the keys are the physical column names and
+ * not the entity's properties.
+ */
+export function rideProfileRichness(row: Record<string, unknown>): number {
+  const listLength = (value: unknown): number =>
+    Array.isArray(value) ? value.length : 0;
+
+  let score = listLength(row.elements) + listLength(row.types);
+
+  for (const field of CURATED_RIDE_PROFILE_FIELDS) {
+    if (row[field] !== null && row[field] !== undefined) score++;
+  }
+
+  const curatedStats = row.curated_stats;
+  if (curatedStats && typeof curatedStats === "object") {
+    const stats = curatedStats as Record<string, unknown>;
+    for (const field of CURATED_RIDE_STAT_FIELDS) {
+      if (stats[field] !== null && stats[field] !== undefined) score++;
+    }
+  }
+
+  return score;
 }
 
 /**
@@ -187,21 +260,28 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // every single time the survivor has a profile, i.e. `discard` wearing a
     // different hat.
     //
-    // So: the survivor's own profile always wins, the loser's is inherited
-    // only into an empty cell, and where one is dropped `applyMergeDependencies`
-    // logs its contents first — the same bargain `logDroppedCuration` strikes
-    // for the curated park columns, and for the same reason: a hand-written
-    // value that ceases to exist should at least leave a line somebody can
-    // find. Which of two competing profiles survives is a curation question
-    // and is decided here by "the winner's", per PAR-105.
+    // So: the loser's profile is inherited into an empty cell, and where the
+    // survivor already holds one the two are RANKED — `richness` below — and
+    // whichever says less is logged and dropped. A tie keeps the survivor's.
+    // The log line is the same bargain `logDroppedCuration` strikes for the
+    // curated park columns, and for the same reason: a hand-written value that
+    // ceases to exist should at least leave a line somebody can find.
     //
-    // That decision is not free, and the log line is where it is paid for:
-    // `AdminRideProfileService.upsert` will create a row from a manufacturer
-    // name alone, with `elements` and `types` empty, so a stub on the survivor
-    // outranks a fully walked-through layout on the loser. Rarely — it needs
-    // two rows for one ride in one park and a profile on BOTH — and the
-    // alternative (rank the rows by how much they say) is a second curation
-    // decision that is not this list's to make. Recorded as PAR-179.
+    // Ranking is PAR-179's correction to PAR-105, which decided the survivor's
+    // profile always wins. That rule ranked two curations by which ATTRACTION
+    // survived, and `AdminRideProfileService.upsert` creates a row from a
+    // manufacturer name alone — so a one-field stub on the survivor beat a
+    // fourteen-element layout on the loser, and the layout was gone. The same
+    // rule also let the order of an unordered SELECT decide, wherever one merge
+    // folds two losers into one survivor (`ParkMergeService.migrateEntities`
+    // matches by slug OR name, and a name is not unique inside a park): the
+    // first loser's row was inherited, and the second was then measured against
+    // THAT row. Ranking by content answers both, because it does not depend on
+    // who survived or on who arrived first.
+    //
+    // This is the only entry on any of these lists that declares `richness`,
+    // and per PAR-179 it stays that way: "the winner's row wins" remains the
+    // rule everywhere else.
     //
     // The park-side twin of this entry (`PARK_DEPENDENCIES`, column `parkId`,
     // `move`) is a different job and both are needed: that one carries the
@@ -214,6 +294,7 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     table: "attraction_ride_profiles",
     column: "attractionId",
     strategy: "winner-authoritative",
+    richness: rideProfileRichness,
   },
 ];
 
@@ -582,7 +663,7 @@ function assertSafeIdentifier(value: string): void {
   }
 }
 
-interface MergeQueryRunner {
+export interface MergeQueryRunner {
   query: (sql: string, params?: unknown[]) => Promise<unknown>;
 }
 
@@ -594,36 +675,152 @@ function asRows(result: unknown): Array<Record<string, unknown>> {
 }
 
 /**
- * Inherits the loser's row only where the winner has none, and says what it
- * drops when it cannot.
+ * What a `winner-authoritative` entry would do to one pair of entities.
  *
- * Three statements at most, and the first one is the point: reading the losing
- * rows before deciding is what makes the log line possible. Without it the
- * DELETE is indistinguishable from `discard` — the values are gone and the only
- * record that they existed went with them.
+ * `dropped` is the whole point of the type: those rows are hand-written, have
+ * no feed behind them and no job that would rebuild them, so both the merge
+ * (as a log line) and the preview (as a warning to the admin about to press
+ * the button) have to be able to name them before they cease to exist.
+ */
+export interface WinnerAuthoritativeDecision {
+  /**
+   * `nothing`     — the loser holds no row; the winner's, if any, stands.
+   * `inherit`     — the winner holds none, so the loser's row moves across.
+   * `keep-winner` — both hold rows and the winner's says at least as much.
+   * `take-loser`  — both hold rows and the loser's says more (`richness`).
+   */
+  action: "nothing" | "inherit" | "keep-winner" | "take-loser";
+  /** The rows that would cease to exist. Empty unless something is dropped. */
+  dropped: Array<Record<string, unknown>>;
+  /** Which entity loses them. Null where nothing is dropped. */
+  droppedFrom: "winner" | "loser" | null;
+}
+
+/** The richest single row of a side, or 0 for a side holding none. */
+function topRichness(
+  rows: Array<Record<string, unknown>>,
+  richness: (row: Record<string, unknown>) => number,
+): number {
+  return rows.reduce((best, row) => Math.max(best, richness(row)), 0);
+}
+
+/**
+ * Decides a `winner-authoritative` entry from the rows alone — no database, no
+ * side effects.
  *
- * Written for a table holding one row per entity. It handles several rows
- * correctly (all of them move, or all of them are logged and dropped), but
- * "the winner's row wins" stops meaning anything obvious once there are many,
- * so a new entry using this strategy should be one-per-entity in fact and not
- * only in the common case.
+ * Split out so `previewMerge` can report the same outcome the merge will
+ * produce instead of deriving a second answer from the same table. Two
+ * derivations of one rule drift, and the one that drifts unnoticed is the
+ * preview, because nobody checks a rehearsal against the act.
+ *
+ * Without `dep.richness` this is exactly the old rule: the winner's row wins
+ * whenever the winner holds one. With it, the richer row wins and a TIE still
+ * keeps the winner's — so the ranking can only ever save content, never move a
+ * curation for the sake of moving it.
+ *
+ * Written for a table holding one row per entity. Several rows are handled
+ * (they move together, or they are dropped together, and a side is ranked by
+ * its richest row), but "the winner's row wins" stops meaning anything obvious
+ * once there are many, so a new entry using this strategy should be
+ * one-per-entity in fact and not only in the common case.
+ */
+export function decideWinnerAuthoritative(
+  dep: MergeDependency,
+  losingRows: Array<Record<string, unknown>>,
+  winningRows: Array<Record<string, unknown>>,
+): WinnerAuthoritativeDecision {
+  // Nothing to inherit, and nothing to lose either.
+  if (losingRows.length === 0) {
+    return { action: "nothing", dropped: [], droppedFrom: null };
+  }
+
+  if (winningRows.length === 0) {
+    return { action: "inherit", dropped: [], droppedFrom: null };
+  }
+
+  if (
+    dep.richness &&
+    topRichness(losingRows, dep.richness) >
+      topRichness(winningRows, dep.richness)
+  ) {
+    return {
+      action: "take-loser",
+      dropped: winningRows,
+      droppedFrom: "winner",
+    };
+  }
+
+  return { action: "keep-winner", dropped: losingRows, droppedFrom: "loser" };
+}
+
+/**
+ * Reads both sides of a `winner-authoritative` entry and decides, without
+ * writing anything.
+ *
+ * The read is the point: deciding on counts alone would leave the DELETE
+ * indistinguishable from `discard` — the values gone, and the only record that
+ * they existed gone with them.
+ *
+ * The winner's side is read in full only where the entry ranks rows. Without
+ * `richness` the branch decides on the winner holding ANY row, and a
+ * `SELECT 1 … LIMIT 1` says that in one index lookup.
+ *
+ * Both sides are read fresh on every call, which matters where one merge folds
+ * SEVERAL losers into one winner: `ParkMergeService.migrateEntities` matches a
+ * loser to a winner by slug OR name, and a name is not unique inside a park, so
+ * two losers can arrive at the same survivor. The second one is then measured
+ * against whatever is standing on the winner — possibly the first loser's row,
+ * inherited a moment ago. Under `richness` that is still the right comparison,
+ * because it asks what the row says rather than who brought it.
+ */
+export async function planWinnerAuthoritative(
+  manager: MergeQueryRunner,
+  dep: MergeDependency,
+  winnerId: string,
+  loserId: string,
+): Promise<WinnerAuthoritativeDecision> {
+  assertSafeIdentifier(dep.table);
+  assertSafeIdentifier(dep.column);
+
+  const losing = asRows(
+    await manager.query(
+      `SELECT * FROM ${dep.table} WHERE "${dep.column}" = $1`,
+      [loserId],
+    ),
+  );
+  // Leaving early keeps the ordinary merge — the overwhelming majority, since
+  // almost no ride carries a curated profile — at one statement instead of
+  // three, and stops the log from announcing a loss that did not happen.
+  if (losing.length === 0) {
+    return { action: "nothing", dropped: [], droppedFrom: null };
+  }
+
+  const winning = asRows(
+    await manager.query(
+      dep.richness
+        ? `SELECT * FROM ${dep.table} WHERE "${dep.column}" = $1`
+        : `SELECT 1 FROM ${dep.table} WHERE "${dep.column}" = $1 LIMIT 1`,
+      [winnerId],
+    ),
+  );
+
+  return decideWinnerAuthoritative(dep, losing, winning);
+}
+
+/**
+ * Inherits the loser's row where the winner has none, ranks the two where both
+ * hold one, and says what it drops either way.
+ *
+ * Three statements at most in the common case, four where the loser's row is
+ * the richer one and the winner's has to be deleted before the move: the merge
+ * column is the primary key, so the UPDATE would otherwise collide with the row
+ * it is replacing.
  *
  * The warning is written inside the caller's transaction, so a merge that
  * rolls back further down leaves a line about a row that still exists. The
  * same is true of `logDroppedCuration`, and the trade is the same one: a log
  * line that is occasionally too pessimistic beats one that is never written
  * because the statement it describes threw.
- *
- * "The winner's own row" is read fresh each call, and where one merge folds
- * SEVERAL losers into one winner that matters: `ParkMergeService
- * .migrateEntities` matches a loser to a winner by slug OR name, and a name is
- * not unique inside a park, so two losers can arrive at the same survivor. The
- * first one's row is inherited, and the second is then measured against THAT
- * row rather than against anything the winner brought. Which of the two
- * curations survives is decided by the order of an unordered SELECT, so it is
- * arbitrary — better than the cascade that used to take both, worse than a
- * rule, and the reason the drop is logged rather than only counted. Ranking
- * the rows by what they say instead is the open question on PAR-179.
  */
 async function applyWinnerAuthoritative(
   manager: MergeQueryRunner,
@@ -631,26 +828,16 @@ async function applyWinnerAuthoritative(
   winnerId: string,
   loserId: string,
 ): Promise<void> {
-  const losing = asRows(
-    await manager.query(
-      `SELECT * FROM ${dep.table} WHERE "${dep.column}" = $1`,
-      [loserId],
-    ),
-  );
-  // Nothing to inherit, and nothing to lose either. Leaving early keeps the
-  // ordinary merge — the overwhelming majority, since almost no ride carries a
-  // curated profile — at one statement instead of three, and stops the log
-  // from announcing a loss that did not happen.
-  if (losing.length === 0) return;
-
-  const winnerHolds = asRows(
-    await manager.query(
-      `SELECT 1 FROM ${dep.table} WHERE "${dep.column}" = $1 LIMIT 1`,
-      [winnerId],
-    ),
+  const decision = await planWinnerAuthoritative(
+    manager,
+    dep,
+    winnerId,
+    loserId,
   );
 
-  if (winnerHolds.length === 0) {
+  if (decision.action === "nothing") return;
+
+  if (decision.action === "inherit") {
     await manager.query(
       `UPDATE ${dep.table} SET "${dep.column}" = $1 WHERE "${dep.column}" = $2`,
       [winnerId, loserId],
@@ -665,13 +852,26 @@ async function applyWinnerAuthoritative(
   // inherited a moment ago. Naming it as the survivor's would tell a reader the
   // survivor had a curation of its own, which is the one thing they would check
   // before deciding whether the dropped one is worth typing back in.
+  const kept = decision.action === "take-loser" ? loserId : winnerId;
+  const lost = decision.action === "take-loser" ? winnerId : loserId;
   logger.warn(
-    `🗑️  ${dep.table}: keeping the row already on ${winnerId} and dropping ${loserId}'s — ` +
-      losing.map((row) => JSON.stringify(row)).join(" | "),
+    `🗑️  ${dep.table}: keeping the row already on ${kept} and dropping ${lost}'s — ` +
+      decision.dropped.map((row) => JSON.stringify(row)).join(" | "),
   );
+
   await manager.query(`DELETE FROM ${dep.table} WHERE "${dep.column}" = $1`, [
-    loserId,
+    lost,
   ]);
+
+  // Only now is the key free. `take-loser` is the branch that needs it: the
+  // merge column is the primary key here, so the row cannot be moved onto an
+  // id that is still occupied.
+  if (decision.action === "take-loser") {
+    await manager.query(
+      `UPDATE ${dep.table} SET "${dep.column}" = $1 WHERE "${dep.column}" = $2`,
+      [winnerId, loserId],
+    );
+  }
 }
 
 /**
@@ -724,6 +924,16 @@ export async function applyMergeDependencies(
       throw new Error(
         `Merge dependency "${dep.table}" declares conflictColumns with the ` +
           `winner-authoritative strategy, which ignores them`,
+      );
+    }
+    // The mirror of the check above, and the more expensive mistake of the
+    // two: a `richness` on a `move` or `discard` entry is somebody believing
+    // their curation is being ranked while the row is reparented or deleted
+    // without ever being read.
+    if (dep.richness && dep.strategy !== "winner-authoritative") {
+      throw new Error(
+        `Merge dependency "${dep.table}" declares richness with the ` +
+          `${dep.strategy} strategy, which never reads it`,
       );
     }
   }

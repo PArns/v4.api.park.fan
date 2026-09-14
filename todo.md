@@ -408,7 +408,12 @@ What is still open, roughly by consequence:
       `logDroppedCuration` strikes for the curated park columns: a hand-written
       value that ceases to exist leaves a line somebody can find. Which of two
       competing profiles survives is a curation question, and it is answered
-      with "the winner's". One entry on the shared list reaches all four merge
+      with "the winner's". **Superseded on 2026-09-14 (PAR-179):** the entry
+      declares a `richness` now and the richer of the two rows survives, a tie
+      keeping the winner's. "The winner's" ranked two curations by which
+      attraction happened to survive, and `AdminRideProfileService.upsert`
+      writes a row from a manufacturer name alone, so a stub beat a full
+      layout. One entry on the shared list reaches all four merge
       paths, because every one of them hands `ATTRACTION_DEPENDENCIES` to
       `applyMergeDependencies`. The park entry stays where it is and on its own
       column: it carries the denormalised `parkId` of a profile whose ride has

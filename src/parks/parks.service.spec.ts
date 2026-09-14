@@ -561,28 +561,38 @@ describe("ParksService", () => {
      * `dependencyTablesTouched`: with no losing row the branch correctly issues
      * no write at all, and a table the merge touched only by reading is
      * indistinguishable there from one it forgot.
+     *
+     * Which of the two reads is which is decided by their ORDER, not by the
+     * SQL: since PAR-179 the entry ranks rows, so both sides are read with the
+     * same `SELECT *` and the branch reads the loser first, every time. Hence
+     * the counter — a stateless answer would hand the survivor a profile too
+     * and turn every case here into a collision, which is a different test.
      */
-    const curatedRideProfileReads = (
-      sql: string,
-      params?: unknown[],
-    ): unknown[] | undefined => {
-      if (/SELECT \* FROM attraction_ride_profiles/i.test(sql)) {
-        return [
-          {
-            attractionId: params?.[0],
-            elements: ["lifthill", "vertical-loop"],
-            types: ["launch-coaster"],
-          },
-        ];
-      }
-      if (/SELECT 1 FROM attraction_ride_profiles/i.test(sql)) return [];
-      return undefined;
+    const curatedRideProfileReader = () => {
+      let read = 0;
+      return (sql: string, params?: unknown[]): unknown[] | undefined => {
+        if (/SELECT \* FROM attraction_ride_profiles/i.test(sql)) {
+          const isLoser = read++ % 2 === 0;
+          return isLoser
+            ? [
+                {
+                  attractionId: params?.[0],
+                  elements: ["lifthill", "vertical-loop"],
+                  types: ["launch-coaster"],
+                },
+              ]
+            : [];
+        }
+        if (/SELECT 1 FROM attraction_ride_profiles/i.test(sql)) return [];
+        return undefined;
+      };
     };
 
     const recordTransaction = (
       rowsFor: (sql: string, params?: unknown[]) => unknown[],
     ) => {
       const calls: Recorded[] = [];
+      const curatedRideProfileReads = curatedRideProfileReader();
       const transactionalEntityManager = {
         query: jest.fn(async (sql: string, params?: unknown[]) => {
           calls.push({ sql, params });
