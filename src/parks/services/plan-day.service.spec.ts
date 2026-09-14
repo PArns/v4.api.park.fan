@@ -30,6 +30,8 @@ describe("PlanDayService", () => {
 
   let service: PlanDayService;
   let calendarDay: Record<string, unknown> | null;
+  /** Whether the calendar throws rather than answering. */
+  let calendarFails: boolean;
   let dailyPredictions: unknown[];
   /** Whether the daily forecast service throws rather than answering. */
   let dailyPredictionsFail: boolean;
@@ -151,9 +153,10 @@ describe("PlanDayService", () => {
         {
           provide: CalendarService,
           useValue: {
-            buildCalendarResponse: jest.fn().mockImplementation(async () => ({
-              days: calendarDay ? [calendarDay] : [],
-            })),
+            buildCalendarResponse: jest.fn().mockImplementation(async () => {
+              if (calendarFails) throw new Error("calendar down");
+              return { days: calendarDay ? [calendarDay] : [] };
+            }),
           },
         },
         {
@@ -203,6 +206,7 @@ describe("PlanDayService", () => {
     hourlyHistory = new Map();
     afterMidnightHistory = new Map();
     historyFails = false;
+    calendarFails = false;
     calendarDay = {
       date: "2026-10-17",
       status: "OPERATING",
@@ -2417,6 +2421,23 @@ describe("PlanDayService", () => {
       expect(feedQueries()).toHaveLength(1);
     });
 
+    it("measures a park's feed once, not once per date asked about", async () => {
+      calendarDay = { ...calendarDay!, date: farDate() };
+      profile = { hours: [], attractions: [] };
+      dailyPredictions = [];
+      service = await build();
+
+      // Three different dates, one park. Feed recency is a property of the
+      // park; the HTTP cache in front of this is keyed per URL with the date
+      // in it, so without the memo a permanently empty park pays every time.
+      for (const days of [30, 31, 32]) {
+        calendarDay = { ...calendarDay!, date: dayFromToday(days) };
+        await service.buildPlanDay(park, dayFromToday(days));
+      }
+
+      expect(feedQueries()).toHaveLength(1);
+    });
+
     it("separates a feed that stopped from one that never started", async () => {
       const date = farDate();
       calendarDay = { ...calendarDay!, date };
@@ -2528,6 +2549,55 @@ describe("PlanDayService", () => {
       expect(plan.tier).toBe("observed");
       expect(plan.rides).toEqual([]);
       expect(plan.ridesUnavailable?.reason).toBe("no_observations");
+    });
+
+    it("does not read a failed calendar as a day without hours", async () => {
+      const date = farDate();
+      // No published hours AND no profile to derive observed ones — the state
+      // most parks are in at lead 30, which is what makes this the worst place
+      // for an outage to read as a data gap.
+      calendarDay = null;
+      calendarFails = true;
+      profile = { hours: [], attractions: [] };
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.context.openHour).toBeNull();
+      expect(plan.ridesUnavailable?.reason).toBe("data_unavailable");
+
+      // Counter-check: the calendar answering "no row for this day" is a fact
+      // about the park's schedule and keeps its own reason.
+      calendarFails = false;
+      service = await build();
+      const known = await service.buildPlanDay(park, date);
+      expect(known.ridesUnavailable?.reason).toBe("hours_unknown");
+    });
+
+    it("does not read a failed profile as a day without hours", async () => {
+      const date = farDate();
+      calendarDay = { date, status: "OPERATING", hours: null };
+      // The observed-hours fallback is the only window left, and it fails open.
+      profileMock = jest.fn().mockRejectedValue(new Error("profile down"));
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.context.openHour).toBeNull();
+      expect(plan.ridesUnavailable?.reason).toBe("data_unavailable");
+    });
+
+    it("still reports a stated closure when a dependency is down", async () => {
+      const date = farDate();
+      calendarDay = { date, status: "CLOSED", hours: null };
+      profileMock = jest.fn().mockRejectedValue(new Error("profile down"));
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      // The operator's own word about the day stands whatever failed on our
+      // side, and it is the more useful sentence.
+      expect(plan.ridesUnavailable?.reason).toBe("park_closed");
     });
 
     it("does not turn a failed recency query into a healthy feed", async () => {

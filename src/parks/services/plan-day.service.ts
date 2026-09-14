@@ -77,6 +77,9 @@ import { isCuratedOutOfService } from "../../attractions/utils/curated-out-of-se
  * label, and the hours the 24-hour window did not reach were simply missing,
  * which cut the evening off a park that closes at 22:00.
  */
+/** How long a park's measured feed recency is reused across requests. */
+const FEED_RECENCY_TTL_MS = 5 * 60_000;
+
 /** What {@link PlanDayService.explainEmptyPlan} needs that only the build knows. */
 interface PlanDayEmptyCounts {
   rideCount: number;
@@ -97,6 +100,16 @@ interface PlanDayEmptyCounts {
 @Injectable()
 export class PlanDayService {
   private readonly logger = new Logger(PlanDayService.name);
+
+  /**
+   * Per-park feed recency, so a permanently empty park costs one measurement
+   * rather than one per date asked about. In-process on purpose: it is a
+   * cheap-to-rebuild hint, not a fact anything is served from.
+   */
+  private readonly feedRecency = new Map<
+    string,
+    { value: number | null | "unknown"; until: number }
+  >();
 
   /**
    * Where the python service's hourly generation stops
@@ -197,7 +210,9 @@ export class PlanDayService {
     // One day rather than a month — the caller asked about one day, and the
     // calendar's month cache would answer with 92 KB to serve 1 KB of it.
     const day = await this.loadDay(park, dateStr);
-    const status = day?.status ?? "UNKNOWN";
+    const calendarUnavailable = day === "unavailable";
+    const theDay = calendarUnavailable ? null : day;
+    const status = theDay?.status ?? "UNKNOWN";
 
     // The historical shape, needed both to compose curves and to fall back on
     // for opening hours. An observed day wants neither: it is answered from
@@ -205,13 +220,16 @@ export class PlanDayService {
     // every ride in the park. Composing a shape onto a past date would draw a
     // forecast for a day the visitor walked.
     const profile = isFuture ? await this.loadProfile(park) : null;
+    // `getParkHourlyProfile` always returns a DTO, empty or not, so a `null`
+    // here is only ever the `catch` inside `loadProfile`.
+    const profileUnavailable = isFuture && profile === null;
 
-    let openHour = this.hourIn(day?.hours?.openingTime, park.timezone);
+    let openHour = this.hourIn(theDay?.hours?.openingTime, park.timezone);
     // The park's opening to the minute, not just the hour: a ride opening at
     // 09:45 in a park that opens at 09:00 shares its hour and is still 45
     // minutes later, which is exactly what a visitor needs told.
-    const parkOpensAt = this.hhmmIn(day?.hours?.openingTime, park.timezone);
-    let closeHour = this.hourIn(day?.hours?.closingTime, park.timezone);
+    const parkOpensAt = this.hhmmIn(theDay?.hours?.openingTime, park.timezone);
+    let closeHour = this.hourIn(theDay?.hours?.closingTime, park.timezone);
     let hoursSource: PlanDayHoursSource | undefined =
       openHour !== null && closeHour !== null ? "schedule" : undefined;
 
@@ -242,18 +260,18 @@ export class PlanDayService {
       openHour,
       closeHour,
       ...(hoursSource ? { hoursSource } : {}),
-      crowdLevel: day?.crowdLevel ?? null,
+      crowdLevel: theDay?.crowdLevel ?? null,
       // No climate normal substituted past the forecast's reach. A made-up rain
       // probability would silently move every bar on the day, and the caller
       // cannot tell an invented one from a real one.
-      weather: (day?.weather as Record<string, unknown> | undefined) ?? null,
-      isHoliday: Boolean(day?.isHoliday),
-      isBridgeDay: Boolean(day?.isBridgeDay),
-      isSchoolVacation: Boolean(day?.isSchoolVacation),
+      weather: (theDay?.weather as Record<string, unknown> | undefined) ?? null,
+      isHoliday: Boolean(theDay?.isHoliday),
+      isBridgeDay: Boolean(theDay?.isBridgeDay),
+      isSchoolVacation: Boolean(theDay?.isSchoolVacation),
       // Derived here rather than read: the calendar carries no isWeekend, and
       // every surface that wanted one was deriving it from the date separately.
       isWeekend: this.isWeekend(dateStr),
-      neighborHolidays: (day?.neighborHolidays ?? []) as unknown as Array<
+      neighborHolidays: (theDay?.neighborHolidays ?? []) as unknown as Array<
         Record<string, unknown>
       >,
       // Off the ENTITY, not off the day: whether a source exists is a property
@@ -283,10 +301,20 @@ export class PlanDayService {
     // saying so is the answer. The tier stays the nominal one for the distance:
     // with no curves there is no method to characterise.
     if (openHour === null || closeHour === null) {
-      // Answerable without touching the database: a stated closure and an
-      // unknown window are both properties of the day, not of the rides.
+      // A stated closure is the day's own answer and stands whatever else
+      // failed. An unknown window is not: both halves that could have produced
+      // one — the calendar's published hours and the profile's observed ones —
+      // fail open, so `hours_unknown` on a failed run is a data gap invented
+      // out of an outage. That is the substitution this whole field exists to
+      // stop, and it bites hardest here: at lead 30 most parks have no
+      // published hours and depend on the profile.
       base.ridesUnavailable = {
-        reason: status === "CLOSED" ? "park_closed" : "hours_unknown",
+        reason:
+          status === "CLOSED"
+            ? "park_closed"
+            : calendarUnavailable || profileUnavailable
+              ? "data_unavailable"
+              : "hours_unknown",
       };
       return base;
     }
@@ -329,7 +357,7 @@ export class PlanDayService {
           // Without this, an analytics outage answered `no_observations` — "the
           // rollup holds nothing for this park" — which is a statement about
           // the park made out of a statement about us.
-          dependencyUnavailable: observed.unavailable,
+          dependencyUnavailable: observed.unavailable || calendarUnavailable,
         });
       }
       return base;
@@ -344,7 +372,7 @@ export class PlanDayService {
       profile,
       hoursSource === "schedule" ? parkOpensAt : null,
       status,
-      day?.hours?.openingTime ?? null,
+      theDay?.hours?.openingTime ?? null,
     );
     base.tier = built.tier;
     base.rides = built.rides;
@@ -421,6 +449,29 @@ export class PlanDayService {
    * no wait times, and counting those rows would call it healthy.
    */
   private async feedStaleDays(park: Park): Promise<number | null | "unknown"> {
+    // Memoised per park, because how long a feed has been silent is a property
+    // of the PARK and not of the date asked about — while the HTTP cache is
+    // keyed per URL, date included. Without this, walking one permanently empty
+    // park across dates re-runs both steps for every one of them, and the
+    // second step is the unbounded scan. Minutes, not hours: a feed that comes
+    // back should stop being called stale within a poll cycle or two.
+    const cached = this.feedRecency.get(park.id);
+    if (cached && cached.until > Date.now()) return cached.value;
+    const value = await this.measureFeedStaleDays(park);
+    // A failed statement is not kept: the next request asks again rather than
+    // repeating an outage for five minutes.
+    if (value !== "unknown") {
+      this.feedRecency.set(park.id, {
+        value,
+        until: Date.now() + FEED_RECENCY_TTL_MS,
+      });
+    }
+    return value;
+  }
+
+  private async measureFeedStaleDays(
+    park: Park,
+  ): Promise<number | null | "unknown"> {
     // Asked in two steps, because the answer only has three shapes — never,
     // under the threshold, or over it — and the cheap step settles the common
     // one. Bounded to the threshold, the aggregate reads one end of the
@@ -792,7 +843,7 @@ export class PlanDayService {
       ]);
 
     const dayLevels = levels.levels;
-    for (const id of runningNow) blocked.delete(id);
+    for (const id of runningNow.ids) blocked.delete(id);
     const plannable = attractions.filter((a) => !blocked.has(a.id));
     const byId = new Map(plannable.map((a) => [a.id, a]));
     const bySlug = new Map(plannable.map((a) => [a.slug, a]));
@@ -1009,7 +1060,10 @@ export class PlanDayService {
         // `profile === null` is only ever the catch in `loadProfile`; the
         // service itself always returns a DTO, empty or not.
         dependencyUnavailable:
-          profile === null || levels.unavailable || measured.unavailable,
+          profile === null ||
+          levels.unavailable ||
+          measured.unavailable ||
+          runningNow.unavailable,
       },
     };
   }
@@ -1430,10 +1484,11 @@ export class PlanDayService {
     openingTime: Date | string | null | undefined,
     leadDays: number,
     candidateIds: string[],
-  ): Promise<Set<string>> {
+  ): Promise<{ ids: Set<string>; unavailable: boolean }> {
     const out = new Set<string>();
-    if (leadDays !== 0 || parkStatus === "CLOSED") return out;
-    if (candidateIds.length === 0) return out;
+    if (leadDays !== 0 || parkStatus === "CLOSED")
+      return { ids: out, unavailable: false };
+    if (candidateIds.length === 0) return { ids: out, unavailable: false };
 
     const floor = new Date(
       Date.now() - PlanDayService.LIVE_STATUS_FLOOR_HOURS * 60 * 60 * 1000,
@@ -1467,9 +1522,14 @@ export class PlanDayService {
       this.logger.warn(
         `Plan day: live status unavailable for ${park.slug}: ${(error as Error).message}`,
       );
+      // Without this the season filter simply keeps every ride it blocked, and
+      // the empty plan reads `rides_cannot_open` — which
+      // `isStructuralPlanDayReason` calls a property of the park and files
+      // permanently out of the watched number.
+      return { ids: out, unavailable: true };
     }
 
-    return out;
+    return { ids: out, unavailable: false };
   }
 
   /** Day-level prediction per attraction for one date. */
@@ -1526,8 +1586,12 @@ export class PlanDayService {
         this.logger.warn(
           `Plan day: calendar unavailable for ${park.slug} on ${dateStr}: ${err.message}`,
         );
-        return null;
+        // Distinct from "the calendar has no row for this day": the first is an
+        // outage, the second is a fact about the park's schedule, and they
+        // reach the same empty response.
+        return "unavailable" as const;
       });
+    if (response === "unavailable") return "unavailable";
     return response?.days?.find((d) => d.date === dateStr) ?? null;
   }
 

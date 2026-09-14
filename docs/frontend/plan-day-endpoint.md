@@ -668,8 +668,10 @@ out of the planner with a year of data behind it.
 
 ### The reasons
 
-`park_closed` · `hours_unknown` — properties of the day. Answered without
-touching the database.
+`park_closed` — the operator's own word about the day. It stands whatever
+failed on our side, and it is answered without asking about the feed.
+`hours_unknown` — neither a published nor an observed window, and only reported
+when both sources that could have produced one actually answered.
 
 `no_rides_on_file` · `no_wait_time_source` · `rides_cannot_open` — properties of
 the **park**. `no_wait_time_source` is the only one that will never change:
@@ -686,15 +688,18 @@ answered from the 15-minute rollup, so no shape was scaled and no day level was
 read, and neither may be reported as missing.
 
 `data_unavailable` is the odd one out and the reason the other eleven stay
-honest. **Five** things this endpoint asks swallow their own failure to keep
-the response serving — the hourly profile, the daily forecast, the hourly
-forecast, the 15-minute rollup and the feed-recency statement — and every one
-of them degrades to something that reads as an answer. That is right for
-serving and a lie for diagnosis: without this reason, a profile service having
-a bad minute reported `insufficient_history`, an analytics outage reported
-`no_observations` ("the rollup holds nothing for this park" — a statement about
-the park made out of a statement about us), and a failed recency query reported
-a feed measured seconds ago.
+honest. **Seven** things this endpoint asks swallow their own failure to keep
+the response serving — the calendar, the hourly profile, the daily forecast,
+the hourly forecast, the 15-minute rollup, the live-status lookup and the
+feed-recency statement — and every one of them degrades to something that reads
+as an answer. That is right for serving and a lie for diagnosis: without this
+reason, a profile service having a bad minute reported `insufficient_history`,
+an analytics outage reported `no_observations` ("the rollup holds nothing for
+this park" — a statement about the park made out of a statement about us), a
+failed recency query reported a feed measured seconds ago, and a calendar
+outage reported `hours_unknown` — which bites hardest at lead 30, where most
+parks have no published hours and the observed-hours fallback is the only
+window there is.
 
 It is neither a data gap nor a property of the park: it is **unmeasured**, and
 the sweep counts it apart from both.
@@ -722,6 +727,13 @@ Farm against production on 2026-09-14:
 | --- | --- | --- |
 | bounded to 30 days | **35 ms** | 16,194 |
 | no bound | 185 ms | 61,795 |
+
+The answer is memoised per park for five minutes, because how long a feed has
+been silent is a property of the park and not of the date asked about, while the
+HTTP cache is keyed per URL with the date in it — without that, walking one
+permanently empty park across dates re-runs both steps for every one of them. A
+failed statement is not memoised: the next request asks again rather than
+repeating an outage for five minutes.
 
 So the twelve `insufficient_history` parks pay the 35 ms, and only the handful
 that turn out to be silent pay the full scan — which is exactly where the exact
