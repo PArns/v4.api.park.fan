@@ -1,6 +1,9 @@
 import { Logger } from "@nestjs/common";
+import { getMetadataArgsStorage } from "typeorm";
+import { AttractionRideProfile } from "../../attractions/entities/attraction-ride-profile.entity";
 import {
   ATTRACTION_DEPENDENCIES,
+  CURATED_RIDE_PROFILE_FIELDS,
   PARK_CHILD_ENTITIES,
   PARK_DEPENDENCIES,
   PARK_INLINE_DEPENDENCIES,
@@ -11,6 +14,7 @@ import {
   attractionTablesMissingFrom,
   decideWinnerAuthoritative,
   parkTablesMissingFrom,
+  planWinnerAuthoritative,
   rideProfileRichness,
   restaurantTablesMissingFrom,
   showTablesMissingFrom,
@@ -695,9 +699,10 @@ describe("applyMergeDependencies", () => {
 
     it("keeps the winner's row on a tie", async () => {
       // PAR-179 decided the ranking and this boundary with it: equal richness
-      // keeps the survivor's row. So the rule can only ever save content that
-      // would otherwise be deleted, and never moves a curation for its own
-      // sake — the single-field stub on each side is the same curation twice.
+      // keeps the survivor's row, so nothing moves without a strictly richer
+      // row to move — a single-field row on each side is the same curation
+      // twice, and swapping one for the other would buy nothing and cost the
+      // field they disagree on.
       manager.query
         .mockResolvedValueOnce([{ attractionId: "loser-id", model: "Blitz" }])
         .mockResolvedValueOnce([
@@ -851,7 +856,61 @@ describe("applyMergeDependencies", () => {
             durationSeconds: null,
           },
         }),
-      ).toBe(3 + 2 + 5 + 2);
+      ).toBe(3 + 2 + 6);
+    });
+
+    it("counts curated_stats as one field, however many measurements it holds", () => {
+      // The ticket says "Anzahl gesetzter Felder", and `curated_stats` is one
+      // column. Counting its four measurements separately is a different rule:
+      // a row with no track elements would outrank a three-element layout on
+      // the strength of its speed, height, length and duration, and which of
+      // those two a merge keeps is a curation question rather than arithmetic.
+      const allFour = {
+        topSpeedKmh: 100,
+        heightM: 40,
+        lengthM: 1200,
+        durationSeconds: 90,
+      };
+      expect(rideProfileRichness({ curated_stats: allFour })).toBe(1);
+      expect(rideProfileRichness({ curated_stats: { topSpeedKmh: 100 } })).toBe(
+        1,
+      );
+      expect(
+        rideProfileRichness({
+          elements: ["lifthill", "first-drop", "vertical-loop"],
+        }),
+      ).toBeGreaterThan(rideProfileRichness({ curated_stats: allFour }));
+    });
+
+    it("names columns that exist on the entity", () => {
+      // A hand-written twin of the physical column names, and nothing in the
+      // type system joins the two halves: every spec here builds its rows as
+      // literals, so a renamed column would drop out of the score in silence —
+      // no type error, no red test — and tilt the ranking towards deleting the
+      // row. `elements` and `types` are checked too although they are counted
+      // by length rather than as a flag.
+      const columns = new Set(
+        getMetadataArgsStorage()
+          .filterColumns(AttractionRideProfile)
+          .map((column) => column.options.name ?? column.propertyName),
+      );
+
+      // The counter-check first: a lookup that resolved nothing would pass
+      // every assertion below and guard exactly nothing.
+      expect(columns.size).toBe(15);
+      expect(columns).not.toContain("manufacturerName");
+
+      for (const field of [
+        ...CURATED_RIDE_PROFILE_FIELDS,
+        "elements",
+        "types",
+      ]) {
+        expect(columns).toContain(field);
+      }
+      // And the two the function must NOT count are real columns as well, so
+      // their absence from the list above is a decision and not a typo.
+      expect(columns).toContain("stats");
+      expect(columns).toContain("stats_updated_at");
     });
 
     it("scores an empty row 0 and a manufacturer-only stub 1", () => {
@@ -894,6 +953,21 @@ describe("applyMergeDependencies", () => {
             sourceId: "Q319081",
           },
           stats_updated_at: new Date(),
+        }),
+      ).toBe(0);
+    });
+
+    it("ignores the bookkeeping columns every row carries", () => {
+      // They are set on both sides of every comparison, so counting them would
+      // add the same constant twice and change nothing — except on a row whose
+      // `parkId` the park step has not reached yet, where it would.
+      expect(
+        rideProfileRichness({
+          attractionId: "a",
+          parkId: "p",
+          seeded_at: new Date(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
         }),
       ).toBe(0);
     });
@@ -944,6 +1018,22 @@ describe("applyMergeDependencies", () => {
         dropped: [],
         droppedFrom: null,
       });
+    });
+
+    it("refuses one id on both sides, like applyMergeDependencies does", async () => {
+      // `planWinnerAuthoritative` is a second exported way into the same read
+      // path, and with one id on both sides the two SELECTs return the SAME
+      // row — which the caller would then log and delete over a merge that is
+      // not one. `previewMerge` happens to check first today; the guard in
+      // `applyMergeDependencies` exists precisely so that does not have to be
+      // true of every future caller.
+      const manager = { query: jest.fn().mockResolvedValue([]) };
+
+      await expect(
+        planWinnerAuthoritative(manager, profiles, "same-id", "same-id"),
+      ).rejects.toThrow(/both sides/);
+
+      expect(manager.query).not.toHaveBeenCalled();
     });
 
     it("keeps the winner's row for an entry that declares no ranking", () => {

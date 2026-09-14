@@ -12,7 +12,9 @@ export interface MergeDependency {
    * `discard` — drop them; the winner's own row is authoritative and the
    *             value is derived, so keeping both would be meaningless.
    * `winner-authoritative` — move them only where the winner holds nothing;
-   *             otherwise drop them, after logging what is being dropped.
+   *             otherwise drop them, after logging what is being dropped —
+   *             UNLESS the entry declares `richness` below, in which case the
+   *             two rows are ranked and the richer one survives.
    *             For a row that is one per entity, hand-written and
    *             reproducible from no feed: `discard` would destroy a curation
    *             the winner has no equivalent of, and `move` cannot be used at
@@ -33,8 +35,15 @@ export interface MergeDependency {
    * Without it that strategy keeps the winner's row whenever the winner holds
    * one — which ranks two curations by which ATTRACTION happened to survive,
    * a property of the merge rather than of the rows. With it, the richer row
-   * survives and a tie still keeps the winner's, so the rule only ever moves
-   * content that would otherwise have been deleted.
+   * survives, and a tie keeps the winner's, so nothing is ever moved without a
+   * strictly richer row to move.
+   *
+   * It is still a trade and not a pure gain: the richer row survives WHOLE, so
+   * a field only the poorer row had goes with it — a survivor holding a model
+   * name and an opening year loses both to a loser holding nine track elements
+   * and neither. Under the old rule those two fields survived and the nine
+   * elements did not. Merging the two rows field by field would end the trade
+   * and is a third curation decision nobody has taken; recorded as PAR-208.
    *
    * Declared on exactly one entry (`attraction_ride_profiles`, PAR-179).
    * Leaving it off everywhere else is the decision, not an omission: for a
@@ -44,38 +53,51 @@ export interface MergeDependency {
   richness?: (row: Record<string, unknown>) => number;
 }
 
-/** Fields of a ride profile a person fills in, one point each when set. */
-const CURATED_RIDE_PROFILE_FIELDS = [
+/**
+ * The columns of `attraction_ride_profiles` a person fills in, one point each
+ * when set. Physical names, because `rideProfileRichness` is handed a raw row.
+ *
+ * Absent on purpose: `elements` and `types` (counted by length, not as a flag),
+ * `stats` and `stats_updated_at` (imported, see below), `attractionId` /
+ * `parkId` / `seeded_at` / `createdAt` / `updatedAt` (bookkeeping, set on every
+ * row, so they would add the same constant to both sides of every comparison).
+ *
+ * A hand-written twin of the entity's column names, so
+ * `merge-dependencies.spec.ts` checks every one of them against TypeORM's
+ * metadata: a renamed column would otherwise drop out of the score in silence
+ * and tilt the ranking towards deleting the row.
+ */
+export const CURATED_RIDE_PROFILE_FIELDS = [
   "manufacturer_name",
   "manufacturer_term_id",
   "model",
   "opened_year",
   "inversions",
-] as const;
-
-/** The four measurements inside `curated_stats`, one point each when set. */
-const CURATED_RIDE_STAT_FIELDS = [
-  "topSpeedKmh",
-  "heightM",
-  "lengthM",
-  "durationSeconds",
+  "curated_stats",
 ] as const;
 
 /**
  * How much a curated ride profile says: one point per track element, one per
  * ride type, one per curated field that is set.
  *
- * The definition is PAR-179's, and the point of it is the stub.
- * `AdminRideProfileService.upsert` creates a row from a manufacturer name
- * alone, with `elements` and `types` empty — a profile scoring 1 against a
- * fully walked-through layout scoring twenty. Ranking by content is what stops
- * the stub from outranking the layout merely by sitting on the surviving row.
+ * The formula is PAR-179's, read literally — `curated_stats` is one column and
+ * therefore one point, not one per measurement inside it. Counting its four
+ * measurements separately was the first draft and is a different rule: a row
+ * with no track elements at all would then outrank a three-element layout on
+ * the strength of its speed, height, length and duration. Which of those two a
+ * merge should keep is a curation question, and the decision on the ticket
+ * says "Anzahl gesetzter Felder".
+ *
+ * The point of ranking at all is the stub. `AdminRideProfileService.upsert`
+ * creates a row from a manufacturer name alone, with `elements` and `types`
+ * empty — a profile scoring 1 against a fully walked-through layout scoring
+ * twenty. Ranking by content is what stops the stub from outranking the layout
+ * merely by sitting on the surviving row.
  *
  * `stats` and `stats_updated_at` are deliberately NOT counted: they are
  * imported from Wikidata by `RideStatsService`, so counting them would let an
  * automatic import outrank a curation — the exact inversion this function
- * exists to prevent. `curated_stats` IS counted, per measurement rather than
- * as a single flag, because it is hand-assembled like everything else here.
+ * exists to prevent.
  *
  * Takes a raw row (`SELECT *`), so the keys are the physical column names and
  * not the entity's properties.
@@ -88,14 +110,6 @@ export function rideProfileRichness(row: Record<string, unknown>): number {
 
   for (const field of CURATED_RIDE_PROFILE_FIELDS) {
     if (row[field] !== null && row[field] !== undefined) score++;
-  }
-
-  const curatedStats = row.curated_stats;
-  if (curatedStats && typeof curatedStats === "object") {
-    const stats = curatedStats as Record<string, unknown>;
-    for (const field of CURATED_RIDE_STAT_FIELDS) {
-      if (stats[field] !== null && stats[field] !== undefined) score++;
-    }
   }
 
   return score;
@@ -715,8 +729,9 @@ function topRichness(
  *
  * Without `dep.richness` this is exactly the old rule: the winner's row wins
  * whenever the winner holds one. With it, the richer row wins and a TIE still
- * keeps the winner's — so the ranking can only ever save content, never move a
- * curation for the sake of moving it.
+ * keeps the winner's, so nothing moves without a strictly richer row to move.
+ * It is a trade rather than a pure gain — the richer row survives whole, and a
+ * field only the poorer one carried goes with it (PAR-208).
  *
  * Written for a table holding one row per entity. Several rows are handled
  * (they move together, or they are dropped together, and a side is ranked by
@@ -779,6 +794,17 @@ export async function planWinnerAuthoritative(
   winnerId: string,
   loserId: string,
 ): Promise<WinnerAuthoritativeDecision> {
+  // The same refusal `applyMergeDependencies` makes, because this is a second
+  // exported way into the same read path and the guard there was written for
+  // exactly that reason ("cheaper to refuse than to be careful"). With one id
+  // on both sides the two SELECTs return the SAME row, and a caller acting on
+  // the answer would log and delete a curation over a merge that is not one.
+  if (winnerId === loserId) {
+    throw new Error(
+      `Cannot plan a merge dependency with one id on both sides (${winnerId})`,
+    );
+  }
+
   assertSafeIdentifier(dep.table);
   assertSafeIdentifier(dep.column);
 
@@ -847,15 +873,22 @@ async function applyWinnerAuthoritative(
 
   // Before the DELETE, not after: this is the only trace the row leaves.
   //
-  // "the row already on" rather than "its own row": where a merge folds several
-  // losers into one winner, the row standing there may be the first loser's,
-  // inherited a moment ago. Naming it as the survivor's would tell a reader the
-  // survivor had a curation of its own, which is the one thing they would check
-  // before deciding whether the dropped one is worth typing back in.
-  const kept = decision.action === "take-loser" ? loserId : winnerId;
+  // Two branches, two sentences, because the ids mean different things in them.
+  // `keep-winner` says "the row already on" rather than "its own row": where a
+  // merge folds several losers into one winner, the row standing there may be
+  // the first loser's, inherited a moment ago, and naming it as the survivor's
+  // would tell a reader the survivor had a curation of its own — the one thing
+  // they would check before deciding whether the dropped one is worth typing
+  // back in. `take-loser` cannot borrow that wording: the row it keeps sits on
+  // the LOSING attraction, which is deleted seconds later, so a reader looking
+  // it up under that id would find nothing. It names the destination instead.
   const lost = decision.action === "take-loser" ? winnerId : loserId;
+  const outcome =
+    decision.action === "take-loser"
+      ? `moving the richer row from ${loserId} onto ${winnerId} and dropping ${winnerId}'s own`
+      : `keeping the row already on ${winnerId} and dropping ${loserId}'s`;
   logger.warn(
-    `🗑️  ${dep.table}: keeping the row already on ${kept} and dropping ${lost}'s — ` +
+    `🗑️  ${dep.table}: ${outcome} — ` +
       decision.dropped.map((row) => JSON.stringify(row)).join(" | "),
   );
 

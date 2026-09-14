@@ -82,14 +82,28 @@ brought.
 is the only one on any of the five lists that declares it — pinned by a test,
 because PAR-179's decision names the scope as well as the rule. An entry
 without it behaves exactly as before. `rideProfileRichness` counts one point
-per track element, one per ride type and one per curated field that is set
-(including each of the four measurements inside `curated_stats`), and a tie
-still keeps the survivor's row, so the ranking can only ever save content that
-would otherwise be deleted. `stats` and `stats_updated_at` are deliberately not
-counted: they are imported from Wikidata by `RideStatsService`, and counting
-them would let an import outrank a curation, which is the inversion the
-function exists to prevent. `inversions: 0` counts as stated rather than as
-missing — a curated zero is a fact somebody looked up.
+per track element, one per ride type and one per curated column that is set,
+and a tie still keeps the survivor's row, so nothing moves without a strictly
+richer row to move. `curated_stats` is one column and therefore one point:
+counting its four measurements separately would let a row with no track
+elements at all outrank a three-element layout, which is a different rule than
+the one the ticket states ("Anzahl gesetzter Felder"). `stats` and
+`stats_updated_at` are deliberately not counted: they are imported from
+Wikidata by `RideStatsService`, and counting them would let an import outrank a
+curation, which is the inversion the function exists to prevent. `inversions:
+0` counts as stated rather than as missing — a curated zero is a fact somebody
+looked up. The names in `CURATED_RIDE_PROFILE_FIELDS` are a hand-written twin
+of the entity's physical column names, so a test checks each one against
+TypeORM's metadata: a renamed column would otherwise drop out of the score
+without a type error or a red test, and tilt the ranking towards deleting.
+
+It is a trade and not a pure gain, which the first draft of the docstring
+claimed: the richer row survives **whole**, so a field only the poorer row
+carried goes with it — a survivor holding a model name and an opening year
+loses both to a loser holding nine track elements and neither. Under the old
+rule those two survived and the nine elements did not. Merging the two rows
+field by field would end the trade and is a third curation decision; recorded
+as PAR-208.
 
 Where the loser's row is the richer one, the survivor's is logged and deleted
 first and the loser's is then moved onto it: `attractionId` is both the merge
