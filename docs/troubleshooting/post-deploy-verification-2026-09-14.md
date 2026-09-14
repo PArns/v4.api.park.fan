@@ -14,14 +14,17 @@
 
 | # | Question | Answer |
 | - | -------- | ------ |
-| 1 | Does `/plan/day` serve parks that close after midnight? | **Yes.** 13 of the 21 wrapping parks serve hours past 23 (max 25). The 8 that do not are data availability, not the wrap. |
+| 1 | Does `/plan/day` serve parks that close after midnight? | **Yes.** 15 of the 21 wrapping parks serve hours past 23 (max 25). The 6 that do not are data availability, not the wrap. |
 | 2 | Is `hourly_agg` still hot after the cache fix? | **Yes — decisively.** 49.1 % of one core in a fresh 23.5-min window. The decision gate opens. |
-| 3 | Does the ride-profile term audit cron run cleanly? | **Yes.** 30 firings recorded; the handler returns 152 ids, 0 broken. |
+| 3 | Does the ride-profile term audit cron run cleanly? | **Handler yes**, 152 ids and 0 broken; the cron is evidenced firing 29 times. A clean run *triggered by the cron* is the one thing still open. |
 | 4 | Does `curated_may_get_wet` override a diverging sync? | **Yes**, proven on the first real divergence, 2026-09-13. |
 
-**No regression was found in any of the four.** Two follow-ups were filed: PAR-192
-(La Ronde has been silent for 82 days) and PAR-193 (the frontend can drop its
-double lookup now that the wrap contract is measured).
+**No regression was found in any of the four.** Three follow-ups were filed, none of
+them a regression *of* these fixes: PAR-192 (La Ronde has been silent for 82 days),
+PAR-193 (the frontend can drop its double lookup now that the wrap contract is
+measured) and PAR-194 (26 % of parks that are open on a given day 30 days out serve
+no plan at all — found while explaining away the wrap misses, and the reason those
+misses could be explained away so quickly).
 
 ---
 
@@ -59,21 +62,45 @@ ORDER BY p.id, s.date;
 Group by `p.id`, never by `p.slug` — `disneyland-park` exists twice and a slug-keyed
 count silently merges Anaheim with Paris.
 
-**21 parks. 13 serve hours past 23**, the highest observed hour being **25** (Parc
-Astérix and Walibi Rhône-Alpes, both running 19:00–01:00 park-local).
+> **One wrap day per park is not a verdict on the park.** The query above takes
+> `DISTINCT ON (p.id) … ORDER BY p.id, s.date`, i.e. each park's *earliest* wrap date.
+> A park whose earliest wrap day happens to be thin then lands in the "does not serve"
+> column while serving fine a month later — which is exactly what happened on the
+> first pass here, to Parque Warner Madrid and Six Flags Great America, producing a
+> count that contradicted this document's own first table. The survey was therefore
+> re-run over **up to five wrap dates per park** (first, quartiles, last): 72 park-days
+> across the 21 parks.
 
-### The eight that did not, and why none of them is the wrap
+**21 parks. 15 serve hours past 23** on at least one of their wrap days, the highest
+observed hour being **25** (Parc Astérix, Walibi Rhône-Alpes and Six Flags Magic
+Mountain). Twelve of the fifteen serve wrap hours on *every* date sampled.
+
+### The six that did not, and why none of them is the wrap
 
 This is the part worth keeping, because every one of them *looks* like a wrap bug:
 
-| Park | Reading | Actual cause |
+| Park | Wrap days sampled | Actual cause |
+| ---- | ----------------- | ------------ |
+| La Ronde | 5 | Both upstream feeds silent since June → **PAR-192**. Also answers `0` on non-wrap days. |
+| Six Flags Mexico | 5 | Rolled up every day, **0 qualifying samples** every day (41 rows, 0 slots). Also `0` on non-wrap days. |
+| Movieland | 1 | No `queue_data` row has ever existed for it. |
+| Mirabilandia | 1 | Serves 20 rides on a past non-wrap day; returns `0` for *every* future date, wrap or not. |
+| Mid-America Parks | 1 | Returns `0` on past and future dates alike, wrap or not. |
+| Six Flags Over Texas | 1 | Its one wrap day is lead 60, but the horizon is not the cause — Cedar Point serves 15 rides at leads 59–61. This park serves at most 1 ride on any future date. |
+
+All six are data availability. None of them answers differently on a wrap day than it
+does on a comparable non-wrap day, which is the test that separates the two causes.
+
+Four of the six turned out to be instances of something wider, measured afterwards and
+filed as **PAR-194**: at lead 30, **19 of the 73 parks that are open that day serve no
+plan at all**. The wrap survey did not find a wrap bug; it found the edge of that hole.
+
+Two further readings that looked like misses and are not:
+
+| Case | Reading | Actual cause |
 | ---- | ------- | ------------ |
-| La Ronde | `rides: 0` | Both upstream feeds silent since June → **PAR-192**. Also answers `0` on non-wrap days. |
-| Movieland | `rides: 0` | No `queue_data` row has ever existed for it. |
-| Six Flags Great America, 09-12 | `rides: 0` | The rollup for that park-local day **did not exist yet** (see below). |
-| Six Flags Mexico, 09-03 | `rides: 0` | Rolled up, but **0 qualifying samples** (41 rows, 0 slots). |
-| Mid-America Parks, Mirabilandia, Six Flags Over Texas | `rides: 0` | Every *future* date returns 0 for these parks, wrap or not. |
-| Parque Warner Madrid, 09-05 | hours stop at 23 | Hour 0 of 09-06 has 38 raw rows and **0** that are `OPERATING` + `STANDBY` + `waitTime >= 5`. |
+| Six Flags Great America, 09-12 | `rides: 0` | The rollup for that park-local day **did not exist yet** (see below). The park serves wrap hours on 3 of its 4 sampled wrap days. |
+| Parque Warner Madrid, 09-05 | hours stop at 23 | Hour 0 of 09-06 has 38 raw rows and **0** that are `OPERATING` + `STANDBY` + `waitTime >= 5`. The park serves hours through 24 on 4 of its 5 sampled wrap days. |
 
 > **The trap, written down because it cost a wrong conclusion first.**
 > For a past date, `buildPlanDay` takes the `!isFuture` branch
@@ -81,8 +108,9 @@ This is the part worth keeping, because every one of them *looks* like a wrap bu
 > **only** the pre-aggregated `attraction_hourly_history` — never `queue_data`. On a
 > wrap day it additionally reads the *next* day's row for the midnight hour
 > (`:913-918`). Abundant raw `queue_data` therefore says nothing about whether the
-> endpoint should answer; the entity comment puts it exactly right: *"absence is 'not
-> rolled up yet' … which is not the same statement as an empty queue."*
+> endpoint should answer. The code says so itself, in two places: the `observedRides`
+> docblock (`plan-day.service.ts:897-900`) — *"which is not the same statement as an
+> empty queue"* — and `analytics.service.ts:5720`, *"Absence is 'not rolled up yet'"*.
 
 Six Flags Great America on 2026-09-12 is the worked example. Raw data was complete —
 1 503 rows, 55 attractions, `OPERATING` measurements through hours 10–23 plus the
@@ -190,24 +218,35 @@ ml-service through its own SQLAlchemy engine (`ml-service/db.py:67`). It could n
 appear there at any duration. **Closing this out "against the current slow-query log"
 would have read structural blindness as a clean bill of health.**
 
-**Worker recycling bounds the cache below its own TTL.** The cache is a module-global
-dict, so it dies with its worker. `gunicorn.conf.py` sets `max_requests = 1000`
-(jitter 200) across 2 workers; 25 worker boots over 6 h 35 min give a mean worker
-lifetime of ≈ 32 min against a 900 s TTL — about two cache generations before a cold
-start. Each worker also holds its own copy, so a park must be fetched once per worker.
-A real effect, though a moderate one, and worth having in view before the
-per-attraction split is sized.
+**The cache's real lifetime is the worker's, not the TTL's — and they are the same
+order of magnitude.** The cache is a module-global dict, so it dies with its worker.
+`gunicorn.conf.py` sets `max_requests = 1000` (jitter 200) across 2 workers; 25 worker
+boots over 6 h 35 min give a mean worker lifetime of ≈ **32 min** against a **15 min**
+TTL. So recycling does not truncate the TTL — it allows roughly two cache generations
+before a cold start, and each worker holds its own copy, so a park is fetched once per
+worker. A real effect, a moderate one, and the number to size the per-attraction split
+against: raising the TTL past ~30 min buys nothing until `max_requests` moves too.
 
 ---
 
 ## 3 · Ride-profile term audit cron
 
 Registration was previously evidenced only by `delayed: 1`. Redis says more — the
-repeatable job `audit-ride-profile-terms:ride-profile-term-audit-cron:::30 6 * * *`
-carries `"repeat": {"count": 30, …}`: **30 firings**, the last at 2026-09-13 06:30 UTC,
-the next due 2026-09-14 06:30 UTC.
+repeatable job `audit-ride-profile-terms:ride-profile-term-audit-cron:::30 6 * * *` has
+a pending delayed instance scheduled for 2026-09-14 06:30 UTC carrying
+`"repeat": {"count": 30, …}`. Bull increments `count` per scheduled instance and this
+one has not run yet, so it evidences **29 firings**, the last on 2026-09-13 06:30 UTC.
 
-That the *handler* completes cleanly was shown without waiting for 06:30.
+> **What `count` does and does not prove.** It counts instances Bull *created and
+> handed to a worker*, not handlers that finished cleanly — and `removeOnComplete` /
+> `removeOnFail` are both `true`, so a completed run and a failed one leave the same
+> trace, namely none. The cron's *delivery* is therefore established; its *outcome* is
+> not, and could not be read from the log either: the running container started
+> 2026-09-13 16:47 UTC, after the last 06:30 run, and Docker keeps no log from its
+> predecessor. Grepping the live log for both branches returns nothing at all.
+
+That the *handler* completes cleanly was therefore shown a different way, without
+waiting for 06:30.
 `handleAuditRideProfileTerms` (`curated-data.processor.ts:99`) does nothing but call
 `rideProfileAudit.audit()`, and the same method hangs synchronously off
 `GET /v1/admin/ride-profile-term-audit` (`admin.controller.ts:1229`) — same path, same
@@ -227,6 +266,12 @@ That is the `else` branch at `ride-profile-audit.service.ts:100`, reachable only
 `broken.length === 0`. 122 of 274 glossary terms are unused by any curation — expected,
 the glossary is the superset.
 
+**Net:** the handler is proven clean and the cron is proven to fire. What remains
+unproven is the conjunction — a clean run *triggered by the cron* — and the cheapest
+way to close it is to read the log after any 06:30 UTC run, looking for **either**
+branch: the clean line above or `🎢 Ride-profile term audit could not run`
+(`curated-data.processor.ts:105`), which is what an unreachable frontend produces.
+
 ---
 
 ## 4 · `curated_may_get_wet` divergence
@@ -244,9 +289,19 @@ Tower", today **Terraform Tower Challenge**
 `may_get_wet = true` raw, `curated_may_get_wet = false`.
 
 The ride endpoint serves **`mayGetWet: false`** — the curated value overrides the sync.
-Control cases where curated and raw agree (`river-rapids`, `stanley-falls-flume`,
-`splash-battle`) all serve `true`, so the read path is returning neither column
-unconditionally.
+
+Two controls, because one of them does not actually discriminate:
+
+| Control | DB `may_get_wet` | DB `curated_may_get_wet` | API `mayGetWet` | Rules out |
+| ------- | ---------------- | ------------------------ | --------------- | --------- |
+| the divergence above | `true` | `false` | `false` | "always raw" |
+| `river-rapids`, `stanley-falls-flume`, `splash-battle` | `true` | `true` | `true` | **nothing** — both candidate rules agree here |
+| `pirates-…-sunken-treasure`, `river-quest` | `true` | `NULL` | `true` | "always curated" |
+
+Only the first and third rows carry weight. Together they pin the behaviour to
+`curated ?? raw`: the curated value wins when present, the raw value is served when it
+is not. The middle row was the first control run here and proves nothing on its own —
+where the two columns agree, every candidate rule returns the same answer.
 
 > In the JSON response the field is top-level `mayGetWet` and is `null` for most of the
 > 7 211 rides. A `jq 'paths(scalars)'` filter skips nulls and will report the field as

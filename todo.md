@@ -862,10 +862,22 @@ and both fail **silently** — that is what makes them worth tracking.
 
 **Curation left deliberately open:**
 
-- [x] **Der Audit-Cron laeuft, und der Handler ist sauber.** ✅ Geprueft
-      2026-09-14 (PAR-42). Der Repeatable-Job in Redis traegt
-      `"repeat": {"count": 30, …}` — er ist 30-mal gefeuert, zuletzt
-      2026-09-13 06:30 UTC; `delayed: 1` war also nur die halbe Geschichte.
+- [x] **Der Audit-Cron feuert, und der Handler laeuft sauber durch.** ✅ Geprueft
+      2026-09-14 (PAR-42). Der wartende Delayed-Job in Redis (faellig
+      2026-09-14 06:30 UTC) traegt `"repeat": {"count": 30, …}`; Bull zaehlt je
+      erzeugter Instanz hoch und diese ist noch nicht gelaufen, belegt sind also
+      **29 Feuerungen**, die letzte 2026-09-13 06:30 UTC. `delayed: 1` war nur
+      die halbe Geschichte.
+
+      **Was `count` nicht belegt:** sauberen Durchlauf. Es zaehlt Zustellung an
+      einen Worker, und weil `removeOnComplete`/`removeOnFail` beide `true` sind,
+      hinterlassen Erfolg und Fehlschlag dieselbe Spur — keine. Aus dem Log war
+      es auch nicht zu holen: der laufende Container startete 2026-09-13 16:47
+      UTC, nach dem letzten 06:30-Lauf. **Offen bleibt damit genau die
+      Konjunktion** — ein sauberer Lauf *ausgeloest durch den Cron*. Der naechste
+      Lauf nach einem 06:30 UTC greppt das Log nach **beiden** Zweigen: der
+      Clean-Zeile und `🎢 Ride-profile term audit could not run`
+      (`curated-data.processor.ts:105`, feuert bei unerreichbarem Frontend).
       Dass der Handler *durchlaeuft*, ist ueber den Admin-GET
       `/v1/admin/ride-profile-term-audit` belegt, der dieselbe
       `rideProfileAudit.audit()` synchron faehrt: `152` gespeicherte Term-IDs,
@@ -926,8 +938,15 @@ and both fail **silently** — that is what makes them worth tracking.
       die Korrekturschicht ueberstimmt den Sync. Gegenprobe an drei kuratierten
       Bahnen ohne Divergenz (`river-rapids`, `stanley-falls-flume`,
       `splash-battle`): alle drei liefern `true`, der Lesepfad gibt also nicht
-      pauschal einen der beiden Werte zurueck. Zahlen in
-      `docs/troubleshooting/post-deploy-verification-2026-09-14.md`.
+      pauschal einen der beiden Werte zurueck.
+
+      Genauer, weil die erste Gegenprobe das gar nicht zeigte: drei Bahnen mit
+      `curated == roh` liefern unter *jeder* denkbaren Regel dasselbe und
+      unterscheiden nichts. Erst die zweite Gegenprobe traegt — Bahnen mit
+      `curated_may_get_wet IS NULL` und `may_get_wet = true`
+      (`pirates-…-sunken-treasure`, `river-quest`) liefern `true`. Divergenzfall
+      plus diese zusammen pinnen das Verhalten auf **`curated ?? roh`** fest.
+      Zahlen in `docs/troubleshooting/post-deploy-verification-2026-09-14.md`.
 - [x] **Runde 5 erledigt — der Cluster-Sweep ueber benannte Inversionen ist
       sauber.** Alle Listen, die eine benannte Inversion enthalten, werden jetzt
       nur noch von Rides geteilt, die auch dieselbe Inversionszahl melden. Was
@@ -1180,10 +1199,20 @@ checked once it is live:
       2026-09-02 answers `openHour: 16`, `closeHour: 0`, **24 rides**, hours
       through 24 — it previously answered `rides: []`. Widened from the three
       named samples to **all 21 parks whose schedule wraps** between 2026-09-01
-      and 2026-11-30: 13 serve hours past 23 (max observed 25), and each of the
-      8 that do not was traced to data availability, not to the wrap. La Ronde
-      is one of them and is its own bug now (PAR-192): both upstream feeds have
-      been silent since June. The original instructions follow.
+      and 2026-11-30, sampled over **up to five wrap dates each** (72 park-days):
+      **15 serve hours past 23** (max observed 25), and each of the 6 that do not
+      was traced to data availability, not to the wrap — none of them answers
+      differently on a wrap day than on a comparable non-wrap day.
+
+      Sample more than one wrap day per park. Taking each park's *earliest* wrap
+      date put Parque Warner Madrid and Six Flags Great America in the "does not
+      serve" column although both serve wrap hours on most of their other wrap
+      days; that first pass read 13/21 and contradicted its own evidence.
+
+      Two of the six are their own bugs now: La Ronde (**PAR-192**, both upstream
+      feeds silent since June), and four of the six turned out to be instances of
+      a wider hole — at lead 30, **19 of 73 open parks serve no plan at all**
+      (**PAR-194**). The original instructions follow.
 
       Six Flags Qiddiya City is the
       sharpest case — its rollup for the night of 2026-09-02 holds 16:00 through
@@ -1260,11 +1289,12 @@ raise TTL 2→15 min + evict expired entries on write.
       firings of `fetch-wait-times:wait-times-cron`. The "≥2 prediction crons + on-demand
       traffic" requirement is therefore met on its own terms.
 - [x] Re-run the baseline query (calls/min + ms/min for `query LIKE 'WITH hourly_agg%'`) and
-      compare against the table above. ~~Expect the on-demand/repeat-park calls to
-      collapse.~~ **They did not.** Fresh window: **48.5 calls/min, 29 478 ms/min,
+      compare against the table above. Fresh window: **48.5 calls/min, 29 478 ms/min,
       49.1 % of one core, 608 ms/call.**
 
-      **But do not read that as "the fix failed."** The load is violently bursty
+      The expectation above — "the on-demand/repeat-park calls collapse" — **can
+      neither be confirmed nor refuted from this**, and claiming either way would be
+      the category error described below. The load is violently bursty
       (per-interval: `29, 3, 44, 169, 8, 43, 86, 7, 18, 24, 13, 58, 168, 10` calls/min),
       the 2026-06-03 baseline was a 133-min *morning* window three months and much
       traffic growth ago, per-call cost alone has risen 275/373 ms → 608 ms as
@@ -1312,11 +1342,13 @@ at a time.
       On read, assemble from per-attraction cache; query only the missing IDs. Then single-
       attraction and park-level paths share entries.
 
-      **Size it against the worker lifetime, not the TTL.** The cache is a module-global
-      dict and dies with its worker: `gunicorn.conf.py` sets `max_requests = 1000`
-      (jitter 200) over 2 workers, and 25 boots in 6 h 35 min give a mean worker life of
-      ≈ 32 min against the 900 s TTL — about two cache generations before a cold start,
-      and each worker holds its own copy.
+      **Size it against the worker lifetime as well as the TTL — they are the same
+      order of magnitude.** The cache is a module-global dict and dies with its worker:
+      `gunicorn.conf.py` sets `max_requests = 1000` (jitter 200) over 2 workers, and 25
+      boots in 6 h 35 min give a mean worker life of ≈ **32 min** against the **15 min**
+      TTL. Recycling does not truncate the TTL; it allows roughly two cache generations
+      before a cold start, and each worker holds its own copy. Practical consequence:
+      raising the TTL past ~30 min buys nothing until `max_requests` moves too.
 - [x] ~~If not hot: close this out, no further work.~~ Not applicable — it is hot.
 
 ---
