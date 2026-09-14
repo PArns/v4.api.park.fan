@@ -72,6 +72,7 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
+import { ttlSecondsToNextBoundary } from "../common/utils/best-visit-times.util";
 
 /**
  * Parks Controller
@@ -416,7 +417,15 @@ export class ParksController {
       "All dates are in the park's local timezone. Includes hourly predictions for today/tomorrow by default. " +
       "Per-day `influencingHolidays` (the neighbouring-region holidays that drive up crowds) are OMITTED by " +
       "default — they were ~98% of the payload and no consumer of this endpoint reads them; opt back in with " +
-      "`?include=influencingHolidays`. Cache TTL: Dynamic (5 min for today/past, 1 hour for future).",
+      "`?include=influencingHolidays`. Cache TTL: dynamic — a week for a range that ended " +
+      "before today, a day for a range that lies entirely in the future, the rest of the " +
+      "park's day for a range containing today. A response that actually carries an " +
+      "`hourly` curve is capped at the rest of the current hour instead, day fields and " +
+      "all: that curve is a countdown over the next few open hours, not a statement about " +
+      "a day, and it moves on the hour. Since `includeHourly` defaults to `today+tomorrow`, " +
+      "a range reaching today or tomorrow carries one unless you ask for " +
+      "`includeHourly=none` — which is what a caller wanting a long-lived copy of the day " +
+      "fields should send.",
   })
   @ApiParam({
     name: "continent",
@@ -605,10 +614,48 @@ export class ParksController {
       ? Math.min(60 * 60, secondsLeftToday)
       : cacheTTL;
 
+    // Everything above treats this response as a set of statements about DAYS. `hourly` is
+    // the one field that is not one: it is a countdown over the ML horizon — the next few
+    // open hours — and it loses its head at the full hour. Measured at Phantasialand on
+    // 2026-09-14, the same URL answered `11 12 13 14 15` at 11:41 and `12 13 14 15` at
+    // 12:56. Under the window above, whoever opened the day-detail dialog first froze that
+    // countdown for everyone else until the park's own midnight (measured from outside:
+    // `cf-cache-status: HIT`, `age: 3651`, first hour still 11).
+    //
+    // So a copy of a response that CARRIES an hourly curve may not be SERVED past the hour
+    // it was served in. That is the honest form of the guarantee, and it is weaker than
+    // "the hour the curve describes": the curve in the body is already up to ~45 min old
+    // when it leaves here, because `getParkPredictions` reads a 30-min Redis entry
+    // (`ml.service.ts`) and the current month's calendar is cached 15 min
+    // (`calendar.service.ts`). A header shorter than this hour would therefore buy nothing
+    // — the origin has nothing newer to give. What it does buy is the end of the 24-hour
+    // freeze: no copy survives into an hour whose curve has moved on.
+    //
+    // The test is the RESPONSE, not the `includeHourly` parameter — `includeHourly` defaults
+    // to `today+tomorrow`, so the parameter would shorten pure-future ranges that never
+    // carry a curve at all. Which way that cuts: any range that does reach today or tomorrow
+    // takes the hour, its day fields included, up to the 90-day maximum. A caller who wants
+    // a long-lived copy of the day fields asks with `includeHourly=none` and gets exactly
+    // the window it had — that is the calendar grid, and it is what the `hourly` docs on
+    // this route now say.
+    const carriesHourlyCurve = response.days.some((d) => d.hourly?.length);
+    const secondsLeftThisHour = ttlSecondsToNextBoundary(60 * 60 * 1000);
+    const servedTTL = carriesHourlyCurve
+      ? Math.min(cacheTTL, secondsLeftThisHour)
+      : cacheTTL;
+    // A minute of stale grace past the boundary rather than the hour above, so the whole
+    // CDN does not revalidate this park at :00 into the live aggregation. What it serves in
+    // that minute is the previous hour's curve, whose first bar has just expired — and an
+    // expired bar is dropped at render (`upcomingHourlyPredictions` in the frontend), so
+    // the reader sees one bar fewer rather than a wrong one.
+    const servedStaleWhileRevalidate = carriesHourlyCurve
+      ? Math.min(staleWhileRevalidate, 60)
+      : staleWhileRevalidate;
+
     if (res) {
       res.setHeader(
         "Cache-Control",
-        `public, max-age=${cacheTTL}, s-maxage=${cacheTTL}, stale-while-revalidate=${staleWhileRevalidate}`,
+        `public, max-age=${servedTTL}, s-maxage=${servedTTL}, stale-while-revalidate=${servedStaleWhileRevalidate}`,
       );
     }
 
