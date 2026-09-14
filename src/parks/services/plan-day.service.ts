@@ -108,7 +108,7 @@ export class PlanDayService {
    */
   private readonly feedRecency = new Map<
     string,
-    { value: number | null | "unknown"; until: number }
+    { value: Promise<number | null | "unknown">; until: number }
   >();
 
   /**
@@ -373,6 +373,7 @@ export class PlanDayService {
       hoursSource === "schedule" ? parkOpensAt : null,
       status,
       theDay?.hours?.openingTime ?? null,
+      calendarUnavailable,
     );
     base.tier = built.tier;
     base.rides = built.rides;
@@ -457,15 +458,23 @@ export class PlanDayService {
     // back should stop being called stale within a poll cycle or two.
     const cached = this.feedRecency.get(park.id);
     if (cached && cached.until > Date.now()) return cached.value;
-    const value = await this.measureFeedStaleDays(park);
+
+    // The PROMISE goes in the map, not its result. Storing the value only
+    // deduplicates requests that arrive after the first one finished, and the
+    // first one is the expensive one: two parallel first requests for the same
+    // empty park would each run both statements, including the unbounded scan.
+    const pending = this.measureFeedStaleDays(park);
+    this.feedRecency.set(park.id, {
+      value: pending,
+      until: Date.now() + FEED_RECENCY_TTL_MS,
+    });
+
+    const value = await pending;
     // A failed statement is not kept: the next request asks again rather than
-    // repeating an outage for five minutes.
-    if (value !== "unknown") {
-      this.feedRecency.set(park.id, {
-        value,
-        until: Date.now() + FEED_RECENCY_TTL_MS,
-      });
-    }
+    // repeating an outage for five minutes. Dropped only if this entry is still
+    // the one we put there, so a later measurement is not thrown away.
+    if (value === "unknown" && this.feedRecency.get(park.id)?.value === pending)
+      this.feedRecency.delete(park.id);
     return value;
   }
 
@@ -733,6 +742,12 @@ export class PlanDayService {
      * live reading in {@link runningNow} and nothing else.
      */
     publishedOpening: Date | string | null,
+    /**
+     * Whether the calendar itself failed. It reaches here because the profile's
+     * observed window can produce hours without it, so a forecast day can be
+     * built on a calendar outage and must not report a data gap for it.
+     */
+    calendarUnavailable: boolean,
   ): Promise<{
     tier: PlanDayTier;
     rides: PlanDayRideDto[];
@@ -759,7 +774,7 @@ export class PlanDayService {
           shapedRideCount: 0,
           hasDayLevels: false,
           observed: false,
-          dependencyUnavailable: false,
+          dependencyUnavailable: calendarUnavailable,
         },
       };
 
@@ -1060,6 +1075,7 @@ export class PlanDayService {
         // `profile === null` is only ever the catch in `loadProfile`; the
         // service itself always returns a DTO, empty or not.
         dependencyUnavailable:
+          calendarUnavailable ||
           profile === null ||
           levels.unavailable ||
           measured.unavailable ||

@@ -2438,6 +2438,42 @@ describe("PlanDayService", () => {
       expect(feedQueries()).toHaveLength(1);
     });
 
+    it("measures a park's feed once for two requests that arrive together", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      profile = { hours: [], attractions: [] };
+      dailyPredictions = [];
+      service = await build();
+
+      // Storing the value rather than the promise would deduplicate only the
+      // requests that arrive after the first one finished — and the first one
+      // is the expensive one.
+      await Promise.all([
+        service.buildPlanDay(park, date),
+        service.buildPlanDay(park, date),
+      ]);
+
+      expect(feedQueries()).toHaveLength(1);
+    });
+
+    it("does not keep a failed measurement for the next five minutes", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      profile = { hours: [], attractions: [] };
+      dailyPredictions = [];
+      feedQueryFails = true;
+      service = await build();
+
+      const first = await service.buildPlanDay(park, date);
+      expect(first.ridesUnavailable?.reason).toBe("data_unavailable");
+
+      // The next request asks again rather than repeating an outage.
+      feedQueryFails = false;
+      feedLastReading = new Date(Date.now() - 96 * 86_400_000);
+      const second = await service.buildPlanDay(park, date);
+      expect(second.ridesUnavailable?.reason).toBe("feed_stale");
+    });
+
     it("separates a feed that stopped from one that never started", async () => {
       const date = farDate();
       calendarDay = { ...calendarDay!, date };

@@ -142,6 +142,20 @@ describe("classifyPlanDayUnavailable", () => {
     );
   });
 
+  it("does not read a failed live lookup as every ride being out of season", () => {
+    // The live-status lookup is what lifts a ride back out of the season
+    // filter. With it down, every blocked ride stays blocked and the plannable
+    // set empties — and `rides_cannot_open` is STRUCTURAL, so an outage would
+    // be filed permanently out of the watched number.
+    expect(of({ dependencyUnavailable: true, plannableRideCount: 0 })).toBe(
+      "data_unavailable",
+    );
+    // Everything answering, same empty set: the season note means what it says.
+    expect(of({ dependencyUnavailable: false, plannableRideCount: 0 })).toBe(
+      "rides_cannot_open",
+    );
+  });
+
   it("blames no forecast for a past day, which never asked for one", () => {
     // A past date is answered from the 15-minute rollup: nothing is composed
     // and no day level is read, so neither may be reported as missing.

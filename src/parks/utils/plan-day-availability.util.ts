@@ -143,10 +143,17 @@ export function classifyPlanDayUnavailable(
   if (input.staleDays === "unknown") return "data_unavailable";
   if (input.staleDays === null) return "never_measured";
   if (input.staleDays >= FEED_STALE_DAYS) return "feed_stale";
-  if (input.plannableRideCount === 0) return "rides_cannot_open";
-  // Before any statement about our data: did we manage to ask? A dependency
-  // that failed open looks exactly like a dependency that had nothing to say.
+  // Before any statement about the rides or our data: did we manage to ask? A
+  // dependency that failed open looks exactly like one that had nothing to say.
+  //
+  // This sits ABOVE `rides_cannot_open` and not below it, and that position was
+  // bought: the live-status lookup is what lifts a ride out of the season
+  // filter, so when it fails every blocked ride stays blocked, the plannable
+  // set empties, and the answer reads "every ride's season excludes this day".
+  // `isStructuralPlanDayReason` then files an outage permanently out of the
+  // watched number.
   if (input.dependencyUnavailable) return "data_unavailable";
+  if (input.plannableRideCount === 0) return "rides_cannot_open";
   // A past day never consulted a shape or a day level, so neither may be
   // blamed for it. Everything above this line still applies: a feed that died
   // in June is why the rollup is empty in July.
