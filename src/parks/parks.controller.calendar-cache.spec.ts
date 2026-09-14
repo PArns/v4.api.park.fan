@@ -74,6 +74,21 @@ describe("ParksController › /calendar Cache-Control", () => {
       isSchoolVacation: false,
     }) as unknown as CalendarDay;
 
+  /** The same day, carrying the hourly countdown the day-detail dialog asks for. */
+  const dayWithHourlyOn = (date: string) =>
+    ({
+      ...dayOn(date),
+      hourly: [
+        { hour: 12, crowdLevel: "low", predictedWaitTime: 15 },
+        { hour: 13, crowdLevel: "moderate", predictedWaitTime: 25 },
+      ],
+    }) as unknown as CalendarDay;
+
+  const secondsLeftThisHour = (): number => {
+    const now = Date.now();
+    return Math.ceil((Math.ceil(now / 3_600_000) * 3_600_000 - now) / 1000) + 5;
+  };
+
   const makeRes = () => {
     const headers: Record<string, string> = {};
     return {
@@ -193,6 +208,101 @@ describe("ParksController › /calendar Cache-Control", () => {
     expect(res.headers["Cache-Control"]).toBe(
       "public, max-age=604800, s-maxage=604800, stale-while-revalidate=604800",
     );
+  });
+
+  /**
+   * `hourly` is a countdown over the next few open hours, not a statement about a day:
+   * measured at Phantasialand on 2026-09-14 the same URL answered `11 12 13 14 15` at
+   * 11:41 and `12 13 14 15` at 12:56, and the day-long window froze the first copy of
+   * the day for everyone else until the park's midnight.
+   */
+  describe("a response carrying the hourly curve", () => {
+    const parse = (header: string) => ({
+      maxAge: Number(/max-age=(\d+)/.exec(header)![1]),
+      sMaxAge: Number(/s-maxage=(\d+)/.exec(header)![1]),
+      swr: Number(/stale-while-revalidate=(\d+)/.exec(header)![1]),
+    });
+
+    it("does not outlive the hour it was built in", async () => {
+      await mountWithDays([dayWithHourlyOn(parkDate(0))]);
+      const res = makeRes();
+
+      await call(res);
+
+      const { maxAge, sMaxAge, swr } = parse(res.headers["Cache-Control"]);
+      // A second of slack in each direction: the header is computed a moment before the
+      // expectation, so the two readings can straddle a whole second.
+      expect(maxAge).toBeLessThanOrEqual(secondsLeftThisHour() + 1);
+      expect(maxAge).toBeGreaterThanOrEqual(secondsLeftThisHour() - 2);
+      expect(sMaxAge).toBe(maxAge);
+      // A minute of grace past the boundary, so the CDN does not revalidate every park at
+      // :00 into the live aggregation.
+      expect(swr).toBeLessThanOrEqual(60);
+    });
+
+    it("is the only thing shortened — the same range without a curve keeps its window", async () => {
+      // The pair is taken on a FUTURE range, where the window without a curve is a flat
+      // 86400 whatever the clock says. On a range containing today the two can legitimately
+      // meet — in the park's last hour the day is shorter than the hour — and a control the
+      // two halves can tie on proves nothing (📚 G-76).
+      await mountWithDays([dayWithHourlyOn(parkDate(20))]);
+      const withCurve = makeRes();
+      await call(withCurve);
+
+      await mountWithDays([dayOn(parkDate(20))]);
+      const withoutCurve = makeRes();
+      await call(withoutCurve);
+
+      // The calendar grid asks with `includeHourly=none` and gets no curve, so its window is
+      // untouched — which is what AK 2 of PAR-217 asks for.
+      expect(parse(withoutCurve.headers["Cache-Control"]).maxAge).toBe(
+        24 * 60 * 60,
+      );
+      expect(parse(withCurve.headers["Cache-Control"]).maxAge).toBeLessThan(
+        parse(withoutCurve.headers["Cache-Control"]).maxAge,
+      );
+
+      // And the range containing today keeps the cap it already had when no curve rides
+      // along: the rest of the park's day, never more.
+      await mountWithDays([dayOn(parkDate(0))]);
+      const todayWithoutCurve = makeRes();
+      await call(todayWithoutCurve);
+      const left = secondsUntilEndOfDayInTimezone(park.timezone);
+      const todayMaxAge = parse(
+        todayWithoutCurve.headers["Cache-Control"],
+      ).maxAge;
+      expect(todayMaxAge).toBeLessThanOrEqual(left + 1);
+      expect(todayMaxAge).toBeGreaterThanOrEqual(left - 2);
+    });
+
+    it("reads the response, not the range — a future day with a curve is capped too", async () => {
+      await mountWithDays([dayWithHourlyOn(parkDate(20))]);
+      const res = makeRes();
+
+      await call(res);
+
+      // Without the curve this range sends a day (86400); the cap is decided by what the
+      // response actually carries.
+      expect(parse(res.headers["Cache-Control"]).maxAge).toBeLessThanOrEqual(
+        secondsLeftThisHour() + 1,
+      );
+    });
+
+    it("counts an empty curve as no curve", async () => {
+      await mountWithDays([
+        { ...dayOn(parkDate(20)), hourly: [] } as unknown as CalendarDay,
+      ]);
+      const res = makeRes();
+
+      await call(res);
+
+      // `buildHourlyPredictionsFromList` answers `undefined` for a day it has no prediction
+      // for, so an empty array is not a state the origin produces today — but a day with no
+      // hours in it is not a countdown either, and shortening its window would buy nothing.
+      expect(res.headers["Cache-Control"]).toBe(
+        "public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400",
+      );
+    });
   });
 
   it("always carries a stale-while-revalidate, whichever branch it took", async () => {
