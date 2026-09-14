@@ -862,10 +862,29 @@ and both fail **silently** — that is what makes them worth tracking.
 
 **Curation left deliberately open:**
 
-- [ ] **Der Audit-Cron ist registriert, aber noch nie gelaufen.** `delayed: 1` auf
-      der Queue belegt die Registrierung, der Fehlerpfad ist getestet — dass der
-      Handler in Produktion durchlaeuft, zeigt erst der erste Lauf um 06:30.
-      Danach einmal im API-Log nach `Ride-profile term audit clean` schauen.
+- [x] **Der Audit-Cron feuert, und der Handler laeuft sauber durch.** ✅ Geprueft
+      2026-09-14 (PAR-42). Der wartende Delayed-Job in Redis (faellig
+      2026-09-14 06:30 UTC) traegt `"repeat": {"count": 30, …}`; Bull zaehlt je
+      erzeugter Instanz hoch und diese ist noch nicht gelaufen, belegt sind also
+      **29 Feuerungen**, die letzte 2026-09-13 06:30 UTC. `delayed: 1` war nur
+      die halbe Geschichte.
+
+      **Was `count` nicht belegt:** sauberen Durchlauf. Es zaehlt Zustellung an
+      einen Worker, und weil `removeOnComplete`/`removeOnFail` beide `true` sind,
+      hinterlassen Erfolg und Fehlschlag dieselbe Spur — keine. Aus dem Log war
+      es auch nicht zu holen: der laufende Container startete 2026-09-13 16:47
+      UTC, nach dem letzten 06:30-Lauf. **Offen bleibt damit genau die
+      Konjunktion** — ein sauberer Lauf *ausgeloest durch den Cron*. Der naechste
+      Lauf nach einem 06:30 UTC greppt das Log nach **beiden** Zweigen: der
+      Clean-Zeile und `🎢 Ride-profile term audit could not run`
+      (`curated-data.processor.ts:105-106`, feuert bei unerreichbarem Frontend).
+      Dass der Handler *durchlaeuft*, ist ueber den Admin-GET
+      `/v1/admin/ride-profile-term-audit` belegt, der dieselbe
+      `rideProfileAudit.audit()` synchron faehrt: `152` gespeicherte Term-IDs,
+      `0` gebrochen, und die gesuchte Zeile stand danach im Log des
+      Live-Containers — `🎢 Ride-profile term audit clean: 152 stored ids all
+      resolve`. Zahlen in
+      `docs/troubleshooting/post-deploy-verification-2026-09-14.md`.
 - [ ] **Die Bull-Queue heisst weiter `manual-metadata`**, obwohl der Seed dieses
       Namens geloescht ist. Bewusst so gelassen: Bull schluesselt Repeatable-Jobs
       in Redis am Queue-Namen, ein Umbenennen wuerde
@@ -908,12 +927,26 @@ and both fail **silently** — that is what makes them worth tracking.
       Das ist die einzige zulaessige Ausnahme von der Regel "eine ID, eine
       Attraktion" — dieselbe physische Bahn wird in zwei Veranstaltungen
       gelistet. Beim Duplikat-Check also nicht als Fehler werten.
-- [ ] **`curated_may_get_wet` beweist sich erst beim naechsten Detail-Sync.**
-      Aktuell stimmt sie ueberall mit `may_get_wet` ueberein, weil der geloeschte
-      Seed seine Werte dort schon hineingeschrieben hatte. Die Divergenz — und
-      damit der Beweis, dass die Korrekturschicht greift — entsteht erst, wenn
-      der Sync Gentings Shot Tower wieder auf `true` setzt. Danach einmal
-      pruefen, dass die Ride-Seite weiterhin `false` ausliefert.
+- [x] **`curated_may_get_wet` hat sich bewiesen.** ✅ Geprueft 2026-09-14
+      (PAR-42). Die erwartete Divergenz ist am **2026-09-13 04:00:23 UTC**
+      eingetreten, an genau der hier benannten Bahn: Gentings Shot Tower heisst
+      heute **Terraform Tower Challenge**
+      (`089adee1-d196-4c2c-8581-29f46943808a`, Genting SkyWorlds), und der Sync
+      hat `may_get_wet` wieder auf `true` gesetzt, waehrend
+      `curated_may_get_wet` auf `false` steht. Es ist die **einzige** divergente
+      Zeile von 131 kuratierten. Die Ride-Seite liefert `mayGetWet: false` —
+      die Korrekturschicht ueberstimmt den Sync. Gegenprobe an drei kuratierten
+      Bahnen ohne Divergenz (`river-rapids`, `stanley-falls-flume`,
+      `splash-battle`): alle drei liefern `true`, der Lesepfad gibt also nicht
+      pauschal einen der beiden Werte zurueck.
+
+      Genauer, weil die erste Gegenprobe das gar nicht zeigte: drei Bahnen mit
+      `curated == roh` liefern unter *jeder* denkbaren Regel dasselbe und
+      unterscheiden nichts. Erst die zweite Gegenprobe traegt — Bahnen mit
+      `curated_may_get_wet IS NULL` und `may_get_wet = true`
+      (`pirates-…-sunken-treasure`, `river-quest`) liefern `true`. Divergenzfall
+      plus diese zusammen pinnen das Verhalten auf **`curated ?? roh`** fest.
+      Zahlen in `docs/troubleshooting/post-deploy-verification-2026-09-14.md`.
 - [x] **Runde 5 erledigt — der Cluster-Sweep ueber benannte Inversionen ist
       sauber.** Alle Listen, die eine benannte Inversion enthalten, werden jetzt
       nur noch von Rides geteilt, die auch dieselbe Inversionszahl melden. Was
@@ -1160,7 +1193,28 @@ The `/plan/day` wrap fix is in this repo (`unfoldedCloseHour`, changelog
 "a park that closes after midnight had no plan at all"). Two things can only be
 checked once it is live:
 
-- [ ] **Confirm against the parks that wrap.** Six Flags Qiddiya City is the
+- [x] **Confirm against the parks that wrap.** ✅ Verified 2026-09-14 (PAR-42)
+      against the deployed build `2850e7e`; numbers in
+      `docs/troubleshooting/post-deploy-verification-2026-09-14.md`. Qiddiya on
+      2026-09-02 answers `openHour: 16`, `closeHour: 0`, **24 rides**, hours
+      through 24 — it previously answered `rides: []`. Widened from the three
+      named samples to **all 21 parks whose schedule wraps** between 2026-09-01
+      and 2026-11-30, sampled over **up to five wrap dates each** (72 park-days):
+      **15 serve hours past 23** (max observed 25), and each of the 6 that do not
+      was traced to data availability, not to the wrap — none of them answers
+      differently on a wrap day than on a comparable non-wrap day.
+
+      Sample more than one wrap day per park. Taking each park's *earliest* wrap
+      date put Parque Warner Madrid and Six Flags Great America in the "does not
+      serve" column although both serve wrap hours on most of their other wrap
+      days; that first pass read 13/21 and contradicted its own evidence.
+
+      Two of the six are their own bugs now: La Ronde (**PAR-192**, both upstream
+      feeds silent since June), and four of the six turned out to be instances of
+      a wider hole — at lead 30, **19 of 73 open parks serve no plan at all**
+      (**PAR-194**). The original instructions follow.
+
+      Six Flags Qiddiya City is the
       sharpest case — its rollup for the night of 2026-09-02 holds 16:00 through
       midnight with 13 rides still measured at hour 24, and the endpoint answered
       `rides: []` for it:
@@ -1181,6 +1235,14 @@ checked once it is live:
       nothing established which one `hours[].hour` carried on a wrap day. It
       carries the **unfolded** one (24 = midnight), so the second lookup can go,
       and `docs/…/parks-past-midnight.md` there wants the note it asks for.
+
+      **Measured 2026-09-14 (PAR-42), so this is no longer an assumption:** two
+      parks running 19:00–01:00 park-local both serve
+      `hours[].hour = [19,20,21,22,23,24,25]` while `context.closeHour` reads
+      `1` — the array is unfolded (24 = midnight, 25 = 01:00), the context field
+      is the folded wall clock. Note the range runs past 24, which the sentence
+      above does not say. Stays open here because it is **frontend** work and so
+      its own issue per handbook §8 rule 3: **PAR-193**.
 
 ## ML hourly_agg cache — post-deploy verification & follow-up
 
@@ -1205,12 +1267,47 @@ raise TTL 2→15 min + evict expired entries on write.
 > and several query changes old. Either re-baseline and measure, or close this
 > out on the current slow-query log instead of resurrecting the old numbers.
 
-- [ ] Confirm new ml-service container is live (Coolify redeploy done — module-global cache
+> **Re-baselined 2026-09-14 (PAR-42).** Full numbers and method in
+> `docs/troubleshooting/post-deploy-verification-2026-09-14.md`. Verdict: **still
+> hot — the decision gate below opens.**
+
+- [x] Confirm new ml-service container is live (Coolify redeploy done — module-global cache
       only resets on a fresh process, so the fix is NOT active until redeploy).
-- [ ] `SELECT pg_stat_statements_reset();` on celestrial Postgres.
-- [ ] Let it run ~30–60 min (cover ≥2 of the 15-min prediction crons + on-demand traffic).
-- [ ] Re-run the baseline query (calls/min + ms/min for `query LIKE 'WITH hourly_agg%'`) and
-      compare against the table above. Expect the on-demand/repeat-park calls to collapse.
+      ✅ Deployed build is `origin/main` @ `2850e7e` with zero commits beyond it, and
+      the bucketing + 900 s TTL + eviction are all present in the running code
+      (`predict.py:196-215, 241-254, 369-376`).
+- [x] ~~`SELECT pg_stat_statements_reset();` on celestrial Postgres.~~ **Deliberately
+      not done.** The counters have never been reset since 2026-06-03 07:50 UTC — the
+      reset this very baseline was taken after — so a reset would destroy 103 days of
+      history that nothing else records, irreversibly, for a number a **delta of the
+      cumulative counters** yields read-only. Sample the counters, wait, sample again.
+- [x] Let it run ~30–60 min (cover ≥2 of the 15-min prediction crons + on-demand traffic).
+      ✅ 15 samples, 2026-09-14 **02:12:10–02:35:38 UTC = 23.5 min** — shorter than the
+      nominal 30–60, so the binding condition was checked directly rather than assumed:
+      the window contains **both** `*/15` firings of
+      `generate-hourly:hourly-predictions-cron` (02:15:00 and 02:30:00) and five `*/5`
+      firings of `fetch-wait-times:wait-times-cron`. The "≥2 prediction crons + on-demand
+      traffic" requirement is therefore met on its own terms.
+- [x] Re-run the baseline query (calls/min + ms/min for `query LIKE 'WITH hourly_agg%'`) and
+      compare against the table above. Fresh window: **48.5 calls/min, 29 478 ms/min,
+      49.1 % of one core, 608 ms/call.**
+
+      The expectation above — "the on-demand/repeat-park calls collapse" — **can
+      neither be confirmed nor refuted from this**, and claiming either way would be
+      the category error described below. The load is violently bursty
+      (per-interval: `29, 3, 44, 169, 8, 43, 86, 7, 18, 24, 13, 58, 168, 10` calls/min),
+      the 2026-06-03 baseline was a 133-min *morning* window three months and much
+      traffic growth ago, per-call cost alone has risen 275/373 ms → 608 ms as
+      `queue_data` grew, and the 102.8-day lifetime average (15.6 calls/min, 12.1 % of a
+      core) sits *below both* — so this window caught a busy stretch, not a
+      representative one. The comparison cannot support a before/after verdict; it can
+      and does answer the only question the gate asks.
+
+      **Careful with the other close-out route, too:** the slow-query log shows **zero**
+      `hourly_agg` hits across 09-10…09-14, and that is structural blindness, not
+      health. The threshold at `src/config/typeorm.config.ts:24` belongs to a *TypeORM*
+      logger; this query comes from the Python ml-service over its own SQLAlchemy engine
+      (`ml-service/db.py:67`) and can never appear there at any duration.
 
 Baseline SQL: `pg_stat_statements` joined with `pg_stat_statements_info`, normalize
 `calls` and `total_exec_time` by `EXTRACT(EPOCH FROM now()-stats_reset)/60`.
@@ -1222,11 +1319,37 @@ path** `getAttractionPredictions` (`src/ml/ml.service.ts`, `attractionIds: [attr
 attraction-detail pages) which uses a per-single-attraction key and does NOT reuse the
 park-level fetch (`predictForPark` → `activeAttractionIds`).
 
+**Measured 2026-09-14 (PAR-42) — the gate is open, and the suspicion above is
+confirmed with numbers.** The two fingerprints sharing the `hourly_agg` text differ in
+exactly one place, which is what tells them apart:
+
+```
+queryid 3495971031891626369 … ANY(ARRAY[$3])            ← one id  → single-attraction
+queryid 8118237830757439491 … ANY(ARRAY[$3 /*, ... */])  ← a list → park-level
+```
+
+| Path | Lifetime calls | Lifetime DB time | Fresh-window calls | Fresh-window DB time |
+| ---- | -------------- | ---------------- | ------------------ | -------------------- |
+| **Single-attraction** | **70.5 %** | **67.4 %** (201.4 h) | **90.8 %** | **90.5 %** |
+| Park-level | 29.5 % | 32.6 % (97.2 h) | 9.2 % | 9.5 % |
+
+A park-level call returns ~21 500 rows against ~1 100 for a single attraction — roughly
+twenty attractions' worth of data that the single-attraction path then re-fetches one
+at a time.
+
 - [ ] If hot: cache the query result **split by attractionId** (safe — window functions are
       `PARTITION BY "attractionId"`, so each attraction's rolling values are independent).
       On read, assemble from per-attraction cache; query only the missing IDs. Then single-
       attraction and park-level paths share entries.
-- [ ] If not hot: close this out, no further work.
+
+      **Size it against the worker lifetime as well as the TTL — they are the same
+      order of magnitude.** The cache is a module-global dict and dies with its worker:
+      `gunicorn.conf.py` sets `max_requests = 1000` (jitter 200) over 2 workers, and 25
+      boots in 6 h 35 min give a mean worker life of ≈ **32 min** against the **15 min**
+      TTL. Recycling does not truncate the TTL; it allows roughly two cache generations
+      before a cold start, and each worker holds its own copy. Practical consequence:
+      raising the TTL past ~30 min buys nothing until `max_requests` moves too.
+- [x] ~~If not hot: close this out, no further work.~~ Not applicable — it is hot.
 
 ---
 
