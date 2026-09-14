@@ -95,6 +95,8 @@ interface PlanDayEmptyCounts {
    * wrong for diagnosis — see `data_unavailable`.
    */
   dependencyUnavailable: boolean;
+  /** The live-status lookup failed — the only one that can empty `plannable`. */
+  plannableUnavailable: boolean;
 }
 
 @Injectable()
@@ -301,21 +303,30 @@ export class PlanDayService {
     // saying so is the answer. The tier stays the nominal one for the distance:
     // with no curves there is no method to characterise.
     if (openHour === null || closeHour === null) {
-      // A stated closure is the day's own answer and stands whatever else
-      // failed. An unknown window is not: both halves that could have produced
-      // one — the calendar's published hours and the profile's observed ones —
-      // fail open, so `hours_unknown` on a failed run is a data gap invented
-      // out of an outage. That is the substitution this whole field exists to
-      // stop, and it bites hardest here: at lead 30 most parks have no
-      // published hours and depend on the profile.
-      base.ridesUnavailable = {
-        reason:
-          status === "CLOSED"
-            ? "park_closed"
-            : calendarUnavailable || profileUnavailable
-              ? "data_unavailable"
-              : "hours_unknown",
-      };
+      // Through the same ladder as every other empty plan rather than decided
+      // here. Deciding it here is how this branch answered `hours_unknown` for
+      // a park that publishes no readable wait times at all — a closable data
+      // gap reported for a park that will never have one — and how an outage in
+      // either half that produces a window (the calendar's published hours, the
+      // profile's observed ones) read as the same gap. A stated closure still
+      // short-circuits inside the ladder, and costs nothing.
+      const attractions =
+        status === "CLOSED" ? [] : await this.attractions(park);
+      base.ridesUnavailable = await this.explainEmptyPlan(
+        park,
+        status,
+        {
+          rideCount: attractions.length,
+          plannableRideCount: attractions.length,
+          profiledRideCount: 0,
+          shapedRideCount: 0,
+          hasDayLevels: false,
+          observed: !isFuture,
+          dependencyUnavailable: calendarUnavailable || profileUnavailable,
+          plannableUnavailable: false,
+        },
+        false,
+      );
       return base;
     }
 
@@ -357,7 +368,11 @@ export class PlanDayService {
           // Without this, an analytics outage answered `no_observations` — "the
           // rollup holds nothing for this park" — which is a statement about
           // the park made out of a statement about us.
-          dependencyUnavailable: observed.unavailable || calendarUnavailable,
+          // Not `calendarUnavailable`: a past date has no observed-hours
+          // fallback, so a failed calendar leaves no window and the guard above
+          // answers instead. Reaching here means the calendar answered.
+          dependencyUnavailable: observed.unavailable,
+          plannableUnavailable: false,
         });
       }
       return base;
@@ -414,6 +429,7 @@ export class PlanDayService {
     park: Park,
     status: string,
     counts: PlanDayEmptyCounts,
+    hoursKnown = true,
   ): Promise<PlanDayUnavailableDto> {
     const noWaitTimeSource =
       resolveCuratedPark(park).noWaitTimesReason !== null;
@@ -427,7 +443,7 @@ export class PlanDayService {
 
     const input: PlanDayAvailabilityInput = {
       status,
-      hoursKnown: true,
+      hoursKnown,
       noWaitTimeSource,
       staleDays,
       ...counts,
@@ -469,12 +485,23 @@ export class PlanDayService {
       until: Date.now() + FEED_RECENCY_TTL_MS,
     });
 
-    const value = await pending;
-    // A failed statement is not kept: the next request asks again rather than
-    // repeating an outage for five minutes. Dropped only if this entry is still
-    // the one we put there, so a later measurement is not thrown away.
-    if (value === "unknown" && this.feedRecency.get(park.id)?.value === pending)
-      this.feedRecency.delete(park.id);
+    // Dropped on "unknown" AND on a rejection, in both cases only if this entry
+    // is still the one we put there, so a later measurement is not thrown away.
+    // A cached rejection would re-throw the same five-minute-old failure at
+    // every later request; not reachable today, because both statements catch,
+    // and cheaper to make impossible than to keep checking.
+    const forget = () => {
+      if (this.feedRecency.get(park.id)?.value === pending)
+        this.feedRecency.delete(park.id);
+    };
+    let value: number | null | "unknown";
+    try {
+      value = await pending;
+    } catch (error) {
+      forget();
+      throw error;
+    }
+    if (value === "unknown") forget();
     return value;
   }
 
@@ -775,6 +802,7 @@ export class PlanDayService {
           hasDayLevels: false,
           observed: false,
           dependencyUnavailable: calendarUnavailable,
+          plannableUnavailable: false,
         },
       };
 
@@ -1074,12 +1102,13 @@ export class PlanDayService {
         observed: false,
         // `profile === null` is only ever the catch in `loadProfile`; the
         // service itself always returns a DTO, empty or not.
+        // Not `calendarUnavailable`: past the hours guard the window came from
+        // somewhere, and nothing the calendar carries decides whether a ride
+        // gets a curve. Reporting it here moved parks that are simply
+        // unreadable into the "could not measure" bucket.
         dependencyUnavailable:
-          calendarUnavailable ||
-          profile === null ||
-          levels.unavailable ||
-          measured.unavailable ||
-          runningNow.unavailable,
+          profile === null || levels.unavailable || measured.unavailable,
+        plannableUnavailable: runningNow.unavailable,
       },
     };
   }

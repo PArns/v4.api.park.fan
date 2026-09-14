@@ -671,7 +671,10 @@ out of the planner with a year of data behind it.
 `park_closed` — the operator's own word about the day. It stands whatever
 failed on our side, and it is answered without asking about the feed.
 `hours_unknown` — neither a published nor an observed window, and only reported
-when both sources that could have produced one actually answered.
+when both sources that could have produced one actually answered, the park has
+rides, and its feed is alive. Every empty plan goes through the same ladder,
+including this one: deciding it on the spot is how a park that publishes no
+readable wait times came back as a data gap that closes on its own.
 
 `no_rides_on_file` · `no_wait_time_source` · `rides_cannot_open` — properties of
 the **park**. `no_wait_time_source` is the only one that will never change:
@@ -705,11 +708,21 @@ It is neither a data gap nor a property of the park: it is **unmeasured**, and
 the sweep counts it apart from both.
 
 The order in which they are tested is a statement about evidence rather than a
-preference, and one step of it is deliberate: `rides_cannot_open` is tested
-**after** the feed. `season_out_since` is written by a detector that reads the
-feed, so on a park silent since June "out of season" is our own bookkeeping and
-not the operator's word — reporting it there would be the substitution
-`claude.md` §4 exists to ban.
+preference, and it runs in four tiers: the park's and the day's own facts, then
+the feed, then whether the question could be asked at all, then what we have
+about the rides. Two steps inside it were bought with a finding each.
+
+`rides_cannot_open` is tested **after** the feed. `season_out_since` is written
+by a detector that reads the feed, so on a park silent since June "out of
+season" is our own bookkeeping and not the operator's word — reporting it there
+would be the substitution `claude.md` §4 exists to ban.
+
+And the **live-status** failure is kept apart from the other six. It is the only
+one that can empty the plannable set — it is what lifts a ride back out of the
+season filter — so it is tested immediately above `rides_cannot_open` while the
+rest are tested below. Lumping them together made a forecast hiccup report
+`data_unavailable` where the park was simply unreadable, which moves a
+structural park out of the count it belongs in.
 
 ### The one query this costs
 

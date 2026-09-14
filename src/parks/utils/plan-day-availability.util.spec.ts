@@ -30,6 +30,7 @@ describe("classifyPlanDayUnavailable", () => {
     hasDayLevels: true,
     observed: false,
     dependencyUnavailable: false,
+    plannableUnavailable: false,
   };
 
   const of = (patch: Partial<PlanDayAvailabilityInput>) =>
@@ -42,9 +43,23 @@ describe("classifyPlanDayUnavailable", () => {
     expect(of({ status: "OPERATING", rideCount: 0 })).toBe("no_rides_on_file");
   });
 
-  it("reports an unknown window before looking at the rides", () => {
-    expect(of({ hoursKnown: false, rideCount: 0 })).toBe("hours_unknown");
-    expect(of({ hoursKnown: true, rideCount: 0 })).toBe("no_rides_on_file");
+  it("does not report an unknown window for a park we could never read", () => {
+    // Hansa-Park on a date with no schedule row: `hours_unknown` is a closable
+    // data gap, and this park will never have hours worth planning with.
+    expect(of({ hoursKnown: false, noWaitTimeSource: true })).toBe(
+      "no_wait_time_source",
+    );
+    expect(of({ hoursKnown: false, rideCount: 0 })).toBe("no_rides_on_file");
+    // With neither fact in the way, the window is the answer — so the ladder
+    // did reach that far.
+    expect(of({ hoursKnown: false })).toBe("hours_unknown");
+  });
+
+  it("names a dead feed before an unknown window", () => {
+    // The feed is why there is nothing to derive a window from, and it is the
+    // only fault among these reasons.
+    expect(of({ hoursKnown: false, staleDays: 96 })).toBe("feed_stale");
+    expect(of({ hoursKnown: false, staleDays: 1 })).toBe("hours_unknown");
   });
 
   it("names an empty catalog rather than the missing history it causes", () => {
@@ -142,16 +157,28 @@ describe("classifyPlanDayUnavailable", () => {
     );
   });
 
+  it("keeps the live-status failure apart from the other fail-open ones", () => {
+    // Only the live lookup can empty the plannable set — it is what lifts a
+    // ride back out of the season filter. A profile or forecast hiccup cannot,
+    // so it must not pre-empt the season answer.
+    expect(of({ dependencyUnavailable: true, plannableRideCount: 0 })).toBe(
+      "rides_cannot_open",
+    );
+    expect(of({ plannableUnavailable: true, plannableRideCount: 0 })).toBe(
+      "data_unavailable",
+    );
+  });
+
   it("does not read a failed live lookup as every ride being out of season", () => {
     // The live-status lookup is what lifts a ride back out of the season
     // filter. With it down, every blocked ride stays blocked and the plannable
     // set empties — and `rides_cannot_open` is STRUCTURAL, so an outage would
     // be filed permanently out of the watched number.
-    expect(of({ dependencyUnavailable: true, plannableRideCount: 0 })).toBe(
+    expect(of({ plannableUnavailable: true, plannableRideCount: 0 })).toBe(
       "data_unavailable",
     );
     // Everything answering, same empty set: the season note means what it says.
-    expect(of({ dependencyUnavailable: false, plannableRideCount: 0 })).toBe(
+    expect(of({ plannableUnavailable: false, plannableRideCount: 0 })).toBe(
       "rides_cannot_open",
     );
   });

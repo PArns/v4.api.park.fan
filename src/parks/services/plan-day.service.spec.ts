@@ -2388,6 +2388,37 @@ describe("PlanDayService", () => {
 
       expect(plan.context.openHour).toBeNull();
       expect(plan.ridesUnavailable?.reason).toBe("hours_unknown");
+      // This branch goes through the same ladder as every other empty plan, so
+      // it pays the same one statement — and gets the better answer for it: a
+      // park with no window AND a dead feed is reported as the fault it is.
+      expect(feedQueries()).toHaveLength(1);
+
+      feedLastReading = new Date(Date.now() - 96 * 86_400_000);
+      service = await build();
+      const dead = await service.buildPlanDay(park, date);
+      expect(dead.ridesUnavailable?.reason).toBe("feed_stale");
+    });
+
+    it("does not report an unknown window for a park we could never read", async () => {
+      // Hansa-Park on a date with no schedule row. Deciding this branch outside
+      // the ladder answered `hours_unknown` — a gap that closes on its own,
+      // reported for a park that publishes wait times nowhere readable.
+      const hansa = {
+        id: "park-hansa",
+        slug: "hansa-park",
+        citySlug: "sierksdorf",
+        timezone: "Europe/Berlin",
+      } as Park;
+      const date = farDate();
+      calendarDay = null;
+      profile = { hours: [], attractions: [] };
+      service = await build();
+
+      const plan = await service.buildPlanDay(hansa, date);
+
+      expect(plan.context.openHour).toBeNull();
+      expect(plan.ridesUnavailable?.reason).toBe("no_wait_time_source");
+      // And there is no feed to ask about, so the statement is still skipped.
       expect(feedQueries()).toHaveLength(0);
     });
 

@@ -118,8 +118,22 @@ export interface PlanDayAvailabilityInput {
    * arise, so the ladder must not reach them.
    */
   observed: boolean;
-  /** The hourly profile or the daily forecast could not be fetched at all. */
+  /**
+   * Something this endpoint asks failed open — the calendar, the hourly
+   * profile, either forecast, or the rollup. None of them can empty the
+   * plannable set, so this is tested after the season question.
+   */
   dependencyUnavailable: boolean;
+  /**
+   * The LIVE-STATUS lookup failed, specifically.
+   *
+   * Kept apart from the rest because it is the only one that can empty the
+   * plannable set: it is what lifts a ride back out of the season filter, so
+   * with it down every blocked ride stays blocked and "every ride's season
+   * excludes this day" becomes true for a reason that has nothing to do with
+   * seasons.
+   */
+  plannableUnavailable: boolean;
 }
 
 /**
@@ -135,28 +149,40 @@ export interface PlanDayAvailabilityInput {
 export function classifyPlanDayUnavailable(
   input: PlanDayAvailabilityInput,
 ): PlanDayUnavailableReason {
+  // Tier 1 — the park's and the day's own facts. They outrank everything below
+  // because they are answers rather than gaps, and because two of them are what
+  // keeps a park we will never read out of a number that is meant to fall.
   if (input.status === "CLOSED") return "park_closed";
-  if (!input.hoursKnown) return "hours_unknown";
   if (input.rideCount === 0) return "no_rides_on_file";
   if (input.noWaitTimeSource) return "no_wait_time_source";
-  // Before either verdict about the feed: did the question get an answer?
+
+  // Tier 2 — the feed. A dead feed is the cause of most of what follows, and it
+  // is the only fault among these reasons, so it is named before its effects.
   if (input.staleDays === "unknown") return "data_unavailable";
   if (input.staleDays === null) return "never_measured";
   if (input.staleDays >= FEED_STALE_DAYS) return "feed_stale";
-  // Before any statement about the rides or our data: did we manage to ask? A
-  // dependency that failed open looks exactly like one that had nothing to say.
+
+  // Tier 3 — could we ask at all? Each of these sits directly above the reason
+  // it would otherwise be mistaken for.
   //
-  // This sits ABOVE `rides_cannot_open` and not below it, and that position was
-  // bought: the live-status lookup is what lifts a ride out of the season
-  // filter, so when it fails every blocked ride stays blocked, the plannable
-  // set empties, and the answer reads "every ride's season excludes this day".
-  // `isStructuralPlanDayReason` then files an outage permanently out of the
-  // watched number.
-  if (input.dependencyUnavailable) return "data_unavailable";
+  // `season_out_since` is written by a detector that reads the feed, so with
+  // the feed alive the note means what it says — which is why tier 2 is above
+  // this and not below it (`claude.md` §4). The live-status lookup is what
+  // lifts a ride back out of that filter, so its failure has to be named before
+  // the emptiness it causes, and `rides_cannot_open` is structural: an outage
+  // reported there leaves the watched number for good.
+  if (input.plannableUnavailable) return "data_unavailable";
   if (input.plannableRideCount === 0) return "rides_cannot_open";
+  if (input.dependencyUnavailable) return "data_unavailable";
+  // Both halves that could produce an opening window — the calendar's published
+  // hours and the profile's observed ones — are in the check above, so reaching
+  // here means both answered and neither had one.
+  if (!input.hoursKnown) return "hours_unknown";
+
+  // Tier 4 — what we have, and do not have, about the rides.
+  //
   // A past day never consulted a shape or a day level, so neither may be
-  // blamed for it. Everything above this line still applies: a feed that died
-  // in June is why the rollup is empty in July.
+  // blamed for it.
   if (input.observed) return "no_observations";
   if (input.profiledRideCount === 0) return "insufficient_history";
   if (input.shapedRideCount === 0) return "no_hourly_shape";
