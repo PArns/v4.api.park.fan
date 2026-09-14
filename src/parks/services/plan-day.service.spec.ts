@@ -37,6 +37,8 @@ describe("PlanDayService", () => {
   let downRows: Array<{ attractionId: string }>;
   /** The latest live reading per ride, for the season exception. */
   let liveRows: Array<{ attractionId: string; status: string }>;
+  /** The park's last qualifying wait-time reading; null = never measured. */
+  let feedLastReading: Date | null;
   let headlinerIds: Set<string>;
   let headlinerFails: boolean;
   let queryCalls: unknown[][];
@@ -79,9 +81,11 @@ describe("PlanDayService", () => {
                 .fn()
                 .mockImplementation(async (...args: unknown[]) => {
                   queryCalls.push(args);
-                  return String(args[0]).includes("DISTINCT ON")
-                    ? liveRows
-                    : downRows;
+                  const sql = String(args[0]);
+                  if (sql.includes("max(q.timestamp)")) {
+                    return [{ last: feedLastReading }];
+                  }
+                  return sql.includes("DISTINCT ON") ? liveRows : downRows;
                 }),
             },
           },
@@ -171,6 +175,7 @@ describe("PlanDayService", () => {
     ];
     downRows = [];
     liveRows = [];
+    feedLastReading = new Date();
     headlinerIds = new Set<string>();
     headlinerFails = false;
     queryCalls = [];
@@ -2299,6 +2304,208 @@ describe("PlanDayService", () => {
       expect(
         hours.filter((h) => h.hour > 11).every((h) => h.source === "composed"),
       ).toBe(true);
+    });
+  });
+  /**
+   * `rides: []` used to mean four things at once. Each case below builds the
+   * state that produces one reason and then asserts the COUNTER-CHECK — the
+   * same fixture with the deciding fact put back — so the branch is shown to
+   * have been reached rather than inherited from an earlier guard (📚 G-44).
+   *
+   * Measured against production on 2026-09-14: 19 of 73 parks open on
+   * 2026-10-14 answered with no rides, across six of these reasons.
+   */
+  describe("why a plan is empty", () => {
+    /** Statements that ask how long this park's feed has been silent. */
+    const feedQueries = () =>
+      queryCalls.filter((c) => String(c[0]).includes("max(q.timestamp)"));
+
+    it("says nothing, and asks nothing, when there are rides to serve", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides.length).toBeGreaterThan(0);
+      expect(plan.ridesUnavailable).toBeUndefined();
+      // The diagnosis costs a query, and a park that answered must not pay it.
+      expect(feedQueries()).toHaveLength(0);
+    });
+
+    it("reports a stated closure without asking the database", async () => {
+      const date = farDate();
+      calendarDay = { date, status: "CLOSED", hours: null };
+      profile = { hours: [], attractions: [] };
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides).toEqual([]);
+      expect(plan.ridesUnavailable?.reason).toBe("park_closed");
+      expect(feedQueries()).toHaveLength(0);
+    });
+
+    it("reports an unknown window when nothing published or observed it", async () => {
+      const date = farDate();
+      calendarDay = { date, status: "OPERATING", hours: null };
+      profile = { hours: [], attractions: [] };
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.context.openHour).toBeNull();
+      expect(plan.ridesUnavailable?.reason).toBe("hours_unknown");
+      expect(feedQueries()).toHaveLength(0);
+    });
+
+    it("reports the curated source flag, and does not ask about the feed", async () => {
+      // Hansa-Park publishes wait times only inside its own app. 82 rides on
+      // file, not one reading, and the reason is written down.
+      const hansa = {
+        id: "park-hansa",
+        slug: "hansa-park",
+        citySlug: "sierksdorf",
+        timezone: "Europe/Berlin",
+      } as Park;
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      profile = { hours: [], attractions: [] };
+      dailyPredictions = [];
+      service = await build();
+
+      const plan = await service.buildPlanDay(hansa, date);
+
+      expect(plan.context.liveWaitTimes.available).toBe(false);
+      expect(plan.ridesUnavailable?.reason).toBe("no_wait_time_source");
+      // There is no feed to be stale; asking would be a query for an answer
+      // that cannot change the verdict.
+      expect(feedQueries()).toHaveLength(0);
+
+      // Counter-check: the same empty park WITHOUT the curated flag falls
+      // through to the measurement questions, so the flag is what decided it.
+      const plain = await service.buildPlanDay(park, date);
+      expect(plain.ridesUnavailable?.reason).not.toBe("no_wait_time_source");
+      expect(feedQueries()).toHaveLength(1);
+    });
+
+    it("separates a feed that stopped from one that never started", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      profile = { hours: [], attractions: [] };
+      dailyPredictions = [];
+      feedLastReading = new Date(Date.now() - 96 * 86_400_000);
+      service = await build();
+
+      const stale = await service.buildPlanDay(park, date);
+      expect(stale.ridesUnavailable?.reason).toBe("feed_stale");
+      // The number is the point: 96 days is a fault, 3 days is a quiet week.
+      expect(stale.ridesUnavailable?.staleDays).toBe(96);
+
+      feedLastReading = null;
+      service = await build();
+      const never = await service.buildPlanDay(park, date);
+      expect(never.ridesUnavailable?.reason).toBe("never_measured");
+      // No last reading means no distance to report, rather than zero.
+      expect(never.ridesUnavailable?.staleDays).toBeUndefined();
+    });
+
+    it("separates 'no ride cleared the floor' from 'no hour did'", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      // Twelve parks on the sweep date: readings arrive, no ride reaches the
+      // profile's measured-days floor, so the profile carries nobody.
+      profile = { hours: [], attractions: [] };
+      service = await build();
+      const thin = await service.buildPlanDay(park, date);
+      expect(thin.rides).toEqual([]);
+      expect(thin.ridesUnavailable?.reason).toBe("insufficient_history");
+
+      // Knott's Berry Farm: the ride IS in the profile — it cleared the floor —
+      // and its row is empty because no hour is carried by enough of the park's
+      // rides to be a column. That is a different sentence and a different fix.
+      profile = {
+        hours: [],
+        attractions: [
+          {
+            attractionSlug: "taron",
+            attractionName: "Taron",
+            land: "Mystery",
+            p50: [],
+            sampleDays: 111,
+          },
+        ],
+      };
+      service = await build();
+      const shapeless = await service.buildPlanDay(park, date);
+      expect(shapeless.rides).toEqual([]);
+      expect(shapeless.ridesUnavailable?.reason).toBe("no_hourly_shape");
+    });
+
+    it("names the missing forecast when the shape is there and the level is not", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      // The shape exists and is usable; the model simply said nothing about
+      // this date, so there is no level to scale it to.
+      dailyPredictions = [];
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("long_range");
+      expect(plan.ridesUnavailable?.reason).toBe("no_forecast");
+
+      // Counter-check: put the level back and the same fixture serves a curve,
+      // which shows the shape half was never the problem.
+      dailyPredictions = [
+        {
+          ...({
+            attractionId: "a-taron",
+            predictedWaitTime: 60,
+            predictionType: "daily",
+          } as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      service = await build();
+      const served = await service.buildPlanDay(park, date);
+      expect(served.rides.length).toBe(1);
+      expect(served.ridesUnavailable).toBeUndefined();
+    });
+
+    it("explains an empty past day without inventing a forecast gap", async () => {
+      const date = pastDate();
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        hours: {
+          openingTime: atParkHour(date, 9),
+          closingTime: atParkHour(date, 18),
+        },
+      };
+      hourlyHistory = new Map();
+      feedLastReading = new Date(Date.now() - 96 * 86_400_000);
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("observed");
+      expect(plan.rides).toEqual([]);
+      // A past day is answered from the rollup alone. Neither the hour shape
+      // nor the day level was asked for, so neither may be blamed.
+      expect(plan.ridesUnavailable?.reason).toBe("feed_stale");
     });
   });
 });

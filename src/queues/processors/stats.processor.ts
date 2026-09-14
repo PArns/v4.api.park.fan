@@ -7,6 +7,7 @@ import {
   getYesterdayDateInTimezone,
 } from "../../common/utils/date.util";
 import { ParksService } from "../../parks/parks.service";
+import { PlanDayCoverageService } from "../../parks/services/plan-day-coverage.service";
 import { format, subDays, parseISO, isValid } from "date-fns";
 
 const STATS_CONCURRENCY = 10;
@@ -28,7 +29,28 @@ export class StatsProcessor {
   constructor(
     private readonly statsService: StatsService,
     private readonly parksService: ParksService,
+    private readonly planDayCoverageService: PlanDayCoverageService,
   ) {}
+
+  /**
+   * How many parks that are open a month out cannot be given a day plan, and
+   * why.
+   *
+   * Runs after the night's aggregation (`queue-percentile` at 02:00,
+   * `attraction-hourly-history` at 04:30) and after the day-level forecasts, so
+   * the sweep sees the state a visitor will see rather than yesterday's. A gap
+   * here is not an outage — the endpoint answers 200 with an empty ride list —
+   * so nothing else would ever raise it.
+   */
+  @Process("plan-day-coverage")
+  async handlePlanDayCoverage(_job: Job): Promise<void> {
+    try {
+      await this.planDayCoverageService.sweep();
+    } catch (error) {
+      this.logger.error("Failed to sweep plan-day coverage", error);
+      throw error;
+    }
+  }
 
   @Process("update-today-stats")
   async handleUpdateTodayStats(_job: Job): Promise<void> {

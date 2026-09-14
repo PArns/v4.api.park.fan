@@ -1,5 +1,6 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { LiveWaitTimesDto } from "./live-wait-times.dto";
+import type { PlanDayUnavailableReason } from "../utils/plan-day-availability.util";
 
 /**
  * How a number in this response was arrived at. It travels with every curve
@@ -420,6 +421,54 @@ export class PlanDayAccuracyDto {
   sampleSize?: number;
 }
 
+export const PLAN_DAY_UNAVAILABLE_REASONS = [
+  "park_closed",
+  "hours_unknown",
+  "no_rides_on_file",
+  "no_wait_time_source",
+  "never_measured",
+  "feed_stale",
+  "rides_cannot_open",
+  "insufficient_history",
+  "no_hourly_shape",
+  "no_forecast",
+] as const satisfies readonly PlanDayUnavailableReason[];
+
+export class PlanDayUnavailableDto {
+  @ApiProperty({
+    enum: PLAN_DAY_UNAVAILABLE_REASONS,
+    description:
+      "Why this day carries no ride curves. Present ONLY when `rides` is " +
+      "empty, and then always — an empty list without one is a bug.\n\n" +
+      "`rides: []` on its own meant four different things at once and a caller " +
+      "could tell none of them apart: measured against production on " +
+      "2026-09-14, 19 of the 73 parks with an operating day on 2026-10-14 came " +
+      "back empty, for six different reasons. A client that renders all of them " +
+      "as a quiet park prints an invented number for a park nobody measures; " +
+      "one that renders all of them as an error tells a visitor of Hansa-Park " +
+      "something is broken when nothing is.\n\n" +
+      "`no_wait_time_source` is an ANSWER — that park publishes wait times " +
+      "nowhere readable, so no plan is coming, today or ever. `park_closed`, " +
+      "`rides_cannot_open` and `no_rides_on_file` are answers about the park. " +
+      "The rest are gaps on our side: `never_measured` and " +
+      "`insufficient_history` close as history accumulates, `no_hourly_shape` " +
+      "when the park's rides start sharing hours, `no_forecast` with the next " +
+      "model run — and `feed_stale` is a FAULT, a park that still schedules " +
+      "operating days while its readings stopped weeks ago.",
+  })
+  reason: PlanDayUnavailableReason;
+
+  @ApiProperty({
+    required: false,
+    example: 96,
+    description:
+      "Days since the last usable wait-time reading from this park. Present " +
+      "on `feed_stale` and omitted everywhere else, including " +
+      "`never_measured`, where there is no last reading to count from.",
+  })
+  staleDays?: number;
+}
+
 export class PlanDayDto {
   @ApiProperty({ example: "phantasialand" })
   parkSlug: string;
@@ -479,6 +528,15 @@ export class PlanDayDto {
 
   @ApiProperty({ type: [PlanDayRideDto] })
   rides: PlanDayRideDto[];
+
+  @ApiProperty({
+    required: false,
+    type: PlanDayUnavailableDto,
+    description:
+      "Why `rides` is empty. Present exactly when it is, so a caller tests " +
+      "this field rather than guessing from the length of a list.",
+  })
+  ridesUnavailable?: PlanDayUnavailableDto;
 
   @ApiProperty({
     type: [PlanDayShowDto],
