@@ -686,12 +686,18 @@ answered from the 15-minute rollup, so no shape was scaled and no day level was
 read, and neither may be reported as missing.
 
 `data_unavailable` is the odd one out and the reason the other eleven stay
-honest. The hourly profile and the daily forecast are both fetched behind a
-`catch` that degrades to "nothing" — right for serving, a lie for diagnosis.
-Without it, a profile service having a bad minute reported
-`insufficient_history` and the nightly counter filed it as a gap that would
-close on its own. It is neither a data gap nor a property of the park: it is
-**unmeasured**, and the sweep counts it apart from both.
+honest. **Five** things this endpoint asks swallow their own failure to keep
+the response serving — the hourly profile, the daily forecast, the hourly
+forecast, the 15-minute rollup and the feed-recency statement — and every one
+of them degrades to something that reads as an answer. That is right for
+serving and a lie for diagnosis: without this reason, a profile service having
+a bad minute reported `insufficient_history`, an analytics outage reported
+`no_observations` ("the rollup holds nothing for this park" — a statement about
+the park made out of a statement about us), and a failed recency query reported
+a feed measured seconds ago.
+
+It is neither a data gap nor a property of the park: it is **unmeasured**, and
+the sweep counts it apart from both.
 
 The order in which they are tested is a statement about evidence rather than a
 preference, and one step of it is deliberate: `rides_cannot_open` is tested

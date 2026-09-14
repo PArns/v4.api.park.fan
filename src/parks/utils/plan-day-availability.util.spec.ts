@@ -111,6 +111,20 @@ describe("classifyPlanDayUnavailable", () => {
     );
   });
 
+  it("does not read a failed recency query as an answer about the feed", () => {
+    expect(of({ staleDays: "unknown" })).toBe("data_unavailable");
+    // Both answers it could have degraded to are wrong in opposite directions,
+    // and both would be reported as facts about the park.
+    expect(of({ staleDays: null })).toBe("never_measured");
+    expect(of({ staleDays: 0, profiledRideCount: 0 })).toBe(
+      "insufficient_history",
+    );
+    // And a fact about the park still outranks it.
+    expect(of({ staleDays: "unknown", noWaitTimeSource: true })).toBe(
+      "no_wait_time_source",
+    );
+  });
+
   it("says the question could not be asked before answering it", () => {
     // `loadProfile` and `dayLevels` both degrade to "nothing" on failure, which
     // is right for serving and a lie for diagnosis. Without this guard a

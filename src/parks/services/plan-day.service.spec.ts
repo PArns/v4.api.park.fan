@@ -41,6 +41,8 @@ describe("PlanDayService", () => {
   let liveRows: Array<{ attractionId: string; status: string }>;
   /** The park's last qualifying wait-time reading; null = never measured. */
   let feedLastReading: Date | null;
+  /** Whether the feed-recency statement throws rather than answering. */
+  let feedQueryFails: boolean;
   let headlinerIds: Set<string>;
   let headlinerFails: boolean;
   let queryCalls: unknown[][];
@@ -85,6 +87,21 @@ describe("PlanDayService", () => {
                   queryCalls.push(args);
                   const sql = String(args[0]);
                   if (sql.includes("max(q.timestamp)")) {
+                    if (feedQueryFails) throw new Error("queue_data down");
+                    // The service asks in two steps, and the mock has to as
+                    // well: a park whose last reading is older than the bound
+                    // must come back EMPTY from the bounded statement, or the
+                    // second step is never exercised and the bound is never
+                    // tested.
+                    const bounded = sql.includes("NOW() - ($2");
+                    if (
+                      bounded &&
+                      (feedLastReading === null ||
+                        Date.now() - feedLastReading.getTime() >
+                          30 * 86_400_000)
+                    ) {
+                      return [{ last: null }];
+                    }
                     return [{ last: feedLastReading }];
                   }
                   return sql.includes("DISTINCT ON") ? liveRows : downRows;
@@ -179,6 +196,7 @@ describe("PlanDayService", () => {
     downRows = [];
     liveRows = [];
     feedLastReading = new Date();
+    feedQueryFails = false;
     headlinerIds = new Set<string>();
     headlinerFails = false;
     queryCalls = [];
@@ -2502,6 +2520,7 @@ describe("PlanDayService", () => {
       hourlyHistory = new Map();
       // Live feed: the rollup is simply empty for that day.
       feedLastReading = new Date();
+      feedQueryFails = false;
       service = await build();
 
       const plan = await service.buildPlanDay(park, date);
@@ -2509,6 +2528,44 @@ describe("PlanDayService", () => {
       expect(plan.tier).toBe("observed");
       expect(plan.rides).toEqual([]);
       expect(plan.ridesUnavailable?.reason).toBe("no_observations");
+    });
+
+    it("does not turn a failed recency query into a healthy feed", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      profile = { hours: [], attractions: [] };
+      dailyPredictions = [];
+      feedQueryFails = true;
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      // A date of "now" would call a dead feed healthy AND push the verdict
+      // down into the data gaps, where the nightly sweep files it as a gap
+      // that closes on its own. A null would call a live park never measured.
+      expect(plan.ridesUnavailable?.reason).toBe("data_unavailable");
+      expect(plan.ridesUnavailable?.staleDays).toBeUndefined();
+    });
+
+    it("does not blame the rollup when the rollup could not be read", async () => {
+      const date = pastDate();
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        hours: {
+          openingTime: atParkHour(date, 9),
+          closingTime: atParkHour(date, 18),
+        },
+      };
+      historyFails = true;
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides).toEqual([]);
+      // `no_observations` says "the rollup holds nothing for this park" — a
+      // statement about the park, made out of a statement about us.
+      expect(plan.ridesUnavailable?.reason).toBe("data_unavailable");
     });
 
     it("reports a failed dependency as such, not as a gap in the data", async () => {

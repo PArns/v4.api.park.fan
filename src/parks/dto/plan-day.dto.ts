@@ -482,9 +482,13 @@ export class PlanDayUnavailableDto {
     required: false,
     example: 96,
     description:
-      "Days since the last usable wait-time reading from this park. Present " +
-      "on `feed_stale` and omitted everywhere else, including " +
-      "`never_measured`, where there is no last reading to count from.",
+      "Days since the last usable wait-time reading from this park, counted " +
+      "from TODAY and not from the date asked about — the feed is a property " +
+      "of the park, not of the day, so on a past date this says how long the " +
+      "silence has lasted rather than how old it was then. Present on " +
+      "`feed_stale` and omitted everywhere else, including `never_measured`, " +
+      "where there is no last reading to count from, and `data_unavailable`, " +
+      "where the question got no answer.",
   })
   staleDays?: number;
 }

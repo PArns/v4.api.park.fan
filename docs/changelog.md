@@ -32,11 +32,15 @@ Three decisions inside it:
 - **`rides_cannot_open` is tested after the feed checks.** `season_out_since` is
   written by a detector that reads the feed, so on a park silent since June "out
   of season" is our own bookkeeping rather than the operator's word.
-- **`data_unavailable` exists because `loadProfile` and `dayLevels` both
-  degrade to "nothing" on failure.** That is right for serving and a lie for
-  diagnosis: without it, a profile service having a bad minute reported
-  `insufficient_history`, and the nightly counter filed a broken dependency as a
-  gap that would close on its own.
+- **`data_unavailable` exists because five of the things this endpoint asks
+  swallow their own failure** — the hourly profile, the daily forecast, the
+  hourly forecast, the 15-minute rollup and the feed-recency statement. Each
+  degrades to something that reads as an answer, which is right for serving and
+  a lie for diagnosis: without it, a profile service having a bad minute
+  reported `insufficient_history`, an analytics outage reported
+  `no_observations`, a failed recency query reported a feed measured seconds
+  ago — and the nightly counter filed every one of them as a gap that would
+  close on its own.
 - **The one query this costs runs only when the list is empty, and in two
   steps.** The 54 parks that answered pay nothing; the common empty case pays a
   30-day-bounded aggregate (35 ms, 16 k buffers at Knott's Berry Farm against

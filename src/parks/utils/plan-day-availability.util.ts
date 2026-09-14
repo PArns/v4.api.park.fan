@@ -96,11 +96,17 @@ export interface PlanDayAvailabilityInput {
   /** Curated: the park publishes no readable wait times. */
   noWaitTimeSource: boolean;
   /**
-   * Days since the last qualifying wait-time reading; `null` when not one has
-   * ever arrived. Measured only when the plan is empty — see
+   * Days since the last qualifying wait-time reading, counted from today;
+   * `null` when not one has ever arrived, and `"unknown"` when the statement
+   * that would answer it failed.
+   *
+   * Three states rather than two, because a failed query degraded to a number
+   * is worse than no answer: reporting `0` would call a dead feed healthy and
+   * push the verdict down into the data gaps, and reporting `null` would call a
+   * live park never measured. Measured only when the plan is empty — see
    * `PlanDayService.explainEmptyPlan`.
    */
-  staleDays: number | null;
+  staleDays: number | null | "unknown";
   /** Rides that cleared the hourly profile's own measured-days floor. */
   profiledRideCount: number;
   /** Rides with at least one measured hour to scale a curve from. */
@@ -133,6 +139,8 @@ export function classifyPlanDayUnavailable(
   if (!input.hoursKnown) return "hours_unknown";
   if (input.rideCount === 0) return "no_rides_on_file";
   if (input.noWaitTimeSource) return "no_wait_time_source";
+  // Before either verdict about the feed: did the question get an answer?
+  if (input.staleDays === "unknown") return "data_unavailable";
   if (input.staleDays === null) return "never_measured";
   if (input.staleDays >= FEED_STALE_DAYS) return "feed_stale";
   if (input.plannableRideCount === 0) return "rides_cannot_open";

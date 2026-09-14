@@ -303,7 +303,7 @@ export class PlanDayService {
     if (!isFuture) {
       base.tier = "observed";
       const attractions = await this.attractions(park);
-      base.rides = await this.observedRides(
+      const observed = await this.observedRides(
         park,
         dateStr,
         openHour,
@@ -311,6 +311,7 @@ export class PlanDayService {
         new Map(attractions.map((a) => [a.id, a])),
         await this.headlinerIds(park),
       );
+      base.rides = observed.rides;
       if (base.rides.length === 0) {
         // A past day is answered from the rollup alone, so the two forecast
         // questions cannot arise: nothing was composed and no day level was
@@ -324,7 +325,11 @@ export class PlanDayService {
           shapedRideCount: 0,
           hasDayLevels: false,
           observed: true,
-          dependencyUnavailable: false,
+          // The rollup swallows its own failure to keep the response serving.
+          // Without this, an analytics outage answered `no_observations` — "the
+          // rollup holds nothing for this park" — which is a statement about
+          // the park made out of a statement about us.
+          dependencyUnavailable: observed.unavailable,
         });
       }
       return base;
@@ -383,10 +388,11 @@ export class PlanDayService {
   ): Promise<PlanDayUnavailableDto> {
     const noWaitTimeSource =
       resolveCuratedPark(park).noWaitTimesReason !== null;
-    // Neither of the two cheap answers needs the feed, and one of them —
-    // a curated park with no source — has no feed to ask about.
+    // Three answers that stand above the feed in the ladder, so asking about it
+    // could not change the verdict: a stated closure, an empty catalog, and a
+    // curated park that has no feed to ask about in the first place.
     const staleDays =
-      counts.rideCount === 0 || noWaitTimeSource
+      status === "CLOSED" || counts.rideCount === 0 || noWaitTimeSource
         ? null
         : await this.feedStaleDays(park);
 
@@ -400,7 +406,9 @@ export class PlanDayService {
     const reason = classifyPlanDayUnavailable(input);
     return {
       reason,
-      ...(reason === "feed_stale" && staleDays !== null ? { staleDays } : {}),
+      ...(reason === "feed_stale" && typeof staleDays === "number"
+        ? { staleDays }
+        : {}),
     };
   }
 
@@ -412,7 +420,7 @@ export class PlanDayService {
    * looser one: a park whose rides only ever report CLOSED has a busy feed and
    * no wait times, and counting those rows would call it healthy.
    */
-  private async feedStaleDays(park: Park): Promise<number | null> {
+  private async feedStaleDays(park: Park): Promise<number | null | "unknown"> {
     // Asked in two steps, because the answer only has three shapes — never,
     // under the threshold, or over it — and the cheap step settles the common
     // one. Bounded to the threshold, the aggregate reads one end of the
@@ -420,6 +428,7 @@ export class PlanDayService {
     // 61 k for the same statement without the bound, which has no chunk to
     // exclude and walks the whole retained history.
     const recent = await this.lastQualifyingReading(park, FEED_STALE_DAYS);
+    if (recent === "unknown") return "unknown";
     if (recent !== null) {
       return Math.max(
         0,
@@ -430,6 +439,7 @@ export class PlanDayService {
     // scan — and only here does it matter, because this is where `feed_stale`
     // and `never_measured` part company.
     const ever = await this.lastQualifyingReading(park, null);
+    if (ever === "unknown") return "unknown";
     if (ever === null) return null;
     return Math.max(0, Math.floor((Date.now() - ever.getTime()) / 86_400_000));
   }
@@ -445,10 +455,10 @@ export class PlanDayService {
   private async lastQualifyingReading(
     park: Park,
     withinDays: number | null,
-  ): Promise<Date | null> {
+  ): Promise<Date | null | "unknown"> {
     const params: unknown[] = [park.id];
     if (withinDays !== null) params.push(withinDays);
-    const rows: Array<{ last: Date | null }> =
+    const rows: Array<{ last: Date | null }> | "unknown" =
       await this.attractionRepository.manager
         .query(
           `SELECT max(q.timestamp) AS last
@@ -466,10 +476,13 @@ export class PlanDayService {
           this.logger.warn(
             `Plan day: feed recency unavailable for ${park.slug}: ${err.message}`,
           );
-          // Unknown is not "never": reporting null here would turn a failed query
-          // into the claim that this park has never been measured.
-          return [{ last: new Date() }];
+          // Neither answer, and that is the point. `null` would claim this park
+          // has never been measured; a date of now would claim a dead feed is
+          // healthy AND push the verdict down into the data gaps, where the
+          // nightly sweep files an outage as a gap that closes on its own.
+          return "unknown" as const;
         });
+    if (rows === "unknown") return "unknown";
     const last = rows[0]?.last ? new Date(rows[0].last) : null;
     return last && !Number.isNaN(last.getTime()) ? last : null;
   }
@@ -767,6 +780,7 @@ export class PlanDayService {
           : Promise.resolve({
               hours: new Map<string, Map<number, number>>(),
               bands: new Map<string, number>(),
+              unavailable: false,
             }),
         this.runningNow(
           park,
@@ -994,7 +1008,8 @@ export class PlanDayService {
         observed: false,
         // `profile === null` is only ever the catch in `loadProfile`; the
         // service itself always returns a DTO, empty or not.
-        dependencyUnavailable: profile === null || levels.unavailable,
+        dependencyUnavailable:
+          profile === null || levels.unavailable || measured.unavailable,
       },
     };
   }
@@ -1025,13 +1040,19 @@ export class PlanDayService {
   ): Promise<{
     hours: Map<string, Map<number, number>>;
     bands: Map<string, number>;
+    unavailable: boolean;
   }> {
+    let unavailable = false;
     const stored = await this.mlService
       .getParkPredictions(park.id, "hourly")
       .catch((err: Error) => {
         this.logger.warn(
           `Plan day: hourly predictions unavailable for ${park.slug}: ${err.message}`,
         );
+        // Degrade for serving, remember for diagnosis: inside the hourly
+        // horizon this is the difference between "the model said nothing about
+        // this day" and "the model was not asked".
+        unavailable = true;
         return { predictions: [] as PredictionDto[] };
       });
 
@@ -1083,7 +1104,7 @@ export class PlanDayService {
       if (means.size > 0) hours.set(attractionId, means);
     }
 
-    return { hours, bands };
+    return { hours, bands, unavailable };
   }
 
   /**
@@ -1126,17 +1147,21 @@ export class PlanDayService {
     closeHour: number,
     byId: Map<string, Attraction>,
     headlinerIds: ReadonlySet<string>,
-  ): Promise<PlanDayRideDto[]> {
+  ): Promise<{ rides: PlanDayRideDto[]; unavailable: boolean }> {
     // The day's own row, and — only where the day runs past midnight — the next
     // date's, whose small hours belong to it. Asked together: two indexed reads
     // against a primary key, and the second is not asked for at all on an
     // ordinary day.
-    const [own, afterMidnight] = await Promise.all([
+    const [ownRows, afterMidnightRows] = await Promise.all([
       this.hourlyHistory(park, dateStr),
       closeHour > 23
         ? this.hourlyHistory(park, PlanDayService.plusDays(dateStr, 1))
         : Promise.resolve(new Map<string, AttractionHourlyHistory>()),
     ]);
+    const unavailable = ownRows === null || afterMidnightRows === null;
+    const own = ownRows ?? new Map<string, AttractionHourlyHistory>();
+    const afterMidnight =
+      afterMidnightRows ?? new Map<string, AttractionHourlyHistory>();
 
     // attraction → { hour → [weightedSum, weight], the day's peak }
     const measured = new Map<
@@ -1215,9 +1240,12 @@ export class PlanDayService {
       });
     }
 
-    return rides.sort((a, b) =>
-      a.attractionName.localeCompare(b.attractionName),
-    );
+    return {
+      unavailable,
+      rides: rides.sort((a, b) =>
+        a.attractionName.localeCompare(b.attractionName),
+      ),
+    };
   }
 
   /**
@@ -1745,14 +1773,17 @@ export class PlanDayService {
   private async hourlyHistory(
     park: Park,
     dateStr: string,
-  ): Promise<Map<string, AttractionHourlyHistory>> {
+  ): Promise<Map<string, AttractionHourlyHistory> | null> {
     return this.analyticsService
       .getParkHourlyHistory(park.id, dateStr)
       .catch((err: Error) => {
         this.logger.warn(
           `Plan day: hourly history unavailable for ${park.slug} on ${dateStr}: ${err.message}`,
         );
-        return new Map<string, AttractionHourlyHistory>();
+        // `null`, not an empty map. The rollup holding nothing for this day and
+        // the rollup being unreachable produce the same empty ride list, and
+        // only one of them is a statement about the park.
+        return null;
       });
   }
 
