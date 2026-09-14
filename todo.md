@@ -1253,7 +1253,12 @@ raise TTL 2→15 min + evict expired entries on write.
       history that nothing else records, irreversibly, for a number a **delta of the
       cumulative counters** yields read-only. Sample the counters, wait, sample again.
 - [x] Let it run ~30–60 min (cover ≥2 of the 15-min prediction crons + on-demand traffic).
-      ✅ 23.5 min, 15 samples, 2026-09-14 02:12–02:36 UTC.
+      ✅ 15 samples, 2026-09-14 **02:12:10–02:35:38 UTC = 23.5 min** — shorter than the
+      nominal 30–60, so the binding condition was checked directly rather than assumed:
+      the window contains **both** `*/15` firings of
+      `generate-hourly:hourly-predictions-cron` (02:15:00 and 02:30:00) and five `*/5`
+      firings of `fetch-wait-times:wait-times-cron`. The "≥2 prediction crons + on-demand
+      traffic" requirement is therefore met on its own terms.
 - [x] Re-run the baseline query (calls/min + ms/min for `query LIKE 'WITH hourly_agg%'`) and
       compare against the table above. ~~Expect the on-demand/repeat-park calls to
       collapse.~~ **They did not.** Fresh window: **48.5 calls/min, 29 478 ms/min,

@@ -126,7 +126,13 @@ not performed**: it destroys 103 days of accumulated history that nothing else
 records, it is irreversible, and the ticket does not ask for it. A **delta of the
 cumulative counters** over a fresh window gives the same rate, read-only.
 
-### Measured, 2026-09-14 02:12–02:36 UTC, 23.5 min, 15 samples
+### Measured, 2026-09-14 02:12:10–02:35:38 UTC, 23.5 min, 15 samples
+
+The protocol asks for 30–60 min; this window is 23.5. What that duration is *for* is
+the binding condition, and it was checked rather than assumed: the window contains
+**both** `*/15` firings of `generate-hourly:hourly-predictions-cron` (02:15:00,
+02:30:00) and five `*/5` firings of `fetch-wait-times:wait-times-cron`, so "≥2
+prediction crons + on-demand traffic" is satisfied.
 
 | | calls/min | DB ms/min | share of one core | mean ms/call |
 | - | --------- | --------- | ----------------- | ------------ |
