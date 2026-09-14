@@ -6,6 +6,57 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — the coverage threshold is the measured floor, and it is run as a ratchet
+
+`coverageThreshold.global` in `jest.config.json` asked for 70 % on all four
+axes. PAR-96 had repaired the instrumentation underneath it and deliberately
+left the number alone, because a threshold that measured nothing for months is
+expected to be violated the day it starts measuring again and configuring that
+away quietly would have been the same fault a second time. What to do with the
+number was carried as PAR-108, and the decision (2026-09-13) is: put the
+threshold on the measured state and run it as a ratchet — it may fall, never
+rise.
+
+Measured on `main` at `15d94b0`, two consecutive `pnpm test:cov` runs over an
+unchanged tree, 167 of 168 suites and 1 925 of 1 936 cases each (the remainder
+skipped in both):
+
+| axis | run 1 | run 2 | threshold before | threshold after |
+| -- | -- | -- | -- | -- |
+| statements | 46.86 % | 46.85 % | 70 | 46 |
+| branches | 35.85 % | 35.83 % | 70 | 35 |
+| functions | 46.52 % | 46.52 % | 70 | 46 |
+| lines | 46.74 % | 46.74 % | 70 | 46 |
+
+**The numbers are floored to whole percent rather than written out to the
+decimal, and the two runs are why.** Statements move 46.86 → 46.85 and branches
+35.85 → 35.83 with not a line changed between them, which is what PAR-96's own
+entry means by "a run can still move in the second decimal". A threshold at
+46.86 would have gone red on the next run over nothing. What the flooring costs
+is the slack between the measured value and the threshold — at most 0.86 pp
+(statements), 0.85 (branches), 0.74 (lines), 0.52 (functions) — and below that
+the run turns red, which is the regression the number is there to catch.
+
+`pnpm test:cov` now ends with exit 0; the run that proves it measured
+46.85 / 35.83 / 46.52 / 46.74, run 2's four figures again. That also unblocks
+the second half of `pnpm test:all:cov`, which is `test:cov && test:e2e:cov` and
+therefore never reached `test:e2e:cov` while the first half exited 1. There is
+no second threshold waiting there: `test/jest-e2e.json` declares
+`collectCoverageFrom` and a `coverageDirectory` and no `coverageThreshold` at
+all.
+
+Nothing about the suite changed. No test was written, skipped or deleted for
+this, `collectCoverageFrom` is untouched — `src/types/*.d.ts` still counts as
+an uncovered file, which is a counting fault and not a coverage gap — and the
+**66 of 268 files the report puts at 0 % statements** (both of `src/sitemap`
+among them) are there for the same reasons as before. PAR-108 lists
+`trips.controller.ts` and `trip-write-rate-limit.service.ts` as two more of
+them; both carry coverage today, 60.86 % and 68.42 % of statements, so that
+part of the issue no longer describes the report.
+
+The threshold is a guard against losing what the suite covers today, not a
+statement that 46 % is enough.
+
 ### Fixed — `/plan/day`'s live-status window cuts at the day's own opening, which is what the spec and the docs had said since PAR-93
 
 PR #253's last commit, `73b8246` ("cut the live window at the day's own opening,
