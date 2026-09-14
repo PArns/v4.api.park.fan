@@ -98,7 +98,6 @@ import { PopularityModule } from "../popularity/popularity.module";
     TypeOrmModule, // CRITICAL: Export TypeOrmModule so other modules can inject ParkRepository
     ParkEnrichmentService,
     CalendarService,
-    PlanDayService,
     PlanDayCoverageService,
     BestDaysService,
     ParkValidatorService,

@@ -31,6 +31,8 @@ describe("PlanDayService", () => {
   let service: PlanDayService;
   let calendarDay: Record<string, unknown> | null;
   let dailyPredictions: unknown[];
+  /** Whether the daily forecast service throws rather than answering. */
+  let dailyPredictionsFail: boolean;
   let hourlyPredictions: unknown[];
   let profile: unknown;
   let attractions: Array<Partial<Attraction>>;
@@ -123,9 +125,10 @@ describe("PlanDayService", () => {
             })),
             getServingDailyPredictions: jest
               .fn()
-              .mockImplementation(async () => ({
-                predictions: dailyPredictions,
-              })),
+              .mockImplementation(async () => {
+                if (dailyPredictionsFail) throw new Error("nf-service down");
+                return { predictions: dailyPredictions };
+              }),
           },
         },
         {
@@ -213,6 +216,7 @@ describe("PlanDayService", () => {
       },
     ];
     hourlyPredictions = [];
+    dailyPredictionsFail = false;
     leadMae = null;
     rideOpenings = new Map();
     accuracyProfile = new Map();
@@ -2485,7 +2489,57 @@ describe("PlanDayService", () => {
       expect(served.ridesUnavailable).toBeUndefined();
     });
 
-    it("explains an empty past day without inventing a forecast gap", async () => {
+    it("names an empty rollup on a past day, not a forecast that was never asked for", async () => {
+      const date = pastDate();
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        hours: {
+          openingTime: atParkHour(date, 9),
+          closingTime: atParkHour(date, 18),
+        },
+      };
+      hourlyHistory = new Map();
+      // Live feed: the rollup is simply empty for that day.
+      feedLastReading = new Date();
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("observed");
+      expect(plan.rides).toEqual([]);
+      expect(plan.ridesUnavailable?.reason).toBe("no_observations");
+    });
+
+    it("reports a failed dependency as such, not as a gap in the data", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      // `loadProfile` swallows the error and returns null, which is right for
+      // serving and would otherwise be read as "no ride cleared the floor".
+      profileMock = jest.fn().mockRejectedValue(new Error("profile down"));
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides).toEqual([]);
+      expect(plan.ridesUnavailable?.reason).toBe("data_unavailable");
+    });
+
+    it("reports a failed forecast service as such, not as a missing forecast", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictionsFail = true;
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides).toEqual([]);
+      // `no_forecast` would say the model had nothing to say about this date.
+      // It was never asked.
+      expect(plan.ridesUnavailable?.reason).toBe("data_unavailable");
+    });
+
+    it("explains an empty past day whose feed died months ago", async () => {
       const date = pastDate();
       calendarDay = {
         ...calendarDay!,

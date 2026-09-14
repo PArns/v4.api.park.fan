@@ -2,6 +2,7 @@ import {
   classifyPlanDayUnavailable,
   FEED_STALE_DAYS,
   isStructuralPlanDayReason,
+  isUnknownPlanDayReason,
   type PlanDayAvailabilityInput,
 } from "./plan-day-availability.util";
 
@@ -27,6 +28,8 @@ describe("classifyPlanDayUnavailable", () => {
     profiledRideCount: 18,
     shapedRideCount: 18,
     hasDayLevels: true,
+    observed: false,
+    dependencyUnavailable: false,
   };
 
   const of = (patch: Partial<PlanDayAvailabilityInput>) =>
@@ -108,6 +111,43 @@ describe("classifyPlanDayUnavailable", () => {
     );
   });
 
+  it("says the question could not be asked before answering it", () => {
+    // `loadProfile` and `dayLevels` both degrade to "nothing" on failure, which
+    // is right for serving and a lie for diagnosis. Without this guard a
+    // profile service having a bad minute reported `insufficient_history`.
+    expect(of({ dependencyUnavailable: true, profiledRideCount: 0 })).toBe(
+      "data_unavailable",
+    );
+    // Same empty profile with the dependency healthy: the data gap is named.
+    expect(of({ dependencyUnavailable: false, profiledRideCount: 0 })).toBe(
+      "insufficient_history",
+    );
+    // And it does not shout over a fact about the park itself.
+    expect(of({ dependencyUnavailable: true, rideCount: 0 })).toBe(
+      "no_rides_on_file",
+    );
+  });
+
+  it("blames no forecast for a past day, which never asked for one", () => {
+    // A past date is answered from the 15-minute rollup: nothing is composed
+    // and no day level is read, so neither may be reported as missing.
+    expect(
+      of({ observed: true, profiledRideCount: 0, hasDayLevels: false }),
+    ).toBe("no_observations");
+    // The same counts on a future date are a forecast gap, which shows the
+    // `observed` flag is what decided it.
+    expect(
+      of({ observed: false, profiledRideCount: 0, hasDayLevels: false }),
+    ).toBe("insufficient_history");
+  });
+
+  it("still names a dead feed on a past day rather than the empty rollup", () => {
+    // The feed checks sit above `observed` on purpose: a feed that died in June
+    // is WHY the rollup is empty in July, and it is the more useful sentence.
+    expect(of({ observed: true, staleDays: 96 })).toBe("feed_stale");
+    expect(of({ observed: true, staleDays: 1 })).toBe("no_observations");
+  });
+
   it("falls back to the shape when shapes and levels are both present", () => {
     // Curves were built and every one of them fell outside the day's hours.
     // Reporting the forecast as missing would be the one wrong answer here.
@@ -123,6 +163,12 @@ describe("isStructuralPlanDayReason", () => {
     expect(isStructuralPlanDayReason("rides_cannot_open")).toBe(true);
   });
 
+  it("counts a failed dependency as neither, so it cannot be mistaken for either", () => {
+    expect(isUnknownPlanDayReason("data_unavailable")).toBe(true);
+    expect(isStructuralPlanDayReason("data_unavailable")).toBe(false);
+    expect(isUnknownPlanDayReason("insufficient_history")).toBe(false);
+  });
+
   it("counts every closable gap, so the number can reach zero", () => {
     expect(isStructuralPlanDayReason("feed_stale")).toBe(false);
     expect(isStructuralPlanDayReason("never_measured")).toBe(false);
@@ -130,5 +176,6 @@ describe("isStructuralPlanDayReason", () => {
     expect(isStructuralPlanDayReason("no_hourly_shape")).toBe(false);
     expect(isStructuralPlanDayReason("no_forecast")).toBe(false);
     expect(isStructuralPlanDayReason("hours_unknown")).toBe(false);
+    expect(isStructuralPlanDayReason("no_observations")).toBe(false);
   });
 });

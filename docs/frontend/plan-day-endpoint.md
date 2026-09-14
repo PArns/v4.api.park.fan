@@ -678,9 +678,20 @@ that park publishes wait times nowhere readable (see
 client should present it as an answer and not as a gap.
 
 `never_measured` · `feed_stale` · `insufficient_history` · `no_hourly_shape` ·
-`no_forecast` — gaps on our side, and every one of them closes on its own
-except `feed_stale`, which is a **fault**: a park that still schedules operating
-days while its readings stopped weeks ago. It carries `staleDays`.
+`no_forecast` · `no_observations` — gaps on our side, and every one of them
+closes on its own except `feed_stale`, which is a **fault**: a park that still
+schedules operating days while its readings stopped weeks ago. It carries
+`staleDays`. `no_observations` is the past-day form: a date already walked is
+answered from the 15-minute rollup, so no shape was scaled and no day level was
+read, and neither may be reported as missing.
+
+`data_unavailable` is the odd one out and the reason the other eleven stay
+honest. The hourly profile and the daily forecast are both fetched behind a
+`catch` that degrades to "nothing" — right for serving, a lie for diagnosis.
+Without it, a profile service having a bad minute reported
+`insufficient_history` and the nightly counter filed it as a gap that would
+close on its own. It is neither a data gap nor a property of the park: it is
+**unmeasured**, and the sweep counts it apart from both.
 
 The order in which they are tested is a statement about evidence rather than a
 preference, and one step of it is deliberate: `rides_cannot_open` is tested
@@ -693,9 +704,22 @@ not the operator's word — reporting it there would be the substitution
 
 Everything but feed recency is already in hand when the ride list turns out
 empty. That one fact costs a statement, and it runs **only** in that branch: the
-54 parks that answered on the sweep date paid nothing, the 19 that did not paid
-one aggregate over their own rides (0.1–0.35 s measured per park against
-production).
+54 parks that answered on the sweep date paid nothing.
+
+It is asked in two steps, because the answer only has three shapes — never,
+under the threshold, over it — and the cheap step settles the common one. Bounded
+to 30 days the aggregate reads one end of the hypertable; unbounded it has no
+chunk to exclude and walks the whole retained history. Measured at Knott's Berry
+Farm against production on 2026-09-14:
+
+| statement | time | buffers |
+| --- | --- | --- |
+| bounded to 30 days | **35 ms** | 16,194 |
+| no bound | 185 ms | 61,795 |
+
+So the twelve `insufficient_history` parks pay the 35 ms, and only the handful
+that turn out to be silent pay the full scan — which is exactly where the exact
+number is wanted, because that is where `feed_stale` and `never_measured` part.
 
 It reads `queue_data` rather than `queue_data_aggregates`, which looks like the
 cheaper source and is the wrong one: the rollup only keeps an hour that saw
@@ -715,7 +739,14 @@ that is wrong.
 The row keeps the **reason**, not just the count, because the count alone cannot
 fall for the right cause: a park nobody can read and a park whose feed broke
 last night both add one. `isStructuralPlanDayReason` draws that line, so the
-watched number is the one that can reach zero.
+watched number is the one that can reach zero, and `isUnknownPlanDayReason`
+draws the second: a park the sweep could not get an answer about is unmeasured
+and belongs in neither half.
+
+`parksOpen` is counted from the schedule, not from the rows the sweep managed to
+write. A denominator that shrinks with every failure makes a systematic outage
+read as an improving coverage rate — the one way this number could lie in the
+reassuring direction.
 
 The 26 % above was found by a post-deploy verification run looking for something
 else entirely ([PAR-42](https://linear.app/parkfan/issue/PAR-42)). A park whose

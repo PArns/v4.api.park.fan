@@ -50,7 +50,25 @@ export type PlanDayUnavailableReason =
    */
   | "no_hourly_shape"
   /** Hour shapes exist, and the model has produced no day level for this date. */
-  | "no_forecast";
+  | "no_forecast"
+  /**
+   * A past date whose 15-minute rollup holds nothing for this park. The
+   * forecast reasons cannot apply — a past day is answered from what the queues
+   * did, so no shape was scaled and no day level was asked for.
+   */
+  | "no_observations"
+  /**
+   * A service this endpoint depends on did not answer, so why the plan is empty
+   * is not known.
+   *
+   * This is the reason the other nine exist to keep out of themselves. The
+   * hourly profile and the daily forecast are both fetched behind a `catch`
+   * that degrades to "nothing" — sound for serving, and a lie for diagnosis:
+   * without this, a profile service having a bad minute reported
+   * `insufficient_history` and a nightly counter filed it as a data gap that
+   * would close on its own.
+   */
+  | "data_unavailable";
 
 /**
  * How long a park's wait-time feed may be silent before the endpoint calls it
@@ -89,6 +107,13 @@ export interface PlanDayAvailabilityInput {
   shapedRideCount: number;
   /** Whether the model produced any day level for this date. */
   hasDayLevels: boolean;
+  /**
+   * A past date, answered from the rollup. The two forecast questions do not
+   * arise, so the ladder must not reach them.
+   */
+  observed: boolean;
+  /** The hourly profile or the daily forecast could not be fetched at all. */
+  dependencyUnavailable: boolean;
 }
 
 /**
@@ -111,6 +136,13 @@ export function classifyPlanDayUnavailable(
   if (input.staleDays === null) return "never_measured";
   if (input.staleDays >= FEED_STALE_DAYS) return "feed_stale";
   if (input.plannableRideCount === 0) return "rides_cannot_open";
+  // Before any statement about our data: did we manage to ask? A dependency
+  // that failed open looks exactly like a dependency that had nothing to say.
+  if (input.dependencyUnavailable) return "data_unavailable";
+  // A past day never consulted a shape or a day level, so neither may be
+  // blamed for it. Everything above this line still applies: a feed that died
+  // in June is why the rollup is empty in July.
+  if (input.observed) return "no_observations";
   if (input.profiledRideCount === 0) return "insufficient_history";
   if (input.shapedRideCount === 0) return "no_hourly_shape";
   if (!input.hasDayLevels) return "no_forecast";
@@ -137,4 +169,18 @@ export function isStructuralPlanDayReason(
     reason === "park_closed" ||
     reason === "rides_cannot_open"
   );
+}
+
+/**
+ * Whether this reason says the question could not be asked, rather than
+ * answering it.
+ *
+ * Counted apart from both halves above: a run that could not reach the profile
+ * service has measured nothing, and filing it as either a healthy park or a
+ * data gap would move a number that nobody checked.
+ */
+export function isUnknownPlanDayReason(
+  reason: PlanDayUnavailableReason,
+): boolean {
+  return reason === "data_unavailable";
 }

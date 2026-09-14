@@ -36,6 +36,7 @@ import type {
 } from "../dto/plan-day.dto";
 import {
   classifyPlanDayUnavailable,
+  FEED_STALE_DAYS,
   type PlanDayAvailabilityInput,
 } from "../utils/plan-day-availability.util";
 import { buildLiveWaitTimes } from "../dto/live-wait-times.dto";
@@ -83,6 +84,14 @@ interface PlanDayEmptyCounts {
   profiledRideCount: number;
   shapedRideCount: number;
   hasDayLevels: boolean;
+  /** A past date, answered from the rollup rather than from a forecast. */
+  observed: boolean;
+  /**
+   * The hourly profile or the daily forecast could not be fetched. Both are
+   * behind a `catch` that degrades to "nothing", which is right for serving and
+   * wrong for diagnosis — see `data_unavailable`.
+   */
+  dependencyUnavailable: boolean;
 }
 
 @Injectable()
@@ -305,14 +314,17 @@ export class PlanDayService {
       if (base.rides.length === 0) {
         // A past day is answered from the rollup alone, so the two forecast
         // questions cannot arise: nothing was composed and no day level was
-        // needed. Reporting them as present keeps the classifier from naming a
-        // forecast gap for a date no forecast was ever asked about.
+        // asked for. `observed` stops the ladder before them rather than
+        // handing them values they never had — a reason invented to satisfy a
+        // classifier is the same failure as an empty list with no reason.
         base.ridesUnavailable = await this.explainEmptyPlan(park, status, {
           rideCount: attractions.length,
           plannableRideCount: attractions.length,
-          profiledRideCount: 1,
-          shapedRideCount: 1,
-          hasDayLevels: true,
+          profiledRideCount: 0,
+          shapedRideCount: 0,
+          hasDayLevels: false,
+          observed: true,
+          dependencyUnavailable: false,
         });
       }
       return base;
@@ -401,6 +413,41 @@ export class PlanDayService {
    * no wait times, and counting those rows would call it healthy.
    */
   private async feedStaleDays(park: Park): Promise<number | null> {
+    // Asked in two steps, because the answer only has three shapes — never,
+    // under the threshold, or over it — and the cheap step settles the common
+    // one. Bounded to the threshold, the aggregate reads one end of the
+    // hypertable: 35 ms and 16 k buffers against production, against 185 ms and
+    // 61 k for the same statement without the bound, which has no chunk to
+    // exclude and walks the whole retained history.
+    const recent = await this.lastQualifyingReading(park, FEED_STALE_DAYS);
+    if (recent !== null) {
+      return Math.max(
+        0,
+        Math.floor((Date.now() - recent.getTime()) / 86_400_000),
+      );
+    }
+    // Nothing inside the window. Only now is the exact distance worth the full
+    // scan — and only here does it matter, because this is where `feed_stale`
+    // and `never_measured` part company.
+    const ever = await this.lastQualifyingReading(park, null);
+    if (ever === null) return null;
+    return Math.max(0, Math.floor((Date.now() - ever.getTime()) / 86_400_000));
+  }
+
+  /**
+   * The park's last reading the rollup would accept, optionally bounded to the
+   * last `withinDays` days.
+   *
+   * The filter is the aggregator's own (`queue-percentile.processor.ts`), not a
+   * looser one: a park whose rides only ever report CLOSED has a busy feed and
+   * no wait times, and counting those rows would call it healthy.
+   */
+  private async lastQualifyingReading(
+    park: Park,
+    withinDays: number | null,
+  ): Promise<Date | null> {
+    const params: unknown[] = [park.id];
+    if (withinDays !== null) params.push(withinDays);
     const rows: Array<{ last: Date | null }> =
       await this.attractionRepository.manager
         .query(
@@ -409,10 +456,11 @@ export class PlanDayService {
            JOIN attractions a ON a.id = q."attractionId"
           WHERE a."parkId" = $1
             AND a.retired_at IS NULL
+            ${withinDays !== null ? `AND q.timestamp >= NOW() - ($2 || ' days')::interval` : ""}
             AND q.status = 'OPERATING'
             AND q."queueType" = 'STANDBY'
             AND q."waitTime" IS NOT NULL`,
-          [park.id],
+          params,
         )
         .catch((err: Error) => {
           this.logger.warn(
@@ -423,8 +471,7 @@ export class PlanDayService {
           return [{ last: new Date() }];
         });
     const last = rows[0]?.last ? new Date(rows[0].last) : null;
-    if (!last || Number.isNaN(last.getTime())) return null;
-    return Math.max(0, Math.floor((Date.now() - last.getTime()) / 86_400_000));
+    return last && !Number.isNaN(last.getTime()) ? last : null;
   }
 
   /**
@@ -647,6 +694,8 @@ export class PlanDayService {
           profiledRideCount: 0,
           shapedRideCount: 0,
           hasDayLevels: false,
+          observed: false,
+          dependencyUnavailable: false,
         },
       };
 
@@ -707,7 +756,7 @@ export class PlanDayService {
     // answer — never re-derived from `dayPeak`, because a headliner having a
     // quiet Tuesday is still a headliner, and a planner that pointed at the
     // day's tallest bars instead would recommend whatever happens to be busy.
-    const [dayLevels, downIds, headlinerIds, openings, measured, runningNow] =
+    const [levels, downIds, headlinerIds, openings, measured, runningNow] =
       await Promise.all([
         this.dayLevels(park, dateStr),
         this.downYesterday(park, dateStr),
@@ -728,6 +777,7 @@ export class PlanDayService {
         ),
       ]);
 
+    const dayLevels = levels.levels;
     for (const id of runningNow) blocked.delete(id);
     const plannable = attractions.filter((a) => !blocked.has(a.id));
     const byId = new Map(plannable.map((a) => [a.id, a]));
@@ -941,6 +991,10 @@ export class PlanDayService {
         profiledRideCount,
         shapedRideCount,
         hasDayLevels: dayLevels.size > 0,
+        observed: false,
+        // `profile === null` is only ever the catch in `loadProfile`; the
+        // service itself always returns a DTO, empty or not.
+        dependencyUnavailable: profile === null || levels.unavailable,
       },
     };
   }
@@ -1394,14 +1448,18 @@ export class PlanDayService {
   private async dayLevels(
     park: Park,
     dateStr: string,
-  ): Promise<Map<string, PredictionDto>> {
+  ): Promise<{ levels: Map<string, PredictionDto>; unavailable: boolean }> {
     const out = new Map<string, PredictionDto>();
+    let unavailable = false;
     const serving = await this.mlService
       .getServingDailyPredictions(park.id)
       .catch((err: Error) => {
         this.logger.warn(
           `Plan day: daily predictions unavailable for ${park.slug}: ${err.message}`,
         );
+        // Degrading to "no levels" keeps the response serving; remembering that
+        // it was a failure keeps the empty-plan reason from calling it one.
+        unavailable = true;
         return { predictions: [] as PredictionDto[] };
       });
 
@@ -1410,7 +1468,7 @@ export class PlanDayService {
       // Freshest wins where a park has more than one row for the day.
       out.set(p.attractionId, p);
     }
-    return out;
+    return { levels: out, unavailable };
   }
 
   /**

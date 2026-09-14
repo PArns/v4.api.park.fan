@@ -4,7 +4,10 @@ import { Repository } from "typeorm";
 import { Park } from "../entities/park.entity";
 import { PlanDayCoverage } from "../entities/plan-day-coverage.entity";
 import { PlanDayService } from "./plan-day.service";
-import { isStructuralPlanDayReason } from "../utils/plan-day-availability.util";
+import {
+  isStructuralPlanDayReason,
+  isUnknownPlanDayReason,
+} from "../utils/plan-day-availability.util";
 import { mapWithDbBudget } from "../../common/utils/db-job-budget";
 
 /** How far ahead the sweep asks. */
@@ -16,7 +19,15 @@ const BATCH_SIZE = 5;
 export interface PlanDayCoverageSummary {
   measuredOn: string;
   plannedDate: string;
-  /** Parks with a park-wide OPERATING entry for the planned date. */
+  /**
+   * Parks with a park-wide OPERATING entry for the planned date — the whole
+   * population, including the ones the sweep could not ask.
+   *
+   * Counted from the schedule rather than from the rows it managed to write. A
+   * denominator that shrinks with every failure makes a systematic outage read
+   * as an improving coverage rate, which is the one way this number could lie
+   * in the reassuring direction.
+   */
   parksOpen: number;
   /** Of those, the ones that produced at least one ride curve. */
   parksWithPlan: number;
@@ -24,6 +35,12 @@ export interface PlanDayCoverageSummary {
   parksWithoutPlan: number;
   /** Empty plans whose reason is a property of the park, not a data gap. */
   parksStructural: number;
+  /**
+   * Parks the sweep could not get an answer about at all — `buildPlanDay`
+   * threw, or a dependency behind it failed. Neither planned nor unplanned:
+   * unmeasured.
+   */
+  parksFailed: number;
   byReason: Record<string, number>;
 }
 
@@ -106,30 +123,16 @@ export class PlanDayCoverageService {
       measuredOn,
       plannedDate,
       rows,
+      parks.length,
     );
     this.logger.log(
       `Plan-day coverage ${measuredOn} (+${LEAD_DAYS}d): ` +
         `${summary.parksWithPlan}/${summary.parksOpen} parks planned, ` +
         `${summary.parksWithoutPlan} without a plan ` +
-        `(${summary.parksStructural} structural)`,
+        `(${summary.parksStructural} structural, ` +
+        `${summary.parksFailed} not measured)`,
     );
     return summary;
-  }
-
-  /** The latest stored sweep, for the admin read and for a later comparison. */
-  async latest(): Promise<PlanDayCoverageSummary | null> {
-    const newest = await this.coverageRepository.find({
-      order: { measuredOn: "DESC" },
-      take: 1,
-    });
-    const measuredOn = newest[0]?.measuredOn;
-    if (!measuredOn) return null;
-    const rows = await this.coverageRepository.find({ where: { measuredOn } });
-    return PlanDayCoverageService.summarise(
-      measuredOn,
-      rows[0]?.plannedDate ?? measuredOn,
-      rows,
-    );
   }
 
   /**
@@ -156,27 +159,32 @@ export class PlanDayCoverageService {
     measuredOn: string,
     plannedDate: string,
     rows: readonly PlanDayCoverage[],
+    parksOpen: number,
   ): PlanDayCoverageSummary {
     const byReason: Record<string, number> = {};
     let parksWithPlan = 0;
     let parksWithoutPlan = 0;
     let parksStructural = 0;
+    let measured = 0;
     for (const row of rows) {
+      measured++;
       if (!row.reason) {
         parksWithPlan++;
         continue;
       }
       byReason[row.reason] = (byReason[row.reason] ?? 0) + 1;
-      if (row.isStructural) parksStructural++;
+      if (isUnknownPlanDayReason(row.reason)) measured--;
+      else if (row.isStructural) parksStructural++;
       else parksWithoutPlan++;
     }
     return {
       measuredOn,
       plannedDate,
-      parksOpen: rows.length,
+      parksOpen,
       parksWithPlan,
       parksWithoutPlan,
       parksStructural,
+      parksFailed: parksOpen - measured,
       byReason,
     };
   }

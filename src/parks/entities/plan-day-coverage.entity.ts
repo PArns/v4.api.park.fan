@@ -1,10 +1,4 @@
-import {
-  Column,
-  CreateDateColumn,
-  Entity,
-  Index,
-  PrimaryColumn,
-} from "typeorm";
+import { Column, CreateDateColumn, Entity, PrimaryColumn } from "typeorm";
 import type { PlanDayUnavailableReason } from "../utils/plan-day-availability.util";
 
 /**
@@ -28,9 +22,15 @@ import type { PlanDayUnavailableReason } from "../utils/plan-day-availability.ut
  * rows a day.
  */
 @Entity("plan_day_coverage")
-@Index("plan_day_coverage_measured_idx", ["measuredOn"])
 export class PlanDayCoverage {
-  /** The date the sweep ran, in UTC — the "with a date" half of the counter. */
+  /**
+   * The date the sweep ran, in UTC — the "with a date" half of the counter.
+   *
+   * Leading column of the primary key, which is why no separate index sits on
+   * it: both reads this table has (`WHERE measured_on = …` and
+   * `ORDER BY measured_on DESC`) use the PK, and `synchronize` does not drop an
+   * index once it has made one.
+   */
   @PrimaryColumn({ type: "date", name: "measured_on" })
   measuredOn: string;
 

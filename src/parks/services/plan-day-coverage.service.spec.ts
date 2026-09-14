@@ -129,8 +129,39 @@ describe("PlanDayCoverageService", () => {
     // "We could not ask" and "there was no answer" are the two things this
     // whole endpoint exists to keep apart; a failed park must not be recorded
     // as a park without a plan.
-    expect(summary.parksOpen).toBe(3);
+    // The denominator stays the population the schedule named. A denominator
+    // that shrinks with every failure turns a systematic outage into an
+    // improving coverage rate.
+    expect(summary.parksOpen).toBe(4);
+    expect(summary.parksFailed).toBe(1);
     expect(summary.byReason.insufficient_history).toBeUndefined();
     expect(upserted.map((row) => row.parkId)).not.toContain("p-4");
+  });
+
+  it("counts a park whose dependency failed as unmeasured, not as a gap", async () => {
+    plans.set("ocean-park", {
+      ridesUnavailable: { reason: "data_unavailable" },
+    });
+    service = await build();
+
+    const summary = await service.sweep(new Date("2026-09-14T09:00:00.000Z"));
+
+    // The row is written — the reason is worth keeping — but it moves neither
+    // the closable count nor the structural one.
+    expect(upserted.map((row) => row.parkId)).toContain("p-4");
+    expect(summary.byReason.data_unavailable).toBe(1);
+    expect(summary.parksFailed).toBe(1);
+    expect(summary.parksWithoutPlan).toBe(1);
+    expect(summary.parksStructural).toBe(1);
+
+    // Counter-check: the same park with a real data gap DOES move the closable
+    // count, so the special case is what decided it above.
+    plans.set("ocean-park", {
+      ridesUnavailable: { reason: "insufficient_history" },
+    });
+    service = await build();
+    const gap = await service.sweep(new Date("2026-09-14T09:00:00.000Z"));
+    expect(gap.parksFailed).toBe(0);
+    expect(gap.parksWithoutPlan).toBe(2);
   });
 });

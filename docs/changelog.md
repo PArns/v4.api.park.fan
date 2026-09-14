@@ -19,24 +19,33 @@ invented number; rendered as an error it tells a Hansa-Park visitor something is
 broken when nothing is.
 
 Every empty ride list now carries `ridesUnavailable.reason`, and a non-empty one
-never does. Ten reasons, split three ways: properties of the **day**
+never does. Twelve reasons, split four ways: properties of the **day**
 (`park_closed`, `hours_unknown`), properties of the **park**
-(`no_wait_time_source`, `no_rides_on_file`, `rides_cannot_open`) and gaps on
-**our** side (`never_measured`, `feed_stale`, `insufficient_history`,
-`no_hourly_shape`, `no_forecast`). Only `feed_stale` is a fault, and it carries
-`staleDays`.
+(`no_wait_time_source`, `no_rides_on_file`, `rides_cannot_open`), gaps on **our**
+side (`never_measured`, `feed_stale`, `insufficient_history`, `no_hourly_shape`,
+`no_forecast`, `no_observations`) and — separate from all three —
+`data_unavailable`, which says the question could not be asked. Only
+`feed_stale` is a fault, and it carries `staleDays`.
 
-Two decisions inside it:
+Three decisions inside it:
 
 - **`rides_cannot_open` is tested after the feed checks.** `season_out_since` is
   written by a detector that reads the feed, so on a park silent since June "out
   of season" is our own bookkeeping rather than the operator's word.
-- **The one query this costs runs only when the list is empty.** The 54 parks
-  that answered pay nothing. It reads `queue_data`, not
-  `queue_data_aggregates`: the rollup drops an hour that saw fewer than three
-  readings, so Peppa Pig and Aquatica Orlando have no aggregate row while their
-  feeds deliver thousands of readings a month — asking the rollup would report a
-  live park as never measured.
+- **`data_unavailable` exists because `loadProfile` and `dayLevels` both
+  degrade to "nothing" on failure.** That is right for serving and a lie for
+  diagnosis: without it, a profile service having a bad minute reported
+  `insufficient_history`, and the nightly counter filed a broken dependency as a
+  gap that would close on its own.
+- **The one query this costs runs only when the list is empty, and in two
+  steps.** The 54 parks that answered pay nothing; the common empty case pays a
+  30-day-bounded aggregate (35 ms, 16 k buffers at Knott's Berry Farm against
+  production) and only a park that turns out to be silent pays the unbounded one
+  (185 ms, 62 k) — which is where the exact distance is wanted anyway. It reads
+  `queue_data`, not `queue_data_aggregates`: the rollup drops an hour that saw
+  fewer than three readings, so Peppa Pig and Aquatica Orlando have no aggregate
+  row while their feeds deliver thousands of readings a month — asking the
+  rollup would report a live park as never measured.
 
 And the number is now watched rather than stumbled over: the `plan-day-coverage`
 job (`stats` queue, 09:00 UTC) sweeps the parks open 30 days out and writes one

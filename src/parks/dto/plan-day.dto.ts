@@ -421,18 +421,35 @@ export class PlanDayAccuracyDto {
   sampleSize?: number;
 }
 
-export const PLAN_DAY_UNAVAILABLE_REASONS = [
-  "park_closed",
-  "hours_unknown",
-  "no_rides_on_file",
-  "no_wait_time_source",
-  "never_measured",
-  "feed_stale",
-  "rides_cannot_open",
-  "insufficient_history",
-  "no_hourly_shape",
-  "no_forecast",
-] as const satisfies readonly PlanDayUnavailableReason[];
+/**
+ * The published list, derived from a map keyed by the union rather than written
+ * out beside it.
+ *
+ * `as const satisfies readonly PlanDayUnavailableReason[]` only checks that the
+ * listed values are valid, not that all of them are listed — so a new member of
+ * the union would drop out of the OpenAPI enum without a word. Keying a
+ * `Record` by the union makes the compiler demand every one. That drift is
+ * exactly how `unknown` stayed out of the published `AttractionStatus` contract
+ * for months (`claude.md` §4).
+ */
+const UNAVAILABLE_REASON_SET: Record<PlanDayUnavailableReason, true> = {
+  park_closed: true,
+  hours_unknown: true,
+  no_rides_on_file: true,
+  no_wait_time_source: true,
+  never_measured: true,
+  feed_stale: true,
+  rides_cannot_open: true,
+  data_unavailable: true,
+  no_observations: true,
+  insufficient_history: true,
+  no_hourly_shape: true,
+  no_forecast: true,
+};
+
+export const PLAN_DAY_UNAVAILABLE_REASONS = Object.keys(
+  UNAVAILABLE_REASON_SET,
+) as PlanDayUnavailableReason[];
 
 export class PlanDayUnavailableDto {
   @ApiProperty({
@@ -447,6 +464,9 @@ export class PlanDayUnavailableDto {
       "as a quiet park prints an invented number for a park nobody measures; " +
       "one that renders all of them as an error tells a visitor of Hansa-Park " +
       "something is broken when nothing is.\n\n" +
+      "`data_unavailable` is the odd one: a service behind this endpoint did " +
+      "not answer, so why the list is empty is not known. It is not a data gap " +
+      "and must not be counted as one.\n\n" +
       "`no_wait_time_source` is an ANSWER — that park publishes wait times " +
       "nowhere readable, so no plan is coming, today or ever. `park_closed`, " +
       "`rides_cannot_open` and `no_rides_on_file` are answers about the park. " +
