@@ -5,6 +5,16 @@ import { TripsService } from "./trips.service";
 import { TripWriteRateLimitService } from "./trip-write-rate-limit.service";
 import { throughFilter } from "../../test/helpers/through-filter";
 
+/**
+ * The delete half of the credential-is-the-id trade.
+ *
+ * Everything worth pinning here is a thing a caller could otherwise learn or
+ * spend that they should not: which ids are shaped like real ones (so a
+ * malformed id answers exactly as a missing one, and never reaches the
+ * database), how many attempts they get (the update bucket, counted before any
+ * work, so a miss costs the same as a hit), and whether a 404 means "gone" or
+ * "never was" (it means neither — see `TripsService.find`).
+ */
 describe("TripsController · DELETE", () => {
   const ID = "n7Qk2Fd3Xb9pLmZa";
 

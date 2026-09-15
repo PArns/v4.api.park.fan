@@ -93,11 +93,15 @@ enumeration ever gets.
 **A 429 says how long to wait**, in two places that always agree: the body's
 `retryAfterSeconds` (exact, as the limiter counted it) and a `Retry-After`
 header in whole seconds, rounded up. The push-follow routes below answer the
-same pair. The **global** throttler is the one exception and is the reason the
-header exists here at all — it has always set `Retry-After`, and it throws a
-plain string body, so there is no `retryAfterSeconds` to read on a 429 it
-raised. Read the header first and the field as the exact figure; a client that
-only reads the field will find nothing on a throttler 429.
+same pair.
+
+**The body is the copy a browser can read.** `Retry-After` is not a
+CORS-safelisted response header and nothing exposes it, so a page calling the
+API directly cross-origin gets `null` for it; read `retryAfterSeconds`, which
+is also the exact figure rather than a rounded one. The header is for
+non-browser clients — and for the **global** throttler, which is the reason it
+exists here at all: it has always set `Retry-After`, and it throws a plain
+string body, so a 429 it raised carries no `retryAfterSeconds` to read.
 
 Until 2026-09-15 these routes had neither: the figure was in the thrown
 exception and `HttpExceptionFilter` rebuilt every error body from `message` and

@@ -22,6 +22,7 @@ import { TripWriteRateLimitService } from "./trip-write-rate-limit.service";
 import { checkTripPayload } from "./trip-payload.util";
 import { TripResponseDto, TripWriteDto } from "./dto/trip.dto";
 import { Trip } from "./entities/trip.entity";
+import { RATE_LIMITED_RESPONSE } from "../common/filters/rate-limited-response";
 
 /**
  * Stored plans.
@@ -63,13 +64,7 @@ export class TripsController {
     status: 400,
     description: "The payload is not a plan, or is too large.",
   })
-  @ApiResponse({
-    status: 429,
-    description:
-      "Too many trips created from this address. The body carries " +
-      "`retryAfterSeconds` and the response a `Retry-After` header with the " +
-      "same figure in whole seconds.",
-  })
+  @ApiResponse(RATE_LIMITED_RESPONSE)
   async create(
     @Body() body: TripWriteDto,
     @Req() request: Request,
@@ -113,13 +108,7 @@ export class TripsController {
     description: "The payload is not a plan, or is too large.",
   })
   @ApiResponse({ status: 404, description: "No such trip." })
-  @ApiResponse({
-    status: 429,
-    description:
-      "Too many writes from this address. The body carries " +
-      "`retryAfterSeconds` and the response a `Retry-After` header with the " +
-      "same figure in whole seconds.",
-  })
+  @ApiResponse(RATE_LIMITED_RESPONSE)
   async update(
     @Param("id") id: string,
     @Body() body: TripWriteDto,
@@ -156,13 +145,7 @@ export class TripsController {
       "No such trip — an id that was never issued, one already deleted, one " +
       "that has expired, or one that cannot be a trip id at all.",
   })
-  @ApiResponse({
-    status: 429,
-    description:
-      "Too many writes from this address. The body carries " +
-      "`retryAfterSeconds` and the response a `Retry-After` header with the " +
-      "same figure in whole seconds.",
-  })
+  @ApiResponse(RATE_LIMITED_RESPONSE)
   async remove(
     @Param("id") id: string,
     @Req() request: Request,

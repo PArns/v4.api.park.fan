@@ -53,10 +53,13 @@ Nest's `ThrottlerGuard`, which already sets it on the 429s the global limiter
 raises. Without it the API answered two kinds of 429 under two contracts,
 decided by which limiter fired first.
 
-The tests moved with it. `trips.controller.spec.ts` and
+The tests moved with it, and the two sides had failed differently.
 `push-follow-access.guard.spec.ts` asserted the figure on the **thrown
-exception**, which stayed green through the whole bug; both now run the real
-filter and assert the body and the header a caller receives.
+exception** and stayed green through the whole bug. `trips.controller.spec.ts`
+had the case **retracted**, with a comment saying why — pinning it would have
+promised a client something it could not read. Both now run the real filter and
+assert the body and header a caller receives, which is where an assertion about
+what a caller learns belongs.
 
 ### Added — an empty `/plan/day` says why, and the number is counted
 
