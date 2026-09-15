@@ -74,10 +74,11 @@ export interface MissingWzId {
  * (0.0000 km), the Wet'n'Wild pair (0.0000 km), and
  * `Hurricane Harbor Chicago` against `Six Flags Hurricane Harbor, Rockford`
  * at 0.0424 km — two real parks 110 km apart, of which the Rockford row
- * carries a Gurnee geocode. That last pair also has disjoint sources, so only
- * a name threshold stands between it and an automatic merge, and only by
- * 0.08. At 0.01 km it is out on geometry instead, with the nearest
- * non-duplicate four times the radius away and nothing at all in between.
+ * carries a Gurnee geocode. That last pair also has disjoint sources, so at
+ * 0.05 km the name floor below would be the only thing standing between it
+ * and an automatic merge, by 0.6122 against 0.6 — twelve thousandths. At
+ * 0.01 km it is out on geometry instead, with the nearest non-duplicate four
+ * times the radius away and nothing at all in between.
  */
 const SHARED_POINT_KM = 0.01;
 
@@ -87,25 +88,61 @@ const SHARED_POINT_KM = 0.01;
  *
  * It sits under the pair it must catch (0.6923) and far over the only other
  * pairs sharing a point, PortAventura World's own three (0.1600–0.2000).
- * It cannot do more than that: the dangerous shape is a water park beside its
- * theme park, and those score AT or ABOVE the target — Legoland Windsor
- * against its water park 0.7429, Alton Towers against its waterpark 0.6923.
- * Keeping them out is `SHARED_POINT_KM`'s job; no two such siblings in the
- * catalogue are closer than 0.0424 km.
+ * It cannot do more than that, and two measured figures say where its limit
+ * is. The dangerous shape is a second venue at one address, and those score AT
+ * or ABOVE the target — Legoland Windsor against its water park 0.7429, Alton
+ * Towers against its waterpark 0.6923. So does another park of the same brand:
+ * `Wet 'n' Wild Las Vegas` against `Wet 'n' Wild Gold Coast` is 0.6061, over
+ * this floor. Keeping all of them out is `SHARED_POINT_KM`'s job, not this
+ * constant's; no two such rows in the catalogue are closer than 0.0424 km.
  */
 const SHARED_POINT_NAME_SIMILARITY = 0.6;
 
-/** How many of the three upstream sources have given this row an ID. */
-function countSourceIds(park: {
+/** Whether any of the three upstream sources has given this row an ID. */
+function namesASource(park: {
   wikiEntityId: string | null;
   queueTimesEntityId: string | null;
   wartezeitenEntityId: string | null;
-}): number {
-  return (
-    (park.wikiEntityId ? 1 : 0) +
-    (park.queueTimesEntityId ? 1 : 0) +
-    (park.wartezeitenEntityId ? 1 : 0)
+}): boolean {
+  return !!(
+    park.wikiEntityId ||
+    park.queueTimesEntityId ||
+    park.wartezeitenEntityId
   );
+}
+
+/**
+ * A position, or null when the row does not have one.
+ *
+ * Three things the truthiness check this replaces got wrong, and the first is
+ * the one that matters here. **`0, 0` is Null Island** — a row whose geocoding
+ * failed, not a park in the Gulf of Guinea; `source-id-inheritance.util.ts`
+ * refuses it for the same reason, and `queue-times-data-source.ts` writes the
+ * API's coordinates through `parseFloat` without filtering, so the value does
+ * reach the table. Two such rows are 0.0000 km apart and would satisfy
+ * `SHARED_POINT_KM` on no location information at all: before this branch
+ * existed they still needed 0.85 on names to be called duplicates, and now
+ * they would need 0.6.
+ *
+ * The other two: `latitude` and `longitude` are `decimal`, which Postgres
+ * hands back as strings, so they are coerced here once rather than left to
+ * coerce themselves inside the haversine; and a park exactly on the prime
+ * meridian read as "no coordinates" under `p.latitude && p.longitude`, which
+ * silently excluded it from `geoProximity`. No park in the catalogue sits on
+ * the meridian or the equator today (nearest: 0.319° and 1.254°), so fixing
+ * that changes nothing now and stops being a trap later.
+ */
+function usableCoordinate(park: {
+  latitude: number | null;
+  longitude: number | null;
+}): { latitude: number; longitude: number } | null {
+  if (park.latitude === null || park.latitude === undefined) return null;
+  if (park.longitude === null || park.longitude === undefined) return null;
+  const latitude = Number(park.latitude);
+  const longitude = Number(park.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (latitude === 0 && longitude === 0) return null;
+  return { latitude, longitude };
 }
 
 export interface DuplicatePair {
@@ -393,14 +430,12 @@ export class ParkValidatorService {
           sharedWiki || sharedQueueTimes || sharedWartezeiten;
 
         const sameCity = p1.city && p2.city && p1.city === p2.city;
-        let distanceKm: number | null = null;
-        if (p1.latitude && p1.longitude && p2.latitude && p2.longitude) {
-          distanceKm = calculateHaversineDistance(
-            { latitude: p1.latitude, longitude: p1.longitude },
-            { latitude: p2.latitude, longitude: p2.longitude },
-            "km",
-          );
-        }
+        const where1 = usableCoordinate(p1);
+        const where2 = usableCoordinate(p2);
+        const distanceKm =
+          where1 && where2
+            ? calculateHaversineDistance(where1, where2, "km")
+            : null;
         const geoProximity = distanceKm !== null && distanceKm < 1.0;
 
         // One upstream source holding an ID for BOTH rows is that source
@@ -413,11 +448,9 @@ export class ParkValidatorService {
         // The test is structural — it reads what each row IS, not when it was
         // last heard from — and it needs a source on each side, or a row with
         // no IDs at all would be "from a different source" than everything.
-        const p1Sources = countSourceIds(p1);
-        const p2Sources = countSourceIds(p2);
         const sourcesDisjoint =
-          p1Sources > 0 &&
-          p2Sources > 0 &&
+          namesASource(p1) &&
+          namesASource(p2) &&
           !(p1.wikiEntityId && p2.wikiEntityId) &&
           !(p1.queueTimesEntityId && p2.queueTimesEntityId) &&
           !(p1.wartezeitenEntityId && p2.wartezeitenEntityId);

@@ -293,6 +293,57 @@ describe("ParkValidatorService.findDuplicates", () => {
     expect(await service.findDuplicates()).toEqual([]);
   });
 
+  it("pins the name floor near 0.6, not merely somewhere under 0.6923", async () => {
+    // Wet'n'Wild Sydney is a different park of the same brand and scores
+    // 0.5625 against the Gold Coast row — the closest realistic miss. Without
+    // a case in this range the suite stays green with the floor dropped to
+    // 0.25, and the constant's whole claim is that it sits just under the
+    // pair it catches.
+    parkRepository.find.mockResolvedValue([
+      park({ ...wetnwildWiki, name: "Wet 'n' Wild Sydney" }),
+      wetnwildQueueTimes,
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("does not treat two failed geocodes as one point", async () => {
+    // 0,0 is Null Island: rows whose geocoding failed, not neighbours. They
+    // are 0.0000 km apart and would otherwise clear SHARED_POINT_KM on no
+    // location information at all.
+    parkRepository.find.mockResolvedValue([
+      park({ ...wetnwildWiki, latitude: 0, longitude: 0 }),
+      park({ ...wetnwildQueueTimes, latitude: 0, longitude: 0 }),
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("reads the coordinates Postgres actually returns for a decimal column", async () => {
+    // TypeORM hands `decimal` back as a string. Everything above feeds
+    // numbers, so without this the branch is only ever tested in a shape
+    // production does not use.
+    parkRepository.find.mockResolvedValue([
+      park({
+        ...wetnwildWiki,
+        latitude: "-27.9149499" as unknown as number,
+        longitude: "153.3167716" as unknown as number,
+      }),
+      park({
+        ...wetnwildQueueTimes,
+        latitude: "-27.9149499" as unknown as number,
+        longitude: "153.3167716" as unknown as number,
+      }),
+    ]);
+
+    const duplicates = await service.findDuplicates();
+
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].reason).toContain(
+      "same coordinates, one park per source",
+    );
+  });
+
   it("does not flag PortAventura World's three parks on one resort geocode", async () => {
     parkRepository.find.mockResolvedValue([
       portAventuraPark,

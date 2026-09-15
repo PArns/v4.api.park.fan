@@ -682,13 +682,13 @@ Queensland. They carry **the same latitude and longitude to seven decimals**
 attractions each — the same 13 slides, reported by the wiki under one row and by
 Queue-Times under the other.
 
-`GET /v1/admin/duplicate-parks` returns `{"total":0,"pairs":[]}`. Every branch of
-`ParkValidatorService.findDuplicates` requires a name similarity of at least
+`GET /v1/admin/duplicate-parks` returned `{"total":0,"pairs":[]}`. Every branch
+of `ParkValidatorService.findDuplicates` required a name similarity of at least
 0.85, and this pair scores **0.6923**: `calculateStringSimilarity` strips
 whitespace, so `Wet'n'Wild` against `Wet 'n' Wild` would be a perfect 1.0, and
 it is the nine characters of `GoldCoast` — eight bigrams the other name cannot
-match — that drop it below every threshold.
-Geography never gets a vote of its own — `geoProximity` only ever appears in a
+match — that dropped it below every threshold.
+Geography never got a vote of its own: `geoProximity` only ever appeared in a
 conjunction with a name score.
 
 The lesson is the mirror image of §5.4. There, two identical names had to be
@@ -715,9 +715,14 @@ What that measurement says, and what it constrains:
 
 - **The radius is 0.01 km, not the 0.05 the ticket proposed.** At 0.05 the
   Rockford row comes with it — a real park 110 km away whose geocode says
-  Gurnee, and whose sources are disjoint too, so only the name would have stood
-  between it and an automatic merge, by 0.08. Between 0.0000 and 0.0424 the
-  catalogue is empty.
+  Gurnee, and whose sources are disjoint too, so the name floor would have been
+  the only thing standing between it and an automatic merge, by 0.6122 against
+  0.6000. Between 0.0000 and 0.0424 the catalogue is empty.
+- **`0, 0` is not a point.** Null Island is a failed geocode, and two rows that
+  both failed are 0.0000 km apart on no location information at all;
+  `usableCoordinate` refuses it, as `source-id-inheritance.util.ts` already
+  did. The same helper coerces the `decimal` columns (Postgres returns them as
+  strings) and stops treating a park on the prime meridian as unlocated.
 - **Disjoint sources is the PortAventura guard**, and it is the §5.4 rule one
   level up: Queue-Times carries 19 for PortAventura Park and 277 for Ferrari
   Land, which is that source saying it knows two parks on this geocode. The
@@ -726,10 +731,11 @@ What that measurement says, and what it constrains:
 - **The name floor is 0.6 and cannot carry more than it does.** A water park
   beside its theme park scores at or above the pair we must catch — Legoland
   Windsor against its water park 0.7429, Alton Towers against its waterpark
-  0.6923, Heide Park against its resort 0.7273 — so no threshold separates that
-  class. The radius does: no two siblings in the catalogue sit closer than
-  0.0424 km, and the only pairs on one point are one resort's three parks, at
-  ≤ 0.2000 on names.
+  0.6923, Heide Park against its resort 0.7273 — and so does another park of
+  the same brand, `Wet 'n' Wild Las Vegas` against the Gold Coast row at
+  0.6061. No threshold separates that class. The radius does: no two such rows
+  in the catalogue sit closer than 0.0424 km, and the only pairs on one point
+  are one resort's three parks, at ≤ 0.2000 on names.
 
 Detection only. Merging the two rows stays a separate, irreversible operation.
 

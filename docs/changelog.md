@@ -24,9 +24,15 @@ review gate, so a false positive deletes a real park:
 - **`SHARED_POINT_KM` = 0.01**, not the 0.05 first proposed. Under 0.05 km the
   catalogue also holds `Hurricane Harbor Chicago` against `Six Flags Hurricane
   Harbor, Rockford` at 0.0424 km — two real parks 110 km apart, of which the
-  Rockford row carries a Gurnee geocode. Its sources are disjoint too, so only
-  the name stood between it and a merge, by 0.08. Nothing lies between 0.0000
-  and 0.0424.
+  Rockford row carries a Gurnee geocode. Its sources are disjoint too, so the
+  name floor would have been the only thing standing between it and a merge, by
+  0.6122 against 0.6000. Nothing lies between 0.0000 and 0.0424.
+- **`0, 0` is not a point.** Two rows whose geocoding failed are 0.0000 km
+  apart on no location information at all. `usableCoordinate` refuses Null
+  Island the way `source-id-inheritance.util.ts` already did, coerces the
+  `decimal` columns Postgres returns as strings, and stops reading a park on
+  the prime meridian as unlocated — no catalogue park sits on the meridian or
+  the equator today, so that last part changes nothing now.
 - **Sources disjoint.** One upstream source holding an ID for *both* rows is
   that source saying it knows two parks here — Queue-Times carries 19 for
   PortAventura Park and 277 for Ferrari Land on one resort geocode. This is
@@ -35,7 +41,8 @@ review gate, so a false positive deletes a real park:
 - **`SHARED_POINT_NAME_SIMILARITY` = 0.6**, under the pair it must catch and far
   over the only other pairs sharing a point (0.1600–0.2000). It cannot do more:
   a water park beside its theme park scores at or above the target (Legoland
-  Windsor 0.7429, Alton Towers 0.6923), so keeping those out is the radius's
+  Windsor 0.7429, Alton Towers 0.6923), and so does another park of the same
+  brand (`Wet 'n' Wild Las Vegas` 0.6061), so keeping those out is the radius's
   job.
 
 The existing four branches and their 0.85 thresholds are untouched, and this is
