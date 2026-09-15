@@ -55,6 +55,7 @@ rises where the historical CTEs run: `early_end` joins `win` per reading
 (loops=3644), and the two blind parks with a ride in a closure went from
 19.1/20.3 ms to 28.0/25.3 and from 14.1/14.4 to 19.0/17.1. Skipping that join in
 a park whose windows never wrap is PAR-251.
+
 ### Fixed — an entity that changes its `entityType` upstream no longer leaves a dead attraction behind
 
 ThemeParks.wiki reclassifies entities without changing their id. On 2026-04-25
