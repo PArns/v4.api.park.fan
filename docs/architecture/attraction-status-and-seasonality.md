@@ -673,7 +673,7 @@ called `PLAYGROUND`. Their names agree perfectly, so name matching offered them
 as *safe* auto-merges. Two ids from the **same** source are that source saying
 these are two things; auto-merge now requires a pair to span two sources.
 
-### 5.5 Two rows for one water park, and the detector cannot see them
+### 5.5 Two rows for one water park, invisible to every name-led branch
 
 `Wet'n'Wild` (wiki `ee018a72-…`, created 2026-04-08) and `Wet 'n' Wild Gold
 Coast` (`qt-park-146`, created 2026-06-22) are the same park in Oxenford,

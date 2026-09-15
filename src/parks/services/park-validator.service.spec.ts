@@ -339,8 +339,10 @@ describe("ParkValidatorService.findDuplicates", () => {
     parkRepository.find.mockResolvedValue([
       park({
         ...wetnwildWiki,
-        latitude: null as never,
-        longitude: null as never,
+        // Nullable columns, typed non-null on the entity: this is what
+        // Postgres hands back for a park that was never geocoded.
+        latitude: null as unknown as number,
+        longitude: null as unknown as number,
       }),
       wetnwildQueueTimes,
     ]);
