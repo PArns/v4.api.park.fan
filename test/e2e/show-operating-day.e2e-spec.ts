@@ -226,6 +226,69 @@ describe("Showtimes follow the operating day (E2E)", () => {
       ).toEqual(["02:00"]);
     });
 
+    it("lists a wall-clock time once when a spring-forward night repeats it", async () => {
+      // The one shape where the same `HH:mm` can appear twice inside ONE
+      // operating day. Two instants sharing a wall clock are normally 24 hours
+      // apart, and `normalizedClosingSql` caps a day at 24 — but on the night
+      // the clock springs forward they are 23 apart, so both fit.
+      //
+      // Toronto, 2026-03-08: 02:00 EST becomes 03:00 EDT. A day opening
+      // 2026-03-07 21:00 EST and closing 2026-03-08 22:00 EDT spans exactly
+      // 24 hours and contains 21:30 on both dates. `per_time`'s `bool_and`
+      // folds them to one entry on the earlier side; a DISTINCT over
+      // (hhmm, after_midnight) would list "21:30" twice, out of order.
+      const parkRepo = dataSource.getRepository(Park);
+      const showRepo = dataSource.getRepository(Show);
+      const liveRepo = dataSource.getRepository(ShowLiveData);
+      const scheduleRepo = dataSource.getRepository(ScheduleEntry);
+
+      const park = await parkRepo.save(
+        createTestPark({
+          externalId: "test-park-dst",
+          name: "Test DST Park",
+          slug: "test-dst-park",
+          timezone: "America/Toronto",
+        }),
+      );
+      const show = await showRepo.save(
+        showRepo.create({
+          externalId: "test-show-dst",
+          name: "Test DST Show",
+          slug: "test-dst-show",
+          parkId: park.id,
+        }),
+      );
+
+      await scheduleRepo.save(
+        scheduleRepo.create({
+          parkId: park.id,
+          date: "2026-03-07" as unknown as Date,
+          scheduleType: ScheduleType.OPERATING,
+          openingTime: new Date("2026-03-07T21:00:00-05:00"),
+          closingTime: new Date("2026-03-08T22:00:00-04:00"),
+        }),
+      );
+
+      await liveRepo.save(
+        liveRepo.create({
+          showId: show.id,
+          status: LiveStatus.OPERATING,
+          timestamp: new Date("2026-03-07T21:15:00-05:00"),
+          showtimes: [
+            { startTime: "2026-03-07T21:30:00-05:00", type: "Operating" },
+            { startTime: "2026-03-08T21:30:00-04:00", type: "Operating" },
+          ],
+        }),
+      );
+
+      const times = await shows.getShowtimesOnDate(
+        park.id,
+        "America/Toronto",
+        "2026-03-07",
+      );
+      expect(times.get(show.id)).toEqual(["21:30"]);
+    });
+
     it("counts a performance that starts exactly on the closing instant", async () => {
       // 01:00 under a 01:00 close, and the bound is inclusive on purpose: every
       // one of the 20 showtimes this rule moves in production sits exactly on
@@ -363,7 +426,7 @@ describe("Showtimes follow the operating day (E2E)", () => {
     async function seedRelative(
       daysAgo: number,
       opts: {
-        /** Unique per case: nothing clears the tables between tests. */
+        /** Distinguishes each case's fixture when reading a failure. */
         tag?: string;
         /** A plain 10:00 → 22:00 day instead of one that runs to 01:00. */
         wrap?: boolean;
@@ -515,7 +578,8 @@ describe("Showtimes follow the operating day (E2E)", () => {
       // What this does NOT pin is the `bool_and` in `per_time`: swapping that
       // GROUP BY for a DISTINCT over (hhmm, after_midnight) keeps this case
       // green, because both snapshots agree on which side of midnight a time
-      // sits. The comment there explains why no fixture can tell them apart.
+      // sits. The case that tells those two apart is the spring-forward one
+      // above, against the day reader's copy of the same fold.
       const { showId } = await seedRelative(5, {
         tag: "-twice",
         twice: true,

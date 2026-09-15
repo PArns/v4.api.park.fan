@@ -883,16 +883,20 @@ export class ShowsService {
                   -- A wrap day, in the same terms as §5: the window ends on a
                   -- later park-local date than it starts on.
                   --
-                  -- This test and the coverage test below OVERLAP, and each
-                  -- one alone already rejects an ordinary day — which means
-                  -- removing either leaves the suite green and the statement
-                  -- correct. Measured by mutation on 2026-09-15: dropping the
-                  -- wrap test alone, or the \`<= closes\` alone, fails nothing
-                  -- in \`show-operating-day.e2e-spec.ts\`; dropping both fails
-                  -- four cases. So do not read a green run as licence to
-                  -- delete one of them. They are kept apart because they say
+                  -- This test and the coverage test below overlap on an
+                  -- ORDINARY day: either one alone already rejects it, so a
+                  -- mutation that drops only this one leaves
+                  -- \`show-operating-day.e2e-spec.ts\` green (measured
+                  -- 2026-09-15, 13/13). That is not licence to delete it — it
+                  -- is the reason a green run says nothing here.
+                  --
+                  -- The two are NOT interchangeable. Dropping the coverage
+                  -- test instead fails two cases and breaks the rule outright:
+                  -- every afternoon time of the following day would move onto
+                  -- the previous date. Dropping both fails four. They say
                   -- different things — this one that the day reaches into the
-                  -- night at all, the one below that it reaches this far.
+                  -- night at all, the one below how far it reaches — and only
+                  -- the second one carries the rule on a wrap day.
                   AND (${closes} AT TIME ZONE ${tz})::date
                     > (se."openingTime" AT TIME ZONE ${tz})::date
                   AND ${startTs} >  se."openingTime"
@@ -986,15 +990,18 @@ export class ShowsService {
          -- \`bool_and\` resolves that to the earlier slot, which is where a
          -- reader expects an ambiguous time to sit.
          --
-         -- That case is a guard rather than an observed one, and the
-         -- difference is worth stating: two instants sharing a wall-clock
-         -- time are 24 hours apart, while \`normalizedClosingSql\` caps an
-         -- operating day at 24 hours and the coverage test is exclusive at
-         -- the opening — so the pair cannot both fall in one day. Swapping
-         -- this GROUP BY for a DISTINCT over the tuple fails nothing in the
-         -- e2e suite (measured by mutation, 2026-09-15); removing the
-         -- deduplication altogether does, because every poll republishes the
-         -- day's whole programme.
+         -- The case is reachable exactly once a year, and only there. Two
+         -- instants sharing a wall clock are normally 24 hours apart while
+         -- \`normalizedClosingSql\` caps an operating day at 24 — but on a
+         -- spring-forward night they are 23 apart, so both fit. Toronto,
+         -- 2026-03-08: a day opening 03-07 21:00 EST and closing 03-08 22:00
+         -- EDT spans 24 hours and holds 21:30 on both dates.
+         -- \`show-operating-day.e2e-spec.ts\` pins it against the day reader's
+         -- copy of this fold; widening that key there returns
+         -- \`["21:30", "21:30"]\` (measured by mutation, 2026-09-15).
+         --
+         -- Removing the deduplication altogether fails a second case, because
+         -- every poll republishes the day's whole programme.
          SELECT show_id, weekday, day, hhmm,
                 bool_and(after_midnight) AS after_midnight
            FROM keyed
