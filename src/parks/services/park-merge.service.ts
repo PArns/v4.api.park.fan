@@ -461,12 +461,13 @@ export class ParkMergeService {
    * then reported success — on the one merge path a person triggers and the
    * repair service runs unattended.
    *
-   * The same step, not yet the same coverage: `ride_alerts` is the attraction
-   * twin of `show_follows`, with the same CASCADE and the same "a stranger
-   * who would simply never hear from us again", and it is still off
-   * `ATTRACTION_DEPENDENCIES` (PAR-149). A colliding show keeps its follower
-   * here while a colliding ride loses its alerts — putting that list right is
-   * what closes the gap, and this path picks it up the moment it does.
+   * The same step, and since PAR-149 the same coverage: `ride_alerts` is the
+   * attraction twin of `show_follows`, with the same CASCADE and the same "a
+   * stranger who would simply never hear from us again", and it was off
+   * `ATTRACTION_DEPENDENCIES` until that ticket put it on. A colliding show
+   * kept its follower here while a colliding ride lost its alerts; both keep
+   * them now, and this path picked it up with no change of its own — which is
+   * what applying the shared list rather than a local one is for.
    */
   private async consolidateEntityData(
     manager: any,

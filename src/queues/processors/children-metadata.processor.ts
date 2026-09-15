@@ -2,9 +2,14 @@ import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { IsNull, Repository } from "typeorm";
+import { In, IsNull, Not, Repository } from "typeorm";
 import { Job, Queue } from "bull";
 import { AttractionsService } from "../../attractions/attractions.service";
+import {
+  AttractionRetirementService,
+  RECLASSIFIED_UPSTREAM_REASON,
+  isReclassifiedUpstreamReason,
+} from "../../attractions/services/attraction-retirement.service";
 import { ShowsService } from "../../shows/shows.service";
 import { RestaurantsService } from "../../restaurants/restaurants.service";
 import { ParksService } from "../../parks/parks.service";
@@ -50,6 +55,7 @@ export class ChildrenMetadataProcessor {
 
   constructor(
     private attractionsService: AttractionsService,
+    private attractionRetirementService: AttractionRetirementService,
     private showsService: ShowsService,
     private restaurantsService: RestaurantsService,
     private parksService: ParksService,
@@ -188,6 +194,36 @@ export class ChildrenMetadataProcessor {
               for (const restaurantEntity of restaurants) {
                 await this.syncRestaurant(restaurantEntity, park.id);
                 parkRestaurants++;
+              }
+
+              // An entity can change its entityType upstream while keeping its
+              // id, and then it is synced into a second table while the first
+              // one keeps its row. Do this after the show/restaurant syncs so
+              // the replacement row exists before the old one is retired.
+              // Guarded like the two steps below it: a failure here must not
+              // cost this park its mapping job and its cache eviction.
+              //
+              // Ids that arrived as an ATTRACTION in the same response are
+              // excluded. `/children` listing one entity under two types is
+              // the same upstream fault `dedupePollEntities` handles for live
+              // data, and without this the row would be un-retired by
+              // syncAttraction and retired again here on every single run —
+              // each pass evicting caches and revalidating the frontend.
+              const syncedAsAttraction = new Set(
+                attractions.map((child) => child.id),
+              );
+              try {
+                await this.retireReclassifiedAttractions(
+                  park.id,
+                  park.name,
+                  [...shows, ...restaurants]
+                    .map((child) => child.id)
+                    .filter((id) => !syncedAsAttraction.has(id)),
+                );
+              } catch (e) {
+                this.logger.error(
+                  `Failed to retire reclassified attractions for ${park.name}: ${e}`,
+                );
               }
 
               // Phase 6.6.3: Queue Entity Mapping Job (to match with Queue-Times)
@@ -443,7 +479,14 @@ export class ChildrenMetadataProcessor {
       .getRepository()
       .find({
         where: { parkId },
-        select: ["id", "externalId", "slug", "name", "queueTimesEntityId"],
+        select: [
+          "id",
+          "externalId",
+          "slug",
+          "name",
+          "queueTimesEntityId",
+          "retiredReason",
+        ],
       });
 
     const existing = findExistingAttraction(
@@ -464,6 +507,16 @@ export class ChildrenMetadataProcessor {
         longitude: mappedData.longitude,
         attractionType: mappedData.attractionType,
       });
+
+      // The entity is an attraction again, so the retirement
+      // `retireReclassifiedAttractions` wrote is wrong now. Only that exact
+      // reason is undone — a retirement a human entered through the admin
+      // endpoint has to survive this run and every one after it. It goes
+      // through the service rather than a column write, because lifting a
+      // retirement has the same cache and sitemap consequences as setting one.
+      if (isReclassifiedUpstreamReason(existing.retiredReason)) {
+        await this.attractionRetirementService.unretire(existing.id);
+      }
     } else {
       // Generate unique slug for this park
       const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
@@ -576,6 +629,167 @@ export class ChildrenMetadataProcessor {
       // Insert new restaurant
       await this.restaurantsService.getRepository().save(mappedData);
     }
+  }
+
+  /**
+   * Retires attraction rows whose entity is now a show or a restaurant upstream.
+   *
+   * ThemeParks.wiki reclassifies entities without changing their id — on
+   * 2026-04-25 it moved 17 Universal Studios Singapore meet-and-greets from
+   * `ATTRACTION` to `SHOW`, and on 2026-04-23 fifteen more at the two Tokyo
+   * parks. The sync followed into `shows` and left `attractions` untouched,
+   * because `externalId` is unique *per table* and nothing compares across the
+   * two. The abandoned row then reads CLOSED forever: no source reports it, so
+   * reverse-reconciliation writes a CLOSED row every poll cycle — 11,832 of
+   * them for USS alone in the 30 days before this was fixed — and the park page
+   * shows a permanently closed ride that does not exist as a ride any more.
+   *
+   * **A row with a second source is left alone, and the test is structural.**
+   * An earlier round of this change also held back rows that had received a
+   * genuine reading in the last 30 days. That guard was withdrawn: after the
+   * wiki flips an entity's type, `WaitTimesProcessor` resolves
+   * `themeparks-wiki:<externalId>` to the shows row, so the attraction's last
+   * genuine reading is the day of the reclassification itself — the guard
+   * would have postponed every future repair by 30 days, leaving exactly the
+   * wrongly-CLOSED ride this method exists to remove on the park page for a
+   * month. A row's own columns say what it is; its readings say when we last
+   * heard, and that is a different question.
+   *
+   * A row is left alone when any source other than the wiki claims it.
+   * Disneyland Paris' `Mickey's PhilharMagic` is a show to the wiki and a
+   * queueing ride to Queue-Times, and was still receiving real OPERATING
+   * readings; retiring it would delete a live ride over a disagreement between
+   * two sources, which is a curation decision and not a sync one.
+   *
+   * There are two ways a row can carry a second source, and both are checked.
+   * `queue_times_entity_id` is set when the mapping job matches a Queue-Times
+   * ride — but **only** for Queue-Times: a `wartezeiten-app` match writes just
+   * the `external_entity_mapping` row, and `WaitTimesProcessor` resolves live
+   * data through that mapping all the same. 39 attractions carried exactly
+   * that combination on 2026-09-15 (a wartezeiten mapping and no Queue-Times
+   * id), so checking the column alone would retire a ride that is still being
+   * measured. Only a row that exists purely because the wiki once called it an
+   * attraction is retired here.
+   *
+   * **This is reversible, and that is what keeps it safe to run unattended.**
+   * A row retired here carries `RECLASSIFIED_UPSTREAM_REASON` verbatim, and
+   * `syncAttraction` lifts the retirement the moment the wiki lists the entity
+   * as an `ATTRACTION` again — so a single malformed `/children` response
+   * cannot strand a park's rides. Only rows carrying a reason this sync wrote
+   * are un-retired, so a retirement a human entered through the admin endpoint
+   * survives every nightly run.
+   *
+   * **That protection is one-directional, deliberately.** A human retirement
+   * survives; a human *un*-retirement does not. `POST /admin/unretire-
+   * attraction/:id` clears `retired_reason`, and the row then matches this
+   * filter again, so the next run retires it while the wiki still calls the
+   * entity a show. That is the sync winning an argument with a person, which
+   * is what a sync is for — the wiki is the source for what an entity *is*.
+   * Overriding it means correcting the entity upstream, or adding the id to
+   * `THEMEPARKS_EXCLUSIONS` so this sync stops having an opinion about it.
+   *
+   * **What comes back is the row, not its data supply.** The `shows` row keeps
+   * existing (PAR-232), and `WaitTimesProcessor` builds its lookup with the
+   * shows after the attractions, so `themeparks-wiki:<externalId>` still
+   * resolves to the show and the un-retired attraction goes straight back to
+   * receiving `system-reconciliation` CLOSED rows. That is no worse than the
+   * state this method exists to fix — a visible ride reading CLOSED beats one
+   * that silently disappeared — but it is not a full recovery, and clearing
+   * the orphaned show row belongs to PAR-232 rather than here.
+   *
+   * The reverse direction is only handled on the attraction side for the same
+   * reason: `shows` and `restaurants` have no `retired_at` column to set.
+   *
+   * One neighbouring job had to learn that a retirement can be temporary:
+   * `detect-seasonal` cleared `is_seasonal` and `season_months` for every
+   * retired row, and a row retired here would have lost its season for good —
+   * while retired it receives no readings at all (`wait-times.processor.ts`
+   * loads its attractions with `retiredAt: IsNull()`), so nothing could derive
+   * the months again. It skips these retirements now.
+   *
+   * The lookup here is deliberately not scoped to the park:
+   * `attractions.externalId` is globally unique, so there is at most one row
+   * either way, and scoping it would miss a row whose park changed upstream.
+   * The diagnostic query in §5.6 of the doc answers a narrower question: it
+   * joins only `shows`, so it misses an entity that became a `RESTAURANT`, and
+   * it applies none of the second-source filters above.
+   * **The way back is park-scoped**, because `syncAttraction` only ever looks
+   * at its own park's rows — so a row that moved parks upstream is retired
+   * automatically but has to be brought back by hand.
+   */
+  private async retireReclassifiedAttractions(
+    parkId: string,
+    parkName: string,
+    reclassifiedExternalIds: string[],
+  ): Promise<void> {
+    if (reclassifiedExternalIds.length === 0) return;
+
+    const candidates = await this.attractionsService.getRepository().find({
+      where: {
+        externalId: In(reclassifiedExternalIds),
+        retiredAt: IsNull(),
+        queueTimesEntityId: IsNull(),
+      },
+      select: ["id", "name", "parkId"],
+    });
+    if (candidates.length === 0) return;
+
+    const stale = await this.withoutForeignSourceMappings(candidates);
+    if (stale.length === 0) return;
+
+    // The wiki does not say when it reclassified an entity, so this is the day
+    // it was noticed. `RECLASSIFIED_UPSTREAM_REASON` says so, because the
+    // column otherwise reads as the day the ride stopped existing.
+    const retiredAt = new Date().toISOString();
+    await this.attractionRetirementService.retire(
+      stale.map((attraction) => ({
+        attractionId: attraction.id,
+        retiredAt,
+        reason: RECLASSIFIED_UPSTREAM_REASON,
+      })),
+    );
+
+    // The park in the message is the one whose `/children` carried the id. The
+    // lookup is not park-scoped, so a row that moved parks upstream is named
+    // with its own park id instead of being filed under the wrong name.
+    const elsewhere = stale.filter((a) => a.parkId !== parkId);
+    this.logger.log(
+      `🪦 ${parkName}: retired ${stale.length} attraction row(s) reclassified upstream — ` +
+        stale.map((a) => a.name).join(", "),
+    );
+    for (const row of elsewhere) {
+      this.logger.warn(
+        `"${row.name}" belongs to park ${row.parkId}, not to ${parkName} — ` +
+          "retired anyway, but syncAttraction is park-scoped: it will not bring " +
+          "this row back, and if the entity turns up as an ATTRACTION under the " +
+          "new park it will try to insert a second row on the same unique " +
+          "externalId. Move or un-retire it by hand.",
+      );
+    }
+  }
+
+  /**
+   * Drops the rows another source has claimed, whatever the wiki now says.
+   *
+   * The companion to `queue_times_entity_id`, and the reason that column is
+   * not enough on its own: the entity mapping job writes it for Queue-Times
+   * matches only, while a `wartezeiten-app` match leaves nothing but the
+   * `external_entity_mapping` row — which `WaitTimesProcessor` resolves live
+   * data through regardless.
+   */
+  private async withoutForeignSourceMappings<T extends { id: string }>(
+    candidates: T[],
+  ): Promise<T[]> {
+    const mappings = await this.mappingRepository.find({
+      where: {
+        internalEntityId: In(candidates.map((c) => c.id)),
+        internalEntityType: "attraction",
+        externalSource: Not("themeparks-wiki"),
+      },
+      select: ["internalEntityId"],
+    });
+    const claimed = new Set(mappings.map((m) => m.internalEntityId));
+    return candidates.filter((c) => !claimed.has(c.id));
   }
 
   /**

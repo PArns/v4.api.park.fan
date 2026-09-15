@@ -504,7 +504,11 @@ export class AttractionResponseDto {
       "When this attraction stopped existing (ISO 8601), or null while it is " +
       "still around. A retired attraction is absent from park listings, " +
       "counts and search, but keeps answering here so its history stays " +
-      'readable — render it as "operated until …", never as closed.',
+      'readable — render it as "operated until …", never as closed. ' +
+      "One case does not mean that: where the children sync retired a row " +
+      "because ThemeParks.wiki reclassified the entity as a show or a " +
+      "restaurant, this is the day that was noticed and the ride never " +
+      "stopped existing. `retiredReason` says which of the two it is.",
     required: false,
     nullable: true,
   })

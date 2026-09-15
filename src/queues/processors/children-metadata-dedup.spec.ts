@@ -44,6 +44,7 @@ describe("ChildrenMetadataProcessor — cross-source duplicate prevention", () =
 
     processor = new ChildrenMetadataProcessor(
       { getRepository: () => attractionRepo } as any,
+      { retire: jest.fn() } as any,
       { getRepository: () => ({}) } as any,
       { getRepository: () => ({}) } as any,
       {} as any,
