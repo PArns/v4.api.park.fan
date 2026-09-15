@@ -140,16 +140,27 @@ async function createSchema(database: string): Promise<void> {
       console.warn("⚠️  Continuing without some extensions");
     }
 
-    // Every hypertable the merge path moves rows through. Production has
-    // seven; these three are the ones a merge writes to, and the two live-data
-    // tables were plain tables here until PAR-172 — so `SET LOCAL
+    // The hypertables this suite has. Production has seven, all compressed;
+    // the merge writes to five of them — these three plus `weather_data`
+    // (`mergeParks` step 4) and `wait_time_predictions`
+    // (`ATTRACTION_DEPENDENCIES`), which are STILL plain tables here and are
+    // PAR-234.
+    //
+    // The two live-data tables were plain tables until PAR-172, so `SET LOCAL
     // timescaledb.max_tuples_decompressed_per_dml_transaction = 0` in step 0 of
     // `mergeParks` was lifting a cap that did not apply to anything the suite
     // touched. A plain table cannot answer what the merge does to a compressed
     // chunk, which is the one question a real database is here to settle.
     //
+    // They also had a second effect that is easy to miss: every suite that
+    // boots `AppModule` runs `TimescaleInitService`, whose `enableCompression`
+    // silently did nothing for these two while they were not hypertables. It
+    // takes hold now.
+    //
     // Partitioning column has to be in the primary key: `queue_data` is
     // `(id, timestamp)` and so are `show_live_data` and `restaurant_live_data`.
+    // `weather_data` partitions on `date` instead and needs its own call, which
+    // is why it is not in this loop.
     for (const table of [
       "queue_data",
       "show_live_data",

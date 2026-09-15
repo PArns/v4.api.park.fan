@@ -249,6 +249,27 @@ describe("Park merge (E2E)", () => {
     expect(missing).toEqual([]);
   });
 
+  /**
+   * And in the right SHAPE, for the three the merge writes time series to.
+   *
+   * `create_hypertable` in `global-setup.ts` only warns when it fails, so a
+   * table that quietly stayed a plain one would leave every case below passing
+   * against a schema production does not have — including the compressed-chunk
+   * case, whose own premise assertion is the only other thing that would
+   * notice.
+   */
+  it("has the merge's time-series tables as hypertables", async () => {
+    const rows = await dataSource.query(
+      `SELECT hypertable_name FROM timescaledb_information.hypertables
+       WHERE hypertable_name = ANY($1::text[]) ORDER BY hypertable_name`,
+      [["queue_data", "restaurant_live_data", "show_live_data"]],
+    );
+
+    expect(
+      rows.map((r: { hypertable_name: string }) => r.hypertable_name),
+    ).toEqual(["queue_data", "restaurant_live_data", "show_live_data"]);
+  });
+
   it("commits: no 23503/23505/42703, time series on the winner, ghost park gone", async () => {
     await seedCollidingParks();
 
@@ -431,25 +452,41 @@ describe("Park merge (E2E)", () => {
       await park(MERGE_WINNER, "merge-winner");
       await park(MERGE_LOSER, "merge-loser");
 
-      const show = (id: string, parkId: string, slug: string) =>
+      const show = (id: string, parkId: string, name: string, slug: string) =>
         dataSource.query(
           `INSERT INTO shows (id, "externalId", name, slug, "parkId", "createdAt", "updatedAt")
            VALUES ($1, $2, $3, $4, $5, NOW(), NOW())`,
-          [id, `ext-show-${id.slice(0, 8)}`, slug, slug, parkId],
+          [id, `ext-show-${id.slice(0, 8)}`, name, slug, parkId],
         );
-      await show(WINNER_SHOW, MERGE_WINNER, "fantasmic");
-      await show(LOSER_SHOW, MERGE_LOSER, "fantasmic");
-      await show(LONELY_SHOW, MERGE_LOSER, "lion-king");
+      // The show pair collides on SLUG.
+      await show(WINNER_SHOW, MERGE_WINNER, "Fantasmic", "fantasmic");
+      await show(LOSER_SHOW, MERGE_LOSER, "Fantasmic!", "fantasmic");
+      await show(LONELY_SHOW, MERGE_LOSER, "Lion King", "lion-king");
 
-      const restaurant = (id: string, parkId: string, slug: string) =>
+      const restaurant = (
+        id: string,
+        parkId: string,
+        name: string,
+        slug: string,
+      ) =>
         dataSource.query(
           `INSERT INTO restaurants (id, "externalId", name, slug, "parkId", "createdAt", "updatedAt")
            VALUES ($1, $2, $3, $4, $5, NOW(), NOW())`,
-          [id, `ext-rest-${id.slice(0, 8)}`, slug, slug, parkId],
+          [id, `ext-rest-${id.slice(0, 8)}`, name, slug, parkId],
         );
-      await restaurant(WINNER_REST, MERGE_WINNER, "bistro");
-      await restaurant(LOSER_REST, MERGE_LOSER, "bistro");
-      await restaurant(LONELY_REST, MERGE_LOSER, "taverne");
+      // The restaurant pair collides on NAME and on nothing else — the second
+      // of `migrateEntities`'s two lookups, which a pair sharing both would
+      // never reach. Two feeds spelling the same place differently enough to
+      // slug apart ("Bistro du Parc" / "Bistro Du-Parc") is the ordinary way
+      // this happens.
+      await restaurant(WINNER_REST, MERGE_WINNER, "Bistro du Parc", "bistro");
+      await restaurant(
+        LOSER_REST,
+        MERGE_LOSER,
+        "Bistro du Parc",
+        "bistro-du-parc",
+      );
+      await restaurant(LONELY_REST, MERGE_LOSER, "Taverne", "taverne");
 
       // show_live_data — hypertable, surrogate `(id, timestamp)` key, FK
       // CASCADE. The whole showtime history of the losing show, and the rows
@@ -675,10 +712,18 @@ describe("Park merge (E2E)", () => {
      * What this proves: `applyMergeDependencies` rewrites `showId` on rows that
      * live in a compressed chunk, rather than failing the whole transaction the
      * way a compressed chunk refuses DML on older TimescaleDB. Production keeps
-     * `show_live_data` and `restaurant_live_data` compressed
-     * (`timescaledb_information.hypertables`, both `compression_enabled = t`),
-     * so an uncompressed test schema answers a question production does not
-     * ask.
+     * `show_live_data` compressed — `timescaledb_information.hypertables` says
+     * `compression_enabled = t` with 235 compressed chunks on 2026-09-15 — so
+     * an uncompressed test schema answers a question production does not ask.
+     *
+     * Compression is configured WITHOUT a `segmentby`, because that is what
+     * production has: `timescaledb_information.compression_settings` is empty
+     * for this table, and `TimescaleInitService.enableCompression` passes no
+     * `segmentBy` for it. The difference is not cosmetic. Segmenting by
+     * `showId` — the very column the UPDATE rewrites — would let TimescaleDB
+     * decompress only the losing show's segment; without one it has to
+     * decompress every batch the matching rows sit in, which is the harder case
+     * and the one production runs.
      *
      * What it does NOT prove: that lifting
      * `timescaledb.max_tuples_decompressed_per_dml_transaction` in step 0 of
@@ -689,12 +734,29 @@ describe("Park merge (E2E)", () => {
     it("moves a compressed show history to the survivor", async () => {
       await seedShowAndRestaurantCollision();
 
-      await dataSource.query(
-        `ALTER TABLE show_live_data SET (
-           timescaledb.compress,
-           timescaledb.compress_segmentby = '"showId"'
-         )`,
-      );
+      // Whether compression is already on depends on which file ran first:
+      // every suite that boots `AppModule` starts `TimescaleInitService`, which
+      // enables it and adds a policy — and only does so successfully now that
+      // `global-setup.ts` makes this a hypertable at all. So the setting is
+      // read rather than assumed, and only put back if this test is the one
+      // that turned it on. Hard-coding `compress = false` afterwards would
+      // silently disable compression for every later file and orphan that
+      // policy.
+      const enabled = async (): Promise<boolean> => {
+        const rows = await dataSource.query(
+          `SELECT compression_enabled FROM timescaledb_information.hypertables
+           WHERE hypertable_name = 'show_live_data'`,
+        );
+        return rows[0]?.compression_enabled === true;
+      };
+
+      const wasCompressed = await enabled();
+      if (!wasCompressed) {
+        await dataSource.query(
+          `ALTER TABLE show_live_data SET (timescaledb.compress)`,
+        );
+      }
+
       try {
         await dataSource.query(
           `SELECT compress_chunk(c, if_not_compressed => true)
@@ -703,13 +765,21 @@ describe("Park merge (E2E)", () => {
 
         // The premise of the test, asserted rather than assumed: with nothing
         // compressed this case would be the previous one under a longer name
-        // (G-72).
+        // (G-72). Both halves are needed — "at least one compressed" would hold
+        // while the losing show's rows sat in a second, uncompressed chunk,
+        // which is what a chunk boundary crossed mid-seed produces.
         expect(
           await count(
             `SELECT count(*) c FROM timescaledb_information.chunks
              WHERE hypertable_name = 'show_live_data' AND is_compressed`,
           ),
         ).toBeGreaterThan(0);
+        expect(
+          await count(
+            `SELECT count(*) c FROM timescaledb_information.chunks
+             WHERE hypertable_name = 'show_live_data' AND NOT is_compressed`,
+          ),
+        ).toBe(0);
 
         await parkMergeService.mergeParks(MERGE_WINNER, MERGE_LOSER);
 
@@ -726,17 +796,25 @@ describe("Park merge (E2E)", () => {
           ),
         ).toBe(0);
       } finally {
-        // Compression is a table setting and outlives the test; `afterEach`
-        // only truncates rows. Decompress first — the setting cannot be
-        // withdrawn while a compressed chunk exists — so the next test starts
-        // on the same schema this one did.
-        await dataSource.query(
-          `SELECT decompress_chunk(c, if_compressed => true)
-           FROM show_chunks('show_live_data') c`,
-        );
-        await dataSource.query(
-          `ALTER TABLE show_live_data SET (timescaledb.compress = false)`,
-        );
+        // Caught rather than thrown: a merge that dies on the compressed chunk
+        // is exactly what this test is for, and a cleanup statement failing
+        // afterwards would replace that error with its own.
+        try {
+          await dataSource.query(
+            `SELECT decompress_chunk(c, if_compressed => true)
+             FROM show_chunks('show_live_data') c`,
+          );
+          if (!wasCompressed) {
+            await dataSource.query(
+              `ALTER TABLE show_live_data SET (timescaledb.compress = false)`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            "Could not restore show_live_data compression state:",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
       }
     });
 
@@ -784,6 +862,38 @@ describe("Park merge (E2E)", () => {
           [WINNER_REST],
         ),
       ).toBe(1);
+
+      // And the loser side, because a guard placed one step too late — after
+      // `consolidateEntityIds`, or after the first `migrateEntities` pass —
+      // would show there first while the winner's own counts still looked
+      // untouched.
+      expect(
+        await count(`SELECT count(*) c FROM parks WHERE id = $1`, [
+          MERGE_LOSER,
+        ]),
+      ).toBe(1);
+      expect(
+        await count(`SELECT count(*) c FROM shows WHERE "parkId" = $1`, [
+          MERGE_LOSER,
+        ]),
+      ).toBe(2);
+      expect(
+        await count(`SELECT count(*) c FROM restaurants WHERE "parkId" = $1`, [
+          MERGE_LOSER,
+        ]),
+      ).toBe(2);
+      expect(
+        await count(
+          `SELECT count(*) c FROM show_live_data WHERE "showId" = $1`,
+          [LOSER_SHOW],
+        ),
+      ).toBe(5);
+      expect(
+        await count(
+          `SELECT count(*) c FROM restaurant_live_data WHERE "restaurantId" = $1`,
+          [LOSER_REST],
+        ),
+      ).toBe(4);
     });
   });
 });
