@@ -107,9 +107,9 @@ describe("parkOpenWindowCtes", () => {
 
   it("bounds on the opening, which no source misdates", () => {
     expect(sql).toContain(
-      `se."openingTime" > $2::timestamptz - INTERVAL '2 days'`,
+      `se."openingTime" > ($2::timestamptz) - INTERVAL '2 days'`,
     );
-    expect(sql).toContain(`se."openingTime" < $3::timestamptz`);
+    expect(sql).toContain(`se."openingTime" < ($3::timestamptz)`);
   });
 
   it("reads capability from configuration and can be asked to ignore it", () => {
@@ -117,6 +117,51 @@ describe("parkOpenWindowCtes", () => {
     expect(flat(parkOpenWindowCtes({ wikiOnly: false }))).not.toContain(
       "wiki_entity_id",
     );
+  });
+
+  it("takes its parks and its bounds from the caller when asked", () => {
+    // A statement numbering its parameters differently could not use this
+    // helper at all, and the alternative was a second copy of the window
+    // definition — which is what CURRENT_CLOSURE_GAP_SQL had in three places.
+    const live = flat(
+      parkOpenWindowCtes({
+        parkTz: `SELECT $4::uuid AS park_id, $2::text AS tz`,
+        from: `$3::timestamptz - INTERVAL '31 days'`,
+        to: `$3::timestamptz + INTERVAL '2 days'`,
+      }),
+    );
+    expect(live).toContain(`SELECT $4::uuid AS park_id, $2::text AS tz`);
+    expect(live).toContain(
+      `se."openingTime" > ($3::timestamptz - INTERVAL '31 days') - INTERVAL '2 days'`,
+    );
+    expect(live).toContain(
+      `se."openingTime" < ($3::timestamptz + INTERVAL '2 days')`,
+    );
+    // The override replaces the scan of parks, so the capability filter goes
+    // with it rather than being silently appended to somebody else's SELECT.
+    expect(live).not.toContain("FROM parks pk");
+    expect(live).not.toContain("wiki_entity_id");
+  });
+
+  it("keeps one window definition whatever the caller feeds it", () => {
+    // Only where the parks and the bounds come from is open. The repair, the
+    // disjoint union and the operating-day anchor are the same text for every
+    // caller — assert on the three lines that carry them.
+    const live = flat(
+      parkOpenWindowCtes({
+        parkTz: `SELECT $4::uuid AS park_id, $2::text AS tz`,
+        from: `$3::timestamptz`,
+        to: `$3::timestamptz`,
+      }),
+    );
+    for (const invariant of [
+      "(MIN(opens_at) AT TIME ZONE tz)::date AS op_day",
+      "WHERE closes_at > opens_at",
+      "SUM(CASE WHEN prev_max IS NULL OR opens_at > prev_max THEN 1 ELSE 0 END)",
+    ]) {
+      expect(live).toContain(invariant);
+      expect(sql).toContain(invariant);
+    }
   });
 
   it("drops a window that stayed impossible after repair", () => {
