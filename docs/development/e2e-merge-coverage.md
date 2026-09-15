@@ -68,6 +68,59 @@ forgotten". A test schema stricter than production would turn a forgotten
 dependency into a loud 23503 instead of the quiet orphan the merge code exists
 to prevent.
 
+## A table can exist and still be the wrong kind
+
+> **2026-09-15, PAR-172** — the second axis of the same drift.
+
+The rule above is about tables the test schema does not *have*. A table it does
+have can still be shaped differently from production, and that is quieter,
+because every `to_regclass` check above passes.
+
+Production runs **seven** hypertables, all compressed, and the merge writes to
+every one of them:
+
+| Table | Where the merge touches it | Partitioning column |
+| -- | -- | -- |
+| `queue_data` | `ATTRACTION_DEPENDENCIES` | `timestamp` |
+| `show_live_data` | `SHOW_DEPENDENCIES` | `timestamp` |
+| `restaurant_live_data` | `RESTAURANT_DEPENDENCIES` | `timestamp` |
+| `weather_data` | `mergeParks` step 4 | `date` |
+| `wait_time_predictions` | `ATTRACTION_DEPENDENCIES` | `createdAt` |
+| `forecast_data` | `ATTRACTION_DEPENDENCIES` | `createdAt` |
+| `queue_data_aggregates` | `ATTRACTION_DEPENDENCIES`, `PARK_DEPENDENCIES` | `hour` |
+
+`synchronize: true` makes none of them a hypertable. `global-setup.ts` calls
+`create_hypertable` from a hand-written list, and until PAR-172 that list had
+one entry. So the merge's `SET LOCAL
+timescaledb.max_tuples_decompressed_per_dml_transaction = 0` — step 0, lifted
+once for the whole transaction — applied to nothing the suite touched, and any
+case asserting what a merge does to compressed rows would have been measuring a
+plain table.
+
+The list is now three. The remaining four are PAR-234.
+
+**Two things this costs that are easy to miss:**
+
+1. **`TimescaleInitService.enableCompression` is a silent no-op on a
+   non-hypertable.** Every suite that boots `AppModule` runs it, and it looked
+   like it was configuring compression all along. It takes hold the moment a
+   table becomes a hypertable, which means the first suite to boot decides the
+   compression state the later ones inherit. A test that toggles compression
+   therefore reads the current state and puts back only what it changed —
+   `park-merge.e2e-spec.ts` does; a hard `SET (timescaledb.compress = false)`
+   disables it for every later file and orphans the policy.
+2. **`create_hypertable` failures only warn.** That is deliberate — a suite
+   without TimescaleDB should still run — but it means a table can quietly stay
+   plain. `park-merge.e2e-spec.ts` asserts the three by name against
+   `timescaledb_information.hypertables`, so a silent fallback fails as a named
+   expectation rather than as a case that passes for the wrong reason.
+
+**And compression settings are read from the writer too**, for the same reason
+the DDL is. `enableCompression` passes no `segmentby` for `show_live_data`, and
+production has none. Segmenting by the column a merge rewrites lets TimescaleDB
+decompress one segment instead of every batch the rows sit in — an easier case
+than the one production runs, and green for the wrong reason.
+
 ## Two things a new dependency must not slip past
 
 1. **The schema guard.** `test/e2e/park-merge.e2e-spec.ts` checks every table in
