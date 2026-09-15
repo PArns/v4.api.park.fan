@@ -51,24 +51,66 @@ export const OPERATING_SCHEDULE_TYPE = "OPERATING";
  * CTEs producing `park_tz(park_id, tz)` and `win(park_id, tz, opens_at,
  * closes_at, op_day)`, the flattened windows.
  *
- * Parameters the caller must bind: `$1` a `uuid[]` park filter or NULL, `$2` the
- * window start, `$3` the window end.
+ * Parameters the caller must bind, unless it overrides the expressions below:
+ * `$1` a `uuid[]` park filter or NULL, `$2` the window start, `$3` the window
+ * end.
  *
  * `wikiOnly` restricts to parks that can emit `DOWN` at all. It is a capability
  * read from configuration, never from the outcome: a park with no
  * `wiki_entity_id` and a park with a quiet quarter are two different statements,
  * and only this column tells them apart.
+ *
+ * ## Why the placeholders are configurable
+ *
+ * A statement whose own parameters are numbered differently could not use this
+ * helper at all, and the alternative was writing the window definition out a
+ * second time — the drift this file exists to prevent. `CURRENT_CLOSURE_GAP_SQL`
+ * takes `$1` attraction ids, `$2` timezone, `$3` as-of, `$4` park, so it passes
+ * its own expressions rather than renumbering a helper three other statements
+ * already bind by position.
+ *
+ * What stays fixed is the **semantics**: the closing-time repair, the disjoint
+ * union and the operating-day anchoring below are one definition whatever the
+ * caller feeds them. Only where the parks and the bounds come from is open.
+ *
+ * All three are interpolated into the SQL verbatim, so they must be **literals
+ * written in this repository** — a placeholder (`$4`), an interval, a cast.
+ * Never a value that reached the process from outside: a request parameter, a
+ * database row, a config string. A value belongs in a `$n` placeholder and is
+ * bound by the caller; this is where the query is assembled, not where data
+ * enters it.
+ *
+ * @param wikiOnly - Restrict the default park scan to parks with a
+ *   `wiki_entity_id`. Ignored when `parkTz` replaces that scan.
+ * @param parkTz - A `SELECT` producing `(park_id, tz)`, replacing the scan of
+ *   `parks`. A caller that already holds both — a single-park statement that was
+ *   handed the timezone — passes them straight in rather than reading a second
+ *   source for a value it has; two sources for one park's zone is how a day ends
+ *   up resolved twice in one statement.
+ * @param from - Expression for the start of the range of interest.
+ * @param to - Expression for its end.
  */
-export function parkOpenWindowCtes(
-  { wikiOnly }: { wikiOnly: boolean } = { wikiOnly: true },
-): string {
-  return `
-  park_tz AS (
-    SELECT pk.id AS park_id, pk.timezone AS tz
+export function parkOpenWindowCtes({
+  wikiOnly = true,
+  parkTz,
+  from = "$2::timestamptz",
+  to = "$3::timestamptz",
+}: {
+  wikiOnly?: boolean;
+  parkTz?: string;
+  from?: string;
+  to?: string;
+} = {}): string {
+  const parkTzBody =
+    parkTz ??
+    `SELECT pk.id AS park_id, pk.timezone AS tz
       FROM parks pk
      WHERE ($1::uuid[] IS NULL OR pk.id = ANY($1::uuid[]))
        ${wikiOnly ? "AND pk.wiki_entity_id IS NOT NULL" : ""}
-       AND pk.timezone IS NOT NULL
+       AND pk.timezone IS NOT NULL`;
+  return `
+  park_tz AS (
+    ${parkTzBody}
   ),
   windows_raw AS (
     SELECT z.park_id, z.tz,
@@ -84,8 +126,8 @@ export function parkOpenWindowCtes(
        -- most 24 hours long, so two days of slack on the opening catches every
        -- window that reaches into the scan range — and unlike the closing, the
        -- opening is the one bound no source has been observed to misdate.
-       AND se."openingTime" > $2::timestamptz - INTERVAL '2 days'
-       AND se."openingTime" < $3::timestamptz
+       AND se."openingTime" > (${from}) - INTERVAL '2 days'
+       AND se."openingTime" < (${to})
   ),
   w_ord AS (
     SELECT park_id, tz, opens_at, closes_at,

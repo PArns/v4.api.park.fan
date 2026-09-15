@@ -26,58 +26,57 @@ describe("closure-gap statements", () => {
     ["live", CURRENT_CLOSURE_GAP_SQL],
   ] as const;
 
-  it("the live statement recognises a gap as a same-park-local-day return", () => {
-    // This used to run over both statements. It does not any more, and the
-    // split is the point rather than an oversight: the nightly statement takes
-    // its day from the window that contains the reading, this one still takes
-    // the calendar date, and the assertion below is what keeps that a written
-    // decision instead of a silent drift.
-    //
-    // A gap in a park closing after midnight is therefore filed in the history
-    // and invisible on the live surface, and the two count different gap_days
-    // against the same MAX_GAP_DAY_SHARE. PAR-129 carries the repair, which
-    // needs an EXPLAIN ANALYZE against real data rather than an edit — the
-    // whole plan of this statement rests on InitPlans and one materialised
-    // CTE. When it lands, this test moves to the operating-day form and the
-    // two go back to being asserted together.
-    expect(CURRENT_CLOSURE_GAP_SQL).toMatch(
-      /AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/,
-    );
-    // And the divergence is named where a reader of the SQL will hit it,
-    // not only here.
-    expect(CURRENT_CLOSURE_GAP_SQL).toContain("PAR-129");
-  });
+  // The gap-triple CTE of each statement, and the two aliases it joins `win`
+  // under. They are the same assertion on both sides, which is the whole point:
+  // this pair went out of step once — the nightly moved to the operating day
+  // and the live one stayed on the calendar — and the test that was supposed to
+  // hold them together had to be split to stay green. It is joint again.
+  const dayKeyed = [
+    ["historical", CLOSURE_GAP_INTERVALS_SQL, "gap_edges", "wo", "wb"],
+    ["live", CURRENT_CLOSURE_GAP_SQL, "cycle", "wf", "wn"],
+  ] as const;
 
-  it("the nightly statement keys the return on the OPERATING day, not the calendar", () => {
-    // A park that closes after midnight has its evening split across two
-    // calendar dates: the 23:30 reading lands on one and the 00:30 reading on
-    // the next, so a raw `::date` comparison fails and the gap is dropped. La
-    // Ronde does that every day of its season — the case park_open in the live
-    // statement already names, and the case park-open-window.sql §3 exists for.
-    //
-    // Asserted as three separate things because each can be reverted on its
-    // own and only the combination is the fix.
-    const edges = cteBody(CLOSURE_GAP_INTERVALS_SQL, "gap_edges");
+  it.each(dayKeyed)(
+    "%s keys a gap's return on the OPERATING day, not the calendar",
+    (_n, sql, cte, aliasStart, aliasEnd) => {
+      // A park that closes after midnight has its evening split across two
+      // calendar dates: the 23:30 reading lands on one and the 00:30 reading on
+      // the next, so a raw `::date` comparison fails and the gap is dropped —
+      // the case park-open-window.sql §3 exists for.
+      //
+      // Asserted as three separate things because each can be reverted on its
+      // own and only the combination is the fix.
+      const body = cteBody(sql, cte);
+
+      // 1. The day comes from the window that contains the instant, and the
+      //    window comes from the shared builder rather than a second definition
+      //    of "when is this park open".
+      expect(sql).toContain("win AS (");
+      expect(body).toMatch(new RegExp(`LEFT JOIN win ${aliasStart}\\b`));
+      expect(body).toMatch(new RegExp(`LEFT JOIN win ${aliasEnd}\\b`));
+
+      // 2. LEFT, with the calendar day as the fallback. An INNER join would
+      //    narrow the population to gaps inside published hours, which is a
+      //    different change from this one — and on the live side it would drop
+      //    every reading a park emits after it shuts, which `queue_data` being
+      //    a change log makes routine.
+      expect(body).toMatch(
+        new RegExp(
+          `COALESCE\\(${aliasStart}\\.op_day,[\\s\\S]{0,60}?::date\\)`,
+        ),
+      );
+      expect(body).toMatch(
+        new RegExp(`COALESCE\\(${aliasEnd}\\.op_day,[\\s\\S]{0,60}?::date\\)`),
+      );
+
+      // 3. And no raw same-day cast survives in that CTE. This is the assertion
+      //    that fails if someone "simplifies" the comparison back.
+      expect(body).not.toMatch(/AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/);
+    },
+  );
+
+  it("the nightly statement emits the window-derived day, not a third cast", () => {
     const gaps = cteBody(CLOSURE_GAP_INTERVALS_SQL, "raw_gaps");
-
-    // 1. The day comes from the window that contains the instant, and the
-    //    window comes from the shared builder rather than a second definition
-    //    of "when is this park open".
-    expect(CLOSURE_GAP_INTERVALS_SQL).toContain("win AS (");
-    expect(edges).toMatch(/LEFT JOIN win wo\b/);
-    expect(edges).toMatch(/LEFT JOIN win wb\b/);
-    expect(edges).toContain("wo.op_day");
-    expect(edges).toContain("wb.op_day");
-
-    // 2. LEFT, with the calendar day as the fallback. An INNER join would
-    //    narrow the population to gaps inside published hours, which is a
-    //    different change from this one.
-    expect(edges).toMatch(/COALESCE\(wo\.op_day,[\s\S]{0,60}?::date\)/);
-    expect(edges).toMatch(/COALESCE\(wb\.op_day,[\s\S]{0,60}?::date\)/);
-
-    // 3. And the same-day test compares those two days — never the raw casts
-    //    again. This is the assertion that fails if someone "simplifies" the
-    //    comparison back into raw_gaps.
     expect(gaps).toContain("start_op_day = end_op_day");
     expect(gaps).not.toMatch(/AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/);
     // The emitted day is the window-derived one too: it leaves as "startOpDay"
@@ -85,6 +84,49 @@ describe("closure-gap statements", () => {
     // it, whose op_day has always come from win. Matched on the tokens, not the
     // column alignment — the rest of the file reflows this SQL freely.
     expect(gaps).toMatch(/\bstart_op_day\s+AS op_day\b/);
+  });
+
+  it("the live statement has ONE notion of the park's day, read out of win", () => {
+    // Three hand-rolled copies of "when does this park's day end" lived here:
+    // park_open scanned schedule_entries and normalized the close itself,
+    // park_day_close did it a second time, and the readings they were compared
+    // against carried calendar dates from a third. todo.md named all three.
+    //
+    // Each of the four assertions below is a separate way back to a second
+    // definition, and none of them changes a row in an ordinary park — which is
+    // why they are pinned rather than left to review.
+    const openToday = cteBody(CURRENT_CLOSURE_GAP_SQL, "open_today");
+    const parkOpen = cteBody(CURRENT_CLOSURE_GAP_SQL, "park_open");
+    const dayClose = cteBody(CURRENT_CLOSURE_GAP_SQL, "park_day_close");
+    const earlyEnd = cteBody(CURRENT_CLOSURE_GAP_SQL, "early_end");
+
+    // 1. "Open earlier the same day" compares two operating days.
+    expect(openToday).toMatch(/LEFT JOIN win wr\b/);
+    expect(openToday).toMatch(/LEFT JOIN win ws\b/);
+    expect(openToday).toMatch(/COALESCE\(wr\.op_day,[\s\S]{0,60}?::date\)/);
+    expect(openToday).not.toMatch(/AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/);
+
+    // 2. Both day-end CTEs read win instead of scanning the table again.
+    for (const body of [parkOpen, dayClose]) {
+      expect(body).toContain("FROM win");
+      expect(body).not.toContain("schedule_entries");
+    }
+
+    // 3. early_end keys its per-day grouping on the operating day too. It was
+    //    the quietest of the three: park_day_close has ALWAYS keyed on the
+    //    opening's park-local date, so a reading taking its calendar date was
+    //    compared against the closing time of whatever day that date named.
+    expect(earlyEnd).toMatch(/LEFT JOIN win wr\b/);
+    expect(earlyEnd).toMatch(/COALESCE\(wr\.op_day,[\s\S]{0,60}?::date\)/);
+
+    // 4. And the duty-cycle denominator starts at the numerator's own lowest
+    //    reachable operating day. A bare local_date floor excludes a day the
+    //    numerator counts in a park that closes after midnight, which pushes
+    //    gap_days/active_days up — the direction that suppresses a real fault.
+    expect(CURRENT_CLOSURE_GAP_SQL).toContain("active_floor AS (");
+    expect(cteBody(CURRENT_CLOSURE_GAP_SQL, "active")).toContain(
+      "SELECT from_day FROM active_floor",
+    );
   });
 
   it.each(both)("%s is structurally a statement, not a fragment", (_n, sql) => {
@@ -316,11 +358,33 @@ describe("closure-gap statements", () => {
       // permanently under MIN_DAYS_FOR_CYCLE_TEST, so the filter never fired.
       const body = cteBody(sql, "active");
       expect(body).toMatch(/op_day\s*>=/);
-      expect(body).toMatch(/op_day\s*<=/);
-      // Park-local on both sides, because op_day is. A bare ::date takes the
-      // session zone and disagrees for 56 of the 91 blind parks.
-      expect(body).not.toMatch(/\$\d::timestamptz\)::date/);
-      expect(body).toContain("AT TIME ZONE");
+      // The upper bound differs in FORM between the two and must: the nightly
+      // numerator reaches up to the last instant before $3, so its edge is
+      // inclusive; the live one stops one day below the operating day in
+      // progress ("every day but today"), so its edge is exclusive against that
+      // day. Asserting `<=` on both is what let the live denominator keep the
+      // calendar edge after cycle moved off it — measured 2026-09-15, 1083
+      // exposure rows of the running operating day carried operating_minutes > 0
+      // and entered a denominator whose numerator could not reach them. So each
+      // statement is pinned to its own edge and neither can quietly take the
+      // other's.
+      expect(body).toMatch(
+        sql === CURRENT_CLOSURE_GAP_SQL
+          ? /op_day < \(SELECT op_day FROM park_open\)/
+          : /op_day\s*<=/,
+      );
+      // Park-local on both edges, because op_day is. A bare ::date takes the
+      // session zone and disagrees for 56 of the 91 blind parks at any instant,
+      // which is one operating day against a gate that sits at 5.
+      //
+      // Checked where the conversion actually lives. In the live statement both
+      // edges are now days read out of another CTE — active_floor below and
+      // park_open above — so `active` itself holds no cast to inspect, and
+      // asserting on it would pass for the wrong reason.
+      const converted =
+        sql === CURRENT_CLOSURE_GAP_SQL ? cteBody(sql, "active_floor") : body;
+      expect(converted).not.toMatch(/\$\d::timestamptz\)::date/);
+      expect(converted).toContain("AT TIME ZONE");
       // And no fixed offset in front of the numerator's edge. One day of slack
       // moved the nightly statement from 330 intervals over 112 rides to 370
       // over 120 — all dilution, in the direction that publishes a timetable
