@@ -174,10 +174,13 @@ export const TRAILING_OUTAGE_START_SQL = `
  *
  * ## Parameter order is dictated by the shared CTEs
  *
- * `parkOpenWindowCtes()` hard-codes `$1` park filter, `$2` window start, `$3`
+ * `parkOpenWindowCtes()` defaults to `$1` park filter, `$2` window start, `$3`
  * window end, so this query takes them in that order and puts its own attraction
- * filter last. Renumbering the shared helper to suit one caller is how two
- * copies of a window definition start.
+ * filter last. Renumbering the shared helper to suit one caller is still how two
+ * copies of a window definition start — a caller that cannot use those positions
+ * passes its own expressions through `parkTz`/`from`/`to` instead, which is what
+ * `CURRENT_CLOSURE_GAP_SQL` does. The semantics stay one definition either way;
+ * only where the parks and the bounds come from is open.
  *
  * Parameters: `$1` uuid[] park filter, `$2` window start, `$3` window end,
  * `$4` uuid[] attraction ids.

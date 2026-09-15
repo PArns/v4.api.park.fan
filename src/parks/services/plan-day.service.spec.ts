@@ -1987,8 +1987,8 @@ describe("PlanDayService", () => {
       seasonOutSince: "2026-01-31",
     };
 
-    const planToday = async (over: Partial<Attraction> = {}) => {
-      const date = today();
+    /** The default fixture planned for `date`, with `taron` flagged shut. */
+    const planOn = async (date: string, over: Partial<Attraction> = {}) => {
       calendarDay = { ...calendarDay!, date };
       dailyPredictions = [
         {
@@ -2000,6 +2000,8 @@ describe("PlanDayService", () => {
       service = await build();
       return service.buildPlanDay(park, date);
     };
+
+    const planToday = (over: Partial<Attraction> = {}) => planOn(today(), over);
 
     /** Raw statements that are the live lookup, not `downYesterday`. */
     const liveLookups = () =>
@@ -2243,6 +2245,90 @@ describe("PlanDayService", () => {
 
       expect(plan.rides).toEqual([]);
       expect(liveLookups()).toHaveLength(0);
+    });
+
+    // ── The note reaches tomorrow, so the reading that refutes it must too ──
+    it("keeps a ride the feed reports OPERATING today in tomorrow's plan as well", async () => {
+      // `season_out_since` with no months blocks today AND tomorrow, and it is
+      // written for a ride whose CURRENT status is CLOSED. So a row saying the
+      // ride is running contradicts the note's own precondition rather than
+      // just its use for today — and a ride in today's plan was dropping out of
+      // tomorrow's off that same note.
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+      const plan = await planOn(dayFromToday(1));
+
+      expect(plan.rides.map((r) => r.attractionSlug)).toEqual(["taron"]);
+      expect(liveLookups()).toHaveLength(1);
+    });
+
+    it("does not let today's reading lift months that exclude tomorrow", async () => {
+      // The half that may not travel. Months are a calendar, and a ride running
+      // today says nothing about tomorrow when tomorrow is the first day of a
+      // month its season does not cover — which is exactly the day a season
+      // ends on. Not even asked: with nothing liftable left there is no id to
+      // look up.
+      const date = dayFromToday(1);
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+      const plan = await planOn(date, {
+        seasonMonths: allMonthsExcept(monthOf(date)),
+      });
+
+      expect(plan.rides).toEqual([]);
+      expect(liveLookups()).toHaveLength(0);
+    });
+
+    it("reaches exactly as far as the note, and no day further", async () => {
+      // The day after tomorrow is past the note's own horizon, so the note is
+      // dropped there and what blocks a ride that far out is its months —
+      // which a live row may not overrule at any distance.
+      const date = dayFromToday(2);
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+      const plan = await planOn(date, {
+        seasonMonths: allMonthsExcept(monthOf(date)),
+      });
+
+      expect(plan.rides).toEqual([]);
+      expect(liveLookups()).toHaveLength(0);
+    });
+
+    it("bounds tomorrow's lookup by the floor, not by tomorrow's opening", async () => {
+      // The row is today's whichever day is being planned, and tomorrow's
+      // published opening has not happened yet — so the six-hour floor is the
+      // whole window, the same one a park that published no opening gets.
+      liveRows = [{ attractionId: "a-taron", status: "OPERATING" }];
+
+      const date = dayFromToday(1);
+      const opening = new Date(Date.now() + 20 * 60 * 60 * 1000);
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        hours: {
+          openingTime: opening.toISOString(),
+          closingTime: new Date(Date.now() + 32 * 60 * 60 * 1000).toISOString(),
+        },
+      };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      attractions = [{ ...attractions[0], ...shutNow }];
+      service = await build();
+      await service.buildPlanDay(park, date);
+
+      const [, params] = liveLookups()[0] as [string, unknown[]];
+      const since = params[1] as Date;
+      expect(since.getTime()).toBeLessThan(Date.now());
+      expect(Date.now() - since.getTime()).toBeGreaterThanOrEqual(
+        6 * 60 * 60 * 1000,
+      );
+      expect(Date.now() - since.getTime()).toBeLessThan(
+        6 * 60 * 60 * 1000 + 60_000,
+      );
     });
   });
 
