@@ -147,6 +147,80 @@ lookup window is the six-hour floor, not an opening — the published opening
 belongs to the day being planned, and tomorrow's has not happened yet. The
 curated works period is unaffected; a live reading has never overruled it.
 
+### Removed — the park attractions list said `CLOSED` about 6477 rides it knows nothing about
+
+`GET /v1/parks/{continent}/{country}/{city}/{park}/attractions` joins no queue
+data, and `AttractionResponseDto.fromEntity` sets `status: "CLOSED"` as a floor
+for the callers that do. The list served that floor as a reading. Measured on
+2026-09-15 over 190 parks: **6477 of 6477 attractions CLOSED** here against
+**849 OPERATING, 307 UNKNOWN, 11 DOWN and 5 REFURBISHMENT** among the same rows
+in the park payload. A search for broken rides over this route finds nothing and
+looks like a valid answer, which is the expensive part — there is no error to
+notice.
+
+**Breaking for a consumer of this route that reads `status`, `hourlyForecast`,
+`forecasts` or `statistics`:** all four are now absent
+(`fromEntityWithoutLiveData`) rather than renamed. The attraction table has no
+status column, so there is no stored status a different name could describe,
+and an absent optional field reads as "this route has no reading" rather than
+as a closure. The two forecast arrays were the same false negative one field
+over — shipped empty, they said no forecast exists for a ride nobody had asked
+a model about, and `statistics: null` said the same about statistics. `effectiveStatus`
+and `queues` were absent already. Live state comes from the park payload or the
+attraction detail route, neither of which changes.
+
+The placeholders stay for the integrated callers, and they are now one named
+set (`livePlaceholders()`) beside the stored half of the row rather than four
+literals mixed into it, so a live field added later is absent from this route
+without a second edit. One side effect, for completeness: the placeholders are
+spread last, so on the routes that still carry them `status` is now the 20th
+key of an attraction object instead of the 4th. Values are unchanged; only a
+content-derived weak ETag notices, once. `status` in particular has to keep its
+"CLOSED" floor:
+the attraction detail path reads it when a ride has no row inside the freshness
+window (`isSourceAbsent([])` is false by design) and derives `effectiveStatus`
+from it.
+
+Same route, the second half of the same report: it counted more attractions than
+the park payload for 23 of 190 parks, **6477 against 6406**. The +71 splits
+exactly two ways, and only one of them was a bug. (Two sweeps are quoted below.
+The totals above are the 14:10 UTC run, which reached 190 parks — 23 Fantawild
+parks answered 502 that hour. A second run at 19:53 reached all 213 and read
+7211 against 7140: different hour, different rows operating, same +71 over the
+same 23 parks. Counts of parks and rows come from the first, the breakdown of
+the duplicate groups from the second.)
+
+- **34 retired rows across 11 parks** — 17 at Universal Studios Singapore,
+  retired via PAR-159 after ThemeParks.wiki reclassified them as shows. The
+  park payload filters them (`loadParkRelations`) and this list did not.
+  `findAllWithFilters` now excludes them; its only caller is this route. The
+  `retiredAt` docstring promises the same of search, where it is still untrue —
+  `src/search` filters nothing, which is PAR-233.
+- **37 rows in 12 parks that the park payload groups away** (Walibi Belgium 21,
+  Heide Park 4, Carowinds 2), falling into 34 name groups. Most are the catalog
+  holding one ride twice, the pairs `AttractionMergeService.findDuplicatePairs`
+  finds by its `foo` / `foo-2` slug rule; there both rows arrive with the same
+  `name` and `slug` (the numeric suffix is stripped on the way out) and `id` is
+  all that separates them. `id` is the only field *guaranteed* to differ,
+  though, not the only one that does: 13 of the 34 groups also disagree about
+  coordinates, `land`, `isSeasonal` or a height limit, so which of the two the
+  park payload shows decides those values. `deduplicateEntities` picks the row
+  reading `OPERATING` first, and only between two rows of equal status the one
+  that has coordinates — so on a closed day the choice falls through to the
+  coordinates and on an open one it may not.
+
+  Three groups are not a duplicate at all but **two different rides sharing a
+  curated name**, and there the collapse loses a ride rather than a copy: at
+  Hurricane Harbor Arlington `wahoo-racer` and `typhoon-twister` are both
+  called "Typhoon Twister" with minimum heights of 107 and 122 cm, and Sea
+  World's `wally-the-walrus` and `castaway-bay-sky-climb` share a name across
+  15 m. That is PAR-259, not this route.
+
+  Deduplicating here would break pagination, which counts in SQL before any
+  collapse, so the difference is documented in the route's `api-json`
+  description instead — including which of the two numbers to believe, which
+  depends on the group.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide

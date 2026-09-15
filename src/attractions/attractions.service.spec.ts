@@ -194,6 +194,69 @@ describe("AttractionsService", () => {
     });
   });
 
+  describe("findAllWithFilters", () => {
+    const makeQueryBuilder = () => {
+      const qb = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        leftJoin: jest.fn().mockReturnThis(),
+        setParameter: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+        // The repository mock's inferred query-builder shape carries these two.
+        getMany: jest.fn().mockResolvedValue([]),
+        getOne: jest.fn().mockResolvedValue(null),
+      };
+      return qb;
+    };
+
+    // The park attractions list is the only caller. It served 34 retired rows
+    // across 11 parks on 2026-09-15 — 17 of them at Universal Studios
+    // Singapore, retired via PAR-159 — while the park payload served none.
+    it("excludes retired attractions", async () => {
+      const qb = makeQueryBuilder();
+      // `Once`, not `mockReturnValue`: `jest.clearAllMocks()` in `beforeEach`
+      // clears calls but not implementations, so a permanent override would
+      // hand this builder to every test declared after this block. The method
+      // builds exactly one query, and if that ever becomes two the second
+      // falls back to the default builder and these assertions fail loudly.
+      mockAttractionRepository.createQueryBuilder.mockReturnValueOnce(qb);
+
+      await service.findAllWithFilters({ park: "walibi-belgium" });
+
+      expect(qb.andWhere).toHaveBeenCalledWith("attraction.retiredAt IS NULL");
+      // TypeORM's `.where()` REPLACES the whole clause rather than adding to
+      // it, so one of those inserted into this method later would drop the
+      // filter without failing the assertion above.
+      expect(qb.where).not.toHaveBeenCalled();
+    });
+
+    it("still applies the geo filters beside it", async () => {
+      const qb = makeQueryBuilder();
+      mockAttractionRepository.createQueryBuilder.mockReturnValueOnce(qb);
+
+      await service.findAllWithFilters({
+        park: "walibi-belgium",
+        continentSlug: "europe",
+        countrySlug: "belgium",
+        citySlug: "wavre",
+      });
+
+      expect(qb.andWhere).toHaveBeenCalledWith("park.slug = :parkSlug", {
+        parkSlug: "walibi-belgium",
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "park.continentSlug = :continentSlug",
+        { continentSlug: "europe" },
+      );
+      expect(qb.andWhere).toHaveBeenCalledWith("attraction.retiredAt IS NULL");
+    });
+  });
+
   describe("getRepository", () => {
     it("should return the repository instance", () => {
       const repo = service.getRepository();
