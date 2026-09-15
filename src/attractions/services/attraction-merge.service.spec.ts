@@ -456,14 +456,23 @@ describe("AttractionMergeService — previewMerge", () => {
     update: jest.fn(),
   };
 
-  const serviceWith = () => {
+  /**
+   * Curated ride profiles by attraction id, answered through the raw `query`
+   * the dependency planner reads with. Empty by default, which is the real
+   * catalog's ordinary case: very few rides carry a profile at all.
+   */
+  const serviceWith = (
+    profiles: Record<string, Array<Record<string, unknown>>> = {},
+  ) => {
     const findOne = jest.fn(({ where }: { where: { id: string } }) =>
       Promise.resolve(rows.find((row) => row.id === where.id) ?? null),
     );
     const dataSource = {
       getRepository: jest.fn(() => ({ findOne })),
       transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)),
-      query: jest.fn().mockResolvedValue([]),
+      query: jest.fn((_sql: string, params: unknown[] = []) =>
+        Promise.resolve(profiles[String(params[0])] ?? []),
+      ),
     };
     return {
       service: new AttractionMergeService(
@@ -515,5 +524,93 @@ describe("AttractionMergeService — previewMerge", () => {
     await expect(
       service.previewMerge("row-base", "row-missing"),
     ).rejects.toThrow(/not found/i);
+  });
+
+  /**
+   * The half PAR-179 added. Until then the rehearsal reported a slug and a
+   * handful of inherited columns and said nothing at all about the dependent
+   * rows — including the one the merge destroys for good.
+   */
+  describe("the curated rows it would destroy", () => {
+    const layout = {
+      attractionId: "row-suffix",
+      elements: ["lifthill", "first-drop", "vertical-loop"],
+      types: ["launch-coaster"],
+    };
+    const stub = {
+      attractionId: "row-base",
+      elements: [],
+      types: [],
+      manufacturer_name: "Mack Rides",
+    };
+
+    it("reports nothing where nothing is lost", async () => {
+      // Both the ordinary pair (no profile anywhere) and the inheriting one
+      // (only the loser has a profile, so it simply moves across). A preview
+      // that cried wolf on the second would be worse than silent: the button
+      // beside it is the one the admin is deciding about.
+      const { service } = serviceWith();
+      expect(
+        (await service.previewMerge("row-base", "row-suffix")).droppedCurations,
+      ).toEqual([]);
+
+      const inheriting = serviceWith({ "row-suffix": [layout] }).service;
+      expect(
+        (await inheriting.previewMerge("row-base", "row-suffix"))
+          .droppedCurations,
+      ).toEqual([]);
+    });
+
+    it("names the losing row, with its contents", async () => {
+      const { service } = serviceWith({
+        "row-base": [{ ...layout, attractionId: "row-base" }],
+        "row-suffix": [{ ...stub, attractionId: "row-suffix" }],
+      });
+
+      const preview = await service.previewMerge("row-base", "row-suffix");
+
+      expect(preview.droppedCurations).toEqual([
+        {
+          table: "attraction_ride_profiles",
+          from: "loser",
+          row: { ...stub, attractionId: "row-suffix" },
+        },
+      ]);
+    });
+
+    it("names the SURVIVOR's row where the loser's says more", async () => {
+      // The case that makes the report worth reading, and the one a preview
+      // built on "the winner keeps its own" could not express at all: under
+      // PAR-179 the richer profile wins, so the row about to disappear is the
+      // survivor's stub.
+      const { service } = serviceWith({
+        "row-base": [stub],
+        "row-suffix": [layout],
+      });
+
+      const preview = await service.previewMerge("row-base", "row-suffix");
+
+      expect(preview.droppedCurations).toEqual([
+        { table: "attraction_ride_profiles", from: "winner", row: stub },
+      ]);
+    });
+
+    it("still writes nothing", async () => {
+      // The reason the preview exists. Reading both sides is what lets it name
+      // the row, and it must not tempt anybody into resolving the collision
+      // here — `previewMerge` opens no transaction and issues no statement
+      // other than the SELECTs.
+      const { service, dataSource } = serviceWith({
+        "row-base": [stub],
+        "row-suffix": [layout],
+      });
+
+      await service.previewMerge("row-base", "row-suffix");
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      for (const [sql] of dataSource.query.mock.calls) {
+        expect(sql).toMatch(/^SELECT /);
+      }
+    });
   });
 });

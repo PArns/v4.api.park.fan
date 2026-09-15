@@ -8,6 +8,7 @@ import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation
 import {
   ATTRACTION_DEPENDENCIES,
   applyMergeDependencies,
+  planWinnerAuthoritative,
 } from "../../parks/utils/merge-dependencies";
 import {
   resolveSurvivingSlug,
@@ -70,6 +71,26 @@ export interface AttractionMergeResult {
   renamed: boolean;
 }
 
+/**
+ * A hand-written row the merge would delete, named while it still exists.
+ *
+ * There is no feed behind these rows and no job that would rebuild one, so the
+ * report carries the row itself rather than a count: somebody who decides to
+ * go ahead anyway has to be able to type it back in afterwards.
+ */
+export interface DroppedCuration {
+  /** Table the row lives in. */
+  table: string;
+  /**
+   * Which attraction loses its row. The SURVIVOR's own row can be the one that
+   * goes: where both sides hold a curated ride profile, the richer of the two
+   * wins and the survivor's is not automatically the richer (PAR-179).
+   */
+  from: "winner" | "loser";
+  /** The row as stored, so the loss is recoverable by hand. */
+  row: Record<string, unknown>;
+}
+
 /** The same answer as a merge, minus the merge. See `previewMerge`. */
 export interface AttractionMergePreview extends AttractionMergeResult {
   dryRun: true;
@@ -77,6 +98,12 @@ export interface AttractionMergePreview extends AttractionMergeResult {
   removedSlug: string;
   /** Columns the survivor would take from the row about to disappear. */
   inheritedColumns: string[];
+  /**
+   * Curated rows the merge would destroy. Empty for almost every pair — very
+   * few rides carry a curated profile, and both sides must carry one before
+   * anything is lost.
+   */
+  droppedCurations: DroppedCuration[];
 }
 
 /**
@@ -110,7 +137,15 @@ export class AttractionMergeService {
    * likely to be rehearsed were the ones the detector had refused to merge.
    *
    * Everything reported here is derived by the same functions the real merge
-   * uses, so the preview cannot drift from the act.
+   * uses, so the preview cannot drift from the act — `resolveSurvivingName` and
+   * `resolveSurvivingSlug` for the naming, `inheritMissingMetadata` for the
+   * columns, and `planWinnerAuthoritative` for the curated rows that would
+   * cease to exist.
+   *
+   * The last of those was missing until PAR-179, and it was the one that
+   * mattered: a rehearsal that reports a slug and a handful of inherited
+   * columns, and stays silent about a fourteen-element ride layout it is about
+   * to delete, understates the only irreversible thing the merge does.
    */
   async previewMerge(
     winnerId: string,
@@ -154,7 +189,50 @@ export class AttractionMergeService {
       renamed: survivingSlug !== winner.slug,
       removedSlug: loser.slug,
       inheritedColumns: Object.keys(this.inheritMissingMetadata(winner, loser)),
+      droppedCurations: await this.findDroppedCurations(winnerId, loserId),
     };
+  }
+
+  /**
+   * The curated rows `applyMergeDependencies` would delete for this pair.
+   *
+   * Reads `ATTRACTION_DEPENDENCIES` rather than naming a table, so an entry
+   * added to that list is reported here without a second edit — the drift this
+   * whole method exists to close would otherwise reopen with the next curated
+   * table somebody declares.
+   *
+   * Only `winner-authoritative` entries are asked. `discard` rows are derived
+   * and the nightly jobs rewrite them from the history that has just moved onto
+   * the survivor, so naming them would bury the one line that matters under
+   * five that do not — the baselines, the rope drop and the typical waits are
+   * deliberately out of scope (PAR-179).
+   *
+   * Outside a transaction, unlike the merge: this is a read, and the pair can
+   * change between the rehearsal and the act either way.
+   */
+  private async findDroppedCurations(
+    winnerId: string,
+    loserId: string,
+  ): Promise<DroppedCuration[]> {
+    const dropped: DroppedCuration[] = [];
+
+    for (const dep of ATTRACTION_DEPENDENCIES) {
+      if (dep.strategy !== "winner-authoritative") continue;
+
+      const decision = await planWinnerAuthoritative(
+        this.dataSource,
+        dep,
+        winnerId,
+        loserId,
+      );
+
+      if (!decision.droppedFrom) continue;
+      for (const row of decision.dropped) {
+        dropped.push({ table: dep.table, from: decision.droppedFrom, row });
+      }
+    }
+
+    return dropped;
   }
 
   async mergeAttractions(
