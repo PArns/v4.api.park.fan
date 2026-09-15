@@ -1672,24 +1672,29 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug/attractions")
-  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live wait times
+  // 5 minutes. Not for live wait times — this route carries none (see below) —
+  // but the catalog it does serve changes on a curation write, and this is the
+  // window a correction waits out.
+  @UseInterceptors(new HttpCacheInterceptor(300))
   @ApiOperation({
     summary: "List park attractions (geo)",
     description:
       "Returns a paginated list of all attractions for a specific park via geographic path. " +
       "Cached for 5 minutes.\n\n" +
-      "**Carries no live data.** No `status`, no `effectiveStatus`, no `queues`: this route " +
-      "reads the attraction rows and joins nothing. For whether a ride is running, read the " +
-      "park payload (`GET /v1/parks/{continent}/{country}/{city}/{park}`) or the attraction " +
-      "detail route below.\n\n" +
-      "**May still count more attractions than the park payload.** This route returns rows; the " +
-      "park payload collapses same-name duplicates before serving them. Measured on 2026-09-15 " +
-      "over 190 parks, 6477 rows here against 6406 there: 34 of those 71 were retired " +
-      "attractions this route should never have served and now filters out, the remaining 37 " +
-      "are duplicate pairs the catalog holds twice (Walibi Belgium 21, Heide Park 4, Carowinds " +
-      "2) — the same pairs the attraction merge finds by its `foo` / `foo-2` slug rule. Until a " +
-      "merge collapses them, the park payload's number is the one that describes the park and " +
-      "this one is the number of rows.",
+      "**Carries no live data.** No `status`, no `effectiveStatus`, no `queues`, and no " +
+      "forecasts: this route reads the attraction rows and joins nothing, so it states nothing " +
+      "about a ride running or a wait being predicted. For either, read the park payload " +
+      "(`GET /v1/parks/{continent}/{country}/{city}/{park}`) or the attraction detail route " +
+      "below.\n\n" +
+      "**May count more attractions than the park payload.** This route returns rows; the park " +
+      "payload collapses same-name duplicates before serving them. Retired attractions are in " +
+      "neither. What is left over is the catalog holding a ride twice: 37 rows in 12 parks on " +
+      "2026-09-15 (Walibi Belgium 21, Heide Park 4, Carowinds 2) — the pairs the attraction " +
+      "merge finds by its `foo` / `foo-2` slug rule. Both rows of such a pair reach you with " +
+      "the same `name` and the same `slug`, because the numeric suffix is stripped on the way " +
+      "out, so **`id` is the only field that tells them apart** — keying this list by slug " +
+      "silently drops one. Until a merge collapses them, the park payload's number is the one " +
+      "that describes the park and this one is the number of rows.",
   })
   @ApiParam({
     name: "continent",

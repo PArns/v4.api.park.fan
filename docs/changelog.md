@@ -147,7 +147,7 @@ lookup window is the six-hour floor, not an opening — the published opening
 belongs to the day being planned, and tomorrow's has not happened yet. The
 curated works period is unaffected; a live reading has never overruled it.
 
-### Fixed — the park attractions list said `CLOSED` about 6477 rides it knows nothing about
+### Removed — the park attractions list said `CLOSED` about 6477 rides it knows nothing about
 
 `GET /v1/parks/{continent}/{country}/{city}/{park}/attractions` joins no queue
 data, and `AttractionResponseDto.fromEntity` sets `status: "CLOSED"` as a floor
@@ -158,14 +158,23 @@ in the park payload. A search for broken rides over this route finds nothing and
 looks like a valid answer, which is the expensive part — there is no error to
 notice.
 
-The field is now absent (`fromEntityWithoutLiveData`), not renamed: the
-attraction table has no status column, so there is no stored status a different
-name could describe, and an absent optional field reads as "this route has no
-reading" rather than as a closure. `effectiveStatus` and `queues` were already
-absent. Live state comes from the park payload or the attraction detail route.
-The floor stays in `fromEntity`, because the attraction detail path reads it
-when a ride has no row inside the freshness window (`isSourceAbsent([])` is
-false by design) and derives `effectiveStatus` from it.
+**Breaking for a consumer of this route that reads `status`, `hourlyForecast`
+or `forecasts`:** all three are now absent (`fromEntityWithoutLiveData`) rather
+than renamed. The attraction table has no status column, so there is no stored
+status a different name could describe, and an absent optional field reads as
+"this route has no reading" rather than as a closure. The two forecast arrays
+were the same false negative one field over — shipped empty, they said no
+forecast exists for a ride nobody had asked a model about. `effectiveStatus`
+and `queues` were absent already. Live state comes from the park payload or the
+attraction detail route, neither of which changes.
+
+The placeholders stay for the integrated callers, and they are now one named
+set (`LIVE_PLACEHOLDERS`) beside the stored half of the row rather than four
+literals mixed into it, so a live field added later is absent from this route
+without a second edit. `status` in particular has to keep its "CLOSED" floor:
+the attraction detail path reads it when a ride has no row inside the freshness
+window (`isSourceAbsent([])` is false by design) and derives `effectiveStatus`
+from it.
 
 Same route, the second half of the same report: it counted more attractions than
 the park payload for 23 of 190 parks, **6477 against 6406**. The +71 splits
@@ -173,10 +182,10 @@ exactly two ways, and only one of them was a bug:
 
 - **34 retired rows across 11 parks** — 17 at Universal Studios Singapore,
   retired via PAR-159 after ThemeParks.wiki reclassified them as shows. The
-  park payload filters them (`loadParkRelations`), the DTO's own `retiredAt`
-  docstring promises they leave "every park listing, count and search", and
-  this list was the one place that did not. `findAllWithFilters` now excludes
-  them; its only caller is this route.
+  park payload filters them (`loadParkRelations`) and this list did not.
+  `findAllWithFilters` now excludes them; its only caller is this route. The
+  `retiredAt` docstring promises the same of search, where it is still untrue —
+  `src/search` filters nothing, which is PAR-233.
 - **37 duplicate rows in 12 parks** (Walibi Belgium 21, Heide Park 4,
   Carowinds 2) — pairs the catalog holds twice, the same ones
   `AttractionMergeService.findDuplicatePairs` finds by its `foo` / `foo-2` slug

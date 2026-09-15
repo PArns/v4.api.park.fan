@@ -210,13 +210,17 @@ GET /v1/parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug # 
 **Query Parameters:**
 - `page`, `limit` — Pagination for attraction list (default: page=1, limit=10)
 
-**Response includes:**
+**The detail route includes:**
 - Live wait times and status (OPERATING, CLOSED, DOWN, REFURBISHMENT)
 - 24-hour ML-powered wait time forecasts
 - Daily predictions with confidence scores
 - Historical statistics (average, percentiles)
 - Downtime tracking and reliability metrics
 - Full geographic URL for easy navigation
+
+**The list route includes none of that.** It joins no live data: no status, no
+queues, no forecasts, no statistics — the stored catalog of the park and
+nothing else. Read the park payload or the detail route for live state.
 
 **Example Response:**
 ```json

@@ -183,12 +183,17 @@ export class AttractionsService {
    * Finds all attractions with filtering and sorting.
    *
    * Retired attractions are excluded, the same rule `loadParkRelations` applies
-   * to the park payload and the one `retiredAt` documents on the response DTO:
-   * a retired attraction leaves every list, count and search, and keeps only
-   * its own detail route. Without it this list served 34 retired rows across 11
-   * parks on 2026-09-15 (17 of them at Universal Studios Singapore, retired via
-   * PAR-159 after ThemeParks.wiki reclassified them as shows) while the park
-   * payload served none.
+   * to the park payload: a retired attraction leaves the lists that describe a
+   * park as it is today and keeps its own detail route, so its history stays
+   * readable. Without it this list served 34 retired rows across 11 parks on
+   * 2026-09-15 (17 of them at Universal Studios Singapore, retired via PAR-159
+   * after ThemeParks.wiki reclassified them as shows) while the park payload
+   * served none.
+   *
+   * The `retiredAt` docstring on the response DTO claims the same of search,
+   * and there it is not true yet — `loadAttractionIndexFromDb` filters nothing
+   * (measured 2026-09-15: no `retired` anywhere in `src/search`). That is
+   * PAR-233, not this method.
    */
   async findAllWithFilters(filters: {
     park?: string;

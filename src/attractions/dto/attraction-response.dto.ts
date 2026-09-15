@@ -531,19 +531,18 @@ export class AttractionResponseDto {
   /**
    * The stored half of an attraction: everything that comes off the row itself.
    *
-   * `status` here is a PLACEHOLDER, not a reading — the attraction table has no
-   * status column, and the value is whatever the integrated caller overwrites
-   * it with from `queue_data`. It stays "CLOSED" rather than being dropped
-   * because the attraction detail path reads it as its own floor: an
-   * attraction with no row inside the freshness window keeps this value
-   * (`isSourceAbsent([])` is deliberately false), and `effectiveStatus` is
-   * derived from it.
-   *
-   * So a caller that does NOT join live data must not serve this object as it
-   * is — use {@link fromEntityWithoutLiveData}, which keeps the placeholder out
-   * of the response.
+   * Nothing here is a reading, and nothing here is empty for want of data —
+   * which is exactly what separates it from {@link LIVE_PLACEHOLDERS}. Keeping
+   * the two apart is the point: a caller that joins no live data spreads this
+   * and stops, so it cannot accidentally assert the absence of something it
+   * never asked for.
    */
-  static fromEntity(attraction: Attraction): AttractionResponseDto {
+  private static storedHalf(
+    attraction: Attraction,
+  ): Omit<
+    AttractionResponseDto,
+    keyof typeof AttractionResponseDto.LIVE_PLACEHOLDERS
+  > {
     const curated = resolveCuratedFacts(attraction);
 
     return {
@@ -553,8 +552,6 @@ export class AttractionResponseDto {
       // deliberately untouched — see the entity.
       name: curated.name,
       slug: cleanSlugSuffix(attraction.slug),
-
-      status: "CLOSED", // Placeholder — see the docblock above
 
       latitude: attraction.latitude !== undefined ? attraction.latitude : null,
       longitude:
@@ -581,24 +578,60 @@ export class AttractionResponseDto {
         : null,
       retiredReason: attraction.retiredReason ?? null,
       isCurrentlyInSeason: isCurrentlyInSeason(curated),
-
-      hourlyForecast: [],
-      forecasts: [],
-      statistics: null,
     };
   }
 
   /**
-   * The same object for an endpoint that reads no live data at all.
+   * The fields a caller is expected to fill from live data, with the value they
+   * hold until it does. Each one is a statement about data we have not asked
+   * for yet, so only a caller that WILL ask may serve them:
+   *
+   * - `status` "CLOSED" is the floor the attraction detail path reads. A ride
+   *   with no `queue_data` row inside the freshness window keeps it
+   *   (`isSourceAbsent([])` is deliberately false) and `effectiveStatus` is
+   *   derived from it, which is why it is a placeholder rather than absent.
+   * - `hourlyForecast` / `forecasts` empty say "no forecast exists", and
+   *   `statistics` null says "no statistics exist".
+   *
+   * Add a live field here rather than to {@link storedHalf}, and
+   * {@link fromEntityWithoutLiveData} keeps it out of the response without a
+   * second edit.
+   */
+  private static readonly LIVE_PLACEHOLDERS = {
+    status: "CLOSED" as string | undefined,
+    hourlyForecast: [] as AttractionResponseDto["hourlyForecast"],
+    forecasts: [] as AttractionResponseDto["forecasts"],
+    statistics: null as AttractionResponseDto["statistics"],
+  };
+
+  /**
+   * An attraction for a caller that goes on to join live data over it.
+   *
+   * The three integrated callers do: `AttractionIntegrationService` and both
+   * favorites paths overwrite `status` from `queue_data` and fill the
+   * forecasts. A caller that joins nothing must use
+   * {@link fromEntityWithoutLiveData} instead.
+   */
+  static fromEntity(attraction: Attraction): AttractionResponseDto {
+    return {
+      ...AttractionResponseDto.storedHalf(attraction),
+      ...AttractionResponseDto.LIVE_PLACEHOLDERS,
+    };
+  }
+
+  /**
+   * The same attraction for an endpoint that reads no live data at all.
    *
    * Measured on 2026-09-15 over 190 parks: the park attractions list
    * reported 6477 of 6477 attractions as CLOSED, while the park payload
    * reported 849 OPERATING, 307 UNKNOWN, 11 DOWN and 5 REFURBISHMENT among
    * them. The list was not stale and not wrong about a ride — it was serving
-   * `fromEntity`'s placeholder, and a search for broken rides over it finds
-   * nothing while looking like a valid answer.
+   * the placeholder, and a search for broken rides over it finds nothing while
+   * looking like a valid answer. `hourlyForecast: []` and `forecasts: []` rode
+   * along in the same response, saying no forecast exists for a ride nobody
+   * had asked a model about.
    *
-   * The field is dropped rather than renamed: there is no stored status a
+   * The fields are dropped rather than renamed: there is no stored status a
    * different name could describe. An absent optional field reads as "this
    * endpoint does not know", which is the truth; `queues` and
    * `effectiveStatus` are absent here for the same reason. Live state comes
@@ -607,8 +640,6 @@ export class AttractionResponseDto {
   static fromEntityWithoutLiveData(
     attraction: Attraction,
   ): AttractionResponseDto {
-    const dto = AttractionResponseDto.fromEntity(attraction);
-    delete dto.status;
-    return dto;
+    return AttractionResponseDto.storedHalf(attraction);
   }
 }

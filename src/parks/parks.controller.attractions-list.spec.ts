@@ -112,7 +112,7 @@ describe("ParksController › /attractions list carries no live status", () => {
       10,
     );
 
-  it("ships no status, effectiveStatus or queues on any row", async () => {
+  it("ships no live field on any row", async () => {
     const res = await call();
 
     expect(res.data).toHaveLength(2);
@@ -120,6 +120,11 @@ describe("ParksController › /attractions list carries no live status", () => {
       expect(row).not.toHaveProperty("status");
       expect(row).not.toHaveProperty("effectiveStatus");
       expect(row).not.toHaveProperty("queues");
+      // Empty arrays here claimed no forecast exists for a ride nobody had
+      // asked a model about — the same false negative as the CLOSED.
+      expect(row).not.toHaveProperty("hourlyForecast");
+      expect(row).not.toHaveProperty("forecasts");
+      expect(row).not.toHaveProperty("statistics");
     }
   });
 
