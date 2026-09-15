@@ -746,10 +746,20 @@ show. Retiring it would delete a live ride over a disagreement between two
 sources — a curation decision, not a sync one. Only rows that exist purely
 because the wiki once called them attractions are retired.
 
-The reverse direction, `SHOW → ATTRACTION`, is **not** handled: `shows` and
-`restaurants` have no `retired_at` column at all, so there is nothing to set
-(PAR-232). It is not observed in production either — all 34 collisions run one
-way, and `restaurants` has none.
+**And it undoes itself.** A row retired this way carries
+`RECLASSIFIED_UPSTREAM_REASON` verbatim, and `syncAttraction` clears
+`retired_at` again the moment the wiki lists the entity as an `ATTRACTION`. That
+is what makes the retirement safe to run unattended: one malformed `/children`
+response cannot strand a park's rides, because the next correct run brings them
+back. Only rows carrying that exact reason are lifted — a retirement a human
+entered through `POST /admin/retire-attractions` survives every nightly run, and
+that is why the marker is an exact string and not a prefix.
+
+The reverse direction is handled **only on the attraction side**. When an entity
+moves the other way, the row it leaves behind in `shows` or `restaurants` stays
+there, because neither table has a `retired_at` column to set (PAR-232). It is
+not observed in production either — all 34 collisions run one way, and
+`restaurants` has none.
 
 ---
 

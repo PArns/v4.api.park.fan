@@ -5,7 +5,10 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { In, IsNull, Repository } from "typeorm";
 import { Job, Queue } from "bull";
 import { AttractionsService } from "../../attractions/attractions.service";
-import { AttractionRetirementService } from "../../attractions/services/attraction-retirement.service";
+import {
+  AttractionRetirementService,
+  RECLASSIFIED_UPSTREAM_REASON,
+} from "../../attractions/services/attraction-retirement.service";
 import { ShowsService } from "../../shows/shows.service";
 import { RestaurantsService } from "../../restaurants/restaurants.service";
 import { ParksService } from "../../parks/parks.service";
@@ -196,11 +199,18 @@ export class ChildrenMetadataProcessor {
               // id, and then it is synced into a second table while the first
               // one keeps its row. Do this after the show/restaurant syncs so
               // the replacement row exists before the old one is retired.
-              await this.retireReclassifiedAttractions(
-                park.id,
-                park.name,
-                [...shows, ...restaurants].map((child) => child.id),
-              );
+              // Guarded like the two steps below it: a failure here must not
+              // cost this park its mapping job and its cache eviction.
+              try {
+                await this.retireReclassifiedAttractions(
+                  park.name,
+                  [...shows, ...restaurants].map((child) => child.id),
+                );
+              } catch (e) {
+                this.logger.error(
+                  `Failed to retire reclassified attractions for ${park.name}: ${e}`,
+                );
+              }
 
               // Phase 6.6.3: Queue Entity Mapping Job (to match with Queue-Times)
               try {
@@ -455,7 +465,14 @@ export class ChildrenMetadataProcessor {
       .getRepository()
       .find({
         where: { parkId },
-        select: ["id", "externalId", "slug", "name", "queueTimesEntityId"],
+        select: [
+          "id",
+          "externalId",
+          "slug",
+          "name",
+          "queueTimesEntityId",
+          "retiredReason",
+        ],
       });
 
     const existing = findExistingAttraction(
@@ -469,13 +486,27 @@ export class ChildrenMetadataProcessor {
 
     if (existing) {
       ctx?.claimed.add(existing.id);
+      // The entity is back to being an attraction, so the retirement
+      // `retireReclassifiedAttractions` wrote is wrong now. Only that exact
+      // reason is undone — a retirement a human entered through the admin
+      // endpoint has to survive this run and every one after it.
+      const wasReclassified =
+        existing.retiredReason === RECLASSIFIED_UPSTREAM_REASON;
+
       // Update existing attraction (keep existing slug)
       await this.attractionsService.getRepository().update(existing.id, {
         name: mappedData.name,
         latitude: mappedData.latitude,
         longitude: mappedData.longitude,
         attractionType: mappedData.attractionType,
+        ...(wasReclassified ? { retiredAt: null, retiredReason: null } : {}),
       });
+
+      if (wasReclassified) {
+        this.logger.log(
+          `↩️  "${mappedData.name}" is an ATTRACTION upstream again — retirement lifted`,
+        );
+      }
     } else {
       // Generate unique slug for this park
       const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
@@ -612,12 +643,24 @@ export class ChildrenMetadataProcessor {
    * sync one. Only a row that exists purely because the wiki once called it an
    * attraction is retired here.
    *
-   * The reverse direction (`SHOW → ATTRACTION`) is not handled: `shows` and
-   * `restaurants` have no `retired_at` column at all, so there is nothing to
-   * set. See PAR-232.
+   * **This is reversible, and that is what keeps it safe to run unattended.**
+   * A row retired here carries `RECLASSIFIED_UPSTREAM_REASON` verbatim, and
+   * `syncAttraction` clears the retirement again the moment the wiki lists the
+   * entity as an `ATTRACTION` — so a single malformed `/children` response
+   * cannot strand a park's rides: the next correct run brings them back. Only
+   * rows carrying that exact reason are un-retired, so a retirement a human
+   * entered through the admin endpoint survives every nightly run.
+   *
+   * The reverse direction (`SHOW → ATTRACTION`) is only handled on this side.
+   * `shows` and `restaurants` have no `retired_at` column at all, so the row
+   * the entity leaves behind *there* cannot be marked. See PAR-232.
+   *
+   * The lookup is deliberately not scoped to the park: `attractions.externalId`
+   * is globally unique, so there is at most one row either way, and scoping it
+   * would miss a row whose park changed upstream. It is the same set the
+   * diagnostic query in §5.6 of the doc returns.
    */
   private async retireReclassifiedAttractions(
-    parkId: string,
     parkName: string,
     reclassifiedExternalIds: string[],
   ): Promise<void> {
@@ -625,7 +668,6 @@ export class ChildrenMetadataProcessor {
 
     const stale = await this.attractionsService.getRepository().find({
       where: {
-        parkId,
         externalId: In(reclassifiedExternalIds),
         retiredAt: IsNull(),
         queueTimesEntityId: IsNull(),
@@ -634,15 +676,15 @@ export class ChildrenMetadataProcessor {
     });
     if (stale.length === 0) return;
 
+    // The wiki does not say when it reclassified an entity, so this is the day
+    // it was noticed. `RECLASSIFIED_UPSTREAM_REASON` says so, because the
+    // column otherwise reads as the day the ride stopped existing.
     const retiredAt = new Date().toISOString();
     await this.attractionRetirementService.retire(
       stale.map((attraction) => ({
         attractionId: attraction.id,
         retiredAt,
-        reason:
-          "ThemeParks.wiki now publishes this entity as a show or a restaurant, " +
-          "so the attraction row has no source left. The entity itself lives on " +
-          "under the same id in shows/restaurants.",
+        reason: RECLASSIFIED_UPSTREAM_REASON,
       })),
     );
 

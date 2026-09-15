@@ -34,9 +34,17 @@ on 2026-08-29. Retiring it would delete a live ride over a disagreement between
 two sources, which is a curation decision rather than a sync one. Two of the 34
 rows are held back by this rule.
 
-The reverse direction (`SHOW → ATTRACTION`) is not handled, because `shows` and
-`restaurants` have no `retired_at` column to set — PAR-232. It is not observed
-in production either: all 34 collisions run one way, and `restaurants` has none.
+**The retirement undoes itself.** A row retired this way carries
+`RECLASSIFIED_UPSTREAM_REASON` verbatim, and `syncAttraction` lifts it again as
+soon as the wiki lists the entity as an `ATTRACTION`. That is what makes it safe
+to run unattended — a single malformed `/children` response cannot strand a
+park's rides. Only that exact reason is lifted, so a retirement entered by hand
+through `POST /admin/retire-attractions` survives every run.
+
+The row an entity leaves behind in `shows` or `restaurants` when it moves the
+other way is still not handled, because neither table has a `retired_at` column
+to set — PAR-232. It is not observed in production either: all 34 collisions run
+one way, and `restaurants` has none.
 
 Details and the diagnostic query: `docs/architecture/attraction-status-and-seasonality.md` §5.6.
 

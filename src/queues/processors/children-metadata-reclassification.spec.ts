@@ -1,4 +1,5 @@
 import { In, IsNull } from "typeorm";
+import { RECLASSIFIED_UPSTREAM_REASON } from "../../attractions/services/attraction-retirement.service";
 import { ChildrenMetadataProcessor } from "./children-metadata.processor";
 
 /**
@@ -21,6 +22,7 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
     save: jest.fn(),
   };
   const retirementService = { retire: jest.fn() };
+  const themeParksMapper = { mapAttraction: jest.fn() };
 
   let processor: ChildrenMetadataProcessor;
 
@@ -40,7 +42,7 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       { getRepository: () => ({}) } as any,
       {} as any,
       {} as any,
-      {} as any,
+      themeParksMapper as any,
       {} as any,
       {} as any,
       {} as any,
@@ -49,12 +51,10 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
     );
   });
 
+  const otherShowExternalId = "1b2c3d4e-5f60-4718-8293-a4b5c6d7e8f9";
+
   const retireReclassified = (externalIds: string[]) =>
-    (processor as any).retireReclassifiedAttractions(
-      parkId,
-      parkName,
-      externalIds,
-    );
+    (processor as any).retireReclassifiedAttractions(parkName, externalIds);
 
   describe("ATTRACTION → SHOW", () => {
     it("retires the abandoned attraction row", async () => {
@@ -66,13 +66,29 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       const [requests] = retirementService.retire.mock.calls[0];
       expect(requests).toHaveLength(1);
       expect(requests[0].attractionId).toBe("row-sesame-street");
-      expect(requests[0].reason).toContain("ThemeParks.wiki");
+      expect(requests[0].reason).toBe(RECLASSIFIED_UPSTREAM_REASON);
       expect(Date.parse(requests[0].retiredAt)).not.toBeNaN();
     });
 
     it("leaves the row alone when the entity still arrives as an ATTRACTION", async () => {
-      // The counter-check for the case above: same repository, same row, and
-      // the only difference is that no show or restaurant carries this id.
+      // The counter-check for the case above. The park does have shows, so the
+      // branch runs with a real id list — only this row's id is not in it, and
+      // the query comes back without it.
+      attractionRepo.find.mockResolvedValue([]);
+
+      await retireReclassified([otherShowExternalId]);
+
+      expect(attractionRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            externalId: In([otherShowExternalId]),
+          }),
+        }),
+      );
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    it("does not query at all when the park publishes no shows or restaurants", async () => {
       attractionRepo.find.mockResolvedValue([staleRow]);
 
       await retireReclassified([]);
@@ -91,7 +107,6 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       expect(attractionRepo.find).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
-            parkId,
             externalId: In([showExternalId]),
             retiredAt: IsNull(),
             queueTimesEntityId: IsNull(),
@@ -175,8 +190,10 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       jest
         .spyOn(processor as any, "syncAttraction")
         .mockResolvedValue(undefined);
-      jest.spyOn(processor as any, "syncShow").mockResolvedValue(undefined);
-      jest
+      const showSpy = jest
+        .spyOn(processor as any, "syncShow")
+        .mockResolvedValue(undefined);
+      const restaurantSpy = jest
         .spyOn(processor as any, "syncRestaurant")
         .mockResolvedValue(undefined);
 
@@ -196,7 +213,100 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       await processor.handleFetchChildren({} as any);
 
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy).toHaveBeenCalledWith(parkId, parkName, ["show-1", "rest-1"]);
+      expect(spy).toHaveBeenCalledWith(parkName, ["show-1", "rest-1"]);
+
+      // The replacement row has to exist before the old one is retired — a
+      // reader who only sees the assertion above could move the call up.
+      expect(showSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        spy.mock.invocationCallOrder[0],
+      );
+      expect(restaurantSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        spy.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("keeps syncing the park when retiring throws", async () => {
+      jest
+        .spyOn(processor as any, "retireReclassifiedAttractions")
+        .mockRejectedValue(new Error("deadlock detected"));
+      jest
+        .spyOn(processor as any, "syncAttraction")
+        .mockResolvedValue(undefined);
+      jest.spyOn(processor as any, "syncShow").mockResolvedValue(undefined);
+      jest
+        .spyOn(processor as any, "syncRestaurant")
+        .mockResolvedValue(undefined);
+
+      const queueAdd = jest.fn();
+      const redisDel = jest.fn();
+      (processor as any).parksService = {
+        findAll: jest
+          .fn()
+          .mockResolvedValue([
+            { id: parkId, name: parkName, wikiEntityId: "wiki-uss" },
+          ]),
+      };
+      (processor as any).themeParksClient = {
+        getEntityChildren: jest.fn().mockResolvedValue(childrenOf("uss")),
+      };
+      (processor as any).entityMappingsQueue = { add: queueAdd };
+      (processor as any).redis = { del: redisDel };
+
+      await processor.handleFetchChildren({} as any);
+
+      // Both of these sit after the retirement call and are what an unguarded
+      // throw would have cost this park.
+      expect(queueAdd).toHaveBeenCalledTimes(1);
+      expect(redisDel).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * The way back. Without it a single malformed `/children` response would
+   * strand a park's rides for good, since nothing else clears `retired_at`.
+   */
+  describe("the entity becomes an ATTRACTION again", () => {
+    const syncBack = (row: Record<string, unknown>) => {
+      themeParksMapper.mapAttraction.mockReturnValue({
+        externalId: showExternalId,
+        name: "Sesame Street",
+        parkId,
+      });
+      attractionRepo.find.mockResolvedValue([
+        { slug: "sesame-street", queueTimesEntityId: null, ...row },
+      ]);
+      return (processor as any).syncAttraction({}, parkId);
+    };
+
+    it("lifts a retirement this sync wrote", async () => {
+      await syncBack({
+        id: "row-sesame-street",
+        externalId: showExternalId,
+        name: "Sesame Street",
+        retiredReason: RECLASSIFIED_UPSTREAM_REASON,
+      });
+
+      expect(attractionRepo.update).toHaveBeenCalledWith(
+        "row-sesame-street",
+        expect.objectContaining({ retiredAt: null, retiredReason: null }),
+      );
+    });
+
+    it("leaves a retirement a human entered alone", async () => {
+      // Same row, same upstream answer, and the only difference is who wrote
+      // the reason. Retiring by hand has to outlive the nightly sync.
+      await syncBack({
+        id: "row-sesame-street",
+        externalId: showExternalId,
+        name: "Sesame Street",
+        retiredReason:
+          "Demolished in January 2026. Source: https://example.org",
+      });
+
+      expect(attractionRepo.update).toHaveBeenCalledTimes(1);
+      const [, patch] = attractionRepo.update.mock.calls[0];
+      expect(patch).not.toHaveProperty("retiredAt");
+      expect(patch).not.toHaveProperty("retiredReason");
     });
   });
 });

@@ -7,6 +7,22 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 
+/**
+ * The exact `retired_reason` the children sync writes when an entity is
+ * reclassified upstream, and the marker that lets it undo itself.
+ *
+ * It has to be an exact string rather than a prefix or a substring, because
+ * the sync only un-retires rows carrying *this* reason: a retirement entered
+ * by a human through `POST /admin/retire-attractions` must survive every
+ * nightly run, and a fuzzy match would eventually swallow one.
+ */
+export const RECLASSIFIED_UPSTREAM_REASON =
+  "ThemeParks.wiki publishes this entity as a show or a restaurant rather than " +
+  "an attraction, so this row has no source left. The entity itself lives on " +
+  "under the same id in shows/restaurants. Written by the children sync; the " +
+  "date is when this was noticed, not when the reclassification happened. " +
+  "See docs/architecture/attraction-status-and-seasonality.md §5.6 (PAR-159).";
+
 export interface RetirementRequest {
   attractionId: string;
   /** The day it stopped existing, where a source states one. */
