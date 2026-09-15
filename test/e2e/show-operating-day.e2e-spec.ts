@@ -360,10 +360,21 @@ describe("Showtimes follow the operating day (E2E)", () => {
      * counted on the morning after is counted on the wrong weekday, and the
      * projection then promises Saturday's late show on a Sunday.
      */
-    async function seedRelative(daysAgo: number): Promise<{
+    async function seedRelative(
+      daysAgo: number,
+      opts: {
+        /** Unique per case: nothing clears the tables between tests. */
+        tag?: string;
+        /** A plain 10:00 → 22:00 day instead of one that runs to 01:00. */
+        wrap?: boolean;
+        /** Write the same showtimes a second time, from a later snapshot. */
+        twice?: boolean;
+      } = {},
+    ): Promise<{
       showId: string;
       openDay: Date;
     }> {
+      const { tag = "", wrap = true, twice = false } = opts;
       const parkRepo = dataSource.getRepository(Park);
       const showRepo = dataSource.getRepository(Show);
       const liveRepo = dataSource.getRepository(ShowLiveData);
@@ -371,17 +382,17 @@ describe("Showtimes follow the operating day (E2E)", () => {
 
       const park = await parkRepo.save(
         createTestPark({
-          externalId: "test-park-wrap-rel",
-          name: "Test Wrap Park Rel",
-          slug: "test-wrap-park-rel",
+          externalId: `test-park-wrap-rel${tag}`,
+          name: `Test Wrap Park Rel${tag}`,
+          slug: `test-wrap-park-rel${tag}`,
           timezone: "UTC",
         }),
       );
       const show = await showRepo.save(
         showRepo.create({
-          externalId: "test-show-rel",
-          name: "Test Rel Show",
-          slug: "test-rel-show",
+          externalId: `test-show-rel${tag}`,
+          name: `Test Rel Show${tag}`,
+          slug: `test-rel-show${tag}`,
           parkId: park.id,
         }),
       );
@@ -392,8 +403,12 @@ describe("Showtimes follow the operating day (E2E)", () => {
       open.setUTCDate(open.getUTCDate() - daysAgo);
       open.setUTCHours(10, 0, 0, 0);
       const close = new Date(open);
-      close.setUTCDate(close.getUTCDate() + 1);
-      close.setUTCHours(1, 0, 0, 0);
+      if (wrap) {
+        close.setUTCDate(close.getUTCDate() + 1);
+        close.setUTCHours(1, 0, 0, 0);
+      } else {
+        close.setUTCHours(22, 0, 0, 0);
+      }
       const midnightShow = new Date(open);
       midnightShow.setUTCDate(midnightShow.getUTCDate() + 1);
       midnightShow.setUTCHours(0, 30, 0, 0);
@@ -410,22 +425,42 @@ describe("Showtimes follow the operating day (E2E)", () => {
         }),
       );
 
+      const showtimes = [
+        {
+          startTime: new Date(
+            open.getTime() + 12 * 60 * 60 * 1000,
+          ).toISOString(),
+          type: "Operating",
+        },
+        // Only reachable on a wrap day; on a plain one it falls outside the
+        // published window and stays on its own date, which is the point of
+        // the negative case below.
+        { startTime: midnightShow.toISOString(), type: "Operating" },
+      ];
+
       await liveRepo.save(
         liveRepo.create({
           showId: show.id,
           status: LiveStatus.OPERATING,
           timestamp: new Date(open.getTime() + 10 * 60 * 60 * 1000),
-          showtimes: [
-            {
-              startTime: new Date(
-                open.getTime() + 12 * 60 * 60 * 1000,
-              ).toISOString(),
-              type: "Operating",
-            },
-            { startTime: midnightShow.toISOString(), type: "Operating" },
-          ],
+          showtimes,
         }),
       );
+
+      if (twice) {
+        // The feed republishes the same programme every poll, so the same
+        // start time arrives once per snapshot. Deduplication used to be
+        // `array_agg(DISTINCT hhmm)`; it now runs over a wider key, and this
+        // is the fixture that tells the two apart.
+        await liveRepo.save(
+          liveRepo.create({
+            showId: show.id,
+            status: LiveStatus.OPERATING,
+            timestamp: new Date(open.getTime() + 11 * 60 * 60 * 1000),
+            showtimes,
+          }),
+        );
+      }
 
       return { showId: show.id, openDay: open };
     }
@@ -443,6 +478,51 @@ describe("Showtimes follow the operating day (E2E)", () => {
       // day, so the night does not seed a second weekday of its own.
       expect(patterns).toHaveLength(1);
       expect(patterns[0].weekday).toBe(openDay.getUTCDay());
+      expect(patterns[0].times).toEqual(["22:00", "00:30"]);
+    });
+
+    it("keys an ordinary day on its own weekday, and leaves the night out", async () => {
+      // The negative half. A park closing at 22:00 publishes no claim on the
+      // night, so the 00:30 entry is NOT folded back — it belongs to the next
+      // calendar day, which seeds a weekday of its own. Without this case the
+      // rule could key everything on the opening day and still look right.
+      const { showId, openDay } = await seedRelative(4, {
+        tag: "-plain",
+        wrap: false,
+      });
+
+      await shows.rebuildSchedulePatterns();
+
+      const patterns = await dataSource
+        .getRepository(ShowSchedulePattern)
+        .find({ where: { showId }, order: { weekday: "ASC" } });
+
+      const openWeekday = patterns.find(
+        (p) => p.weekday === openDay.getUTCDay(),
+      );
+      expect(openWeekday?.times).toEqual(["22:00"]);
+
+      const nextWeekday = patterns.find(
+        (p) => p.weekday === (openDay.getUTCDay() + 1) % 7,
+      );
+      expect(nextWeekday?.times).toEqual(["00:30"]);
+    });
+
+    it("does not repeat a time two snapshots both carry", async () => {
+      // Every poll republishes the day's whole programme, so the raw rows hold
+      // each start time once per snapshot. The times array is a set.
+      const { showId } = await seedRelative(5, {
+        tag: "-twice",
+        twice: true,
+      });
+
+      await shows.rebuildSchedulePatterns();
+
+      const patterns = await dataSource
+        .getRepository(ShowSchedulePattern)
+        .find({ where: { showId } });
+
+      expect(patterns).toHaveLength(1);
       expect(patterns[0].times).toEqual(["22:00", "00:30"]);
     });
   });
