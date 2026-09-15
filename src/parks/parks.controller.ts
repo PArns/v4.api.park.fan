@@ -1685,11 +1685,14 @@ export class ParksController {
     description:
       "Returns a paginated list of all attractions for a specific park via geographic path. " +
       "Cached for 5 minutes.\n\n" +
-      "**Carries no live data.** No `status`, no `effectiveStatus`, no `queues`, and no " +
-      "forecasts: this route reads the attraction rows and joins nothing, so it states nothing " +
-      "about a ride running or a wait being predicted. For either, read the park payload " +
+      "**Carries no live data.** No `status`, no `effectiveStatus`, no `queues`, no " +
+      "`hourlyForecast`, no `forecasts` and no `statistics`: this route reads the attraction " +
+      "rows and joins nothing, so it states nothing about a ride running, a wait being " +
+      "predicted or a figure being measured. For any of those, read the park payload " +
       "(`GET /v1/parks/{continent}/{country}/{city}/{park}`) or the attraction detail route " +
-      "below.\n\n" +
+      "below. The response schema below is the shared attraction model and still lists the " +
+      "six as optional fields; on this route they are never sent. Narrowing the schema " +
+      "itself is PAR-249.\n\n" +
       "**May count more attractions than the park payload.** This route returns rows; the park " +
       "payload groups them by `name` and serves one row per name. Retired attractions are in " +
       "neither. What is left over is 37 rows across 12 parks on 2026-09-15 (Walibi Belgium 21, " +

@@ -183,7 +183,12 @@ from it.
 
 Same route, the second half of the same report: it counted more attractions than
 the park payload for 23 of 190 parks, **6477 against 6406**. The +71 splits
-exactly two ways, and only one of them was a bug:
+exactly two ways, and only one of them was a bug. (Two sweeps are quoted below.
+The totals above are the 14:10 UTC run, which reached 190 parks — 23 Fantawild
+parks answered 502 that hour. A second run at 19:53 reached all 213 and read
+7211 against 7140: different hour, different rows operating, same +71 over the
+same 23 parks. Counts of parks and rows come from the first, the breakdown of
+the duplicate groups from the second.)
 
 - **34 retired rows across 11 parks** — 17 at Universal Studios Singapore,
   retired via PAR-159 after ThemeParks.wiki reclassified them as shows. The
@@ -198,8 +203,11 @@ exactly two ways, and only one of them was a bug:
   `name` and `slug` (the numeric suffix is stripped on the way out) and `id` is
   all that separates them. `id` is the only field *guaranteed* to differ,
   though, not the only one that does: 13 of the 34 groups also disagree about
-  coordinates, `land`, `isSeasonal` or a height limit — `deduplicateEntities`
-  picks between them, preferring the row that has coordinates.
+  coordinates, `land`, `isSeasonal` or a height limit, so which of the two the
+  park payload shows decides those values. `deduplicateEntities` picks the row
+  reading `OPERATING` first, and only between two rows of equal status the one
+  that has coordinates — so on a closed day the choice falls through to the
+  coordinates and on an open one it may not.
 
   Three groups are not a duplicate at all but **two different rides sharing a
   curated name**, and there the collapse loses a ride rather than a copy: at
