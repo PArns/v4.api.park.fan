@@ -89,16 +89,28 @@ review gate, so a false positive deletes a real park:
   §5.4's rule ("two ids from the same source are that source saying these are
   two things") applied to parks.
 - **`SHARED_POINT_NAME_SIMILARITY` = 0.6**, under the pair it must catch and far
-  over the only other pairs sharing a point (0.1600–0.2000). It cannot do more:
-  a water park beside its theme park scores at or above the target (Legoland
-  Windsor 0.7429, Alton Towers 0.6923), and so does another park of the same
-  brand (`Wet 'n' Wild Las Vegas` 0.6061), so keeping those out is the radius's
-  job.
+  over the only other pairs sharing a point (0.1600–0.2000). **0.65 rather than
+  0.6, so that the name and the radius refuse independently:** at 0.6 exactly
+  one catalogue pair cleared both the floor and `sourcesDisjoint` and was held
+  out by geometry alone — the Rockford row again, 0.6122 at 0.0424 km, on
+  coordinates Queue-Times publishes rather than ones we derive, so one upstream
+  correction would have moved it onto the point. 63 pairs score in
+  [0.60, 0.65) and every one is two different parks, the closest of them
+  0.1901 km apart, so the raise excludes nothing the radius did not already
+  exclude and leaves the target 0.0423 of margin. The nearest pair the radius
+  must now separate is 0.1174 km away (`Boonie Bears Adventure Park Linhai`
+  against its water park, 0.6923), 11.7× the radius against 4.2× before. It
+  still cannot do more than that: a water park beside its theme park scores at
+  or above the target (Legoland Windsor 0.7429, Alton Towers 0.6923), so
+  keeping that class out stays the radius's job.
 
-The existing four branches and their 0.85 thresholds are untouched, and this is
-detection only — merging the Wet'n'Wild rows stays a separate operation.
-Details and the measurement table:
+The existing four branches and their 0.85 thresholds are untouched. This change
+adds the detector and nothing else — it does **not** add a gate in front of the
+merge, so `autoDetect: true` merges this new pair as unconditionally as it
+merges the other four branches' pairs. That gate is PAR-247. Details and the
+measurement table:
 [Attraction Status & Seasonality §5.5](architecture/attraction-status-and-seasonality.md).
+
 ### Fixed — an entity that changes its `entityType` upstream no longer leaves a dead attraction behind
 
 ThemeParks.wiki reclassifies entities without changing their id. On 2026-04-25

@@ -294,12 +294,23 @@ describe("ParkValidatorService.findDuplicates", () => {
     expect(await service.findDuplicates()).toEqual([]);
   });
 
-  it("pins the name floor near 0.6, not merely somewhere under 0.6923", async () => {
-    // Wet'n'Wild Sydney is a different park of the same brand and scores
-    // 0.5625 against the Gold Coast row — the closest realistic miss. Without
-    // a case in this range the suite stays green with the floor dropped to
-    // 0.25, and the constant's whole claim is that it sits just under the
-    // pair it catches.
+  it("pins the name floor at 0.65, not merely somewhere under 0.6923", async () => {
+    // `Wet 'n' Wild Las Vegas` against the Gold Coast row is 0.6061 — a real
+    // park of the same brand, and the figure the floor was raised past. It
+    // shares this pair's point and its disjoint sources, so the NAME is the
+    // only thing refusing it: drop the floor back to 0.6 and this goes red.
+    parkRepository.find.mockResolvedValue([
+      park({ ...wetnwildWiki, name: "Wet 'n' Wild Las Vegas" }),
+      wetnwildQueueTimes,
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("pins the floor from below too — 0.5625 on one point is still refused", async () => {
+    // Wet'n'Wild Sydney, another park of the same brand, at 0.5625. Guards the
+    // range between the two figures: without a case down here the suite stayed
+    // green with the floor dropped as far as 0.25.
     parkRepository.find.mockResolvedValue([
       park({ ...wetnwildWiki, name: "Wet 'n' Wild Sydney" }),
       wetnwildQueueTimes,
@@ -394,6 +405,25 @@ describe("ParkValidatorService.findDuplicates", () => {
     parkRepository.find.mockResolvedValue([
       park({ ...wetnwildWiki, wikiEntityId: null }),
       park({ ...wetnwildQueueTimes, queueTimesEntityId: null }),
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("needs a source on EACH side, not a source on either", async () => {
+    // Only the wiki row is claimed by an upstream; the other names no source
+    // at all. "Two sources agree on this point" is then not what happened, and
+    // the disjointness test is satisfied vacuously. Turning the branch's
+    // `namesASource(p1) && namesASource(p2)` into `||` leaves the case above
+    // green and only this one red.
+    parkRepository.find.mockResolvedValue([
+      wetnwildWiki,
+      park({
+        ...wetnwildQueueTimes,
+        wikiEntityId: null,
+        queueTimesEntityId: null,
+        wartezeitenEntityId: null,
+      }),
     ]);
 
     expect(await service.findDuplicates()).toEqual([]);

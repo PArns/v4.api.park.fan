@@ -76,9 +76,15 @@ export interface MissingWzId {
  * at 0.0424 km — two real parks 110 km apart, of which the Rockford row
  * carries a Gurnee geocode. That last pair also has disjoint sources, so at
  * 0.05 km the name floor below would be the only thing standing between it
- * and an automatic merge, by 0.6122 against 0.6 — twelve thousandths. At
- * 0.01 km it is out on geometry instead, with the nearest non-duplicate four
- * times the radius away and nothing at all in between.
+ * and an automatic merge. At 0.01 km it is out on geometry instead — and
+ * since the floor is 0.65 it is out on the name as well, which is why that
+ * figure is what it is.
+ *
+ * With both conditions in place the nearest row pair this radius has to
+ * separate is **0.1174 km** away (`Boonie Bears Adventure Park Linhai`
+ * against `Boonie Bears Water Park Linhai`, 0.6923), i.e. 11.7× the radius,
+ * with nothing at all in between. At a floor of 0.6 that margin was the
+ * Rockford pair's 0.0424 km, 4.2×.
  */
 const SHARED_POINT_KM = 0.01;
 
@@ -88,15 +94,30 @@ const SHARED_POINT_KM = 0.01;
  *
  * It sits under the pair it must catch (0.6923) and far over the only other
  * pairs sharing a point, PortAventura World's own three (0.1600–0.2000).
- * It cannot do more than that, and two measured figures say where its limit
- * is. The dangerous shape is a second venue at one address, and those score AT
- * or ABOVE the target — Legoland Windsor against its water park 0.7429, Alton
- * Towers against its waterpark 0.6923. So does another park of the same brand:
- * `Wet 'n' Wild Las Vegas` against `Wet 'n' Wild Gold Coast` is 0.6061, over
- * this floor. Keeping all of them out is `SHARED_POINT_KM`'s job, not this
- * constant's; no two such rows in the catalogue are closer than 0.0424 km.
+ *
+ * **0.65 rather than 0.60, so that this condition and `SHARED_POINT_KM` hold
+ * independently.** At 0.60 exactly one catalogue pair cleared both the floor
+ * and `sourcesDisjoint` and was held out by the radius alone: `Hurricane
+ * Harbor Chicago` against `Six Flags Hurricane Harbor, Rockford`, 0.6122 at
+ * 0.0424 km. That radius is not ours to rely on there — the Rockford row's
+ * coordinates are the Gurnee point Queue-Times itself publishes, so one
+ * upstream correction moves the pair to 0.0000 km and an automatic merge
+ * deletes a real park. Measured over all 213 catalogue parks (22 578 pairs):
+ * **63 pairs score in [0.60, 0.65), every one of them two genuinely different
+ * parks**, and the closest of the 63 is 0.1901 km apart (`Fantawild FT Wild
+ * Land Xiaogan` against `Fantawild Water Park Xiaogan`), i.e. 19× this
+ * radius. Raising the floor therefore excludes nothing the radius does not
+ * already exclude, and leaves the target pair 0.0423 of margin.
+ *
+ * It still cannot do more than that, and the measured figures say where its
+ * limit is. The dangerous shape is a second venue at one address, and those
+ * score AT or ABOVE the target — Legoland Windsor against its water park
+ * 0.7429, Alton Towers against its waterpark 0.6923, and `Boonie Bears
+ * Adventure Park Linhai` against `Boonie Bears Water Park Linhai` 0.6923 at
+ * 0.1174 km. Keeping that class out is `SHARED_POINT_KM`'s job, not this
+ * constant's; no two such rows in the catalogue are closer than 0.1174 km.
  */
-const SHARED_POINT_NAME_SIMILARITY = 0.6;
+const SHARED_POINT_NAME_SIMILARITY = 0.65;
 
 /** Whether any of the three upstream sources has given this row an ID. */
 function namesASource(park: {

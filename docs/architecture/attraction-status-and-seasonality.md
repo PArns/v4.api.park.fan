@@ -733,11 +733,24 @@ What that measurement says, and what it constrains:
   Windsor against its water park 0.7429, Alton Towers against its waterpark
   0.6923, Heide Park against its resort 0.7273 — and so does another park of
   the same brand, `Wet 'n' Wild Las Vegas` against the Gold Coast row at
-  0.6061. No threshold separates that class. The radius does: no two such rows
-  in the catalogue sit closer than 0.0424 km, and the only pairs on one point
-  are one resort's three parks, at ≤ 0.2000 on names.
+  0.6061. No threshold separates that class. The radius does: with the floor at
+  0.65 no two such rows in the catalogue sit closer than 0.1174 km (`Boonie
+  Bears Adventure Park Linhai` against its water park, 0.6923), 11.7× the
+  radius, and the only pairs on one point are one resort's three parks, at
+  ≤ 0.2000 on names.
 
-Detection only. Merging the two rows stays a separate, irreversible operation.
+  The floor is 0.65 and not 0.6 for one measured reason: at 0.6 the Rockford
+  pair cleared both the name floor and `sourcesDisjoint`, leaving the radius as
+  its only refusal — and that radius rests on coordinates Queue-Times
+  publishes, not on ones we derive. 63 catalogue pairs score in [0.60, 0.65),
+  all of them genuinely different parks, and the closest is 0.1901 km apart, so
+  raising the floor refuses nothing the radius was not refusing already.
+
+This section adds the detector, not a gate in front of the merge:
+`POST /v1/admin/merge-duplicate-parks` with `autoDetect: true` still merges
+every pair `findDuplicates` returns, this one included, with no dry run and no
+review step. Giving that endpoint the `safe`/`needsReview`/`dryRun` treatment
+the attraction side already has is PAR-247.
 
 ### 5.6 An entity changed its `entityType` and left its old row behind
 
