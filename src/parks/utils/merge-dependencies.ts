@@ -373,13 +373,13 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // The per-ride half of a table the park side deliberately keeps out of
     // every dependency list. There the rows are park-level (`attractionId IS
     // NULL`) or per-ride and told apart by that nullable column, which a
-    // row-wise `IN` cannot compare — so both raw paths do it by hand with `IS
-    // NOT DISTINCT FROM`.
+    // row-wise `IN` cannot compare — so every park path goes through
+    // `migrateScheduleEntries` below and compares with `IS NOT DISTINCT FROM`.
     //
     // None of that applies on this side, which is why the same table can be a
     // plain `move` here: `WHERE "attractionId" = $loser` has already excluded
     // every park-level row, and `(date, scheduleType)` carries no nullable
-    // column. The key is the one `mergeParks` uses for the park-level move.
+    // column. It is the park path that cannot use this key, not this one.
     //
     // How many rows that is, is NOT established here, and the entry does not
     // depend on it. No write path in this repo sets `attractionId` on a
