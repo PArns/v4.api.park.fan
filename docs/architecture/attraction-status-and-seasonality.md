@@ -695,7 +695,43 @@ The lesson is the mirror image of §5.4. There, two identical names had to be
 kept apart because they came from one source; here, two rows that agree on
 *every* physical fact are kept apart because their names disagree. **A distance
 of 0.000 km between two parks is a stronger statement than any string
-comparison**, and the detector currently has no way to say so (PAR-160).
+comparison**, and the detector had no way to say so.
+
+**Fixed in PAR-160** by a fifth branch, `sharedPoint`, which lets the physical
+facts lead: coordinates under `SHARED_POINT_KM`, sources disjoint, and a name
+score over `SHARED_POINT_NAME_SIMILARITY` — a floor rather than a verdict. All
+three numbers were placed against the whole catalogue (213 parks, 22 578 pairs)
+rather than chosen, because `POST merge-duplicate-parks` with `autoDetect: true`
+merges whatever `findDuplicates` returns, with no dry run and no review gate.
+What that measurement says, and what it constrains:
+
+| km | name | pair |
+| -- | -- | -- |
+| 0.0000 | 0.1600 | Caribe Aquatic Park ↔ Ferrari Land (Vila-seca) |
+| 0.0000 | 0.2000 | Caribe Aquatic Park ↔ PortAventura Park |
+| 0.0000 | 0.1600 | Ferrari Land ↔ PortAventura Park |
+| 0.0000 | **0.6923** | **Wet 'n' Wild Gold Coast ↔ Wet'n'Wild** |
+| 0.0424 | 0.6122 | Hurricane Harbor Chicago ↔ Six Flags Hurricane Harbor, Rockford |
+
+- **The radius is 0.01 km, not the 0.05 the ticket proposed.** At 0.05 the
+  Rockford row comes with it — a real park 110 km away whose geocode says
+  Gurnee, and whose sources are disjoint too, so only the name would have stood
+  between it and an automatic merge, by 0.08. Between 0.0000 and 0.0424 the
+  catalogue is empty.
+- **Disjoint sources is the PortAventura guard**, and it is the §5.4 rule one
+  level up: Queue-Times carries 19 for PortAventura Park and 277 for Ferrari
+  Land, which is that source saying it knows two parks on this geocode. The
+  test reads what a row *is* (which source columns it fills), never when it was
+  last heard from.
+- **The name floor is 0.6 and cannot carry more than it does.** A water park
+  beside its theme park scores at or above the pair we must catch — Legoland
+  Windsor against its water park 0.7429, Alton Towers against its waterpark
+  0.6923, Heide Park against its resort 0.7273 — so no threshold separates that
+  class. The radius does: no two siblings in the catalogue sit closer than
+  0.0424 km, and the only pairs on one point are one resort's three parks, at
+  ≤ 0.2000 on names.
+
+Detection only. Merging the two rows stays a separate, irreversible operation.
 
 ---
 

@@ -6,6 +6,43 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — one point and two sources now outweigh a regional name suffix
+
+`ParkValidatorService.findDuplicates` asked the name first on every branch: all
+four required `nameSimilarity >= 0.85`, and `geoProximity` only ever appeared in
+a conjunction with it. So `Wet'n'Wild` (ThemeParks.wiki) and `Wet 'n' Wild Gold
+Coast` (Queue-Times) — one water park in Oxenford, same coordinates to seven
+decimals, same city, the same thirteen slides — scored **0.6923** and stayed two
+parks, with `GET /v1/admin/duplicate-parks` answering `{"total":0,"pairs":[]}`.
+
+A fifth branch, `sharedPoint`, lets the physical facts lead instead. Three
+conditions, not one threshold, each placed against the whole catalogue (213
+parks, 22 578 pairs) rather than chosen — `POST merge-duplicate-parks` with
+`autoDetect: true` merges whatever this function returns, with no dry run and no
+review gate, so a false positive deletes a real park:
+
+- **`SHARED_POINT_KM` = 0.01**, not the 0.05 first proposed. Under 0.05 km the
+  catalogue also holds `Hurricane Harbor Chicago` against `Six Flags Hurricane
+  Harbor, Rockford` at 0.0424 km — two real parks 110 km apart, of which the
+  Rockford row carries a Gurnee geocode. Its sources are disjoint too, so only
+  the name stood between it and a merge, by 0.08. Nothing lies between 0.0000
+  and 0.0424.
+- **Sources disjoint.** One upstream source holding an ID for *both* rows is
+  that source saying it knows two parks here — Queue-Times carries 19 for
+  PortAventura Park and 277 for Ferrari Land on one resort geocode. This is
+  §5.4's rule ("two ids from the same source are that source saying these are
+  two things") applied to parks.
+- **`SHARED_POINT_NAME_SIMILARITY` = 0.6**, under the pair it must catch and far
+  over the only other pairs sharing a point (0.1600–0.2000). It cannot do more:
+  a water park beside its theme park scores at or above the target (Legoland
+  Windsor 0.7429, Alton Towers 0.6923), so keeping those out is the radius's
+  job.
+
+The existing four branches and their 0.85 thresholds are untouched, and this is
+detection only — merging the Wet'n'Wild rows stays a separate operation.
+Details and the measurement table:
+[Attraction Status & Seasonality §5.5](architecture/attraction-status-and-seasonality.md).
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide
