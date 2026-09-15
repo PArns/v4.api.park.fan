@@ -4,6 +4,7 @@ import { ParkValidatorService } from "./park-validator.service";
 import { Park } from "../entities/park.entity";
 import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.client";
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
+import { determineMergeWinner } from "../utils/park-merge.util";
 
 /**
  * findDuplicates() is the only automatic guard against the same physical
@@ -423,6 +424,19 @@ describe("ParkValidatorService.findDuplicates", () => {
     parkRepository.find.mockResolvedValue([fantawildPark, fantawildWaterPark]);
 
     expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("resolves a winner for the pair, which is what the endpoint reports", async () => {
+    // `GET /v1/admin/duplicate-parks` maps each pair through
+    // `determineMergeWinner`, the same function the merge uses. The row
+    // ThemeParks.wiki knows wins: it is the only one of the two carrying a
+    // wiki ID.
+    const verdict = determineMergeWinner(wetnwildWiki, wetnwildQueueTimes);
+
+    expect(verdict).toEqual({
+      winnerId: wetnwildWiki.id,
+      loserId: wetnwildQueueTimes.id,
+    });
   });
 
   it("finds all three real pairs and no false positives in one pass", async () => {
