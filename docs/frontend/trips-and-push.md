@@ -90,6 +90,14 @@ before the lookup on every verb, so a miss costs an attempt exactly as a hit
 does — otherwise enumeration would be free, since a miss is the only answer an
 enumeration ever gets.
 
+**A 429 says how long to wait**, in two places that always agree: the body's
+`retryAfterSeconds` (exact, as the limiter counted it) and a `Retry-After`
+header in whole seconds, rounded up. The same pair comes back from the
+push-follow routes below and from the global throttler, so a client has one
+thing to read whichever limiter answered. Until 2026-09-15 it had none: the
+figure was in the thrown exception and `HttpExceptionFilter` rebuilt every
+error body from `message` and `error` alone, so it never left the process.
+
 ## 3. Push: ask before offering the switch
 
 `GET /v1/push` answers `{ available, publicKey?, topics }`. **The browser must

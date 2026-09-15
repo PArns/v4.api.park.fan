@@ -65,7 +65,10 @@ export class TripsController {
   })
   @ApiResponse({
     status: 429,
-    description: "Too many trips created from this address.",
+    description:
+      "Too many trips created from this address. The body carries " +
+      "`retryAfterSeconds` and the response a `Retry-After` header with the " +
+      "same figure in whole seconds.",
   })
   async create(
     @Body() body: TripWriteDto,
@@ -112,7 +115,10 @@ export class TripsController {
   @ApiResponse({ status: 404, description: "No such trip." })
   @ApiResponse({
     status: 429,
-    description: "Too many writes from this address.",
+    description:
+      "Too many writes from this address. The body carries " +
+      "`retryAfterSeconds` and the response a `Retry-After` header with the " +
+      "same figure in whole seconds.",
   })
   async update(
     @Param("id") id: string,
@@ -152,7 +158,10 @@ export class TripsController {
   })
   @ApiResponse({
     status: 429,
-    description: "Too many writes from this address.",
+    description:
+      "Too many writes from this address. The body carries " +
+      "`retryAfterSeconds` and the response a `Retry-After` header with the " +
+      "same figure in whole seconds.",
   })
   async remove(
     @Param("id") id: string,

@@ -79,7 +79,10 @@ export class ShowFollowsController {
   })
   @ApiResponse({
     status: 429,
-    description: "Too many writes from this address.",
+    description:
+      "Too many writes from this address. The body carries " +
+      "`retryAfterSeconds` and the response a `Retry-After` header with the " +
+      "same figure in whole seconds.",
   })
   async create(
     @Body() body: CreateShowFollowDto,
@@ -124,6 +127,13 @@ export class ShowFollowsController {
       "Idempotent — unfollowing a show that is not followed is not an error.",
   })
   @ApiResponse({ status: 204 })
+  @ApiResponse({
+    status: 429,
+    description:
+      "Too many writes from this address. The body carries " +
+      "`retryAfterSeconds` and the response a `Retry-After` header with the " +
+      "same figure in whole seconds.",
+  })
   async remove(
     @Body() body: DeleteShowFollowDto,
     @Req() request: Request,

@@ -1,7 +1,9 @@
-import { HttpException } from "@nestjs/common";
+import { HttpException, Logger } from "@nestjs/common";
+import type { ArgumentsHost } from "@nestjs/common";
 import { PushFollowAccessGuard } from "./push-follow-access.guard";
 import { PushService } from "./push.service";
 import { PushFollowWriteRateLimitService } from "./push-follow-write-rate-limit.service";
+import { HttpExceptionFilter } from "../common/filters/http-exception.filter";
 
 /**
  * The one rule `RideAlertsController` and `ShowFollowsController` both
@@ -82,6 +84,47 @@ describe("PushFollowAccessGuard", () => {
         retryAfterSeconds: 42,
         message: expect.stringContaining("ride-alert"),
       });
+    });
+
+    it("and the figure survives the filter that writes the response", async () => {
+      // The case above asserts what this guard throws, and that assertion was
+      // green for as long as `HttpExceptionFilter` was deleting the field on
+      // its way out (PAR-146). These two routes are the second pair of writers
+      // affected; the ticket was filed against `/v1/trips` because that is
+      // where it was noticed.
+      check.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 42 });
+      const thrown = await guard.writeGuard(req(), "ride-alert").then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+      const json = jest.fn();
+      const headers: Record<string, string> = {};
+      const host = {
+        switchToHttp: () => ({
+          getResponse: () => ({
+            status: () => ({ json }),
+            headersSent: false,
+            header: (name: string, value: string) => {
+              headers[name] = value;
+            },
+          }),
+          getRequest: () => ({ method: "POST", url: "/v1/push/ride-alerts" }),
+        }),
+      } as unknown as ArgumentsHost;
+
+      const warn = jest.spyOn(Logger.prototype, "warn").mockImplementation();
+      try {
+        new HttpExceptionFilter().catch(thrown, host);
+      } finally {
+        warn.mockRestore();
+      }
+
+      expect(json.mock.calls[0][0]).toMatchObject({
+        statusCode: 429,
+        retryAfterSeconds: 42,
+      });
+      expect(headers["Retry-After"]).toBe("42");
     });
   });
 });

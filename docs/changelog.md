@@ -6,6 +6,45 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a field a handler attaches to an error body now reaches the client
+
+`HttpExceptionFilter` is global and builds the error response itself, which is
+what keeps every failure on this API the same shape. It built it from `message`
+and `error` alone, so every other field of a thrown object body was dropped
+between the `throw` and the wire. Four throw sites put one there:
+
+| site | status | field |
+| --- | --- | --- |
+| `trips.controller.ts` `guard()` | 429 | `retryAfterSeconds` |
+| `push-follow-access.guard.ts` `writeGuard()` | 429 | `retryAfterSeconds` |
+| `admin.controller.ts` `cache/reset` | 400 | `warning` |
+| `admin-auth.controller.ts` Turnstile | 403 | `reason` |
+
+The expensive two are the limiters. `retryAfterSeconds` had never reached a
+client on any hand-raised 429 — `/v1/trips` on all three write verbs, and
+`POST`/`DELETE` on `/v1/push/ride-alerts` and `/v1/push/show-follows` — so a
+caller learned it had to wait and never how long, and had to guess.
+
+The extras travel now, and the envelope stays the filter's: they are spread
+first and `statusCode`, `timestamp`, `path`, `message`, `error`, `reference` and
+`stack` are written over them, because `path` is redacted here and `stack` is
+withheld in production. Extras that do not survive `JSON.stringify` are dropped
+rather than thrown — this filter is the last thing that can still answer the
+request, and a circular reference in a body would otherwise fail inside
+`response.json()`.
+
+A 429 carrying a finite, positive `retryAfterSeconds` also gets a `Retry-After`
+header, rounded **up** to whole seconds (the header has no sub-second form, and
+a rounded-down 0.4 would read as "come back now"). That is not a new convention:
+`CfThrottlerGuard` extends Nest's `ThrottlerGuard`, which already sets it on the
+429s the global limiter raises. Without it the API answered two kinds of 429
+under two contracts, decided by which limiter fired first.
+
+The tests moved with it. `trips.controller.spec.ts` and
+`push-follow-access.guard.spec.ts` asserted the figure on the **thrown
+exception**, which stayed green through the whole bug; both now run the real
+filter and assert the body and the header a caller receives.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide

@@ -93,7 +93,10 @@ export class RideAlertsController {
   })
   @ApiResponse({
     status: 429,
-    description: "Too many writes from this address.",
+    description:
+      "Too many writes from this address. The body carries " +
+      "`retryAfterSeconds` and the response a `Retry-After` header with the " +
+      "same figure in whole seconds.",
   })
   async create(
     @Body() body: CreateRideAlertDto,
@@ -151,6 +154,13 @@ export class RideAlertsController {
       "Idempotent — removing an alert that is not there is not an error.",
   })
   @ApiResponse({ status: 204 })
+  @ApiResponse({
+    status: 429,
+    description:
+      "Too many writes from this address. The body carries " +
+      "`retryAfterSeconds` and the response a `Retry-After` header with the " +
+      "same figure in whole seconds.",
+  })
   async remove(
     @Body() body: DeleteRideAlertDto,
     @Req() request: Request,
