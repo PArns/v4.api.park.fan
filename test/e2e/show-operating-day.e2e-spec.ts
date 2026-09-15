@@ -292,6 +292,45 @@ describe("Showtimes follow the operating day (E2E)", () => {
     });
   });
 
+  describe("getShowtimeInstantsOnDate", () => {
+    it("returns the real instant of a performance after midnight", async () => {
+      const { showId, parkId } = await seed({
+        showtimes: [`${WRAP_DAY}T22:00`, `${NEXT_DAY}T00:30`],
+      });
+
+      const instants = await shows.getShowtimeInstantsOnDate(
+        parkId,
+        TZ,
+        WRAP_DAY,
+      );
+
+      // The point of the method: the 00:30 performance belongs to WRAP_DAY but
+      // happens on NEXT_DAY, so a caller rebuilding it from WRAP_DAY plus
+      // "00:30" would be 24 hours early. The push job did exactly that.
+      expect(instants.get(showId)).toEqual([
+        new Date(`${WRAP_DAY}T22:00:00-04:00`).toISOString(),
+        new Date(`${NEXT_DAY}T00:30:00-04:00`).toISOString(),
+      ]);
+    });
+
+    it("agrees with getShowtimesOnDate about which day a showtime is on", async () => {
+      const { showId, parkId } = await seed({
+        showtimes: [`${WRAP_DAY}T22:00`, `${NEXT_DAY}T00:30`],
+      });
+
+      // Same rule, same answer: neither may report the performance on the
+      // morning after, or the two callers would disagree about the same day.
+      expect(
+        (await shows.getShowtimesOnDate(parkId, TZ, NEXT_DAY)).has(showId),
+      ).toBe(false);
+      expect(
+        (await shows.getShowtimeInstantsOnDate(parkId, TZ, NEXT_DAY)).has(
+          showId,
+        ),
+      ).toBe(false);
+    });
+  });
+
   describe("rebuildSchedulePatterns", () => {
     /**
      * The pattern job reads a rolling window ending at `now()`, so a fixture

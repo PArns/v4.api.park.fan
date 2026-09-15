@@ -3,7 +3,6 @@ import { Inject, Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { createHash } from "crypto";
 import { Redis } from "ioredis";
-import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { PushService } from "../../push/push.service";
 import { TripsService } from "../../trips/trips.service";
@@ -400,41 +399,29 @@ export class PushNotificationProcessor {
       dateQueries.map(async ({ parkId, timezone, dateStr }) => {
         let timesByShow: Map<string, string[]>;
         try {
-          timesByShow = await this.showsService.getShowtimesOnDate(
+          // The instants, not the wall-clock strings. Showtimes follow the
+          // OPERATING day, so a time this returns need not fall on `dateStr`
+          // at all — the 00:00 finale of a day that runs past midnight comes
+          // back for that day, and rebuilding it from `dateStr` would place it
+          // 24 hours early, where the lead window never opens. That also
+          // retires the round-trip guard this loop used to carry: a wall-clock
+          // time inside a spring-forward gap has no instant, and the row has
+          // had the real one all along.
+          timesByShow = await this.showsService.getShowtimeInstantsOnDate(
             parkId,
             timezone,
             dateStr,
           );
         } catch (error) {
           this.logger.warn(
-            `getShowtimesOnDate failed for park ${parkId} on ${dateStr}: ${(error as Error)?.message ?? error}`,
+            `getShowtimeInstantsOnDate failed for park ${parkId} on ${dateStr}: ${(error as Error)?.message ?? error}`,
           );
           return;
         }
-        for (const [showId, hhmmTimes] of timesByShow) {
+        for (const [showId, instants] of timesByShow) {
           if (!metaByShow.has(showId)) continue; // a show in this park nobody follows
           const isoTimes = verifiedTimesByShow.get(showId) ?? [];
-          for (const hhmm of hhmmTimes) {
-            try {
-              const instant = fromZonedTime(`${dateStr}T${hhmm}:00`, timezone);
-              // A local wall-clock time a spring-forward transition skips
-              // (e.g. 02:30 on the one day the clock jumps 02:00 -> 03:00)
-              // has no real instant at all — `fromZonedTime` still returns
-              // one, silently shifted by the DST offset, which round-trips
-              // to a DIFFERENT local time than the one asked for. Caught
-              // here rather than sent: a show cannot start at a time that
-              // did not happen.
-              const roundTrip = formatInTimeZone(
-                instant,
-                timezone,
-                "yyyy-MM-dd'T'HH:mm",
-              );
-              if (roundTrip !== `${dateStr}T${hhmm}`) continue;
-              isoTimes.push(instant.toISOString());
-            } catch {
-              // A malformed time from the aggregate query — skip just this one.
-            }
-          }
+          isoTimes.push(...instants);
           verifiedTimesByShow.set(showId, isoTimes);
         }
       }),

@@ -59,10 +59,15 @@ export class ShowSchedulePattern {
 
   /**
    * The park-local start times of the most recent day this show ran on this
-   * weekday, as `HH:mm`, ascending.
+   * weekday, as `HH:mm`, in the order they run.
    *
    * Times of day rather than instants, because that is the part that repeats.
-   * The date is supplied by whoever projects them.
+   * **The date does not simply follow from the operating day**, though: on a
+   * day that crosses midnight the late times fall on the NEXT date, and they
+   * are listed last rather than sorted as text (`["22:00", "00:30"]`). A
+   * caller that needs the instant of a real performance asks
+   * `ShowsService.getShowtimeInstantsOnDate` instead of pinning these to a
+   * date — pinning them is how the push job lost a wrap day's finale.
    */
   @Column({ name: "times", type: "jsonb" })
   times: string[];

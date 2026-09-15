@@ -1005,6 +1005,54 @@ export class ShowsService {
   }
 
   /**
+   * The same day's showtimes as {@link getShowtimesOnDate}, but as instants.
+   *
+   * A caller that needs to know WHEN a performance starts cannot rebuild it
+   * from the `HH:mm` strings above, and since showtimes follow the operating
+   * day it is no longer even close: the 00:00 performance of a day that runs
+   * past midnight is returned for that day, and pinning it to that day's date
+   * puts it 24 hours early. Measured on 2026-09-15, that is 20 performances —
+   * every one of Disneyland Park's and Magic Kingdom Park's wrap-day finales.
+   *
+   * It also removes a reconstruction that could only ever lose: the caller used
+   * to run the wall clock back through `fromZonedTime` and then check whether
+   * it round-tripped, because a local time inside a spring-forward gap has no
+   * instant at all. The instant was in the row the whole time.
+   */
+  async getShowtimeInstantsOnDate(
+    parkId: string,
+    timezone: string,
+    date: string,
+  ): Promise<Map<string, string[]>> {
+    const rows: Array<{ show_id: string; starts: Date[] }> =
+      await this.showLiveDataRepository.manager.query(
+        `WITH entries AS (
+           SELECT l."showId" AS show_id,
+                  (e->>'startTime')::timestamptz AS st,
+                  ${ShowsService.operatingDaySql("(e->>'startTime')::timestamptz", 's."parkId"', "$2")} AS op_day
+             FROM show_live_data l
+             JOIN shows s ON s.id = l."showId"
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(l.showtimes, '[]'::jsonb)) e
+            WHERE s."parkId" = $1::uuid
+              AND l.status = 'OPERATING'
+              AND l.timestamp >= ($3::date - INTERVAL '1 day')
+              AND l.timestamp <  ($3::date + INTERVAL '2 days')
+              AND ((e->>'startTime')::timestamptz AT TIME ZONE $2)::date
+                  BETWEEN $3::date AND $3::date + 1
+         )
+         SELECT show_id, array_agg(DISTINCT st ORDER BY st) AS starts
+           FROM entries
+          WHERE op_day = $3::date
+          GROUP BY show_id`,
+        [parkId, timezone, date],
+      );
+
+    return new Map(
+      rows.map((r) => [r.show_id, r.starts.map((s) => s.toISOString())]),
+    );
+  }
+
+  /**
    * The per-weekday patterns for one park's shows, keyed by show id.
    *
    * `weekday` is the Postgres convention (0 = Sunday), which is also

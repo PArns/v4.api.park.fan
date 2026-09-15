@@ -75,7 +75,7 @@ describe("PushNotificationProcessor", () => {
   let showFollowsService: { allFollows: jest.Mock };
   let showsService: {
     findBatchCurrentStatusByShows: jest.Mock;
-    getShowtimesOnDate: jest.Mock;
+    getShowtimeInstantsOnDate: jest.Mock;
   };
   let redisStore: Map<string, string>;
   let redis: { exists: jest.Mock; set: jest.Mock };
@@ -100,11 +100,13 @@ describe("PushNotificationProcessor", () => {
     showsService = {
       findBatchCurrentStatusByShows: jest.fn().mockResolvedValue(new Map()),
       // The show-follow branch verifies a showtime against
-      // `getShowtimesOnDate` rather than trusting the (possibly stale/
+      // `getShowtimeInstantsOnDate` rather than trusting the (possibly stale/
       // projected) `showtimes` on the status row — see
-      // `followedShowsDueToday`. Defaults to "nothing verified"; tests that
-      // expect a show-follow send configure this explicitly.
-      getShowtimesOnDate: jest.fn().mockResolvedValue(new Map()),
+      // `followedShowsDueToday`. It returns INSTANTS rather than wall-clock
+      // strings, because a showtime follows the operating day and need not
+      // fall on the date it was asked for. Defaults to "nothing verified";
+      // tests that expect a show-follow send configure this explicitly.
+      getShowtimeInstantsOnDate: jest.fn().mockResolvedValue(new Map()),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -301,8 +303,8 @@ describe("PushNotificationProcessor", () => {
       // NOW is 20:00 Berlin (CEST, UTC+2); the fixture's showtime is 30 min
       // later, i.e. 20:30 local — the "verified for today" time
       // `getShowtimesOnDate` would answer for a genuinely-reported showtime.
-      showsService.getShowtimesOnDate.mockResolvedValueOnce(
-        new Map([["show-1", ["20:30"]]]),
+      showsService.getShowtimeInstantsOnDate.mockResolvedValueOnce(
+        new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]]),
       );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),
@@ -366,8 +368,8 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimesOnDate.mockResolvedValueOnce(
-        new Map([["show-1", ["20:30"]]]),
+      showsService.getShowtimeInstantsOnDate.mockResolvedValueOnce(
+        new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]]),
       );
       pushService.findByIds.mockResolvedValueOnce(subscriptionsById);
 
@@ -481,8 +483,8 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimesOnDate.mockResolvedValueOnce(
-        new Map([["show-1", ["20:30"]]]),
+      showsService.getShowtimeInstantsOnDate.mockResolvedValueOnce(
+        new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]]),
       );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),
@@ -571,10 +573,10 @@ describe("PushNotificationProcessor", () => {
       );
       // Nothing verified for "today" (the 17th) — the showtime belongs to
       // the 18th, which is exactly the date the fix also has to query.
-      showsService.getShowtimesOnDate.mockImplementation(
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
         async (_parkId: string, _tz: string, dateStr: string) =>
           dateStr === "2026-10-18"
-            ? new Map([["show-1", ["00:00"]]])
+            ? new Map([["show-1", ["2026-10-17T22:00:00.000Z"]]]) // 00:00 CEST
             : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(
@@ -592,15 +594,19 @@ describe("PushNotificationProcessor", () => {
     });
   });
 
-  it("does not notify about a showtime that falls in a spring-forward gap", async () => {
+  it("sends on the instant the source reports, across a spring-forward night", async () => {
     await withVapid(async () => {
       // 2026-03-29 is the day Berlin's clocks jump 02:00 -> 03:00 (at 01:00
-      // UTC) — 02:30 local that day never happens. `fromZonedTime` still
-      // resolves it (empirically, to 2026-03-29T00:30:00Z), so "now" is set
-      // 30 minutes before THAT instant: inside `dueShowNotifications`'
-      // 25-35 minute lead window, which is what makes this test meaningful —
-      // without the round-trip guard this exact "now" sends, guarded it
-      // must not, because the source time never happened.
+      // UTC). This used to be the round-trip guard's case: the job rebuilt an
+      // instant from `dateStr` plus a wall-clock string, and "02:30" that day
+      // never happens, so `fromZonedTime` returned a silently shifted instant
+      // that had to be caught and dropped — losing a real performance would
+      // have been the alternative.
+      //
+      // There is nothing to reconstruct any more. `getShowtimeInstantsOnDate`
+      // returns the instant the row actually carries, so a time that never
+      // happened cannot arrive here, and one that did is sent on its own
+      // instant. The lead window is the only thing still being asserted.
       const at = Date.parse("2026-03-29T00:00:00.000Z"); // 01:00 CET, before the jump
       jest.spyOn(Date, "now").mockReturnValue(at);
 
@@ -629,10 +635,13 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimesOnDate.mockImplementation(
+      // 30 minutes after `at`, i.e. inside the 25-35 minute lead window: the
+      // performance that really runs that night, on the far side of the jump.
+      const startsAt = new Date(at + 30 * 60_000).toISOString();
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
         async (_parkId: string, _tz: string, dateStr: string) =>
           dateStr === "2026-03-29"
-            ? new Map([["show-1", ["02:30"]]])
+            ? new Map([["show-1", [startsAt]]])
             : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(
@@ -640,7 +649,7 @@ describe("PushNotificationProcessor", () => {
       );
 
       await processor.handleDue({} as never);
-      expect(pushService.send).not.toHaveBeenCalled();
+      expect(pushService.send).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -671,8 +680,8 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimesOnDate.mockResolvedValueOnce(
-        new Map([["show-1", ["20:30"]]]),
+      showsService.getShowtimeInstantsOnDate.mockResolvedValueOnce(
+        new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]]),
       );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),
