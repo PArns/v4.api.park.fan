@@ -1,3 +1,4 @@
+import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attraction-retirement.service";
 import { QueuePercentileProcessor } from "./queue-percentile.processor";
 
 /**
@@ -177,6 +178,37 @@ describe("QueuePercentileProcessor — detect-seasonal skips free-flow", () => {
     expect(reset).toBeDefined();
     expect(reset).toMatch(/is_seasonal = false/i);
     expect(reset).toMatch(/season_months = NULL/i);
+  });
+
+  /**
+   * That reset rests on retirement being final, and one kind is not: the
+   * children sync retires a row whose entity ThemeParks.wiki reclassified as a
+   * show, and lifts it again if the wiki changes its mind. Clearing the season
+   * of such a row loses it for good — the row receives nothing but
+   * `system-reconciliation` rows while retired, so this detector can never
+   * re-derive what it erased.
+   */
+  it("spares the retirement the children sync can undo", async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const processor = new QueuePercentileProcessor(
+      {} as never,
+      {} as never,
+      {} as never,
+      { query } as never,
+    );
+    await processor.handleDetectSeasonal({} as never);
+
+    const call = query.mock.calls.find(
+      ([sql]) =>
+        /UPDATE attractions/i.test(sql as string) &&
+        /retired_at IS NOT NULL/i.test(sql as string),
+    );
+
+    expect(call?.[0]).toMatch(/retired_reason <> ALL/i);
+    // And the bind itself, because the SQL text alone would stay green while
+    // Postgres rejects the statement and takes the whole run down with it —
+    // step 2c has no try/catch and runs before the candidate searches.
+    expect(call?.[1]).toEqual([RECLASSIFIED_UPSTREAM_REASONS]);
   });
 
   it("excludes them from both candidate searches", async () => {

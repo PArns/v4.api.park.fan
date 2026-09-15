@@ -276,20 +276,20 @@ Three things about it are easy to get wrong from the outside:
   year of plans with no field saying why. Past tomorrow only the months decide,
   and with no months on file the ride stays.
 
-**A live `OPERATING` row overrules the season, for today.** The park page has
-always had this rule — a ride you can queue for is behind a season that has gone
-stale, not the other way round — and until this endpoint read a live status the
-two surfaces could answer differently about one ride on one day. The window for
-that is not one night: `detect-seasonal` is a daily job and has already been out
-for **73 days** without anyone noticing.
+**A live `OPERATING` row overrules the season.** The park page has always had
+this rule — a ride you can queue for is behind a season that has gone stale, not
+the other way round — and until this endpoint read a live status the two surfaces
+could answer differently about one ride on one day. The window for that is not
+one night: `detect-seasonal` is a daily job and has already been out for **73
+days** without anyone noticing.
 
 It costs 0 or 1 extra query per request, never more, and the one runs inside the
 existing parallel batch rather than behind it. It is skipped unless something
-could actually change: not today's park-local date, park CLOSED for the day, or —
-the common case — nothing excluded by the season at all. It asks only about the
-rides the season excluded, and only an explicit `OPERATING` rescues one, which is
-what keeps a park we cannot read out of it: a feed that only ever writes CLOSED,
-and reverse-reconciliation's own CLOSED stamps, both fail the test.
+could actually change: past tomorrow, park CLOSED for the day, or — the common
+case — nothing excluded by the season at all. It asks only about the rides the
+season excluded, and only an explicit `OPERATING` rescues one, which is what
+keeps a park we cannot read out of it: a feed that only ever writes CLOSED, and
+reverse-reconciliation's own CLOSED stamps, both fail the test.
 
 A reading counts back to **the day's own opening, and never less than six
 hours** — the park page's own cutoff rule, where the opening is a floor under how
@@ -301,10 +301,18 @@ park-local midnight would do: the first rescues a ride off yesterday evening, th
 second off last night's session on a park that runs past midnight — both claims
 about an operating day that is not the one being planned.
 
-It corrects **today**, which is the only day a live row speaks about. A detector
-note with no months behind it reaches one day further (§6), so a ride running
-today can still be absent from tomorrow's plan off that same note — the
-`seasonOutSince` half of the rule, tracked separately.
+**It reaches today and tomorrow, and the two days lift different things.** The
+row is today's either way; there is no live row for a day that has not happened.
+What it may lift is what the note it contradicts blocks — and the monthless note
+blocks both days, so a ride the feed reports running today is in tomorrow's plan
+as well. Months are the other half and do not travel: a ride running today says
+nothing about tomorrow when tomorrow is the first day of a month its season does
+not cover, which is exactly the day a season ends on. So tomorrow's lookup asks
+only about the rides the note alone blocks, and past tomorrow it is not made at
+all, because that far out the note is already dropped and what remains is the
+calendar. Tomorrow's window is the six-hour floor rather than an opening: the
+published opening belongs to the day being planned, and tomorrow's has not
+happened yet.
 
 Nothing upstream does this. `MLService.getParkPredictions` keeps rides with an
 OPERATING reading in the last 90 days, which is a question about the past asked

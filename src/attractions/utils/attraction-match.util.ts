@@ -20,6 +20,8 @@ export interface AttractionMatchCandidate {
   slug: string | null;
   name?: string | null;
   queueTimesEntityId?: string | null;
+  /** Carried through so a caller can tell a sync retirement from a human one. */
+  retiredReason?: string | null;
 }
 
 export interface IncomingAttraction {

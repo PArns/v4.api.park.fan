@@ -6,6 +6,147 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — the live closure-gap statement keys on the operating day, like its nightly twin
+
+`CLOSURE_GAP_INTERVALS_SQL` moved to the operating day in PAR-29: the day of a
+gap comes from the published window that contains it, not from
+`(ts AT TIME ZONE tz)::date`. `CURRENT_CLOSURE_GAP_SQL` kept the calendar cast in
+two places, so the same ride could count a different number of `gap_days`
+against the same `MAX_GAP_DAY_SHARE` depending on which statement asked. A third
+notion sat between them: `park_day_close` has always keyed on the opening's
+park-local date, and `early_end` joined readings to it by calendar date — in a
+park closing after midnight, the evening's own readings were judged against the
+NEXT day's closing time.
+
+All three now read one `win` CTE from `parkOpenWindowCtes()`, which takes its
+park source and its bounds as expressions so a statement numbering its
+parameters differently can use it (`$1` attractions, `$2` timezone, `$3` as-of,
+`$4` park). The window semantics — the closing-time repair, the disjoint union,
+the operating-day anchor — are unchanged and still written once.
+
+The joins to `win` are LEFT, with the calendar day as the fallback, exactly as
+`gap_edges` does. `queue_data` is a change log, so a ride reads `OPERATING` for
+hours after its park shuts; an INNER join would drop those readings from every
+park rather than re-key them in the few that close late. Whether it should is a
+separate question with its own before/after — `todo.md` carries it.
+
+`park_open` and `park_day_close` no longer scan `schedule_entries` themselves;
+both read `win`, which removes a second scan per call. `active_floor` is new and
+follows from the numerator's move: a gap read just after the window's start can
+carry the previous local day in a wrap park, so a bare `local_date` floor would
+exclude an operating day the numerator counted and push `gap_days/active_days`
+up — the direction that suppresses a real fault as a duty cycle.
+
+**Measured against production, 2026-09-15.** Of the 94 blind parks this
+statement serves, none published a close strictly after park-local midnight in
+the last 30 days: every wrap day in that window closes at exactly `00:00`, and
+`[opens_at, 00:00)` holds no instant of the following date. Run over all 94 at
+one instant, old and new returned the same 4 rows. Over 400 days the affected
+set is two parks and seven days; at Six Flags Qiddiya City the keying moves 3463
+readings across five operating days, up to 54 rides a day. The plan is unchanged
+where it matters — both pseudoconstant `EXISTS` clauses still emit their
+One-Time Filter, and `win` materialises 35 rows in 0.5 ms.
+
+Shared buffers fall in every park measured — Thorpe Park 5736 → 5630,
+Phantasialand 3456 → 3338, Energylandia 989 → 776, Alton Towers 669 → 551 —
+because `park_open` and `park_day_close` no longer scan `schedule_entries`
+separately, and a park that cannot produce a row stays at ~5 ms. Execution time
+rises where the historical CTEs run: `early_end` joins `win` per reading
+(loops=3644), and the two blind parks with a ride in a closure went from
+19.1/20.3 ms to 28.0/25.3 and from 14.1/14.4 to 19.0/17.1. Skipping that join in
+a park whose windows never wrap is PAR-251.
+
+### Fixed — an entity that changes its `entityType` upstream no longer leaves a dead attraction behind
+
+ThemeParks.wiki reclassifies entities without changing their id. On 2026-04-25
+it moved 17 Universal Studios Singapore meet-and-greets from `ATTRACTION` to
+`SHOW`, and on 2026-04-23 fifteen more at the two Tokyo parks. The children sync
+fans a park's entities out by `entityType` and writes each group into its own
+table, so it followed the change into `shows` and left the `attractions` row
+untouched — `externalId` is unique *per table*, and nothing compared the two.
+
+The abandoned row does not go quiet: no source reports it, so
+reverse-reconciliation writes a CLOSED row every poll cycle, and the park page
+shows a permanently closed ride that is not a ride any more. Measured against
+production on 2026-09-15: **34 such rows** across five parks, and in the 30 days
+before the fix **11,832** reconciliation rows for USS alone. The last real
+reading on the attraction side is 2026-04-26 (USS) and 2026-04-23 (Tokyo).
+
+`retireReclassifiedAttractions` now runs after the show and restaurant syncs of
+each park and retires what was left behind, through `AttractionRetirementService`
+so cache eviction and revalidation come with it.
+
+**A row with a second source is left alone.** Disneyland Paris'
+`Mickey's PhilharMagic` is a show to the wiki and a queueing ride to
+Queue-Times, and was still receiving real `OPERATING` readings on 2026-08-29.
+Retiring it would delete a live ride over a disagreement between two sources,
+which is a curation decision rather than a sync one. Two of the 34 rows are held
+back by this rule.
+
+A second source shows up in two places, and both are checked:
+`queue_times_entity_id` is written by the entity mapping job for a Queue-Times
+match only, while a `wartezeiten-app` match leaves nothing but the
+`external_entity_mapping` row — which `WaitTimesProcessor` resolves live data
+through all the same. **39 attractions** carried that exact combination on
+2026-09-15, so the column on its own would eventually retire a ride that is
+still being measured.
+
+**The retirement undoes itself.** A row retired this way carries
+`RECLASSIFIED_UPSTREAM_REASON` verbatim, and `syncAttraction` lifts it again as
+soon as the wiki lists the entity as an `ATTRACTION`. That is what makes it safe
+to run unattended — a single malformed `/children` response cannot strand a
+park's rides. Only that exact reason is lifted, so a retirement entered by hand
+through `POST /admin/retire-attractions` survives every run.
+
+One neighbouring job had to learn that a retirement can be temporary:
+`detect-seasonal` cleared `is_seasonal` and `season_months` for every retired
+row, because a demolished ride never reports OPERATING again. A row retired by
+this sync can come back, and while it is retired it receives no readings at all
+— so the season would have been lost for good, with nothing left to derive it
+from. Step 2c now skips those retirements and leaves every other one permanent.
+
+What comes back is the row and not its data supply: the orphaned `shows` row
+still wins the entity lookup in `WaitTimesProcessor`, so the un-retired
+attraction resumes collecting `system-reconciliation` CLOSED rows until PAR-232
+clears it. A visible ride reading CLOSED is still better than one that silently
+vanished, but it is not a full recovery. The way back is also park-scoped, while
+the retirement is not — a row whose park moved upstream has to be brought back
+by hand.
+
+The row an entity leaves behind in `shows` or `restaurants` when it moves the
+other way is still not handled, because neither table has a `retired_at` column
+to set — PAR-232. It is not observed in production either: all 34 collisions run
+one way, and `restaurants` has none.
+
+Details and the diagnostic query: `docs/architecture/attraction-status-and-seasonality.md` §5.6.
+
+### Fixed — a ride the feed reports running today is in tomorrow's plan too
+
+`season_out_since` with no months behind it blocks a ride for **today and
+tomorrow** (`SEASON_NOW_HORIZON_DAYS`), and the live exception that overrules it
+reached today alone. So a ride the feed reported `OPERATING` stood in today's
+plan and was missing from tomorrow's, off a note today's own readings refute:
+the detector writes it for a ride whose **current status is CLOSED** and clears
+it on the next `OPERATING` row, which makes the row a contradiction of the
+note's precondition rather than of its use for one day.
+
+`runningNow` now runs for `leadDays <= SEASON_NOW_HORIZON_DAYS`. What each of
+the two days may lift is not the same thing:
+
+- **Today**, everything the season blocks, as before.
+- **Tomorrow**, the monthless note alone. A ride with `season_months` on file
+  stays out at every horizon — today's row says nothing about tomorrow when
+  tomorrow is the first day of a month the season does not cover, and that is
+  precisely the day a season ends on. The candidate set asks `outOfSeasonOn`
+  with the note stripped rather than re-deriving the season rule beside it.
+
+Still **0 or 1 query per request**, inside the existing `Promise.all`: the two
+other skips (park CLOSED for the day, nothing excluded by the season) are
+untouched, and tomorrow's candidate set is a subset of today's. Tomorrow's
+lookup window is the six-hour floor, not an opening — the published opening
+belongs to the day being planned, and tomorrow's has not happened yet. The
+curated works period is unaffected; a live reading has never overruled it.
+
 ### Fixed — a showtime belongs to the operating day, not to the calendar date
 
 §5 unfolds a day that crosses midnight: La Ronde's `10 → 0` is one ascending run

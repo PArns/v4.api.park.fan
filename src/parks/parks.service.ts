@@ -53,6 +53,8 @@ import {
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { NegativeCache } from "../common/utils/negative-cache.util";
+import { invalidateParkCaches } from "../common/cache/park-cache-invalidation";
+import { RevalidationService } from "../common/revalidation/revalidation.service";
 
 /**
  * Input shape for saveScheduleData. Covers both the ThemeParks.wiki schedule
@@ -96,6 +98,7 @@ export class ParksService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @Inject(forwardRef(() => HolidaysService))
     private holidaysService: HolidaysService,
+    private readonly revalidation: RevalidationService,
   ) {}
 
   /**
@@ -475,6 +478,7 @@ export class ParksService {
                 },
               );
               this.logger.log(`✅ Ghost Park merged and deleted successfully.`);
+              await this.announceParkMerge(existing.id, ghostPark.id);
             }
           }
         } else {
@@ -1139,6 +1143,81 @@ export class ParksService {
   }
 
   /**
+   * Announces a completed ghost-park merge to the caches and to the frontend,
+   * for the two raw merge paths in this file.
+   *
+   * `ParkMergeService.mergeParks` has done this since a same-path merge was
+   * found leaving the deleted park on the site for up to 24h; the two paths
+   * here reached neither half. What that costs is the geo skeleton: it lists
+   * every park, is cached for 24h, and the frontend builds park links and
+   * sitemap entries out of it, so a ghost park keeps being advertised long
+   * after its row is gone. The inherited rides are the same story one level
+   * down — their integrated payload embeds the park context they were filed
+   * under.
+   *
+   * Called AFTER the transaction and only on its success: an eviction is not
+   * undone by a rollback, so a cache emptied for a merge that never committed
+   * is a cache refilled from the rows the merge was about to change.
+   *
+   * Best-effort by construction. Both halves are caught: the merge is
+   * committed, and neither a Redis hiccup nor a webhook the frontend did not
+   * answer may turn it into a failure of the sync run around it — on these two
+   * paths that run is unattended.
+   */
+  private async announceParkMerge(
+    winnerId: string,
+    loserId: string,
+  ): Promise<void> {
+    // The winner now owns the ghost's migrated attractions; evict their
+    // integrated/baseline caches (which embed park context) alongside the
+    // park-scoped ones. Read after the commit, so the list already includes
+    // what the merge moved over. A failed read costs the ride-level eviction
+    // and must not cost the park-level one below, which is the larger half.
+    let winnerAttractionIds: string[] = [];
+    try {
+      const rows: Array<{ id: string }> =
+        await this.parkRepository.manager.query(
+          `SELECT id FROM attractions WHERE "parkId" = $1`,
+          [winnerId],
+        );
+      winnerAttractionIds = rows.map((row) => row.id);
+    } catch (error) {
+      this.logger.warn(
+        `Could not list attractions of park ${winnerId} after the merge; ` +
+          `their caches keep the old park context until they expire: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+      );
+    }
+
+    await this.invalidateParkCaches(winnerId, winnerAttractionIds);
+    await this.invalidateParkCaches(loserId);
+
+    try {
+      await this.revalidation.revalidateTags(["geo", "parks", "attractions"]);
+    } catch (error) {
+      this.logger.warn(
+        `Could not revalidate frontend after merging into ${winnerId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async invalidateParkCaches(
+    parkId: string,
+    attractionIds: string[] = [],
+  ): Promise<void> {
+    try {
+      await invalidateParkCaches(this.redis, parkId, attractionIds);
+    } catch (e) {
+      this.logger.warn(
+        `Failed to invalidate caches for park ${parkId}: ${(e as Error)?.message ?? e}`,
+      );
+    }
+  }
+
+  /**
    * Scans for and merges duplicate parks based on shared Queue-Times IDs.
    * This fixes "Split Brain" issues where a park exists separately from Wiki and Queue-Times sources.
    */
@@ -1280,6 +1359,7 @@ export class ParksService {
         this.logger.log(
           `✅ Ghost Park "${ghostPark.name}" merged and deleted.`,
         );
+        await this.announceParkMerge(primary!.id, ghostPark.id);
       }
     }
   }

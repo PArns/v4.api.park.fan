@@ -196,16 +196,27 @@ export class AttractionMergeService {
   /**
    * The curated rows `applyMergeDependencies` would delete for this pair.
    *
-   * Reads `ATTRACTION_DEPENDENCIES` rather than naming a table, so an entry
-   * added to that list is reported here without a second edit — the drift this
-   * whole method exists to close would otherwise reopen with the next curated
-   * table somebody declares.
+   * Reads `ATTRACTION_DEPENDENCIES` rather than naming a table, so a
+   * `winner-authoritative` entry added to that list is reported here without a
+   * second edit — the drift this whole method exists to close would otherwise
+   * reopen with the next curated table somebody declares.
    *
    * Only `winner-authoritative` entries are asked. `discard` rows are derived
    * and the nightly jobs rewrite them from the history that has just moved onto
    * the survivor, so naming them would bury the one line that matters under
    * five that do not — the baselines, the rope drop and the typical waits are
    * deliberately out of scope (PAR-179).
+   *
+   * A `custom` entry is skipped too, and there that is a gap rather than a
+   * decision: `attraction_review_marks` drops two kinds of hand-written verdict
+   * (PAR-149) and this rehearsal names neither. One of them is the mark saying
+   * a person already established that these two are DIFFERENT rides — the most
+   * useful thing this preview could put in front of somebody about to merge
+   * them, and the one thing it does not say. Closing it wants a read-only half
+   * for the strategy, the way `planWinnerAuthoritative` is the twin of
+   * `applyWinnerAuthoritative`, plus a decision about whether such a mark
+   * should stop the merge rather than annotate it: PAR-239. Until then the
+   * merge logs what it drops and the preview does not.
    *
    * Outside a transaction, unlike the merge: this is a read, and the pair can
    * change between the rehearsal and the act either way.
