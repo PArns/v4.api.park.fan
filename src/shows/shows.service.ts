@@ -717,68 +717,6 @@ export class ShowsService {
   private static readonly PATTERN_WINDOW_DAYS = 56;
 
   /**
-   * The operating day a showtime belongs to, as a SQL scalar expression.
-   *
-   * §5 of `docs/frontend/plan-day-endpoint.md` unfolds a day that crosses
-   * midnight: La Ronde's `10 → 0` is one ascending run of hours, and the hour
-   * after 23 is 24 rather than 0 of the next date. Showtimes were never
-   * unfolded that way — both readers below grouped them by the showtime's own
-   * park-local calendar date — so the last performance of such a day landed on
-   * the morning after, where `PlanDayService.buildShows` served it as that
-   * day's `scheduled` programme and suppressed the projection behind it.
-   *
-   * The rule here is the same one, expressed against the schedule rather than
-   * against an hour: a showtime belongs to the previous date when that date's
-   * published operating window still covers it. Everything else keeps its
-   * calendar date, which is why this is a narrowing and not a shift — a park
-   * with no wrap day is untouched, and so is every showtime after the window
-   * closes.
-   *
-   * Measured against production on 2026-09-15 (PAR-51): 36 parks publish wrap
-   * days, and 20 showtimes move — 19 at Disneyland Park (Anaheim) and one at
-   * Magic Kingdom Park, all of them at exactly 00:00, the last performance of
-   * a day that closes at midnight.
-   *
-   * Two limits are deliberate, because both would be a different decision:
-   *
-   * `OPERATING` only, the same schedule type every other reader in this
-   * codebase treats as opening hours. Universal's Halloween Horror Nights runs
-   * past midnight as `TICKETED_EVENT`, and its 00:30 shows therefore stay on
-   * the following date — production holds exactly two such rows, both still in
-   * the future. Widening the type here would change what "the park is open"
-   * means for shows alone.
-   *
-   * And a *published* window, never a guessed one. A fixed "before 06:00
-   * belongs to yesterday" cutoff would sweep up feeds whose problem is a
-   * different one: Universal Studios Japan serves `Ollivanders™` at 16:00 UTC,
-   * which is 01:00 the next morning in Tokyo for a daytime walkthrough, on 148
-   * days. Those parks publish no wrap day, so this expression leaves them
-   * exactly where they are.
-   *
-   * The window is read through {@link normalizedClosingSql}, never from the raw
-   * column, and that is load-bearing in both directions. A closing time stamped
-   * with the day's OWN date — ThemeParks.wiki does that for `open 12:00 /
-   * close 00:00`, Parque Warner Madrid every day — is not a wrap day to a raw
-   * comparison, so the rule would miss exactly the rows §5 was written for. And
-   * an overshot window (`operating-window.util.ts` names a 34-hour one at
-   * SeaWorld San Diego and a three-year one at Busch Gardens Williamsburg)
-   * would swallow the whole following day, dragging ordinary afternoon
-   * performances onto the date before. Normalising re-anchors both to the
-   * opening's park-local date, through the timezone rather than by adding 24
-   * hours, so a DST night keeps its local closing time.
-   *
-   * It is a correlated subquery in a job that walks millions of rows, so the
-   * cost was measured rather than assumed: against production on 2026-09-15 the
-   * pattern window holds **3,788,203** showtime entries, and resolving the
-   * operating day for every one of them takes **8.1 s** against the 5.7 s the
-   * aggregation above costs without it. Roughly two and a half seconds, once a
-   * night — cheap enough that a `wrap_days` join, which would put the rule in
-   * two places, is not worth the drift.
-   *
-   * `$<tz>` and the showtime expression are interpolated by the callers, which
-   * bind the park timezone as a parameter; the subquery itself takes none.
-   */
-  /**
    * The `entries` CTE both day readers below open with: every showtime a park
    * published around one date, tagged with the operating day it belongs to.
    *
@@ -819,6 +757,72 @@ export class ShowsService {
          )`;
   }
 
+  /**
+   * The operating day a showtime belongs to, as a SQL scalar expression.
+   *
+   * §5 of `docs/frontend/plan-day-endpoint.md` unfolds a day that crosses
+   * midnight: La Ronde's `10 → 0` is one ascending run of hours, and the hour
+   * after 23 is 24 rather than 0 of the next date. Showtimes were never
+   * unfolded that way — both readers below grouped them by the showtime's own
+   * park-local calendar date — so the last performance of such a day landed on
+   * the morning after, where `PlanDayService.buildShows` served it as that
+   * day's `scheduled` programme and suppressed the projection behind it.
+   *
+   * The rule here is the same one, expressed against the schedule rather than
+   * against an hour: a showtime belongs to the previous date when that date's
+   * published operating window still covers it. Both day readers reach it
+   * through {@link ShowsService.showtimeEntriesCte}; `rebuildSchedulePatterns`
+   * calls it directly. Everything else keeps its
+   * calendar date, which is why this is a narrowing and not a shift — a park
+   * with no wrap day is untouched, and so is every showtime after the window
+   * closes.
+   *
+   * Measured against production on 2026-09-15 (PAR-51): 36 parks publish wrap
+   * days, and 20 showtimes move — 19 at Disneyland Park (Anaheim) and one at
+   * Magic Kingdom Park, all of them at exactly 00:00, the last performance of
+   * a day that closes at midnight.
+   *
+   * Two limits are deliberate, because both would be a different decision:
+   *
+   * `OPERATING` only, the same schedule type every other reader in this
+   * codebase treats as opening hours. Universal's Halloween Horror Nights runs
+   * past midnight as `TICKETED_EVENT`, and its 00:30 shows therefore stay on
+   * the following date — production holds exactly two such rows, both still in
+   * the future. Widening the type here would change what "the park is open"
+   * means for shows alone.
+   *
+   * And a *published* window, never a guessed one. A fixed "before 06:00
+   * belongs to yesterday" cutoff would sweep up feeds whose problem is a
+   * different one: Universal Studios Japan serves `Ollivanders™` at 16:00 UTC,
+   * which is 01:00 the next morning in Tokyo for a daytime walkthrough, on 148
+   * days. Those parks publish no wrap day, so this expression leaves them
+   * exactly where they are.
+   *
+   * The window is read through {@link normalizedClosingSql}, never from the raw
+   * column, and that is load-bearing in both directions. A closing time stamped
+   * with the day's OWN date — ThemeParks.wiki does that for `open 12:00 /
+   * close 00:00`, Parque Warner Madrid every day — is not a wrap day to a raw
+   * comparison, so the rule would miss exactly the rows §5 was written for. And
+   * an overshot window (`operating-window.util.ts` names a 34-hour one at
+   * SeaWorld San Diego and a three-year one at Busch Gardens Williamsburg)
+   * would swallow the whole following day, dragging ordinary afternoon
+   * performances onto the date before. Normalising re-anchors both to the
+   * opening's park-local date, through the timezone rather than by adding 24
+   * hours, so a DST night keeps its local closing time.
+   *
+   * It is a correlated subquery in a job that walks millions of rows, so the
+   * cost was measured rather than assumed: against production on 2026-09-15 the
+   * pattern window `rebuildSchedulePatterns` reads holds **3,788,203** showtime
+   * entries, and resolving the operating day for every one of them takes
+   * **8.1 s** against the 5.7 s that aggregation costs without it. Roughly two and a half seconds, once a
+   * night — cheap enough that a `wrap_days` join, which would put the rule in
+   * two places, is not worth the drift.
+   *
+   * The timezone and the showtime expression are interpolated by the caller,
+   * and the two callers pass different things: the day readers hand in the
+   * bound parameter `$2`, while `rebuildSchedulePatterns` hands in the column
+   * `tz` it already carries. The subquery itself binds nothing.
+   */
   private static operatingDaySql(startTs: string, parkId: string, tz: string) {
     const closes = normalizedClosingSql(
       'se."openingTime"',

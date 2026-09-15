@@ -373,12 +373,15 @@ export class PushNotificationProcessor {
     if (metaByShow.size === 0) return [];
 
     // Three `getShowtimeInstantsOnDate` calls per distinct PARK, not per show — a
-    // popular park with many followed shows shares them. Both today's AND
-    // tomorrow's date: a showtime in the first ~35 minutes after local
-    // midnight has a lead window that opens BEFORE that midnight, while
-    // `todayStr` at that moment still names the day before it — querying
-    // only "today" means the one tick where such a showtime is due asks the
-    // wrong day and never finds it.
+    // popular park with many followed shows shares them. Yesterday, today AND
+    // tomorrow, because the date a showtime answers under is its OPERATING
+    // day, and that straddles local midnight in both directions. Forwards: a
+    // performance in the first ~35 minutes after midnight has a lead window
+    // that opens BEFORE that midnight, while `todayStr` at that moment still
+    // names the day before it. Backwards: a performance at 00:45 on a day
+    // that opened the previous morning answers under THAT morning's date,
+    // which by the time it is due is already yesterday. Either date left out
+    // is a tick that asks the wrong day and finds nothing.
     //
     // All of them fired at once, not one park-date at a time: each query is
     // independent (a different park, a different date) and nothing here

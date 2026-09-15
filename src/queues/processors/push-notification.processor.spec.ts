@@ -303,8 +303,14 @@ describe("PushNotificationProcessor", () => {
       // NOW is 20:00 Berlin (CEST, UTC+2); the fixture's showtime is 30 min
       // later, i.e. 20:30 local — the "verified for today" time
       // `getShowtimesOnDate` would answer for a genuinely-reported showtime.
-      showsService.getShowtimeInstantsOnDate.mockResolvedValueOnce(
-        new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]]),
+      // Keyed on the date rather than on call order: the job asks yesterday,
+      // today and tomorrow, so a `...Once` would answer the FIRST of those
+      // and this fixture would silently stop describing "today".
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-17"
+            ? new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]])
+            : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),
@@ -368,8 +374,14 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimeInstantsOnDate.mockResolvedValueOnce(
-        new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]]),
+      // Keyed on the date rather than on call order: the job asks yesterday,
+      // today and tomorrow, so a `...Once` would answer the FIRST of those
+      // and this fixture would silently stop describing "today".
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-17"
+            ? new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]])
+            : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(subscriptionsById);
 
@@ -483,8 +495,14 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimeInstantsOnDate.mockResolvedValueOnce(
-        new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]]),
+      // Keyed on the date rather than on call order: the job asks yesterday,
+      // today and tomorrow, so a `...Once` would answer the FIRST of those
+      // and this fixture would silently stop describing "today".
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-17"
+            ? new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]])
+            : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),
@@ -532,6 +550,56 @@ describe("PushNotificationProcessor", () => {
         tripSubscription,
         expect.objectContaining({ title: expect.stringContaining("Ride") }),
       );
+    });
+  });
+
+  it("notifies about a performance that belongs to yesterday's operating day", async () => {
+    await withVapid(async () => {
+      // 00:20 Berlin on the 18th, twenty-five minutes ahead of a 00:45
+      // performance. That performance runs on a day that OPENED on the 17th
+      // and closed at 01:00 — so `getShowtimeInstantsOnDate` answers it under
+      // the 17th, which at this instant is neither today nor tomorrow.
+      // Querying only those two asks the two dates that do not have it.
+      const justAfterMidnight = Date.parse("2026-10-17T22:20:00.000Z"); // 00:20 CEST on the 18th
+      jest.spyOn(Date, "now").mockReturnValue(justAfterMidnight);
+
+      showFollowsService.allFollows.mockResolvedValueOnce([
+        { id: "f1", subscriptionId: "sub-show", showId: "show-1" },
+      ]);
+      showsService.findBatchCurrentStatusByShows.mockResolvedValueOnce(
+        new Map([
+          [
+            "show-1",
+            {
+              status: "OPERATING",
+              showtimes: [],
+              show: {
+                name: "Feuerwerk",
+                park: {
+                  name: "Europa-Park",
+                  slug: "europa-park",
+                  timezone: "Europe/Berlin",
+                  continentSlug: "europe",
+                  countrySlug: "germany",
+                  citySlug: "rust",
+                },
+              },
+            },
+          ],
+        ]),
+      );
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-17"
+            ? new Map([["show-1", ["2026-10-17T22:45:00.000Z"]]]) // 00:45 CEST
+            : new Map(),
+      );
+      pushService.findByIds.mockResolvedValueOnce(
+        new Map([["sub-show", showSubscription]]),
+      );
+
+      await processor.handleDue({} as never);
+      expect(pushService.send).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -607,16 +675,17 @@ describe("PushNotificationProcessor", () => {
       // returns the instant the row actually carries, so a time that never
       // happened cannot arrive here.
       //
-      // What is left to pin is that the jump does not cost a real performance:
-      // `now` sits at 01:00 CET, on the near side, and the show starts 30
-      // minutes later — which the local clock calls 02:30 and then 03:30 as
-      // the hour disappears underneath it. Comparing instants, the lead is 30
-      // minutes either way, and that is exactly why the job may not go back
-      // through the wall clock. The assertion is deliberately the opposite of
-      // what this test asserted before the change: it used to require silence,
-      // because the only 02:30 it could see was one the reconstruction had
-      // invented.
-      const at = Date.parse("2026-03-29T00:00:00.000Z"); // 01:00 CET, before the jump
+      // What is left to pin is that the jump does not cost a real performance.
+      // Berlin's clocks move at 01:00 UTC, so `now` sits 20 minutes before
+      // that and the performance 30 minutes after `now` — 01:10 UTC, which the
+      // local clock reads as 03:10 CEST. The two are on opposite sides of the
+      // jump, and no wall-clock arithmetic gets from one to the other: 01:40
+      // plus 30 minutes is 02:10, an hour that does not exist that night.
+      // Comparing instants the lead is 30 minutes, and the notification goes
+      // out. The assertion is deliberately the opposite of the one this test
+      // made before the change: it used to require silence, because the only
+      // 02:30 it could ever see was one the reconstruction had invented.
+      const at = Date.parse("2026-03-29T00:40:00.000Z"); // 01:40 CET, before the jump
       jest.spyOn(Date, "now").mockReturnValue(at);
 
       showFollowsService.allFollows.mockResolvedValueOnce([
@@ -689,8 +758,14 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimeInstantsOnDate.mockResolvedValueOnce(
-        new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]]),
+      // Keyed on the date rather than on call order: the job asks yesterday,
+      // today and tomorrow, so a `...Once` would answer the FIRST of those
+      // and this fixture would silently stop describing "today".
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-17"
+            ? new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]])
+            : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),
