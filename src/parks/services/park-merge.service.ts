@@ -14,6 +14,7 @@ import {
   RESTAURANT_DEPENDENCIES,
   SHOW_DEPENDENCIES,
   applyMergeDependencies,
+  migrateScheduleEntries,
   type MergeDependency,
 } from "../utils/merge-dependencies";
 import { Redis } from "ioredis";
@@ -175,13 +176,18 @@ export class ParkMergeService {
           loser.id,
           ["date"],
         );
-        result.migratedScheduleEntries = await this.migrateTableData(
+        // Not `migrateTableData`: its conflict key is a row-wise `IN`, and no
+        // list of columns it can build both dedupes a park-level row and
+        // spares a per-ride one. `(date, scheduleType)` bought the first at the
+        // cost of the second: it read across the nullable `attractionId` and
+        // took the loser's per-ride rows with it whenever the winner held any
+        // row of that TYPE that day — usually its own park-level OPERATING row
+        // (PAR-171). The rule is shared with `consolidateMergedPark` rather
+        // than written twice.
+        result.migratedScheduleEntries = await migrateScheduleEntries(
           manager,
-          "schedule_entries",
-          "parkId",
           winner.id,
           loser.id,
-          ["date", "scheduleType"],
         );
 
         // 4. Migrate Park-Specific Analysis Tables
@@ -313,7 +319,19 @@ export class ParkMergeService {
     "shows",
     "restaurants",
     "park_daily_stats",
-    "schedule_entries",
+    // `schedule_entries` is deliberately absent HERE, and that is not the same
+    // as absent: the spread below re-adds it, because the attraction side
+    // declares the table as a dependency of its own (PAR-149). So is
+    // `scheduleType`, through that entry's `conflictColumns`. This list cannot
+    // be the thing that keeps the wrong key out of that table — a
+    // `migrateTableData(…, "schedule_entries", …, ["date", "scheduleType"])`
+    // passes `assertAllowedIdentifier` today. What keeps it out is that no such
+    // call exists: the park path goes through `migrateScheduleEntries`, which
+    // spells its three columns out itself, and a spec case pins that no
+    // statement in `mergeParks` deletes from this table on a `parkId` key with
+    // a row-wise `IN`. On a key of `attractionId` that `IN` is correct and the
+    // attraction path uses it — the park-level rows are already excluded there
+    // (PAR-171, PAR-149).
     "park_p50_baselines",
     "park_occupancy",
     "headliner_attractions",
@@ -328,7 +346,6 @@ export class ParkMergeService {
     "parkId",
     "attractionId",
     "date",
-    "scheduleType",
     "timestamp",
     ...ATTRACTION_DEPENDENCIES.flatMap((d) => [
       d.column,

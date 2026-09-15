@@ -373,13 +373,13 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // The per-ride half of a table the park side deliberately keeps out of
     // every dependency list. There the rows are park-level (`attractionId IS
     // NULL`) or per-ride and told apart by that nullable column, which a
-    // row-wise `IN` cannot compare — so both raw paths do it by hand with `IS
-    // NOT DISTINCT FROM`.
+    // row-wise `IN` cannot compare — so every park path goes through
+    // `migrateScheduleEntries` below and compares with `IS NOT DISTINCT FROM`.
     //
     // None of that applies on this side, which is why the same table can be a
     // plain `move` here: `WHERE "attractionId" = $loser` has already excluded
     // every park-level row, and `(date, scheduleType)` carries no nullable
-    // column. The key is the one `mergeParks` uses for the park-level move.
+    // column. It is the park path that cannot use this key, not this one.
     //
     // How many rows that is, is NOT established here, and the entry does not
     // depend on it. No write path in this repo sets `attractionId` on a
@@ -394,14 +394,14 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // with no measurement behind it, which is how this file's oldest comments
     // went wrong.
     //
-    // On `mergeParks` the rows this saves are then taken by something else,
-    // and it is not this entry's bug to fix: step 3 there dedupes the table
-    // park-wide on `["date", "scheduleType"]` with no `attractionId`, so a
-    // per-ride row is deleted whenever the surviving park holds ANY row of
-    // that type that day — usually its own park-level OPERATING row. That is
-    // PAR-171, it predates this entry, and the two raw paths already avoid it
-    // with `IS NOT DISTINCT FROM`. So whatever per-ride rows exist survive the
-    // attraction-merge path today and the park path once PAR-171 lands.
+    // Until PAR-171 the rows this saves were then taken by something else:
+    // step 3 of `mergeParks` deduped the table park-wide on
+    // `["date", "scheduleType"]` with no `attractionId`, so a per-ride row was
+    // deleted whenever the surviving park held ANY row of that type that day —
+    // usually its own park-level OPERATING row. That path now calls
+    // `migrateScheduleEntries` below, which compares the ride as well, so
+    // whatever per-ride rows exist survive both the attraction-merge path here
+    // and the park path.
     table: "schedule_entries",
     column: "attractionId",
     strategy: "move",
@@ -887,7 +887,8 @@ export const PARK_TABLES_HANDLED_INLINE = [
  *     conflict keys with a row-wise `IN`, and a NULL inside one of those makes
  *     the comparison NULL rather than true, so no key that mentions
  *     `attractionId` can dedupe a park-level row and no key that omits it can
- *     spare a per-ride one. The caller uses `IS NOT DISTINCT FROM` instead.
+ *     spare a per-ride one. Both merge paths call `migrateScheduleEntries`
+ *     below, which compares the three columns with `IS NOT DISTINCT FROM`.
  *
  * Whether a table is here decides one of two failure modes, both real:
  * `park_occupancy` is the only one whose FK is NO ACTION (`ManyToOne(() =>
@@ -1320,4 +1321,70 @@ export async function applyMergeDependencies(
       [winnerId, loserId],
     );
   }
+}
+
+/**
+ * Reparents a losing park's schedule, dropping only the rows the survivor
+ * already states.
+ *
+ * `schedule_entries` holds park-level rows (`attractionId IS NULL`, the park's
+ * opening hours) and per-ride rows in the same table. Two rows are the same
+ * statement only if all three of date, type and ride agree, and the ride is
+ * nullable — which is why this is not a `MergeDependency`:
+ * `applyMergeDependencies` compares its conflict key with a row-wise `IN`, and
+ * `(date, type, NULL) IN (SELECT date, type, NULL …)` is NULL, not true. A key
+ * of (date, scheduleType) alone reads across the difference and deletes the
+ * ghost's whole per-ride schedule whenever the survivor has any row for that
+ * day — usually its own opening hours, so usually all of them;
+ * `IS NOT DISTINCT FROM` compares the three as written.
+ *
+ * Nothing here is a constraint — the PK is a surrogate id — so the delete
+ * exists only to stop one park holding a day twice.
+ *
+ * One function rather than a copy per path: this rule had two derivations and
+ * they differed, which is the whole of PAR-171 — `consolidateMergedPark` spelt
+ * the three columns out while `ParkMergeService.mergeParks` handed
+ * (date, scheduleType) to its generic `migrateTableData`.
+ *
+ * Callers must already hold a transaction.
+ *
+ * @returns the number of rows reparented onto the winner.
+ */
+export async function migrateScheduleEntries(
+  manager: MergeQueryRunner,
+  winnerParkId: string,
+  loserParkId: string,
+): Promise<number> {
+  // The same refusal `applyMergeDependencies` makes, for the same reason and
+  // one step earlier: with one id on both sides the EXISTS matches every row
+  // against itself, so the DELETE empties the park's schedule instead of doing
+  // nothing. Both callers run inside a transaction that `applyMergeDependencies`
+  // would abort a few statements later anyway — this only stops the wipe from
+  // being written first.
+  if (winnerParkId === loserParkId) {
+    throw new Error(
+      `Cannot migrate schedule entries with one park id on both sides (${winnerParkId})`,
+    );
+  }
+
+  await manager.query(
+    `DELETE FROM schedule_entries loser
+       WHERE loser."parkId" = $2
+         AND EXISTS (
+           SELECT 1 FROM schedule_entries winner
+           WHERE winner."parkId" = $1
+             AND winner."date" = loser."date"
+             AND winner."scheduleType" = loser."scheduleType"
+             AND winner."attractionId" IS NOT DISTINCT FROM loser."attractionId"
+         )`,
+    [winnerParkId, loserParkId],
+  );
+
+  const result = await manager.query(
+    `UPDATE schedule_entries SET "parkId" = $1 WHERE "parkId" = $2`,
+    [winnerParkId, loserParkId],
+  );
+  // node-postgres answers an UPDATE through TypeORM's raw query as
+  // [rows, affectedCount].
+  return Array.isArray(result) ? Number(result[1]) || 0 : 0;
 }

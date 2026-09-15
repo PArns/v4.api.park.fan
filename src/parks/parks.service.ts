@@ -43,6 +43,7 @@ import {
   PARK_CHILD_ENTITIES,
   PARK_DEPENDENCIES,
   PARK_INLINE_DEPENDENCIES,
+  migrateScheduleEntries,
 } from "./utils/merge-dependencies";
 import { captureParkPath, samePath } from "./services/park-rename.service";
 import {
@@ -811,33 +812,11 @@ export class ParksService {
       );
     }
 
-    // `schedule_entries` holds park-level rows (`attractionId IS NULL`, the
-    // park's opening hours) and per-ride rows in the same table. Two rows are
-    // the same statement only if all three of date, type and ride agree, and
-    // the ride is nullable — which is why this is not a `MergeDependency`:
-    // `applyMergeDependencies` compares its conflict key with a row-wise `IN`,
-    // and `(date, type, NULL) IN (SELECT date, type, NULL …)` is NULL, not
-    // true. A key of (date, scheduleType) alone reads across the difference and
-    // deletes the ghost's whole per-ride schedule whenever the survivor has any
-    // row for that day; `IS NOT DISTINCT FROM` compares the three as written.
-    // Nothing here is a constraint — the PK is a surrogate id — so the delete
-    // exists only to stop one park holding a day twice.
-    await manager.query(
-      `DELETE FROM schedule_entries loser
-       WHERE loser."parkId" = $2
-         AND EXISTS (
-           SELECT 1 FROM schedule_entries winner
-           WHERE winner."parkId" = $1
-             AND winner."date" = loser."date"
-             AND winner."scheduleType" = loser."scheduleType"
-             AND winner."attractionId" IS NOT DISTINCT FROM loser."attractionId"
-         )`,
-      [winnerParkId, loserParkId],
-    );
-    await manager.query(
-      `UPDATE schedule_entries SET "parkId" = $1 WHERE "parkId" = $2`,
-      [winnerParkId, loserParkId],
-    );
+    // The schedule moves whole, minus the rows the survivor already states.
+    // Why the key has to name the ride, and why that keeps this table out of
+    // `applyMergeDependencies`, is in `migrateScheduleEntries` — the one place
+    // the rule now lives, shared with `ParkMergeService.mergeParks` (PAR-171).
+    await migrateScheduleEntries(manager, winnerParkId, loserParkId);
 
     await applyMergeDependencies(
       manager,
