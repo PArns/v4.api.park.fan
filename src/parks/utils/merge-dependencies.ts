@@ -394,14 +394,14 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // with no measurement behind it, which is how this file's oldest comments
     // went wrong.
     //
-    // On `mergeParks` the rows this saves are then taken by something else,
-    // and it is not this entry's bug to fix: step 3 there dedupes the table
-    // park-wide on `["date", "scheduleType"]` with no `attractionId`, so a
-    // per-ride row is deleted whenever the surviving park holds ANY row of
-    // that type that day — usually its own park-level OPERATING row. That is
-    // PAR-171, it predates this entry, and the two raw paths already avoid it
-    // with `IS NOT DISTINCT FROM`. So whatever per-ride rows exist survive the
-    // attraction-merge path today and the park path once PAR-171 lands.
+    // Until PAR-171 the rows this saves were then taken by something else:
+    // step 3 of `mergeParks` deduped the table park-wide on
+    // `["date", "scheduleType"]` with no `attractionId`, so a per-ride row was
+    // deleted whenever the surviving park held ANY row of that type that day —
+    // usually its own park-level OPERATING row. That path now calls
+    // `migrateScheduleEntries` below, which compares the ride as well, so
+    // whatever per-ride rows exist survive both the attraction-merge path here
+    // and the park path.
     table: "schedule_entries",
     column: "attractionId",
     strategy: "move",
