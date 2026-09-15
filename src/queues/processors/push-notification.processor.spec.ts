@@ -302,7 +302,8 @@ describe("PushNotificationProcessor", () => {
       );
       // NOW is 20:00 Berlin (CEST, UTC+2); the fixture's showtime is 30 min
       // later, i.e. 20:30 local — the "verified for today" time
-      // `getShowtimesOnDate` would answer for a genuinely-reported showtime.
+      // `getShowtimeInstantsOnDate` would answer for a genuinely-reported
+      // showtime.
       // Keyed on the date rather than on call order: the job asks yesterday,
       // today and tomorrow, so a `...Once` would answer the FIRST of those
       // and this fixture would silently stop describing "today".
@@ -390,7 +391,7 @@ describe("PushNotificationProcessor", () => {
     });
   });
 
-  it("does not notify about a showtime findBatchCurrentStatusByShows carries but getShowtimesOnDate never verified", async () => {
+  it("does not notify about a showtime findBatchCurrentStatusByShows carries but getShowtimeInstantsOnDate never verified", async () => {
     // The exact gap `followedShowsDueToday` closes: a projected/stale
     // showtime with nothing to back it up must not fire.
     await withVapid(async () => {
@@ -414,7 +415,7 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      // Default mock: getShowtimesOnDate verifies nothing for today.
+      // Default mock: getShowtimeInstantsOnDate verifies nothing, any date.
 
       await processor.handleDue({} as never);
       expect(pushService.send).not.toHaveBeenCalled();
