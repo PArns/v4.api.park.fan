@@ -1040,12 +1040,29 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        -- $3 is now() in production so nothing lies beyond it today, but a
        -- pinned as-of — a spec, a replay — would count operating days from
        -- after the instant being judged.
-       -- The numerator's last reachable day, not local_date($3): run_readings
-       -- reads qd.timestamp < $3, so when $3 is this park's local midnight the
-       -- newest reading it can see belongs to the day before. Same asymmetry
-       -- as the lower edge, same direction.
-       AND e.op_day <= (($3::timestamptz - INTERVAL '1 microsecond')
-                        AT TIME ZONE $2)::date
+       --
+       -- The numerator's edge, which is the OPERATING day in progress and not
+       -- local_date($3). cycle stops one day below it ("every day but today"),
+       -- so this is the same day boundary read from the same place, and the two
+       -- span the same days — the rule this file states for the nightly pair
+       -- and had not kept here.
+       --
+       -- It was local_date($3 - 1 microsecond), and the gap that bound leaves
+       -- is not theoretical: measured 2026-09-15 across the blind parks, 1083
+       -- exposure rows of the operating day currently in progress carry
+       -- operating_minutes > 0, so they passed the FILTER and entered a
+       -- denominator whose numerator could not reach them. That dilutes
+       -- gap_days/active_days downward, which publishes a timetable as a fault
+       -- — the direction every other threshold in this file leans away from.
+       -- The comment here claimed the bound was already the numerator's; it was
+       -- the calendar's, and the two only agreed before cycle moved off it.
+       --
+       -- NULL when the park is shut, which empties this CTE. That costs
+       -- nothing: open_today is empty then too, so no ride reaches the join
+       -- that would read it, and COALESCE(ac.active_days, 0) keeps the
+       -- duty-cycle arm passing exactly as it does for a ride with no exposure
+       -- rows at all.
+       AND e.op_day < (SELECT op_day FROM park_open)
      GROUP BY e."attractionId"
   ),
   -- When the park shut, once per operating day it published hours for.

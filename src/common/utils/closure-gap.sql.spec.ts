@@ -358,11 +358,33 @@ describe("closure-gap statements", () => {
       // permanently under MIN_DAYS_FOR_CYCLE_TEST, so the filter never fired.
       const body = cteBody(sql, "active");
       expect(body).toMatch(/op_day\s*>=/);
-      expect(body).toMatch(/op_day\s*<=/);
-      // Park-local on both sides, because op_day is. A bare ::date takes the
-      // session zone and disagrees for 56 of the 91 blind parks.
-      expect(body).not.toMatch(/\$\d::timestamptz\)::date/);
-      expect(body).toContain("AT TIME ZONE");
+      // The upper bound differs in FORM between the two and must: the nightly
+      // numerator reaches up to the last instant before $3, so its edge is
+      // inclusive; the live one stops one day below the operating day in
+      // progress ("every day but today"), so its edge is exclusive against that
+      // day. Asserting `<=` on both is what let the live denominator keep the
+      // calendar edge after cycle moved off it — measured 2026-09-15, 1083
+      // exposure rows of the running operating day carried operating_minutes > 0
+      // and entered a denominator whose numerator could not reach them. So each
+      // statement is pinned to its own edge and neither can quietly take the
+      // other's.
+      expect(body).toMatch(
+        sql === CURRENT_CLOSURE_GAP_SQL
+          ? /op_day < \(SELECT op_day FROM park_open\)/
+          : /op_day\s*<=/,
+      );
+      // Park-local on both edges, because op_day is. A bare ::date takes the
+      // session zone and disagrees for 56 of the 91 blind parks at any instant,
+      // which is one operating day against a gate that sits at 5.
+      //
+      // Checked where the conversion actually lives. In the live statement both
+      // edges are now days read out of another CTE — active_floor below and
+      // park_open above — so `active` itself holds no cast to inspect, and
+      // asserting on it would pass for the wrong reason.
+      const converted =
+        sql === CURRENT_CLOSURE_GAP_SQL ? cteBody(sql, "active_floor") : body;
+      expect(converted).not.toMatch(/\$\d::timestamptz\)::date/);
+      expect(converted).toContain("AT TIME ZONE");
       // And no fixed offset in front of the numerator's edge. One day of slack
       // moved the nightly statement from 330 intervals over 112 rides to 370
       // over 120 — all dilution, in the direction that publishes a timetable

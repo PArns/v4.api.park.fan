@@ -180,10 +180,17 @@ describe("closure gaps across park-local midnight (e2e)", () => {
 
   it("still refuses a ride whose last OPERATING was a different operating day", async () => {
     // The gate has to keep biting, or the fix has simply switched it off. The
-    // ride was open on the 14th and has read CLOSED ever since: a seasonal or
-    // all-day closure, which is exactly what this filter exists to exclude.
+    // ride was open late on the 14th and has read CLOSED ever since: a seasonal
+    // or all-day closure, which is exactly what this filter exists to exclude.
+    //
+    // 23:30 rather than 20:00, and the hour is the whole test. `recent` looks
+    // back LIVE_LOOKBACK_HOURS = 26 h from the as-of, so a reading at 20:00 on
+    // the 14th is 28¾ h old and never enters the statement — open_today would
+    // then be empty because there is no OPERATING row at all, and the case
+    // would pass with the day comparison replaced by TRUE. Verified by that
+    // mutation: at 20:00 all five cases stay green, at 23:30 this one fails.
     await seedPark(CLOSES);
-    await reading(new Date("2026-06-14T20:00:00+02:00"), "OPERATING");
+    await reading(new Date("2026-06-14T23:30:00+02:00"), "OPERATING");
     await reading(new Date(`${DAY}T23:00:00+02:00`), "CLOSED");
 
     const rows = await run(new Date(`${NEXT}T00:45:00+02:00`));
