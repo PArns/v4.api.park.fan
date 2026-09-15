@@ -511,6 +511,11 @@ describe("Showtimes follow the operating day (E2E)", () => {
     it("does not repeat a time two snapshots both carry", async () => {
       // Every poll republishes the day's whole programme, so the raw rows hold
       // each start time once per snapshot. The times array is a set.
+      //
+      // What this does NOT pin is the `bool_and` in `per_time`: swapping that
+      // GROUP BY for a DISTINCT over (hhmm, after_midnight) keeps this case
+      // green, because both snapshots agree on which side of midnight a time
+      // sits. The comment there explains why no fixture can tell them apart.
       const { showId } = await seedRelative(5, {
         tag: "-twice",
         twice: true,

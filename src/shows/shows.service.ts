@@ -882,6 +882,17 @@ export class ShowsService {
                   AND se.date = (${startTs} AT TIME ZONE ${tz})::date - 1
                   -- A wrap day, in the same terms as §5: the window ends on a
                   -- later park-local date than it starts on.
+                  --
+                  -- This test and the coverage test below OVERLAP, and each
+                  -- one alone already rejects an ordinary day — which means
+                  -- removing either leaves the suite green and the statement
+                  -- correct. Measured by mutation on 2026-09-15: dropping the
+                  -- wrap test alone, or the \`<= closes\` alone, fails nothing
+                  -- in \`show-operating-day.e2e-spec.ts\`; dropping both fails
+                  -- four cases. So do not read a green run as licence to
+                  -- delete one of them. They are kept apart because they say
+                  -- different things — this one that the day reaches into the
+                  -- night at all, the one below that it reaches this far.
                   AND (${closes} AT TIME ZONE ${tz})::date
                     > (se."openingTime" AT TIME ZONE ${tz})::date
                   AND ${startTs} >  se."openingTime"
@@ -974,6 +985,16 @@ export class ShowsService {
          -- sides of a midnight would otherwise be listed twice, out of order.
          -- \`bool_and\` resolves that to the earlier slot, which is where a
          -- reader expects an ambiguous time to sit.
+         --
+         -- That case is a guard rather than an observed one, and the
+         -- difference is worth stating: two instants sharing a wall-clock
+         -- time are 24 hours apart, while \`normalizedClosingSql\` caps an
+         -- operating day at 24 hours and the coverage test is exclusive at
+         -- the opening — so the pair cannot both fall in one day. Swapping
+         -- this GROUP BY for a DISTINCT over the tuple fails nothing in the
+         -- e2e suite (measured by mutation, 2026-09-15); removing the
+         -- deduplication altogether does, because every poll republishes the
+         -- day's whole programme.
          SELECT show_id, weekday, day, hhmm,
                 bool_and(after_midnight) AS after_midnight
            FROM keyed
