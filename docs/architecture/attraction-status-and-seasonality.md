@@ -767,6 +767,15 @@ exists to remove, since a visible ride reading CLOSED beats one that silently
 disappeared, but it is not a full recovery. Clearing the orphaned show row is
 PAR-232's job.
 
+**The protection runs one way.** A retirement a human entered survives every
+run, because its reason is not one the sync wrote. An un-retirement entered by
+hand does not: `POST /admin/unretire-attraction/:id` clears `retired_reason`,
+the row matches the filter again, and the next run retires it while the wiki
+still calls the entity a show. That is the sync winning an argument with a
+person, which is the point of a sync — the wiki is the source for what an entity
+*is*. To override it, correct the entity upstream or add its id to
+`THEMEPARKS_EXCLUSIONS`.
+
 Two more limits worth knowing before trusting the round trip:
 
 - **The way back is park-scoped.** The retirement is not: `externalId` is
@@ -778,6 +787,18 @@ Two more limits worth knowing before trusting the round trip:
   the same upstream fault `dedupePollEntities` handles for live data, and
   without the exclusion the row would flip between retired and not on every
   run, evicting caches and revalidating the frontend each time.
+- **A row that still received a genuine reading in the last 30 days is held
+  back**, on top of the `queue_times_entity_id` rule. That column is written by
+  the entity mapping job, so a row can be waiting for its first mapping run and
+  look wiki-only while Queue-Times already reports it; a reading that is neither
+  a `system-reconciliation` row nor a heartbeat is the harder evidence. Measured
+  on 2026-09-15 it holds nothing back — all 15 remaining candidates last read
+  genuinely in April — so it is a guard rather than a filter.
+
+And the 17 rows retired by hand for this issue on 2026-09-15 carry their own
+reason, with the entity URL in it, rather than the constant. They were an admin
+write, so the sync treats them the way it treats any human retirement: it will
+not lift them. That is the intended reading, not an oversight.
 
 The reverse direction is handled **only on the attraction side**. When an entity
 moves the other way, the row it leaves behind in `shows` or `restaurants` stays

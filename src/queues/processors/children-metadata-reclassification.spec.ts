@@ -1,5 +1,8 @@
 import { In, IsNull } from "typeorm";
-import { RECLASSIFIED_UPSTREAM_REASON } from "../../attractions/services/attraction-retirement.service";
+import {
+  RECLASSIFIED_UPSTREAM_REASON,
+  RECLASSIFIED_UPSTREAM_REASONS,
+} from "../../attractions/services/attraction-retirement.service";
 import { ChildrenMetadataProcessor } from "./children-metadata.processor";
 
 /**
@@ -16,10 +19,12 @@ import { ChildrenMetadataProcessor } from "./children-metadata.processor";
  * absence is green whenever the branch is not reached at all.
  */
 describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
+  const managerQuery = jest.fn();
   const attractionRepo = {
     find: jest.fn(),
     update: jest.fn(),
     save: jest.fn(),
+    manager: { query: managerQuery },
   };
   const retirementService = { retire: jest.fn(), unretire: jest.fn() };
   const themeParksMapper = { mapAttraction: jest.fn() };
@@ -31,10 +36,16 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
   /** `Sesame Street`, an ATTRACTION until 2026-04-25 and a SHOW since. */
   const showExternalId = "8d1ea3fc-0a1b-4c2d-9e3f-4a5b6c7d8e9f";
 
-  const staleRow = { id: "row-sesame-street", name: "Sesame Street" };
+  const staleRow = {
+    id: "row-sesame-street",
+    name: "Sesame Street",
+    parkId: "park-uss",
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // No candidate has a genuine reading unless a test says otherwise.
+    managerQuery.mockResolvedValue([]);
     processor = new ChildrenMetadataProcessor(
       { getRepository: () => attractionRepo } as any,
       retirementService as any,
@@ -54,7 +65,11 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
   const otherShowExternalId = "1b2c3d4e-5f60-4718-8293-a4b5c6d7e8f9";
 
   const retireReclassified = (externalIds: string[]) =>
-    (processor as any).retireReclassifiedAttractions(parkName, externalIds);
+    (processor as any).retireReclassifiedAttractions(
+      parkId,
+      parkName,
+      externalIds,
+    );
 
   describe("ATTRACTION → SHOW", () => {
     it("retires the abandoned attraction row", async () => {
@@ -133,7 +148,7 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
     it("retires an attraction row whose entity is now a RESTAURANT", async () => {
       const restaurantExternalId = "f1e2d3c4-b5a6-4978-8a9b-0c1d2e3f4a5b";
       attractionRepo.find.mockResolvedValue([
-        { id: "row-mels-drive-in", name: "Mel's Drive-In" },
+        { id: "row-mels-drive-in", name: "Mel's Drive-In", parkId },
       ]);
 
       await retireReclassified([restaurantExternalId]);
@@ -153,8 +168,8 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
     it("retires every reclassified row of the park in one call", async () => {
       const ids = ["show-a", "show-b", "restaurant-c"];
       attractionRepo.find.mockResolvedValue([
-        { id: "row-a", name: "A" },
-        { id: "row-b", name: "B" },
+        { id: "row-a", name: "A", parkId },
+        { id: "row-b", name: "B", parkId },
       ]);
 
       await retireReclassified(ids);
@@ -219,7 +234,7 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
 
       await processor.handleFetchChildren({} as any);
 
-      expect(spy).toHaveBeenCalledWith(parkName, ["show-only"]);
+      expect(spy).toHaveBeenCalledWith(parkId, parkName, ["show-only"]);
     });
 
     it("hands over the show and restaurant ids, and not the attraction ones", async () => {
@@ -252,7 +267,7 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       await processor.handleFetchChildren({} as any);
 
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy).toHaveBeenCalledWith(parkName, ["show-1", "rest-1"]);
+      expect(spy).toHaveBeenCalledWith(parkId, parkName, ["show-1", "rest-1"]);
 
       // The replacement row has to exist before the old one is retired — a
       // reader who only sees the assertion above could move the call up.
@@ -352,6 +367,46 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
   });
 
   /**
+   * `queue_times_entity_id` is written by the entity mapping job, so a row can
+   * be waiting for its first mapping run and look wiki-only while Queue-Times
+   * already reports it. A genuine reading is the harder evidence.
+   */
+  describe("a row that is still being read", () => {
+    it("is held back even though it carries no Queue-Times id", async () => {
+      attractionRepo.find.mockResolvedValue([staleRow]);
+      managerQuery.mockResolvedValue([{ attractionId: "row-sesame-street" }]);
+
+      await retireReclassified([showExternalId]);
+
+      expect(managerQuery).toHaveBeenCalledTimes(1);
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    it("is retired once that reading is gone", async () => {
+      // The pair: same row, same query, and the only difference is whether it
+      // came back with a genuine reading.
+      attractionRepo.find.mockResolvedValue([staleRow]);
+      managerQuery.mockResolvedValue([]);
+
+      await retireReclassified([showExternalId]);
+
+      expect(managerQuery).toHaveBeenCalledTimes(1);
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks only about reconciliation-free, non-heartbeat rows", async () => {
+      attractionRepo.find.mockResolvedValue([staleRow]);
+
+      await retireReclassified([showExternalId]);
+
+      const [sql, params] = managerQuery.mock.calls[0];
+      expect(sql).toContain("data_source <> 'system-reconciliation'");
+      expect(sql).toContain("is_heartbeat IS NOT TRUE");
+      expect(params).toEqual([["row-sesame-street"]]);
+    });
+  });
+
+  /**
    * The reason ends up on the public attraction detail endpoint
    * (`AttractionResponseDto.fromEntity` serves `retiredReason`), so it has to
    * read as a sentence to a visitor rather than as a note to a developer.
@@ -362,6 +417,45 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       expect(RECLASSIFIED_UPSTREAM_REASON).not.toMatch(/PAR-\d+/);
       expect(RECLASSIFIED_UPSTREAM_REASON).not.toContain("docs/");
       expect(RECLASSIFIED_UPSTREAM_REASON).not.toContain(".md");
+    });
+
+    /**
+     * The copy IS the marker, so rewording it strands every row already
+     * retired under the old text — the un-retire check stops recognising them
+     * and the retire filter skips them because `retired_at` is set. This pin
+     * makes that impossible to do by accident: changing the sentence fails
+     * here, and the fix is to move the old value into
+     * `RECLASSIFIED_UPSTREAM_REASONS` in the same commit.
+     */
+    it("is pinned, because the copy is also the marker", () => {
+      expect(RECLASSIFIED_UPSTREAM_REASON).toBe(
+        "ThemeParks.wiki lists this entity as a show or a restaurant rather " +
+          "than an attraction, so it is no longer tracked as a ride. The date " +
+          "is when this was noticed, not when the reclassification happened. " +
+          "Source: https://api.themeparks.wiki/",
+      );
+      expect(RECLASSIFIED_UPSTREAM_REASONS).toContain(
+        RECLASSIFIED_UPSTREAM_REASON,
+      );
+    });
+  });
+
+  /**
+   * The protection runs one way, and that is the intended behaviour rather
+   * than a gap: the wiki is the source for what an entity *is*.
+   */
+  describe("a human un-retirement does not survive", () => {
+    it("retires the row again while the wiki still calls it a show", async () => {
+      // `POST /admin/unretire-attraction/:id` clears both columns, so the row
+      // looks exactly like one that was never retired.
+      attractionRepo.find.mockResolvedValue([staleRow]);
+
+      await retireReclassified([showExternalId]);
+
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+      expect(retirementService.retire.mock.calls[0][0][0].reason).toBe(
+        RECLASSIFIED_UPSTREAM_REASON,
+      );
     });
   });
 });

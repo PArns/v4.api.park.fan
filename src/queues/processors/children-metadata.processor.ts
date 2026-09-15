@@ -8,6 +8,7 @@ import { AttractionsService } from "../../attractions/attractions.service";
 import {
   AttractionRetirementService,
   RECLASSIFIED_UPSTREAM_REASON,
+  isReclassifiedUpstreamReason,
 } from "../../attractions/services/attraction-retirement.service";
 import { ShowsService } from "../../shows/shows.service";
 import { RestaurantsService } from "../../restaurants/restaurants.service";
@@ -213,6 +214,7 @@ export class ChildrenMetadataProcessor {
               );
               try {
                 await this.retireReclassifiedAttractions(
+                  park.id,
                   park.name,
                   [...shows, ...restaurants]
                     .map((child) => child.id)
@@ -512,7 +514,7 @@ export class ChildrenMetadataProcessor {
       // endpoint has to survive this run and every one after it. It goes
       // through the service rather than a column write, because lifting a
       // retirement has the same cache and sitemap consequences as setting one.
-      if (existing.retiredReason === RECLASSIFIED_UPSTREAM_REASON) {
+      if (isReclassifiedUpstreamReason(existing.retiredReason)) {
         await this.attractionRetirementService.unretire(existing.id);
       }
     } else {
@@ -655,9 +657,18 @@ export class ChildrenMetadataProcessor {
    * A row retired here carries `RECLASSIFIED_UPSTREAM_REASON` verbatim, and
    * `syncAttraction` lifts the retirement the moment the wiki lists the entity
    * as an `ATTRACTION` again — so a single malformed `/children` response
-   * cannot strand a park's rides. Only rows carrying that exact reason are
-   * un-retired, so a retirement a human entered through the admin endpoint
+   * cannot strand a park's rides. Only rows carrying a reason this sync wrote
+   * are un-retired, so a retirement a human entered through the admin endpoint
    * survives every nightly run.
+   *
+   * **That protection is one-directional, deliberately.** A human retirement
+   * survives; a human *un*-retirement does not. `POST /admin/unretire-
+   * attraction/:id` clears `retired_reason`, and the row then matches this
+   * filter again, so the next run retires it while the wiki still calls the
+   * entity a show. That is the sync winning an argument with a person, which
+   * is what a sync is for — the wiki is the source for what an entity *is*.
+   * Overriding it means correcting the entity upstream, or adding the id to
+   * `THEMEPARKS_EXCLUSIONS` so this sync stops having an opinion about it.
    *
    * **What comes back is the row, not its data supply.** The `shows` row keeps
    * existing (PAR-232), and `WaitTimesProcessor` builds its lookup with the
@@ -680,19 +691,30 @@ export class ChildrenMetadataProcessor {
    * automatically but has to be brought back by hand.
    */
   private async retireReclassifiedAttractions(
+    parkId: string,
     parkName: string,
     reclassifiedExternalIds: string[],
   ): Promise<void> {
     if (reclassifiedExternalIds.length === 0) return;
 
-    const stale = await this.attractionsService.getRepository().find({
+    const candidates = await this.attractionsService.getRepository().find({
       where: {
         externalId: In(reclassifiedExternalIds),
         retiredAt: IsNull(),
         queueTimesEntityId: IsNull(),
       },
-      select: ["id", "name"],
+      select: ["id", "name", "parkId"],
     });
+    if (candidates.length === 0) return;
+
+    // `queue_times_entity_id` is a snapshot: it is written by the entity
+    // mapping job, so a row can be waiting for its first mapping run and look
+    // wiki-only while Queue-Times is already reporting it. A genuine reading —
+    // not a reverse-reconciliation row, not a heartbeat — is the harder
+    // evidence, and it holds the row back regardless. Measured against
+    // production on 2026-09-15 this changes nothing: all 15 remaining
+    // candidates last read genuinely in April, so none is held back.
+    const stale = await this.withoutRecentGenuineReadings(candidates);
     if (stale.length === 0) return;
 
     // The wiki does not say when it reclassified an entity, so this is the day
@@ -707,10 +729,45 @@ export class ChildrenMetadataProcessor {
       })),
     );
 
+    // The park in the message is the one whose `/children` carried the id. The
+    // lookup is not park-scoped, so a row that moved parks upstream is named
+    // with its own park id instead of being filed under the wrong name.
+    const elsewhere = stale.filter((a) => a.parkId !== parkId);
     this.logger.log(
       `🪦 ${parkName}: retired ${stale.length} attraction row(s) reclassified upstream — ` +
         stale.map((a) => a.name).join(", "),
     );
+    for (const row of elsewhere) {
+      this.logger.warn(
+        `"${row.name}" belongs to park ${row.parkId}, not to ${parkName} — ` +
+          "retired anyway, but syncAttraction is park-scoped and will not bring it back",
+      );
+    }
+  }
+
+  /**
+   * Drops the rows that still received a genuine reading in the last 30 days.
+   *
+   * `system-reconciliation` rows say our data stopped arriving, and a
+   * heartbeat carries the previous row's `data_source` forward, so neither is
+   * evidence that anything is still reporting the ride. Only a row that is
+   * neither answers the question this guard asks.
+   */
+  private async withoutRecentGenuineReadings<T extends { id: string }>(
+    candidates: T[],
+  ): Promise<T[]> {
+    const rows: { attractionId: string }[] = await this.attractionsService
+      .getRepository()
+      .manager.query(
+        `SELECT DISTINCT "attractionId" FROM queue_data
+          WHERE "attractionId" = ANY($1::uuid[])
+            AND timestamp > now() - interval '30 days'
+            AND data_source <> 'system-reconciliation'
+            AND is_heartbeat IS NOT TRUE`,
+        [candidates.map((c) => c.id)],
+      );
+    const stillReporting = new Set(rows.map((r) => r.attractionId));
+    return candidates.filter((c) => !stillReporting.has(c.id));
   }
 
   /**

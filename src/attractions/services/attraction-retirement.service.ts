@@ -20,12 +20,36 @@ import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation
  * the next developer: `AttractionResponseDto` serves `retiredReason` on the
  * public attraction detail endpoint. Issue numbers, file paths and internals
  * belong in the docblock of the method that writes it, not in here.
+ *
+ * ⚠️ **Rewording it strands every row already retired under the old wording.**
+ * The marker and the copy are the same string, so an edit here breaks the
+ * `===` in `syncAttraction`, and those rows are then invisible to both sides:
+ * the retire filter skips them (`retiredAt` is set) and the un-retire check no
+ * longer recognises them. If this text is ever changed, the previous value
+ * moves into {@link RECLASSIFIED_UPSTREAM_REASONS} in the same commit. A spec
+ * pins the literal so the change cannot be made without reading this.
  */
 export const RECLASSIFIED_UPSTREAM_REASON =
   "ThemeParks.wiki lists this entity as a show or a restaurant rather than an " +
   "attraction, so it is no longer tracked as a ride. The date is when this was " +
   "noticed, not when the reclassification happened. " +
   "Source: https://api.themeparks.wiki/";
+
+/**
+ * Every wording the children sync has ever written, newest first. The
+ * un-retire check accepts all of them, so a row retired under an older text
+ * still comes back when the wiki calls the entity an attraction again.
+ */
+export const RECLASSIFIED_UPSTREAM_REASONS: readonly string[] = [
+  RECLASSIFIED_UPSTREAM_REASON,
+];
+
+/** True for a retirement this sync wrote, under any wording it has used. */
+export function isReclassifiedUpstreamReason(
+  reason: string | null | undefined,
+): boolean {
+  return reason != null && RECLASSIFIED_UPSTREAM_REASONS.includes(reason);
+}
 
 export interface RetirementRequest {
   attractionId: string;

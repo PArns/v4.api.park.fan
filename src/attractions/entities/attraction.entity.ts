@@ -397,8 +397,11 @@ export class Attraction {
    * reclassified as a show or a restaurant, and writes
    * `RECLASSIFIED_UPSTREAM_REASON` verbatim. The sync clears only its own
    * retirements, and only when the entity is an `ATTRACTION` upstream again —
-   * a hand-entered retirement survives every run. Nothing else in the sync
-   * touches this column, which is still the rule the curated columns follow.
+   * a hand-entered retirement survives every run. The reverse does not: an
+   * un-retirement entered by hand clears the reason, and the sync retires the
+   * row again while the wiki still calls the entity a show. Nothing else in
+   * the sync touches this column, which is still the rule the curated columns
+   * follow.
    */
   @Column({ name: "retired_at", type: "timestamptz", nullable: true })
   @Index("idx_attraction_retired_at", { where: "retired_at IS NULL" })
