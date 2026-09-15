@@ -153,11 +153,12 @@ curated works period is unaffected; a live reading has never overruled it.
 (`attractionId IS NULL`) and one row per ride per day. `ParkMergeService.mergeParks`
 deduped them through its generic `migrateTableData` on `(date, scheduleType)`, a
 key that cannot see the difference — so a single opening-hours row on the winner
-deleted **every** row the loser held for that day, the per-ride ones included.
-The delete ran inside a transaction that then reported success. How many rows
-that was in production is not established here and the fix does not depend on
-it: the winner is open on almost every day the loser has a schedule for, so a
-per-ride row the loser held survived only on a day the winner was shut.
+deleted every row of **that type** the loser held for that day, the per-ride ones
+included. The delete ran inside a transaction that then reported success. How
+many rows that was in production is not established here and the fix does not
+depend on it: the winner is open on almost every day the loser has a schedule
+for, so a loser's per-ride OPERATING row survived only on a day the winner was
+shut.
 
 Measured against PostgreSQL 16 on a seven-row fixture (winner: opening hours and
 ride B on 09-20; loser: opening hours, ride A and ride B on 09-20, ride A on
@@ -182,8 +183,14 @@ NULL rather than true, so no key it can build spares a per-ride row and dedupes
 a park-level one at once.
 
 What keeps the weak key out is that its call site is gone, and a spec case pins
-that: no statement in `mergeParks` deletes from `schedule_entries` with a
-row-wise `IN`. It is deliberately not pinned on `ParkMergeService`'s identifier
+that: no statement in `mergeParks` deletes from `schedule_entries` on a `parkId`
+key with a row-wise `IN`. The key is part of that sentence — on `attractionId`
+the same `IN` is correct, because `WHERE "attractionId" = $loser` has already
+excluded every park-level row, and the attraction path uses it (PAR-149). The
+case runs with a colliding ride so that statement is really present, or the
+absence it asserts would be the fixture's rather than the rule's.
+
+It is deliberately not pinned on `ParkMergeService`'s identifier
 allowlists, because those cannot carry it — both lists are built by spreading
 the dependency declarations, and the attraction side declares `schedule_entries`
 with `conflictColumns: ["date", "scheduleType"]`, so striking the two literals

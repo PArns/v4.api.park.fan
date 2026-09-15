@@ -399,6 +399,13 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
     // open on almost every day the loser has a ride schedule for, so that key
     // matched the opening-hours row and deleted the loser's per-ride rows for
     // that day with it (PAR-171).
+    //
+    // With a colliding ride, so the attraction path below really runs and its
+    // own row-wise `IN` over this table is present in `calls` — otherwise the
+    // absence asserted at the end of this case is the fixture's and not the
+    // rule's.
+    ridesCollide = true;
+
     await service.mergeParks(WINNER_PARK, LOSER_PARK);
 
     const scheduleDelete = calls.find(
@@ -416,18 +423,31 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
     // three columns is NULL for a park-level row, so it would spare nothing.
     expect(scheduleDelete?.sql).not.toMatch(/\bIN\s*\(/i);
 
-    // And it is gone from the whole merge, not just from the statement found
-    // above. Removing the two identifiers from `ALLOWED_TABLE_NAMES` and
+    // And it is gone from the whole PARK path, not just from the statement
+    // found above. Removing the two identifiers from `ALLOWED_TABLE_NAMES` and
     // `ALLOWED_COLUMN_NAMES` does not prevent this: both come back through the
     // spread of `ATTRACTION_DEPENDENCIES`, whose own `schedule_entries` entry
     // carries `conflictColumns: ["date", "scheduleType"]`. The guarantee is
     // that the call site is gone, so this is where it is pinned.
-    const weakKeyDelete = calls.find(
+    //
+    // Keyed on the park, because the attraction path emits a row-wise `IN` over
+    // this same table and is RIGHT to: `WHERE "attractionId" = $loser` has
+    // already excluded every park-level row, so its key carries no nullable
+    // column (PAR-149). A filter that only asked for `schedule_entries` and an
+    // `IN` would pin the fixture rather than the rule — it would pass here only
+    // because no ride collides in this case, and turn red on a case that sets
+    // `ridesCollide`.
+    const scheduleDeletesWithIn = calls.filter(
       (c) =>
         /DELETE\s+FROM\s+schedule_entries/i.test(c.sql) &&
         /\bIN\s*\(/i.test(c.sql),
     );
-    expect(weakKeyDelete).toBeUndefined();
+    // The attraction path's one is there, which is what makes the next
+    // assertion an absence rather than an empty set.
+    expect(scheduleDeletesWithIn).not.toHaveLength(0);
+    expect(
+      scheduleDeletesWithIn.filter((c) => /"parkId"/.test(c.sql)),
+    ).toHaveLength(0);
 
     const move = calls.find((c) =>
       /^\s*UPDATE schedule_entries SET "parkId"/i.test(c.sql),
