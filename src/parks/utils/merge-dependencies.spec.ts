@@ -105,6 +105,23 @@ describe("merge dependency tables", () => {
     expect(tables).toHaveLength(new Set(tables).size);
   });
 
+  it("lists every table it declares a strategy for", () => {
+    // The other direction, and the one that had rotted: the guard above asks
+    // whether every table in the snapshot has a strategy, so a table that was
+    // DECLARED and never listed stayed invisible to it. Three were
+    // (attraction_outages, attraction_exposure_days,
+    // attraction_downtime_profiles), which is how a list meant to protect 27
+    // tables spent a month protecting 20 — the data is corrected above, and
+    // without this the same rot starts again with the next entry somebody adds
+    // to the list and forgets here.
+    const declared = ATTRACTION_DEPENDENCIES.map((d) => d.table);
+    expect(
+      declared.filter(
+        (table) => !ATTRACTION_REFERENCING_TABLES.includes(table),
+      ),
+    ).toEqual([]);
+  });
+
   /**
    * The park-side counterpart, and it did not exist until a merge ate a set of
    * hand-researched seasons. Same snapshot rule as the attraction list above.

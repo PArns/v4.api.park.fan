@@ -598,9 +598,16 @@ describe("ParksService", () => {
      * So every case below runs with the loser holding a mark. Stateless, unlike
      * the profile reader: this gate asks one question about one id, and the
      * statements after it are the same whatever the winner holds.
+     *
+     * Anchored at the start of the statement, which is not pedantry: the same
+     * words occur again inside the second DELETE, as `EXISTS (SELECT 1 FROM
+     * attraction_review_marks AS w …)`. An unanchored match answered that
+     * statement too — harmlessly, since the SQL is recorded before the reader
+     * runs, but a helper whose comment says it asks one question while it
+     * answers two is the kind of thing a later case builds on.
      */
     const reviewMarkReader = (sql: string): unknown[] | undefined =>
-      /SELECT 1 FROM attraction_review_marks/i.test(sql)
+      /^\s*SELECT 1 FROM attraction_review_marks/i.test(sql)
         ? [{ "?column?": 1 }]
         : undefined;
 
