@@ -15,6 +15,12 @@ import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.c
  * required same-city OR <1km proximity, so the bad geo protected the ghost.
  * It also skipped any pair that shared an external entity ID — which is the
  * single strongest duplicate signal, and which both real pairs had.
+ *
+ * The third pair, Wet'n'Wild, is the opposite shape: every physical fact
+ * agrees and the NAMES are what disagree, so it needed a branch that does not
+ * ask the name first. Its four negative cases are the pairs that came closest
+ * to it when the branch was measured against all 213 parks — a resort's three
+ * parks on one geocode, and a row filed 110 km from the park it names.
  */
 describe("ParkValidatorService.findDuplicates", () => {
   let service: ParkValidatorService;
@@ -87,6 +93,97 @@ describe("ParkValidatorService.findDuplicates", () => {
     longitude: -117.918953,
     wikiEntityId: "dlr-wiki",
     queueTimesEntityId: "qt-park-16",
+    wartezeitenEntityId: null,
+  });
+
+  /**
+   * Wet'n'Wild, Oxenford — real production rows, and the pair the
+   * `sharedPoint` branch exists for. Same coordinates to seven decimals, same
+   * city, same thirteen slides, one row per upstream source; the names score
+   * 0.6923, which is under every other branch's threshold.
+   */
+  const wetnwildWiki = park({
+    id: "0319acc9-06d5-4f41-9e9f-45ec6a8f3587",
+    name: "Wet'n'Wild",
+    city: "Oxenford",
+    latitude: -27.9149499,
+    longitude: 153.3167716,
+    wikiEntityId: "ee018a72-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+    queueTimesEntityId: null,
+    wartezeitenEntityId: null,
+  });
+  const wetnwildQueueTimes = park({
+    id: "eca6de1a-b9ea-427a-ad3e-0f7c5f9b1bd4",
+    name: "Wet 'n' Wild Gold Coast",
+    city: "Oxenford",
+    latitude: -27.9149499,
+    longitude: 153.3167716,
+    wikiEntityId: null,
+    queueTimesEntityId: "qt-park-146",
+    wartezeitenEntityId: null,
+  });
+
+  /**
+   * PortAventura World's three parks, all on one resort geocode (0.0000 km
+   * apart in production). Two of them are listed separately by Queue-Times,
+   * which is the source saying it knows two parks here. Must NOT be flagged.
+   */
+  const portAventuraPark = park({
+    id: "pa-1",
+    name: "PortAventura Park",
+    city: "Vila-seca",
+    latitude: 41.0986786,
+    longitude: 1.151773,
+    wikiEntityId: "pa-wiki",
+    queueTimesEntityId: "qt-park-19",
+    wartezeitenEntityId: null,
+  });
+  const ferrariLand = park({
+    id: "pa-2",
+    name: "Ferrari Land",
+    city: "Vila-seca",
+    latitude: 41.0986786,
+    longitude: 1.151773,
+    wikiEntityId: "fl-wiki",
+    queueTimesEntityId: "qt-park-277",
+    wartezeitenEntityId: null,
+  });
+  /** The third, which Queue-Times does not list — so the sources ARE disjoint
+   * and only the name keeps it out. */
+  const caribeAquaticPark = park({
+    id: "pa-3",
+    name: "Caribe Aquatic Park",
+    city: "Vila-seca",
+    latitude: 41.0986786,
+    longitude: 1.151773,
+    wikiEntityId: null,
+    queueTimesEntityId: null,
+    wartezeitenEntityId: "caribeaquaticpark",
+  });
+
+  /**
+   * Two real parks 110 km apart, of which the Rockford row carries a Gurnee
+   * geocode: 0.0424 km in production, name 0.6122, disjoint sources. The
+   * closest thing in the catalogue to a false positive. Must NOT be flagged.
+   */
+  const hurricaneHarborChicago = park({
+    id: "hh-1",
+    name: "Hurricane Harbor Chicago",
+    city: "Gurnee",
+    latitude: 42.3706,
+    longitude: -87.9361,
+    wikiEntityId: "hh-chicago-wiki",
+    queueTimesEntityId: null,
+    wartezeitenEntityId: null,
+  });
+  const hurricaneHarborRockford = park({
+    id: "hh-2",
+    name: "Six Flags Hurricane Harbor, Rockford",
+    city: "Gurnee",
+    latitude: 42.370244,
+    longitude: -87.935916,
+    wikiEntityId: null,
+    queueTimesEntityId: "qt-park-297",
     wartezeitenEntityId: null,
   });
 
@@ -169,6 +266,88 @@ describe("ParkValidatorService.findDuplicates", () => {
     expect(pair.sharedEntityIds.queueTimes).toBe(false);
   });
 
+  it("detects the Wet'n'Wild pair on coordinates alone, at 0.6923 on names", async () => {
+    parkRepository.find.mockResolvedValue([wetnwildWiki, wetnwildQueueTimes]);
+
+    const duplicates = await service.findDuplicates();
+
+    expect(duplicates).toHaveLength(1);
+    expect(idsOf(duplicates[0])).toEqual(
+      [wetnwildWiki.id, wetnwildQueueTimes.id].sort(),
+    );
+    expect(duplicates[0].reason).toContain(
+      "same coordinates, one park per source",
+    );
+    // The point of the branch: no existing threshold would have taken it.
+    expect(duplicates[0].score).toBeLessThan(0.85);
+  });
+
+  it("still needs the name to say something — a suffix, not a different park", async () => {
+    // Same two rows, but the Queue-Times row is renamed to a park that merely
+    // shares the address. Geography and sources are untouched.
+    parkRepository.find.mockResolvedValue([
+      wetnwildWiki,
+      park({ ...wetnwildQueueTimes, name: "Paradise Country" }),
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("does not flag PortAventura World's three parks on one resort geocode", async () => {
+    parkRepository.find.mockResolvedValue([
+      portAventuraPark,
+      ferrariLand,
+      caribeAquaticPark,
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("does not flag two parks that one source lists separately", async () => {
+    // Identical coordinates AND a name score over the floor. Only the
+    // Queue-Times IDs on both rows keep them apart, which is that source
+    // saying it knows two parks here.
+    parkRepository.find.mockResolvedValue([
+      park({ ...wetnwildWiki, queueTimesEntityId: "qt-park-999" }),
+      wetnwildQueueTimes,
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("does not flag the Rockford row that carries a Gurnee geocode", async () => {
+    // 0.0424 km apart, 0.6122 on names, disjoint sources — everything the
+    // Wet'n'Wild pair has except one point. Two real parks 110 km apart.
+    parkRepository.find.mockResolvedValue([
+      hurricaneHarborChicago,
+      hurricaneHarborRockford,
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("does not flag two rows on one point when neither names a source", async () => {
+    parkRepository.find.mockResolvedValue([
+      park({ ...wetnwildWiki, wikiEntityId: null }),
+      park({ ...wetnwildQueueTimes, queueTimesEntityId: null }),
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("does not flag two rows on one point when one row has no coordinates", async () => {
+    parkRepository.find.mockResolvedValue([
+      park({
+        ...wetnwildWiki,
+        latitude: null as never,
+        longitude: null as never,
+      }),
+      wetnwildQueueTimes,
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
   it("does not flag two real parks that share a name", async () => {
     parkRepository.find.mockResolvedValue([disneylandParis, disneylandAnaheim]);
 
@@ -181,16 +360,23 @@ describe("ParkValidatorService.findDuplicates", () => {
     expect(await service.findDuplicates()).toEqual([]);
   });
 
-  it("finds both real pairs and no false positives in one pass", async () => {
+  it("finds all three real pairs and no false positives in one pass", async () => {
     parkRepository.find.mockResolvedValue([
       ushLosAngeles,
       ushBullCreek,
       ioaOrlando,
       ioaTampa,
+      wetnwildWiki,
+      wetnwildQueueTimes,
       disneylandParis,
       disneylandAnaheim,
       fantawildPark,
       fantawildWaterPark,
+      portAventuraPark,
+      ferrariLand,
+      caribeAquaticPark,
+      hurricaneHarborChicago,
+      hurricaneHarborRockford,
     ]);
 
     const duplicates = await service.findDuplicates();
@@ -199,6 +385,7 @@ describe("ParkValidatorService.findDuplicates", () => {
       [
         [ushLosAngeles.id, ushBullCreek.id].sort(),
         [ioaOrlando.id, ioaTampa.id].sort(),
+        [wetnwildWiki.id, wetnwildQueueTimes.id].sort(),
       ].sort(),
     );
   });

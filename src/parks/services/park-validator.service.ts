@@ -51,6 +51,63 @@ export interface MissingWzId {
   similarity: number;
 }
 
+/**
+ * Two rows may describe one place while their names barely agree, so long as
+ * every physical fact does. `Wet'n'Wild` (ThemeParks.wiki) and
+ * `Wet 'n' Wild Gold Coast` (Queue-Times) are one water park in Oxenford,
+ * Queensland, down to the same thirteen slides — and they score 0.6923 on
+ * names, which is under every threshold `findDuplicates` had.
+ *
+ * The three constants below are the branch that catches that pair. Each was
+ * placed against the whole catalogue (213 parks, all carrying coordinates,
+ * 22 578 pairs) rather than chosen, because `POST merge-duplicate-parks`
+ * with `autoDetect: true` merges whatever this function returns — with no dry
+ * run and no review gate, so a false positive deletes a real park.
+ */
+
+/**
+ * Closer than this and the two rows are not near each other, they are on the
+ * same point.
+ *
+ * The catalogue has exactly five pairs under the 0.05 km this was first
+ * proposed at: PortAventura World's three parks on one resort geocode
+ * (0.0000 km), the Wet'n'Wild pair (0.0000 km), and
+ * `Hurricane Harbor Chicago` against `Six Flags Hurricane Harbor, Rockford`
+ * at 0.0424 km — two real parks 110 km apart, of which the Rockford row
+ * carries a Gurnee geocode. That last pair also has disjoint sources, so only
+ * a name threshold stands between it and an automatic merge, and only by
+ * 0.08. At 0.01 km it is out on geometry instead, with the nearest
+ * non-duplicate four times the radius away and nothing at all in between.
+ */
+const SHARED_POINT_KM = 0.01;
+
+/**
+ * A name floor, because identical coordinates alone describe a resort as
+ * readily as a duplicate.
+ *
+ * It sits under the pair it must catch (0.6923) and far over the only other
+ * pairs sharing a point, PortAventura World's own three (0.1600–0.2000).
+ * It cannot do more than that: the dangerous shape is a water park beside its
+ * theme park, and those score AT or ABOVE the target — Legoland Windsor
+ * against its water park 0.7429, Alton Towers against its waterpark 0.6923.
+ * Keeping them out is `SHARED_POINT_KM`'s job; no two such siblings in the
+ * catalogue are closer than 0.0424 km.
+ */
+const SHARED_POINT_NAME_SIMILARITY = 0.6;
+
+/** How many of the three upstream sources have given this row an ID. */
+function countSourceIds(park: {
+  wikiEntityId: string | null;
+  queueTimesEntityId: string | null;
+  wartezeitenEntityId: string | null;
+}): number {
+  return (
+    (park.wikiEntityId ? 1 : 0) +
+    (park.queueTimesEntityId ? 1 : 0) +
+    (park.wartezeitenEntityId ? 1 : 0)
+  );
+}
+
 export interface DuplicatePair {
   park1: { id: string; name: string; city: string | null };
   park2: { id: string; name: string; city: string | null };
@@ -286,7 +343,13 @@ export class ParkValidatorService {
   }
 
   /**
-   * Finds duplicate parks based on city, geo proximity, and name similarity
+   * Finds duplicate parks based on city, geo proximity, and name similarity.
+   *
+   * Every branch but one asks the name first and lets geography confirm it.
+   * The exception is `sharedPoint`, where the physical facts lead: two rows on
+   * one point that no upstream source lists twice are the same place even when
+   * one of them carries a regional suffix the other does not. See
+   * `SHARED_POINT_KM`.
    */
   async findDuplicates(): Promise<DuplicatePair[]> {
     const allParks = await this.parkRepository.find({
@@ -330,18 +393,48 @@ export class ParkValidatorService {
           sharedWiki || sharedQueueTimes || sharedWartezeiten;
 
         const sameCity = p1.city && p2.city && p1.city === p2.city;
-        let geoProximity = false;
+        let distanceKm: number | null = null;
         if (p1.latitude && p1.longitude && p2.latitude && p2.longitude) {
-          const dist = calculateHaversineDistance(
+          distanceKm = calculateHaversineDistance(
             { latitude: p1.latitude, longitude: p1.longitude },
             { latitude: p2.latitude, longitude: p2.longitude },
             "km",
           );
-          geoProximity = dist < 1.0;
         }
+        const geoProximity = distanceKm !== null && distanceKm < 1.0;
+
+        // One upstream source holding an ID for BOTH rows is that source
+        // saying it knows two parks here — evidence against a duplicate, not
+        // for one, and it is what keeps PortAventura Park and Ferrari Land
+        // apart on their shared resort geocode (Queue-Times 19 and 277).
+        // A shared *value* is the opposite signal and already has its own
+        // branch below; it cannot reach this one, because an equal ID means
+        // both rows carry that source and the sources are then not disjoint.
+        // The test is structural — it reads what each row IS, not when it was
+        // last heard from — and it needs a source on each side, or a row with
+        // no IDs at all would be "from a different source" than everything.
+        const p1Sources = countSourceIds(p1);
+        const p2Sources = countSourceIds(p2);
+        const sourcesDisjoint =
+          p1Sources > 0 &&
+          p2Sources > 0 &&
+          !(p1.wikiEntityId && p2.wikiEntityId) &&
+          !(p1.queueTimesEntityId && p2.queueTimesEntityId) &&
+          !(p1.wartezeitenEntityId && p2.wartezeitenEntityId);
 
         const nameSimilarity = calculateNameSimilarity(p1.name, p2.name);
+
+        // Two sources, one point, and names that still agree on something.
+        // The physical facts carry this one; the name only has to rule out a
+        // resort whose parks share a geocode.
+        const sharedPoint =
+          distanceKm !== null &&
+          distanceKm < SHARED_POINT_KM &&
+          sourcesDisjoint &&
+          nameSimilarity >= SHARED_POINT_NAME_SIMILARITY;
+
         const isDuplicate =
+          sharedPoint ||
           (sameCity && nameSimilarity >= 0.85) ||
           (geoProximity && nameSimilarity >= 0.85) ||
           (nameSimilarity >= 0.98 && (sameCity || geoProximity)) ||
@@ -354,6 +447,8 @@ export class ParkValidatorService {
 
         if (isDuplicate) {
           const reasons: string[] = [];
+          if (sharedPoint)
+            reasons.push("same coordinates, one park per source");
           if (sameCity) reasons.push("same city");
           if (geoProximity) reasons.push("geo proximity < 1km");
           if (nameSimilarity >= 0.98) reasons.push("very high name similarity");
