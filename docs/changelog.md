@@ -6,6 +6,70 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — an entity that changes its `entityType` upstream no longer leaves a dead attraction behind
+
+ThemeParks.wiki reclassifies entities without changing their id. On 2026-04-25
+it moved 17 Universal Studios Singapore meet-and-greets from `ATTRACTION` to
+`SHOW`, and on 2026-04-23 fifteen more at the two Tokyo parks. The children sync
+fans a park's entities out by `entityType` and writes each group into its own
+table, so it followed the change into `shows` and left the `attractions` row
+untouched — `externalId` is unique *per table*, and nothing compared the two.
+
+The abandoned row does not go quiet: no source reports it, so
+reverse-reconciliation writes a CLOSED row every poll cycle, and the park page
+shows a permanently closed ride that is not a ride any more. Measured against
+production on 2026-09-15: **34 such rows** across five parks, and in the 30 days
+before the fix **11,832** reconciliation rows for USS alone. The last real
+reading on the attraction side is 2026-04-26 (USS) and 2026-04-23 (Tokyo).
+
+`retireReclassifiedAttractions` now runs after the show and restaurant syncs of
+each park and retires what was left behind, through `AttractionRetirementService`
+so cache eviction and revalidation come with it.
+
+**A row with a second source is left alone.** Disneyland Paris'
+`Mickey's PhilharMagic` is a show to the wiki and a queueing ride to
+Queue-Times, and was still receiving real `OPERATING` readings on 2026-08-29.
+Retiring it would delete a live ride over a disagreement between two sources,
+which is a curation decision rather than a sync one. Two of the 34 rows are held
+back by this rule.
+
+A second source shows up in two places, and both are checked:
+`queue_times_entity_id` is written by the entity mapping job for a Queue-Times
+match only, while a `wartezeiten-app` match leaves nothing but the
+`external_entity_mapping` row — which `WaitTimesProcessor` resolves live data
+through all the same. **39 attractions** carried that exact combination on
+2026-09-15, so the column on its own would eventually retire a ride that is
+still being measured.
+
+**The retirement undoes itself.** A row retired this way carries
+`RECLASSIFIED_UPSTREAM_REASON` verbatim, and `syncAttraction` lifts it again as
+soon as the wiki lists the entity as an `ATTRACTION`. That is what makes it safe
+to run unattended — a single malformed `/children` response cannot strand a
+park's rides. Only that exact reason is lifted, so a retirement entered by hand
+through `POST /admin/retire-attractions` survives every run.
+
+One neighbouring job had to learn that a retirement can be temporary:
+`detect-seasonal` cleared `is_seasonal` and `season_months` for every retired
+row, because a demolished ride never reports OPERATING again. A row retired by
+this sync can come back, and while it is retired it receives no readings at all
+— so the season would have been lost for good, with nothing left to derive it
+from. Step 2c now skips those retirements and leaves every other one permanent.
+
+What comes back is the row and not its data supply: the orphaned `shows` row
+still wins the entity lookup in `WaitTimesProcessor`, so the un-retired
+attraction resumes collecting `system-reconciliation` CLOSED rows until PAR-232
+clears it. A visible ride reading CLOSED is still better than one that silently
+vanished, but it is not a full recovery. The way back is also park-scoped, while
+the retirement is not — a row whose park moved upstream has to be brought back
+by hand.
+
+The row an entity leaves behind in `shows` or `restaurants` when it moves the
+other way is still not handled, because neither table has a `retired_at` column
+to set — PAR-232. It is not observed in production either: all 34 collisions run
+one way, and `restaurants` has none.
+
+Details and the diagnostic query: `docs/architecture/attraction-status-and-seasonality.md` §5.6.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide
