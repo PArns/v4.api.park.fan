@@ -6,6 +6,33 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a ride the feed reports running today is in tomorrow's plan too
+
+`season_out_since` with no months behind it blocks a ride for **today and
+tomorrow** (`SEASON_NOW_HORIZON_DAYS`), and the live exception that overrules it
+reached today alone. So a ride the feed reported `OPERATING` stood in today's
+plan and was missing from tomorrow's, off a note today's own readings refute:
+the detector writes it for a ride whose **current status is CLOSED** and clears
+it on the next `OPERATING` row, which makes the row a contradiction of the
+note's precondition rather than of its use for one day.
+
+`runningNow` now runs for `leadDays <= SEASON_NOW_HORIZON_DAYS`. What each of
+the two days may lift is not the same thing:
+
+- **Today**, everything the season blocks, as before.
+- **Tomorrow**, the monthless note alone. A ride with `season_months` on file
+  stays out at every horizon — today's row says nothing about tomorrow when
+  tomorrow is the first day of a month the season does not cover, and that is
+  precisely the day a season ends on. The candidate set asks `outOfSeasonOn`
+  with the note stripped rather than re-deriving the season rule beside it.
+
+Still **0 or 1 query per request**, inside the existing `Promise.all`: the two
+other skips (park CLOSED for the day, nothing excluded by the season) are
+untouched, and tomorrow's candidate set is a subset of today's. Tomorrow's
+lookup window is the six-hour floor, not an opening — the published opening
+belongs to the day being planned, and tomorrow's has not happened yet. The
+curated works period is unaffected; a live reading has never overruled it.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide
