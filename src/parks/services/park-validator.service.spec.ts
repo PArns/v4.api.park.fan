@@ -319,6 +319,18 @@ describe("ParkValidatorService.findDuplicates", () => {
     expect(await service.findDuplicates()).toEqual([]);
   });
 
+  it("compares a park on the prime meridian instead of calling it unlocated", async () => {
+    // Longitude 0 is a real position; `p.longitude && …` read it as a missing
+    // one and dropped the pair out of every geographic test. No catalogue park
+    // sits there today, which is exactly why this needs a case of its own.
+    parkRepository.find.mockResolvedValue([
+      park({ ...wetnwildWiki, latitude: 51.4779, longitude: 0 }),
+      park({ ...wetnwildQueueTimes, latitude: 51.4779, longitude: 0 }),
+    ]);
+
+    expect(await service.findDuplicates()).toHaveLength(1);
+  });
+
   it("reads the coordinates Postgres actually returns for a decimal column", async () => {
     // TypeORM hands `decimal` back as a string. Everything above feeds
     // numbers, so without this the branch is only ever tested in a shape
