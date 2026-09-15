@@ -588,6 +588,22 @@ describe("ParksService", () => {
       };
     };
 
+    /**
+     * The same arrangement for review marks, and for the same reason: the
+     * custom branch opens with a `SELECT 1 … LIMIT 1` and returns having
+     * written nothing when the loser carries no mark — which is the ordinary
+     * case in production and an invisible one here, because
+     * `dependencyTablesTouched` reads writes.
+     *
+     * So every case below runs with the loser holding a mark. Stateless, unlike
+     * the profile reader: this gate asks one question about one id, and the
+     * statements after it are the same whatever the winner holds.
+     */
+    const reviewMarkReader = (sql: string): unknown[] | undefined =>
+      /SELECT 1 FROM attraction_review_marks/i.test(sql)
+        ? [{ "?column?": 1 }]
+        : undefined;
+
     const recordTransaction = (
       rowsFor: (sql: string, params?: unknown[]) => unknown[],
     ) => {
@@ -596,7 +612,11 @@ describe("ParksService", () => {
       const transactionalEntityManager = {
         query: jest.fn(async (sql: string, params?: unknown[]) => {
           calls.push({ sql, params });
-          return curatedRideProfileReads(sql, params) ?? rowsFor(sql, params);
+          return (
+            curatedRideProfileReads(sql, params) ??
+            reviewMarkReader(sql) ??
+            rowsFor(sql, params)
+          );
         }),
         // Recorded into the same list as the raw statements. The park DELETE
         // goes through the entity manager rather than `query`, and where it

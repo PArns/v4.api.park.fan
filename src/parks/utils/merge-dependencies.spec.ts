@@ -1,6 +1,7 @@
 import { Logger } from "@nestjs/common";
 import { getMetadataArgsStorage } from "typeorm";
 import { AttractionRideProfile } from "../../attractions/entities/attraction-ride-profile.entity";
+import { AttractionReviewMark } from "../../attractions/entities/attraction-review-mark.entity";
 import {
   ATTRACTION_DEPENDENCIES,
   CURATED_RIDE_PROFILE_FIELDS,
@@ -13,6 +14,7 @@ import {
   applyMergeDependencies,
   attractionTablesMissingFrom,
   decideWinnerAuthoritative,
+  mergeAttractionReviewMarks,
   parkTablesMissingFrom,
   planWinnerAuthoritative,
   rideProfileRichness,
@@ -37,21 +39,41 @@ import {
  */
 describe("merge dependency tables", () => {
   /**
-   * Snapshot of every table referencing attractions, taken from the live
-   * catalog on 2026-07-27. If a new one appears, this test fails and whoever
-   * added it has to declare a merge strategy.
+   * Snapshot of every table referencing attractions, re-derived from the
+   * entities on 2026-09-15 (PAR-149). If a new one appears, this test fails and
+   * whoever added it has to declare a merge strategy.
    *
-   * `attraction_ride_profiles` is younger than that snapshot and was therefore
-   * invisible to the very guard that exists to catch it — every attraction
-   * merge cascaded the curated profile away in silence until PAR-105. Added
-   * here in the same commit that declares its strategy.
+   * The previous snapshot was taken from the live catalog on 2026-07-27 and had
+   * gone stale in BOTH directions: three tables were declared but unlisted
+   * (`attraction_outages`, `attraction_exposure_days`,
+   * `attraction_downtime_profiles`), so the guard was comparing against a list
+   * shorter than the one it exists to protect, and four were listed nowhere —
+   * `ride_alerts`, `schedule_entries`, `attraction_review_marks` and
+   * `prediction_lead_snapshots`. `attraction_ride_profiles` had already been
+   * added by hand for the same reason under PAR-105: it was younger than the
+   * catalog run and therefore invisible to the very guard meant to catch it.
+   *
+   * Derived from the entities rather than from a database, because that is
+   * what a cloud run can read — every `*.entity.ts` carrying an attraction id
+   * column, plus the four forecast tables the ML sub-services create in raw SQL
+   * with no entity and no FK (`pcn`/`shape` also create three `*_comparisons`
+   * tables, which are keyed by segment and hold no attraction id).
+   *
+   * `park_seasons` is deliberately absent although it names attractions: its
+   * `attraction_ids` is a jsonb array with no foreign key, so a merge leaves
+   * dead ids inside the array rather than deleting or orphaning a row, and no
+   * column-and-key dependency can express that. PAR-238.
    */
   const ATTRACTION_REFERENCING_TABLES = [
     "attraction_accuracy_stats",
     "attraction_day_operating",
+    "attraction_downtime_profiles",
+    "attraction_exposure_days",
     "attraction_hourly_history",
+    "attraction_outages",
     "attraction_p50_baselines",
     "attraction_p90_baselines",
+    "attraction_review_marks",
     "attraction_ride_profiles",
     "attraction_rope_drop",
     "attraction_typical_waits",
@@ -62,8 +84,11 @@ describe("merge dependency tables", () => {
     "ml_prediction_anomalies",
     "pcn_forecasts",
     "prediction_accuracy",
+    "prediction_lead_snapshots",
     "queue_data",
     "queue_data_aggregates",
+    "ride_alerts",
+    "schedule_entries",
     "shape_forecasts",
     "tft_forecasts",
     "wait_time_predictions",
@@ -198,14 +223,124 @@ describe("merge dependency tables", () => {
     expect(profiles?.conflictColumns).toBeUndefined();
   });
 
-  it("keeps schedule_entries out of the dependency lists", () => {
-    // Its rows are park-level or per-ride, told apart by a nullable column, and
-    // `applyMergeDependencies` compares conflict keys with a row-wise IN — NULL
-    // there is NULL, never true. Whichever key it were given would be wrong for
-    // half the table, so the caller compares the three columns itself.
+  it("keeps schedule_entries out of the PARK dependency lists and moves it on the attraction side", () => {
+    // The park side: its rows are park-level or per-ride, told apart by a
+    // nullable column, and `applyMergeDependencies` compares conflict keys with
+    // a row-wise IN — NULL there is NULL, never true. Whichever key it were
+    // given would be wrong for half the table, so the caller compares the three
+    // columns itself.
     for (const list of [PARK_DEPENDENCIES, PARK_INLINE_DEPENDENCIES]) {
       expect(list.find((d) => d.table === "schedule_entries")).toBeUndefined();
     }
+
+    // The attraction side is the same table and not the same problem (PAR-149),
+    // which is why this assertion sits next to the one above rather than
+    // somewhere it could contradict it: `WHERE "attractionId" = $loser` has
+    // already excluded every park-level row, so the key never meets a NULL.
+    // Without the entry the FK — ON DELETE CASCADE — takes the losing ride's
+    // whole schedule with it.
+    const onAttraction = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "schedule_entries",
+    );
+    expect(onAttraction).toMatchObject({
+      column: "attractionId",
+      strategy: "move",
+      conflictColumns: ["date", "scheduleType"],
+    });
+    // And the key holds no nullable column — the whole reason this side may use
+    // one. `attractionId` is the nullable one and it is the merge column, not
+    // part of the key.
+    expect(onAttraction?.conflictColumns).not.toContain("attractionId");
+  });
+
+  it("keeps a visitor's ride alert, exactly as the show side keeps their show reminder", () => {
+    // AK 4 of PAR-149, and the assertion is a comparison rather than a list of
+    // values: `ride_alerts` was named as `show_follows`'s twin in that entry's
+    // comment from the day the show list was written, and was missing from this
+    // list for as long. Both are ON DELETE CASCADE, both are unique on the
+    // subscriber, and the owner of both rows is a stranger who would never hear
+    // from us again.
+    const alerts = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "ride_alerts",
+    );
+    const follows = SHOW_DEPENDENCIES.find((d) => d.table === "show_follows");
+
+    expect(alerts?.strategy).toBe(follows?.strategy);
+    expect(alerts?.conflictColumns).toEqual(follows?.conflictColumns);
+    // Spelled out too, so a change that broke BOTH halves could not pass by
+    // keeping them equal to each other.
+    expect(alerts).toMatchObject({
+      column: "attractionId",
+      strategy: "move",
+      conflictColumns: ["subscriptionId"],
+    });
+  });
+
+  it("moves the lead snapshots rather than discarding them", () => {
+    // No FK, so forgetting it leaves orphans rather than raising. `move` and
+    // not `discard` although the numbers are model output: the table exists
+    // because its rows CANNOT be recomputed — every nightly run deletes and
+    // rewrites its own daily predictions, and this is the copy that survives to
+    // be scored against what actually happened.
+    const snapshots = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "prediction_lead_snapshots",
+    );
+
+    expect(snapshots).toMatchObject({
+      // The physical column: this table has no camelCase one.
+      column: "attraction_id",
+      strategy: "move",
+      // The rest of its PK (attraction_id, target_date, lead_days). One target
+      // day accumulates one row per lead distance, so the loser's row for a
+      // distance the winner already sampled has to go before the move.
+      conflictColumns: ["target_date", "lead_days"],
+    });
+  });
+
+  it("hands attraction_review_marks to a function of its own", () => {
+    // The only `custom` entry anywhere, and the bar is the table's shape: two
+    // attraction columns plus a CHECK across them, so no combination of
+    // `column` and `conflictColumns` can express it. The three generic
+    // statements each name exactly one column.
+    const marks = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "attraction_review_marks",
+    );
+
+    expect(marks?.strategy).toBe("custom");
+    expect(marks?.apply).toBe(mergeAttractionReviewMarks);
+    // Same shape of assertion as the one that pins `richness` to one entry:
+    // an escape hatch is only bounded while somebody counts its users.
+    const custom = [
+      ...ATTRACTION_DEPENDENCIES,
+      ...PARK_DEPENDENCIES,
+      ...PARK_INLINE_DEPENDENCIES,
+      ...SHOW_DEPENDENCIES,
+      ...RESTAURANT_DEPENDENCIES,
+    ].filter((d) => d.strategy === "custom" || d.apply);
+    expect(custom).toEqual([marks]);
+  });
+
+  it("names the two attraction columns review marks really has", () => {
+    // `mergeAttractionReviewMarks` writes its column names as literals — that
+    // is what makes it custom — so nothing in the type system connects them to
+    // the entity. A rename would leave five statements addressing columns that
+    // are not there, and no test here builds a row that would notice.
+    const columns = new Set(
+      getMetadataArgsStorage()
+        .filterColumns(AttractionReviewMark)
+        .map((column) => column.options.name ?? column.propertyName),
+    );
+
+    // The counter-check first: a lookup that resolved nothing would pass
+    // everything below.
+    expect(columns.size).toBe(7);
+    expect(columns).not.toContain("attractionId");
+
+    expect(columns).toContain("attraction_id");
+    expect(columns).toContain("other_attraction_id");
+    // Read by the dedupe, which asks whether the winner already holds a verdict
+    // OF THE SAME KIND about the same pair.
+    expect(columns).toContain("kind");
   });
 
   it("moves the rope-drop and typical-wait rows with the park rather than cascading them", () => {
@@ -1047,6 +1182,169 @@ describe("applyMergeDependencies", () => {
         dropped: [rich],
         droppedFrom: "loser",
       });
+    });
+  });
+
+  /**
+   * The custom branch. Its SQL was run against a throwaway PostgreSQL 16 with
+   * the CHECK and the unique index rebuilt from the entity, in both uuid
+   * orientations, plus a counter-check with the entry removed — a CHECK
+   * violation is invisible to every assertion below, because a mock manager
+   * accepts any statement. What these pin is the part that outlives the run:
+   * which statements are issued, in what order, and that a dropped verdict is
+   * named before it ceases to exist.
+   */
+  describe("custom", () => {
+    const marks = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "attraction_review_marks",
+    )!;
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it("refuses a custom entry with no function to call", async () => {
+      // A table declared to the guard and handled by nothing is the exact
+      // failure this file exists to prevent, and it is silent: the guard passes
+      // because the table is listed.
+      await expect(
+        applyMergeDependencies(
+          manager,
+          [
+            {
+              table: "attraction_review_marks",
+              column: "attraction_id",
+              strategy: "custom",
+            },
+          ],
+          "winner-id",
+          "loser-id",
+        ),
+      ).rejects.toThrow(/apply/);
+
+      expect(manager.query).not.toHaveBeenCalled();
+    });
+
+    it("refuses a function on a strategy that never calls it", async () => {
+      const apply = jest.fn();
+      await expect(
+        applyMergeDependencies(
+          manager,
+          [
+            {
+              table: "queue_data",
+              column: "attractionId",
+              strategy: "move",
+              apply,
+            },
+          ],
+          "winner-id",
+          "loser-id",
+        ),
+      ).rejects.toThrow(/apply/);
+
+      expect(apply).not.toHaveBeenCalled();
+      expect(manager.query).not.toHaveBeenCalled();
+    });
+
+    it("refuses a conflict key the custom branch would ignore", async () => {
+      await expect(
+        applyMergeDependencies(
+          manager,
+          [{ ...marks, conflictColumns: ["kind"] }],
+          "winner-id",
+          "loser-id",
+        ),
+      ).rejects.toThrow(/conflictColumns/);
+
+      expect(manager.query).not.toHaveBeenCalled();
+    });
+
+    it("touches nothing when the loser carries no mark", async () => {
+      manager.query.mockResolvedValueOnce([]);
+
+      await applyMergeDependencies(manager, [marks], "winner-id", "loser-id");
+
+      // One index lookup and no write: almost no ride carries a review mark,
+      // so this is what a merge costs in practice.
+      expect(manager.query).toHaveBeenCalledTimes(1);
+      expect(manager.query.mock.calls[0][0]).toMatch(
+        /^SELECT 1 FROM attraction_review_marks/,
+      );
+      expect(manager.query.mock.calls[0][1]).toEqual(["loser-id"]);
+    });
+
+    it("drops the pair's own mark and both kinds of superseded row, then moves the rest", async () => {
+      const mutual = {
+        kind: "not_a_duplicate",
+        attraction_id: "winner-id",
+        other_attraction_id: "loser-id",
+        reason: "cedar creek is a lazy river",
+      };
+      const superseded = {
+        kind: "not_a_duplicate",
+        attraction_id: "loser-id",
+        other_attraction_id: "other-id",
+        reason: "kondaala is the kids' ride",
+      };
+      manager.query
+        .mockResolvedValueOnce([{ "?column?": 1 }])
+        .mockResolvedValueOnce([mutual])
+        .mockResolvedValueOnce([superseded]);
+      const warn = jest
+        .spyOn(Logger.prototype, "warn")
+        .mockImplementation(() => undefined);
+
+      await applyMergeDependencies(manager, [marks], "winner-id", "loser-id");
+
+      const sql = manager.query.mock.calls.map(([s]: [string]) =>
+        s.replace(/\s+/g, " ").trim(),
+      );
+      expect(sql).toHaveLength(6);
+      expect(sql[1]).toMatch(/^DELETE FROM attraction_review_marks/);
+      expect(sql[2]).toMatch(/^DELETE FROM attraction_review_marks AS m/);
+      // Three moves, one per shape. The order is what keeps them from meeting:
+      // the first leaves no row naming the loser in `other_attraction_id`, and
+      // the third only ever sees rows with no partner at all.
+      expect(sql[3]).toContain(
+        "WHERE attraction_id = $2::uuid AND other_attraction_id IS NOT NULL",
+      );
+      expect(sql[4]).toContain("WHERE other_attraction_id = $2::uuid");
+      expect(sql[5]).toContain(
+        "WHERE attraction_id = $2::uuid AND other_attraction_id IS NULL",
+      );
+      // Every rewrite restores the canonical order in the same statement: the
+      // CHECK is not deferrable, so a move and a later swap is a merge that
+      // rolls back.
+      for (const statement of [sql[3], sql[4]]) {
+        expect(statement).toContain("LEAST(");
+        expect(statement).toContain("GREATEST(");
+      }
+
+      // Both deletes report through RETURNING, and the log carries the reason
+      // rather than a count: that sentence and its URL are the only record that
+      // somebody once decided the opposite of what this merge is doing.
+      expect(sql[1]).toContain("RETURNING *");
+      expect(sql[2]).toContain("RETURNING *");
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls[0][0]).toContain("cedar creek is a lazy river");
+      expect(warn.mock.calls[1][0]).toContain("kondaala is the kids' ride");
+    });
+
+    it("says nothing when it drops nothing", async () => {
+      // A merge that only moves marks across is not a merge that lost one, and
+      // a warning about every ride with a review mark would train the reader to
+      // scroll past the line that matters.
+      manager.query
+        .mockResolvedValueOnce([{ "?column?": 1 }])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      const warn = jest
+        .spyOn(Logger.prototype, "warn")
+        .mockImplementation(() => undefined);
+
+      await mergeAttractionReviewMarks(manager, "winner-id", "loser-id");
+
+      expect(manager.query).toHaveBeenCalledTimes(6);
+      expect(warn).not.toHaveBeenCalled();
     });
   });
 
