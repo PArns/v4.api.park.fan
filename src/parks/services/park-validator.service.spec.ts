@@ -425,12 +425,18 @@ describe("ParkValidatorService.findDuplicates", () => {
   it("pins the radius: a park and its own water park 0.1174 km apart stay two parks", async () => {
     // 0.6923 on names — the target pair's own score, so the floor cannot
     // refuse this one — disjoint sources, same city. Only SHARED_POINT_KM
-    // stands between them, and it is the only case in the suite that says so:
-    // raise the radius to 0.05, 0.2 or 1.0 km and this goes red alone.
+    // stands between them, and it is the only case in the suite that says so.
     //
     // Before the floor moved to 0.65 the Rockford pair did this job by
     // accident, because 0.6122 sat above a floor of 0.6. It no longer does,
     // and widening the radius stopped being caught by anything.
+    //
+    // How far this reaches, measured: red at 0.2 km and at 1.0 km, still
+    // green at 0.05. That is not a hole in the case, it is the catalogue —
+    // above the 0.65 floor nothing sits between the target pair's 0.0000 km
+    // and this pair's 0.1174 km, so widening to 0.05 produces no false
+    // positive to catch. A fixture placed in that gap would pin the digit
+    // rather than the risk.
     parkRepository.find.mockResolvedValue([
       boonieBearsAdventure,
       boonieBearsWater,
