@@ -700,6 +700,12 @@ export class ChildrenMetadataProcessor {
    * The reverse direction is only handled on the attraction side for the same
    * reason: `shows` and `restaurants` have no `retired_at` column to set.
    *
+   * One neighbouring job had to learn that a retirement can be temporary:
+   * `detect-seasonal` cleared `is_seasonal` and `season_months` for every
+   * retired row, and a row retired here would have lost its season for good,
+   * since it receives nothing but `system-reconciliation` rows in the meantime.
+   * It skips these retirements now.
+   *
    * The lookup here is deliberately not scoped to the park:
    * `attractions.externalId` is globally unique, so there is at most one row
    * either way, and scoping it would miss a row whose park changed upstream.

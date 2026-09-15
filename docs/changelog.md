@@ -48,6 +48,13 @@ to run unattended — a single malformed `/children` response cannot strand a
 park's rides. Only that exact reason is lifted, so a retirement entered by hand
 through `POST /admin/retire-attractions` survives every run.
 
+One neighbouring job had to learn that a retirement can be temporary:
+`detect-seasonal` cleared `is_seasonal` and `season_months` for every retired
+row, because a demolished ride never reports OPERATING again. A row retired by
+this sync can come back, and while it is retired it receives nothing but
+`system-reconciliation` rows — so the season would have been lost for good. Step
+2c now skips those retirements and leaves every other one permanent.
+
 What comes back is the row and not its data supply: the orphaned `shows` row
 still wins the entity lookup in `WaitTimesProcessor`, so the un-retired
 attraction resumes collecting `system-reconciliation` CLOSED rows until PAR-232

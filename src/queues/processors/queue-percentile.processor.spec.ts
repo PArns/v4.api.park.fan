@@ -179,6 +179,25 @@ describe("QueuePercentileProcessor — detect-seasonal skips free-flow", () => {
     expect(reset).toMatch(/season_months = NULL/i);
   });
 
+  /**
+   * That reset rests on retirement being final, and one kind is not: the
+   * children sync retires a row whose entity ThemeParks.wiki reclassified as a
+   * show, and lifts it again if the wiki changes its mind. Clearing the season
+   * of such a row loses it for good — the row receives nothing but
+   * `system-reconciliation` rows while retired, so this detector can never
+   * re-derive what it erased.
+   */
+  it("spares the retirement the children sync can undo", async () => {
+    const statements = await runDetectSeasonal();
+
+    const reset = statements.find(
+      (sql) =>
+        /UPDATE attractions/i.test(sql) && /retired_at IS NOT NULL/i.test(sql),
+    );
+
+    expect(reset).toMatch(/retired_reason <> ALL/i);
+  });
+
   it("excludes them from both candidate searches", async () => {
     const statements = await runDetectSeasonal();
 
