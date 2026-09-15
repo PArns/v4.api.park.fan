@@ -14,6 +14,7 @@ import {
   RESTAURANT_DEPENDENCIES,
   SHOW_DEPENDENCIES,
   applyMergeDependencies,
+  migrateScheduleEntries,
   type MergeDependency,
 } from "../utils/merge-dependencies";
 import { Redis } from "ioredis";
@@ -175,13 +176,17 @@ export class ParkMergeService {
           loser.id,
           ["date"],
         );
-        result.migratedScheduleEntries = await this.migrateTableData(
+        // Not `migrateTableData`: its conflict key is a row-wise `IN`, and no
+        // list of columns it can build both dedupes a park-level row and
+        // spares a per-ride one. `(date, scheduleType)` did neither — it read
+        // across the nullable `attractionId` and took the loser's whole
+        // per-ride schedule with it whenever the winner held any row for that
+        // day, which is every day the winner is open (PAR-171). The rule is
+        // shared with `consolidateMergedPark` rather than written twice.
+        result.migratedScheduleEntries = await migrateScheduleEntries(
           manager,
-          "schedule_entries",
-          "parkId",
           winner.id,
           loser.id,
-          ["date", "scheduleType"],
         );
 
         // 4. Migrate Park-Specific Analysis Tables
@@ -313,7 +318,10 @@ export class ParkMergeService {
     "shows",
     "restaurants",
     "park_daily_stats",
-    "schedule_entries",
+    // `schedule_entries` is deliberately absent: it moves through
+    // `migrateScheduleEntries`, which spells its three columns out itself, and
+    // no key `migrateTableData` can build is right for that table (PAR-171).
+    // Re-adding it here is how the wrong key would come back.
     "park_p50_baselines",
     "park_occupancy",
     "headliner_attractions",
@@ -328,7 +336,6 @@ export class ParkMergeService {
     "parkId",
     "attractionId",
     "date",
-    "scheduleType",
     "timestamp",
     ...ATTRACTION_DEPENDENCIES.flatMap((d) => [
       d.column,

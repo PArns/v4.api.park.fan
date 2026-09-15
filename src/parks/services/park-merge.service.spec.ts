@@ -392,6 +392,37 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("drops a loser's schedule row only where the winner states the same day, type AND ride", async () => {
+    // `schedule_entries` holds the park's opening hours (`attractionId IS
+    // NULL`) beside the per-ride rows in one table, and this path used to hand
+    // (date, scheduleType) to the generic `migrateTableData`. The winner is
+    // open on almost every day the loser has a ride schedule for, so that key
+    // matched the opening-hours row and deleted the loser's per-ride rows for
+    // that day with it (PAR-171).
+    await service.mergeParks(WINNER_PARK, LOSER_PARK);
+
+    const scheduleDelete = calls.find(
+      (c) =>
+        /DELETE\s+FROM\s+schedule_entries/i.test(c.sql) &&
+        (c.params ?? []).includes(LOSER_PARK),
+    );
+    expect(scheduleDelete?.sql).toMatch(
+      /"attractionId"\s+IS NOT DISTINCT FROM/,
+    );
+    expect(scheduleDelete?.sql).toMatch(/"scheduleType"/);
+    expect(scheduleDelete?.params).toEqual([WINNER_PARK, LOSER_PARK]);
+
+    // The old key is gone rather than joined by the ride: a row-wise `IN` over
+    // three columns is NULL for a park-level row, so it would spare nothing.
+    expect(scheduleDelete?.sql).not.toMatch(/\bIN\s*\(/i);
+
+    const move = calls.find((c) =>
+      /^\s*UPDATE schedule_entries SET "parkId"/i.test(c.sql),
+    );
+    expect(move?.params).toEqual([WINNER_PARK, LOSER_PARK]);
+    expect(calls.indexOf(scheduleDelete!)).toBeLessThan(calls.indexOf(move!));
+  });
+
   it("does not stamp last_merged_at when no ride collided — it is a column on attractions", async () => {
     await service.mergeParks(WINNER_PARK, LOSER_PARK);
 

@@ -147,6 +147,41 @@ lookup window is the six-hour floor, not an opening — the published opening
 belongs to the day being planned, and tomorrow's has not happened yet. The
 curated works period is unaffected; a live reading has never overruled it.
 
+### Fixed — a park merge keeps the losing park's per-ride schedule, and the rule now has one derivation
+
+`schedule_entries` holds two kinds of row in one table: the park's opening hours
+(`attractionId IS NULL`) and one row per ride per day. `ParkMergeService.mergeParks`
+deduped them through its generic `migrateTableData` on `(date, scheduleType)`, a
+key that cannot see the difference — so a single opening-hours row on the winner
+deleted **every** row the loser held for that day, the per-ride ones included.
+The winner is open on almost every day the loser has a schedule for, so this was
+not an edge case: it was the loser's whole ride schedule, inside a transaction
+that then reported success.
+
+Measured against PostgreSQL 16 on a seven-row fixture (winner: opening hours and
+ride B on 09-20; loser: opening hours, ride A and ride B on 09-20, ride A on
+09-21, ride A CLOSED on 09-20):
+
+| statement | deleted | reparented | ride A's 09-20 OPERATING row |
+| -- | -- | -- | -- |
+| `(date, scheduleType)` — before | 3 | 2 | **gone** |
+| date, type and ride — now | 2 | 3 | survives |
+
+Both deletions the new key makes are genuine duplicates: the loser's opening
+hours and its ride-B row, which the winner states as well.
+
+`consolidateMergedPark` in `parks.service.ts` already compared all three columns
+with `IS NOT DISTINCT FROM`, and that was the whole problem — one rule, two
+derivations, and only one of them right. Both paths now call
+`migrateScheduleEntries` in `merge-dependencies.ts`, which carries the reasoning
+and the same-id refusal `applyMergeDependencies` makes. The table stays out of
+the dependency lists for the reason it always was: `applyMergeDependencies`
+compares conflict keys with a row-wise `IN`, and a NULL inside one of those is
+NULL rather than true, so no key it can build spares a per-ride row and dedupes
+a park-level one at once. `schedule_entries` and `scheduleType` are gone from
+`ParkMergeService`'s identifier allowlists, so the wrong key cannot come back
+through `migrateTableData` without somebody re-adding them.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide
