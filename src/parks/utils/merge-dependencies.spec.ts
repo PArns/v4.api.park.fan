@@ -1299,8 +1299,8 @@ describe("applyMergeDependencies", () => {
         s.replace(/\s+/g, " ").trim(),
       );
       expect(sql).toHaveLength(6);
-      expect(sql[1]).toMatch(/^DELETE FROM attraction_review_marks/);
-      expect(sql[2]).toMatch(/^DELETE FROM attraction_review_marks AS m/);
+      expect(sql[1]).toContain("DELETE FROM attraction_review_marks WHERE");
+      expect(sql[2]).toContain("DELETE FROM attraction_review_marks AS m");
       // Three moves, one per shape. The order is what keeps them from meeting:
       // the first leaves no row naming the loser in `other_attraction_id`, and
       // the third only ever sees rows with no partner at all.
@@ -1327,6 +1327,49 @@ describe("applyMergeDependencies", () => {
       expect(warn).toHaveBeenCalledTimes(2);
       expect(warn.mock.calls[0][0]).toContain("cedar creek is a lazy river");
       expect(warn.mock.calls[1][0]).toContain("kondaala is the kids' ride");
+    });
+
+    it("reads its deletes as rows, not as TypeORM's [rows, rowCount]", async () => {
+      // The bug this pins was in the first version and invisible to every
+      // assertion above, because a mock answers whatever it is told to.
+      // TypeORM's postgres driver rewrites the result of a bare DELETE or
+      // UPDATE into `[rows, rowCount]` (`PostgresQueryRunner`, `switch
+      // (raw.command)`) — so `DELETE … RETURNING *` came back as a two-element
+      // array whose second element is a number, `dropped.length` was 2 on every
+      // merge that got past the gate, and the warning meant to be the only
+      // record of a lost verdict announced two rows and printed `[] | 0`.
+      //
+      // Wrapping the DELETE in a CTE and selecting from it makes the command a
+      // SELECT, which is the shape the code reads. Asserted on the SQL rather
+      // than by feeding the mock a driver result, because the driver is what
+      // decides the shape and a mock cannot be made to disagree with itself.
+      manager.query
+        .mockResolvedValueOnce([{ "?column?": 1 }])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      await mergeAttractionReviewMarks(manager, "winner-id", "loser-id");
+
+      const [, first, second] = manager.query.mock.calls.map(([s]: [string]) =>
+        s.replace(/\s+/g, " ").trim(),
+      );
+      for (const statement of [first, second]) {
+        expect(statement).toMatch(/^WITH dropped AS \(\s*DELETE FROM/);
+        expect(statement).toMatch(/SELECT \* FROM dropped$/);
+      }
+    });
+
+    it("refuses one id on both sides, like applyMergeDependencies does", async () => {
+      // Sharper here than on the generic path: with one id on both sides the
+      // second DELETE's EXISTS matches every pair mark against itself, so it
+      // would delete every pair verdict the attraction carries. Unreachable
+      // through `applyMergeDependencies`, which refuses first — and this
+      // function is exported, so it has its own way in.
+      await expect(
+        mergeAttractionReviewMarks(manager, "same-id", "same-id"),
+      ).rejects.toThrow(/both sides/i);
+
+      expect(manager.query).not.toHaveBeenCalled();
     });
 
     it("says nothing when it drops nothing", async () => {

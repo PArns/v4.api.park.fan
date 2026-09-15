@@ -192,12 +192,33 @@ export function rideProfileRichness(row: Record<string, unknown>): number {
  * read anyway — the read is what it decides on. Here the read would exist only
  * to log, and a line written from `RETURNING` describes rows that really were
  * deleted rather than rows a failing statement left standing.
+ *
+ * Both are wrapped in a CTE for that, and the wrapper is load-bearing rather
+ * than a flourish: TypeORM's postgres driver rewrites the result of a bare
+ * DELETE or UPDATE into `[rows, rowCount]` (`PostgresQueryRunner`, `switch
+ * (raw.command)`), so `RETURNING *` would arrive as a two-element array whose
+ * second element is a number — and every check below would then find two
+ * "rows" to warn about on every merge, whether anything was deleted or not.
+ * Selecting from the CTE makes the command a SELECT, and the rows come back as
+ * rows. `MLService.deleteOldPredictions` wraps its DELETE for the same reason.
  */
 export async function mergeAttractionReviewMarks(
   manager: MergeQueryRunner,
   winnerId: string,
   loserId: string,
 ): Promise<void> {
+  // The same refusal `applyMergeDependencies` and `planWinnerAuthoritative`
+  // make, and for the sharper reason: with one id on both sides the second
+  // DELETE's EXISTS matches every pair mark against ITSELF — the partner is the
+  // row's own other half and the winner is the row's own first half — so it
+  // would delete every pair verdict the attraction carries. Every caller checks
+  // today; this is so the one that stops checking fails instead.
+  if (winnerId === loserId) {
+    throw new Error(
+      `Cannot merge review marks with one id on both sides (${winnerId})`,
+    );
+  }
+
   // Almost no ride carries a review mark, so the ordinary merge is one index
   // lookup instead of five statements.
   const touching = asRows(
@@ -212,10 +233,12 @@ export async function mergeAttractionReviewMarks(
 
   const mutual = asRows(
     await manager.query(
-      `DELETE FROM attraction_review_marks
-        WHERE (attraction_id = $1::uuid AND other_attraction_id = $2::uuid)
-           OR (attraction_id = $2::uuid AND other_attraction_id = $1::uuid)
-        RETURNING *`,
+      `WITH dropped AS (
+         DELETE FROM attraction_review_marks
+          WHERE (attraction_id = $1::uuid AND other_attraction_id = $2::uuid)
+             OR (attraction_id = $2::uuid AND other_attraction_id = $1::uuid)
+          RETURNING *
+       ) SELECT * FROM dropped`,
       [winnerId, loserId],
     ),
   );
@@ -235,16 +258,18 @@ export async function mergeAttractionReviewMarks(
                         THEN m.other_attraction_id ELSE m.attraction_id END`;
   const superseded = asRows(
     await manager.query(
-      `DELETE FROM attraction_review_marks AS m
-        WHERE m.other_attraction_id IS NOT NULL
-          AND (m.attraction_id = $2::uuid OR m.other_attraction_id = $2::uuid)
-          AND EXISTS (
-                SELECT 1 FROM attraction_review_marks AS w
-                 WHERE w.kind = m.kind
-                   AND w.attraction_id = LEAST($1::uuid, ${partner})
-                   AND w.other_attraction_id = GREATEST($1::uuid, ${partner})
-              )
-        RETURNING *`,
+      `WITH dropped AS (
+         DELETE FROM attraction_review_marks AS m
+          WHERE m.other_attraction_id IS NOT NULL
+            AND (m.attraction_id = $2::uuid OR m.other_attraction_id = $2::uuid)
+            AND EXISTS (
+                  SELECT 1 FROM attraction_review_marks AS w
+                   WHERE w.kind = m.kind
+                     AND w.attraction_id = LEAST($1::uuid, ${partner})
+                     AND w.other_attraction_id = GREATEST($1::uuid, ${partner})
+                )
+          RETURNING *
+       ) SELECT * FROM dropped`,
       [winnerId, loserId],
     ),
   );
@@ -359,6 +384,15 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // Without it the FK — ON DELETE CASCADE, nullable — takes the losing
     // ride's whole schedule with it: its maintenance days, its ticketed
     // evenings, everything `/plan/day` reads to know when that ride runs.
+    //
+    // On `mergeParks` the rows this saves are then taken by something else,
+    // and it is not this entry's bug to fix: step 3 there dedupes the table
+    // park-wide on `["date", "scheduleType"]` with no `attractionId`, so a
+    // per-ride row is deleted whenever the surviving park holds ANY row of
+    // that type that day — usually its own park-level OPERATING row. That is
+    // PAR-171, it predates this entry, and the two raw paths already avoid it
+    // with `IS NOT DISTINCT FROM`. So this saves the ride's schedule on the
+    // attraction-merge path today and on the park path once PAR-171 lands.
     table: "schedule_entries",
     column: "attractionId",
     strategy: "move",
@@ -632,8 +666,9 @@ export const SHOW_DEPENDENCIES: MergeDependency[] = [
     // branch, and picking between them is a product question.
     //
     // `ride_alerts` is the attraction-side twin of this row, with the same
-    // CASCADE and the same unique `(subscriptionId, attractionId)`, and it is
-    // NOT on `ATTRACTION_DEPENDENCIES` — see PAR-149.
+    // CASCADE and the same unique `(subscriptionId, attractionId)`. It was off
+    // `ATTRACTION_DEPENDENCIES` until PAR-149 and is on it now, deduped on the
+    // same column, so the two sides finally decide the same way.
     table: "show_follows",
     column: "showId",
     strategy: "move",
