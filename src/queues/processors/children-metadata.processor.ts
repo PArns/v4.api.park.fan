@@ -2,7 +2,7 @@ import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, IsNull, Repository } from "typeorm";
+import { In, IsNull, Not, Repository } from "typeorm";
 import { Job, Queue } from "bull";
 import { AttractionsService } from "../../attractions/attractions.service";
 import {
@@ -655,13 +655,20 @@ export class ChildrenMetadataProcessor {
    * month. A row's own columns say what it is; its readings say when we last
    * heard, and that is a different question.
    *
-   * `queue_times_entity_id` means
-   * Queue-Times also reports this entity, and it reports it as an attraction
-   * with a wait time; Disneyland Paris' `Mickey's PhilharMagic` is a show to
-   * the wiki and a queueing ride to Queue-Times, and was still receiving real
-   * OPERATING readings. Retiring it would delete a live ride over a
-   * disagreement between two sources, which is a curation decision and not a
-   * sync one. Only a row that exists purely because the wiki once called it an
+   * A row is left alone when any source other than the wiki claims it.
+   * Disneyland Paris' `Mickey's PhilharMagic` is a show to the wiki and a
+   * queueing ride to Queue-Times, and was still receiving real OPERATING
+   * readings; retiring it would delete a live ride over a disagreement between
+   * two sources, which is a curation decision and not a sync one.
+   *
+   * There are two ways a row can carry a second source, and both are checked.
+   * `queue_times_entity_id` is set when the mapping job matches a Queue-Times
+   * ride — but **only** for Queue-Times: a `wartezeiten-app` match writes just
+   * the `external_entity_mapping` row, and `WaitTimesProcessor` resolves live
+   * data through that mapping all the same. 39 attractions carried exactly
+   * that combination on 2026-09-15 (a wartezeiten mapping and no Queue-Times
+   * id), so checking the column alone would retire a ride that is still being
+   * measured. Only a row that exists purely because the wiki once called it an
    * attraction is retired here.
    *
    * **This is reversible, and that is what keeps it safe to run unattended.**
@@ -696,8 +703,9 @@ export class ChildrenMetadataProcessor {
    * The lookup here is deliberately not scoped to the park:
    * `attractions.externalId` is globally unique, so there is at most one row
    * either way, and scoping it would miss a row whose park changed upstream.
-   * The diagnostic query in §5.6 of the doc returns a superset: it joins only
-   * `shows` and applies neither of the two filters above.
+   * The diagnostic query in §5.6 of the doc answers a narrower question: it
+   * joins only `shows`, so it misses an entity that became a `RESTAURANT`, and
+   * it applies none of the second-source filters above.
    * **The way back is park-scoped**, because `syncAttraction` only ever looks
    * at its own park's rows — so a row that moved parks upstream is retired
    * automatically but has to be brought back by hand.
@@ -709,7 +717,7 @@ export class ChildrenMetadataProcessor {
   ): Promise<void> {
     if (reclassifiedExternalIds.length === 0) return;
 
-    const stale = await this.attractionsService.getRepository().find({
+    const candidates = await this.attractionsService.getRepository().find({
       where: {
         externalId: In(reclassifiedExternalIds),
         retiredAt: IsNull(),
@@ -717,6 +725,9 @@ export class ChildrenMetadataProcessor {
       },
       select: ["id", "name", "parkId"],
     });
+    if (candidates.length === 0) return;
+
+    const stale = await this.withoutForeignSourceMappings(candidates);
     if (stale.length === 0) return;
 
     // The wiki does not say when it reclassified an entity, so this is the day
@@ -745,6 +756,30 @@ export class ChildrenMetadataProcessor {
           "retired anyway, but syncAttraction is park-scoped and will not bring it back",
       );
     }
+  }
+
+  /**
+   * Drops the rows another source has claimed, whatever the wiki now says.
+   *
+   * The companion to `queue_times_entity_id`, and the reason that column is
+   * not enough on its own: the entity mapping job writes it for Queue-Times
+   * matches only, while a `wartezeiten-app` match leaves nothing but the
+   * `external_entity_mapping` row — which `WaitTimesProcessor` resolves live
+   * data through regardless.
+   */
+  private async withoutForeignSourceMappings<T extends { id: string }>(
+    candidates: T[],
+  ): Promise<T[]> {
+    const mappings = await this.mappingRepository.find({
+      where: {
+        internalEntityId: In(candidates.map((c) => c.id)),
+        internalEntityType: "attraction",
+        externalSource: Not("themeparks-wiki"),
+      },
+      select: ["internalEntityId"],
+    });
+    const claimed = new Set(mappings.map((m) => m.internalEntityId));
+    return candidates.filter((c) => !claimed.has(c.id));
   }
 
   /**

@@ -1,4 +1,4 @@
-import { In, IsNull } from "typeorm";
+import { In, IsNull, Not } from "typeorm";
 import {
   RECLASSIFIED_UPSTREAM_REASON,
   RECLASSIFIED_UPSTREAM_REASONS,
@@ -25,6 +25,7 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
     save: jest.fn(),
   };
   const retirementService = { retire: jest.fn(), unretire: jest.fn() };
+  const mappingRepository = { find: jest.fn(), findOne: jest.fn() };
   const themeParksMapper = { mapAttraction: jest.fn() };
 
   let processor: ChildrenMetadataProcessor;
@@ -42,6 +43,9 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // No candidate is claimed by another source unless a test says so.
+    mappingRepository.find.mockResolvedValue([]);
+    mappingRepository.findOne.mockResolvedValue(null);
     processor = new ChildrenMetadataProcessor(
       { getRepository: () => attractionRepo } as any,
       retirementService as any,
@@ -51,7 +55,7 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       {} as any,
       themeParksMapper as any,
       {} as any,
-      {} as any,
+      mappingRepository as any,
       {} as any,
       {} as any,
       {} as any,
@@ -344,6 +348,15 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       );
       const [, patch] = attractionRepo.update.mock.calls[0];
       expect(patch).not.toHaveProperty("retiredAt");
+
+      // The decision reads `retiredReason` off the candidate row, so it has to
+      // be selected. Without this the check is silently dead in production
+      // while every mocked test above stays green.
+      expect(attractionRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.arrayContaining(["retiredReason"]),
+        }),
+      );
     });
 
     it("leaves a retirement a human entered alone", async () => {
@@ -359,6 +372,53 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
 
       expect(retirementService.unretire).not.toHaveBeenCalled();
       expect(attractionRepo.update).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * `queue_times_entity_id` is written by the entity mapping job for a
+   * Queue-Times match only. A `wartezeiten-app` match leaves nothing but the
+   * `external_entity_mapping` row, and `WaitTimesProcessor` resolves live data
+   * through that mapping all the same — 39 attractions carried exactly that
+   * combination in production on 2026-09-15.
+   */
+  describe("a row claimed by a source that is not the wiki", () => {
+    it("is left alone even though it carries no Queue-Times id", async () => {
+      attractionRepo.find.mockResolvedValue([staleRow]);
+      mappingRepository.find.mockResolvedValue([
+        { internalEntityId: "row-sesame-street" },
+      ]);
+
+      await retireReclassified([showExternalId]);
+
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    it("is retired when no such mapping exists", async () => {
+      // The pair: same row, same query, and the only difference is whether a
+      // foreign mapping came back.
+      attractionRepo.find.mockResolvedValue([staleRow]);
+      mappingRepository.find.mockResolvedValue([]);
+
+      await retireReclassified([showExternalId]);
+
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks about every source except the wiki's own", async () => {
+      attractionRepo.find.mockResolvedValue([staleRow]);
+
+      await retireReclassified([showExternalId]);
+
+      expect(mappingRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            internalEntityId: In(["row-sesame-street"]),
+            internalEntityType: "attraction",
+            externalSource: Not("themeparks-wiki"),
+          },
+        }),
+      );
     });
   });
 

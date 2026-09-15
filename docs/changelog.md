@@ -26,13 +26,20 @@ reading on the attraction side is 2026-04-26 (USS) and 2026-04-23 (Tokyo).
 each park and retires what was left behind, through `AttractionRetirementService`
 so cache eviction and revalidation come with it.
 
-**A row with a second source is left alone.** `queue_times_entity_id` means
-Queue-Times also reports the entity, and it reports it as an attraction with a
-wait time: Disneyland Paris' `Mickey's PhilharMagic` is a show to the wiki and a
-queueing ride to Queue-Times, and was still receiving real `OPERATING` readings
-on 2026-08-29. Retiring it would delete a live ride over a disagreement between
-two sources, which is a curation decision rather than a sync one. Two of the 34
-rows are held back by this rule.
+**A row with a second source is left alone.** Disneyland Paris'
+`Mickey's PhilharMagic` is a show to the wiki and a queueing ride to
+Queue-Times, and was still receiving real `OPERATING` readings on 2026-08-29.
+Retiring it would delete a live ride over a disagreement between two sources,
+which is a curation decision rather than a sync one. Two of the 34 rows are held
+back by this rule.
+
+A second source shows up in two places, and both are checked:
+`queue_times_entity_id` is written by the entity mapping job for a Queue-Times
+match only, while a `wartezeiten-app` match leaves nothing but the
+`external_entity_mapping` row — which `WaitTimesProcessor` resolves live data
+through all the same. **39 attractions** carried that exact combination on
+2026-09-15, so the column on its own would eventually retire a ride that is
+still being measured.
 
 **The retirement undoes itself.** A row retired this way carries
 `RECLASSIFIED_UPSTREAM_REASON` verbatim, and `syncAttraction` lifts it again as

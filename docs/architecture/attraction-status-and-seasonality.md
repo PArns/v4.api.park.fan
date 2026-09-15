@@ -723,8 +723,9 @@ against production on 2026-09-15, in the 30 days before the fix:
 | Disneyland Park (Paris) | 1 | 617 | 2026-08-29 |
 
 `retireReclassifiedAttractions` now runs after the show and restaurant syncs of
-each park and retires the rows that were left behind. The query that finds them,
-and the one to re-run if this is ever suspected again:
+each park and retires the rows that were left behind. The query below finds the show case, which is
+all that has been observed; the code also covers an entity that became a
+`RESTAURANT`, and applies the two second-source filters described further down:
 
 ```sql
 SELECT p.name AS park, count(*) AS total,
@@ -745,6 +746,27 @@ receiving real `OPERATING` readings on 2026-08-29 while the wiki had it as a
 show. Retiring it would delete a live ride over a disagreement between two
 sources — a curation decision, not a sync one. Only rows that exist purely
 because the wiki once called them attractions are retired.
+
+**That column alone does not find every second source.** The entity mapping job
+writes `queue_times_entity_id` for a Queue-Times match only; a `wartezeiten-app`
+match leaves nothing but the `external_entity_mapping` row, and
+`WaitTimesProcessor` resolves live data through that mapping all the same. On
+2026-09-15, **39 attractions** carried exactly that combination — a wartezeiten
+mapping and no Queue-Times id — so the retirement also skips any row with a
+mapping whose `external_source` is not `themeparks-wiki`:
+
+```sql
+SELECT count(*) FROM attractions a
+WHERE a.queue_times_entity_id IS NULL AND EXISTS (
+  SELECT 1 FROM external_entity_mapping m
+   WHERE m.internal_entity_id = a.id::text AND m.internal_entity_type = 'attraction'
+     AND m.external_source = 'wartezeiten-app');
+-- 39
+```
+
+None of them is among today's candidates, so this changes no number above. It is
+the difference between a filter that happens to be right and one that is right
+for a reason.
 
 **And it undoes itself.** A row retired this way carries
 `RECLASSIFIED_UPSTREAM_REASON` verbatim, and `syncAttraction` lifts the
@@ -797,6 +819,7 @@ Two more limits worth knowing before trusting the round trip:
   the same upstream fault `dedupePollEntities` handles for live data, and
   without the exclusion the row would flip between retired and not on every
   run, evicting caches and revalidating the frontend each time.
+
 And the 17 rows retired by hand for this issue on 2026-09-15 carry their own
 reason, with the entity URL in it, rather than the constant. They were an admin
 write, so the sync treats them the way it treats any human retirement: it will
