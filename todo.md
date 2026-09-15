@@ -102,6 +102,36 @@ to be sitting in a closure at an instant that would have produced a line.
 The value is therefore the divergence removed, not rows gained: the two
 statements now count the same `gap_days` against the same `MAX_GAP_DAY_SHARE`.
 
+### What it costs, and the two points left open
+
+Shared buffers fall in every park measured, because `park_open` and
+`park_day_close` no longer scan `schedule_entries` separately: Thorpe Park
+5736 → 5630, Phantasialand 3456 → 3338, Energylandia 989 → 776, Alton Towers
+669 → 551. A park that cannot produce a row is unchanged at ~5 ms — the two
+pseudoconstant `EXISTS` clauses still short-circuit before `win` is demanded.
+
+Execution time rises where the historical CTEs actually run. `early_end` joins
+`win` per reading rather than behind a filter (`CTE Scan on win wr`,
+loops=3644), and the two blind parks that had a ride in a closure went from
+19.1/20.3 ms to 28.0/25.3 (Thorpe Park) and 14.1/14.4 to 19.0/17.1
+(Phantasialand). That is the price of a containment test where a date cast used
+to stand; the cheap way out — skipping the join behind a pseudoconstant in a
+park whose windows never wrap — is PAR-251, with the measurement that motivates
+it.
+
+Two things nothing pins, both filed rather than left in a comment:
+
+* **`active_floor` is guarded only textually.** `LEAST` → `GREATEST` leaves all
+  39 unit and all 5 e2e cases green, because a wrong floor empties `active`,
+  `active_days` falls to 0, and the duty-cycle arm then passes unconditionally.
+  PAR-252.
+* **The null-close reading changed.** `park_day_close` used to keep a day whose
+  close was NULL (it counted in the `days` denominator and could never count as
+  early); `win` drops it. Measured 2026-09-15: of 2391 park-days with an
+  OPERATING entry in the blind parks over the last 30 days, none has a null
+  close or a close at or before its opening, so the two readings agree on every
+  row that exists today. The day the first one appears, nothing will say so.
+
 ## The ML feature fetch reads 730 days to use ~300 (measured 2026-09-08, not fixed)
 
 `fetch_recent_wait_times()` (`ml-service/predict.py:218`) pulls **730 days** of

@@ -47,6 +47,15 @@ readings across five operating days, up to 54 rides a day. The plan is unchanged
 where it matters — both pseudoconstant `EXISTS` clauses still emit their
 One-Time Filter, and `win` materialises 35 rows in 0.5 ms.
 
+Shared buffers fall in every park measured — Thorpe Park 5736 → 5630,
+Phantasialand 3456 → 3338, Energylandia 989 → 776, Alton Towers 669 → 551 —
+because `park_open` and `park_day_close` no longer scan `schedule_entries`
+separately, and a park that cannot produce a row stays at ~5 ms. Execution time
+rises where the historical CTEs run: `early_end` joins `win` per reading
+(loops=3644), and the two blind parks with a ride in a closure went from
+19.1/20.3 ms to 28.0/25.3 and from 14.1/14.4 to 19.0/17.1. Skipping that join in
+a park whose windows never wrap is PAR-251.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide

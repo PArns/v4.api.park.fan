@@ -1102,9 +1102,16 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- closes_at NULL, so the day counted in the days denominator and could never
   -- count as early. win drops those rows (windows_raw requires a non-null
   -- close, w_ord requires closes_at > opens_at), so such a day now leaves the
-  -- denominator instead. Measured before the change on the blind parks over
-  -- CYCLE_WINDOW_DAYS: 0 of 10 662 park-days carry a null or non-positive
-  -- close, so the two readings agree on every row the statement can see today.
+  -- denominator instead. That is the reading the older comment here argued
+  -- against -- a park publishing a run of null-close days would drop a ride
+  -- under MIN_DAYS_FOR_CYCLE_TEST and switch the early-end filter off -- so it
+  -- was measured rather than assumed: over the last CYCLE_WINDOW_DAYS in the
+  -- blind parks this statement serves, 2391 park-days carry an OPERATING entry
+  -- and **none** of them has a null close or a close that stays at or before
+  -- the opening after repair (2026-09-15). The two readings agree on every row
+  -- the statement can see, and the day the first one appears it will be a
+  -- measurement rather than a silent change -- nothing here pins it, which
+  -- todo.md now carries.
   park_day_close AS (
     SELECT w.op_day AS d, max(w.closes_at) AS closes_at
       FROM win w
@@ -1132,6 +1139,29 @@ export const CURRENT_CLOSURE_GAP_SQL = `
         -- unrecovered outage it has manufactured four such days against a
         -- denominator that is only days-with-published-hours. The longest and
         -- most certain closures were the first to be suppressed as timetables.
+        -- ## What this join costs, measured, because it is the one that is not free
+        --
+        -- cycle's two joins hang off the gap triple (249 executions at Thorpe
+        -- Park); this one hangs off every reading in the window. Measured
+        -- against production on 2026-09-15: the CTE Scan on win wr runs 3644
+        -- times over 34 rows, and the statement goes from 19.1/20.3 ms to
+        -- 28.0/25.3 ms at Thorpe Park and 14.1/14.4 to 19.0/17.1 at
+        -- Phantasialand — the two blind parks that had a ride in a closure at
+        -- that instant. Shared buffers fall in every park measured (Thorpe
+        -- 5736 -> 5630, Phantasialand 3456 -> 3338, Energylandia 989 -> 776,
+        -- Alton Towers 669 -> 551), because park_open and park_day_close no
+        -- longer scan schedule_entries separately. A park that produces no row
+        -- is unchanged at ~5 ms: the two pseudoconstants still short-circuit
+        -- before win is demanded at all.
+        --
+        -- Paid rather than hidden: correct day attribution for a reading is a
+        -- containment test, and a date cast is not. The cheap way out is
+        -- narrower than it looks and is filed rather than guessed at -- in a
+        -- park whose windows never cross midnight, COALESCE(op_day, calendar)
+        -- is the calendar date for every reading, so the join could be skipped
+        -- behind a pseudoconstant the way the regime test is. That needs its
+        -- own measurement, and it is PAR-251.
+        --
         -- Keyed on the operating day, like cycle and open_today, and for the
         -- reason this join makes sharpest: park_day_close has ALWAYS keyed on
         -- the opening's park-local date, so a reading that took its calendar

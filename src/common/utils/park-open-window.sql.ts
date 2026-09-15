@@ -73,6 +73,13 @@ export const OPERATING_SCHEDULE_TYPE = "OPERATING";
  * union and the operating-day anchoring below are one definition whatever the
  * caller feeds them. Only where the parks and the bounds come from is open.
  *
+ * All three are interpolated into the SQL verbatim, so they must be **literals
+ * written in this repository** — a placeholder (`$4`), an interval, a cast.
+ * Never a value that reached the process from outside: a request parameter, a
+ * database row, a config string. A value belongs in a `$n` placeholder and is
+ * bound by the caller; this is where the query is assembled, not where data
+ * enters it.
+ *
  * @param wikiOnly - Restrict the default park scan to parks with a
  *   `wiki_entity_id`. Ignored when `parkTz` replaces that scan.
  * @param parkTz - A `SELECT` producing `(park_id, tz)`, replacing the scan of
