@@ -6,6 +6,60 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a field a handler attaches to an error body now reaches the client
+
+`HttpExceptionFilter` is global and builds the error response itself, which is
+what keeps every failure on this API the same shape. It built it from `message`
+and `error` alone, so every other field of a thrown object body was dropped
+between the `throw` and the wire. Four throw sites put one there:
+
+| site | status | field |
+| --- | --- | --- |
+| `trips.controller.ts` `guard()` | 429 | `retryAfterSeconds` |
+| `push-follow-access.guard.ts` `writeGuard()` | 429 | `retryAfterSeconds` |
+| `admin.controller.ts` `cache/reset` | 400 | `warning` |
+| `admin-auth.controller.ts` Turnstile | 403 | `reason` |
+
+The expensive two are the limiters. `retryAfterSeconds` had never reached a
+client on any hand-raised 429 — `/v1/trips` on all three write verbs, and
+`POST`/`DELETE` on `/v1/push/ride-alerts` and `/v1/push/show-follows` — so a
+caller learned it had to wait and never how long, and had to guess.
+
+The extras travel now, and the envelope stays the filter's: they are spread
+first and `statusCode`, `timestamp`, `path`, `message`, `error`, `reference` and
+`stack` are written over them, because `path` is redacted here and `stack` is
+withheld in production. An extra that does not survive `JSON.stringify` is
+dropped **on its own**, not with its siblings — this filter is the last thing
+that can still answer the request, and a circular reference in a body would
+otherwise fail inside `response.json()`, while an unserializable `detail` must
+not take the `retryAfterSeconds` beside it down with it.
+
+**One field had to be withheld at its throw site to stay withheld.**
+`AdminAuthController`'s Turnstile refusal carried `reason`, which forwards
+Cloudflare's own error codes, and the docstring on `TurnstileVerdict` says "for
+the log and nothing else". Generic pass-through would have published
+`invalid-input-secret` or `not-configured` on a public, unauthenticated login
+route — i.e. told an anonymous caller that the challenge in front of the admin
+login is not currently working. It is logged there now and no longer thrown.
+Nothing lost a reader: our own frontend redeems the token in its own proxy and
+never meets this 403.
+
+A 429 carrying a finite, positive `retryAfterSeconds` also gets a `Retry-After`
+header, rounded **up** to whole seconds (the header has no sub-second form, and
+a rounded-down 0.4 would read as "come back now"; past 2^53 it is omitted
+instead, because `String()` would write `1e+21` and that is not
+`delta-seconds`). That is not a new convention: `CfThrottlerGuard` extends
+Nest's `ThrottlerGuard`, which already sets it on the 429s the global limiter
+raises. Without it the API answered two kinds of 429 under two contracts,
+decided by which limiter fired first.
+
+The tests moved with it, and the two sides had failed differently.
+`push-follow-access.guard.spec.ts` asserted the figure on the **thrown
+exception** and stayed green through the whole bug. `trips.controller.spec.ts`
+had the case **retracted**, with a comment saying why — pinning it would have
+promised a client something it could not read. Both now run the real filter and
+assert the body and header a caller receives, which is where an assertion about
+what a caller learns belongs.
 ### Fixed — the live closure-gap statement keys on the operating day, like its nightly twin
 
 `CLOSURE_GAP_INTERVALS_SQL` moved to the operating day in PAR-29: the day of a
@@ -55,6 +109,75 @@ rises where the historical CTEs run: `early_end` joins `win` per reading
 (loops=3644), and the two blind parks with a ride in a closure went from
 19.1/20.3 ms to 28.0/25.3 and from 14.1/14.4 to 19.0/17.1. Skipping that join in
 a park whose windows never wrap is PAR-251.
+
+### Fixed — one point and two sources now outweigh a regional name suffix
+
+`ParkValidatorService.findDuplicates` asked the name first on every branch: all
+four required `nameSimilarity >= 0.85`, and `geoProximity` only ever appeared in
+a conjunction with it. So `Wet'n'Wild` (ThemeParks.wiki) and `Wet 'n' Wild Gold
+Coast` (Queue-Times) — one water park in Oxenford, same coordinates to seven
+decimals, same city, the same thirteen slides — scored **0.6923** and stayed two
+parks, with `GET /v1/admin/duplicate-parks` answering `{"total":0,"pairs":[]}`.
+
+A fifth branch, `sharedPoint`, lets the physical facts lead instead. Three
+conditions, not one threshold, each placed against the whole catalogue (213
+parks, 22 578 pairs) rather than chosen — `POST merge-duplicate-parks` with
+`autoDetect: true` merges whatever this function returns, with no dry run and no
+review gate, so a false positive deletes a real park:
+
+- **`SHARED_POINT_KM` = 0.01**, not the 0.05 first proposed. Under 0.05 km the
+  catalogue also holds `Hurricane Harbor Chicago` against `Six Flags Hurricane
+  Harbor, Rockford` at 0.0424 km — two real parks 110 km apart, of which the
+  Rockford row carries a Gurnee geocode. Its sources are disjoint too, so at
+  0.05 km that pair would have rested on the name floor alone. Nothing lies
+  between 0.0000 and 0.0424.
+- **`0, 0` is not a point.** Two rows whose geocoding failed are 0.0000 km
+  apart on no location information at all. `usableCoordinate` refuses Null
+  Island the way `source-id-inheritance.util.ts` already did, coerces the
+  `decimal` columns Postgres returns as strings, and stops reading a park on
+  the prime meridian as unlocated — no catalogue park sits on the meridian or
+  the equator today, so that last part changes nothing now.
+- **Sources disjoint.** One upstream source holding an ID for *both* rows is
+  that source saying it knows two parks here — Queue-Times carries 19 for
+  PortAventura Park and 277 for Ferrari Land on one resort geocode. This is
+  §5.4's rule ("two ids from the same source are that source saying these are
+  two things") applied to parks.
+- **`SHARED_POINT_NAME_SIMILARITY` = 0.65**, under the pair it must catch and far
+  over the only other pairs sharing a point (0.1600–0.2000). **0.65 rather than
+  0.6, so that the name and the radius refuse independently:** at 0.6 exactly
+  one catalogue pair cleared both the floor and `sourcesDisjoint` and was held
+  out by geometry alone — the Rockford row again, 0.6122 at 0.0424 km, on
+  coordinates Queue-Times publishes rather than ones we derive, so one upstream
+  correction would have moved it onto the point. 63 pairs score in
+  [0.60, 0.65) and every one is two different parks; the closest of them is the
+  Rockford pair itself at 0.0424 km, and the closest of the other 62 is
+  0.1901 km away, so all 63 sit outside the radius already — the raise excludes
+  nothing the radius was not excluding and leaves the target 0.0423 of margin. The nearest pair the radius
+  must now separate is 0.1174 km away (`Boonie Bears Adventure Park Linhai`
+  against its water park, 0.6923), 11.7× the radius against 4.2× before. It
+  still cannot do more than that: a water park beside its theme park scores at
+  or above the target (Legoland Windsor 0.7429, Alton Towers 0.6923), so
+  keeping that class out stays the radius's job.
+
+The existing four branches keep their 0.85 thresholds, with one deliberate
+narrowing: because Postgres returns `"0.0000000"` and that string is truthy,
+two rows whose geocoding failed used to pass the old check and read as 0 km
+apart, so `geoProximity && nameSimilarity >= 0.85` could fire on rows with no
+location information. `usableCoordinate` stops that. A genuine ghost pair is
+still reachable through `sameCity` and through
+`nameSimilarity >= 0.95 && sharedEntityId`, neither of which asks about
+geometry, and no catalogue row sits at `0, 0` today.
+
+This change adds the detector and nothing else — it does **not** add a gate in
+front of the merge, so `autoDetect: true` merges this new pair as
+unconditionally as it merges the other four branches' pairs. The residual risk
+the three conditions cannot cover is a second venue that inherits its resort's
+geocode: there the radius has no vote, and only the name floor and disjoint
+sources stand. PortAventura's three rows are exactly that shape and are held
+by names of 0.1600–0.2000; a water park on its resort's point with a name like
+Legoland Windsor's (0.7429) would not be. That gate is PAR-247. Details and the
+measurement table:
+[Attraction Status & Seasonality §5.5](architecture/attraction-status-and-seasonality.md).
 
 ### Fixed — an entity that changes its `entityType` upstream no longer leaves a dead attraction behind
 
@@ -146,6 +269,80 @@ untouched, and tomorrow's candidate set is a subset of today's. Tomorrow's
 lookup window is the six-hour floor, not an opening — the published opening
 belongs to the day being planned, and tomorrow's has not happened yet. The
 curated works period is unaffected; a live reading has never overruled it.
+
+### Removed — the park attractions list said `CLOSED` about 6477 rides it knows nothing about
+
+`GET /v1/parks/{continent}/{country}/{city}/{park}/attractions` joins no queue
+data, and `AttractionResponseDto.fromEntity` sets `status: "CLOSED"` as a floor
+for the callers that do. The list served that floor as a reading. Measured on
+2026-09-15 over 190 parks: **6477 of 6477 attractions CLOSED** here against
+**849 OPERATING, 307 UNKNOWN, 11 DOWN and 5 REFURBISHMENT** among the same rows
+in the park payload. A search for broken rides over this route finds nothing and
+looks like a valid answer, which is the expensive part — there is no error to
+notice.
+
+**Breaking for a consumer of this route that reads `status`, `hourlyForecast`,
+`forecasts` or `statistics`:** all four are now absent
+(`fromEntityWithoutLiveData`) rather than renamed. The attraction table has no
+status column, so there is no stored status a different name could describe,
+and an absent optional field reads as "this route has no reading" rather than
+as a closure. The two forecast arrays were the same false negative one field
+over — shipped empty, they said no forecast exists for a ride nobody had asked
+a model about, and `statistics: null` said the same about statistics. `effectiveStatus`
+and `queues` were absent already. Live state comes from the park payload or the
+attraction detail route, neither of which changes.
+
+The placeholders stay for the integrated callers, and they are now one named
+set (`livePlaceholders()`) beside the stored half of the row rather than four
+literals mixed into it, so a live field added later is absent from this route
+without a second edit. One side effect, for completeness: the placeholders are
+spread last, so on the routes that still carry them `status` is now the 20th
+key of an attraction object instead of the 4th. Values are unchanged; only a
+content-derived weak ETag notices, once. `status` in particular has to keep its
+"CLOSED" floor:
+the attraction detail path reads it when a ride has no row inside the freshness
+window (`isSourceAbsent([])` is false by design) and derives `effectiveStatus`
+from it.
+
+Same route, the second half of the same report: it counted more attractions than
+the park payload for 23 of 190 parks, **6477 against 6406**. The +71 splits
+exactly two ways, and only one of them was a bug. (Two sweeps are quoted below.
+The totals above are the 14:10 UTC run, which reached 190 parks — 23 Fantawild
+parks answered 502 that hour. A second run at 19:53 reached all 213 and read
+7211 against 7140: different hour, different rows operating, same +71 over the
+same 23 parks. Counts of parks and rows come from the first, the breakdown of
+the duplicate groups from the second.)
+
+- **34 retired rows across 11 parks** — 17 at Universal Studios Singapore,
+  retired via PAR-159 after ThemeParks.wiki reclassified them as shows. The
+  park payload filters them (`loadParkRelations`) and this list did not.
+  `findAllWithFilters` now excludes them; its only caller is this route. The
+  `retiredAt` docstring promises the same of search, where it is still untrue —
+  `src/search` filters nothing, which is PAR-233.
+- **37 rows in 12 parks that the park payload groups away** (Walibi Belgium 21,
+  Heide Park 4, Carowinds 2), falling into 34 name groups. Most are the catalog
+  holding one ride twice, the pairs `AttractionMergeService.findDuplicatePairs`
+  finds by its `foo` / `foo-2` slug rule; there both rows arrive with the same
+  `name` and `slug` (the numeric suffix is stripped on the way out) and `id` is
+  all that separates them. `id` is the only field *guaranteed* to differ,
+  though, not the only one that does: 13 of the 34 groups also disagree about
+  coordinates, `land`, `isSeasonal` or a height limit, so which of the two the
+  park payload shows decides those values. `deduplicateEntities` picks the row
+  reading `OPERATING` first, and only between two rows of equal status the one
+  that has coordinates — so on a closed day the choice falls through to the
+  coordinates and on an open one it may not.
+
+  Three groups are not a duplicate at all but **two different rides sharing a
+  curated name**, and there the collapse loses a ride rather than a copy: at
+  Hurricane Harbor Arlington `wahoo-racer` and `typhoon-twister` are both
+  called "Typhoon Twister" with minimum heights of 107 and 122 cm, and Sea
+  World's `wally-the-walrus` and `castaway-bay-sky-climb` share a name across
+  15 m. That is PAR-259, not this route.
+
+  Deduplicating here would break pagination, which counts in SQL before any
+  collapse, so the difference is documented in the route's `api-json`
+  description instead — including which of the two numbers to believe, which
+  depends on the group.
 
 ### Fixed — a showtime belongs to the operating day, not to the calendar date
 

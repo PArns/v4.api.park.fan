@@ -1672,12 +1672,44 @@ export class ParksController {
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug/attractions")
-  @UseInterceptors(new HttpCacheInterceptor(300)) // 5 minutes - live wait times
+  // 5 minutes. Not for live wait times — this route carries none (see below) —
+  // but the catalog it does serve changes on a curation write, and this is the
+  // freshness window a correction waits out. The wait is longer than the
+  // number: `HttpCacheInterceptor` adds `stale-while-revalidate` at twice the
+  // TTL above 120s, so the header reads `max-age=300, s-maxage=300,
+  // stale-while-revalidate=600` and a CDN may serve the stale copy for up to
+  // 900s while it refreshes. Headers only — nothing is cached in this process.
+  @UseInterceptors(new HttpCacheInterceptor(300))
   @ApiOperation({
     summary: "List park attractions (geo)",
     description:
       "Returns a paginated list of all attractions for a specific park via geographic path. " +
-      "Cached for 5 minutes.",
+      "Cached for 5 minutes.\n\n" +
+      "**Carries no live data.** No `status`, no `effectiveStatus`, no `queues`, no " +
+      "`hourlyForecast`, no `forecasts` and no `statistics`: this route reads the attraction " +
+      "rows and joins nothing, so it states nothing about a ride running, a wait being " +
+      "predicted or a figure being measured. For any of those, read the park payload " +
+      "(`GET /v1/parks/{continent}/{country}/{city}/{park}`) or the attraction detail route " +
+      "below. The response schema below is the shared attraction model and still lists the " +
+      "six as optional fields; on this route they are never sent. Narrowing the schema " +
+      "itself is PAR-249.\n\n" +
+      "**May count more attractions than the park payload.** This route returns rows; the park " +
+      "payload groups them by `name` and serves one row per name. Retired attractions are in " +
+      "neither. What is left over is 37 rows across 12 parks on 2026-09-15 (Walibi Belgium 21, " +
+      "Heide Park 4, Carowinds 2), in 34 name groups — and they are not all the same thing. " +
+      "Most are the catalog holding one ride twice, the pairs the attraction merge finds by " +
+      "its `foo` / `foo-2` slug rule; there the numeric suffix is stripped on the way out, so " +
+      "both rows arrive with the same `name` and the same `slug` and only `id` tells them " +
+      "apart. **So key this list by `id`, never by `slug` or `name`** — either one silently " +
+      "drops a row. But `id` is the only field *guaranteed* to differ, not the only one that " +
+      "does: in 13 of the 34 groups the two rows also disagree about coordinates, `land`, " +
+      "`isSeasonal` or a height limit, and in 4 the `slug` differs too. Three of those four " +
+      "are not one ride twice but **two different rides carrying the same curated name** — at " +
+      "Hurricane Harbor Arlington `wahoo-racer` and `typhoon-twister` are both named " +
+      '"Typhoon Twister" with minimum heights of 107 and 122 cm. There the park payload\'s ' +
+      "grouping hides a real attraction, and this route's number is the one that describes " +
+      "the park. Which number to trust therefore depends on the group: for a duplicated row " +
+      "the park payload's, for a name collision this one's.",
   })
   @ApiParam({
     name: "continent",
@@ -1773,8 +1805,10 @@ export class ParksController {
         limit,
       });
 
+    // Without live data: this route joins no queue rows, so it must not serve
+    // `fromEntity`'s status placeholder as if it were a reading.
     const mappedAttractions = attractions.map((attraction) =>
-      AttractionResponseDto.fromEntity(attraction),
+      AttractionResponseDto.fromEntityWithoutLiveData(attraction),
     );
 
     return {

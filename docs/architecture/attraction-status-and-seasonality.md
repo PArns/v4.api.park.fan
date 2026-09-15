@@ -673,7 +673,7 @@ called `PLAYGROUND`. Their names agree perfectly, so name matching offered them
 as *safe* auto-merges. Two ids from the **same** source are that source saying
 these are two things; auto-merge now requires a pair to span two sources.
 
-### 5.5 Two rows for one water park, and the detector cannot see them
+### 5.5 Two rows for one water park, invisible to every name-led branch
 
 `Wet'n'Wild` (wiki `ee018a72-…`, created 2026-04-08) and `Wet 'n' Wild Gold
 Coast` (`qt-park-146`, created 2026-06-22) are the same park in Oxenford,
@@ -682,20 +682,118 @@ Queensland. They carry **the same latitude and longitude to seven decimals**
 attractions each — the same 13 slides, reported by the wiki under one row and by
 Queue-Times under the other.
 
-`GET /v1/admin/duplicate-parks` returns `{"total":0,"pairs":[]}`. Every branch of
-`ParkValidatorService.findDuplicates` requires a name similarity of at least
+`GET /v1/admin/duplicate-parks` returned `{"total":0,"pairs":[]}`. Every branch
+of `ParkValidatorService.findDuplicates` required a name similarity of at least
 0.85, and this pair scores **0.6923**: `calculateStringSimilarity` strips
 whitespace, so `Wet'n'Wild` against `Wet 'n' Wild` would be a perfect 1.0, and
 it is the nine characters of `GoldCoast` — eight bigrams the other name cannot
-match — that drop it below every threshold.
-Geography never gets a vote of its own — `geoProximity` only ever appears in a
+match — that dropped it below every threshold.
+Geography never got a vote of its own: `geoProximity` only ever appeared in a
 conjunction with a name score.
 
 The lesson is the mirror image of §5.4. There, two identical names had to be
 kept apart because they came from one source; here, two rows that agree on
 *every* physical fact are kept apart because their names disagree. **A distance
 of 0.000 km between two parks is a stronger statement than any string
-comparison**, and the detector currently has no way to say so (PAR-160).
+comparison**, and the detector had no way to say so.
+
+**Fixed in PAR-160** by a fifth branch, `sharedPoint`, which lets the physical
+facts lead: coordinates under `SHARED_POINT_KM`, sources disjoint, and a name
+score over `SHARED_POINT_NAME_SIMILARITY` — a floor rather than a verdict. Three
+conditions, of which two are numbers, and both numbers were placed against the
+whole catalogue (213 parks, 22 578 pairs) rather than chosen, because
+`POST merge-duplicate-parks` with `autoDetect: true` merges whatever
+`findDuplicates` returns, with no dry run and no review gate.
+What that measurement says, and what it constrains:
+
+| km | name | pair |
+| -- | -- | -- |
+| 0.0000 | 0.1600 | Caribe Aquatic Park ↔ Ferrari Land (Vila-seca) |
+| 0.0000 | 0.2000 | Caribe Aquatic Park ↔ PortAventura Park |
+| 0.0000 | 0.1600 | Ferrari Land ↔ PortAventura Park |
+| 0.0000 | **0.6923** | **Wet 'n' Wild Gold Coast ↔ Wet'n'Wild** |
+| 0.0424 | 0.6122 | Hurricane Harbor Chicago ↔ Six Flags Hurricane Harbor, Rockford |
+
+- **The radius is 0.01 km, not the 0.05 the ticket proposed.** At 0.05 the
+  Rockford row comes with it — a real park 110 km away whose geocode says
+  Gurnee, and whose sources are disjoint too, so at 0.05 km that pair would
+  have rested on the name floor alone. Between 0.0000 and 0.0424 the catalogue
+  is empty.
+- **`0, 0` is not a point.** Null Island is a failed geocode, and two rows that
+  both failed are 0.0000 km apart on no location information at all;
+  `usableCoordinate` refuses it, as `source-id-inheritance.util.ts` already
+  did. The same helper coerces the `decimal` columns (Postgres returns them as
+  strings) and stops treating a park on the prime meridian as unlocated — that
+  last part only ever bit on numeric input, because Postgres hands back
+  `"0.0000000"` and that string is truthy.
+
+  For the same reason this **narrows the four name-led branches**, deliberately:
+  two failed geocodes used to pass the truthiness check, `geoProximity` read
+  them as 0 km apart, and `geoProximity && nameSimilarity >= 0.85` could fire on
+  rows carrying no location information. It no longer can. A real ghost pair
+  stays reachable through `sameCity` and through
+  `nameSimilarity >= 0.95 && sharedEntityId`, neither of which asks about
+  geometry, and a spec case pins that so a future hoist of the refusal cannot
+  take ghost detection with it.
+- **Disjoint sources is the §5.4 rule one level up:** Queue-Times carries 19 for
+  PortAventura Park and 277 for Ferrari Land, which is that source saying it
+  knows two parks on this geocode. The test reads what a row *is* (which source
+  columns it fills), never when it was last heard from.
+
+  It is worth being exact about what it does and does not do. At the current
+  floor it does **not** refuse the PortAventura rows — their names score
+  0.1600–0.2000 against 0.65, so the floor refuses all three pairs on its own,
+  and disabling the disjointness condition entirely leaves that case green
+  (five other cases go red). It is the condition that would carry them if the
+  floor were ever lowered, and the one that does the work on any pair whose
+  name clears the floor.
+- **The name floor is 0.65 and cannot carry more than it does.** A water park
+  beside its theme park scores at or above the pair we must catch — Legoland
+  Windsor against its water park 0.7429, Alton Towers against its waterpark
+  0.6923. No threshold separates that class. (A row against its own `… Resort`
+  spelling, such as Heide Park at 0.7273, is not this class at all: that is the
+  Wet'n'Wild shape, one place under two names, and merging it would be right.) (Another park of the same brand is a different case and the floor does
+  separate it: `Wet 'n' Wild Las Vegas` against the Gold Coast row is 0.6061,
+  and a spec case pins the floor on exactly that pair.) The radius carries the
+  first class, **as long as the
+  venue carries its own geocode**: with the floor at 0.65 no two such rows in
+  the catalogue sit closer than 0.1174 km (`Boonie Bears Adventure Park Linhai`
+  against its water park, 0.6923), 11.7× the radius.
+
+  **Where it does not is the residual risk of this branch, and it is worth
+  writing down.** A second venue that inherits its resort's geocode sits at
+  0.0000 km, so the radius has no vote on it at all and only the name floor and
+  `sourcesDisjoint` are left. Three rows are that shape today — PortAventura
+  Park, Ferrari Land and Caribe Aquatic Park on one point — and the name holds
+  all three pairs, at 0.1600–0.2000 against a floor of 0.65. `sourcesDisjoint`
+  additionally fails for PortAventura Park against Ferrari Land, the pair
+  Queue-Times lists twice; Caribe Aquatic Park carries a wartezeiten id and
+  nothing else, so both of its pairs are disjoint and rest on the floor alone.
+  The same hazard covers **any** shared placeholder geocode, not only a
+  resort's: a source falling back to a city centroid puts two rows on one point
+  just as exactly, and refusing `0, 0` by value cannot see that. But a water
+  park
+  that synced in on its resort's point, from a source the theme-park row does
+  not carry, scoring like `Legoland Windsor` against its water park (0.7429),
+  would satisfy all three conditions. No such row is in the catalogue today.
+  What would make that safe rather than merely unlikely is the review gate in
+  PAR-247, not another threshold here.
+
+  The floor is 0.65 and not 0.6 for one measured reason: at 0.6 the Rockford
+  pair cleared both the name floor and `sourcesDisjoint`, leaving the radius as
+  its only refusal — and that radius rests on coordinates Queue-Times
+  publishes, not on ones we derive. 63 catalogue pairs score in [0.60, 0.65),
+  all of them genuinely different parks. The closest of them is the Rockford
+  pair itself at 0.0424 km — it is in this band, which is why the band matters —
+  and the closest of the other 62 is 0.1901 km away, so all 63 are outside the
+  radius already and raising the floor refuses nothing the radius was not
+  refusing.
+
+This section adds the detector, not a gate in front of the merge:
+`POST /v1/admin/merge-duplicate-parks` with `autoDetect: true` still merges
+every pair `findDuplicates` returns, this one included, with no dry run and no
+review step. Giving that endpoint the `safe`/`needsReview`/`dryRun` treatment
+the attraction side already has is PAR-247.
 
 ### 5.6 An entity changed its `entityType` and left its old row behind
 

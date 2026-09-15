@@ -122,6 +122,40 @@ describe("AdminAuthController — Turnstile on the login", () => {
     expect(auth.login).not.toHaveBeenCalled();
   });
 
+  it("tells the caller nothing about why Cloudflare said no", async () => {
+    // `TurnstileVerdict.reason` forwards Cloudflare's own error codes and its
+    // docstring says "for the log and nothing else". This is a public,
+    // unauthenticated route, so `invalid-input-secret` here would tell an
+    // anonymous caller that the challenge in front of the admin login is not
+    // currently working — an invitation rather than an error message.
+    //
+    // The field used to be thrown and silently deleted downstream, because
+    // `HttpExceptionFilter` rebuilt every body from `message` and `error`.
+    // Since PAR-146 it carries whatever a handler attaches, so what must not be
+    // answered has to be absent here. Pinned at the throw site, because that is
+    // where the decision is; the filter is generic on purpose.
+    const { controller } = build({
+      success: false,
+      reason: "invalid-input-secret",
+    });
+
+    const thrown = await controller
+      .login(credentials({ turnstileToken: "x" }), request({}))
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+    expect(thrown).toBeInstanceOf(ForbiddenException);
+    const body = (thrown as ForbiddenException).getResponse() as Record<
+      string,
+      unknown
+    >;
+    expect(body).toMatchObject({ error: "turnstile-failed" });
+    expect(body).not.toHaveProperty("reason");
+    expect(JSON.stringify(body)).not.toContain("invalid-input-secret");
+  });
+
   it("refuses a wrong key like any other stranger", async () => {
     const { controller, turnstile } = build({ success: false });
 

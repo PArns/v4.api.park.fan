@@ -174,7 +174,13 @@ export class AttractionResponseDto {
   @ApiProperty({ description: "URL-friendly slug" })
   slug: string;
 
-  @ApiProperty({ description: "Current status", required: false })
+  @ApiProperty({
+    description:
+      "Current status as the live sources report it. Absent on endpoints that " +
+      "join no live data — the park attractions list is one — and its absence " +
+      "means the endpoint has no reading, never that the ride is closed.",
+    required: false,
+  })
   status?: string; // Overall status: OPERATING, DOWN, CLOSED, REFURBISHMENT
 
   @ApiProperty({
@@ -522,7 +528,16 @@ export class AttractionResponseDto {
   })
   retiredReason?: string | null;
 
-  static fromEntity(attraction: Attraction): AttractionResponseDto {
+  /**
+   * The stored half of an attraction: everything that comes off the row itself.
+   *
+   * Nothing here is a reading, and nothing here is empty for want of data —
+   * which is exactly what separates it from {@link livePlaceholders}. Keeping
+   * the two apart is the point: a caller that joins no live data spreads this
+   * and stops, so it cannot accidentally assert the absence of something it
+   * never asked for.
+   */
+  private static storedHalf(attraction: Attraction): AttractionWithoutLiveData {
     const curated = resolveCuratedFacts(attraction);
 
     return {
@@ -532,8 +547,6 @@ export class AttractionResponseDto {
       // deliberately untouched — see the entity.
       name: curated.name,
       slug: cleanSlugSuffix(attraction.slug),
-
-      status: "CLOSED", // Default
 
       latitude: attraction.latitude !== undefined ? attraction.latitude : null,
       longitude:
@@ -560,10 +573,115 @@ export class AttractionResponseDto {
         : null,
       retiredReason: attraction.retiredReason ?? null,
       isCurrentlyInSeason: isCurrentlyInSeason(curated),
-
-      hourlyForecast: [],
-      forecasts: [],
-      statistics: null,
     };
   }
+
+  /**
+   * The fields a caller is expected to fill from live data, with the value they
+   * hold until it does. Each one is a statement about data we have not asked
+   * for yet, so only a caller that WILL ask may serve them:
+   *
+   * - `status` "CLOSED" is the floor the attraction detail path reads. A ride
+   *   with no `queue_data` row inside the freshness window keeps it
+   *   (`isSourceAbsent([])` is deliberately false) and `effectiveStatus` is
+   *   derived from it, which is why it is a placeholder rather than absent.
+   * - `hourlyForecast` / `forecasts` empty say "no forecast exists", and
+   *   `statistics` null says "no statistics exist".
+   *
+   * Add a live field here rather than to {@link storedHalf}, and
+   * {@link fromEntityWithoutLiveData} keeps it out of the response without a
+   * second edit.
+   *
+   * A function rather than a constant object, because a constant would hand
+   * every DTO the same two array instances: `readonly` freezes the binding and
+   * not the arrays, and one caller pushing into `forecasts` instead of
+   * assigning it would reach every attraction in the process. No caller does
+   * today — all three assign — and this keeps it that way for the next field
+   * added above.
+   *
+   * `satisfies` rather than a return-type annotation: an annotation would widen
+   * the object and `keyof ReturnType<…>` would stop naming the four keys, while
+   * without either a misspelled key is simply a new field on every response a
+   * `fromEntity` caller serves. This way a typo is TS2561 and the key list
+   * stays inferred.
+   *
+   * Not `private`, so {@link AttractionWithoutLiveData} below can name the four
+   * keys off this one declaration. A tuple of key names beside it would be the
+   * alternative and would be a second place to edit.
+   */
+  static livePlaceholders() {
+    return {
+      status: "CLOSED" as string | undefined,
+      hourlyForecast: [] as AttractionResponseDto["hourlyForecast"],
+      forecasts: [] as AttractionResponseDto["forecasts"],
+      statistics: null as AttractionResponseDto["statistics"],
+    } satisfies Partial<AttractionResponseDto>;
+  }
+
+  /**
+   * An attraction for a caller that goes on to join live data over it.
+   *
+   * `AttractionIntegrationService` and the favorites list do: they overwrite
+   * `status` from `queue_data` and fill the forecasts. A caller that joins
+   * nothing must use {@link fromEntityWithoutLiveData} instead — as must the
+   * one branch that still gets this wrong, `FavoritesService`'s fallback for an
+   * integrated attraction it has no card for, which ships the placeholders
+   * untouched. Reaching it takes a cached entry that parses to a FALSY value —
+   * `null`, `0`, `false` — because the cache hit is kept whatever
+   * `JSON.parse` returns and the branch then tests the result for truthiness.
+   * Neither writer produces one, so it is unreachable by accident rather than
+   * by design.
+   */
+  static fromEntity(attraction: Attraction): AttractionResponseDto {
+    return {
+      ...AttractionResponseDto.storedHalf(attraction),
+      ...AttractionResponseDto.livePlaceholders(),
+    };
+  }
+
+  /**
+   * The same attraction for an endpoint that reads no live data at all.
+   *
+   * Measured on 2026-09-15 over 190 parks: the park attractions list
+   * reported 6477 of 6477 attractions as CLOSED, while the park payload
+   * reported 849 OPERATING, 307 UNKNOWN, 11 DOWN and 5 REFURBISHMENT among
+   * them. The list was not stale and not wrong about a ride — it was serving
+   * the placeholder, and a search for broken rides over it finds nothing while
+   * looking like a valid answer. `hourlyForecast: []` and `forecasts: []` rode
+   * along in the same response, saying no forecast exists for a ride nobody
+   * had asked a model about.
+   *
+   * The fields are dropped rather than renamed: there is no stored status a
+   * different name could describe. An absent optional field reads as "this
+   * endpoint does not know", which is the truth; `queues` and
+   * `effectiveStatus` are absent here for the same reason. Live state comes
+   * from the park payload or from the attraction detail endpoint.
+   *
+   * The return type keeps the `Omit` rather than widening back to
+   * `AttractionResponseDto`: the whole point of this method is that the four
+   * fields are not there, and a caller writing `dto.status` should hear that
+   * from the compiler rather than get `string | undefined`. It still assigns
+   * to an `AttractionResponseDto[]`, because all four are optional.
+   */
+  static fromEntityWithoutLiveData(
+    attraction: Attraction,
+  ): AttractionWithoutLiveData {
+    return AttractionResponseDto.storedHalf(attraction);
+  }
 }
+
+/**
+ * An attraction as an endpoint that joins no live data serves it: the response
+ * DTO without the four fields {@link AttractionResponseDto.livePlaceholders}
+ * fills.
+ *
+ * The key list is read off that factory rather than spelled out, so adding a
+ * placeholder there removes it from this type in the same edit. All four are
+ * optional on the DTO, so a value of this type still assigns to an
+ * `AttractionResponseDto` — what it buys is the other direction: reading
+ * `.status` off one is a compiler error rather than `undefined` at runtime.
+ */
+export type AttractionWithoutLiveData = Omit<
+  AttractionResponseDto,
+  keyof ReturnType<typeof AttractionResponseDto.livePlaceholders>
+>;
