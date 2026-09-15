@@ -6,7 +6,9 @@ import { ScheduleEntry } from "./entities/schedule-entry.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { DestinationsService } from "../destinations/destinations.service";
+import { CacheKeys } from "../common/cache/cache-keys";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { RevalidationService } from "../common/revalidation/revalidation.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { createTestPark } from "../../test/fixtures/park.fixtures";
 import {
@@ -108,6 +110,10 @@ describe("ParksService", () => {
     saveHolidaysFromApi: jest.fn(),
   };
 
+  const mockRevalidationService = {
+    revalidateTags: jest.fn().mockResolvedValue(true),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -139,6 +145,10 @@ describe("ParksService", () => {
         {
           provide: HolidaysService,
           useValue: mockHolidaysService,
+        },
+        {
+          provide: RevalidationService,
+          useValue: mockRevalidationService,
         },
       ],
     }).compile();
@@ -1978,6 +1988,198 @@ describe("ParksService", () => {
 
         expect(indexOfParkDelete(calls)).toBeGreaterThan(-1);
         expect(aliasInserts(calls)).toHaveLength(0);
+      });
+    });
+
+    /**
+     * Step 6, and the one both raw paths skipped entirely: saying that the
+     * merge happened. `ParkMergeService.mergeParks` evicts the park-scoped
+     * caches of both parks plus the winner's attractions and revalidates the
+     * three frontend tags; the two paths here deleted a park and left the geo
+     * skeleton — cached for 24h and the source of every park link and sitemap
+     * entry — advertising it.
+     *
+     * The redis deletions are recorded into the same list as the statements,
+     * because where they sit RELATIVE to the park DELETE is half the question:
+     * an eviction inside the transaction survives a rollback the merge does
+     * not, and refills from the rows the merge was about to change.
+     */
+    describe("both raw merges announce themselves after the commit", () => {
+      const REVALIDATED_TAGS = ["geo", "parks", "attractions"];
+
+      /**
+       * Routes `redis.del` into `calls` and answers the post-commit attraction
+       * read. Returns the flat list of evicted keys.
+       */
+      const recordEvictions = (
+        calls: Recorded[],
+        winnerAttractionIds: string[] = [],
+      ) => {
+        const evicted: string[] = [];
+        mockRedis.del.mockImplementation(async (...keys: string[]) => {
+          calls.push({ sql: "REDIS DEL", params: keys });
+          evicted.push(...keys);
+          return keys.length;
+        });
+        mockParkRepository.manager.query.mockResolvedValue(
+          winnerAttractionIds.map((id) => ({ id })),
+        );
+        return evicted;
+      };
+
+      afterEach(() => {
+        mockRedis.del.mockReset();
+        mockParkRepository.manager.query.mockReset();
+        mockRevalidationService.revalidateTags.mockReset();
+        mockRevalidationService.revalidateTags.mockResolvedValue(true);
+      });
+
+      const indexOfFirstEviction = (calls: Recorded[]) =>
+        calls.findIndex((c) => c.sql === "REDIS DEL");
+
+      it("evicts both parks and the winner's attractions after the sync-time merge, then revalidates", async () => {
+        const inheritedAttractionId = "eeee5555-0000-0000-0000-000000000001";
+        const { calls } = primeGhostParkSync([]);
+        const evicted = recordEvictions(calls, [inheritedAttractionId]);
+
+        await service.syncParks();
+
+        // Both parks: the survivor because its ride list changed, the ghost
+        // because it no longer exists.
+        expect(evicted).toContain(
+          CacheKeys.parkIntegrated(syncSurvivingParkId),
+        );
+        expect(evicted).toContain(CacheKeys.parkIntegrated(syncGhostParkId));
+        // The geo skeleton is the entry named in the issue: it lists every
+        // park and the frontend builds links and sitemap entries from it.
+        expect(evicted).toContain(CacheKeys.discoveryGeoStructure());
+        // The inherited ride, whose integrated payload embeds park context.
+        // Passing no attraction ids would evict every key above and still
+        // leave this one, which is why it is asserted separately.
+        expect(evicted).toContain(
+          CacheKeys.attractionIntegrated(inheritedAttractionId),
+        );
+        expect(mockRevalidationService.revalidateTags).toHaveBeenCalledWith(
+          REVALIDATED_TAGS,
+        );
+
+        // After the DELETE, so no rollback can strand an emptied cache.
+        expect(indexOfParkDelete(calls)).toBeGreaterThan(-1);
+        expect(indexOfFirstEviction(calls)).toBeGreaterThan(
+          indexOfParkDelete(calls),
+        );
+      });
+
+      it("evicts both parks and the winner's attractions after the repairDuplicates merge, then revalidates", async () => {
+        const primaryId = "dddddddd-1111-1111-1111-111111111111";
+        const ghostParkId = "dddddddd-2222-2222-2222-222222222222";
+        const inheritedAttractionId = "eeee5555-0000-0000-0000-000000000002";
+        const { calls } = recordTransaction(() => []);
+        const evicted = recordEvictions(calls, [inheritedAttractionId]);
+
+        mockParkRepository.query.mockResolvedValue([
+          { queue_times_entity_id: "4711" },
+        ]);
+        mockParkRepository.find.mockResolvedValue([
+          createTestPark({ id: primaryId, wikiEntityId: "wiki-1" }),
+          createTestPark({ id: ghostParkId, wikiEntityId: null }),
+        ]);
+
+        await service.repairDuplicates();
+
+        expect(evicted).toContain(CacheKeys.parkIntegrated(primaryId));
+        expect(evicted).toContain(CacheKeys.parkIntegrated(ghostParkId));
+        expect(evicted).toContain(CacheKeys.discoveryGeoStructure());
+        expect(evicted).toContain(
+          CacheKeys.attractionIntegrated(inheritedAttractionId),
+        );
+        expect(mockRevalidationService.revalidateTags).toHaveBeenCalledWith(
+          REVALIDATED_TAGS,
+        );
+        expect(indexOfParkDelete(calls)).toBeGreaterThan(-1);
+        expect(indexOfFirstEviction(calls)).toBeGreaterThan(
+          indexOfParkDelete(calls),
+        );
+      });
+
+      it("evicts nothing when the merge rolls back, and everything when the same merge commits", async () => {
+        // The park is still there afterwards, so an emptied cache would refill
+        // from exactly the rows the merge was about to change — and the geo
+        // skeleton would be re-cached WITHOUT the park that still exists.
+        //
+        // Both halves in one case on purpose: an assertion that nothing was
+        // evicted is equally green for a path that never announces anything at
+        // all (📚 G-44). The commit below is what says the announcement was
+        // wired up and the rollback is what suppressed it — with the call site
+        // removed, this case fails on its second half.
+        const primaryId = "dddddddd-3333-3333-3333-333333333333";
+        const ghostParkId = "dddddddd-4444-4444-4444-444444444444";
+        const rolledBack: Recorded[] = [];
+        const evicted = recordEvictions(rolledBack);
+        mockParkRepository.manager.transaction = jest.fn(async () => {
+          rolledBack.push({ sql: "DELETE FROM parks", params: [ghostParkId] });
+          throw new Error("23503: park_occupancy still points at the ghost");
+        });
+
+        mockParkRepository.query.mockResolvedValue([
+          { queue_times_entity_id: "4711" },
+        ]);
+        mockParkRepository.find.mockResolvedValue([
+          createTestPark({ id: primaryId, wikiEntityId: "wiki-1" }),
+          createTestPark({ id: ghostParkId, wikiEntityId: null }),
+        ]);
+
+        await expect(service.repairDuplicates()).rejects.toThrow("23503");
+
+        // The statement ran and rolled back — without this line the case
+        // passes for a merge that was never attempted.
+        expect(indexOfParkDelete(rolledBack)).toBeGreaterThan(-1);
+        expect(evicted).toHaveLength(0);
+        expect(mockRevalidationService.revalidateTags).not.toHaveBeenCalled();
+
+        // Same two parks, same harness, this time the transaction commits.
+        const { calls: committed } = recordTransaction(() => []);
+        const evictedOnCommit = recordEvictions(committed);
+
+        await service.repairDuplicates();
+
+        expect(indexOfParkDelete(committed)).toBeGreaterThan(-1);
+        expect(evictedOnCommit).toContain(
+          CacheKeys.parkIntegrated(ghostParkId),
+        );
+        expect(mockRevalidationService.revalidateTags).toHaveBeenCalledWith(
+          REVALIDATED_TAGS,
+        );
+      });
+
+      it("keeps a committed merge successful when redis and the webhook both fail", async () => {
+        // Both paths run unattended off the sync; the merge is committed by
+        // the time either is asked, so neither may take the run down with it.
+        const primaryId = "dddddddd-5555-5555-5555-555555555555";
+        const ghostParkId = "dddddddd-6666-6666-6666-666666666666";
+        const { calls } = recordTransaction(() => []);
+        recordEvictions(calls);
+        mockRedis.del.mockRejectedValue(new Error("redis is down"));
+        mockRevalidationService.revalidateTags.mockRejectedValue(
+          new Error("frontend did not answer"),
+        );
+
+        mockParkRepository.query.mockResolvedValue([
+          { queue_times_entity_id: "4711" },
+        ]);
+        mockParkRepository.find.mockResolvedValue([
+          createTestPark({ id: primaryId, wikiEntityId: "wiki-1" }),
+          createTestPark({ id: ghostParkId, wikiEntityId: null }),
+        ]);
+
+        await expect(service.repairDuplicates()).resolves.toBeUndefined();
+
+        expect(indexOfParkDelete(calls)).toBeGreaterThan(-1);
+        // The webhook was still attempted: a redis failure on the survivor
+        // must not skip the rest of the announcement.
+        expect(mockRevalidationService.revalidateTags).toHaveBeenCalledWith(
+          REVALIDATED_TAGS,
+        );
       });
     });
   });
