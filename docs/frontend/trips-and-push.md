@@ -92,11 +92,16 @@ enumeration ever gets.
 
 **A 429 says how long to wait**, in two places that always agree: the body's
 `retryAfterSeconds` (exact, as the limiter counted it) and a `Retry-After`
-header in whole seconds, rounded up. The same pair comes back from the
-push-follow routes below and from the global throttler, so a client has one
-thing to read whichever limiter answered. Until 2026-09-15 it had none: the
-figure was in the thrown exception and `HttpExceptionFilter` rebuilt every
-error body from `message` and `error` alone, so it never left the process.
+header in whole seconds, rounded up. The push-follow routes below answer the
+same pair. The **global** throttler is the one exception and is the reason the
+header exists here at all — it has always set `Retry-After`, and it throws a
+plain string body, so there is no `retryAfterSeconds` to read on a 429 it
+raised. Read the header first and the field as the exact figure; a client that
+only reads the field will find nothing on a throttler 429.
+
+Until 2026-09-15 these routes had neither: the figure was in the thrown
+exception and `HttpExceptionFilter` rebuilt every error body from `message` and
+`error` alone, so it never left the process.
 
 ## 3. Push: ask before offering the switch
 

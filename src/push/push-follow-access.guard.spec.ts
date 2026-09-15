@@ -1,9 +1,8 @@
-import { HttpException, Logger } from "@nestjs/common";
-import type { ArgumentsHost } from "@nestjs/common";
+import { HttpException } from "@nestjs/common";
 import { PushFollowAccessGuard } from "./push-follow-access.guard";
 import { PushService } from "./push.service";
 import { PushFollowWriteRateLimitService } from "./push-follow-write-rate-limit.service";
-import { HttpExceptionFilter } from "../common/filters/http-exception.filter";
+import { throughFilter } from "../../test/helpers/through-filter";
 
 /**
  * The one rule `RideAlertsController` and `ShowFollowsController` both
@@ -93,37 +92,13 @@ describe("PushFollowAccessGuard", () => {
       // affected; the ticket was filed against `/v1/trips` because that is
       // where it was noticed.
       check.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 42 });
-      const thrown = await guard.writeGuard(req(), "ride-alert").then(
-        () => null,
-        (e: unknown) => e,
+
+      const { body, headers } = await throughFilter(
+        () => guard.writeGuard(req(), "ride-alert"),
+        { url: "/v1/push/ride-alerts" },
       );
 
-      const json = jest.fn();
-      const headers: Record<string, string> = {};
-      const host = {
-        switchToHttp: () => ({
-          getResponse: () => ({
-            status: () => ({ json }),
-            headersSent: false,
-            header: (name: string, value: string) => {
-              headers[name] = value;
-            },
-          }),
-          getRequest: () => ({ method: "POST", url: "/v1/push/ride-alerts" }),
-        }),
-      } as unknown as ArgumentsHost;
-
-      const warn = jest.spyOn(Logger.prototype, "warn").mockImplementation();
-      try {
-        new HttpExceptionFilter().catch(thrown, host);
-      } finally {
-        warn.mockRestore();
-      }
-
-      expect(json.mock.calls[0][0]).toMatchObject({
-        statusCode: 429,
-        retryAfterSeconds: 42,
-      });
+      expect(body).toMatchObject({ statusCode: 429, retryAfterSeconds: 42 });
       expect(headers["Retry-After"]).toBe("42");
     });
   });

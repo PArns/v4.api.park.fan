@@ -28,17 +28,30 @@ caller learned it had to wait and never how long, and had to guess.
 The extras travel now, and the envelope stays the filter's: they are spread
 first and `statusCode`, `timestamp`, `path`, `message`, `error`, `reference` and
 `stack` are written over them, because `path` is redacted here and `stack` is
-withheld in production. Extras that do not survive `JSON.stringify` are dropped
-rather than thrown — this filter is the last thing that can still answer the
-request, and a circular reference in a body would otherwise fail inside
-`response.json()`.
+withheld in production. An extra that does not survive `JSON.stringify` is
+dropped **on its own**, not with its siblings — this filter is the last thing
+that can still answer the request, and a circular reference in a body would
+otherwise fail inside `response.json()`, while an unserializable `detail` must
+not take the `retryAfterSeconds` beside it down with it.
+
+**One field had to be withheld at its throw site to stay withheld.**
+`AdminAuthController`'s Turnstile refusal carried `reason`, which forwards
+Cloudflare's own error codes, and the docstring on `TurnstileVerdict` says "for
+the log and nothing else". Generic pass-through would have published
+`invalid-input-secret` or `not-configured` on a public, unauthenticated login
+route — i.e. told an anonymous caller that the challenge in front of the admin
+login is not currently working. It is logged there now and no longer thrown.
+Nothing lost a reader: our own frontend redeems the token in its own proxy and
+never meets this 403.
 
 A 429 carrying a finite, positive `retryAfterSeconds` also gets a `Retry-After`
 header, rounded **up** to whole seconds (the header has no sub-second form, and
-a rounded-down 0.4 would read as "come back now"). That is not a new convention:
-`CfThrottlerGuard` extends Nest's `ThrottlerGuard`, which already sets it on the
-429s the global limiter raises. Without it the API answered two kinds of 429
-under two contracts, decided by which limiter fired first.
+a rounded-down 0.4 would read as "come back now"; past 2^53 it is omitted
+instead, because `String()` would write `1e+21` and that is not
+`delta-seconds`). That is not a new convention: `CfThrottlerGuard` extends
+Nest's `ThrottlerGuard`, which already sets it on the 429s the global limiter
+raises. Without it the API answered two kinds of 429 under two contracts,
+decided by which limiter fired first.
 
 The tests moved with it. `trips.controller.spec.ts` and
 `push-follow-access.guard.spec.ts` asserted the figure on the **thrown

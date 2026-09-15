@@ -149,6 +149,11 @@ describe("HttpExceptionFilter — fields a handler attaches", () => {
     ["a negative one", -5],
     ["a non-finite one", Number.POSITIVE_INFINITY],
     ["a string", "1800"],
+    // Past 2^53 `String()` writes `1e+21`, which is not `delta-seconds` and is
+    // not something a client parses. Neither limiter can reach it — both
+    // figures are a Redis TTL — and the guard belongs to the header rather
+    // than to today's two callers.
+    ["one too large to write as seconds", 1e21],
   ])("sets no Retry-After for %s", (_label, value) => {
     // A header the caller can trust or none: a guessed wait is worse than an
     // absent one, because a client that sees the header stops thinking.
@@ -178,29 +183,36 @@ describe("HttpExceptionFilter — fields a handler attaches", () => {
   });
 
   it("carries a field that is not about waiting, on a status that is not a 429", () => {
-    // Three of the four sites are not limiters: `warning` on the Redis flush,
-    // `reason` on a refused Turnstile token. The rule is about the body, not
-    // about 429s.
-    const { host, json } = hostFor("/v1/admin/auth/login");
+    // The rule is about the body, not about 429s. `admin/cache/reset` refuses
+    // an unconfirmed FLUSHALL with a `warning` that says what the confirmation
+    // would have done — a sentence that only means anything to the person
+    // reading the refusal.
+    const { host, json } = hostFor("/v1/admin/cache/reset");
 
     new HttpExceptionFilter().catch(
       new HttpException(
         {
-          error: "turnstile-failed",
-          reason: "invalid-input-response",
-          message: "A solved Turnstile token is required to sign in.",
+          statusCode: HttpStatus.BAD_REQUEST,
+          message: "FLUSHALL requires explicit confirmation.",
+          warning: "This will delete ALL Redis cache data.",
         },
-        HttpStatus.FORBIDDEN,
+        HttpStatus.BAD_REQUEST,
       ),
       host,
     );
 
     expect(json.mock.calls[0][0]).toMatchObject({
-      statusCode: 403,
-      error: "turnstile-failed",
-      reason: "invalid-input-response",
+      statusCode: 400,
+      warning: "This will delete ALL Redis cache data.",
     });
   });
+
+  // The other half of this change is not here, and deliberately so: making the
+  // filter generic moved the decision about what a client may learn to the
+  // throw site. `AdminAuthController` used to attach Cloudflare's own Turnstile
+  // error code to a 403 on a public route, relying on the filter to delete it.
+  // It is logged instead now, and pinned in `admin-auth.login-turnstile.spec.ts`
+  // — a case written here would assert against a body this file made up.
 
   it("lets no thrown field redefine the envelope", () => {
     // `path` is redacted here and `stack` is withheld in production, so both
@@ -235,20 +247,28 @@ describe("HttpExceptionFilter — fields a handler attaches", () => {
     expect(body.stack ?? "").not.toContain("at the caller's choosing");
   });
 
-  it("drops extras that cannot be serialized rather than failing the response", () => {
+  it("drops an extra that cannot be serialized, and keeps the ones beside it", () => {
     // This filter is the last thing that can still answer the request. A
     // circular reference in a thrown body would throw inside `response.json()`,
     // where nothing catches it — the caller would get no answer at all instead
     // of an answer missing one field.
+    //
+    // Field by field rather than all or nothing: an unserializable `detail`
+    // must not take the `retryAfterSeconds` next to it down, which is the whole
+    // field this pass-through exists for.
     const circular: Record<string, unknown> = { name: "loop" };
     circular.self = circular;
-    const { host, json } = hostFor("/v1/trips");
+    const { host, json, header } = hostFor("/v1/trips");
 
     expect(() =>
       new HttpExceptionFilter().catch(
         new HttpException(
-          { message: "boom", detail: circular },
-          HttpStatus.BAD_REQUEST,
+          {
+            message: "boom",
+            detail: circular,
+            retryAfterSeconds: 30,
+          },
+          HttpStatus.TOO_MANY_REQUESTS,
         ),
         host,
       ),
@@ -256,7 +276,9 @@ describe("HttpExceptionFilter — fields a handler attaches", () => {
 
     const body = json.mock.calls[0][0];
     expect(body).not.toHaveProperty("detail");
+    expect(body.retryAfterSeconds).toBe(30);
     expect(body.message).toBe("boom");
+    expect(header).toHaveBeenCalledWith("Retry-After", "30");
     expect(() => JSON.stringify(body)).not.toThrow();
   });
 

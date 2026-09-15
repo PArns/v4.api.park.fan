@@ -1,65 +1,10 @@
 import { Test } from "@nestjs/testing";
-import { Logger } from "@nestjs/common";
-import type { ArgumentsHost } from "@nestjs/common";
 import { Request } from "express";
 import { TripsController } from "./trips.controller";
 import { TripsService } from "./trips.service";
 import { TripWriteRateLimitService } from "./trip-write-rate-limit.service";
-import { HttpExceptionFilter } from "../common/filters/http-exception.filter";
+import { throughFilter } from "../../test/helpers/through-filter";
 
-/**
- * What a caller actually receives when a controller call throws.
- *
- * The globally registered `HttpExceptionFilter` writes every error response on
- * this API, so a controller's throw is a draft and not the answer. Running the
- * real filter is the difference between asserting what this route intends and
- * asserting what leaves the process.
- */
-async function throughFilter(call: () => Promise<unknown>) {
-  // Called exactly once: the limiter counts per call, and a second one would
-  // make this helper's own bookkeeping part of what the test measures.
-  const marker = Symbol("did not throw");
-  const thrown = await call().then(
-    () => marker,
-    (error: unknown) => error,
-  );
-  if (thrown === marker) throw new Error("expected the call to throw");
-
-  const json = jest.fn();
-  const headers: Record<string, string> = {};
-  const host = {
-    switchToHttp: () => ({
-      getResponse: () => ({
-        status: () => ({ json }),
-        headersSent: false,
-        header: (name: string, value: string) => {
-          headers[name] = value;
-        },
-      }),
-      getRequest: () => ({ method: "POST", url: "/v1/trips" }),
-    }),
-  } as unknown as ArgumentsHost;
-
-  const warn = jest.spyOn(Logger.prototype, "warn").mockImplementation();
-  try {
-    new HttpExceptionFilter().catch(thrown, host);
-  } finally {
-    warn.mockRestore();
-  }
-
-  return { body: json.mock.calls[0][0] as Record<string, unknown>, headers };
-}
-
-/**
- * The delete half of the credential-is-the-id trade.
- *
- * Everything worth pinning here is a thing a caller could otherwise learn or
- * spend that they should not: which ids are shaped like real ones (so a
- * malformed id answers exactly as a missing one, and never reaches the
- * database), how many attempts they get (the update bucket, counted before any
- * work, so a miss costs the same as a hit), and whether a 404 means "gone" or
- * "never was" (it means neither — see `TripsService.find`).
- */
 describe("TripsController · DELETE", () => {
   const ID = "n7Qk2Fd3Xb9pLmZa";
 
@@ -142,8 +87,9 @@ describe("TripsController · DELETE", () => {
     // the real filter runs here.
     check.mockResolvedValue({ allowed: false, retryAfterSeconds: 1800 });
 
-    const { body, headers } = await throughFilter(() =>
-      controller.remove(ID, request()),
+    const { body, headers } = await throughFilter(
+      () => controller.remove(ID, request()),
+      { method: "DELETE", url: "/v1/trips/:id" },
     );
 
     expect(body).toMatchObject({ statusCode: 429, retryAfterSeconds: 1800 });
@@ -161,7 +107,9 @@ describe("TripsController · DELETE", () => {
       () => controller.update(ID, payload as never, request()),
       () => controller.remove(ID, request()),
     ]) {
-      const { body, headers } = await throughFilter(call);
+      const { body, headers } = await throughFilter(call, {
+        url: "/v1/trips",
+      });
       expect(body).toMatchObject({ statusCode: 429, retryAfterSeconds: 90 });
       expect(headers["Retry-After"]).toBe("90");
     }

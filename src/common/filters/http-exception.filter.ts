@@ -206,23 +206,24 @@ export class HttpExceptionFilter implements ExceptionFilter {
  * deliberately attached — `retryAfterSeconds` on a 429, `reason` on a refused
  * Turnstile token — and used to be dropped on the floor here.
  *
- * Only what survives `JSON.stringify` is kept. The body reaches this filter
- * from arbitrary call sites, and a circular reference or a BigInt in it would
- * otherwise throw inside `response.json()`, i.e. inside the last thing that
- * could still answer the request.
+ * Each field is kept only if it survives `JSON.stringify` **on its own**. The
+ * body reaches this filter from arbitrary call sites, and a circular reference
+ * or a BigInt in it would otherwise throw inside `response.json()`, i.e. inside
+ * the last thing that could still answer the request. Tested per field rather
+ * than over the whole set on purpose: one unserializable `detail` must not take
+ * the `retryAfterSeconds` beside it down with it, which is the field this
+ * function exists for.
  */
 function extraFields(body: Record<string, unknown>): Record<string, unknown> {
   const kept: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(body)) {
     if (RESERVED_FIELDS.has(key) || value === undefined) continue;
+    try {
+      JSON.stringify(value);
+    } catch {
+      continue;
+    }
     kept[key] = value;
-  }
-
-  if (Object.keys(kept).length === 0) return {};
-  try {
-    JSON.stringify(kept);
-  } catch {
-    return {};
   }
   return kept;
 }
@@ -242,8 +243,13 @@ const RESERVED_FIELDS = new Set([
  *
  * Whole seconds and at least 1: the header has no sub-second form, and a
  * rounded-down 0.4 would read as "come back now" to the client the limiter just
- * turned away. A missing, negative or non-finite figure yields no header at all
- * rather than a guess.
+ * turned away. Anything that cannot be written as `delta-seconds` yields no
+ * header at all rather than a guess — missing, negative, non-finite, and also
+ * too large, because past 2^53 `String()` switches to exponential notation and
+ * `Retry-After: 1e+21` is not a number any client parses. Neither limiter can
+ * produce that (both figures are a Redis TTL), which is the point: the rule is
+ * the header's, not theirs, and the next caller of this filter has not been
+ * written yet.
  */
 function retryAfterHeader(
   status: number,
@@ -254,7 +260,9 @@ function retryAfterHeader(
   if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
     return undefined;
   }
-  return String(Math.ceil(retryAfterSeconds));
+  const seconds = Math.ceil(retryAfterSeconds);
+  if (!Number.isSafeInteger(seconds)) return undefined;
+  return String(seconds);
 }
 
 /** The statement a TypeORM `QueryFailedError` failed on, truncated. */
