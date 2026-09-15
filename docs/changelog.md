@@ -56,6 +56,75 @@ rises where the historical CTEs run: `early_end` joins `win` per reading
 19.1/20.3 ms to 28.0/25.3 and from 14.1/14.4 to 19.0/17.1. Skipping that join in
 a park whose windows never wrap is PAR-251.
 
+### Fixed — one point and two sources now outweigh a regional name suffix
+
+`ParkValidatorService.findDuplicates` asked the name first on every branch: all
+four required `nameSimilarity >= 0.85`, and `geoProximity` only ever appeared in
+a conjunction with it. So `Wet'n'Wild` (ThemeParks.wiki) and `Wet 'n' Wild Gold
+Coast` (Queue-Times) — one water park in Oxenford, same coordinates to seven
+decimals, same city, the same thirteen slides — scored **0.6923** and stayed two
+parks, with `GET /v1/admin/duplicate-parks` answering `{"total":0,"pairs":[]}`.
+
+A fifth branch, `sharedPoint`, lets the physical facts lead instead. Three
+conditions, not one threshold, each placed against the whole catalogue (213
+parks, 22 578 pairs) rather than chosen — `POST merge-duplicate-parks` with
+`autoDetect: true` merges whatever this function returns, with no dry run and no
+review gate, so a false positive deletes a real park:
+
+- **`SHARED_POINT_KM` = 0.01**, not the 0.05 first proposed. Under 0.05 km the
+  catalogue also holds `Hurricane Harbor Chicago` against `Six Flags Hurricane
+  Harbor, Rockford` at 0.0424 km — two real parks 110 km apart, of which the
+  Rockford row carries a Gurnee geocode. Its sources are disjoint too, so at
+  0.05 km that pair would have rested on the name floor alone. Nothing lies
+  between 0.0000 and 0.0424.
+- **`0, 0` is not a point.** Two rows whose geocoding failed are 0.0000 km
+  apart on no location information at all. `usableCoordinate` refuses Null
+  Island the way `source-id-inheritance.util.ts` already did, coerces the
+  `decimal` columns Postgres returns as strings, and stops reading a park on
+  the prime meridian as unlocated — no catalogue park sits on the meridian or
+  the equator today, so that last part changes nothing now.
+- **Sources disjoint.** One upstream source holding an ID for *both* rows is
+  that source saying it knows two parks here — Queue-Times carries 19 for
+  PortAventura Park and 277 for Ferrari Land on one resort geocode. This is
+  §5.4's rule ("two ids from the same source are that source saying these are
+  two things") applied to parks.
+- **`SHARED_POINT_NAME_SIMILARITY` = 0.65**, under the pair it must catch and far
+  over the only other pairs sharing a point (0.1600–0.2000). **0.65 rather than
+  0.6, so that the name and the radius refuse independently:** at 0.6 exactly
+  one catalogue pair cleared both the floor and `sourcesDisjoint` and was held
+  out by geometry alone — the Rockford row again, 0.6122 at 0.0424 km, on
+  coordinates Queue-Times publishes rather than ones we derive, so one upstream
+  correction would have moved it onto the point. 63 pairs score in
+  [0.60, 0.65) and every one is two different parks; the closest of them is the
+  Rockford pair itself at 0.0424 km, and the closest of the other 62 is
+  0.1901 km away, so all 63 sit outside the radius already — the raise excludes
+  nothing the radius was not excluding and leaves the target 0.0423 of margin. The nearest pair the radius
+  must now separate is 0.1174 km away (`Boonie Bears Adventure Park Linhai`
+  against its water park, 0.6923), 11.7× the radius against 4.2× before. It
+  still cannot do more than that: a water park beside its theme park scores at
+  or above the target (Legoland Windsor 0.7429, Alton Towers 0.6923), so
+  keeping that class out stays the radius's job.
+
+The existing four branches keep their 0.85 thresholds, with one deliberate
+narrowing: because Postgres returns `"0.0000000"` and that string is truthy,
+two rows whose geocoding failed used to pass the old check and read as 0 km
+apart, so `geoProximity && nameSimilarity >= 0.85` could fire on rows with no
+location information. `usableCoordinate` stops that. A genuine ghost pair is
+still reachable through `sameCity` and through
+`nameSimilarity >= 0.95 && sharedEntityId`, neither of which asks about
+geometry, and no catalogue row sits at `0, 0` today.
+
+This change adds the detector and nothing else — it does **not** add a gate in
+front of the merge, so `autoDetect: true` merges this new pair as
+unconditionally as it merges the other four branches' pairs. The residual risk
+the three conditions cannot cover is a second venue that inherits its resort's
+geocode: there the radius has no vote, and only the name floor and disjoint
+sources stand. PortAventura's three rows are exactly that shape and are held
+by names of 0.1600–0.2000; a water park on its resort's point with a name like
+Legoland Windsor's (0.7429) would not be. That gate is PAR-247. Details and the
+measurement table:
+[Attraction Status & Seasonality §5.5](architecture/attraction-status-and-seasonality.md).
+
 ### Fixed — an entity that changes its `entityType` upstream no longer leaves a dead attraction behind
 
 ThemeParks.wiki reclassifies entities without changing their id. On 2026-04-25
