@@ -237,11 +237,13 @@ export class PlanDayShowDto {
     type: [String],
     example: ["12:30", "14:30", "17:45"],
     description:
-      "Park-local start times, in the order they run. On a day that crosses " +
-      "midnight (`closeHour < openHour`) the late ones keep their wall-clock " +
-      'form and come last, so the array is `["22:00", "00:30"]` rather ' +
-      "than sorted as text — a showtime belongs to the operating day, the " +
-      "same way `hours[].hour` runs past 23 instead of wrapping.",
+      "Park-local start times, in the order they run. Where the operator " +
+      "published a day that crosses midnight (`closeHour < openHour` with " +
+      '`hoursSource: "schedule"`) the late ones keep their wall-clock form ' +
+      'and come last, so the array is `["22:00", "00:30"]` rather than ' +
+      "sorted as text — a showtime belongs to the operating day, the same " +
+      "way `hours[].hour` runs past 23 instead of wrapping. Observed hours " +
+      "do not move a showtime: the rule reads a published window only.",
   })
   times: string[];
 

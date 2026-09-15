@@ -831,25 +831,34 @@ export class ShowsService {
    *
    * **Why this is not built on {@link parkOpenWindowCtes}**, which is the
    * canonical operating-day definition and was made reusable for callers that
-   * number their placeholders differently (PAR-129). Two reasons, and the
-   * first is the load-bearing one: that helper produces CTEs, while both
-   * readers here need the day resolved per row inside a SELECT list, so using
-   * it means restructuring both statements around a join rather than calling a
-   * function. The second is the index. The subquery below pre-selects on
-   * `se.date`, which is indexed; the `win` CTE anchors the day on the
-   * opening's park-local date, an expression no index covers. Against
-   * 3.8 million rows a night that is the difference the 8.1 s above was
-   * measured for.
+   * number their placeholders differently (PAR-129). The load-bearing reason
+   * is shape: that helper produces CTEs, while both readers here need the day
+   * resolved per row inside a SELECT list, so adopting it means restructuring
+   * both statements around a join rather than calling a function. Whether that
+   * join would be cheaper, dearer or the same has **not** been measured — the
+   * 8.1 s above compares this subquery against resolving no operating day at
+   * all, which is a different question, and `windows_raw` pre-selects on
+   * `se."openingTime"`, which `idx_schedule_operating_times` does cover.
    *
-   * The cost of the second definition is real and stated rather than denied:
-   * `se.date` is a **feed value** (`parks.service.ts` writes
-   * `date: new Date(entry.date)`), not derived from `openingTime`. That the
-   * two agree is a property of the sources, not an invariant — measured on
-   * 2026-09-15, 0 of 36,543 park-wide `OPERATING` rows disagree. Should a
-   * source ever date a row against its own opening, this expression would miss
-   * the window rather than mis-assign it, because the returned `se.date` is
-   * the same value the pre-selection matched on. Unifying the two definitions
-   * is PAR-260.
+   * Two differences would have to survive that move, and both are deliberate
+   * here:
+   *
+   * The closing bound is **inclusive** (`st <= closes`), where the rest of this
+   * repository is half-open (`closure-gap.sql.ts`, `isParkOpen`). It has to be:
+   * every one of the 20 showtimes the rule moves in production sits exactly on
+   * its day's closing instant, so a half-open bound moves none of them.
+   * `test/e2e/show-operating-day.e2e-spec.ts` pins it, and PAR-260 carries it
+   * as an acceptance criterion so a unification cannot drop it by accident.
+   *
+   * The day is anchored on `se.date`, a **feed value** (`parks.service.ts`
+   * writes `date: new Date(entry.date)`), not on the opening's park-local date
+   * the way `win` anchors it. That the two agree is a property of the sources,
+   * not an invariant — measured on 2026-09-15, 0 of 36,543 park-wide
+   * `OPERATING` rows disagree. The two directions of a disagreement differ: a
+   * row dated *later* than its opening simply fails the pre-selection and the
+   * showtime keeps its calendar date, but a row dated *earlier* passes every
+   * test here and would anchor the showtime on the earlier date — a genuine
+   * mis-assignment, not a miss. Unifying the two definitions is PAR-260.
    *
    * The timezone and the showtime expression are interpolated by the caller,
    * and the two callers pass different things: the day readers hand in the

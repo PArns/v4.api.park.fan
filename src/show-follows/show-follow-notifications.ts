@@ -11,8 +11,8 @@ import type { ScheduledStartCopy } from "../push/push-messages";
  * `projectShowtimesToToday` (which remaps a showtime onto today's date
  * whatever the original date actually was, with no check that the park is
  * even open today). The instant is the row's own; nothing reconstructs it
- * from a date and a wall clock, which a showtime past midnight would break. Comparing
- * two absolute instants needs no timezone at all — the zone is only read
+ * from a date and a wall clock, which a showtime past midnight would break.
+ * Comparing two absolute instants needs no timezone at all — the zone is only read
  * here to FORMAT the display time (`atTime`) in the park's local clock, not
  * to decide whether a showtime is due.
  */
