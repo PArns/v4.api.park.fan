@@ -224,9 +224,11 @@ export class QueuePercentileProcessor {
     // The children sync retires a row whose entity ThemeParks.wiki reclassified
     // as a show, and lifts it again if the wiki changes its mind — so a row
     // retired at 04:00 and reset here at 02:30 would come back the next night
-    // having silently lost a season it can no longer re-derive, because it
-    // receives nothing but `system-reconciliation` rows in the meantime. Those
-    // rows are skipped; every other retirement is still permanent.
+    // having silently lost a season it can no longer re-derive: while it is
+    // retired it receives no readings at all (`wait-times.processor.ts` loads
+    // its attractions with `retiredAt: IsNull()`), so there is nothing left for
+    // this detector to derive months from. Those rows are skipped; every other
+    // retirement is still permanent.
     const retiredReset = await this.dataSource.query(
       `UPDATE attractions
           SET is_seasonal = false, season_months = NULL

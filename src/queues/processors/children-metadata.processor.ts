@@ -702,9 +702,10 @@ export class ChildrenMetadataProcessor {
    *
    * One neighbouring job had to learn that a retirement can be temporary:
    * `detect-seasonal` cleared `is_seasonal` and `season_months` for every
-   * retired row, and a row retired here would have lost its season for good,
-   * since it receives nothing but `system-reconciliation` rows in the meantime.
-   * It skips these retirements now.
+   * retired row, and a row retired here would have lost its season for good —
+   * while retired it receives no readings at all (`wait-times.processor.ts`
+   * loads its attractions with `retiredAt: IsNull()`), so nothing could derive
+   * the months again. It skips these retirements now.
    *
    * The lookup here is deliberately not scoped to the park:
    * `attractions.externalId` is globally unique, so there is at most one row
@@ -759,7 +760,10 @@ export class ChildrenMetadataProcessor {
     for (const row of elsewhere) {
       this.logger.warn(
         `"${row.name}" belongs to park ${row.parkId}, not to ${parkName} — ` +
-          "retired anyway, but syncAttraction is park-scoped and will not bring it back",
+          "retired anyway, but syncAttraction is park-scoped: it will not bring " +
+          "this row back, and if the entity turns up as an ATTRACTION under the " +
+          "new park it will try to insert a second row on the same unique " +
+          "externalId. Move or un-retire it by hand.",
       );
     }
   }

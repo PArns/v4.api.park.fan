@@ -821,9 +821,10 @@ Three more limits worth knowing before trusting the round trip:
   run, evicting caches and revalidating the frontend each time.
 - **`detect-seasonal` used to erase the season of any retired row**, on the
   reasoning that a demolished ride never reports OPERATING again. A row retired
-  this way can come back, and while it is retired it receives nothing but
-  `system-reconciliation` rows — so the detector could never re-derive what it
-  had cleared. Step 2c now skips retirements carrying a
+  this way can come back, and while it is retired it receives no readings at
+  all (`wait-times.processor.ts` loads its attractions with
+  `retiredAt: IsNull()`) — so the detector could never re-derive what it had
+  cleared. Step 2c now skips retirements carrying a
   `RECLASSIFIED_UPSTREAM_REASONS` value; every other retirement stays permanent.
 
 And the 17 rows retired by hand for this issue on 2026-09-15 carry their own

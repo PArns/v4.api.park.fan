@@ -1,3 +1,4 @@
+import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attraction-retirement.service";
 import { QueuePercentileProcessor } from "./queue-percentile.processor";
 
 /**
@@ -188,14 +189,26 @@ describe("QueuePercentileProcessor — detect-seasonal skips free-flow", () => {
    * re-derive what it erased.
    */
   it("spares the retirement the children sync can undo", async () => {
-    const statements = await runDetectSeasonal();
+    const query = jest.fn().mockResolvedValue([]);
+    const processor = new QueuePercentileProcessor(
+      {} as never,
+      {} as never,
+      {} as never,
+      { query } as never,
+    );
+    await processor.handleDetectSeasonal({} as never);
 
-    const reset = statements.find(
-      (sql) =>
-        /UPDATE attractions/i.test(sql) && /retired_at IS NOT NULL/i.test(sql),
+    const call = query.mock.calls.find(
+      ([sql]) =>
+        /UPDATE attractions/i.test(sql as string) &&
+        /retired_at IS NOT NULL/i.test(sql as string),
     );
 
-    expect(reset).toMatch(/retired_reason <> ALL/i);
+    expect(call?.[0]).toMatch(/retired_reason <> ALL/i);
+    // And the bind itself, because the SQL text alone would stay green while
+    // Postgres rejects the statement and takes the whole run down with it —
+    // step 2c has no try/catch and runs before the candidate searches.
+    expect(call?.[1]).toEqual([RECLASSIFIED_UPSTREAM_REASONS]);
   });
 
   it("excludes them from both candidate searches", async () => {
