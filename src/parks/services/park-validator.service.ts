@@ -114,8 +114,23 @@ const SHARED_POINT_KM = 0.01;
  * score AT or ABOVE the target — Legoland Windsor against its water park
  * 0.7429, Alton Towers against its waterpark 0.6923, and `Boonie Bears
  * Adventure Park Linhai` against `Boonie Bears Water Park Linhai` 0.6923 at
- * 0.1174 km. Keeping that class out is `SHARED_POINT_KM`'s job, not this
- * constant's; no two such rows in the catalogue are closer than 0.1174 km.
+ * 0.1174 km. Where such a venue carries its OWN geocode, keeping it out is
+ * `SHARED_POINT_KM`'s job, not this constant's: no two such rows in the
+ * catalogue are closer than 0.1174 km.
+ *
+ * **The residual risk is the venue that inherits the resort's geocode**, and
+ * it is worth stating because the radius has no vote there at all. Three rows
+ * do it today — PortAventura Park, Ferrari Land and Caribe Aquatic Park, all
+ * on 41.0986786/1.1517730, 0.0000 km apart — and only their names keep them
+ * apart, at 0.1600–0.2000 against this floor. That margin is wide, and
+ * `sourcesDisjoint` refuses two of the three pairs besides. But a water park
+ * that synced in on its resort's point, from a source the theme-park row does
+ * not carry, with a name like `Legoland Windsor` against its water park
+ * (0.7429), would satisfy all three conditions, and `autoDetect: true` would
+ * delete it without a dry run. No such row exists in the catalogue today
+ * (measured: nothing above this floor sits closer than 0.1174 km except the
+ * pair this branch is for). The gate that would make it safe rather than
+ * merely unlikely is PAR-247.
  */
 const SHARED_POINT_NAME_SIMILARITY = 0.65;
 

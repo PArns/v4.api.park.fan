@@ -19,9 +19,11 @@ import { determineMergeWinner } from "../utils/park-merge.util";
  *
  * The third pair, Wet'n'Wild, is the opposite shape: every physical fact
  * agrees and the NAMES are what disagree, so it needed a branch that does not
- * ask the name first. Its four negative cases are the pairs that came closest
- * to it when the branch was measured against all 213 parks — a resort's three
- * parks on one geocode, and a row filed 110 km from the park it names.
+ * ask the name first. Its five catalogue-real negative cases are the pairs
+ * that came closest to it when the branch was measured against all 213 parks:
+ * a resort's three parks on one geocode, a row filed 110 km from the park it
+ * names, and a theme park 0.1174 km from its own water park — the last being
+ * the only one that pins the radius.
  */
 describe("ParkValidatorService.findDuplicates", () => {
   let service: ParkValidatorService;
@@ -340,9 +342,12 @@ describe("ParkValidatorService.findDuplicates", () => {
   });
 
   it("pins the floor from below too — 0.5625 on one point is still refused", async () => {
-    // Wet'n'Wild Sydney, another park of the same brand, at 0.5625. Guards the
-    // range between the two figures: without a case down here the suite stayed
-    // green with the floor dropped as far as 0.25.
+    // Wet'n'Wild Sydney, another park of the same brand, at 0.5625. The Las
+    // Vegas case above dominates this one — anything that makes this red makes
+    // that red first — so it pins nothing on its own today. It is kept as the
+    // lower anchor of the brand-sibling range. (Before Las Vegas existed, the
+    // suite stayed green with the floor dropped as far as 0.25; that figure is
+    // history, not a current measurement.)
     parkRepository.find.mockResolvedValue([
       park({ ...wetnwildWiki, name: "Wet 'n' Wild Sydney" }),
       wetnwildQueueTimes,
@@ -361,6 +366,43 @@ describe("ParkValidatorService.findDuplicates", () => {
     ]);
 
     expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("still finds a ghost pair on Null Island through the name-led branches", async () => {
+    // The case above refuses two failed geocodes the GEOMETRY would have
+    // joined. This one is the other half of that claim, and the docstring of
+    // `usableCoordinate` makes it: refusing Null Island must not take real
+    // ghost detection with it. Same city, 1.0 on names, both unlocated — the
+    // `sameCity && nameSimilarity >= 0.85` branch does not ask about geometry
+    // and must still fire. Hoisting the Null Island refusal into a `continue`
+    // over the whole pair loop would turn this red.
+    parkRepository.find.mockResolvedValue([
+      park({
+        id: "ghost-1",
+        name: "Phantom Park",
+        city: "Springfield",
+        latitude: 0,
+        longitude: 0,
+        wikiEntityId: "ghost-wiki",
+        queueTimesEntityId: null,
+        wartezeitenEntityId: null,
+      }),
+      park({
+        id: "ghost-2",
+        name: "Phantom Park",
+        city: "Springfield",
+        latitude: 0,
+        longitude: 0,
+        wikiEntityId: null,
+        queueTimesEntityId: "qt-park-ghost",
+        wartezeitenEntityId: null,
+      }),
+    ]);
+
+    const duplicates = await service.findDuplicates();
+
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].reason).toContain("same city");
   });
 
   it("compares a park on the prime meridian instead of calling it unlocated", async () => {
@@ -446,8 +488,14 @@ describe("ParkValidatorService.findDuplicates", () => {
   });
 
   it("does not flag the Rockford row that carries a Gurnee geocode", async () => {
-    // 0.0424 km apart, 0.6122 on names, disjoint sources — everything the
-    // Wet'n'Wild pair has except one point. Two real parks 110 km apart.
+    // Two real parks 110 km apart: 0.0424 km apart on the geocode the Rockford
+    // row wrongly carries, 0.6122 on names, disjoint sources.
+    //
+    // Since the floor moved to 0.65 this pair fails BOTH conditions, so no
+    // single-constant change makes it red — that is the point of the raise
+    // rather than a gap in the case. It is kept because it is the real pair
+    // the radius was chosen against, and because a fix that reintroduced the
+    // 0.6 floor would have to get past it.
     parkRepository.find.mockResolvedValue([
       hurricaneHarborChicago,
       hurricaneHarborRockford,
@@ -460,6 +508,31 @@ describe("ParkValidatorService.findDuplicates", () => {
     parkRepository.find.mockResolvedValue([
       park({ ...wetnwildWiki, wikiEntityId: null }),
       park({ ...wetnwildQueueTimes, queueTimesEntityId: null }),
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("refuses a shared wiki ID on one point, not just a shared queue-times ID", async () => {
+    // `sourcesDisjoint` has one clause per source, and only the queue-times
+    // clause was covered (by the PortAventura fixture). Drop
+    // `!(p1.wikiEntityId && p2.wikiEntityId)` and nothing else in the suite
+    // notices — yet that is the clause that has to hold when ThemeParks.wiki
+    // itself lists two rows here, which is the source this pair's winner comes
+    // from.
+    parkRepository.find.mockResolvedValue([
+      wetnwildWiki,
+      park({ ...wetnwildQueueTimes, wikiEntityId: "another-wiki-id" }),
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("refuses a shared wartezeiten ID on one point", async () => {
+    // The third clause, for the same reason as the second.
+    parkRepository.find.mockResolvedValue([
+      park({ ...wetnwildWiki, wartezeitenEntityId: "wz-a" }),
+      park({ ...wetnwildQueueTimes, wartezeitenEntityId: "wz-b" }),
     ]);
 
     expect(await service.findDuplicates()).toEqual([]);

@@ -104,10 +104,23 @@ review gate, so a false positive deletes a real park:
   or above the target (Legoland Windsor 0.7429, Alton Towers 0.6923), so
   keeping that class out stays the radius's job.
 
-The existing four branches and their 0.85 thresholds are untouched. This change
-adds the detector and nothing else — it does **not** add a gate in front of the
-merge, so `autoDetect: true` merges this new pair as unconditionally as it
-merges the other four branches' pairs. That gate is PAR-247. Details and the
+The existing four branches keep their 0.85 thresholds, with one deliberate
+narrowing: because Postgres returns `"0.0000000"` and that string is truthy,
+two rows whose geocoding failed used to pass the old check and read as 0 km
+apart, so `geoProximity && nameSimilarity >= 0.85` could fire on rows with no
+location information. `usableCoordinate` stops that. A genuine ghost pair is
+still reachable through `sameCity` and through
+`nameSimilarity >= 0.95 && sharedEntityId`, neither of which asks about
+geometry, and no catalogue row sits at `0, 0` today.
+
+This change adds the detector and nothing else — it does **not** add a gate in
+front of the merge, so `autoDetect: true` merges this new pair as
+unconditionally as it merges the other four branches' pairs. The residual risk
+the three conditions cannot cover is a second venue that inherits its resort's
+geocode: there the radius has no vote, and only the name floor and disjoint
+sources stand. PortAventura's three rows are exactly that shape and are held
+by names of 0.1600–0.2000; a water park on its resort's point with a name like
+Legoland Windsor's (0.7429) would not be. That gate is PAR-247. Details and the
 measurement table:
 [Attraction Status & Seasonality §5.5](architecture/attraction-status-and-seasonality.md).
 
