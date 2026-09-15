@@ -30,4 +30,39 @@ export const RATE_LIMITED_RESPONSE: ApiResponseOptions = {
       schema: { type: "string" },
     },
   },
+  // The body gets a schema for the same reason the header did: a field named
+  // only in a description sentence is not something a generated client knows
+  // about, and `retryAfterSeconds` is the copy a browser has to read.
+  schema: {
+    type: "object",
+    properties: {
+      statusCode: { type: "integer", example: 429 },
+      message: { type: "string" },
+      retryAfterSeconds: {
+        type: "number",
+        description:
+          "The exact wait the limiter counted, in seconds. May be fractional; " +
+          "the `Retry-After` header carries the same wait rounded up.",
+      },
+    },
+  },
 };
+
+/**
+ * The same 429, for a route whose bucket is not the one its neighbours use.
+ *
+ * `POST /v1/trips` is counted in the create bucket, which is about thirty times
+ * tighter than the update bucket a `PUT` or `DELETE` spends
+ * (`TripWriteRateLimitService`). That difference was the whole content of this
+ * route's old description and is not visible anywhere else in the spec, so it
+ * is appended rather than dropped into the shared text — the other six really
+ * do say the same thing.
+ *
+ * Spread rather than mutated: `ApiResponse` writes to the object it is handed.
+ */
+export const rateLimitedResponseWith = (
+  extraSentence: string,
+): ApiResponseOptions => ({
+  ...RATE_LIMITED_RESPONSE,
+  description: `${RATE_LIMITED_RESPONSE.description} ${extraSentence}`,
+});

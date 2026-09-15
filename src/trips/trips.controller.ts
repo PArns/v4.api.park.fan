@@ -22,7 +22,10 @@ import { TripWriteRateLimitService } from "./trip-write-rate-limit.service";
 import { checkTripPayload } from "./trip-payload.util";
 import { TripResponseDto, TripWriteDto } from "./dto/trip.dto";
 import { Trip } from "./entities/trip.entity";
-import { RATE_LIMITED_RESPONSE } from "../common/filters/rate-limited-response";
+import {
+  RATE_LIMITED_RESPONSE,
+  rateLimitedResponseWith,
+} from "../common/filters/rate-limited-response";
 
 /**
  * Stored plans.
@@ -64,7 +67,12 @@ export class TripsController {
     status: 400,
     description: "The payload is not a plan, or is too large.",
   })
-  @ApiResponse(RATE_LIMITED_RESPONSE)
+  @ApiResponse(
+    rateLimitedResponseWith(
+      "Creating a trip is counted in its own bucket, far tighter than the one " +
+        "a PUT or DELETE spends.",
+    ),
+  )
   async create(
     @Body() body: TripWriteDto,
     @Req() request: Request,
