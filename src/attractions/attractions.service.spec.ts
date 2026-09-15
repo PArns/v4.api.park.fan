@@ -219,7 +219,12 @@ describe("AttractionsService", () => {
     // Singapore, retired via PAR-159 — while the park payload served none.
     it("excludes retired attractions", async () => {
       const qb = makeQueryBuilder();
-      mockAttractionRepository.createQueryBuilder.mockReturnValue(qb);
+      // `Once`, not `mockReturnValue`: `jest.clearAllMocks()` in `beforeEach`
+      // clears calls but not implementations, so a permanent override would
+      // hand this builder to every test declared after this block. The method
+      // builds exactly one query, and if that ever becomes two the second
+      // falls back to the default builder and these assertions fail loudly.
+      mockAttractionRepository.createQueryBuilder.mockReturnValueOnce(qb);
 
       await service.findAllWithFilters({ park: "walibi-belgium" });
 
@@ -232,7 +237,7 @@ describe("AttractionsService", () => {
 
     it("still applies the geo filters beside it", async () => {
       const qb = makeQueryBuilder();
-      mockAttractionRepository.createQueryBuilder.mockReturnValue(qb);
+      mockAttractionRepository.createQueryBuilder.mockReturnValueOnce(qb);
 
       await service.findAllWithFilters({
         park: "walibi-belgium",

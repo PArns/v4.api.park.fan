@@ -537,12 +537,7 @@ export class AttractionResponseDto {
    * and stops, so it cannot accidentally assert the absence of something it
    * never asked for.
    */
-  private static storedHalf(
-    attraction: Attraction,
-  ): Omit<
-    AttractionResponseDto,
-    keyof ReturnType<typeof AttractionResponseDto.livePlaceholders>
-  > {
+  private static storedHalf(attraction: Attraction): AttractionWithoutLiveData {
     const curated = resolveCuratedFacts(attraction);
 
     return {
@@ -609,8 +604,12 @@ export class AttractionResponseDto {
    * without either a misspelled key is simply a new field on every response a
    * `fromEntity` caller serves. This way a typo is TS2561 and the key list
    * stays inferred.
+   *
+   * Not `private`, so {@link AttractionWithoutLiveData} below can name the four
+   * keys off this one declaration. A tuple of key names beside it would be the
+   * alternative and would be a second place to edit.
    */
-  private static livePlaceholders() {
+  static livePlaceholders() {
     return {
       status: "CLOSED" as string | undefined,
       hourlyForecast: [] as AttractionResponseDto["hourlyForecast"],
@@ -655,10 +654,32 @@ export class AttractionResponseDto {
    * endpoint does not know", which is the truth; `queues` and
    * `effectiveStatus` are absent here for the same reason. Live state comes
    * from the park payload or from the attraction detail endpoint.
+   *
+   * The return type keeps the `Omit` rather than widening back to
+   * `AttractionResponseDto`: the whole point of this method is that the four
+   * fields are not there, and a caller writing `dto.status` should hear that
+   * from the compiler rather than get `string | undefined`. It still assigns
+   * to an `AttractionResponseDto[]`, because all four are optional.
    */
   static fromEntityWithoutLiveData(
     attraction: Attraction,
-  ): AttractionResponseDto {
+  ): AttractionWithoutLiveData {
     return AttractionResponseDto.storedHalf(attraction);
   }
 }
+
+/**
+ * An attraction as an endpoint that joins no live data serves it: the response
+ * DTO without the four fields {@link AttractionResponseDto.livePlaceholders}
+ * fills.
+ *
+ * The key list is read off that factory rather than spelled out, so adding a
+ * placeholder there removes it from this type in the same edit. All four are
+ * optional on the DTO, so a value of this type still assigns to an
+ * `AttractionResponseDto` — what it buys is the other direction: reading
+ * `.status` off one is a compiler error rather than `undefined` at runtime.
+ */
+export type AttractionWithoutLiveData = Omit<
+  AttractionResponseDto,
+  keyof ReturnType<typeof AttractionResponseDto.livePlaceholders>
+>;
