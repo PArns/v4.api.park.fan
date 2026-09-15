@@ -6,6 +6,40 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — an entity that changes its `entityType` upstream no longer leaves a dead attraction behind
+
+ThemeParks.wiki reclassifies entities without changing their id. On 2026-04-25
+it moved 17 Universal Studios Singapore meet-and-greets from `ATTRACTION` to
+`SHOW`, and on 2026-04-23 fifteen more at the two Tokyo parks. The children sync
+fans a park's entities out by `entityType` and writes each group into its own
+table, so it followed the change into `shows` and left the `attractions` row
+untouched — `externalId` is unique *per table*, and nothing compared the two.
+
+The abandoned row does not go quiet: no source reports it, so
+reverse-reconciliation writes a CLOSED row every poll cycle, and the park page
+shows a permanently closed ride that is not a ride any more. Measured against
+production on 2026-09-15: **34 such rows** across five parks, and in the 30 days
+before the fix **11,832** reconciliation rows for USS alone. The last real
+reading on the attraction side is 2026-04-26 (USS) and 2026-04-23 (Tokyo).
+
+`retireReclassifiedAttractions` now runs after the show and restaurant syncs of
+each park and retires what was left behind, through `AttractionRetirementService`
+so cache eviction and revalidation come with it.
+
+**A row with a second source is left alone.** `queue_times_entity_id` means
+Queue-Times also reports the entity, and it reports it as an attraction with a
+wait time: Disneyland Paris' `Mickey's PhilharMagic` is a show to the wiki and a
+queueing ride to Queue-Times, and was still receiving real `OPERATING` readings
+on 2026-08-29. Retiring it would delete a live ride over a disagreement between
+two sources, which is a curation decision rather than a sync one. Two of the 34
+rows are held back by this rule.
+
+The reverse direction (`SHOW → ATTRACTION`) is not handled, because `shows` and
+`restaurants` have no `retired_at` column to set — PAR-232. It is not observed
+in production either: all 34 collisions run one way, and `restaurants` has none.
+
+Details and the diagnostic query: `docs/architecture/attraction-status-and-seasonality.md` §5.6.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide

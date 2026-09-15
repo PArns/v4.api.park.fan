@@ -697,6 +697,60 @@ kept apart because they came from one source; here, two rows that agree on
 of 0.000 km between two parks is a stronger statement than any string
 comparison**, and the detector currently has no way to say so (PAR-160).
 
+### 5.6 An entity changed its `entityType` and left its old row behind
+
+ThemeParks.wiki reclassifies entities **without changing their id**. On
+2026-04-25 it moved 17 Universal Studios Singapore meet-and-greets and character
+shows from `ATTRACTION` to `SHOW`; on 2026-04-23 it did the same to ten entities
+at Tokyo Disneyland and five at Tokyo DisneySea.
+
+`ChildrenMetadataProcessor.handleFetchChildren` fans the children of a park out
+by `entityType` and writes each group into its own table. It followed the
+reclassification into `shows` — and left the `attractions` row exactly where it
+was, because `externalId` is unique **per table** and nothing compared the two.
+
+The abandoned row does not go quiet. No source reports it any more, so
+reverse-reconciliation writes a CLOSED row every poll cycle, and the park page
+shows a permanently closed ride that no longer exists as a ride. Measured
+against production on 2026-09-15, in the 30 days before the fix:
+
+| Park | abandoned rows | `system-reconciliation` rows, 30 d | last real reading |
+| -- | -- | -- | -- |
+| Universal Studios Singapore | 17 | 11,832 | 2026-04-26 |
+| Tokyo Disneyland | 10 | 6,970 | 2026-04-23 |
+| Tokyo DisneySea | 5 | 3,485 | 2026-04-23 |
+| Disney's Animal Kingdom | 1 | 21 | never |
+| Disneyland Park (Paris) | 1 | 617 | 2026-08-29 |
+
+`retireReclassifiedAttractions` now runs after the show and restaurant syncs of
+each park and retires the rows that were left behind. The query that finds them,
+and the one to re-run if this is ever suspected again:
+
+```sql
+SELECT p.name AS park, count(*) AS total,
+       count(*) FILTER (WHERE a.queue_times_entity_id IS NULL)     AS only_wiki,
+       count(*) FILTER (WHERE a.queue_times_entity_id IS NOT NULL) AS also_queue_times
+FROM attractions a
+JOIN shows s ON s."externalId" = a."externalId"
+JOIN parks p ON p.id = a."parkId"
+WHERE a.retired_at IS NULL
+GROUP BY ROLLUP (p.name);
+```
+
+**The two rows in the last column are the reason this is not a blanket cleanup.**
+`queue_times_entity_id` means Queue-Times reports the same entity, and it reports
+it as an attraction with a wait time. Disneyland Paris' `Mickey's PhilharMagic`
+is a show to the wiki and a queueing ride to Queue-Times, and it was still
+receiving real `OPERATING` readings on 2026-08-29 while the wiki had it as a
+show. Retiring it would delete a live ride over a disagreement between two
+sources — a curation decision, not a sync one. Only rows that exist purely
+because the wiki once called them attractions are retired.
+
+The reverse direction, `SHOW → ATTRACTION`, is **not** handled: `shows` and
+`restaurants` have no `retired_at` column at all, so there is nothing to set
+(PAR-232). It is not observed in production either — all 34 collisions run one
+way, and `restaurants` has none.
+
 ---
 
 ## 6. Diagnostic SQL

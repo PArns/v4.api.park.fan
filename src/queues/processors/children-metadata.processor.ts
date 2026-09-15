@@ -2,9 +2,10 @@ import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { IsNull, Repository } from "typeorm";
+import { In, IsNull, Repository } from "typeorm";
 import { Job, Queue } from "bull";
 import { AttractionsService } from "../../attractions/attractions.service";
+import { AttractionRetirementService } from "../../attractions/services/attraction-retirement.service";
 import { ShowsService } from "../../shows/shows.service";
 import { RestaurantsService } from "../../restaurants/restaurants.service";
 import { ParksService } from "../../parks/parks.service";
@@ -50,6 +51,7 @@ export class ChildrenMetadataProcessor {
 
   constructor(
     private attractionsService: AttractionsService,
+    private attractionRetirementService: AttractionRetirementService,
     private showsService: ShowsService,
     private restaurantsService: RestaurantsService,
     private parksService: ParksService,
@@ -189,6 +191,16 @@ export class ChildrenMetadataProcessor {
                 await this.syncRestaurant(restaurantEntity, park.id);
                 parkRestaurants++;
               }
+
+              // An entity can change its entityType upstream while keeping its
+              // id, and then it is synced into a second table while the first
+              // one keeps its row. Do this after the show/restaurant syncs so
+              // the replacement row exists before the old one is retired.
+              await this.retireReclassifiedAttractions(
+                park.id,
+                park.name,
+                [...shows, ...restaurants].map((child) => child.id),
+              );
 
               // Phase 6.6.3: Queue Entity Mapping Job (to match with Queue-Times)
               try {
@@ -576,6 +588,68 @@ export class ChildrenMetadataProcessor {
       // Insert new restaurant
       await this.restaurantsService.getRepository().save(mappedData);
     }
+  }
+
+  /**
+   * Retires attraction rows whose entity is now a show or a restaurant upstream.
+   *
+   * ThemeParks.wiki reclassifies entities without changing their id — on
+   * 2026-04-25 it moved 17 Universal Studios Singapore meet-and-greets from
+   * `ATTRACTION` to `SHOW`, and on 2026-04-23 fifteen more at the two Tokyo
+   * parks. The sync followed into `shows` and left `attractions` untouched,
+   * because `externalId` is unique *per table* and nothing compares across the
+   * two. The abandoned row then reads CLOSED forever: no source reports it, so
+   * reverse-reconciliation writes a CLOSED row every poll cycle — 11,832 of
+   * them for USS alone in the 30 days before this was fixed — and the park page
+   * shows a permanently closed ride that does not exist as a ride any more.
+   *
+   * **A row with a second source is left alone.** `queue_times_entity_id` means
+   * Queue-Times also reports this entity, and it reports it as an attraction
+   * with a wait time; Disneyland Paris' `Mickey's PhilharMagic` is a show to
+   * the wiki and a queueing ride to Queue-Times, and was still receiving real
+   * OPERATING readings. Retiring it would delete a live ride over a
+   * disagreement between two sources, which is a curation decision and not a
+   * sync one. Only a row that exists purely because the wiki once called it an
+   * attraction is retired here.
+   *
+   * The reverse direction (`SHOW → ATTRACTION`) is not handled: `shows` and
+   * `restaurants` have no `retired_at` column at all, so there is nothing to
+   * set. See PAR-232.
+   */
+  private async retireReclassifiedAttractions(
+    parkId: string,
+    parkName: string,
+    reclassifiedExternalIds: string[],
+  ): Promise<void> {
+    if (reclassifiedExternalIds.length === 0) return;
+
+    const stale = await this.attractionsService.getRepository().find({
+      where: {
+        parkId,
+        externalId: In(reclassifiedExternalIds),
+        retiredAt: IsNull(),
+        queueTimesEntityId: IsNull(),
+      },
+      select: ["id", "name"],
+    });
+    if (stale.length === 0) return;
+
+    const retiredAt = new Date().toISOString();
+    await this.attractionRetirementService.retire(
+      stale.map((attraction) => ({
+        attractionId: attraction.id,
+        retiredAt,
+        reason:
+          "ThemeParks.wiki now publishes this entity as a show or a restaurant, " +
+          "so the attraction row has no source left. The entity itself lives on " +
+          "under the same id in shows/restaurants.",
+      })),
+    );
+
+    this.logger.log(
+      `🪦 ${parkName}: retired ${stale.length} attraction row(s) reclassified upstream — ` +
+        stale.map((a) => a.name).join(", "),
+    );
   }
 
   /**
