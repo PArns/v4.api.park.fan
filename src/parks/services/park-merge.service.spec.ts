@@ -416,6 +416,19 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
     // three columns is NULL for a park-level row, so it would spare nothing.
     expect(scheduleDelete?.sql).not.toMatch(/\bIN\s*\(/i);
 
+    // And it is gone from the whole merge, not just from the statement found
+    // above. Removing the two identifiers from `ALLOWED_TABLE_NAMES` and
+    // `ALLOWED_COLUMN_NAMES` does not prevent this: both come back through the
+    // spread of `ATTRACTION_DEPENDENCIES`, whose own `schedule_entries` entry
+    // carries `conflictColumns: ["date", "scheduleType"]`. The guarantee is
+    // that the call site is gone, so this is where it is pinned.
+    const weakKeyDelete = calls.find(
+      (c) =>
+        /DELETE\s+FROM\s+schedule_entries/i.test(c.sql) &&
+        /\bIN\s*\(/i.test(c.sql),
+    );
+    expect(weakKeyDelete).toBeUndefined();
+
     const move = calls.find((c) =>
       /^\s*UPDATE schedule_entries SET "parkId"/i.test(c.sql),
     );

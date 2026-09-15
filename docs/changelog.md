@@ -154,9 +154,10 @@ curated works period is unaffected; a live reading has never overruled it.
 deduped them through its generic `migrateTableData` on `(date, scheduleType)`, a
 key that cannot see the difference — so a single opening-hours row on the winner
 deleted **every** row the loser held for that day, the per-ride ones included.
-The winner is open on almost every day the loser has a schedule for, so this was
-not an edge case: it was the loser's whole ride schedule, inside a transaction
-that then reported success.
+The delete ran inside a transaction that then reported success. How many rows
+that was in production is not established here and the fix does not depend on
+it: the winner is open on almost every day the loser has a schedule for, so a
+per-ride row the loser held survived only on a day the winner was shut.
 
 Measured against PostgreSQL 16 on a seven-row fixture (winner: opening hours and
 ride B on 09-20; loser: opening hours, ride A and ride B on 09-20, ride A on
@@ -178,9 +179,15 @@ and the same-id refusal `applyMergeDependencies` makes. The table stays out of
 the dependency lists for the reason it always was: `applyMergeDependencies`
 compares conflict keys with a row-wise `IN`, and a NULL inside one of those is
 NULL rather than true, so no key it can build spares a per-ride row and dedupes
-a park-level one at once. `schedule_entries` and `scheduleType` are gone from
-`ParkMergeService`'s identifier allowlists, so the wrong key cannot come back
-through `migrateTableData` without somebody re-adding them.
+a park-level one at once.
+
+What keeps the weak key out is that its call site is gone, and a spec case pins
+that: no statement in `mergeParks` deletes from `schedule_entries` with a
+row-wise `IN`. It is deliberately not pinned on `ParkMergeService`'s identifier
+allowlists, because those cannot carry it — both lists are built by spreading
+the dependency declarations, and the attraction side declares `schedule_entries`
+with `conflictColumns: ["date", "scheduleType"]`, so striking the two literals
+changes neither set.
 
 ### Added — an empty `/plan/day` says why, and the number is counted
 

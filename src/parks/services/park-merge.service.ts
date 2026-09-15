@@ -318,10 +318,17 @@ export class ParkMergeService {
     "shows",
     "restaurants",
     "park_daily_stats",
-    // `schedule_entries` is deliberately absent: it moves through
-    // `migrateScheduleEntries`, which spells its three columns out itself, and
-    // no key `migrateTableData` can build is right for that table (PAR-171).
-    // Re-adding it here is how the wrong key would come back.
+    // `schedule_entries` is deliberately absent HERE, and that is not the same
+    // as absent: the spread below re-adds it, because the attraction side
+    // declares the table as a dependency of its own (PAR-149). So is
+    // `scheduleType`, through that entry's `conflictColumns`. This list cannot
+    // be the thing that keeps the wrong key out of that table — a
+    // `migrateTableData(…, "schedule_entries", …, ["date", "scheduleType"])`
+    // passes `assertAllowedIdentifier` today. What keeps it out is that no such
+    // call exists: the park path goes through `migrateScheduleEntries`, which
+    // spells its three columns out itself, and a spec case pins that no
+    // statement in `mergeParks` deletes from this table with a row-wise `IN`
+    // (PAR-171).
     "park_p50_baselines",
     "park_occupancy",
     "headliner_attractions",
