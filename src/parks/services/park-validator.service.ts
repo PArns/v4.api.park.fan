@@ -125,12 +125,12 @@ const SHARED_POINT_KM = 0.01;
  * **The residual risk is the venue that inherits the resort's geocode**, and
  * it is worth stating because the radius has no vote there at all. Three rows
  * do it today — PortAventura Park, Ferrari Land and Caribe Aquatic Park, all
- * on 41.0986786/1.1517730, 0.0000 km apart — and for two of their three pairs
- * the NAME is the only thing keeping them apart, at 0.1600–0.2000 against this
- * floor. `sourcesDisjoint` refuses just one of the three, PortAventura Park
- * against Ferrari Land, because Queue-Times lists both; Caribe Aquatic Park
- * carries a wartezeiten id and no other, so its two pairs are disjoint and
- * reach the floor. The margin there is wide. But a water park
+ * on 41.0986786/1.1517730, 0.0000 km apart — and the NAME is what keeps all
+ * three pairs apart, at 0.1600–0.2000 against this floor. `sourcesDisjoint`
+ * additionally fails for one of the three, PortAventura Park against Ferrari
+ * Land, because Queue-Times lists both; Caribe Aquatic Park carries a
+ * wartezeiten id and no other, so its two pairs are disjoint and rest on the
+ * floor alone. The margin there is wide. But a water park
  * that synced in on its resort's point, from a source the theme-park row does
  * not carry, with a name like `Legoland Windsor` against its water park
  * (0.7429), would satisfy all three conditions, and `autoDetect: true` would
@@ -138,6 +138,14 @@ const SHARED_POINT_KM = 0.01;
  * (measured: nothing above this floor sits closer than 0.1174 km except the
  * pair this branch is for). The gate that would make it safe rather than
  * merely unlikely is PAR-247.
+ *
+ * **Any shared placeholder geocode is the same hazard**, not only a resort's.
+ * `usableCoordinate` refuses `0, 0` because that is the placeholder this repo
+ * writes, but a source falling back to a city or state centroid puts two rows
+ * on one point just as exactly, and a value-specific refusal cannot see it.
+ * Another threshold does not help — the radius cannot tell a shared address
+ * from a shared fallback — so this belongs to what PAR-247's review gate has
+ * to catch.
  */
 const SHARED_POINT_NAME_SIMILARITY = 0.65;
 
@@ -502,8 +510,13 @@ export class ParkValidatorService {
 
         // One upstream source holding an ID for BOTH rows is that source
         // saying it knows two parks here — evidence against a duplicate, not
-        // for one, and it is what keeps PortAventura Park and Ferrari Land
-        // apart on their shared resort geocode (Queue-Times 19 and 277).
+        // for one. PortAventura Park and Ferrari Land are the shape it is for,
+        // both carried by Queue-Times (19 and 277) on one resort geocode,
+        // though at today's floor it is not what refuses them: their names
+        // score 0.2000 against 0.65, so the floor already does. Disabling this
+        // whole condition leaves the PortAventura case green and five others
+        // red. It is the guard that matters if the floor is ever lowered, and
+        // the one doing the work wherever a name clears it.
         // A shared *value* is the opposite signal and already has its own
         // branch below; it cannot reach this one, because an equal ID means
         // both rows carry that source and the sources are then not disjoint.

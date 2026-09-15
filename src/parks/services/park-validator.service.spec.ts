@@ -328,11 +328,16 @@ describe("ParkValidatorService.findDuplicates", () => {
     expect(await service.findDuplicates()).toEqual([]);
   });
 
-  it("pins the name floor at 0.65, not merely somewhere under 0.6923", async () => {
+  it("pins the name floor above 0.6061, which is what the raise was for", async () => {
     // `Wet 'n' Wild Las Vegas` against the Gold Coast row is 0.6061 — a real
     // park of the same brand, and the figure the floor was raised past. It
     // shares this pair's point and its disjoint sources, so the NAME is the
-    // only thing refusing it: drop the floor back to 0.6 and this goes red.
+    // only thing refusing it.
+    //
+    // Reach, measured, stated like the radius case below: red at a floor of
+    // 0.60, green from 0.61 up. It pins the floor above 0.6061 and not at
+    // 0.65 exactly — the catalogue offers nothing between those two figures
+    // to pin it with.
     parkRepository.find.mockResolvedValue([
       park({ ...wetnwildWiki, name: "Wet 'n' Wild Las Vegas" }),
       wetnwildQueueTimes,
@@ -515,7 +520,9 @@ describe("ParkValidatorService.findDuplicates", () => {
 
   it("refuses a shared wiki ID on one point, not just a shared queue-times ID", async () => {
     // `sourcesDisjoint` has one clause per source, and only the queue-times
-    // clause was covered (by the PortAventura fixture). Drop
+    // clause was covered — by "does not flag two parks that one source lists
+    // separately", not by the PortAventura fixture, whose names sit far under
+    // the floor and which therefore pins none of the three clauses. Drop
     // `!(p1.wikiEntityId && p2.wikiEntityId)` and nothing else in the suite
     // notices — yet that is the clause that has to hold when ThemeParks.wiki
     // itself lists two rows here, which is the source this pair's winner comes

@@ -699,10 +699,11 @@ comparison**, and the detector had no way to say so.
 
 **Fixed in PAR-160** by a fifth branch, `sharedPoint`, which lets the physical
 facts lead: coordinates under `SHARED_POINT_KM`, sources disjoint, and a name
-score over `SHARED_POINT_NAME_SIMILARITY` — a floor rather than a verdict. All
-three numbers were placed against the whole catalogue (213 parks, 22 578 pairs)
-rather than chosen, because `POST merge-duplicate-parks` with `autoDetect: true`
-merges whatever `findDuplicates` returns, with no dry run and no review gate.
+score over `SHARED_POINT_NAME_SIMILARITY` — a floor rather than a verdict. Three
+conditions, of which two are numbers, and both numbers were placed against the
+whole catalogue (213 parks, 22 578 pairs) rather than chosen, because
+`POST merge-duplicate-parks` with `autoDetect: true` merges whatever
+`findDuplicates` returns, with no dry run and no review gate.
 What that measurement says, and what it constrains:
 
 | km | name | pair |
@@ -734,16 +735,24 @@ What that measurement says, and what it constrains:
   `nameSimilarity >= 0.95 && sharedEntityId`, neither of which asks about
   geometry, and a spec case pins that so a future hoist of the refusal cannot
   take ghost detection with it.
-- **Disjoint sources is the PortAventura guard**, and it is the §5.4 rule one
-  level up: Queue-Times carries 19 for PortAventura Park and 277 for Ferrari
-  Land, which is that source saying it knows two parks on this geocode. The
-  test reads what a row *is* (which source columns it fills), never when it was
-  last heard from.
+- **Disjoint sources is the §5.4 rule one level up:** Queue-Times carries 19 for
+  PortAventura Park and 277 for Ferrari Land, which is that source saying it
+  knows two parks on this geocode. The test reads what a row *is* (which source
+  columns it fills), never when it was last heard from.
+
+  It is worth being exact about what it does and does not do. At the current
+  floor it does **not** refuse the PortAventura rows — their names score
+  0.1600–0.2000 against 0.65, so the floor refuses all three pairs on its own,
+  and disabling the disjointness condition entirely leaves that case green
+  (five other cases go red). It is the condition that would carry them if the
+  floor were ever lowered, and the one that does the work on any pair whose
+  name clears the floor.
 - **The name floor is 0.65 and cannot carry more than it does.** A water park
   beside its theme park scores at or above the pair we must catch — Legoland
   Windsor against its water park 0.7429, Alton Towers against its waterpark
-  0.6923, Heide Park against its resort 0.7273. No threshold separates that
-  class. (Another park of the same brand is a different case and the floor does
+  0.6923. No threshold separates that class. (A row against its own `… Resort`
+  spelling, such as Heide Park at 0.7273, is not this class at all: that is the
+  Wet'n'Wild shape, one place under two names, and merging it would be right.) (Another park of the same brand is a different case and the floor does
   separate it: `Wet 'n' Wild Las Vegas` against the Gold Coast row is 0.6061,
   and a spec case pins the floor on exactly that pair.) The radius carries the
   first class, **as long as the
@@ -755,12 +764,15 @@ What that measurement says, and what it constrains:
   writing down.** A second venue that inherits its resort's geocode sits at
   0.0000 km, so the radius has no vote on it at all and only the name floor and
   `sourcesDisjoint` are left. Three rows are that shape today — PortAventura
-  Park, Ferrari Land and Caribe Aquatic Park on one point — and for two of their
-  three pairs the name is the only thing holding them, at 0.1600–0.2000 against
-  a floor of 0.65. `sourcesDisjoint` refuses only PortAventura Park against
-  Ferrari Land, the pair Queue-Times lists twice; Caribe Aquatic Park carries a
-  wartezeiten id and nothing else, so both of its pairs are disjoint and reach
-  the floor. But a water park
+  Park, Ferrari Land and Caribe Aquatic Park on one point — and the name holds
+  all three pairs, at 0.1600–0.2000 against a floor of 0.65. `sourcesDisjoint`
+  additionally fails for PortAventura Park against Ferrari Land, the pair
+  Queue-Times lists twice; Caribe Aquatic Park carries a wartezeiten id and
+  nothing else, so both of its pairs are disjoint and rest on the floor alone.
+  The same hazard covers **any** shared placeholder geocode, not only a
+  resort's: a source falling back to a city centroid puts two rows on one point
+  just as exactly, and refusing `0, 0` by value cannot see that. But a water
+  park
   that synced in on its resort's point, from a source the theme-park row does
   not carry, scoring like `Legoland Windsor` against its water park (0.7429),
   would satisfy all three conditions. No such row is in the catalogue today.
