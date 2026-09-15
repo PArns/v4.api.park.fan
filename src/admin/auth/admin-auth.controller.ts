@@ -6,6 +6,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   Param,
   Patch,
   Post,
@@ -62,6 +63,8 @@ import {
 // keep working for a legacy caller say so themselves.
 @AdminLegacyAccess(false)
 export class AdminAuthController {
+  private readonly logger = new Logger(AdminAuthController.name);
+
   constructor(
     private readonly auth: AdminAuthService,
     private readonly sessions: AdminSessionStore,
@@ -115,9 +118,23 @@ export class AdminAuthController {
         clientIp(request),
       );
       if (!verdict.success) {
+        // The reason is logged and not answered. `TurnstileVerdict.reason`
+        // says "for the log and nothing else" and means it: it forwards
+        // Cloudflare's own error codes, so `invalid-input-secret` or
+        // `not-configured` on this route would tell an anonymous caller that
+        // the challenge in front of the admin login is not currently working.
+        // Nothing reads it on the other side either — our frontend redeems the
+        // token in its own proxy and never meets this 403.
+        //
+        // It used to travel and be dropped: `HttpExceptionFilter` rebuilt the
+        // body from `message` and `error`. Now that it carries the rest of a
+        // thrown body (PAR-146), a field withheld from a client has to be
+        // withheld here, where the decision is.
+        this.logger.warn(
+          `Turnstile refused an admin login from ${clientIp(request) ?? "an unknown address"}: ${verdict.reason ?? "no reason given"}`,
+        );
         throw new ForbiddenException({
           error: "turnstile-failed",
-          reason: verdict.reason,
           message: "A solved Turnstile token is required to sign in.",
         });
       }

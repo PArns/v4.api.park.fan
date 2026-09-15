@@ -28,6 +28,7 @@ import {
   DeleteShowFollowDto,
   ShowFollowResponseDto,
 } from "./dto/show-follow.dto";
+import { RATE_LIMITED_RESPONSE } from "../common/filters/rate-limited-response";
 
 /**
  * A visitor's followed shows — same anonymous shape as `ride-alerts`: the
@@ -77,10 +78,7 @@ export class ShowFollowsController {
     status: 404,
     description: "No subscription for this endpoint, or no such show.",
   })
-  @ApiResponse({
-    status: 429,
-    description: "Too many writes from this address.",
-  })
+  @ApiResponse(RATE_LIMITED_RESPONSE)
   async create(
     @Body() body: CreateShowFollowDto,
     @Req() request: Request,
@@ -124,6 +122,7 @@ export class ShowFollowsController {
       "Idempotent — unfollowing a show that is not followed is not an error.",
   })
   @ApiResponse({ status: 204 })
+  @ApiResponse(RATE_LIMITED_RESPONSE)
   async remove(
     @Body() body: DeleteShowFollowDto,
     @Req() request: Request,

@@ -2,6 +2,7 @@ import { HttpException } from "@nestjs/common";
 import { PushFollowAccessGuard } from "./push-follow-access.guard";
 import { PushService } from "./push.service";
 import { PushFollowWriteRateLimitService } from "./push-follow-write-rate-limit.service";
+import { throughFilter } from "../../test/helpers/through-filter";
 
 /**
  * The one rule `RideAlertsController` and `ShowFollowsController` both
@@ -82,6 +83,23 @@ describe("PushFollowAccessGuard", () => {
         retryAfterSeconds: 42,
         message: expect.stringContaining("ride-alert"),
       });
+    });
+
+    it("and the figure survives the filter that writes the response", async () => {
+      // The case above asserts what this guard throws, and that assertion was
+      // green for as long as `HttpExceptionFilter` was deleting the field on
+      // its way out (PAR-146). These two routes are the second pair of writers
+      // affected; the ticket was filed against `/v1/trips` because that is
+      // where it was noticed.
+      check.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 42 });
+
+      const { body, headers } = await throughFilter(
+        () => guard.writeGuard(req(), "ride-alert"),
+        { url: "/v1/push/ride-alerts" },
+      );
+
+      expect(body).toMatchObject({ statusCode: 429, retryAfterSeconds: 42 });
+      expect(headers["Retry-After"]).toBe("42");
     });
   });
 });

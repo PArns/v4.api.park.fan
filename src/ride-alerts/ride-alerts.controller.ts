@@ -33,6 +33,7 @@ import {
   DeleteRideAlertDto,
   RideAlertResponseDto,
 } from "./dto/ride-alert.dto";
+import { RATE_LIMITED_RESPONSE } from "../common/filters/rate-limited-response";
 
 /**
  * A visitor's wait-time alerts — which attraction, and how many minutes.
@@ -91,10 +92,7 @@ export class RideAlertsController {
     status: 404,
     description: "No subscription for this endpoint, or no such attraction.",
   })
-  @ApiResponse({
-    status: 429,
-    description: "Too many writes from this address.",
-  })
+  @ApiResponse(RATE_LIMITED_RESPONSE)
   async create(
     @Body() body: CreateRideAlertDto,
     @Req() request: Request,
@@ -151,6 +149,7 @@ export class RideAlertsController {
       "Idempotent — removing an alert that is not there is not an error.",
   })
   @ApiResponse({ status: 204 })
+  @ApiResponse(RATE_LIMITED_RESPONSE)
   async remove(
     @Body() body: DeleteRideAlertDto,
     @Req() request: Request,

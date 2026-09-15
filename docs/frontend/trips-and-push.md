@@ -90,6 +90,23 @@ before the lookup on every verb, so a miss costs an attempt exactly as a hit
 does — otherwise enumeration would be free, since a miss is the only answer an
 enumeration ever gets.
 
+**A 429 says how long to wait**, in two places that always agree: the body's
+`retryAfterSeconds` (exact, as the limiter counted it) and a `Retry-After`
+header in whole seconds, rounded up. The push-follow routes below answer the
+same pair.
+
+**The body is the copy a browser can read.** `Retry-After` is not a
+CORS-safelisted response header and nothing exposes it, so a page calling the
+API directly cross-origin gets `null` for it; read `retryAfterSeconds`, which
+is also the exact figure rather than a rounded one. The header is for
+non-browser clients — and for the **global** throttler, which is the reason it
+exists here at all: it has always set `Retry-After`, and it throws a plain
+string body, so a 429 it raised carries no `retryAfterSeconds` to read.
+
+Until 2026-09-15 these routes had neither: the figure was in the thrown
+exception and `HttpExceptionFilter` rebuilt every error body from `message` and
+`error` alone, so it never left the process.
+
 ## 3. Push: ask before offering the switch
 
 `GET /v1/push` answers `{ available, publicKey?, topics }`. **The browser must
