@@ -222,7 +222,7 @@ GET /v1/parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug # 
 queues, no forecasts, no statistics — the stored catalog of the park and
 nothing else. Read the park payload or the detail route for live state.
 
-**Example Response:**
+**Example Response (detail route):**
 ```json
 {
   "id": "123e4567-e89b-12d3-a456-426614174000",

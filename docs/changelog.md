@@ -169,9 +169,13 @@ and `queues` were absent already. Live state comes from the park payload or the
 attraction detail route, neither of which changes.
 
 The placeholders stay for the integrated callers, and they are now one named
-set (`LIVE_PLACEHOLDERS`) beside the stored half of the row rather than four
+set (`livePlaceholders()`) beside the stored half of the row rather than four
 literals mixed into it, so a live field added later is absent from this route
-without a second edit. `status` in particular has to keep its "CLOSED" floor:
+without a second edit. One side effect, for completeness: the placeholders are
+spread last, so on the routes that still carry them `status` is now the 20th
+key of an attraction object instead of the 4th. Values are unchanged; only a
+content-derived weak ETag notices, once. `status` in particular has to keep its
+"CLOSED" floor:
 the attraction detail path reads it when a ride has no row inside the freshness
 window (`isSourceAbsent([])` is false by design) and derives `effectiveStatus`
 from it.

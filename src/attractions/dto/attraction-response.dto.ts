@@ -532,7 +532,7 @@ export class AttractionResponseDto {
    * The stored half of an attraction: everything that comes off the row itself.
    *
    * Nothing here is a reading, and nothing here is empty for want of data —
-   * which is exactly what separates it from {@link LIVE_PLACEHOLDERS}. Keeping
+   * which is exactly what separates it from {@link livePlaceholders}. Keeping
    * the two apart is the point: a caller that joins no live data spreads this
    * and stops, so it cannot accidentally assert the absence of something it
    * never asked for.
@@ -541,7 +541,7 @@ export class AttractionResponseDto {
     attraction: Attraction,
   ): Omit<
     AttractionResponseDto,
-    keyof typeof AttractionResponseDto.LIVE_PLACEHOLDERS
+    keyof ReturnType<typeof AttractionResponseDto.livePlaceholders>
   > {
     const curated = resolveCuratedFacts(attraction);
 
@@ -596,26 +596,39 @@ export class AttractionResponseDto {
    * Add a live field here rather than to {@link storedHalf}, and
    * {@link fromEntityWithoutLiveData} keeps it out of the response without a
    * second edit.
+   *
+   * A function rather than a constant object, because a constant would hand
+   * every DTO the same two array instances: `readonly` freezes the binding and
+   * not the arrays, and one caller pushing into `forecasts` instead of
+   * assigning it would reach every attraction in the process. No caller does
+   * today — all three assign — and this keeps it that way for the next field
+   * added above.
    */
-  private static readonly LIVE_PLACEHOLDERS = {
-    status: "CLOSED" as string | undefined,
-    hourlyForecast: [] as AttractionResponseDto["hourlyForecast"],
-    forecasts: [] as AttractionResponseDto["forecasts"],
-    statistics: null as AttractionResponseDto["statistics"],
-  };
+  private static livePlaceholders() {
+    return {
+      status: "CLOSED" as string | undefined,
+      hourlyForecast: [] as AttractionResponseDto["hourlyForecast"],
+      forecasts: [] as AttractionResponseDto["forecasts"],
+      statistics: null as AttractionResponseDto["statistics"],
+    };
+  }
 
   /**
    * An attraction for a caller that goes on to join live data over it.
    *
-   * The three integrated callers do: `AttractionIntegrationService` and both
-   * favorites paths overwrite `status` from `queue_data` and fill the
-   * forecasts. A caller that joins nothing must use
-   * {@link fromEntityWithoutLiveData} instead.
+   * `AttractionIntegrationService` and the favorites list do: they overwrite
+   * `status` from `queue_data` and fill the forecasts. A caller that joins
+   * nothing must use {@link fromEntityWithoutLiveData} instead — as must the
+   * one branch that still gets this wrong, `FavoritesService`'s fallback for an
+   * integrated attraction it could not parse from cache, which ships the
+   * placeholders untouched. That branch needs a cached entry that parses to a
+   * non-object, which neither writer can produce, so it is unreachable by
+   * accident rather than by design.
    */
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     return {
       ...AttractionResponseDto.storedHalf(attraction),
-      ...AttractionResponseDto.LIVE_PLACEHOLDERS,
+      ...AttractionResponseDto.livePlaceholders(),
     };
   }
 
