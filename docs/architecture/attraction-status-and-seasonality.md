@@ -776,6 +776,16 @@ person, which is the point of a sync — the wiki is the source for what an enti
 *is*. To override it, correct the entity upstream or add its id to
 `THEMEPARKS_EXCLUSIONS`.
 
+**The test for a second source is structural, and deliberately so.** A draft of
+this change also held back rows that had received a genuine reading in the last
+30 days. It was withdrawn, because it would have made the fix arrive a month
+late every time: once the wiki flips an entity's type, `WaitTimesProcessor`
+resolves `themeparks-wiki:<externalId>` to the shows row, so the attraction's
+last genuine reading *is* the day of the reclassification — and the wrongly
+CLOSED ride would have stayed on the park page for the whole window. A row's own
+columns say what it is; its readings say when we last heard, which is a
+different question.
+
 Two more limits worth knowing before trusting the round trip:
 
 - **The way back is park-scoped.** The retirement is not: `externalId` is
@@ -787,14 +797,6 @@ Two more limits worth knowing before trusting the round trip:
   the same upstream fault `dedupePollEntities` handles for live data, and
   without the exclusion the row would flip between retired and not on every
   run, evicting caches and revalidating the frontend each time.
-- **A row that still received a genuine reading in the last 30 days is held
-  back**, on top of the `queue_times_entity_id` rule. That column is written by
-  the entity mapping job, so a row can be waiting for its first mapping run and
-  look wiki-only while Queue-Times already reports it; a reading that is neither
-  a `system-reconciliation` row nor a heartbeat is the harder evidence. Measured
-  on 2026-09-15 it holds nothing back — all 15 remaining candidates last read
-  genuinely in April — so it is a guard rather than a filter.
-
 And the 17 rows retired by hand for this issue on 2026-09-15 carry their own
 reason, with the entity URL in it, rather than the constant. They were an admin
 write, so the sync treats them the way it treats any human retirement: it will

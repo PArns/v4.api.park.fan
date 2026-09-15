@@ -19,12 +19,10 @@ import { ChildrenMetadataProcessor } from "./children-metadata.processor";
  * absence is green whenever the branch is not reached at all.
  */
 describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
-  const managerQuery = jest.fn();
   const attractionRepo = {
     find: jest.fn(),
     update: jest.fn(),
     save: jest.fn(),
-    manager: { query: managerQuery },
   };
   const retirementService = { retire: jest.fn(), unretire: jest.fn() };
   const themeParksMapper = { mapAttraction: jest.fn() };
@@ -44,8 +42,6 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // No candidate has a genuine reading unless a test says otherwise.
-    managerQuery.mockResolvedValue([]);
     processor = new ChildrenMetadataProcessor(
       { getRepository: () => attractionRepo } as any,
       retirementService as any,
@@ -367,42 +363,36 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
   });
 
   /**
-   * `queue_times_entity_id` is written by the entity mapping job, so a row can
-   * be waiting for its first mapping run and look wiki-only while Queue-Times
-   * already reports it. A genuine reading is the harder evidence.
+   * The lookup is global while `syncAttraction` is park-scoped, so a row whose
+   * park moved upstream is retired automatically and cannot come back on its
+   * own. The warning is the only thing that says so.
    */
-  describe("a row that is still being read", () => {
-    it("is held back even though it carries no Queue-Times id", async () => {
-      attractionRepo.find.mockResolvedValue([staleRow]);
-      managerQuery.mockResolvedValue([{ attractionId: "row-sesame-street" }]);
+  describe("a row that belongs to another park", () => {
+    it("is retired, and named with its own park", async () => {
+      const warn = jest
+        .spyOn((processor as any).logger, "warn")
+        .mockImplementation(() => undefined);
+      attractionRepo.find.mockResolvedValue([
+        { id: "row-moved", name: "Moved Ride", parkId: "park-other" },
+      ]);
 
       await retireReclassified([showExternalId]);
 
-      expect(managerQuery).toHaveBeenCalledTimes(1);
-      expect(retirementService.retire).not.toHaveBeenCalled();
-    });
-
-    it("is retired once that reading is gone", async () => {
-      // The pair: same row, same query, and the only difference is whether it
-      // came back with a genuine reading.
-      attractionRepo.find.mockResolvedValue([staleRow]);
-      managerQuery.mockResolvedValue([]);
-
-      await retireReclassified([showExternalId]);
-
-      expect(managerQuery).toHaveBeenCalledTimes(1);
       expect(retirementService.retire).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("park-other");
     });
 
-    it("asks only about reconciliation-free, non-heartbeat rows", async () => {
+    it("says nothing when every row belongs to the park being synced", async () => {
+      const warn = jest
+        .spyOn((processor as any).logger, "warn")
+        .mockImplementation(() => undefined);
       attractionRepo.find.mockResolvedValue([staleRow]);
 
       await retireReclassified([showExternalId]);
 
-      const [sql, params] = managerQuery.mock.calls[0];
-      expect(sql).toContain("data_source <> 'system-reconciliation'");
-      expect(sql).toContain("is_heartbeat IS NOT TRUE");
-      expect(params).toEqual([["row-sesame-street"]]);
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled();
     });
   });
 

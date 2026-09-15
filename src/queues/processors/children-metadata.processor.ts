@@ -644,7 +644,18 @@ export class ChildrenMetadataProcessor {
    * them for USS alone in the 30 days before this was fixed — and the park page
    * shows a permanently closed ride that does not exist as a ride any more.
    *
-   * **A row with a second source is left alone.** `queue_times_entity_id` means
+   * **A row with a second source is left alone, and the test is structural.**
+   * An earlier round of this change also held back rows that had received a
+   * genuine reading in the last 30 days. That guard was withdrawn: after the
+   * wiki flips an entity's type, `WaitTimesProcessor` resolves
+   * `themeparks-wiki:<externalId>` to the shows row, so the attraction's last
+   * genuine reading is the day of the reclassification itself — the guard
+   * would have postponed every future repair by 30 days, leaving exactly the
+   * wrongly-CLOSED ride this method exists to remove on the park page for a
+   * month. A row's own columns say what it is; its readings say when we last
+   * heard, and that is a different question.
+   *
+   * `queue_times_entity_id` means
    * Queue-Times also reports this entity, and it reports it as an attraction
    * with a wait time; Disneyland Paris' `Mickey's PhilharMagic` is a show to
    * the wiki and a queueing ride to Queue-Times, and was still receiving real
@@ -685,7 +696,8 @@ export class ChildrenMetadataProcessor {
    * The lookup here is deliberately not scoped to the park:
    * `attractions.externalId` is globally unique, so there is at most one row
    * either way, and scoping it would miss a row whose park changed upstream.
-   * It is the same set the diagnostic query in §5.6 of the doc returns.
+   * The diagnostic query in §5.6 of the doc returns a superset: it joins only
+   * `shows` and applies neither of the two filters above.
    * **The way back is park-scoped**, because `syncAttraction` only ever looks
    * at its own park's rows — so a row that moved parks upstream is retired
    * automatically but has to be brought back by hand.
@@ -697,7 +709,7 @@ export class ChildrenMetadataProcessor {
   ): Promise<void> {
     if (reclassifiedExternalIds.length === 0) return;
 
-    const candidates = await this.attractionsService.getRepository().find({
+    const stale = await this.attractionsService.getRepository().find({
       where: {
         externalId: In(reclassifiedExternalIds),
         retiredAt: IsNull(),
@@ -705,16 +717,6 @@ export class ChildrenMetadataProcessor {
       },
       select: ["id", "name", "parkId"],
     });
-    if (candidates.length === 0) return;
-
-    // `queue_times_entity_id` is a snapshot: it is written by the entity
-    // mapping job, so a row can be waiting for its first mapping run and look
-    // wiki-only while Queue-Times is already reporting it. A genuine reading —
-    // not a reverse-reconciliation row, not a heartbeat — is the harder
-    // evidence, and it holds the row back regardless. Measured against
-    // production on 2026-09-15 this changes nothing: all 15 remaining
-    // candidates last read genuinely in April, so none is held back.
-    const stale = await this.withoutRecentGenuineReadings(candidates);
     if (stale.length === 0) return;
 
     // The wiki does not say when it reclassified an entity, so this is the day
@@ -743,31 +745,6 @@ export class ChildrenMetadataProcessor {
           "retired anyway, but syncAttraction is park-scoped and will not bring it back",
       );
     }
-  }
-
-  /**
-   * Drops the rows that still received a genuine reading in the last 30 days.
-   *
-   * `system-reconciliation` rows say our data stopped arriving, and a
-   * heartbeat carries the previous row's `data_source` forward, so neither is
-   * evidence that anything is still reporting the ride. Only a row that is
-   * neither answers the question this guard asks.
-   */
-  private async withoutRecentGenuineReadings<T extends { id: string }>(
-    candidates: T[],
-  ): Promise<T[]> {
-    const rows: { attractionId: string }[] = await this.attractionsService
-      .getRepository()
-      .manager.query(
-        `SELECT DISTINCT "attractionId" FROM queue_data
-          WHERE "attractionId" = ANY($1::uuid[])
-            AND timestamp > now() - interval '30 days'
-            AND data_source <> 'system-reconciliation'
-            AND is_heartbeat IS NOT TRUE`,
-        [candidates.map((c) => c.id)],
-      );
-    const stillReporting = new Set(rows.map((r) => r.attractionId));
-    return candidates.filter((c) => !stillReporting.has(c.id));
   }
 
   /**

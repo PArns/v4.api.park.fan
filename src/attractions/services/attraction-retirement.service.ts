@@ -21,13 +21,17 @@ import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation
  * public attraction detail endpoint. Issue numbers, file paths and internals
  * belong in the docblock of the method that writes it, not in here.
  *
- * ⚠️ **Rewording it strands every row already retired under the old wording.**
- * The marker and the copy are the same string, so an edit here breaks the
- * `===` in `syncAttraction`, and those rows are then invisible to both sides:
- * the retire filter skips them (`retiredAt` is set) and the un-retire check no
- * longer recognises them. If this text is ever changed, the previous value
- * moves into {@link RECLASSIFIED_UPSTREAM_REASONS} in the same commit. A spec
- * pins the literal so the change cannot be made without reading this.
+ * ⚠️ **An edit here changes what {@link isReclassifiedUpstreamReason} matches,
+ * so the previous value moves into {@link RECLASSIFIED_UPSTREAM_REASONS} in
+ * the same commit.** Without that, every row already retired under the old
+ * wording is stranded: the un-retire check no longer recognises it and the
+ * retire filter skips it because `retiredAt` is set. A spec pins the literal,
+ * so the wording cannot be changed without reading this first.
+ *
+ * The pin is a mitigation and not a fix — the copy and the marker are one
+ * string, which is also why this sentence cannot be localized. Decoupling
+ * them needs a column of its own (`retired_by`, say), and that is a schema
+ * change this issue did not ask for.
  */
 export const RECLASSIFIED_UPSTREAM_REASON =
   "ThemeParks.wiki lists this entity as a show or a restaurant rather than an " +
