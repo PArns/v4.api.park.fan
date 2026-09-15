@@ -224,6 +224,10 @@ describe("AttractionsService", () => {
       await service.findAllWithFilters({ park: "walibi-belgium" });
 
       expect(qb.andWhere).toHaveBeenCalledWith("attraction.retiredAt IS NULL");
+      // TypeORM's `.where()` REPLACES the whole clause rather than adding to
+      // it, so one of those inserted into this method later would drop the
+      // filter without failing the assertion above.
+      expect(qb.where).not.toHaveBeenCalled();
     });
 
     it("still applies the geo filters beside it", async () => {

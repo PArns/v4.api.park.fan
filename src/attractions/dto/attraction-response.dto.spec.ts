@@ -67,21 +67,48 @@ describe("AttractionResponseDto › status on the two builders", () => {
     expect(withoutLive.slug).toBe("vampire");
   });
 
-  it("gives the two builders the same key set apart from the placeholders", () => {
+  it("pins which keys the placeholders add", () => {
     const live = Object.keys(AttractionResponseDto.fromEntity(attraction));
     const stored = Object.keys(
       AttractionResponseDto.fromEntityWithoutLiveData(attraction),
     );
 
-    // A live field added to the placeholder set stays out of the no-live
-    // builder by construction, so this difference may only ever grow on the
-    // live side.
     expect(live.filter((k) => !stored.includes(k)).sort()).toEqual([
       "forecasts",
       "hourlyForecast",
       "statistics",
       "status",
     ]);
-    expect(stored.filter((k) => !live.includes(k))).toEqual([]);
+  });
+
+  it("pins the stored key set itself, so a dropped field is a red test", () => {
+    // Comparing the two builders against each other cannot see this: they
+    // share `storedHalf`, so a field deleted there leaves both of them and
+    // every other assertion here stays green (`toEqual` ignores undefined).
+    expect(
+      Object.keys(
+        AttractionResponseDto.fromEntityWithoutLiveData(attraction),
+      ).sort(),
+    ).toEqual([
+      "fastPass",
+      "hasSingleRider",
+      "id",
+      "isCurrentlyInSeason",
+      "isSeasonal",
+      "land",
+      "latitude",
+      "longitude",
+      "maximumHeight",
+      "mayGetWet",
+      "minimumHeight",
+      "minimumHeightUnit",
+      "name",
+      "park",
+      "rcdbId",
+      "retiredAt",
+      "retiredReason",
+      "seasonMonths",
+      "slug",
+    ]);
   });
 });

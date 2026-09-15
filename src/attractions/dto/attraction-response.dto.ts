@@ -603,6 +603,12 @@ export class AttractionResponseDto {
    * assigning it would reach every attraction in the process. No caller does
    * today — all three assign — and this keeps it that way for the next field
    * added above.
+   *
+   * `satisfies` rather than a return-type annotation: an annotation would widen
+   * the object and `keyof ReturnType<…>` would stop naming the four keys, while
+   * without either a misspelled key is simply a new field on every response a
+   * `fromEntity` caller serves. This way a typo is TS2561 and the key list
+   * stays inferred.
    */
   private static livePlaceholders() {
     return {
@@ -610,7 +616,7 @@ export class AttractionResponseDto {
       hourlyForecast: [] as AttractionResponseDto["hourlyForecast"],
       forecasts: [] as AttractionResponseDto["forecasts"],
       statistics: null as AttractionResponseDto["statistics"],
-    };
+    } satisfies Partial<AttractionResponseDto>;
   }
 
   /**
