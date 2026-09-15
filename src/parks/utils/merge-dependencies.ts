@@ -1,6 +1,7 @@
 import { Logger } from "@nestjs/common";
 
-export type MergeStrategy = "move" | "discard" | "winner-authoritative";
+export type MergeStrategy =
+  "move" | "discard" | "winner-authoritative" | "custom";
 
 export interface MergeDependency {
   /** Table holding rows that point at the entity being merged away. */
@@ -20,6 +21,14 @@ export interface MergeDependency {
    *             the winner has no equivalent of, and `move` cannot be used at
    *             all where the merge column is also the primary key, because
    *             the UPDATE then collides with the winner's own row.
+   * `custom`  — none of the three shapes above fits, and `apply` below says
+   *             what happens instead. The bar is the table's SHAPE rather than
+   *             the awkwardness of its case: a table that names the entity in
+   *             more than one column, or carries a constraint across two of
+   *             them, cannot be expressed as one column plus a conflict key,
+   *             because every statement the three strategies issue names
+   *             exactly one column. Declared on exactly one entry
+   *             (`attraction_review_marks`, PAR-149).
    */
   strategy: MergeStrategy;
   /**
@@ -51,6 +60,25 @@ export interface MergeDependency {
    * define what more means before a merge may act on it.
    */
   richness?: (row: Record<string, unknown>) => number;
+  /**
+   * What a `custom` entry does, and the only thing that may write for one.
+   *
+   * It hangs off the dependency rather than being called beside
+   * `applyMergeDependencies` because there are four merge paths and all four
+   * apply `ATTRACTION_DEPENDENCIES` — a call next to the list is four places
+   * to forget it, and the guard that fails when a table has no strategy would
+   * go on passing, because the table is declared either way.
+   *
+   * It receives the same transaction-bound manager the rest of the pass uses,
+   * so a failure rolls the merge back like any other statement. It gets no
+   * `dep`: the SQL of such an entry names its columns as literals (that is
+   * what makes it custom), so there is nothing on the entry left to read.
+   */
+  apply?: (
+    manager: MergeQueryRunner,
+    winnerId: string,
+    loserId: string,
+  ) => Promise<void>;
 }
 
 /**
@@ -116,6 +144,171 @@ export function rideProfileRichness(row: Record<string, unknown>): number {
 }
 
 /**
+ * Rewrites a losing attraction's review marks onto the survivor.
+ *
+ * The one `custom` entry on any of these lists, because the table names an
+ * attraction in TWO columns and holds a constraint across them
+ * (`attraction-review-mark.entity.ts`):
+ *
+ *   - unique `(kind, attraction_id, other_attraction_id)`
+ *   - CHECK `other_attraction_id IS NULL OR attraction_id < other_attraction_id`
+ *
+ * The CHECK is what rules the ordinary strategies out, not the second column
+ * alone. A pair fact has no direction, so the pair is stored once in ascending
+ * order; rewriting one of the two ids therefore has to restore that order in
+ * the SAME statement, and a CHECK is not deferrable. Two declarations of the
+ * same table — one per column — would each violate it halfway through.
+ *
+ * What the rows are: a person's verdict that a detector's candidate is not a
+ * case ("these two are different rides", "this one is not retired"). Nothing
+ * writes them but a human, and the FK is ON DELETE CASCADE on both columns, so
+ * leaving the table off this list means every merge deletes half the verdicts
+ * about the losing ride and keeps the other half pointing at a row that is
+ * gone. Neither raises an error.
+ *
+ * Four cases, in the order the statements run:
+ *
+ *   1. The mark about EXACTLY this pair cannot survive in any form: rewritten
+ *      it reads "A is not a duplicate of A" and violates the CHECK. For a
+ *      `not_a_duplicate` mark it is also the verdict this merge contradicts,
+ *      which is why it is logged with its `reason` before it goes — that
+ *      sentence and its URL are the only record that somebody once decided the
+ *      opposite.
+ *   2. A pair mark whose partner the winner already has a verdict on: the
+ *      winner's stands and the loser's is logged and dropped, because after
+ *      the merge both name one pair and the unique index allows one.
+ *   3. Every other pair mark moves, canonical order restored in the same
+ *      statement.
+ *   4. A single-attraction mark (`other_attraction_id IS NULL`) moves as it is.
+ *      It is never deduped: Postgres treats NULLs in a unique index as
+ *      distinct, so two `not_retired` rows on one attraction are a state the
+ *      table already permits, and both readers of this table are anti-joins
+ *      (`WHERE m.id IS NULL`) that a second row cannot disturb. Dropping one
+ *      would destroy a human's reason to keep a row the index does not object
+ *      to.
+ *
+ * Both deletes report through `RETURNING` rather than reading first and
+ * deleting second the way `applyWinnerAuthoritative` does. That branch has to
+ * read anyway — the read is what it decides on. Here the read would exist only
+ * to log, and a line written from `RETURNING` describes rows that really were
+ * deleted rather than rows a failing statement left standing.
+ *
+ * Both are wrapped in a CTE for that, and the wrapper is load-bearing rather
+ * than a flourish: TypeORM's postgres driver rewrites the result of a bare
+ * DELETE or UPDATE into `[rows, rowCount]` (`PostgresQueryRunner`, `switch
+ * (raw.command)`), so `RETURNING *` would arrive as a two-element array whose
+ * second element is a number — and every check below would then find two
+ * "rows" to warn about on every merge, whether anything was deleted or not.
+ * Selecting from the CTE makes the command a SELECT, and the rows come back as
+ * rows. `MLService.deleteOldPredictions` wraps its DELETE for the same reason.
+ */
+export async function mergeAttractionReviewMarks(
+  manager: MergeQueryRunner,
+  winnerId: string,
+  loserId: string,
+): Promise<void> {
+  // The same refusal `applyMergeDependencies` and `planWinnerAuthoritative`
+  // make, and for the sharper reason: with one id on both sides the second
+  // DELETE's EXISTS matches every pair mark against ITSELF — the partner is the
+  // row's own other half and the winner is the row's own first half — so it
+  // would delete every pair verdict the attraction carries. Every caller checks
+  // today; this is so the one that stops checking fails instead.
+  if (winnerId === loserId) {
+    throw new Error(
+      `Cannot merge review marks with one id on both sides (${winnerId})`,
+    );
+  }
+
+  // Almost no ride carries a review mark, so the ordinary merge is one index
+  // lookup instead of five statements.
+  const touching = asRows(
+    await manager.query(
+      `SELECT 1 FROM attraction_review_marks
+        WHERE attraction_id = $1::uuid OR other_attraction_id = $1::uuid
+        LIMIT 1`,
+      [loserId],
+    ),
+  );
+  if (touching.length === 0) return;
+
+  const mutual = asRows(
+    await manager.query(
+      `WITH dropped AS (
+         DELETE FROM attraction_review_marks
+          WHERE (attraction_id = $1::uuid AND other_attraction_id = $2::uuid)
+             OR (attraction_id = $2::uuid AND other_attraction_id = $1::uuid)
+          RETURNING *
+       ) SELECT * FROM dropped`,
+      [winnerId, loserId],
+    ),
+  );
+  if (mutual.length > 0) {
+    logger.warn(
+      `🗑️  attraction_review_marks: dropping ${mutual.length} mark(s) about ` +
+        `${winnerId} and ${loserId} themselves — the merge answers the ` +
+        `question they record — ` +
+        mutual.map((row) => JSON.stringify(row)).join(" | "),
+    );
+  }
+
+  // The partner id is the half of the pair that is NOT the loser. Spelled out
+  // twice rather than through a LATERAL, so the statement stays one a reader
+  // can run by hand against a pair of ids.
+  const partner = `CASE WHEN m.attraction_id = $2::uuid
+                        THEN m.other_attraction_id ELSE m.attraction_id END`;
+  const superseded = asRows(
+    await manager.query(
+      `WITH dropped AS (
+         DELETE FROM attraction_review_marks AS m
+          WHERE m.other_attraction_id IS NOT NULL
+            AND (m.attraction_id = $2::uuid OR m.other_attraction_id = $2::uuid)
+            AND EXISTS (
+                  SELECT 1 FROM attraction_review_marks AS w
+                   WHERE w.kind = m.kind
+                     AND w.attraction_id = LEAST($1::uuid, ${partner})
+                     AND w.other_attraction_id = GREATEST($1::uuid, ${partner})
+                )
+          RETURNING *
+       ) SELECT * FROM dropped`,
+      [winnerId, loserId],
+    ),
+  );
+  if (superseded.length > 0) {
+    logger.warn(
+      `🗑️  attraction_review_marks: dropping ${superseded.length} mark(s) ` +
+        `whose pair ${winnerId} already carries a verdict on — ` +
+        superseded.map((row) => JSON.stringify(row)).join(" | "),
+    );
+  }
+
+  // Three moves, one per shape, and they cannot overlap: the first leaves no
+  // row naming the loser in `other_attraction_id` (it writes GREATEST of the
+  // winner and the partner) and touches no row with a NULL partner, and the
+  // second cannot produce the loser's id either, because after the delete
+  // above no surviving row names both sides.
+  await manager.query(
+    `UPDATE attraction_review_marks
+        SET attraction_id = LEAST($1::uuid, other_attraction_id),
+            other_attraction_id = GREATEST($1::uuid, other_attraction_id)
+      WHERE attraction_id = $2::uuid AND other_attraction_id IS NOT NULL`,
+    [winnerId, loserId],
+  );
+  await manager.query(
+    `UPDATE attraction_review_marks
+        SET attraction_id = LEAST(attraction_id, $1::uuid),
+            other_attraction_id = GREATEST(attraction_id, $1::uuid)
+      WHERE other_attraction_id = $2::uuid`,
+    [winnerId, loserId],
+  );
+  await manager.query(
+    `UPDATE attraction_review_marks
+        SET attraction_id = $1::uuid
+      WHERE attraction_id = $2::uuid AND other_attraction_id IS NULL`,
+    [winnerId, loserId],
+  );
+}
+
+/**
  * Every table referencing `attractions`, with what a merge must do to it.
  *
  * Verified against the live catalog and exercised end-to-end by a rollback-only
@@ -128,6 +321,11 @@ export function rideProfileRichness(row: Record<string, unknown>): number {
  *   2. ml_prediction_anomalies — FK NO ACTION → 23503 on the attraction DELETE
  *   3. attraction_hourly_history / rope_drop / typical_waits / p90 → silent CASCADE
  *   4. pcn/shape/tft/catboost forecasts, day_operating, aggregates → orphans
+ *
+ * PAR-149 added four more, found by re-deriving the list from the entities
+ * rather than from that run: `ride_alerts`, `schedule_entries` and
+ * `attraction_review_marks` all cascade, `prediction_lead_snapshots` has no FK.
+ * They postdate the cold run and are pinned by `merge-dependencies.spec.ts`.
  */
 export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
   // --- time series: always keep, never collides on its own surrogate key ---
@@ -170,6 +368,62 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     column: "attractionId",
     strategy: "move",
     conflictColumns: ["op_day"],
+  },
+  {
+    // The per-ride half of a table the park side deliberately keeps out of
+    // every dependency list. There the rows are park-level (`attractionId IS
+    // NULL`) or per-ride and told apart by that nullable column, which a
+    // row-wise `IN` cannot compare — so both raw paths do it by hand with `IS
+    // NOT DISTINCT FROM`.
+    //
+    // None of that applies on this side, which is why the same table can be a
+    // plain `move` here: `WHERE "attractionId" = $loser` has already excluded
+    // every park-level row, and `(date, scheduleType)` carries no nullable
+    // column. The key is the one `mergeParks` uses for the park-level move.
+    //
+    // How many rows that is, is NOT established here, and the entry does not
+    // depend on it. No write path in this repo sets `attractionId` on a
+    // schedule entry — every one of them builds a row from `parkId` alone, and
+    // `park-open-window.sql.ts` says as much in its own opening paragraph — so
+    // the per-ride rows are whatever a past writer or an upstream import left
+    // behind, and nobody has counted them. Declaring the move is right under
+    // either answer: on an empty set the two statements are no-ops, and on a
+    // non-empty one the FK is ON DELETE CASCADE, which destroys the rows inside
+    // a transaction that then reports success. What may not be written here is
+    // what those rows CONTAIN — that would be a claim about production data
+    // with no measurement behind it, which is how this file's oldest comments
+    // went wrong.
+    //
+    // On `mergeParks` the rows this saves are then taken by something else,
+    // and it is not this entry's bug to fix: step 3 there dedupes the table
+    // park-wide on `["date", "scheduleType"]` with no `attractionId`, so a
+    // per-ride row is deleted whenever the surviving park holds ANY row of
+    // that type that day — usually its own park-level OPERATING row. That is
+    // PAR-171, it predates this entry, and the two raw paths already avoid it
+    // with `IS NOT DISTINCT FROM`. So whatever per-ride rows exist survive the
+    // attraction-merge path today and the park path once PAR-171 lands.
+    table: "schedule_entries",
+    column: "attractionId",
+    strategy: "move",
+    conflictColumns: ["date", "scheduleType"],
+  },
+  {
+    // No FK at all, so forgetting it leaves orphans rather than raising —
+    // the `pcn_forecasts` failure mode one table over. Its PK is the whole
+    // key `(attraction_id, target_date, lead_days)`, and one target day
+    // accumulates one row per lead distance, so a loser row for a day and a
+    // distance the winner already sampled has to go before the move.
+    //
+    // `move` rather than `discard` although the numbers are model output: the
+    // table exists precisely because its rows cannot be recomputed later — a
+    // prediction made 60 days out is deleted and rewritten by every nightly
+    // run until its target date arrives, and this is the copy that survives to
+    // be scored. Discarding them would not lose a derived figure, it would
+    // lose the only measurement of how wrong a long-lead forecast was.
+    table: "prediction_lead_snapshots",
+    column: "attraction_id",
+    strategy: "move",
+    conflictColumns: ["target_date", "lead_days"],
   },
   {
     // Discarded rather than moved: the profile is an aggregate over a window
@@ -310,6 +564,40 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     strategy: "winner-authoritative",
     richness: rideProfileRichness,
   },
+
+  // --- rows a person set by hand, one of them a stranger's ---
+  {
+    // The attraction-side twin of `show_follows`, named as such in that
+    // entry's comment since PAR-104 and missing from this list until PAR-149:
+    // same ON DELETE CASCADE, same unique key on the subscriber, same owner —
+    // somebody outside this project who would simply never hear from us again.
+    // A merge deleted their armed alert inside a transaction that then
+    // reported success.
+    //
+    // Deduping on the subscriber is what the unique index asks for: one alert
+    // per subscriber per ride. Which of two rows survives is arbitrary where
+    // they differ — `thresholdMinutes` may be 20 on one and 40 on the other,
+    // and the winner's wins — and that is the same open product question
+    // `show_follows` records as PAR-151 rather than a second one. In every
+    // branch the subscriber keeps a working alert for the ride they asked
+    // about, which is what the CASCADE took away.
+    table: "ride_alerts",
+    column: "attractionId",
+    strategy: "move",
+    conflictColumns: ["subscriptionId"],
+  },
+  {
+    // Two attraction columns and a CHECK across them, so no combination of
+    // `column` and `conflictColumns` can express it — see
+    // `mergeAttractionReviewMarks` for the four cases and why each is what it
+    // is. The entry still names a table and a column because the guard reads
+    // `table` and `ParkMergeService`'s identifier allowlist reads `column`;
+    // the statements themselves name their columns as literals.
+    table: "attraction_review_marks",
+    column: "attraction_id",
+    strategy: "custom",
+    apply: mergeAttractionReviewMarks,
+  },
 ];
 
 /**
@@ -387,8 +675,9 @@ export const SHOW_DEPENDENCIES: MergeDependency[] = [
     // branch, and picking between them is a product question.
     //
     // `ride_alerts` is the attraction-side twin of this row, with the same
-    // CASCADE and the same unique `(subscriptionId, attractionId)`, and it is
-    // NOT on `ATTRACTION_DEPENDENCIES` — see PAR-149.
+    // CASCADE and the same unique `(subscriptionId, attractionId)`. It was off
+    // `ATTRACTION_DEPENDENCIES` until PAR-149 and is on it now, deduped on the
+    // same column, so the two sides finally decide the same way.
     table: "show_follows",
     column: "showId",
     strategy: "move",
@@ -917,7 +1206,9 @@ async function applyWinnerAuthoritative(
  * else is reparented, so no time series is lost.
  *
  * A `winner-authoritative` entry is the third case and reads the table before
- * it writes to it — see `applyWinnerAuthoritative`.
+ * it writes to it — see `applyWinnerAuthoritative`. A `custom` entry is the
+ * fourth and hands the pair to its own function, for a table whose shape none
+ * of the three statements above can address.
  *
  * Callers must already hold a transaction, and for TimescaleDB tables must
  * have lifted `timescaledb.max_tuples_decompressed_per_dml_transaction`.
@@ -969,6 +1260,29 @@ export async function applyMergeDependencies(
           `${dep.strategy} strategy, which never reads it`,
       );
     }
+    // Both directions, because both are silent. A `custom` entry without a
+    // function is a table declared to the guard and handled by nothing — the
+    // exact failure this whole file exists to make impossible — and an `apply`
+    // on any other strategy is a function nothing calls, beside a table that
+    // is being moved or deleted by the generic path instead.
+    if (dep.strategy === "custom" && !dep.apply) {
+      throw new Error(
+        `Merge dependency "${dep.table}" declares the custom strategy ` +
+          `without an apply function, so nothing would handle it`,
+      );
+    }
+    if (dep.apply && dep.strategy !== "custom") {
+      throw new Error(
+        `Merge dependency "${dep.table}" declares apply with the ` +
+          `${dep.strategy} strategy, which never calls it`,
+      );
+    }
+    if (dep.strategy === "custom" && dep.conflictColumns?.length) {
+      throw new Error(
+        `Merge dependency "${dep.table}" declares conflictColumns with the ` +
+          `custom strategy, which never reads them`,
+      );
+    }
   }
 
   for (const dep of dependencies) {
@@ -982,6 +1296,13 @@ export async function applyMergeDependencies(
 
     if (dep.strategy === "winner-authoritative") {
       await applyWinnerAuthoritative(manager, dep, winnerId, loserId);
+      continue;
+    }
+
+    if (dep.strategy === "custom") {
+      // Non-null by the check above, which runs over the whole list before the
+      // first statement.
+      await dep.apply!(manager, winnerId, loserId);
       continue;
     }
 
