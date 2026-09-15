@@ -722,7 +722,18 @@ What that measurement says, and what it constrains:
   both failed are 0.0000 km apart on no location information at all;
   `usableCoordinate` refuses it, as `source-id-inheritance.util.ts` already
   did. The same helper coerces the `decimal` columns (Postgres returns them as
-  strings) and stops treating a park on the prime meridian as unlocated.
+  strings) and stops treating a park on the prime meridian as unlocated — that
+  last part only ever bit on numeric input, because Postgres hands back
+  `"0.0000000"` and that string is truthy.
+
+  For the same reason this **narrows the four name-led branches**, deliberately:
+  two failed geocodes used to pass the truthiness check, `geoProximity` read
+  them as 0 km apart, and `geoProximity && nameSimilarity >= 0.85` could fire on
+  rows carrying no location information. It no longer can. A real ghost pair
+  stays reachable through `sameCity` and through
+  `nameSimilarity >= 0.95 && sharedEntityId`, neither of which asks about
+  geometry, and a spec case pins that so a future hoist of the refusal cannot
+  take ghost detection with it.
 - **Disjoint sources is the PortAventura guard**, and it is the §5.4 rule one
   level up: Queue-Times carries 19 for PortAventura Park and 277 for Ferrari
   Land, which is that source saying it knows two parks on this geocode. The
@@ -733,11 +744,23 @@ What that measurement says, and what it constrains:
   Windsor against its water park 0.7429, Alton Towers against its waterpark
   0.6923, Heide Park against its resort 0.7273 — and so does another park of
   the same brand, `Wet 'n' Wild Las Vegas` against the Gold Coast row at
-  0.6061. No threshold separates that class. The radius does: with the floor at
-  0.65 no two such rows in the catalogue sit closer than 0.1174 km (`Boonie
-  Bears Adventure Park Linhai` against its water park, 0.6923), 11.7× the
-  radius, and the only pairs on one point are one resort's three parks, at
-  ≤ 0.2000 on names.
+  0.6061. No threshold separates that class. The radius does, **as long as the
+  venue carries its own geocode**: with the floor at 0.65 no two such rows in
+  the catalogue sit closer than 0.1174 km (`Boonie Bears Adventure Park Linhai`
+  against its water park, 0.6923), 11.7× the radius.
+
+  **Where it does not is the residual risk of this branch, and it is worth
+  writing down.** A second venue that inherits its resort's geocode sits at
+  0.0000 km, so the radius has no vote on it at all and only the name floor and
+  `sourcesDisjoint` are left. Three rows are that shape today — PortAventura
+  Park, Ferrari Land and Caribe Aquatic Park on one point — and their names
+  hold them apart at 0.1600–0.2000 against a floor of 0.65, with
+  `sourcesDisjoint` refusing two of the three pairs besides. But a water park
+  that synced in on its resort's point, from a source the theme-park row does
+  not carry, scoring like `Legoland Windsor` against its water park (0.7429),
+  would satisfy all three conditions. No such row is in the catalogue today.
+  What would make that safe rather than merely unlikely is the review gate in
+  PAR-247, not another threshold here.
 
   The floor is 0.65 and not 0.6 for one measured reason: at 0.6 the Rockford
   pair cleared both the name floor and `sourcesDisjoint`, leaving the radius as
