@@ -74,9 +74,9 @@ review gate, so a false positive deletes a real park:
 - **`SHARED_POINT_KM` = 0.01**, not the 0.05 first proposed. Under 0.05 km the
   catalogue also holds `Hurricane Harbor Chicago` against `Six Flags Hurricane
   Harbor, Rockford` at 0.0424 km — two real parks 110 km apart, of which the
-  Rockford row carries a Gurnee geocode. Its sources are disjoint too, so the
-  name floor would have been the only thing standing between it and a merge, by
-  0.6122 against 0.6000. Nothing lies between 0.0000 and 0.0424.
+  Rockford row carries a Gurnee geocode. Its sources are disjoint too, so at
+  0.05 km that pair would have rested on the name floor alone. Nothing lies
+  between 0.0000 and 0.0424.
 - **`0, 0` is not a point.** Two rows whose geocoding failed are 0.0000 km
   apart on no location information at all. `usableCoordinate` refuses Null
   Island the way `source-id-inheritance.util.ts` already did, coerces the
@@ -88,7 +88,7 @@ review gate, so a false positive deletes a real park:
   PortAventura Park and 277 for Ferrari Land on one resort geocode. This is
   §5.4's rule ("two ids from the same source are that source saying these are
   two things") applied to parks.
-- **`SHARED_POINT_NAME_SIMILARITY` = 0.6**, under the pair it must catch and far
+- **`SHARED_POINT_NAME_SIMILARITY` = 0.65**, under the pair it must catch and far
   over the only other pairs sharing a point (0.1600–0.2000). **0.65 rather than
   0.6, so that the name and the radius refuse independently:** at 0.6 exactly
   one catalogue pair cleared both the floor and `sourcesDisjoint` and was held

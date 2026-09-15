@@ -715,9 +715,9 @@ What that measurement says, and what it constrains:
 
 - **The radius is 0.01 km, not the 0.05 the ticket proposed.** At 0.05 the
   Rockford row comes with it — a real park 110 km away whose geocode says
-  Gurnee, and whose sources are disjoint too, so the name floor would have been
-  the only thing standing between it and an automatic merge, by 0.6122 against
-  0.6000. Between 0.0000 and 0.0424 the catalogue is empty.
+  Gurnee, and whose sources are disjoint too, so at 0.05 km that pair would
+  have rested on the name floor alone. Between 0.0000 and 0.0424 the catalogue
+  is empty.
 - **`0, 0` is not a point.** Null Island is a failed geocode, and two rows that
   both failed are 0.0000 km apart on no location information at all;
   `usableCoordinate` refuses it, as `source-id-inheritance.util.ts` already
@@ -728,7 +728,7 @@ What that measurement says, and what it constrains:
   Land, which is that source saying it knows two parks on this geocode. The
   test reads what a row *is* (which source columns it fills), never when it was
   last heard from.
-- **The name floor is 0.6 and cannot carry more than it does.** A water park
+- **The name floor is 0.65 and cannot carry more than it does.** A water park
   beside its theme park scores at or above the pair we must catch — Legoland
   Windsor against its water park 0.7429, Alton Towers against its waterpark
   0.6923, Heide Park against its resort 0.7273 — and so does another park of

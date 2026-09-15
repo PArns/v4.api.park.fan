@@ -143,7 +143,7 @@ function namesASource(park: {
  * reach the table. Two such rows are 0.0000 km apart and would satisfy
  * `SHARED_POINT_KM` on no location information at all: before this branch
  * existed they still needed 0.85 on names to be called duplicates, and now
- * they would need 0.6.
+ * they would need 0.65.
  *
  * The other two: `latitude` and `longitude` are `decimal`, which Postgres
  * hands back as strings, so they are coerced here once rather than left to
