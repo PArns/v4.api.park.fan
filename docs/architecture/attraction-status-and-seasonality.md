@@ -739,6 +739,147 @@ What that measurement says, and what it constrains:
 
 Detection only. Merging the two rows stays a separate, irreversible operation.
 
+### 5.6 An entity changed its `entityType` and left its old row behind
+
+ThemeParks.wiki reclassifies entities **without changing their id**. On
+2026-04-25 it moved 17 Universal Studios Singapore meet-and-greets and character
+shows from `ATTRACTION` to `SHOW`; on 2026-04-23 it did the same to ten entities
+at Tokyo Disneyland and five at Tokyo DisneySea.
+
+`ChildrenMetadataProcessor.handleFetchChildren` fans the children of a park out
+by `entityType` and writes each group into its own table. It followed the
+reclassification into `shows` — and left the `attractions` row exactly where it
+was, because `externalId` is unique **per table** and nothing compared the two.
+
+The abandoned row does not go quiet. No source reports it any more, so
+reverse-reconciliation writes a CLOSED row every poll cycle, and the park page
+shows a permanently closed ride that no longer exists as a ride. Measured
+against production on 2026-09-15, in the 30 days before the fix:
+
+| Park | abandoned rows | `system-reconciliation` rows, 30 d | last real reading |
+| -- | -- | -- | -- |
+| Universal Studios Singapore | 17 | 11,832 | 2026-04-26 |
+| Tokyo Disneyland | 10 | 6,970 | 2026-04-23 |
+| Tokyo DisneySea | 5 | 3,485 | 2026-04-23 |
+| Disney's Animal Kingdom | 1 | 21 | never |
+| Disneyland Park (Paris) | 1 | 617 | 2026-08-29 |
+
+`retireReclassifiedAttractions` now runs after the show and restaurant syncs of
+each park and retires the rows that were left behind. The query below finds the show case, which is
+all that has been observed; the code also covers an entity that became a
+`RESTAURANT`, and applies the two second-source filters described further down:
+
+```sql
+SELECT p.name AS park, count(*) AS total,
+       count(*) FILTER (WHERE a.queue_times_entity_id IS NULL)     AS only_wiki,
+       count(*) FILTER (WHERE a.queue_times_entity_id IS NOT NULL) AS also_queue_times
+FROM attractions a
+JOIN shows s ON s."externalId" = a."externalId"
+JOIN parks p ON p.id = a."parkId"
+WHERE a.retired_at IS NULL
+GROUP BY ROLLUP (p.name);
+```
+
+**The two rows in the last column are the reason this is not a blanket cleanup.**
+`queue_times_entity_id` means Queue-Times reports the same entity, and it reports
+it as an attraction with a wait time. Disneyland Paris' `Mickey's PhilharMagic`
+is a show to the wiki and a queueing ride to Queue-Times, and it was still
+receiving real `OPERATING` readings on 2026-08-29 while the wiki had it as a
+show. Retiring it would delete a live ride over a disagreement between two
+sources — a curation decision, not a sync one. Only rows that exist purely
+because the wiki once called them attractions are retired.
+
+**That column alone does not find every second source.** The entity mapping job
+writes `queue_times_entity_id` for a Queue-Times match only; a `wartezeiten-app`
+match leaves nothing but the `external_entity_mapping` row, and
+`WaitTimesProcessor` resolves live data through that mapping all the same. On
+2026-09-15, **39 attractions** carried exactly that combination — a wartezeiten
+mapping and no Queue-Times id — so the retirement also skips any row with a
+mapping whose `external_source` is not `themeparks-wiki`:
+
+```sql
+SELECT count(*) FROM attractions a
+WHERE a.queue_times_entity_id IS NULL AND EXISTS (
+  SELECT 1 FROM external_entity_mapping m
+   WHERE m.internal_entity_id = a.id::text AND m.internal_entity_type = 'attraction'
+     AND m.external_source = 'wartezeiten-app');
+-- 39
+```
+
+None of them is among today's candidates, so this changes no number above. It is
+the difference between a filter that happens to be right and one that is right
+for a reason.
+
+**And it undoes itself.** A row retired this way carries
+`RECLASSIFIED_UPSTREAM_REASON` verbatim, and `syncAttraction` lifts the
+retirement the moment the wiki lists the entity as an `ATTRACTION` again. That
+is what makes it safe to run unattended: one malformed `/children` response
+cannot strand a park's rides, because the next correct run brings them back.
+Only rows carrying that exact reason are lifted — a retirement a human entered
+through `POST /admin/retire-attractions` survives every nightly run, and that is
+why the marker is an exact string rather than a prefix. The string is also
+**user-facing** (`AttractionResponseDto` serves `retiredReason` on the public
+attraction detail endpoint), so it reads as a sentence with its source and
+carries no issue numbers or file paths.
+
+**What comes back is the row, not its data supply.** The `shows` row keeps
+existing (PAR-232), and `WaitTimesProcessor` builds its entity lookup with the
+shows after the attractions, so `themeparks-wiki:<externalId>` still resolves to
+the show — the un-retired attraction goes straight back to collecting
+`system-reconciliation` CLOSED rows. That is no worse than the state this fix
+exists to remove, since a visible ride reading CLOSED beats one that silently
+disappeared, but it is not a full recovery. Clearing the orphaned show row is
+PAR-232's job.
+
+**The protection runs one way.** A retirement a human entered survives every
+run, because its reason is not one the sync wrote. An un-retirement entered by
+hand does not: `POST /admin/unretire-attraction/:id` clears `retired_reason`,
+the row matches the filter again, and the next run retires it while the wiki
+still calls the entity a show. That is the sync winning an argument with a
+person, which is the point of a sync — the wiki is the source for what an entity
+*is*. To override it, correct the entity upstream or add its id to
+`THEMEPARKS_EXCLUSIONS`.
+
+**The test for a second source is structural, and deliberately so.** A draft of
+this change also held back rows that had received a genuine reading in the last
+30 days. It was withdrawn, because it would have made the fix arrive a month
+late every time: once the wiki flips an entity's type, `WaitTimesProcessor`
+resolves `themeparks-wiki:<externalId>` to the shows row, so the attraction's
+last genuine reading *is* the day of the reclassification — and the wrongly
+CLOSED ride would have stayed on the park page for the whole window. A row's own
+columns say what it is; its readings say when we last heard, which is a
+different question.
+
+Three more limits worth knowing before trusting the round trip:
+
+- **The way back is park-scoped.** The retirement is not: `externalId` is
+  globally unique, so a row whose park changed upstream is still found and
+  retired, but `syncAttraction` only ever looks at its own park's rows, so that
+  one row has to be brought back by hand.
+- **An id that arrives as an `ATTRACTION` in the same response is excluded**
+  from the retirement list. `/children` listing one entity under two types is
+  the same upstream fault `dedupePollEntities` handles for live data, and
+  without the exclusion the row would flip between retired and not on every
+  run, evicting caches and revalidating the frontend each time.
+- **`detect-seasonal` used to erase the season of any retired row**, on the
+  reasoning that a demolished ride never reports OPERATING again. A row retired
+  this way can come back, and while it is retired it receives no readings at
+  all (`wait-times.processor.ts` loads its attractions with
+  `retiredAt: IsNull()`) — so the detector could never re-derive what it had
+  cleared. Step 2c now skips retirements carrying a
+  `RECLASSIFIED_UPSTREAM_REASONS` value; every other retirement stays permanent.
+
+And the 17 rows retired by hand for this issue on 2026-09-15 carry their own
+reason, with the entity URL in it, rather than the constant. They were an admin
+write, so the sync treats them the way it treats any human retirement: it will
+not lift them. That is the intended reading, not an oversight.
+
+The reverse direction is handled **only on the attraction side**. When an entity
+moves the other way, the row it leaves behind in `shows` or `restaurants` stays
+there, because neither table has a `retired_at` column to set (PAR-232). It is
+not observed in production either — all 34 collisions run one way, and
+`restaurants` has none.
+
 ---
 
 ## 6. Diagnostic SQL

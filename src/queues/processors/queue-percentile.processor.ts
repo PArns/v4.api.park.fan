@@ -6,6 +6,7 @@ import { Repository, DataSource } from "typeorm";
 import { QueueDataAggregate } from "../../analytics/entities/queue-data-aggregate.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Show } from "../../shows/entities/show.entity";
+import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attraction-retirement.service";
 
 /**
  * Queue Percentile Processor
@@ -218,10 +219,22 @@ export class QueuePercentileProcessor {
     // flag they already carry, and no reset path can reach them either — a
     // demolished ride will never report OPERATING. "Seasonal" says it closes
     // for part of the year, which is not what happened to it.
+    //
+    // That rests on retirement being final, and one kind of retirement is not.
+    // The children sync retires a row whose entity ThemeParks.wiki reclassified
+    // as a show, and lifts it again if the wiki changes its mind — so a row
+    // retired at 04:00 and reset here at 02:30 would come back the next night
+    // having silently lost a season it can no longer re-derive: while it is
+    // retired it receives no readings at all (`wait-times.processor.ts` loads
+    // its attractions with `retiredAt: IsNull()`), so there is nothing left for
+    // this detector to derive months from. Those rows are skipped; every other
+    // retirement is still permanent.
     const retiredReset = await this.dataSource.query(
       `UPDATE attractions
           SET is_seasonal = false, season_months = NULL
-        WHERE retired_at IS NOT NULL AND is_seasonal = true`,
+        WHERE retired_at IS NOT NULL AND is_seasonal = true
+          AND (retired_reason IS NULL OR retired_reason <> ALL($1::text[]))`,
+      [RECLASSIFIED_UPSTREAM_REASONS],
     );
     if (retiredReset[1] > 0) {
       this.logger.log(

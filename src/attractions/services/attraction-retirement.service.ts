@@ -7,6 +7,54 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 
+/**
+ * The exact `retired_reason` the children sync writes when an entity is
+ * reclassified upstream, and the marker that lets it undo itself.
+ *
+ * It has to be an exact string rather than a prefix or a substring, because
+ * the sync only un-retires rows carrying *this* reason: a retirement entered
+ * by a human through `POST /admin/retire-attractions` must survive every
+ * nightly run, and a fuzzy match would eventually swallow one.
+ *
+ * **It is also user-facing**, so it reads as a sentence and not as a note to
+ * the next developer: `AttractionResponseDto` serves `retiredReason` on the
+ * public attraction detail endpoint. Issue numbers, file paths and internals
+ * belong in the docblock of the method that writes it, not in here.
+ *
+ * ⚠️ **An edit here changes what {@link isReclassifiedUpstreamReason} matches,
+ * so the previous value moves into {@link RECLASSIFIED_UPSTREAM_REASONS} in
+ * the same commit.** Without that, every row already retired under the old
+ * wording is stranded: the un-retire check no longer recognises it and the
+ * retire filter skips it because `retiredAt` is set. A spec pins the literal,
+ * so the wording cannot be changed without reading this first.
+ *
+ * The pin is a mitigation and not a fix — the copy and the marker are one
+ * string, which is also why this sentence cannot be localized. Decoupling
+ * them needs a column of its own (`retired_by`, say), and that is a schema
+ * change this issue did not ask for.
+ */
+export const RECLASSIFIED_UPSTREAM_REASON =
+  "ThemeParks.wiki lists this entity as a show or a restaurant rather than an " +
+  "attraction, so it is no longer tracked as a ride. The date is when this was " +
+  "noticed, not when the reclassification happened. " +
+  "Source: https://api.themeparks.wiki/";
+
+/**
+ * Every wording the children sync has ever written, newest first. The
+ * un-retire check accepts all of them, so a row retired under an older text
+ * still comes back when the wiki calls the entity an attraction again.
+ */
+export const RECLASSIFIED_UPSTREAM_REASONS: readonly string[] = [
+  RECLASSIFIED_UPSTREAM_REASON,
+];
+
+/** True for a retirement this sync wrote, under any wording it has used. */
+export function isReclassifiedUpstreamReason(
+  reason: string | null | undefined,
+): boolean {
+  return reason != null && RECLASSIFIED_UPSTREAM_REASONS.includes(reason);
+}
+
 export interface RetirementRequest {
   attractionId: string;
   /** The day it stopped existing, where a source states one. */
