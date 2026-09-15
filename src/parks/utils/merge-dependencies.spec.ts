@@ -15,6 +15,7 @@ import {
   attractionTablesMissingFrom,
   decideWinnerAuthoritative,
   mergeAttractionReviewMarks,
+  migrateScheduleEntries,
   parkTablesMissingFrom,
   planWinnerAuthoritative,
   rideProfileRichness,
@@ -1421,5 +1422,54 @@ describe("applyMergeDependencies", () => {
 
     expect(manager.query).toHaveBeenCalledTimes(1);
     expect(manager.query.mock.calls[0][0]).toMatch(/^UPDATE queue_data/);
+  });
+});
+
+describe("migrateScheduleEntries", () => {
+  const manager = { query: jest.fn().mockResolvedValue([]) };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it("names all three columns and compares the nullable ride with IS NOT DISTINCT FROM", async () => {
+    await migrateScheduleEntries(manager, "winner-park", "loser-park");
+
+    const [deleteSql, deleteParams] = manager.query.mock.calls[0] as [
+      string,
+      unknown[],
+    ];
+    expect(deleteSql).toMatch(/^\s*DELETE FROM schedule_entries/);
+    expect(deleteSql).toMatch(/"date"/);
+    expect(deleteSql).toMatch(/"scheduleType"/);
+    expect(deleteSql).toMatch(/"attractionId"\s+IS NOT DISTINCT FROM/);
+    expect(deleteParams).toEqual(["winner-park", "loser-park"]);
+
+    const [updateSql, updateParams] = manager.query.mock.calls[1] as [
+      string,
+      unknown[],
+    ];
+    expect(updateSql).toMatch(/^\s*UPDATE schedule_entries SET "parkId"/);
+    expect(updateParams).toEqual(["winner-park", "loser-park"]);
+  });
+
+  it("reports the number of rows it reparented", async () => {
+    // TypeORM hands a raw UPDATE back as [rows, affectedCount], and the count
+    // is what `mergeParks` reports as `migratedScheduleEntries`.
+    manager.query
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([[], 7] as unknown as never);
+
+    await expect(
+      migrateScheduleEntries(manager, "winner-park", "loser-park"),
+    ).resolves.toBe(7);
+  });
+
+  it("refuses one park id on both sides instead of emptying its schedule", async () => {
+    // The EXISTS would match every row against itself, so the DELETE is a wipe
+    // rather than a no-op — the same reason `applyMergeDependencies` refuses.
+    await expect(
+      migrateScheduleEntries(manager, "same-park", "same-park"),
+    ).rejects.toThrow(/both sides/i);
+
+    expect(manager.query).not.toHaveBeenCalled();
   });
 });
