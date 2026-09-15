@@ -179,9 +179,9 @@ export class ParkMergeService {
         // Not `migrateTableData`: its conflict key is a row-wise `IN`, and no
         // list of columns it can build both dedupes a park-level row and
         // spares a per-ride one. `(date, scheduleType)` did neither — it read
-        // across the nullable `attractionId` and took the loser's whole
-        // per-ride schedule with it whenever the winner held any row for that
-        // day, which is every day the winner is open (PAR-171). The rule is
+        // across the nullable `attractionId` and took the loser's per-ride
+        // rows with it whenever the winner held any row of that TYPE that day
+        // — usually its own park-level OPERATING row (PAR-171). The rule is
         // shared with `consolidateMergedPark` rather than written twice.
         result.migratedScheduleEntries = await migrateScheduleEntries(
           manager,
@@ -327,8 +327,10 @@ export class ParkMergeService {
     // passes `assertAllowedIdentifier` today. What keeps it out is that no such
     // call exists: the park path goes through `migrateScheduleEntries`, which
     // spells its three columns out itself, and a spec case pins that no
-    // statement in `mergeParks` deletes from this table with a row-wise `IN`
-    // (PAR-171).
+    // statement in `mergeParks` deletes from this table on a `parkId` key with
+    // a row-wise `IN`. On a key of `attractionId` that `IN` is correct and the
+    // attraction path uses it — the park-level rows are already excluded there
+    // (PAR-171, PAR-149).
     "park_p50_baselines",
     "park_occupancy",
     "headliner_attractions",
