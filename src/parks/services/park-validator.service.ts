@@ -135,8 +135,15 @@ function namesASource(park: {
 /**
  * A position, or null when the row does not have one.
  *
- * Three things the truthiness check this replaces got wrong, and the first is
- * the one that matters here. **`0, 0` is Null Island** — a row whose geocoding
+ * Three things the truthiness check got wrong, and the first is the one that
+ * matters here. It is replaced in `findDuplicates` only: `getValidDistance`
+ * and `findMissingQueueTimesIds` further down still test `park.latitude &&
+ * park.longitude` and hand the raw `decimal` strings to the haversine. Both
+ * belong to the Queue-Times id matching rather than to duplicate detection,
+ * so they are PAR-258's along with the third copy of these rules in
+ * `source-id-inheritance.util.ts`, not this branch's.
+ *
+ * **`0, 0` is Null Island** — a row whose geocoding
  * failed, not a park in the Gulf of Guinea; `source-id-inheritance.util.ts`
  * refuses it for the same reason, and `queue-times-data-source.ts` writes the
  * API's coordinates through `parseFloat` without filtering, so the value does
@@ -149,9 +156,21 @@ function namesASource(park: {
  * hands back as strings, so they are coerced here once rather than left to
  * coerce themselves inside the haversine; and a park exactly on the prime
  * meridian read as "no coordinates" under `p.latitude && p.longitude`, which
- * silently excluded it from `geoProximity`. No park in the catalogue sits on
- * the meridian or the equator today (nearest: 0.319° and 1.254°), so fixing
- * that changes nothing now and stops being a trap later.
+ * silently excluded it from `geoProximity`. That last one only ever bit on
+ * NUMERIC input — a unit test, or a future column transformer — because
+ * Postgres hands back `"0.0000000"`, and that string is truthy. No park in
+ * the catalogue sits on the meridian or the equator today (nearest: 0.319°
+ * and 1.254°), so it changes nothing now and stops being a trap later.
+ *
+ * **It narrows the four name-led branches, deliberately.** Because
+ * `"0.0000000"` is truthy, two rows whose geocoding failed did pass the old
+ * check, and `geoProximity` then read them as 0.0000 km apart — so
+ * `geoProximity && nameSimilarity >= 0.85` could fire on two rows with no
+ * location information at all. It no longer can. That is the intended
+ * direction: 0 km between two failed geocodes is not evidence of proximity,
+ * and a genuine ghost pair is still reachable through `sameCity` and through
+ * `nameSimilarity >= 0.95 && sharedEntityId`, neither of which asks about
+ * geometry. No catalogue row sits at `0, 0` today, so nothing changes yet.
  */
 function usableCoordinate(park: {
   latitude: number | null;

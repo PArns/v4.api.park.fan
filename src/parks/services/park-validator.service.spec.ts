@@ -188,6 +188,38 @@ describe("ParkValidatorService.findDuplicates", () => {
     wartezeitenEntityId: null,
   });
 
+  /**
+   * A theme park and its own water park, 0.1174 km apart on the catalogue's
+   * real coordinates and 0.6923 on names — the same score as the Wet'n'Wild
+   * pair, which is the whole point. Everything `sharedPoint` asks for is
+   * satisfied here EXCEPT the radius, and the sources are deliberately set
+   * disjoint so that nothing else can do the refusing.
+   *
+   * This is what pins `SHARED_POINT_KM`. It is the nearest pair in the
+   * catalogue that the radius has to separate, so widening the radius past
+   * 0.1174 km merges a theme park into its water park.
+   */
+  const boonieBearsAdventure = park({
+    id: "bb-1",
+    name: "Boonie Bears Adventure Park Linhai",
+    city: "Tai Zhou Shi",
+    latitude: 28.8602,
+    longitude: 121.195,
+    wikiEntityId: "bb-adventure-wiki",
+    queueTimesEntityId: null,
+    wartezeitenEntityId: null,
+  });
+  const boonieBearsWater = park({
+    id: "bb-2",
+    name: "Boonie Bears Water Park Linhai",
+    city: "Tai Zhou Shi",
+    latitude: 28.8601,
+    longitude: 121.1962,
+    wikiEntityId: null,
+    queueTimesEntityId: "qt-park-bb-water",
+    wartezeitenEntityId: null,
+  });
+
   /** Sibling parks of one chain, ~0.4 km apart. Must NOT be flagged. */
   const fantawildPark = park({
     id: "fw-1",
@@ -390,6 +422,23 @@ describe("ParkValidatorService.findDuplicates", () => {
     expect(await service.findDuplicates()).toEqual([]);
   });
 
+  it("pins the radius: a park and its own water park 0.1174 km apart stay two parks", async () => {
+    // 0.6923 on names — the target pair's own score, so the floor cannot
+    // refuse this one — disjoint sources, same city. Only SHARED_POINT_KM
+    // stands between them, and it is the only case in the suite that says so:
+    // raise the radius to 0.05, 0.2 or 1.0 km and this goes red alone.
+    //
+    // Before the floor moved to 0.65 the Rockford pair did this job by
+    // accident, because 0.6122 sat above a floor of 0.6. It no longer does,
+    // and widening the radius stopped being caught by anything.
+    parkRepository.find.mockResolvedValue([
+      boonieBearsAdventure,
+      boonieBearsWater,
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
   it("does not flag the Rockford row that carries a Gurnee geocode", async () => {
     // 0.0424 km apart, 0.6122 on names, disjoint sources — everything the
     // Wet'n'Wild pair has except one point. Two real parks 110 km apart.
@@ -456,11 +505,13 @@ describe("ParkValidatorService.findDuplicates", () => {
     expect(await service.findDuplicates()).toEqual([]);
   });
 
-  it("resolves a winner for the pair, which is what the endpoint reports", async () => {
-    // `GET /v1/admin/duplicate-parks` maps each pair through
-    // `determineMergeWinner`, the same function the merge uses. The row
-    // ThemeParks.wiki knows wins: it is the only one of the two carrying a
-    // wiki ID.
+  it("resolves a winner for the pair through the function the endpoint uses", async () => {
+    // This calls `determineMergeWinner` directly — the function
+    // `GET /v1/admin/duplicate-parks` maps each pair through, and the one the
+    // merge uses. It does NOT exercise the controller, so a swapped argument
+    // order or a changed mapping step in `listDuplicateParks` would leave this
+    // green. The row ThemeParks.wiki knows wins: it is the only one of the two
+    // carrying a wiki ID.
     const verdict = determineMergeWinner(wetnwildWiki, wetnwildQueueTimes);
 
     expect(verdict).toEqual({
