@@ -95,9 +95,10 @@ review gate, so a false positive deletes a real park:
   out by geometry alone — the Rockford row again, 0.6122 at 0.0424 km, on
   coordinates Queue-Times publishes rather than ones we derive, so one upstream
   correction would have moved it onto the point. 63 pairs score in
-  [0.60, 0.65) and every one is two different parks, the closest of them
-  0.1901 km apart, so the raise excludes nothing the radius did not already
-  exclude and leaves the target 0.0423 of margin. The nearest pair the radius
+  [0.60, 0.65) and every one is two different parks; the closest of them is the
+  Rockford pair itself at 0.0424 km, and the closest of the other 62 is
+  0.1901 km away, so all 63 sit outside the radius already — the raise excludes
+  nothing the radius was not excluding and leaves the target 0.0423 of margin. The nearest pair the radius
   must now separate is 0.1174 km away (`Boonie Bears Adventure Park Linhai`
   against its water park, 0.6923), 11.7× the radius against 4.2× before. It
   still cannot do more than that: a water park beside its theme park scores at

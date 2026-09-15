@@ -106,10 +106,12 @@ const SHARED_POINT_KM = 0.01;
  * upstream correction moves the pair to 0.0000 km and an automatic merge
  * deletes a real park. Measured over all 213 catalogue parks (22 578 pairs):
  * **63 pairs score in [0.60, 0.65), every one of them two genuinely different
- * parks**, and the closest of the 63 is 0.1901 km apart (`Fantawild FT Wild
- * Land Xiaogan` against `Fantawild Water Park Xiaogan`), i.e. 19× this
- * radius. Raising the floor therefore excludes nothing the radius does not
- * already exclude, and leaves the target pair 0.0423 of margin.
+ * parks.** The closest of the 63 is the Rockford pair itself at 0.0424 km —
+ * it sits in this band, which is the whole reason the band matters — and the
+ * closest of the other 62 is 0.1901 km away (`Fantawild FT Wild Land Xiaogan`
+ * against `Fantawild Water Park Xiaogan`), i.e. 19× this radius. So all 63
+ * are outside the radius already: raising the floor excludes nothing the
+ * radius was not excluding, and leaves the target pair 0.0423 of margin.
  *
  * It still cannot do more than that, and the measured figures say where its
  * limit is. The dangerous shape is a second venue at one address, and those

@@ -771,8 +771,11 @@ What that measurement says, and what it constrains:
   pair cleared both the name floor and `sourcesDisjoint`, leaving the radius as
   its only refusal — and that radius rests on coordinates Queue-Times
   publishes, not on ones we derive. 63 catalogue pairs score in [0.60, 0.65),
-  all of them genuinely different parks, and the closest is 0.1901 km apart, so
-  raising the floor refuses nothing the radius was not refusing already.
+  all of them genuinely different parks. The closest of them is the Rockford
+  pair itself at 0.0424 km — it is in this band, which is why the band matters —
+  and the closest of the other 62 is 0.1901 km away, so all 63 are outside the
+  radius already and raising the floor refuses nothing the radius was not
+  refusing.
 
 This section adds the detector, not a gate in front of the merge:
 `POST /v1/admin/merge-duplicate-parks` with `autoDetect: true` still merges
