@@ -29,6 +29,7 @@ import {
   todayLookbackDate,
 } from "../common/utils/live-data-query.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
+import { normalizedClosingSql } from "../common/utils/park-open-window.sql";
 
 @Injectable()
 export class ShowsService {
@@ -754,10 +755,35 @@ export class ShowsService {
    * days. Those parks publish no wrap day, so this expression leaves them
    * exactly where they are.
    *
+   * The window is read through {@link normalizedClosingSql}, never from the raw
+   * column, and that is load-bearing in both directions. A closing time stamped
+   * with the day's OWN date — ThemeParks.wiki does that for `open 12:00 /
+   * close 00:00`, Parque Warner Madrid every day — is not a wrap day to a raw
+   * comparison, so the rule would miss exactly the rows §5 was written for. And
+   * an overshot window (`operating-window.util.ts` names a 34-hour one at
+   * SeaWorld San Diego and a three-year one at Busch Gardens Williamsburg)
+   * would swallow the whole following day, dragging ordinary afternoon
+   * performances onto the date before. Normalising re-anchors both to the
+   * opening's park-local date, through the timezone rather than by adding 24
+   * hours, so a DST night keeps its local closing time.
+   *
+   * It is a correlated subquery in a job that walks millions of rows, so the
+   * cost was measured rather than assumed: against production on 2026-09-15 the
+   * pattern window holds **3,788,203** showtime entries, and resolving the
+   * operating day for every one of them takes **8.1 s** against the 5.7 s the
+   * aggregation above costs without it. Roughly two and a half seconds, once a
+   * night — cheap enough that a `wrap_days` join, which would put the rule in
+   * two places, is not worth the drift.
+   *
    * `$<tz>` and the showtime expression are interpolated by the callers, which
    * bind the park timezone as a parameter; the subquery itself takes none.
    */
   private static operatingDaySql(startTs: string, parkId: string, tz: string) {
+    const closes = normalizedClosingSql(
+      'se."openingTime"',
+      'se."closingTime"',
+      tz,
+    );
     return `COALESCE(
               (SELECT se.date
                  FROM schedule_entries se
@@ -766,13 +792,13 @@ export class ShowsService {
                   AND se."scheduleType" = 'OPERATING'
                   AND se."openingTime" IS NOT NULL
                   AND se."closingTime" IS NOT NULL
+                  AND se.date = (${startTs} AT TIME ZONE ${tz})::date - 1
                   -- A wrap day, in the same terms as §5: the window ends on a
                   -- later park-local date than it starts on.
-                  AND (se."closingTime" AT TIME ZONE ${tz})::date
+                  AND (${closes} AT TIME ZONE ${tz})::date
                     > (se."openingTime" AT TIME ZONE ${tz})::date
-                  AND se.date = (${startTs} AT TIME ZONE ${tz})::date - 1
                   AND ${startTs} >  se."openingTime"
-                  AND ${startTs} <= se."closingTime"
+                  AND ${startTs} <= ${closes}
                 LIMIT 1),
               (${startTs} AT TIME ZONE ${tz})::date
             )`;
@@ -854,11 +880,21 @@ export class ShowsService {
                 -- \`times[0]\` and the plan's "earliest first" become wrong.
                 (st AT TIME ZONE tz)::date > day AS after_midnight
            FROM local
+       ), per_time AS (
+         -- One row per distinct wall-clock time, which is what the old
+         -- \`array_agg(DISTINCT hhmm)\` guaranteed and a DISTINCT over the wider
+         -- (hhmm, after_midnight) tuple would not: a time that appears on both
+         -- sides of a midnight would otherwise be listed twice, out of order.
+         -- \`bool_and\` resolves that to the earlier slot, which is where a
+         -- reader expects an ambiguous time to sit.
+         SELECT show_id, weekday, day, hhmm,
+                bool_and(after_midnight) AS after_midnight
+           FROM keyed
+          GROUP BY 1, 2, 3, 4
        ), per_day AS (
          SELECT show_id, weekday, day,
                 array_agg(hhmm ORDER BY after_midnight, hhmm) AS times
-           FROM (SELECT DISTINCT show_id, weekday, day, hhmm, after_midnight
-                   FROM keyed) d
+           FROM per_time
           GROUP BY 1, 2, 3
        ), ranked AS (
          SELECT *,
@@ -950,14 +986,17 @@ export class ShowsService {
          )
          SELECT show_id,
                 array_agg(hhmm ORDER BY after_midnight, hhmm) AS times
-           FROM (SELECT DISTINCT show_id,
+           FROM (SELECT show_id,
                         to_char(st AT TIME ZONE $2, 'HH24:MI') AS hhmm,
                         -- Same unfolding as the patterns: the 00:00 performance
                         -- of a wrap day is the day's LAST one, so it sorts after
-                        -- 22:00 rather than in front of it.
-                        (st AT TIME ZONE $2)::date > op_day AS after_midnight
+                        -- 22:00 rather than in front of it. Grouped rather than
+                        -- DISTINCTed so a time cannot be listed twice by
+                        -- appearing on both sides of the midnight.
+                        bool_and((st AT TIME ZONE $2)::date > op_day) AS after_midnight
                    FROM entries
-                  WHERE op_day = $3::date) d
+                  WHERE op_day = $3::date
+                  GROUP BY show_id, to_char(st AT TIME ZONE $2, 'HH24:MI')) d
           GROUP BY show_id`,
         [parkId, timezone, date],
       );

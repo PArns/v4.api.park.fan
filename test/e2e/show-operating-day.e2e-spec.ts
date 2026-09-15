@@ -209,6 +209,78 @@ describe("Showtimes follow the operating day (E2E)", () => {
       ).toEqual(["00:30"]);
     });
 
+    it("leaves a performance that starts after the window closes", async () => {
+      // 02:00 under a 01:00 close. This is the narrowing the rule claims to be:
+      // the previous day reaches into the night only as far as it published,
+      // not to some hour of the morning we picked.
+      const { showId, parkId } = await seed({
+        showtimes: [`${NEXT_DAY}T02:00`],
+      });
+
+      expect(
+        (await shows.getShowtimesOnDate(parkId, TZ, WRAP_DAY)).has(showId),
+      ).toBe(false);
+      expect(
+        (await shows.getShowtimesOnDate(parkId, TZ, NEXT_DAY)).get(showId),
+      ).toEqual(["02:00"]);
+    });
+
+    it("ignores a ticketed event that runs past midnight", async () => {
+      // Universal's Halloween Horror Nights is a TICKETED_EVENT, and its 00:30
+      // performances are the entries this ticket was filed for. They stay put:
+      // `OPERATING` is what every other reader in this codebase treats as
+      // opening hours, and widening it here would change what "the park is
+      // open" means for shows alone. Production holds two such rows.
+      const { showId, parkId } = await seed({
+        showtimes: [`${NEXT_DAY}T00:30`],
+        wrapDay: false,
+      });
+
+      await dataSource.getRepository(ScheduleEntry).save(
+        dataSource.getRepository(ScheduleEntry).create({
+          parkId,
+          date: WRAP_DAY as unknown as Date,
+          scheduleType: ScheduleType.TICKETED_EVENT,
+          openingTime: new Date(`${WRAP_DAY}T19:00:00-04:00`),
+          closingTime: new Date(`${NEXT_DAY}T02:00:00-04:00`),
+        }),
+      );
+
+      expect(
+        (await shows.getShowtimesOnDate(parkId, TZ, WRAP_DAY)).has(showId),
+      ).toBe(false);
+      expect(
+        (await shows.getShowtimesOnDate(parkId, TZ, NEXT_DAY)).get(showId),
+      ).toEqual(["00:30"]);
+    });
+
+    it("does not let an overshot window swallow the following day", async () => {
+      // `operating-window.util.ts` names these: a 34-hour row at SeaWorld San
+      // Diego, a three-year one at Busch Gardens Williamsburg. Read raw, such a
+      // row passes the wrap test and drags the NEXT day's ordinary afternoon
+      // onto the date before, which would empty that day for the show.
+      // `normalizedClosingSql` re-anchors it first.
+      const { showId, parkId } = await seed({
+        showtimes: [`${NEXT_DAY}T14:00`],
+        wrapDay: false,
+      });
+
+      await dataSource.getRepository(ScheduleEntry).save(
+        dataSource.getRepository(ScheduleEntry).create({
+          parkId,
+          date: WRAP_DAY as unknown as Date,
+          scheduleType: ScheduleType.OPERATING,
+          openingTime: new Date(`${WRAP_DAY}T09:00:00-04:00`),
+          // 34 hours: ends the evening AFTER the next day began.
+          closingTime: new Date(`${NEXT_DAY}T19:00:00-04:00`),
+        }),
+      );
+
+      expect(
+        (await shows.getShowtimesOnDate(parkId, TZ, NEXT_DAY)).get(showId),
+      ).toEqual(["14:00"]);
+    });
+
     it("keeps an ordinary day untouched", async () => {
       const { showId, parkId } = await seed({
         showtimes: [`${NEXT_DAY}T12:00`, `${NEXT_DAY}T18:00`],
