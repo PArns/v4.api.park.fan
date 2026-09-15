@@ -747,13 +747,37 @@ sources — a curation decision, not a sync one. Only rows that exist purely
 because the wiki once called them attractions are retired.
 
 **And it undoes itself.** A row retired this way carries
-`RECLASSIFIED_UPSTREAM_REASON` verbatim, and `syncAttraction` clears
-`retired_at` again the moment the wiki lists the entity as an `ATTRACTION`. That
-is what makes the retirement safe to run unattended: one malformed `/children`
-response cannot strand a park's rides, because the next correct run brings them
-back. Only rows carrying that exact reason are lifted — a retirement a human
-entered through `POST /admin/retire-attractions` survives every nightly run, and
-that is why the marker is an exact string and not a prefix.
+`RECLASSIFIED_UPSTREAM_REASON` verbatim, and `syncAttraction` lifts the
+retirement the moment the wiki lists the entity as an `ATTRACTION` again. That
+is what makes it safe to run unattended: one malformed `/children` response
+cannot strand a park's rides, because the next correct run brings them back.
+Only rows carrying that exact reason are lifted — a retirement a human entered
+through `POST /admin/retire-attractions` survives every nightly run, and that is
+why the marker is an exact string rather than a prefix. The string is also
+**user-facing** (`AttractionResponseDto` serves `retiredReason` on the public
+attraction detail endpoint), so it reads as a sentence with its source and
+carries no issue numbers or file paths.
+
+**What comes back is the row, not its data supply.** The `shows` row keeps
+existing (PAR-232), and `WaitTimesProcessor` builds its entity lookup with the
+shows after the attractions, so `themeparks-wiki:<externalId>` still resolves to
+the show — the un-retired attraction goes straight back to collecting
+`system-reconciliation` CLOSED rows. That is no worse than the state this fix
+exists to remove, since a visible ride reading CLOSED beats one that silently
+disappeared, but it is not a full recovery. Clearing the orphaned show row is
+PAR-232's job.
+
+Two more limits worth knowing before trusting the round trip:
+
+- **The way back is park-scoped.** The retirement is not: `externalId` is
+  globally unique, so a row whose park changed upstream is still found and
+  retired, but `syncAttraction` only ever looks at its own park's rows, so that
+  one row has to be brought back by hand.
+- **An id that arrives as an `ATTRACTION` in the same response is excluded**
+  from the retirement list. `/children` listing one entity under two types is
+  the same upstream fault `dedupePollEntities` handles for live data, and
+  without the exclusion the row would flip between retired and not on every
+  run, evicting caches and revalidating the frontend each time.
 
 The reverse direction is handled **only on the attraction side**. When an entity
 moves the other way, the row it leaves behind in `shows` or `restaurants` stays

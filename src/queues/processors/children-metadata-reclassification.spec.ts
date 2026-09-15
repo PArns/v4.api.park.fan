@@ -21,7 +21,7 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
     update: jest.fn(),
     save: jest.fn(),
   };
-  const retirementService = { retire: jest.fn() };
+  const retirementService = { retire: jest.fn(), unretire: jest.fn() };
   const themeParksMapper = { mapAttraction: jest.fn() };
 
   let processor: ChildrenMetadataProcessor;
@@ -183,6 +183,45 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       ],
     });
 
+    it("skips an id that also arrived as an ATTRACTION in the same response", async () => {
+      // `/children` listing one entity under two types is the upstream fault
+      // `dedupePollEntities` handles for live data. Without the exclusion the
+      // row would flip between retired and not on every single run.
+      const spy = jest
+        .spyOn(processor as any, "retireReclassifiedAttractions")
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(processor as any, "syncAttraction")
+        .mockResolvedValue(undefined);
+      jest.spyOn(processor as any, "syncShow").mockResolvedValue(undefined);
+      jest
+        .spyOn(processor as any, "syncRestaurant")
+        .mockResolvedValue(undefined);
+
+      (processor as any).parksService = {
+        findAll: jest
+          .fn()
+          .mockResolvedValue([
+            { id: parkId, name: parkName, wikiEntityId: "wiki-uss" },
+          ]),
+      };
+      (processor as any).themeParksClient = {
+        getEntityChildren: jest.fn().mockResolvedValue({
+          children: [
+            { id: "both", entityType: "ATTRACTION", name: "Sesame Street" },
+            { id: "both", entityType: "SHOW", name: "Sesame Street" },
+            { id: "show-only", entityType: "SHOW", name: "Egyptian Legends" },
+          ],
+        }),
+      };
+      (processor as any).entityMappingsQueue = { add: jest.fn() };
+      (processor as any).redis = { del: jest.fn() };
+
+      await processor.handleFetchChildren({} as any);
+
+      expect(spy).toHaveBeenCalledWith(parkName, ["show-only"]);
+    });
+
     it("hands over the show and restaurant ids, and not the attraction ones", async () => {
       const spy = jest
         .spyOn(processor as any, "retireReclassifiedAttractions")
@@ -286,10 +325,14 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
         retiredReason: RECLASSIFIED_UPSTREAM_REASON,
       });
 
-      expect(attractionRepo.update).toHaveBeenCalledWith(
+      // Through the service, not a column write: lifting a retirement has the
+      // same cache and sitemap consequences as setting one, and only
+      // `unretire` carries the eviction and the revalidation with it.
+      expect(retirementService.unretire).toHaveBeenCalledWith(
         "row-sesame-street",
-        expect.objectContaining({ retiredAt: null, retiredReason: null }),
       );
+      const [, patch] = attractionRepo.update.mock.calls[0];
+      expect(patch).not.toHaveProperty("retiredAt");
     });
 
     it("leaves a retirement a human entered alone", async () => {
@@ -303,10 +346,22 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
           "Demolished in January 2026. Source: https://example.org",
       });
 
+      expect(retirementService.unretire).not.toHaveBeenCalled();
       expect(attractionRepo.update).toHaveBeenCalledTimes(1);
-      const [, patch] = attractionRepo.update.mock.calls[0];
-      expect(patch).not.toHaveProperty("retiredAt");
-      expect(patch).not.toHaveProperty("retiredReason");
+    });
+  });
+
+  /**
+   * The reason ends up on the public attraction detail endpoint
+   * (`AttractionResponseDto.fromEntity` serves `retiredReason`), so it has to
+   * read as a sentence to a visitor rather than as a note to a developer.
+   */
+  describe("the reason a visitor reads", () => {
+    it("carries a source and no internal references", () => {
+      expect(RECLASSIFIED_UPSTREAM_REASON).toContain("https://");
+      expect(RECLASSIFIED_UPSTREAM_REASON).not.toMatch(/PAR-\d+/);
+      expect(RECLASSIFIED_UPSTREAM_REASON).not.toContain("docs/");
+      expect(RECLASSIFIED_UPSTREAM_REASON).not.toContain(".md");
     });
   });
 });

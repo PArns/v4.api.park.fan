@@ -201,10 +201,22 @@ export class ChildrenMetadataProcessor {
               // the replacement row exists before the old one is retired.
               // Guarded like the two steps below it: a failure here must not
               // cost this park its mapping job and its cache eviction.
+              //
+              // Ids that arrived as an ATTRACTION in the same response are
+              // excluded. `/children` listing one entity under two types is
+              // the same upstream fault `dedupePollEntities` handles for live
+              // data, and without this the row would be un-retired by
+              // syncAttraction and retired again here on every single run —
+              // each pass evicting caches and revalidating the frontend.
+              const syncedAsAttraction = new Set(
+                attractions.map((child) => child.id),
+              );
               try {
                 await this.retireReclassifiedAttractions(
                   park.name,
-                  [...shows, ...restaurants].map((child) => child.id),
+                  [...shows, ...restaurants]
+                    .map((child) => child.id)
+                    .filter((id) => !syncedAsAttraction.has(id)),
                 );
               } catch (e) {
                 this.logger.error(
@@ -486,26 +498,22 @@ export class ChildrenMetadataProcessor {
 
     if (existing) {
       ctx?.claimed.add(existing.id);
-      // The entity is back to being an attraction, so the retirement
-      // `retireReclassifiedAttractions` wrote is wrong now. Only that exact
-      // reason is undone — a retirement a human entered through the admin
-      // endpoint has to survive this run and every one after it.
-      const wasReclassified =
-        existing.retiredReason === RECLASSIFIED_UPSTREAM_REASON;
-
       // Update existing attraction (keep existing slug)
       await this.attractionsService.getRepository().update(existing.id, {
         name: mappedData.name,
         latitude: mappedData.latitude,
         longitude: mappedData.longitude,
         attractionType: mappedData.attractionType,
-        ...(wasReclassified ? { retiredAt: null, retiredReason: null } : {}),
       });
 
-      if (wasReclassified) {
-        this.logger.log(
-          `↩️  "${mappedData.name}" is an ATTRACTION upstream again — retirement lifted`,
-        );
+      // The entity is an attraction again, so the retirement
+      // `retireReclassifiedAttractions` wrote is wrong now. Only that exact
+      // reason is undone — a retirement a human entered through the admin
+      // endpoint has to survive this run and every one after it. It goes
+      // through the service rather than a column write, because lifting a
+      // retirement has the same cache and sitemap consequences as setting one.
+      if (existing.retiredReason === RECLASSIFIED_UPSTREAM_REASON) {
+        await this.attractionRetirementService.unretire(existing.id);
       }
     } else {
       // Generate unique slug for this park
@@ -645,20 +653,31 @@ export class ChildrenMetadataProcessor {
    *
    * **This is reversible, and that is what keeps it safe to run unattended.**
    * A row retired here carries `RECLASSIFIED_UPSTREAM_REASON` verbatim, and
-   * `syncAttraction` clears the retirement again the moment the wiki lists the
-   * entity as an `ATTRACTION` — so a single malformed `/children` response
-   * cannot strand a park's rides: the next correct run brings them back. Only
-   * rows carrying that exact reason are un-retired, so a retirement a human
-   * entered through the admin endpoint survives every nightly run.
+   * `syncAttraction` lifts the retirement the moment the wiki lists the entity
+   * as an `ATTRACTION` again — so a single malformed `/children` response
+   * cannot strand a park's rides. Only rows carrying that exact reason are
+   * un-retired, so a retirement a human entered through the admin endpoint
+   * survives every nightly run.
    *
-   * The reverse direction (`SHOW → ATTRACTION`) is only handled on this side.
-   * `shows` and `restaurants` have no `retired_at` column at all, so the row
-   * the entity leaves behind *there* cannot be marked. See PAR-232.
+   * **What comes back is the row, not its data supply.** The `shows` row keeps
+   * existing (PAR-232), and `WaitTimesProcessor` builds its lookup with the
+   * shows after the attractions, so `themeparks-wiki:<externalId>` still
+   * resolves to the show and the un-retired attraction goes straight back to
+   * receiving `system-reconciliation` CLOSED rows. That is no worse than the
+   * state this method exists to fix — a visible ride reading CLOSED beats one
+   * that silently disappeared — but it is not a full recovery, and clearing
+   * the orphaned show row belongs to PAR-232 rather than here.
    *
-   * The lookup is deliberately not scoped to the park: `attractions.externalId`
-   * is globally unique, so there is at most one row either way, and scoping it
-   * would miss a row whose park changed upstream. It is the same set the
-   * diagnostic query in §5.6 of the doc returns.
+   * The reverse direction is only handled on the attraction side for the same
+   * reason: `shows` and `restaurants` have no `retired_at` column to set.
+   *
+   * The lookup here is deliberately not scoped to the park:
+   * `attractions.externalId` is globally unique, so there is at most one row
+   * either way, and scoping it would miss a row whose park changed upstream.
+   * It is the same set the diagnostic query in §5.6 of the doc returns.
+   * **The way back is park-scoped**, because `syncAttraction` only ever looks
+   * at its own park's rows — so a row that moved parks upstream is retired
+   * automatically but has to be brought back by hand.
    */
   private async retireReclassifiedAttractions(
     parkName: string,

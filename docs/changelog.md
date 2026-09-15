@@ -41,6 +41,14 @@ to run unattended — a single malformed `/children` response cannot strand a
 park's rides. Only that exact reason is lifted, so a retirement entered by hand
 through `POST /admin/retire-attractions` survives every run.
 
+What comes back is the row and not its data supply: the orphaned `shows` row
+still wins the entity lookup in `WaitTimesProcessor`, so the un-retired
+attraction resumes collecting `system-reconciliation` CLOSED rows until PAR-232
+clears it. A visible ride reading CLOSED is still better than one that silently
+vanished, but it is not a full recovery. The way back is also park-scoped, while
+the retirement is not — a row whose park moved upstream has to be brought back
+by hand.
+
 The row an entity leaves behind in `shows` or `restaurants` when it moves the
 other way is still not handled, because neither table has a `retired_at` column
 to set — PAR-232. It is not observed in production either: all 34 collisions run
