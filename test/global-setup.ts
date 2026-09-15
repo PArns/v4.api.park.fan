@@ -140,11 +140,11 @@ async function createSchema(database: string): Promise<void> {
       console.warn("⚠️  Continuing without some extensions");
     }
 
-    // The hypertables this suite has. Production has seven, all compressed;
-    // the merge writes to five of them — these three plus `weather_data`
-    // (`mergeParks` step 4) and `wait_time_predictions`
-    // (`ATTRACTION_DEPENDENCIES`), which are STILL plain tables here and are
-    // PAR-234.
+    // The hypertables this suite has. Production has seven, all compressed, and
+    // the merge writes to every one of them: these three, plus `weather_data`
+    // (`mergeParks` step 4), `wait_time_predictions`, `forecast_data`
+    // (`ATTRACTION_DEPENDENCIES`) and `queue_data_aggregates` (that list and
+    // `PARK_DEPENDENCIES`). Those four are STILL plain tables here — PAR-234.
     //
     // The two live-data tables were plain tables until PAR-172, so `SET LOCAL
     // timescaledb.max_tuples_decompressed_per_dml_transaction = 0` in step 0 of

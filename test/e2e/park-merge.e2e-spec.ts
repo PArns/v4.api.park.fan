@@ -757,6 +757,7 @@ describe("Park merge (E2E)", () => {
         );
       }
 
+      let failed = false;
       try {
         await dataSource.query(
           `SELECT compress_chunk(c, if_not_compressed => true)
@@ -795,10 +796,10 @@ describe("Park merge (E2E)", () => {
              WHERE NOT EXISTS (SELECT 1 FROM shows s WHERE s.id = l."showId")`,
           ),
         ).toBe(0);
+      } catch (error) {
+        failed = true;
+        throw error;
       } finally {
-        // Caught rather than thrown: a merge that dies on the compressed chunk
-        // is exactly what this test is for, and a cleanup statement failing
-        // afterwards would replace that error with its own.
         try {
           await dataSource.query(
             `SELECT decompress_chunk(c, if_compressed => true)
@@ -810,6 +811,14 @@ describe("Park merge (E2E)", () => {
             );
           }
         } catch (error) {
+          // Swallowed ONLY when the body already threw: a merge that dies on
+          // the compressed chunk is what this case is for, and a cleanup
+          // statement failing afterwards must not replace that error with its
+          // own. On the success path it is rethrown instead — a restore that
+          // silently fails hands every later file a compression state this
+          // test invented, which is the leak the `wasCompressed` read exists
+          // to prevent.
+          if (!failed) throw error;
           console.warn(
             "Could not restore show_live_data compression state:",
             error instanceof Error ? error.message : String(error),
@@ -863,10 +872,13 @@ describe("Park merge (E2E)", () => {
         ),
       ).toBe(1);
 
-      // And the loser side, because a guard placed one step too late — after
-      // `consolidateEntityIds`, or after the first `migrateEntities` pass —
-      // would show there first while the winner's own counts still looked
-      // untouched.
+      // And the loser side. Both blocks of counts are defensive rather than
+      // sharp, and it is worth saying which is which: the guard throws BEFORE
+      // `dataSource.transaction` opens, and even without it
+      // `applyMergeDependencies` refuses one id on both sides and rolls the
+      // whole thing back — so no placement of the guard makes these numbers
+      // move. What they do catch is a future step that writes outside the
+      // transaction. The assertion with teeth here is the throw itself.
       expect(
         await count(`SELECT count(*) c FROM parks WHERE id = $1`, [
           MERGE_LOSER,
