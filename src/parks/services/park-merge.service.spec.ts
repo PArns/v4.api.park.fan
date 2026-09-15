@@ -420,7 +420,8 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
     expect(scheduleDelete?.params).toEqual([WINNER_PARK, LOSER_PARK]);
 
     // The old key is gone rather than joined by the ride: a row-wise `IN` over
-    // three columns is NULL for a park-level row, so it would spare nothing.
+    // three columns is NULL for a park-level row, so it would dedupe no
+    // park-level row at all — the other half of the trap, not a fix for it.
     expect(scheduleDelete?.sql).not.toMatch(/\bIN\s*\(/i);
 
     // And it is gone from the whole PARK path, not just from the statement
@@ -434,9 +435,9 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
     // this same table and is RIGHT to: `WHERE "attractionId" = $loser` has
     // already excluded every park-level row, so its key carries no nullable
     // column (PAR-149). A filter that only asked for `schedule_entries` and an
-    // `IN` would pin the fixture rather than the rule — it would pass here only
-    // because no ride collides in this case, and turn red on a case that sets
-    // `ridesCollide`.
+    // `IN` would turn red right here, on a statement that is doing its job —
+    // this case sets `ridesCollide` above precisely so that statement is in
+    // `calls`.
     const scheduleDeletesWithIn = calls.filter(
       (c) =>
         /DELETE\s+FROM\s+schedule_entries/i.test(c.sql) &&

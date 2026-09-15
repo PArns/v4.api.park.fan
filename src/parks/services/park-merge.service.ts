@@ -178,11 +178,12 @@ export class ParkMergeService {
         );
         // Not `migrateTableData`: its conflict key is a row-wise `IN`, and no
         // list of columns it can build both dedupes a park-level row and
-        // spares a per-ride one. `(date, scheduleType)` did neither — it read
-        // across the nullable `attractionId` and took the loser's per-ride
-        // rows with it whenever the winner held any row of that TYPE that day
-        // — usually its own park-level OPERATING row (PAR-171). The rule is
-        // shared with `consolidateMergedPark` rather than written twice.
+        // spares a per-ride one. `(date, scheduleType)` bought the first at the
+        // cost of the second: it read across the nullable `attractionId` and
+        // took the loser's per-ride rows with it whenever the winner held any
+        // row of that TYPE that day — usually its own park-level OPERATING row
+        // (PAR-171). The rule is shared with `consolidateMergedPark` rather
+        // than written twice.
         result.migratedScheduleEntries = await migrateScheduleEntries(
           manager,
           winner.id,
