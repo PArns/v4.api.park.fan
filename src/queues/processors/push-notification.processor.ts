@@ -321,11 +321,16 @@ export class PushNotificationProcessor {
    * original date actually was (ThemeParks.wiki still serves entries from
    * 2022) and which has no park-schedule check, so a park shut today but
    * still showing yesterday's OPERATING row would keep notifying about a
-   * performance that is not happening. `ShowsService.getShowtimesOnDate`
+   * performance that is not happening. `ShowsService.getShowtimeInstantsOnDate`
    * is the one reader that checks a showtime against its OWN embedded date
    * instead of projecting it, so it is used here for the showtimes
    * themselves — `findBatchCurrentStatusByShows` is kept only for the
    * show/park metadata (name, timezone) that reader does not return.
+   *
+   * It returns instants rather than wall-clock times on purpose: a showtime
+   * belongs to the operating day, so the 00:30 performance of a day that ran
+   * past midnight answers under THAT day and falls on the next date. Nothing
+   * here may pin a returned time to the date it asked for.
    */
   private async followedShowsDueToday(
     showIds: string[],
@@ -367,7 +372,7 @@ export class PushNotificationProcessor {
     }
     if (metaByShow.size === 0) return [];
 
-    // Two `getShowtimesOnDate` calls per distinct PARK, not per show — a
+    // Three `getShowtimeInstantsOnDate` calls per distinct PARK, not per show — a
     // popular park with many followed shows shares them. Both today's AND
     // tomorrow's date: a showtime in the first ~35 minutes after local
     // midnight has a lead window that opens BEFORE that midnight, while
@@ -387,7 +392,20 @@ export class PushNotificationProcessor {
     const dateQueries = [...timezoneByPark].flatMap(([parkId, timezone]) => {
       const todayStr = formatInParkTimezone(new Date(startedMs), timezone);
       const tomorrowStr = getTomorrowDateInTimezoneAt(startedMs, timezone);
-      return [todayStr, tomorrowStr].map((dateStr) => ({
+      // Yesterday too, and it is not symmetry for its own sake: a showtime is
+      // keyed on the OPERATING day, so a performance at 00:45 on a day that
+      // opened the previous morning answers under YESTERDAY's date. At the
+      // tick that is 25-35 minutes ahead of it the local clock already reads
+      // the new date, so querying only today and tomorrow asks the two days
+      // that do not have it. Stepping back through UTC noon rather than by
+      // subtracting 24 hours, so a DST night does not land on the same date
+      // twice.
+      const yesterdayStr = new Date(
+        Date.parse(`${todayStr}T12:00:00Z`) - 24 * 60 * 60 * 1000,
+      )
+        .toISOString()
+        .slice(0, 10);
+      return [yesterdayStr, todayStr, tomorrowStr].map((dateStr) => ({
         parkId,
         timezone,
         dateStr,

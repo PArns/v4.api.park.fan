@@ -778,6 +778,47 @@ export class ShowsService {
    * `$<tz>` and the showtime expression are interpolated by the callers, which
    * bind the park timezone as a parameter; the subquery itself takes none.
    */
+  /**
+   * The `entries` CTE both day readers below open with: every showtime a park
+   * published around one date, tagged with the operating day it belongs to.
+   *
+   * Extracted for the same reason as {@link ShowsService.operatingDaySql} — two
+   * callers answering "which showtimes are on this day" must not be able to
+   * drift apart. `getShowtimesOnDate` and `getShowtimeInstantsOnDate` serve the
+   * same day to different consumers (the planner's display times, the push
+   * job's instants), and a park whose late show appears in one and not the
+   * other is worse than either answer alone.
+   *
+   * Binds `$1` park id, `$2` timezone, `$3` date.
+   */
+  private static showtimeEntriesCte(): string {
+    const st = "(e->>'startTime')::timestamptz";
+    return `entries AS (
+           SELECT l."showId" AS show_id,
+                  ${st} AS st,
+                  ${ShowsService.operatingDaySql(st, 's."parkId"', "$2")} AS op_day
+             FROM show_live_data l
+             JOIN shows s ON s.id = l."showId"
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(l.showtimes, '[]'::jsonb)) e
+            WHERE s."parkId" = $1::uuid
+              AND l.status = 'OPERATING'
+              -- The snapshot window is anchored on the DATE asked about, not on
+              -- "now": that answers a past day from the snapshots taken on it,
+              -- today from the day's own, and a future day not at all — which is
+              -- the honest answer there, and what the projection is for.
+              AND l.timestamp >= ($3::date - INTERVAL '1 day')
+              AND l.timestamp <  ($3::date + INTERVAL '2 days')
+              -- Cheap prefilter on the calendar date so the operating-day
+              -- subquery only runs for rows that can still qualify. A showtime
+              -- belongs to $3 either on its own date or on the morning after,
+              -- never further out. This is also what keeps the feed's uncleared
+              -- junk out: ThemeParks.wiki still serves showtimes from 2022, and
+              -- they simply fall on another date.
+              AND (${st} AT TIME ZONE $2)::date
+                  BETWEEN $3::date AND $3::date + 1
+         )`;
+  }
+
   private static operatingDaySql(startTs: string, parkId: string, tz: string) {
     const closes = normalizedClosingSql(
       'se."openingTime"',
@@ -960,30 +1001,7 @@ export class ShowsService {
   ): Promise<Map<string, string[]>> {
     const rows: Array<{ show_id: string; times: string[] }> =
       await this.showLiveDataRepository.manager.query(
-        `WITH entries AS (
-           SELECT l."showId" AS show_id,
-                  (e->>'startTime')::timestamptz AS st,
-                  ${ShowsService.operatingDaySql("(e->>'startTime')::timestamptz", 's."parkId"', "$2")} AS op_day
-             FROM show_live_data l
-             JOIN shows s ON s.id = l."showId"
-            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(l.showtimes, '[]'::jsonb)) e
-            WHERE s."parkId" = $1::uuid
-              AND l.status = 'OPERATING'
-              -- The snapshot window is anchored on the DATE asked about, not on
-              -- "now": that answers a past day from the snapshots taken on it,
-              -- today from the day's own, and a future day not at all — which is
-              -- the honest answer there, and what the projection is for.
-              AND l.timestamp >= ($3::date - INTERVAL '1 day')
-              AND l.timestamp <  ($3::date + INTERVAL '2 days')
-              -- Cheap prefilter on the calendar date so the operating-day
-              -- subquery only runs for rows that can still qualify. A showtime
-              -- belongs to $3 either on its own date or on the morning after,
-              -- never further out. This is also what keeps the feed's uncleared
-              -- junk out: ThemeParks.wiki still serves showtimes from 2022, and
-              -- they simply fall on another date.
-              AND ((e->>'startTime')::timestamptz AT TIME ZONE $2)::date
-                  BETWEEN $3::date AND $3::date + 1
-         )
+        `WITH ${ShowsService.showtimeEntriesCte()}
          SELECT show_id,
                 array_agg(hhmm ORDER BY after_midnight, hhmm) AS times
            FROM (SELECT show_id,
@@ -1026,20 +1044,7 @@ export class ShowsService {
   ): Promise<Map<string, string[]>> {
     const rows: Array<{ show_id: string; starts: Date[] }> =
       await this.showLiveDataRepository.manager.query(
-        `WITH entries AS (
-           SELECT l."showId" AS show_id,
-                  (e->>'startTime')::timestamptz AS st,
-                  ${ShowsService.operatingDaySql("(e->>'startTime')::timestamptz", 's."parkId"', "$2")} AS op_day
-             FROM show_live_data l
-             JOIN shows s ON s.id = l."showId"
-            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(l.showtimes, '[]'::jsonb)) e
-            WHERE s."parkId" = $1::uuid
-              AND l.status = 'OPERATING'
-              AND l.timestamp >= ($3::date - INTERVAL '1 day')
-              AND l.timestamp <  ($3::date + INTERVAL '2 days')
-              AND ((e->>'startTime')::timestamptz AT TIME ZONE $2)::date
-                  BETWEEN $3::date AND $3::date + 1
-         )
+        `WITH ${ShowsService.showtimeEntriesCte()}
          SELECT show_id, array_agg(DISTINCT st ORDER BY st) AS starts
            FROM entries
           WHERE op_day = $3::date

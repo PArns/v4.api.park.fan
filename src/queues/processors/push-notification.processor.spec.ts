@@ -594,7 +594,7 @@ describe("PushNotificationProcessor", () => {
     });
   });
 
-  it("sends on the instant the source reports, across a spring-forward night", async () => {
+  it("sends a performance on the far side of a spring-forward jump", async () => {
     await withVapid(async () => {
       // 2026-03-29 is the day Berlin's clocks jump 02:00 -> 03:00 (at 01:00
       // UTC). This used to be the round-trip guard's case: the job rebuilt an
@@ -605,8 +605,17 @@ describe("PushNotificationProcessor", () => {
       //
       // There is nothing to reconstruct any more. `getShowtimeInstantsOnDate`
       // returns the instant the row actually carries, so a time that never
-      // happened cannot arrive here, and one that did is sent on its own
-      // instant. The lead window is the only thing still being asserted.
+      // happened cannot arrive here.
+      //
+      // What is left to pin is that the jump does not cost a real performance:
+      // `now` sits at 01:00 CET, on the near side, and the show starts 30
+      // minutes later — which the local clock calls 02:30 and then 03:30 as
+      // the hour disappears underneath it. Comparing instants, the lead is 30
+      // minutes either way, and that is exactly why the job may not go back
+      // through the wall clock. The assertion is deliberately the opposite of
+      // what this test asserted before the change: it used to require silence,
+      // because the only 02:30 it could see was one the reconstruction had
+      // invented.
       const at = Date.parse("2026-03-29T00:00:00.000Z"); // 01:00 CET, before the jump
       jest.spyOn(Date, "now").mockReturnValue(at);
 
