@@ -716,6 +716,69 @@ export class ShowsService {
   private static readonly PATTERN_WINDOW_DAYS = 56;
 
   /**
+   * The operating day a showtime belongs to, as a SQL scalar expression.
+   *
+   * §5 of `docs/frontend/plan-day-endpoint.md` unfolds a day that crosses
+   * midnight: La Ronde's `10 → 0` is one ascending run of hours, and the hour
+   * after 23 is 24 rather than 0 of the next date. Showtimes were never
+   * unfolded that way — both readers below grouped them by the showtime's own
+   * park-local calendar date — so the last performance of such a day landed on
+   * the morning after, where `PlanDayService.buildShows` served it as that
+   * day's `scheduled` programme and suppressed the projection behind it.
+   *
+   * The rule here is the same one, expressed against the schedule rather than
+   * against an hour: a showtime belongs to the previous date when that date's
+   * published operating window still covers it. Everything else keeps its
+   * calendar date, which is why this is a narrowing and not a shift — a park
+   * with no wrap day is untouched, and so is every showtime after the window
+   * closes.
+   *
+   * Measured against production on 2026-09-15 (PAR-51): 36 parks publish wrap
+   * days, and 20 showtimes move — 19 at Disneyland Park (Anaheim) and one at
+   * Magic Kingdom Park, all of them at exactly 00:00, the last performance of
+   * a day that closes at midnight.
+   *
+   * Two limits are deliberate, because both would be a different decision:
+   *
+   * `OPERATING` only, the same schedule type every other reader in this
+   * codebase treats as opening hours. Universal's Halloween Horror Nights runs
+   * past midnight as `TICKETED_EVENT`, and its 00:30 shows therefore stay on
+   * the following date — production holds exactly two such rows, both still in
+   * the future. Widening the type here would change what "the park is open"
+   * means for shows alone.
+   *
+   * And a *published* window, never a guessed one. A fixed "before 06:00
+   * belongs to yesterday" cutoff would sweep up feeds whose problem is a
+   * different one: Universal Studios Japan serves `Ollivanders™` at 16:00 UTC,
+   * which is 01:00 the next morning in Tokyo for a daytime walkthrough, on 148
+   * days. Those parks publish no wrap day, so this expression leaves them
+   * exactly where they are.
+   *
+   * `$<tz>` and the showtime expression are interpolated by the callers, which
+   * bind the park timezone as a parameter; the subquery itself takes none.
+   */
+  private static operatingDaySql(startTs: string, parkId: string, tz: string) {
+    return `COALESCE(
+              (SELECT se.date
+                 FROM schedule_entries se
+                WHERE se."parkId" = ${parkId}
+                  AND se."attractionId" IS NULL
+                  AND se."scheduleType" = 'OPERATING'
+                  AND se."openingTime" IS NOT NULL
+                  AND se."closingTime" IS NOT NULL
+                  -- A wrap day, in the same terms as §5: the window ends on a
+                  -- later park-local date than it starts on.
+                  AND (se."closingTime" AT TIME ZONE ${tz})::date
+                    > (se."openingTime" AT TIME ZONE ${tz})::date
+                  AND se.date = (${startTs} AT TIME ZONE ${tz})::date - 1
+                  AND ${startTs} >  se."openingTime"
+                  AND ${startTs} <= se."closingTime"
+                LIMIT 1),
+              (${startTs} AT TIME ZONE ${tz})::date
+            )`;
+  }
+
+  /**
    * Rebuild the per-weekday showtime patterns for every show.
    *
    * Runs nightly, because the question it answers cannot be answered per
@@ -736,6 +799,11 @@ export class ShowsService {
    * And the times come from the **most recent matching day**, not from a union
    * over the window. A union merges a summer programme with an autumn one into a
    * day that never happened; the latest matching day is a day that did.
+   *
+   * Both the day and the weekday are the **operating** ones — see
+   * {@link ShowsService.operatingDaySql}. A park that closes at midnight has
+   * its last performance counted on the day it belongs to, and on that day's
+   * weekday, rather than seeding a pattern for the morning after.
    */
   async rebuildSchedulePatterns(): Promise<{
     patterns: number;
@@ -752,6 +820,7 @@ export class ShowsService {
     }> = await this.showLiveDataRepository.manager.query(
       `WITH times AS (
          SELECT l."showId"        AS show_id,
+                s."parkId"        AS park_id,
                 p.timezone        AS tz,
                 (e->>'startTime')::timestamptz AS st
            FROM show_live_data l
@@ -762,17 +831,34 @@ export class ShowsService {
             AND l.status = 'OPERATING'
        ), local AS (
          SELECT show_id,
-                (st AT TIME ZONE tz)::date                       AS day,
-                EXTRACT(DOW FROM st AT TIME ZONE tz)::int        AS weekday,
-                to_char(st AT TIME ZONE tz, 'HH24:MI')           AS hhmm
+                ${ShowsService.operatingDaySql("st", "park_id", "tz")} AS day,
+                to_char(st AT TIME ZONE tz, 'HH24:MI')           AS hhmm,
+                st,
+                tz
            FROM times
           -- The showtime itself has to be recent: the feed serves years-old ones.
           WHERE st > now() - ($1 || ' days')::interval
             AND st < now() + INTERVAL '2 days'
+       ), keyed AS (
+         -- The weekday follows the OPERATING DAY, not the wall clock: a
+         -- performance at 00:00 on a day that opened the previous morning runs
+         -- on that morning's weekday, and a pattern keyed the other way would
+         -- promise Saturday's late show on Sunday.
+         SELECT show_id, day,
+                EXTRACT(DOW FROM day)::int AS weekday,
+                hhmm,
+                -- Ordering is unfolded the way §5 unfolds hours: a time that
+                -- falls on the date AFTER its operating day belongs at the end
+                -- of that day, not at its start. Without this a 00:00 show
+                -- sorts in front of the 22:00 one it follows, and both
+                -- \`times[0]\` and the plan's "earliest first" become wrong.
+                (st AT TIME ZONE tz)::date > day AS after_midnight
+           FROM local
        ), per_day AS (
          SELECT show_id, weekday, day,
-                array_agg(DISTINCT hhmm ORDER BY hhmm) AS times
-           FROM local
+                array_agg(hhmm ORDER BY after_midnight, hhmm) AS times
+           FROM (SELECT DISTINCT show_id, weekday, day, hhmm, after_midnight
+                   FROM keyed) d
           GROUP BY 1, 2, 3
        ), ranked AS (
          SELECT *,
@@ -825,6 +911,11 @@ export class ShowsService {
    * In practice this answers for today and nothing else — no source publishes
    * further ahead — but it is written against the date rather than against
    * "today" so it keeps working the day one does.
+   *
+   * `date` is the **operating** day, not the calendar one — see
+   * {@link ShowsService.operatingDaySql}. On a day that runs past midnight the
+   * answer therefore includes that day's late performances, and the morning
+   * after does not inherit them.
    */
   async getShowtimesOnDate(
     parkId: string,
@@ -833,25 +924,41 @@ export class ShowsService {
   ): Promise<Map<string, string[]>> {
     const rows: Array<{ show_id: string; times: string[] }> =
       await this.showLiveDataRepository.manager.query(
-        `SELECT l."showId" AS show_id,
-                array_agg(DISTINCT to_char((e->>'startTime')::timestamptz AT TIME ZONE $2, 'HH24:MI')
-                          ORDER BY to_char((e->>'startTime')::timestamptz AT TIME ZONE $2, 'HH24:MI')) AS times
-           FROM show_live_data l
-           JOIN shows s ON s.id = l."showId"
-          CROSS JOIN LATERAL jsonb_array_elements(COALESCE(l.showtimes, '[]'::jsonb)) e
-          WHERE s."parkId" = $1::uuid
-            AND l.status = 'OPERATING'
-            -- The snapshot window is anchored on the DATE asked about, not on
-            -- "now": that answers a past day from the snapshots taken on it,
-            -- today from the day's own, and a future day not at all — which is
-            -- the honest answer there, and what the projection is for.
-            AND l.timestamp >= ($3::date - INTERVAL '1 day')
-            AND l.timestamp <  ($3::date + INTERVAL '2 days')
-            -- Only the times that land on the day itself. This is also what
-            -- keeps the feed's uncleared junk out: ThemeParks.wiki still serves
-            -- showtimes from 2022, and they simply fall on another date.
-            AND ((e->>'startTime')::timestamptz AT TIME ZONE $2)::date = $3::date
-          GROUP BY l."showId"`,
+        `WITH entries AS (
+           SELECT l."showId" AS show_id,
+                  (e->>'startTime')::timestamptz AS st,
+                  ${ShowsService.operatingDaySql("(e->>'startTime')::timestamptz", 's."parkId"', "$2")} AS op_day
+             FROM show_live_data l
+             JOIN shows s ON s.id = l."showId"
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(l.showtimes, '[]'::jsonb)) e
+            WHERE s."parkId" = $1::uuid
+              AND l.status = 'OPERATING'
+              -- The snapshot window is anchored on the DATE asked about, not on
+              -- "now": that answers a past day from the snapshots taken on it,
+              -- today from the day's own, and a future day not at all — which is
+              -- the honest answer there, and what the projection is for.
+              AND l.timestamp >= ($3::date - INTERVAL '1 day')
+              AND l.timestamp <  ($3::date + INTERVAL '2 days')
+              -- Cheap prefilter on the calendar date so the operating-day
+              -- subquery only runs for rows that can still qualify. A showtime
+              -- belongs to $3 either on its own date or on the morning after,
+              -- never further out. This is also what keeps the feed's uncleared
+              -- junk out: ThemeParks.wiki still serves showtimes from 2022, and
+              -- they simply fall on another date.
+              AND ((e->>'startTime')::timestamptz AT TIME ZONE $2)::date
+                  BETWEEN $3::date AND $3::date + 1
+         )
+         SELECT show_id,
+                array_agg(hhmm ORDER BY after_midnight, hhmm) AS times
+           FROM (SELECT DISTINCT show_id,
+                        to_char(st AT TIME ZONE $2, 'HH24:MI') AS hhmm,
+                        -- Same unfolding as the patterns: the 00:00 performance
+                        -- of a wrap day is the day's LAST one, so it sorts after
+                        -- 22:00 rather than in front of it.
+                        (st AT TIME ZONE $2)::date > op_day AS after_midnight
+                   FROM entries
+                  WHERE op_day = $3::date) d
+          GROUP BY show_id`,
         [parkId, timezone, date],
       );
 

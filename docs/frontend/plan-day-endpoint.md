@@ -394,10 +394,31 @@ entry still being served sits **1,396 days** before the snapshot carrying it —
 The third row is not foresight either. Those are performances past midnight —
 Universal's late programme, `The Purge: Dangerous Waters` at 00:45,
 `Meet Snowball` at 04:30 — belonging to the operating day that published them,
-which only crosses a date boundary because the clock does. Note that we do
-**not** unfold them the way §5 unfolds opening hours: `getShowtimesOnDate` and
-the pattern rebuild both bucket a showtime by its own park-local calendar date,
-so such a performance is attributed to the following day.
+which only crosses a date boundary because the clock does.
+
+Those are now unfolded the way §5 unfolds opening hours, in both readers:
+`getShowtimesOnDate` and the pattern rebuild share one expression
+(`ShowsService.operatingDaySql`) that puts a showtime on the previous date when
+**that date's published `OPERATING` window still covers it**. The day and the
+weekday follow from it, and so does the order the times are listed in — a 00:30
+performance is the day's last, not its first.
+
+The rule reads a schedule and never guesses from the clock, which bounds it in a
+way worth stating, because the bound is the whole reason it is safe (measured
+2026-09-15, PAR-51):
+
+- **36 parks** publish at least one wrap day; **20 showtimes** actually move, 19
+  at Disneyland Park (Anaheim) and one at Magic Kingdom Park, every one of them
+  at exactly 00:00.
+- **None of Universal's do**, and they are the parks the 109 above come from.
+  Not one of their eight parks publishes an `OPERATING` day that crosses
+  midnight; Halloween Horror Nights runs as a `TICKETED_EVENT`, of which the
+  whole table holds two rows. Their 00:30 performances therefore stay on the
+  following date until a wrap day is published for them.
+- A blanket "before 06:00 belongs to yesterday" cutoff would be wrong in the
+  other direction: Universal Studios Japan serves `Ollivanders™`, a daytime
+  walkthrough, at 16:00 UTC — 01:00 the next morning in Tokyo — on 148 days.
+  Those parks publish no wrap day, so the expression leaves them alone.
 
 That leaves 43 entries — three per million, in two parks, from snapshots taken
 between 2025-12-23 and 2025-12-27 park-local, with no successor in the eight
