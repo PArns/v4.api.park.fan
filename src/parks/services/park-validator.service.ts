@@ -58,11 +58,13 @@ export interface MissingWzId {
  * Queensland, down to the same thirteen slides — and they score 0.6923 on
  * names, which is under every threshold `findDuplicates` had.
  *
- * The three constants below are the branch that catches that pair. Each was
- * placed against the whole catalogue (213 parks, all carrying coordinates,
- * 22 578 pairs) rather than chosen, because `POST merge-duplicate-parks`
- * with `autoDetect: true` merges whatever this function returns — with no dry
- * run and no review gate, so a false positive deletes a real park.
+ * The branch that catches it asks three conditions: the two constants below
+ * and the source-disjointness test in `findDuplicates` itself. Both constants
+ * were placed against the whole catalogue (213 parks, all carrying
+ * coordinates, 22 578 pairs) rather than chosen, because
+ * `POST merge-duplicate-parks` with `autoDetect: true` merges whatever this
+ * function returns — with no dry run and no review gate, so a false positive
+ * deletes a real park.
  */
 
 /**
@@ -121,9 +123,12 @@ const SHARED_POINT_KM = 0.01;
  * **The residual risk is the venue that inherits the resort's geocode**, and
  * it is worth stating because the radius has no vote there at all. Three rows
  * do it today — PortAventura Park, Ferrari Land and Caribe Aquatic Park, all
- * on 41.0986786/1.1517730, 0.0000 km apart — and only their names keep them
- * apart, at 0.1600–0.2000 against this floor. That margin is wide, and
- * `sourcesDisjoint` refuses two of the three pairs besides. But a water park
+ * on 41.0986786/1.1517730, 0.0000 km apart — and for two of their three pairs
+ * the NAME is the only thing keeping them apart, at 0.1600–0.2000 against this
+ * floor. `sourcesDisjoint` refuses just one of the three, PortAventura Park
+ * against Ferrari Land, because Queue-Times lists both; Caribe Aquatic Park
+ * carries a wartezeiten id and no other, so its two pairs are disjoint and
+ * reach the floor. The margin there is wide. But a water park
  * that synced in on its resort's point, from a source the theme-park row does
  * not carry, with a name like `Legoland Windsor` against its water park
  * (0.7429), would satisfy all three conditions, and `autoDetect: true` would

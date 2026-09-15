@@ -345,9 +345,9 @@ describe("ParkValidatorService.findDuplicates", () => {
     // Wet'n'Wild Sydney, another park of the same brand, at 0.5625. The Las
     // Vegas case above dominates this one — anything that makes this red makes
     // that red first — so it pins nothing on its own today. It is kept as the
-    // lower anchor of the brand-sibling range. (Before Las Vegas existed, the
-    // suite stayed green with the floor dropped as far as 0.25; that figure is
-    // history, not a current measurement.)
+    // lower anchor of the brand-sibling range. (With no case in this range at
+    // all, the suite stayed green with the floor dropped as far as 0.25, which
+    // is why the first of the two was written.)
     parkRepository.find.mockResolvedValue([
       park({ ...wetnwildWiki, name: "Wet 'n' Wild Sydney" }),
       wetnwildQueueTimes,

@@ -742,9 +742,11 @@ What that measurement says, and what it constrains:
 - **The name floor is 0.65 and cannot carry more than it does.** A water park
   beside its theme park scores at or above the pair we must catch — Legoland
   Windsor against its water park 0.7429, Alton Towers against its waterpark
-  0.6923, Heide Park against its resort 0.7273 — and so does another park of
-  the same brand, `Wet 'n' Wild Las Vegas` against the Gold Coast row at
-  0.6061. No threshold separates that class. The radius does, **as long as the
+  0.6923, Heide Park against its resort 0.7273. No threshold separates that
+  class. (Another park of the same brand is a different case and the floor does
+  separate it: `Wet 'n' Wild Las Vegas` against the Gold Coast row is 0.6061,
+  and a spec case pins the floor on exactly that pair.) The radius carries the
+  first class, **as long as the
   venue carries its own geocode**: with the floor at 0.65 no two such rows in
   the catalogue sit closer than 0.1174 km (`Boonie Bears Adventure Park Linhai`
   against its water park, 0.6923), 11.7× the radius.
@@ -753,9 +755,12 @@ What that measurement says, and what it constrains:
   writing down.** A second venue that inherits its resort's geocode sits at
   0.0000 km, so the radius has no vote on it at all and only the name floor and
   `sourcesDisjoint` are left. Three rows are that shape today — PortAventura
-  Park, Ferrari Land and Caribe Aquatic Park on one point — and their names
-  hold them apart at 0.1600–0.2000 against a floor of 0.65, with
-  `sourcesDisjoint` refusing two of the three pairs besides. But a water park
+  Park, Ferrari Land and Caribe Aquatic Park on one point — and for two of their
+  three pairs the name is the only thing holding them, at 0.1600–0.2000 against
+  a floor of 0.65. `sourcesDisjoint` refuses only PortAventura Park against
+  Ferrari Land, the pair Queue-Times lists twice; Caribe Aquatic Park carries a
+  wartezeiten id and nothing else, so both of its pairs are disjoint and reach
+  the floor. But a water park
   that synced in on its resort's point, from a source the theme-park row does
   not carry, scoring like `Legoland Windsor` against its water park (0.7429),
   would satisfy all three conditions. No such row is in the catalogue today.
