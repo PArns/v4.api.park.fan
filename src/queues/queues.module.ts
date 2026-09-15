@@ -200,12 +200,14 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
         },
       },
       // Push notifications: a five-minute tick over the trips somebody
-      // subscribed to, plus followed shows (one `getShowtimesOnDate` query
-      // per distinct park among them). No explicit lock headroom — unlike
-      // rope-drop/typical-waits' long synchronous batch runs, this job is
-      // all async I/O with plenty of await points for Bull's lock renewal
-      // to keep up regardless of wall-clock duration; revisit if that stops
-      // being true once this runs against real follow counts.
+      // subscribed to, plus followed shows (three `getShowtimeInstantsOnDate`
+      // queries per distinct park among them — yesterday, today and tomorrow,
+      // because a showtime is keyed on its operating day). No explicit lock
+      // headroom — unlike rope-drop/typical-waits' long synchronous batch
+      // runs, this job is all async I/O with plenty of await points for
+      // Bull's lock renewal to keep up regardless of wall-clock duration;
+      // revisit if that stops being true once this runs against real follow
+      // counts.
       { name: "push-notifications" },
       // Stored plans: one daily sweep of the expired ones. Its own queue rather
       // than a second job on the push tick, because it is maintenance on a

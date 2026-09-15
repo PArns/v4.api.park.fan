@@ -344,6 +344,44 @@ the duplicate groups from the second.)
   description instead — including which of the two numbers to believe, which
   depends on the group.
 
+### Fixed — a showtime belongs to the operating day, not to the calendar date
+
+§5 unfolds a day that crosses midnight: La Ronde's `10 → 0` is one ascending run
+of hours, and the hour after 23 is 24 rather than 0 of the next date. Showtimes
+were never unfolded that way. Both readers — `ShowsService.getShowtimesOnDate`
+and `rebuildSchedulePatterns` — bucketed a showtime by its own park-local
+calendar date, so the last performance of such a day landed on the morning
+after. There `PlanDayService.buildShows` prefers `scheduled` over `projected`
+and stops, which means one orphaned entry replaced that morning's whole
+programme with a single time nobody could attend.
+
+Both now share one expression, `ShowsService.operatingDaySql`: a showtime moves
+to the previous date when **that date's published `OPERATING` window still
+covers it**, and keeps its calendar date otherwise. The day, the weekday and the
+order of the times all follow from it — a 00:30 performance is the day's last
+rather than its first, in the array and in the pattern.
+
+Measured against production on 2026-09-15 (PAR-51): **20 showtimes** move — 19
+at Disneyland Park (Anaheim), one at Magic Kingdom Park, all at exactly 00:00.
+How many parks publish a wrap day at all is quoted with its timestamp rather
+than as a size, because it moves: 34 that evening against 36 twelve hours
+earlier, and only 22 of the 34 sit on a date already past. The rest are future
+dates the schedule sync rewrites whenever an operator revises its hours. The 20
+do not move with them — those performances are in snapshots already taken. The
+109 Universal entries that prompted the
+ticket (162 by now) do **not** move, and that is the rule working rather than
+failing: no Universal park publishes an `OPERATING` day crossing midnight, since
+Halloween Horror Nights runs as a `TICKETED_EVENT` the table holds twice. The
+expression reads a schedule and never guesses from the clock, which is what
+keeps it off Universal Studios Japan's `Ollivanders™` — a daytime walkthrough
+served at 16:00 UTC, 01:00 the next morning in Tokyo, on 148 days.
+
+Covered by `test/e2e/show-operating-day.e2e-spec.ts` against a real Postgres,
+because both readers are raw SQL and a mocked manager records the statement
+instead of answering it. Follow-up: PAR-241, where `buildShows` orders two shows
+against each other on `times[0]` and a show whose only time is the 00:00 one
+sorts to the top of the day it ends.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide

@@ -3,7 +3,6 @@ import { Inject, Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { createHash } from "crypto";
 import { Redis } from "ioredis";
-import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { PushService } from "../../push/push.service";
 import { TripsService } from "../../trips/trips.service";
@@ -322,11 +321,16 @@ export class PushNotificationProcessor {
    * original date actually was (ThemeParks.wiki still serves entries from
    * 2022) and which has no park-schedule check, so a park shut today but
    * still showing yesterday's OPERATING row would keep notifying about a
-   * performance that is not happening. `ShowsService.getShowtimesOnDate`
+   * performance that is not happening. `ShowsService.getShowtimeInstantsOnDate`
    * is the one reader that checks a showtime against its OWN embedded date
    * instead of projecting it, so it is used here for the showtimes
    * themselves — `findBatchCurrentStatusByShows` is kept only for the
    * show/park metadata (name, timezone) that reader does not return.
+   *
+   * It returns instants rather than wall-clock times on purpose: a showtime
+   * belongs to the operating day, so the 00:30 performance of a day that ran
+   * past midnight answers under THAT day and falls on the next date. Nothing
+   * here may pin a returned time to the date it asked for.
    */
   private async followedShowsDueToday(
     showIds: string[],
@@ -368,13 +372,16 @@ export class PushNotificationProcessor {
     }
     if (metaByShow.size === 0) return [];
 
-    // Two `getShowtimesOnDate` calls per distinct PARK, not per show — a
-    // popular park with many followed shows shares them. Both today's AND
-    // tomorrow's date: a showtime in the first ~35 minutes after local
-    // midnight has a lead window that opens BEFORE that midnight, while
-    // `todayStr` at that moment still names the day before it — querying
-    // only "today" means the one tick where such a showtime is due asks the
-    // wrong day and never finds it.
+    // Three `getShowtimeInstantsOnDate` calls per distinct PARK, not per show — a
+    // popular park with many followed shows shares them. Yesterday, today AND
+    // tomorrow, because the date a showtime answers under is its OPERATING
+    // day, and that straddles local midnight in both directions. Forwards: a
+    // performance in the first ~35 minutes after midnight has a lead window
+    // that opens BEFORE that midnight, while `todayStr` at that moment still
+    // names the day before it. Backwards: a performance at 00:45 on a day
+    // that opened the previous morning answers under THAT morning's date,
+    // which by the time it is due is already yesterday. Either date left out
+    // is a tick that asks the wrong day and finds nothing.
     //
     // All of them fired at once, not one park-date at a time: each query is
     // independent (a different park, a different date) and nothing here
@@ -388,7 +395,20 @@ export class PushNotificationProcessor {
     const dateQueries = [...timezoneByPark].flatMap(([parkId, timezone]) => {
       const todayStr = formatInParkTimezone(new Date(startedMs), timezone);
       const tomorrowStr = getTomorrowDateInTimezoneAt(startedMs, timezone);
-      return [todayStr, tomorrowStr].map((dateStr) => ({
+      // Yesterday too, and it is not symmetry for its own sake: a showtime is
+      // keyed on the OPERATING day, so a performance at 00:45 on a day that
+      // opened the previous morning answers under YESTERDAY's date. At the
+      // tick that is 25-35 minutes ahead of it the local clock already reads
+      // the new date, so querying only today and tomorrow asks the two days
+      // that do not have it. Stepping back through UTC noon rather than by
+      // subtracting 24 hours, so a DST night does not land on the same date
+      // twice.
+      const yesterdayStr = new Date(
+        Date.parse(`${todayStr}T12:00:00Z`) - 24 * 60 * 60 * 1000,
+      )
+        .toISOString()
+        .slice(0, 10);
+      return [yesterdayStr, todayStr, tomorrowStr].map((dateStr) => ({
         parkId,
         timezone,
         dateStr,
@@ -400,41 +420,29 @@ export class PushNotificationProcessor {
       dateQueries.map(async ({ parkId, timezone, dateStr }) => {
         let timesByShow: Map<string, string[]>;
         try {
-          timesByShow = await this.showsService.getShowtimesOnDate(
+          // The instants, not the wall-clock strings. Showtimes follow the
+          // OPERATING day, so a time this returns need not fall on `dateStr`
+          // at all — the 00:00 finale of a day that runs past midnight comes
+          // back for that day, and rebuilding it from `dateStr` would place it
+          // 24 hours early, where the lead window never opens. That also
+          // retires the round-trip guard this loop used to carry: a wall-clock
+          // time inside a spring-forward gap has no instant, and the row has
+          // had the real one all along.
+          timesByShow = await this.showsService.getShowtimeInstantsOnDate(
             parkId,
             timezone,
             dateStr,
           );
         } catch (error) {
           this.logger.warn(
-            `getShowtimesOnDate failed for park ${parkId} on ${dateStr}: ${(error as Error)?.message ?? error}`,
+            `getShowtimeInstantsOnDate failed for park ${parkId} on ${dateStr}: ${(error as Error)?.message ?? error}`,
           );
           return;
         }
-        for (const [showId, hhmmTimes] of timesByShow) {
+        for (const [showId, instants] of timesByShow) {
           if (!metaByShow.has(showId)) continue; // a show in this park nobody follows
           const isoTimes = verifiedTimesByShow.get(showId) ?? [];
-          for (const hhmm of hhmmTimes) {
-            try {
-              const instant = fromZonedTime(`${dateStr}T${hhmm}:00`, timezone);
-              // A local wall-clock time a spring-forward transition skips
-              // (e.g. 02:30 on the one day the clock jumps 02:00 -> 03:00)
-              // has no real instant at all — `fromZonedTime` still returns
-              // one, silently shifted by the DST offset, which round-trips
-              // to a DIFFERENT local time than the one asked for. Caught
-              // here rather than sent: a show cannot start at a time that
-              // did not happen.
-              const roundTrip = formatInTimeZone(
-                instant,
-                timezone,
-                "yyyy-MM-dd'T'HH:mm",
-              );
-              if (roundTrip !== `${dateStr}T${hhmm}`) continue;
-              isoTimes.push(instant.toISOString());
-            } catch {
-              // A malformed time from the aggregate query — skip just this one.
-            }
-          }
+          isoTimes.push(...instants);
           verifiedTimesByShow.set(showId, isoTimes);
         }
       }),

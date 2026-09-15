@@ -75,7 +75,7 @@ describe("PushNotificationProcessor", () => {
   let showFollowsService: { allFollows: jest.Mock };
   let showsService: {
     findBatchCurrentStatusByShows: jest.Mock;
-    getShowtimesOnDate: jest.Mock;
+    getShowtimeInstantsOnDate: jest.Mock;
   };
   let redisStore: Map<string, string>;
   let redis: { exists: jest.Mock; set: jest.Mock };
@@ -100,11 +100,13 @@ describe("PushNotificationProcessor", () => {
     showsService = {
       findBatchCurrentStatusByShows: jest.fn().mockResolvedValue(new Map()),
       // The show-follow branch verifies a showtime against
-      // `getShowtimesOnDate` rather than trusting the (possibly stale/
+      // `getShowtimeInstantsOnDate` rather than trusting the (possibly stale/
       // projected) `showtimes` on the status row — see
-      // `followedShowsDueToday`. Defaults to "nothing verified"; tests that
-      // expect a show-follow send configure this explicitly.
-      getShowtimesOnDate: jest.fn().mockResolvedValue(new Map()),
+      // `followedShowsDueToday`. It returns INSTANTS rather than wall-clock
+      // strings, because a showtime follows the operating day and need not
+      // fall on the date it was asked for. Defaults to "nothing verified";
+      // tests that expect a show-follow send configure this explicitly.
+      getShowtimeInstantsOnDate: jest.fn().mockResolvedValue(new Map()),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -300,9 +302,16 @@ describe("PushNotificationProcessor", () => {
       );
       // NOW is 20:00 Berlin (CEST, UTC+2); the fixture's showtime is 30 min
       // later, i.e. 20:30 local — the "verified for today" time
-      // `getShowtimesOnDate` would answer for a genuinely-reported showtime.
-      showsService.getShowtimesOnDate.mockResolvedValueOnce(
-        new Map([["show-1", ["20:30"]]]),
+      // `getShowtimeInstantsOnDate` would answer for a genuinely-reported
+      // showtime.
+      // Keyed on the date rather than on call order: the job asks yesterday,
+      // today and tomorrow, so a `...Once` would answer the FIRST of those
+      // and this fixture would silently stop describing "today".
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-17"
+            ? new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]])
+            : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),
@@ -366,8 +375,14 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimesOnDate.mockResolvedValueOnce(
-        new Map([["show-1", ["20:30"]]]),
+      // Keyed on the date rather than on call order: the job asks yesterday,
+      // today and tomorrow, so a `...Once` would answer the FIRST of those
+      // and this fixture would silently stop describing "today".
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-17"
+            ? new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]])
+            : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(subscriptionsById);
 
@@ -376,7 +391,7 @@ describe("PushNotificationProcessor", () => {
     });
   });
 
-  it("does not notify about a showtime findBatchCurrentStatusByShows carries but getShowtimesOnDate never verified", async () => {
+  it("does not notify about a showtime findBatchCurrentStatusByShows carries but getShowtimeInstantsOnDate never verified", async () => {
     // The exact gap `followedShowsDueToday` closes: a projected/stale
     // showtime with nothing to back it up must not fire.
     await withVapid(async () => {
@@ -400,7 +415,7 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      // Default mock: getShowtimesOnDate verifies nothing for today.
+      // Default mock: getShowtimeInstantsOnDate verifies nothing, any date.
 
       await processor.handleDue({} as never);
       expect(pushService.send).not.toHaveBeenCalled();
@@ -481,8 +496,14 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimesOnDate.mockResolvedValueOnce(
-        new Map([["show-1", ["20:30"]]]),
+      // Keyed on the date rather than on call order: the job asks yesterday,
+      // today and tomorrow, so a `...Once` would answer the FIRST of those
+      // and this fixture would silently stop describing "today".
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-17"
+            ? new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]])
+            : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),
@@ -533,6 +554,56 @@ describe("PushNotificationProcessor", () => {
     });
   });
 
+  it("notifies about a performance that belongs to yesterday's operating day", async () => {
+    await withVapid(async () => {
+      // 00:20 Berlin on the 18th, twenty-five minutes ahead of a 00:45
+      // performance. That performance runs on a day that OPENED on the 17th
+      // and closed at 01:00 — so `getShowtimeInstantsOnDate` answers it under
+      // the 17th, which at this instant is neither today nor tomorrow.
+      // Querying only those two asks the two dates that do not have it.
+      const justAfterMidnight = Date.parse("2026-10-17T22:20:00.000Z"); // 00:20 CEST on the 18th
+      jest.spyOn(Date, "now").mockReturnValue(justAfterMidnight);
+
+      showFollowsService.allFollows.mockResolvedValueOnce([
+        { id: "f1", subscriptionId: "sub-show", showId: "show-1" },
+      ]);
+      showsService.findBatchCurrentStatusByShows.mockResolvedValueOnce(
+        new Map([
+          [
+            "show-1",
+            {
+              status: "OPERATING",
+              showtimes: [],
+              show: {
+                name: "Feuerwerk",
+                park: {
+                  name: "Europa-Park",
+                  slug: "europa-park",
+                  timezone: "Europe/Berlin",
+                  continentSlug: "europe",
+                  countrySlug: "germany",
+                  citySlug: "rust",
+                },
+              },
+            },
+          ],
+        ]),
+      );
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-17"
+            ? new Map([["show-1", ["2026-10-17T22:45:00.000Z"]]]) // 00:45 CEST
+            : new Map(),
+      );
+      pushService.findByIds.mockResolvedValueOnce(
+        new Map([["sub-show", showSubscription]]),
+      );
+
+      await processor.handleDue({} as never);
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("notifies about a showtime just after local midnight, whose lead window opens the calendar day before", async () => {
     await withVapid(async () => {
       // A fresh `Date.now` for this one test: 23:30 Berlin (CEST) on the
@@ -571,10 +642,10 @@ describe("PushNotificationProcessor", () => {
       );
       // Nothing verified for "today" (the 17th) — the showtime belongs to
       // the 18th, which is exactly the date the fix also has to query.
-      showsService.getShowtimesOnDate.mockImplementation(
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
         async (_parkId: string, _tz: string, dateStr: string) =>
           dateStr === "2026-10-18"
-            ? new Map([["show-1", ["00:00"]]])
+            ? new Map([["show-1", ["2026-10-17T22:00:00.000Z"]]]) // 00:00 CEST
             : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(
@@ -592,16 +663,30 @@ describe("PushNotificationProcessor", () => {
     });
   });
 
-  it("does not notify about a showtime that falls in a spring-forward gap", async () => {
+  it("sends a performance on the far side of a spring-forward jump", async () => {
     await withVapid(async () => {
       // 2026-03-29 is the day Berlin's clocks jump 02:00 -> 03:00 (at 01:00
-      // UTC) — 02:30 local that day never happens. `fromZonedTime` still
-      // resolves it (empirically, to 2026-03-29T00:30:00Z), so "now" is set
-      // 30 minutes before THAT instant: inside `dueShowNotifications`'
-      // 25-35 minute lead window, which is what makes this test meaningful —
-      // without the round-trip guard this exact "now" sends, guarded it
-      // must not, because the source time never happened.
-      const at = Date.parse("2026-03-29T00:00:00.000Z"); // 01:00 CET, before the jump
+      // UTC). This used to be the round-trip guard's case: the job rebuilt an
+      // instant from `dateStr` plus a wall-clock string, and "02:30" that day
+      // never happens, so `fromZonedTime` returned a silently shifted instant
+      // that had to be caught and dropped — losing a real performance would
+      // have been the alternative.
+      //
+      // There is nothing to reconstruct any more. `getShowtimeInstantsOnDate`
+      // returns the instant the row actually carries, so a time that never
+      // happened cannot arrive here.
+      //
+      // What is left to pin is that the jump does not cost a real performance.
+      // Berlin's clocks move at 01:00 UTC, so `now` sits 20 minutes before
+      // that and the performance 30 minutes after `now` — 01:10 UTC, which the
+      // local clock reads as 03:10 CEST. The two are on opposite sides of the
+      // jump, and no wall-clock arithmetic gets from one to the other: 01:40
+      // plus 30 minutes is 02:10, an hour that does not exist that night.
+      // Comparing instants the lead is 30 minutes, and the notification goes
+      // out. The assertion is deliberately the opposite of the one this test
+      // made before the change: it used to require silence, because the only
+      // 02:30 it could ever see was one the reconstruction had invented.
+      const at = Date.parse("2026-03-29T00:40:00.000Z"); // 01:40 CET, before the jump
       jest.spyOn(Date, "now").mockReturnValue(at);
 
       showFollowsService.allFollows.mockResolvedValueOnce([
@@ -629,10 +714,13 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimesOnDate.mockImplementation(
+      // 30 minutes after `at`, i.e. inside the 25-35 minute lead window: the
+      // performance that really runs that night, on the far side of the jump.
+      const startsAt = new Date(at + 30 * 60_000).toISOString();
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
         async (_parkId: string, _tz: string, dateStr: string) =>
           dateStr === "2026-03-29"
-            ? new Map([["show-1", ["02:30"]]])
+            ? new Map([["show-1", [startsAt]]])
             : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(
@@ -640,7 +728,7 @@ describe("PushNotificationProcessor", () => {
       );
 
       await processor.handleDue({} as never);
-      expect(pushService.send).not.toHaveBeenCalled();
+      expect(pushService.send).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -671,8 +759,14 @@ describe("PushNotificationProcessor", () => {
           ],
         ]),
       );
-      showsService.getShowtimesOnDate.mockResolvedValueOnce(
-        new Map([["show-1", ["20:30"]]]),
+      // Keyed on the date rather than on call order: the job asks yesterday,
+      // today and tomorrow, so a `...Once` would answer the FIRST of those
+      // and this fixture would silently stop describing "today".
+      showsService.getShowtimeInstantsOnDate.mockImplementation(
+        async (_parkId: string, _tz: string, dateStr: string) =>
+          dateStr === "2026-10-17"
+            ? new Map([["show-1", [new Date(NOW + 30 * 60_000).toISOString()]]])
+            : new Map(),
       );
       pushService.findByIds.mockResolvedValueOnce(
         new Map([["sub-show", showSubscription]]),

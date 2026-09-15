@@ -6,12 +6,13 @@ import type { ScheduledStartCopy } from "../push/push-messages";
  *
  * Pure, mirroring `notification-planner.ts`'s `dueNotifications` — but
  * simpler, because the caller (`PushNotificationProcessor.followedShowsDueToday`)
- * has already turned each `startTime` into a full ISO instant for today
- * before this function ever sees it, verified against `ShowsService
- * .getShowtimesOnDate` rather than taken from `projectShowtimesToToday`
- * (which remaps a showtime onto today's date whatever the original date
- * actually was, with no check that the park is even open today). Comparing
- * two absolute instants needs no timezone at all — the zone is only read
+ * receives each `startTime` as a full ISO instant, read straight from
+ * `ShowsService.getShowtimeInstantsOnDate` rather than taken from
+ * `projectShowtimesToToday` (which remaps a showtime onto today's date
+ * whatever the original date actually was, with no check that the park is
+ * even open today). The instant is the row's own; nothing reconstructs it
+ * from a date and a wall clock, which a showtime past midnight would break.
+ * Comparing two absolute instants needs no timezone at all — the zone is only read
  * here to FORMAT the display time (`atTime`) in the park's local clock, not
  * to decide whether a showtime is due.
  */
@@ -71,7 +72,13 @@ function isDueLead(leadMin: number): boolean {
 }
 
 export interface FollowedShowtime {
-  /** Full ISO instant, already projected onto the park's "today". */
+  /**
+   * Full ISO instant, as the source row carries it.
+   *
+   * NOT "today's date plus a time": a showtime belongs to its operating day,
+   * so a performance after midnight is reported under the day that opened and
+   * happens on the one after.
+   */
   startTime: string;
 }
 
