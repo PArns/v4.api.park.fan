@@ -237,8 +237,11 @@ describe("merge dependency tables", () => {
     // which is why this assertion sits next to the one above rather than
     // somewhere it could contradict it: `WHERE "attractionId" = $loser` has
     // already excluded every park-level row, so the key never meets a NULL.
-    // Without the entry the FK — ON DELETE CASCADE — takes the losing ride's
-    // whole schedule with it.
+    // Without the entry the FK — ON DELETE CASCADE — deletes whatever per-ride
+    // rows the table holds, inside a transaction that then reports success. How
+    // many that is, is not established: no write path in this repo sets the
+    // column, so the declaration is right on an empty set (two no-ops) and on a
+    // non-empty one alike.
     const onAttraction = ATTRACTION_DEPENDENCIES.find(
       (d) => d.table === "schedule_entries",
     );

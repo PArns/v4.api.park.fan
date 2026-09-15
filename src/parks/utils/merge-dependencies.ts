@@ -381,9 +381,18 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // every park-level row, and `(date, scheduleType)` carries no nullable
     // column. The key is the one `mergeParks` uses for the park-level move.
     //
-    // Without it the FK — ON DELETE CASCADE, nullable — takes the losing
-    // ride's whole schedule with it: its maintenance days, its ticketed
-    // evenings, everything `/plan/day` reads to know when that ride runs.
+    // How many rows that is, is NOT established here, and the entry does not
+    // depend on it. No write path in this repo sets `attractionId` on a
+    // schedule entry — every one of them builds a row from `parkId` alone, and
+    // `park-open-window.sql.ts` says as much in its own opening paragraph — so
+    // the per-ride rows are whatever a past writer or an upstream import left
+    // behind, and nobody has counted them. Declaring the move is right under
+    // either answer: on an empty set the two statements are no-ops, and on a
+    // non-empty one the FK is ON DELETE CASCADE, which destroys the rows inside
+    // a transaction that then reports success. What may not be written here is
+    // what those rows CONTAIN — that would be a claim about production data
+    // with no measurement behind it, which is how this file's oldest comments
+    // went wrong.
     //
     // On `mergeParks` the rows this saves are then taken by something else,
     // and it is not this entry's bug to fix: step 3 there dedupes the table
@@ -391,8 +400,8 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // per-ride row is deleted whenever the surviving park holds ANY row of
     // that type that day — usually its own park-level OPERATING row. That is
     // PAR-171, it predates this entry, and the two raw paths already avoid it
-    // with `IS NOT DISTINCT FROM`. So this saves the ride's schedule on the
-    // attraction-merge path today and on the park path once PAR-171 lands.
+    // with `IS NOT DISTINCT FROM`. So whatever per-ride rows exist survive the
+    // attraction-merge path today and the park path once PAR-171 lands.
     table: "schedule_entries",
     column: "attractionId",
     strategy: "move",
