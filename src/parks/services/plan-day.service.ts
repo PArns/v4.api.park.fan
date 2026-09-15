@@ -133,8 +133,13 @@ export class PlanDayService {
    * Today and tomorrow, the same reach `downYesterday` gives itself and for the
    * same reason: both are readings of the current state rather than facts about
    * a date. It bounds one branch of {@link outOfSeasonOn} — a detector note with
-   * no months behind it — and nothing else; a ride whose season months are on
-   * file is judged on them at every horizon.
+   * no months behind it; a ride whose season months are on file is judged on
+   * them at every horizon.
+   *
+   * It bounds {@link runningNow}'s reach too, and it has to be the same number
+   * rather than a second one beside it: the live reading exists to contradict
+   * that note, so an exception that stopped one day short of it would drop a
+   * ride from tomorrow's plan on the strength of a note today's feed refutes.
    */
   private static readonly SEASON_NOW_HORIZON_DAYS = 1;
 
@@ -766,7 +771,9 @@ export class PlanDayService {
     parkStatus: string,
     /**
      * The day's published opening, when the operator stated one. It bounds the
-     * live reading in {@link runningNow} and nothing else.
+     * live reading in {@link runningNow} and nothing else — and there only on
+     * today's plan, since it is the planned day's opening and the reading is
+     * always today's.
      */
     publishedOpening: Date | string | null,
     /**
@@ -850,11 +857,22 @@ export class PlanDayService {
     // reading in the other direction (`attraction-outage.service.ts` reports no
     // fault inside one). Overruling it here would delete the window's whole
     // purpose exactly where an editor took the trouble to state it.
+    //
+    // And past today the exception is the NOTE's alone. A live row is a reading
+    // of the current state, so it refutes `season_out_since` — which is another
+    // reading of the current state — on every day that note reaches. It says
+    // nothing about `season_months`, a calendar: a ride running today tells you
+    // nothing about tomorrow when tomorrow is the first day of a month its
+    // season does not cover, and that is exactly the day a season ends on. So
+    // for tomorrow the candidates are the rides the note alone blocks, asked
+    // with the same function one flag over rather than with a second copy of
+    // the season rule.
     const seasonOnly = attractions
       .filter(
         (a) =>
           blocked.has(a.id) &&
-          !isCuratedOutOfService(a, park.timezone, dateStr),
+          !isCuratedOutOfService(a, park.timezone, dateStr) &&
+          (leadDays === 0 || !PlanDayService.outOfSeasonOn(a, dateStr, false)),
       )
       .map((a) => a.id);
 
@@ -1469,6 +1487,12 @@ export class PlanDayService {
    * a daily job that has already been out for **73 days** without anyone
    * noticing (`docs/architecture/attraction-status-and-seasonality.md`).
    *
+   * **It reaches as far as the note it contradicts**, which is today and
+   * tomorrow ({@link SEASON_NOW_HORIZON_DAYS}). The caller decides what may be
+   * lifted on each of those two days: everything the season blocks today, and
+   * tomorrow the monthless note alone. Both cases read the same row — today's —
+   * because that is the only live row there is.
+   *
    * **What it costs, which is the question this part was held back for.** There
    * is no cached park-wide status to borrow: `park-integration.service.ts`
    * computes it inside the full park payload's ride loop, and
@@ -1476,8 +1500,9 @@ export class PlanDayService {
    * list query. So it is a query of its own — and it is **skipped** unless
    * something would actually change:
    *
-   * - not today's park-local date (`leadDays !== 0`) → no query. For any other
-   *   date there is no live row that could overrule anything.
+   * - past {@link SEASON_NOW_HORIZON_DAYS} → no query. Today's row is the only
+   *   one there is, and past the note's own reach there is nothing left for it
+   *   to overrule: what blocks a ride that far out is its months.
    * - park CLOSED for the day → no query, because the park page's
    *   `effectiveStatus` is CLOSED for every ride under a closed park and nothing
    *   below it may claim to be running.
@@ -1505,7 +1530,8 @@ export class PlanDayService {
    * safe to use: a queue row is written on change plus an hourly heartbeat, so
    * the current reading for a ride that has not moved predates the gates, and a
    * park that opened twenty minutes ago would otherwise have almost no window.
-   * Where the operator published no opening, the six hours are the whole window.
+   * Where the operator published no opening, the six hours are the whole window
+   * — and so they are on tomorrow's plan, whose opening has not happened yet.
    *
    * Neither of the two shapes this passed through would do. A flat interval —
    * the 48 hours it first carried — rescues a ride off yesterday evening's row.
@@ -1531,18 +1557,32 @@ export class PlanDayService {
     candidateIds: string[],
   ): Promise<{ ids: Set<string>; unavailable: boolean }> {
     const out = new Set<string>();
-    if (leadDays !== 0 || parkStatus === "CLOSED")
+    // A past date is answered from the rollup and never reaches here; the guard
+    // is still written down, because a live row would be evidence about the
+    // wrong day if it ever did.
+    if (
+      leadDays < 0 ||
+      leadDays > PlanDayService.SEASON_NOW_HORIZON_DAYS ||
+      parkStatus === "CLOSED"
+    )
       return { ids: out, unavailable: false };
     if (candidateIds.length === 0) return { ids: out, unavailable: false };
 
     const floor = new Date(
       Date.now() - PlanDayService.LIVE_STATUS_FLOOR_HOURS * 60 * 60 * 1000,
     );
-    const opening = openingTime
-      ? openingTime instanceof Date
-        ? openingTime
-        : new Date(openingTime)
-      : null;
+    // The opening bounds the window only where the day being planned IS today,
+    // because the row is today's either way — there is no live row for
+    // tomorrow, and tomorrow's published opening lies in the future. Today the
+    // comparison below would drop it anyway; stating it as a condition keeps
+    // the window from resting on that accident. For tomorrow the floor is the
+    // whole window, which is what a park that published no opening gets.
+    const opening =
+      leadDays === 0 && openingTime
+        ? openingTime instanceof Date
+          ? openingTime
+          : new Date(openingTime)
+        : null;
     const since =
       opening && !Number.isNaN(opening.getTime()) && opening < floor
         ? opening
@@ -1786,10 +1826,10 @@ export class PlanDayService {
    *
    * What this does NOT do is overrule the season with a live reading — that is
    * {@link runningNow}'s job, applied to this function's answer rather than
-   * inside it, and it reaches today alone. So a detector note with no months
-   * behind it still drops a ride from TOMORROW's plan on the strength of a
-   * reading today contradicts, which is the half of the park page's rule that is
-   * not closed yet.
+   * inside it. It reaches as far as this branch does, so a ride the feed reports
+   * running today is in tomorrow's plan as well; a note and the reading that
+   * refutes it are both statements about now, and one of them may not outlive
+   * the other by a day.
    *
    * @param nearHorizon - Whether "shut now" still speaks for the day asked about.
    */
