@@ -123,7 +123,10 @@ describe("closure gaps across park-local midnight (e2e)", () => {
     );
   };
 
-  const run = (asOf: Date): Promise<Array<{ attractionId: string }>> =>
+  // The two columns the statement emits, and the two `addClosureGaps` reads.
+  const run = (
+    asOf: Date,
+  ): Promise<Array<{ attractionId: string; startedAt: Date }>> =>
     dataSource.query(CURRENT_CLOSURE_GAP_SQL, [[rideId], TZ, asOf, parkId]);
 
   beforeAll(async () => {

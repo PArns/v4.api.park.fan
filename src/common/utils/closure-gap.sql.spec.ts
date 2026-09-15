@@ -61,7 +61,9 @@ describe("closure-gap statements", () => {
       //    every reading a park emits after it shuts, which `queue_data` being
       //    a change log makes routine.
       expect(body).toMatch(
-        new RegExp(`COALESCE\\(${aliasStart}\\.op_day,[\\s\\S]{0,60}?::date\\)`),
+        new RegExp(
+          `COALESCE\\(${aliasStart}\\.op_day,[\\s\\S]{0,60}?::date\\)`,
+        ),
       );
       expect(body).toMatch(
         new RegExp(`COALESCE\\(${aliasEnd}\\.op_day,[\\s\\S]{0,60}?::date\\)`),
@@ -102,9 +104,7 @@ describe("closure-gap statements", () => {
     expect(openToday).toMatch(/LEFT JOIN win wr\b/);
     expect(openToday).toMatch(/LEFT JOIN win ws\b/);
     expect(openToday).toMatch(/COALESCE\(wr\.op_day,[\s\S]{0,60}?::date\)/);
-    expect(openToday).not.toMatch(
-      /AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/,
-    );
+    expect(openToday).not.toMatch(/AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/);
 
     // 2. Both day-end CTEs read win instead of scanning the table again.
     for (const body of [parkOpen, dayClose]) {

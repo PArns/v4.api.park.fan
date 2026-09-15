@@ -6,6 +6,47 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — the live closure-gap statement keys on the operating day, like its nightly twin
+
+`CLOSURE_GAP_INTERVALS_SQL` moved to the operating day in PAR-29: the day of a
+gap comes from the published window that contains it, not from
+`(ts AT TIME ZONE tz)::date`. `CURRENT_CLOSURE_GAP_SQL` kept the calendar cast in
+two places, so the same ride could count a different number of `gap_days`
+against the same `MAX_GAP_DAY_SHARE` depending on which statement asked. A third
+notion sat between them: `park_day_close` has always keyed on the opening's
+park-local date, and `early_end` joined readings to it by calendar date — in a
+park closing after midnight, the evening's own readings were judged against the
+NEXT day's closing time.
+
+All three now read one `win` CTE from `parkOpenWindowCtes()`, which takes its
+park source and its bounds as expressions so a statement numbering its
+parameters differently can use it (`$1` attractions, `$2` timezone, `$3` as-of,
+`$4` park). The window semantics — the closing-time repair, the disjoint union,
+the operating-day anchor — are unchanged and still written once.
+
+The joins to `win` are LEFT, with the calendar day as the fallback, exactly as
+`gap_edges` does. `queue_data` is a change log, so a ride reads `OPERATING` for
+hours after its park shuts; an INNER join would drop those readings from every
+park rather than re-key them in the few that close late. Whether it should is a
+separate question with its own before/after — `todo.md` carries it.
+
+`park_open` and `park_day_close` no longer scan `schedule_entries` themselves;
+both read `win`, which removes a second scan per call. `active_floor` is new and
+follows from the numerator's move: a gap read just after the window's start can
+carry the previous local day in a wrap park, so a bare `local_date` floor would
+exclude an operating day the numerator counted and push `gap_days/active_days`
+up — the direction that suppresses a real fault as a duty cycle.
+
+**Measured against production, 2026-09-15.** Of the 94 blind parks this
+statement serves, none published a close strictly after park-local midnight in
+the last 30 days: every wrap day in that window closes at exactly `00:00`, and
+`[opens_at, 00:00)` holds no instant of the following date. Run over all 94 at
+one instant, old and new returned the same 4 rows. Over 400 days the affected
+set is two parks and seven days; at Six Flags Qiddiya City the keying moves 3463
+readings across five operating days, up to 54 rides a day. The plan is unchanged
+where it matters — both pseudoconstant `EXISTS` clauses still emit their
+One-Time Filter, and `win` materialises 35 rows in 0.5 ms.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide
