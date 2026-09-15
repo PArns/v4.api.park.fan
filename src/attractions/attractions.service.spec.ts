@@ -194,6 +194,60 @@ describe("AttractionsService", () => {
     });
   });
 
+  describe("findAllWithFilters", () => {
+    const makeQueryBuilder = () => {
+      const qb = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        leftJoin: jest.fn().mockReturnThis(),
+        setParameter: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+        // The repository mock's inferred query-builder shape carries these two.
+        getMany: jest.fn().mockResolvedValue([]),
+        getOne: jest.fn().mockResolvedValue(null),
+      };
+      return qb;
+    };
+
+    // The park attractions list is the only caller. It served 34 retired rows
+    // across 11 parks on 2026-09-15 — 17 of them at Universal Studios
+    // Singapore, retired via PAR-159 — while the park payload served none.
+    it("excludes retired attractions", async () => {
+      const qb = makeQueryBuilder();
+      mockAttractionRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAllWithFilters({ park: "walibi-belgium" });
+
+      expect(qb.andWhere).toHaveBeenCalledWith("attraction.retiredAt IS NULL");
+    });
+
+    it("still applies the geo filters beside it", async () => {
+      const qb = makeQueryBuilder();
+      mockAttractionRepository.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAllWithFilters({
+        park: "walibi-belgium",
+        continentSlug: "europe",
+        countrySlug: "belgium",
+        citySlug: "wavre",
+      });
+
+      expect(qb.andWhere).toHaveBeenCalledWith("park.slug = :parkSlug", {
+        parkSlug: "walibi-belgium",
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "park.continentSlug = :continentSlug",
+        { continentSlug: "europe" },
+      );
+      expect(qb.andWhere).toHaveBeenCalledWith("attraction.retiredAt IS NULL");
+    });
+  });
+
   describe("getRepository", () => {
     it("should return the repository instance", () => {
       const repo = service.getRepository();

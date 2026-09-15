@@ -147,6 +147,45 @@ lookup window is the six-hour floor, not an opening — the published opening
 belongs to the day being planned, and tomorrow's has not happened yet. The
 curated works period is unaffected; a live reading has never overruled it.
 
+### Fixed — the park attractions list said `CLOSED` about 6477 rides it knows nothing about
+
+`GET /v1/parks/{continent}/{country}/{city}/{park}/attractions` joins no queue
+data, and `AttractionResponseDto.fromEntity` sets `status: "CLOSED"` as a floor
+for the callers that do. The list served that floor as a reading. Measured on
+2026-09-15 over 190 parks: **6477 of 6477 attractions CLOSED** here against
+**849 OPERATING, 307 UNKNOWN, 11 DOWN and 5 REFURBISHMENT** among the same rows
+in the park payload. A search for broken rides over this route finds nothing and
+looks like a valid answer, which is the expensive part — there is no error to
+notice.
+
+The field is now absent (`fromEntityWithoutLiveData`), not renamed: the
+attraction table has no status column, so there is no stored status a different
+name could describe, and an absent optional field reads as "this route has no
+reading" rather than as a closure. `effectiveStatus` and `queues` were already
+absent. Live state comes from the park payload or the attraction detail route.
+The floor stays in `fromEntity`, because the attraction detail path reads it
+when a ride has no row inside the freshness window (`isSourceAbsent([])` is
+false by design) and derives `effectiveStatus` from it.
+
+Same route, the second half of the same report: it counted more attractions than
+the park payload for 23 of 190 parks, **6477 against 6406**. The +71 splits
+exactly two ways, and only one of them was a bug:
+
+- **34 retired rows across 11 parks** — 17 at Universal Studios Singapore,
+  retired via PAR-159 after ThemeParks.wiki reclassified them as shows. The
+  park payload filters them (`loadParkRelations`), the DTO's own `retiredAt`
+  docstring promises they leave "every park listing, count and search", and
+  this list was the one place that did not. `findAllWithFilters` now excludes
+  them; its only caller is this route.
+- **37 duplicate rows in 12 parks** (Walibi Belgium 21, Heide Park 4,
+  Carowinds 2) — pairs the catalog holds twice, the same ones
+  `AttractionMergeService.findDuplicatePairs` finds by its `foo` / `foo-2` slug
+  rule. The park payload hides them by collapsing same-name entries
+  (`deduplicateEntities`); this route reports rows. Deduplicating here would
+  break pagination, which counts in SQL before any collapse, so the difference
+  is documented in the route's `api-json` description instead: until a merge
+  runs, the park payload's number describes the park and this one counts rows.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide

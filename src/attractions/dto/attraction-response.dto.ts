@@ -174,7 +174,13 @@ export class AttractionResponseDto {
   @ApiProperty({ description: "URL-friendly slug" })
   slug: string;
 
-  @ApiProperty({ description: "Current status", required: false })
+  @ApiProperty({
+    description:
+      "Current status as the live sources report it. Absent on endpoints that " +
+      "join no live data — the park attractions list is one — and its absence " +
+      "means the endpoint has no reading, never that the ride is closed.",
+    required: false,
+  })
   status?: string; // Overall status: OPERATING, DOWN, CLOSED, REFURBISHMENT
 
   @ApiProperty({
@@ -522,6 +528,21 @@ export class AttractionResponseDto {
   })
   retiredReason?: string | null;
 
+  /**
+   * The stored half of an attraction: everything that comes off the row itself.
+   *
+   * `status` here is a PLACEHOLDER, not a reading — the attraction table has no
+   * status column, and the value is whatever the integrated caller overwrites
+   * it with from `queue_data`. It stays "CLOSED" rather than being dropped
+   * because the attraction detail path reads it as its own floor: an
+   * attraction with no row inside the freshness window keeps this value
+   * (`isSourceAbsent([])` is deliberately false), and `effectiveStatus` is
+   * derived from it.
+   *
+   * So a caller that does NOT join live data must not serve this object as it
+   * is — use {@link fromEntityWithoutLiveData}, which keeps the placeholder out
+   * of the response.
+   */
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     const curated = resolveCuratedFacts(attraction);
 
@@ -533,7 +554,7 @@ export class AttractionResponseDto {
       name: curated.name,
       slug: cleanSlugSuffix(attraction.slug),
 
-      status: "CLOSED", // Default
+      status: "CLOSED", // Placeholder — see the docblock above
 
       latitude: attraction.latitude !== undefined ? attraction.latitude : null,
       longitude:
@@ -565,5 +586,29 @@ export class AttractionResponseDto {
       forecasts: [],
       statistics: null,
     };
+  }
+
+  /**
+   * The same object for an endpoint that reads no live data at all.
+   *
+   * Measured on 2026-09-15 over 190 parks: the park attractions list
+   * reported 6477 of 6477 attractions as CLOSED, while the park payload
+   * reported 849 OPERATING, 307 UNKNOWN, 11 DOWN and 5 REFURBISHMENT among
+   * them. The list was not stale and not wrong about a ride — it was serving
+   * `fromEntity`'s placeholder, and a search for broken rides over it finds
+   * nothing while looking like a valid answer.
+   *
+   * The field is dropped rather than renamed: there is no stored status a
+   * different name could describe. An absent optional field reads as "this
+   * endpoint does not know", which is the truth; `queues` and
+   * `effectiveStatus` are absent here for the same reason. Live state comes
+   * from the park payload or from the attraction detail endpoint.
+   */
+  static fromEntityWithoutLiveData(
+    attraction: Attraction,
+  ): AttractionResponseDto {
+    const dto = AttractionResponseDto.fromEntity(attraction);
+    delete dto.status;
+    return dto;
   }
 }

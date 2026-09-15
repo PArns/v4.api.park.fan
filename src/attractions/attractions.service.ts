@@ -180,7 +180,15 @@ export class AttractionsService {
   }
 
   /**
-   * Finds all attractions with filtering and sorting
+   * Finds all attractions with filtering and sorting.
+   *
+   * Retired attractions are excluded, the same rule `loadParkRelations` applies
+   * to the park payload and the one `retiredAt` documents on the response DTO:
+   * a retired attraction leaves every list, count and search, and keeps only
+   * its own detail route. Without it this list served 34 retired rows across 11
+   * parks on 2026-09-15 (17 of them at Universal Studios Singapore, retired via
+   * PAR-159 after ThemeParks.wiki reclassified them as shows) while the park
+   * payload served none.
    */
   async findAllWithFilters(filters: {
     park?: string;
@@ -197,7 +205,8 @@ export class AttractionsService {
   }): Promise<{ data: Attraction[]; total: number }> {
     const queryBuilder = this.attractionRepository
       .createQueryBuilder("attraction")
-      .leftJoinAndSelect("attraction.park", "park");
+      .leftJoinAndSelect("attraction.park", "park")
+      .andWhere("attraction.retiredAt IS NULL");
 
     // Filter by park slug
     if (filters.park) {

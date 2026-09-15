@@ -1677,7 +1677,19 @@ export class ParksController {
     summary: "List park attractions (geo)",
     description:
       "Returns a paginated list of all attractions for a specific park via geographic path. " +
-      "Cached for 5 minutes.",
+      "Cached for 5 minutes.\n\n" +
+      "**Carries no live data.** No `status`, no `effectiveStatus`, no `queues`: this route " +
+      "reads the attraction rows and joins nothing. For whether a ride is running, read the " +
+      "park payload (`GET /v1/parks/{continent}/{country}/{city}/{park}`) or the attraction " +
+      "detail route below.\n\n" +
+      "**May still count more attractions than the park payload.** This route returns rows; the " +
+      "park payload collapses same-name duplicates before serving them. Measured on 2026-09-15 " +
+      "over 190 parks, 6477 rows here against 6406 there: 34 of those 71 were retired " +
+      "attractions this route should never have served and now filters out, the remaining 37 " +
+      "are duplicate pairs the catalog holds twice (Walibi Belgium 21, Heide Park 4, Carowinds " +
+      "2) — the same pairs the attraction merge finds by its `foo` / `foo-2` slug rule. Until a " +
+      "merge collapses them, the park payload's number is the one that describes the park and " +
+      "this one is the number of rows.",
   })
   @ApiParam({
     name: "continent",
@@ -1773,8 +1785,10 @@ export class ParksController {
         limit,
       });
 
+    // Without live data: this route joins no queue rows, so it must not serve
+    // `fromEntity`'s status placeholder as if it were a reading.
     const mappedAttractions = attractions.map((attraction) =>
-      AttractionResponseDto.fromEntity(attraction),
+      AttractionResponseDto.fromEntityWithoutLiveData(attraction),
     );
 
     return {
