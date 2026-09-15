@@ -415,9 +415,14 @@ The rule reads a schedule and never guesses from the clock, which bounds it in a
 way worth stating, because the bound is the whole reason it is safe (measured
 2026-09-15, PAR-51):
 
-- **36 parks** publish at least one wrap day; **20 showtimes** actually move, 19
-  at Disneyland Park (Anaheim) and one at Magic Kingdom Park, every one of them
-  at exactly 00:00.
+- **20 showtimes** actually move, 19 at Disneyland Park (Anaheim) and one at
+  Magic Kingdom Park, every one of them at exactly 00:00. That number is stable:
+  the performances sit in snapshots already taken.
+- **How many parks publish a wrap day is not** — 34 that evening, 36 twelve
+  hours earlier. Only 22 of the 34 sit on a date already past; the rest are
+  future dates the schedule sync rewrites whenever an operator revises its
+  hours. Quote the figure with the day it was read on, never as the size of the
+  set.
 - **None of Universal's do**, and they are the parks the 109 above come from.
   Not one of their eight parks publishes an `OPERATING` day that crosses
   midnight; Halloween Horror Nights runs as a `TICKETED_EVENT`, of which the

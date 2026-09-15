@@ -777,10 +777,17 @@ export class ShowsService {
    * with no wrap day is untouched, and so is every showtime after the window
    * closes.
    *
-   * Measured against production on 2026-09-15 (PAR-51): 36 parks publish wrap
-   * days, and 20 showtimes move — 19 at Disneyland Park (Anaheim) and one at
-   * Magic Kingdom Park, all of them at exactly 00:00, the last performance of
-   * a day that closes at midnight.
+   * Measured against production on 2026-09-15 (PAR-51): **20 showtimes** move
+   * — 19 at Disneyland Park (Anaheim) and one at Magic Kingdom Park, all of
+   * them at exactly 00:00, the last performance of a day that closes at
+   * midnight.
+   *
+   * How many parks publish a wrap day at all is a moving number and is quoted
+   * as one: 34 that evening, 36 twelve hours earlier. Only 22 of the 34 sit on
+   * a date already past; the rest are future dates the schedule sync rewrites
+   * whenever an operator revises its hours, so a park leaves the set the day
+   * its October closing changes from `00:00` to `23:00`. The 20 do not move
+   * with it — they are performances in snapshots already taken.
    *
    * Two limits are deliberate, because both would be a different decision:
    *

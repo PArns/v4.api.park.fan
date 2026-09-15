@@ -31,8 +31,9 @@ import { createTestPark } from "../fixtures/park.fixtures";
  * These cases pin the rule against a real Postgres, which is the only place it
  * can be pinned: both readers are raw SQL, and a mocked manager only records
  * the statement rather than answering it. The measurements that motivated them
- * are in PAR-51 — against production, 36 parks publish wrap days and 20
- * showtimes move, all of them at exactly 00:00.
+ * are in PAR-51 — against production, 20 showtimes move, all of them at exactly
+ * 00:00. How many parks publish a wrap day is a figure that moves with the
+ * schedule sync and is quoted with its date there, not here.
  *
  * The suite deliberately covers both directions. A wrap day claims the night
  * that follows it; a NORMAL day claims nothing, which is what keeps the rule
