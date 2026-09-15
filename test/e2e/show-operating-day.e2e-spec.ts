@@ -226,6 +226,25 @@ describe("Showtimes follow the operating day (E2E)", () => {
       ).toEqual(["02:00"]);
     });
 
+    it("counts a performance that starts exactly on the closing instant", async () => {
+      // 01:00 under a 01:00 close, and the bound is inclusive on purpose: every
+      // one of the 20 showtimes this rule moves in production sits exactly on
+      // its day's closing time (00:00 under a midnight close), so a half-open
+      // `st < closes` would move none of them and the rule would be dead code.
+      // The case above — 02:00 under the same close — is what keeps the
+      // inclusive bound from becoming a blanket claim on the morning.
+      const { showId, parkId } = await seed({
+        showtimes: [`${NEXT_DAY}T01:00`],
+      });
+
+      expect(
+        (await shows.getShowtimesOnDate(parkId, TZ, WRAP_DAY)).get(showId),
+      ).toEqual(["01:00"]);
+      expect(
+        (await shows.getShowtimesOnDate(parkId, TZ, NEXT_DAY)).has(showId),
+      ).toBe(false);
+    });
+
     it("ignores a ticketed event that runs past midnight", async () => {
       // Universal's Halloween Horror Nights is a TICKETED_EVENT, and its 00:30
       // performances are the entries this ticket was filed for. They stay put:

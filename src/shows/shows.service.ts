@@ -772,10 +772,9 @@ export class ShowsService {
    * against an hour: a showtime belongs to the previous date when that date's
    * published operating window still covers it. Both day readers reach it
    * through {@link ShowsService.showtimeEntriesCte}; `rebuildSchedulePatterns`
-   * calls it directly. Everything else keeps its
-   * calendar date, which is why this is a narrowing and not a shift — a park
-   * with no wrap day is untouched, and so is every showtime after the window
-   * closes.
+   * calls it directly. Everything else keeps its calendar date, which is why
+   * this is a narrowing and not a shift — a park with no wrap day is untouched,
+   * and so is every showtime after the window closes.
    *
    * Measured against production on 2026-09-15 (PAR-51): **20 showtimes** move
    * — 19 at Disneyland Park (Anaheim) and one at Magic Kingdom Park, all of
@@ -818,12 +817,39 @@ export class ShowsService {
    * hours, so a DST night keeps its local closing time.
    *
    * It is a correlated subquery in a job that walks millions of rows, so the
-   * cost was measured rather than assumed: against production on 2026-09-15 the
-   * pattern window `rebuildSchedulePatterns` reads holds **3,788,203** showtime
-   * entries, and resolving the operating day for every one of them takes
-   * **8.1 s** against the 5.7 s that aggregation costs without it. Roughly two and a half seconds, once a
-   * night — cheap enough that a `wrap_days` join, which would put the rule in
-   * two places, is not worth the drift.
+   * cost was measured rather than assumed: against production on 2026-09-15
+   * the pattern window `rebuildSchedulePatterns` reads holds **3,788,203**
+   * showtime entries, and resolving the operating day for every one of them
+   * takes **8.1 s** against the 5.7 s that aggregation costs without it.
+   * Roughly two and a half seconds, once a night.
+   *
+   * That is the nightly job, which is the expensive caller. The day readers run
+   * the same subquery on a request path, but against a bounded set rather than
+   * the pattern window: one park, a three-day snapshot window, and a calendar
+   * prefilter that leaves only the two dates a showtime could still qualify on
+   * (see `showtimeEntriesCte`). The subquery never runs for the rest.
+   *
+   * **Why this is not built on {@link parkOpenWindowCtes}**, which is the
+   * canonical operating-day definition and was made reusable for callers that
+   * number their placeholders differently (PAR-129). Two reasons, and the
+   * first is the load-bearing one: that helper produces CTEs, while both
+   * readers here need the day resolved per row inside a SELECT list, so using
+   * it means restructuring both statements around a join rather than calling a
+   * function. The second is the index. The subquery below pre-selects on
+   * `se.date`, which is indexed; the `win` CTE anchors the day on the
+   * opening's park-local date, an expression no index covers. Against
+   * 3.8 million rows a night that is the difference the 8.1 s above was
+   * measured for.
+   *
+   * The cost of the second definition is real and stated rather than denied:
+   * `se.date` is a **feed value** (`parks.service.ts` writes
+   * `date: new Date(entry.date)`), not derived from `openingTime`. That the
+   * two agree is a property of the sources, not an invariant — measured on
+   * 2026-09-15, 0 of 36,543 park-wide `OPERATING` rows disagree. Should a
+   * source ever date a row against its own opening, this expression would miss
+   * the window rather than mis-assign it, because the returned `se.date` is
+   * the same value the pre-selection matched on. Unifying the two definitions
+   * is PAR-260.
    *
    * The timezone and the showtime expression are interpolated by the caller,
    * and the two callers pass different things: the day readers hand in the

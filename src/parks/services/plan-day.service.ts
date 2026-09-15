@@ -597,8 +597,8 @@ export class PlanDayService {
    * `OPERATING` hours, because Halloween Horror Nights runs as a
    * `TICKETED_EVENT` the schedule only carries twice. The 20 showtimes the
    * rule does move are at Disneyland Park and Magic Kingdom Park, all at 00:00
-   * (PAR-51). That leaves 43 entries genuinely dated one or two days ahead, in two parks,
-   * from snapshots taken between 2025-12-23 and 2025-12-27 park-local, with no
+   * (PAR-51). That leaves 43 entries genuinely dated one or two days ahead, in
+   * two parks, from snapshots taken 2025-12-23 to 2025-12-27 park-local, with no
    * successor in the eight months since. Three per million is not a horizon to
    * build on, so a planner asking about October gets nothing from the feed, and
    * `shows` was an empty array for every future date.

@@ -507,6 +507,13 @@ programme is not known yet. Because `buildShows` prefers `scheduled` and stops
 there, that orphan also suppresses the projection for that one show. 109 entries
 in nine months, all at Universal — rare, but not never.
 
+**§8 removes that exception where a park publishes its late night, and only
+there.** A past-midnight performance is now read against the previous day's
+published `OPERATING` window, so it belongs to the day it ends rather than to
+the morning after. The paragraph above still describes Universal, because no
+Universal park publishes such a window — their late programme runs as a
+`TICKETED_EVENT`. It is the unfixed half of the case, not an unfixed case.
+
 **`projected` has no distance limit at all**, and a caller should know that. The
 freshness guard (`MAX_PATTERN_AGE_DAYS`) measures the pattern against *today*
 rather than against the target date, and the sighting guard (`MIN_PATTERN_DAYS`)
