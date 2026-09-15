@@ -140,21 +140,37 @@ async function createSchema(database: string): Promise<void> {
       console.warn("⚠️  Continuing without some extensions");
     }
 
-    try {
-      await dataSource.query(`
-        SELECT create_hypertable('queue_data', 'timestamp',
-          chunk_time_interval => INTERVAL '1 day',
-          if_not_exists => TRUE
+    // Every hypertable the merge path moves rows through. Production has
+    // seven; these three are the ones a merge writes to, and the two live-data
+    // tables were plain tables here until PAR-172 — so `SET LOCAL
+    // timescaledb.max_tuples_decompressed_per_dml_transaction = 0` in step 0 of
+    // `mergeParks` was lifting a cap that did not apply to anything the suite
+    // touched. A plain table cannot answer what the merge does to a compressed
+    // chunk, which is the one question a real database is here to settle.
+    //
+    // Partitioning column has to be in the primary key: `queue_data` is
+    // `(id, timestamp)` and so are `show_live_data` and `restaurant_live_data`.
+    for (const table of [
+      "queue_data",
+      "show_live_data",
+      "restaurant_live_data",
+    ]) {
+      try {
+        await dataSource.query(
+          `SELECT create_hypertable('${table}', 'timestamp',
+             chunk_time_interval => INTERVAL '1 day',
+             if_not_exists => TRUE
+           );`,
         );
-      `);
-      console.log("✅ queue_data converted to hypertable");
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      console.warn(
-        "⚠️  Could not create hypertable for queue_data:",
-        errorMessage,
-      );
+        console.log(`✅ ${table} converted to hypertable`);
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.warn(
+          `⚠️  Could not create hypertable for ${table}:`,
+          errorMessage,
+        );
+      }
     }
 
     // The four merge tables no entity owns, so `synchronize` above never made

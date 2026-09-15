@@ -5,12 +5,15 @@ import { ConfigModule } from "@nestjs/config";
 import { DataSource } from "typeorm";
 import { ParksModule } from "../../src/parks/parks.module";
 import { ParksService } from "../../src/parks/parks.service";
+import { ParkMergeService } from "../../src/parks/services/park-merge.service";
 import { getDatabaseConfig } from "../../src/config/database.config";
 import {
   ATTRACTION_DEPENDENCIES,
   PARK_DEPENDENCIES,
   PARK_INLINE_DEPENDENCIES,
   PARK_TABLES_HANDLED_INLINE,
+  RESTAURANT_DEPENDENCIES,
+  SHOW_DEPENDENCIES,
 } from "../../src/parks/utils/merge-dependencies";
 
 /**
@@ -37,6 +40,7 @@ describe("Park merge (E2E)", () => {
   let app: INestApplication;
   let dataSource: DataSource;
   let parksService: ParksService;
+  let parkMergeService: ParkMergeService;
 
   const WINNER_PARK = "11111111-1111-4111-8111-111111111111";
   const GHOST_PARK = "22222222-2222-4222-8222-222222222222";
@@ -70,6 +74,7 @@ describe("Park merge (E2E)", () => {
 
     dataSource = app.get(DataSource);
     parksService = app.get(ParksService);
+    parkMergeService = app.get(ParkMergeService);
   });
 
   afterAll(async () => {
@@ -224,6 +229,11 @@ describe("Park merge (E2E)", () => {
         ...PARK_DEPENDENCIES.map((d) => d.table),
         ...PARK_INLINE_DEPENDENCIES.map((d) => d.table),
         ...PARK_TABLES_HANDLED_INLINE,
+        // The child-entity lists `mergeParks` hands to the same
+        // `applyMergeDependencies`. They were missing here while the only
+        // covered path was `repairDuplicates`, which never reaches them.
+        ...SHOW_DEPENDENCIES.map((d) => d.table),
+        ...RESTAURANT_DEPENDENCIES.map((d) => d.table),
       ]),
     ].sort();
 
@@ -369,5 +379,411 @@ describe("Park merge (E2E)", () => {
         WINNER_PARK,
       ]),
     ).toBe(1);
+  });
+
+  /**
+   * `ParkMergeService.mergeParks` — the OTHER merge path, and the one a person
+   * triggers.
+   *
+   * The suite above drives `ParksService.repairDuplicates()`, one of the two
+   * raw paths. `mergeParks` is a separate implementation behind
+   * `POST /v1/admin/parks/merge` and `ParkRepairService`, and until PAR-172 it
+   * had no end-to-end case at all — which is how PAR-150 could ship a fix for
+   * "a colliding show is deleted with its dependent rows still pointing at it"
+   * with nothing but a recorded manager behind it.
+   *
+   * Shows and restaurants rather than rides on purpose: the attraction side is
+   * covered above, and the four tables PAR-150 added to the path
+   * (`show_live_data`, `show_schedule_patterns`, `show_follows`,
+   * `restaurant_live_data`) hang off the two entity types nothing else here
+   * touches. Two of them are hypertables, which is why `test/global-setup.ts`
+   * now converts them.
+   */
+  describe("ParkMergeService.mergeParks", () => {
+    const MERGE_WINNER = "66666666-6666-4666-8666-666666666666";
+    const MERGE_LOSER = "77777777-7777-4777-8777-777777777777";
+    const WINNER_SHOW = "88888888-8888-4888-8888-888888888888";
+    const LOSER_SHOW = "99999999-9999-4999-8999-999999999999";
+    const LONELY_SHOW = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const WINNER_REST = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const LOSER_REST = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const LONELY_REST = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const SUB_BOTH = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const SUB_LOSER = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+
+    /**
+     * Two parks, each with a show and a restaurant of the same name, plus one
+     * of each that only the loser has.
+     *
+     * Same name AND same slug: `migrateEntities` matches on either, and the
+     * unique `(parkId, slug)` on both tables is what a plain reparenting UPDATE
+     * would walk into (23505). The lonely pair is the control — it must come
+     * out reparented, not merged away, so a test that passes by deleting
+     * everything fails.
+     */
+    async function seedShowAndRestaurantCollision(): Promise<void> {
+      const park = (id: string, name: string) =>
+        dataSource.query(
+          `INSERT INTO parks (id, "externalId", name, slug, timezone, "createdAt")
+           VALUES ($1, $2, $3, $4, 'Europe/Berlin', NOW())`,
+          [id, `ext-${name}`, name, name],
+        );
+      await park(MERGE_WINNER, "merge-winner");
+      await park(MERGE_LOSER, "merge-loser");
+
+      const show = (id: string, parkId: string, slug: string) =>
+        dataSource.query(
+          `INSERT INTO shows (id, "externalId", name, slug, "parkId", "createdAt", "updatedAt")
+           VALUES ($1, $2, $3, $4, $5, NOW(), NOW())`,
+          [id, `ext-show-${id.slice(0, 8)}`, slug, slug, parkId],
+        );
+      await show(WINNER_SHOW, MERGE_WINNER, "fantasmic");
+      await show(LOSER_SHOW, MERGE_LOSER, "fantasmic");
+      await show(LONELY_SHOW, MERGE_LOSER, "lion-king");
+
+      const restaurant = (id: string, parkId: string, slug: string) =>
+        dataSource.query(
+          `INSERT INTO restaurants (id, "externalId", name, slug, "parkId", "createdAt", "updatedAt")
+           VALUES ($1, $2, $3, $4, $5, NOW(), NOW())`,
+          [id, `ext-rest-${id.slice(0, 8)}`, slug, slug, parkId],
+        );
+      await restaurant(WINNER_REST, MERGE_WINNER, "bistro");
+      await restaurant(LOSER_REST, MERGE_LOSER, "bistro");
+      await restaurant(LONELY_REST, MERGE_LOSER, "taverne");
+
+      // show_live_data — hypertable, surrogate `(id, timestamp)` key, FK
+      // CASCADE. The whole showtime history of the losing show, and the rows
+      // that were destroyed before PAR-150: the CASCADE fires on the DELETE in
+      // `migrateEntities` unless they have moved first.
+      const showLive = (showId: string, hoursAgo: number) =>
+        dataSource.query(
+          `INSERT INTO show_live_data (id, "showId", status, showtimes, timestamp)
+           VALUES (gen_random_uuid(), $1, 'OPERATING',
+                   '[{"type":"Performance","startTime":"2026-09-15T18:00:00Z"}]'::jsonb,
+                   NOW() - ($2 || ' hours')::interval)`,
+          [showId, hoursAgo],
+        );
+      for (let i = 1; i <= 5; i++) await showLive(LOSER_SHOW, i);
+      for (let i = 1; i <= 2; i++) await showLive(WINNER_SHOW, i);
+      for (let i = 1; i <= 3; i++) await showLive(LONELY_SHOW, i);
+
+      // show_schedule_patterns — PK `(show_id, weekday)`, so the loser's
+      // Saturday collides with the winner's and its Wednesday does not. The
+      // dedupe DELETE has to drop exactly the first.
+      const pattern = (showId: string, weekday: number, times: string[]) =>
+        dataSource.query(
+          `INSERT INTO show_schedule_patterns
+             (show_id, weekday, times, observed_days, last_observed_on, computed_at)
+           VALUES ($1, $2, $3::jsonb, 4, '2026-09-12', NOW())`,
+          [showId, weekday, JSON.stringify(times)],
+        );
+      await pattern(WINNER_SHOW, 6, ["12:30", "14:30"]);
+      await pattern(LOSER_SHOW, 6, ["19:00"]); // same weekday → collides
+      await pattern(LOSER_SHOW, 3, ["15:45"]); // no counterpart → must move
+
+      // show_follows — unique `(subscriptionId, showId)`, CASCADE on both
+      // sides. A subscriber who followed both rows keeps one reminder; a
+      // subscriber who only followed the losing show keeps theirs, moved.
+      const subscription = (id: string, endpoint: string) =>
+        dataSource.query(
+          `INSERT INTO push_subscriptions (id, endpoint, p256dh, auth)
+           VALUES ($1, $2, 'p256dh-key', 'auth-secret')`,
+          [id, endpoint],
+        );
+      await subscription(SUB_BOTH, "https://push.example/both");
+      await subscription(SUB_LOSER, "https://push.example/loser");
+
+      const follow = (subscriptionId: string, showId: string) =>
+        dataSource.query(
+          `INSERT INTO show_follows (id, "subscriptionId", "showId", "createdAt", "updatedAt")
+           VALUES (gen_random_uuid(), $1, $2, NOW(), NOW())`,
+          [subscriptionId, showId],
+        );
+      await follow(SUB_BOTH, WINNER_SHOW);
+      await follow(SUB_BOTH, LOSER_SHOW); // same subscriber → collides
+      await follow(SUB_LOSER, LOSER_SHOW); // no counterpart → must move
+
+      // restaurant_live_data — the restaurant side's only dependency, same
+      // shape as show_live_data one table over.
+      const restLive = (restaurantId: string, hoursAgo: number) =>
+        dataSource.query(
+          `INSERT INTO restaurant_live_data (id, "restaurantId", status, timestamp)
+           VALUES (gen_random_uuid(), $1, 'OPERATING', NOW() - ($2 || ' hours')::interval)`,
+          [restaurantId, hoursAgo],
+        );
+      for (let i = 1; i <= 4; i++) await restLive(LOSER_REST, i);
+      await restLive(WINNER_REST, 9);
+      for (let i = 1; i <= 2; i++) await restLive(LONELY_REST, i);
+
+      // external_entity_mapping — moved by `consolidateEntityData` before the
+      // dependency lists, and the one table keyed across every entity type.
+      const mapping = (internalId: string, externalId: string) =>
+        dataSource.query(
+          `INSERT INTO external_entity_mapping
+             (internal_entity_id, internal_entity_type, external_source, external_entity_id, created_at)
+           VALUES ($1, 'show', 'queue-times', $2, NOW())`,
+          [internalId, externalId],
+        );
+      await mapping(LOSER_SHOW, "qt-show-loser");
+      await mapping(WINNER_SHOW, "qt-show-winner");
+    }
+
+    it("moves a colliding show's and restaurant's dependent rows to the survivor", async () => {
+      await seedShowAndRestaurantCollision();
+
+      // The seed itself is asserted: a silently empty one would make every
+      // count below trivially true.
+      expect(
+        await count(
+          `SELECT count(*) c FROM show_live_data WHERE "showId" = $1`,
+          [LOSER_SHOW],
+        ),
+      ).toBe(5);
+      expect(
+        await count(
+          `SELECT count(*) c FROM restaurant_live_data WHERE "restaurantId" = $1`,
+          [LOSER_REST],
+        ),
+      ).toBe(4);
+
+      const result = await parkMergeService.mergeParks(
+        MERGE_WINNER,
+        MERGE_LOSER,
+      );
+
+      // 1 · It committed. Both loser rows counted, the loser park is gone, and
+      //     the colliding child rows with it.
+      expect(result.success).toBe(true);
+      expect(result.migratedShows).toBe(2);
+      expect(result.migratedRestaurants).toBe(2);
+      expect(
+        await count(`SELECT count(*) c FROM parks WHERE id = $1`, [
+          MERGE_LOSER,
+        ]),
+      ).toBe(0);
+      expect(
+        await count(`SELECT count(*) c FROM shows WHERE id = $1`, [LOSER_SHOW]),
+      ).toBe(0);
+      expect(
+        await count(`SELECT count(*) c FROM restaurants WHERE id = $1`, [
+          LOSER_REST,
+        ]),
+      ).toBe(0);
+
+      // 2 · The losing show's history is on the survivor, not deleted by the
+      //     CASCADE. This is the assertion PAR-150 exists for.
+      expect(
+        await count(
+          `SELECT count(*) c FROM show_live_data WHERE "showId" = $1`,
+          [WINNER_SHOW],
+        ),
+      ).toBe(7); // 5 from the loser + the winner's own 2
+      expect(
+        await count(
+          `SELECT count(*) c FROM restaurant_live_data WHERE "restaurantId" = $1`,
+          [WINNER_REST],
+        ),
+      ).toBe(5); // 4 + 1
+
+      // 3 · No orphans anywhere on either side.
+      expect(
+        await count(
+          `SELECT count(*) c FROM show_live_data l
+           WHERE NOT EXISTS (SELECT 1 FROM shows s WHERE s.id = l."showId")`,
+        ),
+      ).toBe(0);
+      expect(
+        await count(
+          `SELECT count(*) c FROM restaurant_live_data l
+           WHERE NOT EXISTS (SELECT 1 FROM restaurants r WHERE r.id = l."restaurantId")`,
+        ),
+      ).toBe(0);
+      expect(
+        await count(
+          `SELECT count(*) c FROM show_follows f
+           WHERE NOT EXISTS (SELECT 1 FROM shows s WHERE s.id = f."showId")`,
+        ),
+      ).toBe(0);
+      expect(
+        await count(
+          `SELECT count(*) c FROM show_schedule_patterns p
+           WHERE NOT EXISTS (SELECT 1 FROM shows s WHERE s.id = p.show_id)`,
+        ),
+      ).toBe(0);
+
+      // 4 · conflictColumns on a composite key: the loser's Saturday was
+      //     dropped against the winner's, its Wednesday moved. The winner's own
+      //     Saturday is untouched — it is the row that wins, so its times are
+      //     the ones that must still be there.
+      const patterns = await dataSource.query(
+        `SELECT weekday, times FROM show_schedule_patterns
+         WHERE show_id = $1 ORDER BY weekday`,
+        [WINNER_SHOW],
+      );
+      expect(patterns.map((p: { weekday: number }) => p.weekday)).toEqual([
+        3, 6,
+      ]);
+      expect(patterns[1].times).toEqual(["12:30", "14:30"]);
+
+      // 5 · Same rule on the reminder: one row per subscriber, both
+      //     subscribers still have one, and nobody got a second.
+      const followers = await dataSource.query(
+        `SELECT "subscriptionId" FROM show_follows WHERE "showId" = $1 ORDER BY "subscriptionId"`,
+        [WINNER_SHOW],
+      );
+      expect(
+        followers.map((f: { subscriptionId: string }) => f.subscriptionId),
+      ).toEqual([SUB_BOTH, SUB_LOSER]);
+
+      // 6 · The mapping moved, and the winner kept its own.
+      expect(
+        await count(
+          `SELECT count(*) c FROM external_entity_mapping WHERE internal_entity_id = $1`,
+          [WINNER_SHOW],
+        ),
+      ).toBe(2);
+
+      // 7 · The control: no counterpart on the winner, so these were
+      //     reparented rather than merged away, and kept their own rows.
+      const [lonelyShow] = await dataSource.query(
+        `SELECT "parkId" FROM shows WHERE id = $1`,
+        [LONELY_SHOW],
+      );
+      expect(lonelyShow.parkId).toBe(MERGE_WINNER);
+      const [lonelyRest] = await dataSource.query(
+        `SELECT "parkId" FROM restaurants WHERE id = $1`,
+        [LONELY_REST],
+      );
+      expect(lonelyRest.parkId).toBe(MERGE_WINNER);
+      expect(
+        await count(
+          `SELECT count(*) c FROM show_live_data WHERE "showId" = $1`,
+          [LONELY_SHOW],
+        ),
+      ).toBe(3);
+      expect(
+        await count(
+          `SELECT count(*) c FROM restaurant_live_data WHERE "restaurantId" = $1`,
+          [LONELY_REST],
+        ),
+      ).toBe(2);
+    });
+
+    /**
+     * The same merge with the losing show's history in a COMPRESSED chunk.
+     *
+     * What this proves: `applyMergeDependencies` rewrites `showId` on rows that
+     * live in a compressed chunk, rather than failing the whole transaction the
+     * way a compressed chunk refuses DML on older TimescaleDB. Production keeps
+     * `show_live_data` and `restaurant_live_data` compressed
+     * (`timescaledb_information.hypertables`, both `compression_enabled = t`),
+     * so an uncompressed test schema answers a question production does not
+     * ask.
+     *
+     * What it does NOT prove: that lifting
+     * `timescaledb.max_tuples_decompressed_per_dml_transaction` in step 0 of
+     * `mergeParks` is load-bearing. The cap is 100000 tuples and this seed is
+     * five rows — a fixture large enough to reach the cap would cost more run
+     * time than the suite has. That one stays a reading of the code.
+     */
+    it("moves a compressed show history to the survivor", async () => {
+      await seedShowAndRestaurantCollision();
+
+      await dataSource.query(
+        `ALTER TABLE show_live_data SET (
+           timescaledb.compress,
+           timescaledb.compress_segmentby = '"showId"'
+         )`,
+      );
+      try {
+        await dataSource.query(
+          `SELECT compress_chunk(c, if_not_compressed => true)
+           FROM show_chunks('show_live_data') c`,
+        );
+
+        // The premise of the test, asserted rather than assumed: with nothing
+        // compressed this case would be the previous one under a longer name
+        // (G-72).
+        expect(
+          await count(
+            `SELECT count(*) c FROM timescaledb_information.chunks
+             WHERE hypertable_name = 'show_live_data' AND is_compressed`,
+          ),
+        ).toBeGreaterThan(0);
+
+        await parkMergeService.mergeParks(MERGE_WINNER, MERGE_LOSER);
+
+        expect(
+          await count(
+            `SELECT count(*) c FROM show_live_data WHERE "showId" = $1`,
+            [WINNER_SHOW],
+          ),
+        ).toBe(7);
+        expect(
+          await count(
+            `SELECT count(*) c FROM show_live_data l
+             WHERE NOT EXISTS (SELECT 1 FROM shows s WHERE s.id = l."showId")`,
+          ),
+        ).toBe(0);
+      } finally {
+        // Compression is a table setting and outlives the test; `afterEach`
+        // only truncates rows. Decompress first — the setting cannot be
+        // withdrawn while a compressed chunk exists — so the next test starts
+        // on the same schema this one did.
+        await dataSource.query(
+          `SELECT decompress_chunk(c, if_compressed => true)
+           FROM show_chunks('show_live_data') c`,
+        );
+        await dataSource.query(
+          `ALTER TABLE show_live_data SET (timescaledb.compress = false)`,
+        );
+      }
+    });
+
+    it("refuses a self-merge without touching a row", async () => {
+      await seedShowAndRestaurantCollision();
+
+      await expect(
+        parkMergeService.mergeParks(MERGE_WINNER, MERGE_WINNER),
+      ).rejects.toThrow(/into itself/);
+
+      // The guard is in front of the transaction, so nothing should have run.
+      // Asserted against the winner's own rows rather than against the loser's:
+      // one id on both sides is what turns every dedupe DELETE into a wipe of
+      // the surviving side, so those are the counts that would fall.
+      expect(
+        await count(`SELECT count(*) c FROM parks WHERE id = $1`, [
+          MERGE_WINNER,
+        ]),
+      ).toBe(1);
+      expect(
+        await count(`SELECT count(*) c FROM shows WHERE "parkId" = $1`, [
+          MERGE_WINNER,
+        ]),
+      ).toBe(1);
+      expect(
+        await count(
+          `SELECT count(*) c FROM show_live_data WHERE "showId" = $1`,
+          [WINNER_SHOW],
+        ),
+      ).toBe(2);
+      expect(
+        await count(
+          `SELECT count(*) c FROM show_schedule_patterns WHERE show_id = $1`,
+          [WINNER_SHOW],
+        ),
+      ).toBe(1);
+      expect(
+        await count(`SELECT count(*) c FROM show_follows WHERE "showId" = $1`, [
+          WINNER_SHOW,
+        ]),
+      ).toBe(1);
+      expect(
+        await count(
+          `SELECT count(*) c FROM restaurant_live_data WHERE "restaurantId" = $1`,
+          [WINNER_REST],
+        ),
+      ).toBe(1);
+    });
   });
 });
