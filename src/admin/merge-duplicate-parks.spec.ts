@@ -104,14 +104,27 @@ describe("AdminController.mergeDuplicateParks", () => {
 
   const build = (duplicates: DuplicatePair[]) => {
     findDuplicates = jest.fn().mockResolvedValue(duplicates);
-    repairDuplicates = jest.fn().mockResolvedValue({
-      fixedQtMismatches: 0,
-      fixedWzMismatches: 0,
-      addedQtIds: 0,
-      addedWzIds: 0,
-      mergedDuplicates: duplicates.filter((d) => d.safe).length,
-      errors: [],
-    });
+    // The default stands for a run in which every pair handed over merged, so
+    // it answers with one `merged: true` verdict per pair — the shape the
+    // service really returns. A case that needs a failure overrides it.
+    repairDuplicates = jest
+      .fn()
+      .mockImplementation(
+        (pairs: Array<{ winnerId: string; loserId: string }>) =>
+          Promise.resolve({
+            fixedQtMismatches: 0,
+            fixedWzMismatches: 0,
+            addedQtIds: 0,
+            addedWzIds: 0,
+            mergedDuplicates: pairs.length,
+            errors: [],
+            pairs: pairs.map((pair) => ({
+              ...pair,
+              merged: true,
+              error: null,
+            })),
+          }),
+      );
     mergeParks = jest.fn();
 
     const parkRepository = {
@@ -358,6 +371,197 @@ describe("AdminController.mergeDuplicateParks", () => {
     expect(result.skipped[0].reviewReason).toContain(
       "a merge in this run was attempted on one of these rows",
     );
+  });
+
+  it("keeps the pair that merged when the row it deleted fails the next pair", async () => {
+    // Three rows for one park, all safe: the detector pairs A–B and A–C, and
+    // `determineMergeWinner` makes A the loser of both, because the other two
+    // carry a wiki id and A does not. The first merge deletes A, the second
+    // fails on it, and that failure is reported as `{ parkId: A }` — the very
+    // id the successful pair also holds as its loser. Searching the error list
+    // by id therefore disowns the merge that really happened.
+    const ushUniversalCity = park({
+      id: "ush-uc",
+      name: "Universal Studios Hollywood",
+      city: "Universal City",
+      wikiEntityId: "ush-uc-wiki-id",
+      queueTimesEntityId: "qt-park-66",
+      wartezeitenEntityId: null,
+    });
+    const secondSharedIdPair = pairOf(
+      ushLosAngeles,
+      ushUniversalCity,
+      true,
+      "shared queue-times ID",
+    );
+    const controller = build([sharedIdPair, secondSharedIdPair]);
+    (
+      controller as unknown as {
+        parkValidatorService: { getParkRepository: () => { find: jest.Mock } };
+      }
+    ).parkValidatorService
+      .getParkRepository()
+      .find.mockResolvedValue([...allParks, ushUniversalCity]);
+
+    repairDuplicates.mockResolvedValue({
+      fixedQtMismatches: 0,
+      fixedWzMismatches: 0,
+      addedQtIds: 0,
+      addedWzIds: 0,
+      mergedDuplicates: 1,
+      errors: [
+        {
+          parkId: ushLosAngeles.id,
+          error: `Park ${ushLosAngeles.id} not found`,
+        },
+      ],
+      pairs: [
+        {
+          winnerId: ushBullCreek.id,
+          loserId: ushLosAngeles.id,
+          merged: true,
+          error: null,
+        },
+        {
+          winnerId: ushUniversalCity.id,
+          loserId: ushLosAngeles.id,
+          merged: false,
+          error: `Park ${ushLosAngeles.id} not found`,
+        },
+      ],
+    });
+
+    const result = await controller.mergeDuplicateParks({
+      autoDetect: true,
+      dryRun: false,
+    });
+
+    // Both pairs were really attempted, and the second really failed — without
+    // that the case would be green over a run in which nothing collided.
+    expect(repairDuplicates).toHaveBeenCalledWith([
+      { winnerId: ushBullCreek.id, loserId: ushLosAngeles.id },
+      { winnerId: ushUniversalCity.id, loserId: ushLosAngeles.id },
+    ]);
+    expect(result.errors).toEqual([
+      {
+        parkId: ushLosAngeles.id,
+        error: `Park ${ushLosAngeles.id} not found`,
+      },
+    ]);
+
+    // The winner is what tells the two pairs apart here; both share a loser.
+    expect(result.results.map((r) => r.winnerId)).toEqual([ushBullCreek.id]);
+    expect(result.merged).toBe(1);
+  });
+
+  const repairAnswering = (pairs: unknown[]) => ({
+    fixedQtMismatches: 0,
+    fixedWzMismatches: 0,
+    addedQtIds: 0,
+    addedWzIds: 0,
+    mergedDuplicates: pairs.length,
+    errors: [],
+    pairs,
+  });
+
+  it("reports nothing rather than the wrong park when the verdicts do not line up", async () => {
+    // The position carries the names, so a verdict list that does not match the
+    // plan would print a real deletion under another park's name. This endpoint
+    // deletes parks; saying nothing is the safer half of that choice.
+    const controller = build([sharedIdPair]);
+
+    repairDuplicates.mockResolvedValue(
+      repairAnswering([
+        {
+          winnerId: "some-other-winner",
+          loserId: "some-other-loser",
+          merged: true,
+          error: null,
+        },
+      ]),
+    );
+
+    const result = await controller.mergeDuplicateParks({
+      autoDetect: true,
+      dryRun: false,
+    });
+
+    expect(result.results).toEqual([]);
+    expect(result.merged).toBe(0);
+    expect(result.errors[0].error).toContain("No merge verdict lined up");
+  });
+
+  it("says a planned pair has no verdict rather than dropping it off the end", async () => {
+    // A short list is this issue's own bug in a new place: the pair would fall
+    // out of `results` and off `merged` with nothing anywhere saying so. The
+    // walk therefore goes over `planned`, and a missing verdict is an error.
+    const controller = build([sharedIdPair, sharedPointPair]);
+    (
+      controller as unknown as {
+        parkValidatorService: { getParkRepository: () => { find: jest.Mock } };
+      }
+    ).parkValidatorService
+      .getParkRepository()
+      .find.mockResolvedValue(allParks);
+
+    // `sharedPointPair` needs review, so only one pair is ever planned — and
+    // the answer holds nothing at all.
+    repairDuplicates.mockResolvedValue(repairAnswering([]));
+
+    const result = await controller.mergeDuplicateParks({
+      autoDetect: true,
+      dryRun: false,
+    });
+
+    expect(result.planned).toHaveLength(1);
+    expect(result.results).toEqual([]);
+    expect(result.merged).toBe(0);
+    expect(result.errors).toEqual([
+      {
+        parkId: ushLosAngeles.id,
+        error: expect.stringContaining("No merge verdict lined up"),
+      },
+    ]);
+  });
+
+  it("reports a verdict that has no planned pair instead of ignoring it", async () => {
+    // The other direction of the same question. A surplus verdict cannot be
+    // named in `results` — there is no plan entry carrying its names — but it
+    // claims a merge happened, so it may not pass unmentioned either.
+    const controller = build([sharedIdPair]);
+
+    repairDuplicates.mockResolvedValue(
+      repairAnswering([
+        {
+          winnerId: ushBullCreek.id,
+          loserId: ushLosAngeles.id,
+          merged: true,
+          error: null,
+        },
+        {
+          winnerId: "unplanned-winner",
+          loserId: "unplanned-loser",
+          merged: true,
+          error: null,
+        },
+      ]),
+    );
+
+    const result = await controller.mergeDuplicateParks({
+      autoDetect: true,
+      dryRun: false,
+    });
+
+    // The pair that WAS planned still lands, so the case does not pass by
+    // refusing everything.
+    expect(result.results.map((r) => r.winnerId)).toEqual([ushBullCreek.id]);
+    expect(result.merged).toBe(1);
+    expect(result.errors).toEqual([
+      {
+        parkId: "unplanned-loser",
+        error: expect.stringContaining("has no planned pair"),
+      },
+    ]);
   });
 
   it("counts the two sets apart on the read route", async () => {

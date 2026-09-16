@@ -16,6 +16,25 @@ export interface RepairResult {
   errors: Array<{ parkId: string; error: string }>;
 }
 
+/** One verdict per merge pair, in the order the pairs were handed in. */
+export interface ParkMergeVerdict {
+  winnerId: string;
+  loserId: string;
+  merged: boolean;
+  error: string | null;
+}
+
+/**
+ * `repairDuplicates`' own result. `errors` is keyed by park and cannot answer
+ * "did THIS pair merge?": one run can hold the same row as the loser of two
+ * pairs — three rows for one park give the detector (1,2), (1,3) and (2,3) —
+ * and then the failure of the second pair carries the id of the row the first
+ * pair already deleted. `pairs` answers it by position instead.
+ */
+export interface DuplicateRepairResult extends RepairResult {
+  pairs: ParkMergeVerdict[];
+}
+
 @Injectable()
 export class ParkRepairService {
   private readonly logger = new Logger(ParkRepairService.name);
@@ -310,20 +329,26 @@ export class ParkRepairService {
   }
 
   /**
-   * Repairs duplicate parks by merging them
+   * Repairs duplicate parks by merging them.
+   *
+   * Every pair handed in gets exactly one entry in `pairs`, at its own index,
+   * whether it merged or not — that is the only part of this result a caller
+   * may use to decide what happened to a given pair (see
+   * `DuplicateRepairResult`). `errors` stays as it was, keyed by park.
    */
   async repairDuplicates(
     duplicates: Array<{ winnerId: string; loserId: string }>,
-  ): Promise<RepairResult> {
+  ): Promise<DuplicateRepairResult> {
     this.logger.log(`🔧 Merging ${duplicates.length} duplicate park pairs...`);
 
-    const result: RepairResult = {
+    const result: DuplicateRepairResult = {
       fixedQtMismatches: 0,
       fixedWzMismatches: 0,
       addedQtIds: 0,
       addedWzIds: 0,
       mergedDuplicates: 0,
       errors: [],
+      pairs: [],
     };
 
     for (const duplicate of duplicates) {
@@ -335,6 +360,12 @@ export class ParkRepairService {
 
         if (mergeResult.success) {
           result.mergedDuplicates++;
+          result.pairs.push({
+            winnerId: duplicate.winnerId,
+            loserId: duplicate.loserId,
+            merged: true,
+            error: null,
+          });
           this.logger.log(
             `✅ Merged "${mergeResult.loserName}" into "${mergeResult.winnerName}"`,
           );
@@ -346,6 +377,12 @@ export class ParkRepairService {
           error instanceof Error ? error.message : String(error);
         result.errors.push({
           parkId: duplicate.loserId,
+          error: errorMessage,
+        });
+        result.pairs.push({
+          winnerId: duplicate.winnerId,
+          loserId: duplicate.loserId,
+          merged: false,
           error: errorMessage,
         });
         this.logger.error(

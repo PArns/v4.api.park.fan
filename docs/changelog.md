@@ -6,6 +6,26 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a park that loses twice in one `autoDetect` run no longer disowns the merge that worked
+
+`ParkRepairService.repairDuplicates` reported failures as `{ parkId, error }` —
+per park, not per pair — and `admin.controller.ts` therefore looked a pair's
+outcome up by its loser's id. Three rows for one park make the detector return
+the pairs (1,2), (1,3) and (2,3), so the same row can lose twice in one run:
+the first merge deletes it, the second fails on it, and that failure carries
+exactly the id the successful pair holds as its loser. The lookup matched both.
+
+`merged` therefore counted low and a park that really was deleted was missing
+from `results`, the one list that says what the call did.
+
+`repairDuplicates` now returns `pairs`, one verdict per pair handed in and in
+that order, and the controller reads it by position instead of searching by id.
+`errors` is unchanged and still keyed by park — it answers "which row broke",
+which is a different question from "did this pair merge". The warning on a
+stale `skipped` entry keeps reading `planned`, because a row a merge was
+*attempted* on is what it is about; that choice used to be argued from this
+bug and is now argued from its own reason.
+
 ### Fixed — `autoDetect` reports what it would merge instead of merging it
 
 `POST /v1/admin/merge-duplicate-parks` with `autoDetect: true` took every pair
