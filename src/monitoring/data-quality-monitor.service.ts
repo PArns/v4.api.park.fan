@@ -1,10 +1,12 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { DataSource } from "typeorm";
+import { observedReadingsSql } from "../common/utils/closure-gap.sql";
+import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 
 /**
- * Two detectors for the two ways this system went quietly wrong for weeks.
+ * Three detectors for the ways this system went quietly wrong for weeks.
  *
  * Both incidents were found by accident on 2026-08-15, while looking at
  * something else, and neither was visible in any existing check:
@@ -20,6 +22,12 @@ import { Queue } from "bull";
  * aggregate cannot see a subset go silent. The boot-time `hasRepeatableJob`
  * check could not have caught the first either: it detects jobs that were never
  * scheduled, and this one was scheduled and running.
+ *
+ * The third was added on 2026-09-16 for a failure the first two are structurally
+ * blind to: not a subset of a park going silent, but the whole park, while its
+ * schedule keeps publishing operating days. La Ronde had been in that state for
+ * 84 days and was found the same way as the other two — by accident, while
+ * verifying something else. See `findScheduledButSilentParks`.
  */
 
 export interface SilencedCluster {
@@ -28,6 +36,16 @@ export interface SilencedCluster {
   attractionCount: number;
   lastOperating: string;
   sampleNames: string[];
+}
+
+export interface ScheduledButSilentPark {
+  parkId: string;
+  parkName: string;
+  attractionCount: number;
+  /** Park-local date of the last observed reading, or null if there has never been one. */
+  lastReading: string | null;
+  futureOperatingDays: number;
+  lastScheduledDay: string;
 }
 
 export interface FailingJob {
@@ -158,6 +176,116 @@ export class DataQualityMonitorService {
       attractionCount: Number(r.n),
       lastOperating: r.last_op,
       sampleNames: r.names ?? [],
+    }));
+  }
+
+  /**
+   * Parks the schedule says are open and the feed says nothing about.
+   *
+   * The exact complement of `findSilencedClusters` above, and the reason that
+   * one cannot be widened to cover it: its `park_health` CTE demands at least
+   * three attractions with an OPERATING reading in the last two days, precisely
+   * so a park closing for the season is not mistaken for a dropped feed. A park
+   * where EVERY ride is silent fails that gate by construction, so the detector
+   * built to find dropped feeds is blind to the largest drop there is.
+   *
+   * What separates the two cases here is not the feed — it is the schedule. A
+   * park shut for the winter has no OPERATING day on the calendar either. A park
+   * with 349 future OPERATING days and no reading since June is an unresolved
+   * contradiction between two of our own sources, and one of them is wrong.
+   *
+   * Found on 2026-09-16 (PAR-192): La Ronde, silent since 2026-06-24 with a
+   * schedule running to 2027-08-31, plus four parks that have never produced a
+   * reading at all — Paradise Country, Movieland The Hollywood Park, Adventure
+   * Island Tampa, Water Country USA. 110 attractions between them.
+   *
+   * Unlike the cluster detector this one has no window and does NOT go quiet by
+   * itself, which is deliberate and is the whole difference in kind. A silenced
+   * cluster resolves into a judgement — "that was the water park closing" — and
+   * the judgement leaves no trace in the data, so a detector that kept firing
+   * would be asking the same answered question every night. This state has only
+   * two exits and both are edits: the feed returns, or the schedule stops
+   * claiming days nobody can confirm. Until one of them happens the
+   * contradiction is still there, and five WARN lines a day is what it costs.
+   *
+   * @param minDaysSilent Days without an observed reading before a park counts.
+   */
+  async findScheduledButSilentParks(
+    minDaysSilent = PARK_FEED_SILENT_DAYS,
+  ): Promise<ScheduledButSilentPark[]> {
+    const rows: Array<{
+      park_id: string;
+      park_name: string;
+      n: string;
+      last_reading: string | null;
+      future_days: string;
+      last_day: string;
+    }> = await this.dataSource.query(
+      `
+      WITH catalog AS (
+        SELECT a."parkId", count(*)::int AS rides
+          FROM attractions a
+         WHERE a.retired_at IS NULL
+         GROUP BY 1
+      ),
+      -- Future only. Today's entry is not enough on its own: a park can be
+      -- scheduled open today and have nothing after it, which is a schedule
+      -- running out rather than a schedule nobody can confirm.
+      future_schedule AS (
+        SELECT se."parkId",
+               count(*)::int AS future_days,
+               max(se.date)::text AS last_day
+          FROM schedule_entries se
+          JOIN parks p ON p.id = se."parkId"
+         WHERE se."scheduleType" = 'OPERATING'
+           AND se.date > (now() AT TIME ZONE p.timezone)::date
+         GROUP BY 1
+      ),
+      -- Bounded on purpose, and the bound is what makes the NULL meaningful: a
+      -- park with no row here has not been observed inside the window, which is
+      -- the condition itself. An unbounded max() would plan against every chunk
+      -- of the hypertable to produce a date nobody reads.
+      last_seen AS (
+        SELECT a."parkId", max(qd.timestamp) AS ts
+          FROM queue_data qd
+          JOIN attractions a ON a.id = qd."attractionId"
+         WHERE a.retired_at IS NULL
+           AND qd.timestamp > now() - ($1::int * INTERVAL '1 day')
+           -- COALESCE for the same reason hasObservedReadingWithin uses one:
+           -- the predicate is NULL, not false, for a row with neither
+           -- is_heartbeat nor lastUpdated, and an unclassifiable row must not
+           -- put a park on a warning list.
+           AND COALESCE(${observedReadingsSql("qd")}, true)
+         GROUP BY 1
+      )
+      SELECT p.id AS park_id,
+             p.name AS park_name,
+             c.rides::text AS n,
+             (SELECT max(qd2.timestamp AT TIME ZONE p.timezone)::date::text
+                FROM queue_data qd2
+                JOIN attractions a2 ON a2.id = qd2."attractionId"
+               WHERE a2."parkId" = p.id
+                 AND qd2.timestamp > now() - INTERVAL '400 days'
+                 AND COALESCE(${observedReadingsSql("qd2")}, true)) AS last_reading,
+             f.future_days::text AS future_days,
+             f.last_day
+        FROM future_schedule f
+        JOIN parks p ON p.id = f."parkId"
+        JOIN catalog c ON c."parkId" = p.id
+        LEFT JOIN last_seen ls ON ls."parkId" = p.id
+       WHERE ls.ts IS NULL
+       ORDER BY c.rides DESC
+      `,
+      [minDaysSilent],
+    );
+
+    return rows.map((r) => ({
+      parkId: r.park_id,
+      parkName: r.park_name,
+      attractionCount: Number(r.n),
+      lastReading: r.last_reading,
+      futureOperatingDays: Number(r.future_days),
+      lastScheduledDay: r.last_day,
     }));
   }
 

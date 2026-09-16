@@ -4,7 +4,7 @@ import { Job } from "bull";
 import { DataQualityMonitorService } from "./data-quality-monitor.service";
 
 /**
- * Daily sweep for the two silent-failure modes described in
+ * Daily sweep for the silent-failure modes described in
  * DataQualityMonitorService.
  *
  * Logs a WARN naming what it found and a single quiet line when clean, the same
@@ -19,8 +19,9 @@ export class DataQualityProcessor {
 
   @Process("monitor-data-quality")
   async handleMonitorDataQuality(_job: Job): Promise<void> {
-    const [clusters, failing] = await Promise.all([
+    const [clusters, silentParks, failing] = await Promise.all([
       this.monitor.findSilencedClusters(),
+      this.monitor.findScheduledButSilentParks(),
       this.monitor.findFailingJobs(),
     ]);
 
@@ -31,15 +32,27 @@ export class DataQualityProcessor {
       );
     }
 
+    for (const p of silentParks) {
+      this.logger.warn(
+        `📵 ${p.parkName}: ${p.attractionCount} attractions, no reading since ` +
+          `${p.lastReading ?? "ever"}, yet ${p.futureOperatingDays} operating day(s) ` +
+          `scheduled through ${p.lastScheduledDay}. Feed dropped, or a schedule nobody can confirm?`,
+      );
+    }
+
     for (const f of failing) {
       this.logger.warn(
         `💥 ${f.queue}/${f.jobName}: ${f.failures} failed run(s), last ${f.lastFailedAt ?? "unknown"} — ${f.lastReason}`,
       );
     }
 
-    if (clusters.length === 0 && failing.length === 0) {
+    if (
+      clusters.length === 0 &&
+      silentParks.length === 0 &&
+      failing.length === 0
+    ) {
       this.logger.log(
-        "✅ Data quality clean: no silenced clusters, no failing jobs",
+        "✅ Data quality clean: no silenced clusters, no silent scheduled parks, no failing jobs",
       );
     }
   }

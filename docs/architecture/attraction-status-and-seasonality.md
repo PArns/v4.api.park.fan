@@ -1029,6 +1029,89 @@ column is what makes the repair possible when it does happen, and what stops a
 reclassified show from standing in the park payload beside its own
 replacement.
 
+### 5.8 A whole park went silent while its schedule kept publishing
+
+**Measured 2026-09-16 (PAR-192).** La Ronde (Montréal, `multi-source`) had not
+produced a single live reading since **2026-06-24** from Queue-Times and
+**2026-06-17** from ThemeParks.wiki — 84 and 91 days. Both upstreams still
+answer, and both answer empty: `liveData: []` and `{"lands":[],"rides":[]}`.
+Nothing in the catalog records it. All 38 attractions are un-retired, none
+carries `season_out_since`, and the schedule publishes **349** future
+`OPERATING` days through 2027-08-31.
+
+**What the API served while that was true.** Not an empty ride list — the
+opposite:
+
+```
+GET /v1/parks/north-america/canada/montreal/la-ronde
+  park.status              OPERATING
+  liveWaitTimes.available  true
+  38 attractions           effectiveStatus OPERATING × 38, crowdLevel very_low × 38
+
+GET /v1/parks/.../la-ronde/attractions/ednoer
+  status                   CLOSED
+  hourlyForecast           30 min at 93.6 % confidence
+```
+
+Three surfaces of the same silence disagreeing with each other. The park page's
+`statusWithoutLiveData` fallback is written for **one** ride going quiet at a
+park whose feed works (`no-live-data-status.util.ts`); a park where every ride
+is quiet falls into it 38 times over, and its own docblock's counter-example —
+"one ride, one request apart, two answers" — came back at park scale. The
+`crowdLevel` chain has the same shape: `very_low` is its last-resort default and
+is only skipped for a park with no readable source, which La Ronde is not.
+
+**It is a class, not a case.** The ticket's own query found one row because it
+compared `max(timestamp)` against a cut-off, which drops parks that have **never**
+produced a reading. Counting those too, on 2026-09-16:
+
+| Park | Rides | Last reading | Future OPERATING days | Open days in the next 7 |
+| -- | -- | -- | -- | -- |
+| La Ronde | 38 | 2026-06-24 | 349 | 7 |
+| Movieland The Hollywood Park | 25 | never | 29 | 5 |
+| Water Country USA | 19 | never | 105 | 2 |
+| Adventure Island Tampa | 16 | never | 192 | 4 |
+| Paradise Country | 12 | never | 118 | 7 |
+
+110 attractions, 25 park-days in the week after the measurement. Four of the
+five read `CLOSED` in that same snapshot only because they were outside their own
+opening hours at the minute it was taken; the park-level `status` gates
+everything below it, so each of them meets the same branch when its own window
+opens.
+
+**Two things changed.** `ParkIntegrationService` now reads
+`waitTimesKnowable = waitTimesReadable && parkObservedRecently`, where the second
+half is `QueueDataService.hasObservedReadingWithin(parkId,
+PARK_FEED_SILENT_DAYS)` — a bounded `EXISTS` over `observedReadingsSql()`, so our
+own reconciliation and heartbeat rows cannot clear a park. Ride status,
+`crowdLevel`, best visit times and the park's wait statistics all read it, and a
+silent park's rides land on `UNKNOWN` — the same place a park with no readable
+source sends them. `liveWaitTimes.available` stays `true`: it is the frontend's
+contract for "publishes wait times nowhere" (§`live-wait-time-sources.ts`), and
+La Ronde published 7.307 rows through June.
+
+`DataQualityMonitorService.findScheduledButSilentParks()` reports the state
+nightly. It is the complement of `findSilencedClusters`, which cannot be widened
+to cover it: that detector's `park_health` CTE demands at least three attractions
+with an `OPERATING` reading in the last two days, precisely so a park closing for
+the season is not read as a dropped feed — and a park where everything is silent
+fails that gate by construction. What separates the two here is the **schedule**:
+a park shut for the winter has no future `OPERATING` day either.
+
+Measured against production on 2026-09-16. The detector runs in **1.2 s**. The
+per-request probe costs 1.8 ms at Europa-Park, where the first row
+short-circuits the `LIMIT`, and 7.0 ms at La Ronde, where all 38 index searches
+come back empty — behind **45 ms** of hypertable planning on a warm backend and
+**338 ms** on a cold one. The cold number is paid once per pooled connection
+rather than per request, and `findCurrentStatusByPark` beside it in the same
+`Promise.all` is a hypertable query of the same class, so the probe joins a band
+the park payload already pays, on a response cached for an hour.
+
+**Open:** whether La Ronde's 349 published days stay or are cut back. The feed
+is not coming back on its own, and a schedule no measurement has confirmed since
+June is a claim about a park that nobody has checked. That is a decision about
+data, not code, and it is not made here.
+
 ---
 
 ## 6. Diagnostic SQL

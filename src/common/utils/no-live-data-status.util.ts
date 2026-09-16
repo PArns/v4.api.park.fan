@@ -17,6 +17,31 @@
  */
 
 /**
+ * How long a park's whole feed must have been silent before its rides stop
+ * reading OPERATING off this fallback.
+ *
+ * The optimism below is written for ONE ride going quiet at a park whose feed
+ * works. It has no answer for a park where nothing has arrived at all, and on
+ * 2026-09-16 that was five parks with 110 rides between them: La Ronde, silent
+ * since 2026-06-24 while its schedule runs to 2027-08-31, and four that have
+ * never produced a single reading (Paradise Country, Movieland The Hollywood
+ * Park, Adventure Island Tampa, Water Country USA). La Ronde's park page served
+ * all 38 rides as OPERATING at `very_low` — "geöffnet, sehr wenig los" — while
+ * each ride's own page served CLOSED off the same silence.
+ *
+ * Thirty days, because that is the window the reported case was measured in and
+ * because it has to clear every ordinary gap by a wide margin: the longest
+ * upstream outage this catalog has recovered from by itself is Busch Gardens
+ * Tampa's 65 days (see `source-absent-status.util.ts`), and a seasonal park
+ * reopening after the winter clears it with its first poll.
+ *
+ * `ParkIntegrationService` reads it; the rides of a silent park go to UNKNOWN,
+ * the same place a park with no readable source sends them, and never reach the
+ * fallback below.
+ */
+export const PARK_FEED_SILENT_DAYS = 30;
+
+/**
  * The status an attraction with no queue rows should carry.
  *
  * `isCurrentlyInSeason` is the API's own resolved answer (see
