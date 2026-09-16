@@ -192,6 +192,41 @@ describe("PushService", () => {
     });
   });
 
+  it("never erases an existing timezone when a later call omits it", async () => {
+    // The zone decides the quiet window, and a missing zone there means
+    // "send" — so clearing it by omission does not lose a detail, it
+    // switches the window off for this browser. The caller that omits it is
+    // a ride alert or a show follow, neither of which knows or cares where
+    // the phone is.
+    await withVapid(async () => {
+      await service.subscribe({ ...base });
+      const { timezone: _omitted, ...withoutZone } = base;
+      const stored = await service.subscribe(withoutZone);
+      expect(stored?.timezone).toBe("Europe/Berlin");
+    });
+  });
+
+  it("clears the timezone when a call sends one it cannot use", async () => {
+    // The other half of the rule: `null` is the controller saying the body
+    // named a zone and it was unusable, which is a statement, unlike silence.
+    await withVapid(async () => {
+      await service.subscribe({ ...base });
+      const stored = await service.subscribe({ ...base, timezone: null });
+      expect(stored?.timezone).toBeNull();
+    });
+  });
+
+  it("does still update the timezone when a later call sends a new one", async () => {
+    await withVapid(async () => {
+      await service.subscribe({ ...base });
+      const stored = await service.subscribe({
+        ...base,
+        timezone: "America/New_York",
+      });
+      expect(stored?.timezone).toBe("America/New_York");
+    });
+  });
+
   it("resets failureCount on every (re-)subscribe", async () => {
     await withVapid(async () => {
       const first = await service.subscribe({ ...base });

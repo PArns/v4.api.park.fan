@@ -48,12 +48,40 @@ because it is a standing question about a queue rather than an event with a
 timestamp: what fires after the window is a fresh crossing carrying a wait time
 read then, not the 03:00 one delivered late.
 
-**No stored zone means send.** The column is nullable, the frontend writes it on
-every subscribe, so the null set is old rows rather than subscribers whose zone
-is unknown for a reason; suppressing them would be silence with nothing to
-explain it. A zone this Node build cannot resolve gets the same answer —
-`formatInTimeZone` throws on an unknown IANA name, and a throw inside the
-five-minute job stops it notifying everybody else.
+**No stored zone means send.** The column is nullable, so the null set is old
+rows rather than subscribers whose zone is unknown for a reason; suppressing
+them would be silence with nothing to explain it. A zone this Node build cannot
+resolve gets the same answer — `formatInTimeZone` throws on an unknown IANA
+name, and a throw inside the five-minute job stops it notifying everybody else.
+
+**`timezone` joins the preserve-on-omit rule, because reading it made it
+load-bearing.** `PushService.subscribe` wrote the column unconditionally, two
+lines under the `tripId` and `topics` writes that are deliberately conditional
+and under a docstring stating exactly why. Since `normalizeTimezone` answered
+`null` for a body that never mentioned the field, a subscribe from the ride-alert
+or show-follow path — neither of which has any business saying where the phone
+is — cleared the zone and switched the quiet window off for that browser
+permanently. It is latent today (both frontend paths send it) and it is the
+same silent failure as the one above, so it goes with this change rather than
+after it. The controller now tells "not sent" (preserve) from "sent, unusable"
+(clear) instead of collapsing both into `null`.
+
+**Suppressions are counted**, per half in the trip log line and per follower on
+the show side, with a debug line for a held-back ride alert. Nothing else can
+tell "the window is doing its job" from "the job is broken": both look like
+notifications that stopped arriving, and the existing log line only ever ran
+when something WAS sent.
+
+**Two limits, named rather than left to be found.** The stored zone is the one
+the browser last sent, not where the phone is now — the frontend writes it on
+registration and when the switches are worked, so somebody who armed an alert at
+home and then travelled carries their home zone into the park, and Berlin to
+Orlando puts this window at 17:00–01:00 local, silencing the park evening. That
+is the reverse of the case it exists for and cannot be fixed on this side; it is
+filed as PAR-266. And a performance from **23:14** loses its late reminder,
+from **23:35** its regular one (lead windows of 8–14 and 25–35 minutes), for a
+subscriber standing in the park's own zone — the 23:00 floor was weighed against
+`next-up`, and a show after it was not part of that trade (PAR-267).
 
 ### Fixed — a park that loses twice in one `autoDetect` run no longer disowns the merge that worked
 

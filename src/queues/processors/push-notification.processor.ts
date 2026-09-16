@@ -164,6 +164,11 @@ export class PushNotificationProcessor {
     // cycle that sent nine notifications as having sent none, in the one
     // log line that ever states how many the job wrote to a phone.
     let sent = 0;
+    // Counted and logged because a suppression that leaves no trace is
+    // indistinguishable from a broken job: "notifications stopped arriving"
+    // is the only symptom either produces, and the log line below only ever
+    // ran when something WAS sent.
+    let quiet = 0;
     try {
       for (const [tripId, subscriptions] of byTrip) {
         // One read per trip, not one per subscriber: a family sharing a plan
@@ -181,7 +186,10 @@ export class PushNotificationProcessor {
           // lead window has passed and there is nothing left to suppress. A
           // marker here would only cost a Redis write for an event that
           // cannot come back.
-          if (isWithinQuietHours(subscription.timezone, startedMs)) continue;
+          if (isWithinQuietHours(subscription.timezone, startedMs)) {
+            quiet += due.length;
+            continue;
+          }
           for (const notification of due) {
             if (!subscription.topics?.includes(notification.topic)) continue;
             if (
@@ -207,6 +215,11 @@ export class PushNotificationProcessor {
     } catch (error) {
       this.logger.error(
         `trip push notifications failed after sending ${sent}: ${(error as Error)?.message ?? error}`,
+      );
+    }
+    if (quiet > 0) {
+      this.logger.log(
+        `Held back ${quiet} trip notification(s) — quiet hours where the subscriber is`,
       );
     }
     return sent;
@@ -317,7 +330,16 @@ export class PushNotificationProcessor {
     // marker, and without writing one. A performance the subscriber slept
     // through leaves `dueShowNotifications`' lead window (25-35 minutes, or
     // 8-14 for the late reminder) on its own.
-    if (isWithinQuietHours(subscription.timezone, nowMs)) return false;
+    if (isWithinQuietHours(subscription.timezone, nowMs)) {
+      // Logged per follower rather than counted in a batch total: the
+      // show half fans out through `Promise.allSettled` and has no place
+      // to add one up. Same reason as the trip half — a silent hold looks
+      // exactly like a broken job.
+      this.logger.log(
+        `Held back a show reminder for ${notification.showId} — quiet hours where the subscriber is`,
+      );
+      return false;
+    }
     if (await this.alreadySent(subscription.endpoint, notification.dedupeKey)) {
       return false;
     }

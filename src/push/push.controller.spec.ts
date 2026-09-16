@@ -217,6 +217,20 @@ describe("PushController", () => {
     });
   });
 
+  it("passes undefined, not null, for a body that never mentions a zone", async () => {
+    // The two have to stay apart all the way to `subscribe`, which preserves
+    // on the first and clears on the second. Collapsed into one value, a
+    // ride-alert subscribe — which sends no zone and has no reason to — would
+    // switch the quiet window off for that browser.
+    await withVapid(async () => {
+      const { timezone: _omitted, ...withoutZone } = VALID;
+      await controller.subscribe(withoutZone);
+      expect(subscribe).toHaveBeenCalledWith(
+        expect.objectContaining({ timezone: undefined }),
+      );
+    });
+  });
+
   describe("unsubscribe", () => {
     it("passes tripId through, scoping the service call to that trip alone", async () => {
       await controller.unsubscribe({

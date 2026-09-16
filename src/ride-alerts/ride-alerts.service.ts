@@ -383,6 +383,14 @@ export class RideAlertsService {
       // the re-arm below would write the row twice and stamp a trigger that
       // never went out.
       if (subscription && isWithinQuietHours(subscription.timezone, nowMs)) {
+        // Debug rather than log: the alert stays armed, so `diffRideAlerts`
+        // offers this same trigger again on every five-minute cycle until
+        // the window ends. One line per cycle per alert is a trace, not an
+        // event — but a hold that leaves nothing at all behind cannot be
+        // told from a broken sweep.
+        this.logger.debug(
+          `Ride alert ${trigger.alertId} held back — quiet hours where the subscriber is`,
+        );
         return;
       }
 

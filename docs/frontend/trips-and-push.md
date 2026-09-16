@@ -197,10 +197,28 @@ passed. A **ride alert keeps its `armed` row** instead, because it asks a
 standing question about a queue rather than naming a moment: what fires after
 the window is a fresh crossing with a wait time read then.
 
-**No stored zone means send.** The column is nullable, the frontend writes it on
-every subscribe, so the rows without one are old rows rather than subscribers
-whose zone is unknown for a reason — and suppressing those would be silence with
-nothing to explain it. A zone this deploy cannot resolve gets the same answer.
+**No stored zone means send.** The column is nullable, so the rows without one
+are old rows rather than subscribers whose zone is unknown for a reason — and
+suppressing those would be silence with nothing to explain it. A zone this
+deploy cannot resolve gets the same answer. **Omitting `timezone` on subscribe
+does not clear it**, the same rule `tripId` and `topics` follow: turning on a
+ride alert must not switch somebody's quiet window off. Sending a value that
+cannot be used does clear it — that is a caller stating something.
+
+Two limits, both named rather than left to be discovered:
+
+- **The zone is the one the browser last sent, not the one the phone is in
+  now.** The frontend writes it on registration and when the switches are
+  worked, not on every page load, so somebody who armed an alert at home and
+  then travelled carries their home zone into the park: Berlin to Orlando puts
+  23:00–07:00 Berlin at 17:00–01:00 local and silences the park evening. That is
+  the reverse of what the window is for, and it is fixed where the column is
+  written (PAR-266).
+- **A performance from 23:14 loses its late reminder and from 23:35 its regular
+  one** (windows of 8–14 and 25–35 minutes), for a subscriber standing in the
+  park's own zone. The 23:00 floor was weighed against `next-up` and a park open
+  until 23:00; a show after it was not part of that trade. Counted and decided
+  in PAR-267.
 
 ## 4. Ride alerts (`/v1/push/ride-alerts`)
 

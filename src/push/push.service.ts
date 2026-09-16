@@ -23,7 +23,13 @@ export interface SubscribeInput {
   auth: string;
   tripId?: string;
   locale: string;
-  timezone: string | null;
+  /**
+   * `undefined` when the caller said nothing, `null` when it sent something
+   * unusable. The two have to be told apart here: omission preserves, an
+   * unusable value clears. `normalizeTimezone` collapsed both into `null`
+   * until the zone became load-bearing.
+   */
+  timezone?: string | null;
   topics?: PushTopic[];
 }
 
@@ -83,12 +89,20 @@ export class PushService {
    * `null` when this deploy has no VAPID keys, so the caller can say so instead
    * of storing a subscription nothing will ever send to.
    *
-   * `tripId` and `topics` are set only when the caller sends them — never
-   * cleared by omission. The same browser subscribes through this one method
-   * for three unrelated reasons (a trip, a followed show, a ride's wait time),
-   * and each call only knows about its own reason; overwriting the other two
-   * with nothing every time would mean turning on a ride alert quietly turns
-   * off someone's trip notifications.
+   * `tripId`, `topics` and `timezone` are set only when the caller sends them
+   * — never cleared by omission. The same browser subscribes through this one
+   * method for three unrelated reasons (a trip, a followed show, a ride's wait
+   * time), and each call only knows about its own reason; overwriting the
+   * others with nothing every time would mean turning on a ride alert quietly
+   * turns off someone's trip notifications.
+   *
+   * `timezone` joined that rule when it stopped being decoration. It is what
+   * `quiet-hours.ts` reads, and a missing zone there means "send" — so a
+   * subscribe that simply did not mention it used to switch the quiet window
+   * off for that browser permanently, which is the same silent failure in a
+   * quieter direction. Sending a zone that cannot be used still clears it:
+   * that is a caller stating something, and storing a value we know is junk
+   * would be worse than the documented fallback.
    */
   async subscribe(input: SubscribeInput): Promise<PushSubscription | null> {
     if (!isPushConfigured()) return null;
@@ -109,7 +123,7 @@ export class PushService {
     if (input.tripId !== undefined) row.tripId = input.tripId;
     if (input.topics !== undefined) row.topics = input.topics;
     row.locale = input.locale;
-    row.timezone = input.timezone;
+    if (input.timezone !== undefined) row.timezone = input.timezone;
     // A re-subscribe is the browser saying it is alive. Whatever went wrong
     // before this is not evidence about the subscription that exists now.
     row.failureCount = 0;

@@ -16,6 +16,16 @@ import { formatInTimeZone } from "date-fns-tz";
  * Kingdom plan read on a phone in Berlin puts a 21:00 block at 03:00, and
  * `push_subscriptions.timezone` is stored per subscriber precisely because it
  * is not the park's.
+ *
+ * **It is the zone the browser last sent, not the zone the phone is in now**,
+ * and the difference has teeth in exactly the case above. The frontend writes
+ * the column when it first registers and when somebody works the switches, not
+ * on every page load, so a subscriber who armed an alert at home and then
+ * TRAVELLED to the park carries their home zone into it: from Berlin to
+ * Orlando, 23:00-07:00 Berlin is 17:00-01:00 local, which silences the whole
+ * park evening — the reverse of what this module is for. Nothing here can fix
+ * that; the zone has to be refreshed where it is written, which is the
+ * frontend's subscribe call (PAR-266).
  */
 
 /**

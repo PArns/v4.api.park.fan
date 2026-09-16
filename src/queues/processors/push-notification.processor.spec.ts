@@ -835,12 +835,15 @@ describe("PushNotificationProcessor", () => {
       });
     });
 
-    it("writes no dedupe marker for what it held back", async () => {
+    it("does not even ask Redis about what it held back", async () => {
       // The block is dropped rather than deferred: by 07:00 in Tokyo it is
       // long outside `dueNotifications`' 10-20 minute lead window and will
-      // never be offered again. A marker would be a Redis write for an event
-      // that cannot come back — and this assertion is what pins the check to
-      // its place BEFORE `alreadySent`.
+      // never be offered again, so there is nothing to mark.
+      //
+      // `redis.exists` is the assertion that pins the ORDER. `redis.set` alone
+      // cannot: `markSent` only runs after a successful `send`, so it stays
+      // unwritten however late the quiet check sits. Only the `alreadySent`
+      // read tells the two placements apart.
       await withVapid(async () => {
         pushService.subscriptionsWithTrip.mockResolvedValueOnce([
           tokyoTripSubscription,
@@ -848,6 +851,7 @@ describe("PushNotificationProcessor", () => {
         tripsService.find.mockResolvedValueOnce(tripWithBlockAt2015);
 
         await processor.handleDue({} as never);
+        expect(redis.exists).not.toHaveBeenCalled();
         expect(redis.set).not.toHaveBeenCalled();
         expect(redisStore.size).toBe(0);
       });
@@ -891,6 +895,7 @@ describe("PushNotificationProcessor", () => {
 
         await processor.handleDue({} as never);
         expect(pushService.send).not.toHaveBeenCalled();
+        expect(redis.exists).not.toHaveBeenCalled();
         expect(redis.set).not.toHaveBeenCalled();
       });
     });
