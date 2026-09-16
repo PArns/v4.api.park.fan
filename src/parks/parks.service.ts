@@ -96,10 +96,12 @@ class PriorityMergeIncompleteError extends Error {}
  * through to the live lookup — but only while the cache is warm, which is why
  * reproducing it from a cold start shows nothing.
  *
- * Same rule as `localDateOf` in `fillScheduleGaps`, as `saveScheduleData`,
- * which normalises the feed's date-only string the same way on the write side,
- * and as `ScheduleItemDto.fromEntity`, which is why the API payload was right
- * on both paths while this comparison was not.
+ * Same rule as `localDateOf` in `fillScheduleGaps` and as
+ * `ScheduleItemDto.fromEntity`, which is why the API payload was right on both
+ * paths while this comparison was not. The write side reaches the same day by
+ * its own route: `saveScheduleData` normalises the feed to a date-only string
+ * and then anchors it at noon UTC, so no timezone conversion on the way into
+ * the DATE column can move it off that day.
  *
  * Only a string can name a day here. A `Date` cannot reach this function:
  * `JSON.stringify` writes one as an ISO string, so it comes back through the

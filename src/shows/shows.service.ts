@@ -871,7 +871,8 @@ export class ShowsService {
    * as an acceptance criterion so a unification cannot drop it by accident.
    *
    * The day is anchored on `se.date`, a **feed value** (`saveScheduleData`
-   * stores the feed's own date-only string), not on the opening's park-local date
+   * normalises the feed's date and writes it anchored at noon UTC, so the DATE
+   * column keeps that day), not on the opening's park-local date
    * the way `win` anchors it. That the two agree is a property of the sources,
    * not an invariant — measured on 2026-09-15, 0 of 36,543 park-wide
    * `OPERATING` rows disagree. The two directions of a disagreement differ: a

@@ -395,6 +395,12 @@ describe("ParksService", () => {
     beforeEach(() => {
       mockRedis.set.mockResolvedValue("OK");
       mockRedis.get.mockResolvedValue(null);
+      // `mockReset` and not just `mockResolvedValue`: `jest.clearAllMocks()`
+      // drops recorded calls but keeps an unconsumed `mockResolvedValueOnce`
+      // queue, and the cases below queue per-call answers for the two `mget`s
+      // in `getBatchSchedules`. A leftover from an earlier case would be served
+      // to the next one. Same trap the two blocks further down call out.
+      mockRedis.mget.mockReset();
       mockRedis.mget.mockResolvedValue([null, null]);
     });
 
@@ -428,7 +434,12 @@ describe("ParksService", () => {
           // the comparison below vacuous.
           arrange(timezone, []);
           mockRedis.get.mockResolvedValue(payload);
-          mockRedis.mget.mockResolvedValue([payload, "null"]);
+          // `getBatchSchedules` calls mget twice — today first, then next.
+          // One answer for both would feed the "next" slot an array, which is
+          // not the shape that branch reads.
+          mockRedis.mget
+            .mockResolvedValueOnce([payload])
+            .mockResolvedValueOnce(["null"]);
 
           const fromCache = await method.call(timezone);
 
@@ -446,7 +457,9 @@ describe("ParksService", () => {
           const payload = cachedPayload(method.cacheKey);
           arrange(timezone, []);
           mockRedis.get.mockResolvedValue(payload);
-          mockRedis.mget.mockResolvedValue([payload, "null"]);
+          mockRedis.mget
+            .mockResolvedValueOnce([payload])
+            .mockResolvedValueOnce(["null"]);
 
           const date = await method.call(timezone);
 
@@ -493,6 +506,49 @@ describe("ParksService", () => {
         expect(result[0].date).toBe(row.date);
       },
     );
+
+    // `getBatchSchedules` keeps two refetch lists, and an unreadable row has to
+    // land in its own. Pushing to the other one leaves the park with no entry
+    // at all rather than a rebuilt one — and no assertion above notices,
+    // because both lists lead to a query.
+    it("refetches the day from the database when the cached today row names no day", async () => {
+      const row = dbRow("America/Los_Angeles");
+      arrange("America/Los_Angeles", [row]);
+      mockRedis.mget
+        .mockResolvedValueOnce([JSON.stringify([{ ...row, date: null }])])
+        .mockResolvedValueOnce(["null"]);
+
+      const { today, next } = await service.getBatchSchedules([parkId]);
+
+      // Rebuilt from the database, not dropped and not 1970-01-01.
+      expect(today.get(parkId)).toHaveLength(1);
+      expect(today.get(parkId)?.[0].date).toBe(row.date);
+      // And the cache is healed, so the next request does not pay for it again.
+      expect(
+        mockRedis.set.mock.calls.some((c) =>
+          String(c[0]).startsWith("schedule:today:"),
+        ),
+      ).toBe(true);
+      // The `next` slot was a clean negative and must not have been disturbed.
+      expect(next.get(parkId)).toBeNull();
+    });
+
+    it("refetches the next opening from the database when its cached row names no day", async () => {
+      const row = dbRow("America/Los_Angeles");
+      arrange("America/Los_Angeles", [row]);
+      mockRedis.mget
+        .mockResolvedValueOnce([JSON.stringify([row])])
+        .mockResolvedValueOnce([JSON.stringify({ ...row, date: null })]);
+
+      const { next } = await service.getBatchSchedules([parkId]);
+
+      expect(next.get(parkId)?.date).toBe(row.date);
+      expect(
+        mockRedis.set.mock.calls.some((c) =>
+          String(c[0]).startsWith("schedule:next:"),
+        ),
+      ).toBe(true);
+    });
 
     it("keeps a cached `null` as the negative result it is, not as a corrupt entry", async () => {
       arrange("America/Los_Angeles", []);
