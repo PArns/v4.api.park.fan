@@ -194,7 +194,8 @@ export class AttractionsService {
    * and of the favorites list, and PAR-233 made both true: `searchAttractions`
    * and `loadAttractionIndexFromDb` filter, and so does
    * `FavoritesService.fetchAttractions`. The counts are only partly there —
-   * see that docstring for the surfaces still outstanding.
+   * the three in `AnalyticsService` still count retired rows, listed on the
+   * `retiredAt` column in `attraction.entity.ts` and tracked as PAR-286.
    */
   async findAllWithFilters(filters: {
     park?: string;

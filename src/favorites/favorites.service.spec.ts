@@ -456,9 +456,31 @@ describe("FavoritesService", () => {
     });
 
     it("returns no attraction for an id whose row is retired", async () => {
-      // The repository answers the filtered query the way Postgres would:
-      // the retired row is simply not in the result set.
-      attractionRepo.find.mockResolvedValueOnce([]);
+      // The mock applies the `retiredAt` predicate it is handed, the way
+      // Postgres would, instead of returning a canned empty list — an empty
+      // list would pass this test with the predicate deleted, which is no
+      // test at all.
+      const retiredRow = {
+        id: validAttractionUuid,
+        name: "Dino-Sue",
+        slug: "dino-sue",
+        parkId: validParkUuid,
+        retiredAt: new Date("2026-02-15T00:00:00.000Z"),
+        park: {
+          id: validParkUuid,
+          name: "Disney's Animal Kingdom",
+          slug: "disneys-animal-kingdom",
+          timezone: "America/New_York",
+        },
+      };
+      attractionRepo.find.mockImplementationOnce(
+        (options: { where?: { retiredAt?: unknown } }) => {
+          const wantsLiveOnly = options?.where?.retiredAt !== undefined;
+          return Promise.resolve(
+            wantsLiveOnly && retiredRow.retiredAt !== null ? [] : [retiredRow],
+          );
+        },
+      );
 
       const result = await service.getFavorites(
         [],

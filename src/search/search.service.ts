@@ -719,8 +719,11 @@ export class SearchService implements OnModuleInit {
     const topAttractionIds = await this.popularityService.getTopAttractions(50);
 
     // See `searchShows`: a retired row leaves search the same way it leaves the
-    // park payload. This `where` has to stay in front of the brackets below,
-    // which use `andWhere` — put it after them and the OR chain swallows it.
+    // park payload. This `where` has to stay in FRONT of the brackets below,
+    // and the brackets have to stay on `andWhere`: `QueryBuilder.where()`
+    // resets the accumulated conditions rather than adding one, so moving this
+    // line after them would drop the whole OR chain and answer every query
+    // with every attraction that is not retired.
     return (
       this.attractionRepository
         .createQueryBuilder("attraction")
