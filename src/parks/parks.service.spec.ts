@@ -611,6 +611,18 @@ describe("ParksService", () => {
 
     const RIDE_FILTER = /attractionId" IS NULL|attractionId IS NULL/;
 
+    // `jest.clearAllMocks()` drops calls, not implementations, and this block
+    // replaces three of them — the trap the `last_merged_at` block below closes
+    // the same way.
+    afterEach(() => {
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder(),
+      );
+      mockParkRepository.findOne.mockReset();
+      mockParkRepository.find.mockReset();
+      mockScheduleRepository.findOne.mockReset();
+    });
+
     const conditionsOf = (kind: RecordedBuilder["kind"]): string[][] =>
       builders.filter((b) => b.kind === kind).map((b) => b.conditions);
 
@@ -741,6 +753,49 @@ describe("ParksService", () => {
         expect(options.where).toHaveProperty("attractionId");
       },
     );
+
+    it("keys a row on its own day, not on the day before it west of Greenwich", async () => {
+      // TypeORM hands a DATE column back as "YYYY-MM-DD". Reading that as
+      // `new Date(str)` gives UTC midnight, and formatting THAT in a park west
+      // of Greenwich answers with the previous day — so the park's row for the
+      // 16th would be filed under the 15th, the 16th would look like a gap, and
+      // the promotion and demotion would land on the neighbouring day.
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        countryCode: "US",
+        regionCode: null,
+        timezone: "America/Los_Angeles",
+      });
+
+      const occupied = getCurrentDateInTimezone("America/Los_Angeles");
+      mockScheduleRepository.createQueryBuilder.mockImplementation(
+        () =>
+          recordingBuilder([
+            {
+              id: "55555555-6666-7777-8888-999999999999",
+              parkId,
+              attractionId: null,
+              // As the driver delivers it.
+              date: occupied,
+              scheduleType: "OPERATING",
+              description: null,
+              isHoliday: false,
+              holidayName: null,
+              isBridgeDay: false,
+            },
+          ]) as unknown as ReturnType<typeof scheduleQueryBuilder>,
+      );
+
+      await service.fillScheduleGaps(parkId, 1, 1);
+
+      const inserted = builders
+        .flatMap((b) => b.inserted)
+        .map((row) => formatInParkTimezone(row.date as Date, "UTC"));
+
+      // The park's own day is taken; only its two neighbours are gaps.
+      expect(inserted).not.toContain(occupied);
+      expect(inserted).toHaveLength(2);
+    });
 
     it("writes no gap-filled row onto a day that only a ride has a row for", async () => {
       // The one day in the window that carries a per-ride row and nothing else —

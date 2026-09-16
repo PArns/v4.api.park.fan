@@ -2174,11 +2174,17 @@ export class ParksService {
       .andWhere("schedule.date <= :endDate", { endDate: endStr })
       .getMany();
 
+    // `schedule_entries.date` is a PostgreSQL DATE column and TypeORM hands it
+    // back as a "YYYY-MM-DD" string, so it is already the day this row is about
+    // and needs no conversion. Reading it as `new Date(str)` gives UTC midnight,
+    // and formatting THAT in a park west of Greenwich answers with the previous
+    // day — every park in the Americas, on every row. `formatInParkTimezone` is
+    // only right for a real timestamp. Same guard, for the same reason, as in
+    // `AttractionIntegrationService`'s schedule map.
     const localDateOf = (e: ScheduleEntry): string =>
-      formatInParkTimezone(
-        e.date instanceof Date ? e.date : new Date(e.date),
-        park.timezone,
-      );
+      typeof e.date === "string"
+        ? e.date
+        : formatInParkTimezone(e.date, park.timezone);
 
     // The row this method may rewrite: park-level only. It is keyed by date
     // alone, so a per-ride row would otherwise occupy the day — and the
@@ -2318,45 +2324,43 @@ export class ParksService {
         // Entry exists: collect updates for batch processing (O(1) lookup via Map)
         //
         // `existingDates` also holds days that only carry per-ride rows, and
-        // those have nothing for this method to update: the park has no row to
-        // promote, demote or stamp a holiday on. Skipping is the whole handling
-        // — the insert above already stayed away from the day.
+        // those leave `existing` undefined: the park has no row here to promote,
+        // demote or stamp a holiday on. Doing nothing is the whole handling —
+        // the insert above already stayed away from the day.
         const existing = existingEntryMap.get(dateStr);
-        if (!existing) {
-          dateStr = addDays(noonUtc, 1).toISOString().slice(0, 10);
-          continue;
-        }
 
-        const holidayChanged =
-          existing.isHoliday !== holidayInfo.isHoliday ||
-          existing.holidayName !== holidayInfo.holidayName ||
-          existing.isBridgeDay !== holidayInfo.isBridgeDay;
-        const shouldBeClosed =
-          existing.scheduleType === ScheduleType.UNKNOWN &&
-          isGapClosed(dateStr);
-        const shouldBeUnknown =
-          existing.scheduleType === ScheduleType.CLOSED &&
-          existing.description === "Gap-filled" && // Only demote gap-fill, never API-provided CLOSED
-          maxOpStr !== null &&
-          dateStr > maxOpStr;
+        if (existing) {
+          const holidayChanged =
+            existing.isHoliday !== holidayInfo.isHoliday ||
+            existing.holidayName !== holidayInfo.holidayName ||
+            existing.isBridgeDay !== holidayInfo.isBridgeDay;
+          const shouldBeClosed =
+            existing.scheduleType === ScheduleType.UNKNOWN &&
+            isGapClosed(dateStr);
+          const shouldBeUnknown =
+            existing.scheduleType === ScheduleType.CLOSED &&
+            existing.description === "Gap-filled" && // Only demote gap-fill, never API-provided CLOSED
+            maxOpStr !== null &&
+            dateStr > maxOpStr;
 
-        if (holidayChanged || shouldBeClosed || shouldBeUnknown) {
-          // Collect updates instead of executing immediately
-          if (shouldBeClosed) {
-            statusPromotions.push(existing.id);
-          } else if (shouldBeUnknown) {
-            statusDemotions.push(existing.id);
-          } else if (holidayChanged) {
-            holidayUpdates.push({
-              id: existing.id,
-              fields: {
-                isHoliday: holidayInfo.isHoliday,
-                holidayName: holidayInfo.holidayName,
-                isBridgeDay: holidayInfo.isBridgeDay,
-              },
-            });
+          if (holidayChanged || shouldBeClosed || shouldBeUnknown) {
+            // Collect updates instead of executing immediately
+            if (shouldBeClosed) {
+              statusPromotions.push(existing.id);
+            } else if (shouldBeUnknown) {
+              statusDemotions.push(existing.id);
+            } else if (holidayChanged) {
+              holidayUpdates.push({
+                id: existing.id,
+                fields: {
+                  isHoliday: holidayInfo.isHoliday,
+                  holidayName: holidayInfo.holidayName,
+                  isBridgeDay: holidayInfo.isBridgeDay,
+                },
+              });
+            }
+            filledCount++;
           }
-          filledCount++;
         }
       }
 
