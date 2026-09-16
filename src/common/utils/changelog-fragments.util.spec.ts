@@ -106,61 +106,56 @@ describe("checkFragment", () => {
     );
   });
 
-  it("sees a setext heading under a block that ended without a blank line", () => {
-    // A fence, a heading and an indented code block all close themselves, so
-    // the paragraph under them is a paragraph and its underline is a real h2.
-    for (const above of ["```\nx\n```", "### Sub", "    code"]) {
-      expect(
-        checkFragment(
-          "PAR-1.md",
-          `### Added — t\n\n${above}\nNext release\n---\n\nmore\n`,
-        ),
-      ).toMatch(/may not open a section/);
+  it("rejects a line of dashes or equals wherever it stands", () => {
+    // Under a paragraph it is a setext heading, elsewhere a thematic break.
+    // RULE_LINE refuses both rather than resolving which, so this list mixes
+    // the two on purpose — each comment says what CommonMark makes of it.
+    const bodies = [
+      "Next release\n---", // an h2
+      "Next release\n===", // an h1
+      "text\n-", // a one-character underline is still an h2
+      "```\nx\n```\nNext release\n---", // an h2 under a closed fence
+      "text\n    code\n---", // an h2 through lazy continuation
+      "```\nx\n```\n---", // a thematic break
+      "text\n#### Sub\n---", // a thematic break
+      "- item\n---", // a thematic break
+      "- item\n  continued\n---", // a thematic break
+      "> quoted\n  more\n---", // a thematic break
+      "body\n\n---\n\nmore", // a thematic break
+      "text\n\n    code\n---", // a thematic break
+    ];
+
+    for (const body of bodies) {
+      expect(checkFragment("PAR-1.md", `### Added — t\n\n${body}\n`)).toMatch(
+        /may not open a section/,
+      );
     }
   });
 
-  it("leaves `---` alone when there is no paragraph above it to underline", () => {
-    // The other half of the case above, and the one it got wrong first: with
-    // nothing between the block and the `---`, there is no paragraph, so the
-    // `---` is a thematic break and the entry is fine.
-    for (const above of ["```\nx\n```", "~~~\nx\n~~~", "text\n#### Sub"]) {
-      expect(
-        checkFragment("PAR-1.md", `### Added — t\n\n${above}\n---\n\nmore\n`),
-      ).toBeNull();
-    }
+  it("rejects an ATX heading marked off by a tab, or by nothing at all", () => {
     expect(
-      checkFragment("PAR-1.md", "### Added — t\n\ntext\n\n    code\n---\n"),
+      checkFragment("PAR-1.md", "### Added — t\n\nbody\n\n##\tNext release\n"),
+    ).toMatch(/may not open a section \(line 5\)/);
+    expect(checkFragment("PAR-1.md", "### Added — t\n\nbody\n\n##\n")).toMatch(
+      /may not open a section \(line 5\)/,
+    );
+    // Three or more hashes is not a section, whatever follows them.
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\nbody\n\n###\tSub\n"),
     ).toBeNull();
   });
 
-  it("rejects a setext heading, which is an h1/h2 with another syntax", () => {
-    expect(
-      checkFragment("PAR-1.md", "### Added — t\n\nNext release\n---\nmore\n"),
-    ).toMatch(/may not open a section \(line 3\)/);
-    expect(
-      checkFragment("PAR-1.md", "### Added — t\n\nNext release\n===\nmore\n"),
-    ).toMatch(/may not open a section \(line 3\)/);
-  });
-
-  it("allows the `---` shapes that are not headings", () => {
-    // A blank line above makes it a thematic break, which splits nothing.
-    expect(
-      checkFragment("PAR-1.md", "### Added — t\n\nbody\n\n---\n\nmore\n"),
-    ).toBeNull();
-    // A table delimiter row and a list are not paragraphs either.
+  it("leaves the rule-shaped lines that are not a rule line", () => {
+    // A table delimiter row starts with a pipe, a quoted rule is inside a
+    // fence, and a dash in running prose is not on a line of its own.
     expect(
       checkFragment("PAR-1.md", "### Added — t\n\n| a |\n| --- |\n| b |\n"),
     ).toBeNull();
     expect(
-      checkFragment("PAR-1.md", "### Added — t\n\n- item\n---\n"),
-    ).toBeNull();
-    // The second line of a list item reads like prose on its own. The block it
-    // belongs to is what decides, not the line above the underline.
-    expect(
-      checkFragment("PAR-1.md", "### Added — t\n\n- item\n  continued\n---\n"),
+      checkFragment("PAR-1.md", "### Added — t\n\n```\n---\n```\n\nafter\n"),
     ).toBeNull();
     expect(
-      checkFragment("PAR-1.md", "### Added — t\n\n> quoted\n  more\n---\n"),
+      checkFragment("PAR-1.md", "### Added — t\n\ntext - dash - dash\n"),
     ).toBeNull();
   });
 
@@ -275,7 +270,7 @@ describe("checkFragment", () => {
 
     expect(
       checkFragment("PAR-1.md", crlf("### Added — t\n\nNext release\n---\n")),
-    ).toMatch(/may not open a section \(line 3\)/);
+    ).toMatch(/may not open a section \(line 4\)/);
   });
 
   it("folds a CRLF entry in with the changelog's own endings", () => {

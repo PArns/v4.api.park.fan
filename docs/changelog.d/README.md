@@ -22,10 +22,12 @@ What changed, why it was wrong before, and the number that says so.
   `Documented`, `Performance`.
 - **Below it:** the entry, in the same voice as the entries already in
   `docs/changelog.md`.
-- **Nothing that becomes an `<h1>` or `<h2>`** — a fragment is one entry, not a
-  section. That covers `# `, `## ` and a setext underline (`---` or `===`
-  directly under a line of prose). Inside a fenced code block they are all
-  fine; the fence has to be closed.
+- **No `# ` or `## ` heading** — a fragment is one entry, not a section.
+- **No horizontal rule** — no line of only `-` or `=`. Under a paragraph that
+  is a heading (`text` over `---` is an `<h2>`), and telling the two apart takes
+  a Markdown parser, so the check refuses both. No entry in `docs/changelog.md`
+  uses one; if you want to separate something, use a blank line.
+- Inside a fenced code block both are fine. The fence has to be closed.
 
 `pnpm changelog:check` reports what it can read and what it rejects.
 `changelog-fragments.util.spec.ts` runs the same rules over this directory in
