@@ -8,10 +8,17 @@
  * of them had a conflict outside that file (PAR-257).
  *
  * A fragment sidesteps the collision by construction — two pull requests add two
- * files. `mergeFragments` folds them back under `## [Unreleased]` at release
+ * files. `changelog-merge.ts` folds them back under `## [Unreleased]` at release
  * time, and the entries already in `docs/changelog.md` are copied through
  * byte-for-byte.
+ *
+ * The rules are pure functions over text. `readFragmentDirectory` is the one
+ * that reads disk, and it lives here rather than in the CLI so the spec walks
+ * the same directory listing the release does — the first version had the walk
+ * in both and an entry that was a directory crashed one of them with `EISDIR`.
  */
+import { readFileSync, readdirSync } from "fs";
+import { join } from "path";
 
 /** Where a pull request puts its entry, relative to the repository root. */
 export const FRAGMENT_DIR = "docs/changelog.d";
@@ -93,8 +100,8 @@ export function isFragmentCandidate(file: string): boolean {
  * The failures are the ones that either lose the entry or break the assembled
  * file: a name the merge cannot key on, an empty file, a heading the
  * changelog's own structure does not have, an entry with nothing under its
- * heading, and a fragment that opens a `## ` section of its own and would
- * therefore cut `[Unreleased]` in half.
+ * heading, a fragment that opens a `# ` or `## ` section of its own and would
+ * therefore cut `[Unreleased]` in half, and a code fence left open.
  */
 export function checkFragment(file: string, content: string): string | null {
   if (!FRAGMENT_FILENAME.test(file)) {
@@ -116,35 +123,51 @@ export function checkFragment(file: string, content: string): string | null {
   }
 
   const section = findSectionHeading(rest);
-  if (section !== -1) {
+  if (section.at !== -1) {
     return `a fragment is one entry and may not open a section (line ${
-      headingAt + section + 2
+      headingAt + section.at + 2
     })`;
+  }
+  if (section.unclosedFence) {
+    return "a code fence is never closed";
   }
 
   return null;
 }
 
 /**
- * The index of the first real `## ` heading, or `-1`.
+ * The index of the first real `# ` or `## ` heading, or `-1`.
+ *
+ * Both levels, not just `## `: a `# ` in a fragment splits `docs/changelog.md`
+ * one level *above* `[Unreleased]`, which is worse than the case the check was
+ * written for.
  *
  * Fenced blocks are skipped, because an entry about the changelog's own
  * structure quotes `## [Unreleased]` inside one — `docs/changelog.d/README.md`
  * is written exactly that way — and rejecting it would be a check refusing the
- * entry it was written to protect.
+ * entry it was written to protect. An **unclosed** fence is reported instead of
+ * skipped: it would otherwise swallow the rest of the file and take every
+ * heading after it out of the check, which is how the first version of this
+ * function let `### Added — t\n\n```\n\n## [4.7.0]` through.
  */
-function findSectionHeading(lines: string[]): number {
+function findSectionHeading(lines: string[]): {
+  at: number;
+  unclosedFence: boolean;
+} {
   let fenced = false;
+  let found = -1;
+
   for (let i = 0; i < lines.length; i++) {
     if (/^\s*(```|~~~)/.test(lines[i])) {
       fenced = !fenced;
       continue;
     }
-    if (!fenced && /^## /.test(lines[i])) {
-      return i;
+    if (!fenced && found === -1 && /^#{1,2} /.test(lines[i])) {
+      found = i;
     }
   }
-  return -1;
+
+  return { at: found, unclosedFence: fenced };
 }
 
 /**
@@ -174,6 +197,49 @@ export function parseFragments(inputs: FragmentInput[]): {
 
   fragments.sort((a, b) => b.issue - a.issue);
   return { fragments, problems };
+}
+
+/**
+ * Reads the fragment directory and parses what is in it.
+ *
+ * `withFileTypes`, because the filter deliberately lets every name through and
+ * a directory handed to `readFileSync` throws `EISDIR` — a stack trace where
+ * the point of this module is a line naming the file and what is wrong with it.
+ * A missing directory is an empty release, not an error.
+ */
+export function readFragmentDirectory(dir: string): {
+  fragments: Fragment[];
+  problems: FragmentProblem[];
+} {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return { fragments: [], problems: [] };
+  }
+
+  const inputs: FragmentInput[] = [];
+  const problems: FragmentProblem[] = [];
+
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!isFragmentCandidate(entry.name)) {
+      continue;
+    }
+    if (!entry.isFile()) {
+      problems.push({ file: entry.name, problem: "not a file" });
+      continue;
+    }
+    inputs.push({
+      file: entry.name,
+      content: readFileSync(join(dir, entry.name), "utf8"),
+    });
+  }
+
+  const parsed = parseFragments(inputs);
+  return {
+    fragments: parsed.fragments,
+    problems: [...problems, ...parsed.problems],
+  };
 }
 
 /**

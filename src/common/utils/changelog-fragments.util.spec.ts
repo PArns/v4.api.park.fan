@@ -1,4 +1,12 @@
-import { existsSync, readdirSync, readFileSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "fs";
+import { tmpdir } from "os";
 import { join, resolve } from "path";
 
 import {
@@ -8,6 +16,7 @@ import {
   checkFragment,
   isFragmentCandidate,
   parseFragments,
+  readFragmentDirectory,
   spliceIntoChangelog,
 } from "./changelog-fragments.util";
 
@@ -41,6 +50,12 @@ describe("checkFragment", () => {
     expect(checkFragment("PAR-0.md", GOOD)).toMatch(/file name/);
   });
 
+  it("rejects a `# ` heading too, which splits the file one level higher", () => {
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\nbody\n\n# Changelog\n"),
+    ).toMatch(/may not open a section \(line 5\)/);
+  });
+
   it("allows a `## ` line inside a fenced block", () => {
     const quoting = [
       "### Documented — where an entry goes",
@@ -53,6 +68,30 @@ describe("checkFragment", () => {
       "",
     ].join("\n");
     expect(checkFragment("PAR-1.md", quoting)).toBeNull();
+  });
+
+  it("still sees a section heading after the fence has closed", () => {
+    const after = [
+      "### Documented — where an entry goes",
+      "",
+      "```markdown",
+      "## [Unreleased]",
+      "```",
+      "",
+      "## [4.7.0]",
+      "",
+    ].join("\n");
+    expect(checkFragment("PAR-1.md", after)).toMatch(
+      /may not open a section \(line 7\)/,
+    );
+  });
+
+  it("reports a fence that is never closed instead of going blind after it", () => {
+    // Without this the fence swallows the rest of the file and the `## ` below
+    // it leaves the check altogether.
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\n```\nx\n\n## [4.7.0]\n"),
+    ).toBe("a code fence is never closed");
   });
 
   it("rejects a heading the changelog's structure does not have", () => {
@@ -223,6 +262,49 @@ describe("spliceIntoChangelog", () => {
   });
 });
 
+describe("readFragmentDirectory", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "changelog-d-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reports a directory instead of dying on EISDIR", () => {
+    writeFileSync(join(dir, "PAR-257.md"), GOOD);
+    mkdirSync(join(dir, "archive"));
+
+    const { fragments, problems } = readFragmentDirectory(dir);
+
+    expect(fragments.map((f) => f.file)).toEqual(["PAR-257.md"]);
+    expect(problems).toEqual([{ file: "archive", problem: "not a file" }]);
+  });
+
+  it("treats a directory that is not there as an empty release", () => {
+    expect(readFragmentDirectory(join(dir, "gone"))).toEqual({
+      fragments: [],
+      problems: [],
+    });
+  });
+
+  it("reads the real names on disk, README and dotfiles aside", () => {
+    writeFileSync(join(dir, "README.md"), "# explains the directory\n");
+    writeFileSync(join(dir, ".gitkeep"), "");
+    writeFileSync(join(dir, "PAR-9.md"), "### Added — nine\n\nbody\n");
+    writeFileSync(join(dir, "PAR-88.markdown"), GOOD);
+
+    const { fragments, problems } = readFragmentDirectory(dir);
+
+    expect(fragments.map((f) => f.issue)).toEqual([9]);
+    expect(problems).toEqual([
+      { file: "PAR-88.markdown", problem: expect.stringMatching(/file name/) },
+    ]);
+  });
+});
+
 /**
  * The half that measures the repository rather than a fixture. After a release
  * merge the directory is empty and these two say nothing about fragments — the
@@ -239,14 +321,9 @@ describe("the repository's own changelog directory", () => {
   });
 
   it("holds only fragments the merge can read", () => {
-    const inputs = readdirSync(dir)
-      .filter(isFragmentCandidate)
-      .map((file) => ({
-        file,
-        content: readFileSync(join(dir, file), "utf8"),
-      }));
-
-    expect(parseFragments(inputs).problems).toEqual([]);
+    // Through readFragmentDirectory, which is what the release runs — reading
+    // the directory a second way here is how the two drifted apart once.
+    expect(readFragmentDirectory(dir).problems).toEqual([]);
   });
 
   it("is where claude.md sends a new entry", () => {

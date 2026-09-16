@@ -16,48 +16,22 @@
  * rest of `src`; it is excluded from `collectCoverageFrom` like `main.ts`, for
  * the same reason — an entry point is run, not unit-tested.
  */
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "fs";
+import { readFileSync, rmSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 
 import {
   CHANGELOG_FILE,
   FRAGMENT_DIR,
-  Fragment,
   FragmentProblem,
   UNRELEASED_HEADING,
-  isFragmentCandidate,
-  parseFragments,
+  readFragmentDirectory,
   spliceIntoChangelog,
 } from "./changelog-fragments.util";
 
-/** The repository root, four directories above `src/common/utils`. */
+/** The repository root, three directories above `src/common/utils`. */
 const ROOT = resolve(__dirname, "..", "..", "..");
 
-function readDirectory(): {
-  fragments: Fragment[];
-  problems: FragmentProblem[];
-} {
-  const dir = join(ROOT, FRAGMENT_DIR);
-  if (!existsSync(dir)) {
-    return { fragments: [], problems: [] };
-  }
-
-  const inputs = readdirSync(dir)
-    .filter(isFragmentCandidate)
-    .sort()
-    .map((file) => ({
-      file,
-      content: readFileSync(join(dir, file), "utf8"),
-    }));
-
-  return parseFragments(inputs);
-}
+const readDirectory = () => readFragmentDirectory(join(ROOT, FRAGMENT_DIR));
 
 function report(problems: FragmentProblem[]): void {
   for (const { file, problem } of problems) {
