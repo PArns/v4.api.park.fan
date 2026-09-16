@@ -258,14 +258,21 @@ describe("curated works window across park-local midnight (e2e)", () => {
     expect(asDay(rows[0].startOpDay)).toBe(DAY);
   });
 
-  it("reads a half-open window, so an open-ended works period still covers it", async () => {
-    // `from` with no `to` is the usual state while work is running and nobody
-    // has been told when it ends. The predicate's three arms are separately
-    // revertible, and this is the one a NULL-handling slip breaks: a comparison
-    // against a NULL bound yields NULL, and a NULL passes no filter at all.
+  it("reads a half-open window on the operating day too", async () => {
+    // `to` with no `from` is a works period that was already running when
+    // somebody wrote it down. Two things at once, and both are needed:
+    //
+    // - the NULL arm. A comparison against a NULL bound yields NULL, and a NULL
+    //   passes no filter, so a slip there switches the exclusion off silently.
+    // - the day again, from the other side. The window ends on the 15th and the
+    //   outage's calendar date is the 16th, so the old predicate let it escape
+    //   past the closing bound — the ticket's failure mode, mirrored.
+    //
+    // The `from`-only shape would NOT discriminate: the 16th is `>= the 15th`
+    // under either reading, so that fixture stays excluded even unfixed.
     await seedPark(CLOSES);
     await seedPastMidnightOutage();
-    await curate(DAY, null);
+    await curate(null, DAY);
 
     await expect(run()).resolves.toHaveLength(0);
   });
