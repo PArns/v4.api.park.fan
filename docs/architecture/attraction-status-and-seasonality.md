@@ -1143,8 +1143,9 @@ with more output.
 
 **What inherits the gate, and what does not.** `/location` and the favourites
 park card read `park:integrated:<id>`, so on a cache hit they carry the new
-values without knowing about them: a silent park shows `operatingAttractions: 0`
-and `crowdLevel: "unknown"` there too. Their own miss paths, which build from
+values without knowing about them: a silent park shows the park page's own
+counters and `crowdLevel: "unknown"` there too, which at La Ronde means
+`operatingAttractions: 0` because it has no free-flow ride. Their own miss paths, which build from
 `AnalyticsService` directly, do not.
 
 Untouched and left for their own issue: the ride's own endpoint

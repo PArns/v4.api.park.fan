@@ -240,8 +240,9 @@ export class ParkIntegrationService {
     // Whether this park publishes wait times anywhere we can read (curated, see
     // parks/data/live-wait-time-sources.ts). `fromEntity` has already put the
     // answer on the response. Everything derived from a wait time — ride status,
-    // crowd level, best visit times, the ML forecast — is unknowable here, and
-    // this API's rule is to say `unknown` rather than emit a placeholder tier.
+    // crowd level, best visit times, the park's own wait statistics — is
+    // unknowable here, and this API's rule is to say `unknown` rather than emit
+    // a placeholder tier.
     //
     // Those four surfaces read `waitTimesKnowable` below rather than this value
     // directly, because a second, measured way of having no wait time joined it.
