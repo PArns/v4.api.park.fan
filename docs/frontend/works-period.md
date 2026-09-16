@@ -32,6 +32,11 @@ rebuilt on schedule.
 
 ## Rendering
 
+These four are the wordings for a window that is **running today**, which is a
+question you answer first — see the next section. A window that has not started
+says "ab 16. Januar" and one that is over says nothing at all; "seit" and the
+present tense are claims about now, and this block makes none.
+
 ```
 from + to,   toUncertain false → "Umbaupause bis 3. März"
 from + to,   toUncertain true  → "Umbaupause voraussichtlich bis 3. März"

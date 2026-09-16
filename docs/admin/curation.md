@@ -324,6 +324,14 @@ lived only there is gone with no trace and nothing to notice it by — the value
 simply reverts to whatever the sync last wrote, months after anybody remembers
 deciding otherwise.
 
+Three columns are off that list today and must stay off until the loop below it
+changes: the works period's `curated_out_of_service_from`, `_to` and
+`_to_uncertain` (PAR-297). `inheritMissingMetadata` fills column by column, so a
+winner holding a start and no end would take the loser's end and carry a window
+that ends before it begins — the pair `AdminCurationService` rejects outright,
+and since PAR-287 one that is served as `worksPeriod`. Putting them on needs the
+window inherited as a set, which is a change to that loop and not to the list.
+
 ## Related
 
 - `docs/admin/authentication.md` — who is allowed to write any of this

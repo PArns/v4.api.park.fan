@@ -716,6 +716,40 @@ describe("AdminCurationService", () => {
       expect(saved.curatedOutOfServiceToUncertain).toBeNull();
     });
 
+    it("clears a stale flag on a save that only moves the start date", async () => {
+      // The fourth way in, and the only one that touches a field the editor did
+      // not send. The row is already in the state the rule forbids — a flag
+      // with no date to qualify — so it is normalised here rather than left for
+      // the day somebody types an end date and gets a hedge on it.
+      const attraction = anAttraction({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: true,
+      });
+      const { service, attractions, audit } = build(attraction);
+
+      const result = await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedOutOfServiceFrom: "2026-01-20" } },
+        ACTOR,
+      );
+
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.curatedOutOfServiceFrom).toBe("2026-01-20");
+      expect(saved.curatedOutOfServiceToUncertain).toBeNull();
+      expect(result.changed).toContain("curatedOutOfServiceToUncertain");
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          before: expect.objectContaining({
+            curatedOutOfServiceToUncertain: true,
+          }),
+        }),
+      );
+    });
+
     it("does not invent a change when no flag was ever set", async () => {
       // A null flag beside a cleared date is already the state this rule
       // produces, so touching it would file an audit row over nothing.

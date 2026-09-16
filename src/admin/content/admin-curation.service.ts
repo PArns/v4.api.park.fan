@@ -240,10 +240,14 @@ export class AdminCurationService {
       // back to life the day an editor types the date the park has now
       // published, hedging a date that was just confirmed.
       //
-      // Read off the MERGED row for the same reason as the check above, and it
-      // covers all three ways in: clearing `to`, ticking the box on a window
-      // that has no end, and a save that does both. Normalised rather than
-      // rejected, because clearing the end of an open-ended window is the
+      // Read off the MERGED row for the same reason as the check above, so it
+      // catches every save that touches the window and not just the one that
+      // made the flag stale: clearing `to`, ticking the box on a window with
+      // no end, a save that does both, and one that only moves `from` while a
+      // stale flag is already sitting there. That last one clears a field the
+      // editor did not send, which is deliberate — the state is wrong however
+      // it got there, and the audit row says what happened. Normalised rather
+      // than rejected, because clearing the end of an open-ended window is the
       // ordinary edit and must not need a second one.
       if (to === null && attraction.curatedOutOfServiceToUncertain !== null) {
         // `before` may already hold this key from the diff loop — a save that
