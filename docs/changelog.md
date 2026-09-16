@@ -265,8 +265,9 @@ one thing only: **which of the two days falls inside the declared period.**
 Operating day in and calendar date out, and the interval escapes an exclusion it
 had earned. Calendar date in and operating day out, and it is excluded although
 its own day lies outside the period. Neither belongs to a shape — the e2e file
-pins one of each, and both use a window on the 15th: the wrap lands its
-operating day inside it, the after-hours failure lands its calendar date there.
+pins one of each, and both declare a window on the fixtures' first day
+(2026-06-15): the wrap lands its operating day inside it, the after-hours
+failure lands its calendar date there.
 
 Nothing had reported any of it because the population that can show it is empty:
 no attraction carries `curated_out_of_service_from`/`_to` today, so the
