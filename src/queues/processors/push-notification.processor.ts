@@ -8,6 +8,7 @@ import { PushService } from "../../push/push.service";
 import { TripsService } from "../../trips/trips.service";
 import { isPushConfigured } from "../../push/push-config";
 import { dueNotifications } from "../../push/notification-planner";
+import { isWithinQuietHours } from "../../push/quiet-hours";
 import { writeMessage } from "../../push/push-messages";
 import { ShowFollowsService } from "../../show-follows/show-follows.service";
 import { ShowFollow } from "../../show-follows/entities/show-follow.entity";
@@ -163,6 +164,21 @@ export class PushNotificationProcessor {
     // cycle that sent nine notifications as having sent none, in the one
     // log line that ever states how many the job wrote to a phone.
     let sent = 0;
+    // Counted and logged because a suppression that leaves no trace is
+    // indistinguishable from a broken job: "notifications stopped arriving"
+    // is the only symptom either produces, and the log line below only ever
+    // ran when something WAS sent.
+    //
+    // Subscribers with something they would actually have been sent, rather
+    // than the length of the due list — which counts entries this subscriber
+    // holds no topic for, and the window held none of those back.
+    //
+    // It is an upper bound rather than an exact count, and the residual is
+    // named rather than papered over: an entry already marked sent on an
+    // earlier tick still counts here, because the marker is a Redis read and
+    // the whole point of this check's placement is to answer before that read
+    // happens. Buying exactness would cost the ordering.
+    let quiet = 0;
     try {
       for (const [tripId, subscriptions] of byTrip) {
         // One read per trip, not one per subscriber: a family sharing a plan
@@ -174,6 +190,18 @@ export class PushNotificationProcessor {
         if (due.length === 0) continue;
 
         for (const subscription of subscriptions) {
+          // Before the dedupe marker, not after, and deliberately without
+          // writing one: a block that was due at 03:00 is not due at 07:00,
+          // so `dueNotifications` stops offering it once its 10-20 minute
+          // lead window has passed and there is nothing left to suppress. A
+          // marker here would only cost a Redis write for an event that
+          // cannot come back.
+          if (isWithinQuietHours(subscription.timezone, startedMs)) {
+            if (due.some((n) => subscription.topics?.includes(n.topic))) {
+              quiet += 1;
+            }
+            continue;
+          }
           for (const notification of due) {
             if (!subscription.topics?.includes(notification.topic)) continue;
             if (
@@ -199,6 +227,11 @@ export class PushNotificationProcessor {
     } catch (error) {
       this.logger.error(
         `trip push notifications failed after sending ${sent}: ${(error as Error)?.message ?? error}`,
+      );
+    }
+    if (quiet > 0) {
+      this.logger.log(
+        `Held trip notifications back for ${quiet} subscriber(s) — quiet hours where they are`,
       );
     }
     return sent;
@@ -264,6 +297,9 @@ export class PushNotificationProcessor {
     // having a bad minute) must not stop the rest of the batch — the same
     // reason `sendShowFollowNotification` never throws.
     let sent = 0;
+    // Same reason as the trip half, and aggregated the same way rather than
+    // logged per follower: a popular show is hundreds of tasks.
+    let quiet = 0;
     for (
       let i = 0;
       i < tasks.length;
@@ -279,12 +315,14 @@ export class PushNotificationProcessor {
             task.notification,
             task.follow,
             subscriptions,
+            startedMs,
           ),
         ),
       );
       for (const result of results) {
         if (result.status === "fulfilled") {
-          if (result.value) sent++;
+          if (result.value === "sent") sent++;
+          else if (result.value === "quiet") quiet++;
         } else {
           this.logger.warn(
             `show-follow send failed: ${(result.reason as Error)?.message ?? result.reason}`,
@@ -292,26 +330,44 @@ export class PushNotificationProcessor {
         }
       }
     }
+    if (quiet > 0) {
+      this.logger.log(
+        `Held ${quiet} show reminder(s) back — quiet hours where the subscriber is`,
+      );
+    }
     return sent;
   }
 
-  /** One follower's send. Never throws — a failure here must not stop the rest of the batch. */
+  /**
+   * One follower's send. Never throws — a failure here must not stop the rest
+   * of the batch.
+   *
+   * Three answers rather than a boolean, so the caller can add up what the
+   * quiet window held back separately from what simply did not send. `"quiet"`
+   * is not a failure and must never be counted as one.
+   */
   private async sendShowFollowNotification(
     notification: DueShowNotification,
     follow: ShowFollow,
     subscriptions: Map<string, PushSubscription>,
-  ): Promise<boolean> {
+    nowMs: number,
+  ): Promise<"sent" | "quiet" | "no"> {
     const subscription = subscriptions.get(follow.subscriptionId);
-    if (!subscription) return false;
+    if (!subscription) return "no";
+    // Same place and the same reasoning as the trip half: before the dedupe
+    // marker, and without writing one. A performance the subscriber slept
+    // through leaves `dueShowNotifications`' lead window (25-35 minutes, or
+    // 8-14 for the late reminder) on its own.
+    if (isWithinQuietHours(subscription.timezone, nowMs)) return "quiet";
     if (await this.alreadySent(subscription.endpoint, notification.dedupeKey)) {
-      return false;
+      return "no";
     }
     const message = writeMessage(notification, subscription.locale);
     const sent = await this.pushService.send(subscription, message);
     if (sent) {
       await this.markSent(subscription.endpoint, notification.dedupeKey);
     }
-    return sent;
+    return sent ? "sent" : "no";
   }
 
   /**

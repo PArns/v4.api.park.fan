@@ -78,7 +78,18 @@ export class PushSubscribeDto {
   @MaxLength(64)
   locale?: string;
 
-  @ApiProperty({ required: false, example: "Europe/Berlin" })
+  @ApiProperty({
+    description:
+      "The SUBSCRIBER's IANA zone, not the park's. Nothing is sent between " +
+      "23:00 and 07:00 by this clock, which is the point of storing it: every " +
+      "trigger fires inside the park's opening hours, so the only way to be " +
+      "woken at 03:00 is to be somewhere else than the park. Omitting it never " +
+      "clears a zone already stored for this endpoint — but a browser with no " +
+      "stored zone is sent to at any hour, so send it. A zone this deploy " +
+      "cannot resolve is treated the same as none.",
+    example: "Europe/Berlin",
+    required: false,
+  })
   @IsOptional()
   @IsString()
   @MaxLength(64)

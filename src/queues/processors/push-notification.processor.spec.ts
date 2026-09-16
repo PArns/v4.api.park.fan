@@ -782,4 +782,146 @@ describe("PushNotificationProcessor", () => {
       );
     });
   });
+
+  /**
+   * Both halves read the quiet window in the SUBSCRIBER's zone, so the park
+   * being open decides nothing. NOW is 20:00 in Berlin and 03:00 the next day
+   * in Tokyo, and both fixtures below are the ones that send in the tests
+   * above — only the subscriber has moved.
+   */
+  describe("quiet hours, in the subscriber's zone", () => {
+    const tokyoTripSubscription = {
+      ...tripSubscription,
+      timezone: "Asia/Tokyo",
+    };
+    const tokyoShowSubscription = {
+      ...showSubscription,
+      timezone: "Asia/Tokyo",
+    };
+
+    const tripWithBlockAt2015 = {
+      payload: {
+        version: 2,
+        parks: {
+          phantasialand: {
+            slug: "phantasialand",
+            name: "Phantasialand",
+            timezone: "Europe/Berlin",
+            days: {
+              "2026-10-17": {
+                entries: [
+                  {
+                    id: "taron-1",
+                    attractionName: "Taron",
+                    startMinute: 20 * 60 + 15,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+
+    it("holds back a trip notification the same fixture sends to a Berlin phone", async () => {
+      await withVapid(async () => {
+        pushService.subscriptionsWithTrip.mockResolvedValueOnce([
+          tokyoTripSubscription,
+        ]);
+        tripsService.find.mockResolvedValueOnce(tripWithBlockAt2015);
+
+        await processor.handleDue({} as never);
+        expect(pushService.send).not.toHaveBeenCalled();
+      });
+    });
+
+    it("does not even ask Redis about what it held back", async () => {
+      // The block is dropped rather than deferred: by 07:00 in Tokyo it is
+      // long outside `dueNotifications`' 10-20 minute lead window and will
+      // never be offered again, so there is nothing to mark.
+      //
+      // `redis.exists` is the assertion that pins the ORDER. `redis.set` alone
+      // cannot: `markSent` only runs after a successful `send`, so it stays
+      // unwritten however late the quiet check sits. Only the `alreadySent`
+      // read tells the two placements apart.
+      await withVapid(async () => {
+        pushService.subscriptionsWithTrip.mockResolvedValueOnce([
+          tokyoTripSubscription,
+        ]);
+        tripsService.find.mockResolvedValueOnce(tripWithBlockAt2015);
+
+        await processor.handleDue({} as never);
+        expect(redis.exists).not.toHaveBeenCalled();
+        expect(redis.set).not.toHaveBeenCalled();
+        expect(redisStore.size).toBe(0);
+      });
+    });
+
+    it("holds back a show-follow notification for the same reason", async () => {
+      await withVapid(async () => {
+        showFollowsService.allFollows.mockResolvedValueOnce([
+          { id: "f1", subscriptionId: "sub-show", showId: "show-1" },
+        ]);
+        showsService.findBatchCurrentStatusByShows.mockResolvedValueOnce(
+          new Map([
+            [
+              "show-1",
+              {
+                status: "OPERATING",
+                showtimes: [
+                  { startTime: new Date(NOW + 30 * 60_000).toISOString() },
+                ],
+                show: {
+                  name: "Feuerwerk",
+                  park: {
+                    name: "Europa-Park",
+                    slug: "europa-park",
+                    timezone: "Europe/Berlin",
+                    continentSlug: "europe",
+                    countrySlug: "germany",
+                    citySlug: "rust",
+                  },
+                },
+              },
+            ],
+          ]),
+        );
+        // The same verification the sending test above sets up, instants and
+        // all: keyed on the date rather than `...Once`, because the job asks
+        // yesterday, today and tomorrow and a single answer would be spent on
+        // yesterday. Without it nothing is due at all, and the three
+        // assertions below would pass on a build that has no window in it.
+        showsService.getShowtimeInstantsOnDate.mockImplementation(
+          async (_parkId: string, _tz: string, dateStr: string) =>
+            dateStr === "2026-10-17"
+              ? new Map([
+                  ["show-1", [new Date(NOW + 30 * 60_000).toISOString()]],
+                ])
+              : new Map(),
+        );
+        pushService.findByIds.mockResolvedValueOnce(
+          new Map([["sub-show", tokyoShowSubscription]]),
+        );
+
+        await processor.handleDue({} as never);
+        expect(pushService.send).not.toHaveBeenCalled();
+        expect(redis.exists).not.toHaveBeenCalled();
+        expect(redis.set).not.toHaveBeenCalled();
+      });
+    });
+
+    it("still sends to a subscriber whose own clock says 20:00", async () => {
+      // The counter-check: without it the three assertions above would also
+      // pass on a build that sends nothing at all.
+      await withVapid(async () => {
+        pushService.subscriptionsWithTrip.mockResolvedValueOnce([
+          tripSubscription,
+        ]);
+        tripsService.find.mockResolvedValueOnce(tripWithBlockAt2015);
+
+        await processor.handleDue({} as never);
+        expect(pushService.send).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
 });

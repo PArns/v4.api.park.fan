@@ -241,8 +241,22 @@ function normalizeLocale(value: unknown): string {
   return /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(tag) ? tag : "en";
 }
 
-/** An IANA zone, or null. Same bounding, same reason. */
-function normalizeTimezone(value: unknown): string | null {
+/**
+ * `undefined` for a body that did not mention the zone, `null` for one that
+ * sent something unusable — `PushService.subscribe` preserves the first and
+ * clears on the second.
+ *
+ * The distinction only started mattering when `quiet-hours.ts` began reading
+ * the column: collapsing both into `null`, as this did, let a subscribe from
+ * the ride-alert or show-follow path switch someone's quiet window off without
+ * ever mentioning it.
+ *
+ * The shape check stays deliberately syntactic. Whether the string names a zone
+ * this deploy can resolve is answered where it is read, because that is the
+ * only place that can answer it for the Node build actually running.
+ */
+function normalizeTimezone(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
   if (typeof value !== "string") return null;
   const zone = value.trim();
   if (zone.length === 0 || zone.length > 64) return null;
