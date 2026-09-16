@@ -65,7 +65,11 @@ describe("ShowFollowsService", () => {
             ) {
               return false;
             }
-            // Stands in for the join condition on `shows.retired_at`.
+            // Stands in for the `WHERE shows.retired_at IS NULL` the real
+            // query adds to its LEFT JOIN. Stricter in one spot: a follow
+            // whose show row is missing is dropped here and kept there. The
+            // FK is NOT NULL with ON DELETE CASCADE, so that row cannot
+            // exist, and no case seeds one.
             if (opts?.where?.show?.retiredAt !== undefined) {
               const show = showRows.get(row.showId);
               if (!show || show.retiredAt != null) return false;

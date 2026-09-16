@@ -168,6 +168,59 @@ a second unattended deletion that this gate never sees. It runs at the end of
 back empty, so it is a bootstrap path rather than a daily one; counted, not
 assumed. Named in §5.5a and filed as PAR-262 rather than widened into here.
 
+### Added — a show or a restaurant can stop existing
+
+`attractions` has carried `retired_at` / `retired_reason` for a while, and with
+it the only honest answer to an entity that has gone away: not "closed today",
+not "unknown", both of which describe a state it could come back from. `shows`
+and `restaurants` had no such column, and the gap had a specific cost.
+ThemeParks.wiki reclassifies entities without changing their id. When one moves
+from `SHOW` to `ATTRACTION`, the sync writes the new `attractions` row and the
+old `shows` row simply stays — the park payload then serves both, and the
+replacement gets no live data at all, because `WaitTimesProcessor` builds its
+lookup with the shows after the attractions and the stale show keeps winning
+`themeparks-wiki:<externalId>`.
+
+Both entities now carry the two columns, nullable, with the same partial index
+on `retired_at IS NULL`. **Nullable is measured, not assumed:** `shows` holds
+2,935 rows in production and `restaurants` 3,358, and `synchronize: true` runs
+there — a `NOT NULL` without a default would issue `ALTER TABLE … ADD … NOT
+NULL` against a populated table and stop the API container from starting.
+
+`retireReclassifiedChildEntities` is the counterpart of
+`retireReclassifiedAttractions` and runs directly after it in the same pass,
+with the same two guards: ids that arrived under the other type in the same
+`/children` response are excluded, so the two directions cannot retire and
+un-retire the same row every night, and a row a second source claims is left
+alone. `syncShow` and `syncRestaurant` lift exactly the reason this sync wrote,
+so a retirement entered by hand survives every run.
+
+**That second guard holds nobody back today, and this is measured rather than
+assumed.** `external_entity_mapping` carried 5,486 `queue-times` and 1,295
+`wartezeiten-app` rows against `internal_entity_type = 'attraction'` on
+2026-09-16, and zero against `'show'` or `'restaurant'`; `show_live_data` has no
+`data_source` column at all, because the wiki is its only feeder. The check is
+kept because it is structural and starts working by itself the day a second
+source claims a show — not because it is doing anything now.
+
+Every read path that serves a show or a restaurant filters retired rows: the
+park payload, both services' list finders, search (the SQL query and the
+in-process Redis index, which outlives the request), favorites, the followed-
+shows list, and the batch live-status lookup those three share.
+`WaitTimesProcessor` skips them too, which is what stops a retired row from
+starving its own replacement, and the seasonal detector skips them for the
+reason step 2c already skips retired attractions. Three places deliberately do
+not filter — the workspace-wide row counts in `AnalyticsService`, the
+post-merge emptiness check on a losing park, and `findBySlug` /
+`findBySlugInPark`, which match `AttractionsService` so a lookup of one named
+row still finds its history.
+
+This direction is not observed in production. The column is what makes the
+repair possible when it happens, and what keeps a reclassified show out of the
+park payload beside its own replacement.
+
+Details: `docs/architecture/attraction-status-and-seasonality.md` §5.7.
+
 ### Fixed — a field a handler attaches to an error body now reaches the client
 
 `HttpExceptionFilter` is global and builds the error response itself, which is
@@ -390,18 +443,17 @@ this sync can come back, and while it is retired it receives no readings at all
 — so the season would have been lost for good, with nothing left to derive it
 from. Step 2c now skips those retirements and leaves every other one permanent.
 
-What comes back is the row and not its data supply: the orphaned `shows` row
-still wins the entity lookup in `WaitTimesProcessor`, so the un-retired
-attraction resumes collecting `system-reconciliation` CLOSED rows until PAR-232
-clears it. A visible ride reading CLOSED is still better than one that silently
-vanished, but it is not a full recovery. The way back is also park-scoped, while
-the retirement is not — a row whose park moved upstream has to be brought back
-by hand.
+What came back was the row and not its data supply: the orphaned `shows` row
+still won the entity lookup in `WaitTimesProcessor`, so the un-retired
+attraction resumed collecting `system-reconciliation` CLOSED rows. The entry
+above closes that from both ends. The way back is also park-scoped, while the
+retirement is not — a row whose park moved upstream has to be brought back by
+hand.
 
 The row an entity leaves behind in `shows` or `restaurants` when it moves the
-other way is still not handled, because neither table has a `retired_at` column
-to set — PAR-232. It is not observed in production either: all 34 collisions run
-one way, and `restaurants` has none.
+other way was not handled here, because neither table had a `retired_at` column
+to set; the entry above adds it. That direction is not observed in production
+either: all 34 collisions run one way, and `restaurants` has none.
 
 Details and the diagnostic query: `docs/architecture/attraction-status-and-seasonality.md` §5.6.
 

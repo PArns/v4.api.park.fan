@@ -780,13 +780,16 @@ export class ChildrenMetadataProcessor {
    * Overriding it means correcting the entity upstream, or adding the id to
    * `THEMEPARKS_EXCLUSIONS` so this sync stops having an opinion about it.
    *
-   * **What comes back is the row, not its data supply.** The `shows` row keeps
-   * existing, and `WaitTimesProcessor` builds its lookup with the shows after
-   * the attractions, so `themeparks-wiki:<externalId>` still resolves to the
-   * show and the un-retired attraction goes straight back to receiving
-   * `system-reconciliation` CLOSED rows. That is no worse than the state this
-   * method exists to fix — a visible ride reading CLOSED beats one that
-   * silently disappeared — but it is not a full recovery.
+   * **The row's data supply comes back with it, in the normal case.** The
+   * `shows` row keeps existing, and `WaitTimesProcessor` builds its lookup
+   * with the shows after the attractions — so an un-retired attraction used
+   * to lose `themeparks-wiki:<externalId>` to the stale show and go straight
+   * back to collecting `system-reconciliation` CLOSED rows. Two things now
+   * prevent that: `retireReclassifiedChildEntities` retires the show in the
+   * same pass, and that lookup skips retired rows. What is left is the case
+   * where the show is held back by `withoutForeignSourceMappings` — a second
+   * source claims it — and there the shadowing is the lesser evil, because
+   * the alternative is retiring a row another feed is still filling.
    *
    * The reverse direction now exists as
    * `retireReclassifiedChildEntities`, which runs immediately after this one

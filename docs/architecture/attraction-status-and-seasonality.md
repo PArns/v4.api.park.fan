@@ -935,13 +935,16 @@ why the marker is an exact string rather than a prefix. The string is also
 attraction detail endpoint), so it reads as a sentence with its source and
 carries no issue numbers or file paths.
 
-**What comes back is the row, not its data supply.** The `shows` row keeps
-existing, and `WaitTimesProcessor` builds its entity lookup with the shows after
-the attractions, so `themeparks-wiki:<externalId>` still resolves to the show —
-the un-retired attraction goes straight back to collecting
-`system-reconciliation` CLOSED rows. That is no worse than the state this fix
-exists to remove, since a visible ride reading CLOSED beats one that silently
-disappeared, but it is not a full recovery.
+**The data supply comes back with the row, in the normal case.** The `shows`
+row keeps existing, and `WaitTimesProcessor` builds its entity lookup with the
+shows after the attractions, so an un-retired attraction used to lose
+`themeparks-wiki:<externalId>` to the stale show and go straight back to
+collecting `system-reconciliation` CLOSED rows. §5.7 closes that from both ends:
+the show is retired in the same pass, and the lookup skips retired rows. What
+remains is the row a second source claims, which
+`withoutForeignSourceMappings` holds back on purpose — there the shadowing is
+the lesser evil, because the alternative is retiring a row another feed is
+still filling.
 
 **The protection runs one way.** A retirement a human entered survives every
 run, because its reason is not one the sync wrote. An un-retirement entered by
