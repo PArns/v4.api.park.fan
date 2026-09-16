@@ -141,20 +141,41 @@ export function checkFragment(file: string, content: string): string | null {
   return null;
 }
 
+/** An ATX heading of level 1 or 2. Up to three leading spaces is still one. */
+const ATX_SECTION = /^ {0,3}#{1,2} /;
+
+/** A fence opener or closer. Four spaces in is an indented code block, not one. */
+const FENCE = /^ {0,3}(```|~~~)/;
+
+/** The underline of a setext heading: `===` is an h1, `---` an h2. */
+const SETEXT_UNDERLINE = /^ {0,3}(-{1,}|={1,})[ \t]*$/;
+
 /**
- * The index of the first real `# ` or `## ` heading, or `-1`.
+ * A line that a setext underline can turn into a heading.
  *
- * Both levels, not just `## `: a `# ` in a fragment splits `docs/changelog.md`
- * one level *above* `[Unreleased]`, which is worse than the case the check was
- * written for.
+ * Only a paragraph does that. Under a list item, a table row or a blockquote,
+ * `---` closes the block and is a thematic break — treating those as headings
+ * would reject a valid entry, and a rejected fragment stops the whole release.
+ */
+const SETEXT_SUBJECT = /^ {0,3}(?![-*+>|#]|\d+[.)]|```|~~~)\S/;
+
+/**
+ * The index of the first line that opens a section, or `-1`.
+ *
+ * "Section" is anything that ends up as an `<h1>` or `<h2>` in the assembled
+ * file, because that is what cuts `[Unreleased]` in half — not one syntax for
+ * it. Three shapes qualify: `# `/`## `, the same indented by up to three
+ * spaces, and a setext underline under a paragraph. Level 1 counts as well as
+ * level 2: it splits the file one level *above* `[Unreleased]`, which is worse
+ * than the case the check was first written for.
  *
  * Fenced blocks are skipped, because an entry about the changelog's own
- * structure quotes `## [Unreleased]` inside one — `docs/changelog.d/README.md`
- * is written exactly that way — and rejecting it would be a check refusing the
- * entry it was written to protect. An **unclosed** fence is reported instead of
- * skipped: it would otherwise swallow the rest of the file and take every
- * heading after it out of the check, which is how the first version of this
- * function let `### Added — t\n\n```\n\n## [4.7.0]` through.
+ * structure quotes a `## ` line inside one — the spec case `allows a '## ' line
+ * inside a fenced block` is exactly that — and rejecting it would be a check
+ * refusing the entry it exists to protect. An **unclosed** fence is reported
+ * instead of skipped: it would otherwise swallow the rest of the file and take
+ * every heading after it out of the check, which is how the first version of
+ * this function let `### Added — t\n\n```\n\n## [4.7.0]` through.
  */
 function findSectionHeading(lines: string[]): {
   at: number;
@@ -164,14 +185,24 @@ function findSectionHeading(lines: string[]): {
   let found = -1;
 
   for (let i = 0; i < lines.length; i++) {
-    if (/^\s*(```|~~~)/.test(lines[i])) {
+    if (FENCE.test(lines[i])) {
       fenced = !fenced;
       continue;
     }
-    // Up to three leading spaces, because that is still an ATX heading in
-    // CommonMark and splits the file exactly the same way.
-    if (!fenced && found === -1 && /^ {0,3}#{1,2} /.test(lines[i])) {
+    if (fenced || found !== -1) {
+      continue;
+    }
+    if (ATX_SECTION.test(lines[i])) {
       found = i;
+      continue;
+    }
+    if (
+      SETEXT_UNDERLINE.test(lines[i]) &&
+      i > 0 &&
+      SETEXT_SUBJECT.test(lines[i - 1])
+    ) {
+      // The heading is the text line, not its underline.
+      found = i - 1;
     }
   }
 

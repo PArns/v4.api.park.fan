@@ -102,6 +102,38 @@ describe("checkFragment", () => {
     );
   });
 
+  it("rejects a setext heading, which is an h1/h2 with another syntax", () => {
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\nNext release\n---\nmore\n"),
+    ).toMatch(/may not open a section \(line 3\)/);
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\nNext release\n===\nmore\n"),
+    ).toMatch(/may not open a section \(line 3\)/);
+  });
+
+  it("allows the `---` shapes that are not headings", () => {
+    // A blank line above makes it a thematic break, which splits nothing.
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\nbody\n\n---\n\nmore\n"),
+    ).toBeNull();
+    // A table delimiter row and a list are not paragraphs either.
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\n| a |\n| --- |\n| b |\n"),
+    ).toBeNull();
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\n- item\n---\n"),
+    ).toBeNull();
+  });
+
+  it("does not take an indented fence for a fence", () => {
+    // Four spaces in it is an indented code block. Toggling on it left the
+    // fence state open and rejected a perfectly good entry, which stops the
+    // release for every other fragment too.
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\nbody\n\n    ```\n    x\n"),
+    ).toBeNull();
+  });
+
   it("reports a fence that is never closed instead of going blind after it", () => {
     // Without this the fence swallows the rest of the file and the `## ` below
     // it leaves the check altogether.
@@ -368,13 +400,13 @@ describe("the repository's own changelog directory", () => {
     );
 
     expect(rule).toContain(FRAGMENT_DIR);
-    // Both documents name the two commands. Renaming a script without them is
-    // how a rule starts lying over a green suite.
+    // Both documents name both commands. Renaming a script without them is how
+    // a rule starts lying over a green suite.
     for (const command of ["changelog:check", "changelog:merge"]) {
       expect(scripts[command]).toBeDefined();
       expect(rule).toContain(command);
+      expect(readme).toContain(command);
     }
-    expect(readme).toContain("changelog:merge");
   });
 
   it("still has a changelog with an [Unreleased] heading to fold into", () => {
