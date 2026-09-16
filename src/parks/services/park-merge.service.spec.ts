@@ -392,6 +392,71 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("drops a loser's schedule row only where the winner states the same day, type AND ride", async () => {
+    // `schedule_entries` holds the park's opening hours (`attractionId IS
+    // NULL`) beside the per-ride rows in one table, and this path used to hand
+    // (date, scheduleType) to the generic `migrateTableData`. One park-wide
+    // OPERATING row on the winner matches every OPERATING row the loser holds
+    // for that date, so that key deleted the loser's per-ride rows along with
+    // its opening hours (PAR-171).
+    //
+    // With a colliding ride, so the attraction path below really runs and its
+    // own row-wise `IN` over this table is present in `calls` — otherwise the
+    // absence asserted at the end of this case is the fixture's and not the
+    // rule's.
+    ridesCollide = true;
+
+    await service.mergeParks(WINNER_PARK, LOSER_PARK);
+
+    const scheduleDelete = calls.find(
+      (c) =>
+        /DELETE\s+FROM\s+schedule_entries/i.test(c.sql) &&
+        (c.params ?? []).includes(LOSER_PARK),
+    );
+    expect(scheduleDelete?.sql).toMatch(
+      /"attractionId"\s+IS NOT DISTINCT FROM/,
+    );
+    expect(scheduleDelete?.sql).toMatch(/"scheduleType"/);
+    expect(scheduleDelete?.params).toEqual([WINNER_PARK, LOSER_PARK]);
+
+    // The old key is gone rather than joined by the ride: a row-wise `IN` over
+    // three columns is NULL for a park-level row, so it would dedupe no
+    // park-level row at all — the other half of the trap, not a fix for it.
+    expect(scheduleDelete?.sql).not.toMatch(/\bIN\s*\(/i);
+
+    // And it is gone from the whole PARK path, not just from the statement
+    // found above. Removing the two identifiers from `ALLOWED_TABLE_NAMES` and
+    // `ALLOWED_COLUMN_NAMES` does not prevent this: both come back through the
+    // spread of `ATTRACTION_DEPENDENCIES`, whose own `schedule_entries` entry
+    // carries `conflictColumns: ["date", "scheduleType"]`. The guarantee is
+    // that the call site is gone, so this is where it is pinned.
+    //
+    // Keyed on the park, because the attraction path emits a row-wise `IN` over
+    // this same table and is RIGHT to: `WHERE "attractionId" = $loser` has
+    // already excluded every park-level row, so its key carries no nullable
+    // column (PAR-149). A filter that only asked for `schedule_entries` and an
+    // `IN` would turn red right here, on a statement that is doing its job —
+    // this case sets `ridesCollide` above precisely so that statement is in
+    // `calls`.
+    const scheduleDeletesWithIn = calls.filter(
+      (c) =>
+        /DELETE\s+FROM\s+schedule_entries/i.test(c.sql) &&
+        /\bIN\s*\(/i.test(c.sql),
+    );
+    // The attraction path's one is there, which is what makes the next
+    // assertion an absence rather than an empty set.
+    expect(scheduleDeletesWithIn).not.toHaveLength(0);
+    expect(
+      scheduleDeletesWithIn.filter((c) => /"parkId"/.test(c.sql)),
+    ).toHaveLength(0);
+
+    const move = calls.find((c) =>
+      /^\s*UPDATE schedule_entries SET "parkId"/i.test(c.sql),
+    );
+    expect(move?.params).toEqual([WINNER_PARK, LOSER_PARK]);
+    expect(calls.indexOf(scheduleDelete!)).toBeLessThan(calls.indexOf(move!));
+  });
+
   it("does not stamp last_merged_at when no ride collided — it is a column on attractions", async () => {
     await service.mergeParks(WINNER_PARK, LOSER_PARK);
 

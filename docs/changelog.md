@@ -462,6 +462,73 @@ instead of answering it. Follow-up: PAR-241, where `buildShows` orders two shows
 against each other on `times[0]` and a show whose only time is the 00:00 one
 sorts to the top of the day it ends.
 
+### Fixed — a park merge keeps the losing park's per-ride schedule, and the rule now has one derivation
+
+`schedule_entries` holds two kinds of row in one table: the park's opening hours
+(`attractionId IS NULL`) and one row per ride per day. `ParkMergeService.mergeParks`
+deduped them through its generic `migrateTableData` on `(date, scheduleType)`, a
+key that cannot see the difference — so a single opening-hours row on the winner
+deleted every row of **that type** the loser held for that day, the per-ride ones
+included. The delete ran inside a transaction that then reported success. How
+many rows that was in production is not established here, and the fix does not
+depend on it: what the key does is narrower than a count and enough on its own —
+one park-wide `OPERATING` row on the winner matches every `OPERATING` row the
+loser holds for that date, whichever ride each of them belongs to.
+
+Measured against PostgreSQL 16 on a seven-row fixture (winner: opening hours and
+ride B on 09-20; loser: opening hours, ride A and ride B on 09-20, ride A on
+09-21, ride A CLOSED on 09-20):
+
+| statement | deleted | reparented | ride A's 09-20 OPERATING row |
+| -- | -- | -- | -- |
+| `(date, scheduleType)` — before | 3 | 2 | **gone** |
+| date, type and ride — now | 2 | 3 | survives |
+
+Both deletions the new key makes are genuine duplicates: the loser's opening
+hours and its ride-B row, which the winner states as well.
+
+`consolidateMergedPark` in `parks.service.ts` already compared all three columns
+with `IS NOT DISTINCT FROM`, and that was the whole problem — one rule, two
+derivations, and only one of them right. Both paths now call
+`migrateScheduleEntries` in `merge-dependencies.ts`, which carries the reasoning
+and the same-id refusal `applyMergeDependencies` makes. The table stays out of
+the dependency lists for the reason it always was: `applyMergeDependencies`
+compares conflict keys with a row-wise `IN`, and a NULL inside one of those is
+NULL rather than true, so no key it can build spares a per-ride row and dedupes
+a park-level one at once.
+
+What keeps the weak key out is that its call site is gone, and a spec case pins
+that: no statement in `mergeParks` deletes from `schedule_entries` on a `parkId`
+key with a row-wise `IN`. The key is part of that sentence — on `attractionId`
+the same `IN` is correct, because `WHERE "attractionId" = $loser` has already
+excluded every park-level row, and the attraction path uses it (PAR-149). The
+case runs with a colliding ride so that statement is really present, or the
+absence it asserts would be the fixture's rather than the rule's.
+
+It is deliberately not pinned on `ParkMergeService`'s identifier
+allowlists, because those cannot carry it — both lists are built by spreading
+the dependency declarations, and the attraction side declares `schedule_entries`
+with `conflictColumns: ["date", "scheduleType"]`, so striking the two literals
+changes neither set.
+
+Two things this does not cover, named here because the heading above says the
+rule has one derivation and that sentence is about the two **merge** paths.
+`cleanupDuplicateScheduleEntries` and its per-park twin carry the same blind key
+in the gap-fill, which runs unconditionally rather than from an admin action;
+that is PAR-246, and it now has a second half. The rows this fix keeps are what
+that key sees next: they are reparented onto the winner, where phase 1 keeps one
+row per `("parkId", date, "scheduleType")` ordered by `updatedAt DESC` — and the
+reparent is a raw `UPDATE` that leaves `updatedAt` alone, so which row that is
+was decided before the merge. A surviving per-ride row can therefore outrank the
+winner's own park-wide row for that day and delete it on the next nightly pass.
+Both halves belong to PAR-246; the interaction is named here so it is not
+re-derived from the merge path.
+
+And the same-id refusal is new for `consolidateMergedPark` — `mergeParks`
+already checked at its entry, this path did not, so a call with one park id on
+both sides now throws where it previously wrote a wipe. Both call sites run
+inside a transaction, so the statements before it roll back.
+
 ### Added — an empty `/plan/day` says why, and the number is counted
 
 Measured against production on 2026-09-14: of **73 parks** with a park-wide
