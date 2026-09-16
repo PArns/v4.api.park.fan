@@ -16,6 +16,16 @@
  * that reads disk, and it lives here rather than in the CLI so the spec walks
  * the same directory listing the release does — the first version had the walk
  * in both and an entry that was a directory crashed one of them with `EISDIR`.
+ *
+ * **Why the section check is written out rather than asked of `marked`.** The
+ * repository does depend on `marked` (`app.service.ts` renders with it), and a
+ * parser would answer "is this an h1 or h2" by definition. It cannot be used
+ * here: `marked` 18 is ESM-only, `pnpm test` runs on Node 22 and cannot
+ * `require` it, and the repository's one answer to that is `test/mocks/marked.ts`
+ * — a stub whose `parse` returns its input. A check mapped to that stub would
+ * measure the stub. This guard has to run in `pnpm test`, because no backend
+ * workflow runs a `package.json` script, so it is written out here and every
+ * disagreement with a real parser is pinned as a case in the spec beside it.
  */
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
@@ -178,16 +188,31 @@ const SETEXT_UNDERLINE = /^ {0,3}(-{1,}|={1,})[ \t]*$/;
 const PARAGRAPH_START = /^ {0,3}(?![-*+>|#]|\d+[.)]|```|~~~)\S/;
 
 /**
+ * A line that ends the block above it without a blank line after it: a closing
+ * fence, an ATX heading of any level, an indented code line.
+ */
+const SELF_TERMINATING = /^( {4,}|[ ]{0,3}#{1,6} |[ ]{0,3}(`{3,}|~{3,}))/;
+
+/**
  * Whether the block ending at `before` is a paragraph.
  *
  * The question is about the **block**, not the line above the underline: the
  * second line of a list item looks like prose on its own, and testing it alone
  * read `- item\n  continued\n---` as a heading when it is a list and a
  * thematic break.
+ *
+ * A blank line is not the only thing that starts a block, which is the other
+ * half: a fence, a heading and an indented code block all end without one, so
+ * `` ```\nx\n```\nNext release\n--- `` is a paragraph and a real `<h2>` — and
+ * walking back past those read it as part of the code above and let it through.
  */
 function isParagraph(lines: string[], before: number): boolean {
   let start = before;
-  while (start > 0 && lines[start - 1].trim() !== "") {
+  while (
+    start > 0 &&
+    lines[start - 1].trim() !== "" &&
+    !SELF_TERMINATING.test(lines[start - 1])
+  ) {
     start--;
   }
   return lines[before].trim() !== "" && PARAGRAPH_START.test(lines[start]);

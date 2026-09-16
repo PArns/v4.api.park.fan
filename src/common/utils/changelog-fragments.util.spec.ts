@@ -106,6 +106,19 @@ describe("checkFragment", () => {
     );
   });
 
+  it("sees a setext heading under a block that ended without a blank line", () => {
+    // A fence, a heading and an indented code block all close themselves, so
+    // the paragraph under them is a paragraph and its underline is a real h2.
+    for (const above of ["```\nx\n```", "### Sub", "    code"]) {
+      expect(
+        checkFragment(
+          "PAR-1.md",
+          `### Added — t\n\n${above}\nNext release\n---\n\nmore\n`,
+        ),
+      ).toMatch(/may not open a section/);
+    }
+  });
+
   it("rejects a setext heading, which is an h1/h2 with another syntax", () => {
     expect(
       checkFragment("PAR-1.md", "### Added — t\n\nNext release\n---\nmore\n"),
