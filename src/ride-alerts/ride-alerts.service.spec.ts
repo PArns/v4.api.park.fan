@@ -428,6 +428,56 @@ describe("RideAlertsService", () => {
       expect(alertRows.get("alert-1")!.armed).toBe(true);
     });
 
+    /**
+     * NOW_MS is 14:00 in Berlin, where the park is, and 05:00 in Los Angeles,
+     * where the subscriber is. The trigger is the same one the "sends and
+     * disarms" case above fires on — only the phone has moved, which is the
+     * whole reason the zone is stored per subscriber.
+     */
+    it("leaves the alert armed rather than spending it inside the subscriber's quiet hours", async () => {
+      alertRows.set("alert-1", alert({ thresholdMinutes: 20, armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+        new Map([["ride-1", standbyReading({ waitTime: 12 })]]),
+      );
+      pushService.findByIds.mockResolvedValueOnce(
+        new Map([
+          [
+            "sub-1",
+            { id: "sub-1", locale: "de", timezone: "America/Los_Angeles" },
+          ],
+        ]),
+      );
+
+      await service.checkAndNotify(PHANTASIALAND, ["ride-1"], NOW_MS);
+
+      expect(pushService.send).not.toHaveBeenCalled();
+      // Armed and unstamped: the check sits BEFORE the disarm, so the next
+      // crossing after 07:00 carries a wait time read then rather than this
+      // one held back and delivered late. `lastTriggeredAt` matters too — the
+      // day-boundary re-arm above reads it.
+      expect(alertRows.get("alert-1")!.armed).toBe(true);
+      expect(alertRows.get("alert-1")!.lastTriggeredAt).toBeNull();
+    });
+
+    it("sends to a subscriber whose stored zone is the park's own", async () => {
+      // The counter-check for the case above: 14:00 in Berlin is not quiet,
+      // and the two differ in nothing but the zone.
+      alertRows.set("alert-1", alert({ thresholdMinutes: 20, armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+        new Map([["ride-1", standbyReading({ waitTime: 12 })]]),
+      );
+      pushService.findByIds.mockResolvedValueOnce(
+        new Map([
+          ["sub-1", { id: "sub-1", locale: "de", timezone: "Europe/Berlin" }],
+        ]),
+      );
+
+      await service.checkAndNotify(PHANTASIALAND, ["ride-1"], NOW_MS);
+
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+      expect(alertRows.get("alert-1")!.armed).toBe(false);
+    });
+
     it("never throws — a bad reading must not fail the park's poll cycle", async () => {
       alertRows.set("alert-1", alert());
       queueDataService.findCurrentStatusByAttractionIds.mockRejectedValueOnce(

@@ -8,6 +8,7 @@ import { PushService } from "../../push/push.service";
 import { TripsService } from "../../trips/trips.service";
 import { isPushConfigured } from "../../push/push-config";
 import { dueNotifications } from "../../push/notification-planner";
+import { isWithinQuietHours } from "../../push/quiet-hours";
 import { writeMessage } from "../../push/push-messages";
 import { ShowFollowsService } from "../../show-follows/show-follows.service";
 import { ShowFollow } from "../../show-follows/entities/show-follow.entity";
@@ -174,6 +175,13 @@ export class PushNotificationProcessor {
         if (due.length === 0) continue;
 
         for (const subscription of subscriptions) {
+          // Before the dedupe marker, not after, and deliberately without
+          // writing one: a block that was due at 03:00 is not due at 07:00,
+          // so `dueNotifications` stops offering it once its 10-20 minute
+          // lead window has passed and there is nothing left to suppress. A
+          // marker here would only cost a Redis write for an event that
+          // cannot come back.
+          if (isWithinQuietHours(subscription.timezone, startedMs)) continue;
           for (const notification of due) {
             if (!subscription.topics?.includes(notification.topic)) continue;
             if (
@@ -279,6 +287,7 @@ export class PushNotificationProcessor {
             task.notification,
             task.follow,
             subscriptions,
+            startedMs,
           ),
         ),
       );
@@ -300,9 +309,15 @@ export class PushNotificationProcessor {
     notification: DueShowNotification,
     follow: ShowFollow,
     subscriptions: Map<string, PushSubscription>,
+    nowMs: number,
   ): Promise<boolean> {
     const subscription = subscriptions.get(follow.subscriptionId);
     if (!subscription) return false;
+    // Same place and the same reasoning as the trip half: before the dedupe
+    // marker, and without writing one. A performance the subscriber slept
+    // through leaves `dueShowNotifications`' lead window (25-35 minutes, or
+    // 8-14 for the late reminder) on its own.
+    if (isWithinQuietHours(subscription.timezone, nowMs)) return false;
     if (await this.alreadySent(subscription.endpoint, notification.dedupeKey)) {
       return false;
     }

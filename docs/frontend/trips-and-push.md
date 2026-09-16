@@ -171,6 +171,37 @@ ticks every five minutes — so a block is seen on two or three consecutive runs
 one missed run costs nothing. The duplicate that implies is absorbed by a Redis
 marker per (endpoint, event) and, failing that, by the `tag` on the device.
 
+### Quiet hours
+
+**Nothing is sent between 23:00 and 07:00 in the subscriber's own timezone** —
+the `timezone` sent on subscribe, never the park's. All three features are
+covered, because the window is read at each trigger rather than in one shared
+send function.
+
+The window exists for one case, and it is not "the job runs through the night".
+Every trigger here fires inside the **park's** opening hours: `next-up` ten
+minutes before a block, a show reminder before a performance, a ride alert only
+off an `OPERATING` reading. What it is for is the subscriber who is not where
+the park is — a Magic Kingdom plan read on a phone in Berlin puts a 21:00 block
+at 03:00.
+
+22:00–08:00 was the obvious pair and was rejected: a park open until 23:00 would
+cut itself on a 22:00 floor and the visitor standing in it would lose the last
+hour of "your next block starts in ten minutes", which is the hour it is worth
+most. Boundaries in `push/quiet-hours.ts`.
+
+**Held back means dropped, not deferred.** A trip and a show reminder leave
+their lead windows on their own (10–20 minutes, 25–35 or 8–14) and no dedupe
+marker is written for them, so nothing arrives at 07:00 about a moment that has
+passed. A **ride alert keeps its `armed` row** instead, because it asks a
+standing question about a queue rather than naming a moment: what fires after
+the window is a fresh crossing with a wait time read then.
+
+**No stored zone means send.** The column is nullable, the frontend writes it on
+every subscribe, so the rows without one are old rows rather than subscribers
+whose zone is unknown for a reason — and suppressing those would be silence with
+nothing to explain it. A zone this deploy cannot resolve gets the same answer.
+
 ## 4. Ride alerts (`/v1/push/ride-alerts`)
 
 A visitor watches an attraction and asks to be told once its STANDBY wait

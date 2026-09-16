@@ -6,6 +6,55 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added — quiet hours, in the subscriber's timezone rather than the park's
+
+`push_subscriptions.timezone` has been written on every subscribe since
+`510a6c3` and had never been read: every timezone calculation in the send path
+took `park.timezone` or `show.timezone`, and the language came from
+`subscription.locale`. Nothing suppressed a notification by the hour at all
+(`grep -rniE "quiet.?hours|do not disturb|dnd" src/` found nothing).
+
+**23:00–07:00, read where the subscriber is** (Patrick, 2026-09-15). 22:00–08:00
+is the usual pair and cuts into a park open until 23:00, taking the last hour of
+"your next block starts in ten minutes" from the visitor standing in it; the
+03:00 case is shut either way.
+
+That case is the only one there is. All three triggers fire inside the **park's**
+opening hours — `next-up` ten minutes before a block, a show reminder before a
+performance, a ride alert only off an `OPERATING` reading — so this is not about
+a job running overnight. It is about a Magic Kingdom plan read on a phone in
+Berlin, where a 21:00 block is 03:00.
+
+The boundaries and the predicate are one pure file, `push/quiet-hours.ts`, with
+no database and no `Date.now()` of its own, like `notification-planner.ts` beside
+it. Reading the wall-clock hour rather than an offset is what makes it right
+across a DST change without a rule for it: 05:30 UTC is 06:30 in Berlin in
+January and 07:30 in July, and the verdict follows the clock the subscriber
+looks at.
+
+**It is read at each trigger, before that trigger's state change — never inside
+`PushService.send`.** A refusal there would reach `RideAlertsService.sendTrigger`
+as `sent === false`, which re-arms, so the row would be written twice and
+`lastTriggeredAt` stamped for a notification that never went out — and the
+day-boundary re-arm reads that column. So: the trip half checks before its Redis
+dedupe marker, the show-follow half before the same, and the ride alert before
+its disarm compare-and-swap.
+
+**Held back means dropped, not deferred**, and the two kinds differ for a
+reason. A trip block and a show reminder leave their lead windows on their own
+(10–20 minutes, 25–35 or 8–14), so no marker is written and nothing arrives at
+07:00 about a moment that has passed. A ride alert keeps its `armed` row,
+because it is a standing question about a queue rather than an event with a
+timestamp: what fires after the window is a fresh crossing carrying a wait time
+read then, not the 03:00 one delivered late.
+
+**No stored zone means send.** The column is nullable, the frontend writes it on
+every subscribe, so the null set is old rows rather than subscribers whose zone
+is unknown for a reason; suppressing them would be silence with nothing to
+explain it. A zone this Node build cannot resolve gets the same answer —
+`formatInTimeZone` throws on an unknown IANA name, and a throw inside the
+five-minute job stops it notifying everybody else.
+
 ### Fixed — a park that loses twice in one `autoDetect` run no longer disowns the merge that worked
 
 `ParkRepairService.repairDuplicates` reported failures as `{ parkId, error }` —

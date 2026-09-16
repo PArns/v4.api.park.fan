@@ -12,6 +12,7 @@ import { Park } from "../parks/entities/park.entity";
 import { PushSubscription } from "../push/entities/push-subscription.entity";
 import { PushService } from "../push/push.service";
 import { writeRideAlertMessage } from "../push/push-messages";
+import { isWithinQuietHours } from "../push/quiet-hours";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import {
@@ -290,7 +291,13 @@ export class RideAlertsService {
         const batch = triggers.slice(i, i + RideAlertsService.SEND_BATCH_SIZE);
         await Promise.allSettled(
           batch.map((trigger) =>
-            this.sendTrigger(trigger, subscriptions, attractionById, park),
+            this.sendTrigger(
+              trigger,
+              subscriptions,
+              attractionById,
+              park,
+              nowMs,
+            ),
           ),
         );
       }
@@ -363,15 +370,28 @@ export class RideAlertsService {
     subscriptions: Map<string, PushSubscription>,
     attractionById: Map<string, Attraction>,
     park: ParkForRideAlertCheck,
+    nowMs: number,
   ): Promise<void> {
     try {
+      const subscription = subscriptions.get(trigger.subscriptionId);
+      // Quiet hours are answered BEFORE the disarm, so the alert stays armed
+      // and the row keeps the `lastTriggeredAt` it had. What fires after the
+      // window is then a fresh crossing with a current number rather than the
+      // 03:00 one held back and delivered late — a ride alert is a standing
+      // question about a queue, not an event with a timestamp. Checking it
+      // inside `PushService.send` instead would land as `sent === false`, and
+      // the re-arm below would write the row twice and stamp a trigger that
+      // never went out.
+      if (subscription && isWithinQuietHours(subscription.timezone, nowMs)) {
+        return;
+      }
+
       const result = await this.repository.update(
         { id: trigger.alertId, armed: true },
         { armed: false, lastTriggeredAt: new Date() },
       );
       if (!result.affected) return;
 
-      const subscription = subscriptions.get(trigger.subscriptionId);
       if (!subscription) return;
       const attraction = attractionById.get(trigger.attractionId);
       if (!attraction) return;
