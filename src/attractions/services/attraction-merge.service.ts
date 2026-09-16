@@ -575,6 +575,17 @@ export class AttractionMergeService {
     "curatedAttractionType",
     "curatedIsSeasonal",
     "curatedSeasonMonths",
+    // The works period, on the rule above: it is written by an editor and by
+    // nobody else, so a merge that dropped it would lose the only copy. Note
+    // that this loop fills column by column, not window by window — a winner
+    // holding a start and no end can take the loser's end, and the estimate
+    // flag can arrive without the date it qualifies. Neither is served wrong
+    // (`resolveWorksPeriod()` drops a flag with no `to`), and pairing the
+    // inheritance is the same open question `curatedIsSeasonal` /
+    // `curatedSeasonMonths` have had here all along.
+    "curatedOutOfServiceFrom",
+    "curatedOutOfServiceTo",
+    "curatedOutOfServiceToUncertain",
     "retiredAt",
     "retiredReason",
     "hasSingleRider",

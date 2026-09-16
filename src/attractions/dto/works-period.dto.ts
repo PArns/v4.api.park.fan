@@ -1,4 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
+import type { WorksPeriod } from "../utils/curated-out-of-service.util";
 
 /**
  * A hand-written works period: the rebuild or refit a ride is closed for.
@@ -27,13 +28,16 @@ import { ApiProperty } from "@nestjs/swagger";
  * above, while one wanting "reopens 3 March" reads `to` on a window that has
  * not started.
  *
- * Not declared `implements WorksPeriod`: the two keys are optional here because
- * the interceptor strips their nulls, and the interface's are not, since every
- * object this codebase builds carries them. The link that matters is checked
- * anyway — `resolveWorksPeriod()`'s result is assigned to this type at both
- * mappers, so a renamed or retyped field is a compile error there.
+ * The keys stay REQUIRED in TypeScript and are `required: false` in the
+ * published schema, and the two say different things on purpose. Every object
+ * this codebase builds carries all three keys, so an internal reader may read
+ * them; a client reads the schema, and on the wire a null key is gone, because
+ * `ExcludeNullInterceptor` strips null-valued keys outside `/v1/admin/*`.
+ * Keeping them required is also what makes `implements WorksPeriod` a real
+ * check: optional keys would let a renamed field satisfy the interface, and
+ * the resolver could then drift from the schema without a compile error.
  */
-export class WorksPeriodDto {
+export class WorksPeriodDto implements WorksPeriod {
   @ApiProperty({
     description:
       "First park-local day of the works period, inclusive. Absent for a " +
@@ -44,7 +48,7 @@ export class WorksPeriodDto {
     required: false,
     nullable: true,
   })
-  from?: string | null;
+  from: string | null;
 
   @ApiProperty({
     description:
@@ -55,7 +59,7 @@ export class WorksPeriodDto {
     required: false,
     nullable: true,
   })
-  to?: string | null;
+  to: string | null;
 
   @ApiProperty({
     description:
