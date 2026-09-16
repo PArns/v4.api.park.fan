@@ -461,15 +461,47 @@ describe("ParksService", () => {
       );
     });
 
-    it("refuses a cached row whose date cannot be read, instead of naming a wrong day", async () => {
-      arrange("America/Los_Angeles", []);
-      mockRedis.get.mockResolvedValue(
-        JSON.stringify([{ id: "row-1", parkId, openingTime: null }]),
-      );
+    // `new Date(null)`, `new Date(0)` and `new Date(false)` are the epoch, not
+    // an Invalid Date, so a coercing reader turns an absent day into
+    // 1970-01-01 and hands back a row that quietly matches nothing. None of
+    // these can reach Redis today — `date` is NOT NULL and every writer
+    // stringifies a database row — so what is pinned here is the rule, not a
+    // population: a value that does not name a day is a cache miss.
+    it.each([
+      ["a missing date", undefined],
+      ["a null date", null],
+      ["a numeric date", 0],
+      ["a boolean date", false],
+      ["an empty string", ""],
+      ["a timestamp that is not a day", "not-a-date"],
+    ])(
+      "treats %s in a cached row as a miss and rebuilds from the database",
+      async (_label, date) => {
+        const row = dbRow("America/Los_Angeles");
+        arrange("America/Los_Angeles", [row]);
+        mockRedis.get.mockResolvedValue(
+          JSON.stringify([{ ...row, date, openingTime: null }]),
+        );
 
-      await expect(
-        service.getTodaySchedule(parkId, "America/Los_Angeles"),
-      ).rejects.toThrow(/no readable date/);
+        const result = await service.getTodaySchedule(
+          parkId,
+          "America/Los_Angeles",
+        );
+
+        // The database row, not 1970-01-01 and not a throw.
+        expect(result).toHaveLength(1);
+        expect(result[0].date).toBe(row.date);
+      },
+    );
+
+    it("keeps a cached `null` as the negative result it is, not as a corrupt entry", async () => {
+      arrange("America/Los_Angeles", []);
+      mockRedis.get.mockResolvedValue("null");
+
+      // "no upcoming operating day" is an answer, and re-querying for it on
+      // every request is what the negative cache exists to avoid.
+      await expect(service.getNextSchedule(parkId)).resolves.toBeNull();
+      expect(mockScheduleRepository.createQueryBuilder).not.toHaveBeenCalled();
     });
   });
 
