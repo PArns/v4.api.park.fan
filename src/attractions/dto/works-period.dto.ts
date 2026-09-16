@@ -28,11 +28,13 @@ import type { WorksPeriod } from "../utils/curated-out-of-service.util";
  * above, while one wanting "reopens 3 March" reads `to` on a window that has
  * not started.
  *
- * The keys stay REQUIRED in TypeScript and are `required: false` in the
+ * `from` and `to` stay REQUIRED in TypeScript and are `required: false` in the
  * published schema, and the two say different things on purpose. Every object
  * this codebase builds carries all three keys, so an internal reader may read
  * them; a client reads the schema, and on the wire a null key is gone, because
  * `ExcludeNullInterceptor` strips null-valued keys outside `/v1/admin/*`.
+ * `toUncertain` is required in both, since it is never null and therefore
+ * never stripped — `false` is a value and travels.
  * `implements WorksPeriod` catches a renamed field either way (TS2420). What
  * the required declaration buys on top is narrower and worth having: it keeps
  * `undefined` out of the property type, so the class cannot quietly widen to
