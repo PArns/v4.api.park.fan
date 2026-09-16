@@ -226,6 +226,14 @@ export class DataQualityMonitorService {
    * claiming days nobody can confirm. Until one of them happens the
    * contradiction is still there, and five WARN lines a day is what it costs.
    *
+   * A third exit exists and this query does not know about it: a park written
+   * into `PARKS_WITHOUT_LIVE_WAIT_TIMES` is explained rather than broken, and
+   * would still be reported here every night. No park in that list is silent
+   * today — Hansa-Park's upstream publishes a row per attraction, so it never
+   * reaches this — and reading a curated TypeScript array from SQL is a worse
+   * trade than the line it would save. It is the first thing to change if the
+   * list grows a park whose feed also stops.
+   *
    * @param minDaysSilent Days without an observed reading before a park counts.
    * @param lookaheadDays How far ahead an operating day has to be published.
    */

@@ -777,6 +777,11 @@ export class ParkIntegrationService {
         if (attraction.effectiveStatus === "CLOSED") {
           crowdLevel = "closed";
         } else if (!waitTimesKnowable) {
+          // A free-flow ride reaches this branch too, and comes out `unknown`
+          // while the same ride at a healthy park is rated against its
+          // synthetic 0-minute queue. That is the right way round: the flag
+          // says the gate is open, not that nobody is inside.
+          //
           // No source → no wait → nothing to rate against the baseline. Without
           // this the chain below falls through both branches to the last-resort
           // default and rates every ride in the park `very_low`, which reads as
@@ -1349,13 +1354,20 @@ export class ParkIntegrationService {
       }
     }
 
-    // A park with no readable source contributes no wait times to any of the
-    // aggregates above, so each of them is the shape a division by an empty set
-    // takes rather than a reading: Ø 0 min, peak 0 min, and — because the closed
-    // branch hard-codes it and the live branch has nothing to rate — `very_low`
-    // crowds, on a park that may be at capacity. `totalAttractions` survives —
-    // the catalog is real — and the wait-derived claims do not.
+    // A park with no readable source — or one whose feed has said nothing for
+    // thirty days — contributes no wait times to any of the aggregates above,
+    // so each of them is the shape a division by an empty set takes rather than
+    // a reading: Ø 0 min, peak 0 min, and — because the closed branch hard-codes
+    // it and the live branch has nothing to rate — `very_low` crowds, on a park
+    // that may be at capacity.
     //
+    // What this block withholds is the three claims that read as a judgement:
+    // the crowd tier, the peak hour and the "typical day" distribution, plus
+    // `closedAttractions` below. It does NOT touch `avgWaitTime`,
+    // `avgWaitToday`, `peakWaitToday` or the `occupancy` object, which still
+    // serve their empty-set zeroes — "0 min, much quieter than typical" at a
+    // park nobody has read since June. That gap predates this change and is
+    // PAR-298; it is named here rather than widened into this one.
     if (dto.analytics && !waitTimesKnowable) {
       dto.analytics.statistics = {
         ...dto.analytics.statistics,

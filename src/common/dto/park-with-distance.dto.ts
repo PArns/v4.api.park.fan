@@ -54,8 +54,8 @@ export class ParkWithDistanceDto {
       "an aggregate over nothing rather than a quiet park. `true` is not the " +
       "same as 'we have data': a park whose feed has gone silent keeps this " +
       "flag, because it is a statement about the source and not about the " +
-      "last 30 days. Read `attractions[].status` for that — every ride of " +
-      "such a park is UNKNOWN.",
+      "last 30 days — the park detail endpoint is where that shows, as an " +
+      "UNKNOWN status per ride.",
     type: LiveWaitTimesDto,
   })
   liveWaitTimes: LiveWaitTimesDto;

@@ -1142,13 +1142,20 @@ ran: three caught throws leave three empty lists, and an empty list is what
 with more output.
 
 **What this change does not touch.** The ride's own endpoint
-(`AttractionIntegrationService`), the favourites list and `/location` still gate
-on `waitTimesReadable` alone, so a silent park's ride still answers `CLOSED` on
-its own page and still carries its hourly forecast. That is a narrower
-contradiction than the one removed — `UNKNOWN` against `CLOSED` rather than
-`OPERATING` against `CLOSED` — but it is one, and it is deliberately left for its
-own issue rather than widened into this one: each of those paths would need its
-own park-level probe.
+(`AttractionIntegrationService`), the favourites list, `/location` and the park
+list (`ParkEnrichmentService`, which serves the attraction counters with no gate
+at all) still read `waitTimesReadable` alone, so a silent park's ride still
+answers `CLOSED` on its own page and still carries its hourly forecast. That is a
+narrower contradiction than the one removed — `UNKNOWN` against `CLOSED` rather
+than `OPERATING` against `CLOSED` — but it is one, and it is deliberately left
+for its own issue rather than widened into this one: each of those paths would
+need its own park-level probe.
+
+The withholding block itself covers three claims and not every wait-derived one:
+`avgWaitTime`, `avgWaitToday`, `peakWaitToday` and `occupancy` keep their
+empty-set zeroes, so a silent park still reads "0 min, much quieter than
+typical". That gap is older than this change — it already applied to the one
+curated no-wait-times park — and is [PAR-298](<https://linear.app/parkfan/issue/PAR-298>).
 
 Measured against production on 2026-09-16. The detector runs in **1.2 s**. The
 per-request probe costs 1.8 ms at Europa-Park, where the first row

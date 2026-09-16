@@ -900,7 +900,9 @@ export class QueueDataService {
    * already pays. The response behind it is cached, but not for long while the
    * probe matters: `calculateDynamicTTL` gives an OPERATING park the seconds to
    * the next five-minute boundary, and OPERATING is the only state in which
-   * this changes an answer.
+   * this changes a ride's status. (The park's own statistics read the same flag
+   * whatever the park is doing, so a CLOSED silent park is affected too — but
+   * its response is cached until shortly before it opens.)
    */
   async hasObservedReadingWithin(
     parkId: string,

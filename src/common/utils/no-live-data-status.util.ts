@@ -52,7 +52,9 @@
  *
  * `ParkIntegrationService` reads it; the rides of a silent park go to UNKNOWN,
  * the same place a park with no readable source sends them, and never reach the
- * fallback below.
+ * fallback below. Free-flow rides are the exception, as they are everywhere
+ * else: a playground opens on a curated flag and the park's schedule, neither
+ * of which is a wait time.
  */
 export const PARK_FEED_SILENT_DAYS = 30;
 

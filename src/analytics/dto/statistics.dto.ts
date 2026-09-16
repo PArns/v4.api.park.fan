@@ -95,19 +95,21 @@ export class ParkStatisticsDto {
 
   @ApiProperty({
     description:
-      "Number of attractions KNOWN to be operating. Where the park's waits " +
-      "are unknowable — no readable source, or a feed silent for 30 days — " +
-      "this counts only the rides a curated flag opens with the park.",
+      "Number of attractions counted as operating. What that means depends on " +
+      "the endpoint: the park detail payload counts only rides it KNOWS are " +
+      "running, which at a park with no readable source is none, and at a park " +
+      "whose feed has been silent for 30 days is the free-flow rides alone.",
     example: 42,
   })
   operatingAttractions: number;
 
   @ApiProperty({
     description:
-      "Number of attractions KNOWN to be closed. `total = operating + closed` " +
-      "does NOT hold in general: at an open park whose waits are unknowable " +
-      "this is 0 and the remainder is the rides nobody can speak for, which " +
-      "`attractions[].status` reports as UNKNOWN.",
+      "Number of attractions counted as closed. `total = operating + closed` " +
+      "holds wherever this is derived from the analytics service, but NOT in " +
+      "the park detail payload: at an open park whose wait times are " +
+      "unknowable it reports 0 there, and the remainder is the rides nobody " +
+      "can speak for.",
     example: 3,
   })
   closedAttractions: number;
