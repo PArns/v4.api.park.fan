@@ -287,7 +287,21 @@ WITH ${sharedCtes()},
              SELECT SUM(${overlapMinutesSql("s.started_at", "s.down_until", "w.opens_at", "w.closes_at")})
                FROM win w WHERE w.park_id = s.pid
            ), 0) AS spell_open_minutes,
-           EXTRACT(EPOCH FROM (s.down_until - s.started_at)) / 60.0 AS wall_minutes
+           EXTRACT(EPOCH FROM (s.down_until - s.started_at)) / 60.0 AS wall_minutes,
+           -- The operating day this interval STARTED on, so the per-day start
+           -- count keys against the exposure table exactly. Not the calendar
+           -- date of started_at: a park closing at 02:00 puts a 00:30 outage on
+           -- the PREVIOUS operating day, and a calendar key would file the start
+           -- under a day the exposure table has no row for.
+           --
+           -- A column rather than a subquery in the SELECT list because the
+           -- curated works-period filter below asks the same question, and a
+           -- WHERE clause cannot read a select alias. Two copies of the subquery
+           -- would be two chances to drift.
+           (SELECT MIN(w.op_day) FROM win w
+             WHERE w.park_id = s.pid
+               AND w.opens_at  < s.down_until
+               AND w.closes_at > s.started_at) AS start_op_day
       FROM spells s
       LEFT JOIN seg_minutes sm ON sm.aid = s.aid AND sm.spell = s.spell
   ),
@@ -323,21 +337,30 @@ SELECT c.aid                                   AS "attractionId",
        (c.wall_minutes > ${MAX_OUTAGE_DAYS} * 24 * 60) AS "likelyWorksPeriod",
        LEAST(c.rows_in_spell, 32767)::smallint  AS "rowsInSpell",
        LEAST(c.heartbeat_rows, 32767)::smallint AS "heartbeatRows",
-       -- The operating day this interval STARTED on, so the per-day start count
-       -- keys against the exposure table exactly. Not the calendar date of
-       -- started_at: a park closing at 02:00 puts a 00:30 outage on the
-       -- PREVIOUS operating day, and a calendar key would file the start under a
-       -- day the exposure table has no row for.
-       (SELECT MIN(w.op_day) FROM win w
-         WHERE w.park_id = c.pid
-           AND w.opens_at < c.down_until
-           AND w.closes_at > c.started_at)    AS "startOpDay"
+       c.start_op_day                          AS "startOpDay"
   FROM classified c
  WHERE c.operating_minutes >= ${MIN_OUTAGE_OPERATING_MINUTES}
+   -- Asked about the interval's OPERATING day, the same key the row is written
+   -- under. An editor declaring "16 January to 3 March" means the park's
+   -- operating days, and those are not the calendar dates of started_at
+   -- whenever the window an interval belongs to is not the one its start date
+   -- names. Two shapes, and the first is 98 % of them (measured 2026-09-16 over
+   -- the stored history: 1009 and 23 of 163 969 intervals):
+   --
+   --   * A ride that fails after closing time, anywhere. start_op_day takes the
+   --     lowest window the interval OVERLAPS, and an evening already shut is
+   --     not one, so a 22:00 failure still down next morning is filed under the
+   --     morning — operating day LATER than its date.
+   --   * A park that closes after midnight. A 00:30 breakdown belongs to the
+   --     evening before, so its operating day is EARLIER than its date.
+   --
+   -- Either way the calendar date asks the window about a day the row is not
+   -- filed under, and it errs in both directions: an interval inside a declared
+   -- works period escaped it, and one outside a period was excluded by it.
    AND NOT EXISTS (
      SELECT 1 FROM attractions a
       WHERE a.id = c.aid
-        AND ${attractionIsCuratedOutOfService("a", "(c.started_at AT TIME ZONE c.tz)::date")}
+        AND ${attractionIsCuratedOutOfService("a", "c.start_op_day")}
    )
  ORDER BY c.pid, c.aid, c.started_at
 `;

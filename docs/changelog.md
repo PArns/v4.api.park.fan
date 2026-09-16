@@ -221,6 +221,75 @@ park payload beside its own replacement.
 
 Details: `docs/architecture/attraction-status-and-seasonality.md` §5.7.
 
+
+### Fixed — the curated works window is asked about the outage's operating day
+
+`OUTAGE_INTERVALS_SQL` files every interval under the operating day of the
+window that contains it, and emits that day as `startOpDay` so the per-day start
+count keys into `attraction_exposure_days` exactly. The curated works-period
+exclusion two lines below it asked a different question: the calendar date of
+`started_at`.
+
+The two differ whenever the window an interval belongs to is not the one its
+start date names, and that is **two** shapes, not one. Measured over the stored
+history on 2026-09-16 — 1,032 of 163,969 intervals in 51 parks have an operating
+day that differs from their calendar date, and they split as:
+
+| shape | intervals | parks |
+| --- | --- | --- |
+| a ride that breaks **after closing time**, operating day LATER | 1,009 | 51 |
+| a park that closes **after midnight**, operating day EARLIER | 23 | 2 |
+
+Every park figure is `count(DISTINCT parks.id)`, and the union is 51 rather than
+53 because both wrap parks also carry an after-hours interval. A first pass
+grouped on `parks.name` and reported 50 for the union, below the 51 of a subset:
+names are not unique in this catalogue, which is the trap
+`docs/architecture/attraction-status-and-seasonality.md` sets out for the same
+query shape — "Group by `p.id`, never `p.slug` or `p.name`".
+
+- **After closing time, anywhere.** `startOpDay` takes the lowest window the
+  interval OVERLAPS, and an evening that has already shut is not one — so a ride
+  failing at 22:00 and still down the next morning is filed under the morning,
+  while `started_at` is on the evening's date. No midnight wrap is involved, and
+  this is 98 % of the population.
+- **A park that closes after midnight.** The shape the ticket describes. A 00:30
+  breakdown belongs to the previous evening's operating day, so an editor's
+  window declared for that day ends one calendar date before the outage's. It is
+  the rarer of the two by a factor of 44, and it is not empty:
+  `closure-gap-operating-day.e2e-spec.ts` records that every wrap day in the 30
+  days to 2026-09-15 closes at exactly 00:00, which cannot produce a divergence
+  — over the full retention 23 intervals land on wrap days that do. How many
+  such days there are is not measured.
+
+**And it cuts both ways, in both shapes.** The calendar date asks the window
+about a day the row is not filed under, and which error that produces turns on
+one thing only: **which of the two days falls inside the declared period.**
+Operating day in and calendar date out, and the interval escapes an exclusion it
+had earned. Calendar date in and operating day out, and it is excluded although
+its own day lies outside the period. Neither belongs to a shape — the e2e file
+pins one of each, and both declare a window on the fixtures' first day
+(2026-06-15): the wrap lands its operating day inside it, the after-hours
+failure lands its calendar date there.
+
+Nothing had reported any of it because the population that can show it is empty:
+no attraction carries `curated_out_of_service_from`/`_to` today, so the
+predicate's opening `IS NOT NULL` disjunction is false for every row, the filter
+excludes nobody, and both readings keep every interval. The bug was waiting on
+the first editor.
+
+`startOpDay` moves out of the SELECT list into a `start_op_day` column on the
+`measured` CTE — a `WHERE` cannot read a select alias, and two copies of the
+subquery are two chances to drift apart again, which is how this one started.
+`MIN(w.op_day)` now appears exactly once in the statement, and a shape spec
+pins that.
+
+The proof is a container rather than a query: `test/e2e/outage-curated-window-operating-day.e2e-spec.ts`
+builds the 10:00 → 02:00 park production does not currently hold, and the
+after-hours shape beside it, each with a declared window. Nine cases separate
+"the filter moved" from "the filter was switched off" — a window on the calendar
+date alone must NOT exclude, and an ordinary same-day outage under a window on
+its own day must still be.
+
 ### Fixed — a field a handler attaches to an error body now reaches the client
 
 `HttpExceptionFilter` is global and builds the error response itself, which is
