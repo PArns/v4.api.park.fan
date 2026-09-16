@@ -7,8 +7,10 @@ import { getDatabaseConfig } from "../../src/config/database.config";
 import { LIVE_STATS_SQL } from "../../src/discovery/discovery.service";
 import { Attraction } from "../../src/attractions/entities/attraction.entity";
 import { QueueData } from "../../src/queue-data/entities/queue-data.entity";
-import { LiveStatus } from "../../src/external-apis/themeparks/themeparks.types";
-import { createTestQueueData } from "../fixtures/queue-data.fixtures";
+import {
+  LiveStatus,
+  QueueType,
+} from "../../src/external-apis/themeparks/themeparks.types";
 import { seedMinimalTestData, clearTestData } from "../helpers/seed-test-data";
 import { randomUUID } from "node:crypto";
 
@@ -56,15 +58,20 @@ describe("LIVE_STATS_SQL — retired attractions (E2E)", () => {
    * predicate that guards `operatingAttractions` / `closedAttractions`.
    */
   async function addReading(attractionId: string, status: LiveStatus) {
-    await dataSource.getRepository(QueueData).save(
-      createTestQueueData(attractionId, {
-        id: randomUUID(),
-        status,
-        waitTime: status === LiveStatus.OPERATING ? 30 : 0,
-        timestamp: new Date(),
-        lastUpdated: new Date(),
-      }),
-    );
+    // Built here rather than via `test/fixtures/queue-data.fixtures.ts`:
+    // importing that file pulls in type errors it already carries on main,
+    // and this spec has no business fixing them.
+    const row = new QueueData();
+    Object.assign(row, {
+      id: randomUUID(),
+      attractionId,
+      queueType: QueueType.STANDBY,
+      status,
+      waitTime: status === LiveStatus.OPERATING ? 30 : 0,
+      timestamp: new Date(),
+      lastUpdated: new Date(),
+    });
+    await dataSource.getRepository(QueueData).save(row);
   }
 
   async function retire(attractionId: string) {
