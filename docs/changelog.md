@@ -40,9 +40,9 @@ subquery behind `attractionCount`, and the `latest_attraction_data` CTE behind
 than from the CTE's own `operating_conf_count`. That column is parsed into
 `ParkLiveStats` and never read by anything (noted on PAR-296).
 
-The CTE's predicate is not redundant with the write side, which is what the
-first draft of this entry claimed. Polling and reverse-reconciliation do skip
-retired rows, but `writeHourlyHeartbeats` reads **every** attraction and carries
+The CTE's predicate is not redundant with the write side. Polling and
+reverse-reconciliation do skip retired rows, but `writeHourlyHeartbeats` reads
+**every** attraction and carries
 the last reading forward hourly while the park is open, for as long as the
 ride's Redis last-seen key is under the 24-hour staleness threshold — so a
 retired ride stays eligible to re-enter the 30-minute window for up to a day
