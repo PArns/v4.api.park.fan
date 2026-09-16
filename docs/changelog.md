@@ -66,11 +66,16 @@ same silent failure as the one above, so it goes with this change rather than
 after it. The controller now tells "not sent" (preserve) from "sent, unusable"
 (clear) instead of collapsing both into `null`.
 
-**Suppressions are counted**, per half in the trip log line and per follower on
-the show side, with a debug line for a held-back ride alert. Nothing else can
-tell "the window is doing its job" from "the job is broken": both look like
+**Suppressions are counted and logged**, once per tick in each half of the
+notification job and once per park cycle for ride alerts. Nothing else can tell
+"the window is doing its job" from "the job is broken": both look like
 notifications that stopped arriving, and the existing log line only ever ran
-when something WAS sent.
+when something WAS sent. At `log` rather than `debug`, because `main.ts`
+defaults the level to `log` and no deployment sets `LOG_LEVEL` — a debug line
+would have left a held-back alert exactly as traceless as the failure it has to
+be distinguished from. Aggregated rather than written per alert: a held ride
+alert keeps its armed row, so the same trigger returns every five minutes until
+the window ends.
 
 **Two limits, named rather than left to be found.** The stored zone is the one
 the browser last sent, not where the phone is now — the frontend writes it on

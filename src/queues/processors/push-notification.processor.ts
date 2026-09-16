@@ -169,10 +169,15 @@ export class PushNotificationProcessor {
     // is the only symptom either produces, and the log line below only ever
     // ran when something WAS sent.
     //
-    // Subscribers rather than notifications, so the number is exactly true.
-    // Counting the due list would count entries this subscriber does not hold
-    // the topic for, and entries already marked sent on an earlier tick —
-    // neither of which the window held back.
+    // Subscribers with something they would actually have been sent, rather
+    // than the length of the due list — which counts entries this subscriber
+    // holds no topic for, and the window held none of those back.
+    //
+    // It is an upper bound rather than an exact count, and the residual is
+    // named rather than papered over: an entry already marked sent on an
+    // earlier tick still counts here, because the marker is a Redis read and
+    // the whole point of this check's placement is to answer before that read
+    // happens. Buying exactness would cost the ordering.
     let quiet = 0;
     try {
       for (const [tripId, subscriptions] of byTrip) {
@@ -192,7 +197,9 @@ export class PushNotificationProcessor {
           // marker here would only cost a Redis write for an event that
           // cannot come back.
           if (isWithinQuietHours(subscription.timezone, startedMs)) {
-            quiet += 1;
+            if (due.some((n) => subscription.topics?.includes(n.topic))) {
+              quiet += 1;
+            }
             continue;
           }
           for (const notification of due) {
