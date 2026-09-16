@@ -6,7 +6,11 @@ import { DataSource } from "typeorm";
 import { getDatabaseConfig } from "../../src/config/database.config";
 import { LIVE_STATS_SQL } from "../../src/discovery/discovery.service";
 import { Attraction } from "../../src/attractions/entities/attraction.entity";
+import { QueueData } from "../../src/queue-data/entities/queue-data.entity";
+import { LiveStatus } from "../../src/external-apis/themeparks/themeparks.types";
+import { createTestQueueData } from "../fixtures/queue-data.fixtures";
 import { seedMinimalTestData, clearTestData } from "../helpers/seed-test-data";
+import { randomUUID } from "node:crypto";
 
 /**
  * PAR-233. `LIVE_STATS_SQL` is the geo listing's counter, and it counted
@@ -25,16 +29,49 @@ describe("LIVE_STATS_SQL — retired attractions (E2E)", () => {
   let app: INestApplication;
   let dataSource: DataSource;
 
-  type LiveStatsRow = { id: string; total_attractions: number };
+  type LiveStatsRow = {
+    id: string;
+    total_attractions: number;
+    operating_conf_count: number;
+    explicitly_closed_count: number;
+  };
 
-  async function totalFor(parkId: string): Promise<number> {
+  async function statsFor(parkId: string): Promise<LiveStatsRow> {
     const rows: LiveStatsRow[] = await dataSource.query(LIVE_STATS_SQL);
     const row = rows.find((r) => r.id === parkId);
     // The query LEFT JOINs from `parks`, so every seeded park has a row even
     // with no rides at all. A missing row means the shape changed, not that
     // the count is zero.
     expect(row).toBeDefined();
-    return Number(row!.total_attractions);
+    return row!;
+  }
+
+  async function totalFor(parkId: string): Promise<number> {
+    return Number((await statsFor(parkId)).total_attractions);
+  }
+
+  /**
+   * A reading inside the CTE's 30-minute window. That window is the only way
+   * into `latest_attraction_data`, and therefore the only way to reach the
+   * predicate that guards `operatingAttractions` / `closedAttractions`.
+   */
+  async function addReading(attractionId: string, status: LiveStatus) {
+    await dataSource.getRepository(QueueData).save(
+      createTestQueueData(attractionId, {
+        id: randomUUID(),
+        status,
+        waitTime: status === LiveStatus.OPERATING ? 30 : 0,
+        timestamp: new Date(),
+        lastUpdated: new Date(),
+      }),
+    );
+  }
+
+  async function retire(attractionId: string) {
+    const result = await dataSource
+      .getRepository(Attraction)
+      .update({ id: attractionId }, { retiredAt: new Date() });
+    expect(result.affected).toBe(1);
   }
 
   beforeAll(async () => {
@@ -97,6 +134,56 @@ describe("LIVE_STATS_SQL — retired attractions (E2E)", () => {
     expect(retired.affected).toBe(1);
 
     expect(await totalFor(park.id)).toBe(parkAttractions.length - 1);
+  });
+
+  /**
+   * `total_attractions` and the live counters are two separate reads of
+   * `attractions`, and a spec that only covers the first leaves the second
+   * free to drop its predicate without turning anything red. These two cases
+   * exist because that is exactly what the first draft of this file did.
+   *
+   * Getting in needs a reading inside the CTE's 30-minute window, which is
+   * also the real-world shape of the bug: `WaitTimesProcessor` stops writing
+   * at the retirement, so a just-retired ride keeps its last reading — and
+   * with it its place in the counts — until that window slides past.
+   */
+  it("stops counting a just-retired ride as operating", async () => {
+    const seeded = await seedMinimalTestData(app);
+    const park = seeded.parks[0];
+    const [operating, stillRunning] = seeded.attractions.filter(
+      (a) => a.parkId === park.id,
+    );
+    await addReading(operating.id, LiveStatus.OPERATING);
+    await addReading(stillRunning.id, LiveStatus.OPERATING);
+
+    // Reachable (G-44): both rides are inside the window and counted.
+    expect(Number((await statsFor(park.id)).operating_conf_count)).toBe(2);
+
+    await retire(operating.id);
+
+    const after = await statsFor(park.id);
+    expect(Number(after.operating_conf_count)).toBe(1);
+    // The control: the neighbour's reading is still in the window, so the
+    // drop came from the predicate and not from the window sliding shut.
+    expect(Number(after.total_attractions)).toBe(
+      seeded.attractions.filter((a) => a.parkId === park.id).length - 1,
+    );
+  });
+
+  it("stops counting a just-retired ride as closed", async () => {
+    const seeded = await seedMinimalTestData(app);
+    const park = seeded.parks[0];
+    const [closed, alsoClosed] = seeded.attractions.filter(
+      (a) => a.parkId === park.id,
+    );
+    await addReading(closed.id, LiveStatus.CLOSED);
+    await addReading(alsoClosed.id, LiveStatus.CLOSED);
+
+    expect(Number((await statsFor(park.id)).explicitly_closed_count)).toBe(2);
+
+    await retire(closed.id);
+
+    expect(Number((await statsFor(park.id)).explicitly_closed_count)).toBe(1);
   });
 
   it("leaves the other park's count alone", async () => {
