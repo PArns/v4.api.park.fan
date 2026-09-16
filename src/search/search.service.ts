@@ -718,11 +718,15 @@ export class SearchService implements OnModuleInit {
     const normalizedQuery = query.replace(/[^a-zA-Z0-9]/g, "");
     const topAttractionIds = await this.popularityService.getTopAttractions(50);
 
+    // See `searchShows`: a retired row leaves search the same way it leaves the
+    // park payload. This `where` has to stay in front of the brackets below,
+    // which use `andWhere` — put it after them and the OR chain swallows it.
     return (
       this.attractionRepository
         .createQueryBuilder("attraction")
         .leftJoinAndSelect("attraction.park", "park")
         .leftJoinAndSelect("park.destination", "destination")
+        .where("attraction.retiredAt IS NULL")
         .select([
           "attraction.id",
           "attraction.slug",
@@ -752,7 +756,7 @@ export class SearchService implements OnModuleInit {
           "destination.id",
           "destination.name",
         ])
-        .where(
+        .andWhere(
           new Brackets((qb) => {
             // Index-only WHERE: every clause must hit a trigram, dmetaphone
             // or functional index so the OR chain does not collapse to a
@@ -1832,9 +1836,8 @@ export class SearchService implements OnModuleInit {
       );
       await pipeline.exec();
 
-      // The index loaders are effectively unbounded full-table reads — the
-      // show and restaurant ones skip retired rows, the attraction one does
-      // not yet — so watch the serialized size:
+      // The index loaders are effectively unbounded full-table reads — retired
+      // rows are the only ones they skip — so watch the serialized size:
       // past this threshold the JSON round-trip and in-memory index start
       // to hurt boot/refresh latency and a bounded strategy is needed.
       const totalBytes =
@@ -1907,10 +1910,14 @@ export class SearchService implements OnModuleInit {
   }
 
   private async loadAttractionIndexFromDb(): Promise<AttractionIndexEntry[]> {
+    // See `loadShowIndexFromDb`: the index outlives the request, so a retired
+    // row let in here keeps being served from Redis until the next rebuild,
+    // long after the SQL path stopped returning it.
     const rows = await this.attractionRepository
       .createQueryBuilder("attraction")
       .leftJoinAndSelect("attraction.park", "park")
       .leftJoinAndSelect("park.destination", "destination")
+      .where("attraction.retiredAt IS NULL")
       .select([
         "attraction.id",
         "attraction.slug",

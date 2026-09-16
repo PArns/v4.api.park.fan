@@ -6,6 +6,49 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a retired attraction leaves search, favorites and the geo listing's count
+
+`retired_at` promises, in the column's own docblock and in the `retiredAt`
+`@ApiProperty`, that a retired attraction is "absent from park listings, counts
+and search". Park listings held up. The rest did not.
+
+Measured against production on 2026-09-16: **49 retired rows across 13 parks**,
+every one of them findable. `GET /v1/search?q=Dino-Sue` returned the demolished
+Dino-Sue as its **first result**, and `GET /v1/discovery/continents/asia/singapore`
+reported `attractionCount: 35` for Universal Studios Singapore while the park's
+own page served 18 — the gap was exactly its 17 retired rows. **31 of the 49
+have a live show of the same name in the same park**, so the ride and the show
+stood side by side in one result list: the double image PAR-159 removed from the
+park page.
+
+**Search reads those rows twice, and both readers needed the predicate.** The
+SQL path (`searchAttractions`) answers while the index is still being built; the
+in-process index (`loadAttractionIndexFromDb`) answers afterwards and, unlike a
+query, outlives the request — a retired row let into it keeps being served from
+Redis until the next rebuild. Shows and restaurants had already been filtered on
+both; the attraction side had a comment saying so and no predicate.
+
+`LIVE_STATS_SQL` likewise reads attractions twice: the `total_attractions`
+subquery behind `attractionCount`, and the `latest_attraction_data` CTE behind
+`operatingAttractions` and `closedAttractions`. The CTE's share is small and
+brief by construction — `WaitTimesProcessor` only loads rows with a null
+`retiredAt`, so writing stops at the retirement — but it is not zero: on
+2026-09-16 the children sync retired 15 Tokyo Disneyland and DisneySea rows at
+04:00:42 whose last reading was 03:40:11, leaving them counted as the parks'
+rides for another ten minutes.
+
+**The counts are not all fixed, and the docblocks now say which.** The three
+counters in `AnalyticsService` — `getParkStatistics`, `getAttractionCounts`,
+`getGlobalRealtimeStats` — still count retired rows; that is PAR-286. The blanket
+sentence was narrowed to what actually holds rather than left to be believed.
+
+Tests go through a real database, because the change is raw SQL and the first
+draft put a predicate between `FROM` and `JOIN LATERAL`, which a template
+literal hides: `test/e2e/discovery-live-stats-retired.e2e-spec.ts` executes
+`LIVE_STATS_SQL` and counts before and after a retirement, and
+`search.e2e-spec.ts` covers the index path and the SQL path with the second
+park's ride as the control that the query still returns rows.
+
 ### Added — quiet hours, in the subscriber's timezone rather than the park's
 
 `push_subscriptions.timezone` has been written on every subscribe since

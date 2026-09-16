@@ -77,6 +77,16 @@ export const LIVE_STATS_SQL = `
             qd.timestamp DESC
           LIMIT 1
         ) qd ON true
+        -- A retired ride is not one of the park's rides at all, so it belongs
+        -- in neither half of "12 von 45 geöffnet" — the same rule the park
+        -- payload applies via loadParkRelations. WaitTimesProcessor only loads
+        -- rows with a null retiredAt, so the writing stops at the retirement
+        -- and this predicate removes exactly the rows still inside the
+        -- 30-minute window behind it. That window is real, not theoretical:
+        -- on 2026-09-16 the children sync retired 15 Tokyo Disneyland and
+        -- DisneySea rows at 04:00:42 whose last reading was 03:40:11, so they
+        -- counted as the park's rides for another ten minutes.
+        WHERE a.retired_at IS NULL
       ),
       park_stats AS (
         SELECT
@@ -113,6 +123,12 @@ export const LIVE_STATS_SQL = `
         COALESCE(stats.explicitly_closed_count, 0) as explicitly_closed_count,
         (SELECT COUNT(*)::int FROM attractions a
           WHERE a."parkId" = p.id
+            -- See latest_attraction_data: a retired ride left this park's
+            -- lists when it was retired. Without this the country listing
+            -- reported 35 rides for Universal Studios Singapore while the
+            -- park's own page served 18 (measured 2026-09-16, 49 retired rows
+            -- across 13 parks).
+            AND a.retired_at IS NULL
             AND (
               NOT ${attractionIsOutOfSeason("a")}
               OR a.id IN (

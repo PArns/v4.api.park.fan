@@ -387,9 +387,14 @@ export class Attraction {
    * The row and its queue_data are deliberately KEPT: the wait-time history is
    * load-bearing for baselines and models, and a ride page that says "operated
    * until February 2026" is worth more than a 404. What retirement changes is
-   * visibility — a retired attraction leaves the park's live list, the
-   * operating counts, search and favorites, while its own detail endpoint keeps
-   * answering.
+   * visibility — a retired attraction leaves the park's live list, search, the
+   * favorites list and the geo listing's counts (`LIVE_STATS_SQL`), while its
+   * own detail endpoint keeps answering.
+   *
+   * The counts are not all of them yet. `AnalyticsService.getParkStatistics`,
+   * `getAttractionCounts` and `getGlobalRealtimeStats` still count retired
+   * rows; that is PAR-286, not this column. Read the list as what holds today,
+   * not as a promise about every count in the API.
    *
    * **Two writers, and they are told apart by `retiredReason`.** A human
    * retires a ride through `POST /admin/retire-attractions` with a reason they
