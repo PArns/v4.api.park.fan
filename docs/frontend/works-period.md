@@ -58,8 +58,13 @@ ordinary — somebody wrote it down after the work had begun — and it carries 
 hedge exactly as a complete one does. Dropping the hedge there would print an
 estimate as a firm date, which is the thing the field exists to prevent.
 
-The one pairing the API does guarantee: `toUncertain` is never `true` without a
-`to`, because a flag with no date to qualify is dropped on the way out.
+Two things the API does guarantee, so nobody builds a dead branch:
+
+- **`toUncertain` is never `true` without a `to`** — a flag with no date to
+  qualify is dropped on the way out.
+- **At least one of `from` and `to` is always there.** Both empty is not an
+  empty block, it is no block: `worksPeriod` itself is absent. A bare
+  "Umbaupause" with no date is a state this endpoint cannot produce.
 
 **A missing `to` is not "closed for good".** It is the ordinary state while work
 is running and the park has not said when it ends — the park usually names a

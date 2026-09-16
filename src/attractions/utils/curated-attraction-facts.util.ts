@@ -124,6 +124,14 @@ export const ATTRACTION_CURATED_DB_COLUMNS: readonly string[] = [
  * (NOT NULL, so every row holds a value). They were filled in bulk rather than
  * by an editor, and counting them would report thousands of rides as curated
  * that nobody has ever looked at.
+ *
+ * The works period's three columns — `curated_out_of_service_from`, `_to` and
+ * `_to_uncertain` — are missing for no such reason. They are written by an
+ * editor and by nobody else, so a ride whose only curation is a works period
+ * counts as untouched in the admin's figure. That is PAR-297, together with
+ * the same gap in `AttractionMergeService.INHERITABLE_COLUMNS`; it is left
+ * here rather than fixed in passing because the figure wants measuring before
+ * and after, which needs the production database.
  */
 
 export function resolveCuratedFacts(
