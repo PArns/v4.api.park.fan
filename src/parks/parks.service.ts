@@ -45,6 +45,10 @@ import {
   PARK_INLINE_DEPENDENCIES,
   migrateScheduleEntries,
 } from "./utils/merge-dependencies";
+import {
+  crossTypeConflictSql,
+  sameTypeDuplicateSql,
+} from "./utils/schedule-dedup.sql";
 import { captureParkPath, samePath } from "./services/park-rename.service";
 import {
   isParkOpen,
@@ -1627,6 +1631,12 @@ export class ParksService {
     // Pre-load all existing entries for the affected dates in a single query
     // instead of one SELECT per entry (a full sync covers ~365 days per park).
     // Select the date as text so the park-local YYYY-MM-DD key is driver/TZ-safe.
+    //
+    // Park-level rows only. Every row this method writes is built from `parkId`
+    // alone, so it speaks about the park's own day and about nothing else — and
+    // the key below is `date|scheduleType`, which a per-ride row of the same day
+    // and type would answer just as well. It would then be handed the park's
+    // opening hours while staying attached to its ride.
     type ExistingScheduleRow = {
       id: string;
       date: string;
@@ -1656,6 +1666,7 @@ export class ParksService {
         .addSelect('schedule."isBridgeDay"', "isBridgeDay")
         .where("schedule.parkId = :parkId", { parkId })
         .andWhere("schedule.date IN (:...dates)", { dates: affectedDates })
+        .andWhere("schedule.attractionId IS NULL")
         .getRawMany();
       for (const row of existingRows) {
         const key = `${row.date}|${row.scheduleType}`;
@@ -1793,6 +1804,10 @@ export class ParksService {
 
     // Batch DELETE operations: Cleanup placeholders when we have real data from the API.
     // Use date strings for reliable deletion (avoids TZ-dependent off-by-one with Date objects).
+    //
+    // `attractionId IS NULL` on all three, for the reason the lookup above
+    // carries: the placeholder being replaced is the park's own, and a per-ride
+    // row for that day is a different statement by a different writer.
 
     // Filter normalized entries for deletion
     const deleteUnknownDates = normalizedEntries
@@ -1817,6 +1832,7 @@ export class ParksService {
         .andWhere('"scheduleType" = :type', {
           type: ScheduleType.UNKNOWN,
         })
+        .andWhere('"attractionId" IS NULL')
         .execute();
     }
 
@@ -1830,6 +1846,7 @@ export class ParksService {
         .andWhere('"scheduleType" = :type', {
           type: ScheduleType.CLOSED,
         })
+        .andWhere('"attractionId" IS NULL')
         .execute();
     }
 
@@ -1843,6 +1860,7 @@ export class ParksService {
         .andWhere('"scheduleType" = :type', {
           type: ScheduleType.OPERATING,
         })
+        .andWhere('"attractionId" IS NULL')
         .execute();
     }
 
@@ -2145,11 +2163,20 @@ export class ParksService {
     };
 
     // 1. Fetch existing entries (use date strings for range to avoid TZ issues in query)
+    //
+    // Park-level rows only, and the map below is why: it is keyed by date alone,
+    // so a per-ride row would occupy the day. The park would never get its own
+    // gap-filled row for it, and the promotion and demotion further down — both
+    // decided by the PARK's operating range — would rewrite the ride's row
+    // instead. Same filter as `hasOperatingSchedule` and `isParkSeasonal`, which
+    // read the same rows; there is a partial index for it
+    // (`idx_schedule_park_date_no_attraction`).
     const existingEntries = await this.scheduleRepository
       .createQueryBuilder("schedule")
       .where("schedule.parkId = :parkId", { parkId })
       .andWhere("schedule.date >= :startDate", { startDate: startStr })
       .andWhere("schedule.date <= :endDate", { endDate: endStr })
+      .andWhere("schedule.attractionId IS NULL")
       .getMany();
 
     // Map existing entries by their local date string for O(1) lookup
@@ -2417,63 +2444,33 @@ export class ParksService {
    * Full schedule deduplication: handles ALL schedule entries, not just gap-filled ones.
    *
    * Phase 1 — Same-type duplicates:
-   *   Multiple entries with identical (parkId, date, scheduleType).
+   *   Multiple entries with identical (parkId, date, attractionId, scheduleType).
    *   Keeps the most recent (by updatedAt), deletes the rest.
    *
    * Phase 2 — Cross-type conflicts:
-   *   Multiple entries for the same (parkId, date) with different scheduleTypes.
+   *   Multiple entries for the same (parkId, date, attractionId) with different
+   *   scheduleTypes.
    *   Priority: OPERATING > API-provided CLOSED > Gap-filled CLOSED > UNKNOWN.
    *   When a higher-priority entry exists, lower-priority entries are removed.
+   *
+   * The ride is part of the key in both phases — see `schedule-dedup.sql.ts` for
+   * why, and `migrateScheduleEntries` for the same rule on the merge path.
    */
   async cleanupDuplicateScheduleEntries(): Promise<number> {
     let deletedCount = 0;
 
     // ── Phase 1: same-type duplicates ──────────────────────────────────
     // Optimized: Single SQL query with window function (instead of N+1 queries)
-    const deletedSameType = await this.scheduleRepository.query(`
-      DELETE FROM schedule_entries
-      WHERE id IN (
-        SELECT id FROM (
-          SELECT id,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY "parkId", date, "scheduleType"
-                   ORDER BY "updatedAt" DESC
-                 ) as rn
-          FROM schedule_entries
-        ) sub
-        WHERE rn > 1
-      )
-    `);
+    const deletedSameType = await this.scheduleRepository.query(
+      sameTypeDuplicateSql("global"),
+    );
     deletedCount += deletedSameType[1] || 0;
 
     // ── Phase 2: cross-type conflicts ──────────────────────────────────
     // Optimized: Single SQL query with CTE + priority logic (instead of N+1 queries)
-    const deletedCrossType = await this.scheduleRepository.query(`
-      WITH ranked AS (
-        SELECT id,
-               ROW_NUMBER() OVER (
-                 PARTITION BY "parkId", date
-                 ORDER BY
-                   CASE
-                     WHEN "scheduleType" = 'OPERATING' THEN 0
-                     WHEN "scheduleType" = 'CLOSED' AND description != 'Gap-filled' THEN 1
-                     WHEN "scheduleType" = 'CLOSED' THEN 2
-                     WHEN "scheduleType" = 'UNKNOWN' THEN 3
-                     ELSE 4
-                   END,
-                   "updatedAt" DESC
-               ) as rn
-        FROM schedule_entries
-        WHERE ("parkId", date) IN (
-          SELECT "parkId", date
-          FROM schedule_entries
-          GROUP BY "parkId", date
-          HAVING COUNT(DISTINCT "scheduleType") > 1
-        )
-      )
-      DELETE FROM schedule_entries
-      WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
-    `);
+    const deletedCrossType = await this.scheduleRepository.query(
+      crossTypeConflictSql("global"),
+    );
     deletedCount += deletedCrossType[1] || 0;
 
     if (deletedCount > 0) {
@@ -2495,6 +2492,9 @@ export class ParksService {
    *
    * Phase 1: Remove same-type duplicates (keeps most recent by updatedAt)
    * Phase 2: Remove cross-type conflicts (priority: OPERATING > API-CLOSED > Gap-CLOSED > UNKNOWN)
+   *
+   * Same statements as the global twin, built by the same two functions so the
+   * key cannot drift between the two scopes.
    */
   private async cleanupDuplicateScheduleEntriesForPark(
     parkId: string,
@@ -2503,55 +2503,14 @@ export class ParksService {
 
     // Phase 1: Same-type duplicates for this park
     const deletedSameType = await this.scheduleRepository.query(
-      `
-      DELETE FROM schedule_entries
-      WHERE id IN (
-        SELECT id FROM (
-          SELECT id,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY "parkId", date, "scheduleType"
-                   ORDER BY "updatedAt" DESC
-                 ) as rn
-          FROM schedule_entries
-          WHERE "parkId" = $1::uuid
-        ) sub
-        WHERE rn > 1
-      )
-    `,
+      sameTypeDuplicateSql("park"),
       [parkId],
     );
     deletedCount += deletedSameType[1] || 0;
 
     // Phase 2: Cross-type conflicts for this park
     const deletedCrossType = await this.scheduleRepository.query(
-      `
-      WITH ranked AS (
-        SELECT id,
-               ROW_NUMBER() OVER (
-                 PARTITION BY "parkId", date
-                 ORDER BY
-                   CASE
-                     WHEN "scheduleType" = 'OPERATING' THEN 0
-                     WHEN "scheduleType" = 'CLOSED' AND description != 'Gap-filled' THEN 1
-                     WHEN "scheduleType" = 'CLOSED' THEN 2
-                     WHEN "scheduleType" = 'UNKNOWN' THEN 3
-                     ELSE 4
-                   END,
-                   "updatedAt" DESC
-               ) as rn
-        FROM schedule_entries
-        WHERE "parkId" = $1::uuid
-          AND ("parkId", date) IN (
-            SELECT "parkId", date
-            FROM schedule_entries
-            WHERE "parkId" = $1::uuid
-            GROUP BY "parkId", date
-            HAVING COUNT(DISTINCT "scheduleType") > 1
-          )
-      )
-      DELETE FROM schedule_entries
-      WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
-    `,
+      crossTypeConflictSql("park"),
       [parkId],
     );
     deletedCount += deletedCrossType[1] || 0;

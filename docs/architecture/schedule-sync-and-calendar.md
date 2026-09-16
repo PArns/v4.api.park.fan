@@ -58,12 +58,14 @@ Gap-fill uses **batch INSERT/UPDATE operations** to minimize database round-trip
 
 **Impact**: Reduced from ~364 individual save/update queries to **~5 batch operations** for a typical 365-day range (98.6% reduction).
 
-**Deduplication**: Before gap-fill runs, `cleanupDuplicateScheduleEntriesForPark(parkId)` removes any same-type or cross-type duplicates for that specific park. This prevents conflicts from parallel schedule syncs and ensures duplicate entries don't accumulate between the daily global cleanup (`cleanupDuplicateScheduleEntries`).
+**Deduplication**: Before gap-fill runs, `cleanupDuplicateScheduleEntriesForPark(parkId)` removes any same-type or cross-type duplicates for that specific park. This prevents conflicts from parallel schedule syncs and ensures duplicate entries don't accumulate between the daily global cleanup (`cleanupDuplicateScheduleEntries`). Both keys include `attractionId` — see [Common Issues](../troubleshooting/common-issues.md) for why, and `src/parks/utils/schedule-dedup.sql.ts` for the statements.
+
+**Both `saveScheduleData` and `fillScheduleGaps` read and delete park-level rows only** (`attractionId IS NULL`). Every row either writes is built from `parkId` alone, so both speak about the park's own day; a per-ride row for the same day is a different statement by a different writer. Without the filter the sync hands a ride's row the park's opening times, and the gap-fill lets a ride's row occupy the day — the park never gets its own row for it, and the UNKNOWN→CLOSED promotion and the CLOSED→UNKNOWN demotion, both decided by the **park's** operating range, rewrite the ride's schedule instead.
 
 ## Persistence
 
 - **Service**: `ParksService.saveScheduleData(parkId, scheduleData)`.
-- **Behaviour**: Upsert by `(parkId, date, scheduleType)` — insert new, update if times/description/holiday changed. **Bidirectional cleanup** (batch operations): when saving OPERATING entries, delete CLOSED for those dates; when saving CLOSED entries, delete OPERATING for those dates. Also delete UNKNOWN placeholders when real data exists. All DELETE operations are **batched** using `date IN (:...dates)` to reduce database round-trips (reduces ~300 individual deletes to **3 batch deletes**, 99% reduction).
+- **Behaviour**: Upsert by `(parkId, date, scheduleType)` over park-level rows — insert new, update if times/description/holiday changed. **Bidirectional cleanup** (batch operations): when saving OPERATING entries, delete CLOSED for those dates; when saving CLOSED entries, delete OPERATING for those dates. Also delete UNKNOWN placeholders when real data exists. All DELETE operations are **batched** using `date IN (:...dates)` to reduce database round-trips (reduces ~300 individual deletes to **3 batch deletes**, 99% reduction).
 - **Gaps**: After saving, `fillScheduleGaps(parkId, lookAheadDays, lookBackDays)` fills missing dates. Defaults: `lookAheadDays = 182`, `lookBackDays = 182` (~½ year each). Range: (today − lookBackDays) through (today + lookAheadDays). See **Gap-fill rules** above.
 
 ## Calendar Endpoint & First-Request Slowness
