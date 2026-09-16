@@ -361,34 +361,70 @@ describe("ParksService", () => {
     };
 
     /**
-     * The four methods that deserialise a cached schedule row, each reduced to
+     * Every branch that deserialises a cached schedule row, each reduced to
      * "give me one entry's `date`". `cacheKey` is the fragment the payload is
-     * written under, so the hit run replays the miss run's own bytes.
+     * written under, so the hit run replays the miss run's own bytes, and
+     * `serveFromCache` puts those bytes where that branch reads them.
+     *
+     * `getBatchSchedules` appears twice because it holds two of the five
+     * branches and they read from different places: `today` comes out of the
+     * first `mget`, `next` out of the second. One entry covering only `today`
+     * left the `next` hit path pinned by nothing — mutating it back to
+     * `new Date(...)` kept all 75 cases green.
      */
     const METHODS = [
       {
         name: "getTodaySchedule",
         cacheKey: "schedule:today",
+        serveFromCache: (payload: string) => {
+          mockRedis.get.mockResolvedValue(payload);
+        },
         call: async (tz: string) =>
           (await service.getTodaySchedule(parkId, tz))[0]?.date,
       },
       {
         name: "getNextSchedule",
         cacheKey: "schedule:next",
+        serveFromCache: (payload: string) => {
+          mockRedis.get.mockResolvedValue(payload);
+        },
         call: async () => (await service.getNextSchedule(parkId))?.date,
       },
       {
         name: "getUpcomingSchedule",
         cacheKey: "schedule:upcoming",
+        serveFromCache: (payload: string) => {
+          mockRedis.get.mockResolvedValue(payload);
+        },
         call: async () =>
           (await service.getUpcomingSchedule(parkId, 7))[0]?.date,
       },
       {
-        name: "getBatchSchedules",
+        name: "getBatchSchedules (today)",
         cacheKey: "schedule:today",
+        serveFromCache: (payload: string) => {
+          // today's mget first, then next's — a cached "null" for next is the
+          // negative result and keeps that half out of the way.
+          mockRedis.mget
+            .mockResolvedValueOnce([payload])
+            .mockResolvedValueOnce(["null"]);
+        },
         call: async () =>
           (await service.getBatchSchedules([parkId])).today.get(parkId)?.[0]
             ?.date,
+      },
+      {
+        name: "getBatchSchedules (next)",
+        cacheKey: "schedule:next",
+        serveFromCache: (payload: string) => {
+          // An empty array is a hit for today, so this case measures the next
+          // half without a rebuild running alongside it.
+          mockRedis.mget
+            .mockResolvedValueOnce(["[]"])
+            .mockResolvedValueOnce([payload]);
+        },
+        call: async () =>
+          (await service.getBatchSchedules([parkId])).next.get(parkId)?.date,
       },
     ] as const;
 
@@ -433,13 +469,7 @@ describe("ParksService", () => {
           // an entry that came from the query instead of from Redis would make
           // the comparison below vacuous.
           arrange(timezone, []);
-          mockRedis.get.mockResolvedValue(payload);
-          // `getBatchSchedules` calls mget twice — today first, then next.
-          // One answer for both would feed the "next" slot an array, which is
-          // not the shape that branch reads.
-          mockRedis.mget
-            .mockResolvedValueOnce([payload])
-            .mockResolvedValueOnce(["null"]);
+          method.serveFromCache(payload);
 
           const fromCache = await method.call(timezone);
 
@@ -456,10 +486,7 @@ describe("ParksService", () => {
 
           const payload = cachedPayload(method.cacheKey);
           arrange(timezone, []);
-          mockRedis.get.mockResolvedValue(payload);
-          mockRedis.mget
-            .mockResolvedValueOnce([payload])
-            .mockResolvedValueOnce(["null"]);
+          method.serveFromCache(payload);
 
           const date = await method.call(timezone);
 
