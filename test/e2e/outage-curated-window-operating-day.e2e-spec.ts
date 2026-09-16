@@ -59,7 +59,15 @@ describe("curated works window when the operating day is not the start's date (e
   const CLOSES = new Date(`${NEXT}T02:00:00+02:00`);
 
   // The statement's four bound parameters: park filter, scan start, window end,
-  // as-of. The as-of sits after the ride recovered, so nothing is `ongoing`.
+  // as-of. It sits after the wrap fixture's recovery but BEFORE the after-hours
+  // one's, which is not seen running again until 11:30 the next morning.
+  // Neither comes back `ongoing` all the same, because the as-of only closes an
+  // interval that has no end of its own: both spells run to their OPERATING
+  // reading. That matters for more than the label here — were the after-hours
+  // interval cut at the as-of instead, it would end at 03:00 and overlap no
+  // window at all, since the 15th shuts at 20:00 and the 16th opens at 10:00,
+  // and its `startOpDay` would be NULL rather than the 16th. Each anchor case
+  // pins its own `endReason` for that reason.
   const SCAN_START = new Date(`${DAY}T00:00:00+02:00`);
   const WIN_END = new Date("2026-06-17T00:00:00+02:00");
   const AS_OF = new Date(`${NEXT}T03:00:00+02:00`);
@@ -319,6 +327,16 @@ describe("curated works window when the operating day is not the start's date (e
       new Date(`${DAY}T22:00:00+02:00`).toISOString(),
     );
     expect(asDay(rows[0].startOpDay)).toBe(NEXT);
+    // `gap`, not `recovered`, and the difference is the point: `lost_sight`
+    // compares the spell's OPEN minutes against its observed ones, and the
+    // night is not open, so what it counts is the half hour between the park
+    // opening at 10:00 and the first morning reading at 10:30 — over the
+    // 10-minute allowance. The label is about sight, and the interval still
+    // runs to the 11:30 OPERATING reading, which is the only reason it reaches
+    // into the 16th's window at all. Pinned here because `startOpDay` above
+    // silently depends on it: truncate this interval anywhere before 10:00 and
+    // that assertion goes NULL rather than red for its own reason.
+    expect(rows[0].endReason).toBe("gap");
   });
 
   it("excludes an after-hours outage under a window on its operating day", async () => {
