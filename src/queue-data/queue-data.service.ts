@@ -901,8 +901,9 @@ export class QueueDataService {
    * probe matters: `calculateDynamicTTL` gives an OPERATING park the seconds to
    * the next five-minute boundary, and OPERATING is the only state in which
    * this changes a ride's status. (The park's own statistics read the same flag
-   * whatever the park is doing, so a CLOSED silent park is affected too — but
-   * its response is cached until shortly before it opens.)
+   * whatever the park is doing, so a CLOSED silent park is affected too. Its
+   * response is cached for at most six hours, and inside published opening
+   * hours — an unexpected closure — for the same five minutes.)
    */
   async hasObservedReadingWithin(
     parkId: string,

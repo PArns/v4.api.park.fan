@@ -218,7 +218,7 @@ export class ParkIntegrationService {
       this.parksService.hasOperatingSchedule(park.id),
       this.weatherWarningsService.getActiveWarnings(park.id).catch(() => []),
       // Joins the batch rather than sitting after it: it is a 1 h read-through cache, so on the
-      // warm path it costs one Redis GET that overlaps the other six.
+      // warm path it costs one Redis GET that overlaps the rest of the batch.
       this.parksService.getOperatingDateRange(park.id, park.timezone),
       // Optimistic on failure, same direction as the curated lookup: a probe we
       // could not run must not be the thing that blanks a healthy park.
@@ -266,9 +266,10 @@ export class ParkIntegrationService {
      * which says outright that the list must not be derived. Saying it of a park
      * that fed us 7.307 rows until June would be a different wrong answer.
      *
-     * What they share is that every wait-derived claim below is unsupported:
-     * ride status, crowd level, best visit times, the park's own wait
-     * statistics. Those read `unknown` rather than a fabricated tier.
+     * What they share is that every wait-derived claim below is unsupported.
+     * Four read this flag: the ride's status, its crowd level, the best visit
+     * times and the park's own wait statistics. They say `unknown` rather than
+     * emit a fabricated tier.
      *
      * The free-flow override further down is deliberately NOT one of them: a
      * playground is open on the strength of a curated flag and the park's
@@ -1364,10 +1365,13 @@ export class ParkIntegrationService {
     // What this block withholds is the three claims that read as a judgement:
     // the crowd tier, the peak hour and the "typical day" distribution, plus
     // `closedAttractions` below. It does NOT touch `avgWaitTime`,
-    // `avgWaitToday`, `peakWaitToday` or the `occupancy` object, which still
-    // serve their empty-set zeroes — "0 min, much quieter than typical" at a
-    // park nobody has read since June. That gap predates this change and is
-    // PAR-298; it is named here rather than widened into this one.
+    // `avgWaitToday`, `peakWaitToday` or the `occupancy` object, which keep
+    // their empty-set zeroes: Ø 0 min, 0 % occupancy and — from
+    // `calculateParkOccupancy`'s own no-data exit — `comparisonStatus:
+    // "typical"`, which reads as a verdict about a park nobody has heard from
+    // since June rather than as the absence it is. That gap predates this
+    // change and is PAR-298; it is named here rather than widened into this
+    // one.
     if (dto.analytics && !waitTimesKnowable) {
       dto.analytics.statistics = {
         ...dto.analytics.statistics,

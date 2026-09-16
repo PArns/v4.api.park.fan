@@ -52,9 +52,11 @@
  *
  * `ParkIntegrationService` reads it; the rides of a silent park go to UNKNOWN,
  * the same place a park with no readable source sends them, and never reach the
- * fallback below. Free-flow rides are the exception, as they are everywhere
- * else: a playground opens on a curated flag and the park's schedule, neither
- * of which is a wait time.
+ * fallback below. Free-flow rides are the exception **on this half only**: a
+ * playground opens on a curated flag and the park's schedule, neither of which
+ * is a wait time. At a park with no readable source the override is switched
+ * off outright (`isFreeFlowOpen` takes `waitTimesReadable`), so the two halves
+ * of `waitTimesKnowable` differ here and nowhere else.
  */
 export const PARK_FEED_SILENT_DAYS = 30;
 

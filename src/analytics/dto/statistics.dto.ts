@@ -95,9 +95,11 @@ export class ParkStatisticsDto {
 
   @ApiProperty({
     description:
-      "Number of attractions counted as operating. What that means depends on " +
-      "the endpoint: the park detail payload counts only rides it KNOWS are " +
-      "running, which at a park with no readable source is none, and at a park " +
+      "Number of attractions counted as operating, and what that means depends " +
+      "on the endpoint. Where this schema is filled by the analytics service " +
+      "it is optimistic — `total - explicitly closed`, or 0 once the park " +
+      "reads as shut. The park detail payload counts only rides it KNOWS are " +
+      "running, which at a park with no readable source is none and at a park " +
       "whose feed has been silent for 30 days is the free-flow rides alone.",
     example: 42,
   })

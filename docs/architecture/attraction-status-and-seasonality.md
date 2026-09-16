@@ -1141,21 +1141,28 @@ ran: three caught throws leave three empty lists, and an empty list is what
 "nothing is wrong" looks like — a ✅ printed under three ERROR lines is §5.1
 with more output.
 
-**What this change does not touch.** The ride's own endpoint
-(`AttractionIntegrationService`), the favourites list, `/location` and the park
-list (`ParkEnrichmentService`, which serves the attraction counters with no gate
-at all) still read `waitTimesReadable` alone, so a silent park's ride still
-answers `CLOSED` on its own page and still carries its hourly forecast. That is a
-narrower contradiction than the one removed — `UNKNOWN` against `CLOSED` rather
-than `OPERATING` against `CLOSED` — but it is one, and it is deliberately left
-for its own issue rather than widened into this one: each of those paths would
-need its own park-level probe.
+**What inherits the gate, and what does not.** `/location` and the favourites
+park card read `park:integrated:<id>`, so on a cache hit they carry the new
+values without knowing about them: a silent park shows `operatingAttractions: 0`
+and `crowdLevel: "unknown"` there too. Their own miss paths, which build from
+`AnalyticsService` directly, do not.
+
+Untouched and left for their own issue: the ride's own endpoint
+(`AttractionIntegrationService`), the park list (`ParkEnrichmentService` serves
+the attraction counters with no gate at all), and the ride-alert subscription
+check, whose rule against accepting an alert that can never fire reads the
+curated list alone. A silent park's ride therefore still answers `CLOSED` on its
+own page and still carries its hourly forecast — a narrower contradiction than
+the one removed (`UNKNOWN` against `CLOSED` rather than `OPERATING` against
+`CLOSED`), but a contradiction. Each would need its own park-level probe.
 
 The withholding block itself covers three claims and not every wait-derived one:
 `avgWaitTime`, `avgWaitToday`, `peakWaitToday` and `occupancy` keep their
-empty-set zeroes, so a silent park still reads "0 min, much quieter than
-typical". That gap is older than this change — it already applied to the one
-curated no-wait-times park — and is [PAR-298](<https://linear.app/parkfan/issue/PAR-298>).
+empty-set zeroes — Ø 0 min, 0 % occupancy and, out of `calculateParkOccupancy`'s
+own no-data exit, `comparisonStatus: "typical"`, which reads as a verdict rather
+than as the absence it is. That gap is older than this change — it already
+applied to the one curated no-wait-times park — and is
+[PAR-298](<https://linear.app/parkfan/issue/PAR-298>).
 
 Measured against production on 2026-09-16. The detector runs in **1.2 s**. The
 per-request probe costs 1.8 ms at Europa-Park, where the first row

@@ -28,11 +28,17 @@ import { PARK_FEED_SILENT_DAYS } from "../../src/common/utils/no-live-data-statu
  * and the same applies here: an anti-join that matches nothing returns an empty
  * list, which is also what "no park is in this state" looks like.
  *
- * So every case is built as a PAIR. The silent park and the healthy park differ
- * in exactly one row — a single `queue_data` reading — and the healthy one has
- * to be ABSENT from the same result the silent one is present in. A test that
- * only asserted the absence would be green against a detector that returns
- * nothing at all (📚 G-44).
+ * So a case is built as a PAIR wherever the assertion is an absence. The silent
+ * park and the healthy park differ in exactly one row — a single `queue_data`
+ * reading — and the healthy one has to be ABSENT from the same result the
+ * silent one is present in; an absence asserted on its own is green against a
+ * detector that returns nothing at all (📚 G-44).
+ *
+ * Two cases are deliberately unpaired and mutation-checked instead: "ignores a
+ * per-ride schedule row" and "does not let a heartbeat stand in for an
+ * observation". Each one's gate was removed and each one turned red, which is
+ * the same proof by a shorter route — their fixtures are one park and one row,
+ * so a partner would only restate the case above.
  *
  * Dates are relative to `now()`. The detector compares against
  * `(now() AT TIME ZONE p.timezone)::date`, so a fixture pinned to a written-down
