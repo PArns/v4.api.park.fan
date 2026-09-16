@@ -74,6 +74,28 @@ import {
  * Job triggers and curation need `editor`. The handful that cannot be undone —
  * merges, retirements, repair, a full cache reset — need `owner`.
  */
+/**
+ * One pair of `POST merge-duplicate-parks`, on either side of the gate.
+ *
+ * In `planned` it is a merge that ran or would run; in `skipped` it is a pair
+ * the detector found and `autoDetect` refuses to act on, with `reviewReason`
+ * saying what a human has to settle. The winner is resolved either way, so the
+ * operator can send that one pair back as a manual merge without working out
+ * which row survives.
+ *
+ * `score` is the pair's name similarity, and it is `null` for a manual pair:
+ * two ids typed into a form were never scored by anything.
+ */
+export interface ParkMergePlanEntry {
+  winnerId: string;
+  winnerName: string;
+  loserId: string;
+  loserName: string;
+  score: number | null;
+  reason: string;
+  reviewReason: string | null;
+}
+
 @ApiTags("admin")
 @ApiSecurity("admin-auth")
 @Controller("admin")
@@ -1414,6 +1436,10 @@ export class AdminController {
    * `winnerId` is resolved by `determineMergeWinner`, the same function the
    * merge uses, because the order two ids are typed in carries no weight and
    * an operator who believes otherwise deletes the wrong park.
+   *
+   * `safe` and `needsReview` are counted apart, like the attraction listing
+   * does, so the two sets are readable without going pair by pair: the safe
+   * ones are what `autoDetect` would merge, the others are the work.
    */
   @Get("duplicate-parks")
   @ApiOperation({
@@ -1422,6 +1448,8 @@ export class AdminController {
   @ApiResponse({ status: 200, description: "Duplicate park pairs" })
   async listDuplicateParks(): Promise<{
     total: number;
+    safe: number;
+    needsReview: number;
     pairs: Array<{
       park1: { id: string; name: string; city: string | null };
       park2: { id: string; name: string; city: string | null };
@@ -1429,10 +1457,13 @@ export class AdminController {
       reason: string;
       winnerId: string | null;
       loserId: string | null;
+      safe: boolean;
+      reviewReason: string | null;
     }>;
   }> {
     const duplicates = await this.parkValidatorService.findDuplicates();
-    if (duplicates.length === 0) return { total: 0, pairs: [] };
+    if (duplicates.length === 0)
+      return { total: 0, safe: 0, needsReview: 0, pairs: [] };
 
     // One query for every park involved, rather than two per pair.
     const parkRepo = this.parkValidatorService.getParkRepository();
@@ -1444,6 +1475,8 @@ export class AdminController {
 
     return {
       total: duplicates.length,
+      safe: duplicates.filter((d) => d.safe).length,
+      needsReview: duplicates.filter((d) => !d.safe).length,
       pairs: duplicates.map((duplicate) => {
         const park1 = parkById.get(duplicate.park1.id);
         const park2 = parkById.get(duplicate.park2.id);
@@ -1456,6 +1489,8 @@ export class AdminController {
           reason: duplicate.reason,
           winnerId: verdict?.winnerId ?? null,
           loserId: verdict?.loserId ?? null,
+          safe: duplicate.safe,
+          reviewReason: duplicate.reviewReason,
         };
       }),
     };
@@ -1543,6 +1578,21 @@ export class AdminController {
    * Merge duplicate parks
    *
    * Identifies and merges duplicate parks, or merges specific parks if IDs are provided.
+   *
+   * **`autoDetect` picks its own victims, so it defaults to a dry run** and
+   * merges only pairs `findDuplicates` marks `safe` — `dryRun: false` buys the
+   * write, never the pairs a human still has to look at. Before PAR-247 it had
+   * neither: every pair the detector returned was merged inside one call, in a
+   * transaction with no undo, and the only way to ask what it would do was to
+   * let it do it.
+   *
+   * **The manual pair keeps its default**, which is a real merge. Two ids typed
+   * into a form are the human judgement `autoDetect` lacks, and the admin's
+   * merge button sends exactly that body with no `dryRun` — a default flipped
+   * here would be a button that silently stops working. It does honour an
+   * explicit `dryRun: true`, because the alternative is the trap the attraction
+   * endpoint already sprang once: a request that says "Probelauf", deletes the
+   * row, and prints the outcome as a preview.
    */
   @Post("merge-duplicate-parks")
   @AdminMinRole("owner")
@@ -1551,7 +1601,8 @@ export class AdminController {
     summary: "Merge duplicate parks",
     description:
       "Identifies duplicate parks automatically or merges specific parks if park1Id and park2Id are provided. " +
-      "Winner is determined by priority (Wiki-ID, more Entity-IDs, more Child-Entities, older park).",
+      "Winner is determined by priority (Wiki-ID, more Entity-IDs, more Child-Entities, older park). " +
+      "autoDetect defaults to a dry run and never merges a pair marked for review.",
   })
   @ApiBody({
     schema: {
@@ -1570,6 +1621,15 @@ export class AdminController {
           description: "Automatically detect and merge all duplicates",
           default: false,
         },
+        dryRun: {
+          type: "boolean",
+          description:
+            "With autoDetect: report what would be merged without writing. " +
+            "Defaults to true there, so a real run needs dryRun:false. With " +
+            "park1Id/park2Id it defaults to false (that pair is a deliberate " +
+            "act) and dryRun:true previews the winner.",
+          default: true,
+        },
       },
     },
   })
@@ -1583,10 +1643,14 @@ export class AdminController {
       park1Id?: string;
       park2Id?: string;
       autoDetect?: boolean;
+      dryRun?: boolean;
     } = {},
   ): Promise<{
     message: string;
+    dryRun: boolean;
     merged: number;
+    planned: ParkMergePlanEntry[];
+    skipped: ParkMergePlanEntry[];
     results: Array<{
       winnerId: string;
       winnerName: string;
@@ -1612,15 +1676,23 @@ export class AdminController {
       migratedMappings: number;
     }> = [];
     const errors: Array<{ parkId: string; error: string }> = [];
+    const planned: ParkMergePlanEntry[] = [];
+    const skipped: ParkMergePlanEntry[] = [];
 
     if (body.autoDetect) {
+      // Nothing is written unless the caller asks for it in as many words.
+      const dryRun = body.dryRun !== false;
+
       // Auto-detect duplicates
       const duplicates = await this.parkValidatorService.findDuplicates();
 
       if (duplicates.length === 0) {
         return {
           message: "No duplicates found",
+          dryRun,
           merged: 0,
+          planned: [],
+          skipped: [],
           results: [],
           errors: [],
         };
@@ -1656,33 +1728,50 @@ export class AdminController {
           continue;
         }
 
-        mergePairs.push(determineMergeWinner(park1, park2));
+        const verdict = determineMergeWinner(park1, park2);
+        const winner = verdict.winnerId === park1.id ? park1 : park2;
+        const loser = verdict.winnerId === park1.id ? park2 : park1;
+        const entry: ParkMergePlanEntry = {
+          winnerId: winner.id,
+          winnerName: winner.name,
+          loserId: loser.id,
+          loserName: loser.name,
+          score: duplicate.score,
+          reason: duplicate.reason,
+          reviewReason: duplicate.reviewReason,
+        };
+
+        // A pair a human still has to look at is reported and left alone —
+        // `dryRun: false` is permission to write, not permission to decide.
+        if (!duplicate.safe) {
+          skipped.push(entry);
+          continue;
+        }
+
+        planned.push(entry);
+        mergePairs.push(verdict);
+      }
+
+      if (dryRun) {
+        return {
+          message: `Dry run: ${planned.length} pair(s) would be merged, ${skipped.length} need review`,
+          dryRun: true,
+          merged: 0,
+          planned,
+          skipped,
+          results: [],
+          errors,
+        };
       }
 
       // Use repair service to perform merges
       const repairResult =
         await this.parkRepairService.repairDuplicates(mergePairs);
 
-      // Convert repair result to response format
-      // Note: repairDuplicates doesn't return detailed migration counts per merge
-      // We'll use the duplicate info for names
-      for (let i = 0; i < mergePairs.length; i++) {
-        const pair = mergePairs[i];
-        const duplicateInfo = duplicates.find(
-          (d) =>
-            (d.park1.id === pair.winnerId && d.park2.id === pair.loserId) ||
-            (d.park2.id === pair.winnerId && d.park1.id === pair.loserId),
-        );
-
-        const winnerName =
-          duplicateInfo?.park1.id === pair.winnerId
-            ? duplicateInfo.park1.name
-            : duplicateInfo?.park2.name || "Unknown";
-        const loserName =
-          duplicateInfo?.park1.id === pair.loserId
-            ? duplicateInfo.park1.name
-            : duplicateInfo?.park2.name || "Unknown";
-
+      // Convert repair result to response format. The names come from
+      // `planned`, which was built from the park rows themselves — the entry
+      // and its merge pair are pushed together, so the two lists line up.
+      for (const pair of planned) {
         // Check if this merge was successful (no error for this pair)
         const hasError = repairResult.errors.some(
           (e) => e.parkId === pair.loserId,
@@ -1694,9 +1783,9 @@ export class AdminController {
           // For now, we'll use placeholder values
           results.push({
             winnerId: pair.winnerId,
-            winnerName,
+            winnerName: pair.winnerName,
             loserId: pair.loserId,
-            loserName,
+            loserName: pair.loserName,
             migratedAttractions: 0, // Would need to enhance repairDuplicates to return this
             migratedShows: 0,
             migratedRestaurants: 0,
@@ -1721,7 +1810,10 @@ export class AdminController {
       if (!park1 || !park2) {
         return {
           message: "One or both parks not found",
+          dryRun: body.dryRun === true,
           merged: 0,
+          planned: [],
+          skipped: [],
           results: [],
           errors: [
             {
@@ -1733,6 +1825,32 @@ export class AdminController {
       }
 
       const { winnerId, loserId } = determineMergeWinner(park1, park2);
+      const winner = winnerId === park1.id ? park1 : park2;
+      const loser = winnerId === park1.id ? park2 : park1;
+
+      // Only an explicit `true` previews here — see the method's docblock for
+      // why this default is the other way round from `autoDetect`'s.
+      if (body.dryRun === true) {
+        return {
+          message: `Dry run: "${loser.name}" would be merged into "${winner.name}"`,
+          dryRun: true,
+          merged: 0,
+          planned: [
+            {
+              winnerId,
+              winnerName: winner.name,
+              loserId,
+              loserName: loser.name,
+              score: null,
+              reason: "manual pair",
+              reviewReason: null,
+            },
+          ],
+          skipped: [],
+          results: [],
+          errors: [],
+        };
+      }
 
       try {
         const mergeResult = await this.parkMergeService.mergeParks(
@@ -1767,7 +1885,10 @@ export class AdminController {
       return {
         message:
           "Either autoDetect=true or both park1Id and park2Id must be provided",
+        dryRun: false,
         merged: 0,
+        planned: [],
+        skipped: [],
         results: [],
         errors: [],
       };
@@ -1775,7 +1896,10 @@ export class AdminController {
 
     return {
       message: `Merged ${results.length} duplicate park(s)`,
+      dryRun: false,
       merged: results.length,
+      planned,
+      skipped,
       results,
       errors,
     };

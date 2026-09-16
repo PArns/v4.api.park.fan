@@ -6,6 +6,45 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — `autoDetect` reports what it would merge instead of merging it
+
+`POST /v1/admin/merge-duplicate-parks` with `autoDetect: true` took every pair
+`ParkValidatorService.findDuplicates()` returned and merged it, one transaction
+each and no undo. There was no `dryRun`, no per-pair verdict and no threshold in
+between, so a false positive deleted a real park — and the only way to ask what
+the endpoint would do was to let it do it. The attraction side has had both
+halves for as long as it has had a merge.
+
+**A pair is `safe` on one combination:** a shared upstream entity value, which
+is one source saying these two rows are one park, plus a name score of at least
+0.95. That is the existing `nameSimilarity >= 0.95 && sharedEntityId` branch
+reused rather than a second rule, so the safe set is a subset of the detected
+set. Both real production duplicates are in it; a mis-assigned id is not, since
+the name still has to agree.
+
+**`sharedPoint` — the branch PAR-160 added, and the first to admit a pair
+scoring under 0.85 on names — is never safe, structurally.** It requires
+`sourcesDisjoint`, and a shared id value means both rows carry that source, so
+the two cannot hold at once. Nothing here special-cases the branch, which is
+what keeps the two from drifting apart.
+
+`autoDetect` now writes nothing unless `dryRun: false` is sent, and that flag
+buys the write and not the decision: a pair marked for review is returned under
+`skipped` with its winner resolved, never merged. The response gained `dryRun`,
+`planned` and `skipped`; `GET /v1/admin/duplicate-parks` counts `safe` and
+`needsReview` apart, like the attraction listing.
+
+**The manual pair keeps its default.** `park1Id` + `park2Id` is a deliberate act
+and the admin's merge button sends exactly that body with no `dryRun`; a flipped
+default there would be a button that stops working and reports success. An
+explicit `dryRun: true` previews the resolved winner without writing, so the
+endpoint cannot be asked for a dry run and answer with a deletion.
+
+Three sentences in `park-validator.service.ts` and three in
+`docs/architecture/attraction-status-and-seasonality.md` said this gate did not
+exist, two of them naming PAR-247 as the thing that would build it. They are
+rewritten rather than left standing beside it (§5.5a).
+
 ### Fixed — a field a handler attaches to an error body now reaches the client
 
 `HttpExceptionFilter` is global and builds the error response itself, which is

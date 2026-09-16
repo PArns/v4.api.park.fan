@@ -702,8 +702,9 @@ facts lead: coordinates under `SHARED_POINT_KM`, sources disjoint, and a name
 score over `SHARED_POINT_NAME_SIMILARITY` — a floor rather than a verdict. Three
 conditions, of which two are numbers, and both numbers were placed against the
 whole catalogue (213 parks, 22 578 pairs) rather than chosen, because
-`POST merge-duplicate-parks` with `autoDetect: true` merges whatever
-`findDuplicates` returns, with no dry run and no review gate.
+`findDuplicates` is what `POST merge-duplicate-parks` acts on. Since PAR-247 a
+false positive there is reported rather than merged (§5.5a), but the numbers
+still decide what an operator is shown, so they stay measured.
 What that measurement says, and what it constrains:
 
 | km | name | pair |
@@ -776,8 +777,9 @@ What that measurement says, and what it constrains:
   that synced in on its resort's point, from a source the theme-park row does
   not carry, scoring like `Legoland Windsor` against its water park (0.7429),
   would satisfy all three conditions. No such row is in the catalogue today.
-  What would make that safe rather than merely unlikely is the review gate in
-  PAR-247, not another threshold here.
+  What makes that safe rather than merely unlikely is the review gate (§5.5a),
+  not another threshold here: a `sharedPoint` pair is never `safe`, so the
+  endpoint reports it and waits.
 
   The floor is 0.65 and not 0.6 for one measured reason: at 0.6 the Rockford
   pair cleared both the name floor and `sourcesDisjoint`, leaving the radius as
@@ -789,11 +791,43 @@ What that measurement says, and what it constrains:
   radius already and raising the floor refuses nothing the radius was not
   refusing.
 
-This section adds the detector, not a gate in front of the merge:
-`POST /v1/admin/merge-duplicate-parks` with `autoDetect: true` still merges
-every pair `findDuplicates` returns, this one included, with no dry run and no
-review step. Giving that endpoint the `safe`/`needsReview`/`dryRun` treatment
-the attraction side already has is PAR-247.
+### 5.5a The gate in front of the merge
+
+§5.5 added the detector. It did not add anything between a detected pair and a
+deletion, and there was nothing there before it either:
+`POST /v1/admin/merge-duplicate-parks` with `autoDetect: true` merged every pair
+`findDuplicates` returned, in one call, inside a transaction with no undo — so
+the only way to ask what it would merge was to let it merge. **PAR-247** gives
+it the two halves the attraction side already had.
+
+**Every pair carries `safe`.** It is true for one combination: a shared upstream
+entity **value** — one external park cannot be two parks, which is why both real
+production duplicates (§5.3) carry one — together with a name score of at least
+0.95. That is word for word the existing `nameSimilarity >= 0.95 &&
+sharedEntityId` branch, so the safe set is a subset of the detected set rather
+than a second rule beside it, and a shared id that arrived by mis-assignment
+still needs the name to agree before anything is deleted unattended.
+
+**`sharedPoint` is never safe, and not by a special case.** It requires
+`sourcesDisjoint`, which is false as soon as both rows carry an id from the same
+source — and an equal value means exactly that. So `sharedPoint` implies no
+shared id implies not safe. There is no second condition here that could drift
+away from that one.
+
+**`autoDetect` writes nothing without `dryRun: false`**, and `dryRun: false` is
+permission to write, not permission to decide: a pair marked for review is
+reported under `skipped`, with its winner already resolved so an operator can
+send it back as a manual pair. The response carries `dryRun`, `planned` and
+`skipped`; `GET /v1/admin/duplicate-parks` counts `safe` and `needsReview`
+apart, as the attraction listing does.
+
+**The manual pair (`park1Id` + `park2Id`) keeps its default, which is a real
+merge.** Two ids typed into a form are the human judgement `autoDetect` lacks,
+and the admin's merge button sends that body with no `dryRun` — a flipped
+default would be a button that quietly stops working. It does honour an explicit
+`dryRun: true`, because the alternative is the trap the attraction endpoint
+sprang once: a request that says dry run, deletes the row, and prints the
+outcome as a preview.
 
 ### 5.6 An entity changed its `entityType` and left its old row behind
 
