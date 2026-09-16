@@ -120,3 +120,71 @@ describe("ParkWithAttractionsDto.fromEntity › fastPass", () => {
     expect(dto.info?.fastPassTermId).toBe("quick-pass");
   });
 });
+
+/**
+ * The curated works period on the park's attraction list.
+ *
+ * The park payload is the surface that draws the ride cards, so a rebuild that
+ * only reaches the ride's own page would be invisible where most people meet
+ * the ride. This mapper is the second of the two that has to carry the block,
+ * and it is a hand-written copy of the first — which is why it is asserted here
+ * rather than trusted to stay in step.
+ */
+describe("ParkWithAttractionsDto.fromEntity › worksPeriod", () => {
+  const parkWith = (attractions: unknown[]) =>
+    ({
+      id: "park-1",
+      name: "Phantasialand",
+      slug: "phantasialand",
+      timezone: "Europe/Berlin",
+      attractions,
+      shows: [],
+      restaurants: [],
+    }) as unknown as Park;
+
+  const ride = (overrides = {}) => ({
+    id: "ride-1",
+    name: "Chiapas",
+    slug: "chiapas",
+    ...overrides,
+  });
+
+  it("carries the window and the estimate flag onto the card", () => {
+    const dto = ParkWithAttractionsDto.fromEntity(
+      parkWith([
+        ride({
+          curatedOutOfServiceFrom: "2026-01-16",
+          curatedOutOfServiceTo: "2026-03-03",
+          curatedOutOfServiceToUncertain: true,
+        }),
+      ]),
+    );
+
+    expect(dto.attractions[0].worksPeriod).toEqual({
+      from: "2026-01-16",
+      to: "2026-03-03",
+      toUncertain: true,
+    });
+  });
+
+  it("is null for a ride nobody has curated", () => {
+    const dto = ParkWithAttractionsDto.fromEntity(parkWith([ride()]));
+    expect(dto.attractions[0].worksPeriod).toBeNull();
+  });
+
+  it("keeps it out of `outage`, which stays absent", () => {
+    // The two answer different questions and sit side by side. A client that
+    // read a works period as an outage would tell a visitor the ride broke
+    // while it is being rebuilt on schedule.
+    const dto = ParkWithAttractionsDto.fromEntity(
+      parkWith([ride({ curatedOutOfServiceFrom: "2026-01-16" })]),
+    );
+
+    expect(dto.attractions[0].worksPeriod).toEqual({
+      from: "2026-01-16",
+      to: null,
+      toUncertain: false,
+    });
+    expect(dto.attractions[0].outage).toBeUndefined();
+  });
+});

@@ -23,6 +23,8 @@ import { FastPassDto } from "../../attractions/dto/fast-pass.dto";
 import { resolveFastPass } from "../../attractions/utils/fast-pass.util";
 import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
 import { AttractionOutageDto } from "../../attractions/dto/attraction-outage.dto";
+import { WorksPeriodDto } from "../../attractions/dto/works-period.dto";
+import { resolveWorksPeriod } from "../../attractions/utils/curated-out-of-service.util";
 import {
   resolveCuratedPark,
   resolveParkInfo,
@@ -215,6 +217,19 @@ export class ParkAttractionDto {
     nullable: true,
   })
   hasSingleRider?: boolean | null;
+
+  @ApiProperty({
+    description:
+      "The curated works period this ride is closed for — a rebuild or refit " +
+      "written down in advance. Null unless an editor has curated one. Beside " +
+      "`outage` and never inside it: an outage is a fault, this is planned " +
+      "work, and inside this window no outage is reported at all. Both dates " +
+      "are park-local, so compare them in `timezone` on the park.",
+    required: false,
+    nullable: true,
+    type: WorksPeriodDto,
+  })
+  worksPeriod?: WorksPeriodDto | null;
 
   @ApiProperty({
     description:
@@ -733,6 +748,9 @@ export class ParkWithAttractionsDto {
               maximumHeight: curated.maximumHeight,
               mayGetWet: curated.mayGetWet,
               hasSingleRider: attraction.hasSingleRider ?? null,
+              // Null on nearly every ride, so this is one absent key per
+              // attraction rather than a block of nulls across the catalogue.
+              worksPeriod: resolveWorksPeriod(attraction),
               // `park` here, not `attraction.park`: the list is built from the
               // park being mapped, and the attractions carry no back-reference.
               fastPass: resolveFastPass(attraction, park),

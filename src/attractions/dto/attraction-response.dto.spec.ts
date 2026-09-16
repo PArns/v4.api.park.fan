@@ -109,6 +109,62 @@ describe("AttractionResponseDto › status on the two builders", () => {
       "retiredReason",
       "seasonMonths",
       "slug",
+      "worksPeriod",
     ]);
+  });
+});
+
+/**
+ * The curated works period on the ride endpoint.
+ *
+ * It belongs to {@link AttractionResponseDto.storedHalf} rather than to the
+ * live placeholders: it comes off the row, it is the same on every request of
+ * the day, and it must therefore reach BOTH builders — the park attractions
+ * list joins no live data and would otherwise serve a ride under rebuild with
+ * nothing saying so.
+ */
+describe("AttractionResponseDto › worksPeriod", () => {
+  const ride = (overrides: Record<string, unknown> = {}) =>
+    ({
+      id: "attraction-1",
+      name: "Chiapas",
+      slug: "chiapas",
+      retiredAt: null,
+      retiredReason: null,
+      hasSingleRider: null,
+      rcdbId: null,
+      ...overrides,
+    }) as unknown as Attraction;
+
+  it("carries the window and the estimate flag", () => {
+    const dto = AttractionResponseDto.fromEntity(
+      ride({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(dto.worksPeriod).toEqual({
+      from: "2026-01-16",
+      to: "2026-03-03",
+      toUncertain: true,
+    });
+  });
+
+  it("is null for a ride nobody has curated", () => {
+    expect(AttractionResponseDto.fromEntity(ride()).worksPeriod).toBeNull();
+  });
+
+  it("reaches the builder that joins no live data", () => {
+    const dto = AttractionResponseDto.fromEntityWithoutLiveData(
+      ride({ curatedOutOfServiceFrom: "2026-01-16" }),
+    );
+
+    expect(dto.worksPeriod).toEqual({
+      from: "2026-01-16",
+      to: null,
+      toUncertain: false,
+    });
   });
 });

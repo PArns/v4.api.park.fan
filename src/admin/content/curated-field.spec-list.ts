@@ -202,6 +202,19 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "feststeht — das ist der Normalfall, während gearbeitet wird.",
   },
   {
+    key: "curatedOutOfServiceToUncertain",
+    label: "Enddatum nur geschätzt",
+    type: "boolean",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Umbaupause",
+    hint:
+      'Auf „ja" setzen, wenn der Park nur eine Jahreszeit genannt hat und das ' +
+      "Datum daneben unsere Schätzung ist. Die Seite schreibt dann " +
+      '„voraussichtlich bis …" statt eines festen Termins. Nichts gesagt ' +
+      'heißt nicht „sicher" — es heißt, dass niemand nachgesehen hat.',
+  },
+  {
     key: "hasSingleRider",
     label: "Single-Rider-Schlange",
     type: "boolean",

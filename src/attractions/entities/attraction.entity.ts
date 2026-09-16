@@ -269,6 +269,34 @@ export class Attraction {
   curatedOutOfServiceTo: string | null;
 
   /**
+   * Whether the end of that works period is an estimate rather than a date the
+   * park has published.
+   *
+   * A rebuild usually has a season before it has a day: "back in spring" is
+   * what the park says for months, and an editor who writes 2026-03-31 to get
+   * the window closed has written a date nobody promised. The window still has
+   * to end somewhere — an open-ended one suppresses this ride's outages for
+   * ever — so the flag keeps the date load-bearing and lets the page say
+   * "probably until 31 March" instead of stating it.
+   *
+   * Three states like every other curated boolean: `true` the end is an
+   * estimate, `false` the park published it, `null` nobody has said. Null is
+   * NOT "certain": a window curated before this column existed carries it, and
+   * the difference between "we checked and it is firm" and "nobody looked" is
+   * the whole reason the curated booleans have three states.
+   *
+   * Only meaningful beside a `to`. An uncertain end with no end date is a
+   * curation leftover, and `resolveWorksPeriod()` drops it rather than serving
+   * an adverb with nothing to qualify.
+   */
+  @Column({
+    name: "curated_out_of_service_to_uncertain",
+    type: "boolean",
+    nullable: true,
+  })
+  curatedOutOfServiceToUncertain: boolean | null;
+
+  /**
    * Whether the ride has a single-rider line at all — a static fact about the
    * queue layout, not a live reading.
    *
