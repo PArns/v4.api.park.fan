@@ -253,12 +253,12 @@ day that differs from their calendar date, and they split as:
   days to 2026-09-15 closes at exactly 00:00, which cannot produce a divergence
   — over the full retention 23 of them do.
 
-**And it cuts both ways.** The calendar date asks the window about a day the row
-is not filed under, so an interval inside a declared works period escaped it —
-and an interval outside one was excluded by it. Which way round depends on the
-shape: a wrap loses an exclusion it should have, and an after-hours failure on
-the last declared evening gains one it should not, because it is filed under the
-morning after the period ends.
+**And it cuts both ways, in both shapes.** The calendar date asks the window
+about a day the row is not filed under, and which error that produces depends on
+which bound of the declared period the two days straddle, not on the shape: past
+the bound the interval escapes an exclusion it had earned, short of it the
+interval is excluded although its own day lies outside. Both shapes produce both,
+with the signs reversed — the e2e file pins one of each.
 
 Nothing had reported any of it because the population that can show it is empty:
 no attraction carries `curated_out_of_service_from`/`_to` today, so the
