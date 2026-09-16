@@ -110,9 +110,15 @@ function cachedScheduleDay(value: unknown): string {
   if (typeof value === "string") return value.split("T")[0];
   const day = new Date(value as never);
   if (Number.isNaN(day.getTime())) {
-    // A cached row whose date cannot be read names no day, and a string that
+    // A cached row whose date cannot be read names no day, and a value that
     // silently matches nothing is what this whole class of bug is made of.
-    // The old code threw too, one frame later, inside `formatInParkTimezone`.
+    // `date` is NOT NULL and every cached payload is `JSON.stringify` of a
+    // database row, so the set is empty by construction rather than by luck.
+    // This is louder than before on the one path that reads the day — there an
+    // Invalid Date reached `formatInParkTimezone` and threw a line later — and
+    // louder than before on the paths that read only the times, which used to
+    // carry the Invalid Date along harmlessly. The blast radius of the second
+    // kind is one park for one cycle: `writeHourlyHeartbeats` catches per park.
     throw new TypeError(
       `Cached schedule entry carries no readable date: ${JSON.stringify(value)}`,
     );
