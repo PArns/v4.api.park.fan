@@ -380,7 +380,8 @@ describe("ParksService", () => {
       {
         name: "getUpcomingSchedule",
         cacheKey: "schedule:upcoming",
-        call: async () => (await service.getUpcomingSchedule(parkId, 7))[0]?.date,
+        call: async () =>
+          (await service.getUpcomingSchedule(parkId, 7))[0]?.date,
       },
       {
         name: "getBatchSchedules",
