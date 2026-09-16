@@ -45,6 +45,11 @@ Three sentences in `park-validator.service.ts` and three in
 exist, two of them naming PAR-247 as the thing that would build it. They are
 rewritten rather than left standing beside it (§5.5a).
 
+This covers the endpoint and nothing else. `ParksService.repairDuplicates()`
+merges ghost parks on a shared `queue_times_entity_id` alone, in its own SQL,
+and `syncParks` awaits it unguarded — a second unattended deletion that this
+gate never sees. Named in §5.5a rather than widened into here.
+
 ### Fixed — a field a handler attaches to an error body now reaches the client
 
 `HttpExceptionFilter` is global and builds the error response itself, which is

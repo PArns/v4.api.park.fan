@@ -829,6 +829,14 @@ default would be a button that quietly stops working. It does honour an explicit
 sprang once: a request that says dry run, deletes the row, and prints the
 outcome as a preview.
 
+**What this gate does not cover, said out loud so the paragraphs above are not
+read as covering it:** `ParksService.repairDuplicates()` is a different path
+with the same effect. It groups parks by a shared `queue_times_entity_id` in SQL
+of its own, never calls `findDuplicates`, merges every ghost it finds without
+asking the name, and `syncParks` awaits it unguarded — so it runs on a schedule
+rather than on an admin's click. The criterion is the strong one (§5.3), but it
+is the id on its own, which is less than `safe` asks for here.
+
 ### 5.6 An entity changed its `entityType` and left its old row behind
 
 ThemeParks.wiki reclassifies entities **without changing their id**. On
