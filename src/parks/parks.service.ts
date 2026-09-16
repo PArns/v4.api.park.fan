@@ -83,6 +83,43 @@ export interface ScheduleSyncEntry {
  */
 class PriorityMergeIncompleteError extends Error {}
 
+/**
+ * Reads `schedule_entries.date` back out of Redis in the shape the database
+ * path hands out.
+ *
+ * `date` is a PostgreSQL DATE column, TypeORM returns it as a "YYYY-MM-DD"
+ * string, and `JSON.stringify` on a database row stores exactly that string.
+ * So the cache branches must hand it on unchanged. `new Date("2026-09-16")` is
+ * midnight UTC, and formatting THAT in a park west of Greenwich answers with
+ * the previous day: `ParkIntegrationService` compares the row's day against the
+ * park's own today, finds no match for every park in the Americas and falls
+ * through to the live lookup — but only while the cache is warm, which is why
+ * reproducing it from a cold start shows nothing.
+ *
+ * Same rule as `localDateOf` in `fillScheduleGaps`, as `saveScheduleData`,
+ * which normalises the feed's date-only string the same way on the write side,
+ * and as `ScheduleItemDto.fromEntity`, which is why the API payload was right
+ * on both paths while this comparison was not.
+ *
+ * The non-string branch covers a value that reached Redis as a `Date`. It reads
+ * the day back in **UTC**, not in the park's timezone: UTC is what
+ * `toISOString` used to write it, so it is the inverse. Park-local would be
+ * this same bug a second time.
+ */
+function cachedScheduleDay(value: unknown): string {
+  if (typeof value === "string") return value.split("T")[0];
+  const day = new Date(value as never);
+  if (Number.isNaN(day.getTime())) {
+    // A cached row whose date cannot be read names no day, and a string that
+    // silently matches nothing is what this whole class of bug is made of.
+    // The old code threw too, one frame later, inside `formatInParkTimezone`.
+    throw new TypeError(
+      `Cached schedule entry carries no readable date: ${JSON.stringify(value)}`,
+    );
+  }
+  return day.toISOString().split("T")[0];
+}
+
 @Injectable()
 export class ParksService {
   private readonly logger = new Logger(ParksService.name);
@@ -2744,7 +2781,7 @@ export class ParksService {
     if (parsed) {
       return parsed.map((entry) => ({
         ...entry,
-        date: new Date(entry.date),
+        date: cachedScheduleDay(entry.date),
         openingTime: entry.openingTime ? new Date(entry.openingTime) : null,
         closingTime: entry.closingTime ? new Date(entry.closingTime) : null,
       })) as ScheduleEntry[];
@@ -2796,7 +2833,7 @@ export class ParksService {
       if (parsed) {
         return {
           ...parsed,
-          date: new Date(parsed.date),
+          date: cachedScheduleDay(parsed.date),
           openingTime: parsed.openingTime ? new Date(parsed.openingTime) : null,
           closingTime: parsed.closingTime ? new Date(parsed.closingTime) : null,
         } as ScheduleEntry;
@@ -2897,7 +2934,7 @@ export class ParksService {
             parkId,
             parsed.map((entry) => ({
               ...entry,
-              date: new Date(entry.date),
+              date: cachedScheduleDay(entry.date),
               openingTime: entry.openingTime
                 ? new Date(entry.openingTime)
                 : null,
@@ -2921,7 +2958,7 @@ export class ParksService {
           if (parsed) {
             nextMap.set(parkId, {
               ...parsed,
-              date: new Date(parsed.date),
+              date: cachedScheduleDay(parsed.date),
               openingTime: parsed.openingTime
                 ? new Date(parsed.openingTime)
                 : null,
@@ -3091,7 +3128,7 @@ export class ParksService {
     if (cached) {
       return cached.map((entry) => ({
         ...entry,
-        date: new Date(entry.date),
+        date: cachedScheduleDay(entry.date),
         openingTime: entry.openingTime ? new Date(entry.openingTime) : null,
         closingTime: entry.closingTime ? new Date(entry.closingTime) : null,
       })) as ScheduleEntry[];
