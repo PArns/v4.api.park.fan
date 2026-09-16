@@ -51,10 +51,23 @@ describe("scheduled but silent parks (e2e)", () => {
   const parkLocalDate = (at: Date): string =>
     new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(at);
 
+  /**
+   * Two days rather than one, so `futureOperatingDays` is a count and not a
+   * constant a `count(*) = 1` bug would reproduce by accident.
+   */
+  const FUTURE_DAYS = [30, 60];
+  /**
+   * The same shape in the past. A park with NO schedule row at all would drop
+   * out of the join for a second reason, and the case below would stay green
+   * with the date comparison removed — measured: it did, until this fixture
+   * grew its past days.
+   */
+  const PAST_DAYS = [-60, -30];
+
   const seedPark = async (
     slug: string,
     rideCount: number,
-    opts: { futureSchedule: boolean },
+    opts: { scheduleDayOffsets: number[] },
   ): Promise<{ parkId: string; rideIds: string[] }> => {
     const park = await dataSource.getRepository(Park).save(
       dataSource.getRepository(Park).create({
@@ -89,21 +102,17 @@ describe("scheduled but silent parks (e2e)", () => {
       rideIds.push(ride.id);
     }
 
-    if (opts.futureSchedule) {
-      // Two days, so `futureOperatingDays` is a count and not a constant that a
-      // `count(*) = 1` bug would reproduce by accident.
-      for (const offset of [30, 60]) {
-        await dataSource.getRepository(ScheduleEntry).save(
-          dataSource.getRepository(ScheduleEntry).create({
-            parkId: park.id,
-            attractionId: null,
-            date: daysFromNow(offset) as unknown as Date,
-            scheduleType: ScheduleType.OPERATING,
-            openingTime: new Date(`${daysFromNow(offset)}T14:00:00Z`),
-            closingTime: new Date(`${daysFromNow(offset)}T23:00:00Z`),
-          }),
-        );
-      }
+    for (const offset of opts.scheduleDayOffsets) {
+      await dataSource.getRepository(ScheduleEntry).save(
+        dataSource.getRepository(ScheduleEntry).create({
+          parkId: park.id,
+          attractionId: null,
+          date: daysFromNow(offset) as unknown as Date,
+          scheduleType: ScheduleType.OPERATING,
+          openingTime: new Date(`${daysFromNow(offset)}T14:00:00Z`),
+          closingTime: new Date(`${daysFromNow(offset)}T23:00:00Z`),
+        }),
+      );
     }
 
     return { parkId: park.id, rideIds };
@@ -150,7 +159,9 @@ describe("scheduled but silent parks (e2e)", () => {
   });
 
   it("names the park whose schedule runs on while its feed stopped", async () => {
-    const silent = await seedPark("la-ronde-e2e", 3, { futureSchedule: true });
+    const silent = await seedPark("la-ronde-e2e", 3, {
+      scheduleDayOffsets: FUTURE_DAYS,
+    });
     // Old enough to be outside the window and recent enough to still be in the
     // 400-day lookback the report reads `lastReading` from — both halves of the
     // detector's date handling are exercised by this one row.
@@ -176,10 +187,10 @@ describe("scheduled but silent parks (e2e)", () => {
     // below would pass for the wrong reason, so it is read off the SAME call
     // that finds the silent park.
     const silent = await seedPark("still-silent-e2e", 2, {
-      futureSchedule: true,
+      scheduleDayOffsets: FUTURE_DAYS,
     });
     const healthy = await seedPark("still-talking-e2e", 2, {
-      futureSchedule: true,
+      scheduleDayOffsets: FUTURE_DAYS,
     });
     await reading(healthy.rideIds[0], daysAgo(1));
 
@@ -194,7 +205,7 @@ describe("scheduled but silent parks (e2e)", () => {
     // nothing about whether anyone is watching this park. Without
     // observedReadingsSql they would clear the anti-join and hide the park.
     const reconciled = await seedPark("reconciled-e2e", 2, {
-      futureSchedule: true,
+      scheduleDayOffsets: FUTURE_DAYS,
     });
     await reading(reconciled.rideIds[0], daysAgo(1), "system-reconciliation");
     await reading(reconciled.rideIds[1], daysAgo(1), "queue-times", true);
@@ -206,7 +217,7 @@ describe("scheduled but silent parks (e2e)", () => {
     // The gate that separates "a contradiction between two of our sources" from
     // "a park that is simply over for the season". Same silence, no claim.
     const overForTheYear = await seedPark("season-over-e2e", 2, {
-      futureSchedule: false,
+      scheduleDayOffsets: PAST_DAYS,
     });
 
     expect(await reportFor(overForTheYear.parkId)).toBeUndefined();
@@ -215,10 +226,10 @@ describe("scheduled but silent parks (e2e)", () => {
   describe("hasObservedReadingWithin", () => {
     it("separates the two parks the park payload has to tell apart", async () => {
       const silent = await seedPark("probe-silent-e2e", 2, {
-        futureSchedule: true,
+        scheduleDayOffsets: FUTURE_DAYS,
       });
       const talking = await seedPark("probe-talking-e2e", 2, {
-        futureSchedule: true,
+        scheduleDayOffsets: FUTURE_DAYS,
       });
       await reading(silent.rideIds[0], daysAgo(PARK_FEED_SILENT_DAYS + 1));
       await reading(talking.rideIds[0], daysAgo(PARK_FEED_SILENT_DAYS - 1));
@@ -242,7 +253,7 @@ describe("scheduled but silent parks (e2e)", () => {
 
     it("does not let a heartbeat stand in for an observation", async () => {
       const carried = await seedPark("probe-heartbeat-e2e", 1, {
-        futureSchedule: true,
+        scheduleDayOffsets: FUTURE_DAYS,
       });
       await reading(carried.rideIds[0], daysAgo(1), "queue-times", true);
 
