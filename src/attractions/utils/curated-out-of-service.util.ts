@@ -35,6 +35,68 @@ export interface CuratedOutOfServiceSource {
 }
 
 /**
+ * The same window as it leaves the API, plus how firm its end is.
+ *
+ * Served as `worksPeriod`, next to and never inside `outage`: an outage is a
+ * fault somebody is reporting right now, this is planned work somebody wrote
+ * down in advance, and a client that folds them together tells a visitor the
+ * ride broke when it is being rebuilt. The two live side by side on purpose.
+ *
+ * The keys drop the `curated` prefix the columns carry. That prefix is a
+ * statement about where the value comes from, which is the storage layer's
+ * question — no field this API serves has ever carried it, and a reader of the
+ * ride page has no use for the distinction.
+ */
+export interface WorksPeriod {
+  /** First park-local day, inclusive, or null for a window with no start. */
+  from: string | null;
+  /** Last park-local day, inclusive, or null while nobody knows when it ends. */
+  to: string | null;
+  /** Whether `to` is our estimate rather than a date the park published. */
+  toUncertain: boolean;
+}
+
+export interface WorksPeriodSource extends CuratedOutOfServiceSource {
+  curatedOutOfServiceToUncertain?: boolean | null;
+}
+
+/**
+ * The curated works period for the API, or null when nothing is curated.
+ *
+ * Null rather than a block of nulls: "no works period" is the state of nearly
+ * every ride in the catalogue, and an object saying so on each of them is
+ * payload on every park page for a fact that is almost always absent.
+ *
+ * Two normalisations, both so a client cannot render a half-statement:
+ *
+ * - `toUncertain` is false whenever `to` is null. An adverb needs a date to
+ *   qualify, and the pair (`to: null`, `toUncertain: true`) is a curation
+ *   leftover from clearing the end date and not clearing the flag.
+ * - `null` on the column reads as false here. Three states are what the EDITOR
+ *   needs — "nobody has looked" is worth seeing in the form — but a page has
+ *   two renderings, "until 3 March" and "probably until 3 March", and an
+ *   unchecked date gets the plain one.
+ *
+ * This deliberately says nothing about whether the window covers today.
+ * `isCuratedOutOfService()` answers that, it needs the park's timezone, and a
+ * client comparing these dates against the reader's own clock would open the
+ * window at the wrong moment for every park outside the reader's zone.
+ */
+export function resolveWorksPeriod(
+  source: WorksPeriodSource,
+): WorksPeriod | null {
+  const from = source.curatedOutOfServiceFrom ?? null;
+  const to = source.curatedOutOfServiceTo ?? null;
+  if (!from && !to) return null;
+
+  return {
+    from,
+    to,
+    toUncertain: to !== null && source.curatedOutOfServiceToUncertain === true,
+  };
+}
+
+/**
  * Whether a curated works period covers the given park-local day.
  *
  * @param source - The attraction's two curated date columns.

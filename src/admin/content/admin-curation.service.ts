@@ -221,8 +221,10 @@ export class AdminCurationService {
     // the ordinary way to close an open-ended window.
     if (
       changed.includes("curatedOutOfServiceFrom") ||
-      changed.includes("curatedOutOfServiceTo")
+      changed.includes("curatedOutOfServiceTo") ||
+      changed.includes("curatedOutOfServiceToUncertain")
     ) {
+      const key = "curatedOutOfServiceToUncertain";
       const from = attraction.curatedOutOfServiceFrom;
       const to = attraction.curatedOutOfServiceTo;
       if (from && to && to < from) {
@@ -231,6 +233,54 @@ export class AdminCurationService {
             `ends before it begins never applies.`,
         );
       }
+
+      // "That date is only an estimate" needs a date. The flag qualifies `to`
+      // and nothing else, so a `true` standing beside an empty one is visible
+      // nowhere — `resolveWorksPeriod()` drops it on the way out — and comes
+      // back to life the day an editor types the date the park has now
+      // published, hedging a date that was just confirmed.
+      //
+      // Read off the MERGED row for the same reason as the check above, so it
+      // catches every save that touches the window and not just the one that
+      // made the flag stale: clearing `to`, ticking the box on a window with
+      // no end, a save that does both, and one that only moves `from` while a
+      // stale flag is already sitting there. That last one clears a field the
+      // editor did not send, which is deliberate — the state is wrong however
+      // it got there, and the audit row says what happened. Normalised rather
+      // than rejected, because clearing the end of an open-ended window is the
+      // ordinary edit and must not need a second one.
+      if (to === null && attraction.curatedOutOfServiceToUncertain !== null) {
+        // `before` may already hold this key from the diff loop — a save that
+        // changes the flag AND clears the date sends both, and the admin form
+        // does exactly that, since the three fields sit in one group. Taking
+        // the row's current value there would record a `before` the row never
+        // had, and `revert()` would write it back.
+        if (!(key in before)) {
+          before[key] = attraction.curatedOutOfServiceToUncertain;
+        }
+        after[key] = null;
+        if (!changed.includes(key)) changed.push(key);
+        attraction.curatedOutOfServiceToUncertain = null;
+
+        // Ticking the box on a window with no end lands here having changed
+        // nothing: the diff loop recorded `null → true`, this put it back, and
+        // what is left is a save, a cache eviction, three revalidation calls
+        // and an audit row reading `null → null`. That is what the early
+        // return above exists to prevent, so the key leaves the edit the same
+        // way it entered it.
+        if (before[key] === null) {
+          delete before[key];
+          delete after[key];
+          changed.splice(changed.indexOf(key), 1);
+        }
+      }
+    }
+
+    // The normalisation above can empty the edit, so the same question is
+    // asked once more — the early return is before it because everything
+    // between the two reads `changed`.
+    if (changed.length === 0) {
+      return { entity: attraction, changed: [], auditId: null };
     }
 
     if (changed.includes("rcdbId") && attraction.rcdbId !== null) {

@@ -115,6 +115,9 @@ function anAttraction(overrides: Record<string, unknown> = {}) {
     mayGetWet: null,
     curatedMayGetWet: null,
     hasSingleRider: null,
+    curatedOutOfServiceFrom: null,
+    curatedOutOfServiceTo: null,
+    curatedOutOfServiceToUncertain: null,
     openWithPark: false,
     rcdbId: null,
     ...overrides,
@@ -550,6 +553,220 @@ describe("AdminCurationService", () => {
         unknown
       >;
       expect(saved.curatedMinimumHeight).toBeNull();
+    });
+  });
+
+  describe("the works period", () => {
+    it("refuses a window that ends before it begins", async () => {
+      const attraction = anAttraction({
+        curatedOutOfServiceFrom: "2026-03-03",
+        curatedOutOfServiceTo: null,
+      });
+      const { service } = build(attraction);
+
+      await expect(
+        service.curateAttraction(
+          "ride-1",
+          { fields: { curatedOutOfServiceTo: "2026-01-16" } },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/ends before it begins/);
+    });
+
+    it("clears the estimate flag when the end date is cleared", async () => {
+      // The flag qualifies `to` and nothing else. Left standing beside an empty
+      // date it is invisible — resolveWorksPeriod() drops it — and comes back
+      // the day an editor types the date the park has now published, hedging a
+      // date that was just confirmed.
+      const attraction = anAttraction({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      });
+      const { service, attractions } = build(attraction);
+
+      const result = await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedOutOfServiceTo: null } },
+        ACTOR,
+      );
+
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.curatedOutOfServiceTo).toBeNull();
+      expect(saved.curatedOutOfServiceToUncertain).toBeNull();
+      // Audited as its own change, or the log shows one edit and the row holds
+      // two.
+      expect(result.changed).toContain("curatedOutOfServiceToUncertain");
+    });
+
+    it("leaves the flag alone while the end date stands", async () => {
+      const attraction = anAttraction({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      });
+      const { service, attractions } = build(attraction);
+
+      await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedOutOfServiceFrom: "2026-01-20" } },
+        ACTOR,
+      );
+
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.curatedOutOfServiceToUncertain).toBe(true);
+    });
+
+    it("records the flag's stored value when one save clears both", async () => {
+      // The admin form sends every dirty key in one request and the three
+      // fields sit in one group, so this is the ordinary shape of the edit. The
+      // normalisation must not overwrite the `before` the diff loop already
+      // recorded — an audit row saying the flag was `false` beforehand makes
+      // revert() write `false`, which hangs a firm date on an estimate.
+      const attraction = anAttraction({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      });
+      const { service, audit, attractions } = build(attraction);
+
+      await service.curateAttraction(
+        "ride-1",
+        {
+          fields: {
+            curatedOutOfServiceTo: null,
+            curatedOutOfServiceToUncertain: false,
+          },
+        },
+        ACTOR,
+      );
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          before: expect.objectContaining({
+            curatedOutOfServiceToUncertain: true,
+          }),
+          after: expect.objectContaining({
+            curatedOutOfServiceToUncertain: null,
+          }),
+        }),
+      );
+
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.curatedOutOfServiceToUncertain).toBeNull();
+    });
+
+    it("clears a flag ticked on a window that has no end date", async () => {
+      // The other way into the same contradiction: nothing about the dates
+      // changed, so a rule hanging on the two date keys alone would store it.
+      // And the edit ends up empty — the diff loop wrote null → true and this
+      // put it back — so it must leave no save, no audit row and no reported
+      // change behind, exactly like a PATCH that changed nothing at all.
+      const attraction = anAttraction({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: null,
+      });
+      const { service, attractions, audit, calls } = build(attraction);
+
+      const result = await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedOutOfServiceToUncertain: true } },
+        ACTOR,
+      );
+
+      expect(attraction.curatedOutOfServiceToUncertain).toBeNull();
+      expect(result.changed).toEqual([]);
+      expect(attractions.save).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    });
+
+    it("keeps a flag the editor withdraws on a window with no end date", async () => {
+      // Not the same case: the row said "we checked, the date is firm" and the
+      // editor is taking that back. `false → null` is a real change even though
+      // the stored value lands on null, so it is saved and audited.
+      const attraction = anAttraction({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: false,
+      });
+      const { service, attractions } = build(attraction);
+
+      const result = await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedOutOfServiceToUncertain: true } },
+        ACTOR,
+      );
+
+      expect(result.changed).toEqual(["curatedOutOfServiceToUncertain"]);
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.curatedOutOfServiceToUncertain).toBeNull();
+    });
+
+    it("clears a stale flag on a save that only moves the start date", async () => {
+      // The fourth way in, and the only one that touches a field the editor did
+      // not send. The row is already in the state the rule forbids — a flag
+      // with no date to qualify — so it is normalised here rather than left for
+      // the day somebody types an end date and gets a hedge on it.
+      const attraction = anAttraction({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: true,
+      });
+      const { service, attractions, audit } = build(attraction);
+
+      const result = await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedOutOfServiceFrom: "2026-01-20" } },
+        ACTOR,
+      );
+
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.curatedOutOfServiceFrom).toBe("2026-01-20");
+      expect(saved.curatedOutOfServiceToUncertain).toBeNull();
+      expect(result.changed).toContain("curatedOutOfServiceToUncertain");
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          before: expect.objectContaining({
+            curatedOutOfServiceToUncertain: true,
+          }),
+        }),
+      );
+    });
+
+    it("does not invent a change when no flag was ever set", async () => {
+      // A null flag beside a cleared date is already the state this rule
+      // produces, so touching it would file an audit row over nothing.
+      const attraction = anAttraction({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: null,
+      });
+      const { service } = build(attraction);
+
+      const result = await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedOutOfServiceTo: null } },
+        ACTOR,
+      );
+
+      expect(result.changed).toEqual(["curatedOutOfServiceTo"]);
     });
   });
 

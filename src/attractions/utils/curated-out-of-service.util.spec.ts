@@ -1,6 +1,7 @@
 import {
   attractionIsCuratedOutOfService,
   isCuratedOutOfService,
+  resolveWorksPeriod,
 } from "./curated-out-of-service.util";
 
 /** Collapses the SQL's formatting so assertions can match on wording alone. */
@@ -100,5 +101,74 @@ describe("attractionIsCuratedOutOfService", () => {
     expect(sql).toMatch(
       /\(\s*\(a\.curated_out_of_service_from IS NOT NULL OR a\.curated_out_of_service_to IS NOT NULL\)/,
     );
+  });
+});
+
+describe("resolveWorksPeriod", () => {
+  it("is null when neither bound is curated", () => {
+    // The state of nearly every ride in the catalogue. A block of nulls here
+    // would ride along on every attraction of every park payload for a fact
+    // that is almost always absent.
+    expect(resolveWorksPeriod({})).toBeNull();
+    expect(
+      resolveWorksPeriod({
+        curatedOutOfServiceFrom: null,
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("carries both bounds and the estimate flag", () => {
+    expect(
+      resolveWorksPeriod({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    ).toEqual({ from: "2026-01-16", to: "2026-03-03", toUncertain: true });
+  });
+
+  it("keeps a window that only has a start", () => {
+    // The usual case while work is running: nobody has been told when it ends.
+    expect(
+      resolveWorksPeriod({ curatedOutOfServiceFrom: "2026-01-16" }),
+    ).toEqual({ from: "2026-01-16", to: null, toUncertain: false });
+  });
+
+  it("keeps a window that only has an end", () => {
+    expect(resolveWorksPeriod({ curatedOutOfServiceTo: "2026-03-03" })).toEqual(
+      {
+        from: null,
+        to: "2026-03-03",
+        toUncertain: false,
+      },
+    );
+  });
+
+  it("drops an estimate flag that has no end date to qualify", () => {
+    // What clearing the end date and not the checkbox leaves behind. Served as
+    // true it would tell a client to hedge a date that is not there.
+    expect(
+      resolveWorksPeriod({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    ).toEqual({ from: "2026-01-16", to: null, toUncertain: false });
+  });
+
+  it("reads an uncurated flag as a plain date, not as a hedge", () => {
+    // The column has three states because the EDITOR needs them — "nobody has
+    // looked" is worth seeing in the form. A page has two renderings, so null
+    // and false both get the plain one.
+    for (const flag of [null, undefined, false]) {
+      expect(
+        resolveWorksPeriod({
+          curatedOutOfServiceFrom: "2026-01-16",
+          curatedOutOfServiceTo: "2026-03-03",
+          curatedOutOfServiceToUncertain: flag,
+        })?.toUncertain,
+      ).toBe(false);
+    }
   });
 });

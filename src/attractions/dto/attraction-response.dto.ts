@@ -26,6 +26,8 @@ import {
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
 import { RideProfileDto } from "./ride-profile.dto";
+import { WorksPeriodDto } from "./works-period.dto";
+import { resolveWorksPeriod } from "../utils/curated-out-of-service.util";
 import { FastPassDto } from "./fast-pass.dto";
 import { resolveFastPass } from "../utils/fast-pass.util";
 
@@ -198,6 +200,22 @@ export class AttractionResponseDto {
     type: AttractionOutageDto,
   })
   outage?: AttractionOutageDto;
+
+  @ApiProperty({
+    description:
+      "The curated works period this ride is closed for — a rebuild or a " +
+      "refit somebody wrote down in advance. Absent unless an editor has " +
+      "curated one, which is the state of nearly every ride. Deliberately " +
+      "beside `outage` rather than inside it: an outage is a fault the site " +
+      "noticed, this is planned work, and inside this window the API reports " +
+      "no outage at all. Both dates are park-local and inclusive, and the " +
+      "block says nothing about whether the window is running today — compare " +
+      "them in `park.timezone`, never against the reader's own clock.",
+    required: false,
+    nullable: true,
+    type: WorksPeriodDto,
+  })
+  worksPeriod?: WorksPeriodDto | null;
 
   @ApiProperty({
     description:
@@ -564,6 +582,9 @@ export class AttractionResponseDto {
       maximumHeight: curated.maximumHeight,
       mayGetWet: curated.mayGetWet,
       hasSingleRider: attraction.hasSingleRider ?? null,
+      // Null for nearly every ride, so it is one absent key rather than a
+      // block of nulls on every attraction of every park payload.
+      worksPeriod: resolveWorksPeriod(attraction),
       // The name lives on the park row, so this is the one resolver that needs
       // both entities. A projection that did not join the park still resolves —
       // it just falls back to the neutral name and withholds the price.

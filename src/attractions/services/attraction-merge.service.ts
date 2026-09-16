@@ -557,6 +557,21 @@ export class AttractionMergeService {
    * no trace and nothing to notice it by — the value simply reverts to
    * whatever the sync last wrote, months after anybody remembers deciding
    * otherwise. Add a curated column to the entity, add it here.
+   *
+   * Three columns break that rule today and are tracked as PAR-297: the works
+   * period's `curatedOutOfServiceFrom` / `_to` / `_toUncertain`. They are left
+   * off deliberately rather than by oversight, because this loop fills column
+   * by column: a winner holding a start and no end would take the loser's end
+   * and build a window that ends before it begins — the pair the curation
+   * endpoint rejects outright, and since PAR-287 one that is served. Putting
+   * them on needs the window inherited as a set, which is a change to the loop
+   * below and not to this list.
+   *
+   * The price is the loss the paragraph above calls unacceptable: until then a
+   * merge drops the losing row's works period silently, and `previewMerge`
+   * does not report it (`droppedCurations` covers ride profiles alone). The
+   * rare inverted window was preferred over the common silent loss only
+   * because the first reaches readers and the second can be curated again.
    */
   private static readonly INHERITABLE_COLUMNS = [
     "queueTimesEntityId",

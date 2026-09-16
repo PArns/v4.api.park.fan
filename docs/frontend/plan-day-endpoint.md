@@ -364,6 +364,12 @@ Three boundaries are worth stating outright:
   reading in the outage path; letting an `OPERATING` row through here would
   delete its purpose exactly where an editor took the trouble to state it.
 
+The window itself is served, so a client can say why the ride is missing rather
+than leaving a gap: `worksPeriod` (`from`, `to`, `toUncertain`) sits on the
+attraction response and on each attraction of the park payload. It is absent
+here on purpose — this endpoint plans a day, and a ride that cannot open on it
+has no row at all.
+
 ## 7. `leadTimeMae`
 
 The measured mean absolute error for predictions made this far ahead, in minutes,
