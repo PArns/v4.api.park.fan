@@ -24,8 +24,9 @@
  * `require` it, and the repository's one answer to that is `test/mocks/marked.ts`
  * — a stub whose `parse` returns its input. A check mapped to that stub would
  * measure the stub. This guard has to run in `pnpm test`, because no backend
- * workflow runs a `package.json` script, so it is written out here and every
- * disagreement with a real parser is pinned as a case in the spec beside it.
+ * workflow runs a `package.json` script, so it is written out here — and both
+ * sides of its disagreement with a real parser, the over-refusals and the four
+ * known gaps, are pinned as cases in the spec beside it.
  */
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
@@ -197,27 +198,37 @@ function closes(
  * comments.
  *
  * So the check asks a question it can answer exactly: is there a line of dashes
- * or equals outside a fence? It cannot miss a setext heading, because every one
- * of them needs such a line. Measured the same way over 11,686 generated
- * bodies: **0 misses**, and 2,220 refusals of a `---` that would have rendered
- * as a harmless thematic break. That is the trade, and it points the safe way —
- * the cost is a horizontal rule inside an entry, which **none of the 161
- * entries in `docs/changelog.md` has** (the four lines that match are
- * separators *between* entries and between release sections, which is a place a
- * fragment never reaches), and which an author fixes by deleting it.
+ * or equals outside a fence, at the left margin? It cannot miss a **top-level**
+ * setext heading, because every one of them needs such a line. Measured the
+ * same way over 11,686 generated bodies: **0 misses**, and 2,220 refusals of a
+ * `---` that would have rendered as a harmless thematic break. That is the
+ * trade, and it points the safe way — the cost is a horizontal rule inside an
+ * entry, which **none of the 161 entries in `docs/changelog.md` has** (the six
+ * lines that match are separators *between* entries and between release
+ * sections, which is a place a fragment never reaches), and which an author
+ * fixes by deleting it.
+ *
+ * "Top-level" is the whole scope, and it is the right one: a heading nested in
+ * a blockquote or a list item renders inside `<blockquote>`/`<li>` and does not
+ * cut `[Unreleased]` in half, so `> text\n> ---` and `- ## l` are let through
+ * on purpose. The one real gap is raw HTML — `<h2>x</h2>` renders a top-level
+ * heading and is not caught. All four shapes are pinned in the spec as the
+ * known gaps they are.
  */
 const RULE_LINE = /^ {0,3}(-+|=+)[ \t]*$/;
 
 /**
  * The index of the first line that opens a section, or `-1`.
  *
- * "Section" is whatever ends up as an `<h1>` or `<h2>` in the assembled file,
- * because that is what cuts `[Unreleased]` in half — not one syntax for it. Two
- * shapes qualify: an ATX heading (`# ` or `## `, up to three spaces in, marked
- * off by a space, a tab or the end of the line) and a {@link RULE_LINE}, which
- * is refused wherever it appears rather than resolved against its context.
- * Level 1 counts as well as level 2: it splits the file one level *above*
- * `[Unreleased]`, which is worse than the case the check was first written for.
+ * "Section" is what cuts `[Unreleased]` in half: a **top-level** `<h1>` or
+ * `<h2>`, in either syntax. Two shapes qualify — an ATX heading (`# ` or `## `,
+ * up to three spaces in, marked off by a space, a tab or the end of the line)
+ * and a {@link RULE_LINE}, which is refused wherever it appears rather than
+ * resolved against its context. Level 1 counts as well as level 2: it splits
+ * the file one level *above* `[Unreleased]`, which is worse than the case the
+ * check was first written for. What is deliberately **not** a section here is a
+ * heading nested in a container (`> ## q`, `- ## l`) — it renders inside the
+ * container and cuts nothing.
  *
  * Fenced blocks are skipped, because an entry about the changelog's own
  * structure quotes a `## ` line inside one — the spec case `allows a '## ' line

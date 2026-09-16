@@ -46,7 +46,18 @@ function report(problems: FragmentProblem[]): void {
  * right up to the release that fails.
  */
 function missingHeading(): string | null {
-  const changelog = readFileSync(join(ROOT, CHANGELOG_FILE), "utf8");
+  let changelog: string;
+  try {
+    changelog = readFileSync(join(ROOT, CHANGELOG_FILE), "utf8");
+  } catch (error) {
+    // A missing changelog is the same kind of answer as a missing heading, and
+    // it belongs on the `✗` line rather than in a stack trace.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return `${CHANGELOG_FILE} does not exist`;
+    }
+    throw error;
+  }
+
   return hasUnreleasedHeading(changelog)
     ? null
     : `${CHANGELOG_FILE} has no "${UNRELEASED_HEADING}" heading to fold into`;

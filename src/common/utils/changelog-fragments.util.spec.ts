@@ -145,6 +145,22 @@ describe("checkFragment", () => {
     ).toBeNull();
   });
 
+  it("lets a heading nested in a container through, and raw HTML with it", () => {
+    // The known gaps, measured against commonmark 0.31.2 and pinned so the
+    // claim above them stays true. The first three render the heading inside
+    // `<blockquote>` or `<li>`, so they cut nothing — they are gaps on purpose.
+    for (const body of ["> ## q", "- ## l", "> text\n> ---"]) {
+      expect(
+        checkFragment("PAR-1.md", `### Added — t\n\n${body}\n`),
+      ).toBeNull();
+    }
+    // This one is a real gap: raw HTML renders a top-level <h2>. Nobody writes
+    // HTML in a changelog entry, and catching it means parsing HTML blocks.
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\n<h2>x</h2>\n"),
+    ).toBeNull();
+  });
+
   it("leaves the rule-shaped lines that are not a rule line", () => {
     // A table delimiter row starts with a pipe, a quoted rule is inside a
     // fence, and a dash in running prose is not on a line of its own.

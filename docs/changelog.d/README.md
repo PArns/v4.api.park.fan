@@ -40,8 +40,10 @@ pnpm changelog:merge
 ```
 
 folds every fragment in here under `## [Unreleased]` in `docs/changelog.md`,
-newest issue number first, and deletes the files it folded in. Nothing already
-in `docs/changelog.md` is rewritten.
+newest issue number first, and deletes the files it folded in. The entries
+already in `docs/changelog.md` are carried over as they stand; the only thing
+that changes is the run of blank lines directly under the heading, which becomes
+one.
 
 ## Why
 
