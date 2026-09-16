@@ -6,6 +6,66 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — `autoDetect` reports what it would merge instead of merging it
+
+`POST /v1/admin/merge-duplicate-parks` with `autoDetect: true` took every pair
+`ParkValidatorService.findDuplicates()` returned and merged it, one transaction
+each and no undo. There was no `dryRun`, no per-pair verdict and no threshold in
+between, so a false positive deleted a real park — and the only way to ask what
+the endpoint would do was to let it do it. The attraction side has had both
+halves on its batch path from the start — and its single-pair branch did not,
+which is the trap named further down: until `4683c2c` (#192) it handed the two
+ids straight to `mergeAttractions`, so a `dryRun: true` there deleted the row
+and printed the outcome as a rehearsal.
+
+**A pair is `safe` on one combination:** a shared upstream entity value, which
+is one source saying these two rows are one park, plus a name score of at least
+0.95. That is the existing `nameSimilarity >= 0.95 && sharedEntityId` branch
+reused rather than a second rule, so the safe set is a subset of the detected
+set. Both real production duplicates are in it; a mis-assigned id is not, since
+the name still has to agree.
+
+**`sharedPoint` — the branch PAR-160 added, and the first to admit a pair
+scoring under 0.85 on names — is never safe, structurally.** It requires
+`sourcesDisjoint`, and a shared id value means both rows carry that source, so
+the two cannot hold at once. Nothing here special-cases the branch, which is
+what keeps the two from drifting apart.
+
+`autoDetect` now writes nothing unless `dryRun: false` is sent, and that flag
+buys the write and not the decision: a pair marked for review is returned under
+`skipped` with its winner resolved, never merged. The response gained `dryRun`,
+`planned` and `skipped`; `GET /v1/admin/duplicate-parks` counts `safe` and
+`needsReview` apart, like the attraction listing.
+
+**The manual pair keeps its default.** `park1Id` + `park2Id` is a deliberate act
+and the admin's merge button sends exactly that body with no `dryRun`; a flipped
+default there would be a button that stops working and reports success. An
+explicit `dryRun: true` previews the resolved winner without writing, so the
+endpoint cannot be asked for a dry run and answer with a deletion.
+
+Seven sentences said this gate did not exist — three in
+`park-validator.service.ts`, three in
+`docs/architecture/attraction-status-and-seasonality.md`, two of those naming
+PAR-247 as the thing that would build it, and one in the docblock of
+`listDuplicateParks`, which described the merge-everything behaviour in the
+present tense and was found only by the third review pass. All are rewritten
+rather than left standing beside the code that makes them false (§5.5a).
+
+Both flags are parsed rather than compared. The body takes no DTO and Nest
+parses form-encoded requests by default, so `dryRun=true` arrives as the string
+`"true"` — which is not `true`, and the strict comparison would have merged on
+the one request that asked for a dry run. `"true"`/`"false"` are read on
+`dryRun` and `autoDetect`; anything else is a 400 rather than a side taken.
+A pair left in `skipped` whose row was merged by a safe pair in the same run
+says so in its `reviewReason`, because the id it names no longer exists.
+
+This covers the endpoint and nothing else. `ParksService.repairDuplicates()`
+merges ghost parks on a shared `queue_times_entity_id` alone, in its own SQL —
+a second unattended deletion that this gate never sees. It runs at the end of
+`syncParks()`, whose own two callers both run it only on a catalogue that came
+back empty, so it is a bootstrap path rather than a daily one; counted, not
+assumed. Named in §5.5a and filed as PAR-262 rather than widened into here.
+
 ### Fixed — a field a handler attaches to an error body now reaches the client
 
 `HttpExceptionFilter` is global and builds the error response itself, which is

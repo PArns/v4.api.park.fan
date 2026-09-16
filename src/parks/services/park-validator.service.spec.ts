@@ -317,6 +317,74 @@ describe("ParkValidatorService.findDuplicates", () => {
     expect(duplicates[0].score).toBeLessThan(0.85);
   });
 
+  /**
+   * `safe` is what `autoDetect` acts on, so these three pin which evidence
+   * buys an unattended deletion. The two real production duplicates do; the
+   * pair that rests on geometry does not.
+   */
+  it("marks the two pairs with a shared upstream id safe to merge unattended", async () => {
+    parkRepository.find.mockResolvedValue([
+      ushLosAngeles,
+      ushBullCreek,
+      ioaOrlando,
+      ioaTampa,
+    ]);
+
+    const duplicates = await service.findDuplicates();
+
+    expect(duplicates).toHaveLength(2);
+    for (const pair of duplicates) {
+      expect(pair.safe).toBe(true);
+      expect(pair.reviewReason).toBeNull();
+    }
+  });
+
+  it("never marks a sharedPoint pair safe, because it cannot carry a shared id", async () => {
+    parkRepository.find.mockResolvedValue([wetnwildWiki, wetnwildQueueTimes]);
+
+    const [pair] = await service.findDuplicates();
+
+    // Not a special case for this branch: `sharedPoint` requires
+    // `sourcesDisjoint`, and a shared id value means both rows carry that
+    // source, so the two can never hold at once.
+    expect(pair.sharedEntityIds).toEqual({
+      wiki: false,
+      queueTimes: false,
+      wartezeiten: false,
+    });
+    expect(pair.safe).toBe(false);
+    expect(pair.reviewReason).toContain("no upstream source holds one id");
+  });
+
+  it("refuses a shared id whose names do not agree — the second venue at one address", async () => {
+    // A water park beside the theme park it is named after, close enough on
+    // the name to be detected (0.8621, same city) and carrying the theme
+    // park's wartezeiten id — an upstream mis-assignment, which is the only
+    // way two different venues end up on one id. That combination is the
+    // dangerous one the issue names — Legoland Windsor against its water park
+    // is the same shape — and the id on its own would have deleted it.
+    const waterPark = park({
+      id: "ioa-water",
+      name: "Universal Islands of Adventure Water Park",
+      city: "Orlando",
+      latitude: 28.4705,
+      longitude: -81.4702,
+      wikiEntityId: null,
+      queueTimesEntityId: null,
+      wartezeitenEntityId: ioaOrlando.wartezeitenEntityId,
+    });
+    parkRepository.find.mockResolvedValue([ioaOrlando, waterPark]);
+
+    const [pair] = await service.findDuplicates();
+
+    expect(pair).toBeDefined();
+    expect(pair.sharedEntityIds.wartezeiten).toBe(true);
+    expect(pair.score).toBeGreaterThanOrEqual(0.85);
+    expect(pair.score).toBeLessThan(0.95);
+    expect(pair.safe).toBe(false);
+    expect(pair.reviewReason).toContain("names score");
+  });
+
   it("still needs the name to say something — a suffix, not a different park", async () => {
     // Same two rows, but the Queue-Times row is renamed to a park that merely
     // shares the address. Geography and sources are untouched.

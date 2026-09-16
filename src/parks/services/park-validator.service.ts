@@ -61,10 +61,15 @@ export interface MissingWzId {
  * The branch that catches it asks three conditions: the two constants below
  * and the source-disjointness test in `findDuplicates` itself. Both constants
  * were placed against the whole catalogue (213 parks, all carrying
- * coordinates, 22 578 pairs) rather than chosen, because
- * `POST merge-duplicate-parks` with `autoDetect: true` merges whatever this
- * function returns — with no dry run and no review gate, so a false positive
- * deletes a real park.
+ * coordinates, 22 578 pairs) rather than chosen, because this function's
+ * result is what `POST merge-duplicate-parks` acts on, and a false positive
+ * there deletes a real park.
+ *
+ * Since PAR-247 it is no longer the only thing between a false positive and
+ * that deletion: every pair carries `safe`, `autoDetect` merges the safe ones
+ * alone, and it writes nothing at all without `dryRun: false`. A `sharedPoint`
+ * pair is never safe. The constants still decide what an operator is shown,
+ * which is why they stay measured rather than estimated.
  */
 
 /**
@@ -133,19 +138,19 @@ const SHARED_POINT_KM = 0.01;
  * floor alone. The margin there is wide. But a water park
  * that synced in on its resort's point, from a source the theme-park row does
  * not carry, with a name like `Legoland Windsor` against its water park
- * (0.7429), would satisfy all three conditions, and `autoDetect: true` would
- * delete it without a dry run. No such row exists in the catalogue today
- * (measured: nothing above this floor sits closer than 0.1174 km except the
- * pair this branch is for). The gate that would make it safe rather than
- * merely unlikely is PAR-247.
+ * (0.7429), would satisfy all three conditions. No such row exists in the
+ * catalogue today (measured: nothing above this floor sits closer than
+ * 0.1174 km except the pair this branch is for), and since PAR-247 such a row
+ * would be reported rather than merged: `sharedPoint` cannot be `safe`, so
+ * `autoDetect` leaves it for a human whatever the geometry says.
  *
  * **Any shared placeholder geocode is the same hazard**, not only a resort's.
  * `usableCoordinate` refuses `0, 0` because that is the placeholder this repo
  * writes, but a source falling back to a city or state centroid puts two rows
  * on one point just as exactly, and a value-specific refusal cannot see it.
  * Another threshold does not help — the radius cannot tell a shared address
- * from a shared fallback — so this belongs to what PAR-247's review gate has
- * to catch.
+ * from a shared fallback — which is why the review gate and not this constant
+ * is what stands between such a pair and a deletion.
  */
 const SHARED_POINT_NAME_SIMILARITY = 0.65;
 
@@ -215,6 +220,19 @@ function usableCoordinate(park: {
   return { latitude, longitude };
 }
 
+/**
+ * The name floor a pair needs before an automatic merge may delete one of its
+ * two rows.
+ *
+ * It is the floor of the `nameSimilarity >= AUTO_MERGE_NAME_SIMILARITY &&
+ * sharedEntityId` branch below, and it is the same constant in both places
+ * rather than the same number: `safe` IS that one branch, so the safe set is a
+ * subset of the detected set by construction, and two literals would let
+ * somebody raise the branch above the verdict — which would mark a pair safe
+ * that only a weaker branch ever detected.
+ */
+const AUTO_MERGE_NAME_SIMILARITY = 0.95;
+
 export interface DuplicatePair {
   park1: { id: string; name: string; city: string | null };
   park2: { id: string; name: string; city: string | null };
@@ -225,6 +243,41 @@ export interface DuplicatePair {
     queueTimes?: boolean;
     wartezeiten?: boolean;
   };
+  /**
+   * Whether this pair carries enough evidence to be merged without a human
+   * looking at it. `POST merge-duplicate-parks` with `autoDetect: true` merges
+   * the safe ones and nothing else.
+   *
+   * Two conditions: an upstream source's own statement, and names that agree.
+   * The attraction side asks the same pair of questions and the **polarity of
+   * the first one is reversed there**, which is worth saying rather than
+   * papering over with an analogy. `isSafeToAutoMerge` takes the name as its
+   * positive evidence and treats a source that issued BOTH ids as a refusal —
+   * two ids from one source are that source saying these are two rides. Here
+   * the ids are the evidence and the name is the check, because a park row
+   * carries one id per source: two rows on the SAME value is that source
+   * saying these are one park. Same two questions, opposite sign, because an
+   * equal id and a second id are not the same fact.
+   *
+   * Here the evidence is a shared entity **value** — one
+   * external park cannot be two parks, which is why this branch exists at all
+   * and why both real production duplicates carried one. Names still have to
+   * agree, because a shared id can also be a mis-assignment, and a mis-assigned
+   * id plus a name nobody checked is how a real park gets deleted.
+   *
+   * Everything else is `false`: a name against a city, a name against a
+   * geocode, and `sharedPoint`. Those are heuristics measured against the
+   * catalogue as it stands today, and the catalogue is upstream's to change.
+   *
+   * `sharedPoint` is out **structurally rather than by a special case**: it
+   * requires `sourcesDisjoint`, which is false as soon as both rows carry an
+   * id from the same source — and an equal value means exactly that. So
+   * `sharedPoint` implies `!sharedEntityId` implies `!safe`, and there is no
+   * second rule here to drift out of step with that one.
+   */
+  safe: boolean;
+  /** Why a human has to look, or null when nobody has to. */
+  reviewReason: string | null;
 }
 
 export interface ValidationReport {
@@ -457,6 +510,10 @@ export class ParkValidatorService {
    * one point that no upstream source lists twice are the same place even when
    * one of them carries a regional suffix the other does not. See
    * `SHARED_POINT_KM`.
+   *
+   * **A returned pair is a report, not an instruction.** Which of them may be
+   * merged with nobody watching is `safe`, and a caller that deletes a row
+   * reads that field — see `DuplicatePair.safe`.
    */
   async findDuplicates(): Promise<DuplicatePair[]> {
     const allParks = await this.parkRepository.find({
@@ -551,7 +608,7 @@ export class ParkValidatorService {
           // ghost, and it must not also shield it from detection. The shared
           // ID is the verifier that keeps genuinely distinct same-name parks
           // (Disneyland Paris vs Anaheim) out.
-          (nameSimilarity >= 0.95 && sharedEntityId);
+          (nameSimilarity >= AUTO_MERGE_NAME_SIMILARITY && sharedEntityId);
 
         if (isDuplicate) {
           const reasons: string[] = [];
@@ -563,6 +620,14 @@ export class ParkValidatorService {
           if (sharedWiki) reasons.push("shared wiki ID");
           if (sharedQueueTimes) reasons.push("shared queue-times ID");
           if (sharedWartezeiten) reasons.push("shared wartezeiten ID");
+
+          const safe =
+            sharedEntityId && nameSimilarity >= AUTO_MERGE_NAME_SIMILARITY;
+          const reviewReason = safe
+            ? null
+            : !sharedEntityId
+              ? "no upstream source holds one id for both rows — this pair rests on names and geometry alone"
+              : `names score ${nameSimilarity.toFixed(4)} against ${AUTO_MERGE_NAME_SIMILARITY} — "${p1.name}" vs "${p2.name}", so the shared id alone would be deciding this`;
 
           duplicates.push({
             park1: { id: p1.id, name: p1.name, city: p1.city },
@@ -576,6 +641,8 @@ export class ParkValidatorService {
               queueTimes: sharedQueueTimes,
               wartezeiten: sharedWartezeiten,
             },
+            safe,
+            reviewReason,
           });
         }
       }
