@@ -1837,17 +1837,23 @@ export class AdminController {
       // which is worse than reporting nothing. The two ids in the verdict make
       // that answerable here instead of only at the call site that built both
       // lists.
-      repairResult.pairs.forEach((verdict, index) => {
-        const pair = planned[index];
+      //
+      // The walk goes over `planned` and not over the verdicts, so that a list
+      // which is too SHORT is a reported error rather than a quiet tail of
+      // pairs nobody accounts for — which would be this issue's own bug in a
+      // new place. Surplus verdicts are reported after the loop, so neither
+      // direction can go missing.
+      planned.forEach((pair, index) => {
+        const verdict = repairResult.pairs[index];
 
         if (
-          !pair ||
+          !verdict ||
           pair.winnerId !== verdict.winnerId ||
           pair.loserId !== verdict.loserId
         ) {
           errors.push({
-            parkId: verdict.loserId,
-            error: `Merge verdict for ${verdict.winnerId} / ${verdict.loserId} did not line up with the planned pair at position ${index}; it is left out of the results`,
+            parkId: pair.loserId,
+            error: `No merge verdict lined up with the planned pair ${pair.winnerId} / ${pair.loserId} at position ${index}; whether it merged is unknown`,
           });
           return;
         }
@@ -1871,6 +1877,13 @@ export class AdminController {
           migratedMappings: 0,
         });
       });
+
+      for (const surplus of repairResult.pairs.slice(planned.length)) {
+        errors.push({
+          parkId: surplus.loserId,
+          error: `Merge verdict for ${surplus.winnerId} / ${surplus.loserId} has no planned pair; it is left out of the results`,
+        });
+      }
 
       // A skipped pair can share a row with a pair that just merged: three
       // rows for one park give A–B safe and B–C for review, and B is gone by
