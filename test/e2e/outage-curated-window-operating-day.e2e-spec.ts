@@ -63,10 +63,25 @@ describe("curated works window across park-local midnight (e2e)", () => {
   interface IntervalRow {
     attractionId: string;
     startedAt: Date;
-    startOpDay: string;
+    startOpDay: Date | string;
     endReason: string;
     operatingMinutes: number;
   }
+
+  /**
+   * `startOpDay` as `YYYY-MM-DD`.
+   *
+   * `pg` parses a `date` column into a JS Date at the RUNNING PROCESS's local
+   * midnight, so the raw value stringifies to a locale sentence. Read back
+   * through the calendar fields rather than `toISOString()`: east of UTC local
+   * midnight is the previous day in UTC, so the ISO form would report the 14th
+   * for a column holding the 15th and this fixture would assert the bug.
+   */
+  const asDay = (value: Date | string): string => {
+    if (!(value instanceof Date)) return String(value);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+  };
 
   const seedPark = async (closesAt: Date): Promise<void> => {
     const park = await dataSource.getRepository(Park).save(
@@ -184,7 +199,7 @@ describe("curated works window across park-local midnight (e2e)", () => {
     expect(new Date(rows[0].startedAt).toISOString()).toBe(
       new Date(`${NEXT}T00:10:00+02:00`).toISOString(),
     );
-    expect(String(rows[0].startOpDay)).toContain(DAY);
+    expect(asDay(rows[0].startOpDay)).toBe(DAY);
     // 00:10 → 01:20 is 70 minutes, all of it inside the window. Above
     // MIN_OUTAGE_OPERATING_MINUTES, so the row is not dropped for being noise —
     // which would make the exclusion cases below pass for the wrong reason.
@@ -240,7 +255,7 @@ describe("curated works window across park-local midnight (e2e)", () => {
     const rows = await run();
 
     expect(rows).toHaveLength(1);
-    expect(String(rows[0].startOpDay)).toContain(DAY);
+    expect(asDay(rows[0].startOpDay)).toBe(DAY);
   });
 
   it("reads a half-open window, so an open-ended works period still covers it", async () => {

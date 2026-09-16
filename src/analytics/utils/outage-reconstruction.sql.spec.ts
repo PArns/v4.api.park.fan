@@ -86,9 +86,7 @@ describe("outage reconstruction statements", () => {
       /(?:>=|<=)\s*a\.curated_out_of_service_(?:from|to)/g,
     );
     expect(bounds).toHaveLength(2);
-    expect(tail).toMatch(
-      /c\.start_op_day >= a\.curated_out_of_service_from/,
-    );
+    expect(tail).toMatch(/c\.start_op_day >= a\.curated_out_of_service_from/);
     expect(tail).toMatch(/c\.start_op_day <= a\.curated_out_of_service_to/);
 
     // And no raw calendar cast of started_at survives in the filter. This is
