@@ -231,27 +231,40 @@ exclusion two lines below it asked a different question: the calendar date of
 `started_at`.
 
 The two differ whenever the window an interval belongs to is not the one its
-start date names, and that is **two** shapes, not one:
+start date names, and that is **two** shapes, not one. Measured over the stored
+history on 2026-09-16 — 1,032 of 163,969 intervals in 50 parks have an operating
+day that differs from their calendar date, and they split as:
 
-- **A park that closes after midnight.** A 00:30 breakdown belongs to the
-  previous evening's operating day, so an editor's window declared for that day
-  ends one calendar date before the outage's, and the interval escaped the
-  exclusion.
-- **A ride that breaks after closing time anywhere.** `startOpDay` takes the
-  lowest window the interval overlaps, and an evening that has already shut is
-  not one — so a ride failing at 22:00 and still down the next morning is filed
-  under the morning. Against the calendar date the exclusion asked about the
-  evening instead. No midnight wrap is involved, and this is the larger half.
+| shape | intervals | parks |
+| --- | --- | --- |
+| a ride that breaks **after closing time**, operating day LATER | 1,009 | 51 |
+| a park that closes **after midnight**, operating day EARLIER | 23 | 2 |
 
-Either way the interval was stored as a real breakdown while the ride sat in a
-declared rebuild. Measured over the stored history on 2026-09-16: **1,032 of
-163,969 intervals in 50 parks** have an operating day that differs from their
-calendar date.
+- **After closing time, anywhere.** `startOpDay` takes the lowest window the
+  interval OVERLAPS, and an evening that has already shut is not one — so a ride
+  failing at 22:00 and still down the next morning is filed under the morning,
+  while `started_at` is on the evening's date. No midnight wrap is involved, and
+  this is 98 % of the population.
+- **A park that closes after midnight.** The shape the ticket describes. A 00:30
+  breakdown belongs to the previous evening's operating day, so an editor's
+  window declared for that day ends one calendar date before the outage's. It is
+  the rarer of the two by a factor of 44, and it is not empty:
+  `closure-gap-operating-day.e2e-spec.ts` records that every wrap day in the 30
+  days to 2026-09-15 closes at exactly 00:00, which cannot produce a divergence
+  — over the full retention 23 of them do.
 
-Nothing had reported it because the population that can show it is empty: no
-attraction carries `curated_out_of_service_from`/`_to` today, so the predicate's
-opening `IS NOT NULL` disjunction is false for every row and both readings agree
-on a refusal. The bug was waiting on the first editor.
+**And it cuts both ways.** The calendar date asks the window about a day the row
+is not filed under, so an interval inside a declared works period escaped it —
+and an interval outside one was excluded by it. Which way round depends on the
+shape: a wrap loses an exclusion it should have, and an after-hours failure on
+the last declared evening gains one it should not, because it is filed under the
+morning after the period ends.
+
+Nothing had reported any of it because the population that can show it is empty:
+no attraction carries `curated_out_of_service_from`/`_to` today, so the
+predicate's opening `IS NOT NULL` disjunction is false for every row, the filter
+excludes nobody, and both readings keep every interval. The bug was waiting on
+the first editor.
 
 `startOpDay` moves out of the SELECT list into a `start_op_day` column on the
 `measured` CTE — a `WHERE` cannot read a select alias, and two copies of the

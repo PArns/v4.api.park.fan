@@ -910,11 +910,11 @@ Kept here so none of it gets re-proposed.
    a parameter instead of reading `NOW()`, which is what makes it safe to apply to history — and the
    day the reconstruction hands it is the interval's **operating** day (`start_op_day`), the same key
    the stored row is filed under. Against the calendar date of `started_at` the window was asked
-   about a different day whenever the interval's own window is not the one its start date names — a
-   00:30 breakdown in a park that closes after midnight, and, more often, any ride that fails after
-   closing time and is still down the next morning. Measured 2026-09-16 over the stored history:
-   1,032 of 163,969 intervals in 50 parks carry an operating day that differs from their calendar
-   date.
+   about a different day whenever the interval's own window is not the one its start date names.
+   Measured 2026-09-16 over the stored history: 1,032 of 163,969 intervals in 50 parks carry an
+   operating day that differs from their calendar date — **1,009 of them in 51 parks** are a ride
+   failing after closing time and still down the next morning (operating day later), and **23 in 2
+   parks** are the 00:30 breakdown in a park that closes after midnight (operating day earlier).
 3. **Does the event floor stay at 24** after phase 0 has counted, even if that leaves a few hundred of
    ~7000 rides with figures and everything else with a refusal sentence?
 4. **Who answers a press office** that disputes a number, in what time, and is the park's figure switched

@@ -11,7 +11,8 @@ import {
 import { OUTAGE_INTERVALS_SQL } from "../../src/analytics/utils/outage-reconstruction.sql";
 
 /**
- * The curated works-period filter against a park that closes after midnight.
+ * The curated works-period filter where the operating day is not the calendar
+ * date of `started_at`.
  *
  * The unit spec next to the SQL asserts its SHAPE — that the filter reads
  * `start_op_day` and not a `::date` cast of `started_at`. Only a real PostgreSQL
@@ -20,25 +21,31 @@ import { OUTAGE_INTERVALS_SQL } from "../../src/analytics/utils/outage-reconstru
  * against a `timestamptz`, a correlated subquery that resolves to NULL all pass
  * a regular expression and fail a query.
  *
- * The fixture is the case the change is about, at the smallest size that still
- * reaches the filter:
+ * **Two fixtures, because there are two shapes** and only one of them is the one
+ * the ticket describes.
  *
- * - one park with a `wiki_entity_id`, because `parkOpenWindowCtes({wikiOnly})`
- *   drops every park without one and the statement would return nothing,
- * - one published `OPERATING` window running 10:00 → 02:00 the next park-local
- *   day — La Ronde's shape, and a genuine wrap rather than the 00:00 close the
- *   production rows happen to hold,
- * - one ride, DOWN from 00:10 and running again at 01:20, so its interval sits
- *   entirely on the far side of midnight: calendar date the 16th, operating day
- *   the 15th.
+ * 1. **The wrap.** One published `OPERATING` window running 10:00 → 02:00 the
+ *    next park-local day — La Ronde's shape, and a genuine wrap rather than the
+ *    00:00 close the production rows happen to hold. The ride is DOWN from 00:10
+ *    and running again at 01:20, so its interval sits entirely on the far side
+ *    of midnight: calendar date the 16th, operating day the 15th. **Earlier.**
+ * 2. **After hours.** A park shutting at 20:00 and reopening at 10:00, and a
+ *    ride that fails at 22:00 and is still down the next morning. No midnight
+ *    wrap anywhere — but `start_op_day` takes the lowest window the interval
+ *    OVERLAPS, and an evening already shut is not one, so the row is filed under
+ *    the 16th while `started_at` is on the 15th. **Later.**
  *
- * Production cannot supply this case at all. Measured 2026-09-16: **zero**
- * attractions carry `curated_out_of_service_from`/`_to`, so every row of the
- * predicate's opening `IS NOT NULL` disjunction is false and the two day notions
- * cannot be told apart there. That is why the proof is a container and not a
- * query against the live database.
+ * Both need a park with a `wiki_entity_id`: `parkOpenWindowCtes({wikiOnly})`
+ * drops every park without one, and the statement would return nothing.
+ *
+ * Production cannot supply either case, for the same reason. Measured
+ * 2026-09-16: **zero** attractions carry `curated_out_of_service_from`/`_to`, so
+ * the predicate's opening `IS NOT NULL` disjunction is false for every row, the
+ * filter excludes nobody, and the two day notions cannot be told apart there.
+ * That is why the proof is a container and not a query against the live
+ * database.
  */
-describe("curated works window across park-local midnight (e2e)", () => {
+describe("curated works window when the operating day is not the start's date (e2e)", () => {
   let app: INestApplication;
   let dataSource: DataSource;
 

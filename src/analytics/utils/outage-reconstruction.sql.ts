@@ -342,9 +342,21 @@ SELECT c.aid                                   AS "attractionId",
  WHERE c.operating_minutes >= ${MIN_OUTAGE_OPERATING_MINUTES}
    -- Asked about the interval's OPERATING day, the same key the row is written
    -- under. An editor declaring "16 January to 3 March" means the park's
-   -- operating days, so in a park that closes after midnight a 00:30 breakdown
-   -- belongs to the evening before — against the calendar date it would fall
-   -- one day past the window's end and escape a works period it is inside of.
+   -- operating days, and those are not the calendar dates of started_at
+   -- whenever the window an interval belongs to is not the one its start date
+   -- names. Two shapes, and the first is 98 % of them (measured 2026-09-16 over
+   -- the stored history: 1009 and 23 of 163 969 intervals):
+   --
+   --   * A ride that fails after closing time, anywhere. start_op_day takes the
+   --     lowest window the interval OVERLAPS, and an evening already shut is
+   --     not one, so a 22:00 failure still down next morning is filed under the
+   --     morning — operating day LATER than its date.
+   --   * A park that closes after midnight. A 00:30 breakdown belongs to the
+   --     evening before, so its operating day is EARLIER than its date.
+   --
+   -- Either way the calendar date asks the window about a day the row is not
+   -- filed under, and it errs in both directions: an interval inside a declared
+   -- works period escaped it, and one outside a period was excluded by it.
    AND NOT EXISTS (
      SELECT 1 FROM attractions a
       WHERE a.id = c.aid
