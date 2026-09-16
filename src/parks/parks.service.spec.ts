@@ -12,6 +12,10 @@ import { RevalidationService } from "../common/revalidation/revalidation.service
 import { HolidaysService } from "../holidays/holidays.service";
 import { createTestPark } from "../../test/fixtures/park.fixtures";
 import {
+  formatInParkTimezone,
+  getCurrentDateInTimezone,
+} from "../common/utils/date.util";
+import {
   ATTRACTION_DEPENDENCIES,
   PARK_DEPENDENCIES,
   PARK_INLINE_DEPENDENCIES,
@@ -29,6 +33,7 @@ describe("ParksService", () => {
     del: jest.fn(),
     setex: jest.fn(),
     keys: jest.fn().mockResolvedValue([]),
+    mget: jest.fn().mockResolvedValue([]),
   };
 
   // Mock repositories
@@ -534,13 +539,23 @@ describe("ParksService", () => {
     type RecordedBuilder = {
       conditions: string[];
       kind: "read" | "delete" | "other";
+      inserted: Array<Record<string, unknown>>;
+      updatedIds: string[];
     };
 
     let builders: RecordedBuilder[];
 
     /** Records every `andWhere` and what the chain was eventually used for. */
-    const recordingBuilder = (rows: unknown[] = []) => {
-      const recorded: RecordedBuilder = { conditions: [], kind: "other" };
+    const recordingBuilder = (
+      rows: unknown[] = [],
+      rawOne: unknown = { minDate: null, maxDate: null },
+    ) => {
+      const recorded: RecordedBuilder = {
+        conditions: [],
+        kind: "other",
+        inserted: [],
+        updatedIds: [],
+      };
       builders.push(recorded);
 
       const mark = (kind: RecordedBuilder["kind"]) => () => {
@@ -559,10 +574,16 @@ describe("ParksService", () => {
         addOrderBy: jest.fn().mockReturnThis(),
         insert: jest.fn().mockReturnThis(),
         into: jest.fn().mockReturnThis(),
-        values: jest.fn().mockReturnThis(),
+        values: jest.fn((rows: Array<Record<string, unknown>>) => {
+          recorded.inserted.push(...(Array.isArray(rows) ? rows : [rows]));
+          return builder;
+        }),
         update: jest.fn().mockReturnThis(),
         set: jest.fn().mockReturnThis(),
-        whereInIds: jest.fn().mockReturnThis(),
+        whereInIds: jest.fn((ids: string[]) => {
+          recorded.updatedIds.push(...ids);
+          return builder;
+        }),
         delete: jest.fn(() => {
           mark("delete")();
           return builder;
@@ -576,10 +597,12 @@ describe("ParksService", () => {
           mark("read")();
           return rows;
         }),
-        getRawOne: jest.fn().mockResolvedValue({
-          minDate: null,
-          maxDate: null,
+        limit: jest.fn().mockReturnThis(),
+        getOne: jest.fn(async () => {
+          mark("read")();
+          return null;
         }),
+        getRawOne: jest.fn().mockResolvedValue(rawOne),
         execute: jest.fn().mockResolvedValue({ affected: 0 }),
       };
 
@@ -657,6 +680,39 @@ describe("ParksService", () => {
     });
 
     it.each([
+      [
+        "getSchedule",
+        (id: string) =>
+          service.getSchedule(
+            id,
+            new Date("2026-07-01"),
+            new Date("2026-07-31"),
+          ),
+      ],
+      [
+        "getScheduleForDate",
+        (id: string) => service.getScheduleForDate(id, "2026-07-28"),
+      ],
+      ["getNextSchedule", (id: string) => service.getNextSchedule(id)],
+      ["getBatchSchedules", (id: string) => service.getBatchSchedules([id])],
+    ] as const)(
+      "%s asks about the park, so it reads park-level rows only",
+      async (_name, call) => {
+        mockParkRepository.find.mockResolvedValue([
+          { id: parkId, timezone: "Europe/Berlin" },
+        ]);
+
+        await call(parkId);
+
+        const reads = conditionsOf("read");
+        expect(reads.length).toBeGreaterThan(0);
+        for (const conditions of reads) {
+          expect(conditions.some((c) => RIDE_FILTER.test(c))).toBe(true);
+        }
+      },
+    );
+
+    it.each([
       ["isParkCurrentlyOpen", (id: string) => service.isParkCurrentlyOpen(id)],
       [
         "isParkOperatingToday",
@@ -686,16 +742,58 @@ describe("ParksService", () => {
       },
     );
 
-    it("reads the days it fills from park-level rows only", async () => {
+    it("writes no gap-filled row onto a day that only a ride has a row for", async () => {
+      // The one day in the window that carries a per-ride row and nothing else —
+      // what a park-day looks like after the old cleanup deleted the park's own
+      // row. `fillScheduleGaps` may neither rewrite that ride's row (it would be
+      // promoted or demoted by the PARK's operating range) nor declare the day
+      // CLOSED, which is a confident claim built from an absence and which the
+      // analytics joins read as "drop this day from P50/P90".
+      const occupied = getCurrentDateInTimezone("Europe/Berlin");
+      const noon = (offsetDays: number) =>
+        new Date(
+          new Date(`${occupied}T12:00:00Z`).getTime() +
+            offsetDays * 24 * 60 * 60 * 1000,
+        );
+      // An operating range that brackets the day, so `isGapClosed` is true for
+      // it: that is what turns a gap into CLOSED, and what would promote the
+      // ride's UNKNOWN row if it were mistaken for the park's.
+      const operatingRange = {
+        minDate: formatInParkTimezone(noon(-5), "Europe/Berlin"),
+        maxDate: formatInParkTimezone(noon(5), "Europe/Berlin"),
+      };
+      mockScheduleRepository.createQueryBuilder.mockImplementation(
+        () =>
+          recordingBuilder(
+            [
+              {
+                id: "77777777-8888-9999-aaaa-bbbbbbbbbbbb",
+                parkId,
+                attractionId: "aaaaaaaa-0000-0000-0000-000000000001",
+                date: new Date(`${occupied}T12:00:00Z`),
+                scheduleType: "UNKNOWN",
+                description: null,
+                isHoliday: false,
+                holidayName: null,
+                isBridgeDay: false,
+              },
+            ],
+            operatingRange,
+          ) as unknown as ReturnType<typeof scheduleQueryBuilder>,
+      );
+
       await service.fillScheduleGaps(parkId, 1, 1);
 
-      const reads = conditionsOf("read");
-      expect(reads).toHaveLength(1);
-      // The map built from these rows is keyed by date alone. A ride's row would
-      // occupy the day, so the park would never get its own gap-filled row — and
-      // the promotion and demotion below are decided by the PARK's operating
-      // range, so they would rewrite the ride's schedule.
-      expect(reads[0].some((c) => RIDE_FILTER.test(c))).toBe(true);
+      const inserted = builders
+        .flatMap((b) => b.inserted)
+        .map((row) => formatInParkTimezone(row.date as Date, "Europe/Berlin"));
+
+      // The two neighbouring days are genuine gaps and still get their row.
+      expect(inserted.length).toBeGreaterThan(0);
+      expect(inserted).not.toContain(occupied);
+      // And the ride's UNKNOWN row was not promoted to CLOSED by the park's
+      // own operating range, which brackets the day.
+      expect(builders.flatMap((b) => b.updatedIds)).toEqual([]);
     });
   });
 

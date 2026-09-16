@@ -56,8 +56,9 @@ export function sameTypeDuplicateSql(scope: ScheduleDedupScope): string {
  * Runs after phase 1, so each (park, day, ride, type) is already down to one
  * row and the ranking only has to choose between the types.
  *
- * `ScheduleType` has eight members and this ranking names four. The other
- * four — TICKETED_EVENT, PRIVATE_EVENT, EXTRA_HOURS, MAINTENANCE, and INFO —
+ * `ScheduleType` has eight members and this ranking names three of them in four
+ * steps (CLOSED twice, by description). The other five — TICKETED_EVENT,
+ * PRIVATE_EVENT, EXTRA_HOURS, MAINTENANCE and INFO —
  * fall to `ELSE 4`, i.e. below UNKNOWN, so a day that also carries an OPERATING
  * row loses them on every pass. Production does hold such rows (Universal's
  * Halloween Horror Nights runs past midnight as TICKETED_EVENT; see

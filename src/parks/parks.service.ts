@@ -2164,32 +2164,45 @@ export class ParksService {
 
     // 1. Fetch existing entries (use date strings for range to avoid TZ issues in query)
     //
-    // Park-level rows only, and the map below is why: it is keyed by date alone,
-    // so a per-ride row would occupy the day. The park would never get its own
-    // gap-filled row for it, and the promotion and demotion further down — both
-    // decided by the PARK's operating range — would rewrite the ride's row
-    // instead. Same filter as `hasOperatingSchedule` and `isParkSeasonal`, which
-    // read the same rows; there is a partial index for it
-    // (`idx_schedule_park_date_no_attraction`).
+    // Read every row of the window, park-level and per-ride, because the two
+    // things built from them answer different questions and only one of them is
+    // about the park.
     const existingEntries = await this.scheduleRepository
       .createQueryBuilder("schedule")
       .where("schedule.parkId = :parkId", { parkId })
       .andWhere("schedule.date >= :startDate", { startDate: startStr })
       .andWhere("schedule.date <= :endDate", { endDate: endStr })
-      .andWhere("schedule.attractionId IS NULL")
       .getMany();
 
-    // Map existing entries by their local date string for O(1) lookup
-    const existingEntryMap = new Map<string, ScheduleEntry>();
-    existingEntries.forEach((e) => {
-      const eDateStr = formatInParkTimezone(
+    const localDateOf = (e: ScheduleEntry): string =>
+      formatInParkTimezone(
         e.date instanceof Date ? e.date : new Date(e.date),
         park.timezone,
       );
-      existingEntryMap.set(eDateStr, e);
-    });
 
-    const existingDates = new Set(existingEntryMap.keys());
+    // The row this method may rewrite: park-level only. It is keyed by date
+    // alone, so a per-ride row would otherwise occupy the day — and the
+    // promotion and demotion further down are decided by the PARK's operating
+    // range, so they would rewrite the ride's schedule. Same filter as
+    // `hasOperatingSchedule` and `isParkSeasonal`, which read the same rows;
+    // there is a partial index for it (`idx_schedule_park_date_no_attraction`).
+    const existingEntryMap = new Map<string, ScheduleEntry>();
+    for (const e of existingEntries) {
+      if (e.attractionId !== null) continue;
+      existingEntryMap.set(localDateOf(e), e);
+    }
+
+    // The days this method may INSERT on: any row at all holds the day open.
+    // A day with only per-ride rows is not a gap the park can speak about — it
+    // is a day whose park-level row somebody lost, and `isGapClosed` would turn
+    // it into a "Gap-filled" CLOSED between the park's first and last operating
+    // day. That is a confident claim built from an absence (claude.md §4), it
+    // cannot be demoted again inside the season, and the analytics joins read
+    // CLOSED as "drop this day's queue data from P50/P90" while they read a
+    // missing row as "keep it". Reconstructing those rows is out of scope
+    // (PAR-246 names it as a non-goal); writing a wrong one in their place is
+    // not the alternative.
+    const existingDates = new Set(existingEntries.map(localDateOf));
 
     // 2. Fetch Holidays
     // Extend range by 1 day for bridge day detection
@@ -2303,7 +2316,16 @@ export class ParksService {
         filledCount++;
       } else {
         // Entry exists: collect updates for batch processing (O(1) lookup via Map)
-        const existing = existingEntryMap.get(dateStr)!;
+        //
+        // `existingDates` also holds days that only carry per-ride rows, and
+        // those have nothing for this method to update: the park has no row to
+        // promote, demote or stamp a holiday on. Skipping is the whole handling
+        // — the insert above already stayed away from the day.
+        const existing = existingEntryMap.get(dateStr);
+        if (!existing) {
+          dateStr = addDays(noonUtc, 1).toISOString().slice(0, 10);
+          continue;
+        }
 
         const holidayChanged =
           existing.isHoliday !== holidayInfo.isHoliday ||
@@ -2642,6 +2664,12 @@ export class ParksService {
    * or not. Now that a per-ride row survives, each of them has to say so — a
    * `findOne` with no ride in its `where` and no `ORDER BY` is free to answer
    * with a single ride's schedule.
+   *
+   * It narrows the answer rather than settling it: a park-day legitimately holds
+   * several park-level rows of different types (`saveScheduleData` keys on
+   * `date|scheduleType`), so between a sync and the next cleanup a `findOne`
+   * here can still pick the TICKETED_EVENT row over the OPERATING one. That
+   * ambiguity predates this filter and belongs to the ranking in PAR-276.
    *
    * @param parkId - Park ID (UUID)
    * @param startDate - Start date (inclusive)
