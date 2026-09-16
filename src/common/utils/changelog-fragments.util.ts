@@ -207,6 +207,15 @@ const SELF_TERMINATING = /^( {4,}|[ ]{0,3}#{1,6} |[ ]{0,3}(`{3,}|~{3,}))/;
  * walking back past those read it as part of the code above and let it through.
  */
 function isParagraph(lines: string[], before: number): boolean {
+  // The line the underline sits on must be paragraph content itself. A closing
+  // fence or a heading directly above a `---` leaves nothing to underline, so
+  // that `---` is a thematic break: ```` ```\nx\n```\n--- ```` and
+  // `text\n#### Sub\n---` are both fine, and stopping the walk at those lines
+  // without checking this one rejected all three shapes of them.
+  if (lines[before].trim() === "" || SELF_TERMINATING.test(lines[before])) {
+    return false;
+  }
+
   let start = before;
   while (
     start > 0 &&
@@ -215,7 +224,7 @@ function isParagraph(lines: string[], before: number): boolean {
   ) {
     start--;
   }
-  return lines[before].trim() !== "" && PARAGRAPH_START.test(lines[start]);
+  return PARAGRAPH_START.test(lines[start]);
 }
 
 /**

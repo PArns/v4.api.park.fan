@@ -119,6 +119,20 @@ describe("checkFragment", () => {
     }
   });
 
+  it("leaves `---` alone when there is no paragraph above it to underline", () => {
+    // The other half of the case above, and the one it got wrong first: with
+    // nothing between the block and the `---`, there is no paragraph, so the
+    // `---` is a thematic break and the entry is fine.
+    for (const above of ["```\nx\n```", "~~~\nx\n~~~", "text\n#### Sub"]) {
+      expect(
+        checkFragment("PAR-1.md", `### Added — t\n\n${above}\n---\n\nmore\n`),
+      ).toBeNull();
+    }
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\ntext\n\n    code\n---\n"),
+    ).toBeNull();
+  });
+
   it("rejects a setext heading, which is an h1/h2 with another syntax", () => {
     expect(
       checkFragment("PAR-1.md", "### Added — t\n\nNext release\n---\nmore\n"),
