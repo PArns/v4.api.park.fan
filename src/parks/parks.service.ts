@@ -91,10 +91,21 @@ class PriorityMergeIncompleteError extends Error {}
  * string, and `JSON.stringify` on a database row stores exactly that string.
  * So the cache branches must hand it on unchanged. `new Date("2026-09-16")` is
  * midnight UTC, and formatting THAT in a park west of Greenwich answers with
- * the previous day: `ParkIntegrationService` compares the row's day against the
- * park's own today, finds no match for every park in the Americas and falls
- * through to the live lookup — but only while the cache is warm, which is why
- * reproducing it from a cold start shows nothing.
+ * the previous day.
+ *
+ * The consequence is not that the day goes missing, which is the easy thing to
+ * assume and the wrong thing to go looking for. `ParkIntegrationService` picks
+ * today's row out of a 16-day window by comparing each row's day against the
+ * park's own today, so shifting every row back by one hands it **tomorrow's**
+ * row: measured in `America/Los_Angeles` with the park-local day 2026-09-16,
+ * `find` returns the row dated 2026-09-17. That row then decides the park's
+ * status, its rope-drop window and its closing time — yesterday's answer would
+ * at least have been visibly stale, whereas tomorrow's looks perfectly normal.
+ * Only at the edge of the published schedule, where no later row exists, does
+ * the match actually come up empty.
+ *
+ * All of it only while the cache is warm, which is why reproducing it from a
+ * cold start shows nothing.
  *
  * Same rule as `localDateOf` in `fillScheduleGaps` and as
  * `ScheduleItemDto.fromEntity`, which is why the API payload was right on both

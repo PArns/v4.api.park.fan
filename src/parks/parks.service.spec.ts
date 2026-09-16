@@ -486,7 +486,8 @@ describe("ParksService", () => {
       ["a numeric date", 0],
       ["a boolean date", false],
       ["an empty string", ""],
-      ["a timestamp that is not a day", "not-a-date"],
+      ["a string that is not a date at all", "not-a-date"],
+      ["a day with a text suffix", "2026-09-16-ish"],
     ])(
       "treats %s in a cached row as a miss and rebuilds from the database",
       async (_label, date) => {
@@ -506,6 +507,29 @@ describe("ParksService", () => {
         expect(result[0].date).toBe(row.date);
       },
     );
+
+    // The opposite of the cases above, and the reason they say "names no day"
+    // rather than "is not a plain date": a full ISO timestamp DOES name one.
+    // An entry written by an older deploy that cached a `Date` comes back as
+    // `"2026-09-16T00:00:00.000Z"`, and reading the UTC day off it is the
+    // inverse of the `toISOString` that wrote it — so it is a hit, not a miss,
+    // and nobody pays for a rebuild over it.
+    it("accepts a cached ISO timestamp as the day it names", async () => {
+      const row = dbRow("America/Los_Angeles");
+      arrange("America/Los_Angeles", []);
+      mockRedis.get.mockResolvedValue(
+        JSON.stringify([{ ...row, date: `${row.date}T00:00:00.000Z` }]),
+      );
+
+      const result = await service.getTodaySchedule(
+        parkId,
+        "America/Los_Angeles",
+      );
+
+      expect(result[0].date).toBe(row.date);
+      // Served from the cache: no rebuild was needed.
+      expect(mockScheduleRepository.createQueryBuilder).not.toHaveBeenCalled();
+    });
 
     // `getBatchSchedules` keeps two refetch lists, and an unreadable row has to
     // land in its own. Pushing to the other one leaves the park with no entry
