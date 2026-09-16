@@ -257,7 +257,26 @@ export class AdminCurationService {
         after[key] = null;
         if (!changed.includes(key)) changed.push(key);
         attraction.curatedOutOfServiceToUncertain = null;
+
+        // Ticking the box on a window with no end lands here having changed
+        // nothing: the diff loop recorded `null → true`, this put it back, and
+        // what is left is a save, a cache eviction, three revalidation calls
+        // and an audit row reading `null → null`. That is what the early
+        // return above exists to prevent, so the key leaves the edit the same
+        // way it entered it.
+        if (before[key] === null) {
+          delete before[key];
+          delete after[key];
+          changed.splice(changed.indexOf(key), 1);
+        }
       }
+    }
+
+    // The normalisation above can empty the edit, so the same question is
+    // asked once more — the early return is before it because everything
+    // between the two reads `changed`.
+    if (changed.length === 0) {
+      return { entity: attraction, changed: [], auditId: null };
     }
 
     if (changed.includes("rcdbId") && attraction.rcdbId !== null) {

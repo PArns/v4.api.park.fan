@@ -557,6 +557,15 @@ export class AttractionMergeService {
    * no trace and nothing to notice it by — the value simply reverts to
    * whatever the sync last wrote, months after anybody remembers deciding
    * otherwise. Add a curated column to the entity, add it here.
+   *
+   * Three columns break that rule today and are tracked as PAR-297: the works
+   * period's `curatedOutOfServiceFrom` / `_to` / `_toUncertain`. They are left
+   * off deliberately rather than by oversight, because this loop fills column
+   * by column: a winner holding a start and no end would take the loser's end
+   * and build a window that ends before it begins — the pair the curation
+   * endpoint rejects outright, and since PAR-287 one that is served. Putting
+   * them on needs the window inherited as a set, which is a change to the loop
+   * below and not to this list.
    */
   private static readonly INHERITABLE_COLUMNS = [
     "queueTimesEntityId",
@@ -575,17 +584,6 @@ export class AttractionMergeService {
     "curatedAttractionType",
     "curatedIsSeasonal",
     "curatedSeasonMonths",
-    // The works period, on the rule above: it is written by an editor and by
-    // nobody else, so a merge that dropped it would lose the only copy. Note
-    // that this loop fills column by column, not window by window — a winner
-    // holding a start and no end can take the loser's end, and the estimate
-    // flag can arrive without the date it qualifies. Neither is served wrong
-    // (`resolveWorksPeriod()` drops a flag with no `to`), and pairing the
-    // inheritance is the same open question `curatedIsSeasonal` /
-    // `curatedSeasonMonths` have had here all along.
-    "curatedOutOfServiceFrom",
-    "curatedOutOfServiceTo",
-    "curatedOutOfServiceToUncertain",
     "retiredAt",
     "retiredReason",
     "hasSingleRider",

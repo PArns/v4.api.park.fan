@@ -33,9 +33,10 @@ import type { WorksPeriod } from "../utils/curated-out-of-service.util";
  * this codebase builds carries all three keys, so an internal reader may read
  * them; a client reads the schema, and on the wire a null key is gone, because
  * `ExcludeNullInterceptor` strips null-valued keys outside `/v1/admin/*`.
- * Keeping them required is also what makes `implements WorksPeriod` a real
- * check: optional keys would let a renamed field satisfy the interface, and
- * the resolver could then drift from the schema without a compile error.
+ * `implements WorksPeriod` catches a renamed field either way (TS2420). What
+ * the required declaration buys on top is narrower and worth having: it keeps
+ * `undefined` out of the property type, so the class cannot quietly widen to
+ * something the resolver never returns.
  */
 export class WorksPeriodDto implements WorksPeriod {
   @ApiProperty({

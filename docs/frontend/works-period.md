@@ -1,0 +1,74 @@
+# The works period on a ride (`worksPeriod`)
+
+**What it answers:** is this ride closed for a rebuild or a refit somebody
+scheduled, and until when.
+
+Present on the attraction detail payload and on every ride in the park payload,
+so a ride list can badge without a second request.
+
+```jsonc
+"worksPeriod": {
+  "from": "2026-01-16",   // first park-local day, inclusive
+  "to": "2026-03-03",     // last park-local day, inclusive. Absent while nobody knows.
+  "toUncertain": false    // true: `to` is our estimate, not a date the park published
+}
+```
+
+Curated by hand under `/admin/attractions/<id>`, in the group "Umbaupause". No
+feed carries it — ThemeParks.wiki passes `REFURBISHMENT` through with no start,
+no end and no announcement, and does not use it for every closure that really is
+planned work.
+
+## It is not an outage, and must never be rendered as one
+
+`outage` says a ride stopped working and the site noticed. This says a ride was
+taken out of service on purpose, months ahead, by people who scheduled it.
+
+The two never contradict each other in a payload, because the API reports **no
+outage at all** inside a running works period — the feed cannot tell a rebuild
+from a breakdown, so the curated window is the only thing that can. A page that
+folded them together would tell a visitor the ride broke while it is being
+rebuilt on schedule.
+
+## Rendering
+
+```
+from + to,   toUncertain false → "Umbaupause bis 3. März"
+from + to,   toUncertain true  → "Umbaupause voraussichtlich bis 3. März"
+from, no to                    → "Umbaupause seit 16. Januar"
+no from, to                    → "Umbaupause bis 3. März"
+```
+
+`toUncertain` is never `true` without a `to`: the API drops a flag that has no
+date to qualify, so the two states above are the only two the field produces.
+
+**A missing `to` is not "closed for good".** It is the ordinary state while work
+is running and the park has not said when it ends — the park usually names a
+season before it names a day, which is what `toUncertain` exists for once
+somebody writes the day down.
+
+## Whether it is running today is your comparison, not ours
+
+The block is a fact about a date range and says nothing about today. A window
+that ended in March stays on the row; a rebuild starting next winter looks the
+same from here.
+
+Both bounds are park-local `YYYY-MM-DD` and both are **inclusive**, so compare
+them against the park's own calendar day — `timezone` on the park payload — and
+never against the reader's clock. For a park eight hours away the window would
+otherwise open and close on the wrong day.
+
+Deliberately not served as a computed `active` flag: the endpoints that carry
+this are cached, and a boolean computed at render time would be wrong for every
+reader who gets the cached copy on the other side of park-local midnight.
+
+## The absence
+
+`worksPeriod` is absent for nearly every ride, and its absence says nothing at
+all. No feed announces a rebuild, so "no works period here" means nobody has
+curated one — never that the ride is running. Do not render a "läuft normal"
+line from it.
+
+`from` and `to` are stripped from the JSON when they are null, like every other
+null key outside `/v1/admin/*` (`ExcludeNullInterceptor`), so read them as
+optional even though the published schema documents both.

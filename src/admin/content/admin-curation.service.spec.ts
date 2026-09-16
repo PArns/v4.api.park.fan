@@ -668,19 +668,47 @@ describe("AdminCurationService", () => {
     it("clears a flag ticked on a window that has no end date", async () => {
       // The other way into the same contradiction: nothing about the dates
       // changed, so a rule hanging on the two date keys alone would store it.
+      // And the edit ends up empty — the diff loop wrote null → true and this
+      // put it back — so it must leave no save, no audit row and no reported
+      // change behind, exactly like a PATCH that changed nothing at all.
       const attraction = anAttraction({
         curatedOutOfServiceFrom: "2026-01-16",
         curatedOutOfServiceTo: null,
         curatedOutOfServiceToUncertain: null,
       });
-      const { service, attractions } = build(attraction);
+      const { service, attractions, audit, calls } = build(attraction);
 
-      await service.curateAttraction(
+      const result = await service.curateAttraction(
         "ride-1",
         { fields: { curatedOutOfServiceToUncertain: true } },
         ACTOR,
       );
 
+      expect(attraction.curatedOutOfServiceToUncertain).toBeNull();
+      expect(result.changed).toEqual([]);
+      expect(attractions.save).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    });
+
+    it("keeps a flag the editor withdraws on a window with no end date", async () => {
+      // Not the same case: the row said "we checked, the date is firm" and the
+      // editor is taking that back. `false → null` is a real change even though
+      // the stored value lands on null, so it is saved and audited.
+      const attraction = anAttraction({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: false,
+      });
+      const { service, attractions } = build(attraction);
+
+      const result = await service.curateAttraction(
+        "ride-1",
+        { fields: { curatedOutOfServiceToUncertain: true } },
+        ACTOR,
+      );
+
+      expect(result.changed).toEqual(["curatedOutOfServiceToUncertain"]);
       const saved = attractions.save.mock.calls[0][0] as Record<
         string,
         unknown
