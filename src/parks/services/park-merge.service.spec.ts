@@ -395,10 +395,10 @@ describe("ParkMergeService — a colliding show or restaurant", () => {
   it("drops a loser's schedule row only where the winner states the same day, type AND ride", async () => {
     // `schedule_entries` holds the park's opening hours (`attractionId IS
     // NULL`) beside the per-ride rows in one table, and this path used to hand
-    // (date, scheduleType) to the generic `migrateTableData`. The winner is
-    // open on almost every day the loser has a ride schedule for, so that key
-    // matched the opening-hours row and deleted the loser's per-ride rows for
-    // that day with it (PAR-171).
+    // (date, scheduleType) to the generic `migrateTableData`. One park-wide
+    // OPERATING row on the winner matches every OPERATING row the loser holds
+    // for that date, so that key deleted the loser's per-ride rows along with
+    // its opening hours (PAR-171).
     //
     // With a colliding ride, so the attraction path below really runs and its
     // own row-wise `IN` over this table is present in `calls` — otherwise the

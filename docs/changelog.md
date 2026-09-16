@@ -450,10 +450,10 @@ deduped them through its generic `migrateTableData` on `(date, scheduleType)`, a
 key that cannot see the difference — so a single opening-hours row on the winner
 deleted every row of **that type** the loser held for that day, the per-ride ones
 included. The delete ran inside a transaction that then reported success. How
-many rows that was in production is not established here and the fix does not
-depend on it: the winner is open on almost every day the loser has a schedule
-for, so a loser's per-ride OPERATING row survived only on a day the winner was
-shut.
+many rows that was in production is not established here, and the fix does not
+depend on it: what the key does is narrower than a count and enough on its own —
+one park-wide `OPERATING` row on the winner matches every `OPERATING` row the
+loser holds for that date, whichever ride each of them belongs to.
 
 Measured against PostgreSQL 16 on a seven-row fixture (winner: opening hours and
 ride B on 09-20; loser: opening hours, ride A and ride B on 09-20, ride A on
@@ -490,6 +490,15 @@ allowlists, because those cannot carry it — both lists are built by spreading
 the dependency declarations, and the attraction side declares `schedule_entries`
 with `conflictColumns: ["date", "scheduleType"]`, so striking the two literals
 changes neither set.
+
+Two things this does not cover, named here because the heading above says the
+rule has one derivation and that sentence is about the two **merge** paths.
+`cleanupDuplicateScheduleEntries` and its per-park twin carry the same blind key
+in the gap-fill, which runs unconditionally rather than from an admin action;
+that is PAR-246. And the same-id refusal is new for `consolidateMergedPark` —
+`mergeParks` already checked at its entry, this path did not, so a call with one
+park id on both sides now throws where it previously wrote a wipe. Both call
+sites run inside a transaction, so the statements before it roll back.
 
 ### Added — an empty `/plan/day` says why, and the number is counted
 
