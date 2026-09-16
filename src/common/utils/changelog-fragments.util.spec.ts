@@ -12,6 +12,7 @@ import { join, resolve } from "path";
 import {
   CHANGELOG_FILE,
   FRAGMENT_DIR,
+  FRAGMENT_TYPES,
   UNRELEASED_HEADING,
   checkFragment,
   hasUnreleasedHeading,
@@ -33,8 +34,11 @@ describe("checkFragment", () => {
     expect(checkFragment("PAR-257.md", GOOD)).toBeNull();
   });
 
-  it("accepts every type the changelog uses", () => {
-    for (const type of ["Added", "Changed", "Fixed", "Removed", "Security"]) {
+  it("accepts every type the list names", () => {
+    // Over FRAGMENT_TYPES itself, not a copy of it: a type dropped from the
+    // list would otherwise pass here and be rejected at the release.
+    expect(FRAGMENT_TYPES).toContain("Documented");
+    for (const type of FRAGMENT_TYPES) {
       expect(checkFragment("PAR-1.md", `### ${type} — t\n\nbody\n`)).toBeNull();
     }
   });
@@ -122,6 +126,45 @@ describe("checkFragment", () => {
     ).toBeNull();
     expect(
       checkFragment("PAR-1.md", "### Added — t\n\n- item\n---\n"),
+    ).toBeNull();
+  });
+
+  it("lets a longer fence quote a shorter one", () => {
+    // How an entry about writing entries shows a fenced example.
+    const nested = [
+      "### Documented — where an entry goes",
+      "",
+      "````markdown",
+      "```",
+      "## [Unreleased]",
+      "```",
+      "````",
+      "",
+      "and the prose after it.",
+      "",
+    ].join("\n");
+    expect(checkFragment("PAR-1.md", nested)).toBeNull();
+  });
+
+  it("does not let a tilde line close a backtick fence", () => {
+    const mixed = [
+      "### Documented — t",
+      "",
+      "```",
+      "~~~",
+      "x",
+      "```",
+      "",
+      "after.",
+      "",
+    ].join("\n");
+    expect(checkFragment("PAR-1.md", mixed)).toBeNull();
+  });
+
+  it("does not let an info string close a fence", () => {
+    // ```ts opens; only a bare run of backticks closes.
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\n```\n```ts\nx\n```\n"),
     ).toBeNull();
   });
 

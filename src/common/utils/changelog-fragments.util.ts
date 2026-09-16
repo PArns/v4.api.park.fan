@@ -144,8 +144,21 @@ export function checkFragment(file: string, content: string): string | null {
 /** An ATX heading of level 1 or 2. Up to three leading spaces is still one. */
 const ATX_SECTION = /^ {0,3}#{1,2} /;
 
-/** A fence opener or closer. Four spaces in is an indented code block, not one. */
-const FENCE = /^ {0,3}(```|~~~)/;
+/** A fence opener. Four spaces in is an indented code block, not a fence. */
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Whether this line closes the fence that is open: the same character, at least
+ * as long, and nothing after it — a closing fence carries no info string.
+ */
+function closes(
+  line: string,
+  fence: { char: string; length: number },
+): boolean {
+  return new RegExp(`^ {0,3}\\${fence.char}{${fence.length},}[ \\t]*$`).test(
+    line,
+  );
+}
 
 /** The underline of a setext heading: `===` is an h1, `---` an h2. */
 const SETEXT_UNDERLINE = /^ {0,3}(-{1,}|={1,})[ \t]*$/;
@@ -176,20 +189,34 @@ const SETEXT_SUBJECT = /^ {0,3}(?![-*+>|#]|\d+[.)]|```|~~~)\S/;
  * instead of skipped: it would otherwise swallow the rest of the file and take
  * every heading after it out of the check, which is how the first version of
  * this function let `### Added — t\n\n```\n\n## [4.7.0]` through.
+ *
+ * The opener's character and length are remembered, because only a run of the
+ * same character at least as long closes it. Toggling on any fence-shaped line
+ * instead read a ```` ``` ```` quoted inside a ```` ```` ````-fenced block as a
+ * close — and an entry about writing entries is exactly where that is written.
  */
 function findSectionHeading(lines: string[]): {
   at: number;
   unclosedFence: boolean;
 } {
-  let fenced = false;
+  let fence: { char: string; length: number } | null = null;
   let found = -1;
 
   for (let i = 0; i < lines.length; i++) {
-    if (FENCE.test(lines[i])) {
-      fenced = !fenced;
+    const opener = FENCE_OPEN.exec(lines[i]);
+
+    if (fence) {
+      if (closes(lines[i], fence)) {
+        fence = null;
+      }
       continue;
     }
-    if (fenced || found !== -1) {
+
+    if (opener) {
+      fence = { char: opener[1][0], length: opener[1].length };
+      continue;
+    }
+    if (found !== -1) {
       continue;
     }
     if (ATX_SECTION.test(lines[i])) {
@@ -206,7 +233,7 @@ function findSectionHeading(lines: string[]): {
     }
   }
 
-  return { at: found, unclosedFence: fenced };
+  return { at: found, unclosedFence: fence !== null };
 }
 
 /**
