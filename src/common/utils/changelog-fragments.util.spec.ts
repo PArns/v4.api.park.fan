@@ -127,6 +127,14 @@ describe("checkFragment", () => {
     expect(
       checkFragment("PAR-1.md", "### Added — t\n\n- item\n---\n"),
     ).toBeNull();
+    // The second line of a list item reads like prose on its own. The block it
+    // belongs to is what decides, not the line above the underline.
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\n- item\n  continued\n---\n"),
+    ).toBeNull();
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\n> quoted\n  more\n---\n"),
+    ).toBeNull();
   });
 
   it("lets a longer fence quote a shorter one", () => {
@@ -370,6 +378,26 @@ describe("spliceIntoChangelog", () => {
 
   it("returns the file untouched when there is nothing to fold in", () => {
     expect(spliceIntoChangelog(changelog, [])).toBe(changelog);
+  });
+
+  it("keeps a CRLF changelog's own line endings", () => {
+    // Reading a fragment as CRLF was only half of it: spliced into a CRLF file
+    // the LF block left a bare `\r` on the seam.
+    const crlf = changelog.replace(/\n/g, "\r\n");
+    const { fragments } = parseFragments([
+      { file: "PAR-1.md", content: "### Fixed — one\n\nbody\n" },
+    ]);
+
+    const merged = spliceIntoChangelog(crlf, fragments);
+
+    expect(merged).toBe(
+      crlf.replace(
+        `${UNRELEASED_HEADING}\r\n\r\n`,
+        `${UNRELEASED_HEADING}\r\n\r\n### Fixed — one\r\n\r\nbody\r\n\r\n`,
+      ),
+    );
+    expect(merged).not.toMatch(/\r(?!\n)/);
+    expect(merged).not.toMatch(/(?<!\r)\n/);
   });
 
   it("collapses the blank run under the heading to one, and nothing else", () => {

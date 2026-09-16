@@ -167,13 +167,31 @@ function closes(
 const SETEXT_UNDERLINE = /^ {0,3}(-{1,}|={1,})[ \t]*$/;
 
 /**
- * A line that a setext underline can turn into a heading.
+ * A line that opens a paragraph — the only block a setext underline turns into
+ * a heading.
  *
- * Only a paragraph does that. Under a list item, a table row or a blockquote,
- * `---` closes the block and is a thematic break — treating those as headings
- * would reject a valid entry, and a rejected fragment stops the whole release.
+ * Under a list item, a table row or a blockquote, `---` closes the block and is
+ * a thematic break. Treating those as headings rejects a valid entry, and a
+ * rejected fragment stops the whole release, so this errs towards "not a
+ * heading".
  */
-const SETEXT_SUBJECT = /^ {0,3}(?![-*+>|#]|\d+[.)]|```|~~~)\S/;
+const PARAGRAPH_START = /^ {0,3}(?![-*+>|#]|\d+[.)]|```|~~~)\S/;
+
+/**
+ * Whether the block ending at `before` is a paragraph.
+ *
+ * The question is about the **block**, not the line above the underline: the
+ * second line of a list item looks like prose on its own, and testing it alone
+ * read `- item\n  continued\n---` as a heading when it is a list and a
+ * thematic break.
+ */
+function isParagraph(lines: string[], before: number): boolean {
+  let start = before;
+  while (start > 0 && lines[start - 1].trim() !== "") {
+    start--;
+  }
+  return lines[before].trim() !== "" && PARAGRAPH_START.test(lines[start]);
+}
 
 /**
  * The index of the first line that opens a section, or `-1`.
@@ -226,11 +244,7 @@ function findSectionHeading(lines: string[]): {
       found = i;
       continue;
     }
-    if (
-      SETEXT_UNDERLINE.test(lines[i]) &&
-      i > 0 &&
-      SETEXT_SUBJECT.test(lines[i - 1])
-    ) {
+    if (SETEXT_UNDERLINE.test(lines[i]) && i > 0 && isParagraph(lines, i - 1)) {
       // The heading is the text line, not its underline.
       found = i - 1;
     }
@@ -362,12 +376,18 @@ export function spliceIntoChangelog(
     );
   }
 
+  // The file's own line ending, so a CRLF changelog does not come back with an
+  // LF block spliced into it and a bare `\r` left on the seam.
+  const eol = /\r\n/.test(changelog) ? "\r\n" : "\n";
   const cut = heading.index + heading[0].length;
-  const before = changelog.slice(0, cut);
-  const after = changelog.slice(cut).replace(/^\n+/, "");
-  const block = fragments.map((fragment) => fragment.body).join("\n\n");
+  // `[^\n]*$` takes the `\r` with it, and the `eol` below would then double it.
+  const before = changelog.slice(0, cut).replace(/\r$/, "");
+  const after = changelog.slice(cut).replace(/^(?:\r?\n)+/, "");
+  const block = fragments
+    .map((fragment) => fragment.body.replace(/\n/g, eol))
+    .join(`${eol}${eol}`);
 
   return after.length > 0
-    ? `${before}\n\n${block}\n\n${after}`
-    : `${before}\n\n${block}\n`;
+    ? `${before}${eol}${eol}${block}${eol}${eol}${after}`
+    : `${before}${eol}${eol}${block}${eol}`;
 }
