@@ -32,20 +32,34 @@ rebuilt on schedule.
 
 ## Rendering
 
-These four are the wordings for a window that is **running today**, which is a
+These are the wordings for a window that is **running today**, which is a
 question you answer first — see the next section. A window that has not started
 says "ab 16. Januar" and one that is over says nothing at all; "seit" and the
 present tense are claims about now, and this block makes none.
 
+The two halves are independent, so read them as two decisions rather than a
+table of cases. `to` and `toUncertain` decide how the end is worded:
+
 ```
-from + to,   toUncertain false → "Umbaupause bis 3. März"
-from + to,   toUncertain true  → "Umbaupause voraussichtlich bis 3. März"
-from, no to                    → "Umbaupause seit 16. Januar"
-no from, to                    → "Umbaupause bis 3. März"
+to, toUncertain false → "bis 3. März"
+to, toUncertain true  → "voraussichtlich bis 3. März"
+no to                 → no end clause at all
 ```
 
-`toUncertain` is never `true` without a `to`: the API drops a flag that has no
-date to qualify, so the two states above are the only two the field produces.
+and `from` only decides whether the sentence opens with a start:
+
+```
+from    → "Umbaupause seit 16. Januar …"
+no from → "Umbaupause …"
+```
+
+**`toUncertain` is independent of `from`.** A window with an end and no start is
+ordinary — somebody wrote it down after the work had begun — and it carries the
+hedge exactly as a complete one does. Dropping the hedge there would print an
+estimate as a firm date, which is the thing the field exists to prevent.
+
+The one pairing the API does guarantee: `toUncertain` is never `true` without a
+`to`, because a flag with no date to qualify is dropped on the way out.
 
 **A missing `to` is not "closed for good".** It is the ordinary state while work
 is running and the park has not said when it ends — the park usually names a

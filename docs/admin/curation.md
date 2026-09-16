@@ -332,6 +332,14 @@ that ends before it begins — the pair `AdminCurationService` rejects outright,
 and since PAR-287 one that is served as `worksPeriod`. Putting them on needs the
 window inherited as a set, which is a change to that loop and not to the list.
 
+That choice has a price and it is the loss this section calls unacceptable: a
+merge drops the losing row's works period with no trace, and nothing reports it
+— `previewMerge` lists `inheritedColumns` and a `droppedCurations` that covers
+`attraction_ride_profiles` and nothing else. The rare inverted window was
+preferred over the common silent loss only because the first is served to
+readers and the second is recoverable by curating again. Both go away together
+in PAR-297.
+
 ## Related
 
 - `docs/admin/authentication.md` — who is allowed to write any of this
