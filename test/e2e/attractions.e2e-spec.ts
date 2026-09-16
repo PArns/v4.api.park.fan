@@ -165,9 +165,10 @@ describe("Park attractions (E2E)", () => {
     });
 
     /**
-     * PAR-233 took retired attractions out of the park list, search, the
-     * favorites list and the geo count. This is the half of the promise that
-     * pulls the other way, and the one a broad filter would quietly break:
+     * The park list has excluded retired attractions since PAR-159; PAR-233
+     * added search, the favorites list and the geo count. This is the half of
+     * the promise that pulls the other way, and the one a filter one clause
+     * too broad would quietly break:
      * `retiredAt` says the row "keeps answering here so its history stays
      * readable", and a 404 would turn a ride that existed into one that never
      * did.

@@ -232,8 +232,11 @@ describe("SearchController (E2E)", () => {
     }
 
     afterEach(() => {
-      // `indexReady` is a property of the shared service instance, so a test
-      // that flips it has to put it back or it silently reroutes the next one.
+      // `indexReady` lives on the shared service instance, so a test that
+      // flips it leaks into the next one. This resets to the SQL path rather
+      // than to whatever it was: every case here picks its own path — the
+      // index ones through `seedAndIndex()`, the SQL one by setting the flag
+      // — so a known baseline is worth more than the previous value.
       (searchService as unknown as { indexReady: boolean }).indexReady = false;
     });
 
