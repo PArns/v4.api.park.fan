@@ -3205,8 +3205,11 @@ export class ParksService {
       // today. Their rows and history stay, and their own detail endpoint keeps
       // answering — a page saying "operated until February 2026" beats a 404.
       em.find(Attraction, { where: { parkId: park.id, retiredAt: IsNull() } }),
-      em.find(Show, { where: { parkId: park.id } }),
-      em.find(Restaurant, { where: { parkId: park.id } }),
+      // Shows and restaurants follow the same rule, and for the same reason:
+      // a row the wiki reclassified into `attractions` would otherwise stand
+      // here next to its own replacement.
+      em.find(Show, { where: { parkId: park.id, retiredAt: IsNull() } }),
+      em.find(Restaurant, { where: { parkId: park.id, retiredAt: IsNull() } }),
     ]);
     park.attractions = attractions;
     park.shows = shows;

@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import {
   Repository,
   Between,
+  IsNull,
   LessThanOrEqual,
   MoreThanOrEqual,
   In,
@@ -174,6 +175,7 @@ export class RestaurantsService {
    */
   async findAll(): Promise<Restaurant[]> {
     return this.restaurantRepository.find({
+      where: { retiredAt: IsNull() },
       relations: ["park"],
       order: { name: "ASC" },
     });
@@ -192,7 +194,8 @@ export class RestaurantsService {
   }): Promise<{ data: Restaurant[]; total: number }> {
     const queryBuilder = this.restaurantRepository
       .createQueryBuilder("restaurant")
-      .leftJoinAndSelect("restaurant.park", "park");
+      .leftJoinAndSelect("restaurant.park", "park")
+      .where("restaurant.retiredAt IS NULL");
 
     // Filter by park slug
     if (filters.park) {
@@ -242,7 +245,7 @@ export class RestaurantsService {
    */
   async findBySlug(slug: string): Promise<Restaurant | null> {
     return this.restaurantRepository.findOne({
-      where: { slug },
+      where: { slug, retiredAt: IsNull() },
       relations: ["park", "park.destination"],
     });
   }
@@ -257,7 +260,7 @@ export class RestaurantsService {
    */
   async findByParkId(parkId: string): Promise<Restaurant[]> {
     return this.restaurantRepository.find({
-      where: { parkId },
+      where: { parkId, retiredAt: IsNull() },
       relations: ["park", "park.destination"],
       order: { name: "ASC" },
     });
@@ -280,6 +283,7 @@ export class RestaurantsService {
       where: {
         parkId,
         slug: restaurantSlug,
+        retiredAt: IsNull(),
       },
       relations: ["park", "park.destination"],
     });

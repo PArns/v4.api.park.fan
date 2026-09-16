@@ -80,6 +80,36 @@ export class Restaurant {
   @Column({ type: "boolean", default: false })
   requiresReservation: boolean; // If reservation is required/recommended
 
+  /**
+   * When this restaurant stopped existing. Null means it is still around.
+   *
+   * The mirror of `Attraction.retiredAt`, and it exists for the same reason:
+   * an entity that has gone away is not "closed today" and not "unknown"
+   * either — both of those describe a state it could come back from. Without
+   * this column a restaurant whose entity ThemeParks.wiki reclassified as an
+   * `ATTRACTION` kept a second, permanent row here while the attractions table
+   * grew the real one.
+   *
+   * The row and its `restaurant_live_data` are deliberately KEPT: the opening
+   * history stays readable. What retirement changes is visibility — a retired
+   * restaurant leaves the park payload, search and favorites, while its own
+   * detail endpoint keeps answering.
+   *
+   * **Two writers, told apart by `retiredReason`**, exactly as on the
+   * attraction side: a reason this sync wrote is lifted again the moment the
+   * wiki calls the entity a `RESTAURANT`, and anything else survives every run.
+   */
+  @Column({ name: "retired_at", type: "timestamptz", nullable: true })
+  @Index("idx_restaurant_retired_at", { where: "retired_at IS NULL" })
+  retiredAt: Date | null;
+
+  /**
+   * Why, and on whose authority — the source URL belongs in here. A retirement
+   * is a claim about the world, so it travels with its evidence.
+   */
+  @Column({ name: "retired_reason", type: "text", nullable: true })
+  retiredReason: string | null;
+
   @OneToMany(
     () => RestaurantLiveData,
     (restaurantLiveData) => restaurantLiveData.restaurant,

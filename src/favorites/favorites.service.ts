@@ -6,7 +6,7 @@ import {
 } from "../common/utils/free-flow-status.util";
 import { CacheKeys } from "../common/cache/cache-keys";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, In } from "typeorm";
+import { Repository, In, IsNull } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { Park } from "../parks/entities/park.entity";
@@ -344,8 +344,11 @@ export class FavoritesService {
     if (ids.length === 0) {
       return [];
     }
+    // A retired show drops out of the favorites list rather than being served
+    // as a favorite that no longer exists. The stored id is left alone: the
+    // row can come back, and then so does the favorite.
     return this.showRepository.find({
-      where: { id: In(ids) },
+      where: { id: In(ids), retiredAt: IsNull() },
       relations: ["park"],
     });
   }
@@ -357,8 +360,9 @@ export class FavoritesService {
     if (ids.length === 0) {
       return [];
     }
+    // See `fetchShows`.
     return this.restaurantRepository.find({
-      where: { id: In(ids) },
+      where: { id: In(ids), retiredAt: IsNull() },
       relations: ["park"],
     });
   }

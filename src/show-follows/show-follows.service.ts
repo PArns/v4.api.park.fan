@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { IsNull, Repository } from "typeorm";
 import { ShowFollow } from "./entities/show-follow.entity";
 import { Show } from "../shows/entities/show.entity";
 import { Park } from "../parks/entities/park.entity";
@@ -29,8 +29,12 @@ export class ShowFollowsService {
   ) {}
 
   async findShowForFollow(showId: string): Promise<ShowForFollow | null> {
+    // A retired show cannot be followed: the follow would arm a notification
+    // for something that has stopped existing. This only guards new follows —
+    // an existing one stops firing a layer further on, where
+    // `findBatchCurrentStatusByShows` drops the retired row.
     const show = await this.showRepository.findOne({
-      where: { id: showId },
+      where: { id: showId, retiredAt: IsNull() },
       relations: { park: true },
     });
     if (!show || !show.park) return null;
