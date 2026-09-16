@@ -640,6 +640,9 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         .select("park.id", "id")
         .innerJoin("schedule_entries", "schedule", "schedule.parkId = park.id")
         .where("schedule.scheduleType = :type", { type: "OPERATING" })
+        // Park-level rows only; a ride's row would warm a park that is not
+        // opening (PAR-246). Costs nothing to be right here.
+        .andWhere("schedule.attractionId IS NULL")
         .andWhere("schedule.openingTime >= :now", { now })
         .andWhere("schedule.openingTime <= :next12h", { next12h })
         .distinct(true)

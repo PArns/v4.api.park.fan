@@ -644,4 +644,37 @@ describe("AnalyticsService", () => {
       ).not.toHaveBeenCalled();
     });
   });
+
+  /**
+   * `schedule_entries` holds the park's opening hours (`attractionId IS NULL`)
+   * and a row per ride in the same table. These two read the park's hours and
+   * order by `openingTime ASC`, so a ride that opens before its park would win.
+   * They were safe only while the nightly cleanup collapsed each park-day to one
+   * row, which PAR-246 stops doing.
+   */
+  describe("the effective-time readers ask for the park's own row", () => {
+    beforeEach(() => {
+      mockRedis.get.mockResolvedValue(null);
+      mockScheduleEntryRepository.findOne.mockResolvedValue(null);
+    });
+
+    it.each([
+      [
+        "getEffectiveStartTime",
+        () => service.getEffectiveStartTime("park-1", "Europe/Berlin"),
+      ],
+      [
+        "getEffectiveEndTime",
+        () => service.getEffectiveEndTime("park-1", "Europe/Berlin"),
+      ],
+    ] as const)("%s", async (_name, call) => {
+      await call();
+
+      const calls = mockScheduleEntryRepository.findOne.mock.calls;
+      const [options] = calls[calls.length - 1] as [
+        { where: Record<string, unknown> },
+      ];
+      expect(options.where).toHaveProperty("attractionId");
+    });
+  });
 });

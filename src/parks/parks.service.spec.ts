@@ -12,6 +12,10 @@ import { RevalidationService } from "../common/revalidation/revalidation.service
 import { HolidaysService } from "../holidays/holidays.service";
 import { createTestPark } from "../../test/fixtures/park.fixtures";
 import {
+  formatInParkTimezone,
+  getCurrentDateInTimezone,
+} from "../common/utils/date.util";
+import {
   ATTRACTION_DEPENDENCIES,
   PARK_DEPENDENCIES,
   PARK_INLINE_DEPENDENCIES,
@@ -29,6 +33,7 @@ describe("ParksService", () => {
     del: jest.fn(),
     setex: jest.fn(),
     keys: jest.fn().mockResolvedValue([]),
+    mget: jest.fn().mockResolvedValue([]),
   };
 
   // Mock repositories
@@ -514,6 +519,336 @@ describe("ParksService", () => {
       const entry = savedEntry();
       expect(entry.openingTime.toISOString()).toBe("2026-04-18T06:00:00.000Z");
       expect(entry.closingTime.toISOString()).toBe("2026-04-18T09:00:00.000Z");
+    });
+  });
+
+  /**
+   * The park's opening hours and a ride's own schedule share `schedule_entries`,
+   * told apart by `attractionId` — NULL on the park-level row. Every row these
+   * two methods write is built from `parkId` alone, so both may only read and
+   * delete park-level rows. Neither said so, and each had its own way of going
+   * wrong: the sync would hand a ride's row the park's opening times, and the
+   * gap-fill would let a ride's row occupy the day and then promote or demote it
+   * by the PARK's operating range.
+   *
+   * Every case here fails if the filter leaves its statement.
+   */
+  describe("the schedule sync and the gap-fill speak only about park-level rows", () => {
+    const parkId = "cccccccc-dddd-eeee-ffff-000000000000";
+
+    type RecordedBuilder = {
+      conditions: string[];
+      kind: "read" | "delete" | "other";
+      inserted: Array<Record<string, unknown>>;
+      updatedIds: string[];
+    };
+
+    let builders: RecordedBuilder[];
+
+    /** Records every `andWhere` and what the chain was eventually used for. */
+    const recordingBuilder = (
+      rows: unknown[] = [],
+      rawOne: unknown = { minDate: null, maxDate: null },
+    ) => {
+      const recorded: RecordedBuilder = {
+        conditions: [],
+        kind: "other",
+        inserted: [],
+        updatedIds: [],
+      };
+      builders.push(recorded);
+
+      const mark = (kind: RecordedBuilder["kind"]) => () => {
+        recorded.kind = kind;
+      };
+
+      const builder: Record<string, jest.Mock> = {
+        select: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn((condition: string) => {
+          recorded.conditions.push(condition);
+          return builder;
+        }),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        insert: jest.fn().mockReturnThis(),
+        into: jest.fn().mockReturnThis(),
+        values: jest.fn((rows: Array<Record<string, unknown>>) => {
+          recorded.inserted.push(...(Array.isArray(rows) ? rows : [rows]));
+          return builder;
+        }),
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        whereInIds: jest.fn((ids: string[]) => {
+          recorded.updatedIds.push(...ids);
+          return builder;
+        }),
+        delete: jest.fn(() => {
+          mark("delete")();
+          return builder;
+        }),
+        from: jest.fn().mockReturnThis(),
+        getMany: jest.fn(async () => {
+          mark("read")();
+          return rows;
+        }),
+        getRawMany: jest.fn(async () => {
+          mark("read")();
+          return rows;
+        }),
+        limit: jest.fn().mockReturnThis(),
+        getOne: jest.fn(async () => {
+          mark("read")();
+          return null;
+        }),
+        getRawOne: jest.fn().mockResolvedValue(rawOne),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      };
+
+      return builder;
+    };
+
+    const RIDE_FILTER = /attractionId" IS NULL|attractionId IS NULL/;
+
+    // `jest.clearAllMocks()` drops calls, not implementations, and this block
+    // replaces three of them — the trap the `last_merged_at` block below closes
+    // the same way.
+    afterEach(() => {
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder(),
+      );
+      mockParkRepository.findOne.mockReset();
+      mockParkRepository.find.mockReset();
+      mockScheduleRepository.findOne.mockReset();
+    });
+
+    const conditionsOf = (kind: RecordedBuilder["kind"]): string[][] =>
+      builders.filter((b) => b.kind === kind).map((b) => b.conditions);
+
+    beforeEach(() => {
+      builders = [];
+      mockRedis.get.mockResolvedValue(null);
+      mockRedis.set.mockResolvedValue("OK");
+      mockRedis.keys.mockResolvedValue([]);
+      mockHolidaysService.getHolidays.mockResolvedValue([]);
+      mockScheduleRepository.save.mockResolvedValue([]);
+      mockScheduleRepository.query.mockResolvedValue([]);
+      mockScheduleRepository.createQueryBuilder.mockImplementation(
+        () =>
+          recordingBuilder([]) as unknown as ReturnType<
+            typeof scheduleQueryBuilder
+          >,
+      );
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        countryCode: "DE",
+        regionCode: null,
+        timezone: "Europe/Berlin",
+      });
+    });
+
+    it("looks up the row it is about to overwrite among park-level rows only", async () => {
+      await service.saveScheduleData(parkId, [
+        {
+          date: "2026-07-28",
+          type: "OPERATING",
+          openingTime: "2026-07-28T09:00:00+02:00",
+          closingTime: "2026-07-28T18:00:00+02:00",
+        },
+      ]);
+
+      const reads = conditionsOf("read");
+      expect(reads).toHaveLength(1);
+      // Without this the key is `date|scheduleType`, which a ride's row of the
+      // same day and type answers just as well — and it would then be updated
+      // with the park's opening hours while staying attached to its ride.
+      expect(reads[0].some((c) => RIDE_FILTER.test(c))).toBe(true);
+    });
+
+    it("deletes the placeholders of the park, never a ride's row for that day", async () => {
+      await service.saveScheduleData(parkId, [
+        {
+          date: "2026-07-28",
+          type: "OPERATING",
+          openingTime: "2026-07-28T09:00:00+02:00",
+          closingTime: "2026-07-28T18:00:00+02:00",
+        },
+        {
+          date: "2026-07-29",
+          type: "CLOSED",
+          openingTime: null,
+          closingTime: null,
+        },
+      ]);
+
+      const deletes = conditionsOf("delete");
+      // An OPERATING day clears UNKNOWN and CLOSED placeholders, a CLOSED day
+      // clears UNKNOWN and OPERATING — three statements for this payload.
+      expect(deletes).toHaveLength(3);
+      for (const conditions of deletes) {
+        expect(conditions.some((c) => RIDE_FILTER.test(c))).toBe(true);
+      }
+    });
+
+    it.each([
+      [
+        "getSchedule",
+        (id: string) =>
+          service.getSchedule(
+            id,
+            new Date("2026-07-01"),
+            new Date("2026-07-31"),
+          ),
+      ],
+      [
+        "getScheduleForDate",
+        (id: string) => service.getScheduleForDate(id, "2026-07-28"),
+      ],
+      ["getNextSchedule", (id: string) => service.getNextSchedule(id)],
+      ["getBatchSchedules", (id: string) => service.getBatchSchedules([id])],
+    ] as const)(
+      "%s asks about the park, so it reads park-level rows only",
+      async (_name, call) => {
+        mockParkRepository.find.mockResolvedValue([
+          { id: parkId, timezone: "Europe/Berlin" },
+        ]);
+
+        await call(parkId);
+
+        const reads = conditionsOf("read");
+        expect(reads.length).toBeGreaterThan(0);
+        for (const conditions of reads) {
+          expect(conditions.some((c) => RIDE_FILTER.test(c))).toBe(true);
+        }
+      },
+    );
+
+    it.each([
+      ["isParkCurrentlyOpen", (id: string) => service.isParkCurrentlyOpen(id)],
+      [
+        "isParkOperatingToday",
+        (id: string) => service.isParkOperatingToday(id),
+      ],
+    ] as const)(
+      "%s asks for the park's own row, not whichever row comes back first",
+      async (_name, call) => {
+        // A CLOSED row with no times ends both methods on their first branch,
+        // which keeps the case about the `where` clause and nothing else.
+        mockScheduleRepository.findOne.mockResolvedValue({
+          scheduleType: "CLOSED",
+          openingTime: null,
+          closingTime: null,
+        });
+
+        await call(parkId);
+
+        const calls = mockScheduleRepository.findOne.mock.calls;
+        const [options] = calls[calls.length - 1] as [
+          { where: Record<string, unknown> },
+        ];
+        // Neither call has an ORDER BY, so without this the plan decides which
+        // row answers for the park — and a ride's row is a valid candidate as
+        // soon as the cleanup stops deleting it.
+        expect(options.where).toHaveProperty("attractionId");
+      },
+    );
+
+    it("keys a row on its own day, not on the day before it west of Greenwich", async () => {
+      // TypeORM hands a DATE column back as "YYYY-MM-DD". Reading that as
+      // `new Date(str)` gives UTC midnight, and formatting THAT in a park west
+      // of Greenwich answers with the previous day — so the park's row for the
+      // 16th would be filed under the 15th, the 16th would look like a gap, and
+      // the promotion and demotion would land on the neighbouring day.
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        countryCode: "US",
+        regionCode: null,
+        timezone: "America/Los_Angeles",
+      });
+
+      const occupied = getCurrentDateInTimezone("America/Los_Angeles");
+      mockScheduleRepository.createQueryBuilder.mockImplementation(
+        () =>
+          recordingBuilder([
+            {
+              id: "55555555-6666-7777-8888-999999999999",
+              parkId,
+              attractionId: null,
+              // As the driver delivers it.
+              date: occupied,
+              scheduleType: "OPERATING",
+              description: null,
+              isHoliday: false,
+              holidayName: null,
+              isBridgeDay: false,
+            },
+          ]) as unknown as ReturnType<typeof scheduleQueryBuilder>,
+      );
+
+      await service.fillScheduleGaps(parkId, 1, 1);
+
+      const inserted = builders
+        .flatMap((b) => b.inserted)
+        .map((row) => formatInParkTimezone(row.date as Date, "UTC"));
+
+      // The park's own day is taken; only its two neighbours are gaps.
+      expect(inserted).not.toContain(occupied);
+      expect(inserted).toHaveLength(2);
+    });
+
+    it("writes no gap-filled row onto a day that only a ride has a row for", async () => {
+      // The one day in the window that carries a per-ride row and nothing else —
+      // what a park-day looks like after the old cleanup deleted the park's own
+      // row. `fillScheduleGaps` may neither rewrite that ride's row (it would be
+      // promoted or demoted by the PARK's operating range) nor declare the day
+      // CLOSED, which is a confident claim built from an absence and which the
+      // analytics joins read as "drop this day from P50/P90".
+      const occupied = getCurrentDateInTimezone("Europe/Berlin");
+      const noon = (offsetDays: number) =>
+        new Date(
+          new Date(`${occupied}T12:00:00Z`).getTime() +
+            offsetDays * 24 * 60 * 60 * 1000,
+        );
+      // An operating range that brackets the day, so `isGapClosed` is true for
+      // it: that is what turns a gap into CLOSED, and what would promote the
+      // ride's UNKNOWN row if it were mistaken for the park's.
+      const operatingRange = {
+        minDate: formatInParkTimezone(noon(-5), "Europe/Berlin"),
+        maxDate: formatInParkTimezone(noon(5), "Europe/Berlin"),
+      };
+      mockScheduleRepository.createQueryBuilder.mockImplementation(
+        () =>
+          recordingBuilder(
+            [
+              {
+                id: "77777777-8888-9999-aaaa-bbbbbbbbbbbb",
+                parkId,
+                attractionId: "aaaaaaaa-0000-0000-0000-000000000001",
+                date: new Date(`${occupied}T12:00:00Z`),
+                scheduleType: "UNKNOWN",
+                description: null,
+                isHoliday: false,
+                holidayName: null,
+                isBridgeDay: false,
+              },
+            ],
+            operatingRange,
+          ) as unknown as ReturnType<typeof scheduleQueryBuilder>,
+      );
+
+      await service.fillScheduleGaps(parkId, 1, 1);
+
+      const inserted = builders
+        .flatMap((b) => b.inserted)
+        .map((row) => formatInParkTimezone(row.date as Date, "Europe/Berlin"));
+
+      // The two neighbouring days are genuine gaps and still get their row.
+      expect(inserted.length).toBeGreaterThan(0);
+      expect(inserted).not.toContain(occupied);
+      // And the ride's UNKNOWN row was not promoted to CLOSED by the park's
+      // own operating range, which brackets the day.
+      expect(builders.flatMap((b) => b.updatedIds)).toEqual([]);
     });
   });
 

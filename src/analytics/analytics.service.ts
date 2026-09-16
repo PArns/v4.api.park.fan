@@ -3,7 +3,7 @@ import { CacheKeys } from "../common/cache/cache-keys";
 import { safeJsonParse } from "../common/utils/json.util";
 import { attractionIsOutOfSeason } from "../common/utils/season-window.sql";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, In } from "typeorm";
+import { Repository, In, IsNull } from "typeorm";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
@@ -176,6 +176,10 @@ export class AnalyticsService {
         parkId,
         date: todayStr as any,
         scheduleType: ScheduleType.OPERATING,
+        // The park's own row. `schedule_entries` also holds a row per ride, and
+        // `openingTime ASC` would happily return a ride that opens before its
+        // park. Nothing deletes those rows any more (PAR-246).
+        attractionId: IsNull(),
       },
       order: { openingTime: "ASC" },
     });
@@ -206,6 +210,7 @@ export class AnalyticsService {
         parkId,
         date: todayStr as any,
         scheduleType: ScheduleType.OPERATING,
+        attractionId: IsNull(),
       },
       order: { openingTime: "ASC" },
     });
@@ -247,6 +252,7 @@ export class AnalyticsService {
             parkId: In(parkIds),
             date: todayStr as any,
             scheduleType: ScheduleType.OPERATING,
+            attractionId: IsNull(),
           },
           order: {
             parkId: "ASC",
@@ -3802,6 +3808,7 @@ export class AnalyticsService {
           parkId: entityId,
           date: date as any,
           scheduleType: ScheduleType.OPERATING,
+          attractionId: IsNull(),
         },
         order: { openingTime: "ASC" },
       });

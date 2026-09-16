@@ -101,8 +101,10 @@ Short guide for frequent problems and how to fix them.
 **Automatic fixes**:
 
 1. **Per-park cleanup (immediate)**: `fillScheduleGaps(parkId)` automatically calls `cleanupDuplicateScheduleEntriesForPark(parkId)` **before** gap-filling. This removes duplicates for that specific park using SQL window functions:
-   - **Same-type duplicates**: Multiple entries with identical `(parkId, date, scheduleType)` → keeps most recent by `updatedAt`
-   - **Cross-type conflicts**: Multiple entries for same `(parkId, date)` with different scheduleTypes → applies priority (OPERATING > API-provided CLOSED > Gap-filled CLOSED > UNKNOWN)
+   - **Same-type duplicates**: Multiple entries with identical `(parkId, date, attractionId, scheduleType)` → keeps most recent by `updatedAt`
+   - **Cross-type conflicts**: Multiple entries for same `(parkId, date, attractionId)` with different scheduleTypes → applies priority (OPERATING > API-provided CLOSED > Gap-filled CLOSED > UNKNOWN)
+
+   **`attractionId` is part of both keys**, because `schedule_entries` holds the park's opening hours (`attractionId IS NULL`) and per-ride rows in the same table. Leave it out and each pass keeps **one row per park and day** — the opening hours or a single ride, whichever `updatedAt` favours. Both statements are built by `src/parks/utils/schedule-dedup.sql.ts`, one derivation for the global and the per-park scope; the merge path states the same rule in `migrateScheduleEntries`.
 
 2. **Global cleanup (daily)**: `cleanupDuplicateScheduleEntries()` runs as part of `fillAllParksGaps()` job, processing all parks. Uses optimized SQL (2 queries total instead of N+1 pattern).
 

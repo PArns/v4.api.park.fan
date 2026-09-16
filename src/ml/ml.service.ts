@@ -5,7 +5,7 @@ import { SingleFlight } from "../common/utils/single-flight.util";
 import { getMlServiceUrl } from "../config/ml-services.config";
 import { isQueueTimesExcluded } from "../external-apis/queue-times/queue-times.exclusions";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, In, MoreThan } from "typeorm";
+import { Repository, In, IsNull, MoreThan } from "typeorm";
 import { ConfigService } from "@nestjs/config";
 import axios, { AxiosInstance } from "axios";
 import { Redis } from "ioredis";
@@ -583,6 +583,9 @@ export class MLService {
           .andWhere("schedule.scheduleType = :type", {
             type: ScheduleType.OPERATING,
           })
+          // The park's own row, not a ride's: the table holds both and this
+          // query has no ORDER BY (PAR-246).
+          .andWhere("schedule.attractionId IS NULL")
           .getOne();
 
         if (schedule?.openingTime) {
@@ -693,6 +696,9 @@ export class MLService {
           where: {
             parkId,
             scheduleType: ScheduleType.OPERATING,
+            // Same filter as `ParksService.hasOperatingSchedule`, which answers
+            // the same question: a ride's row is not the park having a schedule.
+            attractionId: IsNull(),
           },
           select: ["id"],
         });
@@ -1296,6 +1302,7 @@ export class MLService {
           where: {
             parkId: In([...predictionsByPark.keys()]),
             date: In(allScheduleDates),
+            attractionId: IsNull(),
           },
         })
       : [];
