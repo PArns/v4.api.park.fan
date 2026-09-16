@@ -495,10 +495,19 @@ Two things this does not cover, named here because the heading above says the
 rule has one derivation and that sentence is about the two **merge** paths.
 `cleanupDuplicateScheduleEntries` and its per-park twin carry the same blind key
 in the gap-fill, which runs unconditionally rather than from an admin action;
-that is PAR-246. And the same-id refusal is new for `consolidateMergedPark` —
-`mergeParks` already checked at its entry, this path did not, so a call with one
-park id on both sides now throws where it previously wrote a wipe. Both call
-sites run inside a transaction, so the statements before it roll back.
+that is PAR-246, and it now has a second half. The rows this fix keeps are what
+that key sees next: they are reparented onto the winner, where phase 1 keeps one
+row per `("parkId", date, "scheduleType")` ordered by `updatedAt DESC` — and the
+reparent is a raw `UPDATE` that leaves `updatedAt` alone, so which row that is
+was decided before the merge. A surviving per-ride row can therefore outrank the
+winner's own park-wide row for that day and delete it on the next nightly pass.
+Both halves belong to PAR-246; the interaction is named here so it is not
+re-derived from the merge path.
+
+And the same-id refusal is new for `consolidateMergedPark` — `mergeParks`
+already checked at its entry, this path did not, so a call with one park id on
+both sides now throws where it previously wrote a wipe. Both call sites run
+inside a transaction, so the statements before it roll back.
 
 ### Added — an empty `/plan/day` says why, and the number is counted
 
