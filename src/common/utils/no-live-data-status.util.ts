@@ -22,12 +22,16 @@
  *
  * The optimism below is written for ONE ride going quiet at a park whose feed
  * works. It has no answer for a park where nothing has arrived at all, and on
- * 2026-09-16 that was five parks with 110 rides between them: La Ronde, silent
- * since 2026-06-24 while its schedule runs to 2027-08-31, and four that have
- * never produced a single reading (Paradise Country, Movieland The Hollywood
- * Park, Adventure Island Tampa, Water Country USA). La Ronde's park page served
- * all 38 rides as OPERATING at `very_low` — "geöffnet, sehr wenig los" — while
- * each ride's own page served CLOSED off the same silence.
+ * 2026-09-16 **nine** parks were in that state — the 2, 3 and 4 in the last
+ * three columns of the table below. All nine lose the fallback through this
+ * constant, whatever their schedule says. `findScheduledButSilentParks` reports
+ * the five of them that are also scheduled open, which is a narrower question
+ * and a different one.
+ *
+ * The case that was reported: La Ronde, silent since 2026-06-24 with a schedule
+ * running to 2027-08-31, served all 38 of its rides as OPERATING at `very_low`
+ * — "geöffnet, sehr wenig los" — while each ride's own page served CLOSED off
+ * the same silence.
  *
  * Thirty days, and it is not compared against Busch Gardens Tampa's 65-day
  * recovery in `source-absent-status.util.ts`: that was nine rides of a park

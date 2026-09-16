@@ -42,7 +42,7 @@ export interface ScheduledButSilentPark {
   parkId: string;
   parkName: string;
   attractionCount: number;
-  /** Park-local date of the last observed reading, or null if there has never been one. */
+  /** Park-local date of the last observed reading, or null if there is none in 400 days. */
   lastReading: string | null;
   /** Operating days published inside `SILENT_PARK_LOOKAHEAD_DAYS`. */
   operatingDaysAhead: number;
@@ -277,7 +277,7 @@ export class DataQualityMonitorService {
            AND se."attractionId" IS NULL
            AND se.date > (now() AT TIME ZONE p.timezone)::date
          GROUP BY 1
-        HAVING count(*) FILTER (
+        HAVING count(DISTINCT se.date) FILTER (
                  WHERE se.date <= (now() AT TIME ZONE p.timezone)::date
                                   + ($2::int * INTERVAL '1 day')
                ) > 0

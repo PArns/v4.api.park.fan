@@ -1086,13 +1086,23 @@ PARK_FEED_SILENT_DAYS)` — a bounded `EXISTS` over `observedReadingsSql()`, so 
 own reconciliation and heartbeat rows cannot clear a park. Ride status,
 `crowdLevel`, best visit times and the park's wait statistics all read it, and a
 silent park's rides land on `UNKNOWN` — the same place a park with no readable
-source sends them. `closedAttractions` went to 0 alongside `operatingAttractions`
-in that branch: "0 operating is true, none is *known* to run" defends one half
-and never defended the other, and `total - operating` served "38 of 38 closed"
-under an `OPERATING` badge, which is the same false page from the other
-direction. `liveWaitTimes.available` stays `true`: it is the frontend's contract
-for "publishes wait times nowhere" (`live-wait-time-sources.ts`), and La Ronde
-published 7.307 rows through June.
+source sends them.
+
+`closedAttractions` reads 0 in that branch, **while the park itself is open**.
+"0 operating is true, none is *known* to run" defends `operatingAttractions`,
+which still computes itself and at a silent park counts exactly the free-flow
+rides. Nothing defended the other half: `total - operating` served "38 of 38
+closed" under an `OPERATING` badge, which is "Park geöffnet, alle Bahnen zu"
+arrived at from the other direction. In a CLOSED park the rides really are
+closed for a reason we can state, so the count stands there — zeroing it would
+replace a true answer with a shrug. `total = operating + closed` therefore does
+not hold at an open park whose waits are unknowable, and the DTO descriptions
+say so: the remainder is the rides nobody can speak for.
+
+`liveWaitTimes.available` stays `true`: it is the frontend's contract for
+"publishes wait times nowhere" (`live-wait-time-sources.ts`), and La Ronde
+published 7.307 rows through June. Its description now says outright that `true`
+is not the same as "we have data", because a silent park keeps the flag.
 
 **Thirty days, and the number it is measured against is not an incident.** Days
 since the last observed reading, per park with at least one un-retired
@@ -1108,6 +1118,11 @@ the observed maximum. Busch Gardens Tampa's 65-day recovery in §5.2a is *not*
 the comparison: that was nine rides of a park whose feed kept working, which is
 `findSilencedClusters`' subject and never reaches this rule.
 
+The constant reaches further than the report does. Nine parks were over the
+30-day line on 2026-09-16 and all nine lose the fallback; the five below are the
+subset that is also scheduled open, which is the narrower question the detector
+asks.
+
 `DataQualityMonitorService.findScheduledButSilentParks()` reports the state
 nightly. It is the complement of `findSilencedClusters`, which cannot be widened
 to cover it: that detector's `park_health` CTE demands at least three attractions
@@ -1120,6 +1135,11 @@ summer already published has future operating days and an empty feed, and is
 neither a fault nor news. At 7, 30 and unbounded the query returns the same five
 parks on 2026-09-16, so the window costs nothing today and is the gate that keeps
 January out of the log.
+
+Each of the three detectors catches its own throw, and the job counts how many
+ran: three caught throws leave three empty lists, and an empty list is what
+"nothing is wrong" looks like — a ✅ printed under three ERROR lines is §5.1
+with more output.
 
 **What this change does not touch.** The ride's own endpoint
 (`AttractionIntegrationService`), the favourites list and `/location` still gate

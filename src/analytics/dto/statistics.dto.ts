@@ -94,13 +94,20 @@ export class ParkStatisticsDto {
   totalAttractions: number;
 
   @ApiProperty({
-    description: "Number of attractions currently operating",
+    description:
+      "Number of attractions KNOWN to be operating. Where the park's waits " +
+      "are unknowable — no readable source, or a feed silent for 30 days — " +
+      "this counts only the rides a curated flag opens with the park.",
     example: 42,
   })
   operatingAttractions: number;
 
   @ApiProperty({
-    description: "Number of attractions currently closed",
+    description:
+      "Number of attractions KNOWN to be closed. `total = operating + closed` " +
+      "does NOT hold in general: at an open park whose waits are unknowable " +
+      "this is 0 and the remainder is the rides nobody can speak for, which " +
+      "`attractions[].status` reports as UNKNOWN.",
     example: 3,
   })
   closedAttractions: number;

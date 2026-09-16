@@ -49,9 +49,13 @@ export class ParkWithDistanceDto {
 
   @ApiProperty({
     description:
-      "Whether this park's wait times are readable at all. When false, " +
-      "`operatingAttractions` and every number under `analytics` are an " +
-      "aggregate over nothing rather than a quiet park.",
+      "Whether this park PUBLISHES wait times anywhere we can read. When " +
+      "false, `operatingAttractions` and every number under `analytics` are " +
+      "an aggregate over nothing rather than a quiet park. `true` is not the " +
+      "same as 'we have data': a park whose feed has gone silent keeps this " +
+      "flag, because it is a statement about the source and not about the " +
+      "last 30 days. Read `attractions[].status` for that — every ride of " +
+      "such a park is UNKNOWN.",
     type: LiveWaitTimesDto,
   })
   liveWaitTimes: LiveWaitTimesDto;

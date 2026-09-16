@@ -919,8 +919,9 @@ export class QueueDataService {
           -- lastUpdated is. A row we cannot classify must not be the thing that
           -- declares a park silent, so it counts as an observation — the same
           -- optimistic direction the curated lookup takes. Production holds no
-          -- such row (0 of 43,245,615 over the full 400-day retention, measured
-          -- 2026-09-16); a fixture that omits the column does.
+          -- such row: 0 of 43,245,615, which is every row in the table — it has
+          -- no retention policy and begins 2025-12-24 (measured 2026-09-16).
+          -- A fixture that omits the column does.
           AND COALESCE(${observedReadingsSql("qd")}, true)
         LIMIT 1`,
       [parkId, days],

@@ -257,7 +257,8 @@ export class ParkIntegrationService {
      * curated half is permanent and known in advance (Hansa-Park publishes only
      * inside its own app). This half is measured and can end at any time: both
      * of La Ronde's upstreams still answer, they have simply returned an empty
-     * live payload since 2026-06-17, and nothing in the catalog says so.
+     * live payload since 2026-06-17 (ThemeParks.wiki) and 2026-06-24
+     * (Queue-Times), and nothing in the catalog says so.
      *
      * They are kept apart in the response on purpose. `liveWaitTimes.available`
      * stays `true` here, because it is the frontend's contract for "this park
@@ -268,6 +269,12 @@ export class ParkIntegrationService {
      * What they share is that every wait-derived claim below is unsupported:
      * ride status, crowd level, best visit times, the park's own wait
      * statistics. Those read `unknown` rather than a fabricated tier.
+     *
+     * The free-flow override further down is deliberately NOT one of them: a
+     * playground is open on the strength of a curated flag and the park's
+     * schedule, neither of which is a wait time. It is also why
+     * `operatingAttractions` is left to compute itself rather than forced to 0
+     * — at a silent park it counts exactly those rides and nothing else.
      */
     const waitTimesKnowable = waitTimesReadable && parkObservedRecently;
 
@@ -1349,14 +1356,6 @@ export class ParkIntegrationService {
     // crowds, on a park that may be at capacity. `totalAttractions` survives —
     // the catalog is real — and the wait-derived claims do not.
     //
-    // `closedAttractions` joins them, and the reason is the sentence this
-    // comment used to carry: "0 operating is true, none is *known* to run".
-    // That defends `operatingAttractions`. Nothing defended the other half —
-    // the live branch computes it as `total - operating`, so an unreadable or
-    // silent park read "38 of 38 closed" under a park badge saying OPERATING,
-    // which is the "Park geöffnet, alle Bahnen zu" page `no-live-data-status`
-    // was written to stop, arrived at from the other direction. None of them is
-    // known to be closed either.
     if (dto.analytics && !waitTimesKnowable) {
       dto.analytics.statistics = {
         ...dto.analytics.statistics,
@@ -1365,12 +1364,37 @@ export class ParkIntegrationService {
         peakHourLocal: null,
         peakHourConfidence: 0,
         peakHourSource: null,
-        operatingAttractions: 0,
-        closedAttractions: 0,
       };
       // `percentiles` is a distribution over observed waits — of which there are
       // none — and the frontend renders it as a "typical day" chart.
       dto.analytics.percentiles = undefined;
+
+      // `closedAttractions` goes with them, and only while the park is open.
+      //
+      // "0 operating is true, none is *known* to run" defends
+      // `operatingAttractions`, which still computes itself: the loop counts
+      // `effectiveStatus === "OPERATING"`, and here that is the free-flow rides
+      // and nothing else. Nothing defended the other half — the live branch
+      // derives it as `total - operating`, so an unreadable or silent OPERATING
+      // park read "38 of 38 closed" under a badge saying the park is open,
+      // which is the "Park geöffnet, alle Bahnen zu" page arrived at from the
+      // other direction. Not one of them is known to be closed.
+      //
+      // Gated on the park's own status, because in a CLOSED park every ride IS
+      // closed for a reason we can state, and the branch that built these
+      // statistics has already written the honest `closedAttractions:
+      // totalAttractionsCount`. Zeroing it there would replace a true answer
+      // with a shrug — the rule `readsUnknownFromAbsentSource` follows one
+      // level down.
+      //
+      // `total = operating + closed` therefore does not hold here. That is the
+      // point: the remainder is the rides nobody can speak for.
+      if (dto.status === "OPERATING") {
+        dto.analytics.statistics = {
+          ...dto.analytics.statistics,
+          closedAttractions: 0,
+        };
+      }
     }
 
     // Enrich schedule with holiday data (covers weekends that might be missing in scraped data)

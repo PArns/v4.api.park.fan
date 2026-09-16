@@ -22,7 +22,7 @@ import { PARK_FEED_SILENT_DAYS } from "../../src/common/utils/no-live-data-statu
  * `findScheduledButSilentParks` and `hasObservedReadingWithin` against a real
  * PostgreSQL, because the unit spec next to them can only read the SQL text.
  *
- * The detector is four CTEs, two correlated subqueries and a `LEFT JOIN … IS
+ * The detector is three CTEs, a correlated subquery and a `LEFT JOIN … IS
  * NULL` — the shapes that pass a regular expression and fail a query. The first
  * SQL error of PAR-134 was found by an e2e run and not by any review (📚 G-84),
  * and the same applies here: an anti-join that matches nothing returns an empty
@@ -64,6 +64,14 @@ describe("scheduled but silent parks (e2e)", () => {
    * `SILENT_PARK_LOOKAHEAD_DAYS` so the window is not what excludes them.
    */
   const FUTURE_DAYS = [2, 5];
+  /**
+   * Two days inside the window, one outside, and day 2 twice.
+   *
+   * `operatingDaysAhead` has to come back as 2 against this, which is the only
+   * shape that pins both halves of its expression: drop the `FILTER` and day 8
+   * makes it 3, drop the `DISTINCT` and the duplicate makes it 3 as well.
+   */
+  const MIXED_DAYS = [2, 2, 5, SILENT_PARK_LOOKAHEAD_DAYS + 1];
   /**
    * The same shape in the past. A park with NO schedule row at all would drop
    * out of the join for a second reason, and the case below would stay green
@@ -261,6 +269,22 @@ describe("scheduled but silent parks (e2e)", () => {
     expect(report.map((p) => p.parkId)).not.toContain(overForTheYear.parkId);
   });
 
+  it("counts the days inside the window, once each", async () => {
+    const mixed = await seedPark("mixed-days-e2e", 2, {
+      scheduleDayOffsets: MIXED_DAYS,
+    });
+
+    const hit = await reportFor(mixed.parkId);
+
+    expect(hit).toBeDefined();
+    expect(hit!.operatingDaysAhead).toBe(2);
+    // `lastScheduledDay` is deliberately NOT windowed — it is the number that
+    // says how far the unconfirmed calendar runs, which at La Ronde is 2027.
+    expect(hit!.lastScheduledDay).toBe(
+      daysFromNow(SILENT_PARK_LOOKAHEAD_DAYS + 1),
+    );
+  });
+
   it("holds its tongue about next summer until the week it starts", async () => {
     // A seasonal park shut for the winter has future operating days and an
     // empty feed, and is neither a fault nor news. Without the lookahead window
@@ -386,7 +410,8 @@ describe("scheduled but silent parks (e2e)", () => {
       for (const ride of body.attractions) {
         expect(ride.status).toBe("UNKNOWN");
         expect(ride.effectiveStatus).toBe("UNKNOWN");
-        // `very_low` here reads as "walk on, no queues" off no data at all.
+        // Not `very_low`, which is the last-resort default of the crowd chain
+        // and reads as "walk on, no queues" off no data at all.
         expect(ride.crowdLevel).toBe("unknown");
       }
       // "38 of 38 closed" under an OPERATING badge is the same false page from
@@ -394,6 +419,32 @@ describe("scheduled but silent parks (e2e)", () => {
       expect(body.analytics.statistics.operatingAttractions).toBe(0);
       expect(body.analytics.statistics.closedAttractions).toBe(0);
       expect(body.analytics.statistics.crowdLevel).toBe("unknown");
+    });
+
+    it("still says 'all of them closed' when the park itself is shut", async () => {
+      // The counter override is gated on the park being OPERATING, and this is
+      // the case that gate exists for. A shut park's rides ARE closed for a
+      // reason we can state, and `closedAttractions: 0` there would replace a
+      // true answer with a shrug — which is what the first draft of the fix
+      // did. Without `openNow` there is no schedule row for today at all.
+      await redis.flushdb();
+      const slug = "silent-and-shut-e2e";
+      const park = await seedPark(slug, 2, {
+        scheduleDayOffsets: FUTURE_DAYS,
+        timezone: "UTC",
+      });
+      await reading(park.rideIds[0], daysAgo(PARK_FEED_SILENT_DAYS + 1));
+
+      const { body } = await request(app.getHttpServer())
+        .get(geoPath(slug))
+        .expect(200);
+
+      expect(body.status).toBe("CLOSED");
+      for (const ride of body.attractions) {
+        expect(ride.effectiveStatus).toBe("CLOSED");
+      }
+      expect(body.analytics.statistics.operatingAttractions).toBe(0);
+      expect(body.analytics.statistics.closedAttractions).toBe(2);
     });
 
     it("keeps the optimistic fallback for a park whose feed is alive", async () => {

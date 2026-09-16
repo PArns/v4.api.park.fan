@@ -5,7 +5,8 @@ import { DataQualityProcessor } from "./data-quality.processor";
 
 /**
  * Detectors for failures that stayed invisible for weeks: a scheduled job that
- * runs and throws, and a park losing a block of attractions from its feed.
+ * runs and throws, a park losing a block of attractions from its feed, and a
+ * park scheduled open that no source has reported on in a month.
  */
 @Module({
   imports: [BullModule.registerQueue({ name: "analytics" })],
