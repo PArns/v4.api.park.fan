@@ -463,10 +463,12 @@ describe("ParksService", () => {
 
           const date = await method.call(timezone);
 
-          // This is the comparison `ParkIntegrationService` makes to decide
-          // whether the park has a schedule for today. With `new Date(date)`
-          // in the cache branch it answers with yesterday in Los Angeles, and
-          // the park reads CLOSED with a live fallback behind it.
+          // This is the comparison `ParkIntegrationService` makes to pick
+          // today's row. With `new Date(date)` in the cache branch every row
+          // reads a day early in Los Angeles, so the row it matches is
+          // tomorrow's — and tomorrow's status, rope-drop window and closing
+          // time are what the park page then shows. Only past the last
+          // published row does the match come up empty.
           expect(formatInParkTimezone(date as never, timezone)).toBe(
             getCurrentDateInTimezone(timezone),
           );
@@ -509,11 +511,15 @@ describe("ParksService", () => {
     );
 
     // The opposite of the cases above, and the reason they say "names no day"
-    // rather than "is not a plain date": a full ISO timestamp DOES name one.
-    // An entry written by an older deploy that cached a `Date` comes back as
-    // `"2026-09-16T00:00:00.000Z"`, and reading the UTC day off it is the
-    // inverse of the `toISOString` that wrote it — so it is a hit, not a miss,
-    // and nobody pays for a rebuild over it.
+    // rather than "is not a plain date": a full ISO timestamp DOES name one,
+    // and reading the UTC day off it is the inverse of the `toISOString` that
+    // would have written it — a hit, not a miss, and no rebuild.
+    //
+    // No writer produces this shape, here or historically: all five `redis.set`
+    // calls stringify a database row, and `date` is a DATE column that TypeORM
+    // yields as a string. What is pinned is the tolerance itself, so that
+    // narrowing the accepted shape later has to break a test rather than a
+    // deploy.
     it("accepts a cached ISO timestamp as the day it names", async () => {
       const row = dbRow("America/Los_Angeles");
       arrange("America/Los_Angeles", []);
