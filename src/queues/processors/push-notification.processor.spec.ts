@@ -886,8 +886,18 @@ describe("PushNotificationProcessor", () => {
             ],
           ]),
         );
-        showsService.getShowtimesOnDate.mockResolvedValueOnce(
-          new Map([["show-1", ["20:30"]]]),
+        // The same verification the sending test above sets up, instants and
+        // all: keyed on the date rather than `...Once`, because the job asks
+        // yesterday, today and tomorrow and a single answer would be spent on
+        // yesterday. Without it nothing is due at all, and the three
+        // assertions below would pass on a build that has no window in it.
+        showsService.getShowtimeInstantsOnDate.mockImplementation(
+          async (_parkId: string, _tz: string, dateStr: string) =>
+            dateStr === "2026-10-17"
+              ? new Map([
+                  ["show-1", [new Date(NOW + 30 * 60_000).toISOString()]],
+                ])
+              : new Map(),
         );
         pushService.findByIds.mockResolvedValueOnce(
           new Map([["sub-show", tokyoShowSubscription]]),
