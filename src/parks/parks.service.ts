@@ -83,6 +83,96 @@ export interface ScheduleSyncEntry {
  */
 class PriorityMergeIncompleteError extends Error {}
 
+/**
+ * Reads `schedule_entries.date` back out of Redis in the shape the database
+ * path hands out, or `null` when the cached value does not name a day.
+ *
+ * `date` is a PostgreSQL DATE column, TypeORM returns it as a "YYYY-MM-DD"
+ * string, and `JSON.stringify` on a database row stores exactly that string.
+ * So the cache branches must hand it on unchanged. `new Date("2026-09-16")` is
+ * midnight UTC, and formatting THAT in a park west of Greenwich answers with
+ * the previous day.
+ *
+ * The consequence is not that the day goes missing, which is the easy thing to
+ * assume and the wrong thing to go looking for. `ParkIntegrationService` picks
+ * today's row out of a window that runs from two days back to seventeen days
+ * ahead, by comparing each row's day against the park's own today, so shifting
+ * every row back by one hands it **tomorrow's**
+ * row: measured in `America/Los_Angeles` with the park-local day 2026-09-16,
+ * `find` returns the row dated 2026-09-17. That row then decides the park's
+ * status, its rope-drop window and its closing time — yesterday's answer would
+ * at least have been visibly stale, whereas tomorrow's looks perfectly normal.
+ * Only at the edge of the published schedule, where no later row exists, does
+ * the match actually come up empty.
+ *
+ * All of it only while the cache is warm, which is why reproducing it from a
+ * cold start shows nothing.
+ *
+ * Same rule as `localDateOf` in `fillScheduleGaps` and as
+ * `ScheduleItemDto.fromEntity`, which is why the API payload was right on both
+ * paths while this comparison was not. The write side reaches the same day by
+ * its own route: `saveScheduleData` normalises the feed to a date-only string
+ * and then anchors it at noon UTC, so no timezone conversion on the way into
+ * the DATE column can move it off that day.
+ *
+ * Only a string can name a day here. A `Date` cannot reach this function:
+ * `JSON.stringify` writes one as an ISO string, so it comes back through the
+ * branch below and the `T`-split reads the same UTC day back out — which is the
+ * inverse of what wrote it, and the same choice `ScheduleItemDto.fromEntity`
+ * makes. Everything else JSON can carry is a corrupt value, and none of it may
+ * be coerced: `new Date(null)`, `new Date(0)` and `new Date(false)` are all the
+ * epoch rather than `NaN`, so a `date: null` would quietly become 1970-01-01 —
+ * a confident day built out of an absent one, which is this bug wearing a
+ * different hat.
+ */
+function cachedScheduleDay(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const day = value.split("T")[0];
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+}
+
+/**
+ * One cached row in the shape the database path yields, or `null` if it cannot
+ * be read — which the callers turn into a cache miss.
+ *
+ * `openingTime` and `closingTime` are `timestamptz` and stay `Date`s: consumers
+ * call `.getTime()` and `.toISOString()` on them directly, and unlike `date`
+ * they were symmetric across both paths all along.
+ */
+function scheduleRowFromCache(entry: unknown): ScheduleEntry | null {
+  if (typeof entry !== "object" || entry === null) return null;
+  const row = entry as Record<string, unknown>;
+  const date = cachedScheduleDay(row.date);
+  if (date === null) return null;
+  return {
+    ...row,
+    date,
+    openingTime: row.openingTime ? new Date(row.openingTime as string) : null,
+    closingTime: row.closingTime ? new Date(row.closingTime as string) : null,
+  } as unknown as ScheduleEntry;
+}
+
+/**
+ * A whole cached list, or `null` to treat the entry as a miss and rebuild.
+ *
+ * All-or-nothing on purpose. This is the rule `safeJsonParse` already states
+ * one level up — "a corrupted cache entry should behave like a cache miss
+ * (rebuild), not bubble a SyntaxError into a 500" — applied one field deeper,
+ * where the entry parses but no longer says which day it is about. Dropping
+ * only the unreadable rows would answer with a schedule that is short a day,
+ * and a missing day is read as CLOSED further along.
+ */
+function scheduleRowsFromCache(parsed: unknown): ScheduleEntry[] | null {
+  if (!Array.isArray(parsed)) return null;
+  const rows: ScheduleEntry[] = [];
+  for (const entry of parsed) {
+    const row = scheduleRowFromCache(entry);
+    if (row === null) return null;
+    rows.push(row);
+  }
+  return rows;
+}
+
 @Injectable()
 export class ParksService {
   private readonly logger = new Logger(ParksService.name);
@@ -2741,13 +2831,9 @@ export class ParksService {
     const cached = await this.redis.get(cacheKey);
 
     const parsed = safeJsonParse<any[]>(cached); // corrupt entry = miss
-    if (parsed) {
-      return parsed.map((entry) => ({
-        ...entry,
-        date: new Date(entry.date),
-        openingTime: entry.openingTime ? new Date(entry.openingTime) : null,
-        closingTime: entry.closingTime ? new Date(entry.closingTime) : null,
-      })) as ScheduleEntry[];
+    const cachedRows = scheduleRowsFromCache(parsed); // unreadable day = miss
+    if (cachedRows) {
+      return cachedRows;
     }
 
     const schedule = await this.getScheduleForDate(parkId, todayStr);
@@ -2793,13 +2879,9 @@ export class ParksService {
       // a corrupt entry instead falls through and rebuilds from the DB.
       if (cached === "null") return null;
       const parsed = safeJsonParse<any>(cached);
-      if (parsed) {
-        return {
-          ...parsed,
-          date: new Date(parsed.date),
-          openingTime: parsed.openingTime ? new Date(parsed.openingTime) : null,
-          closingTime: parsed.closingTime ? new Date(parsed.closingTime) : null,
-        } as ScheduleEntry;
+      const cachedRow = scheduleRowFromCache(parsed); // unreadable day = miss
+      if (cachedRow) {
+        return cachedRow;
       }
     }
 
@@ -2893,19 +2975,13 @@ export class ParksService {
       if (cachedTodayValue) {
         try {
           const parsed = JSON.parse(cachedTodayValue) as any[];
-          todayMap.set(
-            parkId,
-            parsed.map((entry) => ({
-              ...entry,
-              date: new Date(entry.date),
-              openingTime: entry.openingTime
-                ? new Date(entry.openingTime)
-                : null,
-              closingTime: entry.closingTime
-                ? new Date(entry.closingTime)
-                : null,
-            })) as ScheduleEntry[],
-          );
+          const cachedRows = scheduleRowsFromCache(parsed);
+          if (cachedRows) {
+            todayMap.set(parkId, cachedRows);
+          } else {
+            // Unreadable day: same answer as unparseable JSON one line down.
+            parksNeedingTodayQuery.push(parkId);
+          }
         } catch {
           parksNeedingTodayQuery.push(parkId);
         }
@@ -2919,17 +2995,16 @@ export class ParksService {
         try {
           const parsed = JSON.parse(cachedNextValue);
           if (parsed) {
-            nextMap.set(parkId, {
-              ...parsed,
-              date: new Date(parsed.date),
-              openingTime: parsed.openingTime
-                ? new Date(parsed.openingTime)
-                : null,
-              closingTime: parsed.closingTime
-                ? new Date(parsed.closingTime)
-                : null,
-            } as ScheduleEntry);
+            const cachedRow = scheduleRowFromCache(parsed);
+            if (cachedRow) {
+              nextMap.set(parkId, cachedRow);
+            } else {
+              // Unreadable day: same answer as unparseable JSON one line down.
+              parksNeedingNextQuery.push(parkId);
+            }
           } else {
+            // A cached `null` is the negative result: no upcoming operating
+            // day. That is an answer, not a corrupt entry.
             nextMap.set(parkId, null);
           }
         } catch {
@@ -3087,14 +3162,10 @@ export class ParksService {
       days,
     );
     const cached = safeJsonParse<any[]>(await this.redis.get(cacheKey)); // corrupt entry = miss
+    const cachedRows = scheduleRowsFromCache(cached); // unreadable day = miss
 
-    if (cached) {
-      return cached.map((entry) => ({
-        ...entry,
-        date: new Date(entry.date),
-        openingTime: entry.openingTime ? new Date(entry.openingTime) : null,
-        closingTime: entry.closingTime ? new Date(entry.closingTime) : null,
-      })) as ScheduleEntry[];
+    if (cachedRows) {
+      return cachedRows;
     }
 
     const schedule = await this.getSchedule(parkId, twoDaysAgo, endDate);

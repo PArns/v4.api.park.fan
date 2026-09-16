@@ -301,6 +301,323 @@ describe("ParksService", () => {
     });
   });
 
+  // `schedule_entries.date` is a DATE column that TypeORM hands back as
+  // "YYYY-MM-DD". Every cache branch used to rebuild it with `new Date(...)`,
+  // i.e. midnight UTC, and `ParkIntegrationService` then compared THAT against
+  // the park's own today — one day early for every park west of Greenwich, and
+  // only while the cache was warm. See PAR-285.
+  describe("the schedule cache hands back the day the database hands back", () => {
+    const parkId = "11111111-2222-3333-4444-555555555555";
+
+    /** One park each side of Greenwich: the bug only shows on the west one. */
+    const ZONES = [
+      ["America/Los_Angeles", "negative UTC offset"],
+      ["Asia/Tokyo", "positive UTC offset"],
+    ] as const;
+
+    /**
+     * The row as TypeORM yields it: `date` a date-only string, the two
+     * timestamps real `Date`s. Building the cached payload out of THIS, via
+     * the service's own `redis.set`, is what keeps the case honest — the
+     * fixture is never hand-written JSON that happens to agree.
+     */
+    const dbRow = (timezone: string) => ({
+      id: "row-1",
+      parkId,
+      attractionId: null,
+      date: getCurrentDateInTimezone(timezone),
+      scheduleType: "OPERATING",
+      openingTime: new Date("2026-09-16T16:00:00.000Z"),
+      closingTime: new Date("2026-09-17T04:00:00.000Z"),
+      description: null,
+      purchases: null,
+    });
+
+    /** Everything the service reads on the way to a schedule query. */
+    const arrange = (timezone: string, rows: unknown[]) => {
+      mockParkRepository.findOne.mockResolvedValue({ id: parkId, timezone });
+      mockParkRepository.find.mockResolvedValue([{ id: parkId, timezone }]);
+      mockScheduleRepository.createQueryBuilder.mockImplementation(
+        () =>
+          ({
+            where: jest.fn().mockReturnThis(),
+            andWhere: jest.fn().mockReturnThis(),
+            orderBy: jest.fn().mockReturnThis(),
+            addOrderBy: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockReturnThis(),
+            getMany: jest.fn().mockResolvedValue(rows),
+            getOne: jest.fn().mockResolvedValue(rows[0] ?? null),
+          }) as never,
+      );
+    };
+
+    /** The string the service last wrote under `key`. */
+    const cachedPayload = (key: string): string => {
+      const write = [...mockRedis.set.mock.calls]
+        .reverse()
+        .find((call) => String(call[0]).includes(key));
+      if (!write) throw new Error(`nothing was cached under *${key}*`);
+      return write[1] as string;
+    };
+
+    /**
+     * Every branch that deserialises a cached schedule row, each reduced to
+     * "give me one entry's `date`". `cacheKey` is the fragment the payload is
+     * written under, so the hit run replays the miss run's own bytes, and
+     * `serveFromCache` puts those bytes where that branch reads them.
+     *
+     * `getBatchSchedules` appears twice because it holds two of the five
+     * branches and they read from different places: `today` comes out of the
+     * first `mget`, `next` out of the second. One entry covering only `today`
+     * left the `next` hit path pinned by nothing — mutating it back to
+     * `new Date(...)` kept all 75 cases green.
+     */
+    const METHODS = [
+      {
+        name: "getTodaySchedule",
+        cacheKey: "schedule:today",
+        serveFromCache: (payload: string) => {
+          mockRedis.get.mockResolvedValue(payload);
+        },
+        call: async (tz: string) =>
+          (await service.getTodaySchedule(parkId, tz))[0]?.date,
+      },
+      {
+        name: "getNextSchedule",
+        cacheKey: "schedule:next",
+        serveFromCache: (payload: string) => {
+          mockRedis.get.mockResolvedValue(payload);
+        },
+        call: async () => (await service.getNextSchedule(parkId))?.date,
+      },
+      {
+        name: "getUpcomingSchedule",
+        cacheKey: "schedule:upcoming",
+        serveFromCache: (payload: string) => {
+          mockRedis.get.mockResolvedValue(payload);
+        },
+        call: async () =>
+          (await service.getUpcomingSchedule(parkId, 7))[0]?.date,
+      },
+      {
+        name: "getBatchSchedules (today)",
+        cacheKey: "schedule:today",
+        serveFromCache: (payload: string) => {
+          // today's mget first, then next's — a cached "null" for next is the
+          // negative result and keeps that half out of the way.
+          mockRedis.mget
+            .mockResolvedValueOnce([payload])
+            .mockResolvedValueOnce(["null"]);
+        },
+        call: async () =>
+          (await service.getBatchSchedules([parkId])).today.get(parkId)?.[0]
+            ?.date,
+      },
+      {
+        name: "getBatchSchedules (next)",
+        cacheKey: "schedule:next",
+        serveFromCache: (payload: string) => {
+          // An empty array is a hit for today, so this case measures the next
+          // half without a rebuild running alongside it.
+          mockRedis.mget
+            .mockResolvedValueOnce(["[]"])
+            .mockResolvedValueOnce([payload]);
+        },
+        call: async () =>
+          (await service.getBatchSchedules([parkId])).next.get(parkId)?.date,
+      },
+    ] as const;
+
+    beforeEach(() => {
+      mockRedis.set.mockResolvedValue("OK");
+      mockRedis.get.mockResolvedValue(null);
+      // `mockReset` and not just `mockResolvedValue`: `jest.clearAllMocks()`
+      // drops recorded calls but keeps an unconsumed `mockResolvedValueOnce`
+      // queue, and the cases below queue per-call answers for the two `mget`s
+      // in `getBatchSchedules`. A leftover from an earlier case would be served
+      // to the next one. Same trap the two blocks further down call out.
+      mockRedis.mget.mockReset();
+      mockRedis.mget.mockResolvedValue([null, null]);
+    });
+
+    afterEach(() => {
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder(),
+      );
+      mockParkRepository.findOne.mockReset();
+      mockParkRepository.find.mockReset();
+      mockRedis.mget.mockResolvedValue([]);
+    });
+
+    describe.each(ZONES)("in %s (%s)", (timezone) => {
+      it.each(METHODS.map((m) => [m.name, m] as const))(
+        "%s: a cache hit answers with the same day as a cache miss",
+        async (_name, method) => {
+          const row = dbRow(timezone);
+          arrange(timezone, [row]);
+
+          // 1. Cache miss. This also produces the bytes Redis will hold.
+          const fromDatabase = await method.call(timezone);
+          expect(fromDatabase).toBe(row.date);
+
+          const payload = cachedPayload(method.cacheKey);
+          // The write side was never the bug, and the hit run below is only
+          // worth anything if the payload really is the date-only string.
+          expect(payload).toContain(`"date":"${row.date}"`);
+
+          // 2. Cache hit on exactly those bytes, with the database unplugged:
+          // an entry that came from the query instead of from Redis would make
+          // the comparison below vacuous.
+          arrange(timezone, []);
+          method.serveFromCache(payload);
+
+          const fromCache = await method.call(timezone);
+
+          expect(fromCache).toBe(fromDatabase);
+        },
+      );
+
+      it.each(METHODS.map((m) => [m.name, m] as const))(
+        "%s: the day a cached row reports is the day a reader asks about",
+        async (_name, method) => {
+          const row = dbRow(timezone);
+          arrange(timezone, [row]);
+          await method.call(timezone);
+
+          const payload = cachedPayload(method.cacheKey);
+          arrange(timezone, []);
+          method.serveFromCache(payload);
+
+          const date = await method.call(timezone);
+
+          // This is the comparison `ParkIntegrationService` makes to pick
+          // today's row. With `new Date(date)` in the cache branch every row
+          // reads a day early in Los Angeles, so the row it matches is
+          // tomorrow's — and tomorrow's status, rope-drop window and closing
+          // time are what the park page then shows. Only past the last
+          // published row does the match come up empty.
+          expect(formatInParkTimezone(date as never, timezone)).toBe(
+            getCurrentDateInTimezone(timezone),
+          );
+        },
+      );
+    });
+
+    // `new Date(null)`, `new Date(0)` and `new Date(false)` are the epoch, not
+    // an Invalid Date, so a coercing reader turns an absent day into
+    // 1970-01-01 and hands back a row that quietly matches nothing. None of
+    // these can reach Redis today — `date` is NOT NULL and every writer
+    // stringifies a database row — so what is pinned here is the rule, not a
+    // population: a value that does not name a day is a cache miss.
+    it.each([
+      ["a missing date", undefined],
+      ["a null date", null],
+      ["a numeric date", 0],
+      ["a boolean date", false],
+      ["an empty string", ""],
+      ["a string that is not a date at all", "not-a-date"],
+      ["a day with a text suffix", "2026-09-16-ish"],
+    ])(
+      "treats %s in a cached row as a miss and rebuilds from the database",
+      async (_label, date) => {
+        const row = dbRow("America/Los_Angeles");
+        arrange("America/Los_Angeles", [row]);
+        mockRedis.get.mockResolvedValue(
+          JSON.stringify([{ ...row, date, openingTime: null }]),
+        );
+
+        const result = await service.getTodaySchedule(
+          parkId,
+          "America/Los_Angeles",
+        );
+
+        // The database row, not 1970-01-01 and not a throw.
+        expect(result).toHaveLength(1);
+        expect(result[0].date).toBe(row.date);
+      },
+    );
+
+    // The opposite of the cases above, and the reason they say "names no day"
+    // rather than "is not a plain date": a full ISO timestamp DOES name one,
+    // and reading the UTC day off it is the inverse of the `toISOString` that
+    // would have written it — a hit, not a miss, and no rebuild.
+    //
+    // No writer produces this shape, here or historically: all five `redis.set`
+    // calls stringify a database row, and `date` is a DATE column that TypeORM
+    // yields as a string. What is pinned is the tolerance itself, so that
+    // narrowing the accepted shape later has to break a test rather than a
+    // deploy.
+    it("accepts a cached ISO timestamp as the day it names", async () => {
+      const row = dbRow("America/Los_Angeles");
+      arrange("America/Los_Angeles", []);
+      mockRedis.get.mockResolvedValue(
+        JSON.stringify([{ ...row, date: `${row.date}T00:00:00.000Z` }]),
+      );
+
+      const result = await service.getTodaySchedule(
+        parkId,
+        "America/Los_Angeles",
+      );
+
+      expect(result[0].date).toBe(row.date);
+      // Served from the cache: no rebuild was needed.
+      expect(mockScheduleRepository.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    // `getBatchSchedules` keeps two refetch lists, and an unreadable row has to
+    // land in its own. Pushing to the other one leaves the park with no entry
+    // at all rather than a rebuilt one — and no assertion above notices,
+    // because both lists lead to a query.
+    it("refetches the day from the database when the cached today row names no day", async () => {
+      const row = dbRow("America/Los_Angeles");
+      arrange("America/Los_Angeles", [row]);
+      mockRedis.mget
+        .mockResolvedValueOnce([JSON.stringify([{ ...row, date: null }])])
+        .mockResolvedValueOnce(["null"]);
+
+      const { today, next } = await service.getBatchSchedules([parkId]);
+
+      // Rebuilt from the database, not dropped and not 1970-01-01.
+      expect(today.get(parkId)).toHaveLength(1);
+      expect(today.get(parkId)?.[0].date).toBe(row.date);
+      // And the cache is healed, so the next request does not pay for it again.
+      expect(
+        mockRedis.set.mock.calls.some((c) =>
+          String(c[0]).startsWith("schedule:today:"),
+        ),
+      ).toBe(true);
+      // The `next` slot was a clean negative and must not have been disturbed.
+      expect(next.get(parkId)).toBeNull();
+    });
+
+    it("refetches the next opening from the database when its cached row names no day", async () => {
+      const row = dbRow("America/Los_Angeles");
+      arrange("America/Los_Angeles", [row]);
+      mockRedis.mget
+        .mockResolvedValueOnce([JSON.stringify([row])])
+        .mockResolvedValueOnce([JSON.stringify({ ...row, date: null })]);
+
+      const { next } = await service.getBatchSchedules([parkId]);
+
+      expect(next.get(parkId)?.date).toBe(row.date);
+      expect(
+        mockRedis.set.mock.calls.some((c) =>
+          String(c[0]).startsWith("schedule:next:"),
+        ),
+      ).toBe(true);
+    });
+
+    it("keeps a cached `null` as the negative result it is, not as a corrupt entry", async () => {
+      arrange("America/Los_Angeles", []);
+      mockRedis.get.mockResolvedValue("null");
+
+      // "no upcoming operating day" is an answer, and re-querying for it on
+      // every request is what the negative cache exists to avoid.
+      await expect(service.getNextSchedule(parkId)).resolves.toBeNull();
+      expect(mockScheduleRepository.createQueryBuilder).not.toHaveBeenCalled();
+    });
+  });
+
   describe("getUniqueCountries", () => {
     it("should return unique country codes", async () => {
       const mockRawResults = [
