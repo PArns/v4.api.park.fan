@@ -359,10 +359,10 @@ describe("ParkValidatorService.findDuplicates", () => {
   it("refuses a shared id whose names do not agree — the second venue at one address", async () => {
     // A water park beside the theme park it is named after, close enough on
     // the name to be detected (0.8621, same city) and carrying the theme
-    // park's wartezeiten id, which is what `source-id-inheritance` hands down
-    // a resort. That combination is the dangerous one the issue names —
-    // Legoland Windsor against its water park is the same shape — and the id
-    // on its own would have deleted it.
+    // park's wartezeiten id — an upstream mis-assignment, which is the only
+    // way two different venues end up on one id. That combination is the
+    // dangerous one the issue names — Legoland Windsor against its water park
+    // is the same shape — and the id on its own would have deleted it.
     const waterPark = park({
       id: "ioa-water",
       name: "Universal Islands of Adventure Water Park",

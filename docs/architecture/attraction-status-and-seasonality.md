@@ -802,7 +802,9 @@ it the two halves the attraction side already had.
 
 **Every pair carries `safe`.** It is true for one combination: a shared upstream
 entity **value** — one external park cannot be two parks, which is why both real
-production duplicates (§5.3) carry one — together with a name score of at least
+production duplicates carry one (Universal Studios Hollywood on `qt-park-66`,
+Islands of Adventure on one wartezeiten id; both are pinned as fixtures in
+`park-validator.service.spec.ts`) — together with a name score of at least
 0.95. That is word for word the existing `nameSimilarity >= 0.95 &&
 sharedEntityId` branch, so the safe set is a subset of the detected set rather
 than a second rule beside it, and a shared id that arrived by mis-assignment
@@ -839,10 +841,16 @@ asked for a dry run in as many words would have deleted a park. `"true"` and
 **What this gate does not cover, said out loud so the paragraphs above are not
 read as covering it:** `ParksService.repairDuplicates()` is a different path
 with the same effect. It groups parks by a shared `queue_times_entity_id` in SQL
-of its own, never calls `findDuplicates`, merges every ghost it finds without
-asking the name, and `syncParks` awaits it unguarded — so it runs on a schedule
-rather than on an admin's click. The criterion is the strong one (§5.3), but it
-is the id on its own, which is less than `safe` asks for here.
+of its own, never calls `findDuplicates`, and merges every ghost it finds
+without asking the name — the shared id is the strong criterion, but on its own
+it is less than `safe` asks for here.
+
+**How often it runs is a counted thing, not an impression.** It has one caller,
+at the end of `syncParks()`, which has two of its own — `ensureParksLoaded()`
+and the children-metadata processor — and both call it only where `findAll()`
+returned zero parks. On a populated catalogue it does not run at all, which is
+most days; it runs when the catalogue is bootstrapped. That is the reason this
+is a follow-up (PAR-262) rather than the second half of this section.
 
 ### 5.6 An entity changed its `entityType` and left its old row behind
 

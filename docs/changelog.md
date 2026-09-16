@@ -40,10 +40,13 @@ default there would be a button that stops working and reports success. An
 explicit `dryRun: true` previews the resolved winner without writing, so the
 endpoint cannot be asked for a dry run and answer with a deletion.
 
-Three sentences in `park-validator.service.ts` and three in
-`docs/architecture/attraction-status-and-seasonality.md` said this gate did not
-exist, two of them naming PAR-247 as the thing that would build it. They are
-rewritten rather than left standing beside it (§5.5a).
+Seven sentences said this gate did not exist — three in
+`park-validator.service.ts`, three in
+`docs/architecture/attraction-status-and-seasonality.md`, two of those naming
+PAR-247 as the thing that would build it, and one in the docblock of
+`listDuplicateParks`, which described the merge-everything behaviour in the
+present tense and was found only by the third review pass. All are rewritten
+rather than left standing beside the code that makes them false (§5.5a).
 
 Both flags are parsed rather than compared. The body takes no DTO and Nest
 parses form-encoded requests by default, so `dryRun=true` arrives as the string
@@ -54,9 +57,11 @@ A pair left in `skipped` whose row was merged by a safe pair in the same run
 says so in its `reviewReason`, because the id it names no longer exists.
 
 This covers the endpoint and nothing else. `ParksService.repairDuplicates()`
-merges ghost parks on a shared `queue_times_entity_id` alone, in its own SQL,
-and `syncParks` awaits it unguarded — a second unattended deletion that this
-gate never sees. Named in §5.5a rather than widened into here.
+merges ghost parks on a shared `queue_times_entity_id` alone, in its own SQL —
+a second unattended deletion that this gate never sees. It runs at the end of
+`syncParks()`, whose own two callers both run it only on a catalogue that came
+back empty, so it is a bootstrap path rather than a daily one; counted, not
+assumed. Named in §5.5a and filed as PAR-262 rather than widened into here.
 
 ### Fixed — a field a handler attaches to an error body now reaches the client
 

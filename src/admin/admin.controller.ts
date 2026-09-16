@@ -64,6 +64,11 @@ import {
  * operator can send that one pair back as a manual merge without working out
  * which row survives.
  *
+ * Both lists belong to `autoDetect`, with one exception: a manual pair asked
+ * for as a dry run returns itself in `planned`, because that is the whole
+ * answer. A manual pair that really merges reports in `results` and leaves
+ * both lists empty — it was never a plan, it was an instruction.
+ *
  * `score` is the pair's name similarity, and it is `null` for a manual pair:
  * two ids typed into a form were never scored by anything.
  */
@@ -1451,10 +1456,13 @@ export class AdminController {
    *
    * A read, which the park side did not have: detection lived inside
    * `POST merge-duplicate-parks` behind `autoDetect: true`, and that flag
-   * merges everything it finds in the same call. So the only way to ask "what
+   * merged everything it found in the same call. So the only way to ask "what
    * would you merge" was to merge it, and the admin's "search" button ended up
    * sending `autoDetect: false` with no ids — a combination the endpoint
-   * answers with its own usage message and nothing else.
+   * answers with its own usage message and nothing else. That flag is now a
+   * dry run unless `dryRun: false` says otherwise and merges only `safe`
+   * pairs, so it can answer the question too; this route stays the read,
+   * because asking it should not need the `owner` role the merge does.
    *
    * `winnerId` is resolved by `determineMergeWinner`, the same function the
    * merge uses, because the order two ids are typed in carries no weight and

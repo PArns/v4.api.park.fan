@@ -290,6 +290,19 @@ describe("AdminController.mergeDuplicateParks", () => {
     expect(repairDuplicates).not.toHaveBeenCalled();
   });
 
+  it("reads an explicit null as the absent key it stands for", async () => {
+    // The documented exception to the 400 above, pinned so that narrowing the
+    // condition to `raw !== undefined` cannot turn a JSON null into a refusal
+    // without anything going red.
+    const result = await build([sharedIdPair]).mergeDuplicateParks({
+      autoDetect: true,
+      dryRun: null as unknown as boolean,
+    });
+
+    expect(result.dryRun).toBe(true);
+    expect(repairDuplicates).not.toHaveBeenCalled();
+  });
+
   it("refuses a manual pair of one park in the dry run too", async () => {
     // `mergeParks` rejects one id on both sides. A preview that answers
     // "would be merged" over the same request promises what the write refuses.
