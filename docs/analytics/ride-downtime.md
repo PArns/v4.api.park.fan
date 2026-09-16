@@ -911,8 +911,8 @@ Kept here so none of it gets re-proposed.
    day the reconstruction hands it is the interval's **operating** day (`start_op_day`), the same key
    the stored row is filed under. Against the calendar date of `started_at` the window was asked
    about a different day whenever the interval's own window is not the one its start date names.
-   Measured 2026-09-16 over the stored history: 1,032 of 163,969 intervals carry an operating day
-   that differs from their calendar date — **1,009 of them in 51 parks** are a ride failing after
+   Measured 2026-09-16 over the stored history: 1,032 of 163,969 intervals in 51 parks carry an
+   operating day that differs from their calendar date — **1,009 of them in 51 parks** are a ride failing after
    closing time and still down the next morning (operating day later), and **23 in 2 parks** are the
    00:30 breakdown in a park that closes after midnight (operating day earlier). Parks counted on
    `parks.id`; grouping on the name undercounts, because names repeat here the way slugs do.

@@ -232,18 +232,20 @@ exclusion two lines below it asked a different question: the calendar date of
 
 The two differ whenever the window an interval belongs to is not the one its
 start date names, and that is **two** shapes, not one. Measured over the stored
-history on 2026-09-16 — 1,032 of 163,969 intervals have an operating day that
-differs from their calendar date, and they split as:
+history on 2026-09-16 — 1,032 of 163,969 intervals in 51 parks have an operating
+day that differs from their calendar date, and they split as:
 
 | shape | intervals | parks |
 | --- | --- | --- |
 | a ride that breaks **after closing time**, operating day LATER | 1,009 | 51 |
 | a park that closes **after midnight**, operating day EARLIER | 23 | 2 |
 
-Both park figures are `count(DISTINCT parks.id)`. A first pass grouped on
-`parks.name` and reported 50 for the union, which is below the 51 of a subset —
-names are not unique in this catalogue, which is the same trap `parks.slug` sets
-in the diagnostic SQL of `docs/architecture/attraction-status-and-seasonality.md` ("Group by `p.id`, never `p.slug` or `p.name`").
+Every park figure is `count(DISTINCT parks.id)`, and the union is 51 rather than
+53 because both wrap parks also carry an after-hours interval. A first pass
+grouped on `parks.name` and reported 50 for the union, below the 51 of a subset:
+names are not unique in this catalogue, which is the trap
+`docs/architecture/attraction-status-and-seasonality.md` sets out for the same
+query shape — "Group by `p.id`, never `p.slug` or `p.name`".
 
 - **After closing time, anywhere.** `startOpDay` takes the lowest window the
   interval OVERLAPS, and an evening that has already shut is not one — so a ride
