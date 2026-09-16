@@ -243,7 +243,7 @@ differs from their calendar date, and they split as:
 Both park figures are `count(DISTINCT parks.id)`. A first pass grouped on
 `parks.name` and reported 50 for the union, which is below the 51 of a subset —
 names are not unique in this catalogue, which is the same trap `parks.slug` sets
-in the diagnostic SQL of `attraction-status-and-seasonality.md`.
+in the diagnostic SQL of `docs/architecture/attraction-status-and-seasonality.md` ("Group by `p.id`, never `p.slug` or `p.name`").
 
 - **After closing time, anywhere.** `startOpDay` takes the lowest window the
   interval OVERLAPS, and an evening that has already shut is not one — so a ride
@@ -256,14 +256,17 @@ in the diagnostic SQL of `attraction-status-and-seasonality.md`.
   the rarer of the two by a factor of 44, and it is not empty:
   `closure-gap-operating-day.e2e-spec.ts` records that every wrap day in the 30
   days to 2026-09-15 closes at exactly 00:00, which cannot produce a divergence
-  — over the full retention 23 of them do.
+  — over the full retention 23 intervals land on wrap days that do. How many
+  such days there are is not measured.
 
 **And it cuts both ways, in both shapes.** The calendar date asks the window
-about a day the row is not filed under, and which error that produces depends on
-which bound of the declared period the two days straddle, not on the shape: past
-the bound the interval escapes an exclusion it had earned, short of it the
-interval is excluded although its own day lies outside. Both shapes produce both,
-with the signs reversed — the e2e file pins one of each.
+about a day the row is not filed under, and which error that produces turns on
+one thing only: **which of the two days falls inside the declared period.**
+Operating day in and calendar date out, and the interval escapes an exclusion it
+had earned. Calendar date in and operating day out, and it is excluded although
+its own day lies outside the period. Neither belongs to a shape — the e2e file
+pins one of each, and both use a window on the 15th: the wrap lands its
+operating day inside it, the after-hours failure lands its calendar date there.
 
 Nothing had reported any of it because the population that can show it is empty:
 no attraction carries `curated_out_of_service_from`/`_to` today, so the
