@@ -79,13 +79,19 @@ export const LIVE_STATS_SQL = `
         ) qd ON true
         -- A retired ride is not one of the park's rides at all, so it belongs
         -- in neither half of "12 von 45 geöffnet" — the same rule the park
-        -- payload applies via loadParkRelations. WaitTimesProcessor only loads
-        -- rows with a null retiredAt, so the writing stops at the retirement
-        -- and this predicate removes exactly the rows still inside the
-        -- 30-minute window behind it. That window is real, not theoretical:
-        -- on 2026-09-16 the children sync retired 15 Tokyo Disneyland and
-        -- DisneySea rows at 04:00:42 whose last reading was 03:40:11, so they
-        -- counted as the park's rides for another ten minutes.
+        -- payload applies via loadParkRelations.
+        --
+        -- Do not assume the writing side makes this predicate redundant. The
+        -- polling and reverse-reconciliation paths in WaitTimesProcessor do
+        -- load only rows with a null retiredAt, but writeHourlyHeartbeats does
+        -- NOT: it reads every attraction and carries the last reading forward
+        -- hourly while the park is open, for as long as the ride's Redis
+        -- last-seen key is under STALE_THRESHOLD_MS (24h). A retired ride is
+        -- therefore eligible to be lifted back into this 30-minute window for
+        -- up to a day after its final sighting. Measured on 2026-09-16: no
+        -- such row exists in retention (0 heartbeat rows for any retired
+        -- attraction), so the gap is open by construction rather than
+        -- observed — which is exactly why the count should not depend on it.
         WHERE a.retired_at IS NULL
       ),
       park_stats AS (

@@ -456,10 +456,12 @@ describe("FavoritesService", () => {
     });
 
     it("returns no attraction for an id whose row is retired", async () => {
-      // The mock applies the `retiredAt` predicate it is handed, the way
-      // Postgres would, instead of returning a canned empty list — an empty
-      // list would pass this test with the predicate deleted, which is no
-      // test at all.
+      // The mock answers according to whether it was ASKED about `retiredAt`
+      // at all, rather than returning a canned empty list — a canned `[]`
+      // passes just as well with the predicate deleted, which is no test.
+      // It does not interpret the operator: `Not(IsNull())` would read the
+      // same to it. Distinguishing operators is what the E2E specs do against
+      // a real database; this one pins that the favorites path asks.
       const retiredRow = {
         id: validAttractionUuid,
         name: "Dino-Sue",
@@ -474,12 +476,12 @@ describe("FavoritesService", () => {
         },
       };
       attractionRepo.find.mockImplementationOnce(
-        (options: { where?: { retiredAt?: unknown } }) => {
-          const wantsLiveOnly = options?.where?.retiredAt !== undefined;
-          return Promise.resolve(
-            wantsLiveOnly && retiredRow.retiredAt !== null ? [] : [retiredRow],
-          );
-        },
+        (options: { where?: { retiredAt?: unknown } }) =>
+          // The stored row is retired, so a query that constrains `retiredAt`
+          // returns nothing and one that does not returns the row.
+          Promise.resolve(
+            options?.where?.retiredAt === undefined ? [retiredRow] : [],
+          ),
       );
 
       const result = await service.getFavorites(

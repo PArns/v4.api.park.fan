@@ -8,9 +8,11 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ### Fixed — a retired attraction leaves search, favorites and the geo listing's count
 
-`retired_at` promises, in the column's own docblock and in the `retiredAt`
-`@ApiProperty`, that a retired attraction is "absent from park listings, counts
-and search". Park listings held up. The rest did not.
+`retired_at` promised more than it delivered. The `retiredAt` `@ApiProperty`
+said a retired attraction is "absent from park listings, counts and search";
+the column's own docblock made the matching claim in its own words, naming the
+live list, the operating counts, search and favorites. Park listings held up.
+The rest did not. Both sentences are rewritten below to what actually holds.
 
 Measured against production on 2026-09-16: **49 retired rows across 13 parks**,
 every one of them findable. `GET /v1/search?q=Dino-Sue` returned the demolished
@@ -26,16 +28,24 @@ SQL path (`searchAttractions`) answers while the index is still being built; the
 in-process index (`loadAttractionIndexFromDb`) answers afterwards and, unlike a
 query, outlives the request — a retired row let into it keeps being served from
 Redis until the next rebuild. Shows and restaurants had already been filtered on
-both; the attraction side had a comment saying so and no predicate.
+both. The attraction side had neither predicate — and said so: the comment in
+`refreshSearchIndex` read "the attraction one does not yet", and the docblock on
+`findAllWithFilters` spelled out that `loadAttractionIndexFromDb` filters
+nothing. The gap was documented, not overlooked.
 
 `LIVE_STATS_SQL` likewise reads attractions twice: the `total_attractions`
 subquery behind `attractionCount`, and the `latest_attraction_data` CTE behind
-`operatingAttractions` and `closedAttractions`. The CTE's share is small and
-brief by construction — `WaitTimesProcessor` only loads rows with a null
-`retiredAt`, so writing stops at the retirement — but it is not zero: on
-2026-09-16 the children sync retired 15 Tokyo Disneyland and DisneySea rows at
-04:00:42 whose last reading was 03:40:11, leaving them counted as the parks'
-rides for another ten minutes.
+`operatingAttractions` and `closedAttractions`.
+
+The CTE's predicate is not redundant with the write side, which is what the
+first draft of this entry claimed. Polling and reverse-reconciliation do skip
+retired rows, but `writeHourlyHeartbeats` reads **every** attraction and carries
+the last reading forward hourly while the park is open, for as long as the
+ride's Redis last-seen key is under the 24-hour staleness threshold — so a
+retired ride stays eligible to re-enter the 30-minute window for up to a day
+after its final sighting. Measured on 2026-09-16: **0** such rows exist in
+retention, so the gap is open by construction rather than observed. The
+unfiltered heartbeat read is PAR-295.
 
 **The counts are not all fixed, and the docblocks now say which.** The three
 counters in `AnalyticsService` — `getParkStatistics`, `getAttractionCounts`,
