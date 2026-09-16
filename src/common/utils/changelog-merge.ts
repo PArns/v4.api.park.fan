@@ -24,6 +24,7 @@ import {
   FRAGMENT_DIR,
   FragmentProblem,
   UNRELEASED_HEADING,
+  hasUnreleasedHeading,
   readFragmentDirectory,
   spliceIntoChangelog,
 } from "./changelog-fragments.util";
@@ -46,7 +47,7 @@ function report(problems: FragmentProblem[]): void {
  */
 function missingHeading(): string | null {
   const changelog = readFileSync(join(ROOT, CHANGELOG_FILE), "utf8");
-  return /^## \[Unreleased\][^\n]*$/m.test(changelog)
+  return hasUnreleasedHeading(changelog)
     ? null
     : `${CHANGELOG_FILE} has no "${UNRELEASED_HEADING}" heading to fold into`;
 }
@@ -76,6 +77,15 @@ function merge(): number {
   if (fragments.length === 0) {
     console.log(`no fragments in ${FRAGMENT_DIR}, ${CHANGELOG_FILE} unchanged`);
     return 0;
+  }
+
+  // The same precondition `check` reports, so the release ends on the line this
+  // module exists to print rather than on a stack trace out of the splice.
+  const heading = missingHeading();
+  if (heading) {
+    console.error(`✗ ${heading}`);
+    console.error("nothing merged");
+    return 1;
   }
 
   const changelog = join(ROOT, CHANGELOG_FILE);

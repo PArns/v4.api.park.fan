@@ -14,6 +14,7 @@ import {
   FRAGMENT_DIR,
   UNRELEASED_HEADING,
   checkFragment,
+  hasUnreleasedHeading,
   isFragmentCandidate,
   parseFragments,
   readFragmentDirectory,
@@ -54,6 +55,21 @@ describe("checkFragment", () => {
     expect(
       checkFragment("PAR-1.md", "### Added — t\n\nbody\n\n# Changelog\n"),
     ).toMatch(/may not open a section \(line 5\)/);
+  });
+
+  it("rejects an indented heading, which CommonMark still reads as one", () => {
+    for (const indent of [" ", "  ", "   "]) {
+      expect(
+        checkFragment(
+          "PAR-1.md",
+          `### Added — t\n\nbody\n\n${indent}## [4.7.0]\n`,
+        ),
+      ).toMatch(/may not open a section \(line 5\)/);
+    }
+    // Four spaces is a code block, not a heading, and splits nothing.
+    expect(
+      checkFragment("PAR-1.md", "### Added — t\n\nbody\n\n    ## [4.7.0]\n"),
+    ).toBeNull();
   });
 
   it("allows a `## ` line inside a fenced block", () => {
@@ -253,6 +269,21 @@ describe("spliceIntoChangelog", () => {
     expect(spliceIntoChangelog(changelog, [])).toBe(changelog);
   });
 
+  it("collapses the blank run under the heading to one, and nothing else", () => {
+    // The one normalisation the docstring claims. Pinned because "carries
+    // everything below over as it stands" was too broad a sentence for it.
+    const roomy = `# Changelog\n\n${UNRELEASED_HEADING}\n\n\n\n${tail}`;
+    const { fragments } = parseFragments([
+      { file: "PAR-1.md", content: "### Fixed — one\n\nbody\n" },
+    ]);
+
+    const merged = spliceIntoChangelog(roomy, fragments);
+
+    expect(merged).toBe(
+      `# Changelog\n\n${UNRELEASED_HEADING}\n\n### Fixed — one\n\nbody\n\n${tail}`,
+    );
+  });
+
   it("refuses a changelog without the heading rather than guessing", () => {
     expect(() =>
       spliceIntoChangelog("# Changelog\n\n## [4.6.2]\n", [
@@ -306,11 +337,14 @@ describe("readFragmentDirectory", () => {
 });
 
 /**
- * The half that measures the repository rather than a fixture. After a release
- * merge the directory is empty and these two say nothing about fragments — the
- * fixtures above are the population that is never empty (📚 G-72). What they do
- * guard is the directory and the rule pointing at it, which is what a revert of
- * this change would quietly remove.
+ * The half that measures the repository rather than a fixture.
+ *
+ * Only the second of these four runs out of subject matter: after a release
+ * merge the directory holds no fragments and it asserts over an empty set. The
+ * fixtures above are the population that is never empty (📚 G-72). The other
+ * three guard the three things a revert or a rename would take away without a
+ * red test — the directory itself, the rule in `claude.md` with the two command
+ * names it promises, and the heading the merge folds under.
  */
 describe("the repository's own changelog directory", () => {
   const dir = join(ROOT, FRAGMENT_DIR);
@@ -326,13 +360,25 @@ describe("the repository's own changelog directory", () => {
     expect(readFragmentDirectory(dir).problems).toEqual([]);
   });
 
-  it("is where claude.md sends a new entry", () => {
+  it("is where claude.md sends a new entry, by the names package.json has", () => {
     const rule = readFileSync(join(ROOT, "claude.md"), "utf8");
+    const readme = readFileSync(join(dir, "README.md"), "utf8");
+    const { scripts } = JSON.parse(
+      readFileSync(join(ROOT, "package.json"), "utf8"),
+    );
+
     expect(rule).toContain(FRAGMENT_DIR);
+    // Both documents name the two commands. Renaming a script without them is
+    // how a rule starts lying over a green suite.
+    for (const command of ["changelog:check", "changelog:merge"]) {
+      expect(scripts[command]).toBeDefined();
+      expect(rule).toContain(command);
+    }
+    expect(readme).toContain("changelog:merge");
   });
 
   it("still has a changelog with an [Unreleased] heading to fold into", () => {
     const changelog = readFileSync(join(ROOT, CHANGELOG_FILE), "utf8");
-    expect(changelog).toContain(`\n${UNRELEASED_HEADING}\n`);
+    expect(hasUnreleasedHeading(changelog)).toBe(true);
   });
 });

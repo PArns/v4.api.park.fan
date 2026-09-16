@@ -30,8 +30,14 @@ export const CHANGELOG_FILE = "docs/changelog.md";
 export const UNRELEASED_HEADING = "## [Unreleased]";
 
 /**
- * Keep a Changelog's six, plus the two this repository has been using for
- * years (`Documented` and `Performance` both appear in `docs/changelog.md`).
+ * Keep a Changelog's six, plus the two this repository has settled on
+ * (`Documented` and `Performance` both appear in `docs/changelog.md`).
+ *
+ * Deliberately narrower than the 161 entries already in the file, which also
+ * hold one `Docs`, one `Weather`, one `ML` and one `Fixed/Changed` — one use
+ * each, against 82 `Fixed` and 48 `Added`. A new entry uses `Documented`
+ * rather than `Docs`; two spellings of one type is how the list stops meaning
+ * anything.
  */
 export const FRAGMENT_TYPES = [
   "Added",
@@ -162,7 +168,9 @@ function findSectionHeading(lines: string[]): {
       fenced = !fenced;
       continue;
     }
-    if (!fenced && found === -1 && /^#{1,2} /.test(lines[i])) {
+    // Up to three leading spaces, because that is still an ATX heading in
+    // CommonMark and splits the file exactly the same way.
+    if (!fenced && found === -1 && /^ {0,3}#{1,2} /.test(lines[i])) {
       found = i;
     }
   }
@@ -214,8 +222,14 @@ export function readFragmentDirectory(dir: string): {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return { fragments: [], problems: [] };
+  } catch (error) {
+    // Only "there is no directory" is an empty release. A permission or I/O
+    // error read as one would let the release run with no entries and say
+    // nothing, which is the silent loss the rest of this module is against.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { fragments: [], problems: [] };
+    }
+    throw error;
   }
 
   const inputs: FragmentInput[] = [];
@@ -242,12 +256,28 @@ export function readFragmentDirectory(dir: string): {
   };
 }
 
+/** The heading `spliceIntoChangelog` folds under, wherever it is asked about. */
+const UNRELEASED_LINE = /^## \[Unreleased\][^\n]*$/m;
+
+/**
+ * Whether the changelog still has the heading the merge needs.
+ *
+ * One function rather than the same regular expression at each caller: the
+ * merge, the `check` command and the spec all ask this, and the last time this
+ * module stated a rule in two places the two answered differently.
+ */
+export function hasUnreleasedHeading(changelog: string): boolean {
+  return UNRELEASED_LINE.test(changelog);
+}
+
 /**
  * Folds the fragments in under `## [Unreleased]` and returns the new file.
  *
- * Everything below the heading is carried over as it stands — this function
- * inserts text and never rewrites the existing entries, of which 62 files under
- * `docs/` are not prettier-clean on `main` and are meant to stay that way.
+ * The entries below the heading are carried over as they stand — this function
+ * inserts text and never rewrites them, and 62 files under `docs/` are not
+ * prettier-clean on `main` and are meant to stay that way. The one thing it
+ * does normalise is the run of blank lines between the heading and the first
+ * entry, which becomes exactly one.
  */
 export function spliceIntoChangelog(
   changelog: string,
@@ -257,7 +287,7 @@ export function spliceIntoChangelog(
     return changelog;
   }
 
-  const heading = /^## \[Unreleased\][^\n]*$/m.exec(changelog);
+  const heading = UNRELEASED_LINE.exec(changelog);
   if (!heading) {
     throw new Error(
       `${CHANGELOG_FILE} has no "${UNRELEASED_HEADING}" heading to fold into`,
