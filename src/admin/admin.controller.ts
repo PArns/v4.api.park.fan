@@ -1864,7 +1864,7 @@ export class AdminController {
         ) {
           continue;
         }
-        entry.reviewReason = `another pair in this run merged onto one of these rows — re-run detection before acting${
+        entry.reviewReason = `a merge in this run was attempted on one of these rows, which may no longer exist — re-run detection before acting${
           entry.reviewReason ? ` (${entry.reviewReason})` : ""
         }`;
       }
