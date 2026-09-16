@@ -79,9 +79,10 @@ describe("outage reconstruction statements", () => {
   it("asks the curated works window about the operating day, not the calendar", () => {
     const tail = finalSelect(OUTAGE_INTERVALS_SQL);
 
-    // The predicate is `attractionIsCuratedOutOfService("a", <dayExpr>)`, whose
-    // dayExpr appears four times in the emitted SQL: two bound comparisons per
-    // half-open side. Each of them has to be the operating day.
+    // The predicate is `attractionIsCuratedOutOfService("a", <dayExpr>)`, and
+    // dayExpr appears twice in the emitted SQL — once per bound. The two
+    // `IS NOT NULL` arms read the attraction's own columns and never the day,
+    // so counting the comparisons counts the places the day is used.
     const bounds = tail.match(
       /(?:>=|<=)\s*a\.curated_out_of_service_(?:from|to)/g,
     );
@@ -91,18 +92,23 @@ describe("outage reconstruction statements", () => {
 
     // And no raw calendar cast of started_at survives in the filter. This is
     // the assertion that fails if someone "simplifies" it back: the old form
-    // reads the same and is wrong for exactly one park shape.
+    // reads the same and disagrees with the key the row is filed under
+    // whenever the interval's window is not the one its start date names.
     expect(tail).not.toMatch(/started_at AT TIME ZONE [^)]*\)::date/);
   });
 
   it("keys exposure on the window's own day too, so the two sides join", () => {
     // `outageStarts` is keyed into attraction_exposure_days by startOpDay, so a
-    // day the interval statement invents and the exposure statement never
-    // emits is a start counted against a row that does not exist.
+    // day the interval statement invents and the exposure statement never emits
+    // is a start counted against a row that does not exist. Both sides have to
+    // read `win.op_day`, and this pins the exposure half of that pair — the
+    // interval half is pinned in the case above.
     const segWin = cteBody(OUTAGE_EXPOSURE_SQL, "seg_win");
     expect(segWin).toMatch(/JOIN win w\b/);
     expect(segWin).toContain("w.op_day");
-    expect(segWin).not.toContain("schedule_entries");
+    // Not a `::date` of the segment's own instant. That is the substitution
+    // that reads identically and re-splits every after-midnight evening.
+    expect(segWin).not.toMatch(/s\.ts[^\n]*\)::date/);
   });
 
   it.each([

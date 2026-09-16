@@ -230,13 +230,23 @@ count keys into `attraction_exposure_days` exactly. The curated works-period
 exclusion two lines below it asked a different question: the calendar date of
 `started_at`.
 
-In a park that closes after midnight the two differ. A 00:30 breakdown belongs
-to the previous evening's operating day, so an editor's window declared for that
-day ends one calendar date before the outage's — and the interval escaped the
-exclusion and was stored as a real breakdown while the ride was in a declared
-rebuild. Measured over the stored history on 2026-09-16: **1,032 of 163,969
-intervals in 50 parks** have an operating day that differs from their calendar
-date.
+The two differ whenever the window an interval belongs to is not the one its
+start date names, and that is **two** shapes, not one:
+
+- **A park that closes after midnight.** A 00:30 breakdown belongs to the
+  previous evening's operating day, so an editor's window declared for that day
+  ends one calendar date before the outage's, and the interval escaped the
+  exclusion.
+- **A ride that breaks after closing time anywhere.** `startOpDay` takes the
+  lowest window the interval overlaps, and an evening that has already shut is
+  not one — so a ride failing at 22:00 and still down the next morning is filed
+  under the morning. Against the calendar date the exclusion asked about the
+  evening instead. No midnight wrap is involved, and this is the larger half.
+
+Either way the interval was stored as a real breakdown while the ride sat in a
+declared rebuild. Measured over the stored history on 2026-09-16: **1,032 of
+163,969 intervals in 50 parks** have an operating day that differs from their
+calendar date.
 
 Nothing had reported it because the population that can show it is empty: no
 attraction carries `curated_out_of_service_from`/`_to` today, so the predicate's
@@ -250,11 +260,13 @@ subquery are two chances to drift apart again, which is how this one started.
 pins that.
 
 The proof is a container rather than a query: `test/e2e/outage-curated-window-operating-day.e2e-spec.ts`
-builds the 10:00 → 02:00 park production does not currently hold with a declared
-window, and six cases separate "the filter moved" from "the filter was switched
-off" — a window on the calendar date alone must NOT exclude, and an ordinary
-park closing at 20:00 must still be excluded. Against the pre-fix predicate
-three of the six fail and the three controls stay green.### Fixed — a field a handler attaches to an error body now reaches the client
+builds the 10:00 → 02:00 park production does not currently hold, and the
+after-hours shape beside it, each with a declared window. Nine cases separate
+"the filter moved" from "the filter was switched off" — a window on the calendar
+date alone must NOT exclude, and an ordinary same-day outage under a window on
+its own day must still be.
+
+### Fixed — a field a handler attaches to an error body now reaches the client
 
 `HttpExceptionFilter` is global and builds the error response itself, which is
 what keeps every failure on this API the same shape. It built it from `message`

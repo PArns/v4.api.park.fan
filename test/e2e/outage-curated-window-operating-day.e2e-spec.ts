@@ -130,6 +130,24 @@ describe("curated works window across park-local midnight (e2e)", () => {
     );
   };
 
+  /** A second published day for the same park, opening hours as given. */
+  const addDay = async (
+    day: string,
+    opensAt: Date,
+    closesAt: Date,
+  ): Promise<void> => {
+    await dataSource.getRepository(ScheduleEntry).save(
+      dataSource.getRepository(ScheduleEntry).create({
+        parkId,
+        attractionId: null,
+        date: day as unknown as Date,
+        scheduleType: ScheduleType.OPERATING,
+        openingTime: opensAt,
+        closingTime: closesAt,
+      }),
+    );
+  };
+
   /** The hand-written works period, as an editor would leave it. */
   const curate = async (from: string | null, to: string | null) => {
     await dataSource.query(
@@ -233,10 +251,10 @@ describe("curated works window across park-local midnight (e2e)", () => {
   });
 
   it("keeps biting in an ordinary park that closes before midnight", async () => {
-    // The population this change must not move. A park shutting at 20:00 has
-    // one operating day per calendar date, so both readings of the predicate
-    // agree — and the filter has to keep excluding, or the fix has simply
-    // deleted it.
+    // The population this change must not move. A park shutting at 20:00 whose
+    // outage starts and ends inside one day has one operating day per calendar
+    // date, so both readings of the predicate agree — and the filter has to
+    // keep excluding, or the fix has simply deleted it.
     await seedPark(new Date(`${DAY}T20:00:00+02:00`));
     await reading(new Date(`${DAY}T14:00:00+02:00`), "DOWN");
     await reading(new Date(`${DAY}T15:00:00+02:00`), "OPERATING");
@@ -256,6 +274,61 @@ describe("curated works window across park-local midnight (e2e)", () => {
 
     expect(rows).toHaveLength(1);
     expect(asDay(rows[0].startOpDay)).toBe(DAY);
+  });
+
+  /**
+   * A ride that breaks after closing time and is still down the next morning,
+   * in a park that shuts at 20:00. No midnight wrap anywhere — and the two day
+   * notions still disagree, which is the class the ticket's wording misses.
+   *
+   * `startOpDay` takes the LOWEST window that overlaps the interval, and the
+   * evening one does not: its `closes_at` is 20:00 and the interval starts at
+   * 22:00. So the row is filed under the 16th while the calendar date of
+   * `started_at` is the 15th. Both readings reach the predicate, because the
+   * next morning's segments put the interval well over
+   * MIN_OUTAGE_OPERATING_MINUTES.
+   */
+  const seedAfterHoursOutage = async (): Promise<void> => {
+    await seedPark(new Date(`${DAY}T20:00:00+02:00`));
+    await addDay(
+      NEXT,
+      new Date(`${NEXT}T10:00:00+02:00`),
+      new Date(`${NEXT}T20:00:00+02:00`),
+    );
+    await reading(new Date(`${DAY}T22:00:00+02:00`), "DOWN");
+    await reading(new Date(`${NEXT}T10:30:00+02:00`), "DOWN");
+    await reading(new Date(`${NEXT}T11:30:00+02:00`), "OPERATING");
+  };
+
+  it("files an after-hours outage under the morning it was next seen open for", async () => {
+    // The anchor for that class, and the proof it really is one: no wrap, and
+    // the operating day is still a day later than the calendar date.
+    await seedAfterHoursOutage();
+
+    const rows = await run();
+
+    expect(rows).toHaveLength(1);
+    expect(new Date(rows[0].startedAt).toISOString()).toBe(
+      new Date(`${DAY}T22:00:00+02:00`).toISOString(),
+    );
+    expect(asDay(rows[0].startOpDay)).toBe(NEXT);
+  });
+
+  it("excludes an after-hours outage under a window on its operating day", async () => {
+    await seedAfterHoursOutage();
+    await curate(NEXT, NEXT);
+
+    await expect(run()).resolves.toHaveLength(0);
+  });
+
+  it("still returns it when the window covers only the evening it broke on", async () => {
+    // The mirror, and the one that used to exclude. Under the calendar reading
+    // a window on the 15th covered this interval; under the operating day it
+    // does not, because the ride was next open for on the 16th.
+    await seedAfterHoursOutage();
+    await curate(DAY, DAY);
+
+    await expect(run()).resolves.toHaveLength(1);
   });
 
   it("reads a half-open window on the operating day too", async () => {
