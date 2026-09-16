@@ -114,7 +114,10 @@ export function checkFragment(file: string, content: string): string | null {
     return `file name must be PAR-<issue>.md`;
   }
 
-  const lines = content.split("\n");
+  // `\r?\n`, because every line matcher below anchors on `$`: with CRLF the
+  // trailing `\r` left no fence able to close and no setext underline able to
+  // match, so a valid entry was rejected and a real `## ` walked through.
+  const lines = content.split(/\r?\n/);
   const headingAt = lines.findIndex((line) => line.trim() !== "");
   if (headingAt === -1) {
     return "file is empty";
@@ -258,7 +261,14 @@ export function parseFragments(inputs: FragmentInput[]): {
       continue;
     }
     const issue = Number(FRAGMENT_FILENAME.exec(file)![1]);
-    fragments.push({ file, issue, body: content.trim() });
+    // The body goes in with the changelog's own line endings. Normalising the
+    // new entry is not the reformatting the issue rules out — that is about the
+    // entries already in the file, which this never touches.
+    fragments.push({
+      file,
+      issue,
+      body: content.replace(/\r\n/g, "\n").trim(),
+    });
   }
 
   fragments.sort((a, b) => b.issue - a.issue);

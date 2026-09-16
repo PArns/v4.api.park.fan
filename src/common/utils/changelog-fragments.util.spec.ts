@@ -221,6 +221,34 @@ describe("checkFragment", () => {
   it("does not mind leading blank lines before the heading", () => {
     expect(checkFragment("PAR-1.md", `\n\n${GOOD}`)).toBeNull();
   });
+
+  it("reads a file with CRLF endings the same as one with LF", () => {
+    // Nothing stops a checkout with core.autocrlf=true: there is no
+    // .gitattributes and no .editorconfig. With the `\r` still on each line no
+    // fence could close and no setext underline could match.
+    const crlf = (lf: string) => lf.replace(/\n/g, "\r\n");
+
+    for (const lf of [
+      GOOD,
+      "### Added — t\n\n```\nx\n```\n\nafter\n",
+      "### Added — t\n\nbody\n\n---\n\nmore\n",
+    ]) {
+      expect(checkFragment("PAR-1.md", crlf(lf))).toBe(
+        checkFragment("PAR-1.md", lf),
+      );
+    }
+
+    expect(
+      checkFragment("PAR-1.md", crlf("### Added — t\n\nNext release\n---\n")),
+    ).toMatch(/may not open a section \(line 3\)/);
+  });
+
+  it("folds a CRLF entry in with the changelog's own endings", () => {
+    const { fragments } = parseFragments([
+      { file: "PAR-1.md", content: "### Added — t\r\n\r\nbody\r\n" },
+    ]);
+    expect(fragments[0].body).toBe("### Added — t\n\nbody");
+  });
 });
 
 describe("isFragmentCandidate", () => {
