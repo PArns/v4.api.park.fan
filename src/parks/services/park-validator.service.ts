@@ -248,9 +248,18 @@ export interface DuplicatePair {
    * looking at it. `POST merge-duplicate-parks` with `autoDetect: true` merges
    * the safe ones and nothing else.
    *
-   * Two conditions, and the attraction side uses both in its own form
-   * (`isSafeToAutoMerge`): positive evidence from an upstream source, and
-   * names that agree. Here the evidence is a shared entity **value** — one
+   * Two conditions: an upstream source's own statement, and names that agree.
+   * The attraction side asks the same pair of questions and the **polarity of
+   * the first one is reversed there**, which is worth saying rather than
+   * papering over with an analogy. `isSafeToAutoMerge` takes the name as its
+   * positive evidence and treats a source that issued BOTH ids as a refusal —
+   * two ids from one source are that source saying these are two rides. Here
+   * the ids are the evidence and the name is the check, because a park row
+   * carries one id per source: two rows on the SAME value is that source
+   * saying these are one park. Same two questions, opposite sign, because an
+   * equal id and a second id are not the same fact.
+   *
+   * Here the evidence is a shared entity **value** — one
    * external park cannot be two parks, which is why this branch exists at all
    * and why both real production duplicates carried one. Names still have to
    * agree, because a shared id can also be a mis-assignment, and a mis-assigned
@@ -618,7 +627,7 @@ export class ParkValidatorService {
             ? null
             : !sharedEntityId
               ? "no upstream source holds one id for both rows — this pair rests on names and geometry alone"
-              : `names score ${nameSimilarity.toFixed(4)} against ${AUTO_MERGE_NAME_SIMILARITY} — "${p1.name}" vs "${p2.name}", so the shared id alone decides it`;
+              : `names score ${nameSimilarity.toFixed(4)} against ${AUTO_MERGE_NAME_SIMILARITY} — "${p1.name}" vs "${p2.name}", so the shared id alone would be deciding this`;
 
           duplicates.push({
             park1: { id: p1.id, name: p1.name, city: p1.city },

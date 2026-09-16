@@ -356,7 +356,7 @@ describe("AdminController.mergeDuplicateParks", () => {
 
     expect(result.results.map((r) => r.loserId)).toEqual([ushLosAngeles.id]);
     expect(result.skipped[0].reviewReason).toContain(
-      "merged into another park in this run",
+      "another pair in this run merged onto one of these rows",
     );
   });
 

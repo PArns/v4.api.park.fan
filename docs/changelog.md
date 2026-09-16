@@ -13,7 +13,10 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 each and no undo. There was no `dryRun`, no per-pair verdict and no threshold in
 between, so a false positive deleted a real park — and the only way to ask what
 the endpoint would do was to let it do it. The attraction side has had both
-halves for as long as it has had a merge.
+halves on its batch path from the start — and its single-pair branch did not,
+which is the trap named further down: until `4683c2c` (#192) it handed the two
+ids straight to `mergeAttractions`, so a `dryRun: true` there deleted the row
+and printed the outcome as a rehearsal.
 
 **A pair is `safe` on one combination:** a shared upstream entity value, which
 is one source saying these two rows are one park, plus a name score of at least

@@ -1652,6 +1652,9 @@ export class AdminController {
           description: "Automatically detect and merge all duplicates",
           default: false,
         },
+        // No `default` here: it is true on the autoDetect path and false on
+        // the manual one, and a schema can only publish one of them — which
+        // would be a machine-readable claim that is wrong for half the calls.
         dryRun: {
           type: "boolean",
           description:
@@ -1659,7 +1662,6 @@ export class AdminController {
             "Defaults to true there, so a real run needs dryRun:false. With " +
             "park1Id/park2Id it defaults to false (that pair is a deliberate " +
             "act) and dryRun:true previews the winner.",
-          default: true,
         },
       },
     },
@@ -1845,14 +1847,24 @@ export class AdminController {
       // rows for one park give A–B safe and B–C for review, and B is gone by
       // the time the operator reads the list. The entry still names it, so the
       // "send it back as a manual pair" this list is for would answer "Park
-      // not found". Say so on the entry rather than re-running the detector:
-      // the ids that went away are exactly the ones in `results`.
-      const mergedAway = new Set(results.map((r) => r.loserId));
+      // not found".
+      //
+      // Read off `planned` rather than `results`, i.e. every row a merge was
+      // ATTEMPTED on. `results` would be the sharper set and is not a reliable
+      // one: `repairDuplicates` reports errors by park id rather than per pair,
+      // so where one row loses twice — which is this same trio — a failure on
+      // the second attempt drops the successful pair out of `results` as well.
+      // The wider set costs a warning on a row that is still there, and the
+      // warning says re-run detection, which is true either way.
+      const touchedByAMerge = new Set(planned.map((p) => p.loserId));
       for (const entry of skipped) {
-        if (!mergedAway.has(entry.winnerId) && !mergedAway.has(entry.loserId)) {
+        if (
+          !touchedByAMerge.has(entry.winnerId) &&
+          !touchedByAMerge.has(entry.loserId)
+        ) {
           continue;
         }
-        entry.reviewReason = `one of these rows was merged into another park in this run — re-run detection before acting${
+        entry.reviewReason = `another pair in this run merged onto one of these rows — re-run detection before acting${
           entry.reviewReason ? ` (${entry.reviewReason})` : ""
         }`;
       }
