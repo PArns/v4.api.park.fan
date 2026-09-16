@@ -208,7 +208,9 @@ export class AttractionResponseDto {
       "curated one, which is the state of nearly every ride. Deliberately " +
       "beside `outage` rather than inside it: an outage is a fault the site " +
       "noticed, this is planned work, and inside this window the API reports " +
-      "no outage at all.",
+      "no outage at all. Both dates are park-local and inclusive, and the " +
+      "block says nothing about whether the window is running today — compare " +
+      "them in `park.timezone`, never against the reader's own clock.",
     required: false,
     nullable: true,
     type: WorksPeriodDto,

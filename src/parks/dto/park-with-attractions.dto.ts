@@ -221,10 +221,12 @@ export class ParkAttractionDto {
   @ApiProperty({
     description:
       "The curated works period this ride is closed for — a rebuild or refit " +
-      "written down in advance. Null unless an editor has curated one. Beside " +
-      "`outage` and never inside it: an outage is a fault, this is planned " +
-      "work, and inside this window no outage is reported at all. Both dates " +
-      "are park-local, so compare them in `timezone` on the park.",
+      "written down in advance. Absent unless an editor has curated one. " +
+      "Beside `outage` and never inside it: an outage is a fault, this is " +
+      "planned work, and inside this window no outage is reported at all. " +
+      "Both dates are park-local and inclusive, and the block says nothing " +
+      "about whether the window is running today — compare them in the " +
+      "park's `timezone`, never against the reader's own clock.",
     required: false,
     nullable: true,
     type: WorksPeriodDto,

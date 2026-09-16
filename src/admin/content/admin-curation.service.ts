@@ -231,6 +231,24 @@ export class AdminCurationService {
             `ends before it begins never applies.`,
         );
       }
+
+      // Clearing the end date takes "that date is only an estimate" with it.
+      // The flag qualifies `to` and nothing else, so a `true` left standing
+      // beside an empty date is not visible anywhere — `resolveWorksPeriod()`
+      // drops it on the way out — and comes back to life the day an editor
+      // types the date the park has now published, hedging a date that was
+      // just confirmed. Written rather than rejected, because clearing the end
+      // of an open-ended window is the ordinary edit and must not need a
+      // second one.
+      if (to === null && attraction.curatedOutOfServiceToUncertain !== null) {
+        before.curatedOutOfServiceToUncertain =
+          attraction.curatedOutOfServiceToUncertain;
+        after.curatedOutOfServiceToUncertain = null;
+        if (!changed.includes("curatedOutOfServiceToUncertain")) {
+          changed.push("curatedOutOfServiceToUncertain");
+        }
+        attraction.curatedOutOfServiceToUncertain = null;
+      }
     }
 
     if (changed.includes("rcdbId") && attraction.rcdbId !== null) {

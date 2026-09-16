@@ -172,10 +172,12 @@ describe("ParkWithAttractionsDto.fromEntity › worksPeriod", () => {
     expect(dto.attractions[0].worksPeriod).toBeNull();
   });
 
-  it("keeps it out of `outage`, which stays absent", () => {
-    // The two answer different questions and sit side by side. A client that
-    // read a works period as an outage would tell a visitor the ride broke
-    // while it is being rebuilt on schedule.
+  it("carries a window that has no end yet", () => {
+    // The usual shape while work is running. `outage` is deliberately NOT
+    // asserted beside it: this mapper sets it for no ride at all, so an
+    // assertion that it is absent would be green however the two were folded
+    // together — ParkIntegrationService attaches it later, and that is where a
+    // test of the pair belongs.
     const dto = ParkWithAttractionsDto.fromEntity(
       parkWith([ride({ curatedOutOfServiceFrom: "2026-01-16" })]),
     );
@@ -185,6 +187,5 @@ describe("ParkWithAttractionsDto.fromEntity › worksPeriod", () => {
       to: null,
       toUncertain: false,
     });
-    expect(dto.attractions[0].outage).toBeUndefined();
   });
 });
