@@ -168,6 +168,11 @@ export class PushNotificationProcessor {
     // indistinguishable from a broken job: "notifications stopped arriving"
     // is the only symptom either produces, and the log line below only ever
     // ran when something WAS sent.
+    //
+    // Subscribers rather than notifications, so the number is exactly true.
+    // Counting the due list would count entries this subscriber does not hold
+    // the topic for, and entries already marked sent on an earlier tick —
+    // neither of which the window held back.
     let quiet = 0;
     try {
       for (const [tripId, subscriptions] of byTrip) {
@@ -187,7 +192,7 @@ export class PushNotificationProcessor {
           // marker here would only cost a Redis write for an event that
           // cannot come back.
           if (isWithinQuietHours(subscription.timezone, startedMs)) {
-            quiet += due.length;
+            quiet += 1;
             continue;
           }
           for (const notification of due) {
@@ -219,7 +224,7 @@ export class PushNotificationProcessor {
     }
     if (quiet > 0) {
       this.logger.log(
-        `Held back ${quiet} trip notification(s) — quiet hours where the subscriber is`,
+        `Held trip notifications back for ${quiet} subscriber(s) — quiet hours where they are`,
       );
     }
     return sent;
@@ -285,6 +290,9 @@ export class PushNotificationProcessor {
     // having a bad minute) must not stop the rest of the batch — the same
     // reason `sendShowFollowNotification` never throws.
     let sent = 0;
+    // Same reason as the trip half, and aggregated the same way rather than
+    // logged per follower: a popular show is hundreds of tasks.
+    let quiet = 0;
     for (
       let i = 0;
       i < tasks.length;
@@ -306,7 +314,8 @@ export class PushNotificationProcessor {
       );
       for (const result of results) {
         if (result.status === "fulfilled") {
-          if (result.value) sent++;
+          if (result.value === "sent") sent++;
+          else if (result.value === "quiet") quiet++;
         } else {
           this.logger.warn(
             `show-follow send failed: ${(result.reason as Error)?.message ?? result.reason}`,
@@ -314,41 +323,44 @@ export class PushNotificationProcessor {
         }
       }
     }
+    if (quiet > 0) {
+      this.logger.log(
+        `Held ${quiet} show reminder(s) back — quiet hours where the subscriber is`,
+      );
+    }
     return sent;
   }
 
-  /** One follower's send. Never throws — a failure here must not stop the rest of the batch. */
+  /**
+   * One follower's send. Never throws — a failure here must not stop the rest
+   * of the batch.
+   *
+   * Three answers rather than a boolean, so the caller can add up what the
+   * quiet window held back separately from what simply did not send. `"quiet"`
+   * is not a failure and must never be counted as one.
+   */
   private async sendShowFollowNotification(
     notification: DueShowNotification,
     follow: ShowFollow,
     subscriptions: Map<string, PushSubscription>,
     nowMs: number,
-  ): Promise<boolean> {
+  ): Promise<"sent" | "quiet" | "no"> {
     const subscription = subscriptions.get(follow.subscriptionId);
-    if (!subscription) return false;
+    if (!subscription) return "no";
     // Same place and the same reasoning as the trip half: before the dedupe
     // marker, and without writing one. A performance the subscriber slept
     // through leaves `dueShowNotifications`' lead window (25-35 minutes, or
     // 8-14 for the late reminder) on its own.
-    if (isWithinQuietHours(subscription.timezone, nowMs)) {
-      // Logged per follower rather than counted in a batch total: the
-      // show half fans out through `Promise.allSettled` and has no place
-      // to add one up. Same reason as the trip half — a silent hold looks
-      // exactly like a broken job.
-      this.logger.log(
-        `Held back a show reminder for ${notification.showId} — quiet hours where the subscriber is`,
-      );
-      return false;
-    }
+    if (isWithinQuietHours(subscription.timezone, nowMs)) return "quiet";
     if (await this.alreadySent(subscription.endpoint, notification.dedupeKey)) {
-      return false;
+      return "no";
     }
     const message = writeMessage(notification, subscription.locale);
     const sent = await this.pushService.send(subscription, message);
     if (sent) {
       await this.markSent(subscription.endpoint, notification.dedupeKey);
     }
-    return sent;
+    return sent ? "sent" : "no";
   }
 
   /**

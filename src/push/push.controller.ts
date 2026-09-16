@@ -241,7 +241,6 @@ function normalizeLocale(value: unknown): string {
   return /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(tag) ? tag : "en";
 }
 
-/** An IANA zone, or null. Same bounding, same reason. */
 /**
  * `undefined` for a body that did not mention the zone, `null` for one that
  * sent something unusable — `PushService.subscribe` preserves the first and

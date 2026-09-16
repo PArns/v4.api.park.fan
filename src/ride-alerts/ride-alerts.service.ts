@@ -283,13 +283,19 @@ export class RideAlertsService {
       // sequential: a ride with hundreds of alerts must not turn into
       // hundreds of concurrent outbound HTTPS calls, nor stall every park
       // behind this one in the poll's batch for minutes.
+      // Counted rather than logged per alert, and at `log` rather than
+      // `debug`: the default level is `log` (`main.ts`) and nothing sets
+      // `LOG_LEVEL` in any deployment, so a debug line would never print —
+      // which would leave a held-back alert exactly as traceless as the
+      // broken sweep it has to be told apart from.
+      let quiet = 0;
       for (
         let i = 0;
         i < triggers.length;
         i += RideAlertsService.SEND_BATCH_SIZE
       ) {
         const batch = triggers.slice(i, i + RideAlertsService.SEND_BATCH_SIZE);
-        await Promise.allSettled(
+        const results = await Promise.allSettled(
           batch.map((trigger) =>
             this.sendTrigger(
               trigger,
@@ -299,6 +305,16 @@ export class RideAlertsService {
               nowMs,
             ),
           ),
+        );
+        for (const result of results) {
+          if (result.status === "fulfilled" && result.value === "quiet") {
+            quiet++;
+          }
+        }
+      }
+      if (quiet > 0) {
+        this.logger.log(
+          `Held ${quiet} ride alert(s) back at ${park.name} — quiet hours where the subscriber is`,
         );
       }
     } catch (error) {
@@ -364,6 +380,11 @@ export class RideAlertsService {
    * (a reclaimed stalled Bull job re-running the same cycle) racing this one
    * finds `affected === 0` and returns — the same crossing can never notify
    * twice. Never throws; a failure here must not stop the rest of the batch.
+   *
+   * Answers `"quiet"` when the subscriber's quiet window held it back, so the
+   * caller can say so once per park instead of once per alert: the row stays
+   * armed, so the same trigger comes back on every five-minute cycle until the
+   * window ends, and a line each would be a trace rather than an event.
    */
   private async sendTrigger(
     trigger: AlertTrigger,
@@ -371,7 +392,7 @@ export class RideAlertsService {
     attractionById: Map<string, Attraction>,
     park: ParkForRideAlertCheck,
     nowMs: number,
-  ): Promise<void> {
+  ): Promise<"quiet" | void> {
     try {
       const subscription = subscriptions.get(trigger.subscriptionId);
       // Quiet hours are answered BEFORE the disarm, so the alert stays armed
@@ -383,15 +404,7 @@ export class RideAlertsService {
       // the re-arm below would write the row twice and stamp a trigger that
       // never went out.
       if (subscription && isWithinQuietHours(subscription.timezone, nowMs)) {
-        // Debug rather than log: the alert stays armed, so `diffRideAlerts`
-        // offers this same trigger again on every five-minute cycle until
-        // the window ends. One line per cycle per alert is a trace, not an
-        // event — but a hold that leaves nothing at all behind cannot be
-        // told from a broken sweep.
-        this.logger.debug(
-          `Ride alert ${trigger.alertId} held back — quiet hours where the subscriber is`,
-        );
-        return;
+        return "quiet";
       }
 
       const result = await this.repository.update(
