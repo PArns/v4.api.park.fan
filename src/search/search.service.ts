@@ -1544,7 +1544,10 @@ export class SearchService implements OnModuleInit {
           "s.scheduleType",
         ])
         .where("s.parkId IN (:...parkIds)", { parkIds })
-        .andWhere("s.scheduleType = :type", { type: ScheduleType.OPERATING });
+        .andWhere("s.scheduleType = :type", { type: ScheduleType.OPERATING })
+        // The park's own row. The loop below is last-write-wins per park, so a
+        // ride's row would set the park's hours in search results (PAR-246).
+        .andWhere("s.attractionId IS NULL");
 
       // Add a dynamic where condition for each park's date
       // For performance with many parks, we group by date
