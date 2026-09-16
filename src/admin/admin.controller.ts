@@ -96,6 +96,28 @@ export interface ParkMergePlanEntry {
   reviewReason: string | null;
 }
 
+/**
+ * Read a flag out of a body that nothing validates, and refuse to guess.
+ *
+ * `merge-duplicate-parks` takes an inline body rather than a DTO, so the
+ * `ValidationPipe` has no metatype to work with and coerces nothing — and Nest
+ * parses `application/x-www-form-urlencoded` out of the box, where every value
+ * arrives as a string. `dryRun=true` from a curl one-liner is therefore
+ * `"true"`, and `"true" === true` is false: a strict comparison reads the one
+ * request that asked in as many words for a dry run as permission to delete.
+ * Which is, to the letter, the trap the attraction endpoint sprang once.
+ *
+ * A value that is neither is `undefined` here and a 400 at the call site. On an
+ * endpoint that deletes parks, a `dryRun: "yes"` nobody can interpret must not
+ * be interpreted — in either direction.
+ */
+function readBodyFlag(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+}
+
 @ApiTags("admin")
 @ApiSecurity("admin-auth")
 @Controller("admin")
@@ -1679,9 +1701,24 @@ export class AdminController {
     const planned: ParkMergePlanEntry[] = [];
     const skipped: ParkMergePlanEntry[] = [];
 
-    if (body.autoDetect) {
+    // Both flags decide whether rows get deleted, so an uninterpretable value
+    // is refused rather than read as one side of the question.
+    const autoDetectFlag = readBodyFlag(body.autoDetect);
+    const dryRunFlag = readBodyFlag(body.dryRun);
+    for (const [name, raw, parsed] of [
+      ["autoDetect", body.autoDetect, autoDetectFlag],
+      ["dryRun", body.dryRun, dryRunFlag],
+    ] as const) {
+      if (raw !== undefined && raw !== null && parsed === undefined) {
+        throw new BadRequestException(
+          `${name} must be a boolean (true or false)`,
+        );
+      }
+    }
+
+    if (autoDetectFlag) {
       // Nothing is written unless the caller asks for it in as many words.
-      const dryRun = body.dryRun !== false;
+      const dryRun = dryRunFlag !== false;
 
       // Auto-detect duplicates
       const duplicates = await this.parkValidatorService.findDuplicates();
@@ -1795,6 +1832,22 @@ export class AdminController {
         }
       }
 
+      // A skipped pair can share a row with a pair that just merged: three
+      // rows for one park give A–B safe and B–C for review, and B is gone by
+      // the time the operator reads the list. The entry still names it, so the
+      // "send it back as a manual pair" this list is for would answer "Park
+      // not found". Say so on the entry rather than re-running the detector:
+      // the ids that went away are exactly the ones in `results`.
+      const mergedAway = new Set(results.map((r) => r.loserId));
+      for (const entry of skipped) {
+        if (!mergedAway.has(entry.winnerId) && !mergedAway.has(entry.loserId)) {
+          continue;
+        }
+        entry.reviewReason = `one of these rows was merged into another park in this run — re-run detection before acting${
+          entry.reviewReason ? ` (${entry.reviewReason})` : ""
+        }`;
+      }
+
       // Add errors from repair result
       errors.push(...repairResult.errors);
     } else if (body.park1Id && body.park2Id) {
@@ -1810,7 +1863,7 @@ export class AdminController {
       if (!park1 || !park2) {
         return {
           message: "One or both parks not found",
-          dryRun: body.dryRun === true,
+          dryRun: dryRunFlag === true,
           merged: 0,
           planned: [],
           skipped: [],
@@ -1830,7 +1883,7 @@ export class AdminController {
 
       // Only an explicit `true` previews here — see the method's docblock for
       // why this default is the other way round from `autoDetect`'s.
-      if (body.dryRun === true) {
+      if (dryRunFlag === true) {
         return {
           message: `Dry run: "${loser.name}" would be merged into "${winner.name}"`,
           dryRun: true,

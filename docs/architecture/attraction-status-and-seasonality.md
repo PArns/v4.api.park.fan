@@ -829,6 +829,13 @@ default would be a button that quietly stops working. It does honour an explicit
 sprang once: a request that says dry run, deletes the row, and prints the
 outcome as a preview.
 
+**A flag this endpoint cannot read is a 400, not a guess.** The body takes no
+DTO, so nothing coerces it, and Nest parses form-encoded requests out of the box
+— where every value is a string, and `dryRun=true` from a curl one-liner is
+`"true"`. Under a strict comparison that is not `true`, so the request that
+asked for a dry run in as many words would have deleted a park. `"true"` and
+`"false"` are read; anything else on `dryRun` or `autoDetect` is refused.
+
 **What this gate does not cover, said out loud so the paragraphs above are not
 read as covering it:** `ParksService.repairDuplicates()` is a different path
 with the same effect. It groups parks by a shared `queue_times_entity_id` in SQL

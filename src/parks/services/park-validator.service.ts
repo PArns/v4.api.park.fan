@@ -224,10 +224,12 @@ function usableCoordinate(park: {
  * The name floor a pair needs before an automatic merge may delete one of its
  * two rows.
  *
- * It is the floor of the `nameSimilarity >= 0.95 && sharedEntityId` branch
- * below, reused rather than chosen again: `safe` is that one branch, so the
- * safe set is a subset of the detected set by construction and a pair cannot
- * be safe on a rule that never detected it.
+ * It is the floor of the `nameSimilarity >= AUTO_MERGE_NAME_SIMILARITY &&
+ * sharedEntityId` branch below, and it is the same constant in both places
+ * rather than the same number: `safe` IS that one branch, so the safe set is a
+ * subset of the detected set by construction, and two literals would let
+ * somebody raise the branch above the verdict — which would mark a pair safe
+ * that only a weaker branch ever detected.
  */
 const AUTO_MERGE_NAME_SIMILARITY = 0.95;
 
@@ -597,7 +599,7 @@ export class ParkValidatorService {
           // ghost, and it must not also shield it from detection. The shared
           // ID is the verifier that keeps genuinely distinct same-name parks
           // (Disneyland Paris vs Anaheim) out.
-          (nameSimilarity >= 0.95 && sharedEntityId);
+          (nameSimilarity >= AUTO_MERGE_NAME_SIMILARITY && sharedEntityId);
 
         if (isDuplicate) {
           const reasons: string[] = [];

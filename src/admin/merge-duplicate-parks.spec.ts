@@ -227,6 +227,68 @@ describe("AdminController.mergeDuplicateParks", () => {
     });
   });
 
+  it("reads a form-encoded dryRun, where every value is a string", async () => {
+    // This body takes no DTO, so nothing coerces it, and Nest parses
+    // `application/x-www-form-urlencoded` by default — `curl -d dryRun=true`
+    // arrives as "true". Under a strict comparison that is not `true`, and the
+    // one request that asked for a dry run would have deleted a park.
+    const controller = build([]);
+    mergeParks.mockResolvedValue({ success: true });
+
+    const preview = await controller.mergeDuplicateParks({
+      park1Id: ushLosAngeles.id,
+      park2Id: ushBullCreek.id,
+      dryRun: "true" as unknown as boolean,
+    });
+
+    expect(mergeParks).not.toHaveBeenCalled();
+    expect(preview.dryRun).toBe(true);
+  });
+
+  it("refuses a flag it cannot read rather than picking a side", async () => {
+    const controller = build([sharedIdPair]);
+
+    await expect(
+      controller.mergeDuplicateParks({
+        autoDetect: true,
+        dryRun: "yes" as unknown as boolean,
+      }),
+    ).rejects.toThrow("dryRun must be a boolean");
+    expect(repairDuplicates).not.toHaveBeenCalled();
+  });
+
+  it("says so when a skipped pair lost one of its rows to the merge beside it", async () => {
+    // Three rows for one park: A–B is safe and merges, B–C still needs review,
+    // and B is gone by the time anybody reads the list.
+    const third = park({
+      id: "ush-third",
+      name: "Universal Studios Hollywood Backlot",
+      city: "Los Angeles",
+      wikiEntityId: null,
+      queueTimesEntityId: null,
+      wartezeitenEntityId: "universalstudioshollywood",
+    });
+    const overlapping = pairOf(ushLosAngeles, third, false, "same city");
+    const controller = build([sharedIdPair, overlapping]);
+    (
+      controller as unknown as {
+        parkValidatorService: { getParkRepository: () => { find: jest.Mock } };
+      }
+    ).parkValidatorService
+      .getParkRepository()
+      .find.mockResolvedValue([...allParks, third]);
+
+    const result = await controller.mergeDuplicateParks({
+      autoDetect: true,
+      dryRun: false,
+    });
+
+    expect(result.results.map((r) => r.loserId)).toEqual([ushLosAngeles.id]);
+    expect(result.skipped[0].reviewReason).toContain(
+      "merged into another park in this run",
+    );
+  });
+
   it("counts the two sets apart on the read route", async () => {
     const result = await build([
       sharedPointPair,

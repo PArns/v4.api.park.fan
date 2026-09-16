@@ -45,6 +45,14 @@ Three sentences in `park-validator.service.ts` and three in
 exist, two of them naming PAR-247 as the thing that would build it. They are
 rewritten rather than left standing beside it (§5.5a).
 
+Both flags are parsed rather than compared. The body takes no DTO and Nest
+parses form-encoded requests by default, so `dryRun=true` arrives as the string
+`"true"` — which is not `true`, and the strict comparison would have merged on
+the one request that asked for a dry run. `"true"`/`"false"` are read on
+`dryRun` and `autoDetect`; anything else is a 400 rather than a side taken.
+A pair left in `skipped` whose row was merged by a safe pair in the same run
+says so in its `reviewReason`, because the id it names no longer exists.
+
 This covers the endpoint and nothing else. `ParksService.repairDuplicates()`
 merges ghost parks on a shared `queue_times_entity_id` alone, in its own SQL,
 and `syncParks` awaits it unguarded — a second unattended deletion that this
