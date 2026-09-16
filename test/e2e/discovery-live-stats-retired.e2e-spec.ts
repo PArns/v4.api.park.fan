@@ -176,9 +176,12 @@ describe("LIVE_STATS_SQL — retired attractions (E2E)", () => {
     await retire(operating.id);
 
     const after = await statsFor(park.id);
+    // The control is this 1 rather than a 0: the neighbour's reading is still
+    // inside the window, so the drop came from the predicate and not from the
+    // window sliding shut under both rides.
     expect(Number(after.operating_conf_count)).toBe(1);
-    // The control: the neighbour's reading is still in the window, so the
-    // drop came from the predicate and not from the window sliding shut.
+    // And the subquery moved too — a different read of the same table, so it
+    // is asserted separately rather than as evidence about the CTE.
     expect(Number(after.total_attractions)).toBe(
       seeded.attractions.filter((a) => a.parkId === park.id).length - 1,
     );

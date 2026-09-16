@@ -55,9 +55,10 @@ counters in `AnalyticsService` — `getParkStatistics`, `getAttractionCounts`,
 `getGlobalRealtimeStats` — still count retired rows; that is PAR-286. The blanket
 sentence was narrowed to what actually holds rather than left to be believed.
 
-Tests go through a real database, because the change is raw SQL and the first
-draft put a predicate between `FROM` and `JOIN LATERAL`, which a template
-literal hides: `test/e2e/discovery-live-stats-retired.e2e-spec.ts` executes
+Tests go through a real database, because the change is raw SQL held in a
+template literal, where neither the type checker nor a reviewer sees a
+predicate placed in a syntactically legal but wrong clause:
+`test/e2e/discovery-live-stats-retired.e2e-spec.ts` executes
 `LIVE_STATS_SQL` and counts before and after a retirement, and
 `search.e2e-spec.ts` covers the index path and the SQL path with the second
 park's ride as the control that the query still returns rows.
@@ -656,8 +657,10 @@ the duplicate groups from the second.)
   retired via PAR-159 after ThemeParks.wiki reclassified them as shows. The
   park payload filters them (`loadParkRelations`) and this list did not.
   `findAllWithFilters` now excludes them; its only caller is this route. The
-  `retiredAt` docstring promises the same of search, where it is still untrue —
-  `src/search` filters nothing, which is PAR-233.
+  `retiredAt` docstring promised the same of search, and at the time of this
+  entry that was untrue — `src/search` filtered nothing. PAR-233 closed it in
+  the same release; see "a retired attraction leaves search, favorites and the
+  geo listing's count" above.
 - **37 rows in 12 parks that the park payload groups away** (Walibi Belgium 21,
   Heide Park 4, Carowinds 2), falling into 34 name groups. Most are the catalog
   holding one ride twice, the pairs `AttractionMergeService.findDuplicatePairs`
