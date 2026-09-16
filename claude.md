@@ -8,7 +8,13 @@
 > 1. Create a detailed markdown file in the `docs/` directory (e.g., `docs/troubleshooting/my-issue.md`).
 > 2. Link it in the "Documentation Index" below.
 > 3. Keep this file (`claude.md`) concise.
-> 4. Record notable changes in [Changelog](docs/changelog.md) with version and date.
+> 4. Record notable changes as **one file per pull request** in
+>    [`docs/changelog.d/`](docs/changelog.d/README.md) — `PAR-<issue>.md`, first
+>    line `### <Type> — <title>`. Do not write into
+>    [`docs/changelog.md`](docs/changelog.md) directly: every entry landing under
+>    the same heading is what sends the second pull request of the day back for a
+>    rebase. `pnpm changelog:merge` folds the fragments into the changelog at
+>    release time, `pnpm changelog:check` reports what it can read.
 
 ---
 
@@ -19,6 +25,7 @@
 
 ### 📋 Changelog
 - [Changelog](docs/changelog.md) – Versioned changes (date, version, added/changed/fixed).
+- [Changelog fragments](docs/changelog.d/README.md) – Where a pull request writes its entry, and the two commands that fold them in.
 
 ### 🏗️ Architecture & Infrastructure
 - [System Overview](docs/architecture/system-overview.md) - High-level component design.

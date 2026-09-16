@@ -10,7 +10,8 @@
     "!**/*.module.ts",
     "!**/*.dto.ts",
     "!**/*.entity.ts",
-    "!main.ts"
+    "!main.ts",
+    "!common/utils/changelog-merge.ts"
   ],
   "coverageDirectory": "../coverage",
   "testEnvironment": "node",
