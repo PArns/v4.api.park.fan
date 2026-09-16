@@ -1818,30 +1818,40 @@ export class AdminController {
 
       // Convert repair result to response format. The names come from
       // `planned`, which was built from the park rows themselves — the entry
-      // and its merge pair are pushed together, so the two lists line up.
-      for (const pair of planned) {
-        // Check if this merge was successful (no error for this pair)
-        const hasError = repairResult.errors.some(
-          (e) => e.parkId === pair.loserId,
-        );
+      // and its merge pair are pushed together, so the two lists line up, and
+      // `repairDuplicates` returns one verdict per pair in that same order.
+      //
+      // The verdict is read BY POSITION and never searched for by id.
+      // `repairResult.errors` is keyed by park, and one run can hold the same
+      // row as the loser of two pairs: three rows for one park give the
+      // detector (1,2), (1,3) and (2,3), the first merge deletes the shared
+      // row, the second fails on it, and the failure carries exactly the
+      // `loserId` the successful pair also has. An id search therefore reads
+      // the second pair's failure onto the first, dropping a park that really
+      // was deleted out of `results` — the one list that says what this call
+      // did — and undercounting `merged`.
+      repairResult.pairs.forEach((verdict, index) => {
+        const pair = planned[index];
 
-        if (!hasError) {
-          // Note: We don't have detailed migration counts from repairDuplicates
-          // The merge service logs them, but repairDuplicates doesn't return them
-          // For now, we'll use placeholder values
-          results.push({
-            winnerId: pair.winnerId,
-            winnerName: pair.winnerName,
-            loserId: pair.loserId,
-            loserName: pair.loserName,
-            migratedAttractions: 0, // Would need to enhance repairDuplicates to return this
-            migratedShows: 0,
-            migratedRestaurants: 0,
-            migratedScheduleEntries: 0,
-            migratedMappings: 0,
-          });
+        if (!pair || !verdict.merged) {
+          return;
         }
-      }
+
+        // Note: We don't have detailed migration counts from repairDuplicates
+        // The merge service logs them, but repairDuplicates doesn't return them
+        // For now, we'll use placeholder values
+        results.push({
+          winnerId: pair.winnerId,
+          winnerName: pair.winnerName,
+          loserId: pair.loserId,
+          loserName: pair.loserName,
+          migratedAttractions: 0, // Would need to enhance repairDuplicates to return this
+          migratedShows: 0,
+          migratedRestaurants: 0,
+          migratedScheduleEntries: 0,
+          migratedMappings: 0,
+        });
+      });
 
       // A skipped pair can share a row with a pair that just merged: three
       // rows for one park give A–B safe and B–C for review, and B is gone by
@@ -1850,12 +1860,16 @@ export class AdminController {
       // not found".
       //
       // Read off `planned` rather than `results`, i.e. every row a merge was
-      // ATTEMPTED on. `results` would be the sharper set and is not a reliable
-      // one: `repairDuplicates` reports errors by park id rather than per pair,
-      // so where one row loses twice — which is this same trio — a failure on
-      // the second attempt drops the successful pair out of `results` as well.
-      // The wider set costs a warning on a row that is still there, and the
-      // warning says re-run detection, which is true either way.
+      // ATTEMPTED on, which is what the warning is about: a failed attempt is
+      // the case where the row is gone and this run is the reason. In the same
+      // trio, the second pair fails precisely BECAUSE the first one deleted the
+      // row they share, and `results` holds only the first. The wider set costs
+      // a warning on a row that is still there, and the warning says re-run
+      // detection, which is true either way.
+      //
+      // Until PAR-268, `results` was unusable here for a second reason — it
+      // dropped the successful pair of exactly this trio. It is per-pair now,
+      // and `planned` is still the set this warning wants.
       const touchedByAMerge = new Set(planned.map((p) => p.loserId));
       for (const entry of skipped) {
         if (
