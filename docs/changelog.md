@@ -6,6 +6,63 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a retired attraction leaves search, favorites and the geo listing's count
+
+`retired_at` promised more than it delivered. The `retiredAt` `@ApiProperty`
+said a retired attraction is "absent from park listings, counts and search";
+the column's own docblock made the matching claim in its own words, naming the
+live list, the operating counts, search and favorites. Park listings held up.
+The rest did not. Both sentences are rewritten below to what actually holds.
+
+Measured against production on 2026-09-16: **49 retired rows across 13 parks**,
+every one of them findable. `GET /v1/search?q=Dino-Sue` returned the demolished
+Dino-Sue as its **first result**, and `GET /v1/discovery/continents/asia/singapore`
+reported `attractionCount: 35` for Universal Studios Singapore while the park's
+own page served 18 — the gap was exactly its 17 retired rows. **31 of the 49
+have a live show of the same name in the same park**, so the ride and the show
+stood side by side in one result list: the double image PAR-159 removed from the
+park page.
+
+**Search reads those rows twice, and both readers needed the predicate.** The
+SQL path (`searchAttractions`) answers while the index is still being built; the
+in-process index (`loadAttractionIndexFromDb`) answers afterwards and, unlike a
+query, outlives the request — a retired row let into it keeps being served from
+Redis until the next rebuild. Shows and restaurants had already been filtered on
+both. The attraction side had neither predicate — and said so: the comment in
+`refreshSearchIndex` read "the attraction one does not yet", and the docblock on
+`findAllWithFilters` spelled out that `loadAttractionIndexFromDb` filters
+nothing. The gap was documented, not overlooked.
+
+`LIVE_STATS_SQL` likewise reads attractions twice: the `total_attractions`
+subquery behind `attractionCount`, and the `latest_attraction_data` CTE behind
+`closedAttractions` — and so behind `operatingAttractions` too, which
+`hydrateStructure` derives as `totalAttractions - explicitlyClosedCount` rather
+than from the CTE's own `operating_conf_count`. That column is parsed into
+`ParkLiveStats` and never read by anything (noted on PAR-296).
+
+The CTE's predicate is not redundant with the write side. Polling and
+reverse-reconciliation do skip retired rows, but `writeHourlyHeartbeats` reads
+**every** attraction and carries the last reading forward hourly while the park
+is open, for as long as the ride's Redis last-seen key is under the 24-hour
+staleness threshold — so a retired ride stays eligible to re-enter the
+30-minute window for up to a day after its final sighting. Measured on
+2026-09-16: **0** such rows exist in retention, so the gap is open by
+construction rather than observed. The
+unfiltered heartbeat read is PAR-295.
+
+**The counts are not all fixed, and the docblocks now say which.** The three
+counters in `AnalyticsService` — `getParkStatistics`, `getAttractionCounts`,
+`getGlobalRealtimeStats` — still count retired rows; that is PAR-286. The blanket
+sentence was narrowed to what actually holds rather than left to be believed.
+
+Tests go through a real database, because the change is raw SQL held in a
+template literal, where neither the type checker nor a reviewer sees a
+predicate placed in a syntactically legal but wrong clause:
+`test/e2e/discovery-live-stats-retired.e2e-spec.ts` executes
+`LIVE_STATS_SQL` and counts before and after a retirement, and
+`search.e2e-spec.ts` covers the index path and the SQL path with the second
+park's ride as the control that the query still returns rows.
+
 ### Added — quiet hours, in the subscriber's timezone rather than the park's
 
 `push_subscriptions.timezone` has been written on every subscribe since
@@ -600,8 +657,10 @@ the duplicate groups from the second.)
   retired via PAR-159 after ThemeParks.wiki reclassified them as shows. The
   park payload filters them (`loadParkRelations`) and this list did not.
   `findAllWithFilters` now excludes them; its only caller is this route. The
-  `retiredAt` docstring promises the same of search, where it is still untrue —
-  `src/search` filters nothing, which is PAR-233.
+  `retiredAt` docstring promised the same of search, and at the time of this
+  entry that was untrue — `src/search` filtered nothing. PAR-233 closed it in
+  the same release; see "a retired attraction leaves search, favorites and the
+  geo listing's count" above.
 - **37 rows in 12 parks that the park payload groups away** (Walibi Belgium 21,
   Heide Park 4, Carowinds 2), falling into 34 name groups. Most are the catalog
   holding one ride twice, the pairs `AttractionMergeService.findDuplicatePairs`

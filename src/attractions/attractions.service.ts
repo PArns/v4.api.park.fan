@@ -190,10 +190,12 @@ export class AttractionsService {
    * after ThemeParks.wiki reclassified them as shows) while the park payload
    * served none.
    *
-   * The `retiredAt` docstring on the response DTO claims the same of search,
-   * and there it is not true yet — `loadAttractionIndexFromDb` filters nothing
-   * (measured 2026-09-15: no `retired` anywhere in `src/search`). That is
-   * PAR-233, not this method.
+   * The `retiredAt` docstring on the response DTO claims the same of search
+   * and of the favorites list, and PAR-233 made both true: `searchAttractions`
+   * and `loadAttractionIndexFromDb` filter, and so does
+   * `FavoritesService.fetchAttractions`. The counts are only partly there —
+   * the three in `AnalyticsService` still count retired rows, listed on the
+   * `retiredAt` column in `attraction.entity.ts` and tracked as PAR-286.
    */
   async findAllWithFilters(filters: {
     park?: string;

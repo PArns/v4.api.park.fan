@@ -331,8 +331,11 @@ export class FavoritesService {
     if (ids.length === 0) {
       return [];
     }
+    // See `fetchShows`: a retired attraction drops out of the favorites list
+    // rather than being served as a favorite that no longer exists, and the
+    // stored id is left alone so the favorite returns with the row.
     return this.attractionRepository.find({
-      where: { id: In(ids) },
+      where: { id: In(ids), retiredAt: IsNull() },
       relations: ["park"],
     });
   }

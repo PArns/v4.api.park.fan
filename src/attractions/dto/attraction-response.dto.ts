@@ -509,7 +509,8 @@ export class AttractionResponseDto {
     description:
       "When this attraction stopped existing (ISO 8601), or null while it is " +
       "still around. A retired attraction is absent from park listings, " +
-      "counts and search, but keeps answering here so its history stays " +
+      "search, the favorites list and the geo listing's attraction count, but " +
+      "keeps answering here so its history stays " +
       'readable — render it as "operated until …", never as closed. ' +
       "One case does not mean that: where the children sync retired a row " +
       "because ThemeParks.wiki reclassified the entity as a show or a " +

@@ -77,6 +77,23 @@ export const LIVE_STATS_SQL = `
             qd.timestamp DESC
           LIMIT 1
         ) qd ON true
+        -- A retired ride is not one of the park's rides at all, so it belongs
+        -- in neither half of "12 von 45 geöffnet" — the same rule the park
+        -- payload applies via loadParkRelations.
+        --
+        -- Do not assume the writing side makes this predicate redundant. The
+        -- polling and reverse-reconciliation paths in WaitTimesProcessor do
+        -- load only rows with a null retiredAt, but writeHourlyHeartbeats does
+        -- NOT: it reads every attraction and carries the last reading forward
+        -- hourly while the park is open, for as long as the ride's Redis
+        -- last-seen key is under STALE_THRESHOLD_MS (24h). A retired ride is
+        -- therefore eligible to be lifted back into this 30-minute window for
+        -- up to a day after its final sighting. Measured on 2026-09-16: no
+        -- heartbeat row exists anywhere in retention that was written AFTER a
+        -- retirement, so the gap is open by construction rather than observed
+        -- — which is exactly why the count should not depend on it. Filed as
+        -- PAR-295.
+        WHERE a.retired_at IS NULL
       ),
       park_stats AS (
         SELECT
@@ -113,6 +130,12 @@ export const LIVE_STATS_SQL = `
         COALESCE(stats.explicitly_closed_count, 0) as explicitly_closed_count,
         (SELECT COUNT(*)::int FROM attractions a
           WHERE a."parkId" = p.id
+            -- See latest_attraction_data: a retired ride left this park's
+            -- lists when it was retired. Without this the country listing
+            -- reported 35 rides for Universal Studios Singapore while the
+            -- park's own page served 18 (measured 2026-09-16, 49 retired rows
+            -- across 13 parks).
+            AND a.retired_at IS NULL
             AND (
               NOT ${attractionIsOutOfSeason("a")}
               OR a.id IN (

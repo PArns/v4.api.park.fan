@@ -1,5 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
+import { IsNull } from "typeorm";
 import { FavoritesService } from "./favorites.service";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
@@ -418,6 +419,81 @@ describe("FavoritesService", () => {
       expect(typeof payload).toBe("string");
       // Payload is JSON, parses cleanly.
       expect(() => JSON.parse(payload as string)).not.toThrow();
+    });
+  });
+
+  /**
+   * PAR-233. A retired attraction is gone from the park's lists and from
+   * search, so a favorites list that still serves it is the one surface left
+   * where a demolished ride looks current.
+   */
+  describe("Retired favorites", () => {
+    const validAttractionUuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const validShowUuid = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+
+    it("asks the attraction repository for live rows only, exactly as the show path does", async () => {
+      await service.getFavorites(
+        [],
+        [validAttractionUuid],
+        [validShowUuid],
+        [],
+      );
+
+      // Reached: the id survived validation and became a real lookup (G-44).
+      // Without this, the predicate assertion below would also pass for an
+      // attraction path that was never called at all.
+      expect(attractionRepo.find).toHaveBeenCalledTimes(1);
+      const attractionWhere = attractionRepo.find.mock.calls[0][0].where;
+      expect(attractionWhere.id).toBeDefined();
+
+      // And it asks only for rows that still exist.
+      expect(attractionWhere.retiredAt).toEqual(IsNull());
+
+      // The show path is the reference this was matched to; if its rule ever
+      // changes, this pins that the two did not drift apart silently.
+      const showWhere = showRepo.find.mock.calls[0][0].where;
+      expect(attractionWhere.retiredAt).toEqual(showWhere.retiredAt);
+    });
+
+    it("returns no attraction for an id whose row is retired", async () => {
+      // The mock answers according to whether it was ASKED about `retiredAt`
+      // at all, rather than returning a canned empty list — a canned `[]`
+      // passes just as well with the predicate deleted, which is no test.
+      // It does not interpret the operator: `Not(IsNull())` would read the
+      // same to it. That is the sibling case above, which compares against
+      // `IsNull()` and so rejects the wrong operator structurally. Favorites
+      // has no E2E of its own; between these two the unit level covers that
+      // the path asks, and asks for the right thing.
+      const retiredRow = {
+        id: validAttractionUuid,
+        name: "Dino-Sue",
+        slug: "dino-sue",
+        parkId: validParkUuid,
+        retiredAt: new Date("2026-02-15T00:00:00.000Z"),
+        park: {
+          id: validParkUuid,
+          name: "Disney's Animal Kingdom",
+          slug: "disneys-animal-kingdom",
+          timezone: "America/New_York",
+        },
+      };
+      attractionRepo.find.mockImplementationOnce(
+        (options: { where?: { retiredAt?: unknown } }) =>
+          // The stored row is retired, so a query that constrains `retiredAt`
+          // returns nothing and one that does not returns the row.
+          Promise.resolve(
+            options?.where?.retiredAt === undefined ? [retiredRow] : [],
+          ),
+      );
+
+      const result = await service.getFavorites(
+        [],
+        [validAttractionUuid],
+        [],
+        [],
+      );
+
+      expect(result.attractions).toEqual([]);
     });
   });
 });

@@ -11,6 +11,8 @@ import { MLModule } from "../../src/ml/ml.module";
 import { RedisModule, REDIS_CLIENT } from "../../src/common/redis/redis.module";
 import { getDatabaseConfig } from "../../src/config/database.config";
 import { seedMinimalTestData } from "../helpers/seed-test-data";
+import { DataSource } from "typeorm";
+import { Attraction } from "../../src/attractions/entities/attraction.entity";
 import type { Redis } from "ioredis";
 
 /**
@@ -160,6 +162,55 @@ describe("Park attractions (E2E)", () => {
       await request(app.getHttpServer())
         .get(`${GEO}/${parks[0].slug}/attractions/non-existent-attraction`)
         .expect(404);
+    });
+
+    /**
+     * The park list has excluded retired attractions since PAR-159; PAR-233
+     * added search, the favorites list and the geo count. This is the half of
+     * the promise that pulls the other way, and the one a filter one clause
+     * too broad would quietly break:
+     * `retiredAt` says the row "keeps answering here so its history stays
+     * readable", and a 404 would turn a ride that existed into one that never
+     * did.
+     */
+    it("still answers for a retired attraction while the park list drops it", async () => {
+      const { parks, attractions } = await seedMinimalTestData(app);
+      const park = parks[0];
+      const retired = attractions.find((a) => a.parkId === park.id)!;
+
+      // Reachable in both places first, so neither assertion below can pass
+      // for the wrong reason (G-44).
+      await request(app.getHttpServer())
+        .get(`${GEO}/${park.slug}/attractions/${retired.slug}`)
+        .expect(200);
+      const before = await request(app.getHttpServer())
+        .get(`${GEO}/${park.slug}/attractions`)
+        .expect(200);
+      expect(before.body.data.map((a: { slug: string }) => a.slug)).toContain(
+        retired.slug,
+      );
+
+      const updated = await app
+        .get(DataSource)
+        .getRepository(Attraction)
+        .update({ id: retired.id }, { retiredAt: new Date() });
+      expect(updated.affected).toBe(1);
+      await redis.flushdb();
+
+      // Gone from the list that describes the park as it is today ...
+      const after = await request(app.getHttpServer())
+        .get(`${GEO}/${park.slug}/attractions`)
+        .expect(200);
+      const slugs = after.body.data.map((a: { slug: string }) => a.slug);
+      expect(slugs).not.toContain(retired.slug);
+      expect(slugs).toHaveLength(4);
+
+      // ... and still readable on its own route, with its retirement stated.
+      const { body } = await request(app.getHttpServer())
+        .get(`${GEO}/${park.slug}/attractions/${retired.slug}`)
+        .expect(200);
+      expect(body.id).toBe(retired.id);
+      expect(body.retiredAt).not.toBeNull();
     });
   });
 });
