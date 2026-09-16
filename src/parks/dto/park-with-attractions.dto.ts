@@ -461,10 +461,15 @@ export class ParkStatisticsDto {
   @ApiProperty({ description: "Total attractions count" })
   totalAttractions: number;
 
-  @ApiProperty({ description: "Operating attractions count" })
+  @ApiProperty({ description: "Attractions KNOWN to be operating" })
   operatingAttractions: number;
 
-  @ApiProperty({ description: "Closed attractions count" })
+  @ApiProperty({
+    description:
+      "Attractions KNOWN to be closed. `total = operating + closed` does not " +
+      "hold at an open park whose waits are unknowable: this reads 0 and the " +
+      "remainder is UNKNOWN.",
+  })
   closedAttractions: number;
 
   @ApiProperty({ description: "Timestamp" })

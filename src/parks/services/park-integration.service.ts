@@ -40,7 +40,10 @@ import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.cl
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { ParkStatus } from "../../common/types/status.type";
 import { readsUnknownFromAbsentSource } from "../../common/utils/source-absent-status.util";
-import { statusWithoutLiveData } from "../../common/utils/no-live-data-status.util";
+import {
+  PARK_FEED_SILENT_DAYS,
+  statusWithoutLiveData,
+} from "../../common/utils/no-live-data-status.util";
 import {
   isFreeFlowOpen,
   freeFlowQueues,
@@ -205,6 +208,7 @@ export class ParkIntegrationService {
       parkHasOperatingSchedule,
       weatherWarnings,
       operatingDateRange,
+      parkObservedRecently,
     ] = await Promise.all([
       this.weatherService.getCurrentAndForecast(park.id),
       this.parksService.getUpcomingSchedule(park.id, 16),
@@ -214,8 +218,13 @@ export class ParkIntegrationService {
       this.parksService.hasOperatingSchedule(park.id),
       this.weatherWarningsService.getActiveWarnings(park.id).catch(() => []),
       // Joins the batch rather than sitting after it: it is a 1 h read-through cache, so on the
-      // warm path it costs one Redis GET that overlaps the other six.
+      // warm path it costs one Redis GET that overlaps the rest of the batch.
       this.parksService.getOperatingDateRange(park.id, park.timezone),
+      // Optimistic on failure, same direction as the curated lookup: a probe we
+      // could not run must not be the thing that blanks a healthy park.
+      this.queueDataService
+        .hasObservedReadingWithin(park.id, PARK_FEED_SILENT_DAYS)
+        .catch(() => true),
     ]);
     const hourlyRes = mlPredictionsResult;
 
@@ -230,12 +239,46 @@ export class ParkIntegrationService {
 
     // Whether this park publishes wait times anywhere we can read (curated, see
     // parks/data/live-wait-time-sources.ts). `fromEntity` has already put the
-    // answer on the response; what follows uses it to keep the live surfaces
-    // from filling the gap with values nothing supports. Everything derived
-    // from a wait time — ride status, crowd level, best visit times, the ML
-    // forecast — is unknowable here, and this API's rule is to say `unknown`
-    // rather than emit a placeholder tier.
+    // answer on the response. Everything derived from a wait time — ride status,
+    // crowd level, best visit times, the park's own wait statistics — is
+    // unknowable here, and this API's rule is to say `unknown` rather than emit
+    // a placeholder tier.
+    //
+    // Those four surfaces read `waitTimesKnowable` below rather than this value
+    // directly, because a second, measured way of having no wait time joined it.
+    // This one is still read on its own by the free-flow override, which turns
+    // on a curated flag and the park's schedule and never on a wait time.
     const waitTimesReadable = dto.liveWaitTimes.available;
+
+    /**
+     * The park publishes wait times somewhere we can read AND something has
+     * actually arrived from there this month.
+     *
+     * The two halves are different failures with the same consequence. The
+     * curated half is permanent and known in advance (Hansa-Park publishes only
+     * inside its own app). This half is measured and can end at any time: both
+     * of La Ronde's upstreams still answer, they have simply returned an empty
+     * live payload since 2026-06-17 (ThemeParks.wiki) and 2026-06-24
+     * (Queue-Times), and nothing in the catalog says so.
+     *
+     * They are kept apart in the response on purpose. `liveWaitTimes.available`
+     * stays `true` here, because it is the frontend's contract for "this park
+     * publishes wait times nowhere" — see `parks/data/live-wait-time-sources.ts`,
+     * which says outright that the list must not be derived. Saying it of a park
+     * that fed us 7.307 rows until June would be a different wrong answer.
+     *
+     * What they share is that every wait-derived claim below is unsupported.
+     * Four read this flag: the ride's status, its crowd level, the best visit
+     * times and the park's own wait statistics. They say `unknown` rather than
+     * emit a fabricated tier.
+     *
+     * The free-flow override further down is deliberately NOT one of them: a
+     * playground is open on the strength of a curated flag and the park's
+     * schedule, neither of which is a wait time. It is also why
+     * `operatingAttractions` is left to compute itself rather than forced to 0
+     * — at a silent park it counts exactly those rides and nothing else.
+     */
+    const waitTimesKnowable = waitTimesReadable && parkObservedRecently;
 
     const currentEntity = weatherData.current;
     const weatherNow =
@@ -608,7 +651,7 @@ export class ParkIntegrationService {
         // Get current queue data for this attraction from the bulk result
         const queueData = queueDataMap.get(attraction.id) || [];
 
-        if (!waitTimesReadable) {
+        if (!waitTimesKnowable) {
           // A park we cannot read has no informative ride feed — but that is not the
           // same as having no feed at all. Hansa-Park's upstream publishes a row for
           // every one of its 82 attractions, permanently CLOSED and never carrying a
@@ -618,6 +661,13 @@ export class ParkIntegrationService {
           // whether the ride is running. The rows are dropped and the ride reads
           // UNKNOWN; the park's own CLOSED (from the schedule, which we CAN read)
           // still closes everything below.
+          //
+          // The silent half of `waitTimesKnowable` lands here too, and the
+          // sentence above is the reason it may: it is the same "we have nothing
+          // to say about this ride", arrived at by measurement instead of by the
+          // curated list. Without it the branch below fills those parks in from
+          // `statusWithoutLiveData`, whose optimism is written for one quiet ride
+          // at a working park and not for a park that has been quiet since June.
           attraction.queues = [];
           attraction.status = dto.status === "OPERATING" ? "UNKNOWN" : "CLOSED";
         } else if (readsUnknownFromAbsentSource(queueData, dto.status)) {
@@ -728,7 +778,12 @@ export class ParkIntegrationService {
 
         if (attraction.effectiveStatus === "CLOSED") {
           crowdLevel = "closed";
-        } else if (!waitTimesReadable) {
+        } else if (!waitTimesKnowable) {
+          // A free-flow ride reaches this branch too, and comes out `unknown`
+          // while the same ride at a healthy park is rated against its
+          // synthetic 0-minute queue. That is the right way round: the flag
+          // says the gate is open, not that nobody is inside.
+          //
           // No source → no wait → nothing to rate against the baseline. Without
           // this the chain below falls through both branches to the last-resort
           // default and rates every ride in the park `very_low`, which reads as
@@ -907,7 +962,12 @@ export class ParkIntegrationService {
         // Withheld for an unreadable park for the same reason a closed park gets
         // no predictions: the model has never seen a wait time from here, so
         // "come at 16:00, it's quieter" is a recommendation with nothing under it.
-        if (waitTimesReadable && predsForBestVisit.length > 0) {
+        // A park whose feed has been silent for a month is the same case one step
+        // later — the model HAS seen wait times from here, none of them this
+        // season, and it keeps predicting off them: La Ronde's rides carried a
+        // 30-minute forecast at 93.6 % confidence on 2026-09-16, 84 days after
+        // the last reading.
+        if (waitTimesKnowable && predsForBestVisit.length > 0) {
           // Substitute actual live wait for current slot to avoid predicting a
           // spike-masked slot as "best time".
           const currentActualWait = attraction.queues?.[0]?.waitTime;
@@ -1296,14 +1356,24 @@ export class ParkIntegrationService {
       }
     }
 
-    // A park with no readable source contributes no wait times to any of the
-    // aggregates above, so each of them is the shape a division by an empty set
-    // takes rather than a reading: Ø 0 min, peak 0 min, and — because the closed
-    // branch hard-codes it and the live branch has nothing to rate — `very_low`
-    // crowds, on a park that may be at capacity. The counts survive (the
-    // catalog is real, and 0 operating is true: none is *known* to run), the
-    // wait-derived claims do not.
-    if (dto.analytics && !waitTimesReadable) {
+    // A park with no readable source — or one whose feed has said nothing for
+    // thirty days — contributes no wait times to any of the aggregates above,
+    // so each of them is the shape a division by an empty set takes rather than
+    // a reading: Ø 0 min, peak 0 min, and — because the closed branch hard-codes
+    // it and the live branch has nothing to rate — `very_low` crowds, on a park
+    // that may be at capacity.
+    //
+    // What this block withholds is the three claims that read as a judgement:
+    // the crowd tier, the peak hour and the "typical day" distribution, plus
+    // `closedAttractions` below. It does NOT touch `avgWaitTime`,
+    // `avgWaitToday`, `peakWaitToday` or the `occupancy` object, which keep
+    // their empty-set zeroes: Ø 0 min, 0 % occupancy and — from
+    // `calculateParkOccupancy`'s own no-data exit — `comparisonStatus:
+    // "typical"`, which reads as a verdict about a park nobody has heard from
+    // since June rather than as the absence it is. That gap predates this
+    // change and is PAR-298; it is named here rather than widened into this
+    // one.
+    if (dto.analytics && !waitTimesKnowable) {
       dto.analytics.statistics = {
         ...dto.analytics.statistics,
         crowdLevel: "unknown",
@@ -1315,6 +1385,33 @@ export class ParkIntegrationService {
       // `percentiles` is a distribution over observed waits — of which there are
       // none — and the frontend renders it as a "typical day" chart.
       dto.analytics.percentiles = undefined;
+
+      // `closedAttractions` goes with them, and only while the park is open.
+      //
+      // "0 operating is true, none is *known* to run" defends
+      // `operatingAttractions`, which still computes itself: the loop counts
+      // `effectiveStatus === "OPERATING"`, and here that is the free-flow rides
+      // and nothing else. Nothing defended the other half — the live branch
+      // derives it as `total - operating`, so an unreadable or silent OPERATING
+      // park read "38 of 38 closed" under a badge saying the park is open,
+      // which is the "Park geöffnet, alle Bahnen zu" page arrived at from the
+      // other direction. Not one of them is known to be closed.
+      //
+      // Gated on the park's own status, because in a CLOSED park every ride IS
+      // closed for a reason we can state, and the branch that built these
+      // statistics has already written the honest `closedAttractions:
+      // totalAttractionsCount`. Zeroing it there would replace a true answer
+      // with a shrug — the rule `readsUnknownFromAbsentSource` follows one
+      // level down.
+      //
+      // `total = operating + closed` therefore does not hold here. That is the
+      // point: the remainder is the rides nobody can speak for.
+      if (dto.status === "OPERATING") {
+        dto.analytics.statistics = {
+          ...dto.analytics.statistics,
+          closedAttractions: 0,
+        };
+      }
     }
 
     // Enrich schedule with holiday data (covers weekends that might be missing in scraped data)

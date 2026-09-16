@@ -16,6 +16,7 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
+import { observedReadingsSql } from "../common/utils/closure-gap.sql";
 
 /** One attraction's already-fetched live payload, as handed to the batch writer. */
 export interface LiveDataBatchItem {
@@ -867,6 +868,68 @@ export class QueueDataService {
     }
 
     return result;
+  }
+
+  /**
+   * Whether ANY attraction of this park has been observed within `days` days.
+   *
+   * The complement of `findCurrentStatusByPark`, and it answers a different
+   * question. That one asks "what is this ride doing now" over a window of
+   * hours; this asks "does this park have a live feed at all" over a window of
+   * weeks, and `false` is the state La Ronde has been in since 2026-06-24.
+   *
+   * `observedReadingsSql` rather than a bare row count, for the reason that
+   * helper exists: reverse-reconciliation and the heartbeat writer both produce
+   * rows, and a park whose only rows are our own bookkeeping has no feed either.
+   *
+   * Bounded by `days` on purpose, and `EXISTS`-shaped rather than a
+   * `max(timestamp)`: the answer is a boolean, and the LIMIT lets a healthy park
+   * stop at its first row. Measured on production 2026-09-16 at 30 days, with
+   * the planning cost separated from the execution because a hypertable's is
+   * dominated by chunk metadata:
+   *
+   * | | planning | execution |
+   * | -- | -- | -- |
+   * | cold backend | 338 ms | 2.1 ms |
+   * | warm backend, Europa-Park | 45 ms | 1.8 ms |
+   * | warm backend, La Ronde | 43 ms | 7.0 ms |
+   *
+   * The cold number is paid once per pooled connection, not per request, and
+   * `findCurrentStatusByPark` beside it in the same `Promise.all` is a
+   * hypertable query of the same class — so this joins a band the park payload
+   * already pays. The response behind it is cached, but not for long while the
+   * probe matters: `calculateDynamicTTL` gives an OPERATING park the seconds to
+   * the next five-minute boundary, and OPERATING is the only state in which
+   * this changes a ride's status. (The park's own statistics read the same flag
+   * whatever the park is doing, so a CLOSED silent park is affected too. Its
+   * response is cached for at most six hours, and inside published opening
+   * hours — an unexpected closure — for the same five minutes.)
+   */
+  async hasObservedReadingWithin(
+    parkId: string,
+    days: number,
+  ): Promise<boolean> {
+    const rows: Array<{ seen: number }> = await this.queueDataRepository.query(
+      `SELECT 1 AS seen
+         FROM queue_data qd
+         JOIN attractions a ON a.id = qd."attractionId"
+        WHERE a."parkId" = $1
+          AND a.retired_at IS NULL
+          AND qd.timestamp > now() - ($2::int * INTERVAL '1 day')
+          -- COALESCE, because observedReadingsSql can evaluate to NULL rather
+          -- than to false: a row with no is_heartbeat falls back to
+          -- "lastUpdated" = timestamp, and that comparison is NULL when
+          -- lastUpdated is. A row we cannot classify must not be the thing that
+          -- declares a park silent, so it counts as an observation — the same
+          -- optimistic direction the curated lookup takes. Production holds no
+          -- such row: 0 of 43,245,615, which is every row in the table — it has
+          -- no retention policy and begins 2025-12-24 (measured 2026-09-16).
+          -- A fixture that omits the column does.
+          AND COALESCE(${observedReadingsSql("qd")}, true)
+        LIMIT 1`,
+      [parkId, days],
+    );
+    return rows.length > 0;
   }
 
   /**

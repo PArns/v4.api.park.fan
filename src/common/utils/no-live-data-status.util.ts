@@ -17,6 +17,50 @@
  */
 
 /**
+ * How long a park's whole feed must have been silent before its rides stop
+ * reading OPERATING off this fallback.
+ *
+ * The optimism below is written for ONE ride going quiet at a park whose feed
+ * works. It has no answer for a park where nothing has arrived at all, and on
+ * 2026-09-16 **nine** parks were in that state — the 2, 3 and 4 in the last
+ * three columns of the table below. All nine lose the fallback through this
+ * constant, whatever their schedule says. `findScheduledButSilentParks` reports
+ * the five of them that are also scheduled open, which is a narrower question
+ * and a different one.
+ *
+ * The case that was reported: La Ronde, silent since 2026-06-24 with a schedule
+ * running to 2027-08-31, served all 38 of its rides as OPERATING at `very_low`
+ * — "geöffnet, sehr wenig los" — while each ride's own page served CLOSED off
+ * the same silence.
+ *
+ * Thirty days, and it is not compared against Busch Gardens Tampa's 65-day
+ * recovery in `source-absent-status.util.ts`: that was nine rides of a park
+ * whose feed kept working, and a subset is `findSilencedClusters`' subject, not
+ * this one. What matters here is the longest gap a WORKING feed leaves, and the
+ * answer is that there is no middle ground. Days since the last observed
+ * reading, per park with at least one un-retired attraction, measured
+ * 2026-09-16:
+ *
+ * | 0–1 | 2–30 | 31–90 | 90+ | never seen in 400 days |
+ * | -- | -- | -- | -- | -- |
+ * | 195 | **0** | 2 | 3 | 4 |
+ *
+ * Every park anyone is still reading answers within 48 hours, and the band
+ * between two days and a month is empty. Thirty sits in the middle of that gap
+ * at fifteen times the observed maximum, so a seasonal park reopening after the
+ * winter clears it with its first poll and no ordinary outage reaches it.
+ *
+ * `ParkIntegrationService` reads it; the rides of a silent park go to UNKNOWN,
+ * the same place a park with no readable source sends them, and never reach the
+ * fallback below. Free-flow rides are the exception **on this half only**: a
+ * playground opens on a curated flag and the park's schedule, neither of which
+ * is a wait time. At a park with no readable source the override is switched
+ * off outright (`isFreeFlowOpen` takes `waitTimesReadable`), so the two halves
+ * of `waitTimesKnowable` differ here and nowhere else.
+ */
+export const PARK_FEED_SILENT_DAYS = 30;
+
+/**
  * The status an attraction with no queue rows should carry.
  *
  * `isCurrentlyInSeason` is the API's own resolved answer (see
