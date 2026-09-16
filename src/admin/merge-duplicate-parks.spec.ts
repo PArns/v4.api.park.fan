@@ -118,7 +118,11 @@ describe("AdminController.mergeDuplicateParks", () => {
             addedWzIds: 0,
             mergedDuplicates: pairs.length,
             errors: [],
-            pairs: pairs.map((pair) => ({ ...pair, merged: true, error: null })),
+            pairs: pairs.map((pair) => ({
+              ...pair,
+              merged: true,
+              error: null,
+            })),
           }),
       );
     mergeParks = jest.fn();
@@ -406,7 +410,10 @@ describe("AdminController.mergeDuplicateParks", () => {
       addedWzIds: 0,
       mergedDuplicates: 1,
       errors: [
-        { parkId: ushLosAngeles.id, error: `Park ${ushLosAngeles.id} not found` },
+        {
+          parkId: ushLosAngeles.id,
+          error: `Park ${ushLosAngeles.id} not found`,
+        },
       ],
       pairs: [
         {
