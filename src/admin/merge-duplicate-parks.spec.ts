@@ -245,6 +245,32 @@ describe("AdminController.mergeDuplicateParks", () => {
     expect(preview.dryRun).toBe(true);
   });
 
+  it("reads a form-encoded autoDetect and a form-encoded dryRun:false", async () => {
+    // The other direction of the same fix, and the one that writes. Before the
+    // parse, `autoDetect: "false"` was truthy and merged everything; a
+    // `readBodyFlag` narrowed back to booleans would drop this call into the
+    // usage message instead of the branch.
+    const result = await build([sharedIdPair]).mergeDuplicateParks({
+      autoDetect: "true" as unknown as boolean,
+      dryRun: "false" as unknown as boolean,
+    });
+
+    expect(result.dryRun).toBe(false);
+    expect(repairDuplicates).toHaveBeenCalledWith([
+      { winnerId: ushBullCreek.id, loserId: ushLosAngeles.id },
+    ]);
+    expect(result.merged).toBe(1);
+  });
+
+  it("does not take a string autoDetect as a merge instruction", async () => {
+    const result = await build([sharedIdPair]).mergeDuplicateParks({
+      autoDetect: "false" as unknown as boolean,
+    });
+
+    expect(repairDuplicates).not.toHaveBeenCalled();
+    expect(result.message).toContain("Either autoDetect=true");
+  });
+
   it("refuses a flag it cannot read rather than picking a side", async () => {
     const controller = build([sharedIdPair]);
 
@@ -254,6 +280,38 @@ describe("AdminController.mergeDuplicateParks", () => {
         dryRun: "yes" as unknown as boolean,
       }),
     ).rejects.toThrow("dryRun must be a boolean");
+
+    await expect(
+      controller.mergeDuplicateParks({
+        autoDetect: 1 as unknown as boolean,
+      }),
+    ).rejects.toThrow("autoDetect must be a boolean");
+
+    expect(repairDuplicates).not.toHaveBeenCalled();
+  });
+
+  it("refuses a manual pair of one park in the dry run too", async () => {
+    // `mergeParks` rejects one id on both sides. A preview that answers
+    // "would be merged" over the same request promises what the write refuses.
+    const controller = build([]);
+
+    const result = await controller.mergeDuplicateParks({
+      park1Id: ushLosAngeles.id,
+      park2Id: ushLosAngeles.id,
+      dryRun: true,
+    });
+
+    expect(result.planned).toEqual([]);
+    expect(result.errors[0].error).toContain("into itself");
+    expect(mergeParks).not.toHaveBeenCalled();
+  });
+
+  it("reports an empty catalogue as a dry run rather than as a merge", async () => {
+    const result = await build([]).mergeDuplicateParks({ autoDetect: true });
+
+    expect(result.message).toBe("No duplicates found");
+    expect(result.dryRun).toBe(true);
+    expect(result.merged).toBe(0);
     expect(repairDuplicates).not.toHaveBeenCalled();
   });
 

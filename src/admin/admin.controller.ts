@@ -56,25 +56,6 @@ import {
 } from "../attractions/services/attraction-review.service";
 
 /**
- * Admin Controller
- *
- * Every endpoint here needs a signed-in administrator — see `AdminAuthGuard`,
- * which is on the class rather than on each method so that a new endpoint is
- * protected by default and has to opt OUT to be public.
- *
- * That is a change of posture, not a tightening of one. Until it, these
- * endpoints were documented as "protected in production via Cloudflare", which
- * describes traffic arriving through Cloudflare and says nothing about traffic
- * that does not: this application never checked the `pass` parameter it
- * advertised, in any environment, so anything able to reach the origin could
- * merge parks, retire attractions or flush every cache. Cloudflare's rule stays
- * where it is; this is the second lock, on the inside of the same door.
- *
- * Roles follow what an action costs to get wrong. Reads need any session.
- * Job triggers and curation need `editor`. The handful that cannot be undone —
- * merges, retirements, repair, a full cache reset — need `owner`.
- */
-/**
  * One pair of `POST merge-duplicate-parks`, on either side of the gate.
  *
  * In `planned` it is a merge that ran or would run; in `skipped` it is a pair
@@ -109,7 +90,8 @@ export interface ParkMergePlanEntry {
  *
  * A value that is neither is `undefined` here and a 400 at the call site. On an
  * endpoint that deletes parks, a `dryRun: "yes"` nobody can interpret must not
- * be interpreted — in either direction.
+ * be interpreted — in either direction. The one value that is not a 400 is
+ * `null`, which the call site reads as the absent key it stands for in JSON.
  */
 function readBodyFlag(value: unknown): boolean | undefined {
   if (typeof value === "boolean") return value;
@@ -118,6 +100,25 @@ function readBodyFlag(value: unknown): boolean | undefined {
   return undefined;
 }
 
+/**
+ * Admin Controller
+ *
+ * Every endpoint here needs a signed-in administrator — see `AdminAuthGuard`,
+ * which is on the class rather than on each method so that a new endpoint is
+ * protected by default and has to opt OUT to be public.
+ *
+ * That is a change of posture, not a tightening of one. Until it, these
+ * endpoints were documented as "protected in production via Cloudflare", which
+ * describes traffic arriving through Cloudflare and says nothing about traffic
+ * that does not: this application never checked the `pass` parameter it
+ * advertised, in any environment, so anything able to reach the origin could
+ * merge parks, retire attractions or flush every cache. Cloudflare's rule stays
+ * where it is; this is the second lock, on the inside of the same door.
+ *
+ * Roles follow what an action costs to get wrong. Reads need any session.
+ * Job triggers and curation need `editor`. The handful that cannot be undone —
+ * merges, retirements, repair, a full cache reset — need `owner`.
+ */
 @ApiTags("admin")
 @ApiSecurity("admin-auth")
 @Controller("admin")
@@ -1884,6 +1885,26 @@ export class AdminController {
       // Only an explicit `true` previews here — see the method's docblock for
       // why this default is the other way round from `autoDetect`'s.
       if (dryRunFlag === true) {
+        // A preview that promises what the write would refuse is worse than no
+        // preview: `mergeParks` rejects one id on both sides, so the dry run
+        // has to reject it too, in the same words.
+        if (winnerId === loserId) {
+          return {
+            message: `Refusing to merge park ${winnerId} into itself`,
+            dryRun: true,
+            merged: 0,
+            planned: [],
+            skipped: [],
+            results: [],
+            errors: [
+              {
+                parkId: winnerId,
+                error: `Refusing to merge park ${winnerId} into itself`,
+              },
+            ],
+          };
+        }
+
         return {
           message: `Dry run: "${loser.name}" would be merged into "${winner.name}"`,
           dryRun: true,
