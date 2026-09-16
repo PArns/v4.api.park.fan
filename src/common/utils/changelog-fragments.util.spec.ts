@@ -29,10 +29,30 @@ describe("checkFragment", () => {
     }
   });
 
-  it("rejects a file the merge would never pick up", () => {
+  it("rejects a file name the merge cannot key on", () => {
     expect(checkFragment("par-257.md", GOOD)).toMatch(/file name/);
     expect(checkFragment("PAR-257.markdown", GOOD)).toMatch(/file name/);
     expect(checkFragment("notes.md", GOOD)).toMatch(/file name/);
+    expect(checkFragment("PAR-257.md.bak", GOOD)).toMatch(/file name/);
+  });
+
+  it("rejects a leading zero, so two files cannot mean one issue", () => {
+    expect(checkFragment("PAR-00257.md", GOOD)).toMatch(/file name/);
+    expect(checkFragment("PAR-0.md", GOOD)).toMatch(/file name/);
+  });
+
+  it("allows a `## ` line inside a fenced block", () => {
+    const quoting = [
+      "### Documented — where an entry goes",
+      "",
+      "```markdown",
+      "## [Unreleased]",
+      "```",
+      "",
+      "and the prose after it.",
+      "",
+    ].join("\n");
+    expect(checkFragment("PAR-1.md", quoting)).toBeNull();
   });
 
   it("rejects a heading the changelog's structure does not have", () => {
@@ -74,13 +94,54 @@ describe("checkFragment", () => {
 });
 
 describe("isFragmentCandidate", () => {
-  it("skips the README that explains the directory", () => {
+  it("skips the README that explains the directory, and tool dotfiles", () => {
     expect(isFragmentCandidate("README.md")).toBe(false);
     expect(isFragmentCandidate(".gitkeep")).toBe(false);
     expect(isFragmentCandidate("PAR-257.md")).toBe(true);
-    // A misnamed file is a candidate on purpose: checkFragment reports it
-    // instead of the merge dropping it in silence.
-    expect(isFragmentCandidate("par-257.md")).toBe(true);
+  });
+});
+
+/**
+ * The filter and the check, in the order the CLI runs them over a directory
+ * listing. Testing `checkFragment` alone says nothing about a name the filter
+ * drops first — and a dropped name is the worst outcome this directory has,
+ * because the entry is committed, `check` reports nothing wrong, and the
+ * release loses it without a word.
+ */
+describe("a directory listing, filtered and then checked", () => {
+  const listing = (files: string[]) =>
+    parseFragments(
+      files
+        .filter(isFragmentCandidate)
+        .map((file) => ({ file, content: GOOD })),
+    );
+
+  it("says something about every name that is not an entry", () => {
+    const { fragments, problems } = listing([
+      "README.md",
+      ".gitkeep",
+      "PAR-257.md",
+      "PAR-258.markdown",
+      "PAR-259.MD",
+      "PAR-260",
+      "PAR-261.md.bak",
+      "notes.txt",
+    ]);
+
+    expect(fragments.map((f) => f.file)).toEqual(["PAR-257.md"]);
+    expect(problems.map((p) => p.file).sort()).toEqual([
+      "PAR-258.markdown",
+      "PAR-259.MD",
+      "PAR-260",
+      "PAR-261.md.bak",
+      "notes.txt",
+    ]);
+  });
+
+  it("is silent only about the two names that are not entries on purpose", () => {
+    const { fragments, problems } = listing(["README.md", ".DS_Store"]);
+    expect(fragments).toEqual([]);
+    expect(problems).toEqual([]);
   });
 });
 

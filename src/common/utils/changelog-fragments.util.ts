@@ -37,8 +37,15 @@ export const FRAGMENT_TYPES = [
   "Performance",
 ] as const;
 
-/** `PAR-257.md` — the issue number is the file name, so two runs cannot collide. */
-export const FRAGMENT_FILENAME = /^PAR-(\d+)\.md$/;
+/**
+ * `PAR-257.md` — the issue number is the whole file name, which is what makes
+ * two pull requests unable to write the same file.
+ *
+ * No leading zero: `PAR-257.md` and `PAR-00257.md` would otherwise both parse
+ * as issue 257 and both be merged, which is the one way two files could still
+ * mean one entry.
+ */
+export const FRAGMENT_FILENAME = /^PAR-([1-9]\d*)\.md$/;
 
 /** The em dash is the separator every existing entry uses. */
 const FRAGMENT_HEADING = new RegExp(
@@ -65,19 +72,26 @@ export interface FragmentInput {
 }
 
 /**
- * Whether a directory entry is a fragment at all. `README.md` explains the
- * directory and is not one; anything else that is not `PAR-<n>.md` is a
- * mistake and reported by {@link checkFragment}.
+ * Whether a directory entry is meant to be an entry at all.
+ *
+ * Deliberately almost everything: `README.md` explains the directory, and a
+ * dotfile belongs to a tool rather than to a release. Every other name is
+ * handed to {@link checkFragment}, **including the ones it will reject** —
+ * `PAR-257.markdown`, `PAR-257.MD`, `PAR-257` and `PAR-257.md.bak` are the
+ * typos somebody actually makes, and a filter that skipped them would turn the
+ * one failure this directory exists to prevent into the quietest one there is:
+ * the entry sits in git, `check` says nothing is wrong, and the release drops
+ * it. A wrong name is loud here or it is invisible.
  */
 export function isFragmentCandidate(file: string): boolean {
-  return file !== "README.md" && file.endsWith(".md");
+  return file !== "README.md" && !file.startsWith(".");
 }
 
 /**
  * Returns the reason this file is not a usable fragment, or `null` if it is.
  *
- * The four failures are the ones that either lose the entry silently or break
- * the assembled file: a name the merge does not pick up, a heading the
+ * The failures are the ones that either lose the entry or break the assembled
+ * file: a name the merge cannot key on, an empty file, a heading the
  * changelog's own structure does not have, an entry with nothing under its
  * heading, and a fragment that opens a `## ` section of its own and would
  * therefore cut `[Unreleased]` in half.
@@ -101,7 +115,7 @@ export function checkFragment(file: string, content: string): string | null {
     return "entry has a heading and no body";
   }
 
-  const section = rest.findIndex((line) => /^## /.test(line));
+  const section = findSectionHeading(rest);
   if (section !== -1) {
     return `a fragment is one entry and may not open a section (line ${
       headingAt + section + 2
@@ -109,6 +123,28 @@ export function checkFragment(file: string, content: string): string | null {
   }
 
   return null;
+}
+
+/**
+ * The index of the first real `## ` heading, or `-1`.
+ *
+ * Fenced blocks are skipped, because an entry about the changelog's own
+ * structure quotes `## [Unreleased]` inside one — `docs/changelog.d/README.md`
+ * is written exactly that way — and rejecting it would be a check refusing the
+ * entry it was written to protect.
+ */
+function findSectionHeading(lines: string[]): number {
+  let fenced = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(```|~~~)/.test(lines[i])) {
+      fenced = !fenced;
+      continue;
+    }
+    if (!fenced && /^## /.test(lines[i])) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 /**

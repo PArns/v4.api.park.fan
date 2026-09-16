@@ -7,6 +7,14 @@
  *
  * The rules live in `changelog-fragments.util.ts` so the spec next to it can
  * measure them without a filesystem. This file is the part that touches disk.
+ *
+ * It sits under `src/` and not next to the repository's other ts-node scripts
+ * because `.gitignore:41` is `scripts/*`: a file added there is not committed
+ * without `git add -f` and never shows up in `git status` for the next person.
+ * `scripts/generate-swagger-spec.ts` is tracked only because it predates that
+ * rule. Here it is linted, type-checked and covered by the same commands as the
+ * rest of `src`; it is excluded from `collectCoverageFrom` like `main.ts`, for
+ * the same reason — an entry point is run, not unit-tested.
  */
 import {
   existsSync,
@@ -22,6 +30,7 @@ import {
   FRAGMENT_DIR,
   Fragment,
   FragmentProblem,
+  UNRELEASED_HEADING,
   isFragmentCandidate,
   parseFragments,
   spliceIntoChangelog,
@@ -56,13 +65,31 @@ function report(problems: FragmentProblem[]): void {
   }
 }
 
+/**
+ * The one precondition of `merge` that is not a fragment: `spliceIntoChangelog`
+ * throws without the heading, and `check` would otherwise report a clean run
+ * right up to the release that fails.
+ */
+function missingHeading(): string | null {
+  const changelog = readFileSync(join(ROOT, CHANGELOG_FILE), "utf8");
+  return /^## \[Unreleased\][^\n]*$/m.test(changelog)
+    ? null
+    : `${CHANGELOG_FILE} has no "${UNRELEASED_HEADING}" heading to fold into`;
+}
+
 function check(): number {
   const { fragments, problems } = readDirectory();
   report(problems);
+
+  const heading = missingHeading();
+  if (heading) {
+    console.error(`✗ ${heading}`);
+  }
+
   console.log(
     `${fragments.length} changelog fragment(s) ready, ${problems.length} rejected`,
   );
-  return problems.length > 0 ? 1 : 0;
+  return problems.length > 0 || heading ? 1 : 0;
 }
 
 function merge(): number {
