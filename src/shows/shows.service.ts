@@ -1,6 +1,12 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from "typeorm";
+import {
+  Repository,
+  Between,
+  IsNull,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+} from "typeorm";
 import { Show } from "./entities/show.entity";
 import { ShowLiveData } from "./entities/show-live-data.entity";
 import { ShowSchedulePattern } from "./entities/show-schedule-pattern.entity";
@@ -150,6 +156,7 @@ export class ShowsService {
    */
   async findAll(): Promise<Show[]> {
     return this.showRepository.find({
+      where: { retiredAt: IsNull() },
       relations: ["park"],
       order: { name: "ASC" },
     });
@@ -168,7 +175,8 @@ export class ShowsService {
   }): Promise<{ data: Show[]; total: number }> {
     const queryBuilder = this.showRepository
       .createQueryBuilder("show")
-      .leftJoinAndSelect("show.park", "park");
+      .leftJoinAndSelect("show.park", "park")
+      .where("show.retiredAt IS NULL");
 
     // Filter by park slug
     if (filters.park) {
@@ -212,6 +220,12 @@ export class ShowsService {
    * Finds show by slug
    */
   async findBySlug(slug: string): Promise<Show | null> {
+    // NOT filtered, matching `AttractionsService.findBySlug`: a retired row
+    // leaves the lists that describe the park as it is today, while a lookup
+    // of one named row still finds it, so its history stays readable. No
+    // controller reaches this today — shows are served through the park
+    // payload — so the rule is set here by parity, before a route exists that
+    // would have to decide it in a hurry.
     return this.showRepository.findOne({
       where: { slug },
       relations: ["park", "park.destination"],
@@ -228,7 +242,7 @@ export class ShowsService {
    */
   async findByParkId(parkId: string): Promise<Show[]> {
     return this.showRepository.find({
-      where: { parkId },
+      where: { parkId, retiredAt: IsNull() },
       relations: ["park", "park.destination"],
       order: { name: "ASC" },
     });
@@ -247,6 +261,7 @@ export class ShowsService {
     parkId: string,
     showSlug: string,
   ): Promise<Show | null> {
+    // See `findBySlug`: a lookup by name still finds a retired row.
     return this.showRepository.findOne({
       where: {
         parkId,
@@ -534,7 +549,12 @@ export class ShowsService {
         .createQueryBuilder("sld")
         .innerJoinAndSelect("sld.show", "linked_show")
         .leftJoinAndSelect("linked_show.park", "linked_park")
-        .where("sld.showId IN (:...showIds)", { showIds }),
+        .where("sld.showId IN (:...showIds)", { showIds })
+        // All three callers put this status in front of a visitor — the
+        // favorites list, the search result enrichment and the followed-show
+        // push. A retired show has left each of those surfaces already, so it
+        // must not come back through its live data.
+        .andWhere("linked_show.retiredAt IS NULL"),
       "sld",
       "showId",
     ).getMany();

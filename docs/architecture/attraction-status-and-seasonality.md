@@ -935,14 +935,16 @@ why the marker is an exact string rather than a prefix. The string is also
 attraction detail endpoint), so it reads as a sentence with its source and
 carries no issue numbers or file paths.
 
-**What comes back is the row, not its data supply.** The `shows` row keeps
-existing (PAR-232), and `WaitTimesProcessor` builds its entity lookup with the
-shows after the attractions, so `themeparks-wiki:<externalId>` still resolves to
-the show — the un-retired attraction goes straight back to collecting
-`system-reconciliation` CLOSED rows. That is no worse than the state this fix
-exists to remove, since a visible ride reading CLOSED beats one that silently
-disappeared, but it is not a full recovery. Clearing the orphaned show row is
-PAR-232's job.
+**The data supply comes back with the row, in the normal case.** The `shows`
+row keeps existing, and `WaitTimesProcessor` builds its entity lookup with the
+shows after the attractions, so an un-retired attraction used to lose
+`themeparks-wiki:<externalId>` to the stale show and go straight back to
+collecting `system-reconciliation` CLOSED rows. §5.7 closes that from both ends:
+the show is retired in the same pass, and the lookup skips retired rows. What
+remains is the row a second source claims, which
+`withoutForeignSourceMappings` holds back on purpose — there the shadowing is
+the lesser evil, because the alternative is retiring a row another feed is
+still filling.
 
 **The protection runs one way.** A retirement a human entered survives every
 run, because its reason is not one the sync wrote. An un-retirement entered by
@@ -987,11 +989,45 @@ reason, with the entity URL in it, rather than the constant. They were an admin
 write, so the sync treats them the way it treats any human retirement: it will
 not lift them. That is the intended reading, not an oversight.
 
-The reverse direction is handled **only on the attraction side**. When an entity
-moves the other way, the row it leaves behind in `shows` or `restaurants` stays
-there, because neither table has a `retired_at` column to set (PAR-232). It is
-not observed in production either — all 34 collisions run one way, and
-`restaurants` has none.
+### 5.7 · The other direction, `SHOW`/`RESTAURANT` -> `ATTRACTION`
+
+Both tables now carry `retired_at` / `retired_reason`, nullable and with the
+same partial index on `retired_at IS NULL`, and
+`retireReclassifiedChildEntities` runs straight after its attraction-side twin
+in the same pass. A show whose entity the wiki now calls an `ATTRACTION` is
+retired with `RECLASSIFIED_AS_ATTRACTION_REASON`; `syncShow` and
+`syncRestaurant` lift exactly that reason again, and nothing else.
+
+**The two are not each other's undo.** Each direction excludes the ids that
+arrived under the other type in the same `/children` response, so a payload
+listing one entity twice cannot make the pair retire and un-retire each other
+every run.
+
+**Three differences from the attraction side, all deliberate:**
+
+- **The way back is not park-scoped.** `syncShow` looks a row up by
+  `externalId` alone, which is unique across the whole table, so a child entity
+  that moved parks upstream is still found and un-retired — where an attraction
+  in the same position is not, because `syncAttraction` is park-scoped. It
+  comes back under its **old** `parkId` either way: neither sync method moves
+  that column, so such a row reappears in the wrong park's payload and still
+  has to be moved by hand.
+- **The second-source guard is inert today, and that is measured rather than
+  assumed.** `external_entity_mapping` held 5,486 `queue-times` and 1,295
+  `wartezeiten-app` rows against `internal_entity_type = 'attraction'` on
+  2026-09-16, and **zero** against `'show'` or `'restaurant'`. `show_live_data`
+  has no `data_source` column at all, because the wiki is its only feeder. The
+  check is kept because it is structural and starts working by itself the day a
+  second source claims a show — not because it is holding anything back now.
+- **There is no retirement service.** The attraction side has one because the
+  admin endpoints write there too; here the sync is the only writer, so the
+  eviction and revalidation hang off the write itself.
+
+This direction is **not observed in production**: all 34 collisions measured on
+2026-09-15 run from `ATTRACTION` to `SHOW`, and `restaurants` has none. The
+column is what makes the repair possible when it does happen, and what stops a
+reclassified show from standing in the park payload beside its own
+replacement.
 
 ---
 

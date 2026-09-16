@@ -144,12 +144,20 @@ export class WaitTimesProcessor {
                   where: { parkId: park.id, retiredAt: IsNull() },
                   select: ["id", "externalId", "name"],
                 }),
+                // Same rule, and here it decides who gets the live data. The
+                // lookup is keyed on `<source>:<externalId>` and the shows go
+                // in AFTER the attractions, so a show the wiki has since
+                // reclassified as a ride would keep overwriting the key of the
+                // attraction row that replaced it — leaving the replacement
+                // with no readings at all and a permanent
+                // `system-reconciliation` CLOSED series. A retired row does
+                // not speak for its entity any more.
                 this.showsService.getRepository().find({
-                  where: { parkId: park.id },
+                  where: { parkId: park.id, retiredAt: IsNull() },
                   select: ["id", "externalId", "name"],
                 }),
                 this.restaurantsService.getRepository().find({
-                  where: { parkId: park.id },
+                  where: { parkId: park.id, retiredAt: IsNull() },
                   select: ["id", "externalId", "name"],
                 }),
               ]);

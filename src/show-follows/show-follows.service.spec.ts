@@ -39,15 +39,43 @@ describe("ShowFollowsService", () => {
         "show-2",
         { id: "show-2", name: "Orphaned", park: null } as unknown as Show,
       ],
+      [
+        "show-retired",
+        {
+          id: "show-retired",
+          name: "Waterworld",
+          park: { id: "park-1" },
+          retiredAt: new Date("2026-09-15T00:00:00.000Z"),
+        } as Show,
+      ],
     ]);
 
     followRepo = {
-      find: jest.fn(async (opts?: { where?: { subscriptionId?: string } }) =>
-        [...followRows.values()].filter(
-          (row) =>
-            !opts?.where?.subscriptionId ||
-            row.subscriptionId === opts.where.subscriptionId,
-        ),
+      find: jest.fn(
+        async (opts?: {
+          where?: {
+            subscriptionId?: string;
+            show?: { retiredAt?: unknown };
+          };
+        }) =>
+          [...followRows.values()].filter((row) => {
+            if (
+              opts?.where?.subscriptionId &&
+              row.subscriptionId !== opts.where.subscriptionId
+            ) {
+              return false;
+            }
+            // Stands in for the `WHERE shows.retired_at IS NULL` the real
+            // query adds to its LEFT JOIN. Stricter in one spot: a follow
+            // whose show row is missing is dropped here and kept there. The
+            // FK is NOT NULL with ON DELETE CASCADE, so that row cannot
+            // exist, and no case seeds one.
+            if (opts?.where?.show?.retiredAt !== undefined) {
+              const show = showRows.get(row.showId);
+              if (!show || show.retiredAt != null) return false;
+            }
+            return true;
+          }),
       ),
       findOne: jest.fn(
         async (opts: { where: { subscriptionId: string; showId: string } }) => {
@@ -177,10 +205,19 @@ describe("ShowFollowsService", () => {
       }),
     };
 
+    // Both fakes honour a `retiredAt: IsNull()` condition. Without that they
+    // would answer the same for a retired row as for a live one, and every
+    // assertion about retirement below would be green for the wrong reason.
     const showRepo = {
       findOne: jest.fn(
-        async (opts: { where: { id: string } }) =>
-          showRows.get(opts.where.id) ?? null,
+        async (opts: { where: { id: string; retiredAt?: unknown } }) => {
+          const row = showRows.get(opts.where.id) ?? null;
+          if (!row) return null;
+          if (opts.where.retiredAt !== undefined && row.retiredAt != null) {
+            return null;
+          }
+          return row;
+        },
       ),
     };
 
@@ -251,6 +288,34 @@ describe("ShowFollowsService", () => {
     const list = await service.listForSubscription("sub-1");
     expect(list).toHaveLength(1);
     expect(list[0].subscriptionId).toBe("sub-1");
+  });
+
+  it("refuses to follow a retired show", async () => {
+    expect(await service.findShowForFollow("show-retired")).toBeNull();
+  });
+
+  it("leaves a retired show out of the subscription's list", async () => {
+    // The row stays; only the rendering drops it. `GET /v1/push/show-follows`
+    // would otherwise offer a name, slug and park link for something that has
+    // stopped existing — and that is already silent one layer down.
+    await service.upsert("sub-1", "show-1", null);
+    await service.upsert("sub-1", "show-retired", null);
+
+    const list = await service.listForSubscription("sub-1");
+
+    expect(list.map((row) => row.showId)).toEqual(["show-1"]);
+    expect(await service.countForSubscription("sub-1")).toBe(2);
+  });
+
+  it("lists that same show once it is not retired any more", async () => {
+    // The counter-check: identical fixture, only `retiredAt` taken back. The
+    // case above would pass just as well if the row had never been stored.
+    showRows.get("show-retired")!.retiredAt = null;
+    await service.upsert("sub-1", "show-retired", null);
+
+    const list = await service.listForSubscription("sub-1");
+
+    expect(list.map((row) => row.showId)).toEqual(["show-retired"]);
   });
 
   it("counts per-subscription independently of other subscriptions' follows", async () => {

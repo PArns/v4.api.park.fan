@@ -643,7 +643,10 @@ export class QueuePercentileProcessor {
           slu."showId",
           COUNT(DISTINCT pod.open_day) as stale_open_days
         FROM show_last_updated slu
-        JOIN shows s ON s.id = slu."showId"
+        -- A retired show stops receiving readings by construction, so it would
+        -- look "stale" to this detector and be handed a season it never had.
+        -- The attraction side guards the same trap in step 2c.
+        JOIN shows s ON s.id = slu."showId" AND s.retired_at IS NULL
         JOIN parks p ON p.id = s."parkId"
         JOIN park_open_days pod ON pod."parkId" = s."parkId"
           AND pod.open_day > DATE(slu."lastUpdated" AT TIME ZONE p.timezone)

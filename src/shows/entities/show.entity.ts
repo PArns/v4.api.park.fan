@@ -76,6 +76,36 @@ export class Show {
   @Column({ name: "season_months", type: "jsonb", nullable: true })
   seasonMonths: number[] | null;
 
+  /**
+   * When this show stopped existing. Null means it is still around.
+   *
+   * The mirror of `Attraction.retiredAt`, and it exists for the same reason:
+   * an entity that has gone away is not "closed today" and not "unknown"
+   * either — both of those describe a state it could come back from. Without
+   * this column a show whose entity ThemeParks.wiki reclassified as an
+   * `ATTRACTION` kept a second, permanent row here while the attractions table
+   * grew the real one.
+   *
+   * The row and its `show_live_data` are deliberately KEPT: the showtime
+   * history stays readable. What retirement changes is visibility — a retired
+   * show leaves the park payload, search, favorites and follows, while its own
+   * detail endpoint keeps answering.
+   *
+   * **Two writers, told apart by `retiredReason`**, exactly as on the
+   * attraction side: a reason this sync wrote is lifted again the moment the
+   * wiki calls the entity a `SHOW`, and anything else survives every run.
+   */
+  @Column({ name: "retired_at", type: "timestamptz", nullable: true })
+  @Index("idx_show_retired_at", { where: "retired_at IS NULL" })
+  retiredAt: Date | null;
+
+  /**
+   * Why, and on whose authority — the source URL belongs in here. A retirement
+   * is a claim about the world, so it travels with its evidence.
+   */
+  @Column({ name: "retired_reason", type: "text", nullable: true })
+  retiredReason: string | null;
+
   @OneToMany(() => ShowLiveData, (liveData) => liveData.show)
   liveData: ShowLiveData[];
 

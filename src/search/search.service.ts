@@ -833,10 +833,16 @@ export class SearchService implements OnModuleInit {
   > {
     const normalizedQuery = query.replace(/[^a-zA-Z0-9]/g, "");
 
+    // `where` before the brackets below, which use `andWhere`: a retired row
+    // leaves search, the same way it leaves the park payload. The workspace
+    // totals in `AnalyticsService.getCachedCount` still count it — they are a
+    // row count of the database, not a description of one park, and the
+    // attraction side counts its retired rows there too.
     return this.showRepository
       .createQueryBuilder("show")
       .leftJoinAndSelect("show.park", "park")
       .leftJoinAndSelect("park.destination", "destination")
+      .where("show.retiredAt IS NULL")
       .select([
         "show.id",
         "show.slug",
@@ -861,7 +867,7 @@ export class SearchService implements OnModuleInit {
         "destination.id",
         "destination.name",
       ])
-      .where(
+      .andWhere(
         new Brackets((qb) => {
           // Index-only WHERE — see searchParks comment.
           qb.where("show.name ILIKE :likeQuery", {
@@ -927,10 +933,13 @@ export class SearchService implements OnModuleInit {
   > {
     const normalizedQuery = query.replace(/[^a-zA-Z0-9]/g, "");
 
+    // See `searchShows`: retired rows leave search, and this `where` has to
+    // come before the `andWhere` brackets below.
     return this.restaurantRepository
       .createQueryBuilder("restaurant")
       .leftJoinAndSelect("restaurant.park", "park")
       .leftJoinAndSelect("park.destination", "destination")
+      .where("restaurant.retiredAt IS NULL")
       .select([
         "restaurant.id",
         "restaurant.slug",
@@ -955,7 +964,7 @@ export class SearchService implements OnModuleInit {
         "destination.id",
         "destination.name",
       ])
-      .where(
+      .andWhere(
         new Brackets((qb) => {
           // Index-only WHERE — see searchParks comment.
           qb.where("restaurant.name ILIKE :likeQuery", {
@@ -1823,8 +1832,9 @@ export class SearchService implements OnModuleInit {
       );
       await pipeline.exec();
 
-      // The index loaders are unbounded full-table reads (there is no
-      // active/deleted flag to filter on), so watch the serialized size:
+      // The index loaders are effectively unbounded full-table reads — the
+      // show and restaurant ones skip retired rows, the attraction one does
+      // not yet — so watch the serialized size:
       // past this threshold the JSON round-trip and in-memory index start
       // to hurt boot/refresh latency and a bounded strategy is needed.
       const totalBytes =
@@ -1942,10 +1952,15 @@ export class SearchService implements OnModuleInit {
   }
 
   private async loadShowIndexFromDb(): Promise<ShowIndexEntry[]> {
+    // The in-process index is a second reader of the same rows, and it
+    // outlives a single request: a retired row let in here keeps being served
+    // from Redis until the next rebuild, long after the SQL path above
+    // stopped returning it.
     const rows = await this.showRepository
       .createQueryBuilder("show")
       .leftJoinAndSelect("show.park", "park")
       .leftJoinAndSelect("park.destination", "destination")
+      .where("show.retiredAt IS NULL")
       .select([
         "show.id",
         "show.slug",
@@ -1980,10 +1995,12 @@ export class SearchService implements OnModuleInit {
   }
 
   private async loadRestaurantIndexFromDb(): Promise<RestaurantIndexEntry[]> {
+    // See `loadShowIndexFromDb`: the index outlives the request.
     const rows = await this.restaurantRepository
       .createQueryBuilder("restaurant")
       .leftJoinAndSelect("restaurant.park", "park")
       .leftJoinAndSelect("park.destination", "destination")
+      .where("restaurant.retiredAt IS NULL")
       .select([
         "restaurant.id",
         "restaurant.slug",

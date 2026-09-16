@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import {
   Repository,
   Between,
+  IsNull,
   LessThanOrEqual,
   MoreThanOrEqual,
   In,
@@ -174,6 +175,7 @@ export class RestaurantsService {
    */
   async findAll(): Promise<Restaurant[]> {
     return this.restaurantRepository.find({
+      where: { retiredAt: IsNull() },
       relations: ["park"],
       order: { name: "ASC" },
     });
@@ -192,7 +194,8 @@ export class RestaurantsService {
   }): Promise<{ data: Restaurant[]; total: number }> {
     const queryBuilder = this.restaurantRepository
       .createQueryBuilder("restaurant")
-      .leftJoinAndSelect("restaurant.park", "park");
+      .leftJoinAndSelect("restaurant.park", "park")
+      .where("restaurant.retiredAt IS NULL");
 
     // Filter by park slug
     if (filters.park) {
@@ -241,6 +244,12 @@ export class RestaurantsService {
    * Finds restaurant by slug
    */
   async findBySlug(slug: string): Promise<Restaurant | null> {
+    // NOT filtered, matching `AttractionsService.findBySlug`: a retired row
+    // leaves the lists that describe the park as it is today, while a lookup
+    // of one named row still finds it, so its history stays readable. No
+    // controller reaches this today — restaurants are served through the park
+    // payload — so the rule is set here by parity, before a route exists that
+    // would have to decide it in a hurry.
     return this.restaurantRepository.findOne({
       where: { slug },
       relations: ["park", "park.destination"],
@@ -257,7 +266,7 @@ export class RestaurantsService {
    */
   async findByParkId(parkId: string): Promise<Restaurant[]> {
     return this.restaurantRepository.find({
-      where: { parkId },
+      where: { parkId, retiredAt: IsNull() },
       relations: ["park", "park.destination"],
       order: { name: "ASC" },
     });
@@ -276,6 +285,7 @@ export class RestaurantsService {
     parkId: string,
     restaurantSlug: string,
   ): Promise<Restaurant | null> {
+    // See `findBySlug`: a lookup by name still finds a retired row.
     return this.restaurantRepository.findOne({
       where: {
         parkId,
