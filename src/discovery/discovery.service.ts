@@ -89,9 +89,10 @@ export const LIVE_STATS_SQL = `
         -- last-seen key is under STALE_THRESHOLD_MS (24h). A retired ride is
         -- therefore eligible to be lifted back into this 30-minute window for
         -- up to a day after its final sighting. Measured on 2026-09-16: no
-        -- such row exists in retention (0 heartbeat rows for any retired
-        -- attraction), so the gap is open by construction rather than
-        -- observed — which is exactly why the count should not depend on it.
+        -- heartbeat row exists anywhere in retention that was written AFTER a
+        -- retirement, so the gap is open by construction rather than observed
+        -- — which is exactly why the count should not depend on it. Filed as
+        -- PAR-295.
         WHERE a.retired_at IS NULL
       ),
       park_stats AS (

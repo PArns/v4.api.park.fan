@@ -201,9 +201,11 @@ describe("SearchController (E2E)", () => {
    * filtering only one leaves the other serving the row: the index outlives
    * the request and keeps answering until the next rebuild.
    *
-   * Each case proves the row is REACHABLE first and only then proves it is
-   * gone (G-44) — an assertion that something is absent passes just as well
-   * when the query never looked at it.
+   * The two filtering cases prove the row is REACHABLE first and only then
+   * prove it is gone (G-44) — an assertion that something is absent passes
+   * just as well when the query never looked at it. The third case is the
+   * counterweight rather than a filtering case: it pins that retirement
+   * changes visibility and not existence.
    */
   describe("GET /v1/search — retired attractions", () => {
     // Both parks get a Splash Mountain, so one can be retired while the other

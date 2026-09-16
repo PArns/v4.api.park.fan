@@ -55,7 +55,7 @@ describe("LIVE_STATS_SQL — retired attractions (E2E)", () => {
   /**
    * A reading inside the CTE's 30-minute window. That window is the only way
    * into `latest_attraction_data`, and therefore the only way to reach the
-   * predicate that guards `operatingAttractions` / `closedAttractions`.
+   * predicate behind `closedAttractions`.
    */
   async function addReading(attractionId: string, status: LiveStatus) {
     // Built here rather than via `test/fixtures/queue-data.fixtures.ts`:
@@ -150,9 +150,16 @@ describe("LIVE_STATS_SQL — retired attractions (E2E)", () => {
    * exist because that is exactly what the first draft of this file did.
    *
    * Getting in needs a reading inside the CTE's 30-minute window, which is
-   * also the real-world shape of the bug: `WaitTimesProcessor` stops writing
-   * at the retirement, so a just-retired ride keeps its last reading — and
-   * with it its place in the counts — until that window slides past.
+   * also the real-world shape of the bug: a just-retired ride keeps its last
+   * reading, and with it its place in the counts, until that window slides
+   * past — and `writeHourlyHeartbeats` can push it back in, because that job
+   * reads every attraction without a `retiredAt` predicate (PAR-295).
+   *
+   * `explicitly_closed_count` is the column with a reader: `hydrateStructure`
+   * serves it as `closedAttractions` and derives `operatingAttractions` from
+   * `totalAttractions - explicitlyClosedCount`. `operating_conf_count` is
+   * asserted here as well because it is the CTE's other output, but it is
+   * parsed into `ParkLiveStats` and never read (noted on PAR-296).
    */
   it("stops counting a just-retired ride as operating", async () => {
     const seeded = await seedMinimalTestData(app);

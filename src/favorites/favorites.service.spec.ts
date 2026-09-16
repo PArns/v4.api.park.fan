@@ -460,8 +460,10 @@ describe("FavoritesService", () => {
       // at all, rather than returning a canned empty list — a canned `[]`
       // passes just as well with the predicate deleted, which is no test.
       // It does not interpret the operator: `Not(IsNull())` would read the
-      // same to it. Distinguishing operators is what the E2E specs do against
-      // a real database; this one pins that the favorites path asks.
+      // same to it. That is the sibling case above, which compares against
+      // `IsNull()` and so rejects the wrong operator structurally. Favorites
+      // has no E2E of its own; between these two the unit level covers that
+      // the path asks, and asks for the right thing.
       const retiredRow = {
         id: validAttractionUuid,
         name: "Dino-Sue",

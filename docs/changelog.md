@@ -35,7 +35,10 @@ nothing. The gap was documented, not overlooked.
 
 `LIVE_STATS_SQL` likewise reads attractions twice: the `total_attractions`
 subquery behind `attractionCount`, and the `latest_attraction_data` CTE behind
-`operatingAttractions` and `closedAttractions`.
+`closedAttractions` — and so behind `operatingAttractions` too, which
+`hydrateStructure` derives as `totalAttractions - explicitlyClosedCount` rather
+than from the CTE's own `operating_conf_count`. That column is parsed into
+`ParkLiveStats` and never read by anything (noted on PAR-296).
 
 The CTE's predicate is not redundant with the write side, which is what the
 first draft of this entry claimed. Polling and reverse-reconciliation do skip
