@@ -834,8 +834,10 @@ export class SearchService implements OnModuleInit {
     const normalizedQuery = query.replace(/[^a-zA-Z0-9]/g, "");
 
     // `where` before the brackets below, which use `andWhere`: a retired row
-    // is absent from listings, counts and search — the same promise the
-    // attraction side makes, kept on the same surface.
+    // leaves search, the same way it leaves the park payload. The workspace
+    // totals in `AnalyticsService.getCachedCount` still count it — they are a
+    // row count of the database, not a description of one park, and the
+    // attraction side counts its retired rows there too.
     return this.showRepository
       .createQueryBuilder("show")
       .leftJoinAndSelect("show.park", "park")
@@ -1830,8 +1832,8 @@ export class SearchService implements OnModuleInit {
       );
       await pipeline.exec();
 
-      // The index loaders are unbounded full-table reads (there is no
-      // active/deleted flag to filter on), so watch the serialized size:
+      // The index loaders read the full table minus retired rows, which is
+      // not a bound worth counting on, so watch the serialized size:
       // past this threshold the JSON round-trip and in-memory index start
       // to hurt boot/refresh latency and a bounded strategy is needed.
       const totalBytes =

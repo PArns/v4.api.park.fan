@@ -25,6 +25,11 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
     save: jest.fn(),
   };
   const retirementService = { retire: jest.fn(), unretire: jest.fn() };
+  const childEntityRepo = {
+    find: jest.fn().mockResolvedValue([]),
+    update: jest.fn(),
+    findOne: jest.fn().mockResolvedValue(null),
+  };
   const mappingRepository = { find: jest.fn(), findOne: jest.fn() };
   const themeParksMapper = { mapAttraction: jest.fn() };
 
@@ -46,11 +51,17 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
     // No candidate is claimed by another source unless a test says so.
     mappingRepository.find.mockResolvedValue([]);
     mappingRepository.findOne.mockResolvedValue(null);
+    childEntityRepo.find.mockResolvedValue([]);
+    childEntityRepo.findOne.mockResolvedValue(null);
     processor = new ChildrenMetadataProcessor(
       { getRepository: () => attractionRepo } as any,
       retirementService as any,
-      { getRepository: () => ({}) } as any,
-      { getRepository: () => ({}) } as any,
+      // `find`/`update` are stubbed because the sibling direction
+      // (`retireReclassifiedChildEntities`) runs in the same pass. Without
+      // them it throws a TypeError into its own catch and the wiring cases
+      // below would pass while that branch never ran.
+      { getRepository: () => childEntityRepo } as any,
+      { getRepository: () => childEntityRepo } as any,
       {} as any,
       {} as any,
       themeParksMapper as any,

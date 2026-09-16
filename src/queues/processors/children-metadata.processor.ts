@@ -637,8 +637,11 @@ export class ChildrenMetadataProcessor {
       // run and every one after it.
       //
       // Unlike `syncAttraction`, the way back is NOT park-scoped: the lookup
-      // above is by `externalId`, which is unique across the whole table. A
-      // show that moved parks upstream therefore comes back by itself.
+      // above is by `externalId`, which is unique across the whole table, so
+      // the row is found whichever park's `/children` carried the id. It
+      // comes back under its OLD park, though — the update above does not
+      // move `parkId` — so a row whose park changed upstream un-retires into
+      // the wrong park's payload and still needs moving by hand.
       if (isReclassifiedAsAttractionReason(existing.retiredReason)) {
         await this.unretireChildEntity("show", existing.id, existing.parkId);
       }
@@ -792,6 +795,12 @@ export class ChildrenMetadataProcessor {
    * retires a show whose entity became an ATTRACTION. Each entity is excluded
    * from the other's candidate list in the same response, so a `/children`
    * payload listing one id under both types cannot make the pair fight.
+   * That exclusion is per response: were the wiki ever to list the same id
+   * under two different PARKS, one as an ATTRACTION and one as a SHOW, the
+   * two directions would retire and un-retire it once per run, evicting
+   * caches each time. Not observed, and `externalId` being unique per table
+   * means the row itself cannot be duplicated — but it is the shape of the
+   * failure if it ever is.
    *
    * One neighbouring job had to learn that a retirement can be temporary:
    * `detect-seasonal` cleared `is_seasonal` and `season_months` for every

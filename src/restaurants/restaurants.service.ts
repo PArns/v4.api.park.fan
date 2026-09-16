@@ -244,8 +244,11 @@ export class RestaurantsService {
    * Finds restaurant by slug
    */
   async findBySlug(slug: string): Promise<Restaurant | null> {
+    // NOT filtered, matching `AttractionsService.findBySlug`: a retired row
+    // leaves the lists that describe the park as it is today, and keeps
+    // answering on its own detail route so its history stays readable.
     return this.restaurantRepository.findOne({
-      where: { slug, retiredAt: IsNull() },
+      where: { slug },
       relations: ["park", "park.destination"],
     });
   }
@@ -279,11 +282,11 @@ export class RestaurantsService {
     parkId: string,
     restaurantSlug: string,
   ): Promise<Restaurant | null> {
+    // See `findBySlug`: the detail route keeps answering.
     return this.restaurantRepository.findOne({
       where: {
         parkId,
         slug: restaurantSlug,
-        retiredAt: IsNull(),
       },
       relations: ["park", "park.destination"],
     });

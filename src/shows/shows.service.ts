@@ -220,8 +220,11 @@ export class ShowsService {
    * Finds show by slug
    */
   async findBySlug(slug: string): Promise<Show | null> {
+    // NOT filtered, matching `AttractionsService.findBySlug`: a retired row
+    // leaves the lists that describe the park as it is today, and keeps
+    // answering on its own detail route so its history stays readable.
     return this.showRepository.findOne({
-      where: { slug, retiredAt: IsNull() },
+      where: { slug },
       relations: ["park", "park.destination"],
     });
   }
@@ -255,11 +258,11 @@ export class ShowsService {
     parkId: string,
     showSlug: string,
   ): Promise<Show | null> {
+    // See `findBySlug`: the detail route keeps answering for a retired show.
     return this.showRepository.findOne({
       where: {
         parkId,
         slug: showSlug,
-        retiredAt: IsNull(),
       },
       relations: ["park", "park.destination"],
     });

@@ -276,6 +276,67 @@ describe("ChildrenMetadataProcessor — entities reclassified as attractions", (
     });
   });
 
+  /**
+   * The cases above call the method directly, so they say nothing about which
+   * ids it is handed. Swapping the two lists at the call site — passing the
+   * shows instead of the attractions — would retire every show a park
+   * publishes and leave all the direct cases green.
+   */
+  describe("wired into the children sync", () => {
+    const wire = (children: any[]) => {
+      jest
+        .spyOn(processor as any, "syncAttraction")
+        .mockResolvedValue(undefined);
+      jest.spyOn(processor as any, "syncShow").mockResolvedValue(undefined);
+      jest
+        .spyOn(processor as any, "syncRestaurant")
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(processor as any, "retireReclassifiedAttractions")
+        .mockResolvedValue(undefined);
+      (processor as any).parksService = {
+        findAll: jest
+          .fn()
+          .mockResolvedValue([
+            { id: "park-uss", name: parkName, wikiEntityId: "wiki-uss" },
+          ]),
+      };
+      (processor as any).themeParksClient = {
+        getEntityChildren: jest.fn().mockResolvedValue({ children }),
+      };
+      (processor as any).entityMappingsQueue = { add: jest.fn() };
+      return jest
+        .spyOn(processor as any, "retireReclassifiedChildEntities")
+        .mockResolvedValue(undefined);
+    };
+
+    it("hands over the attraction ids, and not the show or restaurant ones", async () => {
+      const spy = wire([
+        { id: "att-1", entityType: "ATTRACTION", name: "Battlestar Galactica" },
+        { id: "show-1", entityType: "SHOW", name: "Sesame Street" },
+        { id: "rest-1", entityType: "RESTAURANT", name: "Mel's Drive-In" },
+      ]);
+
+      await processor.handleFetchChildren({} as any);
+
+      expect(spy).toHaveBeenCalledWith(parkName, ["att-1"]);
+    });
+
+    it("skips an id that also arrived as a SHOW in the same response", async () => {
+      // The ping-pong guard. Without it the row would flip between retired
+      // and not on every run, evicting the park's caches each time.
+      const spy = wire([
+        { id: "both", entityType: "ATTRACTION", name: "Sesame Street" },
+        { id: "both", entityType: "SHOW", name: "Sesame Street" },
+        { id: "ride-only", entityType: "ATTRACTION", name: "Accelerator" },
+      ]);
+
+      await processor.handleFetchChildren({} as any);
+
+      expect(spy).toHaveBeenCalledWith(parkName, ["ride-only"]);
+    });
+  });
+
   describe("the marker string", () => {
     it("reads as a user-facing sentence with its source", () => {
       // It is served on the public detail endpoint, so it carries no issue
