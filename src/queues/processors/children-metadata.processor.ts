@@ -889,7 +889,9 @@ export class ChildrenMetadataProcessor {
    * lookup would miss a row whose park changed upstream. The way back is not
    * park-scoped either here: `syncShow` and `syncRestaurant` both look a row
    * up by `externalId` alone, so unlike an attraction, a child entity that
-   * moved parks upstream still un-retires itself.
+   * moved parks upstream is still found and un-retired. It comes back under
+   * its OLD `parkId` — neither sync method moves that column — so the row
+   * reappears in the wrong park's payload and has to be moved by hand.
    *
    * **The second-source guard is kept, and it holds nobody back today.** On
    * the attraction side it is load-bearing: `external_entity_mapping` carries

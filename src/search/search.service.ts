@@ -1832,8 +1832,9 @@ export class SearchService implements OnModuleInit {
       );
       await pipeline.exec();
 
-      // The index loaders read the full table minus retired rows, which is
-      // not a bound worth counting on, so watch the serialized size:
+      // The index loaders are effectively unbounded full-table reads — the
+      // show and restaurant ones skip retired rows, the attraction one does
+      // not yet — so watch the serialized size:
       // past this threshold the JSON round-trip and in-memory index start
       // to hurt boot/refresh latency and a bounded strategy is needed.
       const totalBytes =

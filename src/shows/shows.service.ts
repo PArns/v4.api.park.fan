@@ -221,8 +221,11 @@ export class ShowsService {
    */
   async findBySlug(slug: string): Promise<Show | null> {
     // NOT filtered, matching `AttractionsService.findBySlug`: a retired row
-    // leaves the lists that describe the park as it is today, and keeps
-    // answering on its own detail route so its history stays readable.
+    // leaves the lists that describe the park as it is today, while a lookup
+    // of one named row still finds it, so its history stays readable. No
+    // controller reaches this today — shows are served through the park
+    // payload — so the rule is set here by parity, before a route exists that
+    // would have to decide it in a hurry.
     return this.showRepository.findOne({
       where: { slug },
       relations: ["park", "park.destination"],
@@ -258,7 +261,7 @@ export class ShowsService {
     parkId: string,
     showSlug: string,
   ): Promise<Show | null> {
-    // See `findBySlug`: the detail route keeps answering for a retired show.
+    // See `findBySlug`: a lookup by name still finds a retired row.
     return this.showRepository.findOne({
       where: {
         parkId,

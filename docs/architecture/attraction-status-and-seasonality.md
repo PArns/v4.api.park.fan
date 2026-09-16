@@ -1004,8 +1004,11 @@ every run.
 
 - **The way back is not park-scoped.** `syncShow` looks a row up by
   `externalId` alone, which is unique across the whole table, so a child entity
-  that moved parks upstream un-retires itself. An attraction in the same
-  position does not, because `syncAttraction` is park-scoped.
+  that moved parks upstream is still found and un-retired — where an attraction
+  in the same position is not, because `syncAttraction` is park-scoped. It
+  comes back under its **old** `parkId` either way: neither sync method moves
+  that column, so such a row reappears in the wrong park's payload and still
+  has to be moved by hand.
 - **The second-source guard is inert today, and that is measured rather than
   assumed.** `external_entity_mapping` held 5,486 `queue-times` and 1,295
   `wartezeiten-app` rows against `internal_entity_type = 'attraction'` on

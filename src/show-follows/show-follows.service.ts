@@ -30,9 +30,9 @@ export class ShowFollowsService {
 
   async findShowForFollow(showId: string): Promise<ShowForFollow | null> {
     // A retired show cannot be followed: the follow would arm a notification
-    // for something that has stopped existing. This only guards new follows —
-    // an existing one stops firing a layer further on, where
-    // `findBatchCurrentStatusByShows` drops the retired row.
+    // for something that has stopped existing. This guards new follows; an
+    // existing one drops out of `listForSubscription` below and stops firing
+    // where `findBatchCurrentStatusByShows` drops the same row.
     const show = await this.showRepository.findOne({
       where: { id: showId, retiredAt: IsNull() },
       relations: { park: true },
@@ -119,10 +119,19 @@ export class ShowFollowsService {
     await this.repository.delete({ subscriptionId, showId });
   }
 
-  /** Every followed show for one subscription, with the show+park to render it. */
+  /**
+   * Every followed show for one subscription, with the show+park to render it.
+   *
+   * Retired shows are left out: `GET /v1/push/show-follows` renders each row's
+   * name, slug and park link, so an unfiltered list would offer a follow for
+   * something that has stopped existing — and one that is already silent,
+   * because `findBatchCurrentStatusByShows` drops the same row a layer down.
+   * The `show_follows` row itself is kept, so the follow comes back with the
+   * show if the wiki changes its mind.
+   */
   async listForSubscription(subscriptionId: string): Promise<ShowFollow[]> {
     return this.repository.find({
-      where: { subscriptionId },
+      where: { subscriptionId, show: { retiredAt: IsNull() } },
       relations: { show: { park: true } },
       order: { createdAt: "ASC" },
     });
