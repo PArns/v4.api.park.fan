@@ -590,10 +590,15 @@ export class PlanDayService {
    * uncleared litter, reaching 1,396 days back. Only 152 entries lead their own
    * snapshot at all, and 109 of those are performances past midnight
    * (00:00–05:30, Universal's late programme) that belong to the day they were
-   * published on — though nothing here unfolds them the way §5 unfolds opening
-   * hours, so `getShowtimesOnDate` does attribute them to the following day.
-   * That leaves 43 entries genuinely dated one or two days ahead, in two parks,
-   * from snapshots taken between 2025-12-23 and 2025-12-27 park-local, with no
+   * published on. `getShowtimesOnDate` now unfolds those the way §5 unfolds
+   * opening hours — but only where the previous day's PUBLISHED window covers
+   * them, and no Universal park publishes one that does: measured on
+   * 2026-09-15, zero of these entries fall inside their previous day's
+   * `OPERATING` hours, because Halloween Horror Nights runs as a
+   * `TICKETED_EVENT` the schedule only carries twice. The 20 showtimes the
+   * rule does move are at Disneyland Park and Magic Kingdom Park, all at 00:00
+   * (PAR-51). That leaves 43 entries genuinely dated one or two days ahead, in
+   * two parks, from snapshots taken 2025-12-23 to 2025-12-27 park-local, with no
    * successor in the eight months since. Three per million is not a horizon to
    * build on, so a planner asking about October gets nothing from the feed, and
    * `shows` was an empty array for every future date.
@@ -679,7 +684,12 @@ export class PlanDayService {
       });
     }
 
-    // Earliest first: a plan is read down the day.
+    // Earliest first: a plan is read down the day. The comparison is the wall
+    // clock, so on a day that runs past midnight a show whose ONLY time is the
+    // 00:00 one sorts to the top of a day it ends. Inside a single show the
+    // order is already right — `ShowsService.operatingDaySql` unfolds it there
+    // — but ordering two shows against each other needs the park's opening
+    // hour, which is this method's non-goal and PAR-241.
     return out.sort(
       (a, b) =>
         (a.times[0] ?? "").localeCompare(b.times[0] ?? "") ||

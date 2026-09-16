@@ -402,10 +402,36 @@ entry still being served sits **1,396 days** before the snapshot carrying it —
 The third row is not foresight either. Those are performances past midnight —
 Universal's late programme, `The Purge: Dangerous Waters` at 00:45,
 `Meet Snowball` at 04:30 — belonging to the operating day that published them,
-which only crosses a date boundary because the clock does. Note that we do
-**not** unfold them the way §5 unfolds opening hours: `getShowtimesOnDate` and
-the pattern rebuild both bucket a showtime by its own park-local calendar date,
-so such a performance is attributed to the following day.
+which only crosses a date boundary because the clock does.
+
+Those are now unfolded the way §5 unfolds opening hours, in both readers:
+`getShowtimesOnDate` and the pattern rebuild share one expression
+(`ShowsService.operatingDaySql`) that puts a showtime on the previous date when
+**that date's published `OPERATING` window still covers it**. The day and the
+weekday follow from it, and so does the order the times are listed in — a 00:30
+performance is the day's last, not its first.
+
+The rule reads a schedule and never guesses from the clock, which bounds it in a
+way worth stating, because the bound is the whole reason it is safe (measured
+2026-09-15, PAR-51):
+
+- **20 showtimes** actually move, 19 at Disneyland Park (Anaheim) and one at
+  Magic Kingdom Park, every one of them at exactly 00:00. That number is stable:
+  the performances sit in snapshots already taken.
+- **How many parks publish a wrap day is not** — 34 that evening, 36 twelve
+  hours earlier. Only 22 of the 34 sit on a date already past; the rest are
+  future dates the schedule sync rewrites whenever an operator revises its
+  hours. Quote the figure with the day it was read on, never as the size of the
+  set.
+- **None of Universal's do**, and they are the parks the 109 above come from.
+  Not one of their eight parks publishes an `OPERATING` day that crosses
+  midnight; Halloween Horror Nights runs as a `TICKETED_EVENT`, of which the
+  whole table holds two rows. Their 00:30 performances therefore stay on the
+  following date until a wrap day is published for them.
+- A blanket "before 06:00 belongs to yesterday" cutoff would be wrong in the
+  other direction: Universal Studios Japan serves `Ollivanders™`, a daytime
+  walkthrough, at 16:00 UTC — 01:00 the next morning in Tokyo — on 148 days.
+  Those parks publish no wrap day, so the expression leaves them alone.
 
 That leaves 43 entries — three per million, in two parks, from snapshots taken
 between 2025-12-23 and 2025-12-27 park-local, with no successor in the eight
@@ -480,6 +506,13 @@ can come back with a lone `scheduled` 04:30 entry for a show whose real
 programme is not known yet. Because `buildShows` prefers `scheduled` and stops
 there, that orphan also suppresses the projection for that one show. 109 entries
 in nine months, all at Universal — rare, but not never.
+
+**§8 removes that exception where a park publishes its late night, and only
+there.** A past-midnight performance is now read against the previous day's
+published `OPERATING` window, so it belongs to the day it ends rather than to
+the morning after. The paragraph above still describes Universal, because no
+Universal park publishes such a window — their late programme runs as a
+`TICKETED_EVENT`. It is the unfixed half of the case, not an unfixed case.
 
 **`projected` has no distance limit at all**, and a caller should know that. The
 freshness guard (`MAX_PATTERN_AGE_DAYS`) measures the pattern against *today*
