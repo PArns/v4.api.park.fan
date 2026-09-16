@@ -29,11 +29,22 @@
  * all 38 rides as OPERATING at `very_low` — "geöffnet, sehr wenig los" — while
  * each ride's own page served CLOSED off the same silence.
  *
- * Thirty days, because that is the window the reported case was measured in and
- * because it has to clear every ordinary gap by a wide margin: the longest
- * upstream outage this catalog has recovered from by itself is Busch Gardens
- * Tampa's 65 days (see `source-absent-status.util.ts`), and a seasonal park
- * reopening after the winter clears it with its first poll.
+ * Thirty days, and it is not compared against Busch Gardens Tampa's 65-day
+ * recovery in `source-absent-status.util.ts`: that was nine rides of a park
+ * whose feed kept working, and a subset is `findSilencedClusters`' subject, not
+ * this one. What matters here is the longest gap a WORKING feed leaves, and the
+ * answer is that there is no middle ground. Days since the last observed
+ * reading, per park with at least one un-retired attraction, measured
+ * 2026-09-16:
+ *
+ * | 0–1 | 2–30 | 31–90 | 90+ | never seen in 400 days |
+ * | -- | -- | -- | -- | -- |
+ * | 195 | **0** | 2 | 3 | 4 |
+ *
+ * Every park anyone is still reading answers within 48 hours, and the band
+ * between two days and a month is empty. Thirty sits in the middle of that gap
+ * at fifteen times the observed maximum, so a seasonal park reopening after the
+ * winter clears it with its first poll and no ordinary outage reaches it.
  *
  * `ParkIntegrationService` reads it; the rides of a silent park go to UNKNOWN,
  * the same place a park with no readable source sends them, and never reach the

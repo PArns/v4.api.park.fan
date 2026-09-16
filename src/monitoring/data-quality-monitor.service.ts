@@ -44,9 +44,26 @@ export interface ScheduledButSilentPark {
   attractionCount: number;
   /** Park-local date of the last observed reading, or null if there has never been one. */
   lastReading: string | null;
-  futureOperatingDays: number;
+  /** Operating days published inside `SILENT_PARK_LOOKAHEAD_DAYS`. */
+  operatingDaysAhead: number;
+  /** The last operating day on the calendar, however far out it runs. */
   lastScheduledDay: string;
 }
+
+/**
+ * How far ahead the schedule has to claim an operating day.
+ *
+ * A window rather than "any future day", because without one the detector is a
+ * seasonal-park alarm: a park shut for the winter with next summer already
+ * published has future operating days and an empty feed, and is neither a fault
+ * nor news. Seven days makes the report's claim the narrow one — *this park is
+ * supposed to be open this week and nobody is reading it.*
+ *
+ * Measured 2026-09-16: at 7, 30 and unbounded the query returns the same five
+ * parks, so the window costs nothing today and is the gate that keeps January
+ * from filling the log.
+ */
+export const SILENT_PARK_LOOKAHEAD_DAYS = 7;
 
 export interface FailingJob {
   queue: string;
@@ -189,9 +206,10 @@ export class DataQualityMonitorService {
    * where EVERY ride is silent fails that gate by construction, so the detector
    * built to find dropped feeds is blind to the largest drop there is.
    *
-   * What separates the two cases here is not the feed — it is the schedule. A
-   * park shut for the winter has no OPERATING day on the calendar either. A park
-   * with 349 future OPERATING days and no reading since June is an unresolved
+   * What separates the two cases here is not the feed — it is the schedule, read
+   * over the next `SILENT_PARK_LOOKAHEAD_DAYS`. A park shut for the winter is
+   * not scheduled open this week, whatever it has published for next summer. A
+   * park scheduled open tomorrow with no reading since June is an unresolved
    * contradiction between two of our own sources, and one of them is wrong.
    *
    * Found on 2026-09-16 (PAR-192): La Ronde, silent since 2026-06-24 with a
@@ -209,16 +227,18 @@ export class DataQualityMonitorService {
    * contradiction is still there, and five WARN lines a day is what it costs.
    *
    * @param minDaysSilent Days without an observed reading before a park counts.
+   * @param lookaheadDays How far ahead an operating day has to be published.
    */
   async findScheduledButSilentParks(
     minDaysSilent = PARK_FEED_SILENT_DAYS,
+    lookaheadDays = SILENT_PARK_LOOKAHEAD_DAYS,
   ): Promise<ScheduledButSilentPark[]> {
     const rows: Array<{
       park_id: string;
       park_name: string;
       n: string;
       last_reading: string | null;
-      future_days: string;
+      days_ahead: string;
       last_day: string;
     }> = await this.dataSource.query(
       `
@@ -231,15 +251,36 @@ export class DataQualityMonitorService {
       -- Future only. Today's entry is not enough on its own: a park can be
       -- scheduled open today and have nothing after it, which is a schedule
       -- running out rather than a schedule nobody can confirm.
+      --
+      -- attractionId IS NULL, because schedule_entries holds the park's own
+      -- opening hours and per-ride rows in the same table. Every other reader
+      -- of a park's hours filters it and there is a partial index for it
+      -- (idx_schedule_park_date_no_attraction); PAR-246 is what the same blind
+      -- key cost on the cleanup path. Production holds no future per-ride
+      -- OPERATING row today (0 of 10.853, measured 2026-09-16), so this is the
+      -- guard being right rather than the guard being needed.
+      --
+      -- count(DISTINCT se.date) for the neighbouring reason: the dedup jobs run
+      -- periodically, so two rows for one day are possible between passes and a
+      -- plain count(*) would report a park as open more days than the calendar
+      -- has.
       future_schedule AS (
         SELECT se."parkId",
-               count(*)::int AS future_days,
+               count(DISTINCT se.date) FILTER (
+                 WHERE se.date <= (now() AT TIME ZONE p.timezone)::date
+                                  + ($2::int * INTERVAL '1 day')
+               )::int AS days_ahead,
                max(se.date)::text AS last_day
           FROM schedule_entries se
           JOIN parks p ON p.id = se."parkId"
          WHERE se."scheduleType" = 'OPERATING'
+           AND se."attractionId" IS NULL
            AND se.date > (now() AT TIME ZONE p.timezone)::date
          GROUP BY 1
+        HAVING count(*) FILTER (
+                 WHERE se.date <= (now() AT TIME ZONE p.timezone)::date
+                                  + ($2::int * INTERVAL '1 day')
+               ) > 0
       ),
       -- Bounded on purpose, and the bound is what makes the NULL meaningful: a
       -- park with no row here has not been observed inside the window, which is
@@ -265,9 +306,10 @@ export class DataQualityMonitorService {
                 FROM queue_data qd2
                 JOIN attractions a2 ON a2.id = qd2."attractionId"
                WHERE a2."parkId" = p.id
+                 AND a2.retired_at IS NULL
                  AND qd2.timestamp > now() - INTERVAL '400 days'
                  AND COALESCE(${observedReadingsSql("qd2")}, true)) AS last_reading,
-             f.future_days::text AS future_days,
+             f.days_ahead::text AS days_ahead,
              f.last_day
         FROM future_schedule f
         JOIN parks p ON p.id = f."parkId"
@@ -276,7 +318,7 @@ export class DataQualityMonitorService {
        WHERE ls.ts IS NULL
        ORDER BY c.rides DESC
       `,
-      [minDaysSilent],
+      [minDaysSilent, lookaheadDays],
     );
 
     return rows.map((r) => ({
@@ -284,7 +326,7 @@ export class DataQualityMonitorService {
       parkName: r.park_name,
       attractionCount: Number(r.n),
       lastReading: r.last_reading,
-      futureOperatingDays: Number(r.future_days),
+      operatingDaysAhead: Number(r.days_ahead),
       lastScheduledDay: r.last_day,
     }));
   }

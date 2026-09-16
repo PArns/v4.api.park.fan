@@ -897,7 +897,10 @@ export class QueueDataService {
    * The cold number is paid once per pooled connection, not per request, and
    * `findCurrentStatusByPark` beside it in the same `Promise.all` is a
    * hypertable query of the same class — so this joins a band the park payload
-   * already pays, on a response cached for an hour.
+   * already pays. The response behind it is cached, but not for long while the
+   * probe matters: `calculateDynamicTTL` gives an OPERATING park the seconds to
+   * the next five-minute boundary, and OPERATING is the only state in which
+   * this changes an answer.
    */
   async hasObservedReadingWithin(
     parkId: string,

@@ -1346,9 +1346,17 @@ export class ParkIntegrationService {
     // aggregates above, so each of them is the shape a division by an empty set
     // takes rather than a reading: Ø 0 min, peak 0 min, and — because the closed
     // branch hard-codes it and the live branch has nothing to rate — `very_low`
-    // crowds, on a park that may be at capacity. The counts survive (the
-    // catalog is real, and 0 operating is true: none is *known* to run), the
-    // wait-derived claims do not.
+    // crowds, on a park that may be at capacity. `totalAttractions` survives —
+    // the catalog is real — and the wait-derived claims do not.
+    //
+    // `closedAttractions` joins them, and the reason is the sentence this
+    // comment used to carry: "0 operating is true, none is *known* to run".
+    // That defends `operatingAttractions`. Nothing defended the other half —
+    // the live branch computes it as `total - operating`, so an unreadable or
+    // silent park read "38 of 38 closed" under a park badge saying OPERATING,
+    // which is the "Park geöffnet, alle Bahnen zu" page `no-live-data-status`
+    // was written to stop, arrived at from the other direction. None of them is
+    // known to be closed either.
     if (dto.analytics && !waitTimesKnowable) {
       dto.analytics.statistics = {
         ...dto.analytics.statistics,
@@ -1357,6 +1365,8 @@ export class ParkIntegrationService {
         peakHourLocal: null,
         peakHourConfidence: 0,
         peakHourSource: null,
+        operatingAttractions: 0,
+        closedAttractions: 0,
       };
       // `percentiles` is a distribution over observed waits — of which there are
       // none — and the frontend renders it as a "typical day" chart.

@@ -1086,17 +1086,49 @@ PARK_FEED_SILENT_DAYS)` — a bounded `EXISTS` over `observedReadingsSql()`, so 
 own reconciliation and heartbeat rows cannot clear a park. Ride status,
 `crowdLevel`, best visit times and the park's wait statistics all read it, and a
 silent park's rides land on `UNKNOWN` — the same place a park with no readable
-source sends them. `liveWaitTimes.available` stays `true`: it is the frontend's
-contract for "publishes wait times nowhere" (§`live-wait-time-sources.ts`), and
-La Ronde published 7.307 rows through June.
+source sends them. `closedAttractions` went to 0 alongside `operatingAttractions`
+in that branch: "0 operating is true, none is *known* to run" defends one half
+and never defended the other, and `total - operating` served "38 of 38 closed"
+under an `OPERATING` badge, which is the same false page from the other
+direction. `liveWaitTimes.available` stays `true`: it is the frontend's contract
+for "publishes wait times nowhere" (`live-wait-time-sources.ts`), and La Ronde
+published 7.307 rows through June.
+
+**Thirty days, and the number it is measured against is not an incident.** Days
+since the last observed reading, per park with at least one un-retired
+attraction, 2026-09-16:
+
+| 0–1 | 2–30 | 31–90 | 90+ | never in 400 days |
+| -- | -- | -- | -- | -- |
+| 195 | **0** | 2 | 3 | 4 |
+
+Every park anyone is still reading answers inside 48 hours and the band between
+two days and a month is empty, so the threshold sits in a gap at fifteen times
+the observed maximum. Busch Gardens Tampa's 65-day recovery in §5.2a is *not*
+the comparison: that was nine rides of a park whose feed kept working, which is
+`findSilencedClusters`' subject and never reaches this rule.
 
 `DataQualityMonitorService.findScheduledButSilentParks()` reports the state
 nightly. It is the complement of `findSilencedClusters`, which cannot be widened
 to cover it: that detector's `park_health` CTE demands at least three attractions
 with an `OPERATING` reading in the last two days, precisely so a park closing for
 the season is not read as a dropped feed — and a park where everything is silent
-fails that gate by construction. What separates the two here is the **schedule**:
-a park shut for the winter has no future `OPERATING` day either.
+fails that gate by construction. What separates the two here is the **schedule**,
+read over the next `SILENT_PARK_LOOKAHEAD_DAYS` = 7 days. The window is what
+keeps this from being a seasonal-park alarm: a park shut for the winter with next
+summer already published has future operating days and an empty feed, and is
+neither a fault nor news. At 7, 30 and unbounded the query returns the same five
+parks on 2026-09-16, so the window costs nothing today and is the gate that keeps
+January out of the log.
+
+**What this change does not touch.** The ride's own endpoint
+(`AttractionIntegrationService`), the favourites list and `/location` still gate
+on `waitTimesReadable` alone, so a silent park's ride still answers `CLOSED` on
+its own page and still carries its hourly forecast. That is a narrower
+contradiction than the one removed — `UNKNOWN` against `CLOSED` rather than
+`OPERATING` against `CLOSED` — but it is one, and it is deliberately left for its
+own issue rather than widened into this one: each of those paths would need its
+own park-level probe.
 
 Measured against production on 2026-09-16. The detector runs in **1.2 s**. The
 per-request probe costs 1.8 ms at Europa-Park, where the first row
@@ -1105,12 +1137,18 @@ come back empty — behind **45 ms** of hypertable planning on a warm backend an
 **338 ms** on a cold one. The cold number is paid once per pooled connection
 rather than per request, and `findCurrentStatusByPark` beside it in the same
 `Promise.all` is a hypertable query of the same class, so the probe joins a band
-the park payload already pays, on a response cached for an hour.
+the park payload already pays. Not on an hourly cache, though:
+`calculateDynamicTTL` gives an `OPERATING` park the seconds to the next
+five-minute boundary, and `OPERATING` is the only state in which the probe
+changes an answer.
 
-**Open:** whether La Ronde's 349 published days stay or are cut back. The feed
-is not coming back on its own, and a schedule no measurement has confirmed since
-June is a claim about a park that nobody has checked. That is a decision about
-data, not code, and it is not made here.
+**Open:** whether La Ronde's 349 published days stay or are cut back. They are
+not a season — they are **every single calendar day** from 2026-09-17 to
+2027-08-31, 59 of them in January and February in Montréal, with no `CLOSED`
+entry anywhere in the range. The feed is not coming back on its own, and a
+calendar no measurement has confirmed since June is a claim about a park that
+nobody has checked. That is a decision about data, not code, and it is not made
+here.
 
 ---
 

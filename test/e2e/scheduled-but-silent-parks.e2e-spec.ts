@@ -1,6 +1,9 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { INestApplication } from "@nestjs/common";
+import request from "supertest";
+import type { Redis } from "ioredis";
 import { DataSource } from "typeorm";
+import { REDIS_CLIENT } from "../../src/common/redis/redis.module";
 import { AppModule } from "../../src/app.module";
 import { Park } from "../../src/parks/entities/park.entity";
 import { Attraction } from "../../src/attractions/entities/attraction.entity";
@@ -8,7 +11,10 @@ import {
   ScheduleEntry,
   ScheduleType,
 } from "../../src/parks/entities/schedule-entry.entity";
-import { DataQualityMonitorService } from "../../src/monitoring/data-quality-monitor.service";
+import {
+  DataQualityMonitorService,
+  SILENT_PARK_LOOKAHEAD_DAYS,
+} from "../../src/monitoring/data-quality-monitor.service";
 import { QueueDataService } from "../../src/queue-data/queue-data.service";
 import { PARK_FEED_SILENT_DAYS } from "../../src/common/utils/no-live-data-status.util";
 
@@ -37,6 +43,7 @@ describe("scheduled but silent parks (e2e)", () => {
   let dataSource: DataSource;
   let monitor: DataQualityMonitorService;
   let queueData: QueueDataService;
+  let redis: Redis;
 
   const TZ = "America/Toronto";
   const daysFromNow = (days: number): string =>
@@ -52,10 +59,11 @@ describe("scheduled but silent parks (e2e)", () => {
     new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(at);
 
   /**
-   * Two days rather than one, so `futureOperatingDays` is a count and not a
-   * constant a `count(*) = 1` bug would reproduce by accident.
+   * Two days rather than one, so `operatingDaysAhead` is a count and not a
+   * constant a `count(*) = 1` bug would reproduce by accident, and both inside
+   * `SILENT_PARK_LOOKAHEAD_DAYS` so the window is not what excludes them.
    */
-  const FUTURE_DAYS = [30, 60];
+  const FUTURE_DAYS = [2, 5];
   /**
    * The same shape in the past. A park with NO schedule row at all would drop
    * out of the join for a second reason, and the case below would stay green
@@ -67,7 +75,11 @@ describe("scheduled but silent parks (e2e)", () => {
   const seedPark = async (
     slug: string,
     rideCount: number,
-    opts: { scheduleDayOffsets: number[] },
+    opts: {
+      scheduleDayOffsets: number[];
+      openNow?: boolean;
+      timezone?: string;
+    },
   ): Promise<{ parkId: string; rideIds: string[] }> => {
     const park = await dataSource.getRepository(Park).save(
       dataSource.getRepository(Park).create({
@@ -76,7 +88,7 @@ describe("scheduled but silent parks (e2e)", () => {
         slug,
         latitude: 45.52,
         longitude: -73.53,
-        timezone: TZ,
+        timezone: opts.timezone ?? TZ,
         continent: "North America",
         continentSlug: "north-america",
         country: "Canada",
@@ -115,6 +127,18 @@ describe("scheduled but silent parks (e2e)", () => {
       );
     }
 
+    if (opts.openNow) {
+      // Gates opened ten minutes ago and close in eight hours, so the park reads
+      // OPERATING at whatever hour the suite runs — which is the only state in
+      // which the optimistic fallback is reached at all.
+      await dataSource.query(
+        `INSERT INTO schedule_entries (id, "parkId", date, "scheduleType", "openingTime", "closingTime")
+         VALUES (gen_random_uuid(), $1, CURRENT_DATE, 'OPERATING',
+                 NOW() - INTERVAL '10 minutes', NOW() + INTERVAL '8 hours')`,
+        [park.id],
+      );
+    }
+
     return { parkId: park.id, rideIds };
   };
 
@@ -148,10 +172,14 @@ describe("scheduled but silent parks (e2e)", () => {
       imports: [AppModule],
     }).compile();
     app = moduleFixture.createNestApplication();
+    // Production serves everything under /v1; without this the park path 404s
+    // regardless of the data.
+    app.setGlobalPrefix("v1");
     await app.init();
     dataSource = app.get(DataSource);
     monitor = app.get(DataQualityMonitorService);
     queueData = app.get(QueueDataService);
+    redis = app.get(REDIS_CLIENT);
   });
 
   afterAll(async () => {
@@ -172,8 +200,8 @@ describe("scheduled but silent parks (e2e)", () => {
     expect(hit).toBeDefined();
     expect(hit!.parkName).toBe("Silent la-ronde-e2e");
     expect(hit!.attractionCount).toBe(3);
-    expect(hit!.futureOperatingDays).toBe(2);
-    expect(hit!.lastScheduledDay).toBe(daysFromNow(60));
+    expect(hit!.operatingDaysAhead).toBe(2);
+    expect(hit!.lastScheduledDay).toBe(daysFromNow(5));
     // The date is park-local, which is why the report can print it next to a
     // park name without a timezone beside it.
     expect(hit!.lastReading).toBe(
@@ -216,11 +244,60 @@ describe("scheduled but silent parks (e2e)", () => {
   it("says nothing about a park whose schedule has run out", async () => {
     // The gate that separates "a contradiction between two of our sources" from
     // "a park that is simply over for the season". Same silence, no claim.
+    //
+    // Read as a pair with a silent park seeded beside it, for the reason every
+    // case here is: `toBeUndefined()` alone is also what a detector returning
+    // nothing at all looks like. Both parks come out of the same call.
     const overForTheYear = await seedPark("season-over-e2e", 2, {
       scheduleDayOffsets: PAST_DAYS,
     });
+    const stillClaimed = await seedPark("season-open-e2e", 2, {
+      scheduleDayOffsets: FUTURE_DAYS,
+    });
 
-    expect(await reportFor(overForTheYear.parkId)).toBeUndefined();
+    const report = await monitor.findScheduledButSilentParks();
+
+    expect(report.map((p) => p.parkId)).toContain(stillClaimed.parkId);
+    expect(report.map((p) => p.parkId)).not.toContain(overForTheYear.parkId);
+  });
+
+  it("holds its tongue about next summer until the week it starts", async () => {
+    // A seasonal park shut for the winter has future operating days and an
+    // empty feed, and is neither a fault nor news. Without the lookahead window
+    // this detector is a January alarm for every one of them.
+    const nextSeason = await seedPark("next-season-e2e", 2, {
+      scheduleDayOffsets: [SILENT_PARK_LOOKAHEAD_DAYS + 1, 120],
+    });
+    const openThisWeek = await seedPark("open-this-week-e2e", 2, {
+      scheduleDayOffsets: FUTURE_DAYS,
+    });
+
+    const report = await monitor.findScheduledButSilentParks();
+
+    expect(report.map((p) => p.parkId)).toContain(openThisWeek.parkId);
+    expect(report.map((p) => p.parkId)).not.toContain(nextSeason.parkId);
+  });
+
+  it("ignores a per-ride schedule row when it reads the park's own calendar", async () => {
+    // `schedule_entries` holds both; every other reader of a park's hours
+    // filters `attractionId IS NULL`, and PAR-246 is what the same blind key
+    // cost on the cleanup path. The park's own calendar has run out here and
+    // only a ride still claims days, so the park must stay off the list.
+    const rideOnly = await seedPark("ride-schedule-only-e2e", 2, {
+      scheduleDayOffsets: PAST_DAYS,
+    });
+    await dataSource.getRepository(ScheduleEntry).save(
+      dataSource.getRepository(ScheduleEntry).create({
+        parkId: rideOnly.parkId,
+        attractionId: rideOnly.rideIds[0],
+        date: daysFromNow(3) as unknown as Date,
+        scheduleType: ScheduleType.OPERATING,
+        openingTime: new Date(`${daysFromNow(3)}T14:00:00Z`),
+        closingTime: new Date(`${daysFromNow(3)}T23:00:00Z`),
+      }),
+    );
+
+    expect(await reportFor(rideOnly.parkId)).toBeUndefined();
   });
 
   describe("hasObservedReadingWithin", () => {
@@ -263,6 +340,80 @@ describe("scheduled but silent parks (e2e)", () => {
           PARK_FEED_SILENT_DAYS,
         ),
       ).toBe(false);
+    });
+  });
+
+  /**
+   * What a visitor gets, which is the half of PAR-192 that is not a log line.
+   *
+   * Read as a pair for the reason every case here is, and this one especially:
+   * the two parks are seeded identically and open right now, and the ONLY
+   * difference between them is how old their single reading is. Delete
+   * `&& parkObservedRecently` from `ParkIntegrationService` and the two
+   * responses become the same, which is what these assertions catch.
+   *
+   * `UTC` rather than Toronto: `CURRENT_DATE` in the schedule insert is the
+   * server's, and only UTC makes park-local "today" agree with it at every hour
+   * the suite might run.
+   */
+  describe("GET /v1/parks/:continent/:country/:city/:slug", () => {
+    const geoPath = (slug: string): string =>
+      `/v1/parks/north-america/canada/montreal-${slug}/${slug}`;
+
+    const openSilentPark = (slug: string, lastReadingDaysAgo: number) =>
+      seedPark(slug, 2, {
+        scheduleDayOffsets: FUTURE_DAYS,
+        openNow: true,
+        timezone: "UTC",
+      }).then(async (park) => {
+        await reading(park.rideIds[0], daysAgo(lastReadingDaysAgo));
+        await reading(park.rideIds[1], daysAgo(lastReadingDaysAgo));
+        return park;
+      });
+
+    it("says UNKNOWN about the rides of a park nobody has read in a month", async () => {
+      // The park response caches under the request URL and under the park id.
+      await redis.flushdb();
+      const slug = "silent-payload-e2e";
+      await openSilentPark(slug, PARK_FEED_SILENT_DAYS + 1);
+
+      const { body } = await request(app.getHttpServer())
+        .get(geoPath(slug))
+        .expect(200);
+
+      expect(body.status).toBe("OPERATING");
+      expect(body.attractions).toHaveLength(2);
+      for (const ride of body.attractions) {
+        expect(ride.status).toBe("UNKNOWN");
+        expect(ride.effectiveStatus).toBe("UNKNOWN");
+        // `very_low` here reads as "walk on, no queues" off no data at all.
+        expect(ride.crowdLevel).toBe("unknown");
+      }
+      // "38 of 38 closed" under an OPERATING badge is the same false page from
+      // the other direction: none of them is known to be closed either.
+      expect(body.analytics.statistics.operatingAttractions).toBe(0);
+      expect(body.analytics.statistics.closedAttractions).toBe(0);
+      expect(body.analytics.statistics.crowdLevel).toBe("unknown");
+    });
+
+    it("keeps the optimistic fallback for a park whose feed is alive", async () => {
+      // One day inside the window instead of one day outside it, and nothing
+      // else differs. The reading is older than the freshness cutoff, so these
+      // rides reach the very branch the case above no longer reaches.
+      await redis.flushdb();
+      const slug = "talking-payload-e2e";
+      await openSilentPark(slug, PARK_FEED_SILENT_DAYS - 1);
+
+      const { body } = await request(app.getHttpServer())
+        .get(geoPath(slug))
+        .expect(200);
+
+      expect(body.status).toBe("OPERATING");
+      expect(body.attractions).toHaveLength(2);
+      for (const ride of body.attractions) {
+        expect(ride.status).toBe("OPERATING");
+        expect(ride.effectiveStatus).toBe("OPERATING");
+      }
     });
   });
 });

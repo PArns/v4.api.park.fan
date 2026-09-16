@@ -78,11 +78,23 @@ describe("DataQualityMonitorService", () => {
     // seeds the pairs and reads the rows back. What is worth pinning here is the
     // shape a regular expression CAN see: the two gates that make the query say
     // something rather than everything.
-    it("passes the silence window through", async () => {
+    it("passes the silence window and the lookahead through", async () => {
       const query = jest.fn().mockResolvedValue([]);
-      await build(query).findScheduledButSilentParks(45);
+      await build(query).findScheduledButSilentParks(45, 3);
 
-      expect(query.mock.calls[0][1]).toEqual([45]);
+      expect(query.mock.calls[0][1]).toEqual([45, 3]);
+    });
+
+    it("reads the park's own calendar, not a ride's", async () => {
+      // `schedule_entries` holds both in one table; PAR-246 is what the same
+      // blind key cost on the cleanup path.
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findScheduledButSilentParks();
+
+      const [sql] = query.mock.calls[0] as [string];
+      expect(sql).toMatch(/se\."attractionId" IS NULL/);
+      // Two rows for one day are possible between dedup passes.
+      expect(sql).toMatch(/count\(DISTINCT se\.date\)/);
     });
 
     it("keys on a FUTURE operating day, not on any operating day", async () => {
@@ -117,7 +129,7 @@ describe("DataQualityMonitorService", () => {
           park_name: "La Ronde",
           n: "38",
           last_reading: "2026-06-24",
-          future_days: "349",
+          days_ahead: "7",
           last_day: "2027-08-31",
         },
       ]);
@@ -128,7 +140,7 @@ describe("DataQualityMonitorService", () => {
           parkName: "La Ronde",
           attractionCount: 38,
           lastReading: "2026-06-24",
-          futureOperatingDays: 349,
+          operatingDaysAhead: 7,
           lastScheduledDay: "2027-08-31",
         },
       ]);
@@ -143,7 +155,7 @@ describe("DataQualityMonitorService", () => {
           park_name: "Paradise Country",
           n: "12",
           last_reading: null,
-          future_days: "118",
+          days_ahead: "7",
           last_day: "2027-01-13",
         },
       ]);
