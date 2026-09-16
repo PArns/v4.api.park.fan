@@ -55,6 +55,15 @@ export function sameTypeDuplicateSql(scope: ScheduleDedupScope): string {
  *
  * Runs after phase 1, so each (park, day, ride, type) is already down to one
  * row and the ranking only has to choose between the types.
+ *
+ * `ScheduleType` has eight members and this ranking names four. The other
+ * four — TICKETED_EVENT, PRIVATE_EVENT, EXTRA_HOURS, MAINTENANCE, and INFO —
+ * fall to `ELSE 4`, i.e. below UNKNOWN, so a day that also carries an OPERATING
+ * row loses them on every pass. Production does hold such rows (Universal's
+ * Halloween Horror Nights runs past midnight as TICKETED_EVENT; see
+ * `ShowsService`), and the schedule sync writes them back, so they are deleted
+ * and rewritten daily. That is unchanged here, deliberately: it predates this
+ * file and altering it changes which rows a park keeps. PAR-276.
  */
 export function crossTypeConflictSql(scope: ScheduleDedupScope): string {
   const parkFilter = scope === "park" ? `AND e."parkId" = $1::uuid` : "";

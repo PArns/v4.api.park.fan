@@ -656,6 +656,36 @@ describe("ParksService", () => {
       }
     });
 
+    it.each([
+      ["isParkCurrentlyOpen", (id: string) => service.isParkCurrentlyOpen(id)],
+      [
+        "isParkOperatingToday",
+        (id: string) => service.isParkOperatingToday(id),
+      ],
+    ] as const)(
+      "%s asks for the park's own row, not whichever row comes back first",
+      async (_name, call) => {
+        // A CLOSED row with no times ends both methods on their first branch,
+        // which keeps the case about the `where` clause and nothing else.
+        mockScheduleRepository.findOne.mockResolvedValue({
+          scheduleType: "CLOSED",
+          openingTime: null,
+          closingTime: null,
+        });
+
+        await call(parkId);
+
+        const calls = mockScheduleRepository.findOne.mock.calls;
+        const [options] = calls[calls.length - 1] as [
+          { where: Record<string, unknown> },
+        ];
+        // Neither call has an ORDER BY, so without this the plan decides which
+        // row answers for the park — and a ride's row is a valid candidate as
+        // soon as the cleanup stops deleting it.
+        expect(options.where).toHaveProperty("attractionId");
+      },
+    );
+
     it("reads the days it fills from park-level rows only", async () => {
       await service.fillScheduleGaps(parkId, 1, 1);
 

@@ -2635,6 +2635,14 @@ export class ParksService {
   /**
    * Gets schedule data for a park within a date range
    *
+   * Park-level rows only (`attractionId IS NULL`), like every reader below that
+   * answers a question about the PARK. That filter used to be carried by the
+   * nightly cleanup instead: it partitioned without the ride and so left one row
+   * per park and day, which these queries then found whether they asked for it
+   * or not. Now that a per-ride row survives, each of them has to say so — a
+   * `findOne` with no ride in its `where` and no `ORDER BY` is free to answer
+   * with a single ride's schedule.
+   *
    * @param parkId - Park ID (UUID)
    * @param startDate - Start date (inclusive)
    * @param endDate - End date (inclusive)
@@ -2650,6 +2658,7 @@ export class ParksService {
       .where("schedule.parkId = :parkId", { parkId })
       .andWhere("schedule.date >= :startDate", { startDate })
       .andWhere("schedule.date <= :endDate", { endDate })
+      .andWhere("schedule.attractionId IS NULL")
       .orderBy("schedule.date", "ASC")
       .addOrderBy("schedule.scheduleType", "ASC")
       .getMany();
@@ -2668,6 +2677,7 @@ export class ParksService {
       .createQueryBuilder("schedule")
       .where("schedule.parkId = :parkId", { parkId })
       .andWhere("schedule.date = :dateStr", { dateStr })
+      .andWhere("schedule.attractionId IS NULL")
       .orderBy("schedule.scheduleType", "ASC")
       .getMany();
   }
@@ -2775,6 +2785,7 @@ export class ParksService {
       })
       .andWhere("schedule.openingTime IS NOT NULL")
       .andWhere("schedule.closingTime IS NOT NULL")
+      .andWhere("schedule.attractionId IS NULL")
       .orderBy("schedule.date", "ASC")
       .limit(1)
       .getOne();
@@ -2922,6 +2933,7 @@ export class ParksService {
             .createQueryBuilder("schedule")
             .where("schedule.parkId IN (:...parkIds)", { parkIds: ids })
             .andWhere("schedule.date = :todayStr", { todayStr })
+            .andWhere("schedule.attractionId IS NULL")
             .orderBy("schedule.parkId", "ASC")
             .addOrderBy("schedule.date", "ASC")
             .addOrderBy("schedule.scheduleType", "ASC")
@@ -2986,6 +2998,7 @@ export class ParksService {
         })
         .andWhere("schedule.openingTime IS NOT NULL")
         .andWhere("schedule.closingTime IS NOT NULL")
+        .andWhere("schedule.attractionId IS NULL")
         .orderBy("schedule.parkId", "ASC")
         .addOrderBy("schedule.date", "ASC")
         .getMany();
@@ -3228,6 +3241,7 @@ export class ParksService {
         parkId,
         date: parkDateStr as any,
         scheduleType: "OPERATING" as ScheduleType,
+        attractionId: IsNull(),
       },
     });
 
@@ -3272,6 +3286,7 @@ export class ParksService {
       where: {
         parkId,
         date: parkDateStr as any,
+        attractionId: IsNull(),
       },
     });
 
