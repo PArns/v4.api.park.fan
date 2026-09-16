@@ -42,11 +42,10 @@ than from the CTE's own `operating_conf_count`. That column is parsed into
 
 The CTE's predicate is not redundant with the write side. Polling and
 reverse-reconciliation do skip retired rows, but `writeHourlyHeartbeats` reads
-**every** attraction and carries
-the last reading forward hourly while the park is open, for as long as the
-ride's Redis last-seen key is under the 24-hour staleness threshold — so a
-retired ride stays eligible to re-enter the 30-minute window for up to a day
-after its final sighting. Measured on 2026-09-16: **0** such rows exist in
+**every** attraction and carries the last reading forward hourly while the park
+is open, for as long as the ride's Redis last-seen key is under the 24-hour
+staleness threshold — so a retired ride stays eligible to re-enter the
+30-minute window for up to a day after its final sighting. Measured on 2026-09-16: **0** such rows exist in
 retention, so the gap is open by construction rather than observed. The
 unfiltered heartbeat read is PAR-295.
 

@@ -273,6 +273,17 @@ describe("SearchController (E2E)", () => {
       const after = await attractionSlugs();
       expect(after).not.toContain(RETIRED_SLUG);
       expect(after).toContain(SURVIVOR_SLUG);
+
+      // The predicate has to sit in front of the OR brackets, and this is the
+      // assertion that notices if it ever moves behind them: `where()` resets
+      // the accumulated conditions, so a misplaced line would drop the whole
+      // name-matching chain and answer every query with every live ride. The
+      // two assertions above would still pass in that state; a query nothing
+      // matches would not.
+      const nonsense = await request(app.getHttpServer())
+        .get("/v1/search?q=zzzqqqnotaride&type=attraction")
+        .expect(200);
+      expect(nonsense.body.results).toEqual([]);
     });
 
     it("keeps the retired row in the database so its history stays readable", async () => {
