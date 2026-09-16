@@ -1830,10 +1830,29 @@ export class AdminController {
       // the second pair's failure onto the first, dropping a park that really
       // was deleted out of `results` — the one list that says what this call
       // did — and undercounting `merged`.
+      //
+      // The position carries the names, so the ids are checked rather than
+      // trusted: this endpoint deletes parks, and a verdict read against the
+      // wrong entry would report a real deletion under another park's name,
+      // which is worse than reporting nothing. The two ids in the verdict make
+      // that answerable here instead of only at the call site that built both
+      // lists.
       repairResult.pairs.forEach((verdict, index) => {
         const pair = planned[index];
 
-        if (!pair || !verdict.merged) {
+        if (
+          !pair ||
+          pair.winnerId !== verdict.winnerId ||
+          pair.loserId !== verdict.loserId
+        ) {
+          errors.push({
+            parkId: verdict.loserId,
+            error: `Merge verdict for ${verdict.winnerId} / ${verdict.loserId} did not line up with the planned pair at position ${index}; it is left out of the results`,
+          });
+          return;
+        }
+
+        if (!verdict.merged) {
           return;
         }
 

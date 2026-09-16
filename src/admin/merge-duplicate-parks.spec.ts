@@ -454,6 +454,39 @@ describe("AdminController.mergeDuplicateParks", () => {
     expect(result.merged).toBe(1);
   });
 
+  it("reports nothing rather than the wrong park when the verdicts do not line up", async () => {
+    // The position carries the names, so a verdict list that does not match the
+    // plan would print a real deletion under another park's name. This endpoint
+    // deletes parks; saying nothing is the safer half of that choice.
+    const controller = build([sharedIdPair]);
+
+    repairDuplicates.mockResolvedValue({
+      fixedQtMismatches: 0,
+      fixedWzMismatches: 0,
+      addedQtIds: 0,
+      addedWzIds: 0,
+      mergedDuplicates: 1,
+      errors: [],
+      pairs: [
+        {
+          winnerId: "some-other-winner",
+          loserId: "some-other-loser",
+          merged: true,
+          error: null,
+        },
+      ],
+    });
+
+    const result = await controller.mergeDuplicateParks({
+      autoDetect: true,
+      dryRun: false,
+    });
+
+    expect(result.results).toEqual([]);
+    expect(result.merged).toBe(0);
+    expect(result.errors[0].error).toContain("did not line up");
+  });
+
   it("counts the two sets apart on the read route", async () => {
     const result = await build([
       sharedPointPair,
