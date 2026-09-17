@@ -817,6 +817,29 @@ describe("AttractionMergeService — the works period survives as a set", () => 
     );
   });
 
+  it("carries a window that has only an end, flag and all", async () => {
+    // `to` with no `from` is a window that was already open when somebody
+    // wrote it down — an ordinary state, and the one asymmetric case in
+    // `settle`: the flag qualifies the END date, so it travels here even
+    // though the start is missing.
+    const preview = await inheritedFrom(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(preview.inheritedColumns).toEqual(
+      expect.arrayContaining([
+        "curatedOutOfServiceTo",
+        "curatedOutOfServiceToUncertain",
+      ]),
+    );
+    expect(preview.inheritedColumns).not.toContain("curatedOutOfServiceFrom");
+  });
+
   it("refuses a losing window that is nothing but the estimate flag", async () => {
     // The winner holds none of the three, so the set is free to move — and it
     // must not, because what would arrive is an estimate flag with no date to
