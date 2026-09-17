@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
 import { Attraction } from "../entities/attraction.entity";
+import { worksPeriodEndsBeforeItBegins } from "../utils/curated-out-of-service.util";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
@@ -617,21 +618,26 @@ export class AttractionMergeService {
    * served to readers as `worksPeriod`. A winner with no dates at all takes
    * the loser's bare `toUncertain` and hedges a date it does not have.
    *
-   * So the set moves or it does not: the winner inherits it only when it holds
-   * none of the three.
+   * So the set moves together or not at all: the winner inherits the columns
+   * the loser holds — an open-ended window is two of them, or one — and only
+   * when it holds none of the three itself.
    *
-   * `coherent` then asks the same question of the row the set comes FROM. The
-   * endpoint's invariants hold for every window it wrote, but the columns are
-   * reachable by hand and this value is about to be copied onto a row that
-   * outlives the merge — so a losing window that states nothing (a bare
-   * `toUncertain`, an estimate flag with no date) stays where it is rather than
-   * travelling. Refusing is the safe direction: what stays behind is deleted
-   * with the row either way, and what travels is a window somebody could have
-   * typed into the form.
+   * `settle` then asks of the window that is about to travel what the endpoint
+   * asks of one being typed. It has to, and not because the endpoint is
+   * careless: these columns are reachable by hand, and unlike a value the
+   * merge merely reads, this one is written onto a row that outlives it. A
+   * window stating nothing (no date at all) stays behind; so does an inverted
+   * one, which is exactly the state the set exists to prevent and would be no
+   * better for having arrived whole. A stale estimate flag is dropped rather
+   * than made to sink the dates beside it — that is the endpoint's own
+   * normalisation, and the dates are a real curation worth carrying.
    */
-  static readonly INHERITABLE_COLUMN_SETS: readonly {
+  private static readonly INHERITABLE_COLUMN_SETS: readonly {
     readonly columns: readonly (keyof Attraction)[];
-    readonly coherent: (loser: Attraction) => boolean;
+    /** The values to write, or null to leave the whole set behind. */
+    readonly settle: (
+      carried: Partial<Attraction>,
+    ) => Partial<Attraction> | null;
   }[] = [
     {
       columns: [
@@ -639,19 +645,35 @@ export class AttractionMergeService {
         "curatedOutOfServiceTo",
         "curatedOutOfServiceToUncertain",
       ],
-      coherent: (loser) =>
-        // It has to say WHEN. An open-ended window is the ordinary state while
-        // work is going on, so one of the two dates is enough.
-        (isSet(loser.curatedOutOfServiceFrom) ||
-          isSet(loser.curatedOutOfServiceTo)) &&
-        // And the estimate flag qualifies the end date, so it cannot arrive
-        // without one. `AdminCurationService` enforces this by clearing the
-        // flag; here the set stays behind instead, because a row in this state
-        // never went through that endpoint.
-        (!isSet(loser.curatedOutOfServiceToUncertain) ||
-          isSet(loser.curatedOutOfServiceTo)),
+      settle: (carried) => {
+        const from = carried.curatedOutOfServiceFrom ?? null;
+        const to = carried.curatedOutOfServiceTo ?? null;
+
+        // It has to be a window at all. `AdminCurationService` refuses this
+        // pair outright, so a row carrying it never came through it.
+        if (worksPeriodEndsBeforeItBegins(from, to)) return null;
+
+        // The flag qualifies the end date and means nothing without one. The
+        // endpoint clears it and keeps the dates; so does this.
+        //
+        // This is also what leaves a window of nothing but a flag behind: with
+        // the flag dropped there is nothing left to assign, so "a bare
+        // toUncertain is not a window" needs no rule of its own — and a rule
+        // no mutation can turn red would read like one that does something.
+        if (!isSet(to) && "curatedOutOfServiceToUncertain" in carried) {
+          const { curatedOutOfServiceToUncertain: _dropped, ...rest } = carried;
+          return rest;
+        }
+        return carried;
+      },
     },
   ];
+
+  /** The set columns, flat — for the spec that holds both lists against the descriptors. */
+  static readonly INHERITABLE_SET_COLUMNS: readonly string[] =
+    AttractionMergeService.INHERITABLE_COLUMN_SETS.flatMap(
+      (set) => set.columns as readonly string[],
+    );
 
   private inheritMissingMetadata(
     winner: Attraction,
@@ -673,11 +695,15 @@ export class AttractionMergeService {
 
     for (const set of AttractionMergeService.INHERITABLE_COLUMN_SETS) {
       if (set.columns.some((column) => isSet(winner[column]))) continue;
-      if (!set.coherent(loser)) continue;
 
+      const carried: Record<string, unknown> = {};
       for (const column of set.columns.filter((c) => isSet(loser[c]))) {
-        inherited[column] = loser[column];
+        carried[column] = loser[column];
       }
+
+      const settled = set.settle(carried as Partial<Attraction>);
+      if (settled === null) continue;
+      Object.assign(inherited, settled);
     }
 
     return inherited as Partial<Attraction>;

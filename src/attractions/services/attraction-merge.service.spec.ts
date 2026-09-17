@@ -624,8 +624,9 @@ describe("AttractionMergeService — previewMerge", () => {
  * those checks — and since PAR-287 the window is served as `worksPeriod`, so
  * the result reaches a reader.
  *
- * The set is refused in both directions: when the WINNER already holds part of
- * a window, and when the LOSER's window states nothing on its own.
+ * The set is held back in both directions: when the WINNER already holds part
+ * of a window, and when the LOSER's window is one the endpoint would have
+ * refused to write.
  *
  * Every assertion below names the absent column AND the presence that proves
  * the merge got far enough to consider it (G-44): the pairs are built so that
@@ -769,17 +770,38 @@ describe("AttractionMergeService — the works period survives as a set", () => 
     }
   });
 
-  it("refuses a losing window whose flag has no end date", async () => {
-    // A start and an estimate flag with no end. The dates alone would be a
-    // valid open-ended window, but the set moves whole or not at all, and
-    // splitting it here would reintroduce the bare flag the set exists to
-    // prevent.
+  it("drops a stale estimate flag rather than the dates beside it", async () => {
+    // A start and an estimate flag with no end — a state the endpoint clears
+    // by dropping the flag and keeping the dates. The window itself is a real
+    // curation and the only copy of it, so sinking it along with the flag
+    // would be the loss this whole change removes.
     const preview = await inheritedFrom(
       ride(),
       ride({
         queueTimesEntityId: 4711,
         curatedOutOfServiceFrom: "2026-01-16",
         curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("curatedOutOfServiceFrom");
+    expect(preview.inheritedColumns).not.toContain(
+      "curatedOutOfServiceToUncertain",
+    );
+  });
+
+  it("refuses a losing window that ends before it begins", async () => {
+    // Unreachable through the endpoint — `AdminCurationService` rejects the
+    // pair — but reachable by hand, and the winner holds nothing, so nothing
+    // else would stop it. Arriving whole does not make an inverted window any
+    // better: it is served as `worksPeriod` and suppresses every outage report
+    // for a ride, on a row that outlives the merge.
+    const preview = await inheritedFrom(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-03-01",
+        curatedOutOfServiceTo: "2026-01-20",
       }),
     );
 

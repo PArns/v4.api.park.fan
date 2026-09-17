@@ -195,9 +195,7 @@ describe("the attraction column lists and the editor's descriptors", () => {
   it("carries every hand-written key across a merge, bar one", () => {
     const inheritable = [
       ...AttractionMergeService.INHERITABLE_COLUMNS,
-      ...AttractionMergeService.INHERITABLE_COLUMN_SETS.flatMap(
-        (set) => set.columns,
-      ),
+      ...AttractionMergeService.INHERITABLE_SET_COLUMNS,
     ];
     const missing = keys.filter(
       (key) =>
@@ -222,9 +220,7 @@ describe("the attraction column lists and the editor's descriptors", () => {
     // twice, and the set's all-or-nothing rule would be the one that loses.
     const inheritable = [
       ...AttractionMergeService.INHERITABLE_COLUMNS,
-      ...AttractionMergeService.INHERITABLE_COLUMN_SETS.flatMap(
-        (set) => set.columns,
-      ),
+      ...AttractionMergeService.INHERITABLE_SET_COLUMNS,
     ];
 
     expect(new Set(inheritable).size).toBe(inheritable.length);

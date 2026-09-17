@@ -329,29 +329,34 @@ sync last wrote, months after anybody remembers deciding otherwise.
 **`INHERITABLE_COLUMNS` is column by column**, and that is the right shape for
 most of them: the winner takes whatever it lacks and the loser holds.
 
-**`INHERITABLE_COLUMN_SETS` moves a group or none of it**, and the works period
-is the group it was built for (PAR-297). `curated_out_of_service_from`, `_to`
-and `_to_uncertain` are three columns holding one statement, with two rules
-guarding it on the way in: `AdminCurationService` refuses an end before its
-start, and clears "that end is only an estimate" whenever the end goes away.
+**`INHERITABLE_COLUMN_SETS` moves a group together or not at all**, and the
+works period is the group it was built for (PAR-297). `curated_out_of_service_from`,
+`_to` and `_to_uncertain` are three columns holding one statement, with two
+rules guarding it on the way in: `AdminCurationService` refuses an end before
+its start, and clears "that end is only an estimate" whenever the end goes away.
 Column by column breaks both — a winner holding a start and no end would take
 the loser's end and carry a window that ends before it begins, and since PAR-287
-that window is served as `worksPeriod`. As a set the winner inherits all three
-only when it holds none of them, so what arrives is a window the curation
-endpoint already accepted on the losing row.
+that window is served as `worksPeriod`. As a set the winner inherits the columns
+the loser holds (an open-ended window is one or two of them) and only when it
+holds none of the three itself.
 
-The set is refused in the other direction too. The columns are reachable by
-hand, and the value is about to be copied onto a row that outlives the merge, so
-a losing window that states nothing on its own — a bare `to_uncertain`, an
-estimate flag with no end date — stays where it is. Refusing is the safe
-direction: what stays behind is deleted with the row either way, and what
-travels is a window somebody could have typed into the form.
+The window is then asked, on the way out, what the endpoint asks of one being
+typed. It has to be: these columns are reachable by hand, and unlike a value the
+merge merely reads, this one lands on a row that outlives it. A window stating
+nothing — no date, only the estimate flag — stays behind, and so does an
+inverted one, which is exactly the state the set exists to prevent and no better
+for having arrived whole. A stale estimate flag is dropped instead of sinking
+the dates beside it, which is the endpoint's own normalisation: the dates are a
+real curation and the only copy of one. `worksPeriodEndsBeforeItBegins` is
+shared between the two writers rather than written twice — the `??` rules in
+`resolveCuratedFacts` were copied into two DTO mappers once, drifted, and
+shipped a bug.
 
-**A refused set is still a silent loss**, and `previewMerge` does not name it:
-where the winner already holds part of a window, the loser's disappears without
-appearing in `inheritedColumns` or `droppedCurations`. That is PAR-301 — smaller
-than the loss this section opens with, because the survivor keeps a window of
-its own, but not nothing.
+**A window held back is still a silent loss**, and `previewMerge` does not name
+it: where the winner already holds part of a window, the loser's disappears
+without appearing in `inheritedColumns` or `droppedCurations`. That is PAR-301 —
+smaller than the loss this section opens with, because the survivor keeps a
+window of its own, but not nothing.
 
 `curated_is_seasonal` / `curated_season_months` deliberately stay column by
 column although `resolveCuratedFacts` resolves them as a pair. A winner curated
