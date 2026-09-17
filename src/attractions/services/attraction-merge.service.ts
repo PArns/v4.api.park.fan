@@ -563,7 +563,7 @@ export class AttractionMergeService {
    * this one: the column is NOT NULL, so the winner's value is never absent
    * and the test below never fires. Carrying it would mean deciding that a
    * stored `false` means "nobody said", which is the opposite of what the
-   * editor's descriptor says it means. Tracked separately.
+   * editor's descriptor says it means. Tracked as PAR-300.
    *
    * `curatedIsSeasonal` and `curatedSeasonMonths` stay here rather than moving
    * into a set, although the resolver treats them as one statement. Column by

@@ -6,6 +6,54 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — a works period counts as curation, and survives a merge
+
+`ATTRACTION_CURATED_DB_COLUMNS` declares itself "every hand-written column on
+an attraction row". The works period's three — `curated_out_of_service_from`,
+`_to` and `_to_uncertain` — were not on it, so a ride whose only curation is a
+works period counted as untouched in the admin's coverage figure and kept being
+handed to the next editor as backlog. That is the exact failure the list was
+introduced to end: the "uncurated" filter used to cover four of fifteen park
+columns, and parks with a website, an address and a phone number kept coming
+back. They are on the list now.
+
+Measured against production on 2026-09-17: the figure moves from **218 to 218**
+over 7,175 unretired rows. One ride carries a window today (Taron, added the day
+before), and it is curated by other columns anyway, so the list has not
+miscounted anybody yet. What changes is what it does the first time an editor
+opens a ride and types a works period as its first curation.
+
+**The same gap sat in `AttractionMergeService`, and there it destroyed data
+rather than miscounting it.** A merge deletes the losing row, so a curation that
+lived only there is gone with nothing to notice it by — `previewMerge` reports
+`droppedCurations` for ride profiles alone. The three columns could not simply
+join `INHERITABLE_COLUMNS`, because that loop fills column by column and the
+works period is three columns holding one statement. A winner with a start and
+no end would take the loser's end and carry a window that ends before it begins
+— the pair `AdminCurationService` refuses outright, and since PAR-287 one that
+is served to readers as `worksPeriod`. A winner with no dates would take a bare
+`toUncertain` and hedge a date it does not have.
+
+So the window travels as a **set**: `INHERITABLE_COLUMN_SETS` moves all three or
+none, and only when the winner holds none of them. What arrives is a window the
+curation endpoint already accepted on the losing row, so copying it cannot
+produce a state the endpoint would have rejected.
+
+`curatedIsSeasonal` / `curatedSeasonMonths` deliberately stay column by column.
+A winner curated seasonal but without months should take the loser's months, and
+a set would refuse. The one crossed pair it can build — a curated `false` beside
+inherited months — never reaches a reader: `resolveCuratedFacts` drops the months
+whenever the resolved seasonality is false.
+
+**And a test now holds the descriptors against both lists**, with the three
+bulk-filled columns (`has_single_rider`, `rcdb_id`, `open_with_park`) named as
+the exceptions they already were. Nothing derives either list from
+`ATTRACTION_CURATED_FIELDS`, which is why three columns could sit off both of
+them unnoticed. `openWithPark` remains off the inheritance lists and cannot join
+them: the column is `NOT NULL DEFAULT false`, so the winner's value is never
+absent and the loop's test never fires — tracked as PAR-300 with the 34 rows it
+affects.
+
 ### Fixed — a retired attraction leaves search, favorites and the geo listing's count
 
 `retired_at` promised more than it delivered. The `retiredAt` `@ApiProperty`
