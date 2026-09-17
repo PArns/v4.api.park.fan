@@ -149,6 +149,72 @@ describe("AttractionMergeService", () => {
     expect(order).toEqual(["delete", "update"]);
   });
 
+  it("writes the loser's works period onto the survivor, dates and all", async () => {
+    // The column-name assertions in the works-period block below read
+    // `previewMerge`, which reports keys. This one goes through the real write
+    // path and names the values, because "the window survives" is a claim
+    // about dates: a set that carried the right column names and the wrong
+    // days would satisfy every other test in this file (PAR-297).
+    givenRows([
+      {
+        ...baseRow,
+        curatedOutOfServiceFrom: null,
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: null,
+      },
+      {
+        ...suffixRow,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      },
+    ]);
+
+    await service.mergeAttractions("row-base", "row-suffix");
+
+    expect(manager.update).toHaveBeenCalledWith(
+      Attraction,
+      "row-base",
+      expect.objectContaining({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+  });
+
+  it("writes no part of a works period the winner already has one of", async () => {
+    // And the other direction, at the same level: the winner's own window is
+    // never overwritten, and none of the loser's three columns reaches the
+    // UPDATE beside it.
+    givenRows([
+      {
+        ...baseRow,
+        curatedOutOfServiceFrom: "2026-06-01",
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: null,
+        landName: null,
+      },
+      {
+        ...suffixRow,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+        landName: "Family Rides",
+      },
+    ]);
+
+    await service.mergeAttractions("row-base", "row-suffix");
+
+    const [, , payload] = manager.update.mock.calls[0];
+    // The merge did inherit — so the absence below is a refusal, not a merge
+    // that never got here.
+    expect(payload).toMatchObject({ landName: "Family Rides" });
+    expect(payload).not.toHaveProperty("curatedOutOfServiceFrom");
+    expect(payload).not.toHaveProperty("curatedOutOfServiceTo");
+    expect(payload).not.toHaveProperty("curatedOutOfServiceToUncertain");
+  });
+
   it("takes over metadata the survivor is missing", async () => {
     // The two sources each fill in different columns: across the 147 real
     // pairs, 33 have the queue-times id only on the suffixed row and 29 have
