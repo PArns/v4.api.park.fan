@@ -23,6 +23,7 @@ import {
   QueueType,
   ScheduleType,
 } from "../../src/external-apis/themeparks/themeparks.types";
+import { getCurrentDateInTimezone } from "../../src/common/utils/date.util";
 import { seedMinimalTestData, clearTestData } from "../helpers/seed-test-data";
 import { randomUUID } from "node:crypto";
 
@@ -298,34 +299,67 @@ describe("Analytics counters — retired attractions (E2E)", () => {
       return { park, attractions };
     }
 
+    /**
+     * Each branch carries the predicate TWICE, in two reads of `attractions`
+     * that feed two different columns: the `attraction_counts` CTE behind
+     * `total_count`, and the outer query behind `explicitly_closed_count`.
+     * Asserting the total alone leaves the second free to lose its predicate
+     * without turning anything red, so the retired ride here is the one
+     * carrying the CLOSED reading and both columns are read back.
+     *
+     * `closedAttractions` is `total - operating`, and `operatingAttractions`
+     * is `total - explicitlyClosed`, so the pair below pins the outer read:
+     * with the predicate the retired ride leaves `explicitly_closed_count`
+     * (4 operating, 0 closed), without it it stays (3 operating, 1 closed).
+     */
+    async function expectCountsAfterRetiringTheClosedRide(
+      parkId: string,
+      closedRideId: string,
+    ) {
+      const before = await parkStatistics(parkId);
+      expect(before.totalAttractions).toBe(5);
+      expect(before.operatingAttractions).toBe(4);
+      expect(before.closedAttractions).toBe(1);
+
+      await retire(closedRideId);
+
+      const after = await parkStatistics(parkId);
+      expect(after.totalAttractions).toBe(4);
+      expect(after.operatingAttractions).toBe(4);
+      expect(after.closedAttractions).toBe(0);
+    }
+
     it("counts a ride until it is retired (slow path)", async () => {
       const { park, attractions } = await seedParkWithReadings();
-
-      expect((await parkStatistics(park.id)).totalAttractions).toBe(5);
-
-      await retire(attractions[1].id);
-
-      expect((await parkStatistics(park.id)).totalAttractions).toBe(4);
+      await expectCountsAfterRetiringTheClosedRide(park.id, attractions[1].id);
     });
 
     it("counts a ride until it is retired (fast path)", async () => {
       const { park, attractions } = await seedParkWithReadings();
       // The fast path's only entry condition: a daily-stats row for the park's
-      // today, with both figures present.
+      // today, with both figures present. "Today" is the PARK's, read with the
+      // same helper the service uses — a UTC date would miss the row between
+      // 00:00 and ~05:00 UTC and drop this case silently into the slow path,
+      // where it would be a second copy of the one above and still pass.
       await dataSource.getRepository(ParkDailyStats).save(
         dataSource.getRepository(ParkDailyStats).create({
           parkId: park.id,
-          date: new Date().toISOString().slice(0, 10),
+          date: getCurrentDateInTimezone("America/New_York"),
           p90WaitTime: 25,
           maxWaitTime: 60,
         }),
       );
 
-      expect((await parkStatistics(park.id)).totalAttractions).toBe(5);
+      // Proof that the branch was taken: both figures come straight from the
+      // row above. The slow path aggregates them from `queue_data` inside
+      // [startOfDay, now] and answers 0 here, because the readings were
+      // written before `startOfDay`.
+      const before = await parkStatistics(park.id);
+      expect(before.avgWaitToday).toBe(25);
+      expect(before.peakWaitToday).toBe(60);
+      await redis.del(`park:statistics:${park.id}`);
 
-      await retire(attractions[1].id);
-
-      expect((await parkStatistics(park.id)).totalAttractions).toBe(4);
+      await expectCountsAfterRetiringTheClosedRide(park.id, attractions[1].id);
     });
 
     it("does not count a retired ride as one you can queue for", async () => {
