@@ -137,9 +137,10 @@ describe("curated field views", () => {
 
 /**
  * The same reminder the park side has had since its merge lost a curation,
- * written for the attraction side after the works period sat off both of its
- * lists for eleven days (PAR-297) — from the day its columns landed to the day
- * somebody read the lists rather than the descriptors.
+ * written for the attraction side after the works period's dates sat off both
+ * of its lists from 2026-09-06 to 2026-09-17 (PAR-297). `_to_uncertain` landed
+ * on the last of those days and never reached either list either — a third
+ * column missed by the same absence of a check.
  *
  * Two lists have to learn about a new curated attraction key, and they answer
  * different questions: `ATTRACTION_CURATED_DB_COLUMNS` decides whether a ride
