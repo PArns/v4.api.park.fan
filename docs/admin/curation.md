@@ -318,27 +318,45 @@ which is exactly what an undo is entitled to assume.
 
 ## Merges
 
-`AttractionMergeService.INHERITABLE_COLUMNS` must list **every** `curated_*`
-column, and keep listing them. A merge deletes the losing row, so a curation that
-lived only there is gone with no trace and nothing to notice it by — the value
-simply reverts to whatever the sync last wrote, months after anybody remembers
-deciding otherwise.
+Every `curated_*` column must be on one of
+`AttractionMergeService`'s two inheritance lists, and keep being on it. A merge
+deletes the losing row, so a curation that lived only there is gone with no
+trace and nothing to notice it by — the value simply reverts to whatever the
+sync last wrote, months after anybody remembers deciding otherwise.
+`previewMerge` does not cover the gap: it lists `inheritedColumns` and a
+`droppedCurations` that reaches `attraction_ride_profiles` and nothing else.
 
-Three columns are off that list today and must stay off until the loop below it
-changes: the works period's `curated_out_of_service_from`, `_to` and
-`_to_uncertain` (PAR-297). `inheritMissingMetadata` fills column by column, so a
-winner holding a start and no end would take the loser's end and carry a window
-that ends before it begins — the pair `AdminCurationService` rejects outright,
-and since PAR-287 one that is served as `worksPeriod`. Putting them on needs the
-window inherited as a set, which is a change to that loop and not to the list.
+**`INHERITABLE_COLUMNS` is column by column**, and that is the right shape for
+most of them: the winner takes whatever it lacks and the loser holds.
 
-That choice has a price and it is the loss this section calls unacceptable: a
-merge drops the losing row's works period with no trace, and nothing reports it
-— `previewMerge` lists `inheritedColumns` and a `droppedCurations` that covers
-`attraction_ride_profiles` and nothing else. The rare inverted window was
-preferred over the common silent loss only because the first is served to
-readers and the second is recoverable by curating again. Both go away together
-in PAR-297.
+**`INHERITABLE_COLUMN_SETS` moves a group or none of it**, and the works period
+is the group it was built for (PAR-297). `curated_out_of_service_from`, `_to`
+and `_to_uncertain` are three columns holding one statement, with two rules
+guarding it on the way in: `AdminCurationService` refuses an end before its
+start, and clears "that end is only an estimate" whenever the end goes away.
+Column by column breaks both — a winner holding a start and no end would take
+the loser's end and carry a window that ends before it begins, and since PAR-287
+that window is served as `worksPeriod`. As a set the winner inherits all three
+only when it holds none of them, so what arrives is a window the curation
+endpoint already accepted on the losing row.
+
+`curated_is_seasonal` / `curated_season_months` deliberately stay column by
+column although `resolveCuratedFacts` resolves them as a pair. A winner curated
+seasonal but without months should take the loser's months, and a set would
+refuse. The one crossed pair column-by-column can build — a curated `false`
+beside inherited months — never reaches a reader, because the resolver drops the
+months whenever the resolved seasonality is false.
+
+`open_with_park` is the one hand-editable column on neither list, and it cannot
+join either: it is `NOT NULL DEFAULT false`, so the winner's value is never
+absent and `inheritMissingMetadata`'s test never fires. Carrying it would mean
+reading a stored `false` as "nobody said", which is the opposite of what its
+descriptor declares — PAR-300, 34 rows.
+
+**A spec holds the descriptors against both lists** (`curated-field.spec-list.spec.ts`),
+with the bulk-filled three (`has_single_rider`, `rcdb_id`, `open_with_park`) named as
+the exceptions. Neither list derives itself from `ATTRACTION_CURATED_FIELDS`,
+which is how the works period sat off both of them unnoticed for a day.
 
 ## Related
 
