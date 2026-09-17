@@ -621,8 +621,10 @@ export class AttractionMergeService {
    * So the set moves together or not at all: the winner inherits the columns
    * the loser holds, and only when it holds none of the three itself. That is
    * all three for a window with both dates and an estimate flag, and one for
-   * the ordinary open-ended one — a start with no end, whose flag `settle`
-   * drops below.
+   * the ordinary open-ended one: `AdminCurationService` clears the flag
+   * whenever the end date goes, so a start with no end carries a null the
+   * filter never picks up. What `settle` drops below is the flag that stayed —
+   * written by hand, past the endpoint that would have cleared it.
    *
    * `settle` then asks of the window that is about to travel what the endpoint
    * asks of one being typed. It has to, and not because the endpoint is

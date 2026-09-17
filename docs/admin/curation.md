@@ -355,9 +355,10 @@ shipped a bug.
 
 **A window held back is still a silent loss**, and `previewMerge` does not name
 it: where the winner already holds part of a window, the loser's disappears
-without appearing in `inheritedColumns` or `droppedCurations`. That is PAR-301 —
-smaller than the loss this section opens with, because the survivor keeps a
-window of its own, but not nothing.
+without appearing in `inheritedColumns` or `droppedCurations`. That is PAR-301.
+Usually it is the smaller loss, because the survivor keeps a window of its own —
+but not always: a winner holding nothing but a stale `to_uncertain` blocks the
+set and has no window at all, `resolveWorksPeriod` serving `null` for it.
 
 `curated_is_seasonal` / `curated_season_months` deliberately stay column by
 column although `resolveCuratedFacts` resolves them as a pair. A winner curated
@@ -377,8 +378,8 @@ and the two have different exceptions. Against the admin's figure it is the
 bulk-filled three — `has_single_rider`, `rcdb_id`, `open_with_park`, which are
 not curation. Against the inheritance lists it is `open_with_park` alone; the
 other two are carried like any other column. Neither list derives itself from
-`ATTRACTION_CURATED_FIELDS`, which is how the works period sat off both of them
-unnoticed for a day.
+`ATTRACTION_CURATED_FIELDS`, which is how the works period's dates sat off both
+of them from 2026-09-06 to 2026-09-17 without anything failing.
 
 ## Related
 

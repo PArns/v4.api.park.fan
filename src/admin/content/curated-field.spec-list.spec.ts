@@ -137,8 +137,9 @@ describe("curated field views", () => {
 
 /**
  * The same reminder the park side has had since its merge lost a curation,
- * written for the attraction side after the works period spent a day off both
- * of its lists (PAR-297).
+ * written for the attraction side after the works period sat off both of its
+ * lists for eleven days (PAR-297) — from the day its columns landed to the day
+ * somebody read the lists rather than the descriptors.
  *
  * Two lists have to learn about a new curated attraction key, and they answer
  * different questions: `ATTRACTION_CURATED_DB_COLUMNS` decides whether a ride

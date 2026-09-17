@@ -130,8 +130,9 @@ export const ATTRACTION_CURATED_DB_COLUMNS: readonly string[] = [
  *
  * Every other key in `ATTRACTION_CURATED_FIELDS` is on the list, and a spec in
  * `curated-field.spec-list.spec.ts` holds the two against each other with
- * exactly those three as the exceptions — the works period spent a day off it
- * because nobody had a reminder that fails.
+ * exactly those three as the exceptions. The works period's dates were off it
+ * from the day they landed (2026-09-06) to 2026-09-17, because nothing derives
+ * this list from the descriptors and nothing failed while they were missing.
  */
 
 export function resolveCuratedFacts(
