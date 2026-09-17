@@ -170,7 +170,7 @@ describe("closure gaps across park-local midnight (e2e)", () => {
   /**
    * One operating day below it, and it is what the `FILTER` excludes.
    *
-   * Its window (10:00 on the 15th to 02:00 on the 16th) was over four hours
+   * Its window (10:00 on the 15th to 02:00 on the 16th) shut 22 3/4 hours
    * before the reading window starts, so `MIN(op_day) FILTER (closes_at > ...)`
    * does not see it while a bare `MIN(op_day)` does.
    */
@@ -184,6 +184,14 @@ describe("closure gaps across park-local midnight (e2e)", () => {
     "2026-06-12",
     "2026-06-13",
   ];
+
+  /**
+   * The last operating day before today, and the day the upper bound sits on.
+   *
+   * It carries no readings and no published window, so it moves `active_days`
+   * and nothing else.
+   */
+  const YESTERDAY = "2026-06-14";
 
   /** The numerator: three of those days carry a real gap triple. */
   const GAP_DAYS = 3;
@@ -481,12 +489,16 @@ describe("closure gaps across park-local midnight (e2e)", () => {
 
     expect(await run(AS_OF)).toHaveLength(0);
 
-    // The same counter-check one day the other way: an ordinary day BELOW
-    // today counts, so the fixture is one exposure row short of a line rather
-    // than short of a candidate. No window is published for it — `active` reads
-    // `attraction_exposure_days`, not the schedule, and the floor is the
-    // calendar candidate 2026-05-17 here in any case.
-    await seedExposureDay("2026-06-08");
+    // The counter-check, and it is the day IMMEDIATELY below today rather than
+    // an arbitrary one, which pins the bound from both sides: an exposure row
+    // on 2026-06-14 counts, so a bound that lost a further day would fail here
+    // just as an inclusive one fails above. A control day further down leaves
+    // that direction — the one that shrinks the denominator and suppresses a
+    // real fault — bounded only by the regular expression in
+    // `closure-gap.sql.spec.ts`. No window is published for it: `active` reads
+    // `attraction_exposure_days`, not the schedule, and the floor here is the
+    // calendar candidate 2026-05-17 in any case.
+    await seedExposureDay(YESTERDAY);
 
     const rows = await run(AS_OF);
 
