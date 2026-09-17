@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { DataSource } from "typeorm";
+import { HYPERTABLES } from "./hypertables";
 
 /**
  * TimescaleDB Initialization Service
@@ -8,23 +9,18 @@ import { DataSource } from "typeorm";
  * Converts time-series tables to TimescaleDB hypertables on startup.
  * Hypertables provide optimized storage and queries for time-series data.
  *
- * Tables converted:
- * - queue_data (timestamp) - Hourly wait time data
- * - forecast_data (createdAt) - Forecast predictions
- * - weather_data (date) - Daily weather data
- * - show_live_data (timestamp) - Show live status and showtimes (Phase 6.4)
- * - restaurant_live_data (timestamp) - Dining availability (Phase 6.4)
+ * **Which tables, on which column, with which chunk interval and compression
+ * settings, is `HYPERTABLES` in `./hypertables.ts`** — not a list in this
+ * docblock and not a sequence of calls below. The E2E schema reads the same
+ * constant, which is what keeps the test schema from drifting into plain tables
+ * behind a passing suite (PAR-172, PAR-234).
  *
- * IMPORTANT: Compression policies preserve hourly resolution!
- * - queue_data: Compress after 30 days (keeps hourly data)
- * - forecast_data: Compress after 7 days, aggregate to daily after 90 days
- * - weather_data: Compress after 60 days (daily resolution)
- * - show_live_data: Compress after 30 days (keeps hourly data)
- * - restaurant_live_data: Compress after 30 days (keeps hourly data)
+ * Compression policies preserve the source resolution: a chunk is compressed,
+ * never downsampled, so an hourly table stays hourly.
  *
  * Strategy:
  * 1. Check if tables are already hypertables
- * 2. If not, truncate and convert (OK per user - early development phase)
+ * 2. If not, rebuild the primary key around the time column and convert
  * 3. Set up compression policies
  */
 @Injectable()
@@ -54,17 +50,13 @@ export class TimescaleInitService implements OnModuleInit {
       }
 
       // Convert tables to hypertables
-      await this.createHypertable("queue_data", "timestamp", "1 day");
-      await this.createHypertable("forecast_data", "createdAt", "1 day");
-      await this.createHypertable("weather_data", "date", "7 days");
-      await this.createHypertable("show_live_data", "timestamp", "1 day");
-      await this.createHypertable("restaurant_live_data", "timestamp", "1 day");
-      await this.createHypertable("queue_data_aggregates", "hour", "7 days");
-      await this.createHypertable(
-        "wait_time_predictions",
-        "createdAt",
-        "7 days",
-      );
+      for (const spec of HYPERTABLES) {
+        await this.createHypertable(
+          spec.table,
+          spec.timeColumn,
+          spec.chunkInterval,
+        );
+      }
 
       // Set up compression policies (preserves hourly data!)
       await this.setupCompressionPolicies();
@@ -235,10 +227,9 @@ export class TimescaleInitService implements OnModuleInit {
   /**
    * Set up compression policies for hypertables
    *
-   * CRITICAL: Compression preserves hourly resolution!
-   * - queue_data: Compress after 30 days (keeps all hourly data)
-   * - forecast_data: Compress after 7 days (keeps all hourly data)
-   * - weather_data: Compress after 60 days (daily data, no hourly loss)
+   * CRITICAL: Compression preserves the source resolution — a chunk is
+   * compressed, never downsampled. The per-table delay and the optional
+   * segment/order columns are `HYPERTABLES`.
    *
    * Compression reduces storage by 90%+ while maintaining query performance.
    */
@@ -246,63 +237,16 @@ export class TimescaleInitService implements OnModuleInit {
     this.logger.log("📦 Setting up compression policies...");
 
     try {
-      // Enable compression on queue_data (compress after 30 days)
-      await this.enableCompression(
-        "queue_data",
-        "timestamp",
-        30,
-        "Hourly wait time data",
-      );
-
-      // Enable compression on forecast_data (compress after 7 days)
-      await this.enableCompression(
-        "forecast_data",
-        "createdAt",
-        7,
-        "Forecast predictions",
-      );
-
-      // Enable compression on weather_data (compress after 60 days)
-      await this.enableCompression(
-        "weather_data",
-        "date",
-        60,
-        "Daily weather data",
-      );
-
-      // Enable compression on show_live_data (compress after 30 days)
-      await this.enableCompression(
-        "show_live_data",
-        "timestamp",
-        30,
-        "Show live status and showtimes",
-      );
-
-      // Enable compression on restaurant_live_data (compress after 30 days)
-      await this.enableCompression(
-        "restaurant_live_data",
-        "timestamp",
-        30,
-        "Dining availability and wait times",
-      );
-
-      // Enable compression on queue_data_aggregates (compress after 30 days)
-      await this.enableCompression(
-        "queue_data_aggregates",
-        "hour",
-        30,
-        "Hourly percentile aggregates",
-      );
-
-      // Enable compression on wait_time_predictions (compress after 14 days)
-      await this.enableCompression(
-        "wait_time_predictions",
-        "createdAt",
-        14,
-        "ML Predictions",
-        "attractionId",
-        "predictedTime ASC",
-      );
+      for (const spec of HYPERTABLES) {
+        await this.enableCompression(
+          spec.table,
+          spec.timeColumn,
+          spec.compressAfterDays,
+          spec.description,
+          spec.segmentBy,
+          spec.orderBy,
+        );
+      }
 
       this.logger.log("✅ Compression policies configured");
     } catch (error) {

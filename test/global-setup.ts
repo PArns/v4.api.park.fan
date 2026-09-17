@@ -7,6 +7,7 @@ import { DataSource } from "typeorm";
 import * as dotenv from "dotenv";
 import * as path from "path";
 import { createMlForecastTables } from "./helpers/ml-forecast-tables";
+import { HYPERTABLES } from "../src/database/hypertables";
 
 /**
  * One TimescaleDB and one Redis for the whole E2E run.
@@ -140,40 +141,43 @@ async function createSchema(database: string): Promise<void> {
       console.warn("⚠️  Continuing without some extensions");
     }
 
-    // The hypertables this suite has. Production has seven, all compressed, and
-    // the merge writes to every one of them: these three, plus `weather_data`
-    // (`mergeParks` step 4), `wait_time_predictions`, `forecast_data`
-    // (`ATTRACTION_DEPENDENCIES`) and `queue_data_aggregates` (that list and
-    // `PARK_DEPENDENCIES`). Those four are STILL plain tables here — PAR-234.
+    // The hypertables. `synchronize: true` above made every one of them a
+    // PLAIN table, and the merge writes to all seven — `queue_data`,
+    // `show_live_data` and `restaurant_live_data` per colliding entity,
+    // `weather_data` in `mergeParks` step 4, `wait_time_predictions`,
+    // `forecast_data` and `queue_data_aggregates` through the dependency lists.
     //
-    // The two live-data tables were plain tables until PAR-172, so `SET LOCAL
-    // timescaledb.max_tuples_decompressed_per_dml_transaction = 0` in step 0 of
-    // `mergeParks` was lifting a cap that did not apply to anything the suite
-    // touched. A plain table cannot answer what the merge does to a compressed
-    // chunk, which is the one question a real database is here to settle.
+    // Read from `HYPERTABLES`, the same constant `TimescaleInitService` builds
+    // production's schema from, rather than listed here. This list was
+    // hand-written twice and drifted both times: it had one entry until PAR-172
+    // (so `SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction =
+    // 0` in step 0 of `mergeParks` lifted a cap that applied to nothing the
+    // suite touched) and three until PAR-234. A plain table cannot answer what
+    // the merge does to a compressed chunk, which is the one question a real
+    // database is here to settle — and it answers it green, because the table
+    // does exist and every `to_regclass` guard passes.
     //
-    // They also had a second effect that is easy to miss: every suite that
-    // boots `AppModule` runs `TimescaleInitService`, whose `enableCompression`
-    // silently did nothing for these two while they were not hypertables. It
-    // takes hold now.
+    // Second effect, easy to miss: every suite that boots `AppModule` runs
+    // `TimescaleInitService`, whose `enableCompression` is a silent no-op on a
+    // non-hypertable. It takes hold the moment a table becomes one, so the
+    // first suite to boot decides the compression state the later ones inherit.
     //
-    // Partitioning column has to be in the primary key: `queue_data` is
-    // `(id, timestamp)` and so are `show_live_data` and `restaurant_live_data`.
-    // `weather_data` partitions on `date` instead and needs its own call, which
-    // is why it is not in this loop.
-    for (const table of [
-      "queue_data",
-      "show_live_data",
-      "restaurant_live_data",
-    ]) {
+    // Warn rather than throw, on purpose: a suite without TimescaleDB should
+    // still run. `park-merge.e2e-spec.ts` asserts these by name against
+    // `timescaledb_information.hypertables`, so a table that quietly stayed
+    // plain fails there instead of passing everywhere for the wrong reason.
+    for (const { table, timeColumn, chunkInterval } of HYPERTABLES) {
       try {
         await dataSource.query(
-          `SELECT create_hypertable('${table}', 'timestamp',
-             chunk_time_interval => INTERVAL '1 day',
+          `SELECT create_hypertable($1, $2,
+             chunk_time_interval => $3::interval,
              if_not_exists => TRUE
            );`,
+          [table, timeColumn, chunkInterval],
         );
-        console.log(`✅ ${table} converted to hypertable`);
+        console.log(
+          `✅ ${table} converted to hypertable (${timeColumn}, ${chunkInterval})`,
+        );
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
