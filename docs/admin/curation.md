@@ -338,7 +338,8 @@ Column by column breaks both — a winner holding a start and no end would take
 the loser's end and carry a window that ends before it begins, and since PAR-287
 that window is served as `worksPeriod`. As a set the winner inherits the columns
 the loser holds (an open-ended window is one or two of them) and only when it
-holds none of the three itself.
+holds none of the three itself — all three for a window with both dates and an
+estimate flag, one for the ordinary open-ended one.
 
 The window is then asked, on the way out, what the endpoint asks of one being
 typed. It has to be: these columns are reachable by hand, and unlike a value the
@@ -372,9 +373,12 @@ reading a stored `false` as "nobody said", which is the opposite of what its
 descriptor declares — PAR-300, 34 rows.
 
 **A spec holds the descriptors against both lists** (`curated-field.spec-list.spec.ts`),
-with the bulk-filled three (`has_single_rider`, `rcdb_id`, `open_with_park`) named as
-the exceptions. Neither list derives itself from `ATTRACTION_CURATED_FIELDS`,
-which is how the works period sat off both of them unnoticed for a day.
+and the two have different exceptions. Against the admin's figure it is the
+bulk-filled three — `has_single_rider`, `rcdb_id`, `open_with_park`, which are
+not curation. Against the inheritance lists it is `open_with_park` alone; the
+other two are carried like any other column. Neither list derives itself from
+`ATTRACTION_CURATED_FIELDS`, which is how the works period sat off both of them
+unnoticed for a day.
 
 ## Related
 

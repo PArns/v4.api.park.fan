@@ -619,8 +619,10 @@ export class AttractionMergeService {
    * the loser's bare `toUncertain` and hedges a date it does not have.
    *
    * So the set moves together or not at all: the winner inherits the columns
-   * the loser holds — an open-ended window is two of them, or one — and only
-   * when it holds none of the three itself.
+   * the loser holds, and only when it holds none of the three itself. That is
+   * all three for a window with both dates and an estimate flag, and one for
+   * the ordinary open-ended one — a start with no end, whose flag `settle`
+   * drops below.
    *
    * `settle` then asks of the window that is about to travel what the endpoint
    * asks of one being typed. It has to, and not because the endpoint is

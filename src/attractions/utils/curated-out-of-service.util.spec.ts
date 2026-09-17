@@ -2,6 +2,7 @@ import {
   attractionIsCuratedOutOfService,
   isCuratedOutOfService,
   resolveWorksPeriod,
+  worksPeriodEndsBeforeItBegins,
 } from "./curated-out-of-service.util";
 
 /** Collapses the SQL's formatting so assertions can match on wording alone. */
@@ -170,5 +171,61 @@ describe("resolveWorksPeriod", () => {
         })?.toUncertain,
       ).toBe(false);
     }
+  });
+});
+
+/**
+ * The rule both writers of a works period read (PAR-297).
+ *
+ * `AdminCurationService` refuses the pair a curator types, and
+ * `AttractionMergeService` refuses to carry one onto the row that survives a
+ * merge. Written twice it would drift, and the half that drifted would be the
+ * one nobody types into.
+ */
+describe("worksPeriodEndsBeforeItBegins", () => {
+  it("names the pair a window can never apply on", () => {
+    expect(worksPeriodEndsBeforeItBegins("2026-03-01", "2026-01-20")).toBe(
+      true,
+    );
+  });
+
+  it("leaves a window that ends on the day it starts alone", () => {
+    // Both bounds inclusive, so a one-day works period is a works period.
+    expect(worksPeriodEndsBeforeItBegins("2026-03-01", "2026-03-01")).toBe(
+      false,
+    );
+  });
+
+  it("calls no half-open window inverted", () => {
+    // There is nothing for the missing bound to precede, and both halves are
+    // ordinary states — a start with no end while work runs, an end with no
+    // start for a window that was already open when somebody wrote it down.
+    expect(worksPeriodEndsBeforeItBegins("2026-03-01", null)).toBe(false);
+    expect(worksPeriodEndsBeforeItBegins(null, "2026-01-20")).toBe(false);
+    expect(worksPeriodEndsBeforeItBegins(null, null)).toBe(false);
+    expect(worksPeriodEndsBeforeItBegins(undefined, undefined)).toBe(false);
+  });
+
+  it("describes a window that covers no day at all", () => {
+    // The reason the merge refuses to carry one, written as an assertion
+    // rather than as a sentence in a test comment: an inverted window
+    // suppresses nothing, it is served as a `worksPeriod` running backwards.
+    const inverted = {
+      curatedOutOfServiceFrom: "2026-03-01",
+      curatedOutOfServiceTo: "2026-01-20",
+    };
+    for (const day of [
+      "2026-01-19",
+      "2026-01-20",
+      "2026-02-10",
+      "2026-03-01",
+    ]) {
+      expect(isCuratedOutOfService(inverted, "Europe/Berlin", day)).toBe(false);
+    }
+    expect(resolveWorksPeriod(inverted)).toEqual({
+      from: "2026-03-01",
+      to: "2026-01-20",
+      toUncertain: false,
+    });
   });
 });

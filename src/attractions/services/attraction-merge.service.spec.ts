@@ -691,7 +691,7 @@ describe("AttractionMergeService — the works period survives as a set", () => 
     );
   });
 
-  it("carries an open-ended window as the two columns it really has", async () => {
+  it("carries an open-ended window as the one column it really has", async () => {
     // A start with no end is the ordinary state while work is going on, and
     // the flag is null beside it. Inheriting a null would write a column the
     // loser never held.
@@ -794,8 +794,10 @@ describe("AttractionMergeService — the works period survives as a set", () => 
     // Unreachable through the endpoint — `AdminCurationService` rejects the
     // pair — but reachable by hand, and the winner holds nothing, so nothing
     // else would stop it. Arriving whole does not make an inverted window any
-    // better: it is served as `worksPeriod` and suppresses every outage report
-    // for a ride, on a row that outlives the merge.
+    // better: `isCuratedOutOfService` tests `from <= day <= to`, which no day
+    // satisfies, so it suppresses nothing and is served to readers as a
+    // `worksPeriod` running from March to January — on a row that outlives the
+    // merge.
     const preview = await inheritedFrom(
       ride(),
       ride({
