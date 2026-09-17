@@ -142,8 +142,8 @@ describe("curated field views", () => {
  * on the last of those days and never reached either list either — a third
  * column missed by the same absence of a check.
  *
- * A new curated attraction key has to reach two places, and the three tests
- * below are that sentence written out: it goes on
+ * A new curated attraction key has to reach two places, and the tests below
+ * are that sentence written out: it goes on
  * `ATTRACTION_CURATED_DB_COLUMNS`, which decides whether a ride carrying only
  * that value counts as curated in the admin's figure, and on exactly one of
  * `AttractionMergeService.INHERITABLE_COLUMNS` / `INHERITABLE_COLUMN_SETS`,
