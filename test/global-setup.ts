@@ -162,6 +162,15 @@ async function createSchema(database: string): Promise<void> {
     // non-hypertable. It takes hold the moment a table becomes one, so the
     // first suite to boot decides the compression state the later ones inherit.
     //
+    // Unlike `TimescaleInitService.createHypertable`, this does not rebuild the
+    // primary key around the time column — it does not have to, because every
+    // entity here already declares it (`weather_data` is `(parkId, date)`,
+    // `wait_time_predictions` `(attractionId, createdAt, predictedTime,
+    // predictionType)`, `forecast_data` `(id, createdAt)`,
+    // `queue_data_aggregates` `(id, hour)`). A future entry whose entity leaves
+    // the time column out of the key converts in production and only warns
+    // here, so the key is where a new hypertable's first check belongs.
+    //
     // Warn rather than throw, on purpose: a suite without TimescaleDB should
     // still run. `park-merge.e2e-spec.ts` asserts these by name against
     // `timescaledb_information.hypertables`, so a table that quietly stayed

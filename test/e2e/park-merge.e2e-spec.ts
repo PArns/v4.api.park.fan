@@ -472,16 +472,6 @@ describe("Park merge (E2E)", () => {
     const SUB_BOTH = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
     const SUB_LOSER = "ffffffff-ffff-4fff-8fff-ffffffffffff";
 
-    /**
-     * Two parks, each with a show and a restaurant of the same name, plus one
-     * of each that only the loser has.
-     *
-     * Same name AND same slug: `migrateEntities` matches on either, and the
-     * unique `(parkId, slug)` on both tables is what a plain reparenting UPDATE
-     * would walk into (23505). The lonely pair is the control — it must come
-     * out reparented, not merged away, so a test that passes by deleting
-     * everything fails.
-     */
     /** The two parks every case in here merges, and nothing else. */
     async function seedMergeParks(): Promise<void> {
       const park = (id: string, name: string) =>
@@ -494,6 +484,16 @@ describe("Park merge (E2E)", () => {
       await park(MERGE_LOSER, "merge-loser");
     }
 
+    /**
+     * Two parks, each with a show and a restaurant of the same name, plus one
+     * of each that only the loser has.
+     *
+     * Same name AND same slug: `migrateEntities` matches on either, and the
+     * unique `(parkId, slug)` on both tables is what a plain reparenting UPDATE
+     * would walk into (23505). The lonely pair is the control — it must come
+     * out reparented, not merged away, so a test that passes by deleting
+     * everything fails.
+     */
     async function seedShowAndRestaurantCollision(): Promise<void> {
       await seedMergeParks();
 
@@ -876,9 +876,11 @@ describe("Park merge (E2E)", () => {
      * `weather_data` — step 4, and the fourth hypertable this merge writes to.
      *
      * It is the only one of the seven that partitions on a `date` rather than a
-     * timestamp, and the only park-level one: `migrateTableData(…,
-     * "weather_data", "parkId", …, ["date"])` deletes the loser's rows whose
-     * date a winner row already holds, then rewrites `parkId` on what is left.
+     * timestamp, and the only one `mergeParks` migrates inline on `parkId`
+     * (`queue_data_aggregates` is park-level too, but through
+     * `PARK_DEPENDENCIES`): `migrateTableData(…, "weather_data", "parkId", …,
+     * ["date"])` deletes the loser's rows whose date a winner row already
+     * holds, then rewrites `parkId` on what is left.
      *
      * The rows deliberately sit in different chunks (`chunk_time_interval` is
      * 7 days here, as in production), so the reparenting UPDATE has to cross a
