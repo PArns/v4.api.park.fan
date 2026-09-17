@@ -563,7 +563,10 @@ export class AttractionMergeService {
    * so a curation that lived only there is gone with no trace and nothing to
    * notice it by — the value simply reverts to whatever the sync last wrote,
    * months after anybody remembers deciding otherwise. Add a curated column to
-   * the entity, add it here.
+   * the entity, add it here — or to a set below, if it only means anything
+   * beside its neighbours. The spec in `curated-field.spec-list.spec.ts` holds
+   * the descriptors against both lists, because this sentence on its own is
+   * what the works period was missed by.
    *
    * `openWithPark` is the one curated key on neither list, and it cannot be on
    * this one: the column is NOT NULL, so the winner's value is never absent
@@ -686,14 +689,8 @@ export class AttractionMergeService {
     const inherited: Record<string, unknown> = {};
 
     for (const column of AttractionMergeService.INHERITABLE_COLUMNS) {
-      const winnerValue = winner[column];
-      const loserValue = loser[column];
-      if (
-        (winnerValue === null || winnerValue === undefined) &&
-        loserValue !== null &&
-        loserValue !== undefined
-      ) {
-        inherited[column] = loserValue;
+      if (!isSet(winner[column]) && isSet(loser[column])) {
+        inherited[column] = loser[column];
       }
     }
 
