@@ -42,11 +42,11 @@ real database proves the transaction **commits**.
 `test/helpers/ml-forecast-tables.ts` creates the four tables by **extracting the
 `CREATE TABLE` statement from the file that issues it**:
 
-| Table | Source of truth |
-| -- | -- |
-| `pcn_forecasts` | `pcn-service/db.py` |
-| `shape_forecasts` | `shape-service/db.py` |
-| `tft_forecasts` | `nf-service/db.py` |
+| Table                      | Source of truth                                  |
+| -------------------------- | ------------------------------------------------ |
+| `pcn_forecasts`            | `pcn-service/db.py`                              |
+| `shape_forecasts`          | `shape-service/db.py`                            |
+| `tft_forecasts`            | `nf-service/db.py`                               |
 | `catboost_daily_forecasts` | `src/queues/processors/nf-forecast.processor.ts` |
 
 A copied DDL is a second definition of a schema this repo owns no migration
@@ -72,32 +72,43 @@ to prevent.
 
 > **2026-09-15, PAR-172** — the second axis of the same drift.
 
-The rule above is about tables the test schema does not *have*. A table it does
+The rule above is about tables the test schema does not _have_. A table it does
 have can still be shaped differently from production, and that is quieter,
 because every `to_regclass` check above passes.
 
 Production runs **seven** hypertables, all compressed, and the merge writes to
 every one of them:
 
-| Table | Where the merge touches it | Partitioning column |
-| -- | -- | -- |
-| `queue_data` | `ATTRACTION_DEPENDENCIES` | `timestamp` |
-| `show_live_data` | `SHOW_DEPENDENCIES` | `timestamp` |
-| `restaurant_live_data` | `RESTAURANT_DEPENDENCIES` | `timestamp` |
-| `weather_data` | `mergeParks` step 4 | `date` |
-| `wait_time_predictions` | `ATTRACTION_DEPENDENCIES` | `createdAt` |
-| `forecast_data` | `ATTRACTION_DEPENDENCIES` | `createdAt` |
-| `queue_data_aggregates` | `ATTRACTION_DEPENDENCIES`, `PARK_DEPENDENCIES` | `hour` |
+| Table                   | Where the merge touches it                     | Partitioning column |
+| ----------------------- | ---------------------------------------------- | ------------------- |
+| `queue_data`            | `ATTRACTION_DEPENDENCIES`                      | `timestamp`         |
+| `show_live_data`        | `SHOW_DEPENDENCIES`                            | `timestamp`         |
+| `restaurant_live_data`  | `RESTAURANT_DEPENDENCIES`                      | `timestamp`         |
+| `weather_data`          | `mergeParks` step 4                            | `date`              |
+| `wait_time_predictions` | `ATTRACTION_DEPENDENCIES`                      | `createdAt`         |
+| `forecast_data`         | `ATTRACTION_DEPENDENCIES`                      | `createdAt`         |
+| `queue_data_aggregates` | `ATTRACTION_DEPENDENCIES`, `PARK_DEPENDENCIES` | `hour`              |
 
-`synchronize: true` makes none of them a hypertable. `global-setup.ts` calls
-`create_hypertable` from a hand-written list, and until PAR-172 that list had
-one entry. So the merge's `SET LOCAL
+`synchronize: true` makes none of them a hypertable. `global-setup.ts` has to
+convert them itself, and it did so from a hand-written list: one entry until
+PAR-172, three until PAR-234. So the merge's `SET LOCAL
 timescaledb.max_tuples_decompressed_per_dml_transaction = 0` — step 0, lifted
 once for the whole transaction — applied to nothing the suite touched, and any
-case asserting what a merge does to compressed rows would have been measuring a
-plain table.
+case asserting what a merge does to compressed rows was measuring a plain
+table.
 
-The list is now three. The remaining four are PAR-234.
+**That list is gone.** The seven are `HYPERTABLES` in
+`src/database/hypertables.ts`, as data: table, partitioning column,
+`chunk_time_interval` and the compression settings.
+`TimescaleInitService.initializeHypertables` iterates it, so production's
+schema comes from the same constant the test schema does, and
+`global-setup.ts` imports it rather than repeating it. Adding a hypertable is
+one line in one file; it reaches the test schema and the assertion below
+without anyone remembering to copy it.
+
+It drifted twice for the reason a copy always does, and both times quietly:
+`to_regclass` passes on a plain table, and the only other thing that would have
+noticed is the premise assertion inside the compressed-chunk case.
 
 **Two things this costs that are easy to miss:**
 
@@ -111,13 +122,19 @@ The list is now three. The remaining four are PAR-234.
    disables it for every later file and orphans the policy.
 2. **`create_hypertable` failures only warn.** That is deliberate — a suite
    without TimescaleDB should still run — but it means a table can quietly stay
-   plain. `park-merge.e2e-spec.ts` asserts the three by name against
-   `timescaledb_information.hypertables`, so a silent fallback fails as a named
-   expectation rather than as a case that passes for the wrong reason.
+   plain. `park-merge.e2e-spec.ts` asserts every entry of `HYPERTABLES` against
+   `timescaledb_information.dimensions` — name, partitioning column and chunk
+   interval, the interval compared in Postgres because `1 day` and `24:00:00`
+   are the same one — so a silent fallback fails as a named expectation rather
+   than as a case that passes for the wrong reason. The case asserts the
+   constant's own length first: it is the expectation, so a shortened list would
+   pass while leaving tables plain.
 
 **And compression settings are read from the writer too**, for the same reason
-the DDL is. `enableCompression` passes no `segmentby` for `show_live_data`, and
-production has none. Segmenting by the column a merge rewrites lets TimescaleDB
+the DDL is — they are fields on the same constant. `HYPERTABLES` gives
+`wait_time_predictions` a `segmentBy` and nothing else one, which is what
+production has (measured 2026-09-17: `compression_settings` holds three rows,
+all of them that table's). Segmenting by the column a merge rewrites lets TimescaleDB
 decompress one segment instead of every batch the rows sit in — an easier case
 than the one production runs, and green for the wrong reason.
 
@@ -137,13 +154,13 @@ A green test proves nothing until it is shown it can go red. Rolling only
 `parks.service.ts` and `merge-dependencies.ts` back, with the test harness left
 as it is:
 
-| Commit | Result | Where it dies |
-| -- | -- | -- |
-| `a045850~1` — before #245 | **42703** `column "attractionId" does not exist` | `parks.service.ts:632`, `UPDATE prediction_accuracy SET "attractionId"` |
-| `a045850` — after #245, before #246 | **23503** `violates foreign key constraint "FK_f6d…014" on table "park_occupancy"` | the `DELETE FROM parks` |
-| `main` | **green** | — |
+| Commit                              | Result                                                                             | Where it dies                                                           |
+| ----------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `a045850~1` — before #245           | **42703** `column "attractionId" does not exist`                                   | `parks.service.ts:632`, `UPDATE prediction_accuracy SET "attractionId"` |
+| `a045850` — after #245, before #246 | **23503** `violates foreign key constraint "FK_f6d…014" on table "park_occupancy"` | the `DELETE FROM parks`                                                 |
+| `main`                              | **green**                                                                          | —                                                                       |
 
-Each stand dies on a *different* statement, one level further in. That is the
+Each stand dies on a _different_ statement, one level further in. That is the
 answer to why this survived so long: without a real database, none of the three
 is visible.
 

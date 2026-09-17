@@ -15,6 +15,7 @@ import {
   RESTAURANT_DEPENDENCIES,
   SHOW_DEPENDENCIES,
 } from "../../src/parks/utils/merge-dependencies";
+import { HYPERTABLES } from "../../src/database/hypertables";
 
 /**
  * The merge transaction against a real Postgres.
@@ -250,24 +251,63 @@ describe("Park merge (E2E)", () => {
   });
 
   /**
-   * And in the right SHAPE, for the three the merge writes time series to.
+   * And in the right SHAPE, for every table the merge writes time series to.
    *
    * `create_hypertable` in `global-setup.ts` only warns when it fails, so a
    * table that quietly stayed a plain one would leave every case below passing
    * against a schema production does not have — including the compressed-chunk
    * case, whose own premise assertion is the only other thing that would
    * notice.
+   *
+   * The expectation is `HYPERTABLES`, the constant `TimescaleInitService`
+   * builds production's schema from, so this cannot be satisfied by a test
+   * schema that merely has SOME hypertables: name, partitioning column and
+   * `chunk_time_interval` are compared per table, and the interval comparison
+   * runs in Postgres because `1 day` and `24:00:00` are the same interval.
    */
   it("has the merge's time-series tables as hypertables", async () => {
+    // The expectation is asserted before it is used, for the same reason every
+    // seed below is: this case is only as strong as that list is long, and a
+    // shortened one would pass while leaving tables plain — which is exactly
+    // how the hand-written copy of it drifted twice (G-72).
+    expect(HYPERTABLES.length).toBeGreaterThanOrEqual(7);
+
     const rows = await dataSource.query(
-      `SELECT hypertable_name FROM timescaledb_information.hypertables
-       WHERE hypertable_name = ANY($1::text[]) ORDER BY hypertable_name`,
-      [["queue_data", "restaurant_live_data", "show_live_data"]],
+      `SELECT e.table_name, d.column_name,
+              d.time_interval = e.chunk_interval::interval AS interval_ok
+         FROM unnest($1::text[], $2::text[], $3::text[])
+                AS e(table_name, time_column, chunk_interval)
+         LEFT JOIN timescaledb_information.dimensions d
+                ON d.hypertable_name = e.table_name
+        ORDER BY e.table_name COLLATE "C"`,
+      [
+        HYPERTABLES.map((h) => h.table),
+        HYPERTABLES.map((h) => h.timeColumn),
+        HYPERTABLES.map((h) => h.chunkInterval),
+      ],
     );
 
-    expect(
-      rows.map((r: { hypertable_name: string }) => r.hypertable_name),
-    ).toEqual(["queue_data", "restaurant_live_data", "show_live_data"]);
+    // One readable line per table rather than three expectations in a loop: a
+    // plain table comes out as `weather_data: none / interval MISMATCH` with
+    // its own name in the diff, instead of as a null dereference.
+    const shape = rows.map(
+      (r: {
+        table_name: string;
+        column_name: string | null;
+        interval_ok: boolean | null;
+      }) =>
+        `${r.table_name}: ${r.column_name ?? "none"} / ${
+          r.interval_ok ? "interval ok" : "interval MISMATCH"
+        }`,
+    );
+
+    expect(shape).toEqual(
+      // Byte order, matching the `COLLATE "C"` above — `localeCompare` treats
+      // the underscore as ignorable and would order these differently.
+      [...HYPERTABLES]
+        .sort((a, b) => (a.table < b.table ? -1 : 1))
+        .map((h) => `${h.table}: ${h.timeColumn} / interval ok`),
+    );
   });
 
   it("commits: no 23503/23505/42703, time series on the winner, ghost park gone", async () => {
@@ -432,6 +472,18 @@ describe("Park merge (E2E)", () => {
     const SUB_BOTH = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
     const SUB_LOSER = "ffffffff-ffff-4fff-8fff-ffffffffffff";
 
+    /** The two parks every case in here merges, and nothing else. */
+    async function seedMergeParks(): Promise<void> {
+      const park = (id: string, name: string) =>
+        dataSource.query(
+          `INSERT INTO parks (id, "externalId", name, slug, timezone, "createdAt")
+           VALUES ($1, $2, $3, $4, 'Europe/Berlin', NOW())`,
+          [id, `ext-${name}`, name, name],
+        );
+      await park(MERGE_WINNER, "merge-winner");
+      await park(MERGE_LOSER, "merge-loser");
+    }
+
     /**
      * Two parks, each with a show and a restaurant of the same name, plus one
      * of each that only the loser has.
@@ -443,14 +495,7 @@ describe("Park merge (E2E)", () => {
      * everything fails.
      */
     async function seedShowAndRestaurantCollision(): Promise<void> {
-      const park = (id: string, name: string) =>
-        dataSource.query(
-          `INSERT INTO parks (id, "externalId", name, slug, timezone, "createdAt")
-           VALUES ($1, $2, $3, $4, 'Europe/Berlin', NOW())`,
-          [id, `ext-${name}`, name, name],
-        );
-      await park(MERGE_WINNER, "merge-winner");
-      await park(MERGE_LOSER, "merge-loser");
+      await seedMergeParks();
 
       const show = (id: string, parkId: string, name: string, slug: string) =>
         dataSource.query(
@@ -825,6 +870,88 @@ describe("Park merge (E2E)", () => {
           );
         }
       }
+    });
+
+    /**
+     * `weather_data` — step 4, and the fourth hypertable this merge writes to.
+     *
+     * It is the only one of the seven that partitions on a `date` rather than a
+     * timestamp, and the only one `mergeParks` migrates inline on `parkId`
+     * (`queue_data_aggregates` is park-level too, but through
+     * `PARK_DEPENDENCIES`): `migrateTableData(…, "weather_data", "parkId", …,
+     * ["date"])` deletes the loser's rows whose date a winner row already
+     * holds, then rewrites `parkId` on what is left.
+     *
+     * The rows deliberately sit in different chunks (`chunk_time_interval` is
+     * 7 days here, as in production), so the reparenting UPDATE has to cross a
+     * chunk boundary rather than rewrite one.
+     *
+     * Forgetting the table would not raise: the FK is ON DELETE CASCADE, so
+     * `DELETE FROM parks` takes the loser's weather history with it inside a
+     * transaction that then reports success — the same silent loss
+     * `park_seasons` has in the suite above.
+     */
+    it("keeps one weather row per date and moves the rest to the survivor", async () => {
+      await seedMergeParks();
+
+      const weather = (parkId: string, date: string, tempMax: number) =>
+        dataSource.query(
+          `INSERT INTO weather_data ("parkId", date, "dataType", "temperatureMax", "updatedAt")
+           VALUES ($1, $2, 'historical', $3, NOW())`,
+          [parkId, date, tempMax],
+        );
+      // Same date on both sides: the collision. The two temperatures differ so
+      // the surviving row can be told apart — a dedupe that dropped the
+      // WINNER's row would still leave one row on that date and pass every
+      // count (G-76).
+      await weather(MERGE_WINNER, "2026-09-01", 20);
+      await weather(MERGE_LOSER, "2026-09-01", 99);
+      // The winner's own second date, and the loser's row that has to move.
+      // Different chunks: 09-01/09-02 in one, 09-15 in another.
+      await weather(MERGE_WINNER, "2026-09-02", 21);
+      await weather(MERGE_LOSER, "2026-09-15", 30);
+
+      // The seed, asserted: three rows that all landed on the winner already
+      // would make every expectation below trivially true.
+      expect(
+        await count(`SELECT count(*) c FROM weather_data WHERE "parkId" = $1`, [
+          MERGE_LOSER,
+        ]),
+      ).toBe(2);
+
+      const result = await parkMergeService.mergeParks(
+        MERGE_WINNER,
+        MERGE_LOSER,
+      );
+      expect(result.success).toBe(true);
+
+      // 1 · The loser's colliding row is gone, its other row moved, and the
+      //     winner kept both of its own.
+      const rows = await dataSource.query(
+        `SELECT to_char(date, 'YYYY-MM-DD') AS day, "temperatureMax"::float AS temp
+           FROM weather_data WHERE "parkId" = $1 ORDER BY date`,
+        [MERGE_WINNER],
+      );
+      expect(rows).toEqual([
+        { day: "2026-09-01", temp: 20 },
+        { day: "2026-09-02", temp: 21 },
+        { day: "2026-09-15", temp: 30 },
+      ]);
+
+      // 2 · Nothing left behind under the deleted park, and nothing orphaned —
+      //     a row the merge missed would have been swept by the CASCADE
+      //     instead of surviving as an orphan, so both halves are asserted.
+      expect(
+        await count(`SELECT count(*) c FROM weather_data WHERE "parkId" = $1`, [
+          MERGE_LOSER,
+        ]),
+      ).toBe(0);
+      expect(
+        await count(
+          `SELECT count(*) c FROM weather_data w
+           WHERE NOT EXISTS (SELECT 1 FROM parks p WHERE p.id = w."parkId")`,
+        ),
+      ).toBe(0);
     });
 
     it("refuses a self-merge without touching a row", async () => {
