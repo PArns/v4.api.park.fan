@@ -142,13 +142,16 @@ describe("curated field views", () => {
  * on the last of those days and never reached either list either — a third
  * column missed by the same absence of a check.
  *
- * Three lists have to learn about a new curated attraction key, and they answer
- * two questions. `ATTRACTION_CURATED_DB_COLUMNS` decides whether a ride
- * carrying only that value counts as curated in the admin's figure;
- * `AttractionMergeService.INHERITABLE_COLUMNS` and `INHERITABLE_COLUMN_SETS`
- * decide whether the value survives a merge, one column at a time or as a
- * group. None of the three is derived from the descriptors, so nothing but a
- * test notices a key missing from one of them.
+ * A new curated attraction key has to reach two places, and the three tests
+ * below are that sentence written out: it goes on
+ * `ATTRACTION_CURATED_DB_COLUMNS`, which decides whether a ride carrying only
+ * that value counts as curated in the admin's figure, and on exactly one of
+ * `AttractionMergeService.INHERITABLE_COLUMNS` / `INHERITABLE_COLUMN_SETS`,
+ * which decide whether the value survives a merge — a column on both would be
+ * inherited twice.
+ *
+ * None of the lists is derived from the descriptors. Nothing but a test
+ * notices a key that reached none of them.
  */
 describe("the attraction column lists and the editor's descriptors", () => {
   /**
