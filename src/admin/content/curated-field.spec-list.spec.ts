@@ -1,4 +1,6 @@
 import { CURATED_PARK_COLUMNS } from "../../parks/utils/curated-park-facts.util";
+import { ATTRACTION_CURATED_DB_COLUMNS } from "../../attractions/utils/curated-attraction-facts.util";
+import { AttractionMergeService } from "../../attractions/services/attraction-merge.service";
 import {
   ATTRACTION_CURATED_FIELDS,
   PARK_CURATED_KEYS,
@@ -128,6 +130,76 @@ describe("curated field views", () => {
     expect(name.syncedValue).toBe("Disney's Hollywood Studios");
     expect(name.resolvedValue).toBe("Hollywood Studios");
     expect(name.overridden).toBe(true);
+  });
+});
+
+/**
+ * The same reminder the park side has had since its merge lost a curation,
+ * written for the attraction side after the works period spent a day off both
+ * of its lists (PAR-297).
+ *
+ * Two lists have to learn about a new curated attraction key, and they answer
+ * different questions: `ATTRACTION_CURATED_DB_COLUMNS` decides whether a ride
+ * carrying only that value counts as curated in the admin's figure, and
+ * `AttractionMergeService`'s two inheritance lists decide whether the value
+ * survives a merge. Neither is derived from the descriptors, so nothing but a
+ * test notices a key missing from one of them.
+ */
+describe("the attraction column lists and the editor's descriptors", () => {
+  const snake = (key: string) =>
+    key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+
+  const keys = ATTRACTION_CURATED_FIELDS.map((field) => field.key);
+
+  /**
+   * Filled in bulk rather than by an editor. Counting them would report
+   * thousands of rides as curated that nobody has ever looked at — the
+   * reasoning sits beside the list itself.
+   */
+  const NOT_A_CURATION = ["hasSingleRider", "rcdbId", "openWithPark"];
+
+  /**
+   * `open_with_park` is NOT NULL with a default of `false`, so the winner's
+   * value is never absent and the inheritance test can never fire on it.
+   * Carrying it would mean reading a stored `false` as "nobody said", which is
+   * the opposite of what its descriptor declares. Tracked as PAR-300.
+   */
+  const NOT_INHERITABLE = ["openWithPark"];
+
+  it("counts every hand-written key in the admin's figure, bar three", () => {
+    const expected = keys.filter((key) => !NOT_A_CURATION.includes(key));
+
+    expect([...ATTRACTION_CURATED_DB_COLUMNS].sort()).toEqual(
+      expected.map(snake).sort(),
+    );
+  });
+
+  it("carries every hand-written key across a merge, bar one", () => {
+    const inheritable = [
+      ...AttractionMergeService.INHERITABLE_COLUMNS,
+      ...AttractionMergeService.INHERITABLE_COLUMN_SETS.flat(),
+    ];
+    const missing = keys.filter(
+      (key) =>
+        !NOT_INHERITABLE.includes(key) &&
+        !(inheritable as readonly string[]).includes(key),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  it("names a column in one list at most once", () => {
+    // A key on both the column-by-column list and in a set would be inherited
+    // twice, and the set's all-or-nothing rule would be the one that loses.
+    const inheritable = [
+      ...AttractionMergeService.INHERITABLE_COLUMNS,
+      ...AttractionMergeService.INHERITABLE_COLUMN_SETS.flat(),
+    ];
+
+    expect(new Set(inheritable).size).toBe(inheritable.length);
+    expect(new Set(ATTRACTION_CURATED_DB_COLUMNS).size).toBe(
+      ATTRACTION_CURATED_DB_COLUMNS.length,
+    );
   });
 });
 

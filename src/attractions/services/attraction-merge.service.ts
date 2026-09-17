@@ -548,32 +548,32 @@ export class AttractionMergeService {
   }
 
   /**
-   * Columns worth carrying over from the losing row. Deliberately excludes
-   * `externalId` (unique, and the survivor keeps its own identity) and `slug`
-   * (handled by resolveSurvivingSlug).
+   * Columns worth carrying over from the losing row, one at a time.
+   * Deliberately excludes `externalId` (unique, and the survivor keeps its own
+   * identity) and `slug` (handled by resolveSurvivingSlug).
    *
-   * Every `curated_*` column has to be on this list, and stay on it. A merge
-   * deletes the losing row, so a curation that lived only there is gone with
-   * no trace and nothing to notice it by — the value simply reverts to
-   * whatever the sync last wrote, months after anybody remembers deciding
-   * otherwise. Add a curated column to the entity, add it here.
+   * Every `curated_*` column has to be on this list or in
+   * `INHERITABLE_COLUMN_SETS`, and stay there. A merge deletes the losing row,
+   * so a curation that lived only there is gone with no trace and nothing to
+   * notice it by — the value simply reverts to whatever the sync last wrote,
+   * months after anybody remembers deciding otherwise. Add a curated column to
+   * the entity, add it here.
    *
-   * Three columns break that rule today and are tracked as PAR-297: the works
-   * period's `curatedOutOfServiceFrom` / `_to` / `_toUncertain`. They are left
-   * off deliberately rather than by oversight, because this loop fills column
-   * by column: a winner holding a start and no end would take the loser's end
-   * and build a window that ends before it begins — the pair the curation
-   * endpoint rejects outright, and since PAR-287 one that is served. Putting
-   * them on needs the window inherited as a set, which is a change to the loop
-   * below and not to this list.
+   * `openWithPark` is the one curated key on neither list, and it cannot be on
+   * this one: the column is NOT NULL, so the winner's value is never absent
+   * and the test below never fires. Carrying it would mean deciding that a
+   * stored `false` means "nobody said", which is the opposite of what the
+   * editor's descriptor says it means. Tracked separately.
    *
-   * The price is the loss the paragraph above calls unacceptable: until then a
-   * merge drops the losing row's works period silently, and `previewMerge`
-   * does not report it (`droppedCurations` covers ride profiles alone). The
-   * rare inverted window was preferred over the common silent loss only
-   * because the first reaches readers and the second can be curated again.
+   * `curatedIsSeasonal` and `curatedSeasonMonths` stay here rather than moving
+   * into a set, although the resolver treats them as one statement. Column by
+   * column is what a merge wants for them: a winner curated seasonal but
+   * without months should take the loser's months, and a set would refuse. The
+   * one crossed pair it can build — a curated `false` next to inherited months
+   * — never reaches a reader, because `resolveCuratedFacts` drops the months
+   * whenever the resolved seasonality is false.
    */
-  private static readonly INHERITABLE_COLUMNS = [
+  static readonly INHERITABLE_COLUMNS = [
     "queueTimesEntityId",
     "latitude",
     "longitude",
@@ -600,6 +600,31 @@ export class AttractionMergeService {
     "seasonMonths",
   ] as const;
 
+  /**
+   * Groups of columns that only ever travel together.
+   *
+   * The works period is three columns holding one statement, and two rules
+   * guard it on the way in: `AdminCurationService` rejects an end before its
+   * start, and clears "that end is only an estimate" whenever the end goes
+   * away. Column-by-column inheritance breaks both. A winner with a start and
+   * no end takes the loser's end and carries a window that ends before it
+   * begins — the pair the endpoint refuses, and since PAR-287 one that is
+   * served to readers as `worksPeriod`. A winner with no dates at all takes
+   * the loser's bare `toUncertain` and hedges a date it does not have.
+   *
+   * So the set moves or it does not: the winner inherits all three only when
+   * it holds none of them. What arrives is then a window the curation endpoint
+   * already accepted on the losing row, which is why no check is needed here —
+   * copying a valid set cannot produce an invalid one.
+   */
+  static readonly INHERITABLE_COLUMN_SETS = [
+    [
+      "curatedOutOfServiceFrom",
+      "curatedOutOfServiceTo",
+      "curatedOutOfServiceToUncertain",
+    ],
+  ] as const;
+
   private inheritMissingMetadata(
     winner: Attraction,
     loser: Attraction,
@@ -615,6 +640,20 @@ export class AttractionMergeService {
         loserValue !== undefined
       ) {
         inherited[column] = loserValue;
+      }
+    }
+
+    for (const columns of AttractionMergeService.INHERITABLE_COLUMN_SETS) {
+      const winnerHoldsSomething = columns.some(
+        (column) => winner[column] !== null && winner[column] !== undefined,
+      );
+      if (winnerHoldsSomething) continue;
+
+      const present = columns.filter(
+        (column) => loser[column] !== null && loser[column] !== undefined,
+      );
+      for (const column of present) {
+        inherited[column] = loser[column];
       }
     }
 

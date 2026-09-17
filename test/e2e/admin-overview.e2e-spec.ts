@@ -116,6 +116,17 @@ describe("Admin overview (e2e)", () => {
         parkId: curatedPark.id,
         retiredAt: new Date("2026-01-01T00:00:00Z"),
       }),
+      // A works period and nothing else — the case PAR-297 is about. Every
+      // other curated column on this row is null, so if the figure counts it,
+      // it counts it for the window.
+      attractionRepo.create({
+        externalId: "e2e-a5",
+        name: "Umbaubahn",
+        slug: "umbaubahn",
+        parkId: curatedPark.id,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+      }),
     ]);
 
     const seasonRepo = dataSource.getRepository(ParkSeason);
@@ -172,12 +183,45 @@ describe("Admin overview (e2e)", () => {
     });
     expect(response.body.attractions).toMatchObject({
       // The retired one is not in any of these.
-      total: 3,
-      curated: 1,
+      total: 4,
+      // Taron by its curated name, Umbaubahn by its works period alone.
+      curated: 2,
       seasonal: 2,
       // One seasonal ride has months, the other has none.
       seasonalWithoutMonths: 1,
     });
+  });
+
+  /**
+   * A ride whose only hand-written value is a works period counts as curated
+   * (PAR-297). The three columns were missing from
+   * `ATTRACTION_CURATED_DB_COLUMNS`, so such a ride was handed to the next
+   * editor as untouched — the exact failure the list was introduced to end.
+   *
+   * Measured by taking the window away rather than by reading the number once:
+   * a figure that happens to be 2 proves nothing about which column produced
+   * it, and every other curated column on this row is already null.
+   */
+  it("counts a ride whose only curation is a works period", async () => {
+    const figure = async () => {
+      const response = await request(app.getHttpServer())
+        .get("/v1/admin/content/overview")
+        .set("Authorization", `Bearer ${token}`);
+      expect(response.status).toBe(200);
+      return response.body.attractions.curated as number;
+    };
+
+    expect(await figure()).toBe(2);
+
+    await dataSource.query(
+      `UPDATE attractions
+          SET curated_out_of_service_from = NULL,
+              curated_out_of_service_to = NULL
+        WHERE "externalId" = $1`,
+      ["e2e-a5"],
+    );
+
+    expect(await figure()).toBe(1);
   });
 
   it("separates a season running today from one still ahead", async () => {
