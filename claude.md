@@ -23,6 +23,21 @@
 
 ## 📚 Documentation Index
 
+> **This file is indexed, not grown (REQUIREMENT).** A new rule, a new measurement or a new piece of
+> background goes into the page that owns the subject — an existing one under `docs/`, or a **new
+> file** when no page owns it yet — and this file gets **one line** pointing at it. Never append the
+> prose here. A paragraph in this file is paid for by every session on every task, whether or not it
+> is about the thing that session is changing; a paragraph in a linked page is paid for by the
+> sessions that need it. The same rule governs those pages: once a page stops being about one
+> subject, split it and index the parts. An entry here carries the rule and the identifiers needed to
+> grep for it and nothing else.
+
+### 📐 Standing rules
+
+- [Unified crowd levels](docs/rules/crowd-levels.md) – Typical-day-peak for daily, ratio-vs-P50 for live, and why they may never meet on one surface.
+- [An absent fact never becomes a confident one](docs/rules/absent-facts.md) – `UNKNOWN` over `CLOSED`, the 330-day season floor, curated columns beside the synced one.
+
+
 ### 📋 Changelog
 - [Changelog](docs/changelog.md) – Versioned changes (date, version, added/changed/fixed).
 - [Changelog fragments](docs/changelog.d/README.md) – Where a pull request writes its entry, and the two commands that fold them in.
@@ -133,58 +148,30 @@ ml-service/            # 🐍 Python CatBoost Service
 
 ### 3. Unified Crowd Levels (Typical-Day-Peak Daily / Ratio-vs-P50 Live)
 
-- **Detailed Guide**: [Typical-Day-Peak](docs/analytics/crowd-level-typical-day-peak.md) · [Crowd Levels](docs/analytics/crowd-levels.md)
-- **Boundary**: daily/historical aggregates compare a day's peak to a **typical day's peak**; point-in-time/live signals use **ratio-vs-P50**. Never mix the two on one surface.
-- **Calendar daily**: a day's value = **AVG across headliner rides** of each ride's daily P90; denominator = **typical-day-peak baseline** = the **median over operating days** of that same day value (548-day window, headliner-only). Future/predicted days use the same baseline (AVG of predicted headliner waits ÷ typical-day-peak).
-  - **Predicted-wait source (2026-05-24)**: those predicted headliner waits come from **TFT for days 1–30** (nf-service, ~2× better on busy peaks), **CatBoost for days 31–365** — merged in `MLService.getServingDailyPredictions` (serving only; the writer stays pure CatBoost). See [TFT vs CatBoost split](docs/ml/neuralforecast-tft-evaluation.md).
-  - **Formula**: `(day_value / typical_day_peak) * 100` — 100% = a statistically typical day = `moderate`; busy seasons (Wintertraum, Easter, promos) correctly read high/very_high/extreme. The pooled P90 baseline is NOT used (it's inflated by the busiest season and compresses the top).
-- **Live overview / `calculateParkOccupancy` (ratio-vs-P50)**: the **baseline-weighted mean** across headliners reporting in the last 60 min. The calendar "today" cell and hourly within-a-day predictions stay on ÷P50 too.
-  - **Formula**: `Σ latest_wait / Σ attraction_p50 * 100` (`getHeadlinerLoad`). Falls back to `avg(latest) / park_p50 * 100` when no per-ride baselines exist.
-  - **The ML feature is a DIFFERENT function.** `park_occupancy_pct` comes from `getCurrentOccupancy`, which deliberately stays on the older park-wide `avg(latest) / park_p50 * 100` shape — trained models depend on that exact feature distribution, so moving it to the weighted mean needs a retrain cycle. Don't "unify" the two.
-  - **Sum the minutes, then divide — never average or take a percentile of the per-ride ratios.** A percentile across ratios is an extreme-value estimator: over a ten-ride headliner set its P90 is just the second-busiest ride, it can only push the reading up, and a 10-minute-baseline ride outvotes a marquee. That is what made Phantasialand read `high` (123%) with Taron at 20/45 min. Same rule applies to any new cross-ride aggregate.
-  - **`breakdown.typicalAvgWait`** must be the baseline of exactly the rides in `currentAvgWait`, so the displayed pair divides out to the displayed percentage.
-- **No made-up ratings**: anything that cannot rate against a real baseline emits **`unknown`**, never a placeholder `moderate` — `rateOrUnknown`, the `isParkRatable` gate, `getLoadRating(_, baseline<=0)`, `calculateParkOccupancy` with no live sample at all, and the callers of `getAttractionCrowdLevel`. A 0-minute wait against a real baseline is a walk-on, not missing data, and still rates (`very_low`) — only an *absent* wait is "no data".
-  - Consumers must read the **gated** value (`occupancy.crowdLevel`), never re-derive a tier from `occupancy.current`: the recompute bypasses the ratability gate, and at `current = 0` it silently yields `very_low`.
-  - Every Swagger `enum:` for a crowd-level field comes from `CROWD_LEVEL_VALUES` / `CROWD_LEVEL_WITH_CLOSED_VALUES` (`common/types/crowd-level.type.ts`). Never hand-write the list — that drift is how `unknown` stayed out of the published contract while the API had been sending it for months.
-- **No calendar fallback**: typical-day-peak is written atomically with P50/P90 (`park_p50_baselines.typicalDayPeak` + Redis), so a missing value means no usable baseline → `unknown`. P50 stays load-bearing (live + ML feature); P90 is computed for free but no longer a calendar reference.
-- **Past and future days must carry the same statistic** where they share a response field. `headlinerForecast.avgWait` is a day-peak on both sides: forecasts come from a per-day MAX in `predict.py`, history from `getHeadlinerDailyPeaks` (per-ride day-P90). A mean on one side and a peak on the other reads as the park getting busier next week when only the statistic changed.
+Daily and historical aggregates compare a day's peak to a **typical day's peak**; point-in-time and
+live signals use **ratio-vs-P50**. **Never mix the two on one surface.** Sum the minutes, then
+divide — never average or take a percentile of the per-ride ratios. Anything that cannot rate
+against a real baseline emits **`unknown`**, never a placeholder `moderate`, and consumers read the
+gated value rather than re-deriving a tier. The ML feature `park_occupancy_pct` is a **different**
+function (`getCurrentOccupancy`) and stays that way on purpose.
+
+Full rule, both formulas and the traps: [Unified crowd levels](docs/rules/crowd-levels.md) ·
+[Typical-Day-Peak](docs/analytics/crowd-level-typical-day-peak.md) ·
+[Crowd Levels](docs/analytics/crowd-levels.md)
 
 ---
 
 ### 4. An Absent Fact Never Becomes a Confident One
 
-- **Detailed Guide**: [Attraction Status & Seasonality](docs/architecture/attraction-status-and-seasonality.md)
-- The `unknown` crowd-level rule (§3) is the same rule as these, and they have
-  all been broken the same way — **our own bookkeeping served as somebody
-  else's statement**:
-  - A ride **no source reports** reads `UNKNOWN`, never `CLOSED`. Reverse-
-    reconciliation's row records that our data stopped arriving, not that the
-    operator shut the ride. ~140 attractions across ten parks read "closed" for
-    weeks this way.
-  - **`season_months` may not be derived from less than a year of watching**
-    (`MIN_OBSERVED_DAYS` = 330). Below that the months are the observation
-    window, not a season — every list in the database was one.
-  - A **free-flow** attraction (`open_with_park`) is not seasonal just because
-    its feed never says OPERATING; that is a playground's normal state.
-- **Two writers, never one cell.** `curated_may_get_wet`, `curated_minimum_height`
-  and `curated_stats` sit *beside* the synced column, never in it, because the
-  sync overwrites its own cell on every run. Read via `resolveCuratedFacts`.
-- **`AttractionStatus` includes `UNKNOWN`** and every Swagger `enum:` for it
-  comes from `ATTRACTION_STATUS_VALUES` — hand-written lists are how `unknown`
-  stayed out of the published contract for months.
-- **Research, never recall.** Facts about real rides and parks (heights, wet
-  flags, whether something is free-flow, seasons) come from the operator's own
-  pages. A name pattern is not evidence.
-- **Identity is the `externalId`, never the slug.** A slug is a frozen name that
-  renames deliberately do not move, so 281 rows carry a slug that no longer
-  matches — that is the system working. Resolve a disputed name against the
-  upstream entity, not against what its slug implies.
-- **A behavioural detector cannot remember.** Duplicate and retirement detection
-  describe the feed, so a cleared candidate returns tomorrow unless the verdict
-  is written to `attraction_review_marks`. Give it a `recheck_after` whenever the
-  answer can change.
+Our own bookkeeping is never somebody else's statement. A ride **no source reports** reads
+`UNKNOWN`, never `CLOSED`. `season_months` may not be derived from less than a year of watching
+(`MIN_OBSERVED_DAYS` = 330). Curated columns sit **beside** the synced column, never in it, and are
+read through `resolveCuratedFacts`. Facts about real rides come from the operator's own pages, never
+from recall, and identity is the `externalId`, never the slug.
 
----
+Full rule and what each of these cost when it was broken:
+[An absent fact never becomes a confident one](docs/rules/absent-facts.md) ·
+[Attraction Status & Seasonality](docs/architecture/attraction-status-and-seasonality.md)
 
 ## 📦 Key Types
 
