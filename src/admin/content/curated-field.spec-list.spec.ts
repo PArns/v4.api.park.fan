@@ -1,4 +1,8 @@
 import { CURATED_PARK_COLUMNS } from "../../parks/utils/curated-park-facts.util";
+import { getMetadataArgsStorage } from "typeorm";
+import { ATTRACTION_CURATED_DB_COLUMNS } from "../../attractions/utils/curated-attraction-facts.util";
+import { AttractionMergeService } from "../../attractions/services/attraction-merge.service";
+import { Attraction as AttractionEntity } from "../../attractions/entities/attraction.entity";
 import {
   ATTRACTION_CURATED_FIELDS,
   PARK_CURATED_KEYS,
@@ -128,6 +132,107 @@ describe("curated field views", () => {
     expect(name.syncedValue).toBe("Disney's Hollywood Studios");
     expect(name.resolvedValue).toBe("Hollywood Studios");
     expect(name.overridden).toBe(true);
+  });
+});
+
+/**
+ * The same reminder the park side has had since its merge lost a curation,
+ * written for the attraction side after the works period's dates sat off both
+ * of its lists from 2026-09-06 to 2026-09-17 (PAR-297). `_to_uncertain` landed
+ * on the last of those days and never reached either list either — a third
+ * column missed by the same absence of a check.
+ *
+ * A new curated attraction key has to reach two places, and the tests below
+ * are that sentence written out: it goes on
+ * `ATTRACTION_CURATED_DB_COLUMNS`, which decides whether a ride carrying only
+ * that value counts as curated in the admin's figure, and on exactly one of
+ * `AttractionMergeService.INHERITABLE_COLUMNS` / `INHERITABLE_COLUMN_SETS`,
+ * which decide whether the value survives a merge — a column on both would be
+ * inherited twice.
+ *
+ * None of the lists is derived from the descriptors. Nothing but a test
+ * notices a key that reached none of them.
+ */
+describe("the attraction column lists and the editor's descriptors", () => {
+  /**
+   * The physical name as TypeORM has it, not as a regex guesses it.
+   *
+   * This entity mixes both conventions — `externalId` and `attractionType`
+   * carry no `name:` and are stored camelCase, the curated columns all declare
+   * a snake_case one. Deriving the name would pin a future column to the shape
+   * the guess produced and leave the raw SQL in `admin-content.controller.ts`
+   * failing at runtime against a green suite.
+   */
+  const physicalName = (property: string) => {
+    const column = getMetadataArgsStorage().columns.find(
+      (candidate) =>
+        candidate.target === AttractionEntity &&
+        candidate.propertyName === property,
+    );
+    if (!column) throw new Error(`${property} is not a column on Attraction`);
+    return column.options.name ?? property;
+  };
+
+  const keys = ATTRACTION_CURATED_FIELDS.map((field) => field.key);
+
+  /**
+   * Filled in bulk rather than by an editor. Counting them would report
+   * thousands of rides as curated that nobody has ever looked at — the
+   * reasoning sits beside the list itself.
+   */
+  const NOT_A_CURATION = ["hasSingleRider", "rcdbId", "openWithPark"];
+
+  /**
+   * `open_with_park` is NOT NULL with a default of `false`, so the winner's
+   * value is never absent and the inheritance test can never fire on it.
+   * Carrying it would mean reading a stored `false` as "nobody said", which is
+   * the opposite of what its descriptor declares. Tracked as PAR-300.
+   */
+  const NOT_INHERITABLE = ["openWithPark"];
+
+  it("counts every hand-written key in the admin's figure, bar three", () => {
+    const expected = keys.filter((key) => !NOT_A_CURATION.includes(key));
+
+    expect([...ATTRACTION_CURATED_DB_COLUMNS].sort()).toEqual(
+      expected.map(physicalName).sort(),
+    );
+  });
+
+  it("carries every hand-written key across a merge, bar one", () => {
+    const inheritable = [
+      ...AttractionMergeService.INHERITABLE_COLUMNS,
+      ...AttractionMergeService.INHERITABLE_SET_COLUMNS,
+    ];
+    const missing = keys.filter(
+      (key) =>
+        !NOT_INHERITABLE.includes(key) &&
+        !(inheritable as readonly string[]).includes(key),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  it("keeps every exception attached to a descriptor that still exists", () => {
+    // An exception outlives the key it was written for: rename or drop a
+    // descriptor and the entry here stops excusing anything and starts
+    // widening the hole these tests exist to guard.
+    expect(keys).toEqual(
+      expect.arrayContaining([...NOT_A_CURATION, ...NOT_INHERITABLE]),
+    );
+  });
+
+  it("names a column in one list at most once", () => {
+    // A key on both the column-by-column list and in a set would be inherited
+    // twice, and the set's all-or-nothing rule would be the one that loses.
+    const inheritable = [
+      ...AttractionMergeService.INHERITABLE_COLUMNS,
+      ...AttractionMergeService.INHERITABLE_SET_COLUMNS,
+    ];
+
+    expect(new Set(inheritable).size).toBe(inheritable.length);
+    expect(new Set(ATTRACTION_CURATED_DB_COLUMNS).size).toBe(
+      ATTRACTION_CURATED_DB_COLUMNS.length,
+    );
   });
 });
 

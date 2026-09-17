@@ -14,6 +14,7 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { Attraction } from "../../attractions/entities/attraction.entity";
+import { worksPeriodEndsBeforeItBegins } from "../../attractions/utils/curated-out-of-service.util";
 import { Park } from "../../parks/entities/park.entity";
 import { parseHttpUrl } from "../../common/utils/http-url.util";
 import { AdminAuditService } from "../auth/admin-audit.service";
@@ -227,7 +228,7 @@ export class AdminCurationService {
       const key = "curatedOutOfServiceToUncertain";
       const from = attraction.curatedOutOfServiceFrom;
       const to = attraction.curatedOutOfServiceTo;
-      if (from && to && to < from) {
+      if (worksPeriodEndsBeforeItBegins(from, to)) {
         throw new BadRequestException(
           `The works period ends ${to} and starts ${from}. A window that ` +
             `ends before it begins never applies.`,

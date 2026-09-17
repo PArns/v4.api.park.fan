@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
 import { Attraction } from "../entities/attraction.entity";
+import { worksPeriodEndsBeforeItBegins } from "../utils/curated-out-of-service.util";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
@@ -104,6 +105,11 @@ export interface AttractionMergePreview extends AttractionMergeResult {
    * anything is lost.
    */
   droppedCurations: DroppedCuration[];
+}
+
+/** A column the merge can read: null and undefined both mean "nothing here". */
+function isSet(value: unknown): boolean {
+  return value !== null && value !== undefined;
 }
 
 /**
@@ -548,32 +554,35 @@ export class AttractionMergeService {
   }
 
   /**
-   * Columns worth carrying over from the losing row. Deliberately excludes
-   * `externalId` (unique, and the survivor keeps its own identity) and `slug`
-   * (handled by resolveSurvivingSlug).
+   * Columns worth carrying over from the losing row, one at a time.
+   * Deliberately excludes `externalId` (unique, and the survivor keeps its own
+   * identity) and `slug` (handled by resolveSurvivingSlug).
    *
-   * Every `curated_*` column has to be on this list, and stay on it. A merge
-   * deletes the losing row, so a curation that lived only there is gone with
-   * no trace and nothing to notice it by — the value simply reverts to
-   * whatever the sync last wrote, months after anybody remembers deciding
-   * otherwise. Add a curated column to the entity, add it here.
+   * Every `curated_*` column has to be on this list or in
+   * `INHERITABLE_COLUMN_SETS`, and stay there. A merge deletes the losing row,
+   * so a curation that lived only there is gone with no trace and nothing to
+   * notice it by — the value simply reverts to whatever the sync last wrote,
+   * months after anybody remembers deciding otherwise. Add a curated column to
+   * the entity, add it here — or to a set below, if it only means anything
+   * beside its neighbours. The spec in `curated-field.spec-list.spec.ts` holds
+   * the descriptors against both lists, because this sentence on its own is
+   * what the works period was missed by.
    *
-   * Three columns break that rule today and are tracked as PAR-297: the works
-   * period's `curatedOutOfServiceFrom` / `_to` / `_toUncertain`. They are left
-   * off deliberately rather than by oversight, because this loop fills column
-   * by column: a winner holding a start and no end would take the loser's end
-   * and build a window that ends before it begins — the pair the curation
-   * endpoint rejects outright, and since PAR-287 one that is served. Putting
-   * them on needs the window inherited as a set, which is a change to the loop
-   * below and not to this list.
+   * `openWithPark` is the one curated key on neither list, and it cannot be on
+   * this one: the column is NOT NULL, so the winner's value is never absent
+   * and the test below never fires. Carrying it would mean deciding that a
+   * stored `false` means "nobody said", which is the opposite of what the
+   * editor's descriptor says it means. Tracked as PAR-300.
    *
-   * The price is the loss the paragraph above calls unacceptable: until then a
-   * merge drops the losing row's works period silently, and `previewMerge`
-   * does not report it (`droppedCurations` covers ride profiles alone). The
-   * rare inverted window was preferred over the common silent loss only
-   * because the first reaches readers and the second can be curated again.
+   * `curatedIsSeasonal` and `curatedSeasonMonths` stay here rather than moving
+   * into a set, although the resolver treats them as one statement. Column by
+   * column is what a merge wants for them: a winner curated seasonal but
+   * without months should take the loser's months, and a set would refuse. The
+   * one crossed pair it can build — a curated `false` next to inherited months
+   * — never reaches a reader, because `resolveCuratedFacts` drops the months
+   * whenever the resolved seasonality is false.
    */
-  private static readonly INHERITABLE_COLUMNS = [
+  static readonly INHERITABLE_COLUMNS = [
     "queueTimesEntityId",
     "latitude",
     "longitude",
@@ -600,6 +609,79 @@ export class AttractionMergeService {
     "seasonMonths",
   ] as const;
 
+  /**
+   * Groups of columns that only ever travel together.
+   *
+   * The works period is three columns holding one statement, and two rules
+   * guard it on the way in: `AdminCurationService` rejects an end before its
+   * start, and clears "that end is only an estimate" whenever the end goes
+   * away. Column-by-column inheritance breaks both. A winner with a start and
+   * no end takes the loser's end and carries a window that ends before it
+   * begins — the pair the endpoint refuses, and since PAR-287 one that is
+   * served to readers as `worksPeriod`. A winner with no dates at all takes
+   * the loser's bare `toUncertain` and hedges a date it does not have.
+   *
+   * So the set moves together or not at all: the winner inherits the columns
+   * the loser holds, and only when it holds none of the three itself. That is
+   * all three for a window with both dates and an estimate flag, and one for
+   * the ordinary open-ended one: `AdminCurationService` clears the flag
+   * whenever the end date goes, so a start with no end carries a null the
+   * filter never picks up. What `settle` drops below is the flag that stayed —
+   * written by hand, past the endpoint that would have cleared it.
+   *
+   * `settle` then asks of the window that is about to travel what the endpoint
+   * asks of one being typed. It has to, and not because the endpoint is
+   * careless: these columns are reachable by hand, and unlike a value the
+   * merge merely reads, this one is written onto a row that outlives it. A
+   * window stating nothing (no date at all) stays behind; so does an inverted
+   * one, which is exactly the state the set exists to prevent and would be no
+   * better for having arrived whole. A stale estimate flag is dropped rather
+   * than made to sink the dates beside it — that is the endpoint's own
+   * normalisation, and the dates are a real curation worth carrying.
+   */
+  private static readonly INHERITABLE_COLUMN_SETS: readonly {
+    readonly columns: readonly (keyof Attraction)[];
+    /** The values to write, or null to leave the whole set behind. */
+    readonly settle: (
+      carried: Partial<Attraction>,
+    ) => Partial<Attraction> | null;
+  }[] = [
+    {
+      columns: [
+        "curatedOutOfServiceFrom",
+        "curatedOutOfServiceTo",
+        "curatedOutOfServiceToUncertain",
+      ],
+      settle: (carried) => {
+        const from = carried.curatedOutOfServiceFrom ?? null;
+        const to = carried.curatedOutOfServiceTo ?? null;
+
+        // It has to be a window at all. `AdminCurationService` refuses this
+        // pair outright, so a row carrying it never came through it.
+        if (worksPeriodEndsBeforeItBegins(from, to)) return null;
+
+        // The flag qualifies the end date and means nothing without one. The
+        // endpoint clears it and keeps the dates; so does this.
+        //
+        // This is also what leaves a window of nothing but a flag behind: with
+        // the flag dropped there is nothing left to assign, so "a bare
+        // toUncertain is not a window" needs no rule of its own — and a rule
+        // no mutation can turn red would read like one that does something.
+        if (!isSet(to) && "curatedOutOfServiceToUncertain" in carried) {
+          const { curatedOutOfServiceToUncertain: _dropped, ...rest } = carried;
+          return rest;
+        }
+        return carried;
+      },
+    },
+  ];
+
+  /** The set columns, flat — for the spec that holds both lists against the descriptors. */
+  static readonly INHERITABLE_SET_COLUMNS: readonly string[] =
+    AttractionMergeService.INHERITABLE_COLUMN_SETS.flatMap(
+      (set) => set.columns as readonly string[],
+    );
+
   private inheritMissingMetadata(
     winner: Attraction,
     loser: Attraction,
@@ -607,15 +689,22 @@ export class AttractionMergeService {
     const inherited: Record<string, unknown> = {};
 
     for (const column of AttractionMergeService.INHERITABLE_COLUMNS) {
-      const winnerValue = winner[column];
-      const loserValue = loser[column];
-      if (
-        (winnerValue === null || winnerValue === undefined) &&
-        loserValue !== null &&
-        loserValue !== undefined
-      ) {
-        inherited[column] = loserValue;
+      if (!isSet(winner[column]) && isSet(loser[column])) {
+        inherited[column] = loser[column];
       }
+    }
+
+    for (const set of AttractionMergeService.INHERITABLE_COLUMN_SETS) {
+      if (set.columns.some((column) => isSet(winner[column]))) continue;
+
+      const carried: Record<string, unknown> = {};
+      for (const column of set.columns.filter((c) => isSet(loser[c]))) {
+        carried[column] = loser[column];
+      }
+
+      const settled = set.settle(carried as Partial<Attraction>);
+      if (settled === null) continue;
+      Object.assign(inherited, settled);
     }
 
     return inherited as Partial<Attraction>;

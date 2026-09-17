@@ -149,6 +149,72 @@ describe("AttractionMergeService", () => {
     expect(order).toEqual(["delete", "update"]);
   });
 
+  it("writes the loser's works period onto the survivor, dates and all", async () => {
+    // The column-name assertions in the works-period block below read
+    // `previewMerge`, which reports keys. This one goes through the real write
+    // path and names the values, because "the window survives" is a claim
+    // about dates: a set that carried the right column names and the wrong
+    // days would satisfy every other test in this file (PAR-297).
+    givenRows([
+      {
+        ...baseRow,
+        curatedOutOfServiceFrom: null,
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: null,
+      },
+      {
+        ...suffixRow,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      },
+    ]);
+
+    await service.mergeAttractions("row-base", "row-suffix");
+
+    expect(manager.update).toHaveBeenCalledWith(
+      Attraction,
+      "row-base",
+      expect.objectContaining({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+  });
+
+  it("writes no part of a works period the winner already has one of", async () => {
+    // And the other direction, at the same level: the winner's own window is
+    // never overwritten, and none of the loser's three columns reaches the
+    // UPDATE beside it.
+    givenRows([
+      {
+        ...baseRow,
+        curatedOutOfServiceFrom: "2026-06-01",
+        curatedOutOfServiceTo: null,
+        curatedOutOfServiceToUncertain: null,
+        landName: null,
+      },
+      {
+        ...suffixRow,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+        landName: "Family Rides",
+      },
+    ]);
+
+    await service.mergeAttractions("row-base", "row-suffix");
+
+    const [, , payload] = manager.update.mock.calls[0];
+    // The merge did inherit — so the absence below is a refusal, not a merge
+    // that never got here.
+    expect(payload).toMatchObject({ landName: "Family Rides" });
+    expect(payload).not.toHaveProperty("curatedOutOfServiceFrom");
+    expect(payload).not.toHaveProperty("curatedOutOfServiceTo");
+    expect(payload).not.toHaveProperty("curatedOutOfServiceToUncertain");
+  });
+
   it("takes over metadata the survivor is missing", async () => {
     // The two sources each fill in different columns: across the 147 real
     // pairs, 33 have the queue-times id only on the suffixed row and 29 have
@@ -612,5 +678,245 @@ describe("AttractionMergeService — previewMerge", () => {
         expect(sql).toMatch(/^SELECT /);
       }
     });
+  });
+});
+
+/**
+ * The works period travels as a set, not column by column (PAR-297).
+ *
+ * `AdminCurationService` refuses an end before its start and clears "that end
+ * is only an estimate" whenever the end goes away. A merge that filled the
+ * three columns one at a time could build either state without going near
+ * those checks — and since PAR-287 the window is served as `worksPeriod`, so
+ * the result reaches a reader.
+ *
+ * The set is held back in both directions: when the WINNER already holds part
+ * of a window, and when the LOSER's window is one the endpoint would have
+ * refused to write.
+ *
+ * Every assertion below names the absent column AND the presence that proves
+ * the merge got far enough to consider it (G-44): the pairs are built so that
+ * a second, unrelated column is always inherited in the same call.
+ */
+describe("AttractionMergeService — the works period survives as a set", () => {
+  const WINDOW = [
+    "curatedOutOfServiceFrom",
+    "curatedOutOfServiceTo",
+    "curatedOutOfServiceToUncertain",
+  ] as const;
+
+  const ride = (overrides: Record<string, unknown> = {}) => ({
+    id: "row-base",
+    slug: "alice-in-wonderland",
+    name: "Alice in Wonderland",
+    parkId: "park-blackpool",
+    queueTimesEntityId: null,
+    curatedOutOfServiceFrom: null,
+    curatedOutOfServiceTo: null,
+    curatedOutOfServiceToUncertain: null,
+    ...overrides,
+  });
+
+  const inheritedFrom = (
+    winner: Record<string, unknown>,
+    loser: Record<string, unknown>,
+  ) => {
+    const rows = [
+      { ...winner, id: "row-base" },
+      { ...loser, id: "row-suffix", slug: "alice-in-wonderland-2" },
+    ];
+    const findOne = jest.fn(({ where }: { where: { id: string } }) =>
+      Promise.resolve(rows.find((row) => row.id === where.id) ?? null),
+    );
+    const dataSource = {
+      getRepository: jest.fn(() => ({ findOne })),
+      transaction: jest.fn(),
+      query: jest.fn().mockResolvedValue([]),
+    };
+    const service = new AttractionMergeService(
+      dataSource as never,
+      {} as never,
+      {} as never,
+    );
+    return service.previewMerge("row-base", "row-suffix");
+  };
+
+  it("carries the whole window when the winner holds none of it", async () => {
+    const preview = await inheritedFrom(
+      ride({ queueTimesEntityId: null }),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(preview.inheritedColumns).toEqual(
+      expect.arrayContaining([...WINDOW, "queueTimesEntityId"]),
+    );
+  });
+
+  it("carries an open-ended window as the one column it really has", async () => {
+    // A start with no end is the ordinary state while work is going on, and
+    // the flag is null beside it. Inheriting a null would write a column the
+    // loser never held.
+    const preview = await inheritedFrom(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-16",
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("curatedOutOfServiceFrom");
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    expect(preview.inheritedColumns).not.toContain("curatedOutOfServiceTo");
+    expect(preview.inheritedColumns).not.toContain(
+      "curatedOutOfServiceToUncertain",
+    );
+  });
+
+  it("never lets an end arrive beside a start it precedes", async () => {
+    // Column by column, this is the pair that used to be built: the winner
+    // keeps its March start, takes the loser's January end, and serves a
+    // window that ends before it begins.
+    const preview = await inheritedFrom(
+      ride({ curatedOutOfServiceFrom: "2026-03-01" }),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-02",
+        curatedOutOfServiceTo: "2026-01-20",
+      }),
+    );
+
+    // The merge did run and did inherit — it just left the window alone.
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    for (const column of WINDOW) {
+      expect(preview.inheritedColumns).not.toContain(column);
+    }
+  });
+
+  it("never lets the estimate flag arrive without its date", async () => {
+    // The winner holds a closed window, the loser a bare `toUncertain`.
+    // Inheriting it alone hedges a date that was just confirmed.
+    const preview = await inheritedFrom(
+      ride({
+        curatedOutOfServiceFrom: "2026-03-01",
+        curatedOutOfServiceTo: "2026-03-30",
+      }),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    expect(preview.inheritedColumns).not.toContain(
+      "curatedOutOfServiceToUncertain",
+    );
+  });
+
+  it("carries a window that has only an end, flag and all", async () => {
+    // `to` with no `from` is a window that was already open when somebody
+    // wrote it down — an ordinary state, and the one asymmetric case in
+    // `settle`: the flag qualifies the END date, so it travels here even
+    // though the start is missing.
+    const preview = await inheritedFrom(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(preview.inheritedColumns).toEqual(
+      expect.arrayContaining([
+        "curatedOutOfServiceTo",
+        "curatedOutOfServiceToUncertain",
+      ]),
+    );
+    expect(preview.inheritedColumns).not.toContain("curatedOutOfServiceFrom");
+  });
+
+  it("refuses a losing window that is nothing but the estimate flag", async () => {
+    // The winner holds none of the three, so the set is free to move — and it
+    // must not, because what would arrive is an estimate flag with no date to
+    // qualify. `AdminCurationService` clears exactly this state on write, so a
+    // row carrying it never went through the endpoint.
+    const preview = await inheritedFrom(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    for (const column of WINDOW) {
+      expect(preview.inheritedColumns).not.toContain(column);
+    }
+  });
+
+  it("drops a stale estimate flag rather than the dates beside it", async () => {
+    // A start and an estimate flag with no end — a state the endpoint clears
+    // by dropping the flag and keeping the dates. The window itself is a real
+    // curation and the only copy of it, so sinking it along with the flag
+    // would be the loss this whole change removes.
+    const preview = await inheritedFrom(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("curatedOutOfServiceFrom");
+    expect(preview.inheritedColumns).not.toContain(
+      "curatedOutOfServiceToUncertain",
+    );
+  });
+
+  it("refuses a losing window that ends before it begins", async () => {
+    // Unreachable through the endpoint — `AdminCurationService` rejects the
+    // pair — but reachable by hand, and the winner holds nothing, so nothing
+    // else would stop it. Arriving whole does not make an inverted window any
+    // better: `isCuratedOutOfService` tests `from <= day <= to`, which no day
+    // satisfies, so it suppresses nothing and is served to readers as a
+    // `worksPeriod` running from March to January — on a row that outlives the
+    // merge.
+    const preview = await inheritedFrom(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-03-01",
+        curatedOutOfServiceTo: "2026-01-20",
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    for (const column of WINDOW) {
+      expect(preview.inheritedColumns).not.toContain(column);
+    }
+  });
+
+  it("leaves the window alone when the winner holds only the flag", async () => {
+    // `toUncertain` with no dates is not a state the endpoint writes, but it
+    // is a value on the winner, and the set does not half-fill around it.
+    const preview = await inheritedFrom(
+      ride({ curatedOutOfServiceToUncertain: false }),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-02",
+        curatedOutOfServiceTo: "2026-01-20",
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    for (const column of WINDOW) {
+      expect(preview.inheritedColumns).not.toContain(column);
+    }
   });
 });

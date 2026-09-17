@@ -167,3 +167,24 @@ function safeToday(timezone: string): string | null {
     return null;
   }
 }
+
+/**
+ * Whether a works period ends before it begins — a window that never applies.
+ *
+ * Lives here rather than inside the endpoint that rejects it, because two
+ * writers now have to agree on it: `AdminCurationService` refuses the pair a
+ * curator types, and `AttractionMergeService` refuses to carry one onto a row
+ * that outlives a merge. The `??`-rules in `resolveCuratedFacts` were copied
+ * into two DTO mappers once, drifted, and shipped a bug; this is the same shape
+ * of rule and gets one home.
+ *
+ * Both bounds inclusive, both park-local ISO dates, so a string comparison is
+ * the date comparison. A half-open window is never inverted: there is nothing
+ * for the missing bound to precede.
+ */
+export function worksPeriodEndsBeforeItBegins(
+  from: string | null | undefined,
+  to: string | null | undefined,
+): boolean {
+  return Boolean(from) && Boolean(to) && (to as string) < (from as string);
+}

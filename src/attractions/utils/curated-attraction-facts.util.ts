@@ -110,6 +110,9 @@ export const ATTRACTION_CURATED_DB_COLUMNS: readonly string[] = [
   "curated_may_get_wet",
   "curated_is_seasonal",
   "curated_season_months",
+  "curated_out_of_service_from",
+  "curated_out_of_service_to",
+  "curated_out_of_service_to_uncertain",
   // Not `curated_`-prefixed because no sync owns them, but written by hand and
   // by hand only — a ride carrying one has been looked at.
   "has_fast_pass",
@@ -125,13 +128,11 @@ export const ATTRACTION_CURATED_DB_COLUMNS: readonly string[] = [
  * by an editor, and counting them would report thousands of rides as curated
  * that nobody has ever looked at.
  *
- * The works period's three columns — `curated_out_of_service_from`, `_to` and
- * `_to_uncertain` — are missing for no such reason. They are written by an
- * editor and by nobody else, so a ride whose only curation is a works period
- * counts as untouched in the admin's figure. That is PAR-297, together with
- * the same gap in `AttractionMergeService.INHERITABLE_COLUMNS`; it is left
- * here rather than fixed in passing because the figure wants measuring before
- * and after, which needs the production database.
+ * Every other key in `ATTRACTION_CURATED_FIELDS` is on the list, and a spec in
+ * `curated-field.spec-list.spec.ts` holds the two against each other with
+ * exactly those three as the exceptions. The works period's dates were off it
+ * from the day they landed (2026-09-06) to 2026-09-17, because nothing derives
+ * this list from the descriptors and nothing failed while they were missing.
  */
 
 export function resolveCuratedFacts(
