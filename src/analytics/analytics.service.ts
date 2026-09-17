@@ -66,6 +66,103 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { OPEN_PARKS_CTES } from "./utils/open-parks.sql";
 
 /**
+ * The global board's per-park counters, lifted out of `getGlobalRealtimeStats`
+ * so a test can run the statement itself. It takes no parameters, so the only
+ * way to catch a predicate that landed in a syntactically legal but wrong
+ * clause is to execute it against a real database (PAR-286, and the same
+ * reason `LIVE_STATS_SQL` is exported).
+ */
+export const GLOBAL_PARK_STATS_SQL = `
+      WITH ${OPEN_PARKS_CTES},
+      latest_updates AS (
+        SELECT DISTINCT ON (qd."attractionId")
+          qd."attractionId",
+          qd."waitTime",
+          qd."status",
+          a."parkId",
+          qd.timestamp
+        FROM queue_data qd
+        JOIN attractions a ON a.id = qd."attractionId"
+        JOIN park_status ps ON ps."parkId" = a."parkId"
+        WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
+          AND qd."queueType" = 'STANDBY'
+        ORDER BY qd."attractionId", qd.timestamp DESC
+      ),
+      -- Pre-aggregate per-park attraction counts so park_stats can JOIN
+      -- against this CTE once instead of running two correlated subqueries
+      -- per park (a SELECT COUNT(*) + a LATERAL latest-status lookup).
+      -- The LATERAL form was the main cache-miss cost: O(parks × attractions)
+      -- correlated executions; this version is a single scan with FILTER.
+      attraction_counts AS (
+        SELECT
+          a."parkId" AS "parkId",
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (
+            WHERE lu."attractionId" IS NULL OR lu.status <> 'OPERATING'
+          )::int AS closed
+        FROM attractions a
+        LEFT JOIN latest_updates lu ON lu."attractionId" = a.id
+        -- A retired ride is in neither half. It matters twice here: the closed
+        -- column counts a missing reading as closed, and a retired ride never
+        -- has one, so without this predicate it inflates total and closed by
+        -- the same amount.
+        WHERE a.retired_at IS NULL
+        -- A ride the season has closed counts for neither half of
+        -- "12 von 45 geöffnet" — it is not one of the park's rides today. A live
+        -- OPERATING row still overrides it: the season on file is then behind
+        -- the park, and a ride you can queue for belongs in both numbers.
+          AND (NOT ${attractionIsOutOfSeason("a")} OR lu.status = 'OPERATING')
+        GROUP BY a."parkId"
+      ),
+      park_stats AS (
+        SELECT
+          p.id,
+          p.name,
+          p.slug,
+          p.city,
+          p.country,
+          p.timezone,
+          p."continentSlug",
+          p."countrySlug",
+          p."citySlug",
+          ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY lu."waitTime")::numeric) as avg_wait,
+          COUNT(*) as active_rides,
+          COALESCE(ac.total, 0) as total_attractions,
+          COALESCE(ac.closed, 0) as explicitly_closed_attractions
+        FROM latest_updates lu
+        JOIN parks p ON p.id = lu."parkId"
+        LEFT JOIN attraction_counts ac ON ac."parkId" = p.id
+        WHERE lu.status = 'OPERATING'
+        GROUP BY p.id, p.name, p.slug, p.city, p.country, p.timezone, p."continentSlug", p."countrySlug", p."citySlug", ac.total, ac.closed
+      )
+      SELECT * FROM park_stats
+`;
+
+/**
+ * The global board's "how many rides are open right now" counter. Exported for
+ * the same reason as `GLOBAL_PARK_STATS_SQL`: it is parameterless raw SQL.
+ */
+export const OPEN_ATTRACTIONS_COUNT_SQL = `
+      SELECT COUNT(DISTINCT a.id) as count
+      FROM attractions a
+      JOIN LATERAL (
+        SELECT qd.status
+        FROM queue_data qd
+        WHERE qd."attractionId" = a.id
+          AND qd.timestamp > NOW() - INTERVAL '24 hours'
+        ORDER BY timestamp DESC
+        LIMIT 1
+      ) latest_status ON true
+      -- A retired ride keeps its last readings, so for the hours between the
+      -- retirement and the window sliding past it, it would still be counted
+      -- as an open ride. Measured on 2026-09-17: 31 of the 49 retired rows in
+      -- production had an OPERATING row inside the 24 hours after their own
+      -- retirement (PAR-286).
+      WHERE a.retired_at IS NULL
+        AND latest_status.status = 'OPERATING'
+`;
+
+/**
  * TTL (seconds) for negatively-cached attraction baselines — i.e. caching
  * the *absence* of a P50/P90 baseline row so attractions without one stop
  * hammering Postgres on every request. Kept short (6h) relative to the
@@ -1417,6 +1514,10 @@ export class AnalyticsService {
         FROM attractions a
         LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
         WHERE a."parkId" = $1::uuid
+        -- A retired ride is not one of the park's rides at all, so it is in
+        -- neither half of the count. Unlike the season predicate below, no
+        -- live row overrides this one: a demolished ride cannot come back.
+          AND a.retired_at IS NULL
         -- A ride the season has closed counts for neither half of
         -- "12 von 45 geöffnet" — it is not one of the park's rides today. A live
         -- OPERATING row still overrides it: the season on file is then behind
@@ -1434,6 +1535,7 @@ export class AnalyticsService {
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
       WHERE a."parkId" = $1::uuid
+        AND a.retired_at IS NULL
         AND (NOT ${attractionIsOutOfSeason("a")} OR lq.status = 'OPERATING')
       `;
       queryParams = [
@@ -1514,6 +1616,10 @@ export class AnalyticsService {
         FROM attractions a
         LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
         WHERE a."parkId" = $1::uuid
+        -- A retired ride is not one of the park's rides at all, so it is in
+        -- neither half of the count. Unlike the season predicate below, no
+        -- live row overrides this one: a demolished ride cannot come back.
+          AND a.retired_at IS NULL
         -- A ride the season has closed counts for neither half of
         -- "12 von 45 geöffnet" — it is not one of the park's rides today. A live
         -- OPERATING row still overrides it: the season on file is then behind
@@ -1531,6 +1637,7 @@ export class AnalyticsService {
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
       WHERE a."parkId" = $1::uuid
+        AND a.retired_at IS NULL
         AND (NOT ${attractionIsOutOfSeason("a")} OR lq.status = 'OPERATING')
       `;
       queryParams = [
@@ -2157,8 +2264,13 @@ export class AnalyticsService {
   private async getAttractionCounts(
     parkId: string,
   ): Promise<import("./types/analytics-response.type").AttractionCounts> {
+    // Both reads carry the predicate, and they have to. `closed` below is
+    // `total - operating`, so filtering only the operating half would move
+    // nothing at all: a retired ride has no OPERATING reading to drop out of
+    // that count, only a row in `total` that inflates `closed` by the same
+    // amount.
     const total = await this.attractionRepository.count({
-      where: { parkId },
+      where: { parkId, retiredAt: IsNull() },
     });
 
     // Get attractions with their latest queue data status
@@ -2177,6 +2289,7 @@ export class AnalyticsService {
       FROM attractions a
       LEFT JOIN latest_queue lq ON lq."attractionId" = a.id
       WHERE a."parkId" = $1::uuid
+      AND a.retired_at IS NULL
       AND lq.status = 'OPERATING'
       `,
       [parkId],
@@ -3059,66 +3172,9 @@ export class AnalyticsService {
     // 1. Get Park Statuses & Average Waits concurrently
     // IMPORTANT: Only consider parks that are currently OPERATING
     // to avoid showing closed parks with 0 wait times
-    const activeParksResult = await this.queueDataRepository.query(`
-      WITH ${OPEN_PARKS_CTES},
-      latest_updates AS (
-        SELECT DISTINCT ON (qd."attractionId")
-          qd."attractionId",
-          qd."waitTime",
-          qd."status",
-          a."parkId",
-          qd.timestamp
-        FROM queue_data qd
-        JOIN attractions a ON a.id = qd."attractionId"
-        JOIN park_status ps ON ps."parkId" = a."parkId"
-        WHERE qd.timestamp > NOW() - INTERVAL '24 hours'
-          AND qd."queueType" = 'STANDBY'
-        ORDER BY qd."attractionId", qd.timestamp DESC
-      ),
-      -- Pre-aggregate per-park attraction counts so park_stats can JOIN
-      -- against this CTE once instead of running two correlated subqueries
-      -- per park (a SELECT COUNT(*) + a LATERAL latest-status lookup).
-      -- The LATERAL form was the main cache-miss cost: O(parks × attractions)
-      -- correlated executions; this version is a single scan with FILTER.
-      attraction_counts AS (
-        SELECT
-          a."parkId" AS "parkId",
-          COUNT(*)::int AS total,
-          COUNT(*) FILTER (
-            WHERE lu."attractionId" IS NULL OR lu.status <> 'OPERATING'
-          )::int AS closed
-        FROM attractions a
-        LEFT JOIN latest_updates lu ON lu."attractionId" = a.id
-        -- A ride the season has closed counts for neither half of
-        -- "12 von 45 geöffnet" — it is not one of the park's rides today. A live
-        -- OPERATING row still overrides it: the season on file is then behind
-        -- the park, and a ride you can queue for belongs in both numbers.
-        WHERE NOT ${attractionIsOutOfSeason("a")} OR lu.status = 'OPERATING'
-        GROUP BY a."parkId"
-      ),
-      park_stats AS (
-        SELECT
-          p.id,
-          p.name,
-          p.slug,
-          p.city,
-          p.country,
-          p.timezone,
-          p."continentSlug",
-          p."countrySlug",
-          p."citySlug",
-          ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY lu."waitTime")::numeric) as avg_wait,
-          COUNT(*) as active_rides,
-          COALESCE(ac.total, 0) as total_attractions,
-          COALESCE(ac.closed, 0) as explicitly_closed_attractions
-        FROM latest_updates lu
-        JOIN parks p ON p.id = lu."parkId"
-        LEFT JOIN attraction_counts ac ON ac."parkId" = p.id
-        WHERE lu.status = 'OPERATING'
-        GROUP BY p.id, p.name, p.slug, p.city, p.country, p.timezone, p."continentSlug", p."countrySlug", p."citySlug", ac.total, ac.closed
-      )
-      SELECT * FROM park_stats
-    `);
+    const activeParksResult = await this.queueDataRepository.query(
+      GLOBAL_PARK_STATS_SQL,
+    );
 
     // Count open parks (those with > 0 active rides)
     const openParks = activeParksResult;
@@ -3291,19 +3347,9 @@ export class AnalyticsService {
       : null;
 
     // Count open vs closed attractions
-    const openAttractionsCount = await this.attractionRepository.query(`
-      SELECT COUNT(DISTINCT a.id) as count
-      FROM attractions a
-      JOIN LATERAL (
-        SELECT qd.status
-        FROM queue_data qd
-        WHERE qd."attractionId" = a.id
-          AND qd.timestamp > NOW() - INTERVAL '24 hours'
-        ORDER BY timestamp DESC
-        LIMIT 1
-      ) latest_status ON true
-      WHERE latest_status.status = 'OPERATING'
-    `);
+    const openAttractionsCount = await this.attractionRepository.query(
+      OPEN_ATTRACTIONS_COUNT_SQL,
+    );
 
     const openAttractions = parseInt(openAttractionsCount[0]?.count || "0");
 
