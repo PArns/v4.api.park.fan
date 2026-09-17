@@ -340,6 +340,19 @@ that window is served as `worksPeriod`. As a set the winner inherits all three
 only when it holds none of them, so what arrives is a window the curation
 endpoint already accepted on the losing row.
 
+The set is refused in the other direction too. The columns are reachable by
+hand, and the value is about to be copied onto a row that outlives the merge, so
+a losing window that states nothing on its own — a bare `to_uncertain`, an
+estimate flag with no end date — stays where it is. Refusing is the safe
+direction: what stays behind is deleted with the row either way, and what
+travels is a window somebody could have typed into the form.
+
+**A refused set is still a silent loss**, and `previewMerge` does not name it:
+where the winner already holds part of a window, the loser's disappears without
+appearing in `inheritedColumns` or `droppedCurations`. That is PAR-301 — smaller
+than the loss this section opens with, because the survivor keeps a window of
+its own, but not nothing.
+
 `curated_is_seasonal` / `curated_season_months` deliberately stay column by
 column although `resolveCuratedFacts` resolves them as a pair. A winner curated
 seasonal but without months should take the loser's months, and a set would

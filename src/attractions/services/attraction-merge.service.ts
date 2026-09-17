@@ -106,6 +106,11 @@ export interface AttractionMergePreview extends AttractionMergeResult {
   droppedCurations: DroppedCuration[];
 }
 
+/** A column the merge can read: null and undefined both mean "nothing here". */
+function isSet(value: unknown): boolean {
+  return value !== null && value !== undefined;
+}
+
 /**
  * Collapses two rows that describe the same ride inside one park.
  *
@@ -612,18 +617,41 @@ export class AttractionMergeService {
    * served to readers as `worksPeriod`. A winner with no dates at all takes
    * the loser's bare `toUncertain` and hedges a date it does not have.
    *
-   * So the set moves or it does not: the winner inherits all three only when
-   * it holds none of them. What arrives is then a window the curation endpoint
-   * already accepted on the losing row, which is why no check is needed here —
-   * copying a valid set cannot produce an invalid one.
+   * So the set moves or it does not: the winner inherits it only when it holds
+   * none of the three.
+   *
+   * `coherent` then asks the same question of the row the set comes FROM. The
+   * endpoint's invariants hold for every window it wrote, but the columns are
+   * reachable by hand and this value is about to be copied onto a row that
+   * outlives the merge — so a losing window that states nothing (a bare
+   * `toUncertain`, an estimate flag with no date) stays where it is rather than
+   * travelling. Refusing is the safe direction: what stays behind is deleted
+   * with the row either way, and what travels is a window somebody could have
+   * typed into the form.
    */
-  static readonly INHERITABLE_COLUMN_SETS = [
-    [
-      "curatedOutOfServiceFrom",
-      "curatedOutOfServiceTo",
-      "curatedOutOfServiceToUncertain",
-    ],
-  ] as const;
+  static readonly INHERITABLE_COLUMN_SETS: readonly {
+    readonly columns: readonly (keyof Attraction)[];
+    readonly coherent: (loser: Attraction) => boolean;
+  }[] = [
+    {
+      columns: [
+        "curatedOutOfServiceFrom",
+        "curatedOutOfServiceTo",
+        "curatedOutOfServiceToUncertain",
+      ],
+      coherent: (loser) =>
+        // It has to say WHEN. An open-ended window is the ordinary state while
+        // work is going on, so one of the two dates is enough.
+        (isSet(loser.curatedOutOfServiceFrom) ||
+          isSet(loser.curatedOutOfServiceTo)) &&
+        // And the estimate flag qualifies the end date, so it cannot arrive
+        // without one. `AdminCurationService` enforces this by clearing the
+        // flag; here the set stays behind instead, because a row in this state
+        // never went through that endpoint.
+        (!isSet(loser.curatedOutOfServiceToUncertain) ||
+          isSet(loser.curatedOutOfServiceTo)),
+    },
+  ];
 
   private inheritMissingMetadata(
     winner: Attraction,
@@ -643,16 +671,11 @@ export class AttractionMergeService {
       }
     }
 
-    for (const columns of AttractionMergeService.INHERITABLE_COLUMN_SETS) {
-      const winnerHoldsSomething = columns.some(
-        (column) => winner[column] !== null && winner[column] !== undefined,
-      );
-      if (winnerHoldsSomething) continue;
+    for (const set of AttractionMergeService.INHERITABLE_COLUMN_SETS) {
+      if (set.columns.some((column) => isSet(winner[column]))) continue;
+      if (!set.coherent(loser)) continue;
 
-      const present = columns.filter(
-        (column) => loser[column] !== null && loser[column] !== undefined,
-      );
-      for (const column of present) {
+      for (const column of set.columns.filter((c) => isSet(loser[c]))) {
         inherited[column] = loser[column];
       }
     }

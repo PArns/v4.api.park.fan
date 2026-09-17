@@ -1,6 +1,8 @@
 import { CURATED_PARK_COLUMNS } from "../../parks/utils/curated-park-facts.util";
+import { getMetadataArgsStorage } from "typeorm";
 import { ATTRACTION_CURATED_DB_COLUMNS } from "../../attractions/utils/curated-attraction-facts.util";
 import { AttractionMergeService } from "../../attractions/services/attraction-merge.service";
+import { Attraction as AttractionEntity } from "../../attractions/entities/attraction.entity";
 import {
   ATTRACTION_CURATED_FIELDS,
   PARK_CURATED_KEYS,
@@ -146,8 +148,24 @@ describe("curated field views", () => {
  * test notices a key missing from one of them.
  */
 describe("the attraction column lists and the editor's descriptors", () => {
-  const snake = (key: string) =>
-    key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+  /**
+   * The physical name as TypeORM has it, not as a regex guesses it.
+   *
+   * This entity mixes both conventions — `externalId` and `attractionType`
+   * carry no `name:` and are stored camelCase, the curated columns all declare
+   * a snake_case one. Deriving the name would pin a future column to the shape
+   * the guess produced and leave the raw SQL in `admin-content.controller.ts`
+   * failing at runtime against a green suite.
+   */
+  const physicalName = (property: string) => {
+    const column = getMetadataArgsStorage().columns.find(
+      (candidate) =>
+        candidate.target === AttractionEntity &&
+        candidate.propertyName === property,
+    );
+    if (!column) throw new Error(`${property} is not a column on Attraction`);
+    return column.options.name ?? property;
+  };
 
   const keys = ATTRACTION_CURATED_FIELDS.map((field) => field.key);
 
@@ -170,14 +188,16 @@ describe("the attraction column lists and the editor's descriptors", () => {
     const expected = keys.filter((key) => !NOT_A_CURATION.includes(key));
 
     expect([...ATTRACTION_CURATED_DB_COLUMNS].sort()).toEqual(
-      expected.map(snake).sort(),
+      expected.map(physicalName).sort(),
     );
   });
 
   it("carries every hand-written key across a merge, bar one", () => {
     const inheritable = [
       ...AttractionMergeService.INHERITABLE_COLUMNS,
-      ...AttractionMergeService.INHERITABLE_COLUMN_SETS.flat(),
+      ...AttractionMergeService.INHERITABLE_COLUMN_SETS.flatMap(
+        (set) => set.columns,
+      ),
     ];
     const missing = keys.filter(
       (key) =>
@@ -188,12 +208,23 @@ describe("the attraction column lists and the editor's descriptors", () => {
     expect(missing).toEqual([]);
   });
 
+  it("keeps every exception attached to a descriptor that still exists", () => {
+    // An exception outlives the key it was written for: rename or drop a
+    // descriptor and the entry here stops excusing anything and starts
+    // widening the hole these tests exist to guard.
+    expect(keys).toEqual(
+      expect.arrayContaining([...NOT_A_CURATION, ...NOT_INHERITABLE]),
+    );
+  });
+
   it("names a column in one list at most once", () => {
     // A key on both the column-by-column list and in a set would be inherited
     // twice, and the set's all-or-nothing rule would be the one that loses.
     const inheritable = [
       ...AttractionMergeService.INHERITABLE_COLUMNS,
-      ...AttractionMergeService.INHERITABLE_COLUMN_SETS.flat(),
+      ...AttractionMergeService.INHERITABLE_COLUMN_SETS.flatMap(
+        (set) => set.columns,
+      ),
     ];
 
     expect(new Set(inheritable).size).toBe(inheritable.length);
