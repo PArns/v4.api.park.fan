@@ -288,6 +288,35 @@ export class AttractionMergeService {
         "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0",
       );
 
+      // `external_entity_mapping` is not in `ATTRACTION_DEPENDENCIES` and
+      // never was: it is keyed on `internal_entity_id` across every entity
+      // type at once, so the list cannot carry it and every caller moves it
+      // itself, before the dependencies. The other two merge paths do
+      // (`ParksService.consolidateMergedEntities`,
+      // `ParkMergeService.consolidateEntityData`); this one did not, and the
+      // table has no FK, so the DELETE below left the row behind in silence
+      // rather than raising 23503.
+      //
+      // The cost is not housekeeping. The unique index is on
+      // `(external_source, external_entity_id)` alone, so the stranded row
+      // keeps holding the upstream's id — and `ChildrenMetadataProcessor`
+      // reads that index to decide whether a mapping is needed
+      // (`createMapping`), finds one, and creates nothing. The replacement
+      // attraction then has no Queue-Times mapping, `WaitTimesProcessor`
+      // resolves nothing for it (its `externalId` fallback covers
+      // `themeparks-wiki` only) and `reconcileMissingAttractions` writes it a
+      // permanent `system-reconciliation` CLOSED series while the feed reports
+      // the ride as open. Measured on 2026-09-18: 201 stranded rows, 38 of
+      // them sitting on the id of a live attraction, 30 in one park.
+      //
+      // No conflict delete, for the same reason the other two paths give: a
+      // pair the winner already holds cannot also sit on the loser, because
+      // that index is unique across the whole table.
+      await manager.query(
+        `UPDATE external_entity_mapping SET "internal_entity_id" = $1 WHERE "internal_entity_id" = $2`,
+        [winnerId, loserId],
+      );
+
       await applyMergeDependencies(
         manager,
         ATTRACTION_DEPENDENCIES,
