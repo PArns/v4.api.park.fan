@@ -183,12 +183,11 @@ describe("the attraction column lists and the editor's descriptors", () => {
   const NOT_A_CURATION = ["hasSingleRider", "rcdbId", "openWithPark"];
 
   /**
-   * `open_with_park` is NOT NULL with a default of `false`, so the winner's
-   * value is never absent and the inheritance test can never fire on it.
-   * Carrying it would mean reading a stored `false` as "nobody said", which is
-   * the opposite of what its descriptor declares. Tracked as PAR-300.
+   * Empty since PAR-300, and kept rather than deleted: the list is what the
+   * assertion below reads, and the next column that cannot travel needs a
+   * named reason here rather than a quiet absence from both merge lists.
    */
-  const NOT_INHERITABLE = ["openWithPark"];
+  const NOT_INHERITABLE: string[] = [];
 
   it("counts every hand-written key in the admin's figure, bar three", () => {
     const expected = keys.filter((key) => !NOT_A_CURATION.includes(key));
@@ -198,18 +197,55 @@ describe("the attraction column lists and the editor's descriptors", () => {
     );
   });
 
-  it("carries every hand-written key across a merge, bar one", () => {
-    const inheritable = [
-      ...AttractionMergeService.INHERITABLE_COLUMNS,
-      ...AttractionMergeService.INHERITABLE_SET_COLUMNS,
-    ];
+  const inheritableKeys = (): string[] => [
+    ...AttractionMergeService.INHERITABLE_COLUMNS,
+    ...AttractionMergeService.INHERITABLE_SET_COLUMNS,
+    ...AttractionMergeService.INHERITABLE_DEFAULTED_COLUMNS.map(
+      (entry) => entry.column,
+    ),
+  ];
+
+  it("carries every hand-written key across a merge", () => {
+    const inheritable = inheritableKeys();
     const missing = keys.filter(
       (key) =>
         !NOT_INHERITABLE.includes(key) &&
-        !(inheritable as readonly string[]).includes(key),
+        !inheritable.includes(key as (typeof inheritable)[number]),
     );
 
     expect(missing).toEqual([]);
+  });
+
+  it("declares the same unset value the editor scores overrides against", () => {
+    // The merge has to know what "nobody decided anything" looks like for a
+    // NOT NULL column, and the descriptor already says so. Writing the value
+    // out a second time is the drift this file exists to catch: a descriptor
+    // default of `false` beside a merge that treats `null` as unset would
+    // leave the column travelling on a condition nothing can meet.
+    for (const entry of AttractionMergeService.INHERITABLE_DEFAULTED_COLUMNS) {
+      const descriptor = ATTRACTION_CURATED_FIELDS.find(
+        (field) => field.key === entry.column,
+      );
+
+      expect(descriptor).toBeDefined();
+      expect(descriptor?.defaultValue).toEqual(entry.unset);
+    }
+  });
+
+  it("puts a column on the defaulted list only when it has a default", () => {
+    // The inverse, and the one that actually costs something: a column whose
+    // descriptor has no `defaultValue` is nullable, so it belongs on the
+    // column-by-column list where an absent winner value is the condition.
+    // On this list it would carry an `unset` nothing declared.
+    const defaulted = ATTRACTION_CURATED_FIELDS.filter(
+      (field) => field.defaultValue !== undefined,
+    ).map((field) => field.key);
+
+    expect(
+      AttractionMergeService.INHERITABLE_DEFAULTED_COLUMNS.map(
+        (entry) => entry.column,
+      ).sort(),
+    ).toEqual(defaulted.sort());
   });
 
   it("keeps every exception attached to a descriptor that still exists", () => {
@@ -224,10 +260,10 @@ describe("the attraction column lists and the editor's descriptors", () => {
   it("names a column in one list at most once", () => {
     // A key on both the column-by-column list and in a set would be inherited
     // twice, and the set's all-or-nothing rule would be the one that loses.
-    const inheritable = [
-      ...AttractionMergeService.INHERITABLE_COLUMNS,
-      ...AttractionMergeService.INHERITABLE_SET_COLUMNS,
-    ];
+    // The defaulted list joins the count for the same reason: it writes into
+    // the same object, last loop wins, and the winner would depend on the
+    // order the loops happen to sit in.
+    const inheritable = inheritableKeys();
 
     expect(new Set(inheritable).size).toBe(inheritable.length);
     expect(new Set(ATTRACTION_CURATED_DB_COLUMNS).size).toBe(

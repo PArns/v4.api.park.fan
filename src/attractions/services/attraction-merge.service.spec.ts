@@ -258,6 +258,61 @@ describe("AttractionMergeService", () => {
     expect(Object.keys(payload)).toEqual(["lastMergedAt"]);
   });
 
+  /**
+   * `open_with_park` is `boolean NOT NULL DEFAULT false`, so the winner's cell
+   * is never empty and the absent-value rule that carries every other curated
+   * column can never fire on it. Free-flow is a statement a person made about
+   * a playground; the `false` beside it is what the column holds when nobody
+   * has said anything, which is what its descriptor declares and what the
+   * editor already scores overrides against.
+   */
+  describe("the free-flow flag across a merge", () => {
+    it("takes the loser's free-flow flag when the survivor sits on the default", async () => {
+      givenRows([
+        { ...baseRow, openWithPark: false },
+        { ...suffixRow, openWithPark: true },
+      ]);
+
+      await service.mergeAttractions("row-base", "row-suffix");
+
+      expect(manager.update).toHaveBeenCalledWith(
+        Attraction,
+        "row-base",
+        expect.objectContaining({ openWithPark: true }),
+      );
+    });
+
+    it("never lets the loser's default unset the survivor's free-flow flag", async () => {
+      // The rule is one-directional. A stored `false` is the absence of a
+      // statement, and an absence may not clear one somebody made.
+      givenRows([
+        { ...baseRow, openWithPark: true, landName: null },
+        { ...suffixRow, openWithPark: false, landName: "Family Rides" },
+      ]);
+
+      await service.mergeAttractions("row-base", "row-suffix");
+
+      const [, , payload] = manager.update.mock.calls[0];
+      // The merge did inherit, so the absence below is a refusal rather than a
+      // merge that never reached this row.
+      expect(payload).toMatchObject({ landName: "Family Rides" });
+      expect(payload).not.toHaveProperty("openWithPark");
+    });
+
+    it("writes nothing when neither row was ever marked free-flow", async () => {
+      givenRows([
+        { ...baseRow, openWithPark: false, landName: null },
+        { ...suffixRow, openWithPark: false, landName: "Family Rides" },
+      ]);
+
+      await service.mergeAttractions("row-base", "row-suffix");
+
+      const [, , payload] = manager.update.mock.calls[0];
+      expect(payload).toMatchObject({ landName: "Family Rides" });
+      expect(payload).not.toHaveProperty("openWithPark");
+    });
+  });
+
   it("tells the frontend to drop its cached attraction pages", async () => {
     givenRows([baseRow, suffixRow]);
 
@@ -576,6 +631,32 @@ describe("AttractionMergeService — previewMerge", () => {
 
     expect(preview.inheritedColumns).toContain("queueTimesEntityId");
     expect(preview.renamed).toBe(false);
+  });
+
+  it("names the free-flow flag among them", async () => {
+    // The dry run is what the admin reads before sending `dryRun: false`, and
+    // a column it leaves out is a change nobody agreed to. The flag needs its
+    // own case here because it travels on a different rule from the column
+    // above: a winner holding `false` is holding the default, not a value.
+    const freeFlowRows = [
+      { ...rows[0], openWithPark: false },
+      { ...rows[1], openWithPark: true },
+    ];
+    const findOne = jest.fn(({ where }: { where: { id: string } }) =>
+      Promise.resolve(freeFlowRows.find((row) => row.id === where.id) ?? null),
+    );
+    const service = new AttractionMergeService(
+      {
+        getRepository: jest.fn(() => ({ findOne })),
+        query: jest.fn().mockResolvedValue([]),
+      } as never,
+      {} as never,
+      {} as never,
+    );
+
+    const preview = await service.previewMerge("row-base", "row-suffix");
+
+    expect(preview.inheritedColumns).toContain("openWithPark");
   });
 
   it("refuses the pairs the real merge refuses, and just as early", async () => {
