@@ -241,3 +241,61 @@ describe("ChildrenMetadataProcessor — syncQtAttraction remaps an existing ride
     );
   });
 });
+
+describe("ChildrenMetadataProcessor — an entity type outside the four", () => {
+  const mappingRepository = {
+    find: jest.fn(),
+    findOne: jest.fn(),
+    save: jest.fn(),
+    update: jest.fn(),
+    manager: { query: jest.fn() },
+  };
+
+  let processor: ChildrenMetadataProcessor;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mappingRepository.manager.query.mockResolvedValue([]);
+    processor = new ChildrenMetadataProcessor(
+      { getRepository: () => ({}) } as any,
+      {} as any,
+      { getRepository: () => ({}) } as any,
+      { getRepository: () => ({}) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      mappingRepository as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+  });
+
+  // `internal_entity_type` is a `character varying`, so a value outside the
+  // four types reaches this. A bare property lookup would answer `constructor`
+  // with a function and interpolate it into the SQL.
+  it.each(["banana", "constructor", "toString", "__proto__"])(
+    "leaves a %s row alone instead of interpolating it into SQL",
+    async (entityType) => {
+      mappingRepository.findOne.mockResolvedValue({
+        id: "mapping-1",
+        internalEntityId: "row-gone",
+        internalEntityType: entityType,
+        externalSource: "queue-times",
+        externalEntityId: "qt-ride-1",
+      });
+
+      await (processor as any).createMapping(
+        "row-live",
+        "attraction",
+        "queue-times",
+        "qt-ride-1",
+      );
+
+      expect(mappingRepository.manager.query).not.toHaveBeenCalled();
+      expect(mappingRepository.update).not.toHaveBeenCalled();
+      expect(mappingRepository.save).not.toHaveBeenCalled();
+    },
+  );
+});

@@ -38,23 +38,6 @@ interface SyncClaimContext {
 }
 
 /**
- * The exact `retired_reason` the children sync writes on a `shows` or
- * `restaurants` row whose entity the wiki now calls an `ATTRACTION`.
- *
- * The mirror of {@link RECLASSIFIED_UPSTREAM_REASON}, and it carries the same
- * two obligations. It has to be an **exact** string, because the sync only
- * un-retires rows carrying one of these wordings — a retirement entered by
- * hand has to survive every nightly run, and a fuzzy match would eventually
- * swallow one. And it is **user-facing**, so it reads as a sentence: a retired
- * show keeps answering on its own detail endpoint, reason included.
- *
- * ⚠️ **An edit here moves the previous value into
- * {@link RECLASSIFIED_AS_ATTRACTION_REASONS} in the same commit.** Without
- * that, every row already retired under the old wording is stranded: the
- * un-retire check stops recognising it and the retire filter skips it because
- * `retiredAt` is set. A spec pins the literal.
- */
-/**
  * The table each `internal_entity_type` of `external_entity_mapping` points
  * into.
  *
@@ -73,6 +56,23 @@ const CHILD_ENTITY_TABLES: Record<
   restaurant: "restaurants",
 };
 
+/**
+ * The exact `retired_reason` the children sync writes on a `shows` or
+ * `restaurants` row whose entity the wiki now calls an `ATTRACTION`.
+ *
+ * The mirror of {@link RECLASSIFIED_UPSTREAM_REASON}, and it carries the same
+ * two obligations. It has to be an **exact** string, because the sync only
+ * un-retires rows carrying one of these wordings — a retirement entered by
+ * hand has to survive every nightly run, and a fuzzy match would eventually
+ * swallow one. And it is **user-facing**, so it reads as a sentence: a retired
+ * show keeps answering on its own detail endpoint, reason included.
+ *
+ * ⚠️ **An edit here moves the previous value into
+ * {@link RECLASSIFIED_AS_ATTRACTION_REASONS} in the same commit.** Without
+ * that, every row already retired under the old wording is stranded: the
+ * un-retire check stops recognising it and the retire filter skips it because
+ * `retiredAt` is set. A spec pins the literal.
+ */
 export const RECLASSIFIED_AS_ATTRACTION_REASON =
   "ThemeParks.wiki lists this entity as an attraction rather than a show or a " +
   "restaurant, so it is no longer tracked here. The date is when this was " +
@@ -1174,11 +1174,15 @@ export class ChildrenMetadataProcessor {
     if (existing.internalEntityId === internalEntityId) return;
 
     // The row holds our id but names somebody else. Two cases, and only one of
-    // them is ours to touch: if that somebody still exists, this is a genuine
-    // conflict between two live entities and `Park-MetadataProcessor` owns it
-    // (`park-metadata.processor.ts`, with its own warning). If it does NOT
-    // exist, the row is stranded — the table has no FK, so a merge or a park
-    // consolidation that deleted its target left it behind in silence.
+    // them is ours to touch: if that somebody still exists, two live entities
+    // are arguing over one upstream id, and that is settled by the writer that
+    // sees both sides of the match — `EntityMappingsProcessor`, which upserts
+    // on `(externalSource, externalEntityId)`. Not `ParkMetadataProcessor`: its
+    // own conflict branch reads the same index, but every one of its five call
+    // sites passes `internalEntityType: "park"`, so it never re-homes an
+    // attraction's id. If the named entity does NOT exist, the row is stranded
+    // — the table has no FK, so a merge or a park consolidation that deleted
+    // its target left it behind in silence.
     //
     // Returning here, as this method used to, is what makes a stranded row
     // expensive rather than merely untidy: the unique index is on
@@ -1217,8 +1221,15 @@ export class ChildrenMetadataProcessor {
     entityType: ExternalEntityMapping["internalEntityType"],
     internalEntityId: string,
   ): Promise<boolean> {
+    // An own-property check, not a truthiness check on the lookup: the column
+    // is a `character varying`, so a value outside the four types reaches this
+    // — and a bare `CHILD_ENTITY_TABLES[entityType]` would answer
+    // `constructor` with a function, which interpolates into the SQL below and
+    // takes the sync down with a syntax error instead of leaving the row
+    // alone. `Object.hasOwn` needs a lib this build does not target.
+    if (!Object.prototype.hasOwnProperty.call(CHILD_ENTITY_TABLES, entityType))
+      return true;
     const table = CHILD_ENTITY_TABLES[entityType];
-    if (!table) return true; // Unknown type: leave the row alone.
 
     // `internal_entity_id` is text and the id columns are uuid, so a row whose
     // value is not a uuid at all would raise 22P02 on the cast. Compare as
