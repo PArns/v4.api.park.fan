@@ -36,12 +36,12 @@ internal `curation_note`. Before this there were none at all — the only
 park-level curation was a hardcoded list in `live-wait-time-sources.ts`.
 
 **`curated_uses_twelve_hour_clock` is the odd one**, and worth knowing about
-before somebody looks for it in a payload: it changes what is *ingested*, not
+before somebody looks for it in a payload: it changes what is _ingested_, not
 what is served. A source that publishes a 12-hour clock unlabelled reports a
 midnight close as `12:00`, and `normalizeClosingTime` cannot repair that — it
 trusts the time-of-day and fixes the date, while here the time-of-day is the
 part that is wrong. The only signal separating it from a park that genuinely
-closes at noon is the closing falling *before* the opening, which the
+closes at noon is the closing falling _before_ the opening, which the
 re-anchoring consumes. So the flag runs first, on the raw pair, and only for a
 park somebody has written it on: see `correctTwelveHourClockClose`
 (`src/common/utils/operating-window.util.ts`).
@@ -64,7 +64,7 @@ Measured against production on 2026-09-11 that returns **five rows in one park**
 — Six Flags Qiddiya City, 2026-04-17 through 05-15, stored as a 21-hour day.
 
 **It finds candidates, not cases, and the difference can cost you a curation.**
-The query reads *stored* rows, which are post-normalization, and two different
+The query reads _stored_ rows, which are post-normalization, and two different
 raw shapes land on an identical stored row:
 
 | What the source sent                    | What `normalizeClosingTime` did              | Stored | Flag fires |
@@ -77,7 +77,7 @@ and normalization has already overwritten the one value that says whether it
 did. Written on the second kind, the column does nothing at all, silently: the
 next sync rewrites the same 21-hour day and no log line mentions it.
 
-So before flagging a *new* park, read the source's own payload for one of the
+So before flagging a _new_ park, read the source's own payload for one of the
 days (`https://api.themeparks.wiki/v1/entity/{externalId}/schedule`) and look at
 the closing's **date**, not only its time. Afterwards, confirm against the next
 sync that the row actually moved. For Qiddiya the raw shape is on record —
@@ -92,14 +92,14 @@ of that park writes.
 Nothing we ingest publishes queue-jump products, so every part is hand-written —
 and the parts sit on different rows on purpose.
 
-| Column                                  | Row         | Holds                                    |
-| --------------------------------------- | ----------- | ---------------------------------------- |
-| `parks.curated_fast_pass_name`          | park        | The brand: QuickPass, Express Pass       |
-| `parks.curated_currency`                | park        | ISO-4217, what the prices are quoted in  |
-| `parks.curated_fast_pass_term_id`       | park        | The glossary entry explaining the product |
-| `attractions.has_fast_pass`             | attraction  | Whether this ride sells one              |
-| `attractions.fast_pass_name`            | attraction  | Override, for the one ride named apart   |
-| `attractions.fast_pass_price`           | attraction  | What it costs on this ride               |
+| Column                            | Row        | Holds                                     |
+| --------------------------------- | ---------- | ----------------------------------------- |
+| `parks.curated_fast_pass_name`    | park       | The brand: QuickPass, Express Pass        |
+| `parks.curated_currency`          | park       | ISO-4217, what the prices are quoted in   |
+| `parks.curated_fast_pass_term_id` | park       | The glossary entry explaining the product |
+| `attractions.has_fast_pass`       | attraction | Whether this ride sells one               |
+| `attractions.fast_pass_name`      | attraction | Override, for the one ride named apart    |
+| `attractions.fast_pass_price`     | attraction | What it costs on this ride                |
 
 The name is on the park because it is a brand. Phantasialand sells QuickPass
 across the whole park; per ride it would be typed forty times and drift into
@@ -319,7 +319,7 @@ which is exactly what an undo is entitled to assume.
 ## Merges
 
 Every `curated_*` column must be on one of
-`AttractionMergeService`'s two inheritance lists, and keep being on it. A merge
+`AttractionMergeService`'s three inheritance lists, and keep being on it. A merge
 deletes the losing row, so a curation that lived only there is gone with no
 trace and nothing to notice it by — the value simply reverts to whatever the
 sync last wrote, months after anybody remembers deciding otherwise.
@@ -367,19 +367,41 @@ refuse. The one crossed pair column-by-column can build — a curated `false`
 beside inherited months — never reaches a reader, because the resolver drops the
 months whenever the resolved seasonality is false.
 
-`open_with_park` is the one hand-editable column on neither list, and it cannot
-join either: it is `NOT NULL DEFAULT false`, so the winner's value is never
-absent and `inheritMissingMetadata`'s test never fires. Carrying it would mean
-reading a stored `false` as "nobody said", which is the opposite of what its
-descriptor declares — PAR-300, 34 rows.
+**`INHERITABLE_DEFAULTED_COLUMNS` is for a column whose "nothing decided" is a
+value**, and `open_with_park` is the only one. It is `NOT NULL DEFAULT false`,
+so the winner's cell is never empty and the absent-value test the other two
+lists rest on can never fire — the column sat off both lists until PAR-300, and
+a merge whose loser was marked free-flow and whose winner held the default threw
+the statement away silently. The entry names the column and the value that means
+nobody said anything, and the rule reads: take the loser's value when the winner
+is sitting on that value and the loser is not.
 
-**A spec holds the descriptors against both lists** (`curated-field.spec-list.spec.ts`),
-and the two have different exceptions. Against the admin's figure it is the
-bulk-filled three — `has_single_rider`, `rcdb_id`, `open_with_park`, which are
-not curation. Against the inheritance lists it is `open_with_park` alone; the
-other two are carried like any other column. Neither list derives itself from
-`ATTRACTION_CURATED_FIELDS`, which is how the works period's dates sat off both
-of them from 2026-09-06 to 2026-09-17 without anything failing.
+Reading a stored `false` as "nobody said" is not a decision this list invents.
+It is the one the editor has run on since the `defaultValue` field existed — see
+"Two things the editor has to know about a column" above — so the spec holds the
+`unset` here against the descriptor's `defaultValue` rather than letting the two
+drift, and refuses a column on this list that has no `defaultValue` at all.
+
+**The rule is one-directional.** A loser's `false` never clears a winner's
+`true`: a `false` is the absence of a statement, and an absence may not unset
+one ([absent facts](../rules/absent-facts.md)).
+
+Measured against production on 2026-09-18, before the change: of the 47 pairs
+`findDuplicatePairs` offers, **none** carries `open_with_park` on either side,
+so the automatic path was losing nothing on the day this was built. The pair it
+guards is the hand-named one — the merge endpoint takes a `winnerId`/`loserId`
+of its caller's choosing and never consults that list. 34 of 7 355 non-retired
+attractions are marked free-flow, and 30 of those 34 are fed by a live source,
+so a free-flow row is not systematically the loser of `chooseDuplicateWinner`
+either.
+
+**A spec holds the descriptors against the lists** (`curated-field.spec-list.spec.ts`),
+and it has one exception left. Against the admin's figure it is the bulk-filled
+three — `has_single_rider`, `rcdb_id`, `open_with_park`, which are not curation.
+Against the inheritance lists there is now none: every hand-editable key is
+carried. No list derives itself from `ATTRACTION_CURATED_FIELDS`, which is how
+the works period's dates sat off all of them from 2026-09-06 to 2026-09-17
+without anything failing.
 
 ## Related
 

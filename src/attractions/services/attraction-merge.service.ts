@@ -568,11 +568,9 @@ export class AttractionMergeService {
    * the descriptors against both lists, because this sentence on its own is
    * what the works period was missed by.
    *
-   * `openWithPark` is the one curated key on neither list, and it cannot be on
-   * this one: the column is NOT NULL, so the winner's value is never absent
-   * and the test below never fires. Carrying it would mean deciding that a
-   * stored `false` means "nobody said", which is the opposite of what the
-   * editor's descriptor says it means. Tracked as PAR-300.
+   * `openWithPark` is on neither list because it cannot be on this one: the
+   * column is NOT NULL, so the winner's value is never absent and the test
+   * below never fires. It travels on `INHERITABLE_DEFAULTED_COLUMNS` instead.
    *
    * `curatedIsSeasonal` and `curatedSeasonMonths` stay here rather than moving
    * into a set, although the resolver treats them as one statement. Column by
@@ -676,6 +674,42 @@ export class AttractionMergeService {
     },
   ];
 
+  /**
+   * Columns whose "nobody decided anything" is a value rather than an absence.
+   *
+   * `INHERITABLE_COLUMNS` above asks whether the winner's cell is empty, which
+   * is the right question for a curated column that starts as null. It is the
+   * wrong one for `open_with_park`: the column is `boolean NOT NULL DEFAULT
+   * false`, so the winner always holds a value and the test never fires. A
+   * merge whose loser was marked free-flow and whose winner sat on the default
+   * dropped the statement with nothing to notice it by.
+   *
+   * Reading that stored `false` as "nobody said" is not a new decision — it is
+   * the one the editor already runs on. `ATTRACTION_CURATED_FIELDS` gives
+   * `openWithPark` a `defaultValue` of `false`, described as what the column
+   * holds when nobody has decided anything, and `attractionFieldViews` scores
+   * `overridden` against that value rather than against null, which is why the
+   * catalogue does not wear a curated badge on every row. So `unset` here is
+   * that same value, and `curated-field.spec-list.spec.ts` holds the two
+   * against each other: declaring a different one is red, not silent.
+   *
+   * The rule stays one-directional on purpose. A loser's `false` never
+   * overwrites a winner's `true`, because a `false` is the absence of a
+   * statement and an absence may not unset one (`docs/rules/absent-facts.md`).
+   *
+   * Measured before the change (production, 2026-09-18): of the 47 duplicate
+   * pairs `findDuplicatePairs` offers, none holds `open_with_park` on either
+   * side, so no pair on that list loses anything today. The pair this guards
+   * is the hand-named one — `POST /admin/merge-duplicate-attractions` takes a
+   * `winnerId`/`loserId` of its caller's choosing and never consults that list.
+   */
+  static readonly INHERITABLE_DEFAULTED_COLUMNS = [
+    { column: "openWithPark", unset: false },
+  ] as const satisfies readonly {
+    column: keyof Attraction;
+    unset: unknown;
+  }[];
+
   /** The set columns, flat — for the spec that holds both lists against the descriptors. */
   static readonly INHERITABLE_SET_COLUMNS: readonly string[] =
     AttractionMergeService.INHERITABLE_COLUMN_SETS.flatMap(
@@ -692,6 +726,15 @@ export class AttractionMergeService {
       if (!isSet(winner[column]) && isSet(loser[column])) {
         inherited[column] = loser[column];
       }
+    }
+
+    for (const {
+      column,
+      unset,
+    } of AttractionMergeService.INHERITABLE_DEFAULTED_COLUMNS) {
+      const loserValue = loser[column];
+      if (winner[column] === unset && isSet(loserValue) && loserValue !== unset)
+        inherited[column] = loserValue;
     }
 
     for (const set of AttractionMergeService.INHERITABLE_COLUMN_SETS) {
