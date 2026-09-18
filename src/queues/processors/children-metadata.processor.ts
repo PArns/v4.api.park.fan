@@ -38,6 +38,25 @@ interface SyncClaimContext {
 }
 
 /**
+ * The table each `internal_entity_type` of `external_entity_mapping` points
+ * into.
+ *
+ * A closed constant rather than a parameter, because the name is interpolated
+ * into SQL — the same rule `PARK_CHILD_ENTITIES` follows in
+ * `merge-dependencies.ts`. A caller that iterates this cannot be handed
+ * anything else.
+ */
+const CHILD_ENTITY_TABLES: Record<
+  ExternalEntityMapping["internalEntityType"],
+  string
+> = {
+  park: "parks",
+  attraction: "attractions",
+  show: "shows",
+  restaurant: "restaurants",
+};
+
+/**
  * The exact `retired_reason` the children sync writes on a `shows` or
  * `restaurants` row whose entity the wiki now calls an `ATTRACTION`.
  *
@@ -1082,6 +1101,21 @@ export class ChildrenMetadataProcessor {
           .getRepository()
           .update(existing.id, updateData);
       }
+
+      // The mapping used to be written on the new-row branch only, so a ride
+      // that lost its mapping after it was created never got one back — and
+      // losing it is not hypothetical: a merge deletes the row a mapping names
+      // and the table has no FK to stop it. Without the mapping
+      // `WaitTimesProcessor` cannot resolve this ride's Queue-Times readings
+      // at all, because its `externalId` fallback covers `themeparks-wiki`
+      // only. `createMapping` is a no-op when the mapping is already correct,
+      // so this costs one indexed lookup per ride per sync.
+      await this.createMapping(
+        existing.id,
+        "attraction",
+        "queue-times",
+        entity.externalId,
+      );
     } else {
       // Generate slug
       const baseSlug = generateSlug(entity.name);
@@ -1134,7 +1168,77 @@ export class ChildrenMetadataProcessor {
         matchConfidence: 1.0,
         matchStrategy: "exact",
       });
+      return;
     }
+
+    if (existing.internalEntityId === internalEntityId) return;
+
+    // The row holds our id but names somebody else. Two cases, and only one of
+    // them is ours to touch: if that somebody still exists, two live entities
+    // are arguing over one upstream id, and that is settled by the writer that
+    // sees both sides of the match — `EntityMappingsProcessor`, which upserts
+    // on `(externalSource, externalEntityId)`. Not `ParkMetadataProcessor`: its
+    // own conflict branch reads the same index, but every one of its call
+    // sites passes `internalEntityType: "park"`, so it never re-homes an
+    // attraction's id. If the named entity does NOT exist, the row is stranded
+    // — the table has no FK, so a merge or a park consolidation that deleted
+    // its target left it behind in silence.
+    //
+    // Returning here, as this method used to, is what makes a stranded row
+    // expensive rather than merely untidy: the unique index is on
+    // `(external_source, external_entity_id)` alone, so the dead row keeps
+    // holding the upstream's id, the live attraction never gets a mapping, and
+    // `WaitTimesProcessor` cannot resolve it (its `externalId` fallback covers
+    // `themeparks-wiki` only). The ride then gets a permanent
+    // `system-reconciliation` CLOSED series while the feed reports it open —
+    // measured on 2026-09-18 at 30 rides of Energylandia, every one of them
+    // open in the feed at that moment.
+    const targetExists = await this.entityExists(
+      existing.internalEntityType,
+      existing.internalEntityId,
+    );
+    if (targetExists) return;
+
+    this.logger.warn(
+      `🔗 Reclaiming stranded mapping ${externalSource}:${externalEntityId} — it named ${existing.internalEntityId}, which no longer exists`,
+    );
+    await this.mappingRepository.update(existing.id, {
+      internalEntityId,
+      internalEntityType,
+      matchConfidence: 1.0,
+      matchMethod: "exact",
+    });
+  }
+
+  /**
+   * Whether the entity a mapping row names is still in the catalogue.
+   *
+   * `internal_entity_id` is a `character varying` with no foreign key and
+   * `internal_entity_type` decides which of four tables it points into, so
+   * this is the only way to ask.
+   */
+  private async entityExists(
+    entityType: ExternalEntityMapping["internalEntityType"],
+    internalEntityId: string,
+  ): Promise<boolean> {
+    // An own-property check, not a truthiness check on the lookup: the column
+    // is a `character varying`, so a value outside the four types reaches this
+    // — and a bare `CHILD_ENTITY_TABLES[entityType]` would answer
+    // `constructor` with a function, which interpolates into the SQL below and
+    // takes the sync down with a syntax error instead of leaving the row
+    // alone. `Object.hasOwn` needs a lib this build does not target.
+    if (!Object.prototype.hasOwnProperty.call(CHILD_ENTITY_TABLES, entityType))
+      return true;
+    const table = CHILD_ENTITY_TABLES[entityType];
+
+    // `internal_entity_id` is text and the id columns are uuid, so a row whose
+    // value is not a uuid at all would raise 22P02 on the cast. Compare as
+    // text, exactly as the orphan count in PAR-311 does.
+    const rows = await this.mappingRepository.manager.query(
+      `SELECT 1 FROM ${table} WHERE id::text = $1 LIMIT 1`,
+      [internalEntityId],
+    );
+    return rows.length > 0;
   }
 
   /**

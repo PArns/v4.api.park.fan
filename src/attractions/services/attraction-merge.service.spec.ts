@@ -337,6 +337,41 @@ describe("AttractionMergeService", () => {
     expect(lift).toBeGreaterThanOrEqual(0);
     expect(lift).toBeLessThan(queueMove);
   });
+
+  it("moves the loser's external mappings onto the survivor before deleting it", async () => {
+    givenRows([baseRow, suffixRow]);
+
+    await service.mergeAttractions("row-base", "row-suffix");
+
+    const mappingMoves = manager.query.mock.calls.filter(([sql]) =>
+      (sql as string).includes("external_entity_mapping"),
+    );
+
+    expect(mappingMoves).toHaveLength(1);
+    const [sql, params] = mappingMoves[0];
+    expect(sql).toMatch(/UPDATE external_entity_mapping/);
+    expect(params).toEqual(["row-base", "row-suffix"]);
+  });
+
+  it("leaves no mapping pointing at the losing row, which has no FK to catch it", async () => {
+    givenRows([baseRow, suffixRow]);
+
+    const order: string[] = [];
+    manager.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("external_entity_mapping")) order.push("mapping");
+      return [];
+    });
+    manager.delete.mockImplementation(async () => {
+      order.push("delete");
+      return { affected: 1 };
+    });
+
+    await service.mergeAttractions("row-base", "row-suffix");
+
+    // The table carries no foreign key, so a row left behind here survives the
+    // DELETE in silence and keeps holding the upstream id (PAR-311).
+    expect(order).toEqual(["mapping", "delete"]);
+  });
 });
 
 describe("AttractionMergeService — batch", () => {
