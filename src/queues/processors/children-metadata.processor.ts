@@ -1178,7 +1178,7 @@ export class ChildrenMetadataProcessor {
     // are arguing over one upstream id, and that is settled by the writer that
     // sees both sides of the match — `EntityMappingsProcessor`, which upserts
     // on `(externalSource, externalEntityId)`. Not `ParkMetadataProcessor`: its
-    // own conflict branch reads the same index, but every one of its five call
+    // own conflict branch reads the same index, but every one of its call
     // sites passes `internalEntityType: "park"`, so it never re-homes an
     // attraction's id. If the named entity does NOT exist, the row is stranded
     // — the table has no FK, so a merge or a park consolidation that deleted
