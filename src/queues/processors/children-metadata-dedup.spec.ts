@@ -45,7 +45,10 @@ describe("ChildrenMetadataProcessor — cross-source duplicate prevention", () =
     processor = new ChildrenMetadataProcessor(
       { getRepository: () => attractionRepo } as any,
       { retire: jest.fn() } as any,
-      { getRepository: () => ({}) } as any,
+      // `syncQtAttraction` reads this park's shows before creating a row.
+      {
+        getRepository: () => ({ find: jest.fn().mockResolvedValue([]) }),
+      } as any,
       { getRepository: () => ({}) } as any,
       {} as any,
       {} as any,

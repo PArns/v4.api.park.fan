@@ -18,7 +18,10 @@ import { ThemeParksMapper } from "../../external-apis/themeparks/themeparks.mapp
 import { EntityResponse } from "../../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../../common/utils/slug.util";
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
-import { findExistingAttraction } from "../../attractions/utils/attraction-match.util";
+import {
+  findExistingAttraction,
+  normalizeName,
+} from "../../attractions/utils/attraction-match.util";
 import { publishedHeightUnit } from "../../common/utils/height-unit.util";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { QueueTimesDataSource } from "../../external-apis/queue-times/queue-times-data-source";
@@ -35,6 +38,13 @@ import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation
  */
 interface SyncClaimContext {
   claimed: Set<string>;
+  /**
+   * Normalized names of this park's live shows, loaded once per park sync.
+   *
+   * Only `syncQtAttraction` fills it, and only on the first incoming ride that
+   * has no existing row — a park whose rides all match costs no query at all.
+   */
+  showNames?: Set<string>;
 }
 
 /**
@@ -1117,6 +1127,48 @@ export class ChildrenMetadataProcessor {
         entity.externalId,
       );
     } else {
+      // Queue-Times sells a ticket for anything you queue for, so it reports
+      // meet & greets and theatre shows as rides. ThemeParks.wiki reports the
+      // same thing as a SHOW, and we sync that into `shows`. Creating the ride
+      // row here puts one entity in the catalogue twice — and the ride half is
+      // the half that starves: `ConflictResolverService.mergeEntities` folds
+      // the Queue-Times ATTRACTION into the wiki SHOW of the same name (its
+      // key carries no `entityType`), so this row's `qt-ride-…` id never
+      // reaches `mappingLookup` and `reconcileMissingAttractions` writes it
+      // `system-reconciliation` CLOSED forever, while the show beside it is
+      // fed normally.
+      //
+      // 21 such rows across 6 parks were retired for PAR-161; all 21 had a
+      // `shows` row that predated them, the newest by eight months. This park
+      // only reaches this branch while it has no `wikiEntityId` — a window,
+      // not a state — which is why the rows kept appearing long after the
+      // shows were in place.
+      //
+      // The guard covers creation only. An existing row keeps being updated
+      // above, mapping included: dropping a ride that is already fed would
+      // strand its Queue-Times readings, which is the failure PAR-311 fixed.
+      let showNames = ctx?.showNames;
+      if (!showNames) {
+        const parkShows = await this.showsService.getRepository().find({
+          where: { parkId, retiredAt: IsNull() },
+          select: ["name"],
+        });
+        showNames = new Set(
+          parkShows
+            .map((s) => normalizeName(s.name ?? ""))
+            .filter((n) => n.length > 0),
+        );
+        if (ctx) ctx.showNames = showNames;
+      }
+
+      const normalized = normalizeName(entity.name ?? "");
+      if (normalized.length > 0 && showNames.has(normalized)) {
+        this.logger.log(
+          `⏭️  Not creating Queue-Times attraction "${entity.name}" — this park already carries a show of that name`,
+        );
+        return;
+      }
+
       // Generate slug
       const baseSlug = generateSlug(entity.name);
       const existingSlugs = existingAttractions.map((a) => a.slug);
