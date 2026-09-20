@@ -1695,21 +1695,31 @@ export class ParksController {
       "itself is PAR-249.\n\n" +
       "**May count more attractions than the park payload.** This route returns rows; the park " +
       "payload groups them by `name` and serves one row per name. Retired attractions are in " +
-      "neither. What is left over is 37 rows across 12 parks on 2026-09-15 (Walibi Belgium 21, " +
-      "Heide Park 4, Carowinds 2), in 34 name groups — and they are not all the same thing. " +
-      "Most are the catalog holding one ride twice, the pairs the attraction merge finds by " +
-      "its `foo` / `foo-2` slug rule; there the numeric suffix is stripped on the way out, so " +
-      "both rows arrive with the same `name` and the same `slug` and only `id` tells them " +
-      "apart. **So key this list by `id`, never by `slug` or `name`** — either one silently " +
-      "drops a row. But `id` is the only field *guaranteed* to differ, not the only one that " +
-      "does: in 13 of the 34 groups the two rows also disagree about coordinates, `land`, " +
-      "`isSeasonal` or a height limit, and in 4 the `slug` differs too. Three of those four " +
-      "are not one ride twice but **two different rides carrying the same curated name** — at " +
-      "Hurricane Harbor Arlington `wahoo-racer` and `typhoon-twister` are both named " +
-      '"Typhoon Twister" with minimum heights of 107 and 122 cm. There the park payload\'s ' +
-      "grouping hides a real attraction, and this route's number is the one that describes " +
-      "the park. Which number to trust therefore depends on the group: for a duplicated row " +
-      "the park payload's, for a name collision this one's.",
+      "neither. What is left over is 48 rows across 15 parks on 2026-09-20 (Walibi Belgium 21, " +
+      "Six Flags Fiesta Texas 8, Heide Park 4), in 45 name groups. They are the catalog " +
+      "holding one ride twice, the pairs the attraction merge finds by its `foo` / `foo-2` " +
+      "slug rule; there the numeric suffix is stripped on the way out, so both rows arrive " +
+      "with the same `name` and the same `slug` and only `id` tells them apart. **So key this " +
+      "list by `id`, never by `slug` or `name`** — either one silently drops a row. But `id` " +
+      "is the only field *guaranteed* to differ, not the only one that does: the two rows of " +
+      "a group often disagree about coordinates, `land`, `isSeasonal` or a height limit, and " +
+      "in 4 groups the `slug` differs too.\n\n" +
+      "A differing `slug` does **not** make them two rides. A slug is a frozen name, so a row " +
+      "keeps the slug of whatever it was called when it was created — see " +
+      "`docs/architecture/attraction-status-and-seasonality.md` §4a, where identity is the " +
+      "`externalId` and never the slug. Three of those four groups carry the exact damage " +
+      "shape that page describes, one row holding the name another row's slug claims. " +
+      "Resolved against the upstream entities on 2026-09-20, in each of the three the ride " +
+      "the odd slug names is **already served as its own row**: `wahoo-racer` at Hurricane " +
+      "Harbor Arlington sits on upstream's Typhoon Twister, while Wahoo Racer is " +
+      "`wahoo-racer-twisted-whizzard` on its own coordinates; Sea World's " +
+      "`castaway-bay-sky-climb` sits on Wally the Walrus, and the Castaway Bay climb is " +
+      "`castaway-bay-sky-fortress`; New Jersey's `discovery-bay-mini-waves` is grouped under " +
+      '"Discovery Bay", and "Discovery Bay - Mini Waves" is `discovery-bay-treehouse`. ' +
+      "New Jersey differs underneath — its two rows bind to two different upstream entities " +
+      "the feed names alike, so the `externalId` would split them too; see §4a. **So the " +
+      "park payload's number is the one that describes the park**, and this route's surplus " +
+      "is duplicate rows rather than hidden attractions (PAR-259).",
   })
   @ApiParam({
     name: "continent",
