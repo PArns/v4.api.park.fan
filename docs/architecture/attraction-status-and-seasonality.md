@@ -239,10 +239,12 @@ another id from the same source; see `attraction-match.util.ts`.
 ### The park payload's grouping is the thing that hides the damage
 
 The fix stopped new rows being handed over. It did not repair the rows already
-handed over, and on **2026-09-20** all four were still there: `wahoo-racer`
-named "Typhoon Twister" at Hurricane Harbor Arlington, `castaway-bay-sky-climb`
-named "Wally the Walrus" at Sea World, `discovery-bay-mini-waves` named
-"Discovery Bay" at Hurricane Harbor New Jersey, and the Walibi Holland pair.
+handed over, and on **2026-09-20** the same three parks still held them:
+`wahoo-racer` named "Typhoon Twister" at Hurricane Harbor Arlington,
+`castaway-bay-sky-climb` named "Wally the Walrus" at Sea World, and
+`discovery-bay-mini-waves` named "Discovery Bay" at Hurricane Harbor New
+Jersey. Each sits in a name group of two, because the row it was handed the
+name from is still there as well.
 
 Nobody sees them, because the park payload groups attractions by `name` and
 serves one row per name (`deduplicateEntities` in `park-integration.service.ts`).
