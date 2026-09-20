@@ -1440,6 +1440,16 @@ export class ParkIntegrationService {
    * Deduplicates a list of entities (attractions, shows, restaurants) by name.
    * Prioritizes OPERATING status and entities with coordinates.
    * Works with both flat DTOs and nested wait-time structures.
+   *
+   * The key is the name, and it may not become the slug. A slug is a frozen
+   * name that renames deliberately leave alone, so a row keeps the slug of
+   * whatever it was called when it was created — identity is the `externalId`
+   * (see `docs/architecture/attraction-status-and-seasonality.md` §4a), and
+   * that column does not reach this DTO. Keying on `name` plus the slug base
+   * was measured on 2026-09-20 over all 210 parks and all 7300 rows: it splits
+   * exactly three groups, and all three are one ride held twice under two
+   * slugs, not two rides sharing a name. It would publish "Typhoon Twister",
+   * "Wally the Walrus" and "Discovery Bay" twice each (PAR-259).
    */
   private deduplicateEntities<T>(entities: T[]): T[] {
     if (!entities || entities.length <= 1) return entities;

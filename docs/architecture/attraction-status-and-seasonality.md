@@ -236,6 +236,37 @@ own row and matches the neighbour that currently holds that name — handing one
 ride's row to another. The fallback now refuses rows that already answer to
 another id from the same source; see `attraction-match.util.ts`.
 
+### The park payload's grouping is the thing that hides the damage
+
+The fix stopped new rows being handed over. It did not repair the rows already
+handed over, and on **2026-09-20** all four were still there: `wahoo-racer`
+named "Typhoon Twister" at Hurricane Harbor Arlington, `castaway-bay-sky-climb`
+named "Wally the Walrus" at Sea World, `discovery-bay-mini-waves` named
+"Discovery Bay" at Hurricane Harbor New Jersey, and the Walibi Holland pair.
+
+Nobody sees them, because the park payload groups attractions by `name` and
+serves one row per name (`deduplicateEntities` in `park-integration.service.ts`).
+That is a **coincidence that happens to land right**, not a design: the rows
+collide on the name precisely because one was handed the other's.
+
+**Do not upgrade that key to the slug.** It is the obvious repair — a name
+collision between two real rides would hide one, and the slug looks like the
+discriminator that would save it. Measured over all 210 parks and 7300 rows on
+2026-09-20: grouping by name serves 7252 attractions, grouping by name plus slug
+base serves 7255, and every one of the three extra rows is a ride the catalog
+holds twice. Bound to their upstream entities by coordinates, both
+`wahoo-racer` and `typhoon-twister` answer for themeparks.wiki's Typhoon
+Twister; Wahoo Racer itself is a third row (`wahoo-racer-twisted-whizzard`) on
+Wahoo Racer's own coordinates. The change would publish "Typhoon Twister",
+"Wally the Walrus" and "Discovery Bay" twice each — §4a's "trusting the slugs
+would have invented two attractions", one layer up. `park-integration.dedupe.spec.ts`
+pins the three pairs so the next attempt goes red instead of live (PAR-259).
+
+A key that would be right is the `externalId`, since two rows answering for one
+upstream entity are one ride by definition. It does not reach the DTO today, and
+until a name collision between two genuinely different rides is measured, there
+is nothing for it to fix.
+
 ---
 
 ## 4b. Review marks: what a human already settled
