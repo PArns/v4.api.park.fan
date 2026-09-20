@@ -1450,7 +1450,9 @@ export class ParkIntegrationService {
    * it splits exactly three groups, and in each one the ride the odd slug
    * names is already served as its own row, so the split recovers nothing and
    * publishes "Typhoon Twister", "Wally the Walrus" and "Discovery Bay" twice
-   * each (PAR-259). Shows and restaurants were not measured; nothing suggests
+   * each (PAR-259). Nor is the `externalId` the upgrade it looks like: the
+   * "Discovery Bay" pair answers to two different upstream ids, so that key
+   * splits it too. Shows and restaurants were not measured; nothing suggests
    * they need a different key from attractions.
    */
   private deduplicateEntities<T>(entities: T[]): T[] {

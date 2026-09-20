@@ -258,24 +258,31 @@ discriminator that would save it. Measured over all 210 parks and 7300 rows on
 base serves 7255. Exactly three groups split, and in each one **the ride the odd
 slug names is already in the catalog as its own row**:
 
-| the group | the odd slug sits on | and that ride is already served as |
+| the group | the odd slug | the ride that slug names, already served as |
 |---|---|---|
-| Arlington, "Typhoon Twister" | `wahoo-racer` on Typhoon Twister's coordinates | `wahoo-racer-twisted-whizzard`, on Wahoo Racer's |
-| Sea World, "Wally the Walrus" | `castaway-bay-sky-climb` on Wally the Walrus's | `castaway-bay-sky-fortress`, the Castaway Bay climb |
-| New Jersey, "Discovery Bay" | two rows on two upstream entities the feed itself calls "Discovery Bay" alike | "Discovery Bay - Mini Waves" as `discovery-bay-treehouse` |
+| Arlington, "Typhoon Twister" | `wahoo-racer`, sitting on Typhoon Twister's coordinates | `wahoo-racer-twisted-whizzard`, on Wahoo Racer's own |
+| Sea World, "Wally the Walrus" | `castaway-bay-sky-climb`, sitting on Wally the Walrus's | `castaway-bay-sky-fortress`, the Castaway Bay climb |
+| New Jersey, "Discovery Bay" | `discovery-bay-mini-waves` | `discovery-bay-treehouse`, carrying "Discovery Bay - Mini Waves" |
 
 So the split recovers nothing. It publishes "Typhoon Twister", "Wally the
 Walrus" and "Discovery Bay" twice each — §4a's "trusting the slugs would have
 invented two attractions", one layer up. `park-integration.dedupe.spec.ts` pins
 the three pairs so the next attempt goes red instead of live (PAR-259).
 
+The three groups are not the same case underneath, and only Arlington and Sea
+World are a row sitting on its neighbour's upstream entity. **New Jersey is the
+harder one:** its two rows bind exactly, but to two *different* upstream
+entities that the feed itself names "Discovery Bay" alike. Whether those two are
+one ride, the feed does not say — one of them shares its coordinates with
+upstream's "Discovery Bay - Mini Waves", which we also hold separately.
+
 Two of the six rows cannot be bound upstream at all: Arlington's
 `typhoon-twister` carries no coordinates, and Sea World's `wally-the-walrus`
 matches no upstream entity exactly. **That is a reason not to trust a split, not
 evidence for one** — an unbindable row is the state §4a is about.
 
-And the `externalId` is not the waiting upgrade either. New Jersey's two rows
-answer to two *different* upstream ids, so keying on it would publish "Discovery
+And the `externalId` is not the waiting upgrade either. Because New Jersey's two
+rows answer to two different upstream ids, keying on it would publish "Discovery
 Bay" twice as well. Which of these rows are one ride is a curation question
 (PAR-160 / PAR-179 / PAR-205), not a question the payload's grouping key can
 answer.

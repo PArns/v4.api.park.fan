@@ -37,9 +37,10 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
  * yields 7252 attractions, grouping by name plus slug base yields 7255. Exactly
  * three groups split, and in each one the ride the odd slug names is already
  * served as its own row — `wahoo-racer-twisted-whizzard` carries Wahoo Racer,
- * `castaway-bay-sky-fortress` carries the Castaway Bay climb. So the split
- * recovers nothing and publishes "Typhoon Twister", "Wally the Walrus" and
- * "Discovery Bay" twice each (PAR-259).
+ * `castaway-bay-sky-fortress` the Castaway Bay climb, `discovery-bay-treehouse`
+ * "Discovery Bay - Mini Waves". So the split recovers nothing and publishes
+ * "Typhoon Twister", "Wally the Walrus" and "Discovery Bay" twice each
+ * (PAR-259).
  */
 describe("ParkIntegrationService › deduplicateEntities", () => {
   let deduplicate: <T>(entities: T[]) => T[];

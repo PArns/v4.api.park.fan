@@ -1714,9 +1714,12 @@ export class ParksController {
       "Harbor Arlington sits on upstream's Typhoon Twister, while Wahoo Racer is " +
       "`wahoo-racer-twisted-whizzard` on its own coordinates; Sea World's " +
       "`castaway-bay-sky-climb` sits on Wally the Walrus, and the Castaway Bay climb is " +
-      "`castaway-bay-sky-fortress`. **So the park payload's number is the one that describes " +
-      "the park**, and this route's surplus is duplicate rows rather than hidden attractions " +
-      "(PAR-259).",
+      "`castaway-bay-sky-fortress`; New Jersey's `discovery-bay-mini-waves` is grouped under " +
+      '"Discovery Bay", and "Discovery Bay - Mini Waves" is `discovery-bay-treehouse`. ' +
+      "New Jersey differs underneath — its two rows bind to two different upstream entities " +
+      "the feed names alike, so the `externalId` would split them too; see §4a. **So the " +
+      "park payload's number is the one that describes the park**, and this route's surplus " +
+      "is duplicate rows rather than hidden attractions (PAR-259).",
   })
   @ApiParam({
     name: "continent",
