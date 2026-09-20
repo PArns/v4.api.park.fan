@@ -255,19 +255,30 @@ collide on the name precisely because one was handed the other's.
 collision between two real rides would hide one, and the slug looks like the
 discriminator that would save it. Measured over all 210 parks and 7300 rows on
 2026-09-20: grouping by name serves 7252 attractions, grouping by name plus slug
-base serves 7255, and every one of the three extra rows is a ride the catalog
-holds twice. Bound to their upstream entities by coordinates, both
-`wahoo-racer` and `typhoon-twister` answer for themeparks.wiki's Typhoon
-Twister; Wahoo Racer itself is a third row (`wahoo-racer-twisted-whizzard`) on
-Wahoo Racer's own coordinates. The change would publish "Typhoon Twister",
-"Wally the Walrus" and "Discovery Bay" twice each — §4a's "trusting the slugs
-would have invented two attractions", one layer up. `park-integration.dedupe.spec.ts`
-pins the three pairs so the next attempt goes red instead of live (PAR-259).
+base serves 7255. Exactly three groups split, and in each one **the ride the odd
+slug names is already in the catalog as its own row**:
 
-A key that would be right is the `externalId`, since two rows answering for one
-upstream entity are one ride by definition. It does not reach the DTO today, and
-until a name collision between two genuinely different rides is measured, there
-is nothing for it to fix.
+| the group | the odd slug sits on | and that ride is already served as |
+|---|---|---|
+| Arlington, "Typhoon Twister" | `wahoo-racer` on Typhoon Twister's coordinates | `wahoo-racer-twisted-whizzard`, on Wahoo Racer's |
+| Sea World, "Wally the Walrus" | `castaway-bay-sky-climb` on Wally the Walrus's | `castaway-bay-sky-fortress`, the Castaway Bay climb |
+| New Jersey, "Discovery Bay" | two rows on two upstream entities the feed itself calls "Discovery Bay" alike | "Discovery Bay - Mini Waves" as `discovery-bay-treehouse` |
+
+So the split recovers nothing. It publishes "Typhoon Twister", "Wally the
+Walrus" and "Discovery Bay" twice each — §4a's "trusting the slugs would have
+invented two attractions", one layer up. `park-integration.dedupe.spec.ts` pins
+the three pairs so the next attempt goes red instead of live (PAR-259).
+
+Two of the six rows cannot be bound upstream at all: Arlington's
+`typhoon-twister` carries no coordinates, and Sea World's `wally-the-walrus`
+matches no upstream entity exactly. **That is a reason not to trust a split, not
+evidence for one** — an unbindable row is the state §4a is about.
+
+And the `externalId` is not the waiting upgrade either. New Jersey's two rows
+answer to two *different* upstream ids, so keying on it would publish "Discovery
+Bay" twice as well. Which of these rows are one ride is a curation question
+(PAR-160 / PAR-179 / PAR-205), not a question the payload's grouping key can
+answer.
 
 ---
 

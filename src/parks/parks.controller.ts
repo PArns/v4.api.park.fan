@@ -1709,12 +1709,14 @@ export class ParksController {
       "`docs/architecture/attraction-status-and-seasonality.md` §4a, where identity is the " +
       "`externalId` and never the slug. Three of those four groups carry the exact damage " +
       "shape that page describes, one row holding the name another row's slug claims. " +
-      "Resolved against the upstream entities on 2026-09-20 by coordinates, all three are one " +
-      "ride held twice: at Hurricane Harbor Arlington both `wahoo-racer` and `typhoon-twister` " +
-      "answer for upstream's Typhoon Twister, and Wahoo Racer is a third row " +
-      "(`wahoo-racer-twisted-whizzard`) sitting on Wahoo Racer's own coordinates. **So the " +
-      "park payload's number is the one that describes the park**, and this route's surplus " +
-      "is duplicate rows rather than hidden attractions (PAR-259).",
+      "Resolved against the upstream entities on 2026-09-20, in each of the three the ride " +
+      "the odd slug names is **already served as its own row**: `wahoo-racer` at Hurricane " +
+      "Harbor Arlington sits on upstream's Typhoon Twister, while Wahoo Racer is " +
+      "`wahoo-racer-twisted-whizzard` on its own coordinates; Sea World's " +
+      "`castaway-bay-sky-climb` sits on Wally the Walrus, and the Castaway Bay climb is " +
+      "`castaway-bay-sky-fortress`. **So the park payload's number is the one that describes " +
+      "the park**, and this route's surplus is duplicate rows rather than hidden attractions " +
+      "(PAR-259).",
   })
   @ApiParam({
     name: "continent",

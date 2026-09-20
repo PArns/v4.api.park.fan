@@ -34,10 +34,12 @@ import { REDIS_CLIENT } from "../../common/redis/redis.module";
  * that column never reaches this DTO.
  *
  * Measured on 2026-09-20 over all 210 parks and 7300 rows: grouping by name
- * yields 7252 attractions, grouping by name plus slug base yields 7255. All
- * three extra rows are one ride held twice under two slugs — checked against
- * themeparks.wiki by coordinates — so the three would publish "Typhoon
- * Twister", "Wally the Walrus" and "Discovery Bay" twice each (PAR-259).
+ * yields 7252 attractions, grouping by name plus slug base yields 7255. Exactly
+ * three groups split, and in each one the ride the odd slug names is already
+ * served as its own row — `wahoo-racer-twisted-whizzard` carries Wahoo Racer,
+ * `castaway-bay-sky-fortress` carries the Castaway Bay climb. So the split
+ * recovers nothing and publishes "Typhoon Twister", "Wally the Walrus" and
+ * "Discovery Bay" twice each (PAR-259).
  */
 describe("ParkIntegrationService › deduplicateEntities", () => {
   let deduplicate: <T>(entities: T[]) => T[];
