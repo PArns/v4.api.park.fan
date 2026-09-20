@@ -1438,15 +1438,28 @@ export class MLService {
     // ONLY record hourly predictions — daily predictions span up to 365 days ahead
     // and can't be compared against actuals until those dates arrive, inflating
     // PENDING counts and skewing coverage metrics.
+    // UNKNOWN passes on purpose. A scheduled closure never reaches this line —
+    // predict.py drops CLOSED rows before inference and schedule_filter drops
+    // whatever falls outside an OPERATING window — so the only thing excluding
+    // UNKNOWN would remove is hours on days nobody published a schedule for, in
+    // parks that were demonstrably running (schedule_filter only keeps such an
+    // hour when a ride reports a wait >= 5 min). Measured over 7 days before
+    // `status` was declared: 1375 of 2336057 hourly rows, 0.059 %, all of it in
+    // three parks with a patchy schedule source. Dropping them would blind the
+    // accuracy metric exactly where forecasting is hardest, and it would let our
+    // own missing bookkeeping stand in for an operator's statement — see
+    // docs/rules/absent-facts.md. null covers rows written before PAR-117.
     const validPredictionsForFeedback = entities.filter(
       (pred) =>
         pred.predictionType === "hourly" &&
-        (pred.status === "OPERATING" || pred.status === null),
+        (pred.status === "OPERATING" ||
+          pred.status === "UNKNOWN" ||
+          pred.status === null),
     );
 
     if (validPredictionsForFeedback.length < entities.length) {
       this.logger.debug(
-        `Filtering: Recording ${validPredictionsForFeedback.length}/${entities.length} predictions (excluding scheduled closures and daily predictions)`,
+        `Filtering: Recording ${validPredictionsForFeedback.length}/${entities.length} predictions (excluding daily predictions)`,
       );
     }
 

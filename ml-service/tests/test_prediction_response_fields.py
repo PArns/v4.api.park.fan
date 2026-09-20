@@ -6,12 +6,11 @@ that predict.py sets and this class does not declare is dropped from the respons
 without an error, a warning or a failing test. The NestJS side then reads `undefined`
 and writes NULL, and nothing anywhere says so.
 
-That is not hypothetical. `status` is set on every row (`predict.py`, the
-`results.append` block) and is NOT declared on `PredictionResponse`, so it never
-reaches the API. `MLService.storePredictions` writes `pred.status || null` into a
-column that is therefore always NULL, and the feedback filter one screen below it —
-`pred.status === "OPERATING" || pred.status === null`, commented "excluding scheduled
-closures" — passes everything. See the KNOWN_DROPPED note below.
+That is not hypothetical. `status` went that way for months: set on every row
+(`predict.py`, the `results.append` block), undeclared here, so it never reached the
+API and `MLService.storePredictions` wrote NULL into `wait_time_predictions.status` on
+all 3157154 hourly rows. PAR-117 declared it and widened the feedback filter to keep
+UNKNOWN, so the column now carries a value and the filter says what it means.
 
 The ml-service image ships no pytest, so this file doubles as a plain script:
 `python3 tests/test_prediction_response_fields.py` runs the same assertions. It parses
@@ -29,12 +28,10 @@ sys.path.insert(0, ROOT)
 
 # Keys predict.py sets that PredictionResponse deliberately does not carry.
 #
-# `parkId` IS declared and does reach the client. `status` is the open bug described
-# above: declaring it would silently activate the feedback filter and drop UNKNOWN
-# rows from accuracy scoring, which is a metrics change and not this test's business.
-# It is recorded in the frontend repo's todo.md; when it is fixed, delete the entry
-# rather than the test.
-KNOWN_DROPPED = {"status"}
+# Empty since PAR-117: `status` was the last entry and is now declared. Add a key
+# here only with a reason, and delete the entry rather than the test once it is
+# declared.
+KNOWN_DROPPED = set()
 
 
 def _prediction_dict_keys(path):
@@ -100,14 +97,11 @@ def main():
     assert "uncertaintyMinutes" in produced, "predict.py stopped emitting the band"
     assert "uncertaintyMinutes" in declared, "PredictionResponse stopped carrying it"
 
-    # And guard the known hole itself: if `status` ever gets declared, this test
-    # should be updated deliberately rather than keep an obsolete exception.
-    assert "status" in produced, "predict.py no longer sets status — drop KNOWN_DROPPED"
-    assert "status" not in declared, (
-        "status is now declared on PredictionResponse. That activates the feedback "
-        "filter in MLService.storePredictions; remove it from KNOWN_DROPPED and "
-        "check what it does to accuracy coverage."
-    )
+    # `status` was the hole this test was written around (PAR-117). Both sides are
+    # pinned by name now, because dropping it again would silently sharpen the
+    # feedback filter in MLService.storePredictions — the same failure in reverse.
+    assert "status" in produced, "predict.py stopped setting status"
+    assert "status" in declared, "PredictionResponse stopped carrying status"
 
     print(f"ok — {len(produced)} keys produced, {len(declared)} declared")
     print(f"     band present on both sides, {sorted(KNOWN_DROPPED)} knowingly dropped")
