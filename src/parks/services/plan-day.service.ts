@@ -1051,6 +1051,7 @@ export class PlanDayService {
         longitude: PlanDayService.coord(attraction.longitude),
         ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
         ...(headlinerIds.has(attractionId) ? { isHeadliner: true } : {}),
+        ...PlanDayService.riderFacts(attraction),
       });
     }
 
@@ -1364,6 +1365,7 @@ export class PlanDayService {
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
         ...(headlinerIds.has(attractionId) ? { isHeadliner: true } : {}),
+        ...PlanDayService.riderFacts(attraction),
       });
     }
 
@@ -1394,6 +1396,36 @@ export class PlanDayService {
    * the Gulf of Guinea, which is a plausible-looking answer and therefore worse
    * than no answer. Same for a whitespace-only value.
    */
+  /**
+   * Who may ride, as far as this payload can say it.
+   *
+   * Through `resolveCuratedFacts` rather than reading the four columns here:
+   * the curated cell wins over the synced one, and a curated `0` height is a
+   * real answer meaning "no minimum at all" rather than a 0 cm limit. That
+   * rule had already been copied into two DTO mappers once, which is why it
+   * lives in one place now.
+   *
+   * Both fields are OMITTED where nothing is known, and that is the whole
+   * point of the helper. "No minimum height recorded" is not the statement
+   * "any height may ride", and "nobody flagged this as a water ride" is not
+   * "you stay dry" — the flag is populated for a few dozen of ~7000
+   * attractions. A planner asked whether the six-year-old can ride has to be
+   * able to answer "we do not know", so absence travels as absence. A curated
+   * `false` on the wet flag is a real statement and does travel.
+   */
+  private static riderFacts(attraction: Attraction): {
+    minimumHeight?: number;
+    mayGetWet?: boolean;
+  } {
+    const facts = resolveCuratedFacts(attraction);
+    return {
+      ...(facts.minimumHeight !== null
+        ? { minimumHeight: facts.minimumHeight }
+        : {}),
+      ...(facts.mayGetWet !== null ? { mayGetWet: facts.mayGetWet } : {}),
+    };
+  }
+
   private static coord(value: unknown): number | null {
     if (value === null || value === undefined) return null;
     if (typeof value === "string" && value.trim() === "") return null;
@@ -1771,6 +1803,11 @@ export class PlanDayService {
    * the day it is planning ({@link cannotOpenOn}), and {@link observedRides}
    * must not, since a row in the hourly rollup is a measurement of the ride
    * having run.
+   *
+   * The four height and wet columns are here because the two fields the
+   * payload states are RESOLVED from them ({@link riderFacts}). Leave them out
+   * of the select and `resolveCuratedFacts` reads `undefined` on every row, so
+   * both fields go silently absent on every ride and nothing fails.
    */
   private async attractions(park: Park): Promise<Attraction[]> {
     return this.attractionRepository.find({
@@ -1782,6 +1819,10 @@ export class PlanDayService {
         "landName",
         "latitude",
         "longitude",
+        "minimumHeight",
+        "curatedMinimumHeight",
+        "mayGetWet",
+        "curatedMayGetWet",
         "isSeasonal",
         "seasonMonths",
         "seasonOutSince",

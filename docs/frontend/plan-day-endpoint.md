@@ -195,6 +195,8 @@ minimising queues.
 | `latitude` / `longitude` | **numbers**, not the strings TypeORM returns for a decimal column. A geodesic distance between two of them is a *lower bound* on the walk and nothing more |
 | `downYesterday` | the ride was reported **DOWN** at some point in the previous operating day and was **never OPERATING** in any of it. A ride the feed called CLOSED all day is a season or a refurbishment, not a fault, and is not flagged — without the DOWN requirement this put a warning on nine of Phantasialand's winter-only and water attractions every day of the summer. Only asked for today and tomorrow |
 | `isHeadliner` | the park's **curated** set, never re-derived from `dayPeak`: a headliner having a quiet Tuesday is still a headliner |
+| `minimumHeight` | minimum rider height in **centimetres**, curated over synced — see §6a |
+| `mayGetWet` | whether the ride may soak you, curated over synced. **Absent is unknown, never dry** — see §6a |
 
 Rides are sorted busiest first (`dayPeak` descending, name as tie-break) on the
 forecast tiers, and by name on an observed day.
@@ -203,6 +205,33 @@ A ride is **omitted** rather than drawn flat when there is nothing to give it a
 shape, and a ride the past-day rollup has no row for is omitted rather than drawn
 at zero — absence there means the rollup has not reached that day, which is not
 the same statement as an empty queue.
+
+### 6a. Who may ride: `minimumHeight` and `mayGetWet`
+
+Two facts about the riders rather than the queue, and they are here for the same
+reason the coordinates are: a planner asks them **once for a whole park**, and
+the alternative is fetching one attraction payload per ride.
+
+**`minimumHeight` is always centimetres.** The attraction row's
+`minimumHeightUnit` is a *display* decision — US parks post 52″ and rendering
+that as "132 cm" would contradict the sign at the entrance — so it stays on the
+attraction payload. A planner compares this number against a child's height
+instead of printing it, so it gets the number and not the unit.
+
+**Both are resolved through `resolveCuratedFacts`**, so the curated column wins
+over the synced one, and a curated height of `0` means *no minimum at all*
+rather than a 0 cm limit.
+
+**Both are omitted where nothing is known, and absence is the point.** "No
+minimum height recorded" is not the statement "anyone may ride", and an
+unflagged ride is not a dry one — upstream populates the wet flag for a few
+dozen of ~7000 attractions. A `false` on `mayGetWet` is a real statement and
+does travel; a missing field never becomes one. A caller that reads absence as
+`false` promises a family that asked to stay dry a dry day it cannot deliver,
+which is [the standing rule](../rules/absent-facts.md) one payload further out.
+
+Both mappers carry them — `forecastRides` and `observedRides` assemble a ride
+separately, so a past day states them too.
 
 ### Which rides a day carries — and the cap that does not bite
 
