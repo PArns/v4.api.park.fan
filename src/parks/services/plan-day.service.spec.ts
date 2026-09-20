@@ -505,6 +505,104 @@ describe("PlanDayService", () => {
     expect(plan.rides[0].hours.every((h) => h.source === undefined)).toBe(true);
   });
 
+  // ── Who may ride ───────────────────────────────────────────────────────────
+  // The two facts a planner needs to answer "can the six-year-old ride this"
+  // and "will we stay dry" for a whole park at once. Before this they were on
+  // the attraction payload only, so the planner's party questions asked forty
+  // rides a question none of them carried an answer to and flagged nobody.
+  //
+  // Both are resolved from a curated column over a synced one, and both are
+  // OMITTED where nothing is known: "no height recorded" is not "anyone may
+  // ride", and an unflagged ride is not a dry one.
+  describe("who may ride", () => {
+    const planFor = async (
+      attraction: Partial<Attraction>,
+      date = farDate(),
+    ) => {
+      attractions = [
+        { id: "a-taron", slug: "taron", name: "Taron", ...attraction },
+      ];
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      const plan = await service.buildPlanDay(park, date);
+      return plan.rides.find((r) => r.attractionSlug === "taron");
+    };
+
+    it("states the synced height when nothing is curated", async () => {
+      expect((await planFor({ minimumHeight: 120 }))?.minimumHeight).toBe(120);
+    });
+
+    it("lets a curated height win over the synced one", async () => {
+      const taron = await planFor({
+        minimumHeight: 120,
+        curatedMinimumHeight: 100,
+      });
+      expect(taron?.minimumHeight).toBe(100);
+    });
+
+    it("says nothing where a curator has written that there is no minimum", async () => {
+      // A curated 0 means "no minimum at all", not a 0 cm limit, and
+      // `resolveCuratedFacts` turns it into null. Absent is the right answer
+      // for a planner: there is no height left to flag anybody against.
+      const taron = await planFor({
+        minimumHeight: 120,
+        curatedMinimumHeight: 0,
+      });
+      expect(taron?.minimumHeight).toBeUndefined();
+      expect("minimumHeight" in (taron as object)).toBe(false);
+    });
+
+    it("carries the wet flag, curated over synced", async () => {
+      expect((await planFor({ mayGetWet: true }))?.mayGetWet).toBe(true);
+      expect(
+        (await planFor({ mayGetWet: true, curatedMayGetWet: false }))
+          ?.mayGetWet,
+      ).toBe(false);
+    });
+
+    it("omits both where the row knows neither, rather than answering false", async () => {
+      // The case that made this ticket: upstream fills the wet flag for a few
+      // dozen of ~7000 attractions. A `false` here would tell a family that
+      // asked to stay dry that every unflagged ride is safe, and a `0` would
+      // tell them every ride is.
+      const taron = await planFor({});
+      expect(taron?.minimumHeight).toBeUndefined();
+      expect(taron?.mayGetWet).toBeUndefined();
+      expect("minimumHeight" in (taron as object)).toBe(false);
+      expect("mayGetWet" in (taron as object)).toBe(false);
+    });
+
+    it("carries both on a day that already happened, not only on a forecast", async () => {
+      // A past day is built by a second mapper (`observedRides`), and the two
+      // are assembled ride by ride rather than through one function. The
+      // planner reads the same fields whichever tier answered, so both sites
+      // are asserted — the first version of this change touched only one.
+      const date = pastDate();
+      hourlyHistory = new Map([
+        [
+          "a-taron",
+          slots([
+            ["10:00", 30, 4],
+            ["14:00", 70, 4],
+          ]),
+        ],
+      ]) as never;
+
+      const taron = await planFor(
+        { minimumHeight: 130, mayGetWet: true },
+        date,
+      );
+
+      expect(taron?.minimumHeight).toBe(130);
+      expect(taron?.mayGetWet).toBe(true);
+    });
+  });
+
   it("ships coordinates as numbers, not as the strings Postgres returns", async () => {
     // A `decimal` column comes back from TypeORM as a string whatever the
     // entity declares, which is why the park payload has always carried

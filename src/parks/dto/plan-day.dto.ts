@@ -224,6 +224,35 @@ export class PlanDayRideDto {
       "out the ones a visitor has not planned.",
   })
   isHeadliner?: boolean;
+
+  @ApiProperty({
+    required: false,
+    example: 120,
+    description:
+      "Minimum rider height in CENTIMETRES, the curated answer over the " +
+      "synced one. Always centimetres, whatever the park posts on its signs: " +
+      "`minimumHeightUnit` is a display decision and stays on the attraction " +
+      "payload, because a planner compares this number against a child's " +
+      "height rather than printing it. Carried so a caller can answer 'can " +
+      "the six-year-old ride this' for a whole park at once instead of " +
+      "fetching one attraction payload per ride. ABSENT where there is no " +
+      "minimum to state — nothing recorded upstream, or a curator writing a 0 " +
+      "to say there is none — and absent must never become a promise that " +
+      "anyone may ride.",
+  })
+  minimumHeight?: number;
+
+  @ApiProperty({
+    required: false,
+    example: true,
+    description:
+      "Whether the ride may soak you, the curated answer over the synced one. " +
+      "ABSENT is unknown rather than dry: upstream fills this flag for a few " +
+      "dozen of ~7000 attractions, so a caller that reads a missing field as " +
+      "'stays dry' would promise a dry day it cannot deliver. A `false` here " +
+      "is a real statement and does travel.",
+  })
+  mayGetWet?: boolean;
 }
 
 export class PlanDayShowDto {
