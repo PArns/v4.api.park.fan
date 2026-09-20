@@ -7,8 +7,14 @@ import { transliterate } from "transliteration";
  * disagree on separators for the same ride ("Spider-Man" vs "Spider Man"),
  * and that helper also leaves a literal "(r)" behind because it strips
  * trademark symbols only after transliteration has already expanded them.
+ *
+ * Exported because the same comparison decides whether a Queue-Times ride is
+ * really a ride: `ChildrenMetadataProcessor.syncQtAttraction` holds an
+ * incoming name against this park's shows before creating a row. Two spellings
+ * of "same name" in one sync would let the duplicate back in through whichever
+ * of the two is looser.
  */
-function normalizeName(name: string): string {
+export function normalizeName(name: string): string {
   return transliterate(name.replace(/[®™©℠]/g, ""))
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");

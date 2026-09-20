@@ -50,7 +50,10 @@ describe("ChildrenMetadataProcessor — stranded mappings", () => {
     processor = new ChildrenMetadataProcessor(
       { getRepository: () => ({}) } as any,
       {} as any,
-      { getRepository: () => ({}) } as any,
+      // `syncQtAttraction` reads this park's shows before creating a row.
+      {
+        getRepository: () => ({ find: jest.fn().mockResolvedValue([]) }),
+      } as any,
       { getRepository: () => ({}) } as any,
       {} as any,
       {} as any,
@@ -191,7 +194,10 @@ describe("ChildrenMetadataProcessor — syncQtAttraction remaps an existing ride
     processor = new ChildrenMetadataProcessor(
       { getRepository: () => attractionRepo } as any,
       {} as any,
-      { getRepository: () => ({}) } as any,
+      // `syncQtAttraction` reads this park's shows before creating a row.
+      {
+        getRepository: () => ({ find: jest.fn().mockResolvedValue([]) }),
+      } as any,
       { getRepository: () => ({}) } as any,
       {} as any,
       {} as any,
@@ -259,7 +265,10 @@ describe("ChildrenMetadataProcessor — an entity type outside the four", () => 
     processor = new ChildrenMetadataProcessor(
       { getRepository: () => ({}) } as any,
       {} as any,
-      { getRepository: () => ({}) } as any,
+      // `syncQtAttraction` reads this park's shows before creating a row.
+      {
+        getRepository: () => ({ find: jest.fn().mockResolvedValue([]) }),
+      } as any,
       { getRepository: () => ({}) } as any,
       {} as any,
       {} as any,
