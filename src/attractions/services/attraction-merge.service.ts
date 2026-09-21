@@ -88,7 +88,15 @@ export interface DroppedCuration {
    * wins and the survivor's is not automatically the richer (PAR-179).
    */
   from: "winner" | "loser";
-  /** The row as stored, so the loss is recoverable by hand. */
+  /**
+   * The row as stored, so the loss is recoverable by hand.
+   *
+   * For a dependent table that is the raw row as the planner read it, column
+   * names and all. For `attractions` it is the handful of curated columns that
+   * stay behind, under the names `AdminCurationService` takes them back under —
+   * typing `curatedOutOfServiceFrom` into the editor is what recovery looks
+   * like there, and `curated_out_of_service_from` is not a key it accepts.
+   */
   row: Record<string, unknown>;
 }
 
@@ -100,9 +108,10 @@ export interface AttractionMergePreview extends AttractionMergeResult {
   /** Columns the survivor would take from the row about to disappear. */
   inheritedColumns: string[];
   /**
-   * Curated rows the merge would destroy. Empty for almost every pair — very
-   * few rides carry a curated profile, and both sides must carry one before
-   * anything is lost.
+   * Curated values the merge would destroy: a dependent row it deletes, and
+   * the curated columns on the losing attraction itself that the survivor
+   * does not inherit. Empty for almost every pair — very few rides carry a
+   * curated profile or a works period at all.
    */
   droppedCurations: DroppedCuration[];
 }
@@ -110,6 +119,26 @@ export interface AttractionMergePreview extends AttractionMergeResult {
 /** A column the merge can read: null and undefined both mean "nothing here". */
 function isSet(value: unknown): boolean {
   return value !== null && value !== undefined;
+}
+
+/**
+ * What a merge would write onto the survivor, and what it would leave behind.
+ *
+ * Both halves come out of one pass because they are the same decision read
+ * twice: a column set the survivor does not inherit is a column set the DELETE
+ * takes with it. Splitting them into a rule for the merge and a rule for the
+ * rehearsal is how the two drift.
+ */
+interface MetadataInheritancePlan {
+  /** Columns the survivor takes from the losing row. */
+  inherited: Partial<Attraction>;
+  /**
+   * Per column set, the values the losing row holds that reach the survivor
+   * nowhere — under the entity's own names, because a curator types those.
+   * Empty for the ordinary pair: almost no ride carries a curated window, and
+   * a loser holding none loses none.
+   */
+  droppedColumnSets: Record<string, unknown>[];
 }
 
 /**
@@ -144,9 +173,9 @@ export class AttractionMergeService {
    *
    * Everything reported here is derived by the same functions the real merge
    * uses, so the preview cannot drift from the act — `resolveSurvivingName` and
-   * `resolveSurvivingSlug` for the naming, `inheritMissingMetadata` for the
-   * columns, and `planWinnerAuthoritative` for the curated rows that would
-   * cease to exist.
+   * `resolveSurvivingSlug` for the naming, `planMetadataInheritance` for the
+   * columns that travel and the ones that stay behind, and
+   * `planWinnerAuthoritative` for the curated rows that would cease to exist.
    *
    * The last of those was missing until PAR-179, and it was the one that
    * mattered: a rehearsal that reports a slug and a handful of inherited
@@ -185,6 +214,8 @@ export class AttractionMergeService {
       survivingName,
     );
 
+    const plan = this.planMetadataInheritance(winner, loser);
+
     return {
       dryRun: true,
       winnerId,
@@ -194,8 +225,19 @@ export class AttractionMergeService {
       survivingSlug,
       renamed: survivingSlug !== winner.slug,
       removedSlug: loser.slug,
-      inheritedColumns: Object.keys(this.inheritMissingMetadata(winner, loser)),
-      droppedCurations: await this.findDroppedCurations(winnerId, loserId),
+      inheritedColumns: Object.keys(plan.inherited),
+      droppedCurations: [
+        ...(await this.findDroppedCurations(winnerId, loserId)),
+        // The attraction's own curated columns, which `findDroppedCurations`
+        // cannot see: it reads `ATTRACTION_DEPENDENCIES`, and that list is
+        // about rows in other tables. `from` is always the loser here —
+        // a survivor holding part of the set keeps all of its own.
+        ...plan.droppedColumnSets.map((row) => ({
+          table: "attractions",
+          from: "loser" as const,
+          row,
+        })),
+      ],
     };
   }
 
@@ -206,6 +248,10 @@ export class AttractionMergeService {
    * `winner-authoritative` entry added to that list is reported here without a
    * second edit — the drift this whole method exists to close would otherwise
    * reopen with the next curated table somebody declares.
+   *
+   * Dependent rows only. A curated column on the attraction row itself never
+   * appears in that list, so the works period is reported by
+   * `planMetadataInheritance` instead and joins this list in `previewMerge`.
    *
    * Only `winner-authoritative` entries are asked. `discard` rows are derived
    * and the nightly jobs rewrite them from the history that has just moved onto
@@ -328,6 +374,21 @@ export class AttractionMergeService {
         "SET timescaledb.max_tuples_decompressed_per_dml_transaction = 100000",
       );
 
+      // The two sources fill in different columns — across the real duplicate
+      // pairs the queue-times id sits only on the second row 33 times and the
+      // coordinates 29 times. Harvest whatever the survivor lacks, never
+      // overwriting what it already has.
+      //
+      // Planned before the DELETE rather than after it, so the warning about
+      // the curated values nobody will carry is written while the row holding
+      // them still exists. The plan reads the two entities already in hand and
+      // issues no statement, so the position costs nothing either way.
+      const { inherited, droppedColumnSets } = this.planMetadataInheritance(
+        winner,
+        loser,
+      );
+      this.logDroppedColumnSets(loser, droppedColumnSets);
+
       await manager.delete(Attraction, loserId);
 
       // Only now is the base slug free: (parkId, slug) is unique, so the
@@ -340,12 +401,6 @@ export class AttractionMergeService {
       const survivingName = resolveSurvivingName(winner.name, loser.name);
       const renamed = survivingSlug !== winner.slug;
       const rewordedName = survivingName !== winner.name;
-
-      // The two sources fill in different columns — across the real duplicate
-      // pairs the queue-times id sits only on the second row 33 times and the
-      // coordinates 29 times. Harvest whatever the survivor lacks, never
-      // overwriting what it already has.
-      const inherited = this.inheritMissingMetadata(winner, loser);
 
       // `lastMergedAt` is unconditional, unlike everything beside it: the merge
       // happened whether or not the survivor changed its name or inherited a
@@ -665,6 +720,11 @@ export class AttractionMergeService {
    * better for having arrived whole. A stale estimate flag is dropped rather
    * than made to sink the dates beside it — that is the endpoint's own
    * normalisation, and the dates are a real curation worth carrying.
+   *
+   * Whatever stays behind on any of those routes is named rather than dropped
+   * in silence: `planMetadataInheritance` returns it, the rehearsal lists it
+   * and the merge logs it. Refusing a window is the right rule and still
+   * deletes a hand-written one (PAR-301).
    */
   private static readonly INHERITABLE_COLUMN_SETS: readonly {
     readonly columns: readonly (keyof Attraction)[];
@@ -745,11 +805,27 @@ export class AttractionMergeService {
       (set) => set.columns as readonly string[],
     );
 
-  private inheritMissingMetadata(
+  /**
+   * Which columns travel, and which ones the DELETE takes with it.
+   *
+   * The second half exists because a refused set is silent in a way a refused
+   * single column is not: the works period is the one curation whose loss the
+   * survivor cannot even hint at, since a survivor holding a window of its own
+   * is exactly the case in which the loser's is refused. Three routes end
+   * there, and the report does not distinguish them — for the operator the
+   * question is only which values will be gone:
+   *
+   * - the survivor holds any of the set, so the loser's is refused whole (the
+   *   common one, and the reason PAR-297's rule is right rather than a gap);
+   * - `settle` refuses the window as inverted;
+   * - `settle` drops a `toUncertain` that arrived without its date.
+   */
+  private planMetadataInheritance(
     winner: Attraction,
     loser: Attraction,
-  ): Partial<Attraction> {
+  ): MetadataInheritancePlan {
     const inherited: Record<string, unknown> = {};
+    const droppedColumnSets: Record<string, unknown>[] = [];
 
     for (const column of AttractionMergeService.INHERITABLE_COLUMNS) {
       if (!isSet(winner[column]) && isSet(loser[column])) {
@@ -767,18 +843,54 @@ export class AttractionMergeService {
     }
 
     for (const set of AttractionMergeService.INHERITABLE_COLUMN_SETS) {
-      if (set.columns.some((column) => isSet(winner[column]))) continue;
-
       const carried: Record<string, unknown> = {};
       for (const column of set.columns.filter((c) => isSet(loser[c]))) {
         carried[column] = loser[column];
       }
 
-      const settled = set.settle(carried as Partial<Attraction>);
-      if (settled === null) continue;
-      Object.assign(inherited, settled);
+      // The losing row states nothing, so there is nothing to carry and
+      // nothing to report. Asked before the survivor is, because a preview
+      // that named a loss on every pair holding a window would be read as
+      // noise and stop being read at all.
+      if (Object.keys(carried).length === 0) continue;
+
+      const settled = set.columns.some((column) => isSet(winner[column]))
+        ? null
+        : set.settle(carried as Partial<Attraction>);
+
+      if (settled !== null) Object.assign(inherited, settled);
+
+      const dropped = Object.fromEntries(
+        Object.entries(carried).filter(
+          ([column]) => settled === null || !(column in settled),
+        ),
+      );
+      if (Object.keys(dropped).length > 0) droppedColumnSets.push(dropped);
     }
 
-    return inherited as Partial<Attraction>;
+    return { inherited: inherited as Partial<Attraction>, droppedColumnSets };
+  }
+
+  /**
+   * The last record of a curated window that is about to cease to exist.
+   *
+   * Called from the merge and never from the rehearsal, which is the whole
+   * reason the plan above returns the values instead of logging them itself:
+   * a warning inside the shared function would fire on every "Probelauf" and
+   * describe a deletion that is not happening. `ParkMergeService` strikes the
+   * same bargain on the park side (`logDroppedCuration`).
+   */
+  private logDroppedColumnSets(
+    loser: Attraction,
+    droppedColumnSets: Record<string, unknown>[],
+  ): void {
+    for (const dropped of droppedColumnSets) {
+      this.logger.warn(
+        `🗑️  Deleting "${loser.name}" (${loser.id}) with curated values the survivor will not carry: ` +
+          Object.entries(dropped)
+            .map(([column, value]) => `${column}=${JSON.stringify(value)}`)
+            .join(", "),
+      );
+    }
   }
 }
