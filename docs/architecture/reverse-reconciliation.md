@@ -43,13 +43,15 @@ After the entity loop finishes for a park, the processor:
 
 `writeHourlyHeartbeats` previously preserved `last.status` for any attraction silent for >1h, which meant stale `OPERATING` status survived forever. It now reads the same `attraction:last-seen:{id}` key and **skips heartbeat writes** when the attraction has been missing from all sources for >24h. The reconciliation step has already written `CLOSED`, so nothing needs backfilling.
 
-### 4. Seasonal detection pickup
+### 4. Seasonal detection does NOT pick these rows up
 
-`QueuePercentileProcessor.handleDetectSeasonal` (scheduled daily at 2:30 am) looks for attractions whose current status is `CLOSED` on days when the park was demonstrably open. Once reconciliation flips a disappeared attraction to `CLOSED`, the next run of `detect-seasonal` will automatically:
+`QueuePercentileProcessor.handleDetectSeasonal` (scheduled daily at 2:30 am) looks for attractions whose current status is `CLOSED` on days when the park was demonstrably open. A row written here has that exact shape, so this section used to say the detector would flag a disappeared attraction automatically — and it did, which was the defect (PAR-32).
 
-- Flag `attraction.isSeasonal = true`.
-- Derive `seasonMonths` from historical `OPERATING` months.
-- Expose `isCurrentlyInSeason` on the API response.
+A ride nobody reports is not a ride the operator closed for the winter. The detector's evidence queries — `current_status`, `ever_operating`, the `attraction_day_operating` rollup and the month derivation — now read **observed** rows only, through `observedReadingsSql()`. For an attraction in this state every row inside the seven-day status window is a reconciliation row, so it has no current status at all and the INNER JOIN onto that CTE drops it from the candidates. It is neither flagged nor given months.
+
+That is the honest answer, and it is the one §2.3 of `attraction-status-and-seasonality.md` already gives the visitor: we do not know what that ride is doing. The 44 Europa-Park rides ThemeParks.wiki dropped on 2026-06-07 all derived the identical month list `[1,2,3,4,5,6,12]` — not a season, but every month before the feed went silent.
+
+What still reads these rows is the outage reconstruction, where the row **ends** a run rather than starting one (`outage-rows.sql.ts`), and the read path, which turns them into `UNKNOWN`.
 
 To re-run seasonal detection immediately after a deployment (without waiting for 2:30 am), an admin trigger is available:
 
