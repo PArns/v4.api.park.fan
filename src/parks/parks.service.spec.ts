@@ -3019,6 +3019,24 @@ describe("ParksService", () => {
       expect(probeCalls()).toHaveLength(0);
     });
 
+    it("keeps the schedule as published when the probe itself fails", async () => {
+      // A probe we could not run must not be the thing that blanks a healthy
+      // park, and it must not cost the park its whole schedule write either.
+      mockScheduleRepository.query.mockImplementation((sql: string) =>
+        sql === PARK_OBSERVED_READING_SQL
+          ? Promise.reject(new Error("canceling statement due to timeout"))
+          : Promise.resolve([]),
+      );
+
+      await expect(
+        service.saveScheduleData(parkId, [operatingOn(FUTURE)]),
+      ).resolves.toBe(1);
+
+      const [entry] = savedEntries();
+      expect(entry.scheduleType).toBe(ScheduleType.OPERATING);
+      expect(entry.openingTime).not.toBeNull();
+    });
+
     it("downgrades only the future half of a mixed payload", async () => {
       setFeedSilent(true);
 

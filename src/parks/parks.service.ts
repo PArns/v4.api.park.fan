@@ -1708,10 +1708,21 @@ export class ParksService {
           e.dateStr > parkLocalToday,
       );
     if (hasFutureOperating) {
+      // Optimistic on failure, the same direction and for the same reason as
+      // the call in `ParkIntegrationService`: a probe we could not run must not
+      // be the thing that blanks a healthy park. Without the catch a statement
+      // timeout on the `queue_data` hypertable would reject the whole schedule
+      // write, so one slow probe would cost the park its sync instead of
+      // costing it this one decision.
       const feedAlive = await this.hasObservedReadingWithin(
         parkId,
         PARK_FEED_SILENT_DAYS,
-      );
+      ).catch((error: unknown) => {
+        this.logger.warn(
+          `Silent-feed probe failed for park ${parkId}, keeping the schedule as published: ${error}`,
+        );
+        return true;
+      });
       if (!feedAlive) {
         let downgraded = 0;
         for (const normalized of normalizedEntries) {
