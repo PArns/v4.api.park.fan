@@ -527,9 +527,12 @@ export class FavoritesService {
             integrated.analytics?.statistics?.operatingAttractions || 0,
           analytics: integrated.analytics
             ? {
+                // Deliberately no `|| 0` — same reason as the nearby card
+                // (PAR-298): the park payload leaves `occupancy` out when the
+                // park's wait times are unknowable, and a zero here would put
+                // the empty-set reading back on the favorites card.
                 avgWaitTime:
-                  integrated.analytics.occupancy?.breakdown?.currentAvgWait ||
-                  0,
+                  integrated.analytics.occupancy?.breakdown?.currentAvgWait,
                 crowdLevel: integrated.analytics.statistics?.crowdLevel,
                 occupancy: integrated.analytics.occupancy?.current,
               }

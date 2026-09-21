@@ -412,14 +412,32 @@ export class ParkOccupancyDto {
 }
 
 export class ParkStatisticsDto {
-  @ApiProperty({ description: "Average wait time" })
-  avgWaitTime: number;
+  @ApiProperty({
+    description:
+      "Average wait time right now (minutes). **Null when the park's wait " +
+      "times are unknowable** — it publishes none we can read, or its feed " +
+      "has said nothing for 30 days. Over no wait times at all the average " +
+      "is 0, and 0 minutes reads as a quiet park rather than as the absence " +
+      "it is.",
+    nullable: true,
+  })
+  avgWaitTime: number | null;
 
-  @ApiProperty({ description: "Average wait today" })
-  avgWaitToday: number;
+  @ApiProperty({
+    description:
+      "Average wait across today (minutes). Null for the same reason as " +
+      "`avgWaitTime`.",
+    nullable: true,
+  })
+  avgWaitToday: number | null;
 
-  @ApiProperty({ description: "Peak wait today" })
-  peakWaitToday: number;
+  @ApiProperty({
+    description:
+      "Highest wait seen today (minutes). Null for the same reason as " +
+      "`avgWaitTime`.",
+    nullable: true,
+  })
+  peakWaitToday: number | null;
 
   @ApiProperty({
     description:
@@ -477,8 +495,16 @@ export class ParkStatisticsDto {
 }
 
 export class ParkAnalyticsDto {
-  @ApiProperty({ description: "Occupancy data", type: ParkOccupancyDto })
-  occupancy: ParkOccupancyDto;
+  @ApiProperty({
+    description:
+      "Occupancy data. **Absent when the park's wait times are unknowable** " +
+      "— every figure in it is derived from wait times, so over none of them " +
+      "the object reads 0 % against a 0-minute baseline. Absence is how this " +
+      "payload already says it about `percentiles`.",
+    type: ParkOccupancyDto,
+    required: false,
+  })
+  occupancy?: ParkOccupancyDto;
 
   @ApiProperty({ description: "Statistics data", type: ParkStatisticsDto })
   statistics: ParkStatisticsDto;

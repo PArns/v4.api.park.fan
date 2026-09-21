@@ -541,9 +541,13 @@ export class LocationService {
             integrated.analytics?.statistics?.operatingAttractions || 0,
           analytics: integrated.analytics
             ? {
+                // Deliberately no `|| 0`. The park payload leaves `occupancy`
+                // out when the park's wait times are unknowable (PAR-298), and
+                // a zero here would hand the nearby card back the empty-set
+                // reading the payload just withheld. The field is optional, so
+                // leaving it out is a value this DTO already has.
                 avgWaitTime:
-                  integrated.analytics.occupancy?.breakdown?.currentAvgWait ||
-                  0,
+                  integrated.analytics.occupancy?.breakdown?.currentAvgWait,
                 crowdLevel: integrated.analytics.statistics?.crowdLevel,
                 occupancy: integrated.analytics.occupancy?.current,
               }
