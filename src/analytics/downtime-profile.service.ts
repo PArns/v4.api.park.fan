@@ -359,9 +359,11 @@ export class DowntimeProfileService {
       // sentence: "come back when the season starts" would promise a figure
       // that cannot arrive. This one is the only regime that ends by itself.
       //
-      // Its place relative to `no_schedule` never matters: a park with no
-      // usable schedule row at all cannot have one inside the window either, so
-      // the two conditions cannot both hold.
+      // Its place relative to `no_schedule` is not free, and for the opposite
+      // reason: a park with no usable schedule row at all cannot have one
+      // inside the window either, so BOTH conditions hold for it. `no_schedule`
+      // has to be asked first, or every park that publishes nothing would be
+      // told its season simply has not started.
       const regime: DowntimeRegime = !row.downCapable
         ? "not_capable"
         : !row.hasSchedule
