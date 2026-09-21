@@ -226,11 +226,19 @@ export class DowntimeProfileService {
              -- queue_data rows in 90 days, and 23 OPERATING rows that all start
              -- on 2026-09-23 or later.
              --
-             -- The bounds are the ones parkOpenWindowCtes() binds into
-             -- windows_raw, including the two days of slack on the opening: a
-             -- normalized window is at most 24 hours long, so that slack catches
-             -- every window reaching into the period, and the opening is the one
-             -- edge no source has been observed to misdate.
+             -- Bounded the way the ex CTE in rebuildProfiles is bounded, and
+             -- NOT the way windows_raw is. That was the first version and it
+             -- left a band open: windows_raw admits an opening up to two days
+             -- before the period because a window reaching into it still counts
+             -- MINUTES, while an exposure day is keyed by the window's own
+             -- park-local opening date and ex filters that date against the
+             -- period. A park whose only usable row opens inside those two days
+             -- would read reports here and still produce no row in ex, so its
+             -- rides would fall through both CTEs exactly as before.
+             --
+             -- So the date, in the park's own zone, is what gets compared: the
+             -- same operating day ex groups by, against the same two bounds it
+             -- binds (isoDay() takes them in UTC, hence AT TIME ZONE 'UTC').
              --
              -- Hung on the SCHEDULE and not on "has no exposure day in the
              -- window", which would be the shorter test and a false statement:
@@ -241,8 +249,10 @@ export class DowntimeProfileService {
                SELECT 1 FROM schedule_entries se
                 WHERE se."parkId" = p.id
                   AND ${usableOperatingRow}
-                  AND se."openingTime" > $2::timestamptz - INTERVAL '2 days'
-                  AND se."openingTime" < $3::timestamptz
+                  AND (se."openingTime" AT TIME ZONE p.timezone)::date
+                        >= ($2::timestamptz AT TIME ZONE 'UTC')::date
+                  AND (se."openingTime" AT TIME ZONE p.timezone)::date
+                        <= ($3::timestamptz AT TIME ZONE 'UTC')::date
              )                                           AS "hasWindowInPeriod",
              COUNT(DISTINCT a.id) FILTER (WHERE a.retired_at IS NULL)::int
                                                          AS "ridesTracked",
@@ -343,11 +353,15 @@ export class DowntimeProfileService {
         row.hasEverReportedDown === false &&
         observedHours >= MIN_BLIND_EVIDENCE_HOURS;
 
-      // Last of the refusals, and last on purpose. The three above it are
-      // properties of the feed and stay true whenever the park is open, so a
-      // park that is both blind and shut is owed the blind sentence: "come back
-      // when the season starts" would promise a figure that cannot arrive.
-      // This one is the only regime that ends by itself.
+      // Last of the refusals, and last on purpose. `never_reports` and
+      // `artefact` are properties of the feed and stay true whenever the park
+      // is open, so a park that is both blind and shut is owed the blind
+      // sentence: "come back when the season starts" would promise a figure
+      // that cannot arrive. This one is the only regime that ends by itself.
+      //
+      // Its place relative to `no_schedule` never matters: a park with no
+      // usable schedule row at all cannot have one inside the window either, so
+      // the two conditions cannot both hold.
       const regime: DowntimeRegime = !row.downCapable
         ? "not_capable"
         : !row.hasSchedule
@@ -637,6 +651,14 @@ export class DowntimeProfileService {
     //    there by design, so a row that stops being rewritten ages into
     //    `stale_data` — „these numbers are not current", which is true — while
     //    deleting it would print `not_down_capable` about a park that reports.
+    //
+    //    That trade is worth naming, because `stale_data` is not the best
+    //    sentence on every exit: a ride that leaves `sched` by turning
+    //    free-flow, or whose park loses its `wiki_entity_id`, would be owed
+    //    `not_down_capable` and gets "not current" instead. It is still the
+    //    better failure — those rides keep a refusal that says nothing about
+    //    the operator, and the alternative loses the row for every park that
+    //    simply opened.
     //
     // What this deliberately does not clean up: a park that vanishes from the
     // rebuild entirely (every ride retired, or the park removed) keeps its

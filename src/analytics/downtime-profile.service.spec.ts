@@ -569,7 +569,7 @@ describe("DowntimeProfileService — the rebuild's population", () => {
       expect(flag).not.toContain("CURRENT_DATE");
     });
 
-    it("asks the window question separately, with the CTE's own bounds", async () => {
+    it("asks the window question separately, bounded the way `ex` is", async () => {
       await build([coverageRow(REPORTING_PARK)], []);
       await service.rebuild(null);
 
@@ -580,14 +580,24 @@ describe("DowntimeProfileService — the rebuild's population", () => {
       );
 
       // The EVER flag above and this one are the two halves of the same
-      // divergence. This one mirrors what windows_raw binds in
-      // parkOpenWindowCtes(), including the two days of slack on the opening: a
-      // normalized window is at most 24 hours long, so that slack is what
-      // catches a window reaching into the period, and the opening is the one
-      // edge no source has been observed to misdate.
-      expect(windowFlag).toContain('se."openingTime" > $2::timestamptz');
-      expect(windowFlag).toContain("INTERVAL '2 days'");
-      expect(windowFlag).toContain('se."openingTime" < $3::timestamptz');
+      // divergence, and this half has to agree with the CTE that decides
+      // whether a ride gets MEASURED — `ex`, which filters `op_day` (the
+      // window's own park-local opening date) against the period. Copying
+      // windows_raw instead leaves a band open: it admits an opening up to two
+      // days before the period, and a park whose only usable row sits there
+      // would read `reports` while producing no exposure day at all, so its
+      // rides fall through both CTEs exactly as they did before this branch.
+      expect(windowFlag).toContain(
+        '(se."openingTime" AT TIME ZONE p.timezone)::date',
+      );
+      expect(windowFlag).toContain(
+        "($2::timestamptz AT TIME ZONE 'UTC')::date",
+      );
+      expect(windowFlag).toContain(
+        "($3::timestamptz AT TIME ZONE 'UTC')::date",
+      );
+      // The slack belongs to a minutes question, not to a day question.
+      expect(windowFlag).not.toContain("INTERVAL '2 days'");
 
       // And it asks for a USABLE row, not any row: the same timezone, both
       // times and repaired-window conditions the EVER flag asks for. Written
