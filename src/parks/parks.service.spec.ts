@@ -10,8 +10,8 @@ import { CacheKeys } from "../common/cache/cache-keys";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { RevalidationService } from "../common/revalidation/revalidation.service";
 import { HolidaysService } from "../holidays/holidays.service";
-import { QueueDataService } from "../queue-data/queue-data.service";
 import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
+import { PARK_OBSERVED_READING_SQL } from "../common/utils/closure-gap.sql";
 import { createTestPark } from "../../test/fixtures/park.fixtures";
 import {
   formatInParkTimezone,
@@ -121,13 +121,6 @@ describe("ParksService", () => {
     revalidateTags: jest.fn().mockResolvedValue(true),
   };
 
-  // Default: the park's feed answered recently, so the silent-feed guard in
-  // saveScheduleData leaves every entry alone. The tests that care about the
-  // guard set this to false themselves.
-  const mockQueueDataService = {
-    hasObservedReadingWithin: jest.fn().mockResolvedValue(true),
-  };
-
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -163,10 +156,6 @@ describe("ParksService", () => {
         {
           provide: RevalidationService,
           useValue: mockRevalidationService,
-        },
-        {
-          provide: QueueDataService,
-          useValue: mockQueueDataService,
         },
       ],
     }).compile();
@@ -2880,6 +2869,26 @@ describe("ParksService", () => {
     /** Every query builder handed out during one call, in creation order. */
     let builders: ReturnType<typeof scheduleQueryBuilder>[];
 
+    /**
+     * The guard asks its question over the repository, not over an injected
+     * service — QueueDataService injects ParksService, so the way back is a
+     * constructor cycle Nest refuses at boot. So the mock answers by statement:
+     * the probe gets a row or no row, everything else (the bulk UPDATE) gets an
+     * empty result as before.
+     */
+    const setFeedSilent = (silent: boolean): void => {
+      mockScheduleRepository.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql === PARK_OBSERVED_READING_SQL && !silent ? [{ seen: 1 }] : [],
+        ),
+      );
+    };
+
+    const probeCalls = (): unknown[][] =>
+      mockScheduleRepository.query.mock.calls.filter(
+        ([sql]: [string]) => sql === PARK_OBSERVED_READING_SQL,
+      );
+
     /** The dates of the DELETE that targets park-level OPERATING rows. */
     const deletedOperatingDates = (): string[] => {
       for (const builder of builders) {
@@ -2916,25 +2925,23 @@ describe("ParksService", () => {
       });
       mockHolidaysService.getHolidays.mockResolvedValue([]);
       mockScheduleRepository.save.mockResolvedValue([]);
-      mockScheduleRepository.query.mockResolvedValue([]);
       mockScheduleRepository.createQueryBuilder.mockImplementation(() => {
         const builder = scheduleQueryBuilder([]);
         builders.push(builder);
         return builder;
       });
-      // Restored per test: jest.clearAllMocks() in the outer beforeEach wipes
-      // the default implementation set where the mock is declared.
-      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(true);
+      // Default for every test here; the ones about a silent feed say so.
+      setFeedSilent(false);
     });
 
     it("stores a future operating day as UNKNOWN when the feed is silent", async () => {
-      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+      setFeedSilent(true);
 
       await service.saveScheduleData(parkId, [operatingOn(FUTURE)]);
 
-      expect(
-        mockQueueDataService.hasObservedReadingWithin,
-      ).toHaveBeenCalledWith(parkId, PARK_FEED_SILENT_DAYS);
+      expect(probeCalls()).toEqual([
+        [PARK_OBSERVED_READING_SQL, [parkId, PARK_FEED_SILENT_DAYS]],
+      ]);
       const [entry] = savedEntries();
       expect(entry.scheduleType).toBe(ScheduleType.UNKNOWN);
     });
@@ -2942,7 +2949,7 @@ describe("ParksService", () => {
     it("drops the hours off a downgraded day", async () => {
       // An UNKNOWN day that still answers "09:00-18:00" has moved the unfounded
       // claim one field to the left: the frontend renders the hours it is given.
-      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+      setFeedSilent(true);
 
       await service.saveScheduleData(parkId, [operatingOn(FUTURE)]);
 
@@ -2956,7 +2963,7 @@ describe("ParksService", () => {
       // Without this the write is additive: the new UNKNOWN row lands beside the
       // old OPERATING one, and every reader looking for an operating day still
       // finds one. The guard would report success and change nothing.
-      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+      setFeedSilent(true);
 
       await service.saveScheduleData(parkId, [operatingOn(FUTURE)]);
 
@@ -2965,13 +2972,11 @@ describe("ParksService", () => {
 
     it("leaves a past operating day alone", async () => {
       // The reconstruction of past days in calendar.service.ts reads these rows.
-      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+      setFeedSilent(true);
 
       await service.saveScheduleData(parkId, [operatingOn(PAST)]);
 
-      expect(
-        mockQueueDataService.hasObservedReadingWithin,
-      ).not.toHaveBeenCalled();
+      expect(probeCalls()).toHaveLength(0);
       const [entry] = savedEntries();
       expect(entry.scheduleType).toBe(ScheduleType.OPERATING);
       expect(entry.openingTime).not.toBeNull();
@@ -2980,7 +2985,7 @@ describe("ParksService", () => {
 
     it("leaves a future closed day alone", async () => {
       // A source that names a day closed has said something about that day.
-      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+      setFeedSilent(true);
 
       await service.saveScheduleData(parkId, [
         { date: FUTURE, type: "CLOSED" },
@@ -2993,7 +2998,7 @@ describe("ParksService", () => {
     it("leaves a future operating day alone when the feed still answers", async () => {
       // The 9347 future operating days of the parks whose feed works, measured
       // on production 2026-09-21, live or die on this one.
-      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(true);
+      setFeedSilent(false);
 
       await service.saveScheduleData(parkId, [operatingOn(FUTURE)]);
 
@@ -3011,13 +3016,11 @@ describe("ParksService", () => {
         { date: FUTURE, type: "CLOSED" },
       ]);
 
-      expect(
-        mockQueueDataService.hasObservedReadingWithin,
-      ).not.toHaveBeenCalled();
+      expect(probeCalls()).toHaveLength(0);
     });
 
     it("downgrades only the future half of a mixed payload", async () => {
-      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+      setFeedSilent(true);
 
       await service.saveScheduleData(parkId, [
         operatingOn(PAST),

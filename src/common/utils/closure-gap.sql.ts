@@ -106,6 +106,35 @@ export function observedReadingsSql(alias: string): string {
         AND NOT COALESCE(${alias}.is_heartbeat, ${alias}."lastUpdated" = ${alias}.timestamp))`;
 }
 
+/**
+ * Has this park produced a single real reading inside `$2` days?
+ *
+ * `$1` is the park id, `$2` the day count. Returns one row or none, so the
+ * caller reads `rows.length > 0`.
+ *
+ * Shared text rather than a method, because the two callers cannot see each
+ * other: `QueueDataService.hasObservedReadingWithin` wraps it for
+ * `ParkIntegrationService`, and `ParksService.saveScheduleData` needs the same
+ * answer before it stores a future operating day. `QueueDataService` already
+ * injects `ParksService`, so injecting it back is a constructor cycle Nest
+ * cannot resolve — it fails at boot with "can't resolve dependencies of the
+ * QueueDataService … argument at index [3]", which every unit test misses
+ * because they all mock the service, and only a full-AppModule e2e run shows.
+ * One statement in one place is the same answer for both without the cycle.
+ *
+ * The behaviour this encodes — why `observedReadingsSql`, why `EXISTS`-shaped,
+ * why the `COALESCE` around it, and the measured timings — is documented once
+ * at `hasObservedReadingWithin`.
+ */
+export const PARK_OBSERVED_READING_SQL = `SELECT 1 AS seen
+     FROM queue_data qd
+     JOIN attractions a ON a.id = qd."attractionId"
+    WHERE a."parkId" = $1
+      AND a.retired_at IS NULL
+      AND qd.timestamp > now() - ($2::int * INTERVAL '1 day')
+      AND COALESCE(${observedReadingsSql("qd")}, true)
+    LIMIT 1`;
+
 /** Rides closing in the same minute, above which it is the park and not a ride. */
 export const MAX_SIMULTANEOUS_CLOSERS = 2;
 

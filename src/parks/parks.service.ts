@@ -55,7 +55,7 @@ import {
   RideStatusData,
 } from "../common/utils/status-calculator.util";
 import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
-import { QueueDataService } from "../queue-data/queue-data.service";
+import { PARK_OBSERVED_READING_SQL } from "../common/utils/closure-gap.sql";
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -196,10 +196,28 @@ export class ParksService {
     @Inject(forwardRef(() => HolidaysService))
     private holidaysService: HolidaysService,
     private readonly revalidation: RevalidationService,
-    // forwardRef because QueueDataModule imports ParksModule right back.
-    @Inject(forwardRef(() => QueueDataService))
-    private readonly queueDataService: QueueDataService,
   ) {}
+
+  /**
+   * Has this park produced a real reading in the last `days` days?
+   *
+   * The same question `QueueDataService.hasObservedReadingWithin` answers for
+   * `ParkIntegrationService`, over the same statement — but asked here rather
+   * than by injecting that service, because `QueueDataService` injects
+   * `ParksService` and the way back is a constructor cycle Nest cannot resolve.
+   * The shared text is `PARK_OBSERVED_READING_SQL`; `hasObservedReadingWithin`
+   * carries the reasoning and the measured timings.
+   */
+  private async hasObservedReadingWithin(
+    parkId: string,
+    days: number,
+  ): Promise<boolean> {
+    const rows: Array<{ seen: number }> = await this.scheduleRepository.query(
+      PARK_OBSERVED_READING_SQL,
+      [parkId, days],
+    );
+    return rows.length > 0;
+  }
 
   /**
    * Syncs all parks from ThemeParks.wiki
@@ -1690,7 +1708,7 @@ export class ParksService {
           e.dateStr > parkLocalToday,
       );
     if (hasFutureOperating) {
-      const feedAlive = await this.queueDataService.hasObservedReadingWithin(
+      const feedAlive = await this.hasObservedReadingWithin(
         parkId,
         PARK_FEED_SILENT_DAYS,
       );
