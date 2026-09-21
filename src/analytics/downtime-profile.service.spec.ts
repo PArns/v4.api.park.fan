@@ -7,7 +7,10 @@ import {
   decideProfile,
 } from "./downtime-profile.service";
 import type { ProfileInputs } from "./downtime-profile.service";
-import { ParkDowntimeCoverage } from "./entities/park-downtime-coverage.entity";
+import {
+  MIN_BLIND_EVIDENCE_HOURS,
+  ParkDowntimeCoverage,
+} from "./entities/park-downtime-coverage.entity";
 import { isDurationUsable } from "../queues/processors/downtime-reconstruction.processor";
 import {
   OPERATING_SCHEDULE_TYPE,
@@ -79,6 +82,16 @@ describe("decideProfile", () => {
     expect(decideProfile(HEALTHY, "no_schedule").reason).toBe("no_schedule");
   });
 
+  it("refuses a park whose published hours all fall outside the window", () => {
+    // Sibling of no_schedule and a different sentence: this park publishes
+    // fine, its season simply starts after the window ends, so there is no
+    // operating time to divide by. Measured 2026-09-21: Traumatica, 12 rides,
+    // 23 OPERATING rows all dated 2026-09-23 or later.
+    expect(decideProfile(HEALTHY, "outside_window").reason).toBe(
+      "outside_window",
+    );
+  });
+
   it("refuses a ride whose history is two interleaved series", () => {
     const merged = { ...HEALTHY, lastMergedAt: new Date("2026-08-01") };
     expect(decideProfile(merged, "reports").reason).toBe("recently_merged");
@@ -144,7 +157,12 @@ describe("decideProfile", () => {
   });
 
   it("never emits a share when it withholds the figures", () => {
-    for (const regime of ["not_capable", "artefact", "no_schedule"] as const) {
+    for (const regime of [
+      "not_capable",
+      "artefact",
+      "no_schedule",
+      "outside_window",
+    ] as const) {
       expect(decideProfile(HEALTHY, regime).downShare).toBeNull();
     }
   });
@@ -288,19 +306,23 @@ describe("DowntimeProfileService — the rebuild's population", () => {
   const SCHEDULE_LESS_PARK = "22222222-2222-4222-8222-222222222222";
   const NOT_CAPABLE_PARK = "33333333-3333-4333-8333-333333333333";
 
+  const SEASONAL_PARK = "44444444-4444-4444-8444-444444444444";
+
   const LIVE_RIDE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const SCHEDULE_LESS_RIDE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const SEASONAL_RIDE = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
   const LONGEST_STARTED_AT = "2026-07-12T09:30:00.000Z";
 
   /** A park row shaped so the regime falls out of the two flags under test. */
   const coverageRow = (
     parkId: string,
-    { downCapable = true, hasSchedule = true } = {},
+    { downCapable = true, hasSchedule = true, hasWindowInPeriod = true } = {},
   ) => ({
     parkId,
     downCapable,
     hasSchedule,
+    hasWindowInPeriod,
     ridesTracked: 10,
     ridesWithOutages: 4,
     outages: 40,
@@ -545,6 +567,147 @@ describe("DowntimeProfileService — the rebuild's population", () => {
       expect(flag).not.toContain("$3");
       expect(flag).not.toContain("now()");
       expect(flag).not.toContain("CURRENT_DATE");
+    });
+
+    it("asks the window question separately, with the CTE's own bounds", async () => {
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      const sql = flatSql(query.mock.calls[0][0] as string);
+      const windowFlag = sql.slice(
+        sql.indexOf('AS "hasSchedule"'),
+        sql.indexOf('AS "hasWindowInPeriod"'),
+      );
+
+      // The EVER flag above and this one are the two halves of the same
+      // divergence. This one mirrors what windows_raw binds in
+      // parkOpenWindowCtes(), including the two days of slack on the opening: a
+      // normalized window is at most 24 hours long, so that slack is what
+      // catches a window reaching into the period, and the opening is the one
+      // edge no source has been observed to misdate.
+      expect(windowFlag).toContain('se."openingTime" > $2::timestamptz');
+      expect(windowFlag).toContain("INTERVAL '2 days'");
+      expect(windowFlag).toContain('se."openingTime" < $3::timestamptz');
+
+      // And it asks for a USABLE row, not any row: the same timezone, both
+      // times and repaired-window conditions the EVER flag asks for. Written
+      // once in the service and interpolated twice, so the two cannot drift.
+      expect(windowFlag).toContain("p.timezone IS NOT NULL");
+      expect(windowFlag).toContain(
+        flatSql(
+          normalizedClosingSql(
+            'se."openingTime"',
+            'se."closingTime"',
+            "p.timezone",
+          ),
+        ),
+      );
+    });
+
+    it("binds the rebuild's own window to those two placeholders", async () => {
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      // 90 days back from the run, the same pair rebuildProfiles measures over.
+      // A coverage query answering about a different period would label a park
+      // shut for a window nobody else looked at.
+      const params = query.mock.calls[0][1] as unknown[];
+      const from = params[1] as Date;
+      const to = params[2] as Date;
+      expect(from).toBeInstanceOf(Date);
+      expect(to).toBeInstanceOf(Date);
+      expect((to.getTime() - from.getTime()) / 86_400_000).toBeCloseTo(
+        DOWNTIME_GATES.windowDays,
+        6,
+      );
+    });
+  });
+
+  describe("a park whose published hours all fall outside the window", () => {
+    /** Schedule yes, none of it in the period. Traumatica's shape. */
+    const shutRow = (parkId: string) =>
+      coverageRow(parkId, { hasWindowInPeriod: false });
+
+    it("sources its rides too, so they get a row at all", async () => {
+      // Same hole as no_schedule and the same fix: no exposure day means no
+      // `ex`, no row means toDowntimeBlock(null), and that answers
+      // not_down_capable about a park whose feed is delivering — Traumatica
+      // wrote 25 028 queue_data rows in the 90 days it was shut.
+      await build([coverageRow(REPORTING_PARK), shutRow(SEASONAL_PARK)], []);
+      await service.rebuild(null);
+
+      const params = query.mock.calls[1][1] as unknown[];
+      expect(params[4]).toEqual([SEASONAL_PARK]);
+    });
+
+    it("resolves its rides to outside_window and not to a thinness reason", async () => {
+      // They arrive with zero exposure and zero observed days, which is what
+      // thin_exposure is measured on, so the regime check has to run first.
+      await build(
+        [shutRow(SEASONAL_PARK)],
+        [
+          {
+            ...publishableRow(SEASONAL_RIDE, SEASONAL_PARK),
+            operatingMinutes: 0,
+            downMinutes: 0,
+            observedDays: 0,
+          },
+        ],
+      );
+      await service.rebuild(null);
+
+      expect(saved()[0]).toMatchObject({
+        attractionId: SEASONAL_RIDE,
+        publishable: false,
+        withheldReason: "outside_window",
+      });
+    });
+
+    it("yields to a blind park, which is the sentence that stays true", async () => {
+      // Both statements hold for a park that is shut AND has never emitted a
+      // DOWN. Only one of them survives the park opening, and „come back when
+      // the season starts" would promise a figure that cannot arrive: its feed
+      // does not carry the status. So the permanent refusal wins.
+      await build(
+        [
+          {
+            ...shutRow(SEASONAL_PARK),
+            hasEverReportedDown: false,
+            observedOperatingHours: MIN_BLIND_EVIDENCE_HOURS,
+          },
+        ],
+        [
+          {
+            ...publishableRow(SEASONAL_RIDE, SEASONAL_PARK),
+            operatingMinutes: 0,
+            downMinutes: 0,
+            observedDays: 0,
+          },
+        ],
+      );
+      await service.rebuild(null);
+
+      expect(saved()[0]).toMatchObject({
+        withheldReason: "park_never_reports",
+      });
+    });
+
+    it("is not added to the delete arm, because its row can age", async () => {
+      // no_schedule is deleted for one reason only: the read path lets it win
+      // over stale_data, so a row nothing rewrites can never age into anything.
+      // outside_window is deliberately not permanent there, so the general rule
+      // applies — the row ages into „these numbers are not current", which is
+      // true, while deleting it would print not_down_capable about a park that
+      // reports.
+      await build(
+        [shutRow(SEASONAL_PARK)],
+        [publishableRow(SEASONAL_RIDE, SEASONAL_PARK)],
+      );
+      await service.rebuild(null);
+
+      const params = managerQuery.mock.calls[0][1] as unknown[];
+      expect(params[2]).toBe("no_schedule");
+      expect(params).not.toContain("outside_window");
     });
   });
 

@@ -15,7 +15,7 @@ import type { AttractionDowntimeProfile } from "../../analytics/entities/attract
  * verdict from them and get a different one. The gates live in
  * `DowntimeProfileService` and their output is a verdict, not evidence.
  *
- * The `withheld` branch carries a REASON and no numbers at all. Four of those
+ * The `withheld` branch carries a REASON and no numbers at all. Five of those
  * reasons are about us rather than about the ride, and a reader is owed the
  * difference: "no source here reports outages" is not "this ride never breaks".
  */
@@ -85,10 +85,12 @@ export class DowntimeWithheldDto {
   @ApiProperty({
     description:
       "Why nothing is published. `not_down_capable`, `park_never_reports`, " +
-      "`artefact_regime` and `no_schedule` are statements about OUR data and " +
-      "say nothing about the ride; the rest are about how much of it there is. " +
-      "`park_never_reports` is the common one — 91 parks are listed at the " +
-      "source and have still never emitted a single DOWN reading.",
+      "`artefact_regime`, `no_schedule` and `outside_window` are statements " +
+      "about OUR data and say nothing about the ride; the rest are about how " +
+      "much of it there is. `park_never_reports` is the common one — 91 parks " +
+      "are listed at the source and have still never emitted a single DOWN " +
+      "reading. `outside_window` is the only one that resolves on its own: the " +
+      "park publishes hours and none of them fall in the window.",
     enum: DOWNTIME_WITHHELD_REASONS,
     example: "thin_events",
   })
@@ -97,7 +99,7 @@ export class DowntimeWithheldDto {
   @ApiProperty({
     description:
       "Reported outages in the window. Present even when withheld, because a " +
-      "count needs no estimator — but it is 0 for the four reasons above, " +
+      "count needs no estimator — but it is 0 for the five reasons above, " +
       "where a zero means 'we cannot see' and not 'none happened'.",
     example: 6,
   })
@@ -119,7 +121,9 @@ export class ParkDowntimeCoverageDto {
       "is no longer compatible with a working feed: the park has been watched " +
       "for 1500+ operating hours and has never emitted a DOWN. Both mean the " +
       "same thing for a ride — its outages are invisible to us — and neither " +
-      "may be rendered as 'no outages'.",
+      "may be rendered as 'no outages'. `outside_window` is the one value that " +
+      "ends by itself: the park publishes hours, none of them fall in the " +
+      "window, so there is no operating time to divide by yet.",
     enum: DOWNTIME_REGIMES,
     example: "reports",
   })
@@ -157,6 +161,12 @@ export const MAX_PROFILE_AGE_DAYS = 2;
  * Staleness cannot override these: a park whose source has no DOWN status does
  * not start reporting because a nightly job caught up, and telling a reader the
  * figures are "not current" would promise a resolution that cannot arrive.
+ *
+ * `outside_window` is deliberately NOT one of them. It is the one park-level
+ * refusal that ends on its own — the park opens, the window catches a day, and
+ * the next nightly run has a denominator. A row that stops being rewritten
+ * should say „these numbers are not current" rather than keep insisting the
+ * park is shut.
  */
 const PERMANENT_REASONS: ReadonlySet<DowntimeWithheldReason> = new Set([
   "not_down_capable",
