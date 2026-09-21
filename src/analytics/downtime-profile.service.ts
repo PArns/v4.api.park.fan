@@ -141,7 +141,12 @@ export class DowntimeProfileService {
       windowTo.getTime() - DOWNTIME_GATES.windowDays * 24 * 60 * 60 * 1000,
     );
 
-    const regimes = await this.rebuildCoverage(parkIds, generatedAt);
+    const regimes = await this.rebuildCoverage(
+      parkIds,
+      generatedAt,
+      windowFrom,
+      windowTo,
+    );
     await this.rebuildProfiles(
       parkIds,
       regimes,
@@ -161,7 +166,24 @@ export class DowntimeProfileService {
   private async rebuildCoverage(
     parkIds: string[] | null,
     generatedAt: Date,
+    windowFrom: Date,
+    windowTo: Date,
   ): Promise<Map<string, DowntimeRegime>> {
+    // The form an exposure day needs from a schedule row, written once and
+    // asked twice below: EVER, and again inside the measured window. Two copies
+    // would be two definitions of "usable hours", and a drift between two such
+    // definitions is the bug this whole branch exists to remove.
+    const usableOperatingRow = `se."attractionId" IS NULL
+                  AND se."scheduleType" = '${OPERATING_SCHEDULE_TYPE}'
+                  AND p.timezone IS NOT NULL
+                  AND se."openingTime" IS NOT NULL
+                  AND se."closingTime" IS NOT NULL
+                  AND ${normalizedClosingSql(
+                    'se."openingTime"',
+                    'se."closingTime"',
+                    "p.timezone",
+                  )} > se."openingTime"`;
+
     const rows: CoverageRow[] = await this.dataSource.query(
       `
       SELECT p.id                                        AS "parkId",
@@ -183,32 +205,55 @@ export class DowntimeProfileService {
              -- park-level OPERATING rows is missing either time. This closes
              -- the gap before a source opens it, and moves nobody today.
              --
-             -- What is deliberately NOT mirrored is the window. An exposure day
-             -- also needs a window inside the period being measured, and this
-             -- test asks EVER. The two are allowed to disagree there, because
-             -- the regimes answer different questions: no_schedule is a
-             -- statement about the park's publishing -- "we do not know when it
-             -- is open" -- and a park that publishes a season starting next
-             -- week is not that park. Measured on the same day, 2 parks with 34
-             -- rides between them sit in exactly that gap (a Halloween event
-             -- whose 23 rows are all in the future, and a park whose last row
-             -- predates the exposure table's retention). They get the wrong
-             -- refusal too, and the honest answer for them is a THIRD state
-             -- rather than borrowing this one -- which is its own ticket.
+             -- This one asks EVER, and the window question is asked separately
+             -- below. They stay two questions because the regimes they feed are
+             -- two sentences: no_schedule is about the park's publishing -- "we
+             -- do not know when it is open" -- and a park that publishes a
+             -- season starting next week has told us precisely that.
              EXISTS (
                SELECT 1 FROM schedule_entries se
                 WHERE se."parkId" = p.id
-                  AND se."attractionId" IS NULL
-                  AND se."scheduleType" = '${OPERATING_SCHEDULE_TYPE}'
-                  AND p.timezone IS NOT NULL
-                  AND se."openingTime" IS NOT NULL
-                  AND se."closingTime" IS NOT NULL
-                  AND ${normalizedClosingSql(
-                    'se."openingTime"',
-                    'se."closingTime"',
-                    "p.timezone",
-                  )} > se."openingTime"
+                  AND ${usableOperatingRow}
              )                                           AS "hasSchedule",
+             -- The same row, inside the period being measured.
+             --
+             -- Without this a park with a schedule but no window in the period
+             -- reads reports, and its rides reach neither ex (no exposure day)
+             -- nor sched (that CTE sources the unmeasured regimes), so they
+             -- get no profile row and the read path answers not_down_capable --
+             -- a statement about the park's SOURCE, on a park whose source is
+             -- delivering. Measured 2026-09-21: Traumatica, 12 rides, 25 028
+             -- queue_data rows in 90 days, and 23 OPERATING rows that all start
+             -- on 2026-09-23 or later.
+             --
+             -- Bounded the way the ex CTE in rebuildProfiles is bounded, and
+             -- NOT the way windows_raw is. That was the first version and it
+             -- left a band open: windows_raw admits an opening up to two days
+             -- before the period because a window reaching into it still counts
+             -- MINUTES, while an exposure day is keyed by the window's own
+             -- park-local opening date and ex filters that date against the
+             -- period. A park whose only usable row opens inside those two days
+             -- would read reports here and still produce no row in ex, so its
+             -- rides would fall through both CTEs exactly as before.
+             --
+             -- So the date, in the park's own zone, is what gets compared: the
+             -- same operating day ex groups by, against the same two bounds it
+             -- binds (isoDay() takes them in UTC, hence AT TIME ZONE 'UTC').
+             --
+             -- Hung on the SCHEDULE and not on "has no exposure day in the
+             -- window", which would be the shorter test and a false statement:
+             -- 7 of the 14 parks with no exposure day in the window on
+             -- 2026-09-21 have no rides at all, and one of them (Chimelong
+             -- Birds Park) published 91 operating rows in that same window.
+             EXISTS (
+               SELECT 1 FROM schedule_entries se
+                WHERE se."parkId" = p.id
+                  AND ${usableOperatingRow}
+                  AND (se."openingTime" AT TIME ZONE p.timezone)::date
+                        >= ($2::timestamptz AT TIME ZONE 'UTC')::date
+                  AND (se."openingTime" AT TIME ZONE p.timezone)::date
+                        <= ($3::timestamptz AT TIME ZONE 'UTC')::date
+             )                                           AS "hasWindowInPeriod",
              COUNT(DISTINCT a.id) FILTER (WHERE a.retired_at IS NULL)::int
                                                          AS "ridesTracked",
              COUNT(DISTINCT o."attractionId")::int       AS "ridesWithOutages",
@@ -278,7 +323,7 @@ export class DowntimeProfileService {
        WHERE ($1::uuid[] IS NULL OR p.id = ANY($1::uuid[]))
        GROUP BY p.id, p.wiki_entity_id
       `,
-      [parkIds],
+      [parkIds, windowFrom, windowTo],
     );
 
     const regimes = new Map<string, DowntimeRegime>();
@@ -308,6 +353,17 @@ export class DowntimeProfileService {
         row.hasEverReportedDown === false &&
         observedHours >= MIN_BLIND_EVIDENCE_HOURS;
 
+      // Last of the refusals, and last on purpose. `never_reports` and
+      // `artefact` are properties of the feed and stay true whenever the park
+      // is open, so a park that is both blind and shut is owed the blind
+      // sentence: "come back when the season starts" would promise a figure
+      // that cannot arrive. This one is the only regime that ends by itself.
+      //
+      // Its place relative to `no_schedule` is not free, and for the opposite
+      // reason: a park with no usable schedule row at all cannot have one
+      // inside the window either, so BOTH conditions hold for it. `no_schedule`
+      // has to be asked first, or every park that publishes nothing would be
+      // told its season simply has not started.
       const regime: DowntimeRegime = !row.downCapable
         ? "not_capable"
         : !row.hasSchedule
@@ -316,7 +372,9 @@ export class DowntimeProfileService {
             ? "never_reports"
             : onTheHourShare >= DOWNTIME_GATES.artefactOnTheHourShare
               ? "artefact"
-              : "reports";
+              : !row.hasWindowInPeriod
+                ? "outside_window"
+                : "reports";
 
       regimes.set(row.parkId, regime);
       toSave.push({
@@ -349,10 +407,14 @@ export class DowntimeProfileService {
     windowTo: Date,
     generatedAt: Date,
   ): Promise<void> {
-    // Parks that publish no opening hours. They have no exposure days, so the
-    // `ex` CTE cannot see their rides at all — see the `sched` CTE below.
-    const noScheduleParkIds = [...regimes]
-      .filter(([, regime]) => regime === "no_schedule")
+    // Parks with no operating time in the window — because they publish no
+    // hours at all, or because none of the hours they publish fall in it.
+    // Either way the window holds no exposure day, so the `ex` CTE cannot see
+    // their rides at all — see the `sched` CTE below.
+    const unmeasuredParkIds = [...regimes]
+      .filter(
+        ([, regime]) => regime === "no_schedule" || regime === "outside_window",
+      )
       .map(([parkId]) => parkId);
 
     const rows: ProfileRow[] = await this.dataSource.query(
@@ -367,17 +429,19 @@ export class DowntimeProfileService {
            AND ($1::uuid[] IS NULL OR e."parkId" = ANY($1::uuid[]))
          GROUP BY e."attractionId", e."parkId"
       ),
-      -- Rides in parks that publish no hours.
+      -- Rides in parks with no operating time inside the window.
       --
-      -- attraction_exposure_days is built FROM the schedule, so a park without
-      -- one contributes no exposure day and none of its rides reaches ex.
-      -- Without a row the read path falls back to not_down_capable
-      -- (toDowntimeBlock(null)), which is a statement about the park's SOURCE
-      -- — and this park has a capable source, it just does not tell us when it
-      -- is open. That is no_schedule, and six translations of it were
-      -- unreachable for this whole class of park.
+      -- attraction_exposure_days is built FROM the schedule, so a park that
+      -- publishes no hours — or none that fall in the window — contributes no
+      -- exposure day and none of its rides reaches ex. Without a row the read
+      -- path falls back to not_down_capable (toDowntimeBlock(null)), which is a
+      -- statement about the park's SOURCE — and both these parks have a capable
+      -- source, one that does not tell us when it is open and one that told us
+      -- about a season starting next week. Those are no_schedule and
+      -- outside_window, and their translations were unreachable for this whole
+      -- class of park.
       --
-      -- Only the no_schedule regime is sourced here, not every ride in the
+      -- Only those two regimes are sourced here, not every ride in the
       -- catalogue: not_capable already resolves correctly through the
       -- missing-row fallback, so adding it would write rows to say what the
       -- absence of a row already says.
@@ -495,7 +559,7 @@ export class DowntimeProfileService {
         isoDay(windowFrom),
         isoDay(windowTo),
         midpoint(windowFrom, windowTo),
-        noScheduleParkIds,
+        unmeasuredParkIds,
       ],
     );
 
@@ -581,6 +645,22 @@ export class DowntimeProfileService {
     //    would swap a true refusal for `not_down_capable`, which is false
     //    about a park whose `wiki_entity_id` is set. (`not_down_capable`
     //    itself is a wash: the fallback says exactly what the row says.)
+    //
+    //    `outside_window` is sourced by the same `sched` CTE and so its
+    //    existence depends on the regime too, and it still does NOT belong
+    //    here. The hole above is "can never age", and that one is `no_schedule`
+    //    being permanent to the read path. `outside_window` is not permanent
+    //    there by design, so a row that stops being rewritten ages into
+    //    `stale_data` — „these numbers are not current", which is true — while
+    //    deleting it would print `not_down_capable` about a park that reports.
+    //
+    //    That trade is worth naming, because `stale_data` is not the best
+    //    sentence on every exit: a ride that leaves `sched` by turning
+    //    free-flow, or whose park loses its `wiki_entity_id`, would be owed
+    //    `not_down_capable` and gets "not current" instead. It is still the
+    //    better failure — those rides keep a refusal that says nothing about
+    //    the operator, and the alternative loses the row for every park that
+    //    simply opened.
     //
     // What this deliberately does not clean up: a park that vanishes from the
     // rebuild entirely (every ride retired, or the park removed) keeps its
@@ -697,6 +777,11 @@ export function decideProfile(
   if (!regime || regime === "not_capable") return withhold("not_down_capable");
   if (regime === "never_reports") return withhold("park_never_reports");
   if (regime === "no_schedule") return withhold("no_schedule");
+  // Same shape as no_schedule — no operating time to divide by — and a
+  // different sentence, because this park did publish hours and they start
+  // after the window ends. The order between the two never matters: a park is
+  // in at most one regime.
+  if (regime === "outside_window") return withhold("outside_window");
   if (regime === "artefact") return withhold("artefact_regime");
 
   // Only a merge INSIDE the window. The reconstruction has always bounded this
@@ -769,6 +854,8 @@ interface CoverageRow {
   parkId: string;
   downCapable: boolean;
   hasSchedule: boolean;
+  /** Whether one of those usable rows falls inside the measured window. */
+  hasWindowInPeriod: boolean;
   ridesTracked: number | string;
   ridesWithOutages: number | string;
   outages: number | string;

@@ -86,6 +86,34 @@ describe("toDowntimeBlock", () => {
     });
   });
 
+  it("lets staleness outrank the one refusal that ends by itself", () => {
+    // outside_window is the counterpart to the test above and the reason
+    // PERMANENT_REASONS is a list rather than "every park-level reason": the
+    // park publishes hours, they simply start after the window, so a stalled
+    // job's row would keep insisting the park is shut long after it opened.
+    // „Diese Zahlen sind nicht aktuell" is the true sentence there.
+    const old = new Date(
+      NOW.getTime() - (MAX_PROFILE_AGE_DAYS + 3) * 86_400_000,
+    );
+    const shut = {
+      ...publishable(old),
+      publishable: false,
+      withheldReason: "outside_window",
+    } as AttractionDowntimeProfile;
+    expect(toDowntimeBlock(shut, NOW)).toMatchObject({ reason: "stale_data" });
+
+    // Fresh, the reason itself reaches the reader.
+    const fresh = {
+      ...publishable(new Date(NOW.getTime() - 3600_000)),
+      publishable: false,
+      withheldReason: "outside_window",
+    } as AttractionDowntimeProfile;
+    expect(toDowntimeBlock(fresh, NOW)).toMatchObject({
+      kind: "withheld",
+      reason: "outside_window",
+    });
+  });
+
   it("still reports staleness for a ride that was genuinely publishable", () => {
     const old = new Date(
       NOW.getTime() - (MAX_PROFILE_AGE_DAYS + 1) * 86_400_000,

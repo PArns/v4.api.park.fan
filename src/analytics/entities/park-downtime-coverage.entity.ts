@@ -58,6 +58,24 @@ export const DOWNTIME_REGIMES = [
   "artefact",
   /** The park publishes no opening hours, so any denominator is circular. */
   "no_schedule",
+  /**
+   * The park publishes hours, and none of them falls in the measured window.
+   *
+   * Its own regime rather than `no_schedule`, which is a statement about the
+   * park's PUBLISHING — "we do not know when it is open". A Halloween event
+   * with 23 dated rows starting next week is not that park, and saying so would
+   * be the same wrong obstacle one step to the side. Nor `reports`, which is
+   * what it reads today: with no window in the period its rides reach neither
+   * `ex` nor `sched` in `rebuildProfiles`, get no row at all, and the read path
+   * answers `not_down_capable` — a statement about a SOURCE that is in fact
+   * delivering (Traumatica: 25 028 `queue_data` rows in 90 days).
+   *
+   * The only regime here that goes away on its own. `not_capable`,
+   * `never_reports` and `artefact` are properties of the feed; this one ends
+   * the day the park opens, which is why it is tested last and why its ride-
+   * level reason is not permanent to the read path.
+   */
+  "outside_window",
 ] as const;
 
 export type DowntimeRegime = (typeof DOWNTIME_REGIMES)[number];

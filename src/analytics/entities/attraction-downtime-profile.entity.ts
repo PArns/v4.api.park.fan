@@ -30,6 +30,19 @@ export const DOWNTIME_WITHHELD_REASONS = [
   "artefact_regime",
   /** The park publishes no opening hours, so the denominator would be circular. */
   "no_schedule",
+  /**
+   * The park publishes hours, but none in the measured window, so there is no
+   * operating time to divide by.
+   *
+   * Sibling of `no_schedule` and deliberately not the same sentence: that one
+   * says "we do not know when this park is open", and a park whose season
+   * starts next week has told us exactly that. The difference matters to a
+   * reader because only this one resolves — it is the one withheld reason that
+   * disappears when the park opens, which is also why it is NOT in
+   * `PERMANENT_REASONS`: once the row stops being rewritten, "these numbers are
+   * not current" is the truer sentence.
+   */
+  "outside_window",
   /** Real outages, too few of them for anything but the count. */
   "thin_events",
   /** Too little observed operating time behind the window. */

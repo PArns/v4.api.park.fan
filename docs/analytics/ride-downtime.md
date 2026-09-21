@@ -561,8 +561,9 @@ poll-attempt row is the only real fix. Until it exists, the methodology page say
 - **`attraction_downtime_profiles`** - the published aggregate, one row per attraction, rewritten
   nightly, with `publishable` and `withheldReason`.
 - **`park_downtime_coverage`** - the honesty label, one row per park, published for _every_ park:
-  `regime` in `not_capable | reports | artefact | no_schedule`, with `downCapable` read from
-  `parks.wiki_entity_id`, that is from configuration and never from the outcome.
+  `regime` in `not_capable | never_reports | reports | artefact | no_schedule | outside_window`, with
+  `downCapable` read from `parks.wiki_entity_id`, that is from configuration and never from the
+  outcome.
 
 All four are registered in `src/parks/utils/merge-dependencies.ts` in the same commit.
 
@@ -586,16 +587,18 @@ compressed hypertable with 254+ chunks. The four new tables come from entity syn
 | `medianOutageMinutes`                         | gated           | Event floor: ≥ 24 outages, ≥ 12 usable, censored share ≤ 25 %, carried share ≤ 50 %                                                   | „Die Hälfte der 28 beobachteten Störungen war nach 25 Minuten vorbei."                                                       |
 | `longestOutageMinutes` + date                 | gated           | Same event floor. A maximum is the most sampling-sensitive statistic there is.                                                        | „Die längste dauerte 3 Stunden 20 Minuten am 14. Juli."                                                                      |
 | `downShare`                                   | gated           | Same floor plus ≥ 150 operating hours. **One denominator on the card, and it is this one.**                                           | „Das sind rund 2 Prozent der Zeit, in der die Bahn lief."                                                                    |
-| `parkDowntimeCoverage.regime`                 | **yes, always** | none                                                                                                                                  | Four refusal sentences, one per reason.                                                                                      |
+| `parkDowntimeCoverage.regime`                 | **yes, always** | none                                                                                                                                  | One refusal sentence per regime.                                                                                             |
 | Rate per 100 operating hours                  | **no**          | Fitted internally (hierarchical gamma-Poisson) to answer whether a rate could ever be published                                       | -                                                                                                                            |
 | Outage starts by hour of day                  | **no**          | An hour-of-day shape built from a flag the ConflictResolver preferentially erases on popular rides shows queue drainage, not failures | -                                                                                                                            |
 | Probability / expected duration / MTBF / MTTR | **no**          | Refused, see §6                                                                                                                       | -                                                                                                                            |
 
-### The four refusals
+### The refusals
 
 - `not_capable`: „Für diesen Park meldet keine Datenquelle Störungen. Ausfälle sehen wir hier nicht."
+- `never_reports`: „Für diesen Park hat die Datenquelle noch nie eine Störung gemeldet." Read from the outcome and only past `MIN_BLIND_EVIDENCE_HOURS` — see [§0](#0-what-the-measurement-found).
 - `artefact`: „Für diesen Park liegen uns Störungsmeldungen nur stundengenau vor. Eine Dauer lässt sich daraus nicht ablesen." **Currently reached by no park** — see [§0](#0-what-the-measurement-found); the test that used to fire it was measuring outage length, not resolution.
 - `no_schedule`: „Für diesen Park sind keine Öffnungszeiten veröffentlicht, deshalb zeigen wir keine Minuten."
+- `outside_window`: „Dieser Park hatte im Messzeitraum keinen Betriebstag, deshalb gibt es keine Zahl." The park publishes hours and none of them fall in the 90 days, so the denominator is empty rather than circular. **The only regime that ends by itself**, which is why it is tested after `never_reports` and `artefact` (both are properties of the feed and stay true whenever the park opens) and why its ride-level reason is deliberately not in `PERMANENT_REASONS`: a row nothing rewrites should age into „diese Zahlen sind nicht aktuell", not keep insisting the park is shut. Measured 2026-09-21: **1 park, 12 rides** (Traumatica, whose 23 OPERATING rows all start 2026-09-23 or later, while its feed wrote 25 028 `queue_data` rows during the window). The test asks the **schedule**, not "has no exposure day in the window" — 7 of the 14 parks with no exposure day that day have no rides at all, and one of them published 91 operating rows inside the same window.
 - `reports` but nothing found: „Für diese Bahn wurde in den letzten 90 Tagen keine Störung gemeldet."
 
 Every published figure attributes the source (`gemeldet` / `reported` / `signalée` / `gemeld` /
