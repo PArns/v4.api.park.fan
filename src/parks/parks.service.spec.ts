@@ -2,7 +2,7 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { ParksService } from "./parks.service";
 import { Park } from "./entities/park.entity";
-import { ScheduleEntry } from "./entities/schedule-entry.entity";
+import { ScheduleEntry, ScheduleType } from "./entities/schedule-entry.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { DestinationsService } from "../destinations/destinations.service";
@@ -10,6 +10,8 @@ import { CacheKeys } from "../common/cache/cache-keys";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { RevalidationService } from "../common/revalidation/revalidation.service";
 import { HolidaysService } from "../holidays/holidays.service";
+import { QueueDataService } from "../queue-data/queue-data.service";
+import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
 import { createTestPark } from "../../test/fixtures/park.fixtures";
 import {
   formatInParkTimezone,
@@ -119,6 +121,13 @@ describe("ParksService", () => {
     revalidateTags: jest.fn().mockResolvedValue(true),
   };
 
+  // Default: the park's feed answered recently, so the silent-feed guard in
+  // saveScheduleData leaves every entry alone. The tests that care about the
+  // guard set this to false themselves.
+  const mockQueueDataService = {
+    hasObservedReadingWithin: jest.fn().mockResolvedValue(true),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -154,6 +163,10 @@ describe("ParksService", () => {
         {
           provide: RevalidationService,
           useValue: mockRevalidationService,
+        },
+        {
+          provide: QueueDataService,
+          useValue: mockQueueDataService,
         },
       ],
     }).compile();
@@ -2833,6 +2846,192 @@ describe("ParksService", () => {
           REVALIDATED_TAGS,
         );
       });
+    });
+  });
+  /**
+   * PAR-299: a park whose whole feed has gone silent must stop announcing
+   * future operating days. The schedule and the live data come from the same
+   * upstream, and when it stops measuring it keeps publishing — La Ronde went
+   * silent on 2026-06-24 and its schedule still claimed every calendar day to
+   * 2027-08-31 as OPERATING, 59 of them in the Montreal January.
+   *
+   * Dates are computed from the clock rather than written down, because the
+   * whole rule is "future vs past" and a fixed date turns into the wrong side
+   * of it the moment it passes. UTC as the park timezone so the offset cannot
+   * move a day across the boundary and make the test about timezones instead.
+   */
+  describe("saveScheduleData — silent feed downgrades future operating days", () => {
+    const parkId = "77777777-8888-9999-aaaa-bbbbbbbbbbbb";
+
+    const dayOffset = (days: number): string =>
+      new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+
+    const FUTURE = dayOffset(30);
+    const PAST = dayOffset(-30);
+
+    const operatingOn = (date: string) => ({
+      date,
+      type: "OPERATING",
+      openingTime: `${date}T09:00:00Z`,
+      closingTime: `${date}T18:00:00Z`,
+      description: "Regular operating day",
+    });
+
+    /** Every query builder handed out during one call, in creation order. */
+    let builders: ReturnType<typeof scheduleQueryBuilder>[];
+
+    /** The dates of the DELETE that targets park-level OPERATING rows. */
+    const deletedOperatingDates = (): string[] => {
+      for (const builder of builders) {
+        if (builder.delete.mock.calls.length === 0) continue;
+        const targetsOperating = builder.andWhere.mock.calls.some(
+          ([sql, params]: [string, Record<string, unknown> | undefined]) =>
+            sql === '"scheduleType" = :type' &&
+            params?.type === ScheduleType.OPERATING,
+        );
+        if (!targetsOperating) continue;
+        const dateCall = builder.andWhere.mock.calls.find(
+          ([sql]: [string]) => sql === "date IN (:...dates)",
+        );
+        return (dateCall?.[1] as { dates: string[] } | undefined)?.dates ?? [];
+      }
+      return [];
+    };
+
+    const savedEntries = (): Array<{
+      date: Date;
+      scheduleType: ScheduleType;
+      openingTime: Date | null;
+      closingTime: Date | null;
+      description: string | null;
+    }> => mockScheduleRepository.save.mock.calls[0]?.[0] ?? [];
+
+    beforeEach(() => {
+      builders = [];
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        countryCode: "CA",
+        regionCode: null,
+        timezone: "UTC",
+      });
+      mockHolidaysService.getHolidays.mockResolvedValue([]);
+      mockScheduleRepository.save.mockResolvedValue([]);
+      mockScheduleRepository.query.mockResolvedValue([]);
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() => {
+        const builder = scheduleQueryBuilder([]);
+        builders.push(builder);
+        return builder;
+      });
+      // Restored per test: jest.clearAllMocks() in the outer beforeEach wipes
+      // the default implementation set where the mock is declared.
+      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(true);
+    });
+
+    it("stores a future operating day as UNKNOWN when the feed is silent", async () => {
+      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+
+      await service.saveScheduleData(parkId, [operatingOn(FUTURE)]);
+
+      expect(
+        mockQueueDataService.hasObservedReadingWithin,
+      ).toHaveBeenCalledWith(parkId, PARK_FEED_SILENT_DAYS);
+      const [entry] = savedEntries();
+      expect(entry.scheduleType).toBe(ScheduleType.UNKNOWN);
+    });
+
+    it("drops the hours off a downgraded day", async () => {
+      // An UNKNOWN day that still answers "09:00-18:00" has moved the unfounded
+      // claim one field to the left: the frontend renders the hours it is given.
+      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+
+      await service.saveScheduleData(parkId, [operatingOn(FUTURE)]);
+
+      const [entry] = savedEntries();
+      expect(entry.openingTime).toBeNull();
+      expect(entry.closingTime).toBeNull();
+      expect(entry.description).toBeNull();
+    });
+
+    it("deletes the OPERATING row the downgraded day replaces", async () => {
+      // Without this the write is additive: the new UNKNOWN row lands beside the
+      // old OPERATING one, and every reader looking for an operating day still
+      // finds one. The guard would report success and change nothing.
+      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+
+      await service.saveScheduleData(parkId, [operatingOn(FUTURE)]);
+
+      expect(deletedOperatingDates()).toContain(FUTURE);
+    });
+
+    it("leaves a past operating day alone", async () => {
+      // The reconstruction of past days in calendar.service.ts reads these rows.
+      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+
+      await service.saveScheduleData(parkId, [operatingOn(PAST)]);
+
+      expect(
+        mockQueueDataService.hasObservedReadingWithin,
+      ).not.toHaveBeenCalled();
+      const [entry] = savedEntries();
+      expect(entry.scheduleType).toBe(ScheduleType.OPERATING);
+      expect(entry.openingTime).not.toBeNull();
+      expect(deletedOperatingDates()).not.toContain(PAST);
+    });
+
+    it("leaves a future closed day alone", async () => {
+      // A source that names a day closed has said something about that day.
+      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+
+      await service.saveScheduleData(parkId, [
+        { date: FUTURE, type: "CLOSED" },
+      ]);
+
+      const [entry] = savedEntries();
+      expect(entry.scheduleType).toBe(ScheduleType.CLOSED);
+    });
+
+    it("leaves a future operating day alone when the feed still answers", async () => {
+      // The 9347 future operating days of the parks whose feed works, measured
+      // on production 2026-09-21, live or die on this one.
+      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(true);
+
+      await service.saveScheduleData(parkId, [operatingOn(FUTURE)]);
+
+      const [entry] = savedEntries();
+      expect(entry.scheduleType).toBe(ScheduleType.OPERATING);
+      expect(entry.openingTime).not.toBeNull();
+      expect(deletedOperatingDates()).not.toContain(FUTURE);
+    });
+
+    it("does not probe the feed when nothing future is operating", async () => {
+      // One indexed EXISTS against queue_data, and only when there is something
+      // for it to decide. A sync of past days pays nothing.
+      await service.saveScheduleData(parkId, [
+        operatingOn(PAST),
+        { date: FUTURE, type: "CLOSED" },
+      ]);
+
+      expect(
+        mockQueueDataService.hasObservedReadingWithin,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("downgrades only the future half of a mixed payload", async () => {
+      mockQueueDataService.hasObservedReadingWithin.mockResolvedValue(false);
+
+      await service.saveScheduleData(parkId, [
+        operatingOn(PAST),
+        operatingOn(FUTURE),
+      ]);
+
+      const byDate = new Map(
+        savedEntries().map((e) => [
+          e.date.toISOString().slice(0, 10),
+          e.scheduleType,
+        ]),
+      );
+      expect(byDate.get(PAST)).toBe(ScheduleType.OPERATING);
+      expect(byDate.get(FUTURE)).toBe(ScheduleType.UNKNOWN);
     });
   });
 });
