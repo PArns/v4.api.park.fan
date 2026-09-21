@@ -55,8 +55,27 @@ standing rule is to emit `unknown` rather than a placeholder tier (see
 | Ride `crowdLevel`                  | rated against the P50 baseline    | **`unknown`**      |
 | Park `statistics.crowdLevel`       | rated                             | **`unknown`**      |
 | `statistics.peakHour*`             | today's peak or a forecast        | **`null` / 0**     |
+| `statistics.avgWaitTime`           | minutes right now                 | **`null`**         |
+| `statistics.avgWaitToday`          | minutes across today              | **`null`**         |
+| `statistics.peakWaitToday`         | today's highest wait              | **`null`**         |
+| `analytics.occupancy`              | % of a typical day, plus a verdict | **omitted**       |
 | `analytics.percentiles`            | today's distribution              | **omitted**        |
 | `hourlyForecast`, `bestVisitTimes` | ML predictions                    | **withheld**       |
+
+The three wait aggregates read `null` rather than 0 because 0 is what a division
+by the empty set returns, and a reader cannot tell it from a quiet Tuesday.
+`occupancy` goes away entirely instead of carrying nulls: its numbers get
+rounded and compared by the clients that read them, and `Math.round(null)` is 0
+— the wall of zeroes would be back, this time with `comparisonStatus: "typical"`
+beside it, which is a verdict about a park we have never had a wait time from.
+Absence is how this payload already says it about `percentiles`.
+
+**The same gate covers a park whose feed has gone quiet**, not only a park with
+no source: `ParkIntegrationService` reads
+`waitTimesKnowable = waitTimesReadable && parkObservedRecently`, the second half
+being `PARK_FEED_SILENT_DAYS` = 30 days without an observed reading (PAR-192).
+`liveWaitTimes.available` stays `true` for those parks, so **a client cannot
+derive this case** — it has to read the fields themselves.
 
 The optimistic fallback is the one worth understanding. It exists so a park whose
 feed drops a row does not read "open, all rides closed" — if the park is open and
@@ -78,7 +97,9 @@ open-park case becomes `UNKNOWN`.
 
 ## What the client still has to do
 
-The response shape does not change, so a client that ignores the flag renders an
+The park payload now withholds the wait aggregates and the occupancy object
+itself, so the worst of this is closed at the source — but every other surface
+still carries the flag rather than a gap, and a client that ignores it renders an
 empty park as a quiet one. Check `liveWaitTimes.available` before showing:
 
 - wait times, or the absence of one as a walk-on

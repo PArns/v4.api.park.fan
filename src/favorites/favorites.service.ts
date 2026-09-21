@@ -419,9 +419,12 @@ export class FavoritesService {
       totalAttractions: number;
       operatingAttractions: number;
       analytics?: {
-        avgWaitTime: number;
+        // Both optional, and for the same reason the DTO they end up in has
+        // them optional: at a park whose wait times are unreadable there is no
+        // honest number to put here (PAR-298).
+        avgWaitTime?: number;
         crowdLevel: string;
-        occupancy: number;
+        occupancy?: number;
       };
       todaySchedule?: {
         openingTime: string;
@@ -465,18 +468,29 @@ export class FavoritesService {
         const todaySchedule = schedules.today.get(park.id);
         const nextSchedule = schedules.next.get(park.id);
 
+        const waitsReadable = !resolveCuratedPark(park).noWaitTimesReason;
+
         fallbackMap.set(park.id, {
           status: statusMap.get(park.id) || "CLOSED",
           totalAttractions: stats?.totalAttractions || 0,
           operatingAttractions: stats?.operatingAttractions || 0,
           analytics: occupancy
             ? {
-                avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+                // Gated here for the same reason as the nearby card's miss
+                // path: this branch builds from `AnalyticsService` instead of
+                // the park payload, and without the gate the favorites card
+                // would read "Ø 0 min" or nothing depending on whether
+                // `park:integrated:<id>` was warm. Curated half only — the
+                // measured one needs a per-park probe this batch does not run
+                // (PAR-298).
+                avgWaitTime: waitsReadable
+                  ? (occupancy.breakdown?.currentAvgWait ?? 0)
+                  : undefined,
                 // Gated at the source: "unknown" for a thin park (not ratable).
                 crowdLevel:
                   occupancy.crowdLevel ??
                   this.analyticsService.determineCrowdLevel(occupancy.current),
-                occupancy: occupancy.current,
+                occupancy: waitsReadable ? occupancy.current : undefined,
               }
             : undefined,
           todaySchedule: formatTodaySchedule(todaySchedule),
@@ -527,9 +541,12 @@ export class FavoritesService {
             integrated.analytics?.statistics?.operatingAttractions || 0,
           analytics: integrated.analytics
             ? {
+                // Deliberately no `|| 0` — same reason as the nearby card
+                // (PAR-298): the park payload leaves `occupancy` out when the
+                // park's wait times are unknowable, and a zero here would put
+                // the empty-set reading back on the favorites card.
                 avgWaitTime:
-                  integrated.analytics.occupancy?.breakdown?.currentAvgWait ||
-                  0,
+                  integrated.analytics.occupancy?.breakdown?.currentAvgWait,
                 crowdLevel: integrated.analytics.statistics?.crowdLevel,
                 occupancy: integrated.analytics.occupancy?.current,
               }

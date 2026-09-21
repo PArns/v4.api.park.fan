@@ -425,6 +425,13 @@ describe("scheduled but silent parks (e2e)", () => {
       expect(body.analytics.statistics.operatingAttractions).toBe(0);
       expect(body.analytics.statistics.closedAttractions).toBe(0);
       expect(body.analytics.statistics.crowdLevel).toBe("unknown");
+      // PAR-298: the aggregates go with the tier. Over no wait times they are
+      // a division by the empty set — Ø 0 min under an OPERATING badge — and
+      // the occupancy object rated that 0 % "typical".
+      expect(body.analytics.statistics.avgWaitTime).toBeNull();
+      expect(body.analytics.statistics.avgWaitToday).toBeNull();
+      expect(body.analytics.statistics.peakWaitToday).toBeNull();
+      expect(body.analytics.occupancy).toBeUndefined();
     });
 
     it("still says 'all of them closed' when the park itself is shut", async () => {
@@ -471,6 +478,10 @@ describe("scheduled but silent parks (e2e)", () => {
         expect(ride.status).toBe("OPERATING");
         expect(ride.effectiveStatus).toBe("OPERATING");
       }
+      // The other half of the PAR-298 pair: one day inside the window, and the
+      // payload keeps every figure. A gate that fires here is not a gate.
+      expect(body.analytics.occupancy).toBeDefined();
+      expect(body.analytics.statistics.avgWaitTime).not.toBeNull();
     });
   });
 });

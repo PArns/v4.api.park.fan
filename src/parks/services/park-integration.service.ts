@@ -1363,19 +1363,28 @@ export class ParkIntegrationService {
     // it and the live branch has nothing to rate — `very_low` crowds, on a park
     // that may be at capacity.
     //
-    // What this block withholds is the three claims that read as a judgement:
-    // the crowd tier, the peak hour and the "typical day" distribution, plus
-    // `closedAttractions` below. It does NOT touch `avgWaitTime`,
-    // `avgWaitToday`, `peakWaitToday` or the `occupancy` object, which keep
-    // their empty-set zeroes: Ø 0 min, 0 % occupancy and — from
-    // `calculateParkOccupancy`'s own no-data exit — `comparisonStatus:
-    // "typical"`, which reads as a verdict about a park nobody has heard from
-    // since June rather than as the absence it is. That gap predates this
-    // change and is PAR-298; it is named here rather than widened into this
-    // one.
+    // What this block withholds is every wait-derived claim: the crowd tier,
+    // the peak hour, the "typical day" distribution, the three wait aggregates,
+    // the occupancy object and `closedAttractions` below. `totalAttractions`
+    // survives — the catalog is real — and so does `operatingAttractions`,
+    // which at a silent park counts the free-flow rides and nothing else.
+    //
+    // Two shapes carry "unknown" here, and which one a field gets is decided by
+    // what a reader does with it rather than by taste. A number becomes `null`:
+    // every reader of these three either gates on `> 0` / `!= null` or prints
+    // the value, and printing nothing is the honest render. The occupancy
+    // OBJECT goes away instead of having its fields nulled, because its readers
+    // do arithmetic on them — `Math.round(null)` is 0, which would put the wall
+    // of zeroes straight back. Absence is also how the line below already says
+    // it about `percentiles`.
     if (dto.analytics && !waitTimesKnowable) {
       dto.analytics.statistics = {
         ...dto.analytics.statistics,
+        // Each of these is a division by the empty set rather than a reading:
+        // Ø 0 min and peak 0 min on a park that may be at capacity.
+        avgWaitTime: null,
+        avgWaitToday: null,
+        peakWaitToday: null,
         crowdLevel: "unknown",
         peakHour: null,
         peakHourLocal: null,
@@ -1385,6 +1394,14 @@ export class ParkIntegrationService {
       // `percentiles` is a distribution over observed waits — of which there are
       // none — and the frontend renders it as a "typical day" chart.
       dto.analytics.percentiles = undefined;
+
+      // The occupancy object is a percentage of a typical day plus the verdict
+      // that goes with it. `calculateParkOccupancy`'s own no-data exit rates it
+      // `unknown` but still emits `comparedToTypical: 0` and
+      // `comparisonStatus: "typical"` beside it — a verdict about a park nobody
+      // has heard from since June. There is no honest value to send, so nothing
+      // is sent.
+      dto.analytics.occupancy = undefined;
 
       // `closedAttractions` goes with them, and only while the park is open.
       //
