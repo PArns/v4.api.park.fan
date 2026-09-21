@@ -88,7 +88,7 @@ export class WaitTimePrediction {
   // smallint, not float: a spread of 9.7 against 10 minutes is not a distinction
   // anybody acts on, and this is the heaviest-written table in the system. Two
   // bytes, and nothing at all while NULL — the row already carries a null bitmap
-  // for confidence, crowdLevel, status and baseline. No index: nothing filters or
+  // for confidence, crowdLevel and baseline. No index: nothing filters or
   // sorts on it, and the header above records what indexes cost here.
   @Column({ type: "smallint", nullable: true })
   uncertaintyMinutes: number | null;
@@ -115,6 +115,10 @@ export class WaitTimePrediction {
     | "extreme"
     | "closed";
 
+  // "OPERATING" or "UNKNOWN" as predict.py derived it for that hour; CLOSED rows
+  // never get this far. NULL on every row written before PAR-117 declared the
+  // field on PredictionResponse — all 3157154 hourly and 35983223 daily rows that
+  // existed then — so a reader must treat NULL as "not recorded", not as a status.
   @Column({ type: "text", nullable: true })
   status: string | null;
 

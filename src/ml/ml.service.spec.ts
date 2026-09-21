@@ -613,6 +613,73 @@ describe("MLService", () => {
       ).toBeUndefined();
     });
 
+    // The accuracy feedback filter reads `status`, which reached this side as
+    // undefined for months because PredictionResponse did not declare it (PAR-117).
+    // Everything was therefore recorded, and the filter's own rule was never
+    // exercised. These pin the rule itself, in both directions.
+    describe("accuracy feedback filter", () => {
+      const hourly = (hour: string, status?: string) => ({
+        attractionId,
+        predictedTime: `${today}T${hour}:00:00Z`,
+        predictedWaitTime: 30,
+        confidence: 0.9,
+        crowdLevel: "moderate" as const,
+        baseline: 28,
+        trend: "stable",
+        modelVersion: "v1.0.0",
+        predictionType: "hourly" as const,
+        status,
+      });
+
+      beforeEach(() => {
+        // No schedule history: the storage filter keeps every row, so whatever
+        // does not reach recordPredictions was dropped by the feedback filter.
+        mockParksService.getOperatingDateRange.mockResolvedValue({
+          minDate: null,
+          maxDate: null,
+        });
+        mockParksService.isParkSeasonal.mockResolvedValue(false);
+        mockScheduleEntryRepository.find.mockResolvedValue([]);
+        mockPredictionAccuracyService.recordPredictions.mockClear();
+      });
+
+      it("records OPERATING, UNKNOWN and not-yet-recorded rows alike", async () => {
+        // UNKNOWN is a day nobody published a schedule for, in a park a ride wait
+        // proved was running — not a scheduled closure. Undefined is every row
+        // written before PAR-117 declared the field.
+        await service.storePredictions([
+          hourly("10", "OPERATING"),
+          hourly("11", "UNKNOWN"),
+          hourly("12"),
+        ]);
+
+        const recorded =
+          mockPredictionAccuracyService.recordPredictions.mock.calls[0][0];
+        expect(
+          recorded.map((p: { status: string | null }) => p.status),
+        ).toEqual(["OPERATING", "UNKNOWN", null]);
+      });
+
+      it("drops any other status, and every daily row", async () => {
+        await service.storePredictions([
+          hourly("10", "OPERATING"),
+          hourly("11", "CLOSED"),
+          {
+            ...hourly("12", "OPERATING"),
+            predictedTime: `${nextWeek}T12:00:00Z`,
+            predictionType: "daily" as const,
+          },
+        ]);
+
+        const recorded =
+          mockPredictionAccuracyService.recordPredictions.mock.calls[0][0];
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0].predictedTime).toEqual(
+          new Date(`${today}T10:00:00Z`),
+        );
+      });
+    });
+
     it("should filter out predictions in seasonal gaps", async () => {
       // Seasonal park with operating history but no explicit schedule
       // entries for the predicted days → every prediction falls into a

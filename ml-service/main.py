@@ -230,6 +230,12 @@ class PredictionResponse(BaseModel):
     crowdLevel: str
     baseline: float
     modelVersion: str
+    # Schedule status of the predicted hour, as predict.py derived it. Only
+    # "OPERATING" and "UNKNOWN" can arrive here: predict.py:1971 drops CLOSED rows
+    # before inference, and schedule_filter drops whatever falls outside an
+    # OPERATING window. "UNKNOWN" means no schedule was reported for that day, not
+    # that the park is shut — see docs/rules/absent-facts.md.
+    status: Optional[str] = None
 
 
 class BulkPredictionResponse(BaseModel):
