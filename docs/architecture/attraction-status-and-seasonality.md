@@ -66,10 +66,16 @@ because the absence check reads the raw rows rather than the overridden ones.
 
 ### 2.3 No source reports it at all → `UNKNOWN`
 Reverse-reconciliation (`wait-times.processor`) writes a CLOSED `queue_data`
-row for anything no upstream source has mentioned in 24h, so `detect-seasonal`
-has something to read. The write is deliberate; the **status** was not
-defensible. It said the operator closed the ride when all that happened is that
-our data stopped arriving.
+row for anything no upstream source has mentioned in 24h. The write is
+deliberate; the **status** was not defensible. It said the operator closed the
+ride when all that happened is that our data stopped arriving.
+
+That write used to be justified here as giving `detect-seasonal` something to
+read, and that justification is gone (PAR-32): the detector now reads observed
+rows only, so these rows are no longer seasonal evidence. What the row is still
+for is the outage reconstruction, where it **ends** a run instead of joining two
+`DOWN` states across the silence, and this read path, which turns it into
+`UNKNOWN`.
 
 `common/utils/source-absent-status.util.ts` decides this. A ride whose current
 rows were *all* written by `system-reconciliation`, in an operating park, reads

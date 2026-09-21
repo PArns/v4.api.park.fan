@@ -7,6 +7,32 @@ import { QueueDataAggregate } from "../../analytics/entities/queue-data-aggregat
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Show } from "../../shows/entities/show.entity";
 import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attraction-retirement.service";
+import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
+
+/**
+ * The evidence half of this detector, and the reason it is a shared string.
+ *
+ * Reverse-reconciliation writes a `CLOSED` row for any ride no source has
+ * mentioned in 24 hours, and the hourly heartbeat carries the previous row's
+ * status AND its `data_source` forward. Both look exactly like a feed saying
+ * something. To a detector whose whole seasonal signature is "CLOSED on every
+ * park-open day while the park was open", our own bookkeeping is therefore
+ * indistinguishable from a park shutting a ride for the winter — and it is the
+ * louder of the two, because it never stops.
+ *
+ * Measured: all 44 Europa-Park rides that ThemeParks.wiki dropped on
+ * 2026-06-07 derived the identical month list `[1,2,3,4,5,6,12]`, which is not
+ * a season but "every month before the feed went silent".
+ *
+ * `COALESCE(..., true)` for the reason `hasObservedReadingWithin` states: the
+ * predicate evaluates to NULL, not false, for a row with neither `is_heartbeat`
+ * nor `lastUpdated`, and a row we cannot classify must not be the thing that
+ * decides a ride's season. It counts as an observation, which is the direction
+ * that leaves today's behaviour alone — production holds no such row, a fixture
+ * does.
+ */
+const OBSERVED = (alias: string) =>
+  `COALESCE(${observedReadingsSql(alias)}, true)`;
 
 /**
  * Queue Percentile Processor
@@ -270,18 +296,30 @@ export class QueuePercentileProcessor {
         WHERE op_day >= CURRENT_DATE - $2::int
       ),
       ever_operating AS (
+        -- Observed rows only: a carried heartbeat repeats an OPERATING the feed
+        -- said hours ago, so counting them lets a ride clear this
+        -- "has a history" gate on rows nobody outside this system wrote.
         SELECT "attractionId", COUNT(*) as op_count
         FROM queue_data
         WHERE status = 'OPERATING'
           AND timestamp >= NOW() - INTERVAL '365 days'
+          AND ${OBSERVED("queue_data")}
         GROUP BY "attractionId"
         HAVING COUNT(*) >= $3
       ),
       current_status AS (
+        -- The gate this detector actually hangs on, and the one the bookkeeping
+        -- writers defeat: for a ride whose feed went quiet, EVERY row in the
+        -- last seven days is a reconciliation CLOSED. Reading those, the ride
+        -- reads CLOSED forever and clears the cs.status = 'CLOSED' test below
+        -- on our own writes. Filtered, it has no row here, and the INNER JOIN
+        -- onto this CTE drops it from the candidates — which is the honest
+        -- answer: we do not know what that ride is doing.
         SELECT DISTINCT ON ("attractionId")
           "attractionId", status
         FROM queue_data
         WHERE timestamp >= NOW() - INTERVAL '7 days'
+          AND ${OBSERVED("queue_data")}
         ORDER BY "attractionId", timestamp DESC
       ),
       days_fully_closed AS (
@@ -447,10 +485,14 @@ export class QueuePercentileProcessor {
           AND a.retired_at IS NULL
       ),
       current_status AS (
+        -- The same gate, the same filter, the same reason as step 3 above. This
+        -- copy decides the zero-history candidates, and a ride that never
+        -- operated is exactly the one whose only rows are bookkeeping.
         SELECT DISTINCT ON ("attractionId")
           "attractionId", status
         FROM queue_data
         WHERE timestamp >= NOW() - INTERVAL '7 days'
+          AND ${OBSERVED("queue_data")}
         ORDER BY "attractionId", timestamp DESC
       )
       -- A never_operating attraction has, by definition, ZERO OPERATING days,
@@ -509,10 +551,15 @@ export class QueuePercentileProcessor {
              -- the status. Deliberately not the OPERATING span: a real winter
              -- attraction only ever operates for about forty days, and that
              -- says nothing about whether we have seen a full year of it.
+             -- Observed rows only, which is what "watched" means. Reconciliation
+             -- keeps writing for a ride no source reports any more, so an
+             -- unfiltered span grows on bookkeeping alone and carries a ride
+             -- over the 330-day gate on the strength of its own silence.
              SELECT "attractionId",
                     max(timestamp) - min(timestamp) AS watched
                FROM queue_data
               WHERE "attractionId" = ANY($1::uuid[])
+                AND ${OBSERVED("queue_data")}
               GROUP BY "attractionId"
            )
            SELECT a.id AS "attractionId",
@@ -524,6 +571,10 @@ export class QueuePercentileProcessor {
            WHERE a.id = ANY($1::uuid[])
              AND q.status = 'OPERATING'
              AND q.timestamp >= NOW() - INTERVAL '730 days'
+             -- A carried heartbeat repeats an OPERATING for up to an hour after
+             -- the feed stopped saying it, so an unfiltered scan can hand a
+             -- month to a ride that never operated in it.
+             AND ${OBSERVED("q")}
              AND o.watched >= ($2::int * INTERVAL '1 day')
            GROUP BY a.id`,
           [candidateIds, MIN_OBSERVED_DAYS],
@@ -831,6 +882,14 @@ export class QueuePercentileProcessor {
    * Incremental: scans only from 2 local days before the last stored day (boundary-safe;
    * ON CONFLICT dedupes). The one-time full backfill (lookback + 5d buffer) runs only when
    * the table is empty. Old rows beyond lookback + 30d are pruned to bound growth.
+   *
+   * Rows written before the observed-readings filter below are NOT rewritten:
+   * `ON CONFLICT DO NOTHING` never revisits a stored day, so a day this used to
+   * record on a carried heartbeat keeps its row. They age out through the prune
+   * at lookback + 30 days, so the table is fully under the new rule about 90
+   * days after deploy. Deleting them here instead would mean re-deriving every
+   * stored day on every run, which is the ~227 s scan this rollup exists to
+   * remove.
    */
   private async refreshOperatingDayRollup(lookbackDays: number): Promise<void> {
     const maxRow: { max: string | null }[] = await this.dataSource.query(
@@ -854,6 +913,13 @@ export class QueuePercentileProcessor {
       JOIN parks p ON p.id = a."parkId"
       WHERE q.status = 'OPERATING'
         AND q.timestamp >= ${since.clause}
+        -- Observed rows only. This rollup is read twice with opposite meanings:
+        -- as park_open_days ("the park was demonstrably open") and as
+        -- attraction_operating_days ("this ride ran that day"), plus a third
+        -- time by the show search. A heartbeat carrying OPERATING makes a park
+        -- look open on a day nothing was reported, which is the day every other
+        -- ride in it then counts as fully closed.
+        AND ${OBSERVED("q")}
       ON CONFLICT ("attractionId", op_day) DO NOTHING
       `,
       [since.param],
