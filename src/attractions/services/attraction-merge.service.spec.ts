@@ -1,3 +1,4 @@
+import { Logger } from "@nestjs/common";
 import { Test, TestingModule } from "@nestjs/testing";
 import { DataSource } from "typeorm";
 import { AttractionMergeService } from "./attraction-merge.service";
@@ -1034,5 +1035,311 @@ describe("AttractionMergeService — the works period survives as a set", () => 
     for (const column of WINDOW) {
       expect(preview.inheritedColumns).not.toContain(column);
     }
+  });
+});
+
+/**
+ * The half PAR-301 adds: a refused window is a DELETED window.
+ *
+ * PAR-297's rule is right — a survivor holding part of a works period keeps
+ * its own — but the losing row is deleted right after, so the window it held
+ * ceases to exist. Nothing said so: it is not in `inheritedColumns` (it was
+ * not inherited) and it was not in `droppedCurations` either, because that
+ * list reads `ATTRACTION_DEPENDENCIES` and a column on the attraction row
+ * itself is in no dependent table.
+ *
+ * Both directions are asserted, each against the presence that proves the
+ * preview got far enough to consider the window at all (G-44): the pairs are
+ * built so an unrelated column is inherited in the same call.
+ */
+describe("AttractionMergeService — the curated window it would delete", () => {
+  const ride = (overrides: Record<string, unknown> = {}) => ({
+    id: "row-base",
+    slug: "alice-in-wonderland",
+    name: "Alice in Wonderland",
+    parkId: "park-blackpool",
+    queueTimesEntityId: null,
+    curatedOutOfServiceFrom: null,
+    curatedOutOfServiceTo: null,
+    curatedOutOfServiceToUncertain: null,
+    ...overrides,
+  });
+
+  const pair = (
+    winner: Record<string, unknown>,
+    loser: Record<string, unknown>,
+  ) => [
+    { ...winner, id: "row-base" },
+    { ...loser, id: "row-suffix", slug: "alice-in-wonderland-2" },
+  ];
+
+  const previewOf = (
+    winner: Record<string, unknown>,
+    loser: Record<string, unknown>,
+  ) => {
+    const rows = pair(winner, loser);
+    const findOne = jest.fn(({ where }: { where: { id: string } }) =>
+      Promise.resolve(rows.find((row) => row.id === where.id) ?? null),
+    );
+    const service = new AttractionMergeService(
+      {
+        getRepository: jest.fn(() => ({ findOne })),
+        query: jest.fn().mockResolvedValue([]),
+      } as never,
+      {} as never,
+      {} as never,
+    );
+    return service.previewMerge("row-base", "row-suffix");
+  };
+
+  /** The real merge, with every write mocked out and the logger captured. */
+  const mergeOf = async (
+    winner: Record<string, unknown>,
+    loser: Record<string, unknown>,
+  ) => {
+    const rows = pair(winner, loser);
+    const manager = {
+      findOne: jest.fn(
+        (_entity: unknown, { where }: { where: { id: string } }) =>
+          Promise.resolve(rows.find((row) => row.id === where.id) ?? null),
+      ),
+      query: jest.fn().mockResolvedValue([]),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const warn = jest
+      .spyOn(Logger.prototype, "warn")
+      .mockImplementation(() => undefined);
+    const service = new AttractionMergeService(
+      {
+        transaction: jest.fn((fn: (m: unknown) => unknown) => fn(manager)),
+      } as never,
+      {
+        keys: jest.fn().mockResolvedValue([]),
+        del: jest.fn(),
+        pipeline: jest.fn(() => ({ del: jest.fn(), exec: jest.fn() })),
+      } as never,
+      { revalidateTags: jest.fn() } as never,
+    );
+
+    await service.mergeAttractions("row-base", "row-suffix");
+    return { warn, manager };
+  };
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("reports nothing where the window travels", async () => {
+    // The pair PAR-297 already handles: the survivor holds none of the set, so
+    // the whole window moves across and nothing is lost. A preview crying wolf
+    // here would be worse than silent — this is the safe pair, and the button
+    // beside the report is the one the admin is deciding about.
+    const preview = await previewOf(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("curatedOutOfServiceFrom");
+    expect(preview.droppedCurations).toEqual([]);
+  });
+
+  it("reports nothing where the losing row holds no window", async () => {
+    const preview = await previewOf(
+      ride({
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+      }),
+      ride({ queueTimesEntityId: 4711 }),
+    );
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    expect(preview.droppedCurations).toEqual([]);
+  });
+
+  it("names the refused window with the losing row's values", async () => {
+    // The case from the ticket: the survivor holds an EXPIRED start, so the
+    // set is refused — and the window that disappears may be the current one.
+    const preview = await previewOf(
+      ride({ curatedOutOfServiceFrom: "2019-03-01" }),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    expect(preview.droppedCurations).toEqual([
+      {
+        table: "attractions",
+        from: "loser",
+        row: {
+          curatedOutOfServiceFrom: "2026-01-16",
+          curatedOutOfServiceTo: "2026-03-03",
+          curatedOutOfServiceToUncertain: true,
+        },
+      },
+    ]);
+  });
+
+  it("names only the estimate flag when the dates beside it travel", async () => {
+    // `settle` keeps the dates and drops the flag, the way the endpoint does.
+    // The flag is still a hand-written value the DELETE takes, so it is named
+    // on its own rather than folded into the window that did arrive.
+    const preview = await previewOf(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceToUncertain: true,
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("curatedOutOfServiceFrom");
+    expect(preview.droppedCurations).toEqual([
+      {
+        table: "attractions",
+        from: "loser",
+        row: { curatedOutOfServiceToUncertain: true },
+      },
+    ]);
+  });
+
+  it("names a window the set refuses as inverted", async () => {
+    const preview = await previewOf(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-03-01",
+        curatedOutOfServiceTo: "2026-01-20",
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    expect(preview.droppedCurations).toEqual([
+      {
+        table: "attractions",
+        from: "loser",
+        row: {
+          curatedOutOfServiceFrom: "2026-03-01",
+          curatedOutOfServiceTo: "2026-01-20",
+        },
+      },
+    ]);
+  });
+
+  it("lists the dependent rows beside it, not instead of it", async () => {
+    // Two sources, one list. The profile comes from `ATTRACTION_DEPENDENCIES`,
+    // the window from the attraction row, and a reader of the report should
+    // not have to know there were two.
+    const stub = { attractionId: "row-base", elements: [], types: [] };
+    const rows = pair(
+      ride({ curatedOutOfServiceFrom: "2019-03-01" }),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-16",
+      }),
+    );
+    const findOne = jest.fn(({ where }: { where: { id: string } }) =>
+      Promise.resolve(rows.find((row) => row.id === where.id) ?? null),
+    );
+    const profiles: Record<string, Array<Record<string, unknown>>> = {
+      "row-base": [stub],
+      "row-suffix": [
+        {
+          attractionId: "row-suffix",
+          elements: ["lifthill", "first-drop"],
+          types: ["launch-coaster"],
+        },
+      ],
+    };
+    const service = new AttractionMergeService(
+      {
+        getRepository: jest.fn(() => ({ findOne })),
+        query: jest.fn((_sql: string, params: unknown[] = []) =>
+          Promise.resolve(profiles[String(params[0])] ?? []),
+        ),
+      } as never,
+      {} as never,
+      {} as never,
+    );
+
+    const preview = await service.previewMerge("row-base", "row-suffix");
+
+    expect(preview.droppedCurations).toEqual([
+      { table: "attraction_ride_profiles", from: "winner", row: stub },
+      {
+        table: "attractions",
+        from: "loser",
+        row: { curatedOutOfServiceFrom: "2026-01-16" },
+      },
+    ]);
+  });
+
+  it("logs the values on the real merge, before the row goes", async () => {
+    const { warn, manager } = await mergeOf(
+      ride({ curatedOutOfServiceFrom: "2019-03-01" }),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+      }),
+    );
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [line] = warn.mock.calls[0] as [string];
+    expect(line).toContain("curatedOutOfServiceFrom");
+    expect(line).toContain("2026-01-16");
+    expect(line).toContain("2026-03-03");
+    // The merge ran to the end: the losing row is gone and the survivor took
+    // the column it was owed.
+    expect(manager.delete).toHaveBeenCalledWith(Attraction, "row-suffix");
+    expect(manager.update).toHaveBeenCalledWith(
+      Attraction,
+      "row-base",
+      expect.objectContaining({ queueTimesEntityId: 4711 }),
+    );
+  });
+
+  it("stays quiet on the merge that loses nothing", async () => {
+    const { warn, manager } = await mergeOf(
+      ride(),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-16",
+      }),
+    );
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(manager.update).toHaveBeenCalledWith(
+      Attraction,
+      "row-base",
+      expect.objectContaining({ curatedOutOfServiceFrom: "2026-01-16" }),
+    );
+  });
+
+  it("writes no warning for a rehearsal", async () => {
+    // The reason the plan returns the values instead of logging them: the
+    // preview reads the same function and must not report a deletion that is
+    // not happening.
+    const warn = jest
+      .spyOn(Logger.prototype, "warn")
+      .mockImplementation(() => undefined);
+
+    await previewOf(
+      ride({ curatedOutOfServiceFrom: "2019-03-01" }),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedOutOfServiceFrom: "2026-01-16",
+        curatedOutOfServiceTo: "2026-03-03",
+      }),
+    );
+
+    expect(warn).not.toHaveBeenCalled();
   });
 });
