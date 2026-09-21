@@ -13,9 +13,15 @@ import { RestaurantLiveData } from "./entities/restaurant-live-data.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { ParksService } from "../parks/parks.service";
-import { EntityLiveResponse } from "../external-apis/themeparks/themeparks.types";
-import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
-import { isThemeParksWikiId } from "../common/utils/external-id.util";
+import {
+  EntityLiveResponse,
+  EntityResponse,
+} from "../external-apis/themeparks/themeparks.types";
+import { Park } from "../parks/entities/park.entity";
+import {
+  ParkSyncState,
+  ThemeParksEntitySync,
+} from "../common/sync/theme-parks-entity-sync";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 import {
   hasDateChangedInTimezone,
@@ -28,9 +34,28 @@ import {
   todayLookbackDate,
 } from "../common/utils/live-data-query.util";
 
+/** What `syncRestaurants` keeps in memory while it walks one park. */
+interface RestaurantSyncState extends ParkSyncState {
+  /**
+   * The rows the wiki's IDs already point at. Looked up by `externalId` rather
+   * than by park, because a restaurant may have been filed under another park
+   * before.
+   */
+  byExternalId: Map<string, Restaurant>;
+}
+
 @Injectable()
-export class RestaurantsService {
+export class RestaurantsService extends ThemeParksEntitySync<
+  Restaurant,
+  EntityResponse,
+  RestaurantSyncState,
+  Restaurant,
+  { deep?: boolean }
+> {
   private readonly logger = new Logger(RestaurantsService.name);
+
+  /** `In([])` is not a query worth sending — see `loadParkState`. */
+  protected readonly skipParksWithoutChildren = true;
 
   constructor(
     @InjectRepository(Restaurant)
@@ -40,7 +65,9 @@ export class RestaurantsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) {}
+  ) {
+    super(parksService, themeParksClient);
+  }
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -63,111 +90,100 @@ export class RestaurantsService {
       `Syncing restaurants from ThemeParks.wiki... (Deep Sync: ${options.deep ? "ON" : "OFF"})`,
     );
 
-    const parks = await this.parksService.ensureParksLoaded();
-
-    let syncedCount = 0;
-
-    for (const park of parks) {
-      // Skip parks that are not from ThemeParks.wiki (e.g. Queue-Times or Wartezeiten)
-      if (!isThemeParksWikiId(park.externalId)) {
-        continue;
-      }
-
-      // Fetch children (attractions, shows, restaurants, etc.)
-      const childrenResponse = await this.themeParksClient.getEntityChildren(
-        park.externalId,
-      );
-
-      // Filter only restaurants
-      const restaurants = childrenResponse.children.filter(
-        (child) => child.entityType === "RESTAURANT",
-      );
-
-      if (restaurants.length === 0) {
-        continue;
-      }
-
-      // Pre-fetch existing data for this park to avoid N+1 queries
-      const apiExternalIds = restaurants.map((r) => r.id);
-      const [existingByExternalId, existingSlugsInPark] = await Promise.all([
-        this.restaurantRepository.find({
-          where: { externalId: In(apiExternalIds) },
-        }),
-        this.restaurantRepository.find({
-          where: { parkId: park.id },
-          select: ["slug"],
-        }),
-      ]);
-
-      const externalIdMap = new Map(
-        existingByExternalId.map((r) => [r.externalId, r]),
-      );
-      const usedSlugs = new Set(existingSlugsInPark.map((r) => r.slug));
-      const toSave: Restaurant[] = [];
-
-      for (const restaurantEntity of restaurants) {
-        let entityData = restaurantEntity;
-
-        // Deep Sync: Fetch detailed data if requested
-        if (options.deep) {
-          try {
-            this.logger.debug(`Deep syncing ${restaurantEntity.name}...`);
-            entityData = await this.themeParksClient.getEntity(
-              restaurantEntity.id,
-            );
-          } catch (error) {
-            this.logger.warn(
-              `Failed to deep sync ${restaurantEntity.name}, using summary data: ${error}`,
-            );
-          }
-        }
-
-        const mappedData = this.themeParksMapper.mapRestaurant(
-          entityData,
-          park.id,
-        );
-
-        // Check if restaurant exists in our pre-fetched map
-        const existing = externalIdMap.get(mappedData.externalId!);
-
-        if (existing) {
-          // Update existing restaurant (keep existing slug)
-          Object.assign(existing, {
-            name: mappedData.name,
-            latitude: mappedData.latitude,
-            longitude: mappedData.longitude,
-            cuisineType: mappedData.cuisineType,
-            requiresReservation: mappedData.requiresReservation,
-          });
-          toSave.push(existing);
-        } else {
-          // Generate unique slug for this park
-          const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
-
-          // Generate unique slug using the current set of used slugs
-          const uniqueSlug = generateUniqueSlug(
-            baseSlug,
-            Array.from(usedSlugs),
-          );
-          mappedData.slug = uniqueSlug;
-          usedSlugs.add(uniqueSlug);
-
-          // Create new restaurant entity
-          const newRestaurant = this.restaurantRepository.create(mappedData);
-          toSave.push(newRestaurant);
-        }
-
-        syncedCount++;
-      }
-
-      // Batch save all new/updated restaurants for this park
-      if (toSave.length > 0) {
-        await this.restaurantRepository.save(toSave);
-      }
-    }
+    const syncedCount = await this.syncFromThemeParksWiki(options);
 
     this.logger.log(`✅ Synced ${syncedCount} restaurants`);
     return syncedCount;
+  }
+
+  protected filterChildren(children: EntityResponse[]): EntityResponse[] {
+    return children.filter((child) => child.entityType === "RESTAURANT");
+  }
+
+  /**
+   * Two reads per park, so the child loop below needs none: the rows the wiki's
+   * IDs already point at, and the slugs this park has handed out.
+   */
+  protected async loadParkState(
+    park: Park,
+    children: EntityResponse[],
+  ): Promise<RestaurantSyncState> {
+    const apiExternalIds = children.map((r) => r.id);
+    const [existingByExternalId, existingSlugsInPark] = await Promise.all([
+      this.restaurantRepository.find({
+        where: { externalId: In(apiExternalIds) },
+      }),
+      this.restaurantRepository.find({
+        where: { parkId: park.id },
+        select: ["slug"],
+      }),
+    ]);
+
+    return {
+      byExternalId: new Map(existingByExternalId.map((r) => [r.externalId, r])),
+      usedSlugs: new Set(existingSlugsInPark.map((r) => r.slug)),
+    };
+  }
+
+  /** Deep Sync: fetch detailed data if requested, summary data otherwise. */
+  protected override async resolveChild(
+    child: EntityResponse,
+    options?: { deep?: boolean },
+  ): Promise<EntityResponse> {
+    if (!options?.deep) {
+      return child;
+    }
+
+    try {
+      this.logger.debug(`Deep syncing ${child.name}...`);
+      return await this.themeParksClient.getEntity(child.id);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to deep sync ${child.name}, using summary data: ${error}`,
+      );
+      return child;
+    }
+  }
+
+  protected mapChild(
+    child: EntityResponse,
+    parkId: string,
+  ): Partial<Restaurant> {
+    return this.themeParksMapper.mapRestaurant(child, parkId);
+  }
+
+  /** An existing restaurant keeps its slug and takes the new values. */
+  protected reconcile(
+    mapped: Partial<Restaurant>,
+    state: RestaurantSyncState,
+  ): Restaurant | null {
+    const existing = state.byExternalId.get(mapped.externalId!);
+    if (!existing) {
+      return null;
+    }
+
+    return Object.assign(existing, {
+      name: mapped.name,
+      latitude: mapped.latitude,
+      longitude: mapped.longitude,
+      cuisineType: mapped.cuisineType,
+      requiresReservation: mapped.requiresReservation,
+    });
+  }
+
+  /** Batch save all new/updated restaurants for this park. */
+  protected async persist(
+    toInsert: Partial<Restaurant>[],
+    toUpdate: Restaurant[],
+  ): Promise<void> {
+    const toSave = [
+      ...toUpdate,
+      ...toInsert.map((mapped) => this.restaurantRepository.create(mapped)),
+    ];
+
+    if (toSave.length > 0) {
+      await this.restaurantRepository.save(toSave);
+    }
   }
 
   /**

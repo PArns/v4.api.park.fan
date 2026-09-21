@@ -11,10 +11,42 @@ import { ParksService } from "../parks/parks.service";
 import { NegativeCache } from "../common/utils/negative-cache.util";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { findExistingAttraction } from "./utils/attraction-match.util";
+import { EntityResponse } from "../external-apis/themeparks/themeparks.types";
+import {
+  ParkSyncState,
+  ThemeParksEntitySync,
+} from "../common/sync/theme-parks-entity-sync";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 
+/** What `syncAttractions` keeps in memory while it walks one park's rides. */
+interface AttractionSyncState extends ParkSyncState {
+  /** Every row this park already has, with the columns the matcher reads. */
+  existingForPark: Pick<
+    Attraction,
+    "id" | "externalId" | "slug" | "name" | "queueTimesEntityId"
+  >[];
+  /**
+   * A row may only be claimed by one incoming attraction per pass — otherwise
+   * five rides called "Restroom" would all fold onto the first.
+   */
+  claimedIds: Set<string>;
+}
+
+/** The fields `syncAttractions` refreshes on a ride it already has. */
+interface AttractionUpdate {
+  id: string;
+  name?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
 @Injectable()
-export class AttractionsService {
+export class AttractionsService extends ThemeParksEntitySync<
+  Attraction,
+  EntityResponse,
+  AttractionSyncState,
+  AttractionUpdate
+> {
   private readonly logger = new Logger(AttractionsService.name);
 
   /** Negative cache for geographic path lookups that returned null (404).
@@ -29,7 +61,9 @@ export class AttractionsService {
     private wartezeitenClient: WartezeitenClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) {}
+  ) {
+    super(parksService, themeParksClient);
+  }
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -68,105 +102,126 @@ export class AttractionsService {
   async syncAttractions(): Promise<number> {
     this.logger.log("Syncing attractions from ThemeParks.wiki...");
 
-    const parks = await this.parksService.ensureParksLoaded();
-
-    let syncedCount = 0;
-
-    for (const park of parks) {
-      // 1. Queue-Times Sync
-      if (park.externalId && park.externalId.startsWith("qt-")) {
-        const qtId = parseInt(
-          park.externalId.replace("qt-", "qt-park-").replace("qt-park-", ""),
-          10,
-        );
-        if (!isNaN(qtId)) {
-          await this.syncFromQueueTimes(park, qtId);
-          syncedCount++; // Count park as synced (simplification)
-        }
-        continue;
-      }
-
-      // 2. Wartezeiten Sync
-      if (park.externalId && park.externalId.startsWith("wz-")) {
-        const wzId = park.externalId.replace("wz-", "");
-        await this.syncFromWartezeiten(park, wzId);
-        syncedCount++;
-        continue;
-      }
-
-      // 3. ThemeParks.wiki Sync (Default)
-      // Fetch children (attractions, shows, restaurants, etc.)
-      const childrenResponse = await this.themeParksClient.getEntityChildren(
-        park.externalId,
-      );
-
-      // Filter only attractions
-      const attractions = childrenResponse.children.filter(
-        (child) => child.entityType === "ATTRACTION",
-      );
-
-      // Pre-fetch every existing attraction for this park ONCE upfront.
-      // The old loop did 1 findOne(externalId) per attraction PLUS a
-      // separate find-all-attractions-for-park per *new* attraction to
-      // compute slug uniqueness — quadratic on first-time syncs. Now we
-      // do one SELECT and diff in memory.
-      const existingForPark = await this.attractionRepository.find({
-        where: { parkId: park.id },
-        select: ["id", "externalId", "slug", "name", "queueTimesEntityId"],
-      });
-      const usedSlugs = new Set(
-        existingForPark.map((a) => a.slug).filter((s): s is string => !!s),
-      );
-      // A row may only be claimed by one incoming attraction per pass —
-      // otherwise five rides called "Restroom" would all fold onto the first.
-      const claimedIds = new Set<string>();
-
-      for (const attractionEntity of attractions) {
-        const mappedData = this.themeParksMapper.mapAttraction(
-          attractionEntity,
-          park.id,
-        );
-
-        // mappedData.externalId is optional in the type; skip rows
-        // without one — the old findOne() would have produced null too.
-        const externalId = mappedData.externalId;
-        if (!externalId) continue;
-        // Match across sources, not just on our own externalId: the wiki
-        // reports a UUID for a ride Queue-Times already gave us as
-        // "qt-ride-12979". Keying on externalId alone is what created 147
-        // duplicate "-2" rows.
-        const existing = findExistingAttraction(
-          {
-            externalId,
-            name: mappedData.name!,
-            queueTimesEntityId: mappedData.queueTimesEntityId,
-          },
-          existingForPark.filter((a) => !claimedIds.has(a.id)),
-        );
-        if (existing) {
-          claimedIds.add(existing.id);
-          await this.attractionRepository.update(existing.id, {
-            name: mappedData.name,
-            latitude: mappedData.latitude,
-            longitude: mappedData.longitude,
-          });
-        } else {
-          const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
-          const uniqueSlug = generateUniqueSlug(
-            baseSlug,
-            Array.from(usedSlugs),
-          );
-          mappedData.slug = uniqueSlug;
-          usedSlugs.add(uniqueSlug);
-          await this.attractionRepository.save(mappedData);
-        }
-
-        syncedCount++;
-      }
-    }
+    const syncedCount = await this.syncFromThemeParksWiki();
 
     this.logger.log(`✅ Synced ${syncedCount} attractions`);
     return syncedCount;
+  }
+
+  /**
+   * Queue-Times and Wartezeiten parks never reach the ThemeParks.wiki path:
+   * they have their own APIs and their own sync methods, and a park belongs to
+   * exactly one of the three.
+   */
+  protected override async claimPark(park: Park): Promise<number | null> {
+    // 1. Queue-Times Sync
+    if (park.externalId && park.externalId.startsWith("qt-")) {
+      const qtId = parseInt(
+        park.externalId.replace("qt-", "qt-park-").replace("qt-park-", ""),
+        10,
+      );
+      if (isNaN(qtId)) {
+        return 0;
+      }
+      await this.syncFromQueueTimes(park, qtId);
+      return 1; // Count park as synced (simplification)
+    }
+
+    // 2. Wartezeiten Sync
+    if (park.externalId && park.externalId.startsWith("wz-")) {
+      const wzId = park.externalId.replace("wz-", "");
+      await this.syncFromWartezeiten(park, wzId);
+      return 1;
+    }
+
+    // 3. ThemeParks.wiki Sync (Default) — the template takes it from here.
+    return null;
+  }
+
+  protected filterChildren(children: EntityResponse[]): EntityResponse[] {
+    return children.filter((child) => child.entityType === "ATTRACTION");
+  }
+
+  /**
+   * Pre-fetch every existing attraction for this park ONCE upfront.
+   * The old loop did 1 findOne(externalId) per attraction PLUS a
+   * separate find-all-attractions-for-park per *new* attraction to
+   * compute slug uniqueness — quadratic on first-time syncs. Now we
+   * do one SELECT and diff in memory.
+   */
+  protected async loadParkState(park: Park): Promise<AttractionSyncState> {
+    const existingForPark = await this.attractionRepository.find({
+      where: { parkId: park.id },
+      select: ["id", "externalId", "slug", "name", "queueTimesEntityId"],
+    });
+
+    return {
+      existingForPark,
+      usedSlugs: new Set(
+        existingForPark.map((a) => a.slug).filter((s): s is string => !!s),
+      ),
+      claimedIds: new Set<string>(),
+    };
+  }
+
+  protected mapChild(
+    child: EntityResponse,
+    parkId: string,
+  ): Partial<Attraction> | null {
+    const mappedData = this.themeParksMapper.mapAttraction(child, parkId);
+
+    // mappedData.externalId is optional in the type; skip rows
+    // without one — the old findOne() would have produced null too.
+    return mappedData.externalId ? mappedData : null;
+  }
+
+  /**
+   * Match across sources, not just on our own externalId: the wiki
+   * reports a UUID for a ride Queue-Times already gave us as
+   * "qt-ride-12979". Keying on externalId alone is what created 147
+   * duplicate "-2" rows.
+   */
+  protected reconcile(
+    mapped: Partial<Attraction>,
+    state: AttractionSyncState,
+  ): AttractionUpdate | null {
+    const existing = findExistingAttraction(
+      {
+        externalId: mapped.externalId!,
+        name: mapped.name!,
+        queueTimesEntityId: mapped.queueTimesEntityId,
+      },
+      state.existingForPark.filter((a) => !state.claimedIds.has(a.id)),
+    );
+    if (!existing) {
+      return null;
+    }
+
+    state.claimedIds.add(existing.id);
+    return {
+      id: existing.id,
+      name: mapped.name,
+      latitude: mapped.latitude,
+      longitude: mapped.longitude,
+    };
+  }
+
+  /**
+   * Row by row rather than batched: a park's rides are a few dozen, and an
+   * `update()` per matched ride keeps the write shape the dedup regression
+   * cover asserts.
+   */
+  protected async persist(
+    toInsert: Partial<Attraction>[],
+    toUpdate: AttractionUpdate[],
+  ): Promise<void> {
+    for (const { id, ...fields } of toUpdate) {
+      await this.attractionRepository.update(id, fields);
+    }
+
+    for (const mapped of toInsert) {
+      await this.attractionRepository.save(mapped);
+    }
   }
 
   /**
