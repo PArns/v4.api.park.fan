@@ -1,4 +1,6 @@
 import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attraction-retirement.service";
+import { HEARTBEAT_SOURCE } from "../../common/utils/outage-rows.sql";
+import { RECONCILIATION_SOURCE } from "../../common/utils/source-absent-status.util";
 import { QueuePercentileProcessor } from "./queue-percentile.processor";
 
 /**
@@ -222,6 +224,107 @@ describe("QueuePercentileProcessor — detect-seasonal skips free-flow", () => {
     expect(candidateQueries.length).toBeGreaterThanOrEqual(2);
     for (const sql of candidateQueries) {
       expect(sql).toMatch(/NOT a\.open_with_park/);
+    }
+  });
+});
+
+/**
+ * A ride whose feed went quiet keeps getting rows: reverse-reconciliation
+ * writes CLOSED for anything no source has mentioned in 24 hours, and the
+ * hourly heartbeat carries the previous status AND its `data_source` forward.
+ * To this detector that is the exact signature of a season — CLOSED on every
+ * park-open day while the park was open — so it marked half of Europa-Park
+ * seasonal on rows nobody outside this system wrote.
+ *
+ * The evidence queries must therefore read observed rows only. `current_status`
+ * is the decisive one: filtered, a feed-dropped ride has no row in the last
+ * seven days at all, and the INNER JOIN onto that CTE drops it from the
+ * candidates.
+ */
+describe("QueuePercentileProcessor — bookkeeping rows are not feed evidence", () => {
+  const runDetectSeasonal = async () => {
+    const query = jest.fn().mockResolvedValue([{ attractionId: "a1" }]);
+    const processor = new QueuePercentileProcessor(
+      {} as never,
+      {} as never,
+      {} as never,
+      { query } as never,
+    );
+    await processor.handleDetectSeasonal({} as never);
+    return query.mock.calls.map((c) => c[0] as string);
+  };
+
+  /** Both writers' own exported names, so a rename cannot pass this silently. */
+  const excludesBothWriters = (sql: string) => {
+    expect(sql).toContain(RECONCILIATION_SOURCE);
+    expect(sql).toContain(HEARTBEAT_SOURCE);
+    // The carried half. A heartbeat copies the previous row's data_source, so
+    // the source list alone does not see it.
+    expect(sql).toMatch(/is_heartbeat/);
+  };
+
+  it("reads current status from observed rows, so a feed-dropped ride is no candidate", async () => {
+    const statements = await runDetectSeasonal();
+
+    const withCurrentStatus = statements.filter((sql) =>
+      /current_status AS \(/.test(sql),
+    );
+    // The history-based search (step 3) and the zero-history search (step 3b).
+    expect(withCurrentStatus).toHaveLength(2);
+
+    for (const sql of withCurrentStatus) {
+      const cte = sql.slice(
+        sql.indexOf("current_status AS ("),
+        sql.indexOf('ORDER BY "attractionId", timestamp DESC'),
+      );
+      excludesBothWriters(cte);
+    }
+  });
+
+  it("counts a ride's operating history and watched span from observed rows only", async () => {
+    const statements = await runDetectSeasonal();
+
+    // `ever_operating` gates on >=20 OPERATING rows; carried heartbeats repeat
+    // an OPERATING the feed said hours ago and would clear it for free.
+    const candidateSql = statements.find((sql) =>
+      /ever_operating AS \(/.test(sql),
+    );
+    expect(candidateSql).toBeDefined();
+    excludesBothWriters(candidateSql as string);
+
+    // The watched span decides whether months may be derived at all. Left
+    // unfiltered it grows on reconciliation alone, so a ride clears the
+    // 330-day gate on the strength of its own silence.
+    const monthSql = statements.find((sql) =>
+      /ARRAY_AGG\(DISTINCT EXTRACT\(MONTH FROM q\.timestamp/.test(sql),
+    );
+    expect(monthSql).toBeDefined();
+    excludesBothWriters(monthSql as string);
+  });
+
+  it("builds the operating-day rollup from observed rows", async () => {
+    const statements = await runDetectSeasonal();
+
+    // Read twice with opposite meanings — "the park was open" and "this ride
+    // ran" — and a third time by the show search, which has no queue_data of
+    // its own and takes its park-open days from here.
+    const rollup = statements.find((sql) =>
+      /INSERT INTO attraction_day_operating/.test(sql),
+    );
+    expect(rollup).toBeDefined();
+    excludesBothWriters(rollup as string);
+  });
+
+  it("keeps an unclassifiable row counting as an observation", async () => {
+    const statements = await runDetectSeasonal();
+
+    // The predicate is NULL, not false, for a row carrying neither
+    // is_heartbeat nor lastUpdated. Dropped instead of kept, such a row would
+    // remove an operating day from the rollup and hand the ride a fully-closed
+    // one — the direction that invents a season. Production holds no such row;
+    // a fixture does.
+    for (const sql of statements.filter((s) => s.includes("is_heartbeat"))) {
+      expect(sql).toMatch(/COALESCE\([\s\S]*?is_heartbeat[\s\S]*?,\s*true\)/);
     }
   });
 });
