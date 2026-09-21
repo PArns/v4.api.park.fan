@@ -573,6 +573,7 @@ export class LocationService {
 
       const occupancy = occupancyMap.get(park.id);
       const stats = statisticsMap.get(park.id);
+      const waitsReadable = !resolveCuratedPark(park).noWaitTimesReason;
       return {
         id: park.id,
         name: resolveCuratedPark(park).name,
@@ -589,12 +590,23 @@ export class LocationService {
         operatingAttractions: stats?.operatingAttractions || 0,
         analytics: occupancy
           ? {
-              avgWaitTime: occupancy.breakdown?.currentAvgWait || 0,
+              // The miss path builds from `AnalyticsService` rather than from
+              // the park payload, so it has to gate these two itself — without
+              // it the same card reads "Ø 0 min" or nothing depending on
+              // whether `park:integrated:<id>` happened to be warm, which is
+              // the cache-dependent answer the park name above already had to
+              // be fixed for. Only the curated half is free here; the measured
+              // half (a feed silent for 30 days) needs a per-park probe this
+              // batch path does not run, and it is open in the same place the
+              // park list is (PAR-298).
+              avgWaitTime: waitsReadable
+                ? (occupancy.breakdown?.currentAvgWait ?? 0)
+                : undefined,
               // Gated at the source: "unknown" for a thin park (not ratable).
               crowdLevel:
                 occupancy.crowdLevel ??
                 this.analyticsService.determineCrowdLevel(occupancy.current),
-              occupancy: occupancy.current,
+              occupancy: waitsReadable ? occupancy.current : undefined,
             }
           : undefined,
         url: buildParkUrl(park) || null,
