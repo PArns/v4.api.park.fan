@@ -11,6 +11,11 @@ sources, and how they write.
 
 Attractions' Queue-Times and Wartezeiten branches stay outside the template;
 they claim their park before the wiki path sees it, so a park still reaches
-exactly one of the three sources and in the same order as before. The one
-behaviour that changed is a park with no external ID: the wiki path now skips
-it, where it used to ask the client about `undefined`.
+exactly one of the three sources and in the same order as before.
+
+Two things behave differently. A park with no external ID is now skipped by the
+wiki path, where it used to ask the client about `undefined`. And a park's
+writes are now collected and issued after its children are mapped rather than
+one ride at a time, so a park that throws half way through writes nothing
+instead of its first few rides — the rows themselves, and the order of the
+parks, are unchanged.
