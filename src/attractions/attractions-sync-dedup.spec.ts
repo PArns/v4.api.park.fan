@@ -172,4 +172,52 @@ describe("AttractionsService — cross-source duplicate prevention", () => {
       expect.objectContaining({ name: "Restroom", slug: "restroom-2" }),
     );
   });
+
+  /**
+   * A park is read from exactly one source. The Queue-Times and Wartezeiten
+   * branches sit outside the shared ThemeParks.wiki template and claim their
+   * park before it: without that, a `qt-` park would fall through to the wiki
+   * client, which has no idea what a Queue-Times ID is.
+   */
+  it("sends Queue-Times and Wartezeiten parks to their own sync, never to the wiki", async () => {
+    const syncFromQueueTimes = jest
+      .spyOn(
+        service as unknown as {
+          syncFromQueueTimes: (park: Park, qtId: number) => Promise<void>;
+        },
+        "syncFromQueueTimes",
+      )
+      .mockResolvedValue(undefined);
+    const syncFromWartezeiten = jest
+      .spyOn(
+        service as unknown as {
+          syncFromWartezeiten: (park: Park, wzId: string) => Promise<void>;
+        },
+        "syncFromWartezeiten",
+      )
+      .mockResolvedValue(undefined);
+
+    parksService.ensureParksLoaded.mockResolvedValue([
+      { id: "park-qt", externalId: "qt-56" } as Park,
+      { id: "park-wz", externalId: "wz-phantasialand" } as Park,
+      // A "qt-" ID with nothing numeric in it: still a Queue-Times park, so it
+      // is dropped rather than handed to the wiki, and it counts for nothing.
+      { id: "park-qt-broken", externalId: "qt-abc" } as Park,
+    ]);
+
+    const syncedCount = await service.syncAttractions();
+
+    expect(themeParksClient.getEntityChildren).not.toHaveBeenCalled();
+    expect(syncFromQueueTimes).toHaveBeenCalledTimes(1);
+    expect(syncFromQueueTimes).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "park-qt" }),
+      56,
+    );
+    expect(syncFromWartezeiten).toHaveBeenCalledTimes(1);
+    expect(syncFromWartezeiten).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "park-wz" }),
+      "phantasialand",
+    );
+    expect(syncedCount).toBe(2);
+  });
 });

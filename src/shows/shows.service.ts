@@ -15,10 +15,14 @@ import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper"
 import { ParksService } from "../parks/parks.service";
 import {
   EntityLiveResponse,
+  EntityResponse,
   ShowtimeData,
 } from "../external-apis/themeparks/themeparks.types";
-import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
-import { isThemeParksWikiId } from "../common/utils/external-id.util";
+import { Park } from "../parks/entities/park.entity";
+import {
+  ParkSyncState,
+  ThemeParksEntitySync,
+} from "../common/sync/theme-parks-entity-sync";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 import {
   formatInParkTimezone,
@@ -37,8 +41,27 @@ import {
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { normalizedClosingSql } from "../common/utils/park-open-window.sql";
 
+/** What `syncShows` keeps in memory while it walks one park's shows. */
+interface ShowSyncState extends ParkSyncState {
+  /** The park's existing shows, keyed on the wiki's ID. */
+  byExternalId: Map<string, Pick<Show, "id" | "externalId" | "slug">>;
+}
+
+/** The fields `syncShows` refreshes on a show it already has. */
+interface ShowUpdate {
+  id: string;
+  name?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
 @Injectable()
-export class ShowsService {
+export class ShowsService extends ThemeParksEntitySync<
+  Show,
+  EntityResponse,
+  ShowSyncState,
+  ShowUpdate
+> {
   private readonly logger = new Logger(ShowsService.name);
 
   constructor(
@@ -51,7 +74,9 @@ export class ShowsService {
     private themeParksClient: ThemeParksClient,
     private themeParksMapper: ThemeParksMapper,
     private parksService: ParksService,
-  ) {}
+  ) {
+    super(parksService, themeParksClient);
+  }
 
   /**
    * Get the repository instance (for advanced queries by other services)
@@ -71,84 +96,64 @@ export class ShowsService {
   async syncShows(): Promise<number> {
     this.logger.log("Syncing shows from ThemeParks.wiki...");
 
-    const parks = await this.parksService.ensureParksLoaded();
-
-    let syncedCount = 0;
-
-    for (const park of parks) {
-      // Skip parks that are not from ThemeParks.wiki (e.g. Queue-Times or Wartezeiten)
-      if (!isThemeParksWikiId(park.externalId)) {
-        continue;
-      }
-
-      // Fetch children (attractions, shows, restaurants, etc.)
-      const childrenResponse = await this.themeParksClient.getEntityChildren(
-        park.externalId,
-      );
-
-      // Filter only shows
-      const shows = childrenResponse.children.filter(
-        (child) => child.entityType === "SHOW",
-      );
-
-      const parkShows = await this.showRepository.find({
-        where: { parkId: park.id },
-        select: ["id", "externalId", "slug"],
-      });
-      const showsByExternalId = new Map(
-        parkShows.map((s) => [s.externalId, s]),
-      );
-      const existingSlugs = new Set(parkShows.map((s) => s.slug));
-
-      const toUpdate: {
-        id: string;
-        name?: string;
-        latitude?: number;
-        longitude?: number;
-      }[] = [];
-      const toInsert: Partial<Show>[] = [];
-
-      for (const showEntity of shows) {
-        const mappedData = this.themeParksMapper.mapShow(showEntity, park.id);
-        const existing = showsByExternalId.get(mappedData.externalId!);
-
-        if (existing) {
-          toUpdate.push({
-            id: existing.id,
-            name: mappedData.name,
-            ...(mappedData.latitude != null && {
-              latitude: mappedData.latitude,
-            }),
-            ...(mappedData.longitude != null && {
-              longitude: mappedData.longitude,
-            }),
-          });
-        } else {
-          const baseSlug = mappedData.slug || generateSlug(mappedData.name!);
-          const uniqueSlug = generateUniqueSlug(baseSlug, [...existingSlugs]);
-          existingSlugs.add(uniqueSlug);
-          mappedData.slug = uniqueSlug;
-          toInsert.push(mappedData);
-        }
-
-        syncedCount++;
-      }
-
-      if (toUpdate.length > 0) {
-        await Promise.all(
-          toUpdate.map(({ id, ...fields }) =>
-            this.showRepository.update(id, fields),
-          ),
-        );
-      }
-
-      if (toInsert.length > 0) {
-        await this.showRepository.save(toInsert);
-      }
-    }
+    const syncedCount = await this.syncFromThemeParksWiki();
 
     this.logger.log(`✅ Synced ${syncedCount} shows`);
     return syncedCount;
+  }
+
+  protected filterChildren(children: EntityResponse[]): EntityResponse[] {
+    return children.filter((child) => child.entityType === "SHOW");
+  }
+
+  protected async loadParkState(park: Park): Promise<ShowSyncState> {
+    const parkShows = await this.showRepository.find({
+      where: { parkId: park.id },
+      select: ["id", "externalId", "slug"],
+    });
+
+    return {
+      byExternalId: new Map(parkShows.map((s) => [s.externalId, s])),
+      usedSlugs: new Set(parkShows.map((s) => s.slug)),
+    };
+  }
+
+  protected mapChild(child: EntityResponse, parkId: string): Partial<Show> {
+    return this.themeParksMapper.mapShow(child, parkId);
+  }
+
+  protected reconcile(
+    mapped: Partial<Show>,
+    state: ShowSyncState,
+  ): ShowUpdate | null {
+    const existing = state.byExternalId.get(mapped.externalId!);
+    if (!existing) {
+      return null;
+    }
+
+    return {
+      id: existing.id,
+      name: mapped.name,
+      ...(mapped.latitude != null && { latitude: mapped.latitude }),
+      ...(mapped.longitude != null && { longitude: mapped.longitude }),
+    };
+  }
+
+  protected async persist(
+    toInsert: Partial<Show>[],
+    toUpdate: ShowUpdate[],
+  ): Promise<void> {
+    if (toUpdate.length > 0) {
+      await Promise.all(
+        toUpdate.map(({ id, ...fields }) =>
+          this.showRepository.update(id, fields),
+        ),
+      );
+    }
+
+    if (toInsert.length > 0) {
+      await this.showRepository.save(toInsert);
+    }
   }
 
   /**
