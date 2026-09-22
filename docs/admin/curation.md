@@ -50,6 +50,32 @@ Seeded like `has_single_rider`, from the rides that have ever reported one. This
 has not been run yet; it is written down here so that the run is reviewable
 rather than reconstructed afterwards.
 
+**It cannot run before the change that adds the column is deployed.** The repo
+has no migrations, so `has_virtual_line` appears when TypeORM's `synchronize`
+next connects — production runs with `DB_SYNCHRONIZE=true`, confirmed on the
+running container on 2026-09-22, despite `docs/deployment/coolify.md` telling
+you to set it to `false` (PAR-399). Adding the column by hand instead is not an
+option worth taking: a schema change outside the deploy path buys nothing that
+the next container start does not.
+
+**Counted against production on 2026-09-22, the three types move 140
+attractions** — 139 of them not retired, out of 7,301 that have any `queue_data`
+row at all. The whole pass takes **14.5 s**. Two of those numbers are worth
+keeping:
+
+- `VIRTUAL_QUEUE` matches **zero** rows in the entire history. Nothing has ever
+  been written with it, which is the other half of the dead-branch finding: the
+  switch ignored the value and no payload ever carried it. `RETURN_TIME` alone
+  carries the seed; `BOARDING_GROUP` matches 2 rides, both of which report
+  `RETURN_TIME` as well, so the union stays 140.
+- `SINGLE_RIDER` matches **48**, the same count `has_single_rider` was seeded
+  from months ago (`docs/changelog.md:3164`). The method reproduces its own
+  earlier result.
+
+Efteling's Danse Macabre — the reported case, and the reason to check before
+running rather than after — reports `RETURN_TIME` across 36,076 rows and is in
+the 140.
+
 ```sql
 -- One pass over queue_data, not a correlated lookup per attraction. See below.
 CREATE TEMP TABLE virtual_line_rides AS
@@ -74,6 +100,11 @@ database whose type predates it, comparing a bare literal does not merely fail
 to match: it aborts the whole statement with
 `invalid input value for enum queue_data_queuetype_enum: "VIRTUAL_QUEUE"`.
 Casting to text removes the dependency and still matches every real row.
+Production is not such a database — checked on 2026-09-22, its enum type already
+carries the label, because `synchronize` ran the `ALTER TYPE` when the value was
+added to the TypeScript enum, long before anything tried to write it. The cast
+stays anyway: it costs nothing and it is what makes the statement safe to paste
+into any other instance.
 
 **`has_virtual_line IS NULL`** is what makes the statement safe to run twice.
 Without it, a re-run overwrites an editor's hand-written `false` — the ride whose
@@ -100,12 +131,11 @@ virtual line".
 somebody has to confirm.** PAR-385 named it alongside the other three. It is a
 return window, so on the wording it belongs; but it is the _paid_ one — Genie+,
 Lightning Lane, Express — and that product already has three columns of its own
-(`has_fast_pass`, `fast_pass_name`, `fast_pass_price`). Including it would flip
-nearly every Disney and Universal ride to `true` and make the column mean "has a
-return window of some kind" rather than "you join this instead of standing in
-the queue", which is what its own docstring and the ride page's badge claim. The
-three above are unambiguous; adding the fourth is one statement more and is left
-until the question is answered:
+(`has_fast_pass`, `fast_pass_name`, `fast_pass_price`). Including it would make
+the column mean "has a return window of some kind" rather than "you join this
+instead of standing in the queue", which is what its own docstring and the ride
+page's badge claim. The three above are unambiguous; adding the fourth is one
+statement more and is left until the question is answered:
 
 ```sql
 -- Only if PAID_RETURN_TIME should count. Check the number it would move first.
@@ -113,6 +143,24 @@ SELECT count(DISTINCT qd."attractionId")
 FROM queue_data qd
 WHERE qd."queueType"::text = 'PAID_RETURN_TIME';
 ```
+
+**Measured on 2026-09-22, that is 55 rides, of which 36 report none of the other
+three** — so the fourth type would take the seed from 140 to 176. Every one of
+the 36 is in a Disney park (Disneyland Paris 12, Disney Adventure World 8, Tokyo
+DisneySea 7, Tokyo Disneyland 3, and one or two each in Magic Kingdom, DCA,
+Animal Kingdom, Hollywood Studios and EPCOT); none is at Universal.
+
+The list of names is the argument, not the count. It holds
+`"it's a small world"`, `Pirates of the Caribbean`, `Big Thunder Mountain`,
+`Peter Pan's Flight`, `Phantom Manor`, `Orbitron®` and `Autopia` — rides with an
+ordinary standby queue that additionally sell a return window, not rides you
+board by return time. That is the distinction the column is for.
+
+One thing cuts the other way and belongs in the same breath: all 36 have
+`has_fast_pass` **NULL**. The fast-pass columns this argument defers to are not
+populated for these rides, so leaving `PAID_RETURN_TIME` out moves the fact into
+an empty field rather than the right one. That gap is PAR-386's to audit, not
+this seed's to paper over.
 
 ### Parks
 
