@@ -81,7 +81,7 @@ function parseCachedLatest(raw: string | null): Partial<QueueData> | null {
  * Queue Data Service
  *
  * Handles storing wait times and live data for attractions.
- * Supports all 6 queue types from ThemeParks.wiki.
+ * Supports all 7 queue types from ThemeParks.wiki.
  *
  * Delta Strategy:
  * - Only store when waitTime changes by > 5 minutes

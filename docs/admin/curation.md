@@ -63,7 +63,8 @@ WHERE a.has_virtual_line IS NULL
   AND a.id::text IN (SELECT id FROM virtual_line_rides);
 ```
 
-Four things in it are load-bearing, and three of them were got wrong first.
+Four things in it are load-bearing, and the first two were got wrong before they
+were got right.
 
 **`::text` on the enum column, not a bare literal.** `queue_data."queueType"` is
 a Postgres enum type. `'VIRTUAL_QUEUE'` is a member of the TypeScript enum, but
