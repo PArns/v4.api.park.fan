@@ -115,6 +115,7 @@ export const ATTRACTION_CURATED_DB_COLUMNS: readonly string[] = [
   "curated_out_of_service_to_uncertain",
   // Not `curated_`-prefixed because no sync owns them, but written by hand and
   // by hand only — a ride carrying one has been looked at.
+  "attraction_kind",
   "has_fast_pass",
   "fast_pass_name",
   "fast_pass_price",

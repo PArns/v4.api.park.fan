@@ -115,6 +115,7 @@ function anAttraction(overrides: Record<string, unknown> = {}) {
     mayGetWet: null,
     curatedMayGetWet: null,
     hasSingleRider: null,
+    attractionKind: null,
     curatedOutOfServiceFrom: null,
     curatedOutOfServiceTo: null,
     curatedOutOfServiceToUncertain: null,
@@ -447,6 +448,54 @@ describe("AdminCurationService", () => {
           ACTOR,
         ),
       ).rejects.toThrow(/must be one of/);
+    });
+
+    /**
+     * `attractionKind` is the first enum on the attraction half, so the check
+     * above says nothing about this path: it exercises `curatePark`. The two
+     * halves share the coercion, but nothing in the suite held them together
+     * until a column needed both.
+     */
+    it("rejects a kind outside the options, and takes one inside it", async () => {
+      const { service } = build(anAttraction());
+      await expect(
+        service.curateAttraction(
+          "ride-1",
+          { fields: { attractionKind: "RAILWAY" } },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/must be one of/);
+
+      const accepting = build(anAttraction());
+      await accepting.service.curateAttraction(
+        "ride-1",
+        { fields: { attractionKind: "TRANSPORT" }, reason: "Parkbahn" },
+        ACTOR,
+      );
+      const saved = accepting.attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.attractionKind).toBe("TRANSPORT");
+    });
+
+    it("clears the kind rather than storing an empty string", async () => {
+      // "Nobody decided" is null. An empty string would read as a value
+      // everywhere the column is tested for presence — including the admin's
+      // own curated/uncurated count, which asks `IS NOT NULL`.
+      const { service, attractions } = build(
+        anAttraction({ attractionKind: "TRANSPORT" }),
+      );
+      await service.curateAttraction(
+        "ride-1",
+        { fields: { attractionKind: "" } },
+        ACTOR,
+      );
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.attractionKind).toBeNull();
     });
   });
 

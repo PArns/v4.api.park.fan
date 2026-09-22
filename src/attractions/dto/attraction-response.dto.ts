@@ -10,6 +10,10 @@ import {
   CROWD_LEVEL_WITH_CLOSED_VALUES,
   CrowdLevel,
 } from "../../common/types/crowd-level.type";
+import {
+  ATTRACTION_KIND_VALUES,
+  AttractionKind,
+} from "../../common/types/attraction-kind.type";
 import { HistoryDayDto } from "./history-day.dto";
 import { AttractionOutageDto } from "./attraction-outage.dto";
 import {
@@ -367,6 +371,20 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
+      "What this attraction is for, hand-decided: a ride, a transport " +
+      "system (railway, cable car, monorail), a show or a walkthrough. Null " +
+      "means nobody has judged it — which is true of nearly every " +
+      "attraction — and never 'it is a ride'. Distinct from " +
+      "`attractionType`, which is the upstream's own free-text label.",
+    enum: ATTRACTION_KIND_VALUES,
+    example: "TRANSPORT",
+    required: false,
+    nullable: true,
+  })
+  attractionKind?: AttractionKind | null;
+
+  @ApiProperty({
+    description:
       "The paid queue-jump product this ride sells, or absent. Absent means " +
       "either nobody has checked or the park sells none — the two are one " +
       "absence to a visitor, so never render it as 'no fast pass'.",
@@ -587,6 +605,7 @@ export class AttractionResponseDto {
       maximumHeight: curated.maximumHeight,
       mayGetWet: curated.mayGetWet,
       hasSingleRider: attraction.hasSingleRider ?? null,
+      attractionKind: attraction.attractionKind ?? null,
       // Null for nearly every ride, so it is one absent key rather than a
       // block of nulls on every attraction of every park payload.
       worksPeriod: resolveWorksPeriod(attraction),

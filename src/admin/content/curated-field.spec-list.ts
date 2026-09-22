@@ -3,6 +3,7 @@ import type { Park } from "../../parks/entities/park.entity";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 import { resolveCuratedPark } from "../../parks/utils/curated-park-facts.util";
 import { SUPPORTED_CURRENCIES } from "../../attractions/utils/fast-pass.util";
+import { ATTRACTION_KIND_VALUES } from "../../common/types/attraction-kind.type";
 
 /**
  * The curated fields, described rather than hard-coded into a form.
@@ -113,6 +114,22 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     hint:
       "Die grobe Kategorie des Upstreams. Die Glossarbegriffe zur Bahnart " +
       "stehen im Ride-Profil.",
+  },
+  {
+    key: "attractionKind",
+    label: "Gattung",
+    type: "enum",
+    syncedKey: null,
+    resolvedKey: "attractionKind",
+    group: "Identität",
+    options: ATTRACTION_KIND_VALUES,
+    hint:
+      "Wofür die Attraktion da ist, nicht wie der Upstream sie nennt — das " +
+      'steht eine Zeile höher unter „Art". „Transport" ist der Grund für ' +
+      "dieses Feld: Parkbahn, Seilbahn, Monorail. Deren Wartezeit hängt am " +
+      "Takt und nicht am Andrang. Leer heißt „noch nicht entschieden“ und " +
+      'nicht „Fahrgeschäft" — ableiten lässt sich das nicht, Big Thunder ' +
+      "Mountain Railroad ist eine Achterbahn.",
   },
   {
     key: "curatedMinimumHeight",

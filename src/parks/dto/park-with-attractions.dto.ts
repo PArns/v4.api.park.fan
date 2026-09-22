@@ -13,6 +13,10 @@ import {
 } from "../../common/types/crowd-level.type";
 import type { BestVisitSlot } from "../../common/utils/best-visit-times.util";
 import type { RopeDropInfo } from "../../common/types/rope-drop.type";
+import {
+  ATTRACTION_KIND_VALUES,
+  AttractionKind,
+} from "../../common/types/attraction-kind.type";
 import type { TypicalWaitsDto } from "../../attractions/dto/attraction-response.dto";
 import {
   isCurrentlyInSeason,
@@ -217,6 +221,20 @@ export class ParkAttractionDto {
     nullable: true,
   })
   hasSingleRider?: boolean | null;
+
+  @ApiProperty({
+    description:
+      "What this attraction is for, hand-decided: a ride, a transport " +
+      "system (railway, cable car, monorail), a show or a walkthrough. Null " +
+      "means nobody has judged it — which is true of nearly every " +
+      "attraction — and never 'it is a ride'. Distinct from " +
+      "`attractionType`, which is the upstream's own free-text label.",
+    enum: ATTRACTION_KIND_VALUES,
+    example: "TRANSPORT",
+    required: false,
+    nullable: true,
+  })
+  attractionKind?: AttractionKind | null;
 
   @ApiProperty({
     description:
@@ -781,6 +799,7 @@ export class ParkWithAttractionsDto {
               maximumHeight: curated.maximumHeight,
               mayGetWet: curated.mayGetWet,
               hasSingleRider: attraction.hasSingleRider ?? null,
+              attractionKind: attraction.attractionKind ?? null,
               // Null on nearly every ride, so this is one absent key per
               // attraction rather than a block of nulls across the catalogue.
               worksPeriod: resolveWorksPeriod(attraction),

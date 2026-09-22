@@ -189,3 +189,45 @@ describe("ParkWithAttractionsDto.fromEntity › worksPeriod", () => {
     });
   });
 });
+
+/**
+ * The hand-decided kind on the park's attraction list.
+ *
+ * The frontend reads the badge off THIS payload — a park page renders its
+ * rides from the park, never from ~40 attraction calls — so a field that
+ * reaches only the attraction endpoint reaches nobody. `hasSingleRider` had
+ * to be added to both mappers for the same reason.
+ */
+describe("ParkWithAttractionsDto.fromEntity › attractionKind", () => {
+  const parkWith = (attractions: unknown[]) =>
+    ({
+      id: "park-1",
+      name: "Efteling",
+      slug: "efteling",
+      timezone: "Europe/Amsterdam",
+      attractions,
+      shows: [],
+      restaurants: [],
+    }) as unknown as Park;
+
+  const ride = (overrides = {}) => ({
+    id: "ride-1",
+    name: "Stoomtrein - Oost",
+    slug: "stoomtrein-oost",
+    ...overrides,
+  });
+
+  it("carries the decided kind through to the list", () => {
+    const dto = ParkWithAttractionsDto.fromEntity(
+      parkWith([ride({ attractionKind: "TRANSPORT" })]),
+    );
+    expect(dto.attractions[0]!.attractionKind).toBe("TRANSPORT");
+  });
+
+  it("reads null for a ride nobody has judged, not a default kind", () => {
+    // The whole catalogue is in this state. A mapper defaulting to "RIDE"
+    // would publish our own silence as a statement about the park.
+    const dto = ParkWithAttractionsDto.fromEntity(parkWith([ride()]));
+    expect(dto.attractions[0]!.attractionKind).toBeNull();
+  });
+});
