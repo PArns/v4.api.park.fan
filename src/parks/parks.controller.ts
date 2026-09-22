@@ -9,6 +9,7 @@ import {
   Res,
   DefaultValuePipe,
   ParseIntPipe,
+  ParseEnumPipe,
   BadRequestException,
 } from "@nestjs/common";
 import {
@@ -1236,8 +1237,9 @@ export class ParksController {
     name: "queueType",
     required: false,
     description: "Optional queue type filter (e.g., 'STANDBY', 'RETURN_TIME')",
-    enum: ["STANDBY", "RETURN_TIME", "SINGLE_RIDER", "PAID_FASTPASS"],
+    enum: QueueType,
   })
+  @ApiResponse({ status: 400, description: "Unknown queueType" })
   @ApiResponse({
     status: 200,
     description: "Wait times data",
@@ -1249,7 +1251,19 @@ export class ParksController {
     @Param("country") country: string,
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
-    @Query("queueType") queueType?: QueueType,
+    // Without the pipe an unknown value reached the Postgres enum column and
+    // came back as a 500 naming `queue_data_queuetype_enum` (PAR-401).
+    @Query(
+      "queueType",
+      new ParseEnumPipe(QueueType, {
+        optional: true,
+        exceptionFactory: () =>
+          new BadRequestException(
+            `queueType must be one of: ${Object.values(QueueType).join(", ")}`,
+          ),
+      }),
+    )
+    queueType?: QueueType,
   ): Promise<ParkWaitTimesResponseDto> {
     const park = await this.parksService.findByGeographicPath(
       continent,
