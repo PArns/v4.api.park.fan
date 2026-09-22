@@ -77,20 +77,46 @@ running rather than after — reports `RETURN_TIME` across 36,076 rows and is in
 the 140.
 
 ```sql
+\set ON_ERROR_STOP on
+BEGIN;
+
 -- One pass over queue_data, not a correlated lookup per attraction. See below.
-CREATE TEMP TABLE virtual_line_rides AS
+DROP TABLE IF EXISTS virtual_line_rides;
+CREATE TEMP TABLE virtual_line_rides ON COMMIT DROP AS
 SELECT DISTINCT qd."attractionId" AS id
 FROM queue_data qd
 WHERE qd."queueType"::text IN ('RETURN_TIME', 'BOARDING_GROUP', 'VIRTUAL_QUEUE');
 
+-- Expect 140 on 2026-09-22. A different number means read before writing.
+SELECT count(*) FROM attractions a
+WHERE a.has_virtual_line IS NULL
+  AND a.id IN (SELECT id FROM virtual_line_rides);
+
 UPDATE attractions a
 SET has_virtual_line = true
 WHERE a.has_virtual_line IS NULL
-  AND a.id::text IN (SELECT id FROM virtual_line_rides);
+  AND a.id IN (SELECT id FROM virtual_line_rides);
+
+COMMIT;
 ```
 
-Four things in it are load-bearing, and the first two were got wrong before they
-were got right.
+Five things in it are load-bearing, and the first three were got wrong before
+they were got right.
+
+**`a.id`, not `a.id::text`.** This is the one that decides whether the statement
+runs at all, and it read the wrong way round until it was tried: with the cast,
+the whole `UPDATE` aborts on `operator does not exist: text = uuid` and writes
+nothing. `queue_data."attractionId"` is `uuid` in the database. The entity says
+`@Column({ type: "text" })` (`src/queue-data/entities/queue-data.entity.ts:77`),
+but the column is created by the relation's `@JoinColumn`, and the decorator
+beside it does not change that — the repo documents this trap in three places of
+its own (`plan-day.service.ts:1458`,
+`park-historical-stats.service.ts:649-651`,
+`prediction-lead-snapshot.entity.ts:64-71`), one of which records it shipping
+exactly that way. `CREATE TABLE AS` inherits the column type, so the temp
+table's `id` is `uuid` too and both sides already match. Reproduced against
+production on 2026-09-22 with `count(*)` in place of the `UPDATE`: the cast
+errors out, and without it the count is 140.
 
 **`::text` on the enum column, not a bare literal.** `queue_data."queueType"` is
 a Postgres enum type. `'VIRTUAL_QUEUE'` is a member of the TypeScript enum, but
@@ -103,13 +129,28 @@ Casting to text removes the dependency and still matches every real row.
 Production is not such a database — checked on 2026-09-22, its enum type already
 carries the label, because `synchronize` ran the `ALTER TYPE` when the value was
 added to the TypeScript enum, long before anything tried to write it. The cast
-stays anyway: it costs nothing and it is what makes the statement safe to paste
-into any other instance.
+stays anyway, because it is what makes the statement safe to paste into an
+instance whose type predates the value — but it is not free: casting the column
+makes the predicate non-sargable and rules out
+`@Index(["queueType", "status", "timestamp"])` (`queue-data.entity.ts:47`). For
+this statement that changes nothing, since it reads every chunk regardless. In a
+query that could have used the index, drop the cast and name the enum values
+directly.
 
-**`has_virtual_line IS NULL`** is what makes the statement safe to run twice.
+**`has_virtual_line IS NULL`** is what makes the `UPDATE` safe to run twice.
 Without it, a re-run overwrites an editor's hand-written `false` — the ride whose
 feed once published a return time and whose park has since stopped running one —
 with `true`.
+
+**The block around it has to be safe to run twice as well**, which the `UPDATE`
+alone does not make it. `DROP TABLE IF EXISTS` plus `ON COMMIT DROP` keeps a
+second attempt in the same `psql` session from failing on
+`relation "virtual_line_rides" already exists` and then running the `UPDATE`
+against the first pass's snapshot. `\set ON_ERROR_STOP on` is what makes the
+transaction stop at the first error instead of carrying on; without it `psql`
+keeps reading. The `SELECT count(*)` before the write is rule 1 of the four
+production-write rules in the runner handbook made concrete: it is the number
+you compare against 140 before you let the `UPDATE` through.
 
 **One pass, not `EXISTS` per row.** `queue_data` is a hypertable that compresses
 after 30 days with no `compress_segmentby` (`src/database/hypertables.ts`), and
