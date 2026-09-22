@@ -48,7 +48,8 @@ where it is — one is the ride's layout, the other is today's reading of it.
 
 Seeded like `has_single_rider`, from the rides that have ever reported one. This
 has not been run yet; it is written down here so that the run is reviewable
-rather than reconstructed afterwards.
+rather than reconstructed afterwards. The run itself is PAR-440, which carries
+the counts below as its before-numbers.
 
 **It cannot run before the change that adds the column is deployed.** The repo
 has no migrations, so `has_virtual_line` appears when TypeORM's `synchronize`
@@ -180,18 +181,19 @@ It seeds `true` only. A ride with no such row is left null — "nobody looked",
 which is what the API serves and what the ride page must not render as "no
 virtual line".
 
-**`PAID_RETURN_TIME` is deliberately not in the list, and that is a decision
-somebody has to confirm.** PAR-385 named it alongside the other three. It is a
+**`PAID_RETURN_TIME` is deliberately not in the list. Confirmed on 2026-09-22:
+three types, not four.** PAR-385 named it alongside the other three. It is a
 return window, so on the wording it belongs; but it is the _paid_ one — Genie+,
 Lightning Lane, Express — and that product already has three columns of its own
 (`has_fast_pass`, `fast_pass_name`, `fast_pass_price`). Including it would make
 the column mean "has a return window of some kind" rather than "you join this
 instead of standing in the queue", which is what its own docstring and the ride
-page's badge claim. The three above are unambiguous; adding the fourth is one
-statement more and is left until the question is answered:
+page's badge claim. The three above are unambiguous. The statement that would
+add the fourth is kept here as the record of what was weighed, not as a step to
+run:
 
 ```sql
--- Only if PAID_RETURN_TIME should count. Check the number it would move first.
+-- Not part of the seed. Kept because it is how the 55 and the 36 below were got.
 SELECT count(DISTINCT qd."attractionId")
 FROM queue_data qd
 WHERE qd."queueType"::text = 'PAID_RETURN_TIME';
@@ -233,8 +235,13 @@ queue-jump product in the fast-pass group, and a virtual line in Ausstattung.
 So the open question is wider than "does `PAID_RETURN_TIME` count". It is where
 the line between `has_virtual_line` and `has_fast_pass` runs, and the answer
 decides whether those 7 rides are a duplication to resolve or two true
-statements about the same ride. Left for a person; the numbers are here so the
-decision is not taken blind.
+statements about the same ride.
+
+**Answered on 2026-09-22: two true statements.** A ride can have a virtual line
+and that line can be free, and the seed writing both is not a contradiction to
+undo. Nothing here changes; the seed runs with its three types. Where exactly
+the boundary between the two columns sits, and whether the 36 `PAID_RETURN_TIME`
+rides with `has_fast_pass` NULL should be filled in, is PAR-386's to settle.
 
 ### Parks
 
