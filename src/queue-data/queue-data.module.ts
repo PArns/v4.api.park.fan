@@ -10,13 +10,14 @@ import { Attraction } from "../attractions/entities/attraction.entity";
 /**
  * Queue Data Module
  *
- * Handles wait times and queue data for all 6 queue types:
+ * Handles wait times and queue data for all 7 queue types:
  * - STANDBY
  * - SINGLE_RIDER
  * - RETURN_TIME
  * - PAID_RETURN_TIME
  * - BOARDING_GROUP
  * - PAID_STANDBY
+ * - VIRTUAL_QUEUE
  *
  * Features:
  * - Delta-based storage (only save when data changes significantly)

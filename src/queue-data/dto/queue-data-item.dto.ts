@@ -10,16 +10,11 @@ import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
  * Polymorphic design: fields are nullable based on queue type
  */
 export class QueueDataItemDto {
+  // The enum itself, not a copy of its members: the copy here had gone stale
+  // on VIRTUAL_QUEUE, so the documented type omitted a value the API can serve.
   @ApiProperty({
     description: "Type of the queue",
-    enum: [
-      "STANDBY",
-      "SINGLE_RIDER",
-      "RETURN_TIME",
-      "BOARDING_GROUP",
-      "PAID_RETURN_TIME",
-      "PAID_STANDBY",
-    ],
+    enum: QueueType,
   })
   queueType: QueueType;
 

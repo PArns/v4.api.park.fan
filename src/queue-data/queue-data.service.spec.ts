@@ -6,6 +6,12 @@ import { ForecastData } from "./entities/forecast-data.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { ParksService } from "../parks/parks.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import {
+  EntityType,
+  LiveStatus,
+  QueueType,
+  type EntityLiveResponse,
+} from "../external-apis/themeparks/themeparks.types";
 
 describe("QueueDataService", () => {
   let service: QueueDataService;
@@ -339,6 +345,97 @@ describe("QueueDataService", () => {
       expect(
         Math.abs(cutoff.getTime() - (Date.now() - 6 * 60 * 60 * 1000)),
       ).toBeLessThan(5_000);
+    });
+  });
+
+  /**
+   * `VIRTUAL_QUEUE` was a member of `QueueType` that no code path could act on:
+   * the payload type had no key for it, so the mapping switch had no branch,
+   * and a park publishing one produced a row carrying a status and nothing
+   * else. Nothing was red while that was true — the enum member alone compiles.
+   *
+   * The two assertions below are the ones that would have caught it, and they
+   * are written against the return window rather than against the branch,
+   * because sharing `RETURN_TIME`'s branch is an implementation choice and the
+   * stored window is the behaviour.
+   */
+  describe("a virtual queue is ingested like a return time", () => {
+    const aVirtualQueuePayload = (
+      returnStart: string,
+      returnEnd: string,
+    ): EntityLiveResponse => ({
+      id: "upstream-1",
+      name: "Danse Macabre",
+      entityType: EntityType.ATTRACTION,
+      status: LiveStatus.OPERATING,
+      lastUpdated: "2026-09-22T08:00:00.000Z",
+      queue: {
+        [QueueType.VIRTUAL_QUEUE]: {
+          state: "AVAILABLE",
+          returnStart,
+          returnEnd,
+        },
+      },
+    });
+
+    const candidatesFor = (live: EntityLiveResponse) =>
+      (
+        service as unknown as {
+          buildQueueCandidates: (
+            attractionId: string,
+            liveData: EntityLiveResponse,
+            source?: string,
+          ) => { queueType: QueueType; data: Partial<QueueData> }[];
+        }
+      ).buildQueueCandidates("ride-1", live);
+
+    it("stores the return window rather than a bare status", () => {
+      const [candidate] = candidatesFor(
+        aVirtualQueuePayload(
+          "2026-09-22T14:00:00.000Z",
+          "2026-09-22T15:00:00.000Z",
+        ),
+      );
+
+      expect(candidate.queueType).toBe(QueueType.VIRTUAL_QUEUE);
+      expect(candidate.data.state).toBe("AVAILABLE");
+      expect(candidate.data.returnStart).toEqual(
+        new Date("2026-09-22T14:00:00.000Z"),
+      );
+      expect(candidate.data.returnEnd).toEqual(
+        new Date("2026-09-22T15:00:00.000Z"),
+      );
+    });
+
+    it("saves a moved window even though the status did not change", () => {
+      // The delta strategy is the second half of the same hole: a row that maps
+      // correctly but is never judged significant is written once and then
+      // stands still for the rest of the day.
+      const significant = (
+        service as unknown as {
+          isSignificantChange: (
+            latest: Partial<QueueData> | null,
+            newData: Partial<QueueData>,
+            queueType: QueueType,
+            timezone: string,
+          ) => boolean;
+        }
+      ).isSignificantChange(
+        {
+          status: LiveStatus.OPERATING,
+          returnStart: new Date("2026-09-22T14:00:00.000Z"),
+          returnEnd: new Date("2026-09-22T15:00:00.000Z"),
+        },
+        {
+          status: LiveStatus.OPERATING,
+          returnStart: new Date("2026-09-22T16:00:00.000Z"),
+          returnEnd: new Date("2026-09-22T17:00:00.000Z"),
+        },
+        QueueType.VIRTUAL_QUEUE,
+        "Europe/Amsterdam",
+      );
+
+      expect(significant).toBe(true);
     });
   });
 });

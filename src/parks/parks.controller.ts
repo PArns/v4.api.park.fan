@@ -1237,6 +1237,10 @@ export class ParksController {
     name: "queueType",
     required: false,
     description: "Optional queue type filter (e.g., 'STANDBY', 'RETURN_TIME')",
+    // Was a hand-written list that had drifted furthest of the three: it named
+    // three of the seven members, offered `PAID_FASTPASS`, which has never been
+    // one, and omitted four — PAID_RETURN_TIME, BOARDING_GROUP, PAID_STANDBY
+    // and VIRTUAL_QUEUE.
     enum: QueueType,
   })
   @ApiResponse({ status: 400, description: "Unknown queueType" })

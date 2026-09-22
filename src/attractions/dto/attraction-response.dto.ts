@@ -385,6 +385,18 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
+      "Whether the ride runs a virtual line at all — a return-time or " +
+      "boarding-group system joined instead of the standby queue. A static " +
+      "fact about the ride, NOT whether return times are being handed out " +
+      "right now, which `queues` answers. Null = unknown, not 'no'.",
+    example: true,
+    required: false,
+    nullable: true,
+  })
+  hasVirtualLine?: boolean | null;
+
+  @ApiProperty({
+    description:
       "The paid queue-jump product this ride sells, or absent. Absent means " +
       "either nobody has checked or the park sells none — the two are one " +
       "absence to a visitor, so never render it as 'no fast pass'.",
@@ -606,6 +618,7 @@ export class AttractionResponseDto {
       mayGetWet: curated.mayGetWet,
       hasSingleRider: attraction.hasSingleRider ?? null,
       attractionKind: attraction.attractionKind ?? null,
+      hasVirtualLine: attraction.hasVirtualLine ?? null,
       // Null for nearly every ride, so it is one absent key rather than a
       // block of nulls on every attraction of every park payload.
       worksPeriod: resolveWorksPeriod(attraction),

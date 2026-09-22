@@ -25,7 +25,7 @@ which is not a hypothetical: it is why `curated_may_get_wet` and
 | `curated_season_months`   | `season_months`   | `detect-seasonal`                     |
 
 Human-only, with no sync behind them: `attraction_kind`, `has_single_rider`,
-`open_with_park`, `rcdb_id`, `retired_at` / `retired_reason`, the three
+`has_virtual_line`, `open_with_park`, `rcdb_id`, `retired_at` / `retired_reason`, the three
 fast-pass columns below, and the whole `attraction_ride_profiles` table except
 its `stats` column.
 
@@ -36,6 +36,212 @@ closed set we decide: `RIDE`, `TRANSPORT`, `SHOW`, `WALKTHROUGH`. Both stay, so
 an editor can record that Queue-Times calls something a "Family Ride" and that
 it is in fact a railway. It is also the first enum on the attraction half; every
 other one describes a park.
+
+#### `has_virtual_line` and its seed
+
+The column answers "does this ride work by return time or boarding group at
+all", which is not the same question the `queues` array answers and cannot be
+read off it: a virtual line handing out nothing at this moment publishes no
+queue, so the ride reads as plain CLOSED. Efteling's Danse Macabre is the
+reported case. The live badge built from `RETURN_TIME` / `BOARDING_GROUP` stays
+where it is — one is the ride's layout, the other is today's reading of it.
+
+Seeded like `has_single_rider`, from the rides that have ever reported one. This
+has not been run yet; it is written down here so that the run is reviewable
+rather than reconstructed afterwards. The run itself is PAR-440, which carries
+the counts below as its before-numbers.
+
+**It cannot run before the change that adds the column is deployed.** The repo
+has no migrations, so `has_virtual_line` appears when TypeORM's `synchronize`
+next connects — production runs with `DB_SYNCHRONIZE=true`, confirmed on the
+running container on 2026-09-22, despite `docs/deployment/coolify.md` telling
+you to set it to `false` (PAR-399). Adding the column by hand instead is not an
+option worth taking: a schema change outside the deploy path buys nothing that
+the next container start does not.
+
+**Counted against production on 2026-09-22, the three types move 140
+attractions** — 139 of them not retired, out of 7,301 that have any `queue_data`
+row at all. The whole pass takes **14.5 s**. Two of those numbers are worth
+keeping:
+
+- `VIRTUAL_QUEUE` matches **zero** rows in the entire history. Nothing has ever
+  been written with it, which is the other half of the dead-branch finding: the
+  switch ignored the value and no payload ever carried it. `RETURN_TIME` alone
+  carries the seed; `BOARDING_GROUP` matches 2 rides, both of which report
+  `RETURN_TIME` as well, so the union stays 140.
+- `SINGLE_RIDER` matches **48**, the same count `has_single_rider` was seeded
+  from months ago (`docs/changelog.md:3164`). The method reproduces its own
+  earlier result.
+
+Efteling's Danse Macabre — the reported case, and the reason to check before
+running rather than after — reports `RETURN_TIME` across 36,076 rows and is in
+the 140.
+
+**Two steps, run separately.** Step 1 writes nothing; you read its number and
+decide whether step 2 goes ahead. Pasting both at once defeats the point.
+
+```sql
+-- Step 1 — build the set and count what the write would touch.
+-- One pass over queue_data, not a correlated lookup per attraction. See below.
+\set ON_ERROR_STOP on
+
+DROP TABLE IF EXISTS pg_temp.virtual_line_rides;
+CREATE TEMP TABLE virtual_line_rides AS
+SELECT DISTINCT qd."attractionId" AS id
+FROM queue_data qd
+WHERE qd."queueType"::text IN ('RETURN_TIME', 'BOARDING_GROUP', 'VIRTUAL_QUEUE');
+
+SELECT count(*) FROM attractions a
+WHERE a.has_virtual_line IS NULL
+  AND a.id IN (SELECT id FROM virtual_line_rides);
+-- 140 on 2026-09-22. Stop and read if it differs.
+```
+
+```sql
+-- Step 2 — same session, only once the count above is what you expected.
+BEGIN;
+
+UPDATE attractions a
+SET has_virtual_line = true
+WHERE a.has_virtual_line IS NULL
+  AND a.id IN (SELECT id FROM virtual_line_rides);
+
+COMMIT;
+```
+
+Five things in it are load-bearing, and the first three were got wrong before
+they were got right.
+
+**`a.id`, not `a.id::text`.** This is the one that decides whether the statement
+runs at all, and it read the wrong way round until it was tried: with the cast,
+the whole `UPDATE` aborts on `operator does not exist: text = uuid` and writes
+nothing. `queue_data."attractionId"` is `uuid` in the database. The entity says
+`@Column({ type: "text" })` (`src/queue-data/entities/queue-data.entity.ts:77`),
+but the column is created by the relation's `@JoinColumn`, and the decorator
+beside it does not change that — the repo documents this trap in three places of
+its own (`plan-day.service.ts:1458`,
+`park-historical-stats.service.ts:649-651`,
+`prediction-lead-snapshot.entity.ts:64-71`), one of which records it shipping
+exactly that way. `CREATE TABLE AS` inherits the column type, so the temp
+table's `id` is `uuid` too and both sides already match. Reproduced against
+production on 2026-09-22 with `count(*)` in place of the `UPDATE`: the cast
+errors out, and without it the count is 140.
+
+**`::text` on the enum column, not a bare literal.** `queue_data."queueType"` is
+a Postgres enum type. `'VIRTUAL_QUEUE'` is a member of the TypeScript enum, but
+it only exists in the database type if `synchronize` has run the `ALTER TYPE`
+since it was added — and until this change nothing ever wrote that value. On a
+database whose type predates it, comparing a bare literal does not merely fail
+to match: it aborts the whole statement with
+`invalid input value for enum queue_data_queuetype_enum: "VIRTUAL_QUEUE"`.
+Casting to text removes the dependency and still matches every real row.
+Production is not such a database — checked on 2026-09-22, its enum type already
+carries the label, because `synchronize` ran the `ALTER TYPE` when the value was
+added to the TypeScript enum, long before anything tried to write it. The cast
+stays anyway, because it is what makes the statement safe to paste into an
+instance whose type predates the value — but it is not free: casting the column
+makes the predicate non-sargable and rules out
+`@Index(["queueType", "status", "timestamp"])` (`queue-data.entity.ts:49`). For
+this statement that changes nothing, since it reads every chunk regardless. In a
+query that could have used the index, drop the cast and name the enum values
+directly.
+
+**`has_virtual_line IS NULL`** is what makes the `UPDATE` safe to run twice.
+Without it, a re-run overwrites an editor's hand-written `false` — the ride whose
+feed once published a return time and whose park has since stopped running one —
+with `true`.
+
+**Step 1 has to be re-runnable too**, which is what `DROP TABLE IF EXISTS
+pg_temp.virtual_line_rides` is for: the temp table deliberately outlives step 1
+so that step 2 writes against the set you just counted, and a second attempt in
+the same session would otherwise fail on `relation … already exists`. The
+schema qualifier matters — bare `virtual_line_rides` resolves through the rest
+of the `search_path` if no temp table is there. `\set ON_ERROR_STOP on` stops
+`psql` from reading on past a failed statement; inside step 2 the server aborts
+the transaction by itself, so it earns its place in step 1, not step 2.
+
+**Counting first is the point of splitting the two**, not decoration. A count
+that sits between `BEGIN` and an unconditional `UPDATE` is not a gate — it
+scrolls past after the write has already happened. Here it is a separate step
+whose number you read before deciding.
+
+**One pass, not `EXISTS` per row.** `queue_data` is a hypertable that compresses
+after 30 days with no `compress_segmentby` (`src/database/hypertables.ts`), and
+nothing prunes it, so "has ever reported" reaches back through every compressed
+chunk. A correlated `EXISTS` asks that question once per attraction, against an
+index that does not exist on a compressed chunk. The `DISTINCT` pass asks it
+once in total. Run it in a quiet window either way.
+
+**The quoted identifiers are the physical names.** Neither `attractionId` nor
+`queueType` declares a `name:` on the entity, so TypeORM stores them camelCase
+while `has_virtual_line` is snake_case; an unquoted identifier folds to lower
+case and does not exist.
+
+It seeds `true` only. A ride with no such row is left null — "nobody looked",
+which is what the API serves and what the ride page must not render as "no
+virtual line".
+
+**`PAID_RETURN_TIME` is deliberately not in the list. Confirmed on 2026-09-22:
+three types, not four.** PAR-385 named it alongside the other three. It is a
+return window, so on the wording it belongs; but it is the _paid_ one — Genie+,
+Lightning Lane, Express — and that product already has three columns of its own
+(`has_fast_pass`, `fast_pass_name`, `fast_pass_price`). Including it would make
+the column mean "has a return window of some kind" rather than "you join this
+instead of standing in the queue", which is what its own docstring and the ride
+page's badge claim. The three above are unambiguous. The statement that would
+add the fourth is kept here as the record of what was weighed, not as a step to
+run:
+
+```sql
+-- Not part of the seed. Kept because it is how the 55 and the 36 below were got.
+SELECT count(DISTINCT qd."attractionId")
+FROM queue_data qd
+WHERE qd."queueType"::text = 'PAID_RETURN_TIME';
+```
+
+**Measured on 2026-09-22, that is 55 rides, of which 36 report none of the other
+three** — so the fourth type would take the seed from 140 to 176. Every one of
+the 36 is in a Disney park (Disneyland Paris 12, Disney Adventure World 8, Tokyo
+DisneySea 7, Tokyo Disneyland 3, and one or two each in Magic Kingdom, DCA,
+Animal Kingdom, Hollywood Studios and EPCOT); none is at Universal.
+
+The list of names is the argument, not the count. It holds
+`"it's a small world"`, `Pirates of the Caribbean`, `Big Thunder Mountain`,
+`Peter Pan's Flight`, `Phantom Manor`, `Orbitron®` and `Autopia` — rides with an
+ordinary standby queue that additionally sell a return window, not rides you
+board by return time. That is the distinction the column is for.
+
+**Two things cut the other way, and the second is the harder one.**
+
+All 36 have `has_fast_pass` **NULL**. The fast-pass columns this argument defers
+to are not populated for these rides, so leaving `PAID_RETURN_TIME` out moves
+the fact into an empty field rather than the right one. That gap is PAR-386's to
+audit, not this seed's to paper over.
+
+And the premise itself — "the fast-pass columns are where the paid product
+lives" — is not what this repo models. `fast-pass.util.ts` says the opposite in
+as many words: "**Zero is free** … Europa-Park's Virtual Line is a queue-jump
+product included with admission", and `docs/frontend/fast-pass.md` repeats it
+for the renderer. A price of `0` is a positive claim, not a missing one. So
+`has_fast_pass` already holds free queue-jump products, and the new column is
+named after one of them.
+
+That is measurable, and it lands squarely on the seed. Counted on 2026-09-22,
+production has **83** rides with `has_fast_pass = true`, of which **7** carry
+`fast_pass_price = 0` — Euro-Mir, Pirates in Batavia, Voletarium, Voltron
+Nevera, WODAN, Poseidon and blue fire, all at Europa-Park. **All 7 are in the 140.** After the seed they assert the same fact in two columns: a free
+queue-jump product in the fast-pass group, and a virtual line in Ausstattung.
+
+So the open question is wider than "does `PAID_RETURN_TIME` count". It is where
+the line between `has_virtual_line` and `has_fast_pass` runs, and the answer
+decides whether those 7 rides are a duplication to resolve or two true
+statements about the same ride.
+
+**Answered on 2026-09-22: two true statements.** A ride can have a virtual line
+and that line can be free, and the seed writing both is not a contradiction to
+undo. Nothing here changes; the seed runs with its three types. Where exactly
+the boundary between the two columns sits, and whether the 36 `PAID_RETURN_TIME`
+rides with `has_fast_pass` NULL should be filled in, is PAR-386's to settle.
 
 ### Parks
 
@@ -406,7 +612,8 @@ either.
 
 **A spec holds the descriptors against the lists** (`curated-field.spec-list.spec.ts`),
 and it has one exception left. Against the admin's figure it is the bulk-filled
-three — `has_single_rider`, `rcdb_id`, `open_with_park`, which are not curation.
+four — `has_single_rider`, `has_virtual_line`, `rcdb_id`, `open_with_park`,
+which are not curation.
 Against the inheritance lists there is now none: every hand-editable key is
 carried. No list derives itself from `ATTRACTION_CURATED_FIELDS`, which is how
 the works period's dates sat off all of them from 2026-09-06 to 2026-09-17

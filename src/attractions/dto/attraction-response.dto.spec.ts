@@ -93,6 +93,7 @@ describe("AttractionResponseDto › status on the two builders", () => {
       "attractionKind",
       "fastPass",
       "hasSingleRider",
+      "hasVirtualLine",
       "id",
       "isCurrentlyInSeason",
       "isSeasonal",

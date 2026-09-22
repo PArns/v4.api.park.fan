@@ -186,6 +186,16 @@ export interface QueueData {
   [QueueType.PAID_RETURN_TIME]?: PaidReturnTimeQueue;
   [QueueType.BOARDING_GROUP]?: BoardingGroupQueue;
   [QueueType.PAID_STANDBY]?: StandbyQueue;
+  /**
+   * Same shape as `RETURN_TIME` — a window you are told to come back in.
+   *
+   * The key was missing here while `QueueType.VIRTUAL_QUEUE` existed, so the
+   * ingestion typed the payload as though the feed could never publish one and
+   * the switch had no branch to map it. A park sending it got a row with a
+   * status and nothing else. Read alongside `RETURN_TIME` rather than as a
+   * third dialect: the fields upstream sends are the same three.
+   */
+  [QueueType.VIRTUAL_QUEUE]?: ReturnTimeQueue;
 }
 
 export interface StandbyQueue {

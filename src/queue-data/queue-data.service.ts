@@ -81,7 +81,7 @@ function parseCachedLatest(raw: string | null): Partial<QueueData> | null {
  * Queue Data Service
  *
  * Handles storing wait times and live data for attractions.
- * Supports all 6 queue types from ThemeParks.wiki.
+ * Supports all 7 queue types from ThemeParks.wiki.
  *
  * Delta Strategy:
  * - Only store when waitTime changes by > 5 minutes
@@ -538,6 +538,10 @@ export class QueueDataService {
 
         case QueueType.RETURN_TIME:
         case QueueType.PAID_RETURN_TIME:
+        // A virtual queue publishes the same return window as RETURN_TIME, so
+        // it is mapped here rather than given a branch that repeats these four
+        // assignments. Only the paid variant carries a price.
+        case QueueType.VIRTUAL_QUEUE:
           if ("state" in queueInfo) {
             queueData.state = queueInfo.state;
             queueData.returnStart = queueInfo.returnStart
@@ -604,9 +608,13 @@ export class QueueDataService {
     }
 
     // Return time window changed → save
+    // VIRTUAL_QUEUE belongs here for the same reason it shares the mapping
+    // branch above: it carries a return window, and without this line a moved
+    // window would only be stored when the status happened to change with it.
     if (
       queueType === QueueType.RETURN_TIME ||
-      queueType === QueueType.PAID_RETURN_TIME
+      queueType === QueueType.PAID_RETURN_TIME ||
+      queueType === QueueType.VIRTUAL_QUEUE
     ) {
       if (newData.returnStart && latest.returnStart) {
         if (

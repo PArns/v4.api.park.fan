@@ -122,16 +122,17 @@ export const ATTRACTION_CURATED_DB_COLUMNS: readonly string[] = [
 ];
 
 /*
- * Three hand-editable columns are deliberately NOT on that list:
+ * Four hand-editable columns are deliberately NOT on that list:
  * `has_single_rider` (seeded from every attraction that ever reported a
- * SINGLE_RIDER queue), `rcdb_id` (a Wikidata import) and `open_with_park`
- * (NOT NULL, so every row holds a value). They were filled in bulk rather than
- * by an editor, and counting them would report thousands of rides as curated
- * that nobody has ever looked at.
+ * SINGLE_RIDER queue), `has_virtual_line` (seeded the same way from the
+ * return-time and boarding-group rows), `rcdb_id` (a Wikidata import) and
+ * `open_with_park` (NOT NULL, so every row holds a value). They were filled in
+ * bulk rather than by an editor, and counting them would report thousands of
+ * rides as curated that nobody has ever looked at.
  *
  * Every other key in `ATTRACTION_CURATED_FIELDS` is on the list, and a spec in
  * `curated-field.spec-list.spec.ts` holds the two against each other with
- * exactly those three as the exceptions. The works period's dates were off it
+ * exactly those four as the exceptions. The works period's dates were off it
  * from the day they landed (2026-09-06) to 2026-09-17, because nothing derives
  * this list from the descriptors and nothing failed while they were missing.
  */
