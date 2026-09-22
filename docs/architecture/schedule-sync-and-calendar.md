@@ -6,11 +6,11 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 
 ## When Schedules Are Synced
 
-| Trigger | Job | When | What |
-| --- | --- | --- | --- |
-| Cron | `sync-all-parks` | Daily 03:00 | Full park metadata + **schedules for all Wiki parks** (12 months ahead). |
-| Cron | `sync-schedules-only` | Daily 15:00 | **Schedules only** for all Wiki parks (no discovery). Ensures new months (e.g. Efteling March) appear same day when the source publishes. |
-| On-demand | `sync-park-schedule` | When calendar is requested | If the requested date range has **no or little schedule data** (e.g. user asks for March, we have nothing), a background job is queued for that park only. Rate-limited to **once per 12 hours per park** (Redis key `schedule:refresh:requested:{parkId}`). Triggers only when the requested range ends **14+ days** beyond our last schedule date (less aggressive). |
+| Trigger   | Job                   | When                       | What                                                                                                                                                                                                                                                                                                                                                                   |
+| --------- | --------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cron      | `sync-all-parks`      | Daily 03:00                | Full park metadata + **schedules for all Wiki parks** (12 months ahead).                                                                                                                                                                                                                                                                                               |
+| Cron      | `sync-schedules-only` | Daily 15:00                | **Schedules only** for all Wiki parks (no discovery). Ensures new months (e.g. Efteling March) appear same day when the source publishes.                                                                                                                                                                                                                              |
+| On-demand | `sync-park-schedule`  | When calendar is requested | If the requested date range has **no or little schedule data** (e.g. user asks for March, we have nothing), a background job is queued for that park only. Rate-limited to **once per 12 hours per park** (Redis key `schedule:refresh:requested:{parkId}`). Triggers only when the requested range ends **14+ days** beyond our last schedule date (less aggressive). |
 
 **Important**: The **daily cron** for park metadata must use the job name **`sync-all-parks`** (not `fetch-all-parks`). The processor only handles `sync-all-parks` and `sync-schedules-only`.
 
@@ -28,6 +28,66 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 - **Cleanup**: When ThemeParks (or saveScheduleData) provides real data for a date, we **delete** the UNKNOWN entry for that `(parkId, date)`. When the API provides **OPERATING** for a date we also delete any **CLOSED** row for that date (so gap-fill CLOSED is removed and OPERATING wins). When the API provides **CLOSED** for a date we delete any **OPERATING** row for that date (bidirectional cleanup ensures a single source of truth per date). Only the API's OPERATING/CLOSED then remains for that date.
 - **Calendar API**: Each day has **`status`** (ParkStatus): `OPERATING` | `CLOSED` | `UNKNOWN`. Frontend shows "Closed" for `CLOSED` and "Opening hours not yet available" for `UNKNOWN`.
 - **On-demand refresh**: When deciding whether to trigger `sync-park-schedule`, we count **all** schedule types (including UNKNOWN) as “we have data until X”. We only trigger when the requested range extends 14+ days beyond our last schedule date (any type).
+
+## A silent park does not announce future operating days
+
+**`saveScheduleData` stores a park's future OPERATING days as UNKNOWN while its
+whole feed has been silent for `PARK_FEED_SILENT_DAYS` (30).** The schedule and
+the live data come from the same upstream, and when that upstream stops
+measuring it does not stop publishing — so a silent park keeps claiming
+operating days that nothing has confirmed.
+
+The reported case: La Ronde in Montréal went silent on 2026-06-24 and its
+ThemeParks.wiki schedule still named **every calendar day** to 2027-08-31 as
+OPERATING — 344 days, 59 of them in the Montréal January, with not one CLOSED
+day among them. `GET /calendar?from=2027-01-01` answered 31 of 31 days
+OPERATING with real opening hours, `isEstimated: false` and
+`recommendation: "recommended"`. That is the rule in
+[absent-facts](../rules/absent-facts.md) in its own shape: our copy of a silent
+source served as that source's statement.
+
+What the guard does and does not touch:
+
+|                                             |                                                                                                                    |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Future OPERATING day, park silent ≥ 30 days | → stored as **UNKNOWN**, with `openingTime`, `closingTime`, `description` and `purchases` set to NULL              |
+| Future OPERATING day, feed answering        | untouched                                                                                                          |
+| **Past** OPERATING day                      | untouched, silent park or not — the past-day reconstruction in `CalendarService` (`isHistorical`) reads those rows |
+| CLOSED day, any direction                   | untouched — a source that names a day closed has said something about that day                                     |
+| Per-ride rows (`attractionId IS NOT NULL`)  | out of scope, as everywhere else in this method                                                                    |
+
+- **UNKNOWN, not CLOSED.** "We have no current information" is what is true;
+  "the park is shut" is a second claim about a park nobody is measuring.
+- **The hours go too.** An UNKNOWN day that still answers `10:30–00:00` has only
+  moved the unfounded claim one field to the left — the frontend renders the
+  hours it is given. This matches how `fillScheduleGaps` writes its own UNKNOWN
+  placeholders. Holiday flags are kept: they describe the date, not the feed.
+- **The downgraded date joins the OPERATING delete.** Without that the write is
+  additive — the new UNKNOWN row lands beside the old OPERATING one and every
+  reader still finds an operating day.
+- **The threshold is `PARK_FEED_SILENT_DAYS`, not a second number.** It is the
+  same question `ParkIntegrationService` already asks before it stops serving a
+  silent park's rides as OPERATING, and that constant's own comment carries the
+  measurement that puts 30 in the empty band between a working feed's longest
+  gap (2 days) and the silent parks (31+).
+- **Self-healing.** The first real reading clears the probe, and the next sync
+  writes the OPERATING days back with their hours. Nothing has to be
+  un-done by hand, and `findScheduledButSilentParks` — which filters on
+  OPERATING — goes quiet on its own.
+- **Cost.** One indexed `EXISTS` against `queue_data`
+  (`QueueDataService.hasObservedReadingWithin`), and only when the payload
+  actually carries a future operating day. A sync of past days or of a closed
+  season pays nothing.
+
+Measured on production 2026-09-21: **10 parks, 1254 future park-level OPERATING
+rows**. Untouched beside them: 9347 future operating days at the 148 parks whose
+feed still answers, 1550 past operating days at the silent ten, and 751 future
+CLOSED days.
+
+**Recovery**: these rows are a copy of an upstream answer, not an original.
+Revert the guard, deploy, and the next `sync-schedules-only` (03:00 / 15:00 UTC,
+or `sync-park-schedule` on demand) writes the OPERATING days back with their
+times. No dump is kept, because a dump would be the same upstream answer, older.
 
 ## Gap-fill rules (fillScheduleGaps)
 

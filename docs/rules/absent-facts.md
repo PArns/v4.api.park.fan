@@ -15,6 +15,14 @@ Moved out of the repo's `claude.md` so that a session reads an index first and o
     window, not a season — every list in the database was one.
   - A **free-flow** attraction (`open_with_park`) is not seasonal just because
     its feed never says OPERATING; that is a playground's normal state.
+  - A park whose **whole feed has been silent** for `PARK_FEED_SILENT_DAYS` does
+    not get to announce future operating days: `saveScheduleData` stores them as
+    `UNKNOWN`, without hours. The schedule and the live data come from the same
+    upstream, and it keeps publishing after it stops measuring — La Ronde was
+    silent for 89 days while its schedule claimed all 344 remaining calendar
+    days as OPERATING, January in Montréal included. Past days and `CLOSED` days
+    are left alone. Full rule and the production numbers:
+    [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md).
 - **Two writers, never one cell.** `curated_may_get_wet`, `curated_minimum_height`
   and `curated_stats` sit _beside_ the synced column, never in it, because the
   sync overwrites its own cell on every run. Read via `resolveCuratedFacts`.

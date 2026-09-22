@@ -54,6 +54,8 @@ import {
   isParkOpen,
   RideStatusData,
 } from "../common/utils/status-calculator.util";
+import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
+import { PARK_OBSERVED_READING_SQL } from "../common/utils/closure-gap.sql";
 
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -195,6 +197,27 @@ export class ParksService {
     private holidaysService: HolidaysService,
     private readonly revalidation: RevalidationService,
   ) {}
+
+  /**
+   * Has this park produced a real reading in the last `days` days?
+   *
+   * The same question `QueueDataService.hasObservedReadingWithin` answers for
+   * `ParkIntegrationService`, over the same statement — but asked here rather
+   * than by injecting that service, because `QueueDataService` injects
+   * `ParksService` and the way back is a constructor cycle Nest cannot resolve.
+   * The shared text is `PARK_OBSERVED_READING_SQL`; `hasObservedReadingWithin`
+   * carries the reasoning and the measured timings.
+   */
+  private async hasObservedReadingWithin(
+    parkId: string,
+    days: number,
+  ): Promise<boolean> {
+    const rows: Array<{ seen: number }> = await this.scheduleRepository.query(
+      PARK_OBSERVED_READING_SQL,
+      [parkId, days],
+    );
+    return rows.length > 0;
+  }
 
   /**
    * Syncs all parks from ThemeParks.wiki
@@ -1640,8 +1663,84 @@ export class ParksService {
         scheduleType = entry.type as ScheduleType;
       }
 
-      return { entry, dateStr, scheduleType };
+      return { entry, dateStr, scheduleType, silencedFeed: false };
     });
+
+    // 2b. A park whose whole feed has been silent for PARK_FEED_SILENT_DAYS does
+    // not get to keep announcing future operating days.
+    //
+    // The schedule and the live feed come from the same upstream, and when that
+    // upstream stops measuring it does not stop publishing: La Ronde has been
+    // silent since 2026-06-24 and its ThemeParks.wiki schedule still claims every
+    // single calendar day to 2027-08-31 as OPERATING — 59 of them in the Montréal
+    // January. The calendar then offered 11 January with real opening hours,
+    // `isEstimated: false` and `recommendation: "recommended"`. That is the rule
+    // in `docs/rules/absent-facts.md` broken in its own shape: our copy of a
+    // silent source served as that source's statement.
+    //
+    // UNKNOWN, not CLOSED, and future days only. "We have no current information"
+    // is what is true; "the park is shut" is a second claim about a park nobody
+    // is measuring. Past days keep their OPERATING rows because the
+    // reconstruction that reads them (`calendar.service.ts`, `isHistorical`)
+    // depends on them, and CLOSED days are left alone in both directions — a
+    // source that names a closed day has said something about that day.
+    //
+    // Measured on production 2026-09-21: 10 parks, 1254 future park-level
+    // OPERATING rows. The 9347 future operating days of the 148 parks whose feed
+    // still answers are untouched, as are 1550 past operating days at the silent
+    // ten. The threshold is PARK_FEED_SILENT_DAYS rather than a second number
+    // because it is the same question `ParkIntegrationService` already asks
+    // before it stops serving a silent park's rides as OPERATING; the constant's
+    // own comment carries the measurement that puts 30 in the empty band between
+    // a working feed's longest gap (2 days) and the silent parks (31+).
+    //
+    // The probe costs one indexed EXISTS against `queue_data` and only runs when
+    // the payload actually carries a future operating day, so a sync of past days
+    // or of a closed season pays nothing.
+    const parkLocalToday = park
+      ? getCurrentDateInTimezone(park.timezone)
+      : null;
+    const hasFutureOperating =
+      parkLocalToday !== null &&
+      normalizedEntries.some(
+        (e) =>
+          e.scheduleType === ScheduleType.OPERATING &&
+          e.dateStr > parkLocalToday,
+      );
+    if (hasFutureOperating) {
+      // Optimistic on failure, the same direction and for the same reason as
+      // the call in `ParkIntegrationService`: a probe we could not run must not
+      // be the thing that blanks a healthy park. Without the catch a statement
+      // timeout on the `queue_data` hypertable would reject the whole schedule
+      // write, so one slow probe would cost the park its sync instead of
+      // costing it this one decision.
+      const feedAlive = await this.hasObservedReadingWithin(
+        parkId,
+        PARK_FEED_SILENT_DAYS,
+      ).catch((error: unknown) => {
+        this.logger.warn(
+          `Silent-feed probe failed for park ${parkId}, keeping the schedule as published: ${error}`,
+        );
+        return true;
+      });
+      if (!feedAlive) {
+        let downgraded = 0;
+        for (const normalized of normalizedEntries) {
+          if (
+            normalized.scheduleType === ScheduleType.OPERATING &&
+            normalized.dateStr > parkLocalToday!
+          ) {
+            normalized.scheduleType = ScheduleType.UNKNOWN;
+            normalized.silencedFeed = true;
+            downgraded++;
+          }
+        }
+        this.logger.warn(
+          `Park ${parkId} has had no observed reading for ${PARK_FEED_SILENT_DAYS} days: ` +
+            `${downgraded} future OPERATING day(s) stored as UNKNOWN instead`,
+        );
+      }
+    }
 
     // 3. Pre-fetch holidays for the date range (Extended by +/ 1 day for bridge day checks)
     const holidayMap = new Map<string, string | HolidayEntry>(); // Date -> Name or HolidayEntry
@@ -1771,7 +1870,12 @@ export class ParksService {
     const toInsert = new Map<string, Partial<ScheduleEntry>>();
     const toUpdate: Array<{ id: string; data: Partial<ScheduleEntry> }> = [];
 
-    for (const { entry, dateStr, scheduleType } of normalizedEntries) {
+    for (const {
+      entry,
+      dateStr,
+      scheduleType,
+      silencedFeed,
+    } of normalizedEntries) {
       // Use noon UTC so timezone conversions inside calculateHolidayInfo won't shift the date
       const dateObj = new Date(`${dateStr}T12:00:00Z`);
 
@@ -1804,14 +1908,22 @@ export class ParksService {
           : null) ??
         normalizeClosingTime(openingTime, rawClosingTime, park!.timezone);
 
+      // A day downgraded by the silent-feed guard carries no hours, no
+      // description and no purchases. They came out of the same silent source as
+      // the OPERATING claim, and an UNKNOWN day that still answers "10:30–00:00"
+      // has only moved the unfounded statement one field to the left — the
+      // frontend renders the hours it is given. `fillScheduleGaps` writes its
+      // UNKNOWN placeholders the same way, so this stays one shape of row.
+      // The holiday flags are kept: they come from the holiday service and are
+      // a fact about the date, not about the park's feed.
       const scheduleEntry: Partial<ScheduleEntry> = {
         parkId,
         date: dateObj,
         scheduleType,
-        openingTime,
-        closingTime,
-        description: entry.description || null,
-        purchases: entry.purchases || null,
+        openingTime: silencedFeed ? null : openingTime,
+        closingTime: silencedFeed ? null : closingTime,
+        description: silencedFeed ? null : entry.description || null,
+        purchases: silencedFeed ? null : entry.purchases || null,
         isHoliday: holidayInfo.isHoliday,
         holidayName: holidayInfo.holidayName,
         isBridgeDay: holidayInfo.isBridgeDay,
@@ -1908,8 +2020,14 @@ export class ParksService {
       .filter((e) => e.scheduleType === ScheduleType.OPERATING)
       .map((e) => e.dateStr);
 
+    // A day the silent-feed guard downgraded joins the CLOSED days here: the
+    // OPERATING row it replaces is the row that has to go. Without this the
+    // write is additive — the new UNKNOWN row lands beside the old OPERATING
+    // one, the delete above skips the date because its entry is now UNKNOWN,
+    // and every reader that looks for an OPERATING day still finds one. The
+    // guard would report success and change nothing a visitor sees.
     const deleteOperatingDates = normalizedEntries
-      .filter((e) => e.scheduleType === ScheduleType.CLOSED)
+      .filter((e) => e.scheduleType === ScheduleType.CLOSED || e.silencedFeed)
       .map((e) => e.dateStr);
 
     if (deleteUnknownDates.length > 0) {

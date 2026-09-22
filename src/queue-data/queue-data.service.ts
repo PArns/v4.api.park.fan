@@ -16,7 +16,7 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
-import { observedReadingsSql } from "../common/utils/closure-gap.sql";
+import { PARK_OBSERVED_READING_SQL } from "../common/utils/closure-gap.sql";
 
 /** One attraction's already-fetched live payload, as handed to the batch writer. */
 export interface LiveDataBatchItem {
@@ -909,24 +909,20 @@ export class QueueDataService {
     parkId: string,
     days: number,
   ): Promise<boolean> {
+    // The statement lives in `closure-gap.sql` because `saveScheduleData` asks
+    // the same question and cannot reach this service: QueueDataService already
+    // injects ParksService, so the way back is a constructor cycle Nest refuses
+    // at boot. The COALESCE around observedReadingsSql is there because that
+    // helper can evaluate to NULL rather than to false: a row with no
+    // is_heartbeat falls back to "lastUpdated" = timestamp, and that comparison
+    // is NULL when lastUpdated is. A row we cannot classify must not be the
+    // thing that declares a park silent, so it counts as an observation — the
+    // same optimistic direction the curated lookup takes. Production holds no
+    // such row: 0 of 43,245,615, which is every row in the table — it has no
+    // retention policy and begins 2025-12-24 (measured 2026-09-16). A fixture
+    // that omits the column does.
     const rows: Array<{ seen: number }> = await this.queueDataRepository.query(
-      `SELECT 1 AS seen
-         FROM queue_data qd
-         JOIN attractions a ON a.id = qd."attractionId"
-        WHERE a."parkId" = $1
-          AND a.retired_at IS NULL
-          AND qd.timestamp > now() - ($2::int * INTERVAL '1 day')
-          -- COALESCE, because observedReadingsSql can evaluate to NULL rather
-          -- than to false: a row with no is_heartbeat falls back to
-          -- "lastUpdated" = timestamp, and that comparison is NULL when
-          -- lastUpdated is. A row we cannot classify must not be the thing that
-          -- declares a park silent, so it counts as an observation — the same
-          -- optimistic direction the curated lookup takes. Production holds no
-          -- such row: 0 of 43,245,615, which is every row in the table — it has
-          -- no retention policy and begins 2025-12-24 (measured 2026-09-16).
-          -- A fixture that omits the column does.
-          AND COALESCE(${observedReadingsSql("qd")}, true)
-        LIMIT 1`,
+      PARK_OBSERVED_READING_SQL,
       [parkId, days],
     );
     return rows.length > 0;
