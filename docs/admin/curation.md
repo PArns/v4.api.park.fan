@@ -76,21 +76,29 @@ Efteling's Danse Macabre — the reported case, and the reason to check before
 running rather than after — reports `RETURN_TIME` across 36,076 rows and is in
 the 140.
 
-```sql
-\set ON_ERROR_STOP on
-BEGIN;
+**Two steps, run separately.** Step 1 writes nothing; you read its number and
+decide whether step 2 goes ahead. Pasting both at once defeats the point.
 
+```sql
+-- Step 1 — build the set and count what the write would touch.
 -- One pass over queue_data, not a correlated lookup per attraction. See below.
-DROP TABLE IF EXISTS virtual_line_rides;
-CREATE TEMP TABLE virtual_line_rides ON COMMIT DROP AS
+\set ON_ERROR_STOP on
+
+DROP TABLE IF EXISTS pg_temp.virtual_line_rides;
+CREATE TEMP TABLE virtual_line_rides AS
 SELECT DISTINCT qd."attractionId" AS id
 FROM queue_data qd
 WHERE qd."queueType"::text IN ('RETURN_TIME', 'BOARDING_GROUP', 'VIRTUAL_QUEUE');
 
--- Expect 140 on 2026-09-22. A different number means read before writing.
 SELECT count(*) FROM attractions a
 WHERE a.has_virtual_line IS NULL
   AND a.id IN (SELECT id FROM virtual_line_rides);
+-- 140 on 2026-09-22. Stop and read if it differs.
+```
+
+```sql
+-- Step 2 — same session, only once the count above is what you expected.
+BEGIN;
 
 UPDATE attractions a
 SET has_virtual_line = true
@@ -132,7 +140,7 @@ added to the TypeScript enum, long before anything tried to write it. The cast
 stays anyway, because it is what makes the statement safe to paste into an
 instance whose type predates the value — but it is not free: casting the column
 makes the predicate non-sargable and rules out
-`@Index(["queueType", "status", "timestamp"])` (`queue-data.entity.ts:47`). For
+`@Index(["queueType", "status", "timestamp"])` (`queue-data.entity.ts:49`). For
 this statement that changes nothing, since it reads every chunk regardless. In a
 query that could have used the index, drop the cast and name the enum values
 directly.
@@ -142,15 +150,19 @@ Without it, a re-run overwrites an editor's hand-written `false` — the ride wh
 feed once published a return time and whose park has since stopped running one —
 with `true`.
 
-**The block around it has to be safe to run twice as well**, which the `UPDATE`
-alone does not make it. `DROP TABLE IF EXISTS` plus `ON COMMIT DROP` keeps a
-second attempt in the same `psql` session from failing on
-`relation "virtual_line_rides" already exists` and then running the `UPDATE`
-against the first pass's snapshot. `\set ON_ERROR_STOP on` is what makes the
-transaction stop at the first error instead of carrying on; without it `psql`
-keeps reading. The `SELECT count(*)` before the write is rule 1 of the four
-production-write rules in the runner handbook made concrete: it is the number
-you compare against 140 before you let the `UPDATE` through.
+**Step 1 has to be re-runnable too**, which is what `DROP TABLE IF EXISTS
+pg_temp.virtual_line_rides` is for: the temp table deliberately outlives step 1
+so that step 2 writes against the set you just counted, and a second attempt in
+the same session would otherwise fail on `relation … already exists`. The
+schema qualifier matters — bare `virtual_line_rides` resolves through the rest
+of the `search_path` if no temp table is there. `\set ON_ERROR_STOP on` stops
+`psql` from reading on past a failed statement; inside step 2 the server aborts
+the transaction by itself, so it earns its place in step 1, not step 2.
+
+**Counting first is the point of splitting the two**, not decoration. A count
+that sits between `BEGIN` and an unconditional `UPDATE` is not a gate — it
+scrolls past after the write has already happened. Here it is a separate step
+whose number you read before deciding.
 
 **One pass, not `EXISTS` per row.** `queue_data` is a hypertable that compresses
 after 30 days with no `compress_segmentby` (`src/database/hypertables.ts`), and
@@ -197,11 +209,32 @@ The list of names is the argument, not the count. It holds
 ordinary standby queue that additionally sell a return window, not rides you
 board by return time. That is the distinction the column is for.
 
-One thing cuts the other way and belongs in the same breath: all 36 have
-`has_fast_pass` **NULL**. The fast-pass columns this argument defers to are not
-populated for these rides, so leaving `PAID_RETURN_TIME` out moves the fact into
-an empty field rather than the right one. That gap is PAR-386's to audit, not
-this seed's to paper over.
+**Two things cut the other way, and the second is the harder one.**
+
+All 36 have `has_fast_pass` **NULL**. The fast-pass columns this argument defers
+to are not populated for these rides, so leaving `PAID_RETURN_TIME` out moves
+the fact into an empty field rather than the right one. That gap is PAR-386's to
+audit, not this seed's to paper over.
+
+And the premise itself — "the fast-pass columns are where the paid product
+lives" — is not what this repo models. `fast-pass.util.ts` says the opposite in
+as many words: "**Zero is free** … Europa-Park's Virtual Line is a queue-jump
+product included with admission", and `docs/frontend/fast-pass.md` repeats it
+for the renderer. A price of `0` is a positive claim, not a missing one. So
+`has_fast_pass` already holds free queue-jump products, and the new column is
+named after one of them.
+
+That is measurable, and it lands squarely on the seed. Counted on 2026-09-22,
+production has **83** rides with `has_fast_pass = true`, of which **7** carry
+`fast_pass_price = 0` — Euro-Mir, Pirates in Batavia, Voletarium, Voltron
+Nevera, WODAN, Poseidon and blue fire, all at Europa-Park. **All 7 are in the 140.** After the seed they assert the same fact in two columns: a free
+queue-jump product in the fast-pass group, and a virtual line in Ausstattung.
+
+So the open question is wider than "does `PAID_RETURN_TIME` count". It is where
+the line between `has_virtual_line` and `has_fast_pass` runs, and the answer
+decides whether those 7 rides are a duplication to resolve or two true
+statements about the same ride. Left for a person; the numbers are here so the
+decision is not taken blind.
 
 ### Parks
 
