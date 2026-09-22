@@ -373,6 +373,140 @@ describe("FavoritesService", () => {
     });
   });
 
+  // PAR-412: the frontend turns a ride's crowd badge back into that ride's
+  // minutes with `baseline` (PAR-378), so the payload has to carry the exact
+  // number `crowdLevel` was rated against — and null wherever it was not
+  // rated against one, as the attraction detail payload does.
+  describe("Crowd baseline", () => {
+    const validAttractionUuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+    const attractionEntity = {
+      id: validAttractionUuid,
+      name: "Frozen Ever After",
+      slug: "frozen-ever-after",
+      parkId: validParkUuid,
+      latitude: null,
+      longitude: null,
+      park: {
+        id: validParkUuid,
+        name: "EPCOT",
+        slug: "epcot",
+        timezone: "America/New_York",
+      },
+    };
+
+    const standbyRow = (status: string, waitTime: number | null) => [
+      {
+        queueType: "STANDBY",
+        status,
+        waitTime,
+        timestamp: new Date("2026-09-22T17:30:00.000Z"),
+        lastUpdated: new Date("2026-09-22T17:30:00.000Z"),
+      },
+    ];
+
+    const fetchOne = async ({
+      parkStatus = "OPERATING",
+      queue = standbyRow("OPERATING", 70),
+      // `null` for "no P50 row": an explicit `undefined` would take this default.
+      p50 = 50 as number | null,
+      ratable = true,
+    } = {}) => {
+      attractionRepo.find.mockResolvedValueOnce([attractionEntity]);
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+        new Map([[validAttractionUuid, queue]]),
+      );
+      parksService.getBatchParkStatus.mockResolvedValueOnce(
+        new Map([[validParkUuid, parkStatus]]),
+      );
+      analyticsService.getBatchAttractionP50s.mockResolvedValueOnce(
+        new Map(p50 === null ? [] : [[validAttractionUuid, p50]]),
+      );
+      if (!ratable) {
+        analyticsService.getRatableParkIds.mockResolvedValueOnce(new Set());
+      }
+      const result = await service.getFavorites(
+        [],
+        [validAttractionUuid],
+        [],
+        [],
+      );
+      return result.attractions[0];
+    };
+
+    it("hands out the P50 the live wait was rated against", async () => {
+      analyticsService.getLoadRating.mockReturnValueOnce({
+        rating: "high",
+        baseline: 50,
+      });
+
+      const attraction = await fetchOne();
+
+      expect(analyticsService.getLoadRating).toHaveBeenCalledWith(70, 50);
+      expect(attraction.crowdLevel).toBe("high");
+      expect(attraction.baseline).toBe(50);
+    });
+
+    it("is null for a ride in a closed park", async () => {
+      const attraction = await fetchOne({ parkStatus: "CLOSED" });
+
+      expect(attraction.crowdLevel).toBe("closed");
+      expect(attraction.baseline).toBeNull();
+    });
+
+    it("is null when the ride reports no wait", async () => {
+      const attraction = await fetchOne({
+        queue: standbyRow("OPERATING", null),
+      });
+
+      expect(attraction.crowdLevel).toBeNull();
+      expect(attraction.baseline).toBeNull();
+    });
+
+    it("is null in a park too thin to rate", async () => {
+      const attraction = await fetchOne({ ratable: false });
+
+      expect(attraction.crowdLevel).toBe("unknown");
+      expect(attraction.baseline).toBeNull();
+    });
+
+    it("is null for a ride without a P50", async () => {
+      const attraction = await fetchOne({ p50: null });
+
+      expect(analyticsService.getLoadRating).not.toHaveBeenCalled();
+      expect(attraction.crowdLevel).toBeNull();
+      expect(attraction.baseline).toBeNull();
+    });
+
+    it("passes the integrated cache's baseline through on a cache hit", async () => {
+      attractionRepo.find.mockResolvedValueOnce([attractionEntity]);
+      redisStore.set(
+        `attraction:integrated:${validAttractionUuid}`,
+        JSON.stringify({
+          id: validAttractionUuid,
+          name: "Frozen Ever After",
+          slug: "frozen-ever-after",
+          status: "OPERATING",
+          effectiveStatus: "OPERATING",
+          crowdLevel: "very_high",
+          baseline: 50,
+          queues: [{ queueType: "STANDBY", status: "OPERATING", waitTime: 80 }],
+          park: attractionEntity.park,
+        }),
+      );
+
+      const result = await service.getFavorites(
+        [],
+        [validAttractionUuid],
+        [],
+        [],
+      );
+
+      expect(result.attractions[0].crowdLevel).toBe("very_high");
+      expect(result.attractions[0].baseline).toBe(50);
+    });
+  });
+
   describe("Redis cache contract", () => {
     it("returns the cached response on a hit and skips all DB lookups", async () => {
       const cached = {

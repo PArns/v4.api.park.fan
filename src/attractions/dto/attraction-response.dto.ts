@@ -434,7 +434,11 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
-      "90th percentile baseline wait time for this hour/day (minutes)",
+      "The wait `crowdLevel` was rated against (minutes): this ride's P50 " +
+      "over its samples (the park payload falls back to P90 for a ride " +
+      "with no P50 row yet), so `crowdLevel` = current wait ÷ baseline × 100 " +
+      "through the unified thresholds. Null whenever `crowdLevel` did not " +
+      "come from a live wait (closed, unknown, no wait, thin park, no P50).",
     required: false,
     nullable: true,
   })

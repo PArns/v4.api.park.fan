@@ -780,6 +780,21 @@ export class FavoritesService {
         const parkRatable = attraction.parkId
           ? ratableParks.has(attraction.parkId)
           : false;
+        // The one branch that rates against the P50 also hands the P50 out as
+        // `baseline` — the frontend turns the badge back into this ride's
+        // minutes with it (PAR-378), so the two must come from the same number.
+        // Every other branch has nothing it was rated against and says null,
+        // exactly as the attraction detail payload does.
+        const rated =
+          dto.effectiveStatus !== "CLOSED" &&
+          waitTimesReadable &&
+          standby?.status === "OPERATING" &&
+          standby.waitTime != null &&
+          parkRatable &&
+          p50 > 0
+            ? this.analyticsService.getLoadRating(standby.waitTime, p50)
+            : null;
+        dto.baseline = rated ? rated.baseline : null;
         dto.crowdLevel =
           dto.effectiveStatus === "CLOSED"
             ? "closed"
@@ -788,10 +803,7 @@ export class FavoritesService {
               : standby?.status === "OPERATING" && standby.waitTime != null
                 ? !parkRatable
                   ? "unknown"
-                  : p50 > 0
-                    ? this.analyticsService.getLoadRating(standby.waitTime, p50)
-                        .rating
-                    : null
+                  : (rated?.rating ?? null)
                 : null;
         const history = sparklinesMap.get(attraction.id) || [];
         dto.statistics = {
