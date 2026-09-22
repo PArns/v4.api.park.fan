@@ -17,8 +17,9 @@ import {
  * Queue Data Entity
  *
  * Stores wait time data for attractions.
- * Supports all 6 queue types from ThemeParks.wiki:
- * - STANDBY, SINGLE_RIDER, RETURN_TIME, PAID_RETURN_TIME, BOARDING_GROUP, PAID_STANDBY
+ * Supports all 7 queue types from ThemeParks.wiki:
+ * - STANDBY, SINGLE_RIDER, RETURN_TIME, PAID_RETURN_TIME, BOARDING_GROUP,
+ *   PAID_STANDBY, VIRTUAL_QUEUE
  *
  * Polymorphic design: Different queue types use different fields (nullable).
  *

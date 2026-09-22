@@ -46,35 +46,72 @@ queue, so the ride reads as plain CLOSED. Efteling's Danse Macabre is the
 reported case. The live badge built from `RETURN_TIME` / `BOARDING_GROUP` stays
 where it is — one is the ride's layout, the other is today's reading of it.
 
-Seeded like `has_single_rider`, from the rides that have ever reported one:
+Seeded like `has_single_rider`, from the rides that have ever reported one. This
+has not been run yet; it is written down here so that the run is reviewable
+rather than reconstructed afterwards.
 
 ```sql
+-- One pass over queue_data, not a correlated lookup per attraction. See below.
+CREATE TEMP TABLE virtual_line_rides AS
+SELECT DISTINCT qd."attractionId" AS id
+FROM queue_data qd
+WHERE qd."queueType"::text IN ('RETURN_TIME', 'BOARDING_GROUP', 'VIRTUAL_QUEUE');
+
 UPDATE attractions a
 SET has_virtual_line = true
 WHERE a.has_virtual_line IS NULL
-  AND EXISTS (
-    SELECT 1
-    FROM queue_data qd
-    WHERE qd."attractionId" = a.id::text
-      AND qd."queueType" IN (
-        'RETURN_TIME', 'PAID_RETURN_TIME', 'BOARDING_GROUP', 'VIRTUAL_QUEUE'
-      )
-  );
+  AND a.id::text IN (SELECT id FROM virtual_line_rides);
 ```
 
-Three things in it are load-bearing. `has_virtual_line IS NULL` is what makes
-the statement safe to run twice: without it a re-run overwrites an editor's
-hand-written `false` — the ride whose feed once published a return time and
-whose park has since stopped running one — with `true`. The quoted
-`"attractionId"` and `"queueType"` are the physical names: neither column
-declares a `name:` on the entity, so TypeORM stores them camelCase while
-`has_virtual_line` is snake_case, and an unquoted identifier folds to lower case
-and does not exist. And the cast is `a.id::text` rather than `qd."attractionId"::uuid`,
-so the comparison stays on the text side where `queue_data`'s index is.
+Four things in it are load-bearing, and three of them were got wrong first.
+
+**`::text` on the enum column, not a bare literal.** `queue_data."queueType"` is
+a Postgres enum type. `'VIRTUAL_QUEUE'` is a member of the TypeScript enum, but
+it only exists in the database type if `synchronize` has run the `ALTER TYPE`
+since it was added — and until this change nothing ever wrote that value. On a
+database whose type predates it, comparing a bare literal does not merely fail
+to match: it aborts the whole statement with
+`invalid input value for enum queue_data_queuetype_enum: "VIRTUAL_QUEUE"`.
+Casting to text removes the dependency and still matches every real row.
+
+**`has_virtual_line IS NULL`** is what makes the statement safe to run twice.
+Without it, a re-run overwrites an editor's hand-written `false` — the ride whose
+feed once published a return time and whose park has since stopped running one —
+with `true`.
+
+**One pass, not `EXISTS` per row.** `queue_data` is a hypertable that compresses
+after 30 days with no `compress_segmentby` (`src/database/hypertables.ts`), and
+nothing prunes it, so "has ever reported" reaches back through every compressed
+chunk. A correlated `EXISTS` asks that question once per attraction, against an
+index that does not exist on a compressed chunk. The `DISTINCT` pass asks it
+once in total. Run it in a quiet window either way.
+
+**The quoted identifiers are the physical names.** Neither `attractionId` nor
+`queueType` declares a `name:` on the entity, so TypeORM stores them camelCase
+while `has_virtual_line` is snake_case; an unquoted identifier folds to lower
+case and does not exist.
 
 It seeds `true` only. A ride with no such row is left null — "nobody looked",
 which is what the API serves and what the ride page must not render as "no
 virtual line".
+
+**`PAID_RETURN_TIME` is deliberately not in the list, and that is a decision
+somebody has to confirm.** PAR-385 named it alongside the other three. It is a
+return window, so on the wording it belongs; but it is the _paid_ one — Genie+,
+Lightning Lane, Express — and that product already has three columns of its own
+(`has_fast_pass`, `fast_pass_name`, `fast_pass_price`). Including it would flip
+nearly every Disney and Universal ride to `true` and make the column mean "has a
+return window of some kind" rather than "you join this instead of standing in
+the queue", which is what its own docstring and the ride page's badge claim. The
+three above are unambiguous; adding the fourth is one statement more and is left
+until the question is answered:
+
+```sql
+-- Only if PAID_RETURN_TIME should count. Check the number it would move first.
+SELECT count(DISTINCT qd."attractionId")
+FROM queue_data qd
+WHERE qd."queueType"::text = 'PAID_RETURN_TIME';
+```
 
 ### Parks
 

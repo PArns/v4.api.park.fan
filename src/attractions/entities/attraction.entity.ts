@@ -357,9 +357,13 @@ export class Attraction {
    * today's reading of it.
    *
    * Seeded from observation — every attraction that has ever reported a
-   * RETURN_TIME, PAID_RETURN_TIME, BOARDING_GROUP or VIRTUAL_QUEUE row — and
-   * extended by hand for the rides whose feed never publishes one. No sync
-   * writes it.
+   * RETURN_TIME, BOARDING_GROUP or VIRTUAL_QUEUE row — and extended by hand for
+   * the rides whose feed never publishes one. No sync writes it.
+   *
+   * PAID_RETURN_TIME is not in that list. It is a return window too, but it is
+   * the paid one, and the paid product has three columns of its own below. A
+   * ride is not "join this instead of queueing" because you can buy a slot on
+   * it. The statement and the open question are in `docs/admin/curation.md`.
    */
   @Column({ name: "has_virtual_line", type: "boolean", nullable: true })
   hasVirtualLine: boolean | null;
