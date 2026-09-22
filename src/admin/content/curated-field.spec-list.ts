@@ -243,6 +243,19 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "nichts.",
   },
   {
+    key: "hasVirtualLine",
+    label: "Virtual Line",
+    type: "boolean",
+    syncedKey: null,
+    resolvedKey: "hasVirtualLine",
+    group: "Ausstattung",
+    hint:
+      "Ob die Bahn überhaupt mit Rückkehrzeit oder Boarding Group arbeitet, " +
+      "nicht ob sie gerade Zeiten ausgibt. Eine Virtual Line, die im Moment " +
+      "nichts vergibt, taucht im Feed gar nicht auf — deshalb steht das hier " +
+      "und wird nicht aus den Live-Queues gelesen. Das synchronisiert nichts.",
+  },
+  {
     key: "openWithPark",
     label: "Offen mit dem Park",
     type: "boolean",

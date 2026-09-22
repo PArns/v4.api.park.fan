@@ -685,6 +685,7 @@ export class AttractionMergeService {
     "retiredReason",
     "attractionKind",
     "hasSingleRider",
+    "hasVirtualLine",
     "hasFastPass",
     "fastPassName",
     "fastPassPrice",

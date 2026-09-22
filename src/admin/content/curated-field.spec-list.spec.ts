@@ -35,6 +35,7 @@ function anAttraction(overrides: Record<string, unknown> = {}): Attraction {
     curatedSeasonMonths: null,
     hasSingleRider: null,
     attractionKind: null,
+    hasVirtualLine: null,
     // NOT NULL with a default — every row in the catalogue holds `false`.
     openWithPark: false,
     rcdbId: null,
@@ -221,7 +222,12 @@ describe("the attraction column lists and the editor's descriptors", () => {
    * thousands of rides as curated that nobody has ever looked at — the
    * reasoning sits beside the list itself.
    */
-  const NOT_A_CURATION = ["hasSingleRider", "rcdbId", "openWithPark"];
+  const NOT_A_CURATION = [
+    "hasSingleRider",
+    "hasVirtualLine",
+    "rcdbId",
+    "openWithPark",
+  ];
 
   /**
    * Empty since PAR-300, and kept rather than deleted: the list is what the
@@ -230,7 +236,7 @@ describe("the attraction column lists and the editor's descriptors", () => {
    */
   const NOT_INHERITABLE: string[] = [];
 
-  it("counts every hand-written key in the admin's figure, bar three", () => {
+  it("counts every hand-written key in the admin's figure, bar four", () => {
     const expected = keys.filter((key) => !NOT_A_CURATION.includes(key));
 
     expect([...ATTRACTION_CURATED_DB_COLUMNS].sort()).toEqual(

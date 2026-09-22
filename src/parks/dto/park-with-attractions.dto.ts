@@ -238,6 +238,18 @@ export class ParkAttractionDto {
 
   @ApiProperty({
     description:
+      "Whether the ride runs a virtual line at all — a return-time or " +
+      "boarding-group system joined instead of the standby queue. A static " +
+      "fact about the ride, NOT whether return times are being handed out " +
+      "right now, which `queues` answers. Null = unknown, not 'no'.",
+    example: true,
+    required: false,
+    nullable: true,
+  })
+  hasVirtualLine?: boolean | null;
+
+  @ApiProperty({
+    description:
       "The curated works period this ride is closed for — a rebuild or refit " +
       "written down in advance. Absent unless an editor has curated one. " +
       "Beside `outage` and never inside it: an outage is a fault, this is " +
@@ -800,6 +812,7 @@ export class ParkWithAttractionsDto {
               mayGetWet: curated.mayGetWet,
               hasSingleRider: attraction.hasSingleRider ?? null,
               attractionKind: attraction.attractionKind ?? null,
+              hasVirtualLine: attraction.hasVirtualLine ?? null,
               // Null on nearly every ride, so this is one absent key per
               // attraction rather than a block of nulls across the catalogue.
               worksPeriod: resolveWorksPeriod(attraction),

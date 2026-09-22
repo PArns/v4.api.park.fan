@@ -342,6 +342,29 @@ export class Attraction {
   attractionKind: AttractionKind | null;
 
   /**
+   * Whether the ride runs a virtual line at all — a return-time or
+   * boarding-group system you join instead of standing in the queue.
+   *
+   * Same shape and same reason as `has_single_rider` above, and the reported
+   * case is the reason it exists rather than being read off `queues`: Efteling's
+   * Danse Macabre has a virtual line and was showing nothing but CLOSED, because
+   * a virtual queue that is not handing out return times right now publishes no
+   * queue at all. `queues` answers "is it running and when may I come back";
+   * this answers "does the ride work that way".
+   *
+   * The live badge built from `RETURN_TIME` / `BOARDING_GROUP` stays as it is.
+   * The two sit beside each other: one is the ride's layout, the other is
+   * today's reading of it.
+   *
+   * Seeded from observation — every attraction that has ever reported a
+   * RETURN_TIME, PAID_RETURN_TIME, BOARDING_GROUP or VIRTUAL_QUEUE row — and
+   * extended by hand for the rides whose feed never publishes one. No sync
+   * writes it.
+   */
+  @Column({ name: "has_virtual_line", type: "boolean", nullable: true })
+  hasVirtualLine: boolean | null;
+
+  /**
    * Whether this ride can be skipped with a paid queue-jump product.
    *
    * Null is not "no". The overwhelming majority of the ~7000 attractions have

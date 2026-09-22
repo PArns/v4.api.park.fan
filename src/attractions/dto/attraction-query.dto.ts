@@ -30,14 +30,10 @@ export class AttractionQueryDto extends PaginationQueryDto {
 
   @IsOptional()
   @IsString()
-  @IsIn([
-    "STANDBY",
-    "SINGLE_RIDER",
-    "RETURN_TIME",
-    "PAID_RETURN_TIME",
-    "BOARDING_GROUP",
-    "PAID_STANDBY",
-  ])
+  // Read off the enum rather than retyped: the hand-written copy here was
+  // missing VIRTUAL_QUEUE, so a filter for it was rejected as an invalid value
+  // for a queue type the rest of the codebase knows about.
+  @IsIn(Object.values(QueueType))
   queueType?: QueueType;
 
   @IsOptional()

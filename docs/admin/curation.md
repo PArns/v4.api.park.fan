@@ -25,7 +25,7 @@ which is not a hypothetical: it is why `curated_may_get_wet` and
 | `curated_season_months`   | `season_months`   | `detect-seasonal`                     |
 
 Human-only, with no sync behind them: `attraction_kind`, `has_single_rider`,
-`open_with_park`, `rcdb_id`, `retired_at` / `retired_reason`, the three
+`has_virtual_line`, `open_with_park`, `rcdb_id`, `retired_at` / `retired_reason`, the three
 fast-pass columns below, and the whole `attraction_ride_profiles` table except
 its `stats` column.
 
@@ -36,6 +36,45 @@ closed set we decide: `RIDE`, `TRANSPORT`, `SHOW`, `WALKTHROUGH`. Both stay, so
 an editor can record that Queue-Times calls something a "Family Ride" and that
 it is in fact a railway. It is also the first enum on the attraction half; every
 other one describes a park.
+
+#### `has_virtual_line` and its seed
+
+The column answers "does this ride work by return time or boarding group at
+all", which is not the same question the `queues` array answers and cannot be
+read off it: a virtual line handing out nothing at this moment publishes no
+queue, so the ride reads as plain CLOSED. Efteling's Danse Macabre is the
+reported case. The live badge built from `RETURN_TIME` / `BOARDING_GROUP` stays
+where it is — one is the ride's layout, the other is today's reading of it.
+
+Seeded like `has_single_rider`, from the rides that have ever reported one:
+
+```sql
+UPDATE attractions a
+SET has_virtual_line = true
+WHERE a.has_virtual_line IS NULL
+  AND EXISTS (
+    SELECT 1
+    FROM queue_data qd
+    WHERE qd."attractionId" = a.id::text
+      AND qd."queueType" IN (
+        'RETURN_TIME', 'PAID_RETURN_TIME', 'BOARDING_GROUP', 'VIRTUAL_QUEUE'
+      )
+  );
+```
+
+Three things in it are load-bearing. `has_virtual_line IS NULL` is what makes
+the statement safe to run twice: without it a re-run overwrites an editor's
+hand-written `false` — the ride whose feed once published a return time and
+whose park has since stopped running one — with `true`. The quoted
+`"attractionId"` and `"queueType"` are the physical names: neither column
+declares a `name:` on the entity, so TypeORM stores them camelCase while
+`has_virtual_line` is snake_case, and an unquoted identifier folds to lower case
+and does not exist. And the cast is `a.id::text` rather than `qd."attractionId"::uuid`,
+so the comparison stays on the text side where `queue_data`'s index is.
+
+It seeds `true` only. A ride with no such row is left null — "nobody looked",
+which is what the API serves and what the ride page must not render as "no
+virtual line".
 
 ### Parks
 
@@ -406,7 +445,8 @@ either.
 
 **A spec holds the descriptors against the lists** (`curated-field.spec-list.spec.ts`),
 and it has one exception left. Against the admin's figure it is the bulk-filled
-three — `has_single_rider`, `rcdb_id`, `open_with_park`, which are not curation.
+four — `has_single_rider`, `has_virtual_line`, `rcdb_id`, `open_with_park`,
+which are not curation.
 Against the inheritance lists there is now none: every hand-editable key is
 carried. No list derives itself from `ATTRACTION_CURATED_FIELDS`, which is how
 the works period's dates sat off all of them from 2026-09-06 to 2026-09-17
