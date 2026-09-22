@@ -12,6 +12,7 @@ export {
 export { TrendDirection } from "./trend.type";
 export { ComparisonStatus } from "./comparison-status.type";
 export { ParkStatus, AttractionStatus } from "./status.type";
+export { AttractionKind, ATTRACTION_KIND_VALUES } from "./attraction-kind.type";
 export type { FeatureContext, QueueDataInfo } from "./feature-context.type";
 export type { HolidayInput } from "./holiday-input.type";
 export type { Percentiles, PercentilesWithIqr } from "./percentiles.type";

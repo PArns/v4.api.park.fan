@@ -14,6 +14,7 @@ import {
 import { Park } from "../../parks/entities/park.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { generateSlug } from "../../common/utils/slug.util";
+import type { AttractionKind } from "../../common/types/attraction-kind.type";
 
 /**
  * Attraction Entity
@@ -312,6 +313,33 @@ export class Attraction {
    */
   @Column({ name: "has_single_rider", type: "boolean", nullable: true })
   hasSingleRider: boolean | null;
+
+  /**
+   * What this attraction is for, hand-decided — a ride, a transport system, a
+   * show, a walkthrough.
+   *
+   * Beside `attraction_type` rather than in it, and not a correction of it:
+   * that column is the upstream's free-text label, this one is a closed set we
+   * decide. Both stay — an editor can record that Queue-Times calls something
+   * a "Family Ride" and that it is, in fact, a railway.
+   *
+   * **Null is not `RIDE`.** It means nobody has judged this attraction, which
+   * is true of nearly all of them. The column starts empty and can never be
+   * backfilled from the name: `Big Thunder Mountain Railroad` and
+   * `Seven Dwarfs Mine Train` are coasters, and a name-match seeds those as
+   * transport. See the type for the numbers behind that.
+   *
+   * Stored as text with the values in `ATTRACTION_KIND_VALUES`, not as a
+   * Postgres enum, which is how `park_type` does it too: `synchronize` runs in
+   * production, and a Postgres enum turns every added value into an
+   * `ALTER TYPE` that a running query can trip over.
+   *
+   * No sync writes it. It is read straight off the row by both DTO mappers,
+   * not through `resolveCuratedFacts` — that resolver is for the columns a
+   * sync fights over, and this one has a single writer.
+   */
+  @Column({ name: "attraction_kind", type: "text", nullable: true })
+  attractionKind: AttractionKind | null;
 
   /**
    * Whether this ride can be skipped with a paid queue-jump product.

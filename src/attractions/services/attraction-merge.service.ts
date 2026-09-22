@@ -683,6 +683,7 @@ export class AttractionMergeService {
     "curatedSeasonMonths",
     "retiredAt",
     "retiredReason",
+    "attractionKind",
     "hasSingleRider",
     "hasFastPass",
     "fastPassName",

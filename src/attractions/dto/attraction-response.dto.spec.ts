@@ -90,6 +90,7 @@ describe("AttractionResponseDto › status on the two builders", () => {
         AttractionResponseDto.fromEntityWithoutLiveData(attraction),
       ).sort(),
     ).toEqual([
+      "attractionKind",
       "fastPass",
       "hasSingleRider",
       "id",
@@ -166,5 +167,59 @@ describe("AttractionResponseDto › worksPeriod", () => {
       to: null,
       toUncertain: false,
     });
+  });
+});
+
+/**
+ * The hand-decided kind on the ride endpoint.
+ *
+ * It belongs to the stored half: it comes off the row, it is the same on every
+ * request, and it must therefore reach both builders — the park attractions
+ * list joins no live data, and that is the payload a park page actually reads.
+ */
+describe("AttractionResponseDto › attractionKind", () => {
+  const ride = (overrides: Record<string, unknown> = {}) =>
+    ({
+      id: "attraction-1",
+      name: "Stoomtrein - Oost",
+      slug: "stoomtrein-oost",
+      retiredAt: null,
+      retiredReason: null,
+      hasSingleRider: null,
+      rcdbId: null,
+      ...overrides,
+    }) as unknown as Attraction;
+
+  it("reaches both builders", () => {
+    const entity = ride({ attractionKind: "TRANSPORT" });
+    expect(AttractionResponseDto.fromEntity(entity).attractionKind).toBe(
+      "TRANSPORT",
+    );
+    expect(
+      AttractionResponseDto.fromEntityWithoutLiveData(entity).attractionKind,
+    ).toBe("TRANSPORT");
+  });
+
+  it("is null for a ride nobody has judged, not a default kind", () => {
+    // Nearly every attraction is in this state, and it has to read as an
+    // absence: a mapper defaulting to "RIDE" would turn our own silence into
+    // a claim about the park.
+    expect(AttractionResponseDto.fromEntity(ride()).attractionKind).toBeNull();
+  });
+
+  it("is not derived from the upstream label", () => {
+    // `attractionType` is the feed's free text and `attractionKind` our
+    // verdict. The two are independent on purpose: upstream files water rides
+    // as ATTRACTION and walkthroughs as RIDE, so a label here may never seed a
+    // kind. A ride with a label and no verdict reads null.
+    expect(
+      AttractionResponseDto.fromEntity(ride({ attractionType: "Family Ride" }))
+        .attractionKind,
+    ).toBeNull();
+    expect(
+      AttractionResponseDto.fromEntity(
+        ride({ attractionType: "Family Ride", attractionKind: "TRANSPORT" }),
+      ).attractionKind,
+    ).toBe("TRANSPORT");
   });
 });

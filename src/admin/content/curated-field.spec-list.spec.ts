@@ -2,6 +2,7 @@ import { CURATED_PARK_COLUMNS } from "../../parks/utils/curated-park-facts.util"
 import { getMetadataArgsStorage } from "typeorm";
 import { ATTRACTION_CURATED_DB_COLUMNS } from "../../attractions/utils/curated-attraction-facts.util";
 import { AttractionMergeService } from "../../attractions/services/attraction-merge.service";
+import { ATTRACTION_KIND_VALUES } from "../../common/types/attraction-kind.type";
 import { Attraction as AttractionEntity } from "../../attractions/entities/attraction.entity";
 import {
   ATTRACTION_CURATED_FIELDS,
@@ -33,6 +34,7 @@ function anAttraction(overrides: Record<string, unknown> = {}): Attraction {
     curatedIsSeasonal: null,
     curatedSeasonMonths: null,
     hasSingleRider: null,
+    attractionKind: null,
     // NOT NULL with a default — every row in the catalogue holds `false`.
     openWithPark: false,
     rcdbId: null,
@@ -82,6 +84,45 @@ describe("curated field views", () => {
       // `false` here IS a statement — "this ride has no single-rider line" —
       // and its column is nullable, so null is what "nothing decided" means.
       expect(byKey(views, "hasSingleRider").overridden).toBe(true);
+    });
+
+    it("leaves the unjudged kind unflagged and flags a decided one", () => {
+      // Null on `attractionKind` is the state nearly every attraction is in.
+      // Were it to count, the badge would claim ~7,400 curated rides on the
+      // day the column landed — the failure `open_with_park` already had.
+      expect(
+        byKey(attractionFieldViews(anAttraction()), "attractionKind")
+          .overridden,
+      ).toBe(false);
+      expect(
+        byKey(
+          attractionFieldViews(anAttraction({ attractionKind: "TRANSPORT" })),
+          "attractionKind",
+        ).overridden,
+      ).toBe(true);
+    });
+  });
+
+  describe("the attraction kind", () => {
+    it("offers exactly the values the API serves", () => {
+      // The descriptor's options and the published union are one list read
+      // twice, not two lists kept in step: a value in the editor that the
+      // Swagger enum does not carry is the drift `status.type.ts` documents
+      // in its own case, where `UNKNOWN` was served for months while the
+      // contract claimed four values.
+      expect(
+        byKey(attractionFieldViews(anAttraction()), "attractionKind").options,
+      ).toEqual([...ATTRACTION_KIND_VALUES]);
+    });
+
+    it("is the first enum on an attraction, so the write path now has one", () => {
+      // Every other enum descriptor belongs to a park. If this assertion ever
+      // reads more than one key, the reason the write-path test below exists
+      // has changed and that test should say so.
+      const enums = ATTRACTION_CURATED_FIELDS.filter(
+        (field) => field.type === "enum",
+      ).map((field) => field.key);
+      expect(enums).toEqual(["attractionKind"]);
     });
   });
 
