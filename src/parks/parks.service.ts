@@ -51,6 +51,10 @@ import {
 } from "./utils/schedule-dedup.sql";
 import { captureParkPath, samePath } from "./services/park-rename.service";
 import {
+  DuplicatePair,
+  ParkValidatorService,
+} from "./services/park-validator.service";
+import {
   isParkOpen,
   RideStatusData,
 } from "../common/utils/status-calculator.util";
@@ -175,6 +179,11 @@ function scheduleRowsFromCache(parsed: unknown): ScheduleEntry[] | null {
   return rows;
 }
 
+/** Order-free key for a pair of park ids — `findDuplicates` lists each pair once, in either order. */
+function parkPairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
 @Injectable()
 export class ParksService {
   private readonly logger = new Logger(ParksService.name);
@@ -196,6 +205,7 @@ export class ParksService {
     @Inject(forwardRef(() => HolidaysService))
     private holidaysService: HolidaysService,
     private readonly revalidation: RevalidationService,
+    private readonly parkValidator: ParkValidatorService,
   ) {}
 
   /**
@@ -1316,6 +1326,13 @@ export class ParksService {
   /**
    * Scans for and merges duplicate parks based on shared Queue-Times IDs.
    * This fixes "Split Brain" issues where a park exists separately from Wiki and Queue-Times sources.
+   *
+   * A shared id is where the search starts, not the permission to delete. A
+   * ghost is merged only when `ParkValidatorService.findDuplicates` lists the
+   * pair (primary, ghost) as `safe` — the same verdict
+   * `POST merge-duplicate-parks` reads, so there is one rule and not two. A
+   * pair it does not list, or lists as needing review, stays and is logged
+   * with both names and the id, for the admin endpoint to pick up.
    */
   async repairDuplicates(): Promise<void> {
     this.logger.debug("🔧 Running Duplicate Park Repair...");
@@ -1337,6 +1354,15 @@ export class ParksService {
       this.logger.debug("Found 0 duplicate sets to repair.");
     }
 
+    const verdicts =
+      duplicates.length > 0
+        ? await this.parkValidator.findDuplicates()
+        : ([] as DuplicatePair[]);
+    const verdictByPair = new Map<string, DuplicatePair>();
+    for (const pair of verdicts) {
+      verdictByPair.set(parkPairKey(pair.park1.id, pair.park2.id), pair);
+    }
+
     for (const dup of duplicates) {
       const qtId = dup.queue_times_entity_id;
 
@@ -1356,6 +1382,19 @@ export class ParksService {
       const ghosts = parks.filter((p) => p.id !== primary!.id);
 
       for (const ghostPark of ghosts) {
+        const verdict = verdictByPair.get(
+          parkPairKey(primary.id, ghostPark.id),
+        );
+        if (!verdict?.safe) {
+          this.logger.warn(
+            `⏭️ Not merging "${ghostPark.name}" (${ghostPark.id}) into "${primary.name}" (${primary.id}) despite shared QT ID ${qtId}: ${
+              verdict?.reviewReason ??
+              "findDuplicates does not list this pair as a duplicate"
+            }. Review it via POST /v1/admin/merge-duplicate-parks.`,
+          );
+          continue;
+        }
+
         this.logger.log(
           `🔀 Merging Ghost Park "${ghostPark.name}" into "${primary!.name}" (Shared QT ID: ${qtId})`,
         );
