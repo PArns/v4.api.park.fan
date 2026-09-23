@@ -484,9 +484,14 @@ def apply_schedule_features(
         if "attractionId" in df.columns:
             df["attractionId"] = df["attractionId"].astype(str)
 
-        # Ensure local_timestamp and date_local exist in df
+        # Ensure local_timestamp and date_local exist in df.
+        # The fallback is the UTC wall clock, but NAIVE: convert_to_local_time
+        # stores a reading rather than an instant, and the column is read again
+        # after this function returns.
         if "local_timestamp" not in df.columns:
-            df["local_timestamp"] = pd.to_datetime(df["timestamp"])
+            df["local_timestamp"] = pd.to_datetime(
+                df["timestamp"], utc=True
+            ).dt.tz_localize(None)
         df["local_timestamp"] = pd.to_datetime(df["local_timestamp"])
         df["schedule_date"] = pd.to_datetime(df["local_timestamp"].dt.date)
 

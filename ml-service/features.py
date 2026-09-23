@@ -62,16 +62,20 @@ def convert_to_local_time(
         df["parkId"].map(tz_map).replace("", np.nan).fillna("UTC").astype(str)
     )
 
+    # Positional assignment (`.indices` / `.iloc` / `.values`), not label-based:
+    # a duplicate index label would otherwise select foreign rows and hand a park
+    # another timezone's wall clock.
     local = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
-    for tz_name, idx in df.groupby(tz_per_row, sort=False).groups.items():
+    ts = df["timestamp"]
+    for tz_name, pos in df.groupby(tz_per_row, sort=False).indices.items():
         try:
-            local.loc[idx] = (
-                df.loc[idx, "timestamp"].dt.tz_convert(tz_name).dt.tz_localize(None)
+            local.iloc[pos] = (
+                ts.iloc[pos].dt.tz_convert(tz_name).dt.tz_localize(None).values
             )
         except Exception as e:
             print(f"⚠️  Timezone conversion failed for {tz_name}: {e}")
             # Keep UTC wall-clock for this group rather than leaving it NaT.
-            local.loc[idx] = df.loc[idx, "timestamp"].dt.tz_localize(None)
+            local.iloc[pos] = ts.iloc[pos].dt.tz_localize(None).values
 
     df["local_timestamp"] = local
 
@@ -1433,7 +1437,12 @@ def add_park_schedule_features(
         # Ensure local_timestamp and date_local exist in df
         if "local_timestamp" not in df.columns:
             # Fallback: use timestamp if local_timestamp missing
-            df["local_timestamp"] = pd.to_datetime(df["timestamp"])
+            # UTC wall clock, but NAIVE: the column leaves this function and is
+            # read again downstream, where a tz-aware value would break the
+            # contract convert_to_local_time establishes.
+            df["local_timestamp"] = pd.to_datetime(
+                df["timestamp"], utc=True
+            ).dt.tz_localize(None)
         if "date_local" not in df.columns:
             df["date_local"] = df["local_timestamp"].dt.date
 
@@ -2035,7 +2044,16 @@ def engineer_features(
     )
 
     # Fetch schedules once (used by add_park_schedule_features and add_park_has_schedule_feature)
-    # Determine date range from local timestamps if available
+    # Determine date range from local timestamps if available.
+    #
+    # In practice the else branch always wins here: add_time_features() — which
+    # creates local_timestamp — does not run until below, so the range is the UTC
+    # one. The consumers join on the park-LOCAL date, and local dates reach one
+    # day past the UTC window in both directions (UTC-12 … UTC+14): a row just
+    # after UTC midnight on the first day is still the previous local day west of
+    # UTC, and the mirror case holds at the end of the window east of it. Those
+    # rows would find no schedule and read is_park_open = 0 mid-operation, so the
+    # fetch is padded by a day on each side.
     if "local_timestamp" in df.columns and not df["local_timestamp"].isna().all():
         start_date_local = df["local_timestamp"].min().date()
         end_date_local = df["local_timestamp"].max().date()
@@ -2044,8 +2062,8 @@ def engineer_features(
         end_date_local = end_date.date()
 
     cached_schedules_df = fetch_park_schedules(
-        datetime.combine(start_date_local, time.min),
-        datetime.combine(end_date_local, time.max),
+        datetime.combine(start_date_local - timedelta(days=1), time.min),
+        datetime.combine(end_date_local + timedelta(days=1), time.max),
     )
 
     print(f"   DB cache fetch time: {time_module.time() - cache_start:.2f}s")

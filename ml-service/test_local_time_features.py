@@ -219,6 +219,9 @@ def test_schedule_join_still_closes_a_row_outside_opening_hours():
     """The counter-check: 04:00 UTC is 00:00 EDT, after the 23:00 close.
 
     Without it, a join that simply said "open" would pass the test above.
+
+    GREEN on the pre-fix code as well, by design — a control is not supposed to
+    tell the two implementations apart.
     """
     df = add_time_features(_frame([(NEW_YORK, "2026-07-04 04:00")]), PARKS_METADATA)
 
@@ -251,6 +254,62 @@ def test_schedule_join_still_closes_a_row_outside_opening_hours():
     )
 
     assert out.loc[0, "is_park_open"] == 0
+
+
+class _StopAfterFetch(Exception):
+    """Ends engineer_features once the schedule window has been observed."""
+
+
+def test_engineer_features_pads_the_schedule_window_past_the_utc_edges():
+    """The fetch range is UTC, the join key is local — so it needs a day of pad.
+
+    `engineer_features` fetches schedules BEFORE `add_time_features` runs, so its
+    `local_timestamp` branch can never fire and the range is always the UTC one.
+    Local dates reach a day past that window on both sides: a row at 01:30 UTC on
+    the window's first day is still the previous local day in New York, and its
+    schedule row would sit outside an unpadded fetch — leaving it `is_park_open =
+    0` at 21:30 on a running evening. Pre-fix this could not happen, because
+    `date_local` was the UTC date and therefore always inside the range.
+
+    Only the requested window is under test here, so the run is cut short as soon
+    as it has been recorded.
+    """
+    asked = {}
+
+    def _fetch_schedules(start, end):
+        asked["start"], asked["end"] = start.date(), end.date()
+        raise _StopAfterFetch
+
+    import features as features_module
+
+    originals = {
+        name: getattr(features_module, name)
+        for name in ("fetch_parks_metadata", "fetch_holidays", "fetch_park_schedules")
+    }
+    features_module.fetch_parks_metadata = lambda *a, **k: PARKS_METADATA.assign(
+        influencingRegions=[[] for _ in range(len(PARKS_METADATA))]
+    )
+    features_module.fetch_holidays = lambda *a, **k: pd.DataFrame(
+        columns=["date", "country", "region", "holiday_type", "is_nationwide"]
+    )
+    features_module.fetch_park_schedules = _fetch_schedules
+
+    day = datetime(2026, 7, 4)
+    try:
+        features_module.engineer_features(_frame([US_EVENING_ROW]), day, day)
+    except _StopAfterFetch:
+        pass
+    finally:
+        for name, fn in originals.items():
+            setattr(features_module, name, fn)
+
+    assert asked, "engineer_features never fetched schedules"
+    assert asked["start"] <= datetime(2026, 7, 3).date(), (
+        f"window starts {asked['start']}, excluding the row's local date 2026-07-03"
+    )
+    assert asked["end"] >= datetime(2026, 7, 5).date(), (
+        f"window ends {asked['end']}, excluding local dates east of UTC"
+    )
 
 
 def test_time_since_park_open_compares_instants_not_wall_clocks():
