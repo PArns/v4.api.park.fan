@@ -70,8 +70,8 @@ means:
 
 Where the endpoints genuinely differ is which row they read, not how they
 serialize it. `/plan/day` falls back to the widest of a ride's **hourly** bands,
-which reach 24 hours ahead; the calendar reads the day-level prediction alone. So
-for today and tomorrow `/plan/day` can answer where `headlinerForecast` does not,
+which reach 48 hours ahead; the calendar reads the day-level prediction alone. So
+inside that window `/plan/day` can answer where `headlinerForecast` does not,
 for the same ride on the same date. Neither is wrong: different rows, different
 purposes.
 

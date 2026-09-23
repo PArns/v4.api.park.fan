@@ -1265,9 +1265,9 @@ export class CalendarService {
    * missing band as "not known", never as "narrow", and must not compare two
    * bands across that seam.
    *
-   * Where the two endpoints CAN disagree is a ride today or tomorrow:
+   * Where the two endpoints CAN disagree is a ride inside the hourly window:
    * `/plan/day` also falls back to the widest of that ride's hourly bands,
-   * which reach 24 hours out, and this path reads the day-level row only.
+   * which reach 48 hours out, and this path reads the day-level row only.
    *
    * A model-reported `0` is a measurement and is forwarded — `predict.py`
    * rounds a sub-half-minute spread to zero — which is why `?? null` is right

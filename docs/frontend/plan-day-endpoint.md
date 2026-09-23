@@ -24,7 +24,7 @@ response says which one produced it.
 | tier | what it is | when |
 | --- | --- | --- |
 | `observed` | what the queues **actually did**, from the nightly 15-minute rollup | a date in the past |
-| `measured` | the model's own hourly prediction | the day carries at least one hour of it — the model reaches **24 hours** ahead |
+| `measured` | the model's own hourly prediction | the day carries at least one hour of it — the model reaches **48 hours** ahead |
 | `composed` | a day-level prediction scaled by the ride's historical hour shape | everything within the daily horizon |
 | `long_range` | the model has produced no day level for this date, so there are **no curves** | past the park's own schedule coverage |
 
@@ -48,10 +48,13 @@ wrong for every one of them.
 
 ## 2. A day is often part measured and part composed
 
-The hourly forecast covers **now → now + 24 h** and not one minute more. So:
+The hourly forecast covers **now → now + 48 h** and not one minute more. So:
 
 - **today** has no measured hours before the current one,
-- **tomorrow** has none after it.
+- **tomorrow** is now covered end to end,
+- **the day after tomorrow** has none after the hour the window stops in — which
+  is the current hour, so a late-afternoon request reaches its afternoon and an
+  early-morning one barely reaches its opening.
 
 Those hours are filled from the composed curve and each one says so:
 
@@ -237,13 +240,13 @@ separately, so a past day states them too.
 
 `rides[]` is not the park's catalogue, and it has never been the five headliners
 the calendar carries. **On a composed day** — the common case, anything past the
-model's 24-hour hourly reach — a ride is carried only where two independent
+model's 48-hour hourly reach — a ride is carried only where two independent
 answers meet: the day level has to speak for it, *and* the last year has to have
 given it an hour shape. Neither alone is enough, and the resulting set is smaller
 than either, because the filters below (season, works window, retired) cut it
 again afterwards. A `measured` ride enters by a different door and needs no
 shape: the ride loop unions the model's hourly rows with the composed ones, so
-today and tomorrow can carry a ride the shape has never covered
+the days the hourly window reaches can carry a ride the shape has never covered
 (`sampleDays: 0`). An `observed` day is the rollup's own list.
 
 Measured against production on 2026-09-11, for 2026-09-18 at seven days' lead —

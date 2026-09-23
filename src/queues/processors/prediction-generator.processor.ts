@@ -115,7 +115,7 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
             try {
               // Pass pre-computed live status to avoid redundant getBatchParkStatus call
               const liveStatus = statusMap.get(park.id);
-              // Get hourly predictions for next 24h
+              // Get hourly predictions for the generation horizon (48h)
               const response = await this.mlService.getParkPredictions(
                 park.id,
                 "hourly",
@@ -399,12 +399,15 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
       const now = new Date();
 
       // Hourly: keep 7 days of past targets. Pruned on createdAt (the partition
-      // key) in day-windows — see purgeHourlyPredictionsBefore. The cutoff gets
-      // one extra day of slack because a row's target can sit up to 24h after
-      // its createdAt, so "created before now-8d" cannot drop anything that was
-      // predicting for the last 7 days.
+      // key) in day-windows — see purgeHourlyPredictionsBefore. The slack is the
+      // generation horizon rounded up to whole days (HOURLY_PREDICTIONS = 48h →
+      // 2), because a row's target sits up to that long after its createdAt: at
+      // now-9d the newest row this drops was predicting for now-7d, exactly the
+      // edge of the retention. Raising the horizon without raising the slack is
+      // a silent delete of targets the retention still wants — at 48h with the
+      // old 1-day slack the purge would have eaten the whole now-7d..now-6d day.
       const hourlyCutoff = new Date(now);
-      hourlyCutoff.setDate(hourlyCutoff.getDate() - 8);
+      hourlyCutoff.setDate(hourlyCutoff.getDate() - 9);
 
       const hourly =
         await this.mlService.purgeHourlyPredictionsBefore(hourlyCutoff);

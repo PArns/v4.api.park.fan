@@ -51,15 +51,15 @@ import { isCuratedOutOfService } from "../../attractions/utils/curated-out-of-se
  * One day, ride by ride, hour by hour — the series a trip planner draws.
  *
  * Nothing upstream answers "what will Taron's queue be at 14:00 on 17 October".
- * What exists is an hourly forecast for the next 24 hours (`HOURLY_PREDICTIONS`
+ * What exists is an hourly forecast for the next 48 hours (`HOURLY_PREDICTIONS`
  * in the python service) and a day-level forecast for as far ahead as the park
  * has published a schedule — about six months. So there are two regimes, and
  * which one produced a number travels with it:
  *
  * - **measured** — the model's own hourly answer, at its own resolution. It
- *   exists for the next 24 hours and not one minute further, so a day inside
- *   that window is part measured and part composed and every hour says which
- *   it is (`PlanDayHourDto.source`).
+ *   exists for the next 48 hours and not one minute further, so the day the
+ *   window ends inside is part measured and part composed and every hour says
+ *   which it is (`PlanDayHourDto.source`).
  * - **composed** — a day-level prediction scaled by the ride's historical hour
  *   shape (see `composeDayCurve`). The level is predicted, the shape is
  *   historical.
@@ -115,7 +115,15 @@ export class PlanDayService {
 
   /**
    * Where the python service's hourly generation stops
-   * (`HOURLY_PREDICTIONS = 24` hours, as 96 quarter-hour slots).
+   * (`HOURLY_PREDICTIONS = 48` hours, as 192 quarter-hour slots), in whole days
+   * — the last day the window can reach at all, not the last one it fills.
+   * Rounded UP on purpose. A 48-hour window always reaches into the day after
+   * tomorrow, up to the hour it is opened at: asked at 18:00 it covers that
+   * day's 00:00-18:00, asked at 06:00 only its first six hours. This constant
+   * decides nothing but whether the measured hours are fetched at all — which
+   * tier a day gets comes from the curves that were built — so covering the day
+   * the window merely enters costs one query and mislabels nothing, while
+   * rounding down would discard answers the model had already given.
    *
    * There is deliberately no matching DAILY constant. The daily horizon is not
    * a fixed number of days — `predict.py` walks the park's schedule, so it ends
@@ -125,7 +133,7 @@ export class PlanDayService {
    * answer as out of range. Whether a date has a day level is a question with
    * an answer, so this asks it (see `dayLevels`).
    */
-  private static readonly HOURLY_HORIZON_DAYS = 1;
+  private static readonly HOURLY_HORIZON_DAYS = 2;
 
   /**
    * How far "this ride is shut at the moment" still describes the day asked about.
@@ -2002,7 +2010,7 @@ export class PlanDayService {
    * The label a day with no curves carries.
    *
    * A date in the past is not a forecast horizon, and the ordering here is the
-   * whole reason it is checked first: `-38 <= 1` is true, so a day five weeks
+   * whole reason it is checked first: `-38 <= 2` is true, so a day five weeks
    * gone came back labelled `measured` — the most trustworthy tier, on the
    * emptiest possible answer. Every day that DOES produce curves gets its tier
    * from those curves instead (`forecastRides`).

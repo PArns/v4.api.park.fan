@@ -19,7 +19,7 @@ import {
  *    in its own type doc: a prediction type that is not compared reports
  *    `tracked: false`, "e.g. daily predictions, which span up to 365 days and are
  *    never compared, so 0% would read as broken". `prediction_accuracy` therefore
- *    holds hourly rows only, which reach 24 hours ahead.
+ *    holds hourly rows only, which reach 48 hours ahead.
  *
  * 2. The predictions themselves do not survive to be scored later.
  *    `MLService.deduplicatePredictions` deletes every daily row with
