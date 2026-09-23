@@ -1,6 +1,7 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { LiveWaitTimesDto } from "./live-wait-times.dto";
 import type { PlanDayUnavailableReason } from "../utils/plan-day-availability.util";
+import type { RideOpeningConfidence } from "../../common/types/ride-opening.type";
 
 /**
  * How a number in this response was arrived at. It travels with every curve
@@ -158,6 +159,29 @@ export class PlanDayRideDto {
       "timestamp.",
   })
   opensAt?: string;
+
+  @ApiProperty({
+    required: false,
+    enum: ["high", "medium", "low"],
+    example: "high",
+    description:
+      "How much watching `opensAt` rests on, bucketed by the number of days " +
+      "the median was taken over: `high` from 40 days, `medium` from 20, " +
+      "`low` below that. Present exactly when `opensAt` is — it grades that " +
+      "time and says nothing on its own.\n\n" +
+      "IT IS NOT A CONFIDENCE INTERVAL AND NO MINUTES CAN BE DERIVED FROM IT. " +
+      "`low` is a real answer on thin evidence, never a placeholder: the floor " +
+      "for an answer to exist at all is five observed openings, and below that " +
+      "`opensAt` is absent instead.\n\n" +
+      "THE TWO KEYS OF ONE RIDE ARE NOT EQUALLY KNOWN, which is why this " +
+      "exists. The opening time is looked up by the park's own opening that " +
+      "day, and a park opens at its off-season hour on far fewer mornings: " +
+      "measured on 2026-09-23, Black Mamba's answer for a 09:00 gate had 176 " +
+      "days behind it and its answer for an 11:00 gate had 23. Without this " +
+      "field the two are indistinguishable. Across every park open that day, " +
+      "58% of served times read `high`, 23% `medium` and 19% `low`.",
+  })
+  opensAtConfidence?: RideOpeningConfidence;
 
   @ApiProperty({
     required: false,

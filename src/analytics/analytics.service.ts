@@ -42,6 +42,10 @@ import {
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { RopeDropStored } from "../common/types/rope-drop.type";
 import {
+  RideOpening,
+  rideOpeningConfidence,
+} from "../common/types/ride-opening.type";
+import {
   computeRopeDrop,
   DEFAULT_ROPE_DROP_THRESHOLDS,
   RopeDropComputeResult,
@@ -5682,13 +5686,21 @@ export class AnalyticsService {
    *
    * A full year, because winter is the case that breaks it. The median rather
    * than the earliest: one late morning is a breakdown, not a schedule.
+   *
+   * EACH ANSWER CARRIES HOW MUCH WATCHING IT RESTS ON. The two keys of one ride
+   * are not equally well known: measured on 2026-09-23, Black Mamba's 09:00
+   * answer had 176 observed days behind it and its 11:00 answer 23, because a
+   * park that opens at 11:00 does so on about twenty mornings a year. Both look
+   * identical in the payload, so the day count is bucketed into a confidence
+   * (`rideOpeningConfidence`) and travels with the time.
    */
   async getRideOpeningTimes(
     parkId: string,
     timezone: string,
-  ): Promise<Map<string, string>> {
-    const cacheKey = `park:ride-openings:v2:${parkId}`;
-    const cached = safeJsonParse<Array<[string, string]>>(
+  ): Promise<Map<string, RideOpening>> {
+    // v3: the cached value changed shape from `HH:mm` to `{opensAt,confidence}`.
+    const cacheKey = `park:ride-openings:v3:${parkId}`;
+    const cached = safeJsonParse<Array<[string, RideOpening]>>(
       await this.redis.get(cacheKey).catch(() => null),
     );
     if (cached) return new Map(cached);
@@ -5697,6 +5709,7 @@ export class AnalyticsService {
       attractionId: string;
       park_opens_at: string;
       opens_at: string;
+      sample_days: string;
     }> = await this.queueDataRepository.manager.query(
       `WITH sched AS (
          SELECT se.date,
@@ -5726,7 +5739,8 @@ export class AnalyticsService {
        )
        SELECT pd.aid AS "attractionId",
               s.park_opens_at,
-              to_char(percentile_disc(0.5) WITHIN GROUP (ORDER BY pd.first_operating), 'HH24:MI') AS opens_at
+              to_char(percentile_disc(0.5) WITHIN GROUP (ORDER BY pd.first_operating), 'HH24:MI') AS opens_at,
+              count(*) AS sample_days
          FROM per_day pd
          JOIN sched s ON s.date = pd.day
         WHERE pd.first_operating IS NOT NULL
@@ -5749,7 +5763,11 @@ export class AnalyticsService {
           (r) =>
             [
               `${r.attractionId}|${r.park_opens_at}`,
-              floorToQuarter(r.opens_at),
+              {
+                opensAt: floorToQuarter(r.opens_at),
+                // `count(*)` comes back as a string from pg's bigint.
+                confidence: rideOpeningConfidence(Number(r.sample_days)),
+              },
             ] as const,
         ),
     );
