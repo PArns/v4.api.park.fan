@@ -1450,16 +1450,13 @@ a warning at >16 MB serialized.
 - or: split the Redis index into per-continent keys and lazy-load,
 - or: switch serialization to msgpack/gzip (last resort, complexity for ~2–3x).
 
-### 6. Python `features.py` vectorization (nice-to-have)
+### 6. Python `features.py` vectorization — DONE (PAR-452)
 
-**Current state:** per-park `groupby` loops with `df.loc[idx, ...]` assignments for
-timezone-local features (`ml-service/features.py` ~lines 51–114). Affects nightly
-training wall-time only, not request latency.
-
-**How:** group rows by timezone (not park), convert once per unique tz via
-`df["timestamp"].dt.tz_convert(tz)`, assign back via `.loc[mask]`. Validate by
-comparing feature output on a fixed dataset before/after (`verify_features.py`
-exists for exactly this).
+Grouping by timezone instead of by park turned out not to be a wall-time item at
+all: the per-park loop wrote tz-aware values into one pandas column, which
+carries a single timezone, so every local hour was silently the UTC one. PAR-452
+converts once per timezone and stores the reading naive. The 0.4 s this saves in
+a ~45 min training was never the point.
 
 ### 7. Decide: PoC scripts in nf-service
 

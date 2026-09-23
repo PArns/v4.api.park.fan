@@ -176,3 +176,47 @@ return dateStr === todayStr; // "2026-03-02" === "2026-03-02" ✓
 | External API ISO datetime (`"2026-03-02T10:00-05:00"`) | `string` | `formatInParkTimezone(new Date(raw), tz)` |
 | TypeORM `DATE` column | `Date` (midnight UTC) | `.toISOString().split("T")[0]` |
 | TypeORM `TIMESTAMPTZ` column | `Date` (real instant) | `formatInParkTimezone(date, tz)` ✓ |
+---
+
+## 8. Python / pandas — One Column, One Timezone (Read Before Touching `ml-service`)
+
+The rules above are about `Date` objects. The ML service works on pandas columns,
+where park time has a trap of its own.
+
+**A pandas datetime column carries exactly ONE timezone.** Writing per-park
+tz-aware values into one column does not give you a column of local times — pandas
+converts each write into the column's timezone. It does this silently: no warning,
+no error, no dtype change.
+
+```python
+# ❌ BAD — every write is converted back to the column's tz (PAR-452)
+df["local_timestamp"] = df["timestamp"]                     # dtype: datetime64[ns, UTC]
+for park_id, idx in df.groupby("parkId").groups.items():
+    df.loc[idx, "local_timestamp"] = (                      # looks local, lands as UTC
+        df.loc[idx, "timestamp"].dt.tz_convert(tz_map[park_id])
+    )
+
+# ✅ CORRECT — convert once per TIMEZONE, store the wall clock naive
+tz_per_row = df["parkId"].map(tz_map).fillna("UTC")
+local = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+for tz_name, idx in df.groupby(tz_per_row, sort=False).groups.items():
+    local.loc[idx] = df.loc[idx, "timestamp"].dt.tz_convert(tz_name).dt.tz_localize(None)
+df["local_timestamp"] = local                               # dtype: datetime64[ns]
+```
+
+**The consequence for every reader: `local_timestamp` is a READING, not an instant.**
+
+| What you need | Column to use |
+|---|---|
+| Wall-clock features — `hour`, `day_of_week`, `month`, `season`, `date_local` | `local_timestamp` (naive) |
+| Join key for holidays, school holidays, schedules, `downtime_minutes_today` | `date_local` (park-local calendar date) |
+| Any comparison against a `TIMESTAMPTZ` from the DB (`openingTime`, `closingTime`) or an ISO instant from the API (`parkOpeningTimes`) | `timestamp` (UTC) — **never** `local_timestamp` |
+
+Comparing a naive reading against a `TIMESTAMPTZ` either raises or, worse, compares
+two numbers that mean different things. The schedule joins in `features.py` and
+`predict.py` are the reference shape: **join on the local date, compare the instants.**
+
+**Why this is worth a section**: while it was broken, `hour` was wrong on 99.8 % of
+production training rows and `date_local` on 3.1 % — and nothing failed. Training and
+serving were wrong in the same direction, so the model never protested; what broke was
+every lookup keyed on the calendar day. See `ml-service/test_local_time_features.py`.
