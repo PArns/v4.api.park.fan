@@ -36,9 +36,9 @@ Measured from the forecast tables themselves, not from configuration:
 | **shape** (`shape_forecasts`) | 1–14 days | 4,893 | expands a daily level into a 15-min curve |
 | **PCN** (`pcn_forecasts`) | **0–1 day** (mean lead 6.1 **hours**) | 2,782 | a nowcaster; not a long-range candidate by construction |
 
-CatBoost's own *hourly* generation stops at 24 hours (`HOURLY_PREDICTIONS`), which
-is why `/plan/day` composes anything beyond tomorrow from a daily level and a
-historical shape.
+CatBoost's own *hourly* generation stops at 48 hours (`HOURLY_PREDICTIONS`, raised
+from 24 on 2026-09-23), which is why `/plan/day` composes anything beyond that
+window from a daily level and a historical shape.
 
 ## 2. TFT degrades gently — and that is the headline
 
@@ -133,8 +133,9 @@ specificity buys. Phantasialand, with the fewest measured days, degrades worst
 
 **The shape model is at parity**, not the 35 % behind its shadow board reports.
 That board compares a 14-day-ahead shape forecast against CatBoost's *freshest*
-prediction for the same slot — and CatBoost only forecasts 24 hours, so its series
-is always a ≤24 h forecast whatever the `lead_bucket` column says. The giveaway is
+prediction for the same slot — and CatBoost forecast only 24 hours when this was
+measured (48 since 2026-09-23), so its series is always a short-lead forecast
+whatever the `lead_bucket` column says. The giveaway is
 in the board itself: CatBoost's MAE is identical across every lead bucket
 (8.11 / 8.12 / 8.14), which no real forecast does.
 

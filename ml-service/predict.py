@@ -398,8 +398,8 @@ def generate_future_timestamps(
         rounded_base = base_time.replace(minute=0, second=0, microsecond=0)
         rounded_base = rounded_base + timedelta(minutes=minutes)
 
-        # Next 24 hours in 15-minute slots (starting from next slot)
-        # 24 hours * 4 slots per hour = 96 slots
+        # HOURLY_PREDICTIONS hours in 15-minute slots (starting from next slot),
+        # so 48 hours * 4 slots per hour = 192 slots.
         return [
             rounded_base + timedelta(minutes=15 * i)
             for i in range(settings.HOURLY_PREDICTIONS * 4)

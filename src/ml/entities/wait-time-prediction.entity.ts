@@ -13,8 +13,8 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
  * WaitTimePrediction Entity
  *
  * Stores ML predictions for attraction wait times
- * - Hourly: Next 24 hours (for immediate planning)
- * - Daily: Next 14 days (for trip planning)
+ * - Hourly: Next 48 hours (for immediate planning)
+ * - Daily: Next 365 days (for trip planning)
  */
 @Entity("wait_time_predictions")
 @Index(["attractionId", "predictedTime"])

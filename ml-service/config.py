@@ -129,7 +129,13 @@ class Settings(BaseSettings):
     )
 
     # Prediction Configuration
-    HOURLY_PREDICTIONS: int = 24  # Next 24 hours (internal use)
+    # Hours of 15-minute slots generated per run (internal use). Three places in
+    # the API are coupled to this number and break silently if it grows past
+    # them: the dedup window in MLService.deduplicatePredictions (48h — this may
+    # not exceed it), the cleanup-old cutoff in PredictionGeneratorProcessor
+    # (retention + this many days of slack, or the purge eats live targets), and
+    # PlanDayService.HOURLY_HORIZON_DAYS (ceil of this in days).
+    HOURLY_PREDICTIONS: int = 48
     DAILY_PREDICTIONS: int = 365  # Next 365 days (1 year)
     # Daily prediction = PEAK, not a single 14:00 value. We predict these peak-window
     # hours per day and collapse to the per-day MAX (≈ the daily P90 peak that the

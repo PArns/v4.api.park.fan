@@ -1855,10 +1855,11 @@ export class MLService {
    * 1. It prunes on `createdAt`, the hypertable's PARTITION KEY, so Timescale
    *    can exclude whole chunks. The old `predictedTime` predicate is unrelated
    *    to the partitioning, so every chunk had to be opened and decompressed.
-   *    The substitution is safe for hourly only: measured lead time is ≤24h
-   *    (avg 1.7h), so a row created before `cutoff` can never have been
-   *    predicting for a time later than `cutoff + 24h` — the caller adds that
-   *    day of slack. Daily predictions run up to ~1 year ahead, where
+   *    The substitution is safe for hourly only: lead time is bounded by the
+   *    generation horizon (`HOURLY_PREDICTIONS`, 48h), so a row created before
+   *    `cutoff` can never have been predicting for a time later than
+   *    `cutoff + 48h` — the caller adds those two days of slack. Daily
+   *    predictions run up to ~1 year ahead, where
    *    `createdAt` says nothing about the target, so they keep the old path.
    *
    * 2. It works in bounded day-windows instead of one statement. Each window
@@ -1941,8 +1942,13 @@ export class MLService {
     const endTime = new Date(now);
 
     if (predictionType === "hourly") {
-      // Delete all future hourly predictions (not just next 24h) to prevent
-      // stale entries from prior runs accumulating alongside new ones
+      // Every future hourly prediction, so stale entries from prior runs cannot
+      // accumulate alongside the new ones. 48h is no longer the generous
+      // over-reach it was at a 24h horizon — it now EQUALS the generation
+      // horizon (`HOURLY_PREDICTIONS`), and only just covers it: the last slot
+      // of a run sits at most 48h past the generating service's clock, and this
+      // runs after that call, so its `now` is the later one. Raise
+      // HOURLY_PREDICTIONS past 48 and this window has to grow with it.
       endTime.setHours(endTime.getHours() + 48);
     } else {
       // Delete predictions for next 60 days to cover extended daily forecasts

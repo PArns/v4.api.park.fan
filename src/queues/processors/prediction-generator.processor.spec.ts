@@ -312,17 +312,47 @@ describe("PredictionGeneratorProcessor", () => {
       );
     });
 
-    it("gives the hourly cutoff a day of slack over the 7-day target window", async () => {
+    it("gives the hourly cutoff two days of slack over the 7-day target window", async () => {
       await processor.handleCleanupOld({} as Job);
 
       const [hourlyCutoff] =
         mlService.purgeHourlyPredictionsBefore.mock.calls[0];
       const ageDays =
         (Date.now() - (hourlyCutoff as Date).getTime()) / 86_400_000;
-      // 8 days: an hourly row's target can sit up to 24h after its createdAt,
-      // so cutting at 7 days on createdAt would drop still-wanted targets.
-      expect(ageDays).toBeGreaterThan(7.9);
-      expect(ageDays).toBeLessThan(8.1);
+      // 9 days: an hourly row's target can sit up to HOURLY_PREDICTIONS (48h)
+      // after its createdAt, so cutting at 7 or 8 days on createdAt would drop
+      // still-wanted targets.
+      expect(ageDays).toBeGreaterThan(8.9);
+      expect(ageDays).toBeLessThan(9.1);
+    });
+
+    it("keeps every target inside the 7-day retention, at the worst-case lead", async () => {
+      // The purge deletes on createdAt; retention is stated in targetTime. This
+      // is the arithmetic that connects them, and the reason the slack is two
+      // days rather than one: the NEWEST row the purge drops is one created an
+      // instant before the cutoff, and it was predicting for up to 48h later.
+      // That latest dropped target must still be at or before the retention
+      // edge — with one day of slack it lands a full day inside it, which is a
+      // silent delete of targets nobody asked to lose.
+      const RETENTION_DAYS = 7;
+      const HORIZON_HOURS = 48; // ml-service/config.py HOURLY_PREDICTIONS
+
+      await processor.handleCleanupOld({} as Job);
+
+      const [hourlyCutoff] =
+        mlService.purgeHourlyPredictionsBefore.mock.calls[0];
+      const latestDroppedTarget =
+        (hourlyCutoff as Date).getTime() + HORIZON_HOURS * 3_600_000;
+      const retentionEdge = Date.now() - RETENTION_DAYS * 86_400_000;
+      // setDate() moves whole calendar days, which are 23h or 25h long across a
+      // DST switch, so the comparison gets an hour of room. It is nowhere near
+      // enough to hide the bug: at one day of slack the latest dropped target
+      // overshoots the edge by a full 24 hours.
+      const DST_SLACK_MS = 3_600_000;
+
+      expect(latestDroppedTarget).toBeLessThanOrEqual(
+        retentionEdge + DST_SLACK_MS,
+      );
     });
 
     it("does not fail when a backlog is left over for the next run", async () => {

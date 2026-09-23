@@ -782,9 +782,9 @@ describe("PlanDayService", () => {
     expect(plan.shows).toEqual([]);
   });
 
-  // ── The model's 24-hour window ─────────────────────────────────────────────
-  // Hourly predictions exist for the next 24 hours and not one minute further,
-  // so a day inside that window is part measured and part composed. Measured
+  // ── The model's 48-hour window ─────────────────────────────────────────────
+  // Hourly predictions exist for the next 48 hours and not one minute further,
+  // so the day the window ends inside is part measured and part composed. Measured
   // against the live service at 17:15, today's plan for a park open 09:00-22:00
   // carried 17:00-21:00 and tomorrow's carried 09:00-17:00 — the evening simply
   // absent, and `dayPeak` the maximum of what was left.
@@ -864,6 +864,51 @@ describe("PlanDayService", () => {
       expect(plan.tier).toBe("measured");
       expect(plan.rides[0].hours.map((h) => h.hour)).toEqual([9, 10, 11]);
       expect(plan.rides[0].sampleDays).toBe(0);
+    });
+
+    // ── How far the window reaches ───────────────────────────────────────────
+    // `HOURLY_PREDICTIONS` is 48 hours, so the window can touch the day after
+    // tomorrow. The gate that decides whether the measured hours are asked for
+    // at all has to reach that far too: left at one day it would have dropped
+    // the model's own answer for a day it had answered, and served the composed
+    // curve in its place — silently, because the two draw identically.
+    it("asks for measured hours two days out, where the window can still reach", async () => {
+      const date = dayFromToday(2);
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      hourlyPredictions = hourlyFor(date, 9, 11);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.leadDays).toBe(2);
+      expect(plan.tier).toBe("measured");
+      expect(
+        plan.rides[0].hours.filter((h) => h.hour <= 11).every((h) => !h.source),
+      ).toBe(true);
+    });
+
+    it("stops asking three days out, past anything the window can reach", async () => {
+      const date = dayFromToday(3);
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      // Rows the model cannot have produced for this distance. The gate is what
+      // keeps them out, so the day is composed throughout.
+      hourlyPredictions = hourlyFor(date, 9, 11);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.leadDays).toBe(3);
+      expect(plan.tier).toBe("composed");
     });
   });
 
