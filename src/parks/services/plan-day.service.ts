@@ -117,11 +117,13 @@ export class PlanDayService {
    * Where the python service's hourly generation stops
    * (`HOURLY_PREDICTIONS = 48` hours, as 192 quarter-hour slots), in whole days
    * — the last day the window can reach at all, not the last one it fills.
-   * Rounded UP on purpose: a 48-hour window opened at 18:00 reaches two hours
-   * into the day after tomorrow, and this only decides whether the measured
-   * hours are asked for. Which tier a day actually gets comes from the curves
-   * that were built, so asking a day the window barely touches costs one query
-   * and mislabels nothing.
+   * Rounded UP on purpose. A 48-hour window always reaches into the day after
+   * tomorrow, up to the hour it is opened at: asked at 18:00 it covers that
+   * day's 00:00-18:00, asked at 06:00 only its first six hours. This constant
+   * decides nothing but whether the measured hours are fetched at all — which
+   * tier a day gets comes from the curves that were built — so covering the day
+   * the window merely enters costs one query and mislabels nothing, while
+   * rounding down would discard answers the model had already given.
    *
    * There is deliberately no matching DAILY constant. The daily horizon is not
    * a fixed number of days — `predict.py` walks the park's schedule, so it ends

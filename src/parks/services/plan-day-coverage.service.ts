@@ -50,7 +50,7 @@ export interface PlanDayCoverageSummary {
  * Asked at a fixed distance of {@link LEAD_DAYS} days rather than for
  * tomorrow, because that is where the endpoint is actually used — people book
  * summer in January — and because the near days hide the problem: inside the
- * model's 24-hour window a park can carry the model's own hourly answer without
+ * model's 48-hour window a park can carry the model's own hourly answer without
  * any measured history at all.
  *
  * The sweep calls the real `buildPlanDay` rather than re-deriving the rules in
