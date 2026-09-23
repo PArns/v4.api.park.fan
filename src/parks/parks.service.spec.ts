@@ -10,6 +10,10 @@ import { CacheKeys } from "../common/cache/cache-keys";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { RevalidationService } from "../common/revalidation/revalidation.service";
 import { HolidaysService } from "../holidays/holidays.service";
+import {
+  DuplicatePair,
+  ParkValidatorService,
+} from "./services/park-validator.service";
 import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
 import { PARK_OBSERVED_READING_SQL } from "../common/utils/closure-gap.sql";
 import { createTestPark } from "../../test/fixtures/park.fixtures";
@@ -121,6 +125,31 @@ describe("ParksService", () => {
     revalidateTags: jest.fn().mockResolvedValue(true),
   };
 
+  const mockParkValidatorService = {
+    findDuplicates: jest.fn(),
+  };
+
+  /** Every pair among `parks`, judged safe to merge unattended. */
+  const safePairsAmong = (
+    parks: Array<{ id: string; name: string; city: string | null }>,
+  ): DuplicatePair[] => {
+    const pairs: DuplicatePair[] = [];
+    for (let i = 0; i < parks.length; i++) {
+      for (let j = i + 1; j < parks.length; j++) {
+        pairs.push({
+          park1: { id: parks[i].id, name: parks[i].name, city: parks[i].city },
+          park2: { id: parks[j].id, name: parks[j].name, city: parks[j].city },
+          score: 1,
+          reason: "shared queue-times ID",
+          sharedEntityIds: { queueTimes: true },
+          safe: true,
+          reviewReason: null,
+        });
+      }
+    }
+    return pairs;
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -157,6 +186,10 @@ describe("ParksService", () => {
           provide: RevalidationService,
           useValue: mockRevalidationService,
         },
+        {
+          provide: ParkValidatorService,
+          useValue: mockParkValidatorService,
+        },
       ],
     }).compile();
 
@@ -164,6 +197,13 @@ describe("ParksService", () => {
 
     // Clear all mocks before each test
     jest.clearAllMocks();
+
+    // By default the merge verdict passes every pair of the rows the park
+    // lookup returns, so the repairDuplicates cases below test the merge
+    // itself. The cases that test the verdict set it explicitly.
+    mockParkValidatorService.findDuplicates.mockImplementation(async () =>
+      safePairsAmong((await mockParkRepository.find()) ?? []),
+    );
   });
 
   it("should be defined", () => {
@@ -2834,6 +2874,96 @@ describe("ParksService", () => {
         expect(mockRevalidationService.revalidateTags).toHaveBeenCalledWith(
           REVALIDATED_TAGS,
         );
+      });
+    });
+
+    /**
+     * PAR-262: a shared Queue-Times id is where `repairDuplicates` starts
+     * looking, not the permission to delete. The permission is `safe` from
+     * `findDuplicates` — the same verdict `POST merge-duplicate-parks` reads —
+     * so a mis-assigned id on two different parks leaves both rows standing.
+     */
+    describe("repairDuplicates merges only what findDuplicates judges safe", () => {
+      const primaryId = "eeeeeeee-1111-1111-1111-111111111111";
+      const ghostParkId = "eeeeeeee-2222-2222-2222-222222222222";
+      const primary = createTestPark({
+        id: primaryId,
+        name: "PortAventura Park",
+        wikiEntityId: "wiki-1",
+      });
+      const ghost = createTestPark({
+        id: ghostParkId,
+        name: "Ferrari Land",
+        wikiEntityId: null,
+      });
+
+      const primeSharedId = () => {
+        mockParkRepository.query.mockResolvedValue([
+          { queue_times_entity_id: "4711" },
+        ]);
+        mockParkRepository.find.mockResolvedValue([primary, ghost]);
+      };
+
+      it("leaves both rows of a pair judged for review and logs why", async () => {
+        const { calls } = recordTransaction(() => []);
+        primeSharedId();
+        // Listed in the order opposite to the group, so the lookup has to be
+        // order-free to find it at all.
+        mockParkValidatorService.findDuplicates.mockResolvedValue([
+          {
+            ...safePairsAmong([ghost, primary])[0],
+            score: 0.2,
+            safe: false,
+            reviewReason: "names score 0.2000 against 0.9",
+          },
+        ]);
+        const warn = jest.spyOn(service["logger"], "warn");
+
+        await service.repairDuplicates();
+
+        expect(mockParkRepository.manager.transaction).not.toHaveBeenCalled();
+        expect(indexOfParkDelete(calls)).toBe(-1);
+        const skipped = warn.mock.calls
+          .map(([message]) => String(message))
+          .find((message) => message.includes("Not merging"));
+        expect(skipped).toContain("Ferrari Land");
+        expect(skipped).toContain("PortAventura Park");
+        expect(skipped).toContain("4711");
+        expect(skipped).toContain("names score 0.2000 against 0.9");
+      });
+
+      it("leaves both rows of a pair findDuplicates does not list at all", async () => {
+        const { calls } = recordTransaction(() => []);
+        primeSharedId();
+        mockParkValidatorService.findDuplicates.mockResolvedValue([]);
+
+        await service.repairDuplicates();
+
+        expect(mockParkRepository.manager.transaction).not.toHaveBeenCalled();
+        expect(indexOfParkDelete(calls)).toBe(-1);
+      });
+
+      it("still merges a pair judged safe", async () => {
+        const { calls } = recordTransaction(() => []);
+        primeSharedId();
+        mockParkValidatorService.findDuplicates.mockResolvedValue(
+          safePairsAmong([ghost, primary]),
+        );
+
+        await service.repairDuplicates();
+
+        expect(mockParkValidatorService.findDuplicates).toHaveBeenCalledTimes(
+          1,
+        );
+        expect(calls[indexOfParkDelete(calls)]?.params).toEqual([ghostParkId]);
+      });
+
+      it("does not ask for the verdict when no id is shared", async () => {
+        mockParkRepository.query.mockResolvedValue([]);
+
+        await service.repairDuplicates();
+
+        expect(mockParkValidatorService.findDuplicates).not.toHaveBeenCalled();
       });
     });
   });
