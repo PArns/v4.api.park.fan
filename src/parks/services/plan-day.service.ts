@@ -20,6 +20,7 @@ import {
   unfoldedCloseHour,
 } from "../../common/utils/day-shape.util";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
+import { RideOpening } from "../../common/types/ride-opening.type";
 import { formatInParkTimezone } from "../../common/utils/date.util";
 import { formatInTimeZone } from "date-fns-tz";
 import {
@@ -996,9 +997,10 @@ export class PlanDayService {
       // with an 11:00 one, so a summer median applied to a winter morning — or
       // the reverse — would be a confident wrong answer. A park opening we have
       // never watched simply has no entry, and the ride draws the park's day.
-      const opensAt = parkOpensAt
+      const opening = parkOpensAt
         ? openings.get(`${attractionId}|${parkOpensAt}`)
         : undefined;
+      const opensAt = opening?.opensAt;
       const rideOpenHour = Math.max(
         openHour,
         opensAt ? Math.round(PlanDayService.minutesOf(opensAt) / 60) : openHour,
@@ -1006,11 +1008,13 @@ export class PlanDayService {
       // Reported whenever the ride opens later than the PARK, even inside the
       // same hour — comparing hours hid Phantasialand's 09:45 ride behind a
       // 09:00 park and left the reader without the one number they wanted.
-      const opensLater =
-        opensAt !== undefined &&
+      const laterOpening =
+        opening !== undefined &&
         parkOpensAt !== null &&
-        PlanDayService.minutesOf(opensAt) >
-          PlanDayService.minutesOf(parkOpensAt);
+        PlanDayService.minutesOf(opening.opensAt) >
+          PlanDayService.minutesOf(parkOpensAt)
+          ? opening
+          : undefined;
 
       // Every hour carries its origin here; the ones that agree with the day's
       // tier lose it again below, once the tier is known. Written the other way
@@ -1054,7 +1058,14 @@ export class PlanDayService {
           level?.uncertaintyMinutes ?? measured.bands.get(attractionId) ?? null,
         sampleDays: sampleDays.get(attractionId) ?? 0,
         ...(cell ? { expectedError: cell.mae } : {}),
-        ...(opensLater ? { opensAt } : {}),
+        // The confidence rides along with the time and never alone: it grades
+        // `opensAt`, so a bare tier next to an absent time would grade nothing.
+        ...(laterOpening
+          ? {
+              opensAt: laterOpening.opensAt,
+              opensAtConfidence: laterOpening.confidence,
+            }
+          : {}),
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
         ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
@@ -1956,19 +1967,19 @@ export class PlanDayService {
   }
 
   /**
-   * When each ride opens, park-local `HH:mm`, or an empty map.
+   * When each ride opens and how well watched that is, or an empty map.
    *
    * A failure here costs the clamp, not the day: without it every curve starts
    * at the park's opening, which is the behaviour this replaced.
    */
-  private async rideOpenings(park: Park): Promise<Map<string, string>> {
+  private async rideOpenings(park: Park): Promise<Map<string, RideOpening>> {
     return this.analyticsService
       .getRideOpeningTimes(park.id, park.timezone)
       .catch((err: Error) => {
         this.logger.warn(
           `Plan day: ride openings unavailable for ${park.slug}: ${err.message}`,
         );
-        return new Map<string, string>();
+        return new Map<string, RideOpening>();
       });
   }
 

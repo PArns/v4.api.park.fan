@@ -11,6 +11,7 @@ import { ShowsService } from "../../shows/shows.service";
 import { ForecastAccuracyService } from "../../ml/services/forecast-accuracy.service";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../entities/park.entity";
+import { RideOpening } from "../../common/types/ride-opening.type";
 
 /**
  * The endpoint's job is to be honest about which of three regimes produced a
@@ -53,7 +54,7 @@ describe("PlanDayService", () => {
   let afterMidnightHistory: Map<string, { slots: unknown[] }>;
   let historyFails: boolean;
   let leadMae: number | null;
-  let rideOpenings: Map<string, string>;
+  let rideOpenings: Map<string, RideOpening>;
   let accuracyProfile: Map<
     string,
     { mae: number; leadBucket: string; sampleSize: number }
@@ -987,15 +988,64 @@ describe("PlanDayService", () => {
           predictedTime: `${date}T12:00:00.000Z`,
         },
       ];
-      rideOpenings = new Map([["a-taron|09:00", "10:00"]]);
+      rideOpenings = new Map([
+        ["a-taron|09:00", { opensAt: "10:00", confidence: "high" }],
+      ]);
 
       const plan = await service.buildPlanDay(park, date);
 
       const taron = plan.rides[0];
       expect(taron.opensAt).toBe("10:00");
+      expect(taron.opensAtConfidence).toBe("high");
       expect(taron.hours[0].hour).toBe(10);
       // And the day still runs to the park's close.
       expect(taron.hours[taron.hours.length - 1].hour).toBe(18);
+    });
+
+    it("grades the opening it serves, and grades nothing when it serves none", async () => {
+      // The whole point of the field: the two keys of one ride are not equally
+      // well watched. Measured on 2026-09-23, Black Mamba's answer for a 09:00
+      // gate rested on 176 observed days and its answer for an 11:00 gate on
+      // 23, because a park opens at its off-season hour about twenty mornings a
+      // year. Without the tier the two are indistinguishable in the payload.
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      rideOpenings = new Map([
+        ["a-taron|09:00", { opensAt: "10:00", confidence: "low" }],
+      ]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].opensAt).toBe("10:00");
+      expect(plan.rides[0].opensAtConfidence).toBe("low");
+    });
+
+    it("withholds the tier with the time it grades", async () => {
+      // A tier beside an absent time grades nothing. The ride here reports
+      // OPERATING before the gates, so no `opensAt` is served — and the
+      // confidence must not travel on its own.
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      rideOpenings = new Map([
+        ["a-taron|09:00", { opensAt: "08:00", confidence: "high" }],
+      ]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].opensAt).toBeUndefined();
+      expect(plan.rides[0].opensAtConfidence).toBeUndefined();
     });
 
     it("ignores an opening earlier than the park's own", async () => {
@@ -1010,7 +1060,9 @@ describe("PlanDayService", () => {
           predictedTime: `${date}T12:00:00.000Z`,
         },
       ];
-      rideOpenings = new Map([["a-taron|09:00", "08:00"]]);
+      rideOpenings = new Map([
+        ["a-taron|09:00", { opensAt: "08:00", confidence: "high" }],
+      ]);
 
       const plan = await service.buildPlanDay(park, date);
 
@@ -1033,7 +1085,9 @@ describe("PlanDayService", () => {
         },
       ];
       // Only a winter observation exists; this day opens at 09:00.
-      rideOpenings = new Map([["a-taron|11:00", "11:00"]]);
+      rideOpenings = new Map([
+        ["a-taron|11:00", { opensAt: "11:00", confidence: "low" }],
+      ]);
 
       const plan = await service.buildPlanDay(park, date);
 
@@ -2515,7 +2569,9 @@ describe("PlanDayService", () => {
         predictedWaitTime: 35,
         predictionType: "hourly",
       }));
-      rideOpenings = new Map([["a-late|09:00", "17:00"]]);
+      rideOpenings = new Map([
+        ["a-late|09:00", { opensAt: "17:00", confidence: "high" }],
+      ]);
       service = await build();
 
       const plan = await service.buildPlanDay(park, date);

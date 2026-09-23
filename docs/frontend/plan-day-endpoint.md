@@ -193,6 +193,7 @@ minimising queues.
 | --- | --- |
 | `uncertaintyMinutes` | half-width of the model's band, from the same row as `dayPeak`. Absent where the model reports no spread — **not** a band of width zero, and it must not be drawn as one |
 | `opensAt` | when the RIDE opens, park-local `HH:mm` — see §9 |
+| `opensAtConfidence` | how much watching `opensAt` rests on: `high` / `medium` / `low`. Present exactly when `opensAt` is — see §9 |
 | `expectedError` | how wrong `dayPeak` typically is, in minutes — see §10 |
 | `sampleDays` | measured days behind the historical shape. `1` on an observed day, `0` for a ride the shape does not cover |
 | `latitude` / `longitude` | **numbers**, not the strings TypeORM returns for a decimal column. A geodesic distance between two of them is a *lower bound* on the walk and nothing more |
@@ -615,6 +616,37 @@ arriving at rope drop needs to know which queue does not exist yet.
 Absent means either "opens with the park" or "we cannot tell" — fewer than five
 observed openings, or a feed that never reports the transition. Both render the
 same way, and `hours` is correct in either case.
+
+### How well watched that answer is (`opensAtConfidence`)
+
+`high` from 40 observed days, `medium` from 20, `low` below that. It is present
+exactly when `opensAt` is, because it grades that time and says nothing on its
+own. **It is not a confidence interval and no minutes can be derived from it.**
+
+`low` is a real answer on thin evidence, never a placeholder: the floor for an
+answer to exist at all is five observed openings, and below that `opensAt` is
+absent instead.
+
+**The two keys of one ride are not equally well known, which is why the field
+exists.** The lookup below is keyed on the park's own opening that day, and a
+park opens at its off-season hour on far fewer mornings. Measured on 2026-09-23:
+
+| ride | park opens | observed days | `opensAtConfidence` |
+| --- | --- | --- | --- |
+| Black Mamba | 09:00 | 176 | `high` |
+| Black Mamba | 11:00 | 23 | `medium` |
+| F.L.Y. | 09:00 | 178 | `high` |
+| F.L.Y. | 11:00 | 21 | `medium` |
+
+Both rows of a ride look identical in the payload without it. Across every park
+open that day — 2757 served times — 58.4 % read `high`, 22.5 % `medium` and
+19.0 % `low`.
+
+The boundaries are the ones `rope-drop.util.ts` already uses, because it counts
+the same thing: days that contributed to one ride's own estimate. The other
+convention in the repo (90/30, `analytics.service.ts`) counts days a whole
+**park** reported, and 90 would pin every winter opening at `low` forever —
+an 11:00 gate happens on about twenty mornings a year, and no more exist.
 
 **The gap is seasonal, so the lookup is too.** Measured over a year:
 

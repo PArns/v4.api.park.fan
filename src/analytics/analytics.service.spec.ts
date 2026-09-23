@@ -66,6 +66,7 @@ describe("AnalyticsService", () => {
     find: jest.fn(),
     findOne: jest.fn(),
     save: jest.fn(),
+    manager: { query: jest.fn().mockResolvedValue([]) },
   };
 
   const mockAttractionRepository = {
@@ -675,6 +676,81 @@ describe("AnalyticsService", () => {
         { where: Record<string, unknown> },
       ];
       expect(options.where).toHaveProperty("attractionId");
+    });
+  });
+  // ── How well watched a ride's opening is ───────────────────────────────────
+  describe("getRideOpeningTimes", () => {
+    const row = (opensAt: string, sampleDays: string) => ({
+      attractionId: "a-1",
+      park_opens_at: "09:00",
+      opens_at: opensAt,
+      sample_days: sampleDays,
+    });
+
+    it("grades each answer by the days it was taken over", async () => {
+      // The boundaries are `rope-drop.util.ts`'s, because it counts the same
+      // thing: days that contributed to one ride's own estimate. 39 and 19 are
+      // the values that flip a tier, so they are the ones worth pinning.
+      mockQueueDataRepository.manager.query.mockResolvedValueOnce([
+        { ...row("10:10", "40"), attractionId: "a-high" },
+        { ...row("10:10", "39"), attractionId: "a-medium-top" },
+        { ...row("10:10", "20"), attractionId: "a-medium-floor" },
+        { ...row("10:10", "19"), attractionId: "a-low" },
+      ]);
+
+      const out = await service.getRideOpeningTimes("park-1", "Europe/Berlin");
+
+      expect(out.get("a-high|09:00")?.confidence).toBe("high");
+      expect(out.get("a-medium-top|09:00")?.confidence).toBe("medium");
+      expect(out.get("a-medium-floor|09:00")?.confidence).toBe("medium");
+      expect(out.get("a-low|09:00")?.confidence).toBe("low");
+    });
+
+    it("still floors the time to the quarter hour", async () => {
+      // The raw median is a DETECTION time: the poller runs every five minutes
+      // and the feed lags the gate on top, so Phantasialand's 10:00 rides
+      // measure 10:10. Adding the tier must not change what the time means.
+      mockQueueDataRepository.manager.query.mockResolvedValueOnce([
+        row("10:10", "176"),
+      ]);
+
+      const out = await service.getRideOpeningTimes("park-1", "Europe/Berlin");
+
+      expect(out.get("a-1|09:00")).toEqual({
+        opensAt: "10:00",
+        confidence: "high",
+      });
+    });
+
+    it("reads and writes a cache key of its own generation", async () => {
+      // The cached value changed shape from `HH:mm` to an object. A leftover
+      // `v2` entry deserialized into the new reader gives every ride an
+      // undefined `opensAt`, so the key carries the version.
+      mockQueueDataRepository.manager.query.mockResolvedValueOnce([
+        row("10:10", "176"),
+      ]);
+
+      await service.getRideOpeningTimes("park-1", "Europe/Berlin");
+
+      const setCalls = mockRedis.set.mock.calls;
+      const [writtenKey, writtenValue] = setCalls[setCalls.length - 1] as [
+        string,
+        string,
+      ];
+      expect(writtenKey).toBe("park:ride-openings:v3:park-1");
+
+      mockRedis.get.mockResolvedValueOnce(writtenValue);
+      mockQueueDataRepository.manager.query.mockClear();
+      const cached = await service.getRideOpeningTimes(
+        "park-1",
+        "Europe/Berlin",
+      );
+
+      expect(mockQueueDataRepository.manager.query).not.toHaveBeenCalled();
+      expect(cached.get("a-1|09:00")).toEqual({
+        opensAt: "10:00",
+        confidence: "high",
+      });
     });
   });
 });

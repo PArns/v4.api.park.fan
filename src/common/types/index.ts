@@ -21,3 +21,8 @@ export type {
   RopeDropStored,
   RopeDropDayBucket,
 } from "./rope-drop.type";
+export type { RideOpening, RideOpeningConfidence } from "./ride-opening.type";
+export {
+  RIDE_OPENING_CONFIDENCE_THRESHOLDS,
+  rideOpeningConfidence,
+} from "./ride-opening.type";
