@@ -24,8 +24,19 @@ def convert_to_local_time(
     df: pd.DataFrame, parks_metadata: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    Convert UTC timestamps to park-local time.
+    Convert UTC timestamps to park-local wall-clock time.
     Critical for correct hour/day features and date-based lookups (weather/holidays).
+
+    `local_timestamp` is **tz-naive on purpose**: it carries the reading on the
+    park's own clock and nothing else. A tz-aware column cannot do that, because
+    a pandas datetime column holds exactly one timezone — writing per-park
+    tz-aware values into it converts them back to that one timezone and the
+    local hour silently becomes the UTC hour again (pandas 2.2.3, no warning).
+
+    The consequence for callers: `local_timestamp` is a wall-clock reading, not
+    an instant, so it may never be compared against a timestamp from the DB.
+    Anything comparing against `openingTime`/`closingTime` (TIMESTAMPTZ, i.e. an
+    instant) compares `timestamp` instead — see `add_park_schedule_features`.
     """
     try:
         import pytz  # noqa: F401
@@ -44,21 +55,25 @@ def convert_to_local_time(
     # Create map {parkId: timezone_str}
     tz_map = parks_metadata.set_index("park_id")["timezone"].to_dict()
 
-    # We need a 'local_timestamp' column for features
-    # Group by parkId once to avoid O(n*k) boolean masking over the full DataFrame
-    df["local_timestamp"] = df["timestamp"]  # Default to UTC
+    # One conversion per TIMEZONE, not per park: parks sharing a timezone share
+    # the call, and each group is written back as naive local time. Rows whose
+    # park has no timezone on record fall back to UTC, as before.
+    tz_per_row = (
+        df["parkId"].map(tz_map).replace("", np.nan).fillna("UTC").astype(str)
+    )
 
-    for park_id, idx in df.groupby("parkId").groups.items():
-        tz_name = tz_map.get(park_id)
-        if not tz_name:
-            continue
-
+    local = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+    for tz_name, idx in df.groupby(tz_per_row, sort=False).groups.items():
         try:
-            df.loc[idx, "local_timestamp"] = df.loc[idx, "timestamp"].dt.tz_convert(
-                tz_name
+            local.loc[idx] = (
+                df.loc[idx, "timestamp"].dt.tz_convert(tz_name).dt.tz_localize(None)
             )
         except Exception as e:
-            print(f"⚠️  Timezone conversion failed for park {park_id} ({tz_name}): {e}")
+            print(f"⚠️  Timezone conversion failed for {tz_name}: {e}")
+            # Keep UTC wall-clock for this group rather than leaving it NaT.
+            local.loc[idx] = df.loc[idx, "timestamp"].dt.tz_localize(None)
+
+    df["local_timestamp"] = local
 
     return df
 
@@ -1119,18 +1134,19 @@ def add_time_since_park_open(
                 # Parse opening time
                 opening_time = pd.to_datetime(opening_time_str)
 
-                # Calculate minutes since opening for this park
+                # Calculate minutes since opening for this park.
+                # `opening_time_str` is an ISO instant from the API
+                # (`schedule.openingTime.toISOString()`), so the difference is
+                # taken against `timestamp` (UTC) — the naive wall-clock
+                # `local_timestamp` is not an instant and must not be used here.
                 mask = df["parkId"] == park_id
                 if mask.any():
-                    # Use local_timestamp if available, otherwise timestamp
-                    time_col = (
-                        "local_timestamp"
-                        if "local_timestamp" in df.columns
-                        else "timestamp"
-                    )
+                    ts = pd.to_datetime(df.loc[mask, "timestamp"], utc=True)
+                    if opening_time.tzinfo is None:
+                        ts = ts.dt.tz_localize(None)
 
                     df.loc[mask, "time_since_park_open_mins"] = (
-                        (df.loc[mask, time_col] - opening_time).dt.total_seconds() / 60
+                        (ts - opening_time).dt.total_seconds() / 60
                     ).clip(lower=0)  # Negative = park not yet open, clip to 0
 
             except Exception as e:
@@ -1456,22 +1472,30 @@ def add_park_schedule_features(
                 suffixes=("", "_schedule"),
             )
 
-            # Vectorized time comparisons
-            mask_valid = (
-                df_merged["opening_time"].notna() & df_merged["closing_time"].notna()
-            )
-            mask_open = (
-                mask_valid
-                & (df_merged["local_timestamp"] >= df_merged["opening_time"])
-                & (df_merged["local_timestamp"] <= df_merged["closing_time"])
-            )
+            # Vectorized time comparisons.
+            # The JOIN key is the park-local date (`date_local`), but the time
+            # comparison is between INSTANTS: opening_time/closing_time come
+            # from a TIMESTAMPTZ column, so they are compared against
+            # `timestamp` (UTC) and never against the naive wall-clock
+            # `local_timestamp`. Same shape as predict.py's schedule join.
+            ts_compare = pd.to_datetime(df_merged["timestamp"], utc=True)
+            opening = df_merged["opening_time"]
+            closing = df_merged["closing_time"]
+            if getattr(opening.dt, "tz", None) is not None:
+                opening = opening.dt.tz_convert("UTC")
+                closing = closing.dt.tz_convert("UTC")
+            else:
+                # Schedules read back naive: they are UTC, so drop the tz on
+                # the other side rather than localizing theirs.
+                ts_compare = ts_compare.dt.tz_localize(None)
+
+            mask_valid = opening.notna() & closing.notna()
+            mask_open = mask_valid & (ts_compare >= opening) & (ts_compare <= closing)
 
             df["is_park_open"] = mask_open.astype(int).values
 
             # Calculate time since open (vectorized)
-            time_since_open = (
-                df_merged["local_timestamp"] - df_merged["opening_time"]
-            ).dt.total_seconds() / 60.0
+            time_since_open = (ts_compare - opening).dt.total_seconds() / 60.0
             df["time_since_park_open_mins"] = (
                 time_since_open.where(mask_valid, 0.0).clip(lower=0).values
             )
