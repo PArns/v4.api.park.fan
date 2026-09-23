@@ -438,4 +438,87 @@ describe("QueueDataService", () => {
       expect(significant).toBe(true);
     });
   });
+
+  /**
+   * A virtual line reaches FINISHED with its return window standing still: the
+   * park stops handing out slots, but the last published window stays where it
+   * was. Neither the status nor the window comparison sees that, so the row
+   * used to wait for the 60-minute rule. Measured against production over 30
+   * days (PAR-402): 894 such changes, median delay 1:04:53, and the two most
+   * frequent ones are AVAILABLE → FINISHED (427) and back (448) — the daily
+   * cycle of a virtual line, once each way.
+   *
+   * `latest.timestamp` is the current instant on purpose. Without it, neither
+   * the day-change rule nor the heartbeat rule is reachable, and the test would
+   * pass on a comparison that only ever runs when the clock already forces a
+   * write anyway.
+   */
+  describe("a virtual line that stops handing out slots", () => {
+    const significantChange = (
+      latest: Partial<QueueData>,
+      newData: Partial<QueueData>,
+      queueType: QueueType,
+    ) =>
+      (
+        service as unknown as {
+          isSignificantChange: (
+            latest: Partial<QueueData> | null,
+            newData: Partial<QueueData>,
+            queueType: QueueType,
+            timezone: string,
+          ) => boolean;
+        }
+      ).isSignificantChange(latest, newData, queueType, "Europe/Amsterdam");
+
+    const aWindow = {
+      status: LiveStatus.OPERATING,
+      returnStart: new Date("2026-09-22T14:00:00.000Z"),
+      returnEnd: new Date("2026-09-22T15:00:00.000Z"),
+    };
+
+    it.each([
+      QueueType.RETURN_TIME,
+      QueueType.PAID_RETURN_TIME,
+      QueueType.VIRTUAL_QUEUE,
+    ])("saves a bare state change on %s", (queueType) => {
+      expect(
+        significantChange(
+          { ...aWindow, state: "AVAILABLE", timestamp: new Date() },
+          { ...aWindow, state: "FINISHED" },
+          queueType,
+        ),
+      ).toBe(true);
+    });
+
+    it("still writes nothing when the state is the one already stored", () => {
+      // The discriminating half: without it, a comparison that returns true for
+      // every call would pass the assertions above.
+      expect(
+        significantChange(
+          { ...aWindow, state: "FINISHED", timestamp: new Date() },
+          { ...aWindow, state: "FINISHED" },
+          QueueType.RETURN_TIME,
+        ),
+      ).toBe(false);
+    });
+
+    it("treats an absent state on both sides as unchanged", () => {
+      // Upstream payloads without a `state` key leave the field unassigned, so
+      // the stored null and the incoming undefined must not read as a change —
+      // otherwise every poll of such a ride writes a row.
+      expect(
+        significantChange(
+          {
+            ...aWindow,
+            // The column is nullable, so a row written before the field
+            // existed reads back as null rather than undefined.
+            state: null as unknown as string,
+            timestamp: new Date(),
+          },
+          { ...aWindow },
+          QueueType.RETURN_TIME,
+        ),
+      ).toBe(false);
+    });
+  });
 });

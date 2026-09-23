@@ -583,6 +583,7 @@ export class QueueDataService {
    * - Wait time changed by > 5 minutes
    * - Status changed (OPERATING → CLOSED, etc.)
    * - Virtual queue return time windows changed
+   * - Virtual queue state changed (AVAILABLE → FINISHED, etc.)
    */
   private isSignificantChange(
     latest: Partial<QueueData> | null,
@@ -616,6 +617,19 @@ export class QueueDataService {
       queueType === QueueType.PAID_RETURN_TIME ||
       queueType === QueueType.VIRTUAL_QUEUE
     ) {
+      // A virtual line reaches FINISHED with its return window standing still,
+      // so the window comparison below does not see that transition. Measured
+      // against production over 30 days (PAR-402): 894 such changes waited for
+      // the 60-minute rule, median 1:04:53, which is 29.8 extra rows a day
+      // against 196 299 written — +0.015 %. Normalized to null on both sides
+      // like the boarding-group fields below, because `state` is only assigned
+      // when the upstream payload carries one.
+      const newState = newData.state ?? null;
+      const oldState = latest.state ?? null;
+      if (newState !== oldState) {
+        return true;
+      }
+
       if (newData.returnStart && latest.returnStart) {
         if (
           latest.returnStart?.getTime() !== newData.returnStart?.getTime() ||
