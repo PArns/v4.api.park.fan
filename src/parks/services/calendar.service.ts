@@ -32,6 +32,7 @@ import {
 import { normalizeRegionCode } from "../../common/utils/region.util";
 import { WeatherData } from "../entities/weather-data.entity";
 import { toWeatherSummary } from "../utils/weather-summary.util";
+import { isClosedByOperatingRange } from "../utils/schedule-closed-day.util";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { rateOrUnknown } from "../../common/utils/crowd-level.util";
 import { Holiday } from "../../holidays/entities/holiday.entity";
@@ -931,31 +932,16 @@ export class CalendarService {
     }
 
     // Seasonal Closure detection (Gap-fill)
+    // 1. Classic gap (between two operating dates) → CLOSED.
+    // 2. Off-season (before the first / after the last operating date) →
+    //    CLOSED only for a seasonal park, so a year-round park that hasn't
+    //    published next month's hours keeps its crowd prediction.
+    // Shared with the yearly predictions so both endpoints agree.
     if (
       status === "UNKNOWN" &&
-      operatingDateRange.minDate &&
-      operatingDateRange.maxDate
+      isClosedByOperatingRange(dateStr, operatingDateRange, isSeasonal)
     ) {
-      // 1. Classic Gap (between two operating dates)
-      if (
-        dateStr > operatingDateRange.minDate &&
-        dateStr < operatingDateRange.maxDate
-      ) {
-        status = "CLOSED";
-      }
-
-      // 2. Off-season (before first known or after last known operating date)
-      // Only infer CLOSED if the park has a history of seasonal closures.
-      // This prevents killing future crowd predictions for year-round parks
-      // that just haven't published next month's hours yet.
-      if (isSeasonal) {
-        if (
-          dateStr < operatingDateRange.minDate ||
-          dateStr > operatingDateRange.maxDate
-        ) {
-          status = "CLOSED";
-        }
-      }
+      status = "CLOSED";
     }
 
     // Compute crowd level for the day (needed even when no schedule, to infer open/closed)

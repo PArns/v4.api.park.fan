@@ -1596,7 +1596,9 @@ export class ParksController {
   @ApiOperation({
     summary: "Get yearly crowd predictions (geo)",
     description:
-      "Returns daily crowd predictions for the entire year (365 days) via geographic path. " +
+      "Returns daily crowd predictions from today to roughly 182 days ahead (the daily model's horizon) via geographic path. " +
+      "A day the park's schedule calls closed reads crowdLevel and recommendation `closed`, by the same rule as the calendar; " +
+      "a day rated `unknown` carries no recommendation. " +
       "Useful for long-term trip planning and identifying best times to visit. " +
       "Cached for 24 hours.",
   })
@@ -1619,7 +1621,7 @@ export class ParksController {
           type: "array",
           items: { $ref: getSchemaPath("ParkDailyPredictionDto") },
           description:
-            "Daily predictions for up to 365 days (or fewer if off-season days filtered)",
+            "Daily predictions up to about 182 days ahead (fewer where the model filtered off-season days out)",
         },
         generatedAt: {
           type: "string",
@@ -1663,6 +1665,7 @@ export class ParksController {
       await this.parkIntegrationService.aggregateDailyPredictions(
         predictions.predictions,
         park.id,
+        park.timezone,
       );
 
     return {

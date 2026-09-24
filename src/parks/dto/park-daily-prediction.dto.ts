@@ -8,7 +8,10 @@ export class ParkDailyPredictionDto {
   date: string;
 
   @ApiProperty({
-    description: "Predicted crowd level",
+    description:
+      "Predicted crowd level. `closed` when the park's schedule says the park " +
+      "is shut that day (same rule as the calendar). `unknown` when the park " +
+      "has no typical-day-peak to rate against.",
     enum: [
       "very_low",
       "low",
@@ -16,6 +19,7 @@ export class ParkDailyPredictionDto {
       "high",
       "very_high",
       "extreme",
+      "unknown",
       "closed",
     ],
   })
@@ -26,6 +30,7 @@ export class ParkDailyPredictionDto {
     | "high"
     | "very_high"
     | "extreme"
+    | "unknown"
     | "closed";
 
   @ApiProperty({
@@ -35,7 +40,8 @@ export class ParkDailyPredictionDto {
   confidencePercentage: number;
 
   @ApiProperty({
-    description: "Recommendation for visiting",
+    description:
+      "Recommendation for visiting. Absent when `crowdLevel` is `unknown`.",
     required: false,
     enum: [
       "highly_recommended",
