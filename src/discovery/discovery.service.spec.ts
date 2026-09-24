@@ -16,6 +16,7 @@ describe("DiscoveryService Deduplication", () => {
 
   const mockRedis = {
     get: jest.fn(),
+    mget: jest.fn().mockResolvedValue([]),
     setex: jest.fn(),
     del: jest.fn(),
   };
@@ -152,5 +153,44 @@ describe("DiscoveryService Deduplication", () => {
       ?.parks[0];
     expect(ungeocoded?.latitude).toBeNull();
     expect(ungeocoded?.longitude).toBeNull();
+  });
+
+  it("sums the park-level attraction counts into the top-level attractionCount", async () => {
+    const park = (id: string, citySlug: string) => ({
+      id,
+      name: `Park ${id}`,
+      slug: `park-${id}`,
+      continent: "Europe",
+      continentSlug: "europe",
+      country: "Germany",
+      countrySlug: "germany",
+      countryCode: "DE",
+      city: citySlug,
+      citySlug,
+      attractions: [],
+    });
+    mockRedis.get.mockResolvedValue(null);
+    mockParkRepository.find.mockResolvedValue([
+      park("1", "rust"),
+      park("2", "bruehl"),
+      // No live-stats row: counts as 0, like its park-level field.
+      park("3", "soltau"),
+    ]);
+    mockParkRepository.query.mockResolvedValueOnce([
+      { id: "1", is_open: true, total_attractions: "12" },
+      { id: "2", is_open: false, total_attractions: "30" },
+    ]);
+
+    const result = await service.getGeoStructure();
+    const parks = result.continents.flatMap((c) =>
+      c.countries.flatMap((co) => co.cities.flatMap((ci) => ci.parks)),
+    );
+    const byId = new Map(parks.map((p) => [p.id, p.attractionCount]));
+
+    // The park-level counts are there first, otherwise a sum of zeros would pass.
+    expect(byId.get("1")).toBe(12);
+    expect(byId.get("2")).toBe(30);
+    expect(byId.get("3")).toBe(0);
+    expect(result.attractionCount).toBe(42);
   });
 });

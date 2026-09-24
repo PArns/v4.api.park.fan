@@ -407,7 +407,7 @@ export class DiscoveryService {
         0,
       ),
       parkCount: parks.length,
-      attractionCount: 0, // Hydrated after live stats are applied
+      attractionCount: 0, // Summed from the parks in hydrateStructure
       generatedAt: new Date().toISOString(),
     };
 
@@ -419,7 +419,7 @@ export class DiscoveryService {
     );
 
     this.logger.log(
-      `Built geo structure: ${structure.continentCount} continents, ${structure.countryCount} countries, ${structure.cityCount} cities, ${structure.parkCount} parks, ${structure.attractionCount} attractions`,
+      `Built geo structure: ${structure.continentCount} continents, ${structure.countryCount} countries, ${structure.cityCount} cities, ${structure.parkCount} parks`,
     );
 
     return structure;
@@ -448,6 +448,11 @@ export class DiscoveryService {
         ? this.parksService.getBatchSchedules(allParkIds)
         : Promise.resolve({ today: new Map(), next: new Map() }),
     ]);
+
+    // Sum of the park-level counts below, so the top-level field counts the
+    // same set (no retired rows) and follows the 5-minute live stats rather
+    // than the 24-hour skeleton.
+    let totalAttractionCount = 0;
 
     for (const continent of structure.continents) {
       let continentOpenCount = 0;
@@ -502,6 +507,7 @@ export class DiscoveryService {
               // Default offline status
               park.status = "CLOSED";
             }
+            totalAttractionCount += park.attractionCount;
 
             // Hydrate Schedules
             const todaySchedule = schedules.today.get(park.id);
@@ -555,6 +561,8 @@ export class DiscoveryService {
           ? roundToNearest5Minutes(continentTotalWait / continentWaitCount)
           : undefined;
     }
+
+    structure.attractionCount = totalAttractionCount;
 
     return structure;
   }
