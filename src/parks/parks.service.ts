@@ -1721,8 +1721,21 @@ export class ParksService {
     // is what is true; "the park is shut" is a second claim about a park nobody
     // is measuring. Past days keep their OPERATING rows because the
     // reconstruction that reads them (`calendar.service.ts`, `isHistorical`)
-    // depends on them, and CLOSED days are left alone in both directions — a
-    // source that names a closed day has said something about that day.
+    // depends on them. This method leaves CLOSED days alone in both directions
+    // — a source that names a closed day has said something about that day.
+    //
+    // `fillScheduleGaps` does not. Its gap-filled CLOSED days (no hours,
+    // description "Gap-filled") exist only because they sit between two
+    // OPERATING days, and the upper one of those is `maxOpStr`, the last
+    // park-level OPERATING day. Once this guard has turned the future OPERATING
+    // days into UNKNOWN, `maxOpStr` falls back to the last past operating day,
+    // every future gap is after it, and the next gap fill demotes those CLOSED
+    // days to UNKNOWN too. That is consistent with `docs/rules/absent-facts.md`:
+    // a closure inferred from a schedule we no longer trust is no better than
+    // the schedule. A CLOSED day the API delivered is never demoted. Measured on
+    // production 2026-09-23 (PAR-481): the silent parks' future CLOSED days went
+    // from 751 to 317, all of the rest at the two parks whose future OPERATING
+    // days the guard had not reached yet.
     //
     // Measured on production 2026-09-21: 10 parks, 1254 future park-level
     // OPERATING rows. The 9347 future operating days of the 148 parks whose feed
