@@ -31,6 +31,12 @@ Related: [Schedule Sync & Calendar](schedule-sync-and-calendar.md), [ML Model Ov
 - **Crowd level does not influence status** (e.g. no override UNKNOWN → CLOSED just because crowdLevel is "closed"). Status comes from schedule or from the rule “past/today + crowd level = OPEN”.
 - **UNKNOWN** = “Opening hours not yet available” (frontend); **CLOSED** = “Closed”.
 
+### 1.4 Yearly predictions use the same closed rule
+
+`GET /v1/parks/.../predictions/yearly` (`ParkIntegrationService.aggregateDailyPredictions`) asks the schedule the way the calendar does: a CLOSED entry, or a day with neither an OPERATING nor a CLOSED entry that `isClosedByOperatingRange()` (`src/parks/utils/schedule-closed-day.util.ts`) places strictly between the first and last OPERATING date, or outside that range for a seasonal park (`isParkSeasonal`). Such a day reads `crowdLevel: "closed"`, `recommendation: "closed"` and has no `avgWaitTime`. The calendar calls the same function, so the two endpoints cannot disagree on this. A day rated `unknown` carries no `recommendation`.
+
+Before PAR-410 the yearly route never read the schedule: on 2026-09-22 it recommended 28 of the 49 days `/calendar` called CLOSED at Legoland Billund in an 89-day window, and all of February 2027 at Phantasialand. The response ends about 182 days out (the CatBoost daily horizon), not 365.
+
 ---
 
 ## 2. Schedule Sync

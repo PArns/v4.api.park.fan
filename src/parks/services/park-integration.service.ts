@@ -60,6 +60,7 @@ import {
   ttlSecondsToNextBoundary,
 } from "../../common/utils/best-visit-times.util";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
+import { isClosedByOperatingRange } from "../utils/schedule-closed-day.util";
 
 /**
  * Park Integration Service
@@ -1640,16 +1641,23 @@ export class ParkIntegrationService {
   /**
    * Helper: Aggregate attraction daily predictions into park-level daily predictions
    * Public so it can be used by yearly predictions route
+   *
+   * A day the park's schedule calls closed reads `crowdLevel: "closed"` and
+   * `recommendation: "closed"`, by the same rule the calendar applies
+   * (see {@link getClosedPredictionDates}). A day rated `unknown` carries no
+   * recommendation.
    */
   public async aggregateDailyPredictions(
     predictions: PredictionDto[],
     parkId: string,
+    timezone: string,
   ): Promise<
     import("../dto/park-daily-prediction.dto").ParkDailyPredictionDto[]
   > {
-    const [headlinerIds, typicalDayPeak] = await Promise.all([
+    const [headlinerIds, typicalDayPeak, closedDates] = await Promise.all([
       this.analyticsService.getHeadlinerAttractionIds(parkId),
       this.analyticsService.getTypicalDayPeakFromCache(parkId),
+      this.getClosedPredictionDates(predictions, parkId, timezone),
     ]);
     // Calendar-parity crowd level: AVG of predicted headliner waits ÷ the
     // typical-day-peak baseline ("predicted level vs a typical day's peak").
@@ -1690,7 +1698,9 @@ export class ParkIntegrationService {
       let crowdLevel: string;
       let avgWaitTime: number | undefined;
 
-      if (waits.length > 0) {
+      if (closedDates.has(date)) {
+        crowdLevel = "closed";
+      } else if (waits.length > 0) {
         // Raw mean drives the crowd math (calendar parity — no rounding
         // before the ratio); the rounded value is for display only. A missing
         // typical-day-peak (park not ratable, < 30 operating days) → "unknown".
@@ -1725,8 +1735,11 @@ export class ParkIntegrationService {
         | "neutral"
         | "avoid"
         | "strongly_avoid"
-        | "closed" = "neutral";
+        | "closed"
+        | undefined = "neutral";
       if (crowdLevel === "closed") recommendation = "closed";
+      // Not ratable → nothing to recommend on.
+      else if (crowdLevel === "unknown") recommendation = undefined;
       else if (recScore <= 1) recommendation = "highly_recommended";
       else if (recScore === 2) recommendation = "recommended";
       else if (recScore === 3) recommendation = "neutral";
@@ -1745,6 +1758,72 @@ export class ParkIntegrationService {
     }
 
     return result.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  /**
+   * The predicted dates the park is closed on, by the calendar's rule
+   * (`CalendarService.buildCalendarDay`): a CLOSED schedule entry, or a day
+   * without an OPERATING/CLOSED entry that {@link isClosedByOperatingRange}
+   * puts inside a gap or, for a seasonal park, outside the season.
+   *
+   * Without this the yearly predictions rated and recommended days the
+   * calendar calls closed (PAR-410: 28 recommended days at Legoland Billund
+   * inside one 89-day window). If the schedule cannot be read the set is
+   * empty, so the forecast is served as before rather than failing.
+   */
+  private async getClosedPredictionDates(
+    predictions: PredictionDto[],
+    parkId: string,
+    timezone: string,
+  ): Promise<Set<string>> {
+    const dates = [
+      ...new Set(predictions.map((p) => p.predictedTime.split("T")[0])),
+    ].sort();
+    if (dates.length === 0) return new Set();
+
+    try {
+      // One day of slack on each side: getSchedule compares a DATE column
+      // with a timestamp, and the exact match below is by park-local string.
+      const from = new Date(`${dates[0]}T12:00:00.000Z`);
+      from.setUTCDate(from.getUTCDate() - 1);
+      const to = new Date(`${dates[dates.length - 1]}T12:00:00.000Z`);
+      to.setUTCDate(to.getUTCDate() + 1);
+
+      const [schedules, operatingDateRange, isSeasonal] = await Promise.all([
+        this.parksService.getSchedule(parkId, from, to),
+        this.parksService.getOperatingDateRange(parkId, timezone),
+        this.parksService.isParkSeasonal(parkId),
+      ]);
+
+      // First entry per date wins, as in the calendar (getSchedule orders
+      // by scheduleType, OPERATING first).
+      const typeByDate = new Map<string, ScheduleType>();
+      for (const s of schedules) {
+        const d = formatInParkTimezone(s.date, timezone);
+        if (!typeByDate.has(d)) typeByDate.set(d, s.scheduleType);
+      }
+
+      const closed = new Set<string>();
+      for (const date of dates) {
+        const type = typeByDate.get(date);
+        if (type === ScheduleType.CLOSED) {
+          closed.add(date);
+        } else if (
+          type !== ScheduleType.OPERATING &&
+          isClosedByOperatingRange(date, operatingDateRange, isSeasonal)
+        ) {
+          closed.add(date);
+        }
+      }
+      return closed;
+    } catch (err) {
+      this.logger.warn(
+        `Schedule unavailable for yearly predictions of park ${parkId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return new Set();
+    }
   }
 
   /**

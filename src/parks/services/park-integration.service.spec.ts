@@ -1,6 +1,7 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { ParkIntegrationService } from "./park-integration.service";
 import { ParksService } from "../parks.service";
+import { ScheduleType } from "../entities/schedule-entry.entity";
 import { WeatherService } from "../weather.service";
 import { WeatherWarningsService } from "../weather-warnings.service";
 import { AttractionsService } from "../../attractions/attractions.service";
@@ -53,6 +54,17 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
     determineCrowdLevel: jest.fn(determineCrowdLevel),
   };
 
+  const TZ = "Europe/Copenhagen";
+
+  // No schedule by default: every day stays open, as before PAR-410.
+  const parksService = {
+    getSchedule: jest.fn().mockResolvedValue([]),
+    getOperatingDateRange: jest
+      .fn()
+      .mockResolvedValue({ minDate: null, maxDate: null }),
+    isParkSeasonal: jest.fn().mockResolvedValue(false),
+  };
+
   const noopRedis = {
     get: jest.fn(),
     set: jest.fn(),
@@ -66,7 +78,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       providers: [
         ParkIntegrationService,
         // Constructor takes 15 deps — most are unused on this path.
-        { provide: ParksService, useValue: {} },
+        { provide: ParksService, useValue: parksService },
         { provide: WeatherService, useValue: {} },
         {
           provide: WeatherWarningsService,
@@ -138,7 +150,11 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         { attractionId: "h1", date: "2026-06-13", hour: 13, wait: 80 },
       ]);
 
-      const [day] = await service.aggregateDailyPredictions(predictions, "p1");
+      const [day] = await service.aggregateDailyPredictions(
+        predictions,
+        "p1",
+        TZ,
+      );
 
       expect(day.crowdLevel).toBe("high");
       expect(day.avgWaitTime).toBe(70);
@@ -158,9 +174,15 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         { attractionId: "h1", date: "2026-06-13", hour: 12, wait: 99 },
       ]);
 
-      const [day] = await service.aggregateDailyPredictions(predictions, "p1");
+      const [day] = await service.aggregateDailyPredictions(
+        predictions,
+        "p1",
+        TZ,
+      );
 
       expect(day.crowdLevel).toBe("unknown");
+      // Not ratable → no recommendation either (PAR-410).
+      expect(day.recommendation).toBeUndefined();
     });
   });
 
@@ -179,7 +201,11 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         { attractionId: "filler", date: "2026-06-13", hour: 12, wait: 5 },
       ]);
 
-      const [day] = await service.aggregateDailyPredictions(predictions, "p1");
+      const [day] = await service.aggregateDailyPredictions(
+        predictions,
+        "p1",
+        TZ,
+      );
 
       // Only the headliner counts: AVG = 70 → 70/50 = 140% → "high",
       // avgWaitTime = 70. If filler had leaked in, AVG of [5, 70] = 37.5
@@ -200,7 +226,11 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         { attractionId: "a2", date: "2026-06-13", hour: 12, wait: 80 },
       ]);
 
-      const [day] = await service.aggregateDailyPredictions(predictions, "p1");
+      const [day] = await service.aggregateDailyPredictions(
+        predictions,
+        "p1",
+        TZ,
+      );
 
       expect(day.crowdLevel).toBe("high"); // AVG 70 / 50 = 140%
     });
@@ -244,10 +274,142 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
           wait: waitForBucket[level],
         },
       ]);
-      const [day] = await service.aggregateDailyPredictions(predictions, "p1");
+      const [day] = await service.aggregateDailyPredictions(
+        predictions,
+        "p1",
+        TZ,
+      );
 
       expect(day.crowdLevel).toBe(level);
       expect(day.recommendation).toBe(expected);
+    });
+  });
+
+  describe("schedule: closed days (PAR-410, calendar parity)", () => {
+    // Every day predicts a quiet headliner (30 / 50 = 60% → very_low →
+    // highly_recommended), which is exactly what a closed February looked
+    // like before the schedule was consulted.
+    const quietDays = (dates: string[]) =>
+      buildPredictions(
+        dates.map((date) => ({ attractionId: "h1", date, hour: 12, wait: 30 })),
+      );
+
+    beforeEach(() => {
+      analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
+        new Set(["h1"]),
+      );
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
+    });
+
+    it("reads a CLOSED schedule entry as closed / closed, without a wait", async () => {
+      parksService.getSchedule.mockResolvedValueOnce([
+        { date: "2027-02-01", scheduleType: ScheduleType.CLOSED },
+        { date: "2027-02-02", scheduleType: ScheduleType.OPERATING },
+      ]);
+
+      const days = await service.aggregateDailyPredictions(
+        quietDays(["2027-02-01", "2027-02-02"]),
+        "p1",
+        TZ,
+      );
+
+      expect(days[0]).toMatchObject({
+        date: "2027-02-01",
+        crowdLevel: "closed",
+        recommendation: "closed",
+      });
+      expect(days[0].avgWaitTime).toBeUndefined();
+      expect(days[1]).toMatchObject({
+        date: "2027-02-02",
+        crowdLevel: "very_low",
+        recommendation: "highly_recommended",
+      });
+    });
+
+    it("closes an unscheduled day inside the operating range (gap), keeps one outside for a year-round park", async () => {
+      parksService.getOperatingDateRange.mockResolvedValueOnce({
+        minDate: "2026-10-01",
+        maxDate: "2027-01-31",
+      });
+      parksService.isParkSeasonal.mockResolvedValueOnce(false);
+
+      const days = await service.aggregateDailyPredictions(
+        quietDays(["2026-12-24", "2027-02-10"]),
+        "p1",
+        TZ,
+      );
+
+      expect(days.map((d) => [d.date, d.crowdLevel, d.recommendation])).toEqual(
+        [
+          ["2026-12-24", "closed", "closed"],
+          // After the last OPERATING date of a year-round park: hours not
+          // published yet, so the forecast stands.
+          ["2027-02-10", "very_low", "highly_recommended"],
+        ],
+      );
+    });
+
+    it("closes an unscheduled day outside the operating range for a seasonal park", async () => {
+      parksService.getOperatingDateRange.mockResolvedValueOnce({
+        minDate: "2026-10-01",
+        maxDate: "2027-01-31",
+      });
+      parksService.isParkSeasonal.mockResolvedValueOnce(true);
+      parksService.getSchedule.mockResolvedValueOnce([
+        { date: "2027-02-11", scheduleType: ScheduleType.UNKNOWN },
+      ]);
+
+      const days = await service.aggregateDailyPredictions(
+        quietDays(["2027-02-10", "2027-02-11"]),
+        "p1",
+        TZ,
+      );
+
+      expect(days.every((d) => d.crowdLevel === "closed")).toBe(true);
+      expect(days.every((d) => d.recommendation === "closed")).toBe(true);
+    });
+
+    it("an OPERATING entry wins over the gap rule", async () => {
+      parksService.getOperatingDateRange.mockResolvedValueOnce({
+        minDate: "2026-10-01",
+        maxDate: "2027-01-31",
+      });
+      parksService.getSchedule.mockResolvedValueOnce([
+        { date: "2026-12-24", scheduleType: ScheduleType.OPERATING },
+      ]);
+
+      const [day] = await service.aggregateDailyPredictions(
+        quietDays(["2026-12-24"]),
+        "p1",
+        TZ,
+      );
+
+      expect(day.crowdLevel).toBe("very_low");
+    });
+
+    it("serves the forecast unchanged when the schedule cannot be read", async () => {
+      parksService.getSchedule.mockRejectedValueOnce(new Error("db down"));
+
+      const [day] = await service.aggregateDailyPredictions(
+        quietDays(["2027-02-01"]),
+        "p1",
+        TZ,
+      );
+
+      expect(day.crowdLevel).toBe("very_low");
+      expect(day.recommendation).toBe("highly_recommended");
+    });
+
+    it("queries the schedule around the predicted window, one day of slack each side", async () => {
+      await service.aggregateDailyPredictions(
+        quietDays(["2027-02-03", "2027-02-01"]),
+        "p1",
+        TZ,
+      );
+
+      const [, from, to] = parksService.getSchedule.mock.calls[0];
+      expect((from as Date).toISOString().slice(0, 10)).toBe("2027-01-31");
+      expect((to as Date).toISOString().slice(0, 10)).toBe("2027-02-04");
     });
   });
 
@@ -265,7 +427,11 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         { attractionId: "h1", date: "2026-06-14", hour: 12, wait: 50 },
       ]);
 
-      const days = await service.aggregateDailyPredictions(predictions, "p1");
+      const days = await service.aggregateDailyPredictions(
+        predictions,
+        "p1",
+        TZ,
+      );
 
       expect(days.map((d) => d.date)).toEqual([
         "2026-06-13",
@@ -297,14 +463,18 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         },
       ]);
 
-      const [day] = await service.aggregateDailyPredictions(predictions, "p1");
+      const [day] = await service.aggregateDailyPredictions(
+        predictions,
+        "p1",
+        TZ,
+      );
 
       // (0.8 + 1.0) / 2 = 0.9
       expect(day.confidencePercentage).toBeCloseTo(0.9);
     });
 
     it("returns an empty array when no predictions are provided", async () => {
-      const days = await service.aggregateDailyPredictions([], "p1");
+      const days = await service.aggregateDailyPredictions([], "p1", TZ);
       expect(days).toEqual([]);
     });
   });
