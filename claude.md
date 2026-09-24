@@ -80,7 +80,7 @@
 
 ### 💻 Development
 - [Setup Guide](docs/development/setup.md) - Local development instructions.
-- [Date & Time Rules](docs/development/datetime-handling.md) - **CRITICAL**: Timezone handling rules.
+- [Date & Time Rules](docs/development/datetime-handling.md) - **CRITICAL**: Timezone handling rules. §8 covers pandas in `ml-service`: one column carries one timezone, so park-local time is stored NAIVE in `local_timestamp` — a reading, never an instant, and never one side of a comparison against a `TIMESTAMPTZ`.
 - [Timezone Audit](docs/development/timezone-audit.md) - Audit of all time operations against park timezone (2026-02-08).
 - [Scripts Overview](docs/development/scripts.md) - Script categories and npm-run commands.
 - [The merge path's E2E gate](docs/development/e2e-merge-coverage.md) - **2026-09-10**: why `repairDuplicates` had no E2E until now — **four** of its 34 tables have no TypeORM entity (`pcn/shape/tft/catboost_daily_forecasts`), so `synchronize` never made them and the merge aborted with 42P01 before any assertion ran. The rule that replaces it: **read each `CREATE TABLE` from the file that issues it, never copy the DDL** — a copy drifts the moment a sub-service adds a column. Includes the schema guard (`to_regclass` over all 34), the truncation list, and the counter-check that proves the spec is not empty (`a045850~1` → 42703, `a045850` → 23503, `main` → green). Corrects PAR-100/PAR-121, which both say eight. **2026-09-17**: the same drift on the second axis — a table that exists but is a plain one where production has a hypertable — is closed by `HYPERTABLES` in `src/database/hypertables.ts`, the one list `TimescaleInitService` and the E2E schema both read.
