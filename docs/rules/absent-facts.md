@@ -21,7 +21,10 @@ Moved out of the repo's `claude.md` so that a session reads an index first and o
     upstream, and it keeps publishing after it stops measuring — La Ronde was
     silent for 89 days while its schedule claimed all 344 remaining calendar
     days as OPERATING, January in Montréal included. Past days and `CLOSED` days
-    are left alone. Full rule and the production numbers:
+    the source delivered are left alone. Gap-filled `CLOSED` days are not:
+    they rest on the park's last OPERATING day, the guard moves that day into
+    the past, and `fillScheduleGaps` then demotes every future gap-filled
+    `CLOSED` day to `UNKNOWN`. Full rule and the production numbers:
     [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md).
 - **Two writers, never one cell.** `curated_may_get_wet`, `curated_minimum_height`
   and `curated_stats` sit _beside_ the synced column, never in it, because the

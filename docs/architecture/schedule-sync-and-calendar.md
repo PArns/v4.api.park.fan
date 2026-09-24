@@ -53,7 +53,8 @@ What the guard does and does not touch:
 | Future OPERATING day, park silent ≥ 30 days | → stored as **UNKNOWN**, with `openingTime`, `closingTime`, `description` and `purchases` set to NULL              |
 | Future OPERATING day, feed answering        | untouched                                                                                                          |
 | **Past** OPERATING day                      | untouched, silent park or not — the past-day reconstruction in `CalendarService` (`isHistorical`) reads those rows |
-| CLOSED day, any direction                   | untouched — a source that names a day closed has said something about that day                                     |
+| CLOSED day from the API, any direction      | untouched — a source that names a day closed has said something about that day                                     |
+| Future **gap-filled** CLOSED day            | not touched by the guard, but demoted to UNKNOWN by the next `fillScheduleGaps` — see below                        |
 | Per-ride rows (`attractionId IS NOT NULL`)  | out of scope, as everywhere else in this method                                                                    |
 
 - **UNKNOWN, not CLOSED.** "We have no current information" is what is true;
@@ -74,6 +75,19 @@ What the guard does and does not touch:
   writes the OPERATING days back with their hours. Nothing has to be
   un-done by hand, and `findScheduledButSilentParks` — which filters on
   OPERATING — goes quiet on its own.
+- **Gap-filled CLOSED days go with the OPERATING ones.** `fillScheduleGaps`
+  marks a gap CLOSED only when it lies strictly between the park's first and
+  last park-level OPERATING day (`isGapClosed`), and demotes a gap-filled
+  CLOSED day (`description = 'Gap-filled'`, no hours) to UNKNOWN once it lies
+  after the last one. The guard removes exactly the future OPERATING days that
+  last one was taken from, so it falls back to the last past operating day and
+  the next gap fill demotes every future gap-filled CLOSED day at the park. The
+  guard itself writes no CLOSED row and deletes none, and a CLOSED day the API
+  delivered is never demoted. This is consistent with
+  [absent-facts](../rules/absent-facts.md): a closure inferred from a schedule
+  we no longer trust is no better than that schedule. The cost is on the
+  calendar, which for the off-season of these parks shows "opening hours not
+  yet available" instead of "closed".
 - **Cost.** One indexed `EXISTS` against `queue_data`
   (`QueueDataService.hasObservedReadingWithin`), and only when the payload
   actually carries a future operating day. A sync of past days or of a closed
@@ -82,7 +96,11 @@ What the guard does and does not touch:
 Measured on production 2026-09-21: **10 parks, 1254 future park-level OPERATING
 rows**. Untouched beside them: 9347 future operating days at the 148 parks whose
 feed still answers, 1550 past operating days at the silent ten, and 751 future
-CLOSED days.
+CLOSED days. The 751 did not stay: on 2026-09-23, with the same population, the
+silent parks held 317 future CLOSED days, all of them at the two parks whose
+future OPERATING days the guard had not reached yet (Adventure Island Tampa,
+Aquatica San Antonio). The other 434 were gap-filled and had been demoted as
+described above (PAR-481).
 
 **Recovery**: these rows are a copy of an upstream answer, not an original.
 Revert the guard, deploy, and the next `sync-schedules-only` (03:00 / 15:00 UTC,
