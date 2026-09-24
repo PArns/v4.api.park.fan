@@ -15,6 +15,7 @@ import { Park } from "../../parks/entities/park.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { generateSlug } from "../../common/utils/slug.util";
 import type { AttractionKind } from "../../common/types/attraction-kind.type";
+import type { IndoorOutdoor } from "../../common/types/indoor-outdoor.type";
 
 /**
  * Attraction Entity
@@ -340,6 +341,21 @@ export class Attraction {
    */
   @Column({ name: "attraction_kind", type: "text", nullable: true })
   attractionKind: AttractionKind | null;
+
+  /**
+   * Whether this attraction keeps a visitor dry — `indoor`, `outdoor`, or
+   * `covered_queue` (queue under a roof, ride outside). Hand-decided; the
+   * values and why no feed can seed them are on the type.
+   *
+   * **Null is neither.** It means nobody has looked, and a reader has to
+   * behave exactly as it did before the column existed.
+   *
+   * Text rather than a Postgres enum for the same reason as
+   * `attraction_kind`: `synchronize` runs in production. Single writer, so
+   * both DTO mappers read it straight off the row.
+   */
+  @Column({ name: "indoor_outdoor", type: "text", nullable: true })
+  indoorOutdoor: IndoorOutdoor | null;
 
   /**
    * Whether the ride runs a virtual line at all — a return-time or

@@ -24,7 +24,7 @@ which is not a hypothetical: it is why `curated_may_get_wet` and
 | `curated_is_seasonal`     | `is_seasonal`     | the nightly `detect-seasonal` job     |
 | `curated_season_months`   | `season_months`   | `detect-seasonal`                     |
 
-Human-only, with no sync behind them: `attraction_kind`, `has_single_rider`,
+Human-only, with no sync behind them: `attraction_kind`, `indoor_outdoor`, `has_single_rider`,
 `has_virtual_line`, `open_with_park`, `rcdb_id`, `retired_at` / `retired_reason`, the three
 fast-pass columns below, and the whole `attraction_ride_profiles` table except
 its `stats` column.

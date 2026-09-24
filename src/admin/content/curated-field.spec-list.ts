@@ -4,6 +4,7 @@ import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-
 import { resolveCuratedPark } from "../../parks/utils/curated-park-facts.util";
 import { SUPPORTED_CURRENCIES } from "../../attractions/utils/fast-pass.util";
 import { ATTRACTION_KIND_VALUES } from "../../common/types/attraction-kind.type";
+import { INDOOR_OUTDOOR_VALUES } from "../../common/types/indoor-outdoor.type";
 
 /**
  * The curated fields, described rather than hard-coded into a form.
@@ -267,6 +268,21 @@ export const ATTRACTION_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     hint:
       "Frei zugängliche Attraktionen — Spielplätze, Wasserspielplätze — ohne " +
       "Warteschlange, offen, solange der Park offen ist.",
+  },
+  {
+    key: "indoorOutdoor",
+    label: "Drinnen / draußen",
+    type: "enum",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Ausstattung",
+    options: INDOOR_OUTDOOR_VALUES,
+    hint:
+      'Wo man bei Regen steht. „indoor": Fahrt und Warteschlange unter Dach. ' +
+      '„covered_queue": Warteschlange überdacht, Fahrt draußen. „outdoor": ' +
+      'beides draußen. Leer heißt „nicht geprüft", nicht „draußen". Die ' +
+      "Quelle gehört in Begründung und Quell-URL. Keine RCDB, keine " +
+      "automatisch gelesenen Park-Seiten.",
   },
   {
     key: "hasFastPass",

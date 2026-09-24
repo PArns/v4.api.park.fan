@@ -684,6 +684,7 @@ export class AttractionMergeService {
     "retiredAt",
     "retiredReason",
     "attractionKind",
+    "indoorOutdoor",
     "hasSingleRider",
     "hasVirtualLine",
     "hasFastPass",
