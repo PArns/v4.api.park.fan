@@ -23,7 +23,7 @@ describe("invalidateParkCaches", () => {
   it("evicts the attraction sitemap so removed slugs stop being advertised", async () => {
     await invalidateParkCaches(redis as never, "park-1");
 
-    expect(deletedKeys()).toContain("sitemap:attractions:v1");
+    expect(deletedKeys()).toContain("sitemap:attractions:v2");
   });
 
   it("still evicts the park-scoped caches", async () => {
