@@ -46,6 +46,11 @@ export class SitemapService {
       .where("p.continentSlug IS NOT NULL")
       .andWhere("p.countrySlug IS NOT NULL")
       .andWhere("p.citySlug IS NOT NULL")
+      // Same rule as `ParksService.loadParkRelations`: a retired ride leaves every list that
+      // describes the park as it is today. The frontend resolves a ride page from the park
+      // payload, which already drops it, so listing it here advertised a 404 in six locales.
+      // Measured 2026-09-24: 70 of the 7,374 rows were retired (36 of them in September).
+      .andWhere("a.retiredAt IS NULL")
       .getMany();
 
     const items: AttractionSitemapItem[] = attractions

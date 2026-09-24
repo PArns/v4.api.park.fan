@@ -158,6 +158,9 @@ export const CacheKeys = {
    * invalidated here too: it is not deduplicated, so any merge that removes
    * an attraction row must drop it or the sitemap keeps advertising a slug
    * that now 404s.
+   *
+   * v2: retired rides are no longer listed. The bump makes the filter apply on
+   * deploy instead of up to 24 h later, when the v1 entry would have expired.
    */
-  sitemapAttractions: (): string => "sitemap:attractions:v1",
+  sitemapAttractions: (): string => "sitemap:attractions:v2",
 } as const;
