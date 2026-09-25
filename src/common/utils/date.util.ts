@@ -164,6 +164,37 @@ export function getYesterdayDateInTimezone(timezone: string): string {
 }
 
 /**
+ * One instant per calendar day in the park's timezone, from the day `from`
+ * falls on to the day `to` falls on (both inclusive), each at 12:00 local.
+ *
+ * Walking a range with `setDate(getDate() + 1)` from local midnight steps in
+ * whole 24-hour units once the runtime is UTC. On the 25-hour fall-back day
+ * that step lands at 23:00 of the SAME date (Berlin, 2026-10-25), so the date
+ * came out twice. Every step here is re-anchored at local noon, which has 12
+ * hours of margin on either side of any real UTC-offset change.
+ *
+ * @example
+ * // from = 2026-10-24 00:00 Berlin, to = 2026-10-26 23:59 Berlin
+ * eachDayAtNoonInTimezone(from, to, "Europe/Berlin").map(d => formatInParkTimezone(d, "Europe/Berlin"))
+ * // ["2026-10-24", "2026-10-25", "2026-10-26"]
+ */
+export function eachDayAtNoonInTimezone(
+  from: Date,
+  to: Date,
+  timezone: string,
+): Date[] {
+  const lastStr = formatInTimeZone(to, timezone, "yyyy-MM-dd");
+  const days: Date[] = [];
+  let dayStr = formatInTimeZone(from, timezone, "yyyy-MM-dd");
+  while (dayStr <= lastStr) {
+    const noonInTz = fromZonedTime(`${dayStr}T12:00:00`, timezone);
+    days.push(noonInTz);
+    dayStr = formatInTimeZone(addDays(noonInTz, 1), timezone, "yyyy-MM-dd");
+  }
+  return days;
+}
+
+/**
  * Gets the current time as a Date object in a specific timezone.
  *
  * This returns a Date object that represents "now" but adjusted to show

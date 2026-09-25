@@ -24,6 +24,7 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
   getTomorrowDateInTimezone,
+  eachDayAtNoonInTimezone,
 } from "../../common/utils/date.util";
 import {
   calculateHolidayInfo,
@@ -355,13 +356,16 @@ export class CalendarService {
     }
 
     // Batch Redis MGET for crowd level cache to avoid N round-trips per historical day
-    const historicalDateStrs: string[] = [];
-    const walk = new Date(fromDate);
-    while (walk <= toDate) {
-      const d = formatInParkTimezone(walk, park.timezone);
-      if (d <= today) historicalDateStrs.push(d);
-      walk.setDate(walk.getDate() + 1);
-    }
+    // One entry per park-local day, built once and shared with the day build
+    // below — see eachDayAtNoonInTimezone for why this is not a setDate walk.
+    const datesToBuild = eachDayAtNoonInTimezone(
+      fromDate,
+      toDate,
+      park.timezone,
+    );
+    const historicalDateStrs = datesToBuild
+      .map((d) => formatInParkTimezone(d, park.timezone))
+      .filter((d) => d <= today);
     const crowdLevelKeys =
       historicalDateStrs.length > 0
         ? historicalDateStrs.map(
@@ -434,14 +438,6 @@ export class CalendarService {
     // The consequence is deliberate and is the point: every day in a month's grid is now a
     // forecast or a measurement, none of them a spot reading, so the whole response is
     // day-stable and may be cached for a day.
-
-    // Collect all dates in the range
-    const datesToBuild: Date[] = [];
-    const currentDate = new Date(fromDate);
-    while (currentDate <= toDate) {
-      datesToBuild.push(new Date(currentDate));
-      currentDate.setDate(currentDate.getDate() + 1);
-    }
 
     // Build the calendar days in parallel, but bounded — see
     // CALENDAR_DAY_BUDGET.
@@ -581,12 +577,8 @@ export class CalendarService {
     timezone: string,
   ): string[] {
     const seen = new Set<string>();
-    const cur = new Date(fromDate);
-    const to = new Date(toDate);
-    while (cur <= to) {
-      const ym = formatInParkTimezone(cur, timezone).slice(0, 7); // YYYY-MM
-      seen.add(ym);
-      cur.setDate(cur.getDate() + 1);
+    for (const day of eachDayAtNoonInTimezone(fromDate, toDate, timezone)) {
+      seen.add(formatInParkTimezone(day, timezone).slice(0, 7)); // YYYY-MM
     }
     return [...seen].sort();
   }
