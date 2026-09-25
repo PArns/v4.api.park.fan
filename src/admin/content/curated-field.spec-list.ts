@@ -414,7 +414,7 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
     resolvedKey: null,
     group: "Links",
     maxLength: 500,
-    hint: "Beliebige Sprache — der Artikel verlinkt seine Übersetzungen selbst.",
+    hint: "Englischer Artikel; Deutsch nur bei Parks im deutschsprachigen Raum. Titel über den `langlinks`-Endpunkt belegen, nie raten.",
   },
   {
     key: "curatedInstagramUrl",
