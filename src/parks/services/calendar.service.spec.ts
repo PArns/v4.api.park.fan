@@ -908,3 +908,125 @@ describe("CalendarService › buildDaysBounded (private)", () => {
     expect(peak).toBeGreaterThan(1);
   });
 });
+
+/**
+ * PAR-535: `/calendar?from=2026-10-24&to=2026-10-26` returned 2026-10-25 twice
+ * for Phantasialand, Efteling and Heide Park. The day list was walked with
+ * `setDate(getDate() + 1)` from local midnight, which on a UTC runtime is a
+ * fixed 24-hour step; on the 25-hour fall-back day that step lands at 23:00 of
+ * the same date. This drives the full (uncached) build path with every data
+ * source empty and checks only the day list.
+ */
+describe("CalendarService › buildCalendarResponse day list across DST", () => {
+  let service: CalendarService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CalendarService,
+        {
+          provide: ParksService,
+          useValue: {
+            getSchedule: jest.fn().mockResolvedValue([]),
+            getOperatingDateRange: jest
+              .fn()
+              .mockResolvedValue({ minDate: null, maxDate: null }),
+            isParkSeasonal: jest.fn().mockResolvedValue(false),
+            getDerivedHistoricalHours: jest.fn().mockResolvedValue(new Map()),
+          },
+        },
+        {
+          provide: WeatherService,
+          useValue: { getWeatherData: jest.fn().mockResolvedValue([]) },
+        },
+        {
+          provide: MLService,
+          useValue: {
+            getServingDailyPredictions: jest
+              .fn()
+              .mockResolvedValue({ predictions: [] }),
+            getParkPredictions: jest
+              .fn()
+              .mockResolvedValue({ predictions: [] }),
+          },
+        },
+        {
+          provide: AnalyticsService,
+          useValue: {
+            getHeadlinerAttractions: jest.fn().mockResolvedValue([]),
+            getTypicalDayPeakFromCache: jest.fn().mockResolvedValue(0),
+            getHeadlinerDailyPeaks: jest.fn().mockResolvedValue(new Map()),
+            calculateCrowdLevelForDate: jest.fn().mockResolvedValue(null),
+          },
+        },
+        {
+          provide: HolidaysService,
+          useValue: { getHolidays: jest.fn().mockResolvedValue([]) },
+        },
+        {
+          provide: AttractionsService,
+          useValue: { getNamesByIds: jest.fn().mockResolvedValue(new Map()) },
+        },
+        {
+          provide: REDIS_CLIENT,
+          useValue: {
+            get: jest.fn().mockResolvedValue("1"), // refresh check: already done
+            set: jest.fn().mockResolvedValue("OK"),
+            del: jest.fn(),
+            // Every month key and crowd-level key misses → full build path.
+            mget: jest.fn((...keys: string[]) =>
+              Promise.resolve(keys.map(() => null)),
+            ),
+          },
+        },
+        {
+          provide: getQueueToken("park-metadata"),
+          useValue: { add: jest.fn() },
+        },
+      ],
+    }).compile();
+
+    service = module.get(CalendarService);
+  });
+
+  const dates = async (from: string, to: string, timezone: string) => {
+    const { parseDateRange } =
+      await import("../../common/utils/date-parsing.util");
+    const { fromDate, toDate } = parseDateRange(from, to, { timezone });
+    const response = await service.buildCalendarResponse(
+      { id: "p1", slug: "test-park", timezone, countryCode: "DE" } as any,
+      fromDate,
+      toDate,
+      "none",
+    );
+    return response.days.map((d) => d.date);
+  };
+
+  it.each(["Europe/Berlin", "Europe/Amsterdam"])(
+    "returns 2026-10-25 once in %s (fall-back)",
+    async (tz) => {
+      expect(await dates("2026-10-24", "2026-10-26", tz)).toEqual([
+        "2026-10-24",
+        "2026-10-25",
+        "2026-10-26",
+      ]);
+    },
+  );
+
+  it.each(["Europe/Berlin", "Europe/Amsterdam"])(
+    "returns every day around 2027-03-28 in %s (spring-forward)",
+    async (tz) => {
+      expect(await dates("2027-03-27", "2027-03-29", tz)).toEqual([
+        "2027-03-27",
+        "2027-03-28",
+        "2027-03-29",
+      ]);
+    },
+  );
+
+  it("builds October 2026 as 31 distinct days", async () => {
+    const october = await dates("2026-10-01", "2026-10-31", "Europe/Berlin");
+    expect(october).toHaveLength(31);
+    expect(new Set(october).size).toBe(31);
+  });
+});

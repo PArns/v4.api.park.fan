@@ -1,7 +1,10 @@
 import {
   secondsUntilEndOfDayInTimezone,
   getTomorrowDateInTimezoneAt,
+  eachDayAtNoonInTimezone,
+  formatInParkTimezone,
 } from "./date.util";
+import { parseDateRange } from "./date-parsing.util";
 
 describe("secondsUntilEndOfDayInTimezone", () => {
   it("counts to the park's own midnight, not to UTC's", () => {
@@ -65,5 +68,67 @@ describe("getTomorrowDateInTimezoneAt", () => {
         "Europe/Berlin",
       ),
     ).toBe("2026-10-26");
+  });
+});
+
+describe("eachDayAtNoonInTimezone", () => {
+  // Ranges as the calendar controller builds them: local midnight to local
+  // 23:59:59, via parseDateRange.
+  const days = (from: string, to: string, timezone: string) => {
+    const { fromDate, toDate } = parseDateRange(from, to, { timezone });
+    return eachDayAtNoonInTimezone(fromDate, toDate, timezone).map((d) =>
+      formatInParkTimezone(d, timezone),
+    );
+  };
+
+  it.each(["Europe/Berlin", "Europe/Amsterdam"])(
+    "lists the fall-back day once in %s (2026-10-25 is 25 hours long)",
+    (tz) => {
+      expect(days("2026-10-24", "2026-10-26", tz)).toEqual([
+        "2026-10-24",
+        "2026-10-25",
+        "2026-10-26",
+      ]);
+    },
+  );
+
+  it.each(["Europe/Berlin", "Europe/Amsterdam"])(
+    "lists every day around spring-forward in %s (2026-03-29 is 23 hours long)",
+    (tz) => {
+      expect(days("2026-03-28", "2026-03-30", tz)).toEqual([
+        "2026-03-28",
+        "2026-03-29",
+        "2026-03-30",
+      ]);
+    },
+  );
+
+  it("returns each date of a full month exactly once across the change", () => {
+    const october = days("2026-10-01", "2026-10-31", "Europe/Berlin");
+    expect(october).toHaveLength(31);
+    expect(new Set(october).size).toBe(31);
+    expect(october[0]).toBe("2026-10-01");
+    expect(october[30]).toBe("2026-10-31");
+  });
+
+  it("anchors every day at 12:00 local time", () => {
+    const { fromDate, toDate } = parseDateRange("2026-10-24", "2026-10-26", {
+      timezone: "Europe/Berlin",
+    });
+    expect(
+      eachDayAtNoonInTimezone(fromDate, toDate, "Europe/Berlin").map((d) =>
+        d.toISOString(),
+      ),
+    ).toEqual([
+      "2026-10-24T10:00:00.000Z", // CEST, UTC+2
+      "2026-10-25T11:00:00.000Z", // CET from 03:00 local
+      "2026-10-26T11:00:00.000Z",
+    ]);
+  });
+
+  it("returns a single day when from and to fall on the same date", () => {
+    expect(days("2026-10-25", "2026-10-25", "Europe/Berlin")).toEqual([
+      "2026-10-25",
+    ]);
   });
 });
