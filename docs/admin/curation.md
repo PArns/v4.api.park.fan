@@ -239,9 +239,64 @@ statements about the same ride.
 
 **Answered on 2026-09-22: two true statements.** A ride can have a virtual line
 and that line can be free, and the seed writing both is not a contradiction to
-undo. Nothing here changes; the seed runs with its three types. Where exactly
-the boundary between the two columns sits, and whether the 36 `PAID_RETURN_TIME`
-rides with `has_fast_pass` NULL should be filled in, is PAR-386's to settle.
+undo. Nothing here changes; the seed runs with its three types.
+
+**And answered on 2026-09-25 (PAR-386): the 36 are filled in, in
+`has_fast_pass`.** That is where the line between the two columns runs — a
+`PAID_RETURN_TIME` window is the park's paid queue-jump product, so it is
+recorded as one; `has_virtual_line` keeps its three types and none of the 36 got
+one. `fast_pass_price` stays empty on all 36, because Disney prices this per day
+and a frozen number would be wrong most days, which is the same rule
+`resolvePrice` states for the whole product family.
+
+The audit that found them, and the one to re-run. It is written as the whole
+picture rather than one gap, because every number in this section is a `FILTER`
+over the same join and reading them apart is how the 140 and the 36 got
+conflated in the first place:
+
+```sql
+WITH sig AS (
+  SELECT qd."attractionId" AS aid,
+         count(*) FILTER (WHERE qd."queueType"::text
+           IN ('RETURN_TIME','BOARDING_GROUP','VIRTUAL_QUEUE')) AS n_vl,
+         count(*) FILTER (WHERE qd."queueType"::text
+           = 'PAID_RETURN_TIME')                                AS n_paid
+  FROM queue_data qd
+  WHERE qd."queueType"::text
+    IN ('RETURN_TIME','BOARDING_GROUP','VIRTUAL_QUEUE','PAID_RETURN_TIME')
+  GROUP BY 1
+)
+SELECT count(*) FILTER (WHERE n_vl > 0)                     AS vl_types_any,
+       count(*) FILTER (WHERE n_paid > 0)                   AS paid_any,
+       count(*) FILTER (WHERE n_paid > 0 AND n_vl = 0)      AS paid_only,
+       -- the two gaps: a seeded column that missed a ride, and a paid window
+       -- recorded nowhere
+       count(*) FILTER (WHERE n_vl > 0
+         AND a.has_virtual_line IS NOT TRUE)                AS vl_gap,
+       count(*) FILTER (WHERE n_paid > 0 AND n_vl = 0
+         AND a.has_fast_pass IS NULL)                       AS fp_gap
+FROM sig JOIN attractions a ON a.id = sig.aid;
+```
+
+Run against production on 2026-09-25, before and after the write:
+
+```
+                 | vl_types_any | paid_any | paid_only | vl_gap | fp_gap
+before           |          140 |       55 |        36 |      0 |     36
+after            |          140 |       55 |        36 |      0 |      0
+```
+
+**Both gaps are meant to read zero, and neither is a count of anything else.**
+`paid_only` stays 36 — it counts the rides, not the work left on them — so a
+later run that sees 36 there has found nothing. `vl_gap` is the seed's own
+check and was already zero.
+
+The brand had to be written first. `has_fast_pass = true` on a park with no
+`curated_fast_pass_name` publishes the neutral **"Fast Pass"**, so the eight
+Disney parks outside Paris got theirs in the same run: Tokyo Disneyland and
+Tokyo DisneySea **Disney Premier Access** (`premier-access`), the six US parks
+**Lightning Lane** (`lightning-lane`). The two Paris parks already carried
+Disney Premier Access. No currency was written, because no price was.
 
 ### Parks
 
