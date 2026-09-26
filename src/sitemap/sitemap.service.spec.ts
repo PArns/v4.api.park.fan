@@ -108,6 +108,28 @@ describe("SitemapService.getAttractionsSitemap", () => {
     expect(items.map((item) => item.slug)).toEqual(["nexus-ai"]);
   });
 
+  it("trims the name before grouping, as the park payload does", async () => {
+    const { service } = setup([
+      { slug: "excalibur", name: "Excalibur ", park: phantasialand },
+      { slug: "excalibur-2", name: "Excalibur", park: phantasialand },
+    ]);
+
+    const items = await service.getAttractionsSitemap();
+
+    expect(items.map((item) => item.slug)).toEqual(["excalibur"]);
+  });
+
+  it("leaves out a row with a blank name, which the payload never serves", async () => {
+    const { service } = setup([
+      { slug: "nameless", name: "   ", park: phantasialand },
+      { slug: "taron", name: "Taron", park: phantasialand },
+    ]);
+
+    const items = await service.getAttractionsSitemap();
+
+    expect(items.map((item) => item.slug)).toEqual(["taron"]);
+  });
+
   it("serves the cached list without querying", async () => {
     const { service, redis } = setup();
     const cached = [{ url: "/v1/parks/x/y/z/p/attractions/a", slug: "a" }];

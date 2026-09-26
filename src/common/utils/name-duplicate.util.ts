@@ -16,6 +16,27 @@ export interface NameDuplicateRow {
 const SLUG_COUNTER = /-[0-9]+$/;
 
 /**
+ * The group a row belongs to, or `null` when it belongs to none.
+ *
+ * Shared for the same reason the comparator is: the park payload and the
+ * attraction sitemap have to agree on the GROUPS before agreeing on the winner.
+ * Two rows named "Raven " and "Raven" are one group to the payload, which trims,
+ * and were two to the sitemap, which did not — so it advertised both slugs while
+ * the payload served one. Five active rows carry a name with trailing whitespace
+ * (measured 2026-09-26, all at Beto Carrero World); none of them collides with a
+ * sibling today, which is exactly why this drifted unnoticed.
+ *
+ * `null` for a blank name, because a row the payload refuses to serve at all
+ * must not be advertised either.
+ */
+export function nameDuplicateKey(
+  name: string | null | undefined,
+): string | null {
+  const trimmed = (name ?? "").trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
  * Where a slug sits in the ranking. Lower wins, compared element by element.
  *
  * 1. **No `-N` counter.** A counter means `generateUniqueSlug` handed this row

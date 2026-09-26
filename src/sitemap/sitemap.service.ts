@@ -7,7 +7,10 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { CacheKeys } from "../common/cache/cache-keys";
 import { buildAttractionUrl } from "../common/utils/url.util";
 import { safeJsonParse } from "../common/utils/json.util";
-import { chooseNameDuplicateWinner } from "../common/utils/name-duplicate.util";
+import {
+  chooseNameDuplicateWinner,
+  nameDuplicateKey,
+} from "../common/utils/name-duplicate.util";
 import { resolveAttractionName } from "../attractions/utils/curated-attraction-facts.util";
 
 export interface AttractionSitemapItem {
@@ -84,7 +87,8 @@ export class SitemapService {
    * losers of the 45 duplicate name groups — no other reason for a gap existed
    * in either direction.
    *
-   * Grouping is per park, on the resolved name and on nothing else, because
+   * Grouping is per park, on the resolved name trimmed by `nameDuplicateKey`
+   * and on nothing else, because
    * that is the payload's key (`docs/architecture/attraction-status-and-seasonality.md`
    * §4a explains why it may not be the slug or the `externalId`). The winner is
    * `chooseNameDuplicateWinner`, shared with the payload so there is one rule
@@ -103,7 +107,10 @@ export class SitemapService {
         byPark.set(attraction.park.id, byName);
       }
 
-      const name = resolveAttractionName(attraction);
+      const name = nameDuplicateKey(resolveAttractionName(attraction));
+      // A row the payload refuses to serve must not be advertised either.
+      if (name === null) continue;
+
       const group = byName.get(name);
       if (group) group.push(attraction);
       else byName.set(name, [attraction]);

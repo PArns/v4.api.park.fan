@@ -1,5 +1,6 @@
 import {
   chooseNameDuplicateWinner,
+  nameDuplicateKey,
   outranksNameDuplicate,
 } from "./name-duplicate.util";
 
@@ -101,5 +102,26 @@ describe("name duplicate winner", () => {
 
   it("returns nothing for an empty group rather than undefined-as-a-row", () => {
     expect(chooseNameDuplicateWinner([])).toBeUndefined();
+  });
+
+  /**
+   * The group has to be settled before the winner is. Five active rows carry a
+   * name with trailing whitespace (2026-09-26, all at Beto Carrero World), and
+   * the payload has always trimmed while the sitemap did not.
+   */
+  describe("nameDuplicateKey", () => {
+    it("trims, so a padded name lands in the same group", () => {
+      expect(nameDuplicateKey("Excalibur ")).toBe("Excalibur");
+      expect(nameDuplicateKey(" Excalibur")).toBe(
+        nameDuplicateKey("Excalibur"),
+      );
+    });
+
+    it("refuses a blank name, so no surface advertises a row it cannot serve", () => {
+      expect(nameDuplicateKey("")).toBeNull();
+      expect(nameDuplicateKey("   ")).toBeNull();
+      expect(nameDuplicateKey(null)).toBeNull();
+      expect(nameDuplicateKey(undefined)).toBeNull();
+    });
   });
 });

@@ -240,6 +240,16 @@ describe("ParkIntegrationService › deduplicateEntities", () => {
     expect(result[0]).toMatchObject({ slug: "taron" });
   });
 
+  it("groups a padded name with its trimmed twin", () => {
+    const result = deduplicate([
+      { name: "Excalibur ", slug: "excalibur" },
+      { name: "Excalibur", slug: "excalibur-2" },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ slug: "excalibur" });
+  });
+
   it("returns a single-element list untouched", () => {
     const rows = [{ name: "Taron", slug: "taron" }];
 

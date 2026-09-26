@@ -31,7 +31,10 @@ import {
   formatInParkTimezone,
 } from "../../common/utils/date.util";
 import { buildAttractionUrl } from "../../common/utils/url.util";
-import { outranksNameDuplicate } from "../../common/utils/name-duplicate.util";
+import {
+  nameDuplicateKey,
+  outranksNameDuplicate,
+} from "../../common/utils/name-duplicate.util";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { ParkEnrichmentService } from "./park-enrichment.service";
 import { ShowLiveData } from "../../shows/entities/show-live-data.entity";
@@ -1491,7 +1494,7 @@ export class ParkIntegrationService {
     for (const entity of entities) {
       // Handle both flat and nested structures (wait-times response)
       const e = entity as any;
-      const name = (e.name || e.attraction?.name || "").trim();
+      const name = nameDuplicateKey(e.name || e.attraction?.name);
       if (!name) continue;
 
       const existing = map.get(name) as any;

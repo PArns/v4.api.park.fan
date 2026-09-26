@@ -341,12 +341,29 @@ base slug that was 404ing. **Nothing is lost by dropping the status:** the choic
 was always between two rows of one name, and a reader had no way to ask for the
 other one either way.
 
-Two traps if this is touched again. **The grouping key is the resolved name**, so
-the sitemap calls `resolveAttractionName` — the same function `resolveCuratedFacts`
-uses — rather than reading `name` and silently splitting a curated group. And the
-sitemap is one flat 24 h-cached list, so a change to what it contains needs a
-bump of `CacheKeys.sitemapAttractions()`; without it the old list is served for up
-to a day after the deploy and the measurement above reproduces the old number.
+**The groups have to match before the winners can.** Both sides therefore build
+the key the same way: `resolveAttractionName` — the same function
+`resolveCuratedFacts` uses, so a curated name cannot split a group on one side
+only — and then `nameDuplicateKey`, which trims it and returns nothing for a
+blank name. The payload has always trimmed and always dropped blank-named rows;
+the sitemap did neither, so "Raven " and "Raven" were one group to the payload and
+two to the sitemap. Five active rows carry a name with trailing whitespace
+(2026-09-26, all at Beto Carrero World) and none of them collides with a sibling
+today, which is why it stayed invisible.
+
+Two things about the transition, because neither is in the diff:
+
+- **The sitemap is one flat 24 h-cached list**, so a change to what it contains
+  needs a bump of `CacheKeys.sitemapAttractions()`. Without it the old list is
+  served for up to a day after the deploy and the measurement above reproduces the
+  old number.
+- **The park payload cache is not versioned** (`park:integrated:<id>`, TTL three
+  minutes for an OPERATING park and up to about six hours for a closed one). So
+  right after a deploy the fresh sitemap can name the new winner while a cached
+  payload still serves the old one. For the nine groups whose winner changed that
+  is the state those URLs were already in, not a new break, and it clears itself
+  within one TTL — busting every park payload to shorten it would cold-start 201
+  rebuilds for nine URLs.
 
 ---
 
