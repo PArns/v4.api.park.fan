@@ -6,6 +6,7 @@ import { Repository } from "typeorm";
 import { ParksService } from "../../parks/parks.service";
 import { DestinationsService } from "../../destinations/destinations.service";
 import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.client";
+import { ThemeParksRateLimitError } from "../../external-apis/themeparks/themeparks.errors";
 import { GoogleGeocodingClient } from "../../external-apis/geocoding/google-geocoding.client";
 import { MultiSourceOrchestrator } from "../../external-apis/data-sources/multi-source-orchestrator.service";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
@@ -115,6 +116,14 @@ export class ParkMetadataProcessor {
         `sync-park-schedule: ${park.name} saved ${savedEntries} schedule entries`,
       );
     } catch (error) {
+      if (error instanceof ThemeParksRateLimitError) {
+        // Throttled, not broken. Still rethrown so Bull retries it with its own
+        // backoff — an on-demand refresh has a reader waiting for it.
+        this.logger.warn(
+          `sync-park-schedule: ${park.name} throttled, retrying later: ${error.message}`,
+        );
+        throw error;
+      }
       this.logger.error(
         `sync-park-schedule: Failed for ${park.name}: ${error}`,
       );
@@ -1059,6 +1068,23 @@ export class ParkMetadataProcessor {
     const parks = await this.parkRepository.find();
     let totalScheduleEntries = 0;
     /**
+     * Parks this run could not ask, and parks the source had no answer for.
+     *
+     * Kept apart because they used to be the same number. A throttled fetch
+     * returned an empty list, `saveScheduleData` wrote nothing, and the run
+     * logged `📅 Fetched total 0 schedule entries` — indistinguishable from a
+     * park whose schedule the source has not published. On 2026-09-23 that hid
+     * 87 of 200 parks, and La Ronde's schedule stood untouched for 17 days
+     * (PAR-480).
+     */
+    let throttledParks = 0;
+    let emptyParks = 0;
+    let syncedParks = 0;
+
+    // What each park holds right now, so a fetch of zero can say what it cost.
+    const heldEntries =
+      await this.parksService.countFutureScheduleEntriesByPark();
+    /**
      * Parks whose schedule this run actually rewrote, as frontend cache tags.
      *
      * A schedule correction is the ONE thing in a calendar month that can change inside a day,
@@ -1105,24 +1131,70 @@ export class ParkMetadataProcessor {
 
         const scheduleResponse =
           await this.themeParksClient.getScheduleExtended(wikiExternalId, 12);
-        const savedEntries = await this.parksService.saveScheduleData(
-          park.id,
-          scheduleResponse.schedule,
-        );
-        totalScheduleEntries += savedEntries;
 
-        // Fill gaps for Holidays/Bridge Days
+        if (scheduleResponse.schedule.length === 0) {
+          // Not throttled — that path throws — so this IS the source's answer.
+          emptyParks++;
+          const held = heldEntries.get(park.id) ?? 0;
+          this.logger.warn(
+            `📅 ${park.name}: the source published no opening hours for any of the 13 requested months — ` +
+              `we keep the ${held} future entr${held === 1 ? "y" : "ies"} already stored. ` +
+              `This run was not throttled, so the gap is upstream.`,
+          );
+        } else {
+          const savedEntries = await this.parksService.saveScheduleData(
+            park.id,
+            scheduleResponse.schedule,
+          );
+          totalScheduleEntries += savedEntries;
+          syncedParks++;
+        }
+
+        // Runs whether or not the source had anything to say, as it did before
+        // this counting was split out. Gap-filling is not a consequence of the
+        // fetch: "today" moves every day, so the window it maintains — UNKNOWN
+        // placeholders, the CLOSED-to-UNKNOWN demotion past the last operating
+        // day, the duplicate cleanup — needs the pass even for a park the feed
+        // has gone quiet about.
         await this.parksService.fillScheduleGaps(park.id);
         await this.parksService.invalidateCalendarMonthCache(park.id);
 
         const tag = parkCacheTag(park);
         if (tag) revalidatedTags.push(tag);
       } catch (error) {
+        if (error instanceof ThemeParksRateLimitError) {
+          // Never an error line: nothing is broken and nothing was lost. The
+          // park keeps what it has and the next run asks again.
+          throttledParks++;
+          const held = heldEntries.get(park.id) ?? 0;
+          this.logger.warn(
+            `📅 ${park.name}: schedule fetch throttled, not synced this run — ` +
+              `the ${held} future entr${held === 1 ? "y" : "ies"} already stored stay as they are. ` +
+              `${error.message}`,
+          );
+          // Same reason as above: the maintenance pass belongs to the calendar
+          // window, not to the fetch, and before this change a throttled park
+          // still got it (it arrived here as an empty list, not as a throw).
+          try {
+            await this.parksService.fillScheduleGaps(park.id);
+            await this.parksService.invalidateCalendarMonthCache(park.id);
+            const tag = parkCacheTag(park);
+            if (tag) revalidatedTags.push(tag);
+          } catch (gapError) {
+            this.logger.warn(
+              `Gap fill after a throttled fetch failed for ${park.name}: ${gapError}`,
+            );
+          }
+          continue;
+        }
         this.logger.error(`Failed to sync schedule for ${park.name}: ${error}`);
       }
     }
 
-    this.logger.log(`✅ Synced ${totalScheduleEntries} schedule entries`);
+    this.logger.log(
+      `✅ Synced ${totalScheduleEntries} schedule entries across ${syncedParks} park(s) · ` +
+        `empty upstream: ${emptyParks} · throttled: ${throttledParks}`,
+    );
 
     // `immediate` because this is not a "will be right eventually" refresh: the month the
     // correction lands in is the month the frontend is serving from a day-long cache, and the

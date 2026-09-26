@@ -20,6 +20,57 @@ Park opening hours (schedules) come from **ThemeParks Wiki** (and optionally War
 - **Extended fetch**: `getScheduleExtended(entityId, 12)` requests the **previous month** plus each of the next **12 months** via the month endpoint (`/entity/{id}/schedule/{year}/{month}`). Month is **zero-padded** (e.g. `05` for May) per Wiki API. Optionally merges with generic `/schedule` (~30 days) for the near term.
 - Some parks (e.g. Efteling) may return empty/404 for far-future months until the park publishes them; we still **request** every month (01–12 ahead) so data appears as soon as the source adds it. **On-demand** `sync-park-schedule` helps when a user requests a range we don’t have yet.
 
+## The upstream budget, and why the bulk run is the only job that spends it
+
+Measured from celestrial on 2026-09-26 (PAR-480). Every ThemeParks.wiki answer
+that reaches the origin carries its own budget, and until that ticket nothing in
+this codebase read it:
+
+```
+ratelimit-limit: 300
+ratelimit-policy: 300;w=60
+ratelimit-remaining: 260
+ratelimit-reset: 29
+```
+
+**300 requests per fixed 60-second window**, per sender — one budget across every
+endpoint, not one per path (reading the counter, firing 20 `/live` requests and
+reading it again drops it by 21). `ratelimit-reset` counts down to 0 and jumps
+back to 60, so the window is fixed rather than sliding, and its boundary is not
+ours. The API container and the host share one egress IP, so a shell on
+celestrial spends the same budget the container does.
+
+**What each job actually costs is decided by the CDN, not by its request count.**
+
+| endpoint                 | `s-maxage` | our cadence            | origin hits       |
+| ------------------------ | ---------- | ---------------------- | ----------------- |
+| `/entity/{id}/live`      | 60 s       | every 5 min, 195 parks | **~26 per cycle** |
+| `/entity/{id}/schedule…` | 3600 s     | once a day, 195 × 14   | **all 2730**      |
+
+The 5-minute live poll is ~87 % Cloudflare hits, because other users of the
+public API keep popular parks warm — a hit carries no `RateLimit-*` header at
+all and never reaches the limiter. The schedule endpoints are cached for an hour
+and asked once a day, so their entry is always cold. That is the whole reason the
+`Global Rate Limit` hits used to appear in the 15:00 hour and in no other.
+
+**Consequences for anything that adds a caller here:**
+
+- `ThemeParksClient` paces **every** request 250 ms apart through an atomic Redis
+  slot, which holds the cap at 241 per 60 seconds under any window alignment. Do
+  not bypass it, and do not assume a new endpoint is CDN-warm: the warmth is
+  foreign traffic, not a promise.
+- A cooldown is **waited out**, never thrown past. Throwing costs no time, so a
+  loop over parks spends the whole penalty at full speed — which is how 87 of 200
+  parks came away with `Fetched total 0 schedule entries` in one run.
+- The client pauses itself once `ratelimit-remaining` drops to 25, and **ignores
+  those headers on a cache hit**: a HIT with `age: 212` still reported
+  `remaining: 260, reset: 29`, numbers from a window four minutes gone.
+- A throttled fetch raises `ThemeParksRateLimitError`; it is never an empty list.
+  An empty list means the source published nothing.
+- A caller inside a request/response path passes
+  `ThemeParksClient.requestPathMaxWaitMs`, so a rate limit stays a fast failure
+  instead of a two-minute sleep on a reader's page.
+
 ## UNKNOWN vs CLOSED
 
 - **`ScheduleType.CLOSED`**: Park is **confirmed** closed: from API (e.g. Wiki) or from **gap-fill** when the day has no schedule but lies **strictly between** two OPERATING days (see Gap-fill rules below).

@@ -396,8 +396,12 @@ export class ParkIntegrationService {
           // Default behavior for pure ThemeParks IDs (UUIDs)
           // Fetch fresh live data (this is cached by the client usually, but ensures we get the live status)
 
+          // Short wait budget: this runs inside a public GET, so a rate limit
+          // has to stay a fast failure the catch below can fall back from,
+          // not a two-minute sleep on the reader's page.
           const liveDataList = await this.themeParksClient.getParkLiveData(
             park.externalId,
+            this.themeParksClient.requestPathMaxWaitMs,
           );
 
           const liveData =
