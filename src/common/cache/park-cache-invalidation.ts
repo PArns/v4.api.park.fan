@@ -40,9 +40,10 @@ export async function invalidateParkCaches(
     CacheKeys.discoveryGeoStructure(),
     // The /nearby coordinate index also lists every park.
     CacheKeys.parkLocationIndex(),
-    // The attraction sitemap is one flat 24h-cached list with no dedup. A
-    // merge removes rows from it, so leaving it cached means advertising
-    // slugs that now 404 — the exact failure the merges are meant to end.
+    // The attraction sitemap is one flat 24h-cached list. A merge removes rows
+    // from it, and it can also change which row of a name group wins, so
+    // leaving it cached means advertising slugs that now 404 — the exact
+    // failure the merges are meant to end.
     // (Cloudflare still fronts this endpoint with s-maxage=86400, so the
     // public copy lags until the edge revalidates.)
     CacheKeys.sitemapAttractions(),

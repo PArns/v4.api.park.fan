@@ -155,12 +155,14 @@ export const CacheKeys = {
 
   /**
    * Flat list backing /v1/sitemap/attractions. Owned by SitemapService, but
-   * invalidated here too: it is not deduplicated, so any merge that removes
-   * an attraction row must drop it or the sitemap keeps advertising a slug
-   * that now 404s.
+   * invalidated here too: any merge that removes an attraction row must drop it
+   * or the sitemap keeps advertising a slug that now 404s.
    *
    * v2: retired rides are no longer listed. The bump makes the filter apply on
    * deploy instead of up to 24 h later, when the v1 entry would have expired.
+   *
+   * v3: same-name rows collapse to the one the park payload serves, for the
+   * same reason and with the same bump (PAR-498).
    */
-  sitemapAttractions: (): string => "sitemap:attractions:v2",
+  sitemapAttractions: (): string => "sitemap:attractions:v3",
 } as const;

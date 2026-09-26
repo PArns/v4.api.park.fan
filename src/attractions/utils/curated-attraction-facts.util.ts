@@ -92,6 +92,20 @@ function cleaned(value: string | null | undefined): string | null {
 }
 
 /**
+ * The name a reader sees, from the two columns that carry one.
+ *
+ * Split out of `resolveCuratedFacts` because the attraction sitemap needs this
+ * one field and nothing else: it groups same-name rows exactly as the park
+ * payload does (PAR-498), and its query deliberately selects five columns
+ * rather than the thirty `resolveCuratedFacts` reads.
+ */
+export function resolveAttractionName(
+  attraction: Pick<CuratedFactsSource, "name" | "curatedName">,
+): string {
+  return cleaned(attraction.curatedName) ?? attraction.name ?? "";
+}
+
+/**
  * Every hand-written column on an attraction row, as physical column names.
  *
  * The park side has had this since the merge learned to carry curation across
@@ -172,7 +186,7 @@ export function resolveCuratedFacts(
       : (attraction.seasonOutSince ?? null),
     // `name` is the one field with no meaningful null: a ride always has a
     // name, and the curated column only ever replaces it.
-    name: cleaned(attraction.curatedName) ?? attraction.name ?? "",
+    name: resolveAttractionName(attraction),
     landName:
       cleaned(attraction.curatedLandName) ?? attraction.landName ?? null,
     attractionType:
