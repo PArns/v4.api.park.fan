@@ -31,6 +31,7 @@ import {
   formatInParkTimezone,
 } from "../../common/utils/date.util";
 import { buildAttractionUrl } from "../../common/utils/url.util";
+import { outranksNameDuplicate } from "../../common/utils/name-duplicate.util";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { ParkEnrichmentService } from "./park-enrichment.service";
 import { ShowLiveData } from "../../shows/entities/show-live-data.entity";
@@ -1460,8 +1461,13 @@ export class ParkIntegrationService {
 
   /**
    * Deduplicates a list of entities (attractions, shows, restaurants) by name.
-   * Prioritizes OPERATING status and entities with coordinates.
    * Works with both flat DTOs and nested wait-time structures.
+   *
+   * Which row of a name group survives is `outranksNameDuplicate`, shared with
+   * `SitemapService` so the sitemap advertises the slug this payload serves.
+   * It reads `slug` and `name` and nothing else — the earlier rule preferred an
+   * OPERATING row, which made the surviving public URL a function of the live
+   * feed (PAR-498).
    *
    * The key is the name, and it may not become the slug. A slug is a frozen
    * name that renames deliberately leave alone, so a row keeps the slug of
@@ -1495,27 +1501,14 @@ export class ParkIntegrationService {
         continue;
       }
 
-      // Priority Logic:
-      // 1. Prefer OPERATING over anything else
-      const currentStatus = e.status || e.queues?.[0]?.status;
-      const existingStatus = existing.status || existing.queues?.[0]?.status;
+      const candidate = { slug: e.slug || e.attraction?.slug || "", name };
+      const incumbent = {
+        slug: existing.slug || existing.attraction?.slug || "",
+        name,
+      };
 
-      if (currentStatus === "OPERATING" && existingStatus !== "OPERATING") {
+      if (outranksNameDuplicate(candidate, incumbent)) {
         map.set(name, entity);
-        continue;
-      }
-
-      // 2. If same status, prefer entity with coordinates
-      const currentLat = e.latitude || e.attraction?.latitude;
-      const existingLat = existing.latitude || existing.attraction?.latitude;
-
-      if (
-        currentStatus === existingStatus &&
-        currentLat != null &&
-        existingLat == null
-      ) {
-        map.set(name, entity);
-        continue;
       }
     }
 

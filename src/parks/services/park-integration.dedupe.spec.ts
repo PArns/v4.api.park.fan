@@ -81,13 +81,19 @@ describe("ParkIntegrationService › deduplicateEntities", () => {
   });
 
   /**
-   * The three production pairs, with the fields the API actually returns on
-   * 2026-09-20. In each one the slugs differ and the ride is the same.
+   * The three production pairs, with the slugs the rows carry on 2026-09-26. In
+   * each one the slugs differ and the ride is the same.
+   *
+   * `survivor` is the second half of the pin: keeping one row was never in
+   * doubt, WHICH row was, and until PAR-498 the answer came from the live feed.
+   * New Jersey's base slug is `discovery-bay-2` and not `discovery-bay`, which
+   * this list said until 2026-09-26 — no row in that park holds `discovery-bay`.
    */
   const productionPairs = [
     {
       park: "Hurricane Harbor Arlington!",
       name: "Typhoon Twister",
+      survivor: "typhoon-twister",
       rows: [
         { slug: "wahoo-racer", latitude: 32.761227, longitude: -97.080663 },
         { slug: "typhoon-twister", latitude: null, longitude: null },
@@ -96,6 +102,7 @@ describe("ParkIntegrationService › deduplicateEntities", () => {
     {
       park: "Sea World",
       name: "Wally the Walrus",
+      survivor: "wally-the-walrus",
       rows: [
         {
           slug: "wally-the-walrus",
@@ -112,23 +119,25 @@ describe("ParkIntegrationService › deduplicateEntities", () => {
     {
       park: "Hurricane Harbor New Jersey",
       name: "Discovery Bay",
+      survivor: "discovery-bay-mini-waves",
       rows: [
         {
           slug: "discovery-bay-mini-waves",
           latitude: 40.147331,
           longitude: -74.438763,
         },
-        { slug: "discovery-bay", latitude: 40.147666, longitude: -74.43879 },
+        { slug: "discovery-bay-2", latitude: 40.147666, longitude: -74.43879 },
       ],
     },
   ];
 
   it.each(productionPairs)(
     "serves one row for the $park pair whose slugs disagree ($name)",
-    ({ name, rows }) => {
+    ({ name, survivor, rows }) => {
       const result = deduplicate(rows.map((row) => ({ ...row, name })));
 
       expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ slug: survivor });
     },
   );
 
@@ -141,37 +150,31 @@ describe("ParkIntegrationService › deduplicateEntities", () => {
     expect(result).toHaveLength(2);
   });
 
-  it("prefers the OPERATING row over one that is not", () => {
+  /**
+   * The three that used to say the opposite. Preferring the OPERATING row, and
+   * then the row with coordinates, is what made the surviving slug a function of
+   * the live feed — 48 sitemap entries with no row in the payload, and which 48
+   * moved during the day (PAR-498).
+   */
+  it("keeps the slug without the counter, whatever the live status says", () => {
     const [survivor] = deduplicate([
-      { name: "Taron", slug: "taron", status: "CLOSED", id: "closed" },
-      { name: "Taron", slug: "taron-2", status: "OPERATING", id: "operating" },
+      { name: "Taron", slug: "taron", status: "CLOSED", id: "base" },
+      { name: "Taron", slug: "taron-2", status: "OPERATING", id: "suffix" },
     ]);
 
-    expect(survivor).toMatchObject({ id: "operating" });
+    expect(survivor).toMatchObject({ id: "base" });
   });
 
-  it("prefers the row with coordinates when the status is the same", () => {
+  it("ignores coordinates too — a row gains and loses them over time", () => {
     const [survivor] = deduplicate([
-      {
-        name: "Taron",
-        slug: "taron",
-        status: "CLOSED",
-        latitude: null,
-        id: "no-coords",
-      },
-      {
-        name: "Taron",
-        slug: "taron-2",
-        status: "CLOSED",
-        latitude: 50.798,
-        id: "coords",
-      },
+      { name: "Taron", slug: "taron", latitude: null, id: "base" },
+      { name: "Taron", slug: "taron-2", latitude: 50.798, id: "suffix" },
     ]);
 
-    expect(survivor).toMatchObject({ id: "coords" });
+    expect(survivor).toMatchObject({ id: "base" });
   });
 
-  it("reads the nested wait-times shape, where name and status sit one level down", () => {
+  it("reads the nested wait-times shape, where name and slug sit one level down", () => {
     const result = deduplicate([
       {
         attraction: { id: "a", name: "Taron", slug: "taron" },
@@ -184,7 +187,46 @@ describe("ParkIntegrationService › deduplicateEntities", () => {
     ]);
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ attraction: { id: "b" } });
+    expect(result[0]).toMatchObject({ attraction: { id: "a" } });
+  });
+
+  /**
+   * Heide Park's five "PLAYGROUND" rows and Walibi Holland's "Walibi Express
+   * Station 2" are the two shapes the counter rule alone cannot settle: every
+   * candidate carries one, or none does.
+   */
+  it("settles a group where every slug carries a counter, by the name", () => {
+    const [survivor] = deduplicate([
+      { name: "Walibi Express Station 2", slug: "walibi-express-station-2-2" },
+      { name: "Walibi Express Station 2", slug: "walibi-express-station-2" },
+    ]);
+
+    expect(survivor).toMatchObject({ slug: "walibi-express-station-2" });
+  });
+
+  it("settles a group where no slug carries a counter, by the name", () => {
+    const [survivor] = deduplicate([
+      { name: "Wally the Walrus", slug: "castaway-bay-sky-climb" },
+      { name: "Wally the Walrus", slug: "wally-the-walrus" },
+    ]);
+
+    expect(survivor).toMatchObject({ slug: "wally-the-walrus" });
+  });
+
+  it("picks the same row whatever order the rows arrive in", () => {
+    const rows = [
+      { name: "PLAYGROUND", slug: "playground-4" },
+      { name: "PLAYGROUND", slug: "playground" },
+      { name: "PLAYGROUND", slug: "playground-2" },
+      { name: "PLAYGROUND", slug: "playground-5" },
+      { name: "PLAYGROUND", slug: "playground-3" },
+    ];
+
+    for (let shift = 0; shift < rows.length; shift++) {
+      const rotated = [...rows.slice(shift), ...rows.slice(0, shift)];
+
+      expect(deduplicate(rotated)).toEqual([{ ...rows[1] }]);
+    }
   });
 
   it("drops a row with no name rather than grouping every one of them together", () => {

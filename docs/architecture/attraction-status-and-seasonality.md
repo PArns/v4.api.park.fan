@@ -293,6 +293,61 @@ Bay" twice as well. Which of these rows are one ride is a curation question
 (PAR-160 / PAR-179 / PAR-205), not a question the payload's grouping key can
 answer.
 
+### Which row of the group survives, and why the sitemap has to agree
+
+The key is settled above. **Which row the key keeps is a second decision, and it
+owns a public URL** — the frontend resolves a ride page from the park payload, so
+the row that loses its name group has no page, and `/v1/sitemap/attractions`
+listing it advertises a 404.
+
+Until PAR-498 that decision read the live feed: prefer the OPERATING row, then
+the row with coordinates. Both move. Measured on **2026-09-26** over all 201
+parks in the sitemap, park by park against the running API:
+
+| | |
+|---|---|
+| sitemap entries | 7,304 |
+| sitemap slugs with no row in the park payload | **48** |
+| payload slugs not in the sitemap | 0 |
+| duplicate name groups / rows / parks | 45 / 93 / 15 |
+
+The 48 were **exactly** the 48 losers of the 45 groups — every group had exactly
+one winner, the sitemap's row set was character-identical to the table's, and the
+divergence ran one way only. So the gap had a single cause, and the frontend
+repo's `docs/seo/analysis.md` item 8 — "~400 hard 404s across 6 locales", and "no
+fix is possible on the sitemap side" — is that cause moving: PAR-498's ticket lists
+`paultons-park/raven` and `disneyland-park/disneyland-railroad-main-street-station`
+as 404 on 2026-09-24, and on 2026-09-26 both were served and their `-2` siblings
+were the missing ones. No row had changed in between.
+
+**The rule now reads `slug` and `name` and nothing else**
+(`outranksNameDuplicate` in `src/common/utils/name-duplicate.util.ts`), and both
+`deduplicateEntities` and `SitemapService.oneRowPerName` call it, so there is one
+rule and not two:
+
+1. **The slug without a `-N` counter wins.** A counter means
+   `generateUniqueSlug` handed that row the leftover name. Settles 42 of the 45
+   groups, and keeps the winner on the slug the sitemap already advertised.
+2. **Then the slug `generateSlug(name)` would produce.** Settles the groups where
+   every candidate carries a counter (Walibi Holland's "Walibi Express Station 2"
+   against `walibi-express-station-2-2`) and the two above where none does — Sea
+   World keeps `wally-the-walrus` rather than `castaway-bay-sky-climb`, which is a
+   different ride's name.
+3. **Then the slug itself, ascending.** Only so the order is total; without it a
+   remainder is decided by the order rows arrive in.
+
+Nine of the 45 groups changed winner, seven of them from a `-N` slug onto the
+base slug that was 404ing. **Nothing is lost by dropping the status:** the choice
+was always between two rows of one name, and a reader had no way to ask for the
+other one either way.
+
+Two traps if this is touched again. **The grouping key is the resolved name**, so
+the sitemap calls `resolveAttractionName` — the same function `resolveCuratedFacts`
+uses — rather than reading `name` and silently splitting a curated group. And the
+sitemap is one flat 24 h-cached list, so a change to what it contains needs a
+bump of `CacheKeys.sitemapAttractions()`; without it the old list is served for up
+to a day after the deploy and the measurement above reproduces the old number.
+
 ---
 
 ## 4b. Review marks: what a human already settled
