@@ -116,6 +116,7 @@ function anAttraction(overrides: Record<string, unknown> = {}) {
     curatedMayGetWet: null,
     hasSingleRider: null,
     attractionKind: null,
+    indoorOutdoor: null,
     curatedOutOfServiceFrom: null,
     curatedOutOfServiceTo: null,
     curatedOutOfServiceToUncertain: null,
@@ -496,6 +497,75 @@ describe("AdminCurationService", () => {
         unknown
       >;
       expect(saved.attractionKind).toBeNull();
+    });
+
+    /**
+     * The second enum on the attraction half (PAR-424). The values are
+     * lower-case, so an editor typing the upper-case spelling of every other
+     * attraction enum must be told, not stored.
+     */
+    it("rejects an indoor/outdoor value outside the options, and takes one inside it", async () => {
+      const { service } = build(anAttraction());
+      await expect(
+        service.curateAttraction(
+          "ride-1",
+          { fields: { indoorOutdoor: "INDOOR" } },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/must be one of/);
+
+      const accepting = build(anAttraction());
+      await accepting.service.curateAttraction(
+        "ride-1",
+        { fields: { indoorOutdoor: "covered_queue" } },
+        ACTOR,
+      );
+      const saved = accepting.attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.indoorOutdoor).toBe("covered_queue");
+    });
+
+    it("keeps the source of an indoor/outdoor value on its audit row", async () => {
+      // No feed carries this field, so the audit row is the only place that
+      // says where a value came from — the issue asks for a source per value.
+      const { service, audit } = build(anAttraction());
+      await service.curateAttraction(
+        "ride-1",
+        {
+          fields: { indoorOutdoor: "indoor" },
+          reason: "Dark ride, queue inside the building",
+          sourceUrl: "https://example.org/park-map",
+        },
+        ACTOR,
+      );
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          before: { indoorOutdoor: null },
+          after: { indoorOutdoor: "indoor" },
+          reason: "Dark ride, queue inside the building",
+          sourceUrl: "https://example.org/park-map",
+        }),
+      );
+    });
+
+    it("clears indoor/outdoor to null rather than an empty string", async () => {
+      // Null is "not checked". An empty string would count as curated in
+      // the admin's `IS NOT NULL` filter and reach the payload as a value.
+      const { service, attractions } = build(
+        anAttraction({ indoorOutdoor: "outdoor" }),
+      );
+      await service.curateAttraction(
+        "ride-1",
+        { fields: { indoorOutdoor: "" } },
+        ACTOR,
+      );
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.indoorOutdoor).toBeNull();
     });
   });
 

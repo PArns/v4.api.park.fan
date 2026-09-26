@@ -95,6 +95,7 @@ describe("AttractionResponseDto › status on the two builders", () => {
       "hasSingleRider",
       "hasVirtualLine",
       "id",
+      "indoorOutdoor",
       "isCurrentlyInSeason",
       "isSeasonal",
       "land",
@@ -222,5 +223,37 @@ describe("AttractionResponseDto › attractionKind", () => {
         ride({ attractionType: "Family Ride", attractionKind: "TRANSPORT" }),
       ).attractionKind,
     ).toBe("TRANSPORT");
+  });
+});
+
+/**
+ * Indoor / outdoor on the ride endpoint (PAR-424). Stored half, so both
+ * builders carry it — the park attractions list joins no live data.
+ */
+describe("AttractionResponseDto › indoorOutdoor", () => {
+  const ride = (overrides: Record<string, unknown> = {}) =>
+    ({
+      id: "attraction-1",
+      name: "Taron",
+      slug: "taron",
+      retiredAt: null,
+      retiredReason: null,
+      hasSingleRider: null,
+      rcdbId: null,
+      ...overrides,
+    }) as unknown as Attraction;
+
+  it("reaches both builders", () => {
+    const entity = ride({ indoorOutdoor: "covered_queue" });
+    expect(AttractionResponseDto.fromEntity(entity).indoorOutdoor).toBe(
+      "covered_queue",
+    );
+    expect(
+      AttractionResponseDto.fromEntityWithoutLiveData(entity).indoorOutdoor,
+    ).toBe("covered_queue");
+  });
+
+  it("is null for a ride nobody has checked, not outdoor", () => {
+    expect(AttractionResponseDto.fromEntity(ride()).indoorOutdoor).toBeNull();
   });
 });
