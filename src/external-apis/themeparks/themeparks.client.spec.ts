@@ -129,7 +129,9 @@ describe("ThemeParksClient", () => {
       await promise;
 
       expect(redis.eval).toHaveBeenCalledWith(
-        expect.stringContaining("redis.call('SET', KEYS[1], slot, 'PX', 60000)"),
+        expect.stringContaining(
+          "redis.call('SET', KEYS[1], slot, 'PX', 60000)",
+        ),
         1,
         "ratelimit:themeparks:slot",
         expect.any(String),
@@ -291,6 +293,76 @@ describe("ThemeParksClient", () => {
       await client.getDestinations();
 
       expect(redis.set).not.toHaveBeenCalled();
+    });
+
+    it("re-checks the cooldown after sitting out its spacing slot", async () => {
+      jest.useFakeTimers();
+      redis.eval.mockResolvedValue(250);
+      // Clear before the slot is reserved, blocked once the sleep is over, then
+      // clear again. Without the second look the request would go out into the
+      // block, earn its own 429 and push the block further out.
+      redis.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce("true")
+        .mockResolvedValue(null);
+      redis.ttl.mockResolvedValue(3);
+      const body = { destinations: [] };
+      mockAxiosInstance.get.mockResolvedValue({ data: body });
+
+      const promise = client.getDestinations();
+      await jest.runAllTimersAsync();
+
+      await expect(promise).resolves.toEqual(body);
+      expect(redis.get).toHaveBeenCalledTimes(3);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps an answer it already holds when recording the budget fails", async () => {
+      const body = { destinations: [{ id: "d1" }] };
+      mockAxiosInstance.get.mockResolvedValue({
+        data: body,
+        headers: { "ratelimit-remaining": "4", "ratelimit-reset": "9" },
+      });
+      redis.set.mockRejectedValue(new Error("READONLY"));
+
+      // A Redis fault must not turn a served response into a retry, and above
+      // all not into the empty result a caller reads as "the source has none".
+      await expect(client.getDestinations()).resolves.toEqual(body);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops waiting quickly for a caller on the request path", async () => {
+      jest.useFakeTimers();
+      redis.get.mockResolvedValue("true");
+      redis.ttl.mockResolvedValue(45); // well inside the 120s job budget
+
+      const promise = client.getParkLiveData("p1", client.requestPathMaxWaitMs);
+      const assertion = expect(promise).rejects.toThrow(
+        ThemeParksRateLimitError,
+      );
+      await jest.runAllTimersAsync();
+      await assertion;
+
+      // A reader is on the other end: fail fast into the caller's fallback
+      // rather than sleep 45s on their page.
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+
+    it("reports an outage as an outage even when a 429 came first", async () => {
+      jest.useFakeTimers();
+      mockAxiosInstance.get
+        .mockRejectedValueOnce(axiosError(429, { "retry-after": "1" }))
+        .mockRejectedValue(axiosError(503));
+
+      const promise = client.getDestinations();
+      // Not a ThemeParksRateLimitError: the run of 5xx is the real story, and
+      // calling it throttling would make getScheduleExtended abandon the park's
+      // remaining months as if we had never asked.
+      const assertion = expect(promise).rejects.not.toBeInstanceOf(
+        ThemeParksRateLimitError,
+      );
+      await jest.runAllTimersAsync();
+      await assertion;
     });
   });
 

@@ -70,13 +70,25 @@ export class ThemeParksClient {
   private readonly requestSpacingMs = 250;
 
   /**
-   * Bounds on waiting. Generous, because for this client a late answer beats no
-   * answer: an immediate failure is what let a 58-second cooldown hand 87 of
-   * 200 parks an empty schedule in a single run (PAR-480). Exceeding either
-   * bound is a real backlog and raises {@link ThemeParksRateLimitError}.
+   * How long a caller may be parked before it is told no. Generous for the
+   * background jobs this client mostly serves, because for them a late answer
+   * beats no answer: an immediate failure is what let a 58-second cooldown hand
+   * 87 of 200 parks an empty schedule in a single run (PAR-480). Exceeding the
+   * budget raises {@link ThemeParksRateLimitError}.
    */
-  private readonly maxSpacingWaitMs = 120_000;
-  private readonly maxBlockWaitMs = 120_000;
+  private readonly defaultMaxWaitMs = 120_000;
+
+  /**
+   * The budget for a caller that has a reader waiting on the other end.
+   * `ParkIntegrationService` asks for live data inside a public GET, and a
+   * two-minute sleep there would turn a rate limit into a hanging page. Two
+   * seconds keeps the old fail-fast shape — its caller catches the throw and
+   * falls back — while still absorbing a cooldown that is almost over.
+   */
+  readonly requestPathMaxWaitMs = 2_000;
+
+  /** Floor for a cooldown sleep, so a sub-second TTL cannot spin the wait loop. */
+  private readonly minCooldownSleepMs = 250;
 
   /**
    * Pause when the upstream says this few slots are left in the current window.
@@ -117,23 +129,29 @@ export class ThemeParksClient {
    * spent handing out empty results at full speed. Waiting makes the same
    * cooldown slow the run down, which is what a cooldown is for.
    */
-  private async waitOutBlock(path: string): Promise<void> {
-    let waitedMs = 0;
-
+  private async waitOutBlock(
+    path: string,
+    maxWaitMs: number,
+    waitedMs = 0,
+  ): Promise<number> {
     for (;;) {
       const blocked = await this.redis.get(this.BLOCKED_KEY);
-      if (!blocked) return;
+      if (!blocked) return waitedMs;
 
       const ttl = await this.redis.ttl(this.BLOCKED_KEY);
       if (ttl < 0) {
         // -2: it expired between GET and TTL. -1: it has no expiry at all,
         // which no writer here produces — drop it rather than wait forever.
         if (ttl === -1) await this.redis.del(this.BLOCKED_KEY);
-        return;
+        return waitedMs;
       }
 
-      const waitMs = ttl * 1000;
-      if (waitedMs + waitMs > this.maxBlockWaitMs) {
+      // `TTL` answers in whole seconds and returns 0 for the last fraction of
+      // one. Sleeping that 0 would spin the loop — two Redis round trips per
+      // turn — until the key finally went away, and `waitedMs` would never grow,
+      // so the budget below could not end it either.
+      const waitMs = Math.max(ttl * 1000, this.minCooldownSleepMs);
+      if (waitedMs + waitMs > maxWaitMs) {
         throw new ThemeParksRateLimitError(
           `ThemeParks API: still cooling down after ${Math.round(
             waitedMs / 1000,
@@ -143,7 +161,9 @@ export class ThemeParksClient {
       }
 
       this.logger.warn(
-        `⏳ ThemeParks cooldown: waiting ${ttl}s before ${path}`,
+        `⏳ ThemeParks cooldown: waiting ${Math.ceil(
+          waitMs / 1000,
+        )}s before ${path}`,
       );
       await this.sleep(waitMs);
       waitedMs += waitMs;
@@ -156,8 +176,11 @@ export class ThemeParksClient {
    *
    * @returns the number of requests counted in the current observability window
    */
-  private async enforceRateLimit(path: string): Promise<number> {
-    await this.waitOutBlock(path);
+  private async enforceRateLimit(
+    path: string,
+    maxWaitMs: number,
+  ): Promise<number> {
+    const waitedMs = await this.waitOutBlock(path, maxWaitMs);
 
     // Observability only — the spacer below is the limiter. This is the number
     // the 429 log needs to say how busy the window was when we were penalised.
@@ -177,18 +200,23 @@ export class ThemeParksClient {
       ),
     );
 
-    if (waitMs > this.maxSpacingWaitMs) {
+    if (waitedMs + waitMs > maxWaitMs) {
       throw new ThemeParksRateLimitError(
         `ThemeParks API: pacing backlog of ${Math.ceil(
           waitMs / 1000,
-        )}s for ${path} exceeds the ${Math.round(
-          this.maxSpacingWaitMs / 1000,
-        )}s budget`,
+        )}s for ${path} exceeds the ${Math.round(maxWaitMs / 1000)}s budget`,
         Math.ceil(waitMs / 1000),
       );
     }
 
-    if (waitMs > 0) await this.sleep(waitMs);
+    if (waitMs > 0) {
+      await this.sleep(waitMs);
+      // Another caller may have been penalised while we sat in our slot. Sending
+      // now would earn a 429 of our own and push the block out again — which is
+      // exactly what the old "never call during a block" note warned about, and
+      // the check before the sleep cannot see it.
+      await this.waitOutBlock(path, maxWaitMs, waitedMs + waitMs);
+    }
 
     return windowCount;
   }
@@ -252,7 +280,10 @@ export class ThemeParksClient {
    * caller gets a {@link ThemeParksRateLimitError}, which is how it can tell
    * "we never asked" from "the source has nothing".
    */
-  private async request<T>(path: string): Promise<T> {
+  private async request<T>(
+    path: string,
+    maxWaitMs: number = this.defaultMaxWaitMs,
+  ): Promise<T> {
     let lastError: any;
     let rateLimitError: ThemeParksRateLimitError | undefined;
 
@@ -264,11 +295,21 @@ export class ThemeParksClient {
 
       // Throws ThemeParksRateLimitError if the cooldown or the pacing backlog
       // outlasts its budget — the caller must not read that as an empty source.
-      const windowCount = await this.enforceRateLimit(path);
+      const windowCount = await this.enforceRateLimit(path, maxWaitMs);
 
       try {
         const response = await this.client.get<T>(path);
-        await this.noteBudget(response, path);
+        // Outside the answer: a Redis hiccup here must not discard a response we
+        // already hold, because the retry it would trigger sends the same GET
+        // again and the caller ends up reading an infrastructure fault as an
+        // empty source — the very confusion this change exists to remove.
+        try {
+          await this.noteBudget(response, path);
+        } catch (budgetError: any) {
+          this.logger.warn(
+            `Could not record the ThemeParks budget after ${path}: ${budgetError?.message ?? budgetError}`,
+          );
+        }
         return response.data;
       } catch (err: any) {
         lastError = err;
@@ -299,6 +340,12 @@ export class ThemeParksClient {
           );
           continue;
         }
+
+        // From here on this attempt failed for a reason other than throttling.
+        // Forgetting the earlier 429 matters: a run of 5xx after one 429 is an
+        // upstream outage, and reporting it as a rate limit would make
+        // getScheduleExtended abandon the park's remaining months as "throttled".
+        rateLimitError = undefined;
 
         // Other 4xx are client errors — don't retry (e.g. far-future 404s).
         if (status !== undefined && status >= 400 && status < 500) {
@@ -353,8 +400,14 @@ export class ThemeParksClient {
    *
    * Fetches live data for an entity (wait times, status, etc.)
    */
-  async getLiveData(entityId: string): Promise<EntityLiveResponse> {
-    const rawData = await this.request<any>(`/entity/${entityId}/live`);
+  async getLiveData(
+    entityId: string,
+    maxWaitMs?: number,
+  ): Promise<EntityLiveResponse> {
+    const rawData = await this.request<any>(
+      `/entity/${entityId}/live`,
+      maxWaitMs,
+    );
 
     // Extract live data from the liveData array
     // API structure: { liveData: [{ queue, status, forecast, ... }] }
@@ -374,8 +427,14 @@ export class ThemeParksClient {
    *
    * OPTIMIZATION: Use this for parks to get all attractions in one API call!
    */
-  async getParkLiveData(parkId: string): Promise<EntityLiveResponse[]> {
-    const rawData = await this.request<any>(`/entity/${parkId}/live`);
+  async getParkLiveData(
+    parkId: string,
+    maxWaitMs?: number,
+  ): Promise<EntityLiveResponse[]> {
+    const rawData = await this.request<any>(
+      `/entity/${parkId}/live`,
+      maxWaitMs,
+    );
 
     // Return the complete liveData array (all child entities)
     // API structure: { liveData: [{ id, status, queue, ... }, ...] }

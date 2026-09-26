@@ -2128,15 +2128,26 @@ export class ParksService {
   }
 
   /**
-   * How many future park-level schedule entries each park currently holds,
-   * keyed by park id. Parks with none are absent from the map.
+   * How many future days each park has an answer for, keyed by park id. Parks
+   * with none are absent from the map.
    *
    * One aggregate rather than a count per park: the bulk schedule sync needs
-   * this for all 195 Wiki parks before it starts fetching, so it can say what a
-   * fetch of zero entries actually cost. `attractionId IS NULL` because a ride's
-   * own row is a different statement by a different writer, and UNKNOWN rows are
-   * excluded because `fillScheduleGaps` writes those itself — counting them
-   * would make a park that holds nothing but placeholders look supplied.
+   * this for all Wiki parks before it starts fetching, so it can say what a
+   * fetch of zero entries actually cost.
+   *
+   * Three filters, each excluding rows that would overstate the answer:
+   * `attractionId IS NULL` because a ride's own row is a different statement by
+   * a different writer; only OPERATING and CLOSED because those are the two
+   * types that say what the park does that day, while UNKNOWN is the
+   * placeholder `fillScheduleGaps` writes itself and INFO/TICKETED_EVENT and
+   * friends sit beside an answer rather than being one. Without the type
+   * filter a park with 300 event rows and no opening hours would read as well
+   * supplied.
+   *
+   * `CURRENT_DATE` is the database session's day, not each park's local one.
+   * The number is for a log line about what a run kept, where being one day out
+   * for the parks west of UTC changes nothing; a reader-facing figure would
+   * have to join each park's timezone.
    */
   async countFutureScheduleEntriesByPark(): Promise<Map<string, number>> {
     const rows = await this.scheduleRepository
@@ -2145,8 +2156,8 @@ export class ParksService {
       .addSelect("COUNT(*)", "count")
       .where('s."attractionId" IS NULL')
       .andWhere("s.date >= CURRENT_DATE")
-      .andWhere('s."scheduleType" != :unknown', {
-        unknown: ScheduleType.UNKNOWN,
+      .andWhere('s."scheduleType" IN (:...types)', {
+        types: [ScheduleType.OPERATING, ScheduleType.CLOSED],
       })
       .groupBy('s."parkId"')
       .getRawMany<{ parkId: string; count: string }>();

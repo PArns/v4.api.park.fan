@@ -1133,25 +1133,29 @@ export class ParkMetadataProcessor {
           await this.themeParksClient.getScheduleExtended(wikiExternalId, 12);
 
         if (scheduleResponse.schedule.length === 0) {
-          // Not throttled (that path throws) — so this is the source's answer.
+          // Not throttled — that path throws — so this IS the source's answer.
           emptyParks++;
           const held = heldEntries.get(park.id) ?? 0;
           this.logger.warn(
-            `📅 ${park.name}: the source published no schedule for any of the 13 requested months — ` +
+            `📅 ${park.name}: the source published no opening hours for any of the 13 requested months — ` +
               `we keep the ${held} future entr${held === 1 ? "y" : "ies"} already stored. ` +
               `This run was not throttled, so the gap is upstream.`,
           );
-          continue;
+        } else {
+          const savedEntries = await this.parksService.saveScheduleData(
+            park.id,
+            scheduleResponse.schedule,
+          );
+          totalScheduleEntries += savedEntries;
+          syncedParks++;
         }
 
-        const savedEntries = await this.parksService.saveScheduleData(
-          park.id,
-          scheduleResponse.schedule,
-        );
-        totalScheduleEntries += savedEntries;
-        syncedParks++;
-
-        // Fill gaps for Holidays/Bridge Days
+        // Runs whether or not the source had anything to say, as it did before
+        // this counting was split out. Gap-filling is not a consequence of the
+        // fetch: "today" moves every day, so the window it maintains — UNKNOWN
+        // placeholders, the CLOSED-to-UNKNOWN demotion past the last operating
+        // day, the duplicate cleanup — needs the pass even for a park the feed
+        // has gone quiet about.
         await this.parksService.fillScheduleGaps(park.id);
         await this.parksService.invalidateCalendarMonthCache(park.id);
 
@@ -1168,6 +1172,19 @@ export class ParkMetadataProcessor {
               `the ${held} future entr${held === 1 ? "y" : "ies"} already stored stay as they are. ` +
               `${error.message}`,
           );
+          // Same reason as above: the maintenance pass belongs to the calendar
+          // window, not to the fetch, and before this change a throttled park
+          // still got it (it arrived here as an empty list, not as a throw).
+          try {
+            await this.parksService.fillScheduleGaps(park.id);
+            await this.parksService.invalidateCalendarMonthCache(park.id);
+            const tag = parkCacheTag(park);
+            if (tag) revalidatedTags.push(tag);
+          } catch (gapError) {
+            this.logger.warn(
+              `Gap fill after a throttled fetch failed for ${park.name}: ${gapError}`,
+            );
+          }
           continue;
         }
         this.logger.error(`Failed to sync schedule for ${park.name}: ${error}`);
