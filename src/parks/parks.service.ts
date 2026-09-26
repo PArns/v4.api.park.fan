@@ -2128,6 +2128,33 @@ export class ParksService {
   }
 
   /**
+   * How many future park-level schedule entries each park currently holds,
+   * keyed by park id. Parks with none are absent from the map.
+   *
+   * One aggregate rather than a count per park: the bulk schedule sync needs
+   * this for all 195 Wiki parks before it starts fetching, so it can say what a
+   * fetch of zero entries actually cost. `attractionId IS NULL` because a ride's
+   * own row is a different statement by a different writer, and UNKNOWN rows are
+   * excluded because `fillScheduleGaps` writes those itself — counting them
+   * would make a park that holds nothing but placeholders look supplied.
+   */
+  async countFutureScheduleEntriesByPark(): Promise<Map<string, number>> {
+    const rows = await this.scheduleRepository
+      .createQueryBuilder("s")
+      .select('s."parkId"', "parkId")
+      .addSelect("COUNT(*)", "count")
+      .where('s."attractionId" IS NULL')
+      .andWhere("s.date >= CURRENT_DATE")
+      .andWhere('s."scheduleType" != :unknown', {
+        unknown: ScheduleType.UNKNOWN,
+      })
+      .groupBy('s."parkId"')
+      .getRawMany<{ parkId: string; count: string }>();
+
+    return new Map(rows.map((r) => [r.parkId, Number(r.count)]));
+  }
+
+  /**
    * True if park has at least one OPERATING schedule entry (any date).
    * Used to decide whether we trust schedule as source of truth for UNKNOWN→OPERATING inference.
    */
