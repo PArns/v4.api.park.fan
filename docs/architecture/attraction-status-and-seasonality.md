@@ -400,6 +400,130 @@ remainder unresolved. *Jurassic Park - The Ride* runs under an anniversary
 overlay name; *Marvel Cave* is central to a 2027 project. Acting on the feed
 signal alone would have deleted 57 existing rides.
 
+### The 2026-09-28 pass: sort the candidates before researching them
+
+The list is regenerated from the query in `findRetirementCandidates`, which is
+behavioural: it finds attractions **we** no longer see OPERATING. That is not the
+same set as the attractions the upstream no longer carries, and the difference
+decides how much research a candidate is worth. The discriminator is whether
+real upstream rows still arrive after the day the ride went quiet — heartbeats
+excluded, because a heartbeat carries the previous row's `data_source` forward
+and is our own writer, and `system-reconciliation` excluded for the same reason:
+
+```sql
+count(*) FILTER (WHERE data_source <> 'system-reconciliation'
+                   AND NOT COALESCE(is_heartbeat, false))
+```
+
+Against 71 candidates on 2026-09-28 that split three ways:
+
+| class | rows | what it means |
+|---|---|---|
+| upstream still delivering today | 45 | the source still carries the entity and reports CLOSED, REFURBISHMENT or DOWN |
+| upstream dropped it | 7 | only `system-reconciliation` since the quiet day |
+| upstream stopped later | 19 | last real row between 2026-04-23 and 2026-08-29 |
+
+**Neither class is a verdict, and that is the point.** Eleven of the nineteen in
+the third class share one last-real-row date, 2026-04-23, which is a source
+change and not nineteen demolitions. In the "upstream dropped it" class sit
+*Enchanted Storybook Castle* and the *Frisco Silver Dollar Line Steam Train* —
+a castle and a steam train that plainly operate. And the one ride in that pass
+that a park had actually demolished, Toverland's *Maximus' Blitz Bahn*, sat in
+the third class alongside eighteen rides that had not. What the split does buy is
+the **upstream's own verdict where it has one**: six candidates were reported
+`REFURBISHMENT` by the source itself, which is a researched answer for free.
+
+Result of the pass: **3 retired, 68 marked `not_retired`** — 37 still operating,
+14 in refurbishment, 12 seasonal, 5 unresolved. The three:
+*Fast & Furious - Supercharged* (`2026-08-17`), *Maximus' Blitz Bahn*
+(`2026-05-17`), *Kumba* (`2026-08-02`).
+
+#### The quiet day is not the closing date
+
+All three retirements carry a `retired_at` **earlier** than our own last
+OPERATING row, and in two of the three the query's `went_silent` date was wrong
+by more than a feed lag:
+
+| | query's `went_silent` | actual closing date | gap |
+|---|---|---|---|
+| *Kumba* | 2026-08-03 | 2026-08-02 | one lag day |
+| *Fast & Furious* | 2026-08-28 | 2026-08-17 | eleven days of feed after demolition |
+| *Maximus' Blitz Bahn* | 2026-07-19 | 2026-05-17 | two months, caused by one row |
+
+`max(timestamp) FILTER (WHERE status = 'OPERATING')` has no defence against a
+single stray row. Toverland's bobsleigh ran for the last time on 2026-05-17 with
+17 OPERATING rows and waits to 75 minutes, then reported CLOSED for two months —
+and then produced **one** OPERATING row with a 5-minute wait on 2026-07-19, one
+of 27 rows that day. That row is the whole reason the candidate list named July.
+*Fast & Furious* shows the other shape: four days of real waits from
+themeparks-wiki after the ride was gone, then seven days of Queue-Times
+`OPERATING` with a wait of exactly 0, which is a source publishing a row rather
+than measuring one.
+
+**So the closing date comes from the source that states it, and the feed is only
+used to corroborate it.** Take the last day with a *plausible* OPERATING day —
+several rows, a wait above zero — not the last OPERATING row.
+
+#### Queue variants mis-mapped as attractions
+
+`Expedition Everest - Legend of the Forbidden Mountain Single Rider` is not a
+retirement candidate but a duplicate: a single-rider queue carried as its own
+attraction. The shape exists **eight** times, at three parks — one at Disney's
+Animal Kingdom, three at Islands of Adventure, four at Universal Studios Florida
+— and all eight share every property:
+
+- each carries its own `externalId` **and** `queue_times_entity_id`, so they
+  arrive as separate park entries from Queue-Times
+- each writes its rows as `queueType = 'STANDBY'`, so the readings do not even
+  land in the parent's single-rider queue
+- each has a live parent row in the same park, and every one of those parents
+  already carries `has_single_rider = true`
+- all eight were still being written on 2026-09-27
+
+Six match their parent on the name minus the `" Single Rider"` suffix; the other
+two (`MEN IN BLACK™ Alien Attack!™ Single Rider`,
+`Revenge of the Mummy™ Single Rider`) differ from their parent by a trademark
+symbol, which `normalizeName` already strips. The fix belongs in the creation
+branch of `syncQtAttraction`, beside the show-name guard that already stands
+there for the same reason — Queue-Times sells a ticket for anything you queue
+for. Left unwritten here because that guard covers creation only and the eight
+existing rows need a separate decision (merge into the parent, or retire as
+reclassified); both are named in PAR-37 and neither is chosen by it.
+
+#### A cheaper triage for the never-OPERATING net
+
+The wider behavioural net — attractions that never report OPERATING in a park
+whose feed demonstrably works — is too large to research row by row. Measured on
+2026-09-28 with a floor of three currently-reporting rides per park it returns
+**736** rows. Sorted by signals that cost nothing:
+
+| bucket | rows | signal |
+|---|---|---|
+| free-flow | 12 | `open_with_park` — never reporting OPERATING is a playground's normal state |
+| Halloween event | 31 | name vocabulary |
+| Christmas / winter event | 23 | name vocabulary |
+| winter operation | 10 | name vocabulary (ice rink, curling, tubing, sledding) |
+| water area | 24 | name vocabulary |
+| playground | 9 | name vocabulary |
+| never measured by any source | 64 | zero upstream rows ever — behaviour cannot judge these at all |
+| upstream dropped it over 60 days ago | 312 | no real row since |
+| remainder | 251 | needs research |
+
+**The buckets order the work, they do not eliminate it.** The six cheap ones take
+**109** rows out for the price of a regex and one boolean column. The 64 rows
+nothing has ever measured come out too, but into a different queue: no amount of
+behaviour can judge a row no source has ever reported, so they are a mapping
+question and not a retirement one — the same shape as the single-rider rows
+above. That leaves the two buckets that actually need research, **312** where the
+upstream dropped the row and **251** where it still reports and has simply never
+said OPERATING. Both need it: a genuinely defunct ride lands in the first, and
+the *Teenage Mutant Ninja Turtles* case in §5.2 — 4737 rows, every one CLOSED,
+ride open — lands in the second.
+
+The name vocabulary is a **sorting** signal and never a verdict: claude.md's
+"research, never recall" still holds, and *Mopti's Monkey Depot* is in this net
+precisely because its name says nothing.
+
 ---
 
 ## 5. Incidents worth remembering
