@@ -17,6 +17,10 @@ import {
   ATTRACTION_KIND_VALUES,
   AttractionKind,
 } from "../../common/types/attraction-kind.type";
+import {
+  INDOOR_OUTDOOR_VALUES,
+  IndoorOutdoor,
+} from "../../common/types/indoor-outdoor.type";
 import type { TypicalWaitsDto } from "../../attractions/dto/attraction-response.dto";
 import {
   isCurrentlyInSeason,
@@ -235,6 +239,20 @@ export class ParkAttractionDto {
     nullable: true,
   })
   attractionKind?: AttractionKind | null;
+
+  @ApiProperty({
+    description:
+      "Whether this attraction keeps a visitor dry, hand-decided: `indoor` " +
+      "(ride and queue under a roof), `outdoor` (neither), or " +
+      "`covered_queue` (queue covered, ride outside). Null means nobody has " +
+      "checked — true of most attractions — and is neither indoor nor " +
+      "outdoor.",
+    enum: INDOOR_OUTDOOR_VALUES,
+    example: "covered_queue",
+    required: false,
+    nullable: true,
+  })
+  indoorOutdoor?: IndoorOutdoor | null;
 
   @ApiProperty({
     description:
@@ -812,6 +830,7 @@ export class ParkWithAttractionsDto {
               mayGetWet: curated.mayGetWet,
               hasSingleRider: attraction.hasSingleRider ?? null,
               attractionKind: attraction.attractionKind ?? null,
+              indoorOutdoor: attraction.indoorOutdoor ?? null,
               hasVirtualLine: attraction.hasVirtualLine ?? null,
               // Null on nearly every ride, so this is one absent key per
               // attraction rather than a block of nulls across the catalogue.

@@ -231,3 +231,39 @@ describe("ParkWithAttractionsDto.fromEntity › attractionKind", () => {
     expect(dto.attractions[0]!.attractionKind).toBeNull();
   });
 });
+
+/**
+ * Indoor / outdoor on the park's attraction list (PAR-424) — the payload a
+ * rain plan on the park page would read.
+ */
+describe("ParkWithAttractionsDto.fromEntity › indoorOutdoor", () => {
+  const parkWith = (attractions: unknown[]) =>
+    ({
+      id: "park-1",
+      name: "Phantasialand",
+      slug: "phantasialand",
+      timezone: "Europe/Berlin",
+      attractions,
+      shows: [],
+      restaurants: [],
+    }) as unknown as Park;
+
+  const ride = (overrides = {}) => ({
+    id: "ride-1",
+    name: "Taron",
+    slug: "taron",
+    ...overrides,
+  });
+
+  it("carries the decided value through to the list", () => {
+    const dto = ParkWithAttractionsDto.fromEntity(
+      parkWith([ride({ indoorOutdoor: "indoor" })]),
+    );
+    expect(dto.attractions[0]!.indoorOutdoor).toBe("indoor");
+  });
+
+  it("reads null for a ride nobody has checked", () => {
+    const dto = ParkWithAttractionsDto.fromEntity(parkWith([ride()]));
+    expect(dto.attractions[0]!.indoorOutdoor).toBeNull();
+  });
+});

@@ -14,6 +14,10 @@ import {
   ATTRACTION_KIND_VALUES,
   AttractionKind,
 } from "../../common/types/attraction-kind.type";
+import {
+  INDOOR_OUTDOOR_VALUES,
+  IndoorOutdoor,
+} from "../../common/types/indoor-outdoor.type";
 import { HistoryDayDto } from "./history-day.dto";
 import { AttractionOutageDto } from "./attraction-outage.dto";
 import {
@@ -385,6 +389,20 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
+      "Whether this attraction keeps a visitor dry, hand-decided: `indoor` " +
+      "(ride and queue under a roof), `outdoor` (neither), or " +
+      "`covered_queue` (queue covered, ride outside). Null means nobody has " +
+      "checked — true of most attractions — and is neither indoor nor " +
+      "outdoor.",
+    enum: INDOOR_OUTDOOR_VALUES,
+    example: "covered_queue",
+    required: false,
+    nullable: true,
+  })
+  indoorOutdoor?: IndoorOutdoor | null;
+
+  @ApiProperty({
+    description:
       "Whether the ride runs a virtual line at all — a return-time or " +
       "boarding-group system joined instead of the standby queue. A static " +
       "fact about the ride, NOT whether return times are being handed out " +
@@ -618,6 +636,7 @@ export class AttractionResponseDto {
       mayGetWet: curated.mayGetWet,
       hasSingleRider: attraction.hasSingleRider ?? null,
       attractionKind: attraction.attractionKind ?? null,
+      indoorOutdoor: attraction.indoorOutdoor ?? null,
       hasVirtualLine: attraction.hasVirtualLine ?? null,
       // Null for nearly every ride, so it is one absent key rather than a
       // block of nulls on every attraction of every park payload.

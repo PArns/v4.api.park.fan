@@ -3,6 +3,7 @@ import { getMetadataArgsStorage } from "typeorm";
 import { ATTRACTION_CURATED_DB_COLUMNS } from "../../attractions/utils/curated-attraction-facts.util";
 import { AttractionMergeService } from "../../attractions/services/attraction-merge.service";
 import { ATTRACTION_KIND_VALUES } from "../../common/types/attraction-kind.type";
+import { INDOOR_OUTDOOR_VALUES } from "../../common/types/indoor-outdoor.type";
 import { Attraction as AttractionEntity } from "../../attractions/entities/attraction.entity";
 import {
   ATTRACTION_CURATED_FIELDS,
@@ -35,6 +36,7 @@ function anAttraction(overrides: Record<string, unknown> = {}): Attraction {
     curatedSeasonMonths: null,
     hasSingleRider: null,
     attractionKind: null,
+    indoorOutdoor: null,
     hasVirtualLine: null,
     // NOT NULL with a default — every row in the catalogue holds `false`.
     openWithPark: false,
@@ -116,14 +118,39 @@ describe("curated field views", () => {
       ).toEqual([...ATTRACTION_KIND_VALUES]);
     });
 
-    it("is the first enum on an attraction, so the write path now has one", () => {
-      // Every other enum descriptor belongs to a park. If this assertion ever
-      // reads more than one key, the reason the write-path test below exists
-      // has changed and that test should say so.
+    it("was the first enum on an attraction, so the write path now has one", () => {
+      // Every other enum descriptor belonged to a park until this one. The
+      // list grows only by a deliberate entry: `indoorOutdoor` (PAR-424) has
+      // its own write-path test in admin-curation.service.spec.ts. A key that
+      // appears here without one is what this assertion exists to catch.
       const enums = ATTRACTION_CURATED_FIELDS.filter(
         (field) => field.type === "enum",
       ).map((field) => field.key);
-      expect(enums).toEqual(["attractionKind"]);
+      expect(enums).toEqual(["attractionKind", "indoorOutdoor"]);
+    });
+  });
+
+  describe("indoor / outdoor", () => {
+    it("offers exactly the values the API serves", () => {
+      // One list read by the Swagger enum and by the editor's dropdown, for
+      // the reason the attraction kind above spells out.
+      expect(
+        byKey(attractionFieldViews(anAttraction()), "indoorOutdoor").options,
+      ).toEqual([...INDOOR_OUTDOOR_VALUES]);
+    });
+
+    it("leaves an unchecked ride unflagged and flags a decided one", () => {
+      // Null is the whole catalogue on the day the column lands. Counting it
+      // would badge every ride as curated.
+      expect(
+        byKey(attractionFieldViews(anAttraction()), "indoorOutdoor").overridden,
+      ).toBe(false);
+      expect(
+        byKey(
+          attractionFieldViews(anAttraction({ indoorOutdoor: "outdoor" })),
+          "indoorOutdoor",
+        ).overridden,
+      ).toBe(true);
     });
   });
 
