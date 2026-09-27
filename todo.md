@@ -554,10 +554,13 @@ left is establishing, per attraction, whether it is actually gone.
       with a 5-minute wait.
 
 - [ ] **The five unresolved ones need a source, not another pass.** Six Flags
-      Magic Mountain's *X2* (closed since 2026-07-12 after two riders were
-      seriously hurt, one fatally) and Six Flags Over Texas' *Shock Wave*
-      (standing but not running since March 2026) are both still on their park's
-      attraction list with no statement either way. Everland's *Rail Slide* has a
+      Magic Mountain's *X2* has been closed since 2026-07-12 after two riders
+      suffered brain hemorrhages, one of them still in a coma in late August;
+      Cal/OSHA has opened an inspection and the park has said only that the ride
+      remains closed ([ABC7 Los Angeles](https://abc7.com/story/flags-magic-mountains-x2-coaster-closed-multiple-allegations-severe-injuries/19773365/)).
+      Six Flags Over Texas' *Shock Wave* has been standing but not running since
+      March 2026. Both are still on their park's attraction list with no statement
+      either way. Everland's *Rail Slide* has a
       date (`2026-05-10`, matching our own last real OPERATING day exactly) from
       two user-generated posts and **nothing** from the operator or the Korean
       press, so it was deliberately not retired. Shanghai's *Selfie Spot with
@@ -879,7 +882,7 @@ park is" and these are not:
 
       **The triage is defined and measured (2026-09-28, PAR-37)** — buckets,
       counts and what each bucket is worth are in §4b of
-      Three numbers to
+      `docs/architecture/attraction-status-and-seasonality.md`. Three numbers to
       start from: with a floor of three currently-reporting rides per park the
       net is **736** rows today, not 453; the six cheap buckets (the free-flow
       flag plus five name vocabularies) take **109** of them out for the price of

@@ -402,41 +402,56 @@ signal alone would have deleted 57 existing rides.
 
 ### The 2026-09-28 pass: sort the candidates before researching them
 
+This pass re-measured the population the section above reports on, so its much
+smaller "genuinely gone" count is a later reading and not a correction to that
+one. The candidate query filters on `retired_at IS NULL`, and 34 hand-curated
+retirements already stood when this pass started (plus 21 Queue-Times duplicates
+of a show and 15 rows the children sync reclassified), so whatever an earlier
+round found cannot appear in a later one. What follows is the method, which is
+the part worth reusing.
+
 The list is regenerated from the query in `findRetirementCandidates`, which is
 behavioural: it finds attractions **we** no longer see OPERATING. That is not the
 same set as the attractions the upstream no longer carries, and the difference
-decides how much research a candidate is worth. The discriminator is whether
-real upstream rows still arrive after the day the ride went quiet — heartbeats
-excluded, because a heartbeat carries the previous row's `data_source` forward
-and is our own writer, and `system-reconciliation` excluded for the same reason:
+decides how much research a candidate is worth. The discriminator is whether real
+upstream rows still arrive after the day the ride went quiet — which is exactly
+what `observedReadingsSql()` already expresses, so it is used rather than
+rewritten:
 
-```sql
-count(*) FILTER (WHERE data_source <> 'system-reconciliation'
-                   AND NOT COALESCE(is_heartbeat, false))
+```ts
+// in a statement that already joins queue_data qd to the candidate row
+count(*) FILTER (WHERE ${observedReadingsSql("qd")})   -- rows since the quiet day
 ```
 
-Against 71 candidates on 2026-09-28 that split three ways:
+**Do not hand-roll it.** A first cut of this pass wrote
+`data_source <> 'system-reconciliation' AND NOT COALESCE(is_heartbeat, false)`,
+which misses the `system-heartbeat` source and reads a NULL `is_heartbeat` as a
+real reading instead of falling back to `lastUpdated = timestamp`. That moved
+exactly one of 71 candidates into the wrong class — *Meet Gelatoni at Duffy and
+Friends Play House*, credited with 11 upstream rows it does not have.
+
+Against 71 candidates on 2026-09-28 the split is three ways:
 
 | class | rows | what it means |
 |---|---|---|
 | upstream still delivering today | 45 | the source still carries the entity and reports CLOSED, REFURBISHMENT or DOWN |
-| upstream dropped it | 7 | only `system-reconciliation` since the quiet day |
-| upstream stopped later | 19 | last real row between 2026-04-23 and 2026-08-29 |
+| upstream dropped it | 8 | no observed reading since the quiet day |
+| upstream stopped later | 18 | last observed row between 2026-04-23 and 2026-08-28 |
 
-**Neither class is a verdict, and that is the point.** Eleven of the nineteen in
-the third class share one last-real-row date, 2026-04-23, which is a source
-change and not nineteen demolitions. In the "upstream dropped it" class sit
-*Enchanted Storybook Castle* and the *Frisco Silver Dollar Line Steam Train* —
-a castle and a steam train that plainly operate. And the one ride in that pass
-that a park had actually demolished, Toverland's *Maximus' Blitz Bahn*, sat in
-the third class alongside eighteen rides that had not. What the split does buy is
-the **upstream's own verdict where it has one**: six candidates were reported
-`REFURBISHMENT` by the source itself, which is a researched answer for free.
+**No class is a verdict, and that is the point.** Nine of the eighteen in the
+third class share one last-observed-row date, 2026-04-23, which is a source
+change and not nine demolitions. The "upstream dropped it" class holds
+*Enchanted Storybook Castle* and the *Frisco Silver Dollar Line Steam Train* — a
+castle and a steam train that plainly operate — beside the one genuine
+demolition of that class, *Fast & Furious - Supercharged*. And Toverland's
+*Maximus' Blitz Bahn*, the other ride in this pass a park had actually taken
+down, sat in the third class among seventeen that were still standing. What the
+split does buy is the **upstream's own verdict where it has one**: six candidates
+were reported `REFURBISHMENT` by the source itself, which is a researched answer
+for free.
 
 Result of the pass: **3 retired, 68 marked `not_retired`** — 37 still operating,
-14 in refurbishment, 12 seasonal, 5 unresolved. The three:
-*Fast & Furious - Supercharged* (`2026-08-17`), *Maximus' Blitz Bahn*
-(`2026-05-17`), *Kumba* (`2026-08-02`).
+14 in refurbishment, 12 seasonal, 5 unresolved.
 
 #### The quiet day is not the closing date
 
@@ -444,11 +459,15 @@ All three retirements carry a `retired_at` **earlier** than our own last
 OPERATING row, and in two of the three the query's `went_silent` date was wrong
 by more than a feed lag:
 
-| | query's `went_silent` | actual closing date | gap |
-|---|---|---|---|
-| *Kumba* | 2026-08-03 | 2026-08-02 | one lag day |
-| *Fast & Furious* | 2026-08-28 | 2026-08-17 | eleven days of feed after demolition |
-| *Maximus' Blitz Bahn* | 2026-07-19 | 2026-05-17 | two months, caused by one row |
+| | query's `went_silent` | `retired_at` | gap | source that states the date |
+|---|---|---|---|---|
+| *Kumba* | 2026-08-03 | 2026-08-02 | one lag day | [Attractions Magazine](https://attractionsmagazine.com/kumba-closing-at-busch-gardens-tampa-bay/), plus WDWMagic, WTSP and Bay News 9 |
+| *Fast & Furious - Supercharged* | 2026-08-28 | 2026-08-17 | eleven days of feed after the ride was gone | [Inside Universal](https://www.insideuniversal.net/2026/07/fast-furious-supercharged-to-permanently-close-august-17-2026-at-universal-studios-florida/), announced in advance |
+| *Maximus' Blitz Bahn* | 2026-07-19 | 2026-05-17 | two months, caused by one row | [the operator's own blog](https://www.toverland.com/toverblog/blog-neue-blitzbahn) |
+
+Each source is also stored in the row's `retired_reason`, which the public
+attraction endpoint serves, so the claim travels with the data and not only with
+this page.
 
 `max(timestamp) FILTER (WHERE status = 'OPERATING')` has no defence against a
 single stray row. Toverland's bobsleigh ran for the last time on 2026-05-17 with
@@ -517,8 +536,8 @@ question and not a retirement one — the same shape as the single-rider rows
 above. That leaves the two buckets that actually need research, **312** where the
 upstream dropped the row and **251** where it still reports and has simply never
 said OPERATING. Both need it: a genuinely defunct ride lands in the first, and
-the *Teenage Mutant Ninja Turtles* case in §5.2 — 4737 rows, every one CLOSED,
-ride open — lands in the second.
+the *Teenage Mutant Ninja Turtles* case in `todo.md` — 4737 rows, every one
+CLOSED, ride open and listed by Movie Park as current — lands in the second.
 
 The name vocabulary is a **sorting** signal and never a verdict: claude.md's
 "research, never recall" still holds, and *Mopti's Monkey Depot* is in this net
