@@ -533,7 +533,41 @@ the recovery curve all filter `signal = 'down'`. What the nightly job stores for
 The mechanism exists (`retired_at`, admin endpoints, job exclusions). What is
 left is establishing, per attraction, whether it is actually gone.
 
-- [ ] **73 individual retirement candidates** — attractions that had real wait
+- [x] **Worked through on 2026-09-28 (PAR-37).** The same query returns **71**,
+      not 73 — the set breathes, and five of the names this section used to call
+      traps had already left it. Of the 71, **3 were genuinely gone** and are
+      retired: Universal Studios Florida's *Fast & Furious - Supercharged*
+      (`2026-08-17`), Toverland's *Maximus' Blitz Bahn* (`2026-05-17`) and Busch
+      Gardens Tampa's *Kumba* (`2026-08-02`). The other **68** carry a
+      `not_retired` review mark with the verdict, the source and a
+      `recheck_after`: 37 still operating, 14 in refurbishment, 12 seasonal, 5
+      unresolved. `GET /v1/admin/retirement-candidates` returns `total: 0`.
+
+      Two findings worth carrying forward, both in
+      [§4b](docs/architecture/attraction-status-and-seasonality.md#the-2026-09-28-pass-sort-the-candidates-before-researching-them):
+      sorting the candidates by whether the **upstream** still delivers rows
+      (heartbeats and `system-reconciliation` excluded) buys the source's own
+      `REFURBISHMENT` verdict for free on six of them and tells you which
+      research is worth doing — and **the query's `went_silent` date is not a
+      closing date.** It was wrong for two of the three retirements, by eleven
+      days and by two months, the latter caused by a single stray OPERATING row
+      with a 5-minute wait.
+
+- [ ] **The five unresolved ones need a source, not another pass.** Six Flags
+      Magic Mountain's *X2* has been closed since 2026-07-12 after two riders
+      suffered brain hemorrhages, one of them still in a coma in late August;
+      Cal/OSHA has opened an inspection and the park has said only that the ride
+      remains closed ([ABC7 Los Angeles](https://abc7.com/story/flags-magic-mountains-x2-coaster-closed-multiple-allegations-severe-injuries/19773365/)).
+      Six Flags Over Texas' *Shock Wave* has been standing but not running since
+      March 2026. Both are still on their park's attraction list with no statement
+      either way. Everland's *Rail Slide* has a
+      date (`2026-05-10`, matching our own last real OPERATING day exactly) from
+      two user-generated posts and **nothing** from the operator or the Korean
+      press, so it was deliberately not retired. Shanghai's *Selfie Spot with
+      Spider Man* and Kennywood's *Raging Rapids* are the other two. Their marks
+      expire on 2026-11-30.
+
+- [x] ~~**73 individual retirement candidates**~~ — attractions that had real wait
       times, stopped reporting more than 30 days ago on a date **not shared**
       with others in their park, and are still receiving reconciliation rows.
 
@@ -593,8 +627,22 @@ left is establishing, per attraction, whether it is actually gone.
 - [ ] **`Expedition Everest - Legend of the Forbidden Mountain Single Rider` is
       not a retirement candidate — it is a data-model error.** It is a queue
       variant of a live roller coaster, not an attraction, so it should be
-      merged into its parent or excluded at mapping time. Worth checking whether
-      other parks have the same shape.
+      merged into its parent or excluded at mapping time.
+
+      **Counted on 2026-09-28 (PAR-37): the shape exists eight times**, at three
+      parks — one at Animal Kingdom, three at Islands of Adventure, four at
+      Universal Studios Florida. All eight carry their own `externalId` *and*
+      `queue_times_entity_id`, all eight write `queueType = 'STANDBY'` rather
+      than a single-rider queue, all eight have a live parent in the same park
+      that already carries `has_single_rider = true`, and all eight were still
+      being written on 2026-09-27. Two of them (*MEN IN BLACK*, *Revenge of the
+      Mummy*) differ from their parent only by a trademark symbol, which
+      `normalizeName` already strips. The guard belongs beside the show-name
+      guard in `syncQtAttraction`'s creation branch — but that branch covers
+      creation only, so the eight existing rows are a separate call: merge into
+      the parent, or retire as reclassified the way PAR-161's 21 rows were.
+      Details in §4b of
+      `docs/architecture/attraction-status-and-seasonality.md`.
 
 ## Feed-dropped attractions still get marked seasonal (2026-08-15)
 
@@ -827,10 +875,26 @@ park is" and these are not:
 - [ ] The name-based net has a known hole: _Mopti's Monkey Depot_ contains no
       playground vocabulary and would never have matched. The behavioural net —
       attractions that never report OPERATING in a park whose feed demonstrably
-      works — returns **453** rows. A sample shows it is dominated by Halloween
-      event attractions, winter operations (_Curlingbaan_, _Schaatsbaan_,
-      _Tubingbaan_), off-season water areas and genuinely defunct rides, so it
-      needs a cheaper triage than per-attraction research before it is useful.
+      works — is dominated by Halloween event attractions, winter operations
+      (_Curlingbaan_, _Schaatsbaan_, _Tubingbaan_), off-season water areas and
+      genuinely defunct rides, so it needs a cheaper triage than
+      per-attraction research before it is useful.
+
+      **The triage is defined and measured (2026-09-28, PAR-37)** — buckets,
+      counts and what each bucket is worth are in §4b of
+      `docs/architecture/attraction-status-and-seasonality.md`. Three numbers to
+      start from: with a floor of three currently-reporting rides per park the
+      net is **736** rows today, not 453; the six cheap buckets (the free-flow
+      flag plus five name vocabularies) take **109** of them out for the price of
+      a regex; and **64** rows have never been measured by any source at all,
+      which makes them a mapping question rather than a retirement one and the
+      cheapest real work in the net. The research that remains is **312** rows
+      the upstream dropped plus **251** it still reports without ever saying
+      OPERATING — and both halves need it, because a defunct ride lands in the
+      first and the _Teenage Mutant Ninja Turtles_ case (4737 rows, all CLOSED,
+      ride open) lands in the second. **The name vocabulary sorts, it never
+      decides** — _Mopti's Monkey Depot_ is in this net precisely because its
+      name says nothing.
 
 ## Ride profiles: the safety nets that went with the seed (2026-08-15)
 
