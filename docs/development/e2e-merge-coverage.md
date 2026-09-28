@@ -169,6 +169,39 @@ The schema guard has to come out for that counter-check — it imports
 suite fails to compile instead of failing an assertion. A compile error is not
 the counter-check.
 
+## A gate in front of the path can switch the spec off without touching it
+
+The counter-check above answers "can this test go red". It does not answer the
+question that actually took this suite down: **does the call under test still
+reach the code being asserted about?**
+
+Since PAR-262 (#322), `repairDuplicates` does not merge every pair sharing a
+Queue-Times id. It merges the ones `ParkValidatorService.findDuplicates` also
+returns as `safe`, and `safe` is `sharedEntityId && nameSimilarity >= 0.95`
+(`AUTO_MERGE_NAME_SIMILARITY`). An unsafe pair is logged and skipped.
+
+The fixture named its two parks `winner-park` and `ghost-park`. Measured with
+`calculateNameSimilarity`, that pair scores **0.4211**, so `findDuplicates` did
+not list it at all, the verdict lookup returned `undefined`, and the loop hit
+its `continue`. No merge ran. Every assertion in the case — ghost park gone,
+time series on the winner, no orphans — then failed against a database nobody
+had touched, and the first of them, `parks WHERE id = GHOST_PARK` returning 1,
+read like the merge had rolled back. It had not: it had never started.
+
+The shape is worth naming because the schema guard does not catch it and the
+counter-check above does not either. A precondition added to the production path
+after a spec was written can make that spec assert about a call that no longer
+happens, and it fails **downstream of the reason**, which is where the reading
+time goes.
+
+What it costs to close: assert the precondition, in the test, before the call.
+`expectPairIsMergeable()` reads `findDuplicates()` and pins that the seeded pair
+is listed, shares its Queue-Times id, carries no `reviewReason` and is `safe`.
+Move the threshold and that assertion fails, naming the verdict, instead of a
+count two hundred lines below it. The general rule: **where the path under test
+is behind a gate, the fixture satisfying that gate is part of the contract and
+is asserted like one.**
+
 ## Related
 
 - [Attraction Status & Seasonality](../architecture/attraction-status-and-seasonality.md) — duplicate detection and the review marks that keep a settled verdict settled.
