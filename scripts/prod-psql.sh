@@ -21,6 +21,8 @@
 #
 # Overrides, per invocation, when a query legitimately needs longer:
 #   PARKFAN_PSQL_STATEMENT_TIMEOUT=15min scripts/prod-psql.sh -c '…'
+#   PARKFAN_PSQL_IDLE_TX_TIMEOUT, PARKFAN_PSQL_LOCK_TIMEOUT — the other two limits
+#   PARKFAN_PSQL_CONTAINER, PARKFAN_PSQL_USER, PARKFAN_PSQL_DB — target and role
 #
 set -euo pipefail
 
@@ -44,9 +46,21 @@ DB_NAME="${PARKFAN_PSQL_DB:-parkfan}"
 if [ -n "${PARKFAN_PSQL_CONTAINER:-}" ]; then
   CONTAINER="$PARKFAN_PSQL_CONTAINER"
 else
-  mapfile -t candidates < <(
-    docker ps --filter name=postgres --format '{{.Names}}' | grep -v coolify || true
-  )
+  # Keep `docker ps` failing (daemon down, no socket permission) apart from it
+  # succeeding with no match: the two need different answers, and reporting the
+  # first as the second sends whoever is debugging down the wrong path.
+  if ! running=$(docker ps --filter name=postgres --format '{{.Names}}' 2>&1); then
+    echo "prod-psql: 'docker ps' failed — is the daemon reachable, and are you in the docker group?" >&2
+    printf '  %s\n' "$running" >&2
+    exit 1
+  fi
+
+  candidates=()
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    case "$name" in *coolify*) continue ;; esac
+    candidates+=("$name")
+  done <<<"$running"
 
   if [ "${#candidates[@]}" -eq 0 ]; then
     echo "prod-psql: no running postgres container matched 'name=postgres'." >&2
@@ -61,9 +75,12 @@ else
   CONTAINER="${candidates[0]}"
 fi
 
-# -t only when stdin really is a terminal, so the script stays usable in a pipe.
+# -t only when both ends really are a terminal. Testing stdin alone is not
+# enough: called from an interactive shell with the output redirected, docker's
+# pseudo-TTY would turn every \n into \r\n and psql would start its pager,
+# which is exactly the case where the output is being captured.
 tty_flag=()
-if [ -t 0 ]; then tty_flag=(-t); fi
+if [ -t 0 ] && [ -t 1 ]; then tty_flag=(-t); fi
 
 exec docker exec -i "${tty_flag[@]}" \
   -e PGOPTIONS="-c statement_timeout=${STATEMENT_TIMEOUT} -c idle_in_transaction_session_timeout=${IDLE_TX_TIMEOUT} -c lock_timeout=${LOCK_TIMEOUT}" \

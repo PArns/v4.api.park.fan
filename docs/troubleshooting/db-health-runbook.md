@@ -30,6 +30,14 @@ Each is overridable per invocation when a query legitimately needs longer:
 PARKFAN_PSQL_STATEMENT_TIMEOUT=15min scripts/prod-psql.sh -c '<QUERY>'
 ```
 
+| Variable | Overrides |
+|---|---|
+| `PARKFAN_PSQL_STATEMENT_TIMEOUT` | `statement_timeout` |
+| `PARKFAN_PSQL_IDLE_TX_TIMEOUT` | `idle_in_transaction_session_timeout` |
+| `PARKFAN_PSQL_LOCK_TIMEOUT` | `lock_timeout` |
+| `PARKFAN_PSQL_CONTAINER` | the container, when the lookup finds more than one |
+| `PARKFAN_PSQL_USER` / `PARKFAN_PSQL_DB` | role and database, both `parkfan` by default |
+
 **Why `5min` and not less.** Measured over the 117 days since the last
 `pg_stat_statements` reset (2026-06-03): of 4962 recorded statements, 6 ever
 exceeded one minute and 2 ever exceeded five, and both of those two are
