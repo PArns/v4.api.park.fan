@@ -37,9 +37,11 @@ lerna-debug.log*
 .env
 .env.*
 
-# Debug scripts with DB credentials (keep local only); README is tracked
+# Debug scripts with DB credentials (keep local only); README, the production
+# psql wrapper and the backup scripts are tracked
 scripts/*
 !scripts/README.md
+!scripts/prod-psql.sh
 !scripts/backup/
 scripts/backup/*.env
 

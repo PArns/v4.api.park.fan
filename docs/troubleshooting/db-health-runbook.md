@@ -2,18 +2,64 @@
 
 Quick reference for checking DB performance, bloat, and index health.
 
-**Connect:**
-```bash
-ssh <user>@<dockerhost> \
-  "docker exec postgres-\$(docker ps --format '{{.Names}}' | grep postgres) \
-   psql -U parkfan -d parkfan -c \"<QUERY>\""
-```
-
-Or interactively:
+**Connect — always through the wrapper:**
 ```bash
 ssh <user>@<dockerhost>
-docker exec -it $(docker ps --format '{{.Names}}' | grep postgres) psql -U parkfan -d parkfan
+cd <repo> && scripts/prod-psql.sh -c '<QUERY>'   # or with no arguments, interactively
 ```
+
+`scripts/prod-psql.sh` resolves the container (its name carries a Coolify deploy
+id and changes with every deploy) and sets the three limits below on that session
+via `PGOPTIONS`. **Do not call `docker exec … psql` by hand.** Ad-hoc SQL against
+this database has no deadline of its own, and a session without one is how the
+public API went down for 32 minutes — see "Why the limits exist" below.
+
+---
+
+## 0. Time limits on ad-hoc SQL
+
+| Setting | Wrapper default | Server default | What it stops |
+|---|---|---|---|
+| `statement_timeout` | `5min` | `0` (off) | one statement running forever |
+| `idle_in_transaction_session_timeout` | `1min` | `0` (off) | a session parked between `BEGIN` and `COMMIT` |
+| `lock_timeout` | `10s` | `0` (off) | a writing session queueing on a lock and collecting waiters |
+
+Each is overridable per invocation when a query legitimately needs longer:
+
+```bash
+PARKFAN_PSQL_STATEMENT_TIMEOUT=15min scripts/prod-psql.sh -c '<QUERY>'
+```
+
+**Why `5min` and not less.** Measured over the 117 days since the last
+`pg_stat_statements` reset (2026-06-03): of 4962 recorded statements, 6 ever
+exceeded one minute and 2 ever exceeded five, and both of those two are
+background jobs rather than research queries (the TimescaleDB compression policy,
+and one `WITH park_tz` analytics query at 685 s). The limit costs nothing that is
+run by hand.
+
+**Why the limits exist.** On 2026-09-28 a research `SELECT` started through
+`docker exec … psql` stayed open after the runner process that launched it had
+exited. The compression policy on `queue_data` then asked for a strong lock,
+queued behind that snapshot, and every subsequent reader queued behind the
+policy: 90 queries piled up, the TypeORM pool ran into its 15-second acquire
+timeout, and the whole public API — `/v1/health` included — answered HTTP 500 for
+about 32 minutes. The query itself was fine. It simply had no deadline.
+
+**Why this is not set on the role or the database.** The application pool
+connects as the *same* `parkfan` role as an ad-hoc session (103 pool connections
+against 1 `psql` at the time of measurement), and so does the TimescaleDB
+background worker. `ALTER ROLE parkfan SET statement_timeout` or
+`ALTER DATABASE parkfan SET …` would therefore cap application queries and
+maintenance jobs too. The pool has its own bound — `connectionTimeoutMillis:
+15000` in `src/config/typeorm.config.ts` — and giving it a query-runtime limit is
+a separate decision, not this one. Keeping the guard per session is what makes it
+apply to exactly the sessions that lack one.
+
+`idle_in_transaction_session_timeout` is a **separate** gap, not a duplicate of
+`statement_timeout`: the latter never fires while no statement is running, so a
+session sitting between `BEGIN` and `COMMIT` would hold its snapshot and its
+locks indefinitely. An idle session *outside* a transaction holds neither, which
+is why there is no `idle_session_timeout` here.
 
 ---
 
