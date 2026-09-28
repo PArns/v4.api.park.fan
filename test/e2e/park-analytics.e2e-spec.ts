@@ -61,7 +61,7 @@ describe("Park Analytics (e2e)", () => {
     );
 
     const attractionRepo = dataSource.getRepository(Attraction);
-    await attractionRepo.save(
+    const attractions = await attractionRepo.save(
       ["Taron", "F.L.Y.", "Black Mamba"].map((name, i) =>
         attractionRepo.create({
           externalId: `e2e-attr-${i}`,
@@ -72,6 +72,33 @@ describe("Park Analytics (e2e)", () => {
           longitude: 6.8792,
         }),
       ),
+    );
+
+    // One real reading, two days old.
+    //
+    // Without it this park has never been heard from, and a park silent for
+    // PARK_FEED_SILENT_DAYS (30) is one the API refuses to describe:
+    // `ParkIntegrationService` drops `analytics.occupancy` entirely rather than
+    // send a verdict about a park nobody has read since June, along with the
+    // wait statistics and `percentiles`. That is the documented behaviour, so
+    // the fixture has to state which of the two parks it means — and it means
+    // the ordinary one, closed right now but reporting, which is what the
+    // assertions below describe.
+    //
+    // Two days rather than two minutes on purpose: the live-status window is
+    // six hours, so this row satisfies "the feed works" without also making a
+    // ride operate and turning `operatingAttractions` into a moving target.
+    // `data_source` and `is_heartbeat` matter as much as the timestamp —
+    // `PARK_OBSERVED_READING_SQL` counts neither a heartbeat nor a
+    // reconciliation row as having been observed.
+    await dataSource.query(
+      `INSERT INTO queue_data
+         (id, "attractionId", "queueType", status, "waitTime", timestamp,
+          "lastUpdated", is_heartbeat, data_source)
+       VALUES (gen_random_uuid(), $1, 'STANDBY', 'OPERATING', 25,
+               NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days 5 minutes',
+               false, 'themeparks-wiki')`,
+      [attractions[0].id],
     );
   });
 

@@ -6,6 +6,7 @@ import { DataSource } from "typeorm";
 import { ParksModule } from "../../src/parks/parks.module";
 import { ParksService } from "../../src/parks/parks.service";
 import { ParkMergeService } from "../../src/parks/services/park-merge.service";
+import { ParkValidatorService } from "../../src/parks/services/park-validator.service";
 import { getDatabaseConfig } from "../../src/config/database.config";
 import {
   ATTRACTION_DEPENDENCIES,
@@ -42,12 +43,24 @@ describe("Park merge (E2E)", () => {
   let dataSource: DataSource;
   let parksService: ParksService;
   let parkMergeService: ParkMergeService;
+  let parkValidator: ParkValidatorService;
 
   const WINNER_PARK = "11111111-1111-4111-8111-111111111111";
   const GHOST_PARK = "22222222-2222-4222-8222-222222222222";
   const WINNER_ATTR = "33333333-3333-4333-8333-333333333333";
   const GHOST_ATTR = "44444444-4444-4444-8444-444444444444";
   const LONELY_ATTR = "55555555-5555-4555-8555-555555555555";
+
+  /**
+   * The name on BOTH rows of the colliding pair. One real park read by two
+   * sources is the shape `repairDuplicates` exists for, and an identical name
+   * is what carries it past the duplicate gate — see `seedCollidingParks`.
+   * Deliberately not a park this database holds elsewhere: `findDuplicates`
+   * compares every park against every other, and a third row answering to the
+   * same name would put a pair into the verdict map that this spec did not
+   * seed.
+   */
+  const DUPLICATE_PARK_NAME = "Split Brain Gardens";
 
   beforeAll(async () => {
     const dbConfig = getDatabaseConfig();
@@ -76,6 +89,7 @@ describe("Park merge (E2E)", () => {
     dataSource = app.get(DataSource);
     parksService = app.get(ParksService);
     parkMergeService = app.get(ParkMergeService);
+    parkValidator = app.get(ParkValidatorService);
   });
 
   afterAll(async () => {
@@ -91,16 +105,33 @@ describe("Park merge (E2E)", () => {
    * Two parks sharing one `queue_times_entity_id` — the split-brain state
    * `repairDuplicates` looks for. The winner carries a `wiki_entity_id` and the
    * ghost does not, which is the preference rule that picks the survivor.
+   *
+   * Both rows carry the SAME name, because they are one real park read twice.
+   * That is a precondition of the path under test rather than decoration: since
+   * PAR-262 `repairDuplicates` merges a shared Queue-Times id only where
+   * `ParkValidatorService.findDuplicates` also calls the pair safe, and `safe`
+   * is `sharedEntityId && nameSimilarity >= AUTO_MERGE_NAME_SIMILARITY` (0.95).
+   * The names this fixture carried until PAR-540 — "winner-park" against
+   * "ghost-park" — score 0.4211, so the gate refused the pair, the merge never
+   * ran, and the ghost park was still standing at the assertion. That is how
+   * this spec went red on `main` without a line of the merge path changing.
+   * `expectPairIsMergeable` pins the precondition so the next threshold change
+   * fails on the sentence that states it.
    */
   async function seedCollidingParks(): Promise<void> {
-    const park = (id: string, name: string, wiki: string | null) =>
+    const park = (
+      id: string,
+      name: string,
+      slug: string,
+      wiki: string | null,
+    ) =>
       dataSource.query(
         `INSERT INTO parks (id, "externalId", name, slug, timezone, "wiki_entity_id", "queue_times_entity_id", "createdAt")
          VALUES ($1, $2, $3, $4, 'Europe/Berlin', $5, 'qt-777', NOW())`,
-        [id, `ext-${name}`, name, name, wiki],
+        [id, `ext-${slug}`, name, slug, wiki],
       );
-    await park(WINNER_PARK, "winner-park", "wiki-winner");
-    await park(GHOST_PARK, "ghost-park", null);
+    await park(WINNER_PARK, DUPLICATE_PARK_NAME, "winner-park", "wiki-winner");
+    await park(GHOST_PARK, DUPLICATE_PARK_NAME, "ghost-park", null);
 
     const attraction = (
       id: string,
@@ -310,8 +341,31 @@ describe("Park merge (E2E)", () => {
     );
   });
 
+  /**
+   * `repairDuplicates` only merges a pair `findDuplicates` has already called
+   * safe, so a fixture the gate refuses runs no merge at all — and every
+   * assertion about the merged state then fails for a reason that has nothing
+   * to do with the merge. Asserted before the call rather than diagnosed after
+   * it: this is the precondition the seed exists to satisfy, and a threshold or
+   * rule change should fail here, naming the pair and the verdict, instead of
+   * as "expected 0, received 1" on a park nobody touched.
+   */
+  async function expectPairIsMergeable(): Promise<void> {
+    const verdicts = await parkValidator.findDuplicates();
+    const pair = verdicts.find(
+      (v) =>
+        (v.park1.id === WINNER_PARK && v.park2.id === GHOST_PARK) ||
+        (v.park1.id === GHOST_PARK && v.park2.id === WINNER_PARK),
+    );
+    expect(pair).toBeDefined();
+    expect(pair!.sharedEntityIds.queueTimes).toBe(true);
+    expect(pair!.reviewReason).toBeNull();
+    expect(pair!.safe).toBe(true);
+  }
+
   it("commits: no 23503/23505/42703, time series on the winner, ghost park gone", async () => {
     await seedCollidingParks();
+    await expectPairIsMergeable();
 
     const before = {
       queueGhost: await count(
