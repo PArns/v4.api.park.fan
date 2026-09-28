@@ -1,6 +1,20 @@
 # Scripts Directory
 
-Operational and one-off scripts. **This directory is gitignored** except this README; scripts that use DB credentials or are local-only stay uncommitted.
+Operational and one-off scripts. **This directory is gitignored** except this README, `prod-psql.sh` and `backup/`; scripts that use DB credentials or are local-only stay uncommitted.
+
+## Ad-hoc SQL against production
+
+```bash
+scripts/prod-psql.sh -c 'SELECT count(*) FROM parks;'
+scripts/prod-psql.sh < query.sql
+scripts/prod-psql.sh                       # interactive
+```
+
+Resolves the postgres container (its name carries a Coolify deploy id) and puts a
+`statement_timeout`, an `idle_in_transaction_session_timeout` and a `lock_timeout`
+on that session. **Use it instead of calling `docker exec … psql` by hand** — the
+defaults, the measurements behind them and the outage that made them necessary are
+in [§0 of the DB Health Runbook](../docs/troubleshooting/db-health-runbook.md).
 
 Run TS scripts from repo root:
 
