@@ -3224,7 +3224,9 @@ describe("ParksService", () => {
     /** The retraction DELETE, as `[sql, params]`, or undefined if it never ran. */
     const retractionCall = (): [string, unknown[]] | undefined =>
       mockScheduleRepository.query.mock.calls.find(([sql]: [string]) =>
-        sql.includes("RETURNING to_char(date, 'YYYY-MM-DD') AS date"),
+        sql.includes(
+          "SELECT to_char(date, 'YYYY-MM-DD') AS date FROM retracted",
+        ),
       ) as [string, unknown[]] | undefined;
 
     const retractionParams = (): {
@@ -3260,7 +3262,9 @@ describe("ParksService", () => {
         Promise.resolve(
           sql === PARK_OBSERVED_READING_SQL
             ? [{ seen: 1 }]
-            : sql.includes("RETURNING to_char(date, 'YYYY-MM-DD') AS date")
+            : sql.includes(
+                  "SELECT to_char(date, 'YYYY-MM-DD') AS date FROM retracted",
+                )
               ? [{ date: WITHDRAWN }]
               : [],
         ),
@@ -3326,7 +3330,9 @@ describe("ParksService", () => {
         Promise.resolve(
           sql === PARK_OBSERVED_READING_SQL
             ? [] // silent feed
-            : sql.includes("RETURNING to_char(date, 'YYYY-MM-DD') AS date")
+            : sql.includes(
+                  "SELECT to_char(date, 'YYYY-MM-DD') AS date FROM retracted",
+                )
               ? []
               : [],
         ),

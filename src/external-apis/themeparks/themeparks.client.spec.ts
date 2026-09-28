@@ -487,7 +487,7 @@ describe("ThemeParksClient", () => {
      * arrived are indistinguishable in it (📚 G-103).
      */
     describe("coveredMonths", () => {
-      /** 2026-09-28, so the 13 requested months run 2026-08 … 2027-09. */
+      /** 2026-09-28, so the 13 requested months run 2026-08 … 2027-08. */
       const FIXED_NOW = new Date("2026-09-28T12:00:00Z");
 
       const monthOf = (path: string): string => {

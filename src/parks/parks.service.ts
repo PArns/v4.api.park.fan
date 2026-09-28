@@ -2113,16 +2113,27 @@ export class ParksService {
         ),
       ];
 
+      // The CTE wrapper is load-bearing, not a flourish: TypeORM's postgres
+      // driver rewrites the result of a bare DELETE into `[rows, rowCount]`
+      // (`PostgresQueryRunner`, `switch (raw.command)`), so a plain
+      // `DELETE … RETURNING` would arrive as a two-element array and the count
+      // below would read 2 on every sync, deleted rows or none. Selecting from
+      // the CTE makes the command a SELECT and the rows come back as rows — the
+      // same reason `mergeAttractionReviewMarks` and
+      // `MLService.deleteOldPredictions` wrap theirs.
       const retracted: Array<{ date: string }> =
         await this.scheduleRepository.query(
-          `DELETE FROM schedule_entries
-           WHERE "parkId" = $1::uuid
-             AND "attractionId" IS NULL
-             AND "scheduleType" = 'OPERATING'
-             AND to_char(date, 'YYYY-MM') = ANY($2::text[])
-             AND to_char(date, 'YYYY-MM-DD') > $3
-             AND to_char(date, 'YYYY-MM-DD') <> ALL($4::text[])
-           RETURNING to_char(date, 'YYYY-MM-DD') AS date`,
+          `WITH retracted AS (
+             DELETE FROM schedule_entries
+              WHERE "parkId" = $1::uuid
+                AND "attractionId" IS NULL
+                AND "scheduleType" = 'OPERATING'
+                AND to_char(date, 'YYYY-MM') = ANY($2::text[])
+                AND to_char(date, 'YYYY-MM-DD') > $3
+                AND to_char(date, 'YYYY-MM-DD') <> ALL($4::text[])
+              RETURNING date
+           )
+           SELECT to_char(date, 'YYYY-MM-DD') AS date FROM retracted`,
           [parkId, answeredMonths, parkLocalToday, stillOperatingDates],
         );
       retractedCount = Array.isArray(retracted) ? retracted.length : 0;
@@ -2132,7 +2143,7 @@ export class ParksService {
         const shown = dates.slice(0, 10).join(", ");
         this.logger.warn(
           `Park ${parkId}: retracted ${retractedCount} future OPERATING day(s) the source ` +
-            `stopped naming in ${answeredMonths.length} answered month(s): ${shown}` +
+            `no longer names as operating, in ${answeredMonths.length} answered month(s): ${shown}` +
             `${dates.length > 10 ? ` (+${dates.length - 10} more)` : ""}`,
         );
       }

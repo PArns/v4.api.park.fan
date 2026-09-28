@@ -337,6 +337,38 @@ describe("schedule retraction (e2e)", () => {
     expect(rows.has(WITHDRAWN[0])).toBe(false);
   });
 
+  it("reports the number of rows it really deleted", async () => {
+    // The count and the dates come out of the statement's own `RETURNING`, and
+    // TypeORM's postgres driver rewrites a bare `DELETE … RETURNING` into
+    // `[rows, rowCount]` — which reads as "2 rows" on every sync, deleted rows
+    // or none, and takes the cache invalidation with it. Only a real driver shows
+    // that, which is why this assertion lives in the e2e and not beside the mock.
+    const park = await seedPark("counted", STORED);
+    const warnings: string[] = [];
+    const logger = (
+      parks as unknown as { logger: { warn: (m: string) => void } }
+    ).logger;
+    const spy = jest
+      .spyOn(logger, "warn")
+      .mockImplementation((message: unknown) => {
+        warnings.push(String(message));
+      });
+
+    try {
+      await parks.saveScheduleData(
+        park.parkId,
+        payloadFor(STILL_NAMED),
+        monthsOf(STORED),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    const line = warnings.find((w) => w.includes("retracted"));
+    expect(line).toContain(`retracted ${WITHDRAWN.length} future OPERATING`);
+    for (const date of WITHDRAWN) expect(line).toContain(date);
+  });
+
   it("retracts nothing when the source still names every stored day", async () => {
     // The everyday case: 154 to 190 parks are written on a normal day and none
     // of them may lose a row to this. A DELETE that fired here would take the
