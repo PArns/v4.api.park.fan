@@ -3185,4 +3185,176 @@ describe("ParksService", () => {
       expect(byDate.get(FUTURE)).toBe(ScheduleType.UNKNOWN);
     });
   });
+
+  /**
+   * PAR-538: a day the source stops naming has to go. Everything else in
+   * `saveScheduleData` works from the dates the payload CONTAINS, so a withdrawn
+   * day was never looked at — Rulantica's maintenance closure (2026-11-16 to 27)
+   * plus 24/25 December stood as 14 OPERATING rows for seven months while the
+   * upstream named none of those days, and the calendar offered all 14 as visit
+   * days.
+   *
+   * The two halves of the rule are tested together because either one alone is
+   * wrong: retracting nothing keeps the closed days open, and retracting outside
+   * the months the source answered for deletes real operating days on a
+   * throttled run (the run 87 of 200 parks had in PAR-480).
+   *
+   * Dates are relative to the clock, since the rule is "future vs past", and the
+   * park sits in UTC so no offset can move a day across that boundary.
+   */
+  describe("saveScheduleData — retracting days the source stopped naming", () => {
+    const parkId = "cccccccc-dddd-eeee-ffff-000000000000";
+
+    const dayOffset = (days: number): string =>
+      new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+
+    const monthOf = (date: string): string => date.slice(0, 7);
+
+    const KEPT = dayOffset(30);
+    const WITHDRAWN = dayOffset(31);
+    const PAST = dayOffset(-30);
+
+    const operatingOn = (date: string) => ({
+      date,
+      type: "OPERATING",
+      openingTime: `${date}T09:00:00Z`,
+      closingTime: `${date}T18:00:00Z`,
+    });
+
+    /** The retraction DELETE, as `[sql, params]`, or undefined if it never ran. */
+    const retractionCall = (): [string, unknown[]] | undefined =>
+      mockScheduleRepository.query.mock.calls.find(([sql]: [string]) =>
+        sql.includes("RETURNING to_char(date, 'YYYY-MM-DD') AS date"),
+      ) as [string, unknown[]] | undefined;
+
+    const retractionParams = (): {
+      months: string[];
+      today: string;
+      keptDates: string[];
+    } => {
+      const call = retractionCall();
+      if (!call) throw new Error("no retraction DELETE was issued");
+      const [, params] = call;
+      return {
+        months: params[1] as string[],
+        today: params[2] as string,
+        keptDates: params[3] as string[],
+      };
+    };
+
+    beforeEach(() => {
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        countryCode: "DE",
+        regionCode: null,
+        timezone: "UTC",
+      });
+      mockHolidaysService.getHolidays.mockResolvedValue([]);
+      mockScheduleRepository.save.mockResolvedValue([]);
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder([]),
+      );
+      // Feed answering, so the silent-feed guard stays out of the way; the
+      // retraction DELETE reports one withdrawn day.
+      mockScheduleRepository.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql === PARK_OBSERVED_READING_SQL
+            ? [{ seen: 1 }]
+            : sql.includes("RETURNING to_char(date, 'YYYY-MM-DD') AS date")
+              ? [{ date: WITHDRAWN }]
+              : [],
+        ),
+      );
+    });
+
+    it("retracts a future operating day the payload no longer names", async () => {
+      await service.saveScheduleData(
+        parkId,
+        [operatingOn(KEPT)],
+        [monthOf(KEPT)],
+      );
+
+      const { months, today, keptDates } = retractionParams();
+      expect(months).toEqual([monthOf(KEPT)]);
+      expect(today).toBe(getCurrentDateInTimezone("UTC"));
+      // The day the payload still names is excluded by the DELETE itself, and
+      // the withdrawn day is not in that list, so the row goes.
+      expect(keptDates).toEqual([KEPT]);
+      expect(keptDates).not.toContain(WITHDRAWN);
+    });
+
+    it("issues no DELETE for a month the fetch could not answer for", async () => {
+      // The whole safety of the rule. Blackpool answered empty for two months
+      // and SeaWorld Orlando's December failed outright during the PAR-538
+      // measurement; those 31 operating days hang on this test.
+      await service.saveScheduleData(parkId, [operatingOn(KEPT)], []);
+
+      expect(retractionCall()).toBeUndefined();
+    });
+
+    it("issues no DELETE when the caller reports no coverage at all", async () => {
+      // The Wartezeiten sync and the live-data fallback in WaitTimesProcessor
+      // write a single day and know nothing about a month.
+      await service.saveScheduleData(parkId, [operatingOn(KEPT)]);
+
+      expect(retractionCall()).toBeUndefined();
+    });
+
+    it("scopes the DELETE to park-level future OPERATING rows", async () => {
+      await service.saveScheduleData(
+        parkId,
+        [operatingOn(KEPT)],
+        [monthOf(KEPT)],
+      );
+
+      const [sql] = retractionCall()!;
+      // A ride's row is a different statement by a different writer.
+      expect(sql).toContain('"attractionId" IS NULL');
+      // CLOSED rows are left alone: hand-written corrections live there
+      // (Phantasialand 2027-01-12/13, `Closed per park announcement (PAR-532)`)
+      // and the table has no provenance column to tell them apart.
+      expect(sql).toContain("\"scheduleType\" = 'OPERATING'");
+      // Past operating rows feed the historical reconstruction in CalendarService.
+      expect(sql).toContain("to_char(date, 'YYYY-MM-DD') > $3");
+    });
+
+    it("counts a day the silent-feed guard downgraded as still named", async () => {
+      // The guard turns future OPERATING days into UNKNOWN and deletes their
+      // OPERATING row itself. Without `silencedFeed` in the kept set, the
+      // retraction would delete the same row and report it a second time.
+      mockScheduleRepository.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql === PARK_OBSERVED_READING_SQL
+            ? [] // silent feed
+            : sql.includes("RETURNING to_char(date, 'YYYY-MM-DD') AS date")
+              ? []
+              : [],
+        ),
+      );
+
+      await service.saveScheduleData(
+        parkId,
+        [operatingOn(KEPT)],
+        [monthOf(KEPT)],
+      );
+
+      expect(retractionParams().keptDates).toEqual([KEPT]);
+    });
+
+    it("protects past operating rows by the date filter, not by the kept list", async () => {
+      // A payload of a full year names past days too, and they land in the kept
+      // list like any other operating day. What protects the past rows the
+      // payload does NOT name is the `> today` filter alone — so this pins that
+      // the boundary is a date comparison and not a list membership.
+      await service.saveScheduleData(
+        parkId,
+        [operatingOn(PAST), operatingOn(KEPT)],
+        [monthOf(PAST), monthOf(KEPT)],
+      );
+
+      const { keptDates, today } = retractionParams();
+      expect(keptDates).toContain(PAST);
+      expect(PAST < today).toBe(true);
+    });
+  });
 });

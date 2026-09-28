@@ -457,11 +457,12 @@ describe("ThemeParksClient", () => {
       await jest.runAllTimersAsync();
       const result = await promise;
 
-      // Generic (2) + one month (2). Partial, but real — and nothing is
-      // deleted for the months that never arrived, because saveScheduleData
-      // only touches the dates it was handed.
+      // Generic (2) + one month (2). Partial, but real — and the months that
+      // never arrived are absent from coveredMonths, so nothing is retracted
+      // for them (PAR-538).
       expect(result.schedule).toHaveLength(4);
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+      expect(result.coveredMonths).toHaveLength(1);
     });
 
     it("returns an empty schedule when the source genuinely publishes none", async () => {
@@ -472,6 +473,119 @@ describe("ThemeParksClient", () => {
       expect(result.schedule).toEqual([]);
       // 1 generic + 13 months, all answered, none throttled.
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(14);
+      // Answered, but with nothing in it. A far-future month reads like this
+      // every day until the park publishes it, and calling that "the park
+      // operates on no day of this month" would retract the days an earlier run
+      // stored (PAR-538).
+      expect(result.coveredMonths).toEqual([]);
+    });
+
+    /**
+     * The months `saveScheduleData` is allowed to retract days in. Derived from
+     * the answers rather than from the entries, because the entries are one flat
+     * array: a month the source dropped a day from and a month that never
+     * arrived are indistinguishable in it (📚 G-103).
+     */
+    describe("coveredMonths", () => {
+      /** 2026-09-28, so the 13 requested months run 2026-08 … 2027-09. */
+      const FIXED_NOW = new Date("2026-09-28T12:00:00Z");
+
+      const monthOf = (path: string): string => {
+        const m = path.match(/schedule\/(\d{4})\/(\d{2})$/);
+        return m ? `${m[1]}-${m[2]}` : "generic";
+      };
+
+      beforeEach(() => {
+        jest.useFakeTimers({ doNotFake: ["nextTick"] });
+        jest.setSystemTime(FIXED_NOW);
+      });
+
+      /** Answers per month key; anything unlisted answers with one entry. */
+      const respondPerMonth = (
+        answers: Record<string, "empty" | "404" | "500">,
+      ): void => {
+        mockAxiosInstance.get.mockImplementation((path: string) => {
+          const key = monthOf(path);
+          const answer = answers[key];
+          if (answer === "404") return Promise.reject(axiosError(404));
+          if (answer === "500") return Promise.reject(axiosError(500));
+          if (answer === "empty" || key === "generic") {
+            return Promise.resolve({ data: { schedule: [] } });
+          }
+          return Promise.resolve({
+            data: { schedule: [{ date: `${key}-01`, type: "OPERATING" }] },
+          });
+        });
+      };
+
+      it("lists every month that answered with at least one entry", async () => {
+        respondPerMonth({});
+
+        const promise = client.getScheduleExtended("p1", 12);
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.coveredMonths).toEqual([
+          "2026-08",
+          "2026-09",
+          "2026-10",
+          "2026-11",
+          "2026-12",
+          "2027-01",
+          "2027-02",
+          "2027-03",
+          "2027-04",
+          "2027-05",
+          "2027-06",
+          "2027-07",
+          "2027-08",
+        ]);
+      });
+
+      it("leaves out a month that answered empty, 404 or 5xx", async () => {
+        // Blackpool Pleasure Beach answers empty for 2026-12 and 2027-01, and
+        // SeaWorld Orlando's 2026-12 failed outright during the PAR-538
+        // measurement. Both must stay out: 31 real operating days hung on it.
+        respondPerMonth({
+          "2026-11": "empty",
+          "2026-12": "404",
+          "2027-01": "500",
+        });
+
+        const promise = client.getScheduleExtended("p1", 12);
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.coveredMonths).not.toContain("2026-11");
+        expect(result.coveredMonths).not.toContain("2026-12");
+        expect(result.coveredMonths).not.toContain("2027-01");
+        expect(result.coveredMonths).toContain("2026-10");
+        // Sanity: the empty and 404 months contributed no entries either, so a
+        // reader of the flat array alone could not have told them apart.
+        expect(result.schedule).toHaveLength(10);
+      });
+
+      it("does not count the generic endpoint as a covered month", async () => {
+        // It spans ~30 days across two months and says nothing about either
+        // being complete. Every month endpoint fails here, so any coverage in
+        // the result could only have come from the generic call.
+        mockAxiosInstance.get.mockImplementation((path: string) =>
+          monthOf(path) === "generic"
+            ? Promise.resolve({
+                data: {
+                  schedule: [{ date: "2026-09-29", type: "OPERATING" }],
+                },
+              })
+            : Promise.reject(axiosError(404)),
+        );
+
+        const promise = client.getScheduleExtended("p1", 12);
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.schedule).toHaveLength(1);
+        expect(result.coveredMonths).toEqual([]);
+      });
     });
   });
 });

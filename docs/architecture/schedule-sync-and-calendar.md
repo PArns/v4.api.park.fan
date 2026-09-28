@@ -158,6 +158,71 @@ Revert the guard, deploy, and the next `sync-schedules-only` (03:00 / 15:00 UTC,
 or `sync-park-schedule` on demand) writes the OPERATING days back with their
 times. No dump is kept, because a dump would be the same upstream answer, older.
 
+## A day the source withdraws stops being an operating day
+
+**`saveScheduleData` retracts future park-level OPERATING rows the payload no
+longer names — but only inside the months the fetch reports as answered.**
+
+Everything else in that method works from the days the payload _contains_, so a
+day the upstream stops naming was never looked at: no `UPDATE`, no `DELETE`. The
+row kept saying OPERATING until the date passed. `fillScheduleGaps` does not catch
+it: it fills **missing** dates and demotes only its own gap-filled CLOSED rows,
+and never touches an OPERATING row from the API.
+
+Measured on production 2026-09-28 over the ten parks with the most future
+OPERATING rows, for 2026-11 / 2026-12 / 2027-01: **18 wrong days in 2 of 10
+parks** (PAR-538). Rulantica held 14 — the annual maintenance closure of the water
+park, 2026-11-16 to 27, plus 24/25 December — written on 2026-02-11 and never
+touched again, with the upstream naming none of those days in any form, not even
+as `EXTRA_HOURS`. SeaWorld San Antonio held 4.
+
+**The coverage information is reported, never derived.** `getScheduleExtended`
+asks for the previous month plus 12 ahead one request at a time and returns one
+flat array with the month boundaries thrown away, so a month that dropped a day
+and a month that never arrived are the same thing in it (📚 G-103). A month counts
+as answered when its **own month endpoint** answered `200` **with at least one
+entry**:
+
+| the month endpoint …                   | covered | why                                                                              |
+| -------------------------------------- | ------- | -------------------------------------------------------------------------------- |
+| answered with entries                  | **yes** | what it names is what the source says now                                        |
+| answered with `[]`                     | no      | the normal state of a far-future month before the park publishes it              |
+| 404 / 5xx                              | no      | no statement about the month                                                     |
+| throttled (`ThemeParksRateLimitError`) | no      | the run 87 of 200 parks had in PAR-480                                           |
+| the generic `/schedule` endpoint       | never   | it spans ~30 days across two months and says nothing about either being complete |
+
+In the same measurement Blackpool Pleasure Beach answered empty for two months and
+SeaWorld Orlando's December failed outright — 31 real operating days that a naive
+"delete what the payload does not name" would have removed.
+
+Four filters on the DELETE, each load-bearing:
+
+|                                           |                                                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------------------------- |
+| `attractionId IS NULL`                    | a ride's row is a different statement by a different writer, as everywhere else here  |
+| `scheduleType = 'OPERATING'`              | the type that offers a closed park as open, and the type this feed writes             |
+| date **after** the park's own today       | past OPERATING rows are what the historical reconstruction in `CalendarService` reads |
+| day not named as operating by the payload | a day the silent-feed guard downgraded counts as named — that guard owns those rows   |
+
+- **The end state belongs to `fillScheduleGaps`**, which both callers run
+  immediately after the save: a retracted day between two operating days becomes
+  CLOSED, one past the last operating day becomes UNKNOWN. Rulantica's closure
+  therefore reads "closed", because 15 and 28 November stay operating days.
+- **Hand-written CLOSED rows are out of reach by construction.**
+  `schedule_entries` has no provenance column, and curated corrections live in
+  CLOSED rows: Phantasialand's 2027-01-12 and 13 carry
+  `description = 'Closed per park announcement (PAR-532)'` on dates the upstream
+  no longer names inside a month it answers for — exactly the shape this DELETE
+  looks for, minus the type. Restricting it to OPERATING is what keeps them.
+- **The writers that report a single day retract nothing.** The Wartezeiten sync
+  and the live-data fallback in `WaitTimesProcessor` pass no coverage, and without
+  it the DELETE is not issued at all.
+- **Recovery needs no dump**, for the same reason as the silent-feed guard's: the
+  rows are a copy of an upstream answer, and the next sync writes the day back
+  with its hours as soon as the source names it again.
+- **What it costs.** One DELETE per park per sync, on the `(parkId, date)` partial
+  index, and only for parks whose fetch answered for at least one month.
+
 ## Gap-fill rules (fillScheduleGaps)
 
 ### When gap-fill runs (DB updates are automatic)

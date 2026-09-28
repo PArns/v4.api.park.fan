@@ -483,16 +483,32 @@ export class ThemeParksClient {
    * "no change" and logs it as a successful fetch. That is what made 87 of 200
    * parks look like parks without a schedule (PAR-480).
    *
+   * **`coveredMonths` says which months the source answered for**, and it is
+   * reported rather than derived because it cannot be derived: the returned
+   * entries are one flat array with the month boundaries thrown away, so a month
+   * the source dropped a day from and a month that never arrived look the same
+   * from the outside (PAR-538, and the general shape of it in 📚 G-103). A month
+   * is covered when its own month endpoint answered **200 with at least one
+   * entry**; an empty answer, a 404, a 5xx and a throttled month are all
+   * uncovered. The generic `/schedule` endpoint contributes entries but never
+   * coverage — it spans ~30 days across two months and says nothing about
+   * either of them being complete.
+   *
+   * `ParksService.saveScheduleData` retracts stale days inside covered months
+   * only, so a month listed here wrongly is a month whose days can be deleted
+   * wrongly.
+   *
    * @param entityId - Park entity ID
    * @param monthsAhead - Number of months to fetch ahead (default: 12)
-   * @returns Combined schedule data from all months
+   * @returns Combined schedule data from all months, plus the months that answered
    */
   async getScheduleExtended(
     entityId: string,
     monthsAhead: number = 12,
-  ): Promise<{ schedule: any[] }> {
+  ): Promise<{ schedule: any[]; coveredMonths: string[] }> {
     const now = new Date();
     const allSchedules: any[] = [];
+    const coveredMonths: string[] = [];
     let throttled = false;
 
     // Optional: try generic endpoint first for near-term data (~30 days)
@@ -536,6 +552,13 @@ export class ThemeParksClient {
         );
         if (monthResponse.schedule && monthResponse.schedule.length > 0) {
           allSchedules.push(...monthResponse.schedule);
+          // This month answered, so what it names is what the source currently
+          // says about it — days it stopped naming may be retracted downstream.
+          // An answer of zero entries is not coverage: for a far-future month it
+          // is the normal state before the park publishes, and treating it as
+          // "the park operates on no day of that month" would delete the days
+          // an earlier run stored.
+          coveredMonths.push(`${year}-${String(month).padStart(2, "0")}`);
           this.logger.debug(
             `Fetched ${monthResponse.schedule.length} entries for ${year}/${String(month).padStart(2, "0")}`,
           );
@@ -571,12 +594,15 @@ export class ThemeParksClient {
       );
     } else {
       this.logger.log(
-        `📅 Fetched total ${allSchedules.length} schedule entries for ${entityId}${
-          throttled ? " (partial — the rest of the months were throttled)" : ""
-        }`,
+        `📅 Fetched total ${allSchedules.length} schedule entries for ${entityId} ` +
+          `across ${coveredMonths.length} month(s) that answered${
+            throttled
+              ? " (partial — the rest of the months were throttled)"
+              : ""
+          }`,
       );
     }
 
-    return { schedule: allSchedules };
+    return { schedule: allSchedules, coveredMonths };
   }
 }

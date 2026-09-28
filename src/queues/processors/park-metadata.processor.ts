@@ -109,6 +109,7 @@ export class ParkMetadataProcessor {
       const savedEntries = await this.parksService.saveScheduleData(
         park.id,
         scheduleResponse.schedule,
+        scheduleResponse.coveredMonths,
       );
       await this.parksService.fillScheduleGaps(park.id);
       await this.parksService.invalidateCalendarMonthCache(park.id);
@@ -1145,6 +1146,7 @@ export class ParkMetadataProcessor {
           const savedEntries = await this.parksService.saveScheduleData(
             park.id,
             scheduleResponse.schedule,
+            scheduleResponse.coveredMonths,
           );
           totalScheduleEntries += savedEntries;
           syncedParks++;

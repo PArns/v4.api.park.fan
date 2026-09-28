@@ -57,13 +57,17 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
       getScheduleExtended: jest
         .fn()
         .mockImplementation((externalId: string) => {
-          if (externalId === EMPTY.wikiEntityId) return { schedule: [] };
+          if (externalId === EMPTY.wikiEntityId)
+            return { schedule: [], coveredMonths: [] };
           if (externalId === THROTTLED.wikiEntityId) {
             return Promise.reject(
               new ThemeParksRateLimitError("cooling down 58s", 58),
             );
           }
-          return { schedule: [{ date: "2026-10-11" }, { date: "2026-10-12" }] };
+          return {
+            schedule: [{ date: "2026-10-11" }, { date: "2026-10-12" }],
+            coveredMonths: ["2026-10"],
+          };
         }),
     };
 
@@ -123,6 +127,17 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
       (c: unknown[]) => c[0],
     );
     expect(written).toEqual([FULL.id]);
+  });
+
+  it("hands the answered months on, so a withdrawn day can be retracted", async () => {
+    // Without the third argument `saveScheduleData` retracts nothing at all, so
+    // the fix would be dead code behind a client that reports coverage correctly
+    // (PAR-538).
+    await processor.handleSyncSchedulesOnly({} as any);
+
+    const [, rows, coveredMonths] = parksService.saveScheduleData.mock.calls[0];
+    expect(rows).toHaveLength(2);
+    expect(coveredMonths).toEqual(["2026-10"]);
   });
 
   it("still runs the calendar maintenance pass for every park it asked about", async () => {
