@@ -145,7 +145,12 @@ export class PushController {
       p256dh,
       auth,
       tripId,
-      locale: normalizeLocale(body?.locale),
+      // Omitted stays omitted: `normalizeLocale(undefined)` is "en", which
+      // would overwrite the stored language of every ride-alert or show-follow
+      // call that does not send one. A locale that is sent and unusable still
+      // falls back to English.
+      locale:
+        body?.locale === undefined ? undefined : normalizeLocale(body.locale),
       timezone: normalizeTimezone(body?.timezone),
       topics,
     });

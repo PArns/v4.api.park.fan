@@ -115,6 +115,55 @@ describe("ParkMergeService — the loser's path", () => {
     expect(inserted.filter((i) => "citySlug" in i)).toHaveLength(0);
   });
 
+  describe("park_p50_baselines", () => {
+    // One row per park (`parkId` is the primary key) and load-bearing: live
+    // crowd levels and an ML feature read it. The survivor's own row wins; the
+    // ghost's moves across only where the survivor has none (PAR-178).
+    const baselineStatements = () =>
+      manager.query.mock.calls
+        .map(([sql, params]) => ({ sql: String(sql), params }))
+        .filter((c) => /park_p50_baselines/.test(c.sql));
+
+    const mergeWith = async (survivorHasBaseline: boolean) => {
+      manager.findOne.mockImplementation(async (_e: unknown, opts: any) =>
+        park({
+          id: opts.where.id === "winner" ? "winner" : "loser",
+          name: "IOA",
+          citySlug: "orlando",
+        }),
+      );
+      manager.query.mockImplementation(async (sql: string, params: any[]) => {
+        if (!/FROM park_p50_baselines/.test(sql)) return [];
+        // Both sides are read, so the ghost has to hold a row or the strategy
+        // stops after the first SELECT and the two runs cannot differ.
+        if (params[0] === "loser") return [{ parkId: "loser" }];
+        return survivorHasBaseline ? [{ "?column?": 1 }] : [];
+      });
+      await service.mergeParks("winner", "loser");
+      return baselineStatements();
+    };
+
+    it("keeps the survivor's own baseline and drops the ghost's", async () => {
+      const statements = await mergeWith(true);
+      expect(statements.map((c) => c.sql.trim().split(/\s+/)[0])).toEqual([
+        "SELECT",
+        "SELECT",
+        "DELETE",
+      ]);
+      expect(statements[2].params).toEqual(["loser"]);
+    });
+
+    it("inherits the ghost's baseline where the survivor has none", async () => {
+      const statements = await mergeWith(false);
+      expect(statements.map((c) => c.sql.trim().split(/\s+/)[0])).toEqual([
+        "SELECT",
+        "SELECT",
+        "UPDATE",
+      ]);
+      expect(statements[2].params).toEqual(["winner", "loser"]);
+    });
+  });
+
   it("tells the frontend to rebuild even when the path did not change", async () => {
     // A merge removes a park and reparents its rides, so the geo tree, the
     // park list and the attraction pages all change — regardless of whether

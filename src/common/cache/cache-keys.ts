@@ -10,6 +10,14 @@
  *
  * Formats are kept exactly as they were so deploys don't orphan warm caches.
  */
+/**
+ * Version segment of `park:historical-stats:v<n>:…`. The writer
+ * (`ParkHistoricalStatsService.statsCacheKey`) and the invalidation glob
+ * (`CacheKeys.parkHistoricalStatsPattern`) both read it: v3 shipped with a
+ * glob still searching v2, so no eviction ever matched a key (PAR-570).
+ */
+export const HISTORICAL_STATS_CACHE_VERSION = 3;
+
 export const CacheKeys = {
   /** Integrated park response (hottest endpoint; warmed by cache-warmup). */
   parkIntegrated: (parkId: string): string => `park:integrated:${parkId}`,
@@ -109,9 +117,9 @@ export const CacheKeys = {
   parkCrowdLevelPattern: (parkId: string): string =>
     `analytics:crowdlevel:park:${parkId}:*`,
 
-  /** Glob: the park historical-stats cache (park:historical-stats:v2:<id>:…). */
+  /** Glob: the park historical-stats cache (park:historical-stats:v<n>:<id>:…). */
   parkHistoricalStatsPattern: (parkId: string): string =>
-    `park:historical-stats:v2:${parkId}:*`,
+    `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:${parkId}:*`,
 
   /** Glob: the park derived-operating-hours cache (park:derivedHours:<id>:…). */
   parkDerivedHoursPattern: (parkId: string): string =>

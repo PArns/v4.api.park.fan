@@ -227,6 +227,26 @@ describe("PushService", () => {
     });
   });
 
+  it("never erases the stored locale when a later call omits it", async () => {
+    // The DTO says "omitting never clears". A ride alert or show follow that
+    // does not send `locale` must not turn the browser's language into
+    // `undefined`, which the sender then reads as the English fallback.
+    await withVapid(async () => {
+      await service.subscribe({ ...base });
+      const { locale: _omitted, ...withoutLocale } = base;
+      const stored = await service.subscribe(withoutLocale);
+      expect(stored?.locale).toBe("de");
+    });
+  });
+
+  it("does still overwrite the stored locale when a later call sends another one", async () => {
+    await withVapid(async () => {
+      await service.subscribe({ ...base });
+      const stored = await service.subscribe({ ...base, locale: "nl" });
+      expect(stored?.locale).toBe("nl");
+    });
+  });
+
   it("resets failureCount on every (re-)subscribe", async () => {
     await withVapid(async () => {
       const first = await service.subscribe({ ...base });

@@ -340,6 +340,35 @@ describe("FavoritesService", () => {
       expect(attraction.crowdLevel).toBe("closed");
     });
 
+    it("does not invent a CLOSED status for a ride whose integrated cache entry is a cached null", async () => {
+      // The fallback branch is entered when the entry parses to `null`, not
+      // when the key is absent (an absent key takes the slow path). Presence
+      // is asserted through the mock first, or the absences below would be
+      // green for the wrong reason.
+      attractionRepo.find.mockResolvedValueOnce([attractionEntity]);
+      redisStore.set(`attraction:integrated:${validAttractionUuid}`, "null");
+      const queuesCalls =
+        queueDataService.findCurrentStatusByAttractionIds.mock.calls.length;
+
+      const result = await service.getFavorites(
+        [],
+        [validAttractionUuid],
+        [],
+        [],
+      );
+
+      // Nothing was missed, so the slow path did not run: the card came from
+      // the fallback and from nothing else.
+      expect(
+        queueDataService.findCurrentStatusByAttractionIds.mock.calls.length,
+      ).toBe(queuesCalls);
+      const attraction = result.attractions[0];
+      expect(attraction.slug).toBe("fenix");
+      expect(attraction.status).toBeUndefined();
+      expect(attraction.forecasts).toBeUndefined();
+      expect(attraction.statistics).toBeUndefined();
+    });
+
     it("keeps effectiveStatus when the response comes from the integrated cache", async () => {
       attractionRepo.find.mockResolvedValueOnce([attractionEntity]);
       redisStore.set(

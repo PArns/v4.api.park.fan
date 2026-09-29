@@ -171,9 +171,6 @@ describe("merge dependency tables", () => {
     "attractions",
     "shows",
     "restaurants",
-    // Winner-authoritative, hand-rolled by both callers since before there was
-    // a strategy of that name to declare instead (PAR-178).
-    "park_p50_baselines",
     // Needs the internal_entity_type filter a bare dependency cannot carry.
     "external_entity_mapping",
     // Park-level and per-ride rows in one table, told apart by a nullable

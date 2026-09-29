@@ -22,7 +22,12 @@ export interface SubscribeInput {
   p256dh: string;
   auth: string;
   tripId?: string;
-  locale: string;
+  /**
+   * `undefined` when the caller said nothing: the stored language stays. Same
+   * rule as `tripId`, `topics` and `timezone`, and the DTO's "omitting never
+   * clears".
+   */
+  locale?: string;
   /**
    * `undefined` when the caller said nothing, `null` when it sent something
    * unusable. The two have to be told apart here: omission preserves, an
@@ -122,7 +127,7 @@ export class PushService {
     row.auth = input.auth;
     if (input.tripId !== undefined) row.tripId = input.tripId;
     if (input.topics !== undefined) row.topics = input.topics;
-    row.locale = input.locale;
+    if (input.locale !== undefined) row.locale = input.locale;
     if (input.timezone !== undefined) row.timezone = input.timezone;
     // A re-subscribe is the browser saying it is alive. Whatever went wrong
     // before this is not evidence about the subscription that exists now.
