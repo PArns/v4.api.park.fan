@@ -899,6 +899,11 @@ export class ParkHistoricalStatsService {
     // is re-themed; the curated one is the correction and wins wherever it is
     // set. `attractionType` is one of the few unquoted camelCase columns on
     // this table — every neighbour here is snake_case, so it needs the quotes.
+    //
+    // `retired_at IS NULL` keeps a demolished ride out of the ranking. Its
+    // aggregates stay in the table (retiring deletes nothing), so without it
+    // Toverland's table led with Maximus' Blitz Bahn months after it was taken
+    // down, linking to a ride page that answers 404.
     return this.aggregateRepo.manager.query(
       `SELECT
          a.slug,
@@ -913,6 +918,7 @@ export class ParkHistoricalStatsService {
        WHERE qda."parkId" = $1
          AND qda.hour >= $2::date
          AND qda.hour <  ($3::date + INTERVAL '1 day')
+         AND a.retired_at IS NULL
        GROUP BY a.id, a.slug, name, land, attraction_type
        HAVING COUNT(DISTINCT DATE(qda.hour)) >= $5
        ORDER BY avg_p90 DESC
