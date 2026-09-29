@@ -1,6 +1,7 @@
 import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attraction-retirement.service";
 import { HEARTBEAT_SOURCE } from "../../common/utils/outage-rows.sql";
 import { RECONCILIATION_SOURCE } from "../../common/utils/source-absent-status.util";
+import { HOURLY_AGGREGATE_SELECT } from "./hourly-aggregate.sql";
 import { QueuePercentileProcessor } from "./queue-percentile.processor";
 
 /**
@@ -24,7 +25,7 @@ describe("QueuePercentileProcessor — deterministic aggregate id", () => {
 
     expect(query).toHaveBeenCalledTimes(1);
     const sql = query.mock.calls[0][0] as string;
-    expect(sql).toMatch(/md5\(\s*qd\."attractionId"/);
+    expect(sql).toMatch(/md5\(\s*s\."attractionId"/);
     // The id column itself must NOT be a random uuid (the explanatory comment
     // mentions gen_random_uuid, so assert on the actual `... as id` usage).
     expect(sql).not.toContain("gen_random_uuid() as id");
@@ -40,8 +41,56 @@ describe("QueuePercentileProcessor — deterministic aggregate id", () => {
 
     expect(query).toHaveBeenCalled();
     const sql = query.mock.calls[0][0] as string;
-    expect(sql).toMatch(/md5\(\s*qd\."attractionId"/);
+    expect(sql).toMatch(/md5\(\s*s\."attractionId"/);
     expect(sql).not.toContain("gen_random_uuid() as id");
+  });
+});
+
+describe("QueuePercentileProcessor — quiet hours keep their aggregate row", () => {
+  const buildProcessor = (query: jest.Mock) =>
+    new QueuePercentileProcessor(
+      { query } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+  const sqlOf = async (run: (p: QueuePercentileProcessor) => Promise<void>) => {
+    const query = jest.fn().mockResolvedValue([{ count: 0 }]);
+    await run(buildProcessor(query));
+    return query.mock.calls[0][0] as string;
+  };
+
+  it.each([
+    [
+      "calculate-percentiles",
+      (p: QueuePercentileProcessor) =>
+        p.handleCalculatePercentiles({} as never),
+    ],
+    [
+      "backfill-percentiles",
+      (p: QueuePercentileProcessor) =>
+        p.handleBackfillPercentiles({ data: { days: 1 } } as never),
+    ],
+  ])(
+    "%s carries the last reading before the hour forward and drops the 3-row floor",
+    async (_name, run) => {
+      const sql = await sqlOf(run);
+      expect(sql).toContain("CROSS JOIN LATERAL");
+      expect(sql).toContain("p.timestamp < h.hour");
+      expect(sql).toContain("prev.status = 'OPERATING'");
+      expect(sql).not.toContain("HAVING COUNT(*) >= 3");
+      expect(sql).toContain("HAVING COUNT(*) >= 2");
+    },
+  );
+
+  it("both handlers issue the identical aggregate SELECT", async () => {
+    const a = await sqlOf((p) => p.handleCalculatePercentiles({} as never));
+    const b = await sqlOf((p) =>
+      p.handleBackfillPercentiles({ data: { days: 1 } } as never),
+    );
+    expect(a).toContain(HOURLY_AGGREGATE_SELECT);
+    expect(b).toContain(HOURLY_AGGREGATE_SELECT);
   });
 });
 
