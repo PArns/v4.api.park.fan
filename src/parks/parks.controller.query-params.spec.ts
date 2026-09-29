@@ -116,6 +116,8 @@ describe("ParksController › query parameters are validated", () => {
     it.each([
       ["page", "abc"],
       ["page", "1.5"],
+      ["page", "1e21"],
+      ["page", "Infinity"],
       ["limit", "abc"],
     ])("answers %s=%s with 400 and never queries", async (key, value) => {
       const res = await request(app.getHttpServer())

@@ -28,14 +28,14 @@ export class QueryIntPipe implements PipeTransform<
 
   transform(value: unknown): number | undefined {
     const { name, fallback, min, max } = this.options;
-    if (value === undefined || value === null || value === "") {
+    if (value === undefined || value === null) {
       return fallback;
     }
     if (typeof value !== "number" && typeof value !== "string") {
       throw new BadRequestException(`${name} must be an integer`);
     }
     const parsed = typeof value === "number" ? value : Number(value);
-    if (!Number.isInteger(parsed)) {
+    if (!Number.isSafeInteger(parsed)) {
       throw new BadRequestException(`${name} must be an integer`);
     }
     let result = parsed;
