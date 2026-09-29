@@ -22,6 +22,7 @@ import {
   ApiQuery,
 } from "@nestjs/swagger";
 import type { Response } from "express";
+import { QueryIntPipe } from "../common/pipes/query-int.pipe";
 import { ParksService } from "./parks.service";
 import { ParkRenameService } from "./services/park-rename.service";
 import { WeatherService } from "./weather.service";
@@ -74,6 +75,14 @@ import {
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
 import { ttlSecondsToNextBoundary } from "../common/utils/best-visit-times.util";
+
+/** The four values `includeHourly` documents on the calendar route. */
+const INCLUDE_HOURLY_VALUES = [
+  "today+tomorrow",
+  "today",
+  "none",
+  "all",
+] as const;
 
 /**
  * Parks Controller
@@ -498,8 +507,19 @@ export class ParksController {
     @Param("parkSlug") parkSlug: string,
     @Query("from") from?: string,
     @Query("to") to?: string,
-    @Query("includeHourly")
-    includeHourly?: "today+tomorrow" | "today" | "none" | "all",
+    // Unchecked, any string became part of the Redis key
+    // `calendar:month:{parkId}:YYYY-MM:{includeHourly}` (PAR-415).
+    @Query(
+      "includeHourly",
+      new ParseEnumPipe(INCLUDE_HOURLY_VALUES, {
+        optional: true,
+        exceptionFactory: () =>
+          new BadRequestException(
+            `includeHourly must be one of: ${INCLUDE_HOURLY_VALUES.join(", ")}`,
+          ),
+      }),
+    )
+    includeHourly?: (typeof INCLUDE_HOURLY_VALUES)[number],
     @Query("include") include?: string,
     @Res({ passthrough: true }) res?: any,
   ): Promise<IntegratedCalendarResponse> {
@@ -1689,7 +1709,7 @@ export class ParksController {
    * @param city - City slug (e.g., "rust", "orlando")
    * @param parkSlug - Park slug (e.g., "europa-park", "magic-kingdom")
    * @param page - Page number (optional, default: 1)
-   * @param limit - Items per page (optional, default: 10)
+   * @param limit - Items per page (optional, default: 10, max: 100)
    * @throws NotFoundException if park not found
    */
   @Get(":continent/:country/:city/:parkSlug/attractions")
@@ -1771,7 +1791,7 @@ export class ParksController {
   @ApiQuery({
     name: "limit",
     required: false,
-    description: "Items per page (default: 10)",
+    description: "Items per page (default: 10, max: 100)",
     example: 10,
   })
   @ApiExtraModels(PaginatedResponseDto, AttractionResponseDto)
@@ -1798,8 +1818,13 @@ export class ParksController {
     @Param("country") country: string,
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
-    @Query("page") page: number = 1,
-    @Query("limit") limit: number = 10,
+    @Query("page", new QueryIntPipe({ name: "page", fallback: 1, min: 1 }))
+    page: number,
+    @Query(
+      "limit",
+      new QueryIntPipe({ name: "limit", fallback: 10, min: 1, max: 100 }),
+    )
+    limit: number,
   ): Promise<{
     data: AttractionResponseDto[];
     pagination: {
@@ -1922,7 +1947,8 @@ export class ParksController {
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
     @Param("attractionSlug") attractionSlug: string,
-    @Query("days") days?: number,
+    @Query("days", new QueryIntPipe({ name: "days", min: 1, max: 365 }))
+    days?: number,
   ): Promise<AttractionResponseDto> {
     const attraction = await this.attractionsService.findByGeographicPath(
       continent,
@@ -1938,9 +1964,8 @@ export class ParksController {
       );
     }
 
-    // Validate days parameter
-    const historyDays =
-      days !== undefined ? Math.max(1, Math.min(365, days)) : 30;
+    // `days` arrives as an integer within 1..365 (QueryIntPipe) or undefined.
+    const historyDays = days ?? 30;
 
     // Return with full integration (live data, forecasts, ML predictions, history, etc.)
     return this.attractionIntegrationService.buildIntegratedResponse(
