@@ -701,27 +701,30 @@ export class PlanDayService {
     const wraps =
       openHour !== null && closeHour !== null && closeHour < openHour;
     const key = (show: PlanDayShowDto): number =>
-      PlanDayService.dayMinute(show.times[0], wraps ? openHour : null);
+      PlanDayService.dayMinute(
+        show.times[0],
+        wraps ? { openHour, closeHour } : null,
+      );
     return out.sort(
       (a, b) => key(a) - key(b) || a.showName.localeCompare(b.showName),
     );
   }
 
   /**
-   * A show time as minutes into the operating day. With `wrapOpenHour` set, a
-   * time earlier than the park's opening hour belongs to the far side of
-   * midnight and counts 24 h later; without it the wall clock is the order. A
-   * missing or unreadable time is -1, so it sorts first as it always did.
+   * A show time as minutes into the operating day. With `wrap` set, a time up
+   * to the closing hour belongs to the far side of midnight and counts 24 h
+   * later; a time between closing and opening stays on the wall clock, and so
+   * does everything when `wrap` is null. A missing or unreadable time is -1, so
+   * it sorts first as it always did.
    */
   private static dayMinute(
     time: string | undefined,
-    wrapOpenHour: number | null,
+    wrap: { openHour: number; closeHour: number } | null,
   ): number {
     const m = /^(\d{1,2}):(\d{2})$/.exec(time ?? "");
     if (!m) return -1;
     const hour = Number(m[1]);
-    const unfolded =
-      wrapOpenHour !== null && hour < wrapOpenHour ? hour + 24 : hour;
+    const unfolded = wrap !== null && hour <= wrap.closeHour ? hour + 24 : hour;
     return unfolded * 60 + Number(m[2]);
   }
 

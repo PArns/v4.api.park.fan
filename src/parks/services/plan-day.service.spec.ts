@@ -1458,11 +1458,15 @@ describe("PlanDayService", () => {
           { id: "s-1", slug: "afternoon", name: "Afternoon" },
           { id: "s-2", slug: "midnight", name: "Midnight" },
           { id: "s-3", slug: "evening", name: "Evening" },
+          { id: "s-4", slug: "rehearsal", name: "Rehearsal" },
+          { id: "s-5", slug: "late", name: "Late" },
         ];
         scheduledTimes = new Map([
           ["s-1", ["17:00"]],
           ["s-2", ["00:00"]],
           ["s-3", ["21:30", "00:00"]],
+          ["s-4", ["10:15"]],
+          ["s-5", ["00:30"]],
         ]);
       });
 
@@ -1477,13 +1481,16 @@ describe("PlanDayService", () => {
             closingTime: "2026-10-17T23:00:00.000Z",
           },
         };
-        // 00:00 counts as 24:00, so it lands behind 21:30 as well as 17:00.
+        // 00:00 and 00:30 count as 24:00 and 24:30; 10:15 is between closing
+        // and opening and stays on the wall clock.
         const plan = await service.buildPlanDay(park, date);
 
         expect(plan.shows.map((s) => s.showSlug)).toEqual([
+          "rehearsal",
           "afternoon",
           "evening",
           "midnight",
+          "late",
         ]);
       });
 
@@ -1495,6 +1502,8 @@ describe("PlanDayService", () => {
 
         expect(plan.shows.map((s) => s.showSlug)).toEqual([
           "midnight",
+          "late",
+          "rehearsal",
           "afternoon",
           "evening",
         ]);
