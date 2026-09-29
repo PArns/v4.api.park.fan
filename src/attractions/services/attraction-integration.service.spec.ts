@@ -893,6 +893,7 @@ describe("AttractionIntegrationService", () => {
 
     it("lists 2026-10-25, the 25-hour fall-back day, once", async () => {
       const dates = [
+        "2026-10-22",
         "2026-10-23",
         "2026-10-24",
         "2026-10-25",
@@ -900,11 +901,13 @@ describe("AttractionIntegrationService", () => {
         "2026-10-27",
       ];
       const got = await runWindow("2026-10-28T09:00:00Z", 6, dates);
-      expect(got).toEqual(dates);
+      expect(got).toEqual(dates.slice(1));
     });
 
     it("lists 2027-03-28, the 23-hour spring-forward day, once", async () => {
+      // 03-25 has data too and lies one day before the window.
       const dates = [
+        "2027-03-25",
         "2027-03-26",
         "2027-03-27",
         "2027-03-28",
@@ -912,7 +915,7 @@ describe("AttractionIntegrationService", () => {
         "2027-03-30",
       ];
       const got = await runWindow("2027-03-31T09:00:00Z", 6, dates);
-      expect(got).toEqual(dates);
+      expect(got).toEqual(dates.slice(1));
     });
   });
 });

@@ -805,8 +805,15 @@ export class AttractionIntegrationService {
       // Calculate date range: today back to (today - days + 1) in park timezone
       // Example: days=30 means today + 29 past days = 30 days total
       const todayStr = getCurrentDateInTimezone(timezone);
-      const today = fromZonedTime(`${todayStr}T00:00:00`, timezone);
-      const startDate = subDays(today, days - 1);
+      // Stepped back from local noon and re-read as a date: 24 h steps from
+      // midnight would start at 23:00 the day before across a spring-forward
+      // and add a day to the window.
+      const startStr = formatInTimeZone(
+        subDays(fromZonedTime(`${todayStr}T12:00:00`, timezone), days - 1),
+        timezone,
+        "yyyy-MM-dd",
+      );
+      const startDate = fromZonedTime(`${startStr}T00:00:00`, timezone);
 
       // Calculate end date: start of tomorrow in park timezone, converted to UTC
       // This ensures we include all of today's data (up to but not including tomorrow)
