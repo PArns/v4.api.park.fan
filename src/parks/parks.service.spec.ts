@@ -1361,12 +1361,21 @@ describe("ParksService", () => {
      * statement it makes — the discard DELETE, the conflict DELETE and the
      * reparenting UPDATE alike — so the set of tables reached for a given loser
      * is readable straight off the recorded calls.
+     *
+     * A leading `SELECT … FROM <table>` counts as reaching the table too: the
+     * `park_seasons` entry (PAR-106) opens with a lookup on the loser id and
+     * writes only when a season names it, which no season does in these mocks.
      */
     const dependencyTablesTouched = (calls: Recorded[], loserId: string) =>
       new Set(
         calls
           .filter((c) => (c.params ?? []).includes(loserId))
-          .map((c) => /(?:UPDATE|DELETE\s+FROM)\s+(\w+)/i.exec(c.sql)?.[1])
+          .map(
+            (c) =>
+              /(?:UPDATE|DELETE\s+FROM|SELECT[^;]*?\sFROM)\s+(\w+)/i.exec(
+                c.sql,
+              )?.[1],
+          )
           .filter((table): table is string => Boolean(table)),
       );
 

@@ -456,15 +456,11 @@ What is still open, roughly by consequence:
       **The third raw path still moves both blind.** The priority merge is
       unreachable (PAR-142) and was being rebuilt in parallel by PAR-103, so
       applying the helper there is its own change — PAR-148.
-- [ ] **A migrated `park_season` can name attractions the same merge deleted.**
-      `park_seasons.attraction_ids` is a jsonb array of attraction ids, and
-      `PARK_DEPENDENCIES` moves the row onto the survivor. Where the merge
-      collided a ride, the id in that array belongs to the deleted loser, and
-      `ParkSeasonService` re-validates the stored array on the next edit — so
-      the season is carried across intact and then refuses every later change
-      with "These attractions are not in this park". The ids would have to be
-      rewritten to the survivors, which the dependency list has no way to
-      express.
+- [x] ~~**A migrated `park_season` can name attractions the same merge deleted.**~~
+      `remapSeasonAttractionIds` is a `custom` entry on `ATTRACTION_DEPENDENCIES`
+      (PAR-106), so all four merge paths rewrite the loser's id to the survivor's
+      inside `park_seasons.attraction_ids`, drop ids that resolve to no ride and
+      dedupe. An emptied array is stored as NULL.
 - [x] ~~A park with no published hours is served `not_down_capable`, not
       `no_schedule`~~ — the population query gained a `sched` branch that
       sources the rides of `no_schedule` parks directly from `attractions`
