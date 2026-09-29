@@ -27,8 +27,9 @@ export interface MergeDependency {
    *             more than one column, or carries a constraint across two of
    *             them, cannot be expressed as one column plus a conflict key,
    *             because every statement the three strategies issue names
-   *             exactly one column. Declared on exactly one entry
-   *             (`attraction_review_marks`, PAR-149).
+   *             exactly one column. Declared on exactly two entries:
+   *             `attraction_review_marks` (PAR-149) and `park_seasons`, whose
+   *             ride ids sit inside a jsonb array (PAR-106).
    */
   strategy: MergeStrategy;
   /**
@@ -306,6 +307,104 @@ export async function mergeAttractionReviewMarks(
       WHERE attraction_id = $2::uuid AND other_attraction_id IS NULL`,
     [winnerId, loserId],
   );
+}
+
+/**
+ * `park_seasons.attraction_ids` after `loserId` has been merged into
+ * `winnerId`: the loser's id replaced by the winner's, every id whose ride no
+ * longer exists dropped, duplicates removed, order kept.
+ *
+ * Pure, so the rule is testable without a database. `liveIds` is the set of
+ * ids from `ids` (plus the winner) that still resolve to an attractions row.
+ *
+ * Dropping instead of keeping is the trade the ticket spells out (PAR-106):
+ * `ParkSeasonService` validates the stored array against the park's
+ * attractions on every edit and refuses the whole edit if one id is missing,
+ * so a season naming a ride that is gone cannot be saved again, while a season
+ * naming fewer rides can.
+ */
+export function rewriteSeasonAttractionIds(
+  ids: readonly string[],
+  loserId: string,
+  winnerId: string,
+  liveIds: ReadonlySet<string>,
+): string[] {
+  const out: string[] = [];
+  for (const id of ids) {
+    const next = id === loserId ? winnerId : id;
+    if (liveIds.has(next) && !out.includes(next)) out.push(next);
+  }
+  return out;
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Rewrites the ride ids inside `park_seasons.attraction_ids` (a jsonb array
+ * with no FK) when a ride is merged away.
+ *
+ * A `MergeDependency` moves whole rows, and this is an id INSIDE a column, so
+ * it is a `custom` entry: the loser→winner pair is only known here, to the
+ * caller that just formed the collision. Rows are matched on the loser id
+ * alone, not on a park — the id is unique across the table, and on the park
+ * merge the season still sits on the losing park at this point.
+ *
+ * Ids in a touched row that resolve to no attraction (the loser is still
+ * present at this point, and is replaced anyway) are dropped with it; a row
+ * that ends up empty becomes NULL, which reads as "no specific rides", the
+ * shape `ParkSeasonService` itself stores.
+ */
+export async function remapSeasonAttractionIds(
+  manager: MergeQueryRunner,
+  winnerId: string,
+  loserId: string,
+): Promise<void> {
+  if (winnerId === loserId) {
+    throw new Error(
+      `Cannot remap season attractions with one id on both sides (${winnerId})`,
+    );
+  }
+
+  const seasons = asRows(
+    await manager.query(
+      `SELECT id, attraction_ids FROM park_seasons
+        WHERE jsonb_exists(attraction_ids, $1)`,
+      [loserId],
+    ),
+  );
+  if (seasons.length === 0) return;
+
+  const candidates = new Set<string>([winnerId]);
+  for (const season of seasons) {
+    for (const id of (season.attraction_ids as string[]) ?? []) {
+      if (typeof id === "string" && UUID_PATTERN.test(id)) candidates.add(id);
+    }
+  }
+  const live = new Set(
+    asRows(
+      await manager.query(
+        `SELECT id FROM attractions WHERE id = ANY($1::uuid[])`,
+        [[...candidates]],
+      ),
+    ).map((row) => row.id as string),
+  );
+
+  for (const season of seasons) {
+    const before = season.attraction_ids as string[];
+    const after = rewriteSeasonAttractionIds(before, loserId, winnerId, live);
+    if (after.length !== before.length) {
+      logger.warn(
+        `park_seasons ${String(season.id)}: dropped ${
+          before.length - after.length
+        } attraction id(s) that no longer resolve after merging ${loserId} into ${winnerId}`,
+      );
+    }
+    await manager.query(
+      `UPDATE park_seasons SET attraction_ids = $1::jsonb WHERE id = $2`,
+      [after.length > 0 ? JSON.stringify(after) : null, season.id],
+    );
+  }
 }
 
 /**
@@ -597,6 +696,18 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     column: "attraction_id",
     strategy: "custom",
     apply: mergeAttractionReviewMarks,
+  },
+  {
+    // Not a row that points at the ride but an id INSIDE a jsonb array
+    // (`park_seasons.attraction_ids`, no FK), so nothing cascades and nothing
+    // fails: the season moves to the surviving park intact and names a ride
+    // that is gone, and `ParkSeasonService` then refuses every later edit of
+    // it (PAR-106). Custom because the shape is a value in a column; hangs off
+    // this list so all four merge paths get it.
+    table: "park_seasons",
+    column: "attraction_ids",
+    strategy: "custom",
+    apply: remapSeasonAttractionIds,
   },
 ];
 

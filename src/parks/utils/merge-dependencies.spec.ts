@@ -1,4 +1,5 @@
 import { Logger } from "@nestjs/common";
+import { ParkSeasonService } from "../services/park-season.service";
 import { getMetadataArgsStorage } from "typeorm";
 import { AttractionRideProfile } from "../../attractions/entities/attraction-ride-profile.entity";
 import { AttractionReviewMark } from "../../attractions/entities/attraction-review-mark.entity";
@@ -13,6 +14,8 @@ import {
   SHOW_DEPENDENCIES,
   applyMergeDependencies,
   attractionTablesMissingFrom,
+  remapSeasonAttractionIds,
+  rewriteSeasonAttractionIds,
   decideWinnerAuthoritative,
   mergeAttractionReviewMarks,
   migrateScheduleEntries,
@@ -60,10 +63,9 @@ describe("merge dependency tables", () => {
    * with no entity and no FK (`pcn`/`shape` also create three `*_comparisons`
    * tables, which are keyed by segment and hold no attraction id).
    *
-   * `park_seasons` is deliberately absent although it names attractions: its
-   * `attraction_ids` is a jsonb array with no foreign key, so a merge leaves
-   * dead ids inside the array rather than deleting or orphaning a row, and no
-   * column-and-key dependency can express that. PAR-238.
+   * `park_seasons` is listed although it has no foreign key to `attractions`:
+   * its `attraction_ids` is a jsonb array, so no column-and-key dependency can
+   * express it and the entry is `custom` (PAR-106, which supersedes PAR-238).
    */
   const ATTRACTION_REFERENCING_TABLES = [
     "attraction_accuracy_stats",
@@ -84,6 +86,7 @@ describe("merge dependency tables", () => {
     "ml_accuracy_comparisons",
     "ml_prediction_anomalies",
     "pcn_forecasts",
+    "park_seasons",
     "prediction_accuracy",
     "prediction_lead_snapshots",
     "queue_data",
@@ -316,7 +319,7 @@ describe("merge dependency tables", () => {
   });
 
   it("hands attraction_review_marks to a function of its own", () => {
-    // The only `custom` entry anywhere, and the bar is the table's shape: two
+    // One of two `custom` entries, and the bar is the table's shape: two
     // attraction columns plus a CHECK across them, so no combination of
     // `column` and `conflictColumns` can express it. The three generic
     // statements each name exactly one column.
@@ -335,7 +338,10 @@ describe("merge dependency tables", () => {
       ...SHOW_DEPENDENCIES,
       ...RESTAURANT_DEPENDENCIES,
     ].filter((d) => d.strategy === "custom" || d.apply);
-    expect(custom).toEqual([marks]);
+    const seasons = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "park_seasons",
+    );
+    expect(custom).toEqual([marks, seasons]);
   });
 
   it("names the two attraction columns review marks really has", () => {
@@ -1468,5 +1474,135 @@ describe("migrateScheduleEntries", () => {
     ).rejects.toThrow(/both sides/i);
 
     expect(manager.query).not.toHaveBeenCalled();
+  });
+  /**
+   * PAR-106: the ride ids inside `park_seasons.attraction_ids`.
+   */
+  describe("season attraction ids", () => {
+    const WINNER = "11111111-1111-4111-8111-111111111111";
+    const LOSER = "22222222-2222-4222-8222-222222222222";
+    const LOSER_2 = "33333333-3333-4333-8333-333333333333";
+    const OTHER = "44444444-4444-4444-8444-444444444444";
+    const GONE = "55555555-5555-4555-8555-555555555555";
+
+    it("swaps the loser for the winner, once, in place", () => {
+      const live = new Set([WINNER, OTHER]);
+      expect(
+        rewriteSeasonAttractionIds([OTHER, LOSER], LOSER, WINNER, live),
+      ).toEqual([OTHER, WINNER]);
+      // The winner was already named: the loser's id collapses into it.
+      expect(
+        rewriteSeasonAttractionIds([WINNER, LOSER], LOSER, WINNER, live),
+      ).toEqual([WINNER]);
+    });
+
+    it("drops an id that no longer resolves to a ride", () => {
+      const live = new Set([WINNER]);
+      expect(
+        rewriteSeasonAttractionIds([GONE, LOSER], LOSER, WINNER, live),
+      ).toEqual([WINNER]);
+    });
+
+    it("declares the entry as custom on the attraction list", () => {
+      const entry = ATTRACTION_DEPENDENCIES.find(
+        (d) => d.table === "park_seasons",
+      );
+      expect(entry?.strategy).toBe("custom");
+      expect(entry?.apply).toBe(remapSeasonAttractionIds);
+    });
+
+    it("refuses one id on both sides", async () => {
+      await expect(
+        remapSeasonAttractionIds(manager, WINNER, WINNER),
+      ).rejects.toThrow(/one id on both sides/);
+      expect(manager.query).not.toHaveBeenCalled();
+    });
+
+    it("issues one lookup and no write when no season names the loser", async () => {
+      manager.query.mockResolvedValueOnce([]);
+      await remapSeasonAttractionIds(manager, WINNER, LOSER);
+      expect(manager.query).toHaveBeenCalledTimes(1);
+      expect(manager.query.mock.calls[0][1]).toEqual([LOSER]);
+    });
+
+    it("writes the rewritten array, deduped across two losers folding into one winner", async () => {
+      const season = { id: "s1", attraction_ids: [LOSER, LOSER_2, GONE] };
+      manager.query
+        .mockResolvedValueOnce([season])
+        .mockResolvedValueOnce([{ id: WINNER }, { id: LOSER_2 }]);
+
+      await remapSeasonAttractionIds(manager, WINNER, LOSER);
+
+      const update = manager.query.mock.calls[2];
+      expect(update[0]).toMatch(/^UPDATE park_seasons SET attraction_ids/);
+      expect(update[1]).toEqual([JSON.stringify([WINNER, LOSER_2]), "s1"]);
+    });
+
+    it("stores NULL, not [], when nothing is left", async () => {
+      manager.query
+        .mockResolvedValueOnce([{ id: "s1", attraction_ids: [LOSER] }])
+        .mockResolvedValueOnce([]);
+      // The winner is missing from the live set (mock), so the id is dropped.
+      await remapSeasonAttractionIds(manager, WINNER, LOSER);
+      expect(manager.query.mock.calls[2][1]).toEqual([null, "s1"]);
+    });
+
+    it("leaves a season that ParkSeasonService accepts on the next edit", async () => {
+      const live = new Set([WINNER, OTHER]);
+      const stored = rewriteSeasonAttractionIds(
+        [LOSER, OTHER],
+        LOSER,
+        WINNER,
+        live,
+      );
+
+      // The same check the service runs: every stored id must be a ride of
+      // the park, or the whole edit is refused with a 400.
+      const attractions = {
+        find: jest.fn(async (opts: { where: { id: { value: string[] } } }) =>
+          opts.where.id.value
+            .filter((id) => live.has(id))
+            .map((id) => ({ id })),
+        ),
+      };
+      const parks = { findOne: jest.fn(async () => ({ id: "park-1" })) };
+      const seasons = {
+        create: (input: unknown) => input,
+        save: jest.fn(async (input: unknown) => input),
+        findOne: jest.fn(),
+      };
+      const service = new ParkSeasonService(
+        seasons as never,
+        parks as never,
+        attractions as never,
+      );
+
+      await expect(
+        service.create(
+          "park-1",
+          {
+            kind: "halloween",
+            startDate: "2026-10-03",
+            endDate: "2026-11-01",
+            attractionIds: stored,
+          },
+          null,
+        ),
+      ).resolves.toBeDefined();
+
+      // The counter-case: the un-rewritten array is what froze the season.
+      await expect(
+        service.create(
+          "park-1",
+          {
+            kind: "halloween",
+            startDate: "2026-10-03",
+            endDate: "2026-11-01",
+            attractionIds: [LOSER, OTHER],
+          },
+          null,
+        ),
+      ).rejects.toThrow(/not in this park/);
+    });
   });
 });
