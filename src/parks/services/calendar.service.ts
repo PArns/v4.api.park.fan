@@ -553,6 +553,18 @@ export class CalendarService {
         todayCrowdLevel: d.date === today ? d.todayCrowdLevel : undefined,
         todayCrowdLevelSamples:
           d.date === today ? d.todayCrowdLevelSamples : undefined,
+        // `headlinerForecast` is decided at WRITE time: buildHeadlinerForecasts fills a future day
+        // with the ML prediction, buildHistoricalHeadlinerForecasts a past day with recorded
+        // peaks and `actual: true`. A day that was future when cached and is past now still
+        // carries the prediction, indistinguishable on the wire from tomorrow's. Strip it rather
+        // than rebuild it: the field is optional and the same clients already handle its absence
+        // (a closed day), whereas the recorded peaks would cost a query on a path that
+        // deliberately has none. An entry that was already written as `actual: true` is a
+        // measurement, stays correct as the day ages, and is kept.
+        headlinerForecast:
+          d.date < today && !d.headlinerForecast?.actual
+            ? undefined
+            : d.headlinerForecast,
       }));
     return {
       meta: {

@@ -254,11 +254,10 @@ export class HeadlinerWaitForecast {
       "here or a stripped key on the wire — `ExcludeNullInterceptor` removes " +
       "null-valued keys outside `/v1/admin/*`. A PAST day is built from " +
       "recorded peaks, an observation having no band, and says so with " +
-      "`actual: true` — with one caveat that is the month cache rather than " +
-      "this field: a cached month entry that outlives park-local midnight can " +
-      "still serve yesterday with the forecast, and its band, that was " +
-      "written while it was tomorrow. Read `actual` and the date, not the " +
-      "presence of a band, to tell the two apart.",
+      "`actual: true`. A cached month entry that outlives park-local " +
+      "midnight no longer serves yesterday with the forecast written " +
+      "while it was tomorrow: the whole `headlinerForecast` is dropped " +
+      "for a past day unless it is `actual`.",
     required: false,
     nullable: true,
     example: 12,
