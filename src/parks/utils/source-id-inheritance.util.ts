@@ -2,8 +2,11 @@ import { calculateHaversineDistance } from "../../common/utils/distance.util";
 
 /** The two rows a merge is about, reduced to what this decision needs. */
 export interface MergeGeoCandidate {
-  latitude?: number | null;
-  longitude?: number | null;
+  // `decimal` columns come back from Postgres as strings ("28.0417444"), so the
+  // rows a merge loads carry strings; unit tests and callers with a numeric
+  // transformer carry numbers. Both are read.
+  latitude?: number | string | null;
+  longitude?: number | string | null;
 }
 
 /**
@@ -66,14 +69,26 @@ export function canInheritSourceIds(
  * of Guinea. Treating it as a real position would put every unlocated row
  * thousands of kilometres from its partner and block inheritance for the one
  * case where we have no information at all.
+ *
+ * The values are coerced with `Number` first. The merge passes rows straight
+ * from the repository, where `decimal` columns are strings; a `typeof ===
+ * "number"` test read every real row as "no coordinates" and let every pair
+ * inherit, whatever the distance.
  */
 function toCoordinate(
   candidate: MergeGeoCandidate,
 ): { latitude: number; longitude: number } | null {
-  const { latitude, longitude } = candidate;
-  if (typeof latitude !== "number" || typeof longitude !== "number")
-    return null;
+  const latitude = toNumber(candidate.latitude);
+  const longitude = toNumber(candidate.longitude);
+  if (latitude === null || longitude === null) return null;
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   if (latitude === 0 && longitude === 0) return null;
   return { latitude, longitude };
+}
+
+/** A number, or null for `null`, `undefined` and blank strings (`Number("")` is 0). */
+function toNumber(value: number | string | null | undefined): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return Number(value);
 }
