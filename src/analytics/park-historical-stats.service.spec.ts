@@ -190,6 +190,24 @@ describe("ParkHistoricalStatsService", () => {
     );
   });
 
+  it("keeps retired attractions out of the top-attractions ranking", async () => {
+    // Toverland's table led with Maximus' Blitz Bahn, retired 2026-05-17,
+    // off 61 measured days — well past the sample floor. The day floor cannot
+    // stop a ride like that; only the retirement filter can, and it has to sit
+    // in the WHERE, before the rows are grouped and ranked.
+    await service.getParkHistoricalStats(park, 2);
+    const topSql = String(
+      aggregateQuery.mock.calls.find((c) =>
+        String(c[0]).includes("ORDER BY avg_p90 DESC"),
+      )![0],
+    );
+    const where = topSql.slice(
+      topSql.indexOf("WHERE"),
+      topSql.indexOf("GROUP BY"),
+    );
+    expect(where).toContain("AND a.retired_at IS NULL");
+  });
+
   it("reports the attraction sample floor it used in meta", async () => {
     const result = await service.getParkHistoricalStats(park, 2, 10, 30, 45);
     expect(result.meta.minAttractionDays).toBe(45);
