@@ -22,6 +22,7 @@ import {
 import { RideDayCurveDto } from "./dto/ride-day-curve.dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { rateOrUnknown } from "../common/utils/crowd-level.util";
+import { HISTORICAL_STATS_CACHE_VERSION } from "../common/cache/cache-keys";
 
 /** Response schema version — bump when the contract changes (see DTO). */
 const SCHEMA_VERSION = 3;
@@ -115,7 +116,7 @@ export class ParkHistoricalStatsService {
     minSampleDays: number,
     minAttractionDays: number,
   ): string {
-    return `park:historical-stats:v3:${parkId}:${years}:${topN}:${minSampleDays}:${minAttractionDays}`;
+    return `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:${parkId}:${years}:${topN}:${minSampleDays}:${minAttractionDays}`;
   }
 
   async getParkHistoricalStats(
@@ -305,7 +306,10 @@ export class ParkHistoricalStatsService {
     topN: number,
     minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
   ): Promise<ParkHourlyProfileDto> {
-    const cacheKey = `park:hourly-profile:v4:${park.id}:${years}:${topN}:${minAttractionDays}`;
+    // v5: retired rides no longer count towards the top N. The bump makes the
+    // filter apply on deploy instead of up to 24 h later, when the v4 entry
+    // would have expired. No invalidation glob exists for this key.
+    const cacheKey = `park:hourly-profile:v5:${park.id}:${years}:${topN}:${minAttractionDays}`;
     const cached = safeJsonParse<ParkHourlyProfileDto>(
       await this.redis.get(cacheKey),
     );
@@ -763,10 +767,15 @@ export class ParkHistoricalStatsService {
          SELECT qda."attractionId"                    AS aid,
                 COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date)::int AS sample_days
          FROM queue_data_aggregates qda
+         -- Retired rides are excluded HERE, before the ranking: filtered only
+         -- in the outer join they would still take a place in the top N and
+         -- leave the table one ride short (PAR-569, as PAR-557 for topAttractions).
+         JOIN attractions a ON a.id::text = qda."attractionId"
          WHERE qda."parkId" = $1
            AND qda.hour >= $3::date
            AND qda.hour <  ($4::date + INTERVAL '1 day')
            AND qda."sampleCount" >= $5
+           AND a.retired_at IS NULL
          GROUP BY qda."attractionId"
          HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6
          ORDER BY AVG(qda.p90) DESC

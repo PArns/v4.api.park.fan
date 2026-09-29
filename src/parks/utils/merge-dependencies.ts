@@ -859,6 +859,23 @@ export const PARK_TABLES_HANDLED_INLINE = [
 ] as const;
 
 /**
+ * `park_p50_baselines`: one row per park (`parkId` is the primary key), and
+ * load-bearing — live crowd levels and an ML feature both read it. The
+ * survivor's own row wins, but where it has none, inheriting the ghost's beats
+ * rating the park `unknown` until the next baseline run.
+ *
+ * A named constant rather than an anonymous list entry because two paths apply
+ * it: `consolidateMergedPark` through `PARK_INLINE_DEPENDENCIES`, and
+ * `ParkMergeService.mergeParks`, which migrates the other inline tables by hand
+ * and hands only this one to `applyMergeDependencies`.
+ */
+export const PARK_P50_BASELINE_DEPENDENCY: MergeDependency = {
+  table: "park_p50_baselines",
+  column: "parkId",
+  strategy: "winner-authoritative",
+};
+
+/**
  * The park-scoped tables of `PARK_TABLES_HANDLED_INLINE` that a merge path has
  * to migrate on its own, expressed as dependencies so the two raw paths in
  * `parks.service.ts` can hand them to `applyMergeDependencies` instead of
@@ -866,19 +883,12 @@ export const PARK_TABLES_HANDLED_INLINE = [
  * calls; this list is the same set of decisions, in the vocabulary the raw
  * paths already speak.
  *
- * Five of the ten inline tables are deliberately absent:
+ * Four of the ten inline tables are deliberately absent:
  *   - `attractions`, `shows`, `restaurants` — both raw paths already reparent
  *     them, and all three need the collision handling that precedes this
  *     (`ATTRACTION_DEPENDENCIES`, `SHOW_DEPENDENCIES`,
  *     `RESTAURANT_DEPENDENCIES`), because all three carry a unique
  *     `(parkId, slug)`.
- *   - `park_p50_baselines` — winner-authoritative, hand-rolled by both callers
- *     (`migrateTableData(..., null)` in `mergeParks`, an explicit SELECT and
- *     branch in `consolidateMergedPark`) since before there was a
- *     `winner-authoritative` strategy to declare instead. The two are the same
- *     rule, so folding it in is a simplification and not a fix — and it is a
- *     change to the park half, which PAR-105 kept out of scope. Recorded as
- *     PAR-178.
  *   - `external_entity_mapping` — keyed on `internal_entity_id` for every
  *     entity type at once, so it wants the `internal_entity_type = 'park'`
  *     filter a bare dependency cannot carry.
@@ -899,6 +909,7 @@ export const PARK_TABLES_HANDLED_INLINE = [
  * its headliner set.
  */
 export const PARK_INLINE_DEPENDENCIES: MergeDependency[] = [
+  PARK_P50_BASELINE_DEPENDENCY,
   {
     table: "park_daily_stats",
     column: "parkId",

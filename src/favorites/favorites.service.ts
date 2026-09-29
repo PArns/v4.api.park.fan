@@ -880,9 +880,14 @@ export class FavoritesService {
     return attractions.map((attraction, index) => {
       const integrated = integratedResponses[index];
 
-      // If integration failed, create minimal DTO
+      // If integration failed, create minimal DTO. It joins no live data, so it
+      // must not claim any: `fromEntity` would fill `status: "CLOSED"` and empty
+      // forecasts, which a reader takes for a measured closed ride. The
+      // branch is not dead code — a cached `null` (`JSON.parse("null")`) lands
+      // in it — so it is kept and made honest rather than removed (PAR-250).
       if (!integrated) {
-        const baseDto = AttractionResponseDto.fromEntity(attraction);
+        const baseDto =
+          AttractionResponseDto.fromEntityWithoutLiveData(attraction);
         const dto: AttractionWithDistanceDto = {
           ...baseDto,
           distance:

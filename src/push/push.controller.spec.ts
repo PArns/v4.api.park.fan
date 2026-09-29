@@ -208,6 +208,18 @@ describe("PushController", () => {
     });
   });
 
+  it("passes an omitted locale on as omitted, so the stored language is not overwritten with English", async () => {
+    // `normalizeLocale(undefined)` is "en". Sent on, that would replace the
+    // language of a browser that subscribed in German the next time a ride
+    // alert or show follow arrives without one.
+    await withVapid(async () => {
+      const { locale: _omitted, ...withoutLocale } = VALID;
+      await controller.subscribe(withoutLocale as PushSubscribeDto);
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      expect(subscribe.mock.calls[0][0].locale).toBeUndefined();
+    });
+  });
+
   it("drops a timezone that is not a zone rather than storing it", async () => {
     await withVapid(async () => {
       await controller.subscribe({ ...VALID, timezone: "'; DROP TABLE" });

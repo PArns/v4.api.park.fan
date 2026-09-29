@@ -701,14 +701,9 @@ export class AttractionResponseDto {
    *
    * `AttractionIntegrationService` and the favorites list do: they overwrite
    * `status` from `queue_data` and fill the forecasts. A caller that joins
-   * nothing must use {@link fromEntityWithoutLiveData} instead — as must the
-   * one branch that still gets this wrong, `FavoritesService`'s fallback for an
-   * integrated attraction it has no card for, which ships the placeholders
-   * untouched. Reaching it takes a cached entry that parses to a FALSY value —
-   * `null`, `0`, `false` — because the cache hit is kept whatever
-   * `JSON.parse` returns and the branch then tests the result for truthiness.
-   * Neither writer produces one, so it is unreachable by accident rather than
-   * by design.
+   * nothing must use {@link fromEntityWithoutLiveData} instead, as
+   * `FavoritesService`'s fallback for an integrated attraction it has no card
+   * for now does (PAR-250).
    */
   static fromEntity(attraction: Attraction): AttractionResponseDto {
     return {

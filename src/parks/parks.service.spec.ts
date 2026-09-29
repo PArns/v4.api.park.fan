@@ -1991,10 +1991,15 @@ describe("ParksService", () => {
      * issued in the right order against a recording manager. Only a real
      * database can prove the transaction commits.
      */
+    // `winner-authoritative` reads before it writes, and writes nothing where
+    // the ghost holds no row, which these mocks never give it. That strategy
+    // has its own case below (`park_p50_baselines`).
     const parkDependencyTables = [
-      ...PARK_INLINE_DEPENDENCIES.map((d) => d.table),
-      ...PARK_DEPENDENCIES.map((d) => d.table),
-    ];
+      ...PARK_INLINE_DEPENDENCIES,
+      ...PARK_DEPENDENCIES,
+    ]
+      .filter((d) => d.strategy !== "winner-authoritative")
+      .map((d) => d.table);
 
     const indexOfParkDelete = (calls: Recorded[]) =>
       calls.findIndex((c) => /DELETE\s+FROM\s+parks/i.test(c.sql));
@@ -2511,6 +2516,10 @@ describe("ParksService", () => {
       const runWith = async (survivorHasBaseline: boolean) => {
         const { calls } = recordTransaction((sql, params) => {
           if (/FROM park_p50_baselines/.test(sql)) {
+            const [parkId] = (params ?? []) as string[];
+            // The ghost holds a row (or the strategy reads no further), and the
+            // survivor holds one only in the first run.
+            if (parkId === ghostParkId) return [{ parkId: ghostParkId }];
             return survivorHasBaseline ? [{ "?column?": 1 }] : [];
           }
           if (!/SELECT id, slug/.test(sql)) return [];
@@ -2530,19 +2539,17 @@ describe("ParksService", () => {
         return calls.filter((c) => /park_p50_baselines/i.test(c.sql));
       };
 
+      const verbs = (calls: Recorded[]) =>
+        calls.map((c) => c.sql.trim().split(/\s+/)[0]);
+
+      // Strategy: read the ghost's side, read the survivor's, then write.
       const withBaseline = await runWith(true);
-      expect(withBaseline.map((c) => c.sql.trim().split(/\s+/)[0])).toEqual([
-        "SELECT",
-        "DELETE",
-      ]);
-      expect(withBaseline[1].params).toEqual([ghostParkId]);
+      expect(verbs(withBaseline)).toEqual(["SELECT", "SELECT", "DELETE"]);
+      expect(withBaseline[2].params).toEqual([ghostParkId]);
 
       const withoutBaseline = await runWith(false);
-      expect(withoutBaseline.map((c) => c.sql.trim().split(/\s+/)[0])).toEqual([
-        "SELECT",
-        "UPDATE",
-      ]);
-      expect(withoutBaseline[1].params).toEqual([primaryId, ghostParkId]);
+      expect(verbs(withoutBaseline)).toEqual(["SELECT", "SELECT", "UPDATE"]);
+      expect(withoutBaseline[2].params).toEqual([primaryId, ghostParkId]);
     });
 
     /**

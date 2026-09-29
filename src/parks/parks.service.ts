@@ -914,31 +914,6 @@ export class ParksService {
       [winnerParkId, loserParkId],
     );
 
-    // `park_p50_baselines` is winner-authoritative rather than move-or-discard:
-    // the row is one per park and load-bearing (live crowd levels and an ML
-    // feature both read it), so the survivor's own always wins — but where the
-    // survivor has none, inheriting the ghost's beats rating nothing until the
-    // next baseline run. Same rule `mergeParks` applies with
-    // `migrateTableData(..., null)`, and the same rule the
-    // `winner-authoritative` strategy in `merge-dependencies.ts` now declares.
-    // Both hand-rolled copies predate that strategy; folding them into it is
-    // PAR-178, and a change to the park half PAR-105 kept out of scope.
-    const winnerBaseline = await manager.query(
-      `SELECT 1 FROM park_p50_baselines WHERE "parkId" = $1 LIMIT 1`,
-      [winnerParkId],
-    );
-    if (Array.isArray(winnerBaseline) && winnerBaseline.length > 0) {
-      await manager.query(
-        `DELETE FROM park_p50_baselines WHERE "parkId" = $1`,
-        [loserParkId],
-      );
-    } else {
-      await manager.query(
-        `UPDATE park_p50_baselines SET "parkId" = $1 WHERE "parkId" = $2`,
-        [winnerParkId, loserParkId],
-      );
-    }
-
     // The schedule moves whole, minus the rows the survivor already states.
     // Why the key has to name the ride, and why that keeps this table out of
     // `applyMergeDependencies`, is in `migrateScheduleEntries` — the one place

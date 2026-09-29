@@ -11,6 +11,7 @@ import { captureParkPath, samePath } from "./park-rename.service";
 import {
   ATTRACTION_DEPENDENCIES,
   PARK_DEPENDENCIES,
+  PARK_P50_BASELINE_DEPENDENCY,
   RESTAURANT_DEPENDENCIES,
   SHOW_DEPENDENCIES,
   applyMergeDependencies,
@@ -191,14 +192,13 @@ export class ParkMergeService {
         );
 
         // 4. Migrate Park-Specific Analysis Tables
-        // park_p50_baselines: winner's baseline is authoritative; only migrate if winner has none
-        await this.migrateTableData(
+        // park_p50_baselines: winner's baseline is authoritative; the ghost's
+        // moves across only where the winner has none.
+        await applyMergeDependencies(
           manager,
-          "park_p50_baselines",
-          "parkId",
+          [PARK_P50_BASELINE_DEPENDENCY],
           winner.id,
           loser.id,
-          null,
         );
         await this.migrateTableData(
           manager,
@@ -332,7 +332,6 @@ export class ParkMergeService {
     // a row-wise `IN`. On a key of `attractionId` that `IN` is correct and the
     // attraction path uses it — the park-level rows are already excluded there
     // (PAR-171, PAR-149).
-    "park_p50_baselines",
     "park_occupancy",
     "headliner_attractions",
     "weather_data",

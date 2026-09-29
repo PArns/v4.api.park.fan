@@ -2,6 +2,10 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { ParkHistoricalStatsService } from "./park-historical-stats.service";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
+import {
+  CacheKeys,
+  HISTORICAL_STATS_CACHE_VERSION,
+} from "../common/cache/cache-keys";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { Park } from "../parks/entities/park.entity";
 
@@ -325,6 +329,30 @@ describe("ParkHistoricalStatsService", () => {
 
     const routeHourly = (rows: unknown[]) => (sql: string) =>
       Promise.resolve(String(sql).includes("hour_of_day") ? rows : []);
+
+    it("keeps retired rides out of the ranking, inside the eligible CTE", async () => {
+      // Filtered only in the outer join, a retired ride would still take one of
+      // the top-N places and the table would end a ride short. The filter has
+      // to sit in `eligible`, before the ranking (PAR-569).
+      aggregateQuery.mockImplementation(routeHourly(hourRows));
+      await service.getParkHourlyProfile(park, 1, 8);
+      const sql = String(
+        aggregateQuery.mock.calls.find((c) =>
+          String(c[0]).includes("hour_of_day"),
+        )![0],
+      );
+      const eligible = sql.slice(
+        sql.indexOf("WITH eligible AS"),
+        sql.indexOf("ORDER BY AVG(qda.p90) DESC"),
+      );
+      // The CTE was found and reaches the ranking, or the checks below read
+      // an empty string.
+      expect(eligible).toContain("FROM queue_data_aggregates qda");
+      expect(eligible).toContain(
+        'JOIN attractions a ON a.id::text = qda."attractionId"',
+      );
+      expect(eligible).toContain("AND a.retired_at IS NULL");
+    });
 
     it("keeps only hours measured on enough days, ascending", async () => {
       aggregateQuery.mockImplementation(routeHourly(hourRows));
@@ -650,5 +678,19 @@ describe("ParkHistoricalStatsService", () => {
       expect(result).toEqual(cached);
       expect(aggregateQuery).not.toHaveBeenCalled();
     });
+  });
+  it("writes a stats key that the invalidation glob matches", async () => {
+    // v3 shipped with the glob still searching v2, so eviction after a merge,
+    // repair or curation never matched a key and `/stats` stayed stale for up
+    // to 24 h (PAR-570). Both now read HISTORICAL_STATS_CACHE_VERSION; this
+    // pins the pair to each other rather than to the number.
+    await service.getParkHistoricalStats(park, 2);
+    const writtenKey = String(redis.set.mock.calls[0][0]);
+    expect(writtenKey).toContain(`:v${HISTORICAL_STATS_CACHE_VERSION}:`);
+    const glob = CacheKeys.parkHistoricalStatsPattern(park.id);
+    const asRegex = new RegExp(
+      `^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`,
+    );
+    expect(writtenKey).toMatch(asRegex);
   });
 });
