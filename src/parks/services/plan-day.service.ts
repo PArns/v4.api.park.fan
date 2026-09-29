@@ -310,7 +310,7 @@ export class PlanDayService {
       leadTimeMae: await this.leadTimeMae(leadDays),
       accuracy: { basis: "unmeasured" },
       rides: [],
-      shows: await this.buildShows(park, dateStr),
+      shows: await this.buildShows(park, dateStr, openHour, closeHour),
     };
 
     // A closed day, or one whose hours nobody knows, has no curves to draw, and
@@ -631,6 +631,8 @@ export class PlanDayService {
   private async buildShows(
     park: Park,
     dateStr: string,
+    openHour: number | null,
+    closeHour: number | null,
   ): Promise<PlanDayShowDto[]> {
     const shows = await this.showsService
       .findByParkId(park.id)
@@ -693,17 +695,34 @@ export class PlanDayService {
       });
     }
 
-    // Earliest first: a plan is read down the day. The comparison is the wall
-    // clock, so on a day that runs past midnight a show whose ONLY time is the
-    // 00:00 one sorts to the top of a day it ends. Inside a single show the
-    // order is already right — `ShowsService.operatingDaySql` unfolds it there
-    // — but ordering two shows against each other needs the park's opening
-    // hour, which is this method's non-goal and PAR-241.
+    // Earliest first: a plan is read down the day, and on a day that runs past
+    // midnight the day is the unfolded one — a show whose only time is 00:00
+    // ends the day, it does not open it.
+    const wraps =
+      openHour !== null && closeHour !== null && closeHour < openHour;
+    const key = (show: PlanDayShowDto): number =>
+      PlanDayService.dayMinute(show.times[0], wraps ? openHour : null);
     return out.sort(
-      (a, b) =>
-        (a.times[0] ?? "").localeCompare(b.times[0] ?? "") ||
-        a.showName.localeCompare(b.showName),
+      (a, b) => key(a) - key(b) || a.showName.localeCompare(b.showName),
     );
+  }
+
+  /**
+   * A show time as minutes into the operating day. With `wrapOpenHour` set, a
+   * time earlier than the park's opening hour belongs to the far side of
+   * midnight and counts 24 h later; without it the wall clock is the order. A
+   * missing or unreadable time is -1, so it sorts first as it always did.
+   */
+  private static dayMinute(
+    time: string | undefined,
+    wrapOpenHour: number | null,
+  ): number {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(time ?? "");
+    if (!m) return -1;
+    const hour = Number(m[1]);
+    const unfolded =
+      wrapOpenHour !== null && hour < wrapOpenHour ? hour + 24 : hour;
+    return unfolded * 60 + Number(m[2]);
   }
 
   /**
