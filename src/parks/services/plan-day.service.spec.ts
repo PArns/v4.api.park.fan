@@ -1452,6 +1452,64 @@ describe("PlanDayService", () => {
       ]);
     });
 
+    describe("order between shows", () => {
+      beforeEach(() => {
+        parkShows = [
+          { id: "s-1", slug: "afternoon", name: "Afternoon" },
+          { id: "s-2", slug: "midnight", name: "Midnight" },
+          { id: "s-3", slug: "evening", name: "Evening" },
+          { id: "s-4", slug: "rehearsal", name: "Rehearsal" },
+          { id: "s-5", slug: "late", name: "Late" },
+        ];
+        scheduledTimes = new Map([
+          ["s-1", ["17:00"]],
+          ["s-2", ["00:00"]],
+          ["s-3", ["21:30", "00:00"]],
+          ["s-4", ["10:15"]],
+          ["s-5", ["00:30"]],
+        ]);
+      });
+
+      it("puts a show that only runs after midnight last on a day that wraps", async () => {
+        const date = farDate();
+        // 16:00 → 01:00 park-local, as in "a day that runs past midnight".
+        calendarDay = {
+          ...calendarDay!,
+          date,
+          hours: {
+            openingTime: "2026-10-17T14:00:00.000Z",
+            closingTime: "2026-10-17T23:00:00.000Z",
+          },
+        };
+        // 00:00 and 00:30 count as 24:00 and 24:30; 10:15 is between closing
+        // and opening and stays on the wall clock.
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows.map((s) => s.showSlug)).toEqual([
+          "rehearsal",
+          "afternoon",
+          "evening",
+          "midnight",
+          "late",
+        ]);
+      });
+
+      it("keeps wall-clock order on a day that does not wrap", async () => {
+        const date = farDate();
+        calendarDay = { ...calendarDay!, date };
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.shows.map((s) => s.showSlug)).toEqual([
+          "midnight",
+          "late",
+          "rehearsal",
+          "afternoon",
+          "evening",
+        ]);
+      });
+    });
+
     it("projects the last matching weekday, and says so", async () => {
       const date = farDate();
       calendarDay = { ...calendarDay!, date };
