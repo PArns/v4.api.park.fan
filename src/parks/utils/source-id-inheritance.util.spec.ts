@@ -75,4 +75,54 @@ describe("canInheritSourceIds", () => {
       ).allowed,
     ).toBe(false);
   });
+
+  describe("with coordinates as Postgres returns them (decimal → string)", () => {
+    const asRow = (c: { latitude: number; longitude: number }) => ({
+      latitude: c.latitude.toFixed(7),
+      longitude: c.longitude.toFixed(7),
+    });
+
+    it("refuses the Orlando/Tampa pair", () => {
+      // The repository hands the merge strings, so this is the form the guard
+      // sees in production. A `typeof === "number"` test read both as "no
+      // coordinates" and allowed every pair.
+      const verdict = canInheritSourceIds(
+        asRow(IOA_ORLANDO),
+        asRow(ADVENTURE_ISLAND_TAMPA),
+      );
+
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.distanceKm).toBeGreaterThan(90);
+    });
+
+    it("allows two rows for the same park", () => {
+      const verdict = canInheritSourceIds(
+        asRow(IOA_ORLANDO),
+        asRow({ latitude: 28.47224, longitude: -81.46785 }),
+      );
+
+      expect(verdict.allowed).toBe(true);
+      expect(verdict.distanceKm).toBeLessThan(1);
+    });
+
+    it("still treats a failed geocode as no evidence", () => {
+      const verdict = canInheritSourceIds(asRow(IOA_ORLANDO), {
+        latitude: "0.0000000",
+        longitude: "0.0000000",
+      });
+
+      expect(verdict.allowed).toBe(true);
+      expect(verdict.distanceKm).toBeNull();
+    });
+
+    it("does not read blank or non-numeric strings as a position", () => {
+      for (const bad of ["", "  ", "abc"]) {
+        const verdict = canInheritSourceIds(asRow(IOA_ORLANDO), {
+          latitude: bad,
+          longitude: bad,
+        });
+        expect(verdict).toEqual({ allowed: true, distanceKm: null });
+      }
+    });
+  });
 });
