@@ -78,6 +78,9 @@ describe("QueuePercentileProcessor — quiet hours keep their aggregate row", ()
       const sql = await sqlOf(run);
       expect(sql).toContain("CROSS JOIN LATERAL");
       expect(sql).toContain("p.timestamp < h.hour");
+      // Constant bounds so chunk exclusion runs at plan time, not per row.
+      expect(sql).toContain("p.timestamp >= $1 - INTERVAL");
+      expect(sql).toContain("p.timestamp < $2");
       expect(sql).toContain("prev.status = 'OPERATING'");
       expect(sql).not.toContain("HAVING COUNT(*) >= 3");
       expect(sql).toContain("HAVING COUNT(*) >= 2");
