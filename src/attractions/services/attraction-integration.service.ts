@@ -28,6 +28,7 @@ import {
   ScheduleType,
 } from "../../parks/entities/schedule-entry.entity";
 import {
+  eachDayAtNoonInTimezone,
   formatInParkTimezone,
   getCurrentDateInTimezone,
   getTomorrowDateInTimezone,
@@ -1029,9 +1030,20 @@ export class AttractionIntegrationService {
 
       // Build history entries for each day
       const history: HistoryDayDto[] = [];
-      const currentDate = new Date(startDate);
+      // One instant per park-local calendar day. `startDate` comes from
+      // `subDays` on a UTC runtime, so it is 24 h steps back from local
+      // midnight and lands at 23:00 the day before when a spring-forward lies
+      // in the window; a `setDate(+1)` walk from there stepped over the
+      // 23 h day itself (Berlin, 2027-03-28 went missing). Noon-anchored
+      // steps cannot skip or repeat a date. `endDate` is exclusive (tomorrow
+      // 00:00 park time).
+      const dayInstants = eachDayAtNoonInTimezone(
+        startDate,
+        new Date(endDate.getTime() - 1),
+        timezone,
+      );
 
-      while (currentDate < endDate) {
+      for (const currentDate of dayInstants) {
         const dateStr = formatInParkTimezone(currentDate, timezone);
 
         // Check if we have queue data for this day
@@ -1268,9 +1280,6 @@ export class AttractionIntegrationService {
               : {}),
           });
         }
-
-        // Move to next day
-        currentDate.setDate(currentDate.getDate() + 1);
       }
 
       // Determine TTL: shorter if today is included, longer for pure history

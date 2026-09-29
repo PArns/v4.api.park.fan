@@ -855,4 +855,64 @@ describe("AttractionIntegrationService", () => {
       expect(result.hourlyForecast).toHaveLength(1);
     });
   });
+
+  describe("calculateAttractionHistory across a DST change", () => {
+    const TZ = "Europe/Berlin";
+
+    // Every calendar day from `first` to `last` (inclusive) has queue data, so
+    // an emitted date that appears twice can only come from the day loop.
+    const runWindow = async (now: string, days: number, dates: string[]) => {
+      jest.useFakeTimers({ now: new Date(now), doNotFake: ["nextTick"] });
+      try {
+        mockRedis.get.mockResolvedValue(null);
+        mockParksService.getSchedule.mockResolvedValue([]);
+        mockAnalyticsService.getAttractionHourlyHistory.mockResolvedValue(
+          new Map(
+            dates.map((d) => [
+              d,
+              {
+                slots: [
+                  { time_slot: "10:00", p90: 20, avgWait: 15, sampleCount: 3 },
+                ],
+                downCount: 0,
+              },
+            ]),
+          ),
+        );
+        const history = await service.calculateAttractionHistory(
+          "attraction-1",
+          "park-1",
+          TZ,
+          days,
+        );
+        return history.map((h) => h.date);
+      } finally {
+        jest.useRealTimers();
+      }
+    };
+
+    it("lists 2026-10-25, the 25-hour fall-back day, once", async () => {
+      const dates = [
+        "2026-10-23",
+        "2026-10-24",
+        "2026-10-25",
+        "2026-10-26",
+        "2026-10-27",
+      ];
+      const got = await runWindow("2026-10-28T09:00:00Z", 6, dates);
+      expect(got).toEqual(dates);
+    });
+
+    it("lists 2027-03-28, the 23-hour spring-forward day, once", async () => {
+      const dates = [
+        "2027-03-26",
+        "2027-03-27",
+        "2027-03-28",
+        "2027-03-29",
+        "2027-03-30",
+      ];
+      const got = await runWindow("2027-03-31T09:00:00Z", 6, dates);
+      expect(got).toEqual(dates);
+    });
+  });
 });
