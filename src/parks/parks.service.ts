@@ -1648,13 +1648,20 @@ export class ParksService {
    * - Upsert based on (parkId, date, scheduleType)
    * - Update if changed, otherwise skip
    * - Keep historical schedule entries for analysis
+   * - Retract future operating days the source stopped naming, inside the
+   *   months `coveredMonths` says it answered for
    *
    * @param parkId - Our internal park ID (UUID)
    * @param scheduleData - Schedule data from ThemeParks.wiki API
+   * @param coveredMonths - Months ("YYYY-MM") the source answered for in this
+   *   fetch, from {@link ThemeParksClient.getScheduleExtended}. Omitted by the
+   *   writers that report a single day (the Wartezeiten sync and the live-data
+   *   fallback in `WaitTimesProcessor`), and without it nothing is retracted.
    */
   async saveScheduleData(
     parkId: string,
     scheduleData: ScheduleSyncEntry[],
+    coveredMonths?: string[],
   ): Promise<number> {
     if (!scheduleData || scheduleData.length === 0) {
       return 0;
@@ -2051,8 +2058,99 @@ export class ParksService {
     }
     savedCount += toUpdate.length;
 
+    // 4b. Retraction: future operating days the source has stopped naming.
+    //
+    // Everything above this line works from `affectedDates` — the days the
+    // payload CONTAINS. A day the source withdraws is therefore never looked at:
+    // Rulantica's annual maintenance closure (2026-11-16 to 27) plus 24/25
+    // December stood as 14 OPERATING rows from 2026-02-11 to 2026-09-28, with
+    // the upstream naming none of those days in any form, and the calendar, the
+    // day planner and best-days offered all 14 as visit days (PAR-538).
+    // `fillScheduleGaps` cannot catch it either: it fills missing dates and
+    // demotes its own gap-filled CLOSED rows, and deliberately never touches an
+    // OPERATING row from the API.
+    //
+    // **Only inside `coveredMonths`, and that is the whole safety of it.** A
+    // month the fetch could not ask for, or that came back empty or broken,
+    // carries no statement about its days — and a naive "delete what the payload
+    // does not name" would then delete a park's real operating days on a
+    // throttled run, which is the run 87 of 200 parks had in PAR-480. The
+    // distinction cannot be recovered from the payload (📚 G-103), so
+    // `getScheduleExtended` reports it.
+    //
+    // Four filters, each one load-bearing:
+    // - `attractionId IS NULL`, as everywhere else in this method: a ride's row
+    //   is a different statement by a different writer.
+    // - OPERATING only. It is the type that offers a closed park as open, and it
+    //   is the type this feed writes. CLOSED rows are left alone because
+    //   `schedule_entries` has no provenance column and hand-written
+    //   corrections live there — Phantasialand's 2027-01-12/13 carry
+    //   `description = 'Closed per park announcement (PAR-532)'` on dates the
+    //   upstream no longer names, i.e. exactly the shape this DELETE looks for.
+    // - Future days only, in the PARK's calendar. Past OPERATING rows are what
+    //   the historical reconstruction in `CalendarService` reads.
+    // - Days the payload names as OPERATING stay. `silencedFeed` counts as named:
+    //   the silent-feed guard above owns those days and deletes their OPERATING
+    //   row itself, and without this they would be counted twice.
+    //
+    // The end state is left to `fillScheduleGaps`, which both callers run
+    // immediately after: a retracted day between two operating days becomes
+    // CLOSED, one past the last operating day becomes UNKNOWN. Recovery needs no
+    // dump for the same reason as the silent-feed guard's — these rows are a copy
+    // of an upstream answer, and the next sync writes them back once the source
+    // names the day again.
+    let retractedCount = 0;
+    const answeredMonths = [...new Set(coveredMonths ?? [])];
+    if (answeredMonths.length > 0 && parkLocalToday) {
+      const stillOperatingDates = [
+        ...new Set(
+          normalizedEntries
+            .filter(
+              (e) =>
+                e.scheduleType === ScheduleType.OPERATING || e.silencedFeed,
+            )
+            .map((e) => e.dateStr),
+        ),
+      ];
+
+      // The CTE wrapper is load-bearing, not a flourish: TypeORM's postgres
+      // driver rewrites the result of a bare DELETE into `[rows, rowCount]`
+      // (`PostgresQueryRunner`, `switch (raw.command)`), so a plain
+      // `DELETE … RETURNING` would arrive as a two-element array and the count
+      // below would read 2 on every sync, deleted rows or none. Selecting from
+      // the CTE makes the command a SELECT and the rows come back as rows — the
+      // same reason `mergeAttractionReviewMarks` and
+      // `MLService.deleteOldPredictions` wrap theirs.
+      const retracted: Array<{ date: string }> =
+        await this.scheduleRepository.query(
+          `WITH retracted AS (
+             DELETE FROM schedule_entries
+              WHERE "parkId" = $1::uuid
+                AND "attractionId" IS NULL
+                AND "scheduleType" = 'OPERATING'
+                AND to_char(date, 'YYYY-MM') = ANY($2::text[])
+                AND to_char(date, 'YYYY-MM-DD') > $3
+                AND to_char(date, 'YYYY-MM-DD') <> ALL($4::text[])
+              RETURNING date
+           )
+           SELECT to_char(date, 'YYYY-MM-DD') AS date FROM retracted`,
+          [parkId, answeredMonths, parkLocalToday, stillOperatingDates],
+        );
+      retractedCount = Array.isArray(retracted) ? retracted.length : 0;
+
+      if (retractedCount > 0) {
+        const dates = retracted.map((r) => r.date).sort();
+        const shown = dates.slice(0, 10).join(", ");
+        this.logger.warn(
+          `Park ${parkId}: retracted ${retractedCount} future OPERATING day(s) the source ` +
+            `no longer names as operating, in ${answeredMonths.length} answered month(s): ${shown}` +
+            `${dates.length > 10 ? ` (+${dates.length - 10} more)` : ""}`,
+        );
+      }
+    }
+
     // Invalidate once after all writes instead of once per written entry.
-    if (savedCount > 0) {
+    if (savedCount > 0 || retractedCount > 0) {
       await this.invalidateScheduleCache(parkId);
     }
 

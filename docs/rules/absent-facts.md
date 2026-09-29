@@ -26,6 +26,12 @@ Moved out of the repo's `claude.md` so that a session reads an index first and o
     the past, and `fillScheduleGaps` then demotes every future gap-filled
     `CLOSED` day to `UNKNOWN`. Full rule and the production numbers:
     [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md).
+  - A day the schedule source **withdraws** is not an operating day either. The
+    stored row is our copy of an older answer, and `saveScheduleData` only ever
+    looked at the days a payload contains — Rulantica's maintenance closure stood
+    as 14 OPERATING days for seven months. It is retracted now, but only inside
+    the months the fetch reports as answered, because an empty or throttled month
+    says nothing about its days: [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md).
 - **Two writers, never one cell.** `curated_may_get_wet`, `curated_minimum_height`
   and `curated_stats` sit _beside_ the synced column, never in it, because the
   sync overwrites its own cell on every run. Read via `resolveCuratedFacts`.
