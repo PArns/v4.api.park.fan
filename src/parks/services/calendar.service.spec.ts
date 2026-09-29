@@ -743,6 +743,45 @@ describe("CalendarService › assembleFromMonthCaches (private)", () => {
     expect(out.days[0].crowdLevel).toBe("closed");
   });
 
+  describe("headlinerForecast across midnight", () => {
+    const forecast = (extra: Record<string, unknown> = {}) => ({
+      rides: [{ name: "Taron", waitTime: 50 }],
+      avgWait: 50,
+      ...extra,
+    });
+
+    it("strips a forecast from a day that was future when cached and is past now", () => {
+      // Written as today = 08-16, when 08-17 was tomorrow; read as today = 08-18.
+      const days = [day("2026-08-17", { headlinerForecast: forecast() })];
+
+      const out = assemble(days, "2026-08-17", "2026-08-17", "2026-08-18");
+
+      expect(out.days[0].headlinerForecast).toBeUndefined();
+    });
+
+    it("keeps a forecast on today and on future days", () => {
+      const days = [
+        day("2026-08-18", { headlinerForecast: forecast() }),
+        day("2026-08-19", { headlinerForecast: forecast() }),
+      ];
+
+      const out = assemble(days, "2026-08-18", "2026-08-19", "2026-08-18");
+
+      expect(out.days[0].headlinerForecast).toBeDefined();
+      expect(out.days[1].headlinerForecast).toBeDefined();
+    });
+
+    it("keeps recorded peaks on a past day (actual: true)", () => {
+      const days = [
+        day("2026-08-17", { headlinerForecast: forecast({ actual: true }) }),
+      ];
+
+      const out = assemble(days, "2026-08-17", "2026-08-17", "2026-08-18");
+
+      expect(out.days[0].headlinerForecast?.actual).toBe(true);
+    });
+  });
+
   it("leaves a past OPERATING day's measured level alone", () => {
     const days = [
       day("2026-08-17", { status: "OPERATING", crowdLevel: "low" }),
