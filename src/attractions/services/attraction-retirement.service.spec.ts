@@ -1,6 +1,7 @@
 import {
   AttractionRetirementService,
   RECLASSIFIED_UPSTREAM_REASON,
+  isOnParkPage,
   retiredKindOf,
 } from "./attraction-retirement.service";
 
@@ -159,5 +160,50 @@ describe("retiredKindOf", () => {
         retiredReason: RECLASSIFIED_UPSTREAM_REASON,
       }),
     ).toBe("reclassified");
+  });
+});
+
+/**
+ * A closed ride stays on its park page for a year after it closed, then answers
+ * only on its own URL. X2 closed on 2026-07-13.
+ */
+describe("isOnParkPage", () => {
+  const x2 = {
+    retiredAt: new Date("2026-07-13T00:00:00Z"),
+    retiredReason: "https://park.fan/news/x2-six-flags-magic-mountain-closed",
+    retiredHidden: false,
+  };
+
+  it("lists a ride closed less than a year ago", () => {
+    expect(isOnParkPage(x2, new Date("2026-09-30T12:00:00Z"))).toBe(true);
+    expect(isOnParkPage(x2, new Date("2027-07-12T00:00:00Z"))).toBe(true);
+  });
+
+  it("takes it off a year after it closed", () => {
+    expect(isOnParkPage(x2, new Date("2027-07-14T00:00:00Z"))).toBe(false);
+  });
+
+  it("takes it off sooner when an editor hid it", () => {
+    expect(
+      isOnParkPage(
+        { ...x2, retiredHidden: true },
+        new Date("2026-09-30T12:00:00Z"),
+      ),
+    ).toBe(false);
+  });
+
+  it("never lists a reclassification or a live row", () => {
+    expect(
+      isOnParkPage(
+        { ...x2, retiredReason: RECLASSIFIED_UPSTREAM_REASON },
+        new Date("2026-09-30T12:00:00Z"),
+      ),
+    ).toBe(false);
+    expect(
+      isOnParkPage(
+        { retiredAt: null, retiredReason: null, retiredHidden: false },
+        new Date("2026-09-30T12:00:00Z"),
+      ),
+    ).toBe(false);
   });
 });

@@ -541,9 +541,10 @@ export class Attraction {
    *
    * A closed ride is listed on its park's page (`closedAttractions` on the park
    * payload) so a visitor who looks for it there finds out what happened, and
-   * its own page links back. Years later that list is clutter, and this is the
-   * switch for it: set by hand through
-   * `POST /admin/retired-attractions/:id/hidden`, never by a job.
+   * its own page links back. It leaves that list on its own a year after it
+   * closed (`CLOSED_RIDE_PARK_PAGE_DAYS`); this is the switch for taking it off
+   * sooner, set by hand through `POST /admin/retired-attractions/:id/hidden`,
+   * never by a job.
    *
    * The ride page and its sitemap entry stay, because the ranking a URL has
    * earned does not expire with the visitor's interest in the park's history.

@@ -1,6 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
-import { IsNull, Repository } from "typeorm";
+import { IsNull, MoreThan, Repository } from "typeorm";
 import { AttractionsService } from "./attractions.service";
 import { Attraction } from "./entities/attraction.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
@@ -9,6 +9,7 @@ import { WartezeitenClient } from "../external-apis/wartezeiten/wartezeiten.clie
 import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
 import { ParksService } from "../parks/parks.service";
 import { createTestAttraction } from "../../test/fixtures/attraction.fixtures";
+import { RECLASSIFIED_UPSTREAM_REASON } from "./services/attraction-retirement.service";
 
 describe("AttractionsService", () => {
   let service: AttractionsService;
@@ -191,6 +192,42 @@ describe("AttractionsService", () => {
       const result = await service.findByParkId("empty-park");
 
       expect(result).toEqual({ data: [], total: 0 });
+    });
+  });
+
+  describe("findClosedForParkPage", () => {
+    it("asks only for closures of the last year that nobody hid", async () => {
+      const now = new Date("2026-09-30T12:00:00Z");
+      mockAttractionRepository.find.mockResolvedValue([]);
+
+      await service.findClosedForParkPage("park-1", now);
+
+      expect(mockAttractionRepository.find).toHaveBeenCalledWith({
+        where: {
+          parkId: "park-1",
+          retiredAt: MoreThan(new Date("2025-09-30T12:00:00Z")),
+          retiredHidden: false,
+        },
+      });
+    });
+
+    it("drops a reclassification the query let through", async () => {
+      const now = new Date("2026-09-30T12:00:00Z");
+      const x2 = createTestAttraction("park-1", {
+        name: "X2",
+        retiredAt: new Date("2026-07-13T00:00:00Z"),
+        retiredReason: null,
+        retiredHidden: false,
+      });
+      const show = createTestAttraction("park-1", {
+        name: "Some Show",
+        retiredAt: new Date("2026-09-01T00:00:00Z"),
+        retiredReason: RECLASSIFIED_UPSTREAM_REASON,
+        retiredHidden: false,
+      });
+      mockAttractionRepository.find.mockResolvedValue([x2, show]);
+
+      expect(await service.findClosedForParkPage("park-1", now)).toEqual([x2]);
     });
   });
 
