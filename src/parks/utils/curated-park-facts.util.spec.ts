@@ -2,6 +2,7 @@ import {
   CURATED_PARK_COLUMNS,
   CURATED_PARK_DB_COLUMNS,
   resolveCuratedPark,
+  resolveEarlyEntry,
   resolveNoWaitTimesReason,
   resolveParkInfo,
 } from "./curated-park-facts.util";
@@ -177,13 +178,16 @@ describe("CURATED_PARK_DB_COLUMNS", () => {
     // The list is derived by lowercasing camelCase, and it goes straight into
     // SQL. A future column whose `name:` does not follow that rule would drop
     // out of the "nothing curated yet" filter without any error — this pins
-    // the fifteen that exist.
+    // the ones that exist.
     expect(CURATED_PARK_DB_COLUMNS).toEqual([
       "curated_name",
       "curated_park_type",
       "curated_article_de",
       "curated_no_wait_times_reason",
       "curated_uses_twelve_hour_clock",
+      "curated_has_early_entry",
+      "curated_early_entry_minutes_peak",
+      "curated_early_entry_minutes_off_peak",
       "curated_website",
       "curated_tickets_url",
       "curated_wikipedia_url",
@@ -243,5 +247,51 @@ describe("resolveArticleDe", () => {
       resolveCuratedPark({ curatedArticleDe: "ein" }).articleDe,
     ).toBeNull();
     expect(resolveCuratedPark({ curatedArticleDe: "  " }).articleDe).toBeNull();
+  });
+});
+
+describe("resolveEarlyEntry", () => {
+  it("serves nothing for a park nobody checked", () => {
+    expect(resolveEarlyEntry({})).toBeNull();
+    expect(resolveEarlyEntry({ curatedHasEarlyEntry: null })).toBeNull();
+  });
+
+  it("serves nothing for a park checked and found without, even with minutes left behind", () => {
+    expect(
+      resolveEarlyEntry({
+        curatedHasEarlyEntry: false,
+        curatedEarlyEntryMinutesPeak: 30,
+      }),
+    ).toBeNull();
+  });
+
+  it("serves the flag alone when no minutes were written", () => {
+    expect(resolveEarlyEntry({ curatedHasEarlyEntry: true })).toEqual({
+      hasEarlyEntry: true,
+    });
+  });
+
+  it("serves both values of a pair", () => {
+    expect(
+      resolveEarlyEntry({
+        curatedHasEarlyEntry: true,
+        curatedEarlyEntryMinutesPeak: 45,
+        curatedEarlyEntryMinutesOffPeak: 15,
+      }),
+    ).toEqual({
+      hasEarlyEntry: true,
+      earlyEntryMinutesPeak: 45,
+      earlyEntryMinutesOffPeak: 15,
+    });
+  });
+
+  it("drops minutes the planner cannot subtract", () => {
+    expect(
+      resolveEarlyEntry({
+        curatedHasEarlyEntry: true,
+        curatedEarlyEntryMinutesPeak: 0,
+        curatedEarlyEntryMinutesOffPeak: 7.5,
+      }),
+    ).toEqual({ hasEarlyEntry: true });
   });
 });

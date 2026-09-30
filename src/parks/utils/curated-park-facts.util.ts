@@ -44,6 +44,9 @@ export interface CuratedParkSource {
   curatedCurrency?: string | null;
   curatedFastPassTermId?: string | null;
   curatedFastPassPriceFrom?: number | null;
+  curatedHasEarlyEntry?: boolean | null;
+  curatedEarlyEntryMinutesPeak?: number | null;
+  curatedEarlyEntryMinutesOffPeak?: number | null;
 }
 
 /**
@@ -145,6 +148,9 @@ export const CURATED_PARK_COLUMNS = [
   "curatedArticleDe",
   "curatedNoWaitTimesReason",
   "curatedUsesTwelveHourClock",
+  "curatedHasEarlyEntry",
+  "curatedEarlyEntryMinutesPeak",
+  "curatedEarlyEntryMinutesOffPeak",
   "curatedWebsite",
   "curatedTicketsUrl",
   "curatedWikipediaUrl",
@@ -241,4 +247,37 @@ export function resolveParkInfo(park: CuratedParkSource): ParkInfo | null {
   };
 
   return Object.values(info).some((value) => value !== null) ? info : null;
+}
+
+/** What the API serves of a park's early entry. Only ever built for `true`. */
+export interface ResolvedEarlyEntry {
+  hasEarlyEntry: true;
+  earlyEntryMinutesPeak?: number;
+  earlyEntryMinutesOffPeak?: number;
+}
+
+/**
+ * The park's early entry, or null when it has none or nobody checked.
+ *
+ * `false` and `null` both come out as null, like every other curated flag in
+ * the payload: the global interceptor strips null keys, and a client asking
+ * "does this park have early entry" must not have to tell "no" from "unknown".
+ * A minutes value that is not a positive whole number is dropped rather than
+ * served, because the planner subtracts it from the opening time.
+ */
+export function resolveEarlyEntry(
+  park: CuratedParkSource,
+): ResolvedEarlyEntry | null {
+  if (park.curatedHasEarlyEntry !== true) return null;
+  const minutes = (value: number | null | undefined): number | undefined =>
+    typeof value === "number" && Number.isInteger(value) && value > 0
+      ? value
+      : undefined;
+  const peak = minutes(park.curatedEarlyEntryMinutesPeak);
+  const offPeak = minutes(park.curatedEarlyEntryMinutesOffPeak);
+  return {
+    hasEarlyEntry: true,
+    ...(peak !== undefined ? { earlyEntryMinutesPeak: peak } : {}),
+    ...(offPeak !== undefined ? { earlyEntryMinutesOffPeak: offPeak } : {}),
+  };
 }

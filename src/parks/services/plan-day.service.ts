@@ -41,7 +41,10 @@ import {
   type PlanDayAvailabilityInput,
 } from "../utils/plan-day-availability.util";
 import { buildLiveWaitTimes } from "../dto/live-wait-times.dto";
-import { resolveCuratedPark } from "../utils/curated-park-facts.util";
+import {
+  resolveCuratedPark,
+  resolveEarlyEntry,
+} from "../utils/curated-park-facts.util";
 import {
   isCurrentlyInSeason,
   resolveCuratedFacts,
@@ -299,6 +302,8 @@ export class PlanDayService {
       liveWaitTimes: buildLiveWaitTimes(
         resolveCuratedPark(park).noWaitTimesReason,
       ),
+      // Spread, so a park without early entry carries no key at all.
+      ...resolveEarlyEntry(park),
     };
 
     const base: PlanDayDto = {
