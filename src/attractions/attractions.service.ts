@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, IsNull, Not, Repository } from "typeorm";
+import { In, IsNull, MoreThan, Repository } from "typeorm";
 import { Attraction } from "./entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
@@ -17,7 +17,10 @@ import {
   ThemeParksEntitySync,
 } from "../common/sync/theme-parks-entity-sync";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
-import { retiredKindOf } from "./services/attraction-retirement.service";
+import {
+  closedRideParkPageCutoff,
+  isOnParkPage,
+} from "./services/attraction-retirement.service";
 
 /** What `syncAttractions` keeps in memory while it walks one park's rides. */
 interface AttractionSyncState extends ParkSyncState {
@@ -436,15 +439,23 @@ export class AttractionsService extends ThemeParksEntitySync<
 
   /**
    * The rides of a park that closed for good and still show on its page:
-   * retired as `closed` (a reclassification closed nothing) and not hidden by
-   * an editor. The park page lists them apart from its live rides; see
-   * `buildClosedAttractions`.
+   * retired as `closed` (a reclassification closed nothing), not hidden by an
+   * editor, and closed within `CLOSED_RIDE_PARK_PAGE_DAYS` — after a year a
+   * ride answers only on its own URL. The park page lists them apart from its
+   * live rides; see `buildClosedAttractions`.
    */
-  async findClosedForParkPage(parkId: string): Promise<Attraction[]> {
+  async findClosedForParkPage(
+    parkId: string,
+    now: Date = new Date(),
+  ): Promise<Attraction[]> {
     const rows = await this.attractionRepository.find({
-      where: { parkId, retiredAt: Not(IsNull()), retiredHidden: false },
+      where: {
+        parkId,
+        retiredAt: MoreThan(closedRideParkPageCutoff(now)),
+        retiredHidden: false,
+      },
     });
-    return rows.filter((row) => retiredKindOf(row) === "closed");
+    return rows.filter((row) => isOnParkPage(row, now));
   }
 
   /**

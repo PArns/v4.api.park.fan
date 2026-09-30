@@ -49,6 +49,7 @@ import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.se
 import {
   AttractionRetirementService,
   RetirementRequest,
+  isOnParkPage,
   retiredKindOf,
 } from "../attractions/services/attraction-retirement.service";
 import {
@@ -241,6 +242,9 @@ export class AdminController {
         reason: a.retiredReason,
         kind: retiredKindOf(a),
         hidden: a.retiredHidden,
+        // False for a reclassification, a hidden ride, and a closure older
+        // than CLOSED_RIDE_PARK_PAGE_DAYS.
+        onParkPage: isOnParkPage(a),
       })),
     };
   }

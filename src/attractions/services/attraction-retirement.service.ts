@@ -73,6 +73,43 @@ export const RETIRED_KIND_VALUES: readonly RetiredKind[] = [
 ];
 
 /**
+ * How long a closed ride stays on its park's page after it closed.
+ *
+ * A year covers the season after the closure, when visitors still look for the
+ * ride where it used to be. After that the park page is about the park as it
+ * is, and the ride answers only on its own URL: its page and its sitemap entry
+ * stay, because the ranking they earned does not expire with that interest.
+ * `retiredHidden` takes a ride off sooner; nothing puts one back later.
+ */
+export const CLOSED_RIDE_PARK_PAGE_DAYS = 365;
+
+/** The oldest closing date still listed on a park page at `now`. */
+export function closedRideParkPageCutoff(now: Date = new Date()): Date {
+  return new Date(now.getTime() - CLOSED_RIDE_PARK_PAGE_DAYS * 86_400_000);
+}
+
+/**
+ * Whether a retired row is listed on its park's page: a closure, not hidden by
+ * an editor, and closed within {@link CLOSED_RIDE_PARK_PAGE_DAYS}. The query
+ * in `AttractionsService.findClosedForParkPage` and the admin list both ask
+ * this, so the two cannot disagree.
+ */
+export function isOnParkPage(
+  row: {
+    retiredAt: Date | null;
+    retiredReason: string | null;
+    retiredHidden?: boolean | null;
+  },
+  now: Date = new Date(),
+): boolean {
+  return (
+    retiredKindOf(row) === "closed" &&
+    row.retiredHidden !== true &&
+    row.retiredAt!.getTime() > closedRideParkPageCutoff(now).getTime()
+  );
+}
+
+/**
  * Which retirement a row carries, or null while it is not retired.
  *
  * Served so that no client has to match {@link RECLASSIFIED_UPSTREAM_REASON}
