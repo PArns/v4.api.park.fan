@@ -1,15 +1,16 @@
 import { SitemapService } from "./sitemap.service";
 
 /**
- * The attraction sitemap has to list exactly the rides a park page can render.
+ * The attraction sitemap has to list exactly the ride pages the frontend can
+ * render.
  *
- * The park payload drops retired rides (`ParksService.loadParkRelations`), and
- * the frontend resolves a ride page from that payload, so a retired ride's URL
- * is a 404. This query did not carry the filter: on 2026-09-24 it listed 70
- * retired rides, 420 sitemap URLs across the six locales that all 404ed.
+ * That is every ride in the park payload, plus every ride retired as closed:
+ * the frontend renders those from the detail endpoint as closed permanently.
+ * A row the children sync retired as a show or a restaurant has no ride page
+ * and stays out.
  *
- * The payload also keeps one row per attraction NAME, which cost another 48
- * entries measured on 2026-09-26 — see `oneRowPerName` (PAR-498).
+ * The payload keeps one row per attraction NAME, which cost 48 entries
+ * measured on 2026-09-26 — see `oneRowPerName` (PAR-498).
  */
 describe("SitemapService.getAttractionsSitemap", () => {
   const phantasialand = {
@@ -46,12 +47,74 @@ describe("SitemapService.getAttractionsSitemap", () => {
     return { service, conditions, redis };
   }
 
-  it("leaves retired rides out, as the park payload does", async () => {
+  it("keeps closed rides in the query and leaves reclassified rows out", async () => {
     const { service, conditions } = setup();
 
     await service.getAttractionsSitemap();
 
-    expect(conditions).toContain("a.retiredAt IS NULL");
+    expect(conditions).toContain(
+      "(a.retiredAt IS NULL OR a.retiredReason IS NULL OR a.retiredReason NOT IN (:...reclassified))",
+    );
+  });
+
+  it("lists a ride retired as closed", async () => {
+    const { service } = setup([
+      {
+        slug: "x2",
+        name: "X2",
+        retiredAt: new Date("2026-07-13T00:00:00Z"),
+        retiredReason:
+          "https://park.fan/news/x2-six-flags-magic-mountain-closed",
+        park: phantasialand,
+      },
+      { slug: "taron", name: "Taron", park: phantasialand },
+    ]);
+
+    const items = await service.getAttractionsSitemap();
+
+    expect(items.map((item) => item.slug).sort()).toEqual(["taron", "x2"]);
+  });
+
+  it("never lets a closed row win a name group over a live ride", async () => {
+    // `chooseNameDuplicateWinner` would pick the unsuffixed slug, which here is
+    // the closed row. The payload serves the live one, so that is the URL.
+    const { service } = setup([
+      {
+        slug: "raven",
+        name: "Raven",
+        retiredAt: new Date("2025-11-01T00:00:00Z"),
+        retiredReason: "Replaced by a new coaster of the same name.",
+        park: phantasialand,
+      },
+      { slug: "raven-2", name: "Raven", park: phantasialand },
+    ]);
+
+    const items = await service.getAttractionsSitemap();
+
+    expect(items.map((item) => item.slug)).toEqual(["raven-2"]);
+  });
+
+  it("collapses closed rows that share a name", async () => {
+    const { service } = setup([
+      {
+        slug: "dino-sue",
+        name: "Dino-Sue",
+        retiredAt: new Date("2026-02-01T00:00:00Z"),
+        retiredReason: null,
+        park: phantasialand,
+      },
+      {
+        slug: "dino-sue-2",
+        name: "Dino-Sue",
+        retiredAt: new Date("2026-02-01T00:00:00Z"),
+        retiredReason: null,
+        park: phantasialand,
+      },
+    ]);
+
+    const items = await service.getAttractionsSitemap();
+
+    expect(items.map((item) => item.slug)).toEqual(["dino-sue"]);
   });
 
   it("still requires the park's full geo path", async () => {

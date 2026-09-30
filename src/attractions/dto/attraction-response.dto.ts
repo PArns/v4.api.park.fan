@@ -38,6 +38,11 @@ import { WorksPeriodDto } from "./works-period.dto";
 import { resolveWorksPeriod } from "../utils/curated-out-of-service.util";
 import { FastPassDto } from "./fast-pass.dto";
 import { resolveFastPass } from "../utils/fast-pass.util";
+import {
+  RETIRED_KIND_VALUES,
+  retiredKindOf,
+  type RetiredKind,
+} from "../services/attraction-retirement.service";
 
 /**
  * One weekday/weekend bucket of the typical-waits summary.
@@ -582,11 +587,12 @@ export class AttractionResponseDto {
       "search, the favorites list, the geo listing's attraction count and the " +
       "park and global analytics counters, but " +
       "keeps answering here so its history stays " +
-      'readable — render it as "operated until …", never as closed. ' +
+      'readable — render it as "closed permanently since …", never as the ' +
+      "daily CLOSED a ride comes back from. " +
       "One case does not mean that: where the children sync retired a row " +
       "because ThemeParks.wiki reclassified the entity as a show or a " +
       "restaurant, this is the day that was noticed and the ride never " +
-      "stopped existing. `retiredReason` says which of the two it is.",
+      "stopped existing. `retiredKind` says which of the two it is.",
     required: false,
     nullable: true,
   })
@@ -594,11 +600,26 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
-      "Why it was retired, including the source it was established from.",
+      "Why it was retired, including the source it was established from. " +
+      "Free text in English, often just the URL of the source; read " +
+      "`retiredKind`, not this, to decide what the retirement means.",
     required: false,
     nullable: true,
   })
   retiredReason?: string | null;
+
+  @ApiProperty({
+    description:
+      "Which retirement `retiredAt` is, or null while the attraction is not " +
+      "retired. `closed`: the ride stopped operating for good — it keeps its " +
+      "page and its sitemap entry and is shown as closed permanently. " +
+      "`reclassified`: ThemeParks.wiki now lists the entity as a show or a " +
+      "restaurant, so it is no longer tracked as a ride; nothing closed.",
+    enum: RETIRED_KIND_VALUES,
+    required: false,
+    nullable: true,
+  })
+  retiredKind?: RetiredKind | null;
 
   /**
    * The stored half of an attraction: everything that comes off the row itself.
@@ -650,6 +671,7 @@ export class AttractionResponseDto {
         ? attraction.retiredAt.toISOString()
         : null,
       retiredReason: attraction.retiredReason ?? null,
+      retiredKind: retiredKindOf(attraction),
       isCurrentlyInSeason: isCurrentlyInSeason(curated),
     };
   }

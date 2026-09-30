@@ -109,6 +109,7 @@ describe("AttractionResponseDto › status on the two builders", () => {
       "park",
       "rcdbId",
       "retiredAt",
+      "retiredKind",
       "retiredReason",
       "seasonMonths",
       "slug",

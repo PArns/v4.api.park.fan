@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, IsNull, Repository } from "typeorm";
+import { In, IsNull, Not, Repository } from "typeorm";
 import { Attraction } from "./entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
@@ -17,6 +17,7 @@ import {
   ThemeParksEntitySync,
 } from "../common/sync/theme-parks-entity-sync";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
+import { retiredKindOf } from "./services/attraction-retirement.service";
 
 /** What `syncAttractions` keeps in memory while it walks one park's rides. */
 interface AttractionSyncState extends ParkSyncState {
@@ -431,6 +432,19 @@ export class AttractionsService extends ThemeParksEntitySync<
     });
 
     return { data, total };
+  }
+
+  /**
+   * The rides of a park that closed for good and still show on its page:
+   * retired as `closed` (a reclassification closed nothing) and not hidden by
+   * an editor. The park page lists them apart from its live rides; see
+   * `buildClosedAttractions`.
+   */
+  async findClosedForParkPage(parkId: string): Promise<Attraction[]> {
+    const rows = await this.attractionRepository.find({
+      where: { parkId, retiredAt: Not(IsNull()), retiredHidden: false },
+    });
+    return rows.filter((row) => retiredKindOf(row) === "closed");
   }
 
   /**
