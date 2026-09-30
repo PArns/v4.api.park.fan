@@ -1,4 +1,8 @@
 import type { WeatherSummary } from "../dto/integrated-calendar.dto";
+import {
+  CLIMATE_NORMAL_PERIOD,
+  ClimateNormalDay,
+} from "../../external-apis/weather/climate-normals";
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
 
 /**
@@ -54,6 +58,7 @@ export function toWeatherSummary(
   if (tempMin === undefined && tempMax === undefined) return undefined;
 
   return {
+    basis: "forecast",
     condition: weather.weatherCode
       ? getWeatherDescription(weather.weatherCode)
       : "unknown",
@@ -72,5 +77,25 @@ export function toWeatherSummary(
     humidity: num(weather.humidity),
     apparentTemp: num(weather.apparentTemperature),
     icon: weather.weatherCode ?? 0,
+  };
+}
+
+/**
+ * The calendar's weather block for a climate normal.
+ *
+ * Same shape as a forecast's, so a client that draws a tile can draw this one,
+ * and marked `basis: "climate_normal"` so a client that cares can tell. The
+ * fields a normal cannot have (humidity, feels-like) stay absent.
+ */
+export function toClimateNormalSummary(
+  normal: ClimateNormalDay | null | undefined,
+): WeatherSummary | undefined {
+  if (!normal) return undefined;
+  const summary = toWeatherSummary(normal);
+  if (!summary) return undefined;
+  return {
+    ...summary,
+    basis: "climate_normal",
+    normalPeriod: CLIMATE_NORMAL_PERIOD,
   };
 }

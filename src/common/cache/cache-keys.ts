@@ -29,6 +29,10 @@ export const CacheKeys = {
   /** 16-day weather forecast per park. */
   weatherForecast: (parkId: string): string => `weather:forecast:${parkId}`,
 
+  /** Climate normals per park (not a forecast; never read by the ML path). */
+  weatherClimateNormals: (parkId: string): string =>
+    `weather:climate-normals:${parkId}`,
+
   /** Park-level ML predictions for one park-local day. */
   mlParkPredictions: (
     parkId: string,

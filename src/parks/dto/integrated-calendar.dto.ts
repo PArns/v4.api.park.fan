@@ -92,6 +92,25 @@ export class OperatingHours {
  * Weather Summary
  */
 export class WeatherSummary {
+  @ApiProperty({
+    enum: ["forecast", "climate_normal"],
+    description:
+      'What the figures are. "forecast": a measured or forecast day from the ' +
+      'weather sync. "climate_normal": the long-run mean for this calendar ' +
+      "day at the park, served beyond the forecast's reach. It says what such " +
+      "a date is usually like, not what this day will be like, and must not " +
+      "be shown or used as a forecast.",
+  })
+  basis: "forecast" | "climate_normal";
+
+  @ApiProperty({
+    required: false,
+    description:
+      'Averaging period of a "climate_normal" (first-last year). Absent for a forecast.',
+    example: "2015-2024",
+  })
+  normalPeriod?: string;
+
   @ApiProperty()
   condition: string;
 

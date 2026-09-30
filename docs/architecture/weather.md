@@ -82,6 +82,24 @@ The integrated park endpoint (`GET /v1/parks/:continent/:country/:city/:slug`) r
 
 ---
 
+## Climate Normals (beyond the forecast)
+
+The forecast stops after 16 days. For a later travel day the calendar (and with it `/plan/day`) serves the park's **climate normal**: the long-run mean for that calendar day, marked so nobody takes it for a forecast.
+
+| | |
+|---|---|
+| Source | Open-Meteo **archive** API (`archive-api.open-meteo.com/v1/archive`, ERA5 reanalysis). Same provider, licence and attribution as the forecast calls. |
+| Reference period | 2015-01-01 to 2024-12-31 (10 full years), constants in `src/external-apis/weather/climate-normals.ts` |
+| Resolution | Daily values at the park's coordinates (rounded to 0.01°). Each calendar day averages `±3` days across all years (70 samples), 366 keys `MM-DD` |
+| Fields | temperature max/min, precipitation, rain, snowfall, max wind, most frequent WMO code |
+| Request volume | One request per park location (10 years of daily data), cached in Redis for 30 days (client) and 7 days (service). Nothing is fetched until a calendar window reaches past today |
+
+**In the response.** `weather` on a calendar day carries `basis: "forecast" | "climate_normal"`. A normal also has `normalPeriod: "2015-2024"`. `basis` is present on every weather block, so a client that ignores it is ignoring a field that is always there. A normal never fills a day that has a forecast row, and it is not used for the day's `recommendation`.
+
+**Why it is walled off from the wait-time model.** The model takes weather as a feature and cannot see the difference between "the mean of this date" and "what the model expects on this day". So a normal is never written to `weather_data` (the table `ml-service/db.py` trains on), never returned by `getCurrentAndForecast` or `getHourlyForecast` (what `MLService` sends), and cached under its own key (`weather:climate-normals:<parkId>`). `weather.service.climate-normals.spec.ts` pins each of these, including that neither `ml-service/*.py` nor `ml.service.ts` mentions normals.
+
+---
+
 ## Storage
 
 **Entity**: `src/parks/entities/weather-data.entity.ts`

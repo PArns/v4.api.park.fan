@@ -5,6 +5,13 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { logRateLimitBlock } from "../../common/utils/file-logger.util";
 import { BROWSER_HEADERS } from "../../common/constants/http-headers.constant";
+import {
+  ArchiveDaily,
+  CLIMATE_NORMAL_FIRST_YEAR,
+  CLIMATE_NORMAL_LAST_YEAR,
+  ClimateNormals,
+  buildClimateNormals,
+} from "./climate-normals";
 
 /**
  * Open-Meteo Weather API Client
@@ -339,6 +346,72 @@ export class OpenMeteoClient {
         );
         throw new Error(`Open-Meteo API error: ${errorMessage}`);
       }
+    });
+  }
+
+  /**
+   * Climate normals for a location: the mean of the ERA5 daily archive over the
+   * reference period (`CLIMATE_NORMAL_*`), one entry per calendar day.
+   *
+   * One request of ten years of daily values per location. Same provider, same
+   * licence and same quota as the forecast calls above (Open-Meteo's archive
+   * endpoint). The result is not a forecast: callers must serve it under its
+   * own marker and never store it next to forecast rows.
+   *
+   * Cached per rounded lat/lon for 30 days; the archive of finished years does
+   * not change.
+   */
+  async getClimateNormals(
+    latitude: number,
+    longitude: number,
+  ): Promise<ClimateNormals> {
+    const latR = Math.round(latitude * 100) / 100;
+    const lonR = Math.round(longitude * 100) / 100;
+    const cacheKey = `weather:climate:${CLIMATE_NORMAL_FIRST_YEAR}-${CLIMATE_NORMAL_LAST_YEAR}:${latR}:${lonR}`;
+    try {
+      const cached = await this.redis.get(cacheKey);
+      if (cached) return JSON.parse(cached);
+    } catch {
+      // Cache miss is fine
+    }
+
+    return this.dedupe(cacheKey, async () => {
+      const data = await this.requestWithRetry<{ daily: ArchiveDaily }>(
+        "https://archive-api.open-meteo.com/v1/archive",
+        {
+          params: {
+            latitude,
+            longitude,
+            start_date: `${CLIMATE_NORMAL_FIRST_YEAR}-01-01`,
+            end_date: `${CLIMATE_NORMAL_LAST_YEAR}-12-31`,
+            daily: [
+              "temperature_2m_max",
+              "temperature_2m_min",
+              "precipitation_sum",
+              "rain_sum",
+              "snowfall_sum",
+              "weathercode",
+              "windspeed_10m_max",
+            ].join(","),
+            timezone: "auto",
+          },
+        },
+      );
+      const normals = buildClimateNormals(data.daily);
+      // An empty result is an upstream hiccup, not a place without climate.
+      if (Object.keys(normals).length > 0) {
+        try {
+          await this.redis.set(
+            cacheKey,
+            JSON.stringify(normals),
+            "EX",
+            30 * 24 * 60 * 60,
+          );
+        } catch {
+          // Cache write failure is non-critical
+        }
+      }
+      return normals;
     });
   }
 

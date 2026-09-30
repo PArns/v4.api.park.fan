@@ -1,4 +1,7 @@
-import { toWeatherSummary } from "./weather-summary.util";
+import {
+  toClimateNormalSummary,
+  toWeatherSummary,
+} from "./weather-summary.util";
 
 /**
  * A day nobody has a forecast for must not read as a cold, clear day.
@@ -97,5 +100,41 @@ describe("toWeatherSummary", () => {
     const summary = toWeatherSummary(aRow({ weatherCode: null }));
     expect(summary?.condition).toBe("unknown");
     expect(summary?.icon).toBe(0);
+  });
+});
+
+describe("weather basis", () => {
+  const normal = {
+    temperatureMin: 14,
+    temperatureMax: 26.5,
+    precipitationSum: 2.1,
+    rainSum: 2.1,
+    snowfallSum: 0,
+    windSpeedMax: 18,
+    weatherCode: 3,
+  };
+
+  it("marks a synced day as a forecast", () => {
+    expect(toWeatherSummary(normal)?.basis).toBe("forecast");
+  });
+
+  it("marks a normal as one and names its period", () => {
+    expect(toClimateNormalSummary(normal)).toMatchObject({
+      basis: "climate_normal",
+      normalPeriod: "2015-2024",
+      tempMin: 14,
+      tempMax: 26.5,
+    });
+  });
+
+  it("serves no normal for a day without one or without a temperature", () => {
+    expect(toClimateNormalSummary(undefined)).toBeUndefined();
+    expect(
+      toClimateNormalSummary({
+        ...normal,
+        temperatureMin: null,
+        temperatureMax: null,
+      }),
+    ).toBeUndefined();
   });
 });

@@ -19,6 +19,7 @@ import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
+import { ClimateNormals } from "../external-apis/weather/climate-normals";
 import { addDays } from "date-fns";
 import { fromZonedTime } from "date-fns-tz";
 
@@ -885,5 +886,39 @@ export class WeatherService {
     );
 
     return result;
+  }
+  /**
+   * Climate normals for a park (mean weather per calendar day), or `null` when
+   * the park has no coordinates or the archive is unreachable.
+   *
+   * This is deliberately a separate method and a separate cache from
+   * `getCurrentAndForecast` / `getHourlyForecast`: those feed `weather_data`
+   * readers and the wait-time model, which must never see a normal as if it
+   * were a forecast. Only the calendar reads this, and it labels every value
+   * `basis: "climate_normal"`. Pinned by `weather.service.climate-normals.spec.ts`.
+   */
+  async getClimateNormals(parkId: string): Promise<ClimateNormals | null> {
+    const cacheKey = CacheKeys.weatherClimateNormals(parkId);
+    const cached = safeJsonParse<ClimateNormals>(
+      await this.redis.get(cacheKey).catch(() => null),
+    );
+    if (cached) return cached;
+
+    const park = await this.parkRepository.findOne({
+      where: { id: parkId },
+      select: ["id", "latitude", "longitude"],
+    });
+    if (!park || !park.latitude || !park.longitude) return null;
+
+    const normals = await this.openMeteoClient.getClimateNormals(
+      park.latitude,
+      park.longitude,
+    );
+    if (Object.keys(normals).length === 0) return null;
+
+    await this.redis
+      .set(cacheKey, JSON.stringify(normals), "EX", 7 * 24 * 60 * 60)
+      .catch(() => undefined);
+    return normals;
   }
 }

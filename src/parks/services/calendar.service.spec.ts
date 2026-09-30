@@ -958,8 +958,14 @@ describe("CalendarService › buildDaysBounded (private)", () => {
  */
 describe("CalendarService › buildCalendarResponse day list across DST", () => {
   let service: CalendarService;
+  const weatherMock = {
+    getWeatherData: jest.fn(),
+    getClimateNormals: jest.fn(),
+  };
 
   beforeEach(async () => {
+    weatherMock.getWeatherData.mockReset().mockResolvedValue([]);
+    weatherMock.getClimateNormals.mockReset().mockResolvedValue(null);
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CalendarService,
@@ -976,7 +982,7 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
         },
         {
           provide: WeatherService,
-          useValue: { getWeatherData: jest.fn().mockResolvedValue([]) },
+          useValue: weatherMock,
         },
         {
           provide: MLService,
@@ -1067,5 +1073,81 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
     const october = await dates("2026-10-01", "2026-10-31", "Europe/Berlin");
     expect(october).toHaveLength(31);
     expect(new Set(october).size).toBe(31);
+  });
+  describe("climate normals past the forecast's reach", () => {
+    // Far enough ahead to be "future" whenever the suite runs.
+    const FROM = "2099-07-10";
+    const TO = "2099-07-12";
+    const hot = {
+      temperatureMax: 39.9,
+      temperatureMin: 25,
+      precipitationSum: 18,
+      rainSum: 18,
+      snowfallSum: 0,
+      windSpeedMax: 60,
+      weatherCode: 95,
+    };
+
+    const build = async () => {
+      const { parseDateRange } =
+        await import("../../common/utils/date-parsing.util");
+      const { fromDate, toDate } = parseDateRange(FROM, TO, {
+        timezone: "Europe/Berlin",
+      });
+      return service.buildCalendarResponse(
+        {
+          id: "p1",
+          slug: "test-park",
+          timezone: "Europe/Berlin",
+          countryCode: "DE",
+        } as any,
+        fromDate,
+        toDate,
+        "none",
+      );
+    };
+
+    it("fills a day with no forecast from the normal and marks it as one", async () => {
+      weatherMock.getClimateNormals.mockResolvedValue({ "07-11": hot });
+      const days = (await build()).days;
+      const day = days.find((d) => d.date === "2099-07-11");
+      expect(day?.weather).toMatchObject({
+        basis: "climate_normal",
+        normalPeriod: "2015-2024",
+        tempMax: 39.9,
+      });
+      // Only the day the normal covers gets weather.
+      expect(
+        days.find((d) => d.date === "2099-07-10")?.weather,
+      ).toBeUndefined();
+    });
+
+    it("prefers a forecast row and marks it as a forecast", async () => {
+      weatherMock.getClimateNormals.mockResolvedValue({ "07-11": hot });
+      weatherMock.getWeatherData.mockResolvedValue([
+        { ...hot, temperatureMax: 21, date: new Date("2099-07-11T12:00:00Z") },
+      ]);
+      const day = (await build()).days.find((d) => d.date === "2099-07-11");
+      expect(day?.weather).toMatchObject({ basis: "forecast", tempMax: 21 });
+      expect(day?.weather?.normalPeriod).toBeUndefined();
+    });
+
+    it("leaves the day without weather when the normals are unavailable", async () => {
+      weatherMock.getClimateNormals.mockRejectedValue(
+        new Error("archive down"),
+      );
+      const day = (await build()).days.find((d) => d.date === "2099-07-11");
+      expect(day?.weather).toBeUndefined();
+    });
+
+    it("does not let a normal move the day's recommendation", async () => {
+      const without = (await build()).days.find((d) => d.date === "2099-07-11");
+      weatherMock.getClimateNormals.mockResolvedValue({ "07-11": hot });
+      const withNormal = (await build()).days.find(
+        (d) => d.date === "2099-07-11",
+      );
+      expect(withNormal?.weather?.basis).toBe("climate_normal");
+      expect(withNormal?.recommendation).toEqual(without?.recommendation);
+    });
   });
 });

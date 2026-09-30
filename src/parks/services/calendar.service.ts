@@ -32,7 +32,14 @@ import {
 } from "../../common/utils/holiday.utils";
 import { normalizeRegionCode } from "../../common/utils/region.util";
 import { WeatherData } from "../entities/weather-data.entity";
-import { toWeatherSummary } from "../utils/weather-summary.util";
+import {
+  toClimateNormalSummary,
+  toWeatherSummary,
+} from "../utils/weather-summary.util";
+import {
+  ClimateNormals,
+  monthDayKey,
+} from "../../external-apis/weather/climate-normals";
 import { isClosedByOperatingRange } from "../utils/schedule-closed-day.util";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { rateOrUnknown } from "../../common/utils/crowd-level.util";
@@ -439,6 +446,18 @@ export class CalendarService {
     // forecast or a measurement, none of them a spot reading, so the whole response is
     // day-stable and may be cached for a day.
 
+    // Climate normals only for windows that reach past today; a failure leaves
+    // those days without weather, as before.
+    const climateNormals =
+      toStr > today
+        ? await this.weatherService.getClimateNormals(park.id).catch((err) => {
+            this.logger.warn(
+              `Climate normals unavailable for ${park.slug}: ${err.message}`,
+            );
+            return null;
+          })
+        : null;
+
     // Build the calendar days in parallel, but bounded — see
     // CALENDAR_DAY_BUDGET.
     const days = await this.buildDaysBounded(datesToBuild, (date) => {
@@ -464,6 +483,7 @@ export class CalendarService {
         dateStr < today
           ? historicalForecastByDate.get(dateStr)
           : headlinerForecastByDate.get(dateStr),
+        climateNormals,
       );
     });
 
@@ -768,6 +788,7 @@ export class CalendarService {
     derivedHours: { openingTime: string; closingTime: string } | null = null,
     ratable: boolean = true,
     headlinerForecast?: HeadlinerForecast,
+    climateNormals: ClimateNormals | null = null,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // Find schedule for this day
@@ -1031,7 +1052,16 @@ export class CalendarService {
     // A row exists for every day in the window, including the ones the model
     // has not reached — see `toWeatherSummary`, which is where "no reading"
     // stays "no reading" instead of becoming 0 °C.
-    const weatherSummary = toWeatherSummary(weather);
+    const forecastSummary = toWeatherSummary(weather);
+    // Past the forecast's reach a future day has no weather at all. The park's
+    // climate normal stands in, marked `basis: "climate_normal"`. It is not a
+    // forecast, so it stays out of the recommendation score below and out of
+    // every reader of `weather_data` (the wait-time model among them).
+    const weatherSummary =
+      forecastSummary ??
+      (dateStr > today
+        ? toClimateNormalSummary(climateNormals?.[monthDayKey(dateStr)])
+        : undefined);
 
     const day: CalendarDay = {
       date: dateStr,
@@ -1058,7 +1088,7 @@ export class CalendarService {
             isSchoolVacation,
             isBridgeDay,
             influencingHolidays.length,
-            weatherSummary || null,
+            forecastSummary || null,
           ),
       events: events.length > 0 ? events : undefined,
       influencingHolidays:
