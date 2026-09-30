@@ -1,4 +1,8 @@
-import { ParkWithAttractionsDto } from "./park-with-attractions.dto";
+import {
+  ParkWithAttractionsDto,
+  buildClosedAttractions,
+} from "./park-with-attractions.dto";
+import type { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../entities/park.entity";
 
 /**
@@ -265,5 +269,90 @@ describe("ParkWithAttractionsDto.fromEntity › indoorOutdoor", () => {
   it("reads null for a ride nobody has checked", () => {
     const dto = ParkWithAttractionsDto.fromEntity(parkWith([ride()]));
     expect(dto.attractions[0]!.indoorOutdoor).toBeNull();
+  });
+});
+
+/**
+ * The park page lists the rides that closed for good, apart from the live ones.
+ * X2 at Magic Mountain was retired on 2026-07-13 and vanished from the page
+ * without a word, while its news post linked to a 404.
+ */
+describe("buildClosedAttractions", () => {
+  const park = {
+    id: "park-1",
+    slug: "six-flags-magic-mountain",
+    continentSlug: "north-america",
+    countrySlug: "united-states",
+    citySlug: "santa-clarita",
+  } as unknown as Park;
+
+  const closed = (
+    slug: string,
+    name: string,
+    retiredAt: string,
+    extra: Record<string, unknown> = {},
+  ) =>
+    ({
+      id: `id-${slug}`,
+      slug,
+      name,
+      retiredAt: new Date(retiredAt),
+      retiredReason: null,
+      ...extra,
+    }) as unknown as Attraction;
+
+  it("lists closed rides newest first, with the ride page's path", () => {
+    const list = buildClosedAttractions(
+      park,
+      [
+        closed("psyclone", "Psyclone", "2006-11-01T00:00:00Z"),
+        closed("x2", "X2", "2026-07-13T00:00:00Z"),
+      ],
+      [{ name: "Twisted Colossus" }],
+    );
+
+    expect(list.map((a) => a.slug)).toEqual(["x2", "psyclone"]);
+    expect(list[0]).toMatchObject({
+      name: "X2",
+      retiredAt: "2026-07-13T00:00:00.000Z",
+      url: "/v1/parks/north-america/united-states/santa-clarita/six-flags-magic-mountain/attractions/x2",
+    });
+  });
+
+  it("leaves out a closed ride whose name a live ride now carries", () => {
+    const list = buildClosedAttractions(
+      park,
+      [closed("raven", "Raven", "2025-11-01T00:00:00Z")],
+      [{ name: "Raven" }],
+    );
+
+    expect(list).toEqual([]);
+  });
+
+  it("keeps one row of closed rides that share a name", () => {
+    const list = buildClosedAttractions(
+      park,
+      [
+        closed("dino-sue-2", "Dino-Sue", "2026-02-01T00:00:00Z"),
+        closed("dino-sue", "Dino-Sue", "2026-02-01T00:00:00Z"),
+      ],
+      [],
+    );
+
+    expect(list.map((a) => a.slug)).toEqual(["dino-sue"]);
+  });
+
+  it("names a ride by its curated name", () => {
+    const list = buildClosedAttractions(
+      park,
+      [
+        closed("x2", "X2 ", "2026-07-13T00:00:00Z", {
+          curatedName: "X2",
+        }),
+      ],
+      [],
+    );
+
+    expect(list[0].name).toBe("X2");
   });
 });

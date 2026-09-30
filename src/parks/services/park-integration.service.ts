@@ -3,7 +3,10 @@ import { CacheKeys } from "../../common/cache/cache-keys";
 import { safeJsonParse } from "../../common/utils/json.util";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
-import { ParkWithAttractionsDto } from "../dto/park-with-attractions.dto";
+import {
+  ParkWithAttractionsDto,
+  buildClosedAttractions,
+} from "../dto/park-with-attractions.dto";
 import { buildRopeDropInfo } from "../../common/utils/rope-drop-info.util";
 import { WeatherItemDto } from "../dto/weather-item.dto";
 import { getWeatherDescription } from "../../common/constants/wmo-weather-codes.constant";
@@ -214,6 +217,7 @@ export class ParkIntegrationService {
       weatherWarnings,
       operatingDateRange,
       parkObservedRecently,
+      closedRows,
     ] = await Promise.all([
       this.weatherService.getCurrentAndForecast(park.id),
       this.parksService.getUpcomingSchedule(park.id, 16),
@@ -230,6 +234,10 @@ export class ParkIntegrationService {
       this.queueDataService
         .hasObservedReadingWithin(park.id, PARK_FEED_SILENT_DAYS)
         .catch(() => true),
+      // A handful of rows at most. An empty list on failure only drops the
+      // "closed permanently" list from the park page; it must not cost the
+      // rest of the payload.
+      this.attractionsService.findClosedForParkPage(park.id).catch(() => []),
     ]);
     const hourlyRes = mlPredictionsResult;
 
@@ -1451,6 +1459,14 @@ export class ParkIntegrationService {
     dto.attractions = this.deduplicateEntities(dto.attractions || []);
     dto.shows = this.deduplicateEntities(dto.shows || []);
     dto.restaurants = this.deduplicateEntities(dto.restaurants || []);
+
+    // After the dedupe, because a closed ride that shares a name with a live
+    // one is left out, and the live names are the ones this payload serves.
+    dto.closedAttractions = buildClosedAttractions(
+      park,
+      closedRows,
+      dto.attractions,
+    );
 
     // Cache the complete response with dynamic TTL
     // For CLOSED parks: TTL expires ~5 min before next opening to ensure fresh data

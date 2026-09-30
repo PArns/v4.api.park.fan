@@ -183,7 +183,10 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
           provide: WeatherWarningsService,
           useValue: { getActiveWarnings: jest.fn().mockResolvedValue([]) },
         },
-        { provide: AttractionsService, useValue: {} },
+        {
+          provide: AttractionsService,
+          useValue: { findClosedForParkPage: jest.fn().mockResolvedValue([]) },
+        },
         {
           provide: ShowsService,
           useValue: {

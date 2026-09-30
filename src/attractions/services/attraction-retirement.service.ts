@@ -189,6 +189,7 @@ export class AttractionRetirementService {
     await this.attractionRepository.update(attractionId, {
       retiredAt: null,
       retiredReason: null,
+      retiredHidden: false,
     });
     await invalidateParkCaches(this.redis, attraction.parkId).catch(() => {});
     await this.revalidationService
@@ -196,6 +197,34 @@ export class AttractionRetirementService {
       .catch(() => {});
 
     this.logger.log(`↩️  Un-retired "${attraction.name}"`);
+    return true;
+  }
+
+  /**
+   * Show or hide a closed ride on its park's page. The ride page and the
+   * sitemap entry are not affected — see `Attraction.retiredHidden`.
+   *
+   * Refused for a row that is not retired: the flag would sit there unseen and
+   * hide the ride the day somebody retires it.
+   */
+  async setRetiredHidden(
+    attractionId: string,
+    hidden: boolean,
+  ): Promise<boolean> {
+    const attraction = await this.attractionRepository.findOne({
+      where: { id: attractionId },
+    });
+    if (!attraction || attraction.retiredAt === null) return false;
+
+    await this.attractionRepository.update(attractionId, {
+      retiredHidden: hidden,
+    });
+    await invalidateParkCaches(this.redis, attraction.parkId).catch(() => {});
+    await this.revalidationService.revalidateTags(["parks"]).catch(() => {});
+
+    this.logger.log(
+      `${hidden ? "🙈 Hid" : "👁️  Showed"} "${attraction.name}" on its park page`,
+    );
     return true;
   }
 

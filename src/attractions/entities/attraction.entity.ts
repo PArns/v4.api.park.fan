@@ -536,6 +536,23 @@ export class Attraction {
   @Column({ name: "retired_reason", type: "text", nullable: true })
   retiredReason: string | null;
 
+  /**
+   * Takes a ride retired as closed off its park's page, and off nothing else.
+   *
+   * A closed ride is listed on its park's page (`closedAttractions` on the park
+   * payload) so a visitor who looks for it there finds out what happened, and
+   * its own page links back. Years later that list is clutter, and this is the
+   * switch for it: set by hand through
+   * `POST /admin/retired-attractions/:id/hidden`, never by a job.
+   *
+   * The ride page and its sitemap entry stay, because the ranking a URL has
+   * earned does not expire with the visitor's interest in the park's history.
+   * Cleared again by an un-retirement, so a ride that comes back is never
+   * hidden by a leftover flag.
+   */
+  @Column({ name: "retired_hidden", type: "boolean", default: false })
+  retiredHidden: boolean;
+
   @OneToMany(() => QueueData, (queueData) => queueData.attraction)
   queueData: QueueData[];
 

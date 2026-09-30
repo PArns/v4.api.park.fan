@@ -49,6 +49,7 @@ import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.se
 import {
   AttractionRetirementService,
   RetirementRequest,
+  retiredKindOf,
 } from "../attractions/services/attraction-retirement.service";
 import {
   AttractionReviewService,
@@ -238,7 +239,27 @@ export class AdminController {
         park: a.park?.name ?? null,
         retiredAt: a.retiredAt,
         reason: a.retiredReason,
+        kind: retiredKindOf(a),
+        hidden: a.retiredHidden,
       })),
+    };
+  }
+
+  @Post("retired-attractions/:id/hidden")
+  @AdminMinRole("owner")
+  @ApiOperation({
+    summary:
+      "Show or hide a closed ride on its park page (ride page and sitemap stay)",
+  })
+  async setRetiredHidden(
+    @Param("id") id: string,
+    @Body() body: { hidden?: unknown },
+  ) {
+    if (typeof body?.hidden !== "boolean") {
+      throw new BadRequestException("`hidden` must be true or false");
+    }
+    return {
+      updated: await this.retirementService.setRetiredHidden(id, body.hidden),
     };
   }
 

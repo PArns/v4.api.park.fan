@@ -38,6 +38,11 @@ import {
   resolveParkInfo,
   type ParkInfo,
 } from "../utils/curated-park-facts.util";
+import type { Attraction } from "../../attractions/entities/attraction.entity";
+import {
+  nameDuplicateKey,
+  outranksNameDuplicate,
+} from "../../common/utils/name-duplicate.util";
 
 export class ParkAttractionDto {
   @ApiProperty({ description: "Unique identifier" })
@@ -589,6 +594,89 @@ export class RopeDropHeadlinerDto {
   strength: "high" | "moderate";
 }
 
+/**
+ * A ride of this park that closed for good, as the park page lists it.
+ *
+ * Deliberately not a `ParkAttractionDto`: that list is the park as it is
+ * today, and every count, filter and planner reads it that way. This one is
+ * the rides a visitor may still look for, each with the date it closed and the
+ * URL of its own page, which keeps answering.
+ */
+export class ClosedAttractionDto {
+  @ApiProperty({ description: "Attraction id" })
+  id: string;
+
+  @ApiProperty({ description: "Name (curated where a human wrote one)" })
+  name: string;
+
+  @ApiProperty({ description: "Slug of the ride page" })
+  slug: string;
+
+  @ApiProperty({
+    description: "API path of the ride's detail endpoint",
+    nullable: true,
+  })
+  url: string | null;
+
+  @ApiProperty({ description: "Themed area", nullable: true, required: false })
+  land: string | null;
+
+  @ApiProperty({ description: "When it closed for good (ISO 8601)" })
+  retiredAt: string;
+}
+
+/**
+ * The park's closed rides as its page lists them: retired as `closed`, not
+ * hidden (the caller's query decides both), newest closure first.
+ *
+ * Grouped by name the way the live list is, and a closed ride never shares a
+ * name with a live one here: a new ride under the old name is the one that
+ * name belongs to, the same rule the attraction sitemap applies.
+ */
+export function buildClosedAttractions(
+  park: Park,
+  closed: Attraction[],
+  live: readonly { name: string }[],
+): ClosedAttractionDto[] {
+  const liveNames = new Set(
+    live
+      .map((a) => nameDuplicateKey(a.name))
+      .filter((key): key is string => key !== null),
+  );
+
+  const byName = new Map<string, Attraction>();
+  for (const attraction of closed) {
+    if (!attraction.retiredAt) continue;
+    const key = nameDuplicateKey(resolveCuratedFacts(attraction).name);
+    if (key === null || liveNames.has(key)) continue;
+
+    const incumbent = byName.get(key);
+    if (
+      !incumbent ||
+      outranksNameDuplicate(
+        { slug: attraction.slug, name: key },
+        { slug: incumbent.slug, name: key },
+      )
+    ) {
+      byName.set(key, attraction);
+    }
+  }
+
+  return [...byName.values()]
+    .sort((a, b) => b.retiredAt!.getTime() - a.retiredAt!.getTime())
+    .map((attraction) => {
+      const curated = resolveCuratedFacts(attraction);
+      return {
+        id: attraction.id,
+        name: curated.name,
+        slug: attraction.slug,
+        url: buildAttractionUrl(park, attraction) || null,
+        land: curated.landName,
+        retiredAt: attraction.retiredAt!.toISOString(),
+      };
+    });
+}
+
 export class ParkWithAttractionsDto {
   @ApiProperty({ description: "Unique identifier of the park" })
   id: string;
@@ -724,6 +812,17 @@ export class ParkWithAttractionsDto {
     required: false,
   })
   attractions: ParkAttractionDto[];
+
+  @ApiProperty({
+    description:
+      "Rides of this park that closed for good, newest closure first. Not part " +
+      "of `attractions`: nothing here counts toward the park today. Each ride's " +
+      "own page keeps answering. A ride an editor hid is left out; so is one " +
+      "whose name a live ride now carries.",
+    type: [ClosedAttractionDto],
+    required: false,
+  })
+  closedAttractions?: ClosedAttractionDto[];
 
   @ApiProperty({
     description:

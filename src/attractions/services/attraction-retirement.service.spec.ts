@@ -87,7 +87,31 @@ describe("AttractionRetirementService", () => {
     expect(update).toHaveBeenCalledWith("a1", {
       retiredAt: null,
       retiredReason: null,
+      // A ride that comes back must not stay hidden by a leftover flag.
+      retiredHidden: false,
     });
+  });
+
+  it("hides a closed ride on its park page and tells the frontend", async () => {
+    const { service, findOne, update, revalidateTags } = build();
+    findOne.mockResolvedValue({
+      id: "a1",
+      name: "X2",
+      parkId: "p1",
+      retiredAt: new Date("2026-07-13T00:00:00Z"),
+    });
+
+    expect(await service.setRetiredHidden("a1", true)).toBe(true);
+    expect(update).toHaveBeenCalledWith("a1", { retiredHidden: true });
+    expect(revalidateTags).toHaveBeenCalledWith(["parks"]);
+  });
+
+  it("refuses to hide a ride that is not retired", async () => {
+    const { service, findOne, update } = build();
+    findOne.mockResolvedValue({ id: "a1", name: "Taron", retiredAt: null });
+
+    expect(await service.setRetiredHidden("a1", true)).toBe(false);
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("reports nothing to undo for an attraction that is not retired", async () => {
