@@ -277,10 +277,13 @@ export class PlanDayService {
       closeHour,
       ...(hoursSource ? { hoursSource } : {}),
       crowdLevel: theDay?.crowdLevel ?? null,
-      // No climate normal substituted past the forecast's reach. A made-up rain
-      // probability would silently move every bar on the day, and the caller
-      // cannot tell an invented one from a real one.
-      weather: (theDay?.weather as Record<string, unknown> | undefined) ?? null,
+      // No climate normal substituted past the forecast's reach. The calendar
+      // now carries one (`basis: "climate_normal"`), but this context moves
+      // every bar on the day, and a normal says nothing about this day.
+      weather:
+        theDay?.weather && theDay.weather.basis !== "climate_normal"
+          ? (theDay.weather as unknown as Record<string, unknown>)
+          : null,
       isHoliday: Boolean(theDay?.isHoliday),
       isBridgeDay: Boolean(theDay?.isBridgeDay),
       isSchoolVacation: Boolean(theDay?.isSchoolVacation),

@@ -103,6 +103,18 @@ describe("toWeatherSummary", () => {
   });
 });
 
+describe("weather code 0", () => {
+  it("is clear sky, not unknown", () => {
+    const summary = toWeatherSummary({
+      temperatureMin: 10,
+      temperatureMax: 20,
+      weatherCode: 0,
+    });
+    expect(summary?.condition).not.toBe("unknown");
+    expect(summary?.icon).toBe(0);
+  });
+});
+
 describe("weather basis", () => {
   const normal = {
     temperatureMin: 14,

@@ -446,10 +446,13 @@ export class CalendarService {
     // forecast or a measurement, none of them a spot reading, so the whole response is
     // day-stable and may be cached for a day.
 
-    // Climate normals only for windows that reach past today; a failure leaves
-    // those days without weather, as before.
+    // Climate normals only for windows that reach past the forecast (16 days).
+    // Served from the cache; a miss warms it in the background (see
+    // `WeatherService.getClimateNormals`), so this never waits on the archive.
+    const forecastReach = new Date(`${today}T12:00:00Z`);
+    forecastReach.setUTCDate(forecastReach.getUTCDate() + 15);
     const climateNormals =
-      toStr > today
+      toStr > forecastReach.toISOString().slice(0, 10)
         ? await this.weatherService.getClimateNormals(park.id).catch((err) => {
             this.logger.warn(
               `Climate normals unavailable for ${park.slug}: ${err.message}`,

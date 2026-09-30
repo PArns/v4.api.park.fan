@@ -73,6 +73,8 @@ export class OpenMeteoClient {
   // callers fail fast during an upstream outage instead of each burning retries.
   private readonly CIRCUIT_KEY = "ratelimit:openmeteo:circuit";
   private readonly CIRCUIT_COOLDOWN = 30; // seconds the circuit stays open
+  // The archive (climate normals) is throttled apart from the forecast calls.
+  private readonly ARCHIVE_BLOCKED_KEY = "ratelimit:openmeteo-archive:blocked";
   // Hourly forecast is stable across hours; nowcast covers real-time. Refresh
   // every ~6h with jitter to respect the quota and avoid synchronized expiry.
   private readonly CACHE_TTL = 6 * 60 * 60; // 6 hours
@@ -350,67 +352,94 @@ export class OpenMeteoClient {
   }
 
   /**
-   * Climate normals for a location: the mean of the ERA5 daily archive over the
-   * reference period (`CLIMATE_NORMAL_*`), one entry per calendar day.
-   *
-   * One request of ten years of daily values per location. Same provider, same
-   * licence and same quota as the forecast calls above (Open-Meteo's archive
-   * endpoint). The result is not a forecast: callers must serve it under its
-   * own marker and never store it next to forecast rows.
-   *
-   * Cached per rounded lat/lon for 30 days; the archive of finished years does
-   * not change.
+   * Cached climate normals for a location, without any upstream call.
+   * `null` when none have been fetched yet (or the cache is unreachable).
    */
-  async getClimateNormals(
+  async peekClimateNormals(
+    latitude: number,
+    longitude: number,
+  ): Promise<ClimateNormals | null> {
+    try {
+      const cached = await this.redis.get(this.climateKey(latitude, longitude));
+      return cached ? (JSON.parse(cached) as ClimateNormals) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private climateKey(latitude: number, longitude: number): string {
+    const latR = Math.round(latitude * 100) / 100;
+    const lonR = Math.round(longitude * 100) / 100;
+    return `weather:climate:${CLIMATE_NORMAL_FIRST_YEAR}-${CLIMATE_NORMAL_LAST_YEAR}:${latR}:${lonR}`;
+  }
+
+  /**
+   * Fetches climate normals: the mean of the ERA5 daily archive over the
+   * reference period (`CLIMATE_NORMAL_*`), one entry per calendar day, and
+   * caches them for 30 days.
+   *
+   * Expensive: ten years of seven daily variables weigh about 180 calls of
+   * Open-Meteo's daily allowance per location (variables / 10 × days / 14). So
+   * this is one attempt with no retries, never on a request's critical path
+   * (see `WeatherService.warmClimateNormals`), and it keeps its own block and
+   * circuit keys: an archive 429 or 5xx must not stop the forecast sync that
+   * feeds the wait-time model.
+   *
+   * Same provider, licence and attribution as the forecast calls. Throws when
+   * the archive is blocked or fails.
+   */
+  async fetchClimateNormals(
     latitude: number,
     longitude: number,
   ): Promise<ClimateNormals> {
     const latR = Math.round(latitude * 100) / 100;
     const lonR = Math.round(longitude * 100) / 100;
-    const cacheKey = `weather:climate:${CLIMATE_NORMAL_FIRST_YEAR}-${CLIMATE_NORMAL_LAST_YEAR}:${latR}:${lonR}`;
-    try {
-      const cached = await this.redis.get(cacheKey);
-      if (cached) return JSON.parse(cached);
-    } catch {
-      // Cache miss is fine
-    }
+    const cacheKey = this.climateKey(latitude, longitude);
 
     return this.dedupe(cacheKey, async () => {
-      const data = await this.requestWithRetry<{ daily: ArchiveDaily }>(
-        "https://archive-api.open-meteo.com/v1/archive",
-        {
-          params: {
-            latitude,
-            longitude,
-            start_date: `${CLIMATE_NORMAL_FIRST_YEAR}-01-01`,
-            end_date: `${CLIMATE_NORMAL_LAST_YEAR}-12-31`,
-            daily: [
-              "temperature_2m_max",
-              "temperature_2m_min",
-              "precipitation_sum",
-              "rain_sum",
-              "snowfall_sum",
-              "weathercode",
-              "windspeed_10m_max",
-            ].join(","),
-            timezone: "auto",
+      if (await this.redis.get(this.ARCHIVE_BLOCKED_KEY)) {
+        throw new Error("Open-Meteo archive: blocked");
+      }
+      let data: { daily: ArchiveDaily };
+      try {
+        const response = await this.client.get<{ daily: ArchiveDaily }>(
+          "https://archive-api.open-meteo.com/v1/archive",
+          {
+            params: {
+              latitude: latR,
+              longitude: lonR,
+              start_date: `${CLIMATE_NORMAL_FIRST_YEAR}-01-01`,
+              end_date: `${CLIMATE_NORMAL_LAST_YEAR}-12-31`,
+              daily: [
+                "temperature_2m_max",
+                "temperature_2m_min",
+                "precipitation_sum",
+                "rain_sum",
+                "snowfall_sum",
+                "weathercode",
+                "windspeed_10m_max",
+              ].join(","),
+              timezone: "auto",
+            },
           },
-        },
-      );
+        );
+        data = response.data;
+      } catch (error) {
+        // Any failure (429, 5xx, network) parks the archive for 15 minutes.
+        await this.redis
+          .set(this.ARCHIVE_BLOCKED_KEY, "true", "EX", 15 * 60)
+          .catch(() => {});
+        throw error;
+      }
+
       const normals = buildClimateNormals(data.daily);
       // An empty result is an upstream hiccup, not a place without climate.
-      if (Object.keys(normals).length > 0) {
-        try {
-          await this.redis.set(
-            cacheKey,
-            JSON.stringify(normals),
-            "EX",
-            30 * 24 * 60 * 60,
-          );
-        } catch {
-          // Cache write failure is non-critical
-        }
+      if (Object.keys(normals).length === 0) {
+        throw new Error("Open-Meteo archive: no data");
       }
+      await this.redis
+        .set(cacheKey, JSON.stringify(normals), "EX", 30 * 24 * 60 * 60)
+        .catch(() => {});
       return normals;
     });
   }

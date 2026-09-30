@@ -59,9 +59,10 @@ export function toWeatherSummary(
 
   return {
     basis: "forecast",
-    condition: weather.weatherCode
-      ? getWeatherDescription(weather.weatherCode)
-      : "unknown",
+    condition:
+      weather.weatherCode != null
+        ? getWeatherDescription(weather.weatherCode)
+        : "unknown",
     // One known end fills the other: a single figure is honest, a range with an
     // invented end is not.
     tempMin: tempMin ?? tempMax!,

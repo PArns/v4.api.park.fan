@@ -887,38 +887,79 @@ export class WeatherService {
 
     return result;
   }
-  /**
-   * Climate normals for a park (mean weather per calendar day), or `null` when
-   * the park has no coordinates or the archive is unreachable.
-   *
-   * This is deliberately a separate method and a separate cache from
-   * `getCurrentAndForecast` / `getHourlyForecast`: those feed `weather_data`
-   * readers and the wait-time model, which must never see a normal as if it
-   * were a forecast. Only the calendar reads this, and it labels every value
-   * `basis: "climate_normal"`. Pinned by `weather.service.climate-normals.spec.ts`.
-   */
-  async getClimateNormals(parkId: string): Promise<ClimateNormals | null> {
-    const cacheKey = CacheKeys.weatherClimateNormals(parkId);
-    const cached = safeJsonParse<ClimateNormals>(
-      await this.redis.get(cacheKey).catch(() => null),
-    );
-    if (cached) return cached;
+  /** Parks whose normals may be fetched per day; ~180 API calls each. */
+  private static readonly CLIMATE_WARM_BUDGET_PER_DAY = 20;
 
+  private async coordinatesOf(
+    parkId: string,
+  ): Promise<{ latitude: number; longitude: number } | null> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
       select: ["id", "latitude", "longitude"],
     });
-    if (!park || !park.latitude || !park.longitude) return null;
+    if (!park || park.latitude == null || park.longitude == null) return null;
+    return { latitude: park.latitude, longitude: park.longitude };
+  }
 
-    const normals = await this.openMeteoClient.getClimateNormals(
-      park.latitude,
-      park.longitude,
+  /**
+   * Climate normals for a park (mean weather per calendar day) from the cache,
+   * or `null` when they are not there yet. Never calls the archive: a request
+   * must not wait for, or pay the quota of, ten years of daily data. A miss
+   * starts `warmClimateNormals` in the background.
+   *
+   * Deliberately separate from `getCurrentAndForecast` / `getHourlyForecast`:
+   * those feed `weather_data` readers and the wait-time model, which must never
+   * see a normal as if it were a forecast. Only the calendar reads this, and it
+   * labels every value `basis: "climate_normal"`. Pinned by
+   * `weather.service.climate-normals.spec.ts`.
+   */
+  async getClimateNormals(parkId: string): Promise<ClimateNormals | null> {
+    const coords = await this.coordinatesOf(parkId);
+    if (!coords) return null;
+    const cached = await this.openMeteoClient.peekClimateNormals(
+      coords.latitude,
+      coords.longitude,
     );
-    if (Object.keys(normals).length === 0) return null;
+    if (cached) return cached;
+    void this.warmClimateNormals(parkId, coords);
+    return null;
+  }
 
-    await this.redis
-      .set(cacheKey, JSON.stringify(normals), "EX", 7 * 24 * 60 * 60)
-      .catch(() => undefined);
-    return normals;
+  /**
+   * Fetches a park's normals in the background. At most
+   * `CLIMATE_WARM_BUDGET_PER_DAY` parks a day, and a failed park is not tried
+   * again for an hour, so neither a crawler nor an upstream outage can turn
+   * calendar requests into archive traffic.
+   */
+  async warmClimateNormals(
+    parkId: string,
+    coords?: { latitude: number; longitude: number } | null,
+  ): Promise<void> {
+    try {
+      const target = coords ?? (await this.coordinatesOf(parkId));
+      if (!target) return;
+      const failedKey = `weather:climate-normals:failed:${parkId}`;
+      if (await this.redis.get(failedKey)) return;
+      const day = new Date().toISOString().slice(0, 10);
+      const budgetKey = `weather:climate-normals:budget:${day}`;
+      const used = await this.redis.incr(budgetKey);
+      await this.redis.expire(budgetKey, 2 * 24 * 60 * 60);
+      if (used > WeatherService.CLIMATE_WARM_BUDGET_PER_DAY) return;
+      try {
+        await this.openMeteoClient.fetchClimateNormals(
+          target.latitude,
+          target.longitude,
+        );
+      } catch (error) {
+        await this.redis.set(failedKey, "1", "EX", 60 * 60);
+        throw error;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Climate normals not fetched for park ${parkId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 }

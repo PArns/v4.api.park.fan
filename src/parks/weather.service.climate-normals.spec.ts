@@ -36,13 +36,16 @@ describe("climate normals never reach the wait-time model", () => {
     }),
   };
   const client = {
-    getClimateNormals: jest.fn().mockResolvedValue(normals),
+    peekClimateNormals: jest.fn(),
+    fetchClimateNormals: jest.fn(),
     getHourlyForecast: jest.fn().mockResolvedValue({ hours: [] }),
   };
   const redis = {
     get: jest.fn().mockResolvedValue(null),
     set: jest.fn().mockResolvedValue("OK"),
     del: jest.fn(),
+    incr: jest.fn().mockResolvedValue(1),
+    expire: jest.fn().mockResolvedValue(1),
   };
   let service: WeatherService;
 
@@ -54,7 +57,9 @@ describe("climate normals never reach the wait-time model", () => {
       latitude: 50.8,
       longitude: 6.87,
     });
-    client.getClimateNormals.mockResolvedValue(normals);
+    client.peekClimateNormals.mockResolvedValue(normals);
+    client.fetchClimateNormals.mockResolvedValue(normals);
+    redis.incr.mockResolvedValue(1);
     client.getHourlyForecast.mockResolvedValue({ hours: [] });
     redis.get.mockResolvedValue(null);
     const module = await Test.createTestingModule({
@@ -71,26 +76,55 @@ describe("climate normals never reach the wait-time model", () => {
 
   it("reading normals writes nothing to weather_data", async () => {
     await expect(service.getClimateNormals("p1")).resolves.toEqual(normals);
+    await service.warmClimateNormals("p1");
     expect(weatherRepo.save).not.toHaveBeenCalled();
     expect(weatherRepo.upsert).not.toHaveBeenCalled();
-  });
-
-  it("caches normals apart from the forecast keys the model's readers use", async () => {
-    await service.getClimateNormals("p1");
-    const keys = redis.set.mock.calls.map((c) => c[0] as string);
-    expect(keys).toEqual(["weather:climate-normals:p1"]);
   });
 
   it("the forecast readers never ask for normals", async () => {
     await service.getHourlyForecast("p1");
     await service.getCurrentAndForecast("p1");
-    expect(client.getClimateNormals).not.toHaveBeenCalled();
+    expect(client.peekClimateNormals).not.toHaveBeenCalled();
+    expect(client.fetchClimateNormals).not.toHaveBeenCalled();
+  });
+
+  it("a cache miss returns null at once and warms in the background", async () => {
+    client.peekClimateNormals.mockResolvedValue(null);
+    await expect(service.getClimateNormals("p1")).resolves.toBeNull();
+    await new Promise((r) => setImmediate(r));
+    expect(client.fetchClimateNormals).toHaveBeenCalledWith(50.8, 6.87);
+  });
+
+  it("stops warming once the daily budget is spent", async () => {
+    redis.incr.mockResolvedValue(21);
+    await service.warmClimateNormals("p1");
+    expect(client.fetchClimateNormals).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a failed park for an hour, and never throws", async () => {
+    client.fetchClimateNormals.mockRejectedValue(new Error("429"));
+    await expect(service.warmClimateNormals("p1")).resolves.toBeUndefined();
+    expect(redis.set).toHaveBeenCalledWith(
+      "weather:climate-normals:failed:p1",
+      "1",
+      "EX",
+      3600,
+    );
+    redis.get.mockResolvedValue("1");
+    client.fetchClimateNormals.mockClear();
+    await service.warmClimateNormals("p1");
+    expect(client.fetchClimateNormals).not.toHaveBeenCalled();
   });
 
   it("serves null, not an empty normal, for a park without coordinates", async () => {
     parkRepo.findOne.mockResolvedValue({ id: "p1", latitude: null });
     await expect(service.getClimateNormals("p1")).resolves.toBeNull();
-    expect(client.getClimateNormals).not.toHaveBeenCalled();
+    expect(client.peekClimateNormals).not.toHaveBeenCalled();
+  });
+
+  it("treats a coordinate of 0 as a coordinate", async () => {
+    parkRepo.findOne.mockResolvedValue({ id: "p1", latitude: 0, longitude: 0 });
+    await expect(service.getClimateNormals("p1")).resolves.toEqual(normals);
   });
 
   describe("source boundary", () => {
