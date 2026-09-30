@@ -1212,34 +1212,30 @@ Rough order by ROI; each its own PR. Full rationale in
       whole 192-slot context instead of ~1 h. Won on the busy segment and the
       champion swap now serves PCN intraday. _(Note: review §7 table row 6 still
       reads "Default bleibt 2" — that line is stale, the code is the truth.)_
-- [ ] **Lead-curve scoring from the stored fan** (review §3 / §7.7) — _partly done:_
-      the `pcn_blend` shadow model in `pcn-service/score.py` keeps the persistence
-      blend under live A/B (`pcn_forecasts` stays raw on purpose). What remains: the scorer
-      currently joins only the freshest origin (≈15-min leads), so the quality of
-      the actually-served longer leads (3–12h, rest-of-day) is unmeasured. Join the
-      stored 48-slot fan at lead 1h/3h/6h vs actual + persistence baseline. A
-      CatBoost head-to-head at long lead additionally needs the design-doc §12.3
-      CatBoost co-snapshot (not implemented) — optional.
-- [ ] **Feature channels** (review §5b) — DOW shipped; `is_holiday` was measured
+- [x] **Lead-curve scoring from the stored fan** (review §3 / §7.7) — done:
+      `pcn-service/score.py:344` scores the stored fan at 1/3/6 h against
+      persistence, in every score job (`score.py:418`). The optional CatBoost
+      head-to-head at long lead still needs the design-doc §12.3 co-snapshot.
+- [ ] **Feature channels** (review §5b; PAR-455 weather, PAR-456 schedule-relative
+      time, PAR-457 school break) — DOW shipped; `is_holiday` was measured
       and **rejected** (clean A/B came out flat, so it is not in the channel set —
       don't re-add it without new evidence). Still open, each through the bake-off
       on busy-MAE/bias: `is_school_break`, schedule-relative time (minutes since
       open / to close), weather (the worst-MAE list — Cheetah Hunt / Wolfpack Raft
       Slide / Manta — is a water/outdoor cluster).
-- [ ] **KPIs must follow the served model** (review §6a): "Live MAE 8.70" + the drift
-      warning (24.58/20) still measure CatBoost-stored, but PCN serves intraday. Point
-      the `prediction_accuracy` pipeline at the serving view (incl. PCN override) or
-      add a second "served" panel; split the drift monitor by horizon (CatBoost drift
-      is now a far-daily concern where it stays the sole level provider).
-- [ ] **Shape offline-vs-live reconcile** (review §6b): offline claimed −7.4% busy,
+- [x] **KPIs must follow the served model** (review §6a) — done: served panel
+      `getServedIntradayAccuracy` (`src/ml/services/prediction-accuracy.service.ts:1530`)
+      and drift split by horizon (`ml-drift-monitoring.service.ts`, `byHorizon`).
+      The far-daily measurement waits on PAR-167.
+- [ ] **Shape offline-vs-live reconcile** (review §6b; PAR-458): offline claimed −7.4% busy,
       live board shows Shape losing everywhere (busy −3.9, bias −20). After the scorer
       fix, re-read the board; then check whether the _level_ Shape renders onto
       under-shoots busy days (bias −20 smells like a level, not a curve, error). No
       producer swap to `learned.py` before this is understood.
-- [ ] **Cheap experiments from the design doc** (§11.5): Chronos-Bolt zero-shot as a
+- [ ] **Cheap experiments from the design doc** (§11.5; PAR-459 for Chronos-Bolt): Chronos-Bolt zero-shot as a
       foundation baseline (no training, instant comparison number) and TouringPlans
       pretraining seed against the ~6–7-month history gap. Weekend-sized, clear signal.
-- [ ] **Per-park training hygiene** (review §5c): no validation split / early-stop
+- [ ] **Per-park training hygiene** (review §5c; PAR-453): no validation split / early-stop
       (fixed 500 steps for a 10-ride park and a 100-ride park alike); one robust
       `_scale` per park (headliner + walk-on share a scale). Hold out the last day,
       early-stop, log per-park final loss so degenerate park models are visible before
@@ -1517,9 +1513,3 @@ all: the per-park loop wrote tz-aware values into one pandas column, which
 carries a single timezone, so every local hour was silently the UTC one. PAR-452
 converts once per timezone and stores the reading naive. The 0.4 s this saves in
 a ~45 min training was never the point.
-
-### 7. Decide: PoC scripts in nf-service
-
-`nf-service/poc_eval.py` and `poc_eval_hourly.py` are standalone eval tools in the
-same spirit as `backtest_*.py` / ml-service's `verify_*.py`. Kept for now.
-Either document them in a README line each, or delete them. Owner call.
