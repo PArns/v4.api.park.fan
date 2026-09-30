@@ -171,6 +171,9 @@ export const CacheKeys = {
    *
    * v3: same-name rows collapse to the one the park payload serves, for the
    * same reason and with the same bump (PAR-498).
+   *
+   * v4: rides retired as closed are listed again, because the frontend renders
+   * their page as closed permanently instead of a 404. Same bump.
    */
-  sitemapAttractions: (): string => "sitemap:attractions:v3",
+  sitemapAttractions: (): string => "sitemap:attractions:v4",
 } as const;

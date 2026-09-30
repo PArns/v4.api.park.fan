@@ -1,4 +1,8 @@
-import { AttractionRetirementService } from "./attraction-retirement.service";
+import {
+  AttractionRetirementService,
+  RECLASSIFIED_UPSTREAM_REASON,
+  retiredKindOf,
+} from "./attraction-retirement.service";
 
 /**
  * A demolished ride is neither "closed today" nor "unknown" — both describe a
@@ -92,5 +96,44 @@ describe("AttractionRetirementService", () => {
 
     expect(await service.unretire("a1")).toBe(false);
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The frontend keeps a `closed` ride's page and sitemap entry and prints
+ * "closed permanently" on it. A row the children sync retired is a show or a
+ * restaurant now, and printing that on it would be a claim nobody made.
+ */
+describe("retiredKindOf", () => {
+  it("is null while the row is not retired", () => {
+    expect(retiredKindOf({ retiredAt: null, retiredReason: null })).toBeNull();
+  });
+
+  it("is closed for a retirement a human entered", () => {
+    expect(
+      retiredKindOf({
+        retiredAt: new Date("2026-07-13T00:00:00Z"),
+        retiredReason:
+          "https://park.fan/news/x2-six-flags-magic-mountain-closed",
+      }),
+    ).toBe("closed");
+  });
+
+  it("is closed when a human gave no reason", () => {
+    expect(
+      retiredKindOf({
+        retiredAt: new Date("2026-02-01T00:00:00Z"),
+        retiredReason: null,
+      }),
+    ).toBe("closed");
+  });
+
+  it("is reclassified for the children sync's own retirement", () => {
+    expect(
+      retiredKindOf({
+        retiredAt: new Date("2026-09-01T00:00:00Z"),
+        retiredReason: RECLASSIFIED_UPSTREAM_REASON,
+      }),
+    ).toBe("reclassified");
   });
 });

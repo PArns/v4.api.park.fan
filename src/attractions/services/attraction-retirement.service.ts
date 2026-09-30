@@ -55,6 +55,40 @@ export function isReclassifiedUpstreamReason(
   return reason != null && RECLASSIFIED_UPSTREAM_REASONS.includes(reason);
 }
 
+/**
+ * The two things `retiredAt` can mean, as the API tells them apart.
+ *
+ * - `closed` — a human retired the ride because it stopped operating for good
+ *   (`POST /admin/retire-attractions`). The frontend renders its page as
+ *   "closed permanently since …" and keeps it in the sitemap.
+ * - `reclassified` — the children sync retired the row because ThemeParks.wiki
+ *   now lists the entity as a show or a restaurant. Nothing closed, so nothing
+ *   may say so.
+ */
+export type RetiredKind = "closed" | "reclassified";
+
+export const RETIRED_KIND_VALUES: readonly RetiredKind[] = [
+  "closed",
+  "reclassified",
+];
+
+/**
+ * Which retirement a row carries, or null while it is not retired.
+ *
+ * Served so that no client has to match {@link RECLASSIFIED_UPSTREAM_REASON}
+ * itself: that string is the sync's marker and its wording may change, and
+ * {@link RECLASSIFIED_UPSTREAM_REASONS} is the one place that keeps track.
+ */
+export function retiredKindOf(row: {
+  retiredAt: Date | null;
+  retiredReason: string | null;
+}): RetiredKind | null {
+  if (!row.retiredAt) return null;
+  return isReclassifiedUpstreamReason(row.retiredReason)
+    ? "reclassified"
+    : "closed";
+}
+
 export interface RetirementRequest {
   attractionId: string;
   /** The day it stopped existing, where a source states one. */
@@ -130,8 +164,9 @@ export class AttractionRetirementService {
     }
 
     if (results.length > 0) {
-      // The park page deduplicates at read time; the sitemap does not. Without
-      // this the removed slug keeps being advertised.
+      // The frontend holds the park payload for a day, and that payload is
+      // what decides whether a ride page renders live or as closed
+      // permanently. Without this it keeps rendering the ride as running.
       await this.revalidationService
         .revalidateTags(["geo", "parks", "attractions"])
         .catch((e) =>

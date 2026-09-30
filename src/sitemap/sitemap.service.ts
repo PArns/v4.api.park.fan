@@ -12,6 +12,10 @@ import {
   nameDuplicateKey,
 } from "../common/utils/name-duplicate.util";
 import { resolveAttractionName } from "../attractions/utils/curated-attraction-facts.util";
+import {
+  RECLASSIFIED_UPSTREAM_REASONS,
+  retiredKindOf,
+} from "../attractions/services/attraction-retirement.service";
 
 export interface AttractionSitemapItem {
   url: string;
@@ -45,6 +49,8 @@ export class SitemapService {
         "a.slug",
         "a.name",
         "a.curatedName",
+        "a.retiredAt",
+        "a.retiredReason",
         "p.id",
         "p.slug",
         "p.continentSlug",
@@ -55,14 +61,21 @@ export class SitemapService {
       .where("p.continentSlug IS NOT NULL")
       .andWhere("p.countrySlug IS NOT NULL")
       .andWhere("p.citySlug IS NOT NULL")
-      // Same rule as `ParksService.loadParkRelations`: a retired ride leaves every list that
-      // describes the park as it is today. The frontend resolves a ride page from the park
-      // payload, which already drops it, so listing it here advertised a 404 in six locales.
-      // Measured 2026-09-24: 70 of the 7,374 rows were retired (36 of them in September).
-      .andWhere("a.retiredAt IS NULL")
+      // A ride retired as closed keeps its page: the frontend renders it as closed
+      // permanently from the detail endpoint, so its URL stays listed and keeps the
+      // ranking it earned. A row the children sync retired as a show or a restaurant
+      // has no ride page to render, so it stays out. On 2026-09-24 the flat
+      // `retiredAt IS NULL` filter that stood here dropped 70 of 7,374 rows, X2 at
+      // Magic Mountain among them, and its news post linked to a 404.
+      .andWhere(
+        "(a.retiredAt IS NULL OR a.retiredReason IS NULL OR a.retiredReason NOT IN (:...reclassified))",
+        { reclassified: [...RECLASSIFIED_UPSTREAM_REASONS] },
+      )
       .getMany();
 
-    const items: AttractionSitemapItem[] = this.oneRowPerName(attractions)
+    const items: AttractionSitemapItem[] = this.oneRowPerNameWithClosed(
+      attractions,
+    )
       .map((a) => {
         const url = buildAttractionUrl(a.park, a);
         return url ? { url, slug: a.slug } : null;
@@ -75,6 +88,43 @@ export class SitemapService {
       JSON.stringify(items),
     );
     return items;
+  }
+
+  /**
+   * The live rows the park payload serves, plus the closed rides it no longer
+   * lists.
+   *
+   * The live rows are grouped exactly as before, without the closed ones, so a
+   * closed row can never take a live ride's place in a name group: the payload
+   * does not know it exists. A closed ride whose name a live ride in the same
+   * park now carries is left out — a new ride under the old name is the page
+   * that name belongs to. Closed rows that share a name among themselves
+   * collapse the same way the live ones do.
+   */
+  private oneRowPerNameWithClosed(attractions: Attraction[]): Attraction[] {
+    const live: Attraction[] = [];
+    const closed: Attraction[] = [];
+    for (const attraction of attractions) {
+      if (retiredKindOf(attraction) === "closed") closed.push(attraction);
+      else live.push(attraction);
+    }
+
+    const kept = this.oneRowPerName(live);
+    const liveNames = new Set(
+      kept.map((a) => this.parkNameKey(a)).filter((key) => key !== null),
+    );
+    const closedKept = this.oneRowPerName(closed).filter((a) => {
+      const key = this.parkNameKey(a);
+      return key !== null && !liveNames.has(key);
+    });
+
+    return [...kept, ...closedKept];
+  }
+
+  private parkNameKey(attraction: Attraction): string | null {
+    const name = nameDuplicateKey(resolveAttractionName(attraction));
+    // JSON rather than a separator: nothing in a ride name can collide with it.
+    return name === null ? null : JSON.stringify([attraction.park.id, name]);
   }
 
   /**
