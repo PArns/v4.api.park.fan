@@ -11,6 +11,14 @@ import { CacheWarmupService } from "../services/cache-warmup.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 
 /**
+ * How long before its published opening a closed park starts getting hourly
+ * predictions again. Morning planning reads them from about here on; before it,
+ * a run only re-derives the set the last run before closing already stored
+ * (each run covers 48 h), at the full ML and insert cost of a 15-minute cycle.
+ */
+const PRE_OPEN_WINDOW_MS = 3 * 60 * 60 * 1000;
+
+/**
  * Prediction Generator Processor
  *
  * Generates and stores ML predictions for all attractions.
@@ -56,7 +64,9 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
 
         // Strategy:
         // 1. If currently OPERATING (confirmed by schedule or heuristic), include it.
-        // 2. If UNKNOWN or CLOSED, check if it operates at any point today.
+        // 2. If not, include it from PRE_OPEN_WINDOW_MS before today's published
+        //    opening until its closing; without published hours, if it operates
+        //    at any point today.
         // 3. If still not included, check for very recent ride activity (safety net).
 
         if (currentStatus === "OPERATING") {
@@ -64,13 +74,17 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
           continue;
         }
 
-        // Check if park is scheduled to operate at any point today
-        // (Returns true for UNKNOWN/no-schedule parks by default)
-        const isOperatingToday = await this.parksService.isParkOperatingToday(
-          park.id,
-        );
+        // A park with published hours today is predicted from PRE_OPEN_WINDOW_MS
+        // before it opens until it closes. Parks without usable hours keep the
+        // old rule: everything that operates at any point today
+        // (isParkOperatingToday answers true for UNKNOWN/no-schedule parks).
+        const window = await this.todayOperatingWindow(park);
+        const now = Date.now();
+        const isInPredictionWindow = window
+          ? now < window.closesAt && window.opensAt - now <= PRE_OPEN_WINDOW_MS
+          : await this.parksService.isParkOperatingToday(park.id);
 
-        if (isOperatingToday) {
+        if (isInPredictionWindow) {
           parks.push(park);
           continue;
         }
@@ -188,6 +202,33 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
       this.logger.error(`Hourly prediction generation failed: ${errorMessage}`);
       throw error;
     }
+  }
+
+  /**
+   * Today's OPERATING window in epoch ms — earliest opening to latest closing,
+   * so a day split into sessions counts as one window. Null when today has no
+   * OPERATING entry with both times, which leaves the caller on its fallback.
+   */
+  private async todayOperatingWindow(park: {
+    id: string;
+    timezone?: string | null;
+  }): Promise<{ opensAt: number; closesAt: number } | null> {
+    const entries = await this.parksService.getTodaySchedule(
+      park.id,
+      park.timezone ?? undefined,
+    );
+    const operating = entries.filter(
+      (e) => e.scheduleType === "OPERATING" && e.openingTime && e.closingTime,
+    );
+    if (operating.length === 0) return null;
+    return {
+      opensAt: Math.min(
+        ...operating.map((e) => new Date(e.openingTime!).getTime()),
+      ),
+      closesAt: Math.max(
+        ...operating.map((e) => new Date(e.closingTime!).getTime()),
+      ),
+    };
   }
 
   @Process("generate-daily")
