@@ -230,16 +230,76 @@ describe("ParksController › /calendar Cache-Control", () => {
       await call(res);
 
       const { maxAge, sMaxAge, swr } = parse(res.headers["Cache-Control"]);
+      // The bound is the nearer of the hour and the park's day: in the park's last hour
+      // the day ends first, and its cap carries no 5 s buffer, so the hour alone would
+      // put the expectation 5 s above the header for 60 minutes every day.
+      const expected = () =>
+        Math.min(
+          secondsLeftThisHour(),
+          secondsUntilEndOfDayInTimezone(park.timezone),
+        );
       // A second of slack in each direction: the header is computed a moment before the
       // expectation, so the two readings can straddle a whole second.
-      expect(maxAge).toBeLessThanOrEqual(secondsLeftThisHour() + 1);
-      expect(maxAge).toBeGreaterThanOrEqual(secondsLeftThisHour() - 2);
+      expect(maxAge).toBeLessThanOrEqual(expected() + 1);
+      expect(maxAge).toBeGreaterThanOrEqual(expected() - 2);
       expect(sMaxAge).toBe(maxAge);
       // A minute of grace past the boundary, so the CDN does not revalidate every park at
       // :00 into the live aggregation — a minute, and not none: this endpoint's slow path is
       // a live aggregation of one query per day, which is why the file has this test at all.
       expect(swr).toBeLessThanOrEqual(60);
       expect(swr).toBeGreaterThan(0);
+    });
+
+    describe("with the clock pinned", () => {
+      // Only `Date` is faked: the Nest module compile awaits real timers.
+      const pinClock = (iso: string) =>
+        jest.useFakeTimers({
+          now: new Date(iso),
+          doNotFake: [
+            "nextTick",
+            "setImmediate",
+            "clearImmediate",
+            "setInterval",
+            "clearInterval",
+            "setTimeout",
+            "clearTimeout",
+            "queueMicrotask",
+            "performance",
+            "hrtime",
+            "requestAnimationFrame",
+            "cancelAnimationFrame",
+            "requestIdleCallback",
+            "cancelIdleCallback",
+          ],
+        });
+
+      afterEach(() => jest.useRealTimers());
+
+      // Berlin is UTC+2 on this date, so its day ends at 22:00:00 UTC.
+      it.each([
+        // Mid-day: the hour boundary (+5 s buffer) is the nearer bound.
+        ["10:30:00", "2026-10-01T10:30:00Z", 30 * 60 + 5],
+        // Park's last hour: the day ends 15 min away, and so does the hour; the day
+        // carries no buffer, so the header is 5 s below what the hour alone would give.
+        [
+          "21:45:00 (last hour of the park's day)",
+          "2026-10-01T21:45:00Z",
+          15 * 60,
+        ],
+      ])(
+        "does not outlive the hour or the day at %s",
+        async (_label, iso, expectedMaxAge) => {
+          pinClock(iso);
+          await mountWithDays([dayWithHourlyOn(parkDate(0))]);
+          const res = makeRes();
+
+          await call(res);
+
+          expect(parse(res.headers["Cache-Control"]).maxAge).toBe(
+            expectedMaxAge,
+          );
+        },
+      );
     });
 
     it("is the only thing shortened — the same range without a curve keeps its window", async () => {
