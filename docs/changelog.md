@@ -6,6 +6,26 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Fixed — the nightly PCN training no longer dies at the container's 8 GB limit
+
+From 2026-09-27 every nightly `train-pcn` run was killed by the kernel
+(`train_runner exited -9`, memory cgroup OOM at ~08:50 UTC). Each run stopped at
+the same park (`437d4234…`, 86 rides, America/Toronto), so the 152 parks that come
+after it in id order kept serving their 2026-09-25 checkpoints.
+
+The cause was `_precompute_windows`: it stacked all 6000 training windows as
+`[W, L, N, C]` before training. Consecutive windows share L-1 of their L slots, so
+the stack was about L times the series it was cut from. For that park it was
+**8.7 GB in float64 plus a 4.4 GB float32 copy, against a 0.2 GB series**. As
+history grew, the park crossed the limit.
+
+`fit` now keeps only the series on the device (`[N, T, C]` plus target/mask) and
+gathers each batch from it there (`_gather_batch`). Each step is still a pure
+on-device gather, so the GPU stays fed. Measured in the production container:
+the same park trains in 60 s with a **2.16 GB peak RSS**. A new test checks that
+the gather cuts exactly the windows `windowing.gather_context`/`gather_targets`
+define.
+
 ### Fixed — a retired attraction leaves search, favorites and the geo listing's count
 
 `retired_at` promised more than it delivered. The `retiredAt` `@ApiProperty`
