@@ -257,9 +257,9 @@ export class DowntimeReconstructionProcessor {
     // still the right trade if that ever changes: a stale row a later run can
     // correct, against a loss no run can undo.
     //
-    // `idx_attraction_outages_ride` is (`attractionId`, `started_at`), and the
+    // The outages primary key is (`attractionId`, `started_at`), and the
     // exposure table's primary key is (`attractionId`, `op_day`), so the
-    // narrower predicate is the one both indexes are built for.
+    // narrower predicate is the one both keys are built for.
     const coveredIds = [
       ...new Set([
         ...exposure.map((row) => row.attractionId),

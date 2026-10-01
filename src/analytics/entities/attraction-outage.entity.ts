@@ -62,7 +62,6 @@ export type DowntimeEndReason = (typeof DOWNTIME_END_REASONS)[number];
  */
 @Entity("attraction_outages")
 @Index(["parkId", "startedAt"])
-@Index("idx_attraction_outages_ride", ["attractionId", "startedAt"])
 export class AttractionOutage {
   @PrimaryColumn("uuid")
   attractionId: string;
