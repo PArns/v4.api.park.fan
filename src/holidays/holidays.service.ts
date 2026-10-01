@@ -12,6 +12,51 @@ import { normalizeRegionCode } from "../common/utils/region.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
 import { HolidayInput } from "../common/types/holiday-input.type";
 
+/** The holiday columns range readers use — everything but the bookkeeping. */
+const HOLIDAY_ROW_COLUMNS = [
+  "date",
+  "name",
+  "localName",
+  "country",
+  "region",
+  "holidayType",
+  "isNationwide",
+] as const;
+
+/**
+ * A holiday as `getHolidays` returns it. `date` is the calendar day as
+ * `YYYY-MM-DD` — the form TypeORM hydrates a `date` column to and the form a
+ * cached row comes back in.
+ */
+export type HolidayRow = Omit<
+  Pick<Holiday, (typeof HOLIDAY_ROW_COLUMNS)[number]>,
+  "date"
+> & { date: string };
+
+function toHolidayRow(h: Holiday): HolidayRow {
+  const date = h.date as Date | string;
+  return {
+    date:
+      date instanceof Date
+        ? date.toISOString().slice(0, 10)
+        : String(date).slice(0, 10),
+    name: h.name,
+    localName: h.localName,
+    country: h.country,
+    region: h.region,
+    holidayType: h.holidayType,
+    isNationwide: h.isNationwide,
+  };
+}
+
+/**
+ * How long a parsed year stays in process memory. Short, because an admin
+ * cache flush only clears Redis — this bounds how long a flushed year can
+ * still be served. The memo holds one entry per (country, year) actually
+ * asked for, a few dozen in practice.
+ */
+const HOLIDAY_YEAR_MEMO_TTL_MS = 10 * 60 * 1000;
+
 /**
  * Holidays Service
  *
@@ -21,6 +66,10 @@ import { HolidayInput } from "../common/types/holiday-input.type";
 @Injectable()
 export class HolidaysService {
   private readonly logger = new Logger(HolidaysService.name);
+  private readonly holidayYearMemo = new Map<
+    string,
+    { rows: HolidayRow[]; expiresAt: number }
+  >();
 
   constructor(
     @InjectRepository(Holiday)
@@ -450,30 +499,70 @@ export class HolidaysService {
     countryCode: string,
     startDate: string,
     endDate: string,
-  ): Promise<Holiday[]> {
-    // Read-through cache: holidays are static reference data but this runs per country on
-    // every calendar build (n=22/day at up to 14s in the slow-query log). 24h TTL.
-    const cacheKey = `holiday:range:${countryCode}:${startDate}:${endDate}`;
+  ): Promise<HolidayRow[]> {
+    const startYear = Number(startDate.slice(0, 4));
+    const endYear = Number(endDate.slice(0, 4));
+    const years: HolidayRow[][] = [];
+    for (let y = startYear; y <= endYear; y++) {
+      years.push(await this.getHolidayYear(countryCode, y));
+    }
+    // Each year is sorted by date and the years are concatenated in order, so
+    // the result keeps the ORDER BY date the per-range query used to give.
+    return years.flat().filter((h) => h.date >= startDate && h.date <= endDate);
+  }
+
+  /**
+   * One country's holidays for one calendar year, read through two caches.
+   *
+   * The cache used to be keyed on the caller's exact range. Every calendar
+   * build asks for a slightly different window, so on 2026-10-01 Redis held
+   * 2168 `holiday:range:*` keys (57 MB) that were mostly copies of the same
+   * rows — the Netherlands stores school holidays per municipality (126k rows,
+   * 354 regions), and one NL year-range entry alone was 10 MB of JSON, parsed
+   * again on every calendar build that touched NL. Keying on the year makes
+   * the entries reusable across ranges, `HOLIDAY_ROW_COLUMNS` drops the four
+   * columns no caller reads, and the in-process memo spares the parse.
+   */
+  private async getHolidayYear(
+    countryCode: string,
+    year: number,
+  ): Promise<HolidayRow[]> {
+    const cacheKey = `holiday:year:${countryCode}:${year}`;
+    const memo = this.holidayYearMemo.get(cacheKey);
+    if (memo && memo.expiresAt > Date.now()) {
+      return memo.rows;
+    }
+
+    let rows: HolidayRow[] | null = null;
     const cached = await this.redis.get(cacheKey);
     if (cached !== null) {
       try {
-        return JSON.parse(cached) as Holiday[];
+        rows = JSON.parse(cached) as HolidayRow[];
       } catch {
         // fall through to DB on corrupt cache
       }
     }
-    const rows = await this.holidayRepository
-      .createQueryBuilder("holiday")
-      .where("holiday.country = :countryCode", { countryCode })
-      .andWhere("holiday.date BETWEEN :startDate AND :endDate", {
-        startDate,
-        endDate,
-      })
-      .orderBy("holiday.date", "ASC")
-      .getMany();
-    await this.redis
-      .set(cacheKey, JSON.stringify(rows), "EX", 24 * 60 * 60)
-      .catch(() => undefined);
+    if (rows === null) {
+      const entities = await this.holidayRepository
+        .createQueryBuilder("holiday")
+        .select(HOLIDAY_ROW_COLUMNS.map((c) => `holiday.${c}`))
+        .where("holiday.country = :countryCode", { countryCode })
+        .andWhere("holiday.date BETWEEN :startDate AND :endDate", {
+          startDate: `${year}-01-01`,
+          endDate: `${year}-12-31`,
+        })
+        .orderBy("holiday.date", "ASC")
+        .getMany();
+      rows = entities.map(toHolidayRow);
+      await this.redis
+        .set(cacheKey, JSON.stringify(rows), "EX", 24 * 60 * 60)
+        .catch(() => undefined);
+    }
+
+    this.holidayYearMemo.set(cacheKey, {
+      rows,
+      expiresAt: Date.now() + HOLIDAY_YEAR_MEMO_TTL_MS,
+    });
     return rows;
   }
 
