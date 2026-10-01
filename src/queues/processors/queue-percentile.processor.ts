@@ -8,6 +8,7 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Show } from "../../shows/entities/show.entity";
 import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attraction-retirement.service";
 import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
+import { HOURLY_AGGREGATE_SELECT } from "./hourly-aggregate.sql";
 
 /**
  * The evidence half of this detector, and the reason it is a shared string.
@@ -96,39 +97,7 @@ export class QueuePercentileProcessor {
           iqr, "stdDev", mean, "sampleCount",
           "createdAt", "updatedAt"
         )
-        SELECT
-          -- DETERMINISTIC id derived from the natural key (attractionId, hour).
-          -- The PK is (id, hour), so a stable id makes that PK enforce one row
-          -- per (attractionId, hour) and lets ON CONFLICT (id, hour) actually
-          -- fire. Previously this was gen_random_uuid(), so the conflict target
-          -- never matched and every re-run/retry/backfill inserted duplicate
-          -- rows — double-counting sampleCount and skewing the percentiles.
-          md5(qd."attractionId" || '|' || date_trunc('hour', qd.timestamp)::text)::uuid as id,
-          date_trunc('hour', qd.timestamp) as hour,
-          qd."attractionId",
-          a."parkId",
-          percentile_cont(0.25) WITHIN GROUP (ORDER BY qd."waitTime") as p25,
-          percentile_cont(0.50) WITHIN GROUP (ORDER BY qd."waitTime") as p50,
-          percentile_cont(0.75) WITHIN GROUP (ORDER BY qd."waitTime") as p75,
-          percentile_cont(0.90) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
-          percentile_cont(0.95) WITHIN GROUP (ORDER BY qd."waitTime") as p95,
-          percentile_cont(0.99) WITHIN GROUP (ORDER BY qd."waitTime") as p99,
-          percentile_cont(0.75) WITHIN GROUP (ORDER BY qd."waitTime") - 
-            percentile_cont(0.25) WITHIN GROUP (ORDER BY qd."waitTime") as iqr,
-          STDDEV(qd."waitTime") as "stdDev",
-          AVG(qd."waitTime") as mean,
-          COUNT(*) as "sampleCount",
-          NOW() as "createdAt",
-          NOW() as "updatedAt"
-        FROM queue_data qd
-        INNER JOIN attractions a ON a.id = qd."attractionId"
-        WHERE qd.timestamp >= $1 
-          AND qd.timestamp < $2
-          AND qd.status = 'OPERATING'
-          AND qd."waitTime" IS NOT NULL
-          AND qd."queueType" = 'STANDBY'
-        GROUP BY date_trunc('hour', qd.timestamp), qd."attractionId", a."parkId"
-        HAVING COUNT(*) >= 3
+        ${HOURLY_AGGREGATE_SELECT}
         ON CONFLICT (id, hour) DO UPDATE SET
           p25 = EXCLUDED.p25,
           p50 = EXCLUDED.p50,
@@ -977,35 +946,7 @@ export class QueuePercentileProcessor {
             iqr, "stdDev", mean, "sampleCount",
             "createdAt", "updatedAt"
           )
-          SELECT
-            -- Deterministic id from (attractionId, hour) — see calculate-
-            -- percentiles. Makes the (id, hour) PK dedupe and ON CONFLICT fire.
-            md5(qd."attractionId" || '|' || date_trunc('hour', qd.timestamp)::text)::uuid as id,
-            date_trunc('hour', qd.timestamp) as hour,
-            qd."attractionId",
-            a."parkId",
-            percentile_cont(0.25) WITHIN GROUP (ORDER BY qd."waitTime") as p25,
-            percentile_cont(0.50) WITHIN GROUP (ORDER BY qd."waitTime") as p50,
-            percentile_cont(0.75) WITHIN GROUP (ORDER BY qd."waitTime") as p75,
-            percentile_cont(0.90) WITHIN GROUP (ORDER BY qd."waitTime") as p90,
-            percentile_cont(0.95) WITHIN GROUP (ORDER BY qd."waitTime") as p95,
-            percentile_cont(0.99) WITHIN GROUP (ORDER BY qd."waitTime") as p99,
-            percentile_cont(0.75) WITHIN GROUP (ORDER BY qd."waitTime") - 
-              percentile_cont(0.25) WITHIN GROUP (ORDER BY qd."waitTime") as iqr,
-            STDDEV(qd."waitTime") as "stdDev",
-            AVG(qd."waitTime") as mean,
-            COUNT(*) as "sampleCount",
-            NOW() as "createdAt",
-            NOW() as "updatedAt"
-          FROM queue_data qd
-          INNER JOIN attractions a ON a.id = qd."attractionId"
-          WHERE qd.timestamp >= $1 
-            AND qd.timestamp < $2
-            AND qd.status = 'OPERATING'
-            AND qd."waitTime" IS NOT NULL
-            AND qd."queueType" = 'STANDBY'
-          GROUP BY date_trunc('hour', qd.timestamp), qd."attractionId", a."parkId"
-          HAVING COUNT(*) >= 3
+          ${HOURLY_AGGREGATE_SELECT}
           ON CONFLICT (id, hour) DO NOTHING
         `,
           [currentDate, actualEnd],
