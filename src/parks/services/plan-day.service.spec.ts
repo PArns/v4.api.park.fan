@@ -418,6 +418,34 @@ describe("PlanDayService", () => {
     expect(plan.context.weather).toBeNull();
   });
 
+  it("drops a climate normal the calendar carries, and keeps a forecast", async () => {
+    const date = farDate();
+    const block = {
+      basis: "climate_normal",
+      condition: "x",
+      icon: 3,
+      tempMin: 10,
+      tempMax: 20,
+      rainChance: 1,
+    };
+    dailyPredictions = [
+      {
+        ...(dailyPredictions[0] as object),
+        predictedTime: `${date}T12:00:00.000Z`,
+      },
+    ];
+    calendarDay = { ...calendarDay!, date, weather: block as never };
+    expect((await service.buildPlanDay(park, date)).context.weather).toBeNull();
+
+    calendarDay = {
+      ...calendarDay!,
+      weather: { ...block, basis: "forecast" } as never,
+    };
+    expect(
+      (await service.buildPlanDay(park, date)).context.weather,
+    ).toMatchObject({ basis: "forecast" });
+  });
+
   it("reports no lead-time error figure while none has been measured", async () => {
     // The archive that measures error by lead distance starts empty and takes
     // as many days as the bucket to say anything. Absent is the honest answer;
