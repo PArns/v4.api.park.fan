@@ -498,6 +498,12 @@ export class AdminContentController {
             name: attraction.fastPassName ?? null,
             price: attraction.fastPassPrice ?? null,
           },
+          // Raw columns, null when nobody has checked: the features table
+          // writes them back, and a resolved value would turn "not looked
+          // at" into a "no" on the first save.
+          hasVirtualLine: attraction.hasVirtualLine ?? null,
+          hasSingleRider: attraction.hasSingleRider ?? null,
+          indoorOutdoor: attraction.indoorOutdoor ?? null,
           hasRideProfile: withProfile.has(attraction.id),
           curatedFieldCount: attractionFieldViews(attraction).filter(
             (f) => f.overridden,

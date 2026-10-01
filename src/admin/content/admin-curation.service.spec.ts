@@ -115,6 +115,8 @@ function anAttraction(overrides: Record<string, unknown> = {}) {
     mayGetWet: null,
     curatedMayGetWet: null,
     hasSingleRider: null,
+    hasVirtualLine: null,
+    curatedAttractionType: null,
     attractionKind: null,
     indoorOutdoor: null,
     curatedOutOfServiceFrom: null,
@@ -613,6 +615,52 @@ describe("AdminCurationService", () => {
         ACTOR,
       );
       expect(glossaryChecked).toEqual([]);
+    });
+  });
+
+  describe("the features table's bulk write", () => {
+    it("accepts virtual line, single rider, indoor/outdoor and the type", async () => {
+      const attraction = anAttraction();
+      const { service, attractions, audit } = build(attraction);
+
+      const result = await service.curateAttractionsBulk(
+        "park-1",
+        [
+          {
+            id: "ride-1",
+            fields: {
+              hasVirtualLine: true,
+              hasSingleRider: false,
+              indoorOutdoor: "covered_queue",
+              curatedAttractionType: "ROLLER_COASTER",
+            },
+          },
+        ],
+        ACTOR,
+      );
+
+      expect(result.changed).toEqual([
+        expect.objectContaining({
+          id: "ride-1",
+          changed: expect.arrayContaining([
+            "hasVirtualLine",
+            "hasSingleRider",
+            "indoorOutdoor",
+            "curatedAttractionType",
+          ]),
+        }),
+      ]);
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved).toMatchObject({
+        hasVirtualLine: true,
+        hasSingleRider: false,
+        indoorOutdoor: "covered_queue",
+        curatedAttractionType: "ROLLER_COASTER",
+      });
+      expect(audit.record).toHaveBeenCalledTimes(1);
     });
   });
 
