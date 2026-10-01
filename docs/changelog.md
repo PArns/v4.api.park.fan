@@ -68,6 +68,27 @@ recent-ride-activity safety net all behave as before. On 2026-10-01 the 117
 parks with hours had an average window of 12.6 hours, against the 24 they were
 predicted for, which is roughly half the hourly prediction runs.
 
+### Changed — the PCN forecast tick no longer rewrites an origin it already wrote
+
+The PCN slot grid ends at a park's last observation, so the forecast origin
+stops moving once the park closes. Every 15-minute tick still predicted that
+same origin with the same model and upserted the same rows. Measured
+2026-10-01 ~19:05 UTC: **84 of 125 parks, 145k of 226k rows per tick**. Each
+upsert (`ON CONFLICT DO UPDATE`) left a dead tuple in `pcn_forecasts`, whose
+primary key had grown to 17 GB against about 5 GB of live keys.
+
+`forecast_park` now remembers the (origin, checkpoint mtime) it last wrote per
+park and skips the prediction and the write when neither changed. A new
+observation or a retrained checkpoint writes as before. The memory is
+in-process, so after a restart each park is written once more.
+
+Visible effect: a closed park's rows now keep the `created_at` of the last
+real forecast. After the serving read's 3-hour staleness guard
+(`PCN_MAX_FORECAST_AGE_H`) that park falls back to CatBoost, which the guard's
+docstring always intended for stale-input parks. Until now the rewrite had kept
+the frozen forecast looking fresh. Scoring reads by `target_slot` and is
+unaffected.
+
 ### Fixed — the nightly PCN training no longer dies at the container's 8 GB limit
 
 From 2026-09-27 every nightly `train-pcn` run was killed by the kernel
