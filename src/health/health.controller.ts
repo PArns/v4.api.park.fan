@@ -1,4 +1,9 @@
-import { Controller, Get, Logger } from "@nestjs/common";
+import {
+  Controller,
+  Get,
+  Logger,
+  ServiceUnavailableException,
+} from "@nestjs/common";
 import { getMlServiceUrl, getNfServiceUrl } from "../config/ml-services.config";
 import { SkipThrottle } from "@nestjs/throttler";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
@@ -55,11 +60,18 @@ interface HealthStatus {
   };
 }
 
+/** How long one /health answer is served before it is built again. */
+const HEALTH_MEMO_TTL_MS = 60 * 1000;
+
 @ApiTags("health")
 @Controller("health")
 @SkipThrottle() // monitoring/uptime probes must never be rate limited
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);
+  private healthMemo: {
+    payload: Promise<HealthStatus>;
+    expiresAt: number;
+  } | null = null;
 
   constructor(
     @InjectConnection() private connection: Connection,
@@ -95,7 +107,50 @@ export class HealthController {
     },
   })
   @ApiResponse({ status: 503, description: "System is unhealthy" })
-  async getHealth(): Promise<HealthStatus> {
+  getHealth(): Promise<HealthStatus> {
+    // Ten reads per call — two of them count a day of queue_data and of
+    // wait_time_predictions, two more are HTTP calls to nf-service — about
+    // 70 ms each. It used to back the container healthcheck every 30 s; that
+    // now hits /health/ready. The memo keeps an external monitor from paying
+    // for the same answer more than once a minute, and shares one in-flight
+    // build between concurrent callers. A failed build is not kept.
+    const now = Date.now();
+    if (this.healthMemo && this.healthMemo.expiresAt > now) {
+      return this.healthMemo.payload;
+    }
+    const payload = this.buildHealth();
+    this.healthMemo = { payload, expiresAt: now + HEALTH_MEMO_TTL_MS };
+    payload.catch(() => {
+      if (this.healthMemo?.payload === payload) this.healthMemo = null;
+    });
+    return payload;
+  }
+
+  /**
+   * Readiness for the container healthcheck: can this process reach Postgres
+   * and Redis? Two round-trips, no table scanned. Answers 503 when either is
+   * down, as the full /health did through its uncaught count queries.
+   */
+  @Get("ready")
+  @ApiOperation({
+    summary: "Readiness probe",
+    description:
+      "Checks the database and Redis connections only. Used by the container healthcheck.",
+  })
+  @ApiResponse({ status: 200, description: "Database and Redis reachable" })
+  @ApiResponse({ status: 503, description: "Database or Redis unreachable" })
+  async ready(): Promise<{ status: "ok" }> {
+    try {
+      await Promise.all([this.connection.query("SELECT 1"), this.redis.ping()]);
+    } catch (error) {
+      throw new ServiceUnavailableException(
+        `Not ready: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return { status: "ok" };
+  }
+
+  private async buildHealth(): Promise<HealthStatus> {
     const dbStatus = this.connection.isInitialized
       ? "connected"
       : "disconnected";
