@@ -36,6 +36,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s
 logger = logging.getLogger("pcn.forecast")
 settings = get_settings()
 
+# park_id -> (origin slot, checkpoint mtime) of the last forecast written.
+#
+# The slot grid ends at the park's last observation, so once a park closes its
+# origin stops moving — and every 15-minute tick re-predicted the same origin with
+# the same model and upserted the same rows. Measured 2026-10-01 21:20 UTC: 84 of
+# 125 parks, 145k of 226k rows per tick, each upsert leaving a dead tuple in a
+# table whose primary key had bloated to 17 GB. Skipping an unchanged (origin,
+# checkpoint) also lets created_at age, so the serving read's 3 h staleness guard
+# falls back to CatBoost for a closed park, as its docstring intends — the rewrite
+# used to keep the stale forecast looking fresh. In-process only: after a restart
+# the first tick writes each park once more.
+_written: dict[str, tuple[pd.Timestamp, float]] = {}
+
 
 def _load_model(park_id: str):
     path = model_path(park_id)
@@ -108,9 +121,14 @@ def forecast_park(park_id: str, version: str) -> int:
                         park_id, int(present.sum()), len(trained))
 
     base = len(t.slots) - 1                      # forecast from the latest slot
+    origin = pd.Timestamp(t.slots[base])
+    stamp = (origin, os.path.getmtime(model_path(park_id)))
+    if _written.get(park_id) == stamp:
+        logger.debug("park %s: origin %s already forecast with this checkpoint — skip",
+                     park_id, origin)
+        return 0
     qpreds = model.predict_quantiles(t, np.array([base]), L, H)
     serve = set(settings.serve_quantiles)
-    origin = pd.Timestamp(t.slots[base])
     step = pd.Timedelta(minutes=settings.PCN_SLOT_MINUTES)
 
     rows = []
@@ -130,6 +148,7 @@ def forecast_park(park_id: str, version: str) -> int:
                     "pw": float(max(mat[ri, h], 0.0)),
                 })
     n = db.write_pcn_forecasts(rows, version)
+    _written[park_id] = stamp
     logger.info("park %s: wrote %d pcn_forecasts (origin=%s, %d rides × %dh × %d q)",
                 park_id, n, origin, len(t.ride_ids), H, len(serve))
     return n
