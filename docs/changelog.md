@@ -6,6 +6,22 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — the container healthcheck reads `/v1/health/ready`, not the full report
+
+The API container's healthcheck (Dockerfile and both compose files) called
+`/v1/health` every 30 s. That endpoint makes ten reads, about 70 ms in
+production: parks and attraction counts, a 24-hour count of `queue_data` and
+one of `wait_time_predictions`, the newest reading, the active model, and two
+HTTP calls to nf-service. None of that answers "is this container alive".
+
+The new `GET /v1/health/ready` runs `SELECT 1` and a Redis `PING` and answers
+503 if either fails. That keeps the one property the old check had: the full
+report's uncaught count queries made a dead database show up as unhealthy. The
+full `/v1/health` is unchanged in shape. It is now built at most once a minute
+per process, and concurrent callers share one in-flight build, so an external
+monitor polling it no longer pays for every poll. `timestamp` and `uptime` can
+therefore be up to 60 s old.
+
 ### Fixed — the nightly PCN training no longer dies at the container's 8 GB limit
 
 From 2026-09-27 every nightly `train-pcn` run was killed by the kernel
