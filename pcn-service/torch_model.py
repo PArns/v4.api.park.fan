@@ -115,35 +115,30 @@ class TorchSeqModel:
               for b in bases]  # each [L, N, C]
         return torch.tensor(np.stack(xs), dtype=torch.float32, device=self.device)
 
-    # VRAM budget for keeping the precomputed window stack resident on the GPU. One park
-    # is tiny vs the 16 GiB card; above this we fall back to pinned-host (still removes the
-    # per-step numpy gather). 4 GiB ≈ 6000 windows × 480 × 96 × C × 4B worst case.
-    _GPU_WINDOW_BUDGET = 4 * 1024 ** 3
+    def _device_series(self, feats_scaled, wait_raw, target_mask):
+        """The park's full series as device tensors: features [N,T,C], target/mask [N,T].
 
-    def _precompute_windows(self, feats_scaled, wait_raw, target_mask, bases, L, H):
-        """Materialise the FULL training set once: context [W,L,N,C] + target/mask [W,N,H].
-
-        The recurrent encoder already pays L sequential GPU kernels per step; re-gathering
-        16 windows from CPU numpy AND transferring them every step on top of that forced a
-        host↔device sync that left the GPU ~half-idle. Building the stack once (vectorised,
-        same as the CatBoost feature prep) and keeping it GPU-resident makes each step a
-        pure on-device gather → the GPU stays fed. Falls back to pinned host memory if the
-        stack would blow the VRAM budget."""
-        X = torch.tensor(
-            np.stack([windowing.gather_context(feats_scaled, int(b), L).transpose(1, 0, 2)
-                      for b in bases]), dtype=torch.float32)        # [W, L, N, C]
-        Y = torch.tensor(
-            np.nan_to_num(np.stack([wait_raw[:, b + 1:b + 1 + H] for b in bases]))
-            / self._scale, dtype=torch.float32)                    # [W, N, H]
-        M = torch.tensor(
-            np.stack([target_mask[:, b + 1:b + 1 + H] for b in bases]),
-            dtype=torch.float32)                                   # [W, N, H]
-        if self.device == "cuda":
-            if X.element_size() * X.nelement() <= self._GPU_WINDOW_BUDGET:
-                return X.to(self.device), Y.to(self.device), M.to(self.device)
-            # Too big to stay resident → pin so per-step batch transfers are fast/async.
-            return X.pin_memory(), Y.pin_memory(), M.pin_memory()
+        Training windows overlap almost entirely (consecutive bases share L-1 slots), so
+        materialising them as a [W,L,N,C] stack multiplied the data by ~L: 6000 windows of
+        an 86-ride park were 8.7 GB in float64 plus a 4.4 GB float32 copy, against a 0.2 GB
+        series — the nightly run died at the cgroup limit (exit -9) from 2026-09-27 on.
+        Keeping only the series resident and gathering each batch from it on the device
+        (`_gather_batch`) keeps the step a pure on-device gather (the GPU stays fed, no
+        per-step host↔device sync) at the series' size rather than L times it."""
+        X = torch.tensor(feats_scaled, dtype=torch.float32, device=self.device)
+        Y = torch.tensor(np.nan_to_num(wait_raw) / self._scale,
+                         dtype=torch.float32, device=self.device)
+        M = torch.tensor(target_mask, dtype=torch.float32, device=self.device)
         return X, Y, M
+
+    @staticmethod
+    def _gather_batch(X, Y, M, b, L: int, H: int):
+        """Batch for base slots b [B]: context [B,L,N,C] over [b-L+1..b] and target/mask
+        [B,N,H] over [b+1..b+H] — the same slices as windowing.gather_context/targets."""
+        ctx = b[:, None] + torch.arange(-L + 1, 1, device=b.device)       # [B, L]
+        tgt = b[:, None] + torch.arange(1, H + 1, device=b.device)        # [B, H]
+        x = X[:, ctx, :].permute(1, 2, 0, 3)                              # [B, L, N, C]
+        return x, Y[:, tgt].permute(1, 0, 2), M[:, tgt].permute(1, 0, 2)  # [B, N, H]
 
     def _loss(self, out, y_t, m_t):
         if self.loss == "tweedie":
@@ -174,22 +169,20 @@ class TorchSeqModel:
         if bases.size > self.max_train_windows:
             bases = rng.choice(bases, self.max_train_windows, replace=False)
 
-        X, Y, M = self._precompute_windows(
-            feats_scaled, wait_raw, target_mask, bases, L, H)
-        W = X.shape[0]
+        X, Y, M = self._device_series(feats_scaled, wait_raw, target_mask)
+        bases_t = torch.as_tensor(bases, dtype=torch.long, device=self.device)
+        W = bases_t.shape[0]
 
         self.net = self.build_net(N, C, H).to(self.device)
         opt = torch.optim.Adam(self.net.parameters(), lr=self.lr)
         self.net.train()
-        logger.info("%s: training on %s (%d windows, N=%d C=%d H=%d, data on %s)",
-                    self.name, self.device, W, N, C, H, X.device.type)
+        logger.info("%s: training on %s (%d windows, N=%d C=%d H=%d)",
+                    self.name, self.device, W, N, C, H)
 
         bs = min(self.batch_size, W)
         for step in range(self.max_steps):
-            sel = torch.as_tensor(rng.integers(0, W, size=bs), device=X.device)
-            x = X[sel].to(self.device, non_blocking=True)        # no-op if already resident
-            y_t = Y[sel].to(self.device, non_blocking=True)
-            m_t = M[sel].to(self.device, non_blocking=True)
+            sel = torch.as_tensor(rng.integers(0, W, size=bs), device=self.device)
+            x, y_t, m_t = self._gather_batch(X, Y, M, bases_t[sel], L, H)
             loss = self._loss(self.net(x), y_t, m_t)
             opt.zero_grad()
             loss.backward()

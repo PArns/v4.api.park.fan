@@ -168,3 +168,29 @@ def test_channel_evolution_older_checkpoint_serves_newer_tensor(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_gather_batch_matches_windowing():
+    """The on-device batch gather must cut exactly the windows windowing.py defines —
+    training no longer materialises them, so this is the only check they line up."""
+    import torch_model
+    import windowing
+
+    rng = np.random.default_rng(0)
+    N, T, C, L, H = 3, 40, 5, 6, 4
+    feats = rng.normal(size=(N, T, C))
+    wait = rng.normal(size=(N, T))
+    mask = (rng.random((N, T)) > 0.3).astype(float)
+    X = torch.tensor(feats, dtype=torch.float32)
+    Y = torch.tensor(wait, dtype=torch.float32)
+    M = torch.tensor(mask, dtype=torch.float32)
+    bases = windowing.valid_bases(T, L, H)[[0, 7, -1]]
+    x, y, m = torch_model.TorchSeqModel._gather_batch(
+        X, Y, M, torch.as_tensor(bases), L, H)
+    assert x.shape == (3, L, N, C) and y.shape == (3, N, H) and m.shape == (3, N, H)
+    for i, b in enumerate(bases):
+        ctx = windowing.gather_context(feats, int(b), L).transpose(1, 0, 2)
+        tw, tm = windowing.gather_targets(wait, mask, int(b), H)
+        np.testing.assert_allclose(x[i].numpy(), ctx, rtol=1e-6)
+        np.testing.assert_allclose(y[i].numpy(), tw, rtol=1e-6)
+        np.testing.assert_allclose(m[i].numpy(), tm)
