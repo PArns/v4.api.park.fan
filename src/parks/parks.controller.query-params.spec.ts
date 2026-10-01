@@ -38,6 +38,8 @@ describe("ParksController › query parameters are validated", () => {
   let buildIntegratedResponse: jest.Mock;
   let buildCalendarResponse: jest.Mock;
   let findByGeographicPath: jest.Mock;
+  let getTopParksWithScores: jest.Mock;
+  let findByIds: jest.Mock;
 
   const base = "/v1/parks/europe/germany/bruhl/phantasialand";
 
@@ -51,12 +53,17 @@ describe("ParksController › query parameters are validated", () => {
     findAttraction = jest.fn().mockResolvedValue({ id: "a-1" });
     buildIntegratedResponse = jest.fn().mockResolvedValue({});
     buildCalendarResponse = jest.fn().mockResolvedValue({ days: [] });
+    getTopParksWithScores = jest.fn().mockResolvedValue([]);
+    findByIds = jest.fn().mockResolvedValue([]);
 
     const noop = {};
     const moduleRef = await Test.createTestingModule({
       controllers: [ParksController],
       providers: [
-        { provide: ParksService, useValue: { findByGeographicPath } },
+        {
+          provide: ParksService,
+          useValue: { findByGeographicPath, findByIds },
+        },
         { provide: ParkIntegrationService, useValue: noop },
         {
           provide: AttractionsService,
@@ -82,7 +89,7 @@ describe("ParksController › query parameters are validated", () => {
         { provide: MLService, useValue: noop },
         { provide: PredictionAccuracyService, useValue: noop },
         { provide: ParkEnrichmentService, useValue: noop },
-        { provide: PopularityService, useValue: noop },
+        { provide: PopularityService, useValue: { getTopParksWithScores } },
         { provide: ParkRenameService, useValue: noop },
         { provide: REDIS_CLIENT, useValue: noop },
       ],
@@ -110,6 +117,7 @@ describe("ParksController › query parameters are validated", () => {
     findAllWithFilters.mockClear();
     buildIntegratedResponse.mockClear();
     buildCalendarResponse.mockClear();
+    getTopParksWithScores.mockClear();
   });
 
   describe("attractions list", () => {
@@ -157,6 +165,27 @@ describe("ParksController › query parameters are validated", () => {
       expect(findAllWithFilters).toHaveBeenCalledWith(
         expect.objectContaining({ page: 2, limit: 100 }),
       );
+    });
+  });
+
+  describe("popular parks", () => {
+    const url = "/v1/parks/popular";
+
+    it.each([
+      [undefined, 20],
+      ["abc", 20],
+      ["5", 5],
+      ["0", 1],
+      ["-3", 1],
+      ["100", 100],
+      ["100000", 100],
+    ])("limit=%s reads %s ranked parks", async (limit, expected) => {
+      const res = await request(app.getHttpServer())
+        .get(url)
+        .query(limit === undefined ? {} : { limit });
+
+      expect(res.status).toBe(200);
+      expect(getTopParksWithScores).toHaveBeenCalledWith(expected);
     });
   });
 
