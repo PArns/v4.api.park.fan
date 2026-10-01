@@ -293,6 +293,39 @@ export class Park {
   })
   curatedUsesTwelveHourClock: boolean | null;
 
+  // ─── early entry ──────────────────────────────────────────────────────────
+  // Hotel guests get into a chosen set of rides 15–60 minutes before the park
+  // opens (Disney World 30, Universal 60, Europa-Park 15–45, Efteling 30). No
+  // feed carries it, so there is nothing to merge: one writer, a human. The
+  // rides it applies to are the park's `isHeadliner` ones, not a list of their
+  // own. `null` on the flag is "nobody checked", `false` is "checked, there is
+  // none" and only `true` reaches the API.
+
+  @Column({ name: "curated_has_early_entry", type: "boolean", nullable: true })
+  curatedHasEarlyEntry: boolean | null;
+
+  /**
+   * Minutes before `openHour` the early-entry rides open, in the park's
+   * current high-season wording. "Peak" has no calendar behind it: the editor
+   * writes whichever value holds today, and the code never looks at a month.
+   * A real month-to-minutes list would need a list field type in the generic
+   * editor and waits for a park that needs more than two values.
+   */
+  @Column({
+    name: "curated_early_entry_minutes_peak",
+    type: "int",
+    nullable: true,
+  })
+  curatedEarlyEntryMinutesPeak: number | null;
+
+  /** The second value of the pair above, for the park's quieter weeks. */
+  @Column({
+    name: "curated_early_entry_minutes_off_peak",
+    type: "int",
+    nullable: true,
+  })
+  curatedEarlyEntryMinutesOffPeak: number | null;
+
   // ─── the facts no feed carries ────────────────────────────────────────────
   // Everything below has exactly one writer, a human, and is here for the same
   // reason `has_single_rider` is on the attraction: neither ThemeParks.wiki nor

@@ -300,7 +300,7 @@ after   |          140 |       55 |        36 |      0 |      0 |         19
 `fp_gap` asks only about the rides that report a paid window and nothing else,
 which is the set PAR-386 was given and the set that is now closed.
 **`fp_gap_all` still reads 19**: those are rides that report a paid window
-*and* one of the three free types, so the seed already gave them
+_and_ one of the three free types, so the seed already gave them
 `has_virtual_line = true` and the paid product they also sell is recorded
 nowhere. Measured on 2026-09-25, all 19 are exactly that — `has_virtual_line`
 true, `has_fast_pass` NULL, no exceptions. Deliberately left alone here: the
@@ -325,6 +325,20 @@ Corrections to a synced column: `curated_name`, `curated_park_type`. Plus
 `curated_no_wait_times_reason`, `curated_uses_twelve_hour_clock` and the
 internal `curation_note`. Before this there were none at all — the only
 park-level curation was a hardcoded list in `live-wait-time-sources.ts`.
+
+**Early entry** is three human-only columns, `curated_has_early_entry` (boolean),
+`curated_early_entry_minutes_peak` and `curated_early_entry_minutes_off_peak`
+(both `int`, minutes before `openHour`). They carry the `curated_` prefix although
+no sync writes them, because the park column list, the merge and the editor all
+key on it. No feed states early entry, so there is nothing to correct. The
+payload keys drop the prefix: `/v1/parks/:slug/plan/day` adds `hasEarlyEntry`,
+`earlyEntryMinutesPeak` and `earlyEntryMinutesOffPeak` to `context`, and only
+when the flag is `true`. `false` (checked, none) and `null` (not checked) both
+leave the keys out, and minutes that are not positive whole numbers are dropped.
+Peak and off-peak have no calendar behind them: the editor writes whichever
+value holds now (Europa-Park: 45 minutes at an 8:15 opening, 15 at 8:30). The
+rides it applies to are the park's `isHeadliner` ones. The columns are nullable
+on a populated table, so `synchronize` adds them without a backfill.
 
 **`curated_uses_twelve_hour_clock` is the odd one**, and worth knowing about
 before somebody looks for it in a payload: it changes what is _ingested_, not

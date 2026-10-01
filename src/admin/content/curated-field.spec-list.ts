@@ -401,6 +401,45 @@ export const PARK_CURATED_FIELDS: readonly CuratedFieldSpec[] = [
       "Mittagsschluss (Wasserparks, Weihnachtsmärkte) auch.",
   },
   {
+    key: "curatedHasEarlyEntry",
+    label: "Early Entry",
+    type: "boolean",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Early Entry",
+    hint:
+      "Ob Hotelgäste den Park vor der offiziellen Öffnung betreten dürfen. " +
+      '„Nein" heißt: nachgesehen, es gibt keins — die API liefert dann nichts ' +
+      "aus. Gilt für die Headliner-Bahnen des Parks, nicht für alle.",
+  },
+  {
+    key: "curatedEarlyEntryMinutesPeak",
+    label: "Minuten vor Öffnung (Hochsaison)",
+    type: "number",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Early Entry",
+    unit: "min",
+    min: 1,
+    max: 180,
+    hint:
+      "Der Wert, der jetzt gilt, wenn der Park zwei kennt (Europa-Park: 45 " +
+      "zur Öffnung um 8:15, 15 bei 8:30). Kein Kalender dahinter: wer die " +
+      "Saison wechselt, trägt die Zahl um. Reicht ein Wert, steht er hier.",
+  },
+  {
+    key: "curatedEarlyEntryMinutesOffPeak",
+    label: "Minuten vor Öffnung (Nebensaison)",
+    type: "number",
+    syncedKey: null,
+    resolvedKey: null,
+    group: "Early Entry",
+    unit: "min",
+    min: 1,
+    max: 180,
+    hint: "Der zweite Wert, nur wenn der Park zwei kennt. Sonst leer lassen.",
+  },
+  {
     key: "curatedWebsite",
     label: "Offizielle Website",
     type: "url",

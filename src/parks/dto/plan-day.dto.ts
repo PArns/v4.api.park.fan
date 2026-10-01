@@ -433,6 +433,36 @@ export class PlanDayContextDto {
       "showing wait times; until now a client of THIS endpoint could not.",
   })
   liveWaitTimes: LiveWaitTimesDto;
+
+  @ApiProperty({
+    required: false,
+    enum: [true],
+    description:
+      "Present only when a human confirmed that this park lets hotel guests " +
+      'in early. Absent means "no" and "nobody checked" alike. The rides ' +
+      "it covers are the park's headliners, not a list of their own.",
+  })
+  hasEarlyEntry?: true;
+
+  @ApiProperty({
+    required: false,
+    example: 30,
+    description:
+      "Minutes before `openHour` the early-entry rides open, the value that " +
+      "holds now. Only with `hasEarlyEntry`, and absent when nobody wrote " +
+      "one. There is no calendar behind peak and off-peak: the editor swaps " +
+      "the numbers, this endpoint never reads a month.",
+  })
+  earlyEntryMinutesPeak?: number;
+
+  @ApiProperty({
+    required: false,
+    example: 15,
+    description:
+      "The park's second value, for its quieter weeks. Only with " +
+      "`hasEarlyEntry`, and absent for a park that knows one value.",
+  })
+  earlyEntryMinutesOffPeak?: number;
 }
 
 export class PlanDayAccuracyDto {
