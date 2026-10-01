@@ -11,7 +11,7 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 The PCN slot grid ends at a park's last observation, so the forecast origin
 stops moving once the park closes. Every 15-minute tick still predicted that
 same origin with the same model and upserted the same rows. Measured
-2026-10-01 21:20 UTC: **84 of 125 parks, 145k of 226k rows per tick**. Each
+2026-10-01 ~19:05 UTC: **84 of 125 parks, 145k of 226k rows per tick**. Each
 upsert (`ON CONFLICT DO UPDATE`) left a dead tuple in `pcn_forecasts`, whose
 primary key had grown to 17 GB against about 5 GB of live keys.
 

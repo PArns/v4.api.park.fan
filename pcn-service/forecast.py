@@ -40,7 +40,7 @@ settings = get_settings()
 #
 # The slot grid ends at the park's last observation, so once a park closes its
 # origin stops moving — and every 15-minute tick re-predicted the same origin with
-# the same model and upserted the same rows. Measured 2026-10-01 21:20 UTC: 84 of
+# the same model and upserted the same rows. Measured 2026-10-01 ~19:05 UTC: 84 of
 # 125 parks, 145k of 226k rows per tick, each upsert leaving a dead tuple in a
 # table whose primary key had bloated to 17 GB. Skipping an unchanged (origin,
 # checkpoint) also lets created_at age, so the serving read's 3 h staleness guard
