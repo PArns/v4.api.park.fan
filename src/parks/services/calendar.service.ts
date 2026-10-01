@@ -5,7 +5,7 @@ import { ParksService } from "../parks.service";
 import { WeatherService } from "../weather.service";
 import { MLService } from "../../ml/ml.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
-import { HolidaysService } from "../../holidays/holidays.service";
+import { HolidayRow, HolidaysService } from "../../holidays/holidays.service";
 import { AttractionsService } from "../../attractions/attractions.service";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
@@ -43,7 +43,6 @@ import {
 import { isClosedByOperatingRange } from "../utils/schedule-closed-day.util";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { rateOrUnknown } from "../../common/utils/crowd-level.util";
-import { Holiday } from "../../holidays/entities/holiday.entity";
 import { PredictionDto } from "../../ml/dto";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -278,7 +277,7 @@ export class CalendarService {
     const schedules = results[0] as ScheduleEntry[];
     const weatherData = results[1] as WeatherData[];
     const mlPredictions = results[2] as { predictions: PredictionDto[] };
-    const holidays = results[3] as Holiday[];
+    const holidays = results[3] as HolidayRow[];
     const operatingDateRange = results[4] as {
       minDate: string | null;
       maxDate: string | null;
@@ -770,7 +769,7 @@ export class CalendarService {
     schedules: ScheduleEntry[],
     weatherData: WeatherData[],
     mlPredictions: PredictionDto[],
-    holidays: Holiday[],
+    holidays: HolidayRow[],
     includeHourly: string,
     today: string,
     hourlyPredictionsPreFetched: PredictionDto[] = [],
@@ -1390,7 +1389,7 @@ export class CalendarService {
    * country. Returns Infinity when the holiday's region isn't a configured
    * influence at all.
    */
-  private neighborHolidayPriority(park: Park, h: Holiday): number {
+  private neighborHolidayPriority(park: Park, h: HolidayRow): number {
     const regions = park.influencingRegions || [];
     const holidayRegion = normalizeRegionCode(h.region);
     let best = Infinity;

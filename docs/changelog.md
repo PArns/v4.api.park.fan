@@ -26,6 +26,24 @@ the same park trains in 60 s with a **2.16 GB peak RSS**. A new test checks that
 the gather cuts exactly the windows `windowing.gather_context`/`gather_targets`
 define.
 
+### Changed — the holiday cache holds one entry per country and year
+
+`HolidaysService.getHolidays` cached each caller's exact date range. Every
+calendar build asks for a slightly different window, so on 2026-10-01 Redis held
+**2168 `holiday:range:*` keys, 57 MB**, mostly copies of the same rows. That was
+5.7 % of the 1 GB Redis, which was already at 95 % and evicts with
+`allkeys-lru`. The Netherlands stores school holidays per municipality (126k
+rows, 354 regions), so a single NL year-range entry was **10 MB of JSON**, parsed
+again on every calendar build that touched NL.
+
+The cache is now keyed per year (`holiday:year:{country}:{year}`), and a range
+is assembled from the years it spans. Each row keeps only the seven columns the
+callers read (`id`, `externalId`, `createdAt`, `updatedAt` are dropped), which
+makes an NL year about 4.5 MB. A parsed year also stays in process memory for 10
+minutes, so most reads skip both Redis and `JSON.parse`. The return type is now
+`HolidayRow` with `date` as `YYYY-MM-DD`. That is what TypeORM had been
+returning for the `date` column all along; the `Holiday` type had claimed a `Date`.
+
 ### Fixed — a retired attraction leaves search, favorites and the geo listing's count
 
 `retired_at` promised more than it delivered. The `retiredAt` `@ApiProperty`

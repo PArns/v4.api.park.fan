@@ -312,8 +312,9 @@ export class ParkEnrichmentService {
       const influencingMap = new Map<string, InfluencingHoliday[]>();
 
       for (const h of holidays) {
-        // Normalize holiday date to park timezone for consistent matching
-        const dateStr = formatInParkTimezone(h.date, park.timezone);
+        // A holiday is a calendar day ("YYYY-MM-DD") that holds in every
+        // timezone — date-fns-tz formatted the date-only string back to itself.
+        const dateStr = h.date;
 
         // Check if this holiday matches the park's primary region
         const matchesPrimaryRegion = (() => {
