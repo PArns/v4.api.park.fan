@@ -6,6 +6,24 @@ Notable changes to the Park Fan API. Format based on [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed — hourly predictions pause between a park's closing and three hours before it opens
+
+The 15-minute `generate-hourly` run included every park that operates at any
+point today. A park with hours 10:00–18:00 was therefore re-predicted from local
+midnight to midnight, 96 runs a day. The runs after closing and through the
+night each wrote a new 48-hour set, nearly identical to the previous one, at
+the full cost of an ML call and a delete-and-insert into `wait_time_predictions`.
+
+A park that is not operating right now is included from **three hours before
+today's published opening until its closing**. The window runs from the
+earliest opening to the latest closing, so a day split into sessions counts as
+one. The set stored by the last run before closing stays in place (it covers 48
+hours), so overnight readers still have tomorrow's predictions. A park that is
+open right now, a park without usable hours today (no entry, `UNKNOWN`), and the
+recent-ride-activity safety net all behave as before. On 2026-10-01 the 117
+parks with hours had an average window of 12.6 hours, against the 24 they were
+predicted for, which is roughly half the hourly prediction runs.
+
 ### Fixed — the nightly PCN training no longer dies at the container's 8 GB limit
 
 From 2026-09-27 every nightly `train-pcn` run was killed by the kernel

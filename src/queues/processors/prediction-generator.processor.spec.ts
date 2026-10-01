@@ -48,6 +48,7 @@ describe("PredictionGeneratorProcessor", () => {
     getBatchParkStatus: jest.fn(),
     isParkOperatingToday: jest.fn().mockResolvedValue(false),
     hasRecentRideActivity: jest.fn().mockResolvedValue(false),
+    getTodaySchedule: jest.fn().mockResolvedValue([]),
   };
 
   const cacheWarmupService = {};
@@ -135,6 +136,88 @@ describe("PredictionGeneratorProcessor", () => {
       await processor.handleGenerateHourly({} as Job);
 
       expect(mlService.getParkPredictions).toHaveBeenCalled();
+    });
+
+    describe("a closed park with published hours today", () => {
+      const HOUR = 60 * 60 * 1000;
+      const park = { id: "p1", name: "Scheduled", timezone: "Europe/Berlin" };
+      const session = (opensInH: number, closesInH: number) => ({
+        scheduleType: "OPERATING",
+        openingTime: new Date(Date.now() + opensInH * HOUR),
+        closingTime: new Date(Date.now() + closesInH * HOUR),
+      });
+
+      beforeEach(() => {
+        parksService.findAll.mockResolvedValue([park]);
+        parksService.getBatchParkStatus.mockResolvedValue(
+          new Map([["p1", "CLOSED"]]),
+        );
+        mlService.getParkPredictions.mockResolvedValue({ predictions: [] });
+      });
+
+      it("is predicted from three hours before opening", async () => {
+        parksService.getTodaySchedule.mockResolvedValueOnce([session(2.5, 10)]);
+
+        await processor.handleGenerateHourly({} as Job);
+
+        expect(parksService.getTodaySchedule).toHaveBeenCalledWith(
+          "p1",
+          "Europe/Berlin",
+        );
+        expect(mlService.getParkPredictions).toHaveBeenCalled();
+        // Published hours decide; the any-time-today fallback is not asked.
+        expect(parksService.isParkOperatingToday).not.toHaveBeenCalled();
+      });
+
+      it("is skipped earlier than that", async () => {
+        parksService.getTodaySchedule.mockResolvedValueOnce([session(5, 13)]);
+
+        await processor.handleGenerateHourly({} as Job);
+
+        expect(mlService.getParkPredictions).not.toHaveBeenCalled();
+      });
+
+      it("is skipped after closing, though it operated today", async () => {
+        parksService.getTodaySchedule.mockResolvedValueOnce([session(-10, -1)]);
+        parksService.isParkOperatingToday.mockResolvedValue(true);
+
+        await processor.handleGenerateHourly({} as Job);
+
+        expect(mlService.getParkPredictions).not.toHaveBeenCalled();
+        parksService.isParkOperatingToday.mockResolvedValue(false);
+      });
+
+      it("is predicted in the gap between two sessions", async () => {
+        parksService.getTodaySchedule.mockResolvedValueOnce([
+          session(-6, -2),
+          session(1, 5),
+        ]);
+
+        await processor.handleGenerateHourly({} as Job);
+
+        expect(mlService.getParkPredictions).toHaveBeenCalled();
+      });
+
+      it("still falls back to recent ride activity after closing", async () => {
+        parksService.getTodaySchedule.mockResolvedValueOnce([session(-10, -1)]);
+        parksService.hasRecentRideActivity.mockResolvedValueOnce(true);
+
+        await processor.handleGenerateHourly({} as Job);
+
+        expect(mlService.getParkPredictions).toHaveBeenCalled();
+      });
+
+      it("uses the any-time-today rule when today has no usable hours", async () => {
+        parksService.getTodaySchedule.mockResolvedValueOnce([
+          { scheduleType: "UNKNOWN", openingTime: null, closingTime: null },
+        ]);
+        parksService.isParkOperatingToday.mockResolvedValueOnce(true);
+
+        await processor.handleGenerateHourly({} as Job);
+
+        expect(parksService.isParkOperatingToday).toHaveBeenCalledWith("p1");
+        expect(mlService.getParkPredictions).toHaveBeenCalled();
+      });
     });
 
     it("continues to the next park when one fails (per-park isolation)", async () => {
