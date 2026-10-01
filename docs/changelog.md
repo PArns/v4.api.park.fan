@@ -22,6 +22,34 @@ per process, and concurrent callers share one in-flight build, so an external
 monitor polling it no longer pays for every poll. `timestamp` and `uptime` can
 therefore be up to 60 s old.
 
+### Fixed — CatBoost was served its rolling features from the start of a two-year window
+
+`ml-service/predict.py` `fetch_recent_wait_times` returned 730 days of hourly
+rows with nine ROWS-based window functions, sorted `date DESC`. The caller then
+read `.iloc[-1]`, which is the **oldest** row. So every served `rolling_avg_7d`,
+`_weekday`, `_weekend`, `_28d`, `_90d` and `volatility_7d`, `_weekday`, `_weekend`
+was the value from the start of the window. Taron on 2026-10-01 was served
+`rolling_avg_7d` = 54.75 from 2025-12-26, against 28.8 for the last week. The
+query was also about two thirds of all Postgres execution time (237 of 359 s
+in a 10-minute sample).
+
+The rolling features now come from `fetch_recent_rolling_stats`, one row per
+attraction at `base_time`. It computes them the way training does in
+`features.add_historical_features`: a median per UTC hour, time-based
+left-closed windows (`[t − N days, t)`), weekday/weekend on the UTC weekday,
+and the sample std. Against the training code on production data the largest
+difference is 0.013 min (float accumulation). The date/hour lookups stay as
+they were, read over 32 days instead of 730. Every lookup reaches at most 30
+days back, and the rows are identical. The long-run fallback that replaced an
+empty 7-day window is now the 90-day mean, where it used to be a 730-day mean.
+
+Measured in production:
+- **History reads per park batch:** 1.5–1.9 s → 0.56–0.71 s.
+- **Accuracy:** same model (`v20261001_0600`), 6 parks, 14 past origins, 12 h
+  ahead, 15-minute slots, 27 723 matched slots. MAE 8.26 → 7.99. On busy slots
+  (actual ≥ 30), MAE 12.94 → 12.22 and bias −9.62 → −9.20. Europa-Park is flat
+  (6.87 → 6.91); the other five parks improved.
+
 ### Fixed — the nightly PCN training no longer dies at the container's 8 GB limit
 
 From 2026-09-27 every nightly `train-pcn` run was killed by the kernel

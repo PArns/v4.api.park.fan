@@ -189,15 +189,35 @@ def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# Cache for recent wait times (short-lived).
-# NOTE: this query is the single biggest steady-state DB load (~270 ms x thousands
-# of calls). It aggregates 730 days of hourly history, which barely changes within
-# minutes, and the real-time signal is fed separately via current_wait_times. So we
-# cache it for 15 min. The cache key buckets end_time to the same window (see below)
-# — without that, base_time=now() carries microsecond precision and the key never
-# repeats, so the cache had a ~0% hit rate.
+# Caches for the two history reads behind the prediction features (short-lived).
+# Together they were the single biggest steady-state DB load. History barely moves
+# within minutes and the real-time signal arrives separately via current_wait_times,
+# so both are cached for 15 min. The key buckets end_time to the same window — with
+# base_time=now() carrying microsecond precision the key would never repeat.
 _recent_wait_times_cache = {}
+_recent_rolling_stats_cache = {}
 _recent_wait_times_cache_ttl = 900  # 15 minutes
+
+# How far back the hour-by-hour lookups reach. Every lookup in
+# create_prediction_features is keyed on a local date at most 30 days before
+# base_time or before a prediction timestamp (yesterday, same hour last week,
+# same hour last month = base - 30 d, same weekday 1-4 weeks back), so 32 days
+# covers all of them with a day of timezone slack on each side.
+RECENT_LOOKUP_DAYS = 32
+
+# The longest rolling window the model was trained on (rolling_avg_90d).
+ROLLING_STATS_DAYS = 90
+
+# Rows the serving features are built from. Shared by both reads so the lookups
+# and the rolling statistics see the same population.
+_SERVING_QUEUE_FILTER = """
+            qd."attractionId"::text = ANY(:attraction_ids)
+                AND qd."waitTime" IS NOT NULL
+                AND qd."waitTime" >= 5
+                AND qd.status = 'OPERATING'
+                AND qd."queueType" = 'STANDBY'
+                AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+"""
 
 
 def _evict_expired_entries(cache: dict, now_ts: float, ttl: float) -> None:
@@ -215,58 +235,57 @@ def _evict_expired_entries(cache: dict, now_ts: float, ttl: float) -> None:
         cache.pop(key, None)
 
 
+def _bucket_end_time(end_time: Optional[datetime]) -> datetime:
+    """end_time floored to the cache-TTL window: one SQL bound and one cache key
+    per window. Defaults to now."""
+    end_time = end_time or datetime.now(timezone.utc)
+    bucket = int(end_time.timestamp()) // _recent_wait_times_cache_ttl
+    return datetime.fromtimestamp(
+        bucket * _recent_wait_times_cache_ttl,
+        tz=end_time.tzinfo or timezone.utc,
+    )
+
+
+def _cached_read(cache: dict, cache_key: str, read) -> pd.DataFrame:
+    import time
+
+    hit = cache.get(cache_key)
+    if hit is not None and time.time() - hit[1] < _recent_wait_times_cache_ttl:
+        return hit[0].copy()
+    df = read()
+    now_ts = time.time()
+    _evict_expired_entries(cache, now_ts, _recent_wait_times_cache_ttl)
+    cache[cache_key] = (df.copy(), now_ts)
+    return df
+
+
 def fetch_recent_wait_times(
     attraction_ids: List[str],
-    lookback_days: int = 730,
+    lookback_days: int = RECENT_LOOKUP_DAYS,
     end_time: Optional[datetime] = None,
 ) -> pd.DataFrame:
     """
-    Fetch recent wait times aggregated by day for historical features
+    Hour-by-hour history for the date/hour lookups, in park-local time.
 
-    OPTIMIZATION:
-    - Caches results for 2 minutes (burst request protection)
-    - Pre-computes rolling averages in DB instead of Python
-    - Uses window functions for efficiency
+    One row per (attraction, local date, local hour) with the hour's average
+    wait. The rolling statistics are NOT here — see fetch_recent_rolling_stats.
 
-    Args:
-        attraction_ids: List of attraction IDs
-        lookback_days: How many days to look back (default: 730 = 2 years)
-
-    Returns:
-        DataFrame with daily aggregated queue data + pre-computed rolling averages
+    This used to read 730 days and compute nine ROWS-based window functions
+    over them, of which the caller then read `.iloc[-1]` — under
+    `ORDER BY date DESC` the OLDEST row. Every served rolling_avg_* and
+    volatility_* was therefore the value at the start of the two-year window
+    (Taron, 2026-10-01: rolling_avg_7d served 54.75 from 2025-12-26 against
+    28.8 now), and the query was ~2/3 of all Postgres execution time.
     """
     if not attraction_ids:
         return pd.DataFrame()
 
-    # Bucket end_time to the cache-TTL window so calls within the same window
-    # share a cache key AND a deterministic SQL upper bound. base_time=now() otherwise
-    # carries microsecond precision → every key is unique → cache never hits.
-    # (end_time is None only for non-prediction callers; leave those unbounded.)
-    if end_time is not None:
-        bucket = int(end_time.timestamp()) // _recent_wait_times_cache_ttl
-        query_end_time = datetime.fromtimestamp(
-            bucket * _recent_wait_times_cache_ttl,
-            tz=end_time.tzinfo or timezone.utc,
-        )
-    else:
-        query_end_time = None
-
-    # Create cache key from sorted attraction IDs
+    query_end_time = _bucket_end_time(end_time)
     cache_key = f"{','.join(sorted(attraction_ids))}:{lookback_days}:{query_end_time}"
 
-    # Check cache
-    if cache_key in _recent_wait_times_cache:
-        cached_data, cache_time = _recent_wait_times_cache[cache_key]
-        import time
-
-        if time.time() - cache_time < _recent_wait_times_cache_ttl:
-            return cached_data.copy()
-
-    # OPTIMIZATION: Pre-compute rolling averages in DB using window functions
-    # This avoids shipping raw data to Python and doing calculations there
-    query = text(
-        """
-        WITH hourly_agg AS (
+    def read() -> pd.DataFrame:
+        query = text(
+            f"""
             SELECT
                 qd."attractionId"::text as "attractionId",
                 a.name as "attractionName",
@@ -282,100 +301,118 @@ def fetch_recent_wait_times(
                 ON se."parkId" = a."parkId"
                 AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
                 AND se."attractionId" IS NULL
-            WHERE qd."attractionId"::text = ANY(:attraction_ids)
-                AND qd.timestamp >= NOW() - :lookback_days * INTERVAL '1 day'
-                AND (CAST(:end_time AS timestamptz) IS NULL OR qd.timestamp < :end_time)
-                AND qd."waitTime" IS NOT NULL
-                AND qd."waitTime" >= 5
-                AND qd.status = 'OPERATING'
-                AND qd."queueType" = 'STANDBY'
-                AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+            WHERE {_SERVING_QUEUE_FILTER}
+                AND qd.timestamp >= CAST(:end_time AS timestamptz) - :lookback_days * INTERVAL '1 day'
+                AND qd.timestamp < :end_time
             GROUP BY qd."attractionId", a.name, DATE(qd.timestamp AT TIME ZONE p.timezone),
                      EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone),
                      EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone)
+            ORDER BY "attractionId", date, hour
+            """
         )
-        SELECT
-            "attractionId",
-            "attractionName",
-            date,
-            hour,
-            day_of_week,
-            avg_wait,
-            data_points,
-            -- Pre-compute 7-day rolling average in DB (window function)
-            AVG(avg_wait) OVER (
-                PARTITION BY "attractionId"
-                ORDER BY date, hour
-                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW  -- 7 days * 24 hours = 168 rows
-            ) as rolling_avg_7d,
-            -- Pre-compute standard deviation for volatility
-            STDDEV(avg_wait) OVER (
-                PARTITION BY "attractionId"
-                ORDER BY date, hour
-                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
-            ) as rolling_std_7d,
-            -- Weekday (Mon-Fri, DOW 1-5) rolling average: help model distinguish load patterns
-            AVG(CASE WHEN day_of_week BETWEEN 1 AND 5 THEN avg_wait END) OVER (
-                PARTITION BY "attractionId"
-                ORDER BY date, hour
-                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
-            ) as rolling_avg_weekday,
-            -- Weekend (Sat-Sun, DOW 0 and 6 in Postgres) rolling average
-            AVG(CASE WHEN day_of_week IN (0, 6) THEN avg_wait END) OVER (
-                PARTITION BY "attractionId"
-                ORDER BY date, hour
-                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
-            ) as rolling_avg_weekend,
-            -- 28-day rolling average (seasonal smoothing baseline)
-            AVG(avg_wait) OVER (
-                PARTITION BY "attractionId"
-                ORDER BY date, hour
-                ROWS BETWEEN 671 PRECEDING AND CURRENT ROW  -- 28 days * 24 hours = 672 rows
-            ) as rolling_avg_28d,
-            -- 90-day rolling average (long-term seasonal baseline)
-            AVG(avg_wait) OVER (
-                PARTITION BY "attractionId"
-                ORDER BY date, hour
-                ROWS BETWEEN 2159 PRECEDING AND CURRENT ROW  -- 90 days * 24 hours = 2160 rows
-            ) as rolling_avg_90d,
-            -- Weekend/weekday standard deviation (for split volatility)
-            STDDEV(CASE WHEN day_of_week BETWEEN 1 AND 5 THEN avg_wait END) OVER (
-                PARTITION BY "attractionId"
-                ORDER BY date, hour
-                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
-            ) as rolling_std_weekday,
-            STDDEV(CASE WHEN day_of_week IN (0, 6) THEN avg_wait END) OVER (
-                PARTITION BY "attractionId"
-                ORDER BY date, hour
-                ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
-            ) as rolling_std_weekend
-        FROM hourly_agg
-        ORDER BY "attractionId", date DESC, hour
+        with get_db() as db:
+            result = db.execute(
+                query,
+                {
+                    "attraction_ids": attraction_ids,
+                    "lookback_days": lookback_days,
+                    "end_time": query_end_time,
+                },
+            )
+            return convert_df_types(
+                pd.DataFrame(result.fetchall(), columns=result.keys())
+            )
+
+    return _cached_read(_recent_wait_times_cache, cache_key, read)
+
+
+def fetch_recent_rolling_stats(
+    attraction_ids: List[str],
+    end_time: Optional[datetime] = None,
+) -> pd.DataFrame:
     """
-    )
+    The rolling features at end_time, one row per attraction, indexed by id.
 
-    with get_db() as db:
-        result = db.execute(
-            query,
-            {
-                "attraction_ids": attraction_ids,
-                "lookback_days": lookback_days,
-                "end_time": query_end_time,
-            },
+    Mirrors features.add_historical_features, which the model is trained on:
+    the series is one MEDIAN wait per UTC hour, each window is time-based and
+    left-closed ([t - N days, t)), weekday/weekend split on the UTC weekday
+    (Mon-Fri vs Sat-Sun) and the std is the sample std (pandas ddof=1, NULL
+    below two values — training's min_periods=2). Columns: attractionName,
+    rolling_avg_7d/_weekday/_weekend/_28d/_90d, rolling_std_7d/_weekday/_weekend.
+    A window with no data yields NaN; the caller applies its fallbacks.
+    """
+    if not attraction_ids:
+        return pd.DataFrame()
+
+    query_end_time = _bucket_end_time(end_time)
+    cache_key = f"{','.join(sorted(attraction_ids))}:{query_end_time}"
+
+    def read() -> pd.DataFrame:
+        query = text(
+            f"""
+            WITH hourly AS (
+                SELECT
+                    qd."attractionId"::text AS "attractionId",
+                    a.name AS name,
+                    DATE_TRUNC('hour', qd.timestamp) AS ts,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS w
+                FROM queue_data qd
+                INNER JOIN attractions a ON a.id = qd."attractionId"
+                INNER JOIN parks p ON p.id = a."parkId"
+                LEFT JOIN schedule_entries se
+                    ON se."parkId" = a."parkId"
+                    AND se.date = DATE(qd.timestamp AT TIME ZONE p.timezone)
+                    AND se."attractionId" IS NULL
+                WHERE {_SERVING_QUEUE_FILTER}
+                    AND qd.timestamp >= CAST(:end_time AS timestamptz) - :days * INTERVAL '1 day'
+                    AND qd.timestamp < :end_time
+                GROUP BY 1, 2, 3
+            ),
+            tagged AS (
+                SELECT
+                    "attractionId",
+                    name,
+                    w,
+                    ts >= CAST(:end_time AS timestamptz) - INTERVAL '7 days' AS in_7d,
+                    ts >= CAST(:end_time AS timestamptz) - INTERVAL '28 days' AS in_28d,
+                    EXTRACT(ISODOW FROM ts AT TIME ZONE 'UTC') >= 6 AS is_weekend
+                FROM hourly
+            )
+            SELECT
+                "attractionId",
+                MAX(name) AS "attractionName",
+                AVG(w) FILTER (WHERE in_7d) AS rolling_avg_7d,
+                AVG(w) FILTER (WHERE in_7d AND NOT is_weekend) AS rolling_avg_weekday,
+                AVG(w) FILTER (WHERE in_7d AND is_weekend) AS rolling_avg_weekend,
+                AVG(w) FILTER (WHERE in_28d) AS rolling_avg_28d,
+                AVG(w) AS rolling_avg_90d,
+                STDDEV_SAMP(w) FILTER (WHERE in_7d) AS rolling_std_7d,
+                STDDEV_SAMP(w) FILTER (WHERE in_7d AND NOT is_weekend) AS rolling_std_weekday,
+                STDDEV_SAMP(w) FILTER (WHERE in_7d AND is_weekend) AS rolling_std_weekend
+            FROM tagged
+            GROUP BY "attractionId"
+            """
         )
-        df = pd.DataFrame(result.fetchall(), columns=result.keys())
-        df = convert_df_types(df)
-
-        # Update cache, evicting expired buckets so the dict can't grow unbounded.
-        import time
-
-        now_ts = time.time()
-        _evict_expired_entries(
-            _recent_wait_times_cache, now_ts, _recent_wait_times_cache_ttl
-        )
-        _recent_wait_times_cache[cache_key] = (df.copy(), now_ts)
-
+        with get_db() as db:
+            result = db.execute(
+                query,
+                {
+                    "attraction_ids": attraction_ids,
+                    "days": ROLLING_STATS_DAYS,
+                    "end_time": query_end_time,
+                },
+            )
+            df = convert_df_types(
+                pd.DataFrame(result.fetchall(), columns=result.keys())
+            )
+        if df.empty:
+            return df
+        df = df.set_index("attractionId")
+        stat_cols = [c for c in df.columns if c != "attractionName"]
+        df[stat_cols] = df[stat_cols].astype(float)
         return df
+
+    return _cached_read(_recent_rolling_stats_cache, cache_key, read)
 
 
 def generate_future_timestamps(
@@ -1477,11 +1514,15 @@ def create_prediction_features(
         df = df.loc[original_order]
 
     # Historical features (most important!)
-    # OPTIMIZATION: fetch_recent_wait_times now pre-computes rolling averages in DB
-    # This avoids expensive Python calculations for every attraction
-    recent_data = fetch_recent_wait_times(
-        attraction_ids, lookback_days=730, end_time=base_time
-    )
+    # Two reads: hour-by-hour rows for the date/hour lookups (last 32 days) and
+    # the rolling statistics at base_time, computed the way training computes
+    # them (see fetch_recent_rolling_stats).
+    recent_data = fetch_recent_wait_times(attraction_ids, end_time=base_time)
+    rolling_stats = fetch_recent_rolling_stats(attraction_ids, end_time=base_time)
+    if recent_data.empty:
+        recent_data = pd.DataFrame(
+            columns=["attractionId", "attractionName", "date", "hour", "avg_wait"]
+        )
 
     # Initialize with defaults (0.0 to match training fallback)
     df["avg_wait_last_24h"] = 0.0
@@ -1492,9 +1533,14 @@ def create_prediction_features(
     df["trend_7d"] = 0.0
     df["volatility_7d"] = 0.0
 
-    if not recent_data.empty:
+    if not recent_data.empty or not rolling_stats.empty:
         # Map attraction names for type heuristic
         attr_names_map = (
+            rolling_stats["attractionName"].dropna().to_dict()
+            if not rolling_stats.empty
+            else {}
+        )
+        attr_names_map.update(
             recent_data.groupby("attractionId")["attractionName"].first().to_dict()
         )
         df["attractionName"] = df["attractionId"].map(attr_names_map)
@@ -1540,9 +1586,25 @@ def create_prediction_features(
             park_id = attraction_to_park.get(attraction_id)
             park_tz = park_timezones.get(park_id) if park_id else None
 
-            if not attraction_data.empty:
-                # Overall average (all data)
-                overall_avg = attraction_data["avg_wait"].mean()
+            stats = (
+                rolling_stats.loc[attraction_id]
+                if attraction_id in rolling_stats.index
+                else None
+            )
+
+            def _stat(col):
+                """The rolling statistic, or None when its window had no data."""
+                if stats is None or pd.isna(stats[col]):
+                    return None
+                return float(stats[col])
+
+            if not attraction_data.empty or stats is not None:
+                # Long-run level used where a shorter window is empty. It was the
+                # mean of 730 days of hourly averages; the 90-day rolling mean is
+                # the longest history the model is trained on.
+                overall_avg = _stat("rolling_avg_90d")
+                if overall_avg is None:
+                    overall_avg = attraction_data["avg_wait"].mean()
 
                 base_time_local = (
                     base_time_local_cache.get(park_tz, base_time_pd)
@@ -1550,28 +1612,9 @@ def create_prediction_features(
                     else base_time_pd
                 )
 
-                # OPTIMIZATION: Use pre-computed rolling_avg_7d from DB (window function)
-                # This avoids expensive Python aggregation for every attraction
-                cutoff_7d_local = (base_time_local - timedelta(days=7)).date()
-                last_7_days = attraction_data[
-                    pd.to_datetime(attraction_data["date"]).dt.date >= cutoff_7d_local
-                ]
-
-                # Use DB-computed rolling average if available
-                if "rolling_avg_7d" in attraction_data.columns:
-                    rolling_7d = (
-                        attraction_data["rolling_avg_7d"].iloc[-1]
-                        if len(attraction_data) > 0
-                        and not pd.isna(attraction_data["rolling_avg_7d"].iloc[-1])
-                        else overall_avg
-                    )
-                else:
-                    # Fallback to Python calculation (backwards compatibility)
-                    rolling_7d = (
-                        last_7_days["avg_wait"].mean()
-                        if len(last_7_days) > 0
-                        else overall_avg
-                    )
+                rolling_7d = _stat("rolling_avg_7d")
+                if rolling_7d is None:
+                    rolling_7d = overall_avg
 
                 # Last 24h average (approximation: today + yesterday average) - use local date
                 cutoff_24h_local = (base_time_local - timedelta(days=1)).date()
@@ -1666,54 +1709,22 @@ def create_prediction_features(
                 # Calculate 7-day trend (momentum) - matches features.py logic
                 trend_7d = avg_24h - rolling_7d
 
-                # OPTIMIZATION: Use pre-computed rolling_std_7d from DB (window function)
-                # Volatility: std of last 7d, log1p-dampened and capped to match training
+                # Volatility: 7-day std, log1p-dampened and capped to match training
+                # (an empty or single-value window is 0, training's fillna(0)).
                 cap_std = get_settings().VOLATILITY_CAP_STD_MINUTES
-                volatility_7d = 0.0
-                if "rolling_std_7d" in attraction_data.columns:
-                    # Use DB-computed standard deviation
-                    raw_std = (
-                        attraction_data["rolling_std_7d"].iloc[-1]
-                        if len(attraction_data) > 0
-                        and not pd.isna(attraction_data["rolling_std_7d"].iloc[-1])
-                        else 0.0
-                    )
-                    if raw_std > 0:
-                        volatility_7d = min(np.log1p(raw_std), np.log1p(cap_std))
-                elif len(last_7_days) > 1:
-                    # Fallback to Python calculation (backwards compatibility)
-                    raw_std = last_7_days["avg_wait"].std()
-                    if not pd.isna(raw_std) and raw_std >= 0:
-                        volatility_7d = min(np.log1p(raw_std), np.log1p(cap_std))
 
-                # Split volatility: weekday vs weekend (matches training-side calculate_trend_volatility)
                 def _dampened_vol_pred(raw_std_val):
                     if raw_std_val is None or pd.isna(raw_std_val) or raw_std_val <= 0:
                         return 0.0
                     return min(np.log1p(raw_std_val), np.log1p(cap_std))
 
-                volatility_weekday = _dampened_vol_pred(
-                    attraction_data["rolling_std_weekday"].iloc[-1]
-                    if "rolling_std_weekday" in attraction_data.columns
-                    and len(attraction_data) > 0
-                    else None
-                )
-                volatility_weekend = _dampened_vol_pred(
-                    attraction_data["rolling_std_weekend"].iloc[-1]
-                    if "rolling_std_weekend" in attraction_data.columns
-                    and len(attraction_data) > 0
-                    else None
-                )
+                volatility_7d = _dampened_vol_pred(_stat("rolling_std_7d"))
+                volatility_weekday = _dampened_vol_pred(_stat("rolling_std_weekday"))
+                volatility_weekend = _dampened_vol_pred(_stat("rolling_std_weekend"))
 
-                # Weekday / weekend rolling averages (from DB window functions)
                 def _extract_col(col, fallback):
-                    return (
-                        attraction_data[col].iloc[-1]
-                        if col in attraction_data.columns
-                        and len(attraction_data) > 0
-                        and not pd.isna(attraction_data[col].iloc[-1])
-                        else fallback
-                    )
+                    value = _stat(col)
+                    return fallback if value is None else value
 
                 rolling_avg_weekday = _extract_col("rolling_avg_weekday", rolling_7d)
                 rolling_avg_weekend = _extract_col("rolling_avg_weekend", rolling_7d)
