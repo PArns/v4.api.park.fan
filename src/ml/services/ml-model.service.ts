@@ -163,12 +163,13 @@ export class MLModelService {
         "trainSamples",
         "isActive",
       ],
-      order: { trainedAt: "ASC" },
+      // Newest `limit` models (PAR-632), handed out oldest first for the chart.
+      order: { trainedAt: "DESC" },
       take: limit,
     });
 
     return {
-      history: models.map((m) => ({
+      history: [...models].reverse().map((m) => ({
         version: m.version,
         trainedAt: m.trainedAt.toISOString(),
         mae: m.mae ?? null,

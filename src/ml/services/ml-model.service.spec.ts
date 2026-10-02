@@ -22,6 +22,7 @@ describe("MLModelService", () => {
   const mlModelRepo = {
     findOne: jest.fn(),
     find: jest.fn(),
+    findAndCount: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -190,6 +191,55 @@ describe("MLModelService", () => {
       const result = service.getModelAge(new Date());
       expect(result.days).toBe(0);
       expect(result.hours).toBe(0);
+    });
+  });
+  describe("getMetricsHistory", () => {
+    // Five trainings, one per day. The fake repository honours `order` and
+    // `take` the way Postgres would, so the test sees which rows the query
+    // asks for, not only that it asked.
+    const trainings = [1, 2, 3, 4, 5].map((day) => ({
+      ...baseModel,
+      version: `v2026.09.0${day}_0600`,
+      trainedAt: new Date(`2026-09-0${day}T06:00:00Z`),
+      isActive: day === 5,
+    }));
+
+    beforeEach(() => {
+      mlModelRepo.findAndCount.mockImplementation(
+        ({
+          order,
+          take,
+        }: {
+          order: { trainedAt: "ASC" | "DESC" };
+          take: number;
+        }) => {
+          const sorted = [...trainings].sort((a, b) =>
+            order.trainedAt === "DESC"
+              ? b.trainedAt.getTime() - a.trainedAt.getTime()
+              : a.trainedAt.getTime() - b.trainedAt.getTime(),
+          );
+          return Promise.resolve([sorted.slice(0, take), trainings.length]);
+        },
+      );
+    });
+
+    it("returns the newest `limit` models, oldest first, when limit < total (PAR-632)", async () => {
+      const result = await service.getMetricsHistory(3);
+
+      expect(result.total).toBe(5);
+      expect(result.history.map((h) => h.version)).toEqual([
+        "v2026.09.03_0600",
+        "v2026.09.04_0600",
+        "v2026.09.05_0600",
+      ]);
+    });
+
+    it("returns every model oldest first when limit >= total", async () => {
+      const result = await service.getMetricsHistory(50);
+
+      expect(result.history.map((h) => h.version)).toEqual(
+        trainings.map((t) => t.version),
+      );
     });
   });
 });

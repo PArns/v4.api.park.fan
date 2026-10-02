@@ -166,7 +166,11 @@ export class MLController {
   })
   async getParkStats(
     @Param("parkId") parkId: string,
-    @Query("days", new DefaultValuePipe(30), ParseIntPipe) days: number,
+    @Query(
+      "days",
+      new QueryIntPipe({ name: "days", fallback: 30, min: 1, max: 365 }),
+    )
+    days: number,
   ) {
     const stats = await this.accuracyService.getParkAccuracyStats(parkId, days);
     return {
@@ -185,7 +189,11 @@ export class MLController {
   })
   async getAttractionStats(
     @Param("attractionId") attractionId: string,
-    @Query("days", new DefaultValuePipe(30), ParseIntPipe) days: number,
+    @Query(
+      "days",
+      new QueryIntPipe({ name: "days", fallback: 30, min: 1, max: 365 }),
+    )
+    days: number,
   ) {
     const stats = await this.accuracyService.getAttractionAccuracyStats(
       attractionId,
@@ -206,7 +214,11 @@ export class MLController {
     summary: "Get hourly and day-of-week accuracy patterns",
   })
   async getHourlyPatterns(
-    @Query("days", new DefaultValuePipe(30), ParseIntPipe) days: number,
+    @Query(
+      "days",
+      new QueryIntPipe({ name: "days", fallback: 30, min: 1, max: 365 }),
+    )
+    days: number,
   ) {
     const hourly = await this.accuracyService.getHourlyAccuracyPatterns(days);
     const dayOfWeek =
@@ -230,7 +242,11 @@ export class MLController {
   async analyzeFeatureErrors(
     @Query("threshold", new DefaultValuePipe(15), ParseIntPipe)
     threshold: number,
-    @Query("days", new DefaultValuePipe(30), ParseIntPipe) days: number,
+    @Query(
+      "days",
+      new QueryIntPipe({ name: "days", fallback: 30, min: 1, max: 365 }),
+    )
+    days: number,
     @Query("attractionId") attractionId?: string,
   ) {
     return this.accuracyService.analyzeFeatureErrors(
