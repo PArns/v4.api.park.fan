@@ -4,7 +4,8 @@ import {
 } from "../queue-data/queue-data-cache-keys";
 
 /**
- * KEYS patterns `POST /v1/admin/flush-cache` deletes. Every entry must match a
+ * Key patterns (SCAN MATCH globs) that `POST /v1/admin/flush-cache` and
+ * `POST /v1/admin/cache/reset` delete. Every entry must match a
  * prefix that is actually written somewhere (see CacheKeys + inline keys).
  *
  * Nothing here may match a Bull key. Bull stores every queue under
