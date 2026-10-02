@@ -1511,3 +1511,205 @@ describe("AttractionMergeService — batch dry run names what it would delete", 
     expect(reads()).toBe(2);
   });
 });
+
+/**
+ * PAR-361: the single curated columns a merge leaves behind.
+ *
+ * The survivor keeps its own value of a curated column, and that rule stays.
+ * But the losing row is deleted right after, so a different hand-written value
+ * on it ceases to exist. PAR-301 named a refused works period; these are named
+ * the same way, as one entry per pair in `droppedCurations` and one warning on
+ * the real merge.
+ *
+ * Every case inherits `queueTimesEntityId` in the same call, so an empty
+ * report is proven to come from a preview that got as far as the inheritance
+ * plan (G-44).
+ */
+describe("AttractionMergeService — the single curated values it would delete", () => {
+  const ride = (overrides: Record<string, unknown> = {}) => ({
+    slug: "black-mamba",
+    name: "Black Mamba",
+    parkId: "park-phantasialand",
+    queueTimesEntityId: null,
+    curatedName: null,
+    curatedMinimumHeight: null,
+    curatedSeasonMonths: null,
+    landName: null,
+    ...overrides,
+  });
+
+  const rowsOf = (
+    winner: Record<string, unknown>,
+    loser: Record<string, unknown>,
+  ) => [
+    { ...winner, id: "row-base" },
+    { ...loser, id: "row-suffix", slug: "black-mamba-2" },
+  ];
+
+  const previewOf = (
+    winner: Record<string, unknown>,
+    loser: Record<string, unknown>,
+  ) => {
+    const rows = rowsOf(winner, loser);
+    const findOne = jest.fn(({ where }: { where: { id: string } }) =>
+      Promise.resolve(rows.find((row) => row.id === where.id) ?? null),
+    );
+    const service = new AttractionMergeService(
+      {
+        getRepository: jest.fn(() => ({ findOne })),
+        query: jest.fn().mockResolvedValue([]),
+      } as never,
+      {} as never,
+      {} as never,
+    );
+    return service.previewMerge("row-base", "row-suffix");
+  };
+
+  const mergeOf = async (
+    winner: Record<string, unknown>,
+    loser: Record<string, unknown>,
+  ) => {
+    const rows = rowsOf(winner, loser);
+    const manager = {
+      findOne: jest.fn(
+        (_entity: unknown, { where }: { where: { id: string } }) =>
+          Promise.resolve(rows.find((row) => row.id === where.id) ?? null),
+      ),
+      query: jest.fn().mockResolvedValue([]),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const warn = jest
+      .spyOn(Logger.prototype, "warn")
+      .mockImplementation(() => undefined);
+    const service = new AttractionMergeService(
+      {
+        transaction: jest.fn((fn: (m: unknown) => unknown) => fn(manager)),
+      } as never,
+      {
+        keys: jest.fn().mockResolvedValue([]),
+        del: jest.fn(),
+        pipeline: jest.fn(() => ({ del: jest.fn(), exec: jest.fn() })),
+      } as never,
+      { revalidateTags: jest.fn() } as never,
+    );
+
+    await service.mergeAttractions("row-base", "row-suffix");
+    return { warn, manager };
+  };
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("reports nothing where the curated value travels", async () => {
+    const preview = await previewOf(
+      ride(),
+      ride({ queueTimesEntityId: 4711, curatedMinimumHeight: 140 }),
+    );
+
+    expect(preview.inheritedColumns).toEqual(
+      expect.arrayContaining(["queueTimesEntityId", "curatedMinimumHeight"]),
+    );
+    expect(preview.droppedCurations).toEqual([]);
+  });
+
+  it("reports nothing where both rows hold the same value", async () => {
+    // Equal by value, not by reference: the months come back as two arrays.
+    const preview = await previewOf(
+      ride({ curatedSeasonMonths: [4, 5, 6] }),
+      ride({ queueTimesEntityId: 4711, curatedSeasonMonths: [4, 5, 6] }),
+    );
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    expect(preview.droppedCurations).toEqual([]);
+  });
+
+  it("does not name a feed column the survivor holds its own of", async () => {
+    // `landName` is inheritable but comes from the sync, which writes it
+    // again. Only the hand-written columns are named.
+    const preview = await previewOf(
+      ride({ landName: "Deep in Africa" }),
+      ride({ queueTimesEntityId: 4711, landName: "Africa" }),
+    );
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    expect(preview.droppedCurations).toEqual([]);
+  });
+
+  it("names every curated value the survivor keeps its own of, in one entry", async () => {
+    const preview = await previewOf(
+      ride({
+        curatedName: "Black Mamba",
+        curatedMinimumHeight: 140,
+        curatedSeasonMonths: [4, 5, 6],
+      }),
+      ride({
+        queueTimesEntityId: 4711,
+        curatedName: "Black Mamba (Deep in Africa)",
+        curatedMinimumHeight: 130,
+        curatedSeasonMonths: [4, 5, 6],
+      }),
+    );
+
+    expect(preview.inheritedColumns).toContain("queueTimesEntityId");
+    expect(preview.inheritedColumns).not.toContain("curatedName");
+    expect(preview.droppedCurations).toEqual([
+      {
+        table: "attractions",
+        from: "loser",
+        row: {
+          curatedName: "Black Mamba (Deep in Africa)",
+          curatedMinimumHeight: 130,
+        },
+      },
+    ]);
+  });
+
+  it("names a curated false the survivor holds a true of", async () => {
+    // A boolean false is a statement, not an absence, on a curated column.
+    const preview = await previewOf(
+      ride({ curatedMayGetWet: true }),
+      ride({ queueTimesEntityId: 4711, curatedMayGetWet: false }),
+    );
+
+    expect(preview.droppedCurations).toEqual([
+      {
+        table: "attractions",
+        from: "loser",
+        row: { curatedMayGetWet: false },
+      },
+    ]);
+  });
+
+  it("logs the value on the real merge and keeps the survivor's own", async () => {
+    const { warn, manager } = await mergeOf(
+      ride({ curatedMinimumHeight: 140 }),
+      ride({ queueTimesEntityId: 4711, curatedMinimumHeight: 130 }),
+    );
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [line] = warn.mock.calls[0] as [string];
+    expect(line).toContain("curatedMinimumHeight=130");
+    expect(manager.delete).toHaveBeenCalledWith(Attraction, "row-suffix");
+    const [, , written] = manager.update.mock.calls.find(
+      ([entity, id]) => entity === Attraction && id === "row-base",
+    ) as unknown as [unknown, string, Record<string, unknown>];
+    expect(written).toEqual(
+      expect.objectContaining({ queueTimesEntityId: 4711 }),
+    );
+    expect(written).not.toHaveProperty("curatedMinimumHeight");
+  });
+
+  it("stays quiet on the merge where the curated value travels", async () => {
+    const { warn, manager } = await mergeOf(
+      ride(),
+      ride({ queueTimesEntityId: 4711, curatedMinimumHeight: 130 }),
+    );
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(manager.update).toHaveBeenCalledWith(
+      Attraction,
+      "row-base",
+      expect.objectContaining({ curatedMinimumHeight: 130 }),
+    );
+  });
+});
