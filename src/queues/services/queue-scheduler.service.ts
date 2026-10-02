@@ -13,10 +13,12 @@ import { createHash } from "crypto";
  *
  * Every add() in registerScheduledJobs is a repeat add guarded by
  * hasRepeatableJob, so a second pass changes nothing for a healthy entry. It
- * exists for the broken ones: Redis runs `allkeys-lru`, and a daily cron's
- * delayed job hash sits untouched for up to 24 h, which makes it the first
- * thing eviction takes. Without the periodic pass a broken chain stayed broken
- * until the next deploy restarted the API (PAR-626).
+ * exists for the broken ones: until PAR-633 Redis ran `allkeys-lru`, and a
+ * daily cron's delayed job hash sat untouched for up to 24 h, which made it the
+ * first thing eviction took. Redis now runs `volatile-lru`, which never evicts
+ * a Bull key (they carry no TTL); the pass stays as the safety net for any other
+ * way a chain breaks. Without it a broken chain stayed broken until the next
+ * deploy restarted the API (PAR-626).
  */
 const RE_REGISTER_INTERVAL_MS = 60 * 60 * 1000;
 

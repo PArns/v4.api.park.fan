@@ -10,9 +10,9 @@ import {
 /**
  * One browser that asked to be told about a trip.
  *
- * **Postgres, not Redis.** This instance runs `maxmemory 512mb` with
- * `allkeys-lru` (`docker-compose.yml`), so Redis is free to evict any key at any
- * moment — a subscription store there would silently lose subscribers, and the
+ * **Postgres, not Redis.** This instance runs with a memory cap and
+ * `volatile-lru` (`docker-compose.yml`), so Redis is free to evict any key that
+ * carries a TTL at any moment — a subscription store there would silently lose subscribers, and the
  * symptom would be notifications quietly not arriving, which nobody reports and
  * nothing measures. The rate limiter next door IS in Redis, and that asymmetry
  * is the point: an evicted counter resets a window, an evicted subscription is

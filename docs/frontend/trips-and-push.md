@@ -319,7 +319,7 @@ trip block's `startMinute` it needs no separate date component.
   visitor's own data, and a shared edge copy would hand the next reader
   somebody else's plan, alerts, or follows.
 - Subscriptions, trips, alerts and follows all live in **Postgres**, not
-  Redis: this instance runs `allkeys-lru`, so an evicted counter merely
+  Redis: this instance runs `volatile-lru`, so an evicted counter merely
   resets a rate-limit window, while an evicted subscription (or an evicted
   alert) is a visitor who silently stops being notified.
 - A subscription is deleted the first time a push service answers 404 or 410 (the
