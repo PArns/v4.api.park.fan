@@ -1,3 +1,5 @@
+import { ScheduleType } from "../entities/schedule-entry.entity";
+
 /**
  * The two deduplication statements `ParksService` runs over `schedule_entries`,
  * built once instead of copied per scope.
@@ -50,24 +52,42 @@ export function sameTypeDuplicateSql(scope: ScheduleDedupScope): string {
 }
 
 /**
+ * The day-status types phase 2 arbitrates between. Every other `ScheduleType`
+ * is an addition to the day and is never removed by phase 2.
+ */
+export const CONFLICT_TYPES = [
+  ScheduleType.OPERATING,
+  ScheduleType.CLOSED,
+  ScheduleType.UNKNOWN,
+] as const;
+
+/**
  * Phase 2 — one subject holding several types for one day.
  * Priority: OPERATING > API-provided CLOSED > Gap-filled CLOSED > UNKNOWN.
  *
  * Runs after phase 1, so each (park, day, ride, type) is already down to one
  * row and the ranking only has to choose between the types.
  *
- * `ScheduleType` has eight members and this ranking names three of them in four
- * steps (CLOSED twice, by description). The other five — TICKETED_EVENT,
- * PRIVATE_EVENT, EXTRA_HOURS, MAINTENANCE and INFO —
- * fall to `ELSE 4`, i.e. below UNKNOWN, so a day that also carries an OPERATING
- * row loses them on every pass. Production does hold such rows (Universal's
- * Halloween Horror Nights runs past midnight as TICKETED_EVENT; see
- * `ShowsService`), and the schedule sync writes them back, so they are deleted
- * and rewritten daily. That is unchanged here, deliberately: it predates this
- * file and altering it changes which rows a park keeps. PAR-276.
+ * **Only the three day-status types take part** (`CONFLICT_TYPES`): OPERATING,
+ * CLOSED and UNKNOWN each say what the day *is*, so two of them on one subject
+ * contradict each other and one has to go. The other five — TICKETED_EVENT,
+ * PRIVATE_EVENT, EXTRA_HOURS, MAINTENANCE and INFO — say what *else* happens
+ * that day. A Halloween Horror Nights evening (TICKETED_EVENT, see
+ * `ShowsService`) is neither an opening day nor a closure, and it belongs next
+ * to the OPERATING row, not in place of it. They are left out of both the
+ * ranking and the `EXISTS` pre-filter, so this phase never deletes them and
+ * they never decide which day-status row survives. PAR-276.
+ *
+ * Before PAR-276 they were ranked `ELSE 4`, below UNKNOWN, and a day that also
+ * carried an OPERATING row lost them on every pass; the schedule sync wrote
+ * them back, and the next cleanup deleted them again.
+ *
+ * Duplicates among those five are still phase 1's job (same park, day, ride
+ * and type).
  */
 export function crossTypeConflictSql(scope: ScheduleDedupScope): string {
   const parkFilter = scope === "park" ? `AND e."parkId" = $1::uuid` : "";
+  const types = CONFLICT_TYPES.map((t) => `'${t}'`).join(", ");
 
   return `
       WITH ranked AS (
@@ -80,19 +100,20 @@ export function crossTypeConflictSql(scope: ScheduleDedupScope): string {
                      WHEN e."scheduleType" = 'CLOSED' AND e.description != 'Gap-filled' THEN 1
                      WHEN e."scheduleType" = 'CLOSED' THEN 2
                      WHEN e."scheduleType" = 'UNKNOWN' THEN 3
-                     ELSE 4
                    END,
                    e."updatedAt" DESC
                ) as rn
         FROM schedule_entries e
-        WHERE EXISTS (
-          SELECT 1
-          FROM schedule_entries other
-          WHERE other."parkId" = e."parkId"
-            AND other.date = e.date
-            AND other."attractionId" IS NOT DISTINCT FROM e."attractionId"
-            AND other."scheduleType" <> e."scheduleType"
-        )
+        WHERE e."scheduleType" IN (${types})
+          AND EXISTS (
+            SELECT 1
+            FROM schedule_entries other
+            WHERE other."parkId" = e."parkId"
+              AND other.date = e.date
+              AND other."attractionId" IS NOT DISTINCT FROM e."attractionId"
+              AND other."scheduleType" IN (${types})
+              AND other."scheduleType" <> e."scheduleType"
+          )
         ${parkFilter}
       )
       DELETE FROM schedule_entries
