@@ -1178,7 +1178,14 @@ export class PlanDayService {
     // did answer is never replaced by last year's. Asked with `byId`, which is
     // `plannable`, so a ride the season rule blocks for this date gets no
     // curve from this tier either, exactly as it gets none from `composed`.
-    if (tier === "long_range" && rides.length === 0 && holidayState) {
+    // A failed day-level read also leaves `dayLevels` empty; that is an outage,
+    // not the end of the model's reach, and must keep reporting as one.
+    if (
+      tier === "long_range" &&
+      rides.length === 0 &&
+      holidayState &&
+      !levels.unavailable
+    ) {
       const looked = await this.climatologyRides(
         park,
         dateStr,

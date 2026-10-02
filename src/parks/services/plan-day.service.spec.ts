@@ -1396,6 +1396,18 @@ describe("PlanDayService", () => {
       expect(plan.rides).toEqual([]);
     });
 
+    it("is not tried when the day-level read failed", async () => {
+      const date = longRangeDay();
+      dailyPredictionsFail = true;
+      measureOn(referenceDatesFor(date), () => 30);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      // An outage is not the end of the model's reach.
+      expect(plan.tier).toBe("long_range");
+      expect(referenceHistoryMock).not.toHaveBeenCalled();
+    });
+
     it("stays long_range when the rollup read fails", async () => {
       const date = longRangeDay();
       referenceHistoryMock.mockRejectedValue(new Error("history down"));
