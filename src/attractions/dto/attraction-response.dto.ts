@@ -1,4 +1,4 @@
-import { ApiExtraModels, ApiProperty } from "@nestjs/swagger";
+import { ApiExtraModels, ApiProperty, OmitType } from "@nestjs/swagger";
 import {
   ParkSummaryDto,
   mapParkSummary,
@@ -783,3 +783,21 @@ export type AttractionWithoutLiveData = Omit<
   AttractionResponseDto,
   keyof ReturnType<typeof AttractionResponseDto.livePlaceholders>
 >;
+
+/**
+ * The OpenAPI model of {@link AttractionWithoutLiveData}: what the park
+ * attractions list (`GET /v1/parks/…/{parkSlug}/attractions`) serves.
+ *
+ * Without it the route's schema referenced the full `AttractionResponseDto`,
+ * so a client generated from `api-json` still typed `status`,
+ * `hourlyForecast`, `forecasts` and `statistics` on a route that has not sent
+ * them since PAR-184 (PAR-249). The key list is read off
+ * {@link AttractionResponseDto.livePlaceholders} at runtime, the same source
+ * the type above uses, so the schema and the type cannot drift apart.
+ */
+export class ParkAttractionListItemDto extends OmitType(
+  AttractionResponseDto,
+  Object.keys(AttractionResponseDto.livePlaceholders()) as (keyof ReturnType<
+    typeof AttractionResponseDto.livePlaceholders
+  >)[],
+) {}
