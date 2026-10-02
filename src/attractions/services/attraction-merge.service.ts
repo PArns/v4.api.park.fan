@@ -52,6 +52,14 @@ export interface DuplicatePairReport {
   survivingSlug: string;
   safe: boolean;
   reason: string;
+  /**
+   * Curated values this pair's merge would delete, as `previewMerge` reports
+   * them for a single pair. Set on the planned pairs of a dry run only: the
+   * real run logs what it drops while it drops it, and `findDuplicatePairs`
+   * stays a pair detector rather than one read of dependent tables per pair.
+   * Empty for almost every pair (PAR-209).
+   */
+  droppedCurations?: DroppedCuration[];
 }
 
 export interface DuplicateBatchReport {
@@ -591,6 +599,15 @@ export class AttractionMergeService {
    * evidence, and at least one real pair holds two genuinely different rides.
    * A failing pair is recorded and the run continues, so one bad row cannot
    * block the rest.
+   *
+   * A dry run names, per planned pair, the curated rows the merge would delete
+   * (`droppedCurations`), taken from `previewMerge` so the batch rehearsal and
+   * the single-pair one cannot disagree. That costs 3 queries per planned pair
+   * today (two attraction reads, one SELECT for the only `winner-authoritative`
+   * entry, `attraction_ride_profiles`, plus one more where the loser holds a
+   * profile) — the same read the real run makes anyway — and it is paid on a
+   * dry run only. A pair whose preview throws is listed under `failed`, the way
+   * a pair whose merge throws is.
    */
   async mergeDuplicates(
     options: { dryRun?: boolean; limit?: number } = {},
@@ -612,8 +629,30 @@ export class AttractionMergeService {
     };
 
     if (dryRun) {
+      report.planned = [];
+      for (const pair of planned) {
+        try {
+          const preview = await this.previewMerge(pair.winnerId, pair.loserId);
+          report.planned.push({
+            ...pair,
+            droppedCurations: preview.droppedCurations,
+          });
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `❌ Preview failed for ${pair.baseSlug} in ${pair.parkName}: ${message}`,
+          );
+          report.planned.push(pair);
+          report.failed.push({ pair, error: message });
+        }
+      }
+
+      const withLoss = report.planned.filter(
+        (p) => (p.droppedCurations?.length ?? 0) > 0,
+      ).length;
       this.logger.log(
-        `🔎 Dry run: ${planned.length} pair(s) would be merged, ${skipped.length} need review`,
+        `🔎 Dry run: ${planned.length} pair(s) would be merged (${withLoss} would delete curated rows), ${skipped.length} need review`,
       );
       return report;
     }
