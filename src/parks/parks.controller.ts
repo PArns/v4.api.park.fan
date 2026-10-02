@@ -56,7 +56,10 @@ import { ScheduleResponseDto } from "./dto/schedule-response.dto";
 import { ScheduleItemDto } from "./dto/schedule-item.dto";
 import { IntegratedCalendarResponse } from "./dto/integrated-calendar.dto";
 import { BestDaysResponse } from "./dto/best-days-calendar.dto";
-import { AttractionResponseDto } from "../attractions/dto/attraction-response.dto";
+import {
+  AttractionResponseDto,
+  ParkAttractionListItemDto,
+} from "../attractions/dto/attraction-response.dto";
 import { PaginatedResponseDto } from "../common/dto/pagination.dto";
 import { MissingGeocodeResponseDto } from "./dto/missing-geocode-response.dto";
 import { ParkWaitTimesResponseDto } from "../queue-data/dto/park-wait-times-response.dto";
@@ -1796,7 +1799,7 @@ export class ParksController {
     description: "Items per page (default: 10, max: 100)",
     example: 10,
   })
-  @ApiExtraModels(PaginatedResponseDto, AttractionResponseDto)
+  @ApiExtraModels(PaginatedResponseDto, ParkAttractionListItemDto)
   @ApiResponse({
     status: 200,
     description: "List of attractions",
@@ -1807,7 +1810,7 @@ export class ParksController {
           properties: {
             data: {
               type: "array",
-              items: { $ref: getSchemaPath(AttractionResponseDto) },
+              items: { $ref: getSchemaPath(ParkAttractionListItemDto) },
             },
           },
         },
@@ -1828,7 +1831,7 @@ export class ParksController {
     )
     limit: number,
   ): Promise<{
-    data: AttractionResponseDto[];
+    data: ParkAttractionListItemDto[];
     pagination: {
       page: number;
       limit: number;
