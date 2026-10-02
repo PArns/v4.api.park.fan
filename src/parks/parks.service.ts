@@ -5,6 +5,10 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, In, IsNull } from "typeorm";
 import { Park } from "./entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "./entities/schedule-entry.entity";
+import {
+  DAY_STATUS_SCHEDULE_TYPES,
+  pickDayStatusEntry,
+} from "../common/utils/schedule.util";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Show } from "../shows/entities/show.entity";
 import { Restaurant } from "../restaurants/entities/restaurant.entity";
@@ -3381,14 +3385,19 @@ export class ParksService {
 
     const parkDateStr = getCurrentDateInTimezone(park.timezone);
 
-    // Query schedule for today in park's timezone
-    const todaySchedule = await this.scheduleRepository.findOne({
-      where: {
-        parkId,
-        date: parkDateStr as any,
-        attractionId: IsNull(),
-      },
-    });
+    // Query today's status row in park's timezone. Event rows (TICKETED_EVENT
+    // etc.) can sit beside it and are filtered out; if more than one status
+    // row exists, OPERATING beats CLOSED beats UNKNOWN.
+    const todaySchedule = pickDayStatusEntry(
+      await this.scheduleRepository.find({
+        where: {
+          parkId,
+          date: parkDateStr as any,
+          attractionId: IsNull(),
+          scheduleType: In([...DAY_STATUS_SCHEDULE_TYPES] as ScheduleType[]),
+        },
+      }),
+    );
 
     // If we have a schedule entry, trust OPERATING/CLOSED explicitly.
     // UNKNOWN means the source has no data for today — treat like "no schedule":

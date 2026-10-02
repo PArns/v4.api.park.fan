@@ -84,6 +84,27 @@ export type TopBottomPerformers = {
  * - Calculates error metrics (MAE, RMSE, MAPE)
  * - Provides feedback loop for model retraining
  */
+/**
+ * True when the park's status for the prediction's day is CLOSED: a park-level
+ * CLOSED row and no OPERATING row. An EXISTS instead of a JOIN, because event
+ * rows (TICKETED_EVENT etc.) can share the day with the status row (PAR-640) —
+ * a join would count every prediction once per row of its day.
+ */
+export const PARK_DAY_IS_CLOSED_SQL = `EXISTS (
+  SELECT 1 FROM schedule_entries se
+  WHERE se."parkId" = a."parkId"
+    AND se.date = DATE(pa.target_time)
+    AND se."attractionId" IS NULL
+    AND se."scheduleType" = 'CLOSED'
+    AND NOT EXISTS (
+      SELECT 1 FROM schedule_entries so
+      WHERE so."parkId" = se."parkId"
+        AND so.date = se.date
+        AND so."attractionId" IS NULL
+        AND so."scheduleType" = 'OPERATING'
+    )
+)`;
+
 @Injectable()
 export class PredictionAccuracyService {
   private readonly logger = new Logger(PredictionAccuracyService.name);
@@ -1371,11 +1392,6 @@ export class PredictionAccuracyService {
         "pb",
         'pb."parkId" = a."parkId" AND pb."typicalDayPeak" IS NOT NULL',
       )
-      .leftJoin(
-        "schedule_entries",
-        "se",
-        'se."parkId" = a."parkId" AND se.date = DATE(pa.target_time) AND se."attractionId" IS NULL',
-      )
       .select("COUNT(*)", "matchedCount")
       .addSelect("AVG(pa.absolute_error)", "mae")
       .addSelect(
@@ -1388,7 +1404,7 @@ export class PredictionAccuracyService {
       .where("pa.target_time >= :startDate", { startDate })
       .andWhere("pa.actual_wait_time IS NOT NULL")
       .andWhere(
-        '(pa.actual_wait_time >= 5 OR (pa.actual_wait_time >= 0 AND (se."scheduleType" IS NULL OR se."scheduleType" != \'CLOSED\')))',
+        `(pa.actual_wait_time >= 5 OR (pa.actual_wait_time >= 0 AND NOT ${PARK_DAY_IS_CLOSED_SQL}))`,
       )
       .andWhere("pa.actual_wait_time <= :maxWait", {
         maxWait: MAX_PLAUSIBLE_WAIT_TIME,

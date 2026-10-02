@@ -613,6 +613,35 @@ describe("MLService", () => {
       ).toBeUndefined();
     });
 
+    it("filters out a CLOSED day even when an event row comes after it (PAR-640)", async () => {
+      // The schedule query has no order; an event row read after CLOSED used
+      // to overwrite it, and the closed day's prediction was stored.
+      mockParksService.getOperatingDateRange.mockResolvedValue({
+        minDate: "2026-01-01",
+        maxDate: "2026-12-31",
+      });
+      mockParksService.isParkSeasonal.mockResolvedValue(true);
+      const row = (date: string, scheduleType: ScheduleType) => ({
+        parkId,
+        date: new Date(`${date}T12:00:00Z`),
+        scheduleType,
+      });
+      mockScheduleEntryRepository.find.mockResolvedValue([
+        row(today, ScheduleType.TICKETED_EVENT),
+        row(today, ScheduleType.OPERATING),
+        row(tomorrow, ScheduleType.CLOSED),
+        row(tomorrow, ScheduleType.TICKETED_EVENT),
+        row(nextWeek, ScheduleType.OPERATING),
+      ]);
+
+      await service.storePredictions(predictions);
+
+      const savedDays = allInserted().map((p) =>
+        (p.predictedTime as Date).toISOString().slice(0, 10),
+      );
+      expect(savedDays.sort()).toEqual([today, nextWeek]);
+    });
+
     // The accuracy feedback filter reads `status`, which reached this side as
     // undefined for months because PredictionResponse did not declare it (PAR-117).
     // Everything was therefore recorded, and the filter's own rule was never
