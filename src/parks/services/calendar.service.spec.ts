@@ -1001,7 +1001,14 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
             getHeadlinerAttractions: jest.fn().mockResolvedValue([]),
             getTypicalDayPeakFromCache: jest.fn().mockResolvedValue(0),
             getHeadlinerDailyPeaks: jest.fn().mockResolvedValue(new Map()),
-            calculateCrowdLevelForDate: jest.fn().mockResolvedValue(null),
+            // The real method never resolves null: a day without data answers hasData: false.
+            // A null here only held while the suite's dates were today or later, and made
+            // every month that includes a past day (October 2026 from 2 Oct) throw.
+            calculateCrowdLevelForDate: jest.fn().mockResolvedValue({
+              hasData: false,
+              crowdLevel: "unknown",
+              peakCrowdLevel: "unknown",
+            }),
           },
         },
         {
