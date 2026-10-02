@@ -1095,7 +1095,10 @@ export class ChildrenMetadataProcessor {
    * `@UpdateDateColumn`, so a row the feed still lists is never older than the
    * last sync. Checked against `/children` for 243 rows in four parks with no
    * crossing in either direction. Any other repository write also moves the
-   * column, which can only delay a retirement, never cause one.
+   * column, which can only delay a retirement, never cause one. The one case
+   * it shortens: a park whose whole sync failed for 60 days retires a missing
+   * row on its first good run, not 60 days after it; the reading gate still
+   * applies, and the row comes back by itself if the id is listed again.
    *
    * **The park has to have synced, and this run proves it** (our feed going
    * quiet is not the entity going away). This runs only after a successful
