@@ -658,6 +658,27 @@ ordinary patterns that have simply gone stale — kept because
 `PATTERN_WINDOW_DAYS` is 56 days, but no longer projected because
 `MAX_PATTERN_AGE_DAYS` is 28.
 
+### Where a show is
+
+Every entry carries `latitude` and `longitude` (PAR-50), read from the `shows`
+row that `buildShows` already loads, so the hot path runs no extra query. They
+go through the same `coord()` conversion as a ride's: numbers, not the strings
+TypeORM returns for a `decimal` column, and `null` for anything that is not a
+finite number, including an empty or whitespace-only value. `Number("")` is 0,
+so without that check a blank column would arrive as 0/0, in the Gulf of Guinea.
+
+**`null` means "position unknown", nothing more.** Many shows have no stored
+position, so this is the normal case, not an error. It does not mean the show is
+off site, cancelled or anywhere in particular. A planner that measures walks
+must leave a show without coordinates out of the distance and treat it as a
+slot in time only, which is how every show was treated before the fields
+existed. It must not substitute 0/0, the park's own position or the previous
+entry's position. Test each field on its own: the two columns are not
+constrained to be set together.
+
+As with rides, a straight line between two positions is a lower bound on the
+walk, not a walking time.
+
 ## 9. A ride opens later than its park
 
 `context.openHour` is the gate. It is not when the rides start, and at some parks
