@@ -8,10 +8,7 @@ import {
   ParkDowntimeCoverage,
 } from "./entities/park-downtime-coverage.entity";
 import type { DowntimeRegime } from "./entities/park-downtime-coverage.entity";
-import {
-  OPERATING_SCHEDULE_TYPE,
-  normalizedClosingSql,
-} from "../common/utils/park-open-window.sql";
+import { usableOperatingScheduleRowSql } from "../common/utils/park-open-window.sql";
 
 /**
  * Thresholds, all of them provisional.
@@ -172,17 +169,9 @@ export class DowntimeProfileService {
     // The form an exposure day needs from a schedule row, written once and
     // asked twice below: EVER, and again inside the measured window. Two copies
     // would be two definitions of "usable hours", and a drift between two such
-    // definitions is the bug this whole branch exists to remove.
-    const usableOperatingRow = `se."attractionId" IS NULL
-                  AND se."scheduleType" = '${OPERATING_SCHEDULE_TYPE}'
-                  AND p.timezone IS NOT NULL
-                  AND se."openingTime" IS NOT NULL
-                  AND se."closingTime" IS NOT NULL
-                  AND ${normalizedClosingSql(
-                    'se."openingTime"',
-                    'se."closingTime"',
-                    "p.timezone",
-                  )} > se."openingTime"`;
+    // definitions is the bug this whole branch exists to remove. The
+    // measurement's parksWithSchedule asks the same helper.
+    const usableOperatingRow = usableOperatingScheduleRowSql();
 
     const rows: CoverageRow[] = await this.dataSource.query(
       `

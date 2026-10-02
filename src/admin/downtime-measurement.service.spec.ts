@@ -1,4 +1,5 @@
 import { DowntimeMeasurementService } from "./downtime-measurement.service";
+import { usableOperatingScheduleRowSql } from "../common/utils/park-open-window.sql";
 
 /**
  * The grouping in `outageEvents` is the whole measurement, and it is the kind of
@@ -261,6 +262,16 @@ describe("DowntimeMeasurementService", () => {
         parksWithSchedule: 192,
       });
       expect(result.totals.outages).toBe(0);
+    });
+  });
+
+  it("counts parksWithSchedule with the regime's own schedule test", () => {
+    // Two definitions of "the park has a schedule", one in the regime and one
+    // in the measurement that calibrates it, drift apart silently.
+    const { service, query } = serviceWith([]);
+    return service.measure({}).then(() => {
+      const censusSql = query.mock.calls[0][0] as string;
+      expect(censusSql).toContain(usableOperatingScheduleRowSql());
     });
   });
 

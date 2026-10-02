@@ -226,6 +226,35 @@ export function normalizedClosingSql(
 }
 
 /**
+ * "This schedule row gives the park usable opening hours", as a WHERE predicate.
+ *
+ * The form an exposure day needs from a row: park-level, `OPERATING`, a park
+ * timezone, both times set, and a window that is still positive after
+ * `normalizedClosingSql()` has repaired it. `parkOpenWindowCtes()` drops every
+ * row that fails one of these, so a weaker test ("an OPERATING row exists")
+ * counts parks the exposure tables never see.
+ *
+ * Written once because two callers ask it: the downtime regime
+ * (`DowntimeProfileService.rebuildCoverage`, `hasSchedule`) and the measurement
+ * that calibrates that regime's gates (`DowntimeMeasurementService`,
+ * `parksWithSchedule`). Changing the condition here changes both.
+ *
+ * The caller must alias `schedule_entries` as `se` and `parks` as `p`.
+ */
+export function usableOperatingScheduleRowSql(): string {
+  return `se."attractionId" IS NULL
+                  AND se."scheduleType" = '${OPERATING_SCHEDULE_TYPE}'
+                  AND p.timezone IS NOT NULL
+                  AND se."openingTime" IS NOT NULL
+                  AND se."closingTime" IS NOT NULL
+                  AND ${normalizedClosingSql(
+                    'se."openingTime"',
+                    'se."closingTime"',
+                    "p.timezone",
+                  )} > se."openingTime"`;
+}
+
+/**
  * Overlap in minutes between a half-open segment and a window.
  *
  * Half-open on both sides, so two adjacent segments never double-count the
