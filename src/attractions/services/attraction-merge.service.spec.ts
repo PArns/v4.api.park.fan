@@ -459,12 +459,53 @@ describe("AttractionMergeService — batch", () => {
   it("merges nothing on a dry run", async () => {
     dataSource.query.mockResolvedValue([pairRow()]);
     const merge = jest.spyOn(service, "mergeAttractions");
+    jest
+      .spyOn(service, "previewMerge")
+      .mockResolvedValue({ droppedCurations: [] } as never);
 
     const report = await service.mergeDuplicates({ dryRun: true });
 
     expect(merge).not.toHaveBeenCalled();
     expect(report.planned).toHaveLength(1);
     expect(report.merged).toBe(0);
+  });
+
+  it("previews only the planned pairs of a dry run, never a real run's", async () => {
+    dataSource.query.mockResolvedValue([
+      pairRow(),
+      pairRow({ base_id: "base-2", suffix_id: "suffix-2" }),
+      pairRow({ base_id: "base-3", suffix_id: "suffix-3" }),
+    ]);
+    const preview = jest
+      .spyOn(service, "previewMerge")
+      .mockResolvedValue({ droppedCurations: [] } as never);
+    jest.spyOn(service, "mergeAttractions").mockResolvedValue({} as never);
+
+    await service.mergeDuplicates({ dryRun: true, limit: 2 });
+    expect(preview).toHaveBeenCalledTimes(2);
+
+    preview.mockClear();
+    await service.mergeDuplicates({ dryRun: false });
+    expect(preview).not.toHaveBeenCalled();
+  });
+
+  it("lists a pair whose preview throws under failed, and keeps going", async () => {
+    dataSource.query.mockResolvedValue([
+      pairRow(),
+      pairRow({ base_id: "base-2", suffix_id: "suffix-2" }),
+    ]);
+    jest
+      .spyOn(service, "previewMerge")
+      .mockRejectedValueOnce(new Error("Attraction not found"))
+      .mockResolvedValueOnce({ droppedCurations: [] } as never);
+
+    const report = await service.mergeDuplicates({ dryRun: true });
+
+    expect(report.planned).toHaveLength(2);
+    expect(report.failed).toHaveLength(1);
+    expect(report.failed[0].error).toMatch(/not found/);
+    expect(report.planned[0].droppedCurations).toBeNull();
+    expect(report.planned[1].droppedCurations).toEqual([]);
   });
 
   it("never merges a pair that needs review", async () => {
@@ -1341,5 +1382,132 @@ describe("AttractionMergeService — the curated window it would delete", () => 
     );
 
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The batch rehearsal read nothing about dependent rows, although it is the
+ * default of the endpoint and the real run behind it covers every planned
+ * pair at once (PAR-209). Driven through `mergeDuplicates` itself, with the
+ * ride-profile rows answered by the raw `query` the planner reads with.
+ */
+describe("AttractionMergeService — batch dry run names what it would delete", () => {
+  const attractionRows = [
+    { id: "a-base", slug: "icon", name: "ICON", parkId: "park-1" },
+    { id: "a-suffix", slug: "icon-2", name: "ICON", parkId: "park-1" },
+    { id: "b-base", slug: "maus", name: "Maus", parkId: "park-1" },
+    { id: "b-suffix", slug: "maus-2", name: "Maus", parkId: "park-1" },
+  ];
+  const stub = { attractionId: "a-base", elements: [], types: [] };
+  const layout = {
+    attractionId: "a-suffix",
+    elements: ["lifthill", "first-drop"],
+    types: ["launch-coaster"],
+  };
+
+  const pairRow = (base: string, suffix: string, slug: string) => ({
+    park_id: "park-1",
+    park_name: "Park One",
+    base_id: base,
+    base_slug: slug,
+    base_name: slug,
+    base_qt: "1",
+    base_external: "11111111-1111-1111-1111-111111111111",
+    base_geo: false,
+    base_recent: 100,
+    base_total: 4000,
+    base_created: new Date("2025-12-24"),
+    suffix_id: suffix,
+    suffix_slug: `${slug}-2`,
+    suffix_name: slug,
+    suffix_qt: "1",
+    suffix_external: "qt-ride-1",
+    suffix_geo: true,
+    suffix_recent: 50,
+    suffix_total: 2000,
+    suffix_created: new Date("2026-04-26"),
+  });
+
+  const build = (profiles: Record<string, Array<Record<string, unknown>>>) => {
+    const findOne = jest.fn(({ where }: { where: { id: string } }) =>
+      Promise.resolve(attractionRows.find((r) => r.id === where.id) ?? null),
+    );
+    const dataSource = {
+      getRepository: jest.fn(() => ({ findOne })),
+      transaction: jest.fn(),
+      query: jest.fn((sql: string, params: unknown[] = []) =>
+        sql.includes("slug_pairs")
+          ? Promise.resolve([
+              pairRow("a-base", "a-suffix", "icon"),
+              pairRow("b-base", "b-suffix", "maus"),
+            ])
+          : Promise.resolve(profiles[String(params[0])] ?? []),
+      ),
+    };
+    return {
+      service: new AttractionMergeService(
+        dataSource as never,
+        {} as never,
+        {} as never,
+      ),
+      dataSource,
+    };
+  };
+
+  it("carries droppedCurations per planned pair, empty where nothing is lost", async () => {
+    const { service } = build({ "a-base": [stub], "a-suffix": [layout] });
+
+    const report = await service.mergeDuplicates({ dryRun: true });
+
+    const byBase = Object.fromEntries(
+      report.planned.map((p) => [p.baseSlug, p.droppedCurations]),
+    );
+    expect(byBase.icon).toEqual([
+      { table: "attraction_ride_profiles", from: "winner", row: stub },
+    ]);
+    expect(byBase.maus).toEqual([]);
+  });
+
+  it("names the loser's row where the survivor's profile is the richer one", async () => {
+    const { service } = build({
+      "a-base": [{ ...layout, attractionId: "a-base" }],
+      "a-suffix": [{ ...stub, attractionId: "a-suffix" }],
+    });
+
+    const report = await service.mergeDuplicates({ dryRun: true });
+
+    const icon = report.planned.find((p) => p.baseSlug === "icon");
+    expect(icon?.droppedCurations).toEqual([
+      {
+        table: "attraction_ride_profiles",
+        from: "loser",
+        row: { ...stub, attractionId: "a-suffix" },
+      },
+    ]);
+  });
+
+  it("still opens no transaction and issues only SELECTs", async () => {
+    const { service, dataSource } = build({});
+
+    await service.mergeDuplicates({ dryRun: true });
+
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+    for (const [sql] of dataSource.query.mock.calls) {
+      expect(String(sql).trim()).toMatch(/^(WITH|SELECT) /);
+    }
+  });
+
+  it("issues one ride-profile SELECT per planned pair when no loser holds a profile", async () => {
+    const { service, dataSource } = build({});
+    const reads = () =>
+      dataSource.query.mock.calls.filter(
+        ([sql]) => !String(sql).includes("slug_pairs"),
+      ).length;
+
+    await service.mergeDuplicates({ dryRun: true });
+
+    // One ride-profile SELECT per pair; the two attraction reads go through
+    // the repository, not `query`.
+    expect(reads()).toBe(2);
   });
 });
