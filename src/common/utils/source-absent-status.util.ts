@@ -34,25 +34,9 @@
  * rows — equally source-absent here, because their feed moved to
  * `show_live_data`. They stop counting once PAR-159 retires them.
  *
- * One thing the test below does not look at: a carried heartbeat keeps the
- * previous row's `dataSource`, so a heartbeat row is indistinguishable from a
- * reading here — only `is_heartbeat` tells them apart, which is why
- * `observedReadingsSql()` checks it and this does not.
- *
- * The two writers are all but exclusive: `writeHourlyHeartbeats` only keeps a
- * ride whose `attraction:last-seen` is inside 24h, and reverse-reconciliation
- * only writes when that same key is missing or older. The guards meet at the
- * boundary rather than partitioning it, and a failed Redis `mget` makes every
- * ride look never-seen — but in the ordinary case a ride is not heartbeated and
- * reconciled in the same cycle, and none of those 125 has a heartbeat row at
- * all (measured 2026-09-11).
- *
- * That leaves the **first 24 hours after a feed drops a ride**, when it gets
- * heartbeats and no reconciliation at all: every row in that window carries the
- * real feed's `dataSource`, so this test says "not absent" and the ride keeps
- * asserting whatever it last said. The window closes by itself, and after it
- * the rows are reconciliation and this test is right again. PAR-162 is whether
- * a day of a stale status is worth changing the definition for.
+ * The test below reads `dataSource` only and ignores `is_heartbeat`, unlike
+ * `observedReadingsSql()`. That is deliberate; the reasoning is on
+ * `isSourceAbsent` (PAR-162).
  *
  * See §5.2a of `docs/architecture/attraction-status-and-seasonality.md` for the
  * three groups and the two checks that tell them apart.
@@ -73,6 +57,33 @@ export const RECONCILIATION_SOURCE = "system-reconciliation";
  * ride that still reports a real STANDBY queue is being observed, whatever else
  * sits beside it. An empty list is NOT source-absence — that is "no data inside
  * the freshness window", which the callers already handle on their own terms.
+ *
+ * ## Why a carried heartbeat is not treated as absence (PAR-162)
+ *
+ * `writeHourlyHeartbeats` copies the previous row's `dataSource`, so a carried
+ * row looks like a feed reading here. `observedReadingsSql()` separates the two
+ * with `is_heartbeat`; this function does not, and should not:
+ *
+ * 1. **A caller never holds a heartbeat and a reconciliation row together.**
+ *    All three callers (the ride, park and favourites payloads) read
+ *    `QueueDataService.findCurrentStatusBy*`, which is `DISTINCT ON
+ *    (attractionId, queueType)`: one row per queue type, the newest, inside a
+ *    window of the park's opening hours or 6 h. Both writers only write
+ *    `STANDBY` (the heartbeat explicitly, reconciliation through the
+ *    status-only row of `saveLiveDataBatch`), so they compete for the same
+ *    slot. Whatever the window, the set holds one or the other.
+ * 2. **A heartbeat does not mean the feed went quiet.** `attraction:last-seen`
+ *    is touched on every feed sighting, before `saveLiveDataBatch` drops an
+ *    unchanged reading. A ride the feed reports every five minutes with the
+ *    same CLOSED gets a heartbeat after an hour like a ride the feed dropped.
+ *    Reading heartbeats as absence would put every steady ride on UNKNOWN.
+ *
+ * What stays uncovered is the first 24 h after a feed drops a ride: its newest
+ * row is a carried heartbeat, and only the Redis key can tell that apart from a
+ * steady report. Closing that window needs `last-seen` on the read path, not a
+ * change here. Measured 2026-10-02 08:17 UTC: 7 of 6,403 rides had a
+ * `last-seen` between 1 h and 24 h old; 5 of them showed a carried heartbeat as
+ * their newest row, one of those carrying OPERATING.
  */
 export function isSourceAbsent(
   rows: Array<{ dataSource?: string | null }>,
