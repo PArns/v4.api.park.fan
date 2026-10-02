@@ -44,6 +44,32 @@ describe("QueuePercentileProcessor — deterministic aggregate id", () => {
     expect(sql).toMatch(/md5\(\s*s\."attractionId"/);
     expect(sql).not.toContain("gen_random_uuid() as id");
   });
+
+  it("backfill-percentiles skips a bucket that exists under a different id", async () => {
+    const query = jest.fn().mockResolvedValue([{ count: 0 }]);
+    await buildProcessor(query).handleBackfillPercentiles({
+      data: { days: 1 },
+    } as never);
+
+    const sql = (query.mock.calls[0][0] as string).replace(/\s+/g, " ");
+    // ON CONFLICT (id, hour) cannot see a legacy gen_random_uuid() row, so the
+    // gap condition has to run on the natural key, with the uuid -> text cast.
+    expect(sql).toContain(
+      `WHERE NOT EXISTS ( SELECT 1 FROM queue_data_aggregates e WHERE e."attractionId" = s."attractionId"::text AND e.hour = s.hour )`,
+    );
+    expect(sql.indexOf("NOT EXISTS")).toBeLessThan(
+      sql.indexOf("ON CONFLICT (id, hour) DO NOTHING"),
+    );
+  });
+
+  it("calculate-percentiles keeps DO UPDATE and has no gap condition", async () => {
+    const query = jest.fn().mockResolvedValue([{ count: 0 }]);
+    await buildProcessor(query).handleCalculatePercentiles({} as never);
+
+    const sql = query.mock.calls[0][0] as string;
+    expect(sql).toContain("ON CONFLICT (id, hour) DO UPDATE SET");
+    expect(sql).not.toContain("NOT EXISTS (");
+  });
 });
 
 describe("QueuePercentileProcessor — quiet hours keep their aggregate row", () => {

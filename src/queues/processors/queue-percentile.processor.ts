@@ -908,6 +908,12 @@ export class QueuePercentileProcessor {
   /**
    * Backfill percentiles for historical data
    * Can be triggered manually via job scheduler
+   *
+   * Only fills gaps: the NOT EXISTS runs on the natural key
+   * ("attractionId", hour). ON CONFLICT (id, hour) alone misses every bucket
+   * whose row still carries a pre-June-2026 gen_random_uuid() id (39 % of the
+   * table) and would insert a second row beside it. `attractionId` is text in
+   * the table but uuid in the computed rows, hence the ::text cast.
    */
   @Process("backfill-percentiles")
   async handleBackfillPercentiles(job: Job<{ days: number }>): Promise<void> {
@@ -946,7 +952,14 @@ export class QueuePercentileProcessor {
             iqr, "stdDev", mean, "sampleCount",
             "createdAt", "updatedAt"
           )
-          ${HOURLY_AGGREGATE_SELECT}
+          SELECT * FROM (
+            ${HOURLY_AGGREGATE_SELECT}
+          ) s
+          WHERE NOT EXISTS (
+            SELECT 1 FROM queue_data_aggregates e
+            WHERE e."attractionId" = s."attractionId"::text
+              AND e.hour = s.hour
+          )
           ON CONFLICT (id, hour) DO NOTHING
         `,
           [currentDate, actualEnd],
