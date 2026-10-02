@@ -7,6 +7,7 @@ import {
   DefaultValuePipe,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiQuery, ApiResponse } from "@nestjs/swagger";
+import { QueryIntPipe } from "../../common/pipes/query-int.pipe";
 import { MLDashboardService } from "../services/ml-dashboard.service";
 import { MLModelService } from "../services/ml-model.service";
 import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
@@ -61,9 +62,18 @@ export class MLController {
   @ApiOperation({
     summary: "Get model version history",
   })
-  @ApiQuery({ name: "limit", required: false, type: Number })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: Number,
+    description: "Max models to return (default 10, clamped to 1-100)",
+  })
   async getModelHistory(
-    @Query("limit", new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query(
+      "limit",
+      new QueryIntPipe({ name: "limit", fallback: 10, min: 1, max: 100 }),
+    )
+    limit: number,
   ) {
     return this.modelService.getModelHistory(limit);
   }
@@ -83,11 +93,15 @@ export class MLController {
     name: "limit",
     required: false,
     type: Number,
-    description: "Max models to return (default 30)",
+    description: "Max models to return (default 30, clamped to 1-100)",
   })
   @ApiResponse({ status: 200, type: ModelMetricsHistoryDto })
   async getMetricsHistory(
-    @Query("limit", new DefaultValuePipe(30), ParseIntPipe) limit: number,
+    @Query(
+      "limit",
+      new QueryIntPipe({ name: "limit", fallback: 30, min: 1, max: 100 }),
+    )
+    limit: number,
   ): Promise<ModelMetricsHistoryDto> {
     return this.modelService.getMetricsHistory(limit);
   }
@@ -100,9 +114,18 @@ export class MLController {
     summary: "Get system-wide prediction accuracy",
     description: "Aggregated accuracy metrics across all attractions.",
   })
-  @ApiQuery({ name: "days", required: false, type: Number })
+  @ApiQuery({
+    name: "days",
+    required: false,
+    type: Number,
+    description: "Look-back window in days (default 7, clamped to 1-365)",
+  })
   async getSystemAccuracy(
-    @Query("days", new DefaultValuePipe(7), ParseIntPipe) days: number,
+    @Query(
+      "days",
+      new QueryIntPipe({ name: "days", fallback: 7, min: 1, max: 365 }),
+    )
+    days: number,
   ) {
     const stats = await this.accuracyService.getSystemAccuracyStats(days);
     const performers = await this.accuracyService.getTopBottomPerformers(
