@@ -27,6 +27,7 @@ export const REDIS_CLIENT = "REDIS_CLIENT";
             setex: () => Promise.resolve("OK"),
             del: () => Promise.resolve(0),
             keys: () => Promise.resolve([]),
+            scan: () => Promise.resolve(["0", []]),
             incr: () => Promise.resolve(1),
             expire: () => Promise.resolve(0),
             ttl: () => Promise.resolve(-2),

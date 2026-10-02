@@ -47,6 +47,7 @@ import { AdminMinRole } from "./auth/admin-auth.decorators";
 import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
 import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.service";
 import { PARK_CACHE_FLUSH_PATTERNS } from "./flush-cache-patterns";
+import { deleteKeysByPatterns } from "./delete-keys-by-patterns";
 import {
   AttractionRetirementService,
   RetirementRequest,
@@ -892,27 +893,10 @@ export class AdminController {
     description: "Park cache flushed successfully",
   })
   async flushCache(): Promise<{ message: string; keysDeleted: number }> {
-    const patterns = PARK_CACHE_FLUSH_PATTERNS;
-
-    let totalDeleted = 0;
-
-    // Fan out the KEYS scans in parallel — they're independent and
-    // each hits a different namespace. The old loop serialised them at
-    // ~one round-trip per pattern; Promise.all collapses that to a
-    // single batch wall-time.
-    const keysPerPattern = await Promise.all(
-      patterns.map((p) => this.redis.keys(p)),
+    const totalDeleted = await deleteKeysByPatterns(
+      this.redis,
+      PARK_CACHE_FLUSH_PATTERNS,
     );
-    const allKeys = keysPerPattern.flat();
-
-    // Single pipelined DEL for every key that matched — one network
-    // round-trip regardless of total key count, vs. 14× DEL before.
-    if (allKeys.length > 0) {
-      const pipeline = this.redis.pipeline();
-      for (const key of allKeys) pipeline.del(key);
-      await pipeline.exec();
-      totalDeleted = allKeys.length;
-    }
 
     return {
       message: "Park cache flushed successfully",
@@ -923,11 +907,14 @@ export class AdminController {
   /**
    * Complete Cache Reset and Rebuild
    *
-   * ⚠️ WARNING: Performs FLUSHALL on Redis, clearing ALL cache data.
-   * Queue jobs are NOT affected (separate storage mechanism).
+   * Deletes the park cache (the same PARK_CACHE_FLUSH_PATTERNS as
+   * `POST /v1/admin/flush-cache`, walked with SCAN) and queues a full rebuild.
+   * It used to run FLUSHALL, which also deleted every Bull queue's jobs and
+   * `repeat` entries (so no cron ran again until the API restarted) and every
+   * admin session. Bull keys (`<BULL_PREFIX>:<queue>:*`), admin sessions and
+   * the state families listed in flush-cache-patterns.ts stay.
    *
-   * SECURITY: This operation is protected by Cloudflare in production and requires
-   * explicit confirmation via `confirm=true` query parameter to prevent accidental execution.
+   * Requires explicit confirmation via `confirm=true`.
    *
    * Use when:
    * - Discovery structure is corrupted or out of sync
@@ -946,43 +933,45 @@ export class AdminController {
   @ApiOperation({
     summary: "Complete cache reset and rebuild",
     description:
-      "⚠️ SECURITY: Performs FLUSHALL on Redis and triggers complete data rebuild pipeline. " +
-      "Requires explicit confirmation via ?confirm=true query parameter. Use with extreme caution.",
+      "Deletes the park cache (same key patterns as flush-cache) and triggers the complete data rebuild pipeline. " +
+      "Bull queue jobs, repeat (cron) entries and admin sessions are kept. " +
+      "Requires explicit confirmation via ?confirm=true query parameter.",
   })
   @ApiResponse({
     status: 200,
-    description: "Cache completely flushed and rebuild jobs triggered",
+    description: "Park cache deleted and rebuild jobs triggered",
   })
   @ApiResponse({
     status: 400,
     description:
-      "Confirmation required. Add ?confirm=true to confirm FLUSHALL operation.",
+      "Confirmation required. Add ?confirm=true to confirm the cache reset.",
   })
   async resetCache(@Query("confirm") confirm?: string): Promise<{
     message: string;
     flushed: string;
+    keysDeleted: number;
     jobsTriggered: string[];
   }> {
-    // SECURITY: Require explicit confirmation to prevent accidental FLUSHALL
     if (confirm !== "true") {
       throw new HttpException(
         {
           statusCode: HttpStatus.BAD_REQUEST,
           message:
-            "FLUSHALL operation requires explicit confirmation. Add ?confirm=true to confirm.",
+            "Cache reset requires explicit confirmation. Add ?confirm=true to confirm.",
           warning:
-            "This operation will delete ALL Redis cache data. This cannot be undone.",
+            "This operation will delete the park cache and rebuild it. This cannot be undone.",
         },
         HttpStatus.BAD_REQUEST,
       );
     }
 
-    // Perform complete Redis flush
-    // SECURITY: This is a dangerous operation, but protected by Cloudflare in production
     this.logger.warn(
-      "⚠️  Executing FLUSHALL on Redis - all cache data will be deleted",
+      "⚠️  Cache reset: deleting the park cache (Bull queues are kept)",
     );
-    await this.redis.flushall();
+    const keysDeleted = await deleteKeysByPatterns(
+      this.redis,
+      PARK_CACHE_FLUSH_PATTERNS,
+    );
 
     // Trigger complete rebuild pipeline
     const jobsTriggered: string[] = [];
@@ -1001,7 +990,8 @@ export class AdminController {
 
     return {
       message: "Complete cache reset and rebuild started",
-      flushed: "ALL (FLUSHALL executed)",
+      flushed: "park cache (PARK_CACHE_FLUSH_PATTERNS)",
+      keysDeleted,
       jobsTriggered,
     };
   }
