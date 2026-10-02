@@ -1,6 +1,7 @@
 import { Logger } from "@nestjs/common";
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
+import { IsNull } from "typeorm";
 import { ParkValidatorService } from "./park-validator.service";
 import { Park } from "../entities/park.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
@@ -1117,5 +1118,95 @@ describe("ParkValidatorService.findDuplicates — shared attractions", () => {
       expect.stringContaining("🎢 3 park pair(s) list the same attractions"),
     );
     warn.mockRestore();
+  });
+
+  describe("the share and what is read", () => {
+    const rides = (n: number, prefix: string) =>
+      Array.from({ length: n }, (_, i) => `${prefix} Ride ${i + 1}`);
+    const qtRow = park({
+      id: "qt-row",
+      name: "Alpha Park",
+      city: "A",
+      latitude: 10,
+      longitude: 10,
+      queueTimesEntityId: "qt-park-alpha",
+    });
+    const wikiRow = park({
+      id: "wiki-row",
+      name: "Beta World",
+      city: "B",
+      latitude: 20,
+      longitude: 20,
+      wikiEntityId: "beta-wiki",
+    });
+
+    beforeEach(() => parkRepository.find.mockResolvedValue([qtRow, wikiRow]));
+
+    it("finds 8 shared names out of 10 — the share floor is inclusive", async () => {
+      withRides(
+        [qtRow, [...rides(8, "Shared"), ...rides(2, "Alpha")]],
+        [wikiRow, [...rides(8, "Shared"), ...rides(4, "Beta")]],
+      );
+
+      const [pair] = await service.findDuplicates();
+
+      expect(pair.reason).toBe("attraction names agree (8 of 10)");
+    });
+
+    it("refuses 7 shared names out of 10, although seven clears the count floor", async () => {
+      withRides(
+        [qtRow, [...rides(7, "Shared"), ...rides(3, "Alpha")]],
+        [wikiRow, [...rides(7, "Shared"), ...rides(4, "Beta")]],
+      );
+
+      expect(await service.findDuplicates()).toEqual([]);
+    });
+
+    it("reads non-retired attractions only, by park and name", async () => {
+      withRides([qtRow, rides(5, "Shared")], [wikiRow, rides(5, "Shared")]);
+
+      await service.findDuplicates();
+
+      expect(attractionRepository.find).toHaveBeenCalledWith({
+        select: ["parkId", "name"],
+        where: { retiredAt: IsNull() },
+      });
+    });
+
+    it("does not count a name that normalises to nothing", async () => {
+      // Four real names plus one made of punctuation only on both sides: an
+      // empty key would otherwise be the fifth shared name.
+      withRides(
+        [qtRow, [...rides(4, "Shared"), "★ ★", ""]],
+        [wikiRow, [...rides(4, "Shared"), "★ ★", ""]],
+      );
+
+      expect(await service.findDuplicates()).toEqual([]);
+    });
+
+    it("gives the distance without the relocation advice under 10 km", async () => {
+      const near = park({ ...wikiRow, latitude: 10.05, longitude: 10 });
+      parkRepository.find.mockResolvedValue([qtRow, near]);
+      withRides([qtRow, rides(5, "Shared")], [near, rides(5, "Shared")]);
+
+      const [pair] = await service.findDuplicates();
+
+      expect(pair.reviewReason).toContain("the rows are 5.6 km apart");
+      expect(pair.reviewReason).not.toContain("correct-location");
+    });
+
+    it("says so when one row has no coordinates", async () => {
+      const unlocated = park({
+        ...wikiRow,
+        latitude: null as unknown as number,
+        longitude: null as unknown as number,
+      });
+      parkRepository.find.mockResolvedValue([qtRow, unlocated]);
+      withRides([qtRow, rides(5, "Shared")], [unlocated, rides(5, "Shared")]);
+
+      const [pair] = await service.findDuplicates();
+
+      expect(pair.reviewReason).toContain("one row has no coordinates");
+    });
   });
 });
