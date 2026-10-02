@@ -1,4 +1,6 @@
+import { ScheduleType } from "../entities/schedule-entry.entity";
 import {
+  CONFLICT_TYPES,
   crossTypeConflictSql,
   sameTypeDuplicateSql,
 } from "./schedule-dedup.sql";
@@ -62,7 +64,7 @@ describe("schedule dedup statements", () => {
         expect(sql).toMatch(
           /other\."attractionId"\s+IS NOT DISTINCT FROM\s+e\."attractionId"/,
         );
-        expect(sql).toContain("WHERE EXISTS");
+        expect(sql).toMatch(/\bEXISTS \(/);
         expect(sql).not.toMatch(/\(\s*"parkId",\s*date\s*\)\s+IN/);
       },
     );
@@ -75,6 +77,46 @@ describe("schedule dedup statements", () => {
       expect(sql).toMatch(/'CLOSED' THEN 2/);
       expect(sql).toMatch(/'UNKNOWN' THEN 3/);
     });
+
+    it.each(["global", "park"] as const)(
+      "arbitrates only between OPERATING, CLOSED and UNKNOWN in %s scope",
+      (scope) => {
+        const sql = crossTypeConflictSql(scope);
+        const typeList = `('OPERATING', 'CLOSED', 'UNKNOWN')`;
+
+        // Both the rows that get ranked and the sibling that makes a day a
+        // conflict are restricted to the three day-status types. Without the
+        // first filter an event row is ranked and deleted; without the second
+        // an OPERATING row next to an event row enters the ranking for nothing.
+        expect(sql).toContain(`e."scheduleType" IN ${typeList}`);
+        expect(sql).toContain(`other."scheduleType" IN ${typeList}`);
+        expect([...CONFLICT_TYPES].sort()).toEqual(
+          ["CLOSED", "OPERATING", "UNKNOWN"].sort(),
+        );
+      },
+    );
+
+    it.each([
+      ScheduleType.TICKETED_EVENT,
+      ScheduleType.PRIVATE_EVENT,
+      ScheduleType.EXTRA_HOURS,
+      ScheduleType.MAINTENANCE,
+      ScheduleType.INFO,
+    ])(
+      "never ranks a %s row, so it survives next to an OPERATING row",
+      (type) => {
+        // PAR-276: Halloween Horror Nights is stored as TICKETED_EVENT on a day
+        // that also has OPERATING opening hours. The old ranking put it at
+        // `ELSE 4`, below UNKNOWN, and deleted it on every pass. A row can only
+        // be deleted here if the CTE selects it, and the CTE selects only the
+        // three day-status types.
+        const sql = crossTypeConflictSql("global");
+
+        expect(CONFLICT_TYPES).not.toContain(type);
+        expect(sql).not.toContain(`'${type}'`);
+        expect(sql).not.toMatch(/ELSE\s+\d/);
+      },
+    );
 
     it("binds the park id rather than interpolating it", () => {
       expect(crossTypeConflictSql("park")).toContain(`e."parkId" = $1::uuid`);

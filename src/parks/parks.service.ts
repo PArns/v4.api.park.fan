@@ -2569,6 +2569,8 @@ export class ParksService {
    *   scheduleTypes.
    *   Priority: OPERATING > API-provided CLOSED > Gap-filled CLOSED > UNKNOWN.
    *   When a higher-priority entry exists, lower-priority entries are removed.
+   *   Only these three types take part: TICKETED_EVENT, PRIVATE_EVENT,
+   *   EXTRA_HOURS, MAINTENANCE and INFO are kept next to them (PAR-276).
    *
    * The ride is part of the key in both phases — see `schedule-dedup.sql.ts` for
    * why, and `migrateScheduleEntries` for the same rule on the merge path.
@@ -2763,8 +2765,11 @@ export class ParksService {
    * It narrows the answer rather than settling it: a park-day legitimately holds
    * several park-level rows of different types (`saveScheduleData` keys on
    * `date|scheduleType`), so between a sync and the next cleanup a `findOne`
-   * here can still pick the TICKETED_EVENT row over the OPERATING one. That
-   * ambiguity predates this filter and belongs to the ranking in PAR-276.
+   * here can still pick the TICKETED_EVENT row over the OPERATING one. Since
+   * PAR-276 that is permanent rather than transient: the cleanup keeps event
+   * rows next to the opening hours, so a reader that wants the day's status
+   * filters by type or orders by `scheduleType` (the Postgres enum sorts
+   * OPERATING first and CLOSED/UNKNOWN last), as the two queries below do.
    *
    * @param parkId - Park ID (UUID)
    * @param startDate - Start date (inclusive)
