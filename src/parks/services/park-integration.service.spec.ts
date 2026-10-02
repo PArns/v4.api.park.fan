@@ -326,6 +326,32 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       });
     });
 
+    it("reads CLOSED when an event row sorts before it on the same day (PAR-640)", async () => {
+      // getSchedule orders by the enum, which puts TICKETED_EVENT before CLOSED.
+      parksService.getSchedule.mockResolvedValueOnce([
+        { date: "2027-02-01", scheduleType: ScheduleType.TICKETED_EVENT },
+        { date: "2027-02-01", scheduleType: ScheduleType.CLOSED },
+        { date: "2027-02-02", scheduleType: ScheduleType.OPERATING },
+        { date: "2027-02-02", scheduleType: ScheduleType.TICKETED_EVENT },
+      ]);
+
+      const days = await service.aggregateDailyPredictions(
+        quietDays(["2027-02-01", "2027-02-02"]),
+        "p1",
+        TZ,
+      );
+
+      expect(days[0]).toMatchObject({
+        date: "2027-02-01",
+        crowdLevel: "closed",
+        recommendation: "closed",
+      });
+      expect(days[1]).toMatchObject({
+        date: "2027-02-02",
+        crowdLevel: "very_low",
+      });
+    });
+
     it("closes an unscheduled day inside the operating range (gap), keeps one outside for a year-round park", async () => {
       parksService.getOperatingDateRange.mockResolvedValueOnce({
         minDate: "2026-10-01",

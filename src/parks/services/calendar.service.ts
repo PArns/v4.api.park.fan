@@ -9,6 +9,7 @@ import { HolidayRow, HolidaysService } from "../../holidays/holidays.service";
 import { AttractionsService } from "../../attractions/attractions.service";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
+import { pickDayStatusEntry } from "../../common/utils/schedule.util";
 import {
   IntegratedCalendarResponse,
   CalendarDay,
@@ -685,8 +686,11 @@ export class CalendarService {
     // Only count OPERATING/CLOSED entries (real API data), not UNKNOWN placeholders from
     // fillScheduleGaps. UNKNOWN means "no data from source yet" — if the requested range
     // only has UNKNOWN entries, we still want to trigger a refresh to check for new data.
+    // Event rows (TICKETED_EVENT etc.) do not say whether the day's hours are known.
     const realSchedules = schedules.filter(
-      (s) => s.scheduleType !== ScheduleType.UNKNOWN,
+      (s) =>
+        s.scheduleType === ScheduleType.OPERATING ||
+        s.scheduleType === ScheduleType.CLOSED,
     );
     const maxScheduleDate =
       realSchedules.length > 0
@@ -793,9 +797,12 @@ export class CalendarService {
     climateNormals: ClimateNormals | null = null,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
-    // Find schedule for this day
-    const schedule = schedules.find(
-      (s) => formatInParkTimezone(s.date, park.timezone) === dateStr,
+    // Find the row that states this day's status. An event row can sit beside
+    // it (OPERATING/CLOSED + TICKETED_EVENT) and sorts before CLOSED/UNKNOWN.
+    const schedule = pickDayStatusEntry(
+      schedules.filter(
+        (s) => formatInParkTimezone(s.date, park.timezone) === dateStr,
+      ),
     );
 
     // Find ML prediction for this day

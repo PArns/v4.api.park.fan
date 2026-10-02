@@ -2,6 +2,7 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { getQueueToken } from "@nestjs/bull";
 import { CalendarService } from "./calendar.service";
 import { ParksService } from "../parks.service";
+import { ScheduleType } from "../entities/schedule-entry.entity";
 import { WeatherService } from "../weather.service";
 import { MLService } from "../../ml/ml.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
@@ -1081,6 +1082,84 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
     expect(october).toHaveLength(31);
     expect(new Set(october).size).toBe(31);
   });
+  describe("event rows beside the day's status row (PAR-640)", () => {
+    const at = (iso: string) => new Date(iso);
+
+    it("reads the status row, not an event row that sorts before CLOSED", async () => {
+      // getSchedule orders by the enum: OPERATING, the event types, CLOSED, UNKNOWN.
+      (service as any).parksService.getSchedule.mockResolvedValueOnce([
+        {
+          date: "2099-02-01",
+          scheduleType: ScheduleType.TICKETED_EVENT,
+          openingTime: at("2099-02-01T18:00:00Z"),
+          closingTime: at("2099-02-01T23:00:00Z"),
+        },
+        {
+          date: "2099-02-01",
+          scheduleType: ScheduleType.CLOSED,
+          openingTime: null,
+          closingTime: null,
+        },
+        {
+          date: "2099-02-02",
+          scheduleType: ScheduleType.OPERATING,
+          openingTime: at("2099-02-02T09:00:00Z"),
+          closingTime: at("2099-02-02T17:00:00Z"),
+        },
+        {
+          date: "2099-02-02",
+          scheduleType: ScheduleType.TICKETED_EVENT,
+          openingTime: at("2099-02-02T18:00:00Z"),
+          closingTime: at("2099-02-02T23:00:00Z"),
+        },
+      ]);
+      const { parseDateRange } =
+        await import("../../common/utils/date-parsing.util");
+      const { fromDate, toDate } = parseDateRange("2099-02-01", "2099-02-02", {
+        timezone: "UTC",
+      });
+      const response = await service.buildCalendarResponse(
+        {
+          id: "p1",
+          slug: "test-park",
+          timezone: "UTC",
+          countryCode: "DE",
+        } as any,
+        fromDate,
+        toDate,
+        "none",
+      );
+
+      expect(response.days.map((d) => [d.date, d.status])).toEqual([
+        ["2099-02-01", "CLOSED"],
+        ["2099-02-02", "OPERATING"],
+      ]);
+    });
+
+    it("does not count an event row as published hours for the refresh check", async () => {
+      const redis = (service as any).redis;
+      redis.get.mockResolvedValueOnce(null); // not rate-limited
+      const queue = (service as any).parkMetadataQueue;
+      queue.add.mockClear();
+
+      await (service as any).requestScheduleRefreshIfNeeded(
+        { id: "p1", slug: "test-park", timezone: "UTC" },
+        new Date("2099-03-01T12:00:00Z"),
+        new Date("2099-03-31T12:00:00Z"),
+        [
+          { date: "2099-03-31", scheduleType: ScheduleType.TICKETED_EVENT },
+          { date: "2099-03-02", scheduleType: ScheduleType.OPERATING },
+        ],
+      );
+
+      expect(queue.add).toHaveBeenCalledWith(
+        "sync-park-schedule",
+        { parkId: "p1" },
+        expect.anything(),
+      );
+    });
+  });
+
   describe("climate normals past the forecast's reach", () => {
     // Far enough ahead to be "future" whenever the suite runs.
     const FROM = "2099-07-10";

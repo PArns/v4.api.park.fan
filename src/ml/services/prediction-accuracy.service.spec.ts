@@ -1,6 +1,9 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
-import { PredictionAccuracyService } from "./prediction-accuracy.service";
+import {
+  PARK_DAY_IS_CLOSED_SQL,
+  PredictionAccuracyService,
+} from "./prediction-accuracy.service";
 import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
 import { AttractionAccuracyStats } from "../entities/attraction-accuracy-stats.entity";
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
@@ -142,6 +145,68 @@ describe("PredictionAccuracyService", () => {
         catboostMae: null,
         delta: null,
       });
+    });
+  });
+
+  describe("system accuracy stats — one row per prediction (PAR-640)", () => {
+    // Event rows (TICKETED_EVENT etc.) can share a day with OPERATING/CLOSED.
+    // A JOIN onto schedule_entries counted each prediction once per row of its
+    // day; the CLOSED test now runs as an EXISTS beside the aggregate.
+    const recordingBuilder = (calls: Array<[string, unknown[]]>) => {
+      const qb: Record<string, unknown> = {};
+      for (const m of [
+        "innerJoin",
+        "leftJoin",
+        "select",
+        "addSelect",
+        "where",
+        "andWhere",
+        "groupBy",
+        "orderBy",
+      ]) {
+        qb[m] = jest.fn((...args: unknown[]) => {
+          calls.push([m, args]);
+          return qb;
+        });
+      }
+      qb.getRawOne = jest.fn().mockResolvedValue({});
+      qb.getRawMany = jest.fn().mockResolvedValue([]);
+      return qb;
+    };
+
+    it("does not join schedule_entries and filters CLOSED days via EXISTS", async () => {
+      const calls: Array<[string, unknown[]]> = [];
+      (accuracyRepo as any).count = jest.fn().mockResolvedValue(0);
+      const original = accuracyRepo.createQueryBuilder.getMockImplementation();
+      accuracyRepo.createQueryBuilder.mockImplementation(
+        () => recordingBuilder(calls) as any,
+      );
+      try {
+        await (service as any).computeSystemAccuracyStats(7);
+      } finally {
+        accuracyRepo.createQueryBuilder.mockImplementation(original!);
+      }
+
+      const joinsSchedule = calls.some(
+        ([m, args]) =>
+          (m === "leftJoin" || m === "innerJoin") &&
+          args[0] === "schedule_entries",
+      );
+      expect(joinsSchedule).toBe(false);
+      expect(
+        calls.some(
+          ([m, args]) =>
+            m === "andWhere" &&
+            String(args[0]).includes(`NOT ${PARK_DAY_IS_CLOSED_SQL}`),
+        ),
+      ).toBe(true);
+    });
+
+    it("calls a day CLOSED only when no OPERATING row shares it", () => {
+      const sql = PARK_DAY_IS_CLOSED_SQL.replace(/\s+/g, " ");
+      expect(sql).toContain(`se."scheduleType" = 'CLOSED'`);
+      expect(sql).toContain(`se."attractionId" IS NULL`);
+      expect(sql).toMatch(/NOT EXISTS \(.*so\."scheduleType" = 'OPERATING'/);
     });
   });
 

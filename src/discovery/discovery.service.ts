@@ -2,6 +2,7 @@ import { Injectable, Inject, Logger } from "@nestjs/common";
 import { CacheKeys } from "../common/cache/cache-keys";
 import { NegativeCache } from "../common/utils/negative-cache.util";
 import { SingleFlight } from "../common/utils/single-flight.util";
+import { formatTodaySchedule } from "../common/utils/schedule.util";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Not, IsNull } from "typeorm";
 import { Redis } from "ioredis";
@@ -513,16 +514,7 @@ export class DiscoveryService {
             const todaySchedule = schedules.today.get(park.id);
             const nextSchedule = schedules.next.get(park.id);
 
-            park.todaySchedule =
-              todaySchedule && todaySchedule.length > 0
-                ? {
-                    openingTime:
-                      todaySchedule[0].openingTime?.toISOString() || "",
-                    closingTime:
-                      todaySchedule[0].closingTime?.toISOString() || "",
-                    scheduleType: todaySchedule[0].scheduleType,
-                  }
-                : undefined;
+            park.todaySchedule = formatTodaySchedule(todaySchedule);
 
             park.nextSchedule = nextSchedule
               ? {
