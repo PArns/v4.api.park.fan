@@ -297,6 +297,21 @@ export class PlanDayShowDto {
   showName: string;
 
   @ApiProperty({
+    required: false,
+    nullable: true,
+    example: 48.2660791,
+    description:
+      "Where the show is staged, as a number. `null` when the show has no " +
+      "stored position, which is common: a caller must then leave the show " +
+      "out of any distance it computes rather than read the gap as 0/0. As " +
+      "with a ride, a geodesic distance is a lower bound on the walk.",
+  })
+  latitude?: number | null;
+
+  @ApiProperty({ required: false, nullable: true, example: 7.7220249 })
+  longitude?: number | null;
+
+  @ApiProperty({
     type: [String],
     example: ["12:30", "14:30", "17:45"],
     description:

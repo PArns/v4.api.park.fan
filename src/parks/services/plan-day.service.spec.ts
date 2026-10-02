@@ -72,6 +72,8 @@ describe("PlanDayService", () => {
     name: string;
     isSeasonal?: boolean;
     seasonMonths?: number[] | null;
+    latitude?: unknown;
+    longitude?: unknown;
   }>;
   let scheduledTimes: Map<string, string[]>;
   let patterns: Map<string, unknown>;
@@ -1728,9 +1730,55 @@ describe("PlanDayService", () => {
         {
           showSlug: "big-moments",
           showName: "Big Moments",
+          latitude: null,
+          longitude: null,
           times: ["12:30", "14:30", "17:45"],
           source: "scheduled",
         },
+      ]);
+    });
+
+    // PAR-50: a show is a place in the day as well as a time, so the planner
+    // can measure the walk to it. TypeORM returns the decimal column as a
+    // string, and an empty one must not become 0/0.
+    it("carries the show's coordinates as numbers, null where unknown", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      parkShows = [
+        {
+          id: "s-1",
+          slug: "placed",
+          name: "Placed",
+          latitude: "48.2660791",
+          longitude: "7.7220249",
+        },
+        {
+          id: "s-2",
+          slug: "blank",
+          name: "Blank",
+          latitude: "",
+          longitude: " ",
+        },
+        { id: "s-3", slug: "unplaced", name: "Unplaced", latitude: null },
+      ];
+      scheduledTimes = new Map([
+        ["s-1", ["12:30"]],
+        ["s-2", ["13:30"]],
+        ["s-3", ["14:30"]],
+      ]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(
+        plan.shows.map(({ showSlug, latitude, longitude }) => ({
+          showSlug,
+          latitude,
+          longitude,
+        })),
+      ).toEqual([
+        { showSlug: "placed", latitude: 48.2660791, longitude: 7.7220249 },
+        { showSlug: "blank", latitude: null, longitude: null },
+        { showSlug: "unplaced", latitude: null, longitude: null },
       ]);
     });
 
@@ -1806,6 +1854,29 @@ describe("PlanDayService", () => {
       // A projection that cannot say what it came from is a schedule.
       expect(show.observedOn).toBe(todayMinus(7));
       expect(show.sampleDays).toBe(7);
+    });
+
+    it("carries coordinates on a projected show too", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      parkShows = [
+        {
+          id: "s-1",
+          slug: "big-moments",
+          name: "Big Moments",
+          latitude: "48.2660791",
+          longitude: "7.7220249",
+        },
+      ];
+      patterns = new Map([["s-1", pattern()]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.shows[0]).toMatchObject({
+        source: "projected",
+        latitude: 48.2660791,
+        longitude: 7.7220249,
+      });
     });
 
     it("refuses to turn a one-off event into a weekly show", async () => {
@@ -2010,6 +2081,8 @@ describe("PlanDayService", () => {
           {
             showSlug: "big-moments",
             showName: "Big Moments",
+            latitude: null,
+            longitude: null,
             times: ["20:00"],
             source: "scheduled",
           },

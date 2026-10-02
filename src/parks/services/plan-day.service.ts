@@ -710,6 +710,8 @@ export class PlanDayService {
         out.push({
           showSlug: show.slug,
           showName: show.name,
+          latitude: PlanDayService.coord(show.latitude),
+          longitude: PlanDayService.coord(show.longitude),
           times: known,
           source: "scheduled",
         });
@@ -734,6 +736,8 @@ export class PlanDayService {
       out.push({
         showSlug: show.slug,
         showName: show.name,
+        latitude: PlanDayService.coord(show.latitude),
+        longitude: PlanDayService.coord(show.longitude),
         times: pattern.times,
         source: "projected",
         observedOn: pattern.lastObservedOn,
