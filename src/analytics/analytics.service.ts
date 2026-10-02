@@ -5807,6 +5807,36 @@ export class AnalyticsService {
     return map;
   }
 
+  /**
+   * The same rows as {@link getParkHourlyHistory}, for several dates in one
+   * read: date → attraction → row. The plan endpoint's `climatology` tier asks
+   * for up to 28 scattered dates at once, and one query per date would be 28
+   * round trips for rows that share an index.
+   */
+  async getParkHourlyHistoryOnDates(
+    parkId: string,
+    dates: string[],
+  ): Promise<Map<string, Map<string, AttractionHourlyHistory>>> {
+    const out = new Map<string, Map<string, AttractionHourlyHistory>>();
+    if (dates.length === 0) return out;
+    const rows = await this.attractionHourlyHistoryRepository
+      .createQueryBuilder("h")
+      .where("h.parkId = :parkId", { parkId })
+      .andWhere("h.date IN (:...dates)", { dates })
+      .getMany();
+
+    for (const row of rows) {
+      const key =
+        typeof row.date === "string"
+          ? row.date
+          : new Date(row.date).toISOString().split("T")[0];
+      const day = out.get(key) ?? new Map<string, AttractionHourlyHistory>();
+      day.set(row.attractionId, row);
+      out.set(key, day);
+    }
+    return out;
+  }
+
   async getAttractionHourlyHistory(
     attractionId: string,
     fromDate: string,
