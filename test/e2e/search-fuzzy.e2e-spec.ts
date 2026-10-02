@@ -49,7 +49,6 @@ describe("Search Fuzzy (E2E)", () => {
 
   const mockShowsService = {
     findCurrentStatusByShow: jest.fn().mockResolvedValue(null),
-    syncShows: jest.fn().mockResolvedValue(0),
   };
 
   beforeAll(async () => {

@@ -10,19 +10,10 @@ import {
 import { Show } from "./entities/show.entity";
 import { ShowLiveData } from "./entities/show-live-data.entity";
 import { ShowSchedulePattern } from "./entities/show-schedule-pattern.entity";
-import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
-import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
-import { ParksService } from "../parks/parks.service";
 import {
   EntityLiveResponse,
-  EntityResponse,
   ShowtimeData,
 } from "../external-apis/themeparks/themeparks.types";
-import { Park } from "../parks/entities/park.entity";
-import {
-  ParkSyncState,
-  ThemeParksEntitySync,
-} from "../common/sync/theme-parks-entity-sync";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 import {
   formatInParkTimezone,
@@ -41,27 +32,8 @@ import {
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { normalizedClosingSql } from "../common/utils/park-open-window.sql";
 
-/** What `syncShows` keeps in memory while it walks one park's shows. */
-interface ShowSyncState extends ParkSyncState {
-  /** The park's existing shows, keyed on the wiki's ID. */
-  byExternalId: Map<string, Pick<Show, "id" | "externalId" | "slug">>;
-}
-
-/** The fields `syncShows` refreshes on a show it already has. */
-interface ShowUpdate {
-  id: string;
-  name?: string;
-  latitude?: number;
-  longitude?: number;
-}
-
 @Injectable()
-export class ShowsService extends ThemeParksEntitySync<
-  Show,
-  EntityResponse,
-  ShowSyncState,
-  ShowUpdate
-> {
+export class ShowsService {
   private readonly logger = new Logger(ShowsService.name);
 
   constructor(
@@ -71,89 +43,13 @@ export class ShowsService extends ThemeParksEntitySync<
     private showLiveDataRepository: Repository<ShowLiveData>,
     @InjectRepository(ShowSchedulePattern)
     private showSchedulePatternRepository: Repository<ShowSchedulePattern>,
-    private themeParksClient: ThemeParksClient,
-    private themeParksMapper: ThemeParksMapper,
-    private parksService: ParksService,
-  ) {
-    super(parksService, themeParksClient);
-  }
+  ) {}
 
   /**
    * Get the repository instance (for advanced queries by other services)
    */
   getRepository(): Repository<Show> {
     return this.showRepository;
-  }
-
-  /**
-   * Syncs all shows from ThemeParks.wiki
-   *
-   * Strategy:
-   * 1. Ensure parks are synced first
-   * 2. For each park, fetch children (shows)
-   * 3. Map and save to DB
-   */
-  async syncShows(): Promise<number> {
-    this.logger.log("Syncing shows from ThemeParks.wiki...");
-
-    const syncedCount = await this.syncFromThemeParksWiki();
-
-    this.logger.log(`✅ Synced ${syncedCount} shows`);
-    return syncedCount;
-  }
-
-  protected filterChildren(children: EntityResponse[]): EntityResponse[] {
-    return children.filter((child) => child.entityType === "SHOW");
-  }
-
-  protected async loadParkState(park: Park): Promise<ShowSyncState> {
-    const parkShows = await this.showRepository.find({
-      where: { parkId: park.id },
-      select: ["id", "externalId", "slug"],
-    });
-
-    return {
-      byExternalId: new Map(parkShows.map((s) => [s.externalId, s])),
-      usedSlugs: new Set(parkShows.map((s) => s.slug)),
-    };
-  }
-
-  protected mapChild(child: EntityResponse, parkId: string): Partial<Show> {
-    return this.themeParksMapper.mapShow(child, parkId);
-  }
-
-  protected reconcile(
-    mapped: Partial<Show>,
-    state: ShowSyncState,
-  ): ShowUpdate | null {
-    const existing = state.byExternalId.get(mapped.externalId!);
-    if (!existing) {
-      return null;
-    }
-
-    return {
-      id: existing.id,
-      name: mapped.name,
-      ...(mapped.latitude != null && { latitude: mapped.latitude }),
-      ...(mapped.longitude != null && { longitude: mapped.longitude }),
-    };
-  }
-
-  protected async persist(
-    toInsert: Partial<Show>[],
-    toUpdate: ShowUpdate[],
-  ): Promise<void> {
-    if (toUpdate.length > 0) {
-      await Promise.all(
-        toUpdate.map(({ id, ...fields }) =>
-          this.showRepository.update(id, fields),
-        ),
-      );
-    }
-
-    if (toInsert.length > 0) {
-      await this.showRepository.save(toInsert);
-    }
   }
 
   /**

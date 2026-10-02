@@ -1,10 +1,8 @@
-import { Module, forwardRef } from "@nestjs/common";
+import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { Restaurant } from "./entities/restaurant.entity";
 import { RestaurantLiveData } from "./entities/restaurant-live-data.entity";
 import { RestaurantsService } from "./restaurants.service";
-import { ThemeParksModule } from "../external-apis/themeparks/themeparks.module";
-import { ParksModule } from "../parks/parks.module";
 
 /**
  * Restaurants Module
@@ -15,11 +13,7 @@ import { ParksModule } from "../parks/parks.module";
  * Phase 6: Shows & Restaurants
  */
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([Restaurant, RestaurantLiveData]),
-    ThemeParksModule,
-    forwardRef(() => ParksModule),
-  ],
+  imports: [TypeOrmModule.forFeature([Restaurant, RestaurantLiveData])],
   controllers: [],
   providers: [RestaurantsService],
   exports: [RestaurantsService],
