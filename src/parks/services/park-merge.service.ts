@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
 import { InjectRepository } from "@nestjs/typeorm";
-import { DataSource, Repository } from "typeorm";
+import { DataSource, EntityManager, Repository } from "typeorm";
 import { Park } from "../entities/park.entity";
 import { canInheritSourceIds } from "../utils/source-id-inheritance.util";
 import { ScheduleEntry } from "../entities/schedule-entry.entity";
@@ -373,7 +373,7 @@ export class ParkMergeService {
    * Handles collisions by merging time-series data and deleting the duplicate entity.
    */
   private async migrateEntities(
-    manager: any,
+    manager: EntityManager,
     tableName: string,
     winnerId: string,
     loserId: string,
@@ -384,23 +384,26 @@ export class ParkMergeService {
       "migrateEntities",
     );
 
-    const loserEntities = await manager.query(
+    // Raw rows of the two lookups below; all three columns are text/uuid.
+    type EntityRow = { id: string; slug: string | null; name: string | null };
+
+    const loserEntities: EntityRow[] = await manager.query(
       `SELECT id, slug, name FROM ${tableName} WHERE "parkId" = $1`,
       [loserId],
     );
 
     if (loserEntities.length === 0) return 0;
 
-    const winnerEntities = await manager.query(
+    const winnerEntities: EntityRow[] = await manager.query(
       `SELECT id, slug, name FROM ${tableName} WHERE "parkId" = $1`,
       [winnerId],
     );
 
     const winnerBySlug = new Map<string, string>(
-      winnerEntities.filter((e: any) => e.slug).map((e: any) => [e.slug, e.id]),
+      winnerEntities.filter((e) => e.slug).map((e) => [e.slug as string, e.id]),
     );
     const winnerByName = new Map<string, string>(
-      winnerEntities.filter((e: any) => e.name).map((e: any) => [e.name, e.id]),
+      winnerEntities.filter((e) => e.name).map((e) => [e.name as string, e.id]),
     );
 
     const collisions: { loserEntityId: string; winnerEntityId: string }[] = [];
@@ -486,7 +489,7 @@ export class ParkMergeService {
    * what applying the shared list rather than a local one is for.
    */
   private async consolidateEntityData(
-    manager: any,
+    manager: EntityManager,
     type: string,
     winnerId: string,
     loserId: string,
@@ -549,7 +552,7 @@ export class ParkMergeService {
    * Pass null to use winner-authoritative mode: loser rows are only migrated when winner has none.
    */
   private async migrateTableData(
-    manager: any,
+    manager: EntityManager,
     tableName: string,
     idColumn: string,
     winnerId: string,
@@ -616,7 +619,7 @@ export class ParkMergeService {
    * `canInheritSourceIds` for the case that taught us this.
    */
   private async consolidateEntityIds(
-    manager: any,
+    manager: EntityManager,
     winner: Park,
     loser: Park,
   ): Promise<string[]> {

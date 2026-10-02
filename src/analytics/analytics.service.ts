@@ -1471,7 +1471,7 @@ export class AnalyticsService {
 
     // Build SQL query conditionally based on whether we have optimized stats
     let query: string;
-    let queryParams: any[];
+    let queryParams: unknown[];
 
     if (optimizedAvgWait !== null && optimizedMaxWait !== null) {
       // Fast path: Use pre-computed stats from ParkDailyStats
@@ -4081,8 +4081,22 @@ export class AnalyticsService {
     const today = fromZonedTime(`${todayStr}T00:00:00`, timezone);
     const cutoff = subDays(today, SLIDING_WINDOW_DAYS);
 
+    // Raw row of both headliner queries below. pg returns NUMERIC (ROUND …)
+    // and COUNT (bigint) columns as strings, hence the parseFloat/parseInt
+    // at the end of this method.
+    type HeadlinerRow = {
+      attraction_id: string;
+      park_id: string;
+      tier: string;
+      avg_wait: string;
+      p50_wait: string;
+      p90_wait: string;
+      operating_days: string;
+      sample_count: string;
+    };
+
     // 3-Tier Adaptive Headliner Identification
-    const result = await this.queueDataRepository.query(
+    const result: HeadlinerRow[] = await this.queueDataRepository.query(
       `
       -- Step 1: Calculate statistics for all attractions
       -- waitTime >= 10 excludes the "1-minute walk-on placeholder" common in water park
@@ -4193,8 +4207,9 @@ export class AnalyticsService {
         `No headliners identified for park ${parkId} using standard tiers. Attempting fallback...`,
       );
 
-      const fallbackResult = await this.queueDataRepository.query(
-        `
+      const fallbackResult: HeadlinerRow[] =
+        await this.queueDataRepository.query(
+          `
         SELECT
           a.id as attraction_id,
           a."parkId" as park_id,
@@ -4221,8 +4236,8 @@ export class AnalyticsService {
         ORDER BY p90_wait DESC
         LIMIT 5
         `,
-        [parkId, timezone, cutoff],
-      );
+          [parkId, timezone, cutoff],
+        );
 
       if (fallbackResult.length > 0) {
         this.logger.log(
@@ -4239,7 +4254,10 @@ export class AnalyticsService {
     // Deduplicate by (parkId, attractionId): same attraction can appear in multiple tiers (UNION ALL).
     // Keep one row per attraction with best tier (tier1 > tier2 > tier3).
     const tierOrder = { tier1: 1, tier2: 2, tier3: 3 } as const;
-    const byAttraction = new Map<string, { row: any; tierRank: number }>();
+    const byAttraction = new Map<
+      string,
+      { row: HeadlinerRow; tierRank: number }
+    >();
     for (const row of result) {
       const id = row.attraction_id as string;
       const rank = tierOrder[row.tier as keyof typeof tierOrder] ?? 3;
@@ -4254,13 +4272,11 @@ export class AnalyticsService {
     // the top 10 by avg_wait. Borderline rides (avg ~20-22 min) otherwise dilute
     // the P50 baseline and distort crowd level / ML occupancy features.
     const MAX_TIER1_HEADLINERS = 10;
-    const tier1Count = deduped.filter((r: any) => r.tier === "tier1").length;
+    const tier1Count = deduped.filter((r) => r.tier === "tier1").length;
     if (tier1Count > MAX_TIER1_HEADLINERS) {
       const tier1 = deduped
-        .filter((r: any) => r.tier === "tier1")
-        .sort(
-          (a: any, b: any) => parseFloat(b.avg_wait) - parseFloat(a.avg_wait),
-        )
+        .filter((r) => r.tier === "tier1")
+        .sort((a, b) => parseFloat(b.avg_wait) - parseFloat(a.avg_wait))
         .slice(0, MAX_TIER1_HEADLINERS);
       deduped = tier1;
       this.logger.log(
@@ -4269,10 +4285,10 @@ export class AnalyticsService {
     }
 
     this.logger.log(
-      `Identified ${deduped.length} headliners for park ${parkId} (Tiers: T1=${deduped.filter((r: any) => r.tier === "tier1").length}, T2=${deduped.filter((r: any) => r.tier === "tier2").length}, T3=${deduped.filter((r: any) => r.tier === "tier3").length})`,
+      `Identified ${deduped.length} headliners for park ${parkId} (Tiers: T1=${deduped.filter((r) => r.tier === "tier1").length}, T2=${deduped.filter((r) => r.tier === "tier2").length}, T3=${deduped.filter((r) => r.tier === "tier3").length})`,
     );
 
-    return deduped.map((row: any) =>
+    return deduped.map((row) =>
       Object.assign(new HeadlinerAttraction(), {
         parkId,
         attractionId: row.attraction_id,
