@@ -4,6 +4,7 @@ import { Repository } from "typeorm";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { outageRunBreaks } from "../common/utils/outage-rows.sql";
 import { OUTAGE_QUEUE_TYPE } from "../common/utils/outage-rows.sql";
+import { usableOperatingScheduleRowSql } from "../common/utils/park-open-window.sql";
 
 /**
  * Phase 0 of the downtime work: count events, publish nothing.
@@ -229,6 +230,11 @@ export class DowntimeMeasurementService {
    * and wartezeiten collapses everything that is not running onto `CLOSED` or
    * `REFURBISHMENT`. Reading capability off "did we see any outages" instead
    * would call a quiet quarter a blind park and a blind park a flawless one.
+   *
+   * `parksWithSchedule` asks the regime's own question
+   * (`usableOperatingScheduleRowSql()`, the `hasSchedule` of
+   * `DowntimeProfileService.rebuildCoverage`), so the gates are calibrated
+   * against the population the regime actually sorts.
    */
   private async capabilityCensus(): Promise<CapabilityCensus> {
     const rows: Array<{ capable: string; total: string; scheduled: string }> =
@@ -239,8 +245,7 @@ export class DowntimeMeasurementService {
                  WHERE EXISTS (
                    SELECT 1 FROM schedule_entries se
                     WHERE se."parkId" = p.id
-                      AND se."attractionId" IS NULL
-                      AND se."scheduleType" = 'OPERATING'
+                      AND ${usableOperatingScheduleRowSql()}
                  )
                ) AS scheduled
           FROM parks p
