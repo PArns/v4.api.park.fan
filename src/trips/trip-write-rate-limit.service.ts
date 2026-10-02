@@ -28,8 +28,8 @@ import {
  * the caller had to know and the row count does not move.
  *
  * Redis here rather than Postgres, deliberately, and it is the opposite of the
- * choice made for anything durable: this instance runs `allkeys-lru`, so a
- * counter may be evicted at any moment. For a limiter that means a window
+ * choice made for anything durable: this instance runs `volatile-lru`, so a
+ * counter (it carries a TTL) may be evicted at any moment. For a limiter that means a window
  * occasionally resets early, which is a bounded and acceptable failure. For a
  * subscription or a trip it would mean silent data loss, which is why those are
  * in Postgres.
