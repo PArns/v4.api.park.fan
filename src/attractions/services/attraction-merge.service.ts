@@ -1,8 +1,10 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
+import { isDeepStrictEqual } from "node:util";
 import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
 import { Attraction } from "../entities/attraction.entity";
 import { worksPeriodEndsBeforeItBegins } from "../utils/curated-out-of-service.util";
+import { ATTRACTION_CURATED_FIELDS } from "../../admin/content/curated-field.spec-list";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
@@ -143,10 +145,12 @@ interface MetadataInheritancePlan {
   /** Columns the survivor takes from the losing row. */
   inherited: Partial<Attraction>;
   /**
-   * Per column set, the values the losing row holds that reach the survivor
-   * nowhere — under the entity's own names, because a curator types those.
-   * Empty for the ordinary pair: almost no ride carries a curated window, and
-   * a loser holding none loses none.
+   * The curated values the losing row holds that reach the survivor nowhere,
+   * under the entity's own names, because a curator types those. One entry
+   * per refused column set, plus one entry for every single curated column
+   * the survivor holds a different value of (PAR-361). Empty for the ordinary
+   * pair: almost no ride carries a curation on both rows, and a loser holding
+   * none loses none.
    */
   droppedColumnSets: Record<string, unknown>[];
 }
@@ -241,7 +245,8 @@ export class AttractionMergeService {
         // The attraction's own curated columns, which `findDroppedCurations`
         // cannot see: it reads `ATTRACTION_DEPENDENCIES`, and that list is
         // about rows in other tables. `from` is always the loser here —
-        // a survivor holding part of the set keeps all of its own.
+        // a survivor holding part of a set, or its own value of a single
+        // curated column, keeps all of its own.
         ...plan.droppedColumnSets.map((row) => ({
           table: "attractions",
           from: "loser" as const,
@@ -844,6 +849,22 @@ export class AttractionMergeService {
     unset: unknown;
   }[];
 
+  /**
+   * The single inheritable columns a curator writes by hand: the editor's own
+   * list (`ATTRACTION_CURATED_FIELDS`) cut down to `INHERITABLE_COLUMNS`.
+   *
+   * A merge keeps the survivor's value of these, which is right, and deletes
+   * the loser's, which nothing can rebuild. So a loser value that differs from
+   * the survivor's is named the way a refused set is (PAR-361). The feed
+   * columns on `INHERITABLE_COLUMNS` (`landName`, `latitude`, …) are left out:
+   * the next sync writes them again, and naming them would put a line on
+   * nearly every pair.
+   */
+  private static readonly CURATED_SINGLE_COLUMNS: readonly (keyof Attraction)[] =
+    AttractionMergeService.INHERITABLE_COLUMNS.filter((column) =>
+      ATTRACTION_CURATED_FIELDS.some((field) => field.key === column),
+    );
+
   /** The set columns, flat — for the spec that holds both lists against the descriptors. */
   static readonly INHERITABLE_SET_COLUMNS: readonly string[] =
     AttractionMergeService.INHERITABLE_COLUMN_SETS.flatMap(
@@ -864,6 +885,10 @@ export class AttractionMergeService {
    *   common one, and the reason PAR-297's rule is right rather than a gap);
    * - `settle` refuses the window as inverted;
    * - `settle` drops a `toUncertain` that arrived without its date.
+   *
+   * A single curated column the survivor holds a different value of is named
+   * too, as one more entry (PAR-361). The survivor's own value hints at the
+   * column there, but not at the value the DELETE takes with it.
    */
   private planMetadataInheritance(
     winner: Attraction,
@@ -876,6 +901,22 @@ export class AttractionMergeService {
       if (!isSet(winner[column]) && isSet(loser[column])) {
         inherited[column] = loser[column];
       }
+    }
+
+    // The survivor keeps its own curated value. The loser's stays behind and
+    // is gone with the row, so it is named here. All of them form one entry,
+    // so a pair costs the report one line, not one per column. An equal value
+    // is no loss: the survivor already says the same thing.
+    const droppedSingles: Record<string, unknown> = {};
+    for (const column of AttractionMergeService.CURATED_SINGLE_COLUMNS) {
+      const theirs = loser[column];
+      if (!isSet(theirs) || !isSet(winner[column])) continue;
+      if (!isDeepStrictEqual(winner[column], theirs)) {
+        droppedSingles[column] = theirs;
+      }
+    }
+    if (Object.keys(droppedSingles).length > 0) {
+      droppedColumnSets.push(droppedSingles);
     }
 
     for (const {
@@ -917,7 +958,8 @@ export class AttractionMergeService {
   }
 
   /**
-   * The last record of a curated window that is about to cease to exist.
+   * The last record of curated values that are about to cease to exist: a
+   * refused window, or single columns the survivor holds its own value of.
    *
    * Called from the merge and never from the rehearsal, which is the whole
    * reason the plan above returns the values instead of logging them itself:
