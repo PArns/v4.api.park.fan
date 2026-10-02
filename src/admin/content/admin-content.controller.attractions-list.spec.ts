@@ -40,6 +40,7 @@ describe("AdminContentController.listAttractions", () => {
         hasVirtualLine: true,
         hasSingleRider: false,
         indoorOutdoor: "covered_queue",
+        attractionKind: "TRANSPORT",
       }),
     ]);
 
@@ -49,6 +50,7 @@ describe("AdminContentController.listAttractions", () => {
       hasVirtualLine: true,
       hasSingleRider: false,
       indoorOutdoor: "covered_queue",
+      attractionKind: "TRANSPORT",
     });
   });
 
@@ -58,6 +60,7 @@ describe("AdminContentController.listAttractions", () => {
         hasVirtualLine: undefined,
         hasSingleRider: null,
         indoorOutdoor: null,
+        attractionKind: undefined,
       }),
     ]);
 
@@ -66,5 +69,6 @@ describe("AdminContentController.listAttractions", () => {
     expect(attractions[0].hasVirtualLine).toBeNull();
     expect(attractions[0].hasSingleRider).toBeNull();
     expect(attractions[0].indoorOutdoor).toBeNull();
+    expect(attractions[0].attractionKind).toBeNull();
   });
 });

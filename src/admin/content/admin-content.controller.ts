@@ -504,6 +504,9 @@ export class AdminContentController {
           hasVirtualLine: attraction.hasVirtualLine ?? null,
           hasSingleRider: attraction.hasSingleRider ?? null,
           indoorOutdoor: attraction.indoorOutdoor ?? null,
+          // Raw too: null is "nobody decided", never RIDE, and the select
+          // needs that to tell an unchecked row from an unchanged one.
+          attractionKind: attraction.attractionKind ?? null,
           hasRideProfile: withProfile.has(attraction.id),
           curatedFieldCount: attractionFieldViews(attraction).filter(
             (f) => f.overridden,
