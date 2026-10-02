@@ -17,7 +17,8 @@ import {
  * Deliberately NOT flushed (state, not cache): popularity:* (ranking),
  * downtime:* (open downtime tracking), prediction:deviation:* (deviation
  * tracking), ratelimit:* (circuit breakers), ml:accuracy:* and
- * ml:last-accuracy-check (job markers).
+ * ml:last-accuracy-check (job markers), geocoding:* (results of a paid API
+ * that do not go stale).
  */
 export const PARK_CACHE_FLUSH_PATTERNS: readonly string[] = [
   "schedule:*",
@@ -38,4 +39,8 @@ export const PARK_CACHE_FLUSH_PATTERNS: readonly string[] = [
   "ml:active-attractions:*",
   "ml:dashboard:*", // ML dashboard snapshot (5min cache)
   "location:*", // /nearby shared park-coordinate index
+  "best-days:*", // best-days snapshot, derived from the calendar:* month caches
+  "sitemap:attractions:*", // attraction sitemap (24h)
+  "ml:drift:*", // drift monitoring snapshot (30min)
+  "ml:lead-mae:*", // lead-time MAE per bucket
 ];
