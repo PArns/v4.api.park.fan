@@ -2,14 +2,16 @@ import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, IsNull, Not, Repository } from "typeorm";
+import { In, IsNull, LessThan, Not, Repository } from "typeorm";
 import { Job, Queue } from "bull";
 import { AttractionsService } from "../../attractions/attractions.service";
 import {
   AttractionRetirementService,
+  ABSENT_UPSTREAM_REASON,
   RECLASSIFIED_UPSTREAM_REASON,
   isReclassifiedUpstreamReason,
 } from "../../attractions/services/attraction-retirement.service";
+import { SYNTHETIC_SOURCES } from "../../common/utils/outage-rows.sql";
 import { ShowsService } from "../../shows/shows.service";
 import { RestaurantsService } from "../../restaurants/restaurants.service";
 import { ParksService } from "../../parks/parks.service";
@@ -104,6 +106,23 @@ export function isReclassifiedAsAttractionReason(
 ): boolean {
   return reason != null && RECLASSIFIED_AS_ATTRACTION_REASONS.includes(reason);
 }
+
+/**
+ * How long an attraction's id has to be missing from its park's `/children`,
+ * while the park keeps syncing, before the sync retires the row.
+ *
+ * PO decision, 2026-10-02 (PAR-621). Well past any feed hiccup, and short
+ * enough to retire a season's mazes before the wiki lists next season's under
+ * new ids beside them. Measured that day: 417 of 515 absent rows had been
+ * missing for more than 60 days, 311 for more than 90.
+ */
+export const ABSENT_UPSTREAM_RETIRE_DAYS = 60;
+
+/**
+ * How far back a reading keeps an absent row from being retired. One week is
+ * the window the 77 still-measured rows of 2026-10-02 were counted in.
+ */
+export const ABSENT_UPSTREAM_READING_DAYS = 7;
 
 /**
  * Children Metadata Processor (Combined)
@@ -320,6 +339,25 @@ export class ChildrenMetadataProcessor {
               } catch (e) {
                 this.logger.error(
                   `Failed to retire reclassified shows/restaurants for ${park.name}: ${e}`,
+                );
+              }
+
+              // And the third case, which neither path above can see: an
+              // entity that left `/children` altogether. Its id is in none of
+              // the three lists, so no `In(...)` ever reaches it. Every id
+              // the response carried counts as listed, whatever its type or
+              // exclusion, so this path only acts on true absence.
+              try {
+                await this.retireAbsentAttractions(
+                  park.id,
+                  park.name,
+                  attractions.length,
+                  new Set(childrenResponse.children.map((child) => child.id)),
+                  attractionCtx.claimed,
+                );
+              } catch (e) {
+                this.logger.error(
+                  `Failed to retire absent attractions for ${park.name}: ${e}`,
                 );
               }
 
@@ -1037,6 +1075,130 @@ export class ChildrenMetadataProcessor {
       .catch((e) =>
         this.logger.warn(`Revalidation failed: ${(e as Error)?.message ?? e}`),
       );
+  }
+
+  /**
+   * Retires the attractions whose id has been missing from their park's
+   * `/children` for {@link ABSENT_UPSTREAM_RETIRE_DAYS}, while the park itself
+   * kept syncing.
+   *
+   * Neither reclassification path can see these rows: both draw their
+   * candidates from the ids the response carries, and an entity that left the
+   * list is in none of them. On 2026-10-02 that left 515 active rows in 83
+   * parks, and 43 of them were served as CLOSED in place of their live twin.
+   * The wiki re-issues seasonal mazes (and once all of Walibi Belgium's rides)
+   * under a new id, the dead row keeps the counter-free slug, and
+   * `outranksNameDuplicate` hands it the name group (PAR-621).
+   *
+   * **Absence is read from the row, not from a history.** `syncAttraction`
+   * writes every row it matches on every run, and `updatedAt` is an
+   * `@UpdateDateColumn`, so a row the feed still lists is never older than the
+   * last sync. Checked against `/children` for 243 rows in four parks with no
+   * crossing in either direction. Any other repository write also moves the
+   * column, which can only delay a retirement, never cause one. The one case
+   * it shortens: a park whose whole sync failed for 60 days retires a missing
+   * row on its first good run, not 60 days after it; the reading gate still
+   * applies, and the row comes back by itself if the id is listed again.
+   *
+   * **The park has to have synced, and this run proves it** (our feed going
+   * quiet is not the entity going away). This runs only after a successful
+   * `/children` call that listed at least one attraction, so a park whose sync
+   * fails or comes back empty retires nothing. Rows claimed in this run are
+   * excluded even when their own id was not listed: a row matched by name or
+   * by Queue-Times id is in the feed under another id.
+   *
+   * The gates are the ones `retireReclassifiedAttractions` applies, plus one
+   * its candidates never needed: no `queue_times_entity_id`, no mapping from
+   * another source, and no reading in {@link ABSENT_UPSTREAM_READING_DAYS}
+   * that is more than our own bookkeeping (`system-reconciliation`,
+   * `system-heartbeat`, carried heartbeats). On 2026-10-02, 77 of the 515 were
+   * still receiving such readings.
+   *
+   * **It undoes itself.** The reason is {@link ABSENT_UPSTREAM_REASON}, which
+   * sits in `RECLASSIFIED_UPSTREAM_REASONS`: `syncAttraction` lifts it the
+   * moment the id is listed again, `retiredKindOf` reads it as `reclassified`
+   * rather than `closed`, and `detect-seasonal` keeps the row's season.
+   */
+  private async retireAbsentAttractions(
+    parkId: string,
+    parkName: string,
+    listedAttractionCount: number,
+    listedExternalIds: Set<string>,
+    claimedRowIds: Set<string>,
+    now: Date = new Date(),
+  ): Promise<void> {
+    if (listedAttractionCount === 0) return;
+
+    const cutoff = new Date(
+      now.getTime() - ABSENT_UPSTREAM_RETIRE_DAYS * 86_400_000,
+    );
+    const rows = await this.attractionsService.getRepository().find({
+      where: {
+        parkId,
+        retiredAt: IsNull(),
+        queueTimesEntityId: IsNull(),
+        updatedAt: LessThan(cutoff),
+      },
+      select: ["id", "name", "externalId"],
+    });
+
+    const absent = rows.filter(
+      (row) =>
+        !claimedRowIds.has(row.id) &&
+        !!row.externalId &&
+        !row.externalId.startsWith("qt-ride-") &&
+        !listedExternalIds.has(row.externalId),
+    );
+    if (absent.length === 0) return;
+
+    const unclaimed = await this.withoutForeignSourceMappings(absent);
+    const silent = await this.withoutRecentReadings(unclaimed, now);
+    if (silent.length === 0) return;
+
+    // The wiki does not say when an entity left the list; `updatedAt` only
+    // bounds it from below. So this is the day it was noticed, and the reason
+    // says so.
+    await this.attractionRetirementService.retire(
+      silent.map((attraction) => ({
+        attractionId: attraction.id,
+        retiredAt: now.toISOString(),
+        reason: ABSENT_UPSTREAM_REASON,
+      })),
+    );
+
+    this.logger.log(
+      `🪦 ${parkName}: retired ${silent.length} attraction row(s) absent upstream ` +
+        `for ${ABSENT_UPSTREAM_RETIRE_DAYS}+ days — ` +
+        silent.map((a) => a.name).join(", "),
+    );
+  }
+
+  /**
+   * Drops every candidate that received a reading in the last
+   * {@link ABSENT_UPSTREAM_READING_DAYS}. Our own bookkeeping does not count:
+   * reverse reconciliation writes CLOSED for exactly the rows no source
+   * mentions, so counting it would keep every absent row alive forever.
+   */
+  private async withoutRecentReadings<T extends { id: string }>(
+    candidates: T[],
+    now: Date,
+  ): Promise<T[]> {
+    if (candidates.length === 0) return candidates;
+    const since = new Date(
+      now.getTime() - ABSENT_UPSTREAM_READING_DAYS * 86_400_000,
+    );
+    const rows: { attractionId: string }[] =
+      await this.mappingRepository.manager.query(
+        `SELECT DISTINCT "attractionId"
+           FROM queue_data
+          WHERE "attractionId" = ANY($1::uuid[])
+            AND "timestamp" >= $2
+            AND data_source <> ALL($3::text[])
+            AND is_heartbeat IS NOT TRUE`,
+        [candidates.map((c) => c.id), since, [...SYNTHETIC_SOURCES]],
+      );
+    const read = new Set(rows.map((r) => r.attractionId));
+    return candidates.filter((c) => !read.has(c.id));
   }
 
   /**

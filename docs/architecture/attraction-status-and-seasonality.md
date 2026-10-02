@@ -1496,6 +1496,42 @@ calendar no measurement has confirmed since June is a claim about a park that
 nobody has checked. That is a decision about data, not code, and it is not made
 here.
 
+### 5.9 An entity left `/children` and its row stayed active
+
+**Measured 2026-10-02 (PAR-621).** Neither path of §5.6 / §5.7 can see an
+entity that disappears from its park's `/children` altogether: both take their
+candidates from the ids the response carries. 515 active rows in 83 parks were
+in that state, every one with a fresh park sync beside it. The wiki re-issues
+seasonal mazes under a new id each season (Six Flags Fiesta Texas: nine mazes
+gone on 2026-06-03, back as new rows on 2026-09-17), and once re-issued all of
+Walibi Belgium's rides. The dead row keeps the counter-free slug, so
+`outranksNameDuplicate` (§4a) hands it the name group and the live row is not
+served at all: 43 rides were served as CLOSED that way, 21 of them at Walibi
+Belgium.
+
+`retireAbsentAttractions` now runs after the two reclassification steps. A row
+is retired when all of these hold:
+
+| gate | why |
+|---|---|
+| the park's `/children` call succeeded and listed at least one attraction | our feed going quiet is not the entity going away |
+| the row's `externalId` is not in the response under any type, and no row of this run claimed it | absent, not reclassified, not matched under another id |
+| `updatedAt` older than `ABSENT_UPSTREAM_RETIRE_DAYS` (60, PO decision) | `syncAttraction` writes every row it matches, so this is "not listed for 60 days" |
+| no `queue_times_entity_id`, no mapping from another source | same gates as §5.6 |
+| no reading in 7 days other than `system-reconciliation` / `system-heartbeat` / carried heartbeats | 77 of the 515 were still being measured |
+
+It writes `ABSENT_UPSTREAM_REASON`, which is listed in
+`RECLASSIFIED_UPSTREAM_REASONS`. So `retiredKind` is `reclassified`, never
+`closed` (a maze that returns under a new id did not close), the sitemap drops
+the URL, `detect-seasonal` keeps the season, and `syncAttraction` lifts the
+retirement by itself if the id is ever listed again. Retiring the dead row is
+also what heals the 43: the name grouping and `buildClosedAttractions` see only
+the live row afterwards, which is then served under its `-2` slug.
+
+What it leaves alone: 6 of the 43 pairs, where a second source still fills the
+dead row. Both rows are alive there, and which one is the ride is a curation
+question (§4a).
+
 ---
 
 ## 6. Diagnostic SQL

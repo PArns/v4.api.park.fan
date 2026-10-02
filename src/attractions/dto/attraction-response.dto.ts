@@ -591,8 +591,9 @@ export class AttractionResponseDto {
       "daily CLOSED a ride comes back from. " +
       "One case does not mean that: where the children sync retired a row " +
       "because ThemeParks.wiki reclassified the entity as a show or a " +
-      "restaurant, this is the day that was noticed and the ride never " +
-      "stopped existing. `retiredKind` says which of the two it is.",
+      "restaurant, or stopped listing it in the park, this is the day that " +
+      "was noticed and nothing is known to have closed. `retiredKind` says " +
+      "which of the two it is.",
     required: false,
     nullable: true,
   })
@@ -614,7 +615,9 @@ export class AttractionResponseDto {
       "retired. `closed`: the ride stopped operating for good — it keeps its " +
       "page and its sitemap entry and is shown as closed permanently. " +
       "`reclassified`: ThemeParks.wiki now lists the entity as a show or a " +
-      "restaurant, so it is no longer tracked as a ride; nothing closed.",
+      "restaurant, or has stopped listing it in the park for at least 60 " +
+      "days, so it is no longer tracked as a ride; nothing is known to have " +
+      "closed.",
     enum: RETIRED_KIND_VALUES,
     required: false,
     nullable: true,
