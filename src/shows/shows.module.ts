@@ -1,11 +1,9 @@
-import { Module, forwardRef } from "@nestjs/common";
+import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { Show } from "./entities/show.entity";
 import { ShowLiveData } from "./entities/show-live-data.entity";
 import { ShowSchedulePattern } from "./entities/show-schedule-pattern.entity";
 import { ShowsService } from "./shows.service";
-import { ThemeParksModule } from "../external-apis/themeparks/themeparks.module";
-import { ParksModule } from "../parks/parks.module";
 
 /**
  * Shows Module
@@ -18,8 +16,6 @@ import { ParksModule } from "../parks/parks.module";
 @Module({
   imports: [
     TypeOrmModule.forFeature([Show, ShowLiveData, ShowSchedulePattern]),
-    ThemeParksModule,
-    forwardRef(() => ParksModule),
   ],
   controllers: [],
   providers: [ShowsService],

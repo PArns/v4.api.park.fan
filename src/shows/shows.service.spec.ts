@@ -4,15 +4,11 @@ import { ShowsService } from "./shows.service";
 import { Show } from "./entities/show.entity";
 import { ShowLiveData } from "./entities/show-live-data.entity";
 import { ShowSchedulePattern } from "./entities/show-schedule-pattern.entity";
-import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
-import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
-import { ParksService } from "../parks/parks.service";
 import {
   EntityLiveResponse,
   EntityType,
   LiveStatus,
 } from "../external-apis/themeparks/themeparks.types";
-import { generateSlug } from "../common/utils/slug.util";
 
 /**
  * Chainable query-builder stub covering both call shapes shows.service.ts
@@ -59,18 +55,6 @@ describe("ShowsService", () => {
     manager: { transaction: jest.fn(), query: jest.fn() },
   };
 
-  const mockThemeParksClient = {
-    getEntityChildren: jest.fn(),
-  };
-
-  const mockThemeParksMapper = {
-    mapShow: jest.fn(),
-  };
-
-  const mockParksService = {
-    ensureParksLoaded: jest.fn(),
-  };
-
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -84,9 +68,6 @@ describe("ShowsService", () => {
           provide: getRepositoryToken(ShowSchedulePattern),
           useValue: mockShowSchedulePatternRepository,
         },
-        { provide: ThemeParksClient, useValue: mockThemeParksClient },
-        { provide: ThemeParksMapper, useValue: mockThemeParksMapper },
-        { provide: ParksService, useValue: mockParksService },
       ],
     }).compile();
 
@@ -329,74 +310,6 @@ describe("ShowsService", () => {
       );
 
       expect(result.size).toBe(0);
-    });
-  });
-
-  describe("syncShows", () => {
-    it("upserts shows, keeps slugs unique, and only syncs ThemeParks.wiki parks", async () => {
-      mockParksService.ensureParksLoaded.mockResolvedValue([
-        { id: "park-1", externalId: "tp_1" },
-        // Queue-Times-only park: never reaches the ThemeParks.wiki client.
-        { id: "park-2", externalId: "qt-2" },
-      ]);
-
-      mockThemeParksClient.getEntityChildren.mockResolvedValue({
-        children: [
-          { id: "show-ext-1", name: "Existing Show", entityType: "SHOW" },
-          { id: "show-ext-new-a", name: "Duplicate Show", entityType: "SHOW" },
-          { id: "show-ext-new-b", name: "Duplicate Show", entityType: "SHOW" },
-          // Not a show — must be filtered out before any mapping happens.
-          { id: "attraction-ext", name: "Some Ride", entityType: "ATTRACTION" },
-        ],
-      });
-
-      mockShowRepository.find.mockResolvedValue([
-        {
-          id: "existing-show-id",
-          externalId: "show-ext-1",
-          slug: "existing-show",
-        },
-      ]);
-
-      mockThemeParksMapper.mapShow.mockImplementation(
-        (apiData: { id: string; name: string }, parkId: string) => ({
-          externalId: apiData.id,
-          name: apiData.name,
-          slug: generateSlug(apiData.name),
-          parkId,
-        }),
-      );
-
-      const syncedCount = await service.syncShows();
-
-      // Wiki-only filter: the Queue-Times park is never asked for children.
-      expect(mockThemeParksClient.getEntityChildren).toHaveBeenCalledTimes(1);
-      expect(mockThemeParksClient.getEntityChildren).toHaveBeenCalledWith(
-        "tp_1",
-      );
-
-      // Non-SHOW children never reach the mapper.
-      expect(mockThemeParksMapper.mapShow).toHaveBeenCalledTimes(3);
-
-      // Update path for the existing show.
-      expect(mockShowRepository.update).toHaveBeenCalledWith(
-        "existing-show-id",
-        { name: "Existing Show" },
-      );
-
-      // Insert path: two shows sharing a name get distinct slugs.
-      expect(mockShowRepository.save).toHaveBeenCalledWith([
-        expect.objectContaining({
-          externalId: "show-ext-new-a",
-          slug: "duplicate-show",
-        }),
-        expect.objectContaining({
-          externalId: "show-ext-new-b",
-          slug: "duplicate-show-2",
-        }),
-      ]);
-
-      expect(syncedCount).toBe(3);
     });
   });
 });

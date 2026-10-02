@@ -6,22 +6,10 @@ import {
   IsNull,
   LessThanOrEqual,
   MoreThanOrEqual,
-  In,
 } from "typeorm";
 import { Restaurant } from "./entities/restaurant.entity";
 import { RestaurantLiveData } from "./entities/restaurant-live-data.entity";
-import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
-import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
-import { ParksService } from "../parks/parks.service";
-import {
-  EntityLiveResponse,
-  EntityResponse,
-} from "../external-apis/themeparks/themeparks.types";
-import { Park } from "../parks/entities/park.entity";
-import {
-  ParkSyncState,
-  ThemeParksEntitySync,
-} from "../common/sync/theme-parks-entity-sync";
+import { EntityLiveResponse } from "../external-apis/themeparks/themeparks.types";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 import {
   hasDateChangedInTimezone,
@@ -34,156 +22,22 @@ import {
   todayLookbackDate,
 } from "../common/utils/live-data-query.util";
 
-/** What `syncRestaurants` keeps in memory while it walks one park. */
-interface RestaurantSyncState extends ParkSyncState {
-  /**
-   * The rows the wiki's IDs already point at. Looked up by `externalId` rather
-   * than by park, because a restaurant may have been filed under another park
-   * before.
-   */
-  byExternalId: Map<string, Restaurant>;
-}
-
 @Injectable()
-export class RestaurantsService extends ThemeParksEntitySync<
-  Restaurant,
-  EntityResponse,
-  RestaurantSyncState,
-  Restaurant,
-  { deep?: boolean }
-> {
+export class RestaurantsService {
   private readonly logger = new Logger(RestaurantsService.name);
-
-  /** `In([])` is not a query worth sending — see `loadParkState`. */
-  protected readonly skipParksWithoutChildren = true;
 
   constructor(
     @InjectRepository(Restaurant)
     private restaurantRepository: Repository<Restaurant>,
     @InjectRepository(RestaurantLiveData)
     private restaurantLiveDataRepository: Repository<RestaurantLiveData>,
-    private themeParksClient: ThemeParksClient,
-    private themeParksMapper: ThemeParksMapper,
-    private parksService: ParksService,
-  ) {
-    super(parksService, themeParksClient);
-  }
+  ) {}
 
   /**
    * Get the repository instance (for advanced queries by other services)
    */
   getRepository(): Repository<Restaurant> {
     return this.restaurantRepository;
-  }
-
-  /**
-   * Syncs all restaurants from ThemeParks.wiki
-   *
-   * Strategy:
-   * 1. Ensure parks are synced first
-   * 2. For each park, fetch children (restaurants)
-   * 3. Map and save to DB
-   * @param options.deep - If true, fetches detailed data for each restaurant (slower, hits rate limits)
-   */
-  async syncRestaurants(options: { deep?: boolean } = {}): Promise<number> {
-    this.logger.log(
-      `Syncing restaurants from ThemeParks.wiki... (Deep Sync: ${options.deep ? "ON" : "OFF"})`,
-    );
-
-    const syncedCount = await this.syncFromThemeParksWiki(options);
-
-    this.logger.log(`✅ Synced ${syncedCount} restaurants`);
-    return syncedCount;
-  }
-
-  protected filterChildren(children: EntityResponse[]): EntityResponse[] {
-    return children.filter((child) => child.entityType === "RESTAURANT");
-  }
-
-  /**
-   * Two reads per park, so the child loop below needs none: the rows the wiki's
-   * IDs already point at, and the slugs this park has handed out.
-   */
-  protected async loadParkState(
-    park: Park,
-    children: EntityResponse[],
-  ): Promise<RestaurantSyncState> {
-    const apiExternalIds = children.map((r) => r.id);
-    const [existingByExternalId, existingSlugsInPark] = await Promise.all([
-      this.restaurantRepository.find({
-        where: { externalId: In(apiExternalIds) },
-      }),
-      this.restaurantRepository.find({
-        where: { parkId: park.id },
-        select: ["slug"],
-      }),
-    ]);
-
-    return {
-      byExternalId: new Map(existingByExternalId.map((r) => [r.externalId, r])),
-      usedSlugs: new Set(existingSlugsInPark.map((r) => r.slug)),
-    };
-  }
-
-  /** Deep Sync: fetch detailed data if requested, summary data otherwise. */
-  protected override async resolveChild(
-    child: EntityResponse,
-    options?: { deep?: boolean },
-  ): Promise<EntityResponse> {
-    if (!options?.deep) {
-      return child;
-    }
-
-    try {
-      this.logger.debug(`Deep syncing ${child.name}...`);
-      return await this.themeParksClient.getEntity(child.id);
-    } catch (error) {
-      this.logger.warn(
-        `Failed to deep sync ${child.name}, using summary data: ${error}`,
-      );
-      return child;
-    }
-  }
-
-  protected mapChild(
-    child: EntityResponse,
-    parkId: string,
-  ): Partial<Restaurant> {
-    return this.themeParksMapper.mapRestaurant(child, parkId);
-  }
-
-  /** An existing restaurant keeps its slug and takes the new values. */
-  protected reconcile(
-    mapped: Partial<Restaurant>,
-    state: RestaurantSyncState,
-  ): Restaurant | null {
-    const existing = state.byExternalId.get(mapped.externalId!);
-    if (!existing) {
-      return null;
-    }
-
-    return Object.assign(existing, {
-      name: mapped.name,
-      latitude: mapped.latitude,
-      longitude: mapped.longitude,
-      cuisineType: mapped.cuisineType,
-      requiresReservation: mapped.requiresReservation,
-    });
-  }
-
-  /** Batch save all new/updated restaurants for this park. */
-  protected async persist(
-    toInsert: Partial<Restaurant>[],
-    toUpdate: Restaurant[],
-  ): Promise<void> {
-    const toSave = [
-      ...toUpdate,
-      ...toInsert.map((mapped) => this.restaurantRepository.create(mapped)),
-    ];
-
-    if (toSave.length > 0) {
-      await this.restaurantRepository.save(toSave);
-    }
   }
 
   /**
