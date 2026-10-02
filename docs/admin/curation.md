@@ -540,6 +540,27 @@ A patch that changes nothing writes nothing — no save, no eviction, no audit
 row. A form that PATCHes every field on every blur would otherwise fill the log
 with empty edits and bury the real ones.
 
+### Recording a check that changed nothing (`park.verify`)
+
+The rule above has a cost: a source check that confirms a curated value cannot
+leave a trace through the PATCH, because the PATCH sees an equal value and
+writes no audit row (`changed: []`, `auditId: null`; PAR-601). So
+`POST /v1/admin/content/parks/:id/verify` takes `fields` (curated keys, checked
+against the park descriptors), an optional `reason` and a required `sourceUrl`
+(http or https), and writes one `park.verify` row:
+
+- `before` holds the named fields as they stand, `after` is null,
+- the park row is not saved, and no cache is evicted or revalidated,
+- it is not undoable, since nothing changed,
+- a failed audit write is a 500, not a silent success. The row is the only
+  thing the call produces.
+
+Every entry from `GET /history` and in a park's or ride's `history` carries
+`kind: "change" | "verification"`, so the admin can show a verify as a check
+and not as a removal, which the `before`-without-`after` shape would otherwise
+look like. The dashboard's curation count (`action LIKE '%.curate'`) leaves
+verifications out. Attractions have no verify action yet.
+
 ### Editing a whole park's list at once
 
 `PATCH /v1/admin/content/parks/:id/attractions` takes one entry per ride. It

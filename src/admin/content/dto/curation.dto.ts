@@ -1,10 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
+  ArrayNotEmpty,
   IsArray,
   IsBoolean,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
@@ -50,6 +52,38 @@ export class CurationPatchDto {
   @IsString()
   @MaxLength(2000)
   sourceUrl?: string;
+}
+
+export class VerifyFieldsDto {
+  @ApiProperty({
+    description:
+      "Curated field keys that were checked against the source and found " +
+      "right, keyed like the descriptors' `key`.",
+    example: ["curatedStreetAddress", "curatedPostalCode"],
+    type: [String],
+  })
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsString({ each: true })
+  fields: string[];
+
+  @ApiPropertyOptional({
+    description: "What was compared, in the checker's own words.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  reason?: string;
+
+  @ApiProperty({
+    description:
+      "The page the values were checked against. Required: a verification " +
+      "without a source records nothing anybody could re-check.",
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  sourceUrl: string;
 }
 
 /** One ride's share of a bulk curation. */

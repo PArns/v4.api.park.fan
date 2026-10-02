@@ -16,6 +16,28 @@ export interface AuditWrite {
   sourceUrl?: string | null;
 }
 
+/**
+ * A curated value checked against its source and found right. The row's
+ * `before` holds the values as they stood, `after` is null, and nothing was
+ * written to the park (PAR-622).
+ */
+export const PARK_VERIFY_ACTION = "park.verify";
+
+/**
+ * Whether an audit row records a change or a check that changed nothing.
+ *
+ * Handed to the admin with every history entry, because a verify row has a
+ * `before` and no `after`, which is the same shape a delete has, and the
+ * history would otherwise render "checked against the source" as "removed".
+ */
+export type AuditEntryKind = "change" | "verification";
+
+export function auditEntryKind(action: string): AuditEntryKind {
+  return action.endsWith(".verify") ? "verification" : "change";
+}
+
+export type AuditEntry = AdminAuditLog & { kind: AuditEntryKind };
+
 export interface AuditQuery {
   entityType?: string;
   entityId?: string;
@@ -107,7 +129,7 @@ export class AdminAuditService {
   }
 
   async list(query: AuditQuery = {}): Promise<{
-    entries: AdminAuditLog[];
+    entries: AuditEntry[];
     total: number;
   }> {
     const qb = this.auditRepository
@@ -135,7 +157,10 @@ export class AdminAuditService {
       qb.andWhere("log.action LIKE :action", { action: `${query.action}%` });
     }
 
-    const [entries, total] = await qb.getManyAndCount();
+    const [rows, total] = await qb.getManyAndCount();
+    const entries = rows.map((row) =>
+      Object.assign(row, { kind: auditEntryKind(row.action) }),
+    );
     return { entries, total };
   }
 

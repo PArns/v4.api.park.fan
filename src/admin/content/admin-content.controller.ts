@@ -54,6 +54,7 @@ import {
   RideProfileWriteDto,
   SeasonPatchDto,
   SeasonWriteDto,
+  VerifyFieldsDto,
 } from "./dto/curation.dto";
 
 /**
@@ -435,6 +436,30 @@ export class AdminContentController {
       auditId: result.auditId,
       fields: parkFieldViews(result.entity),
     };
+  }
+
+  @Post("parks/:id/verify")
+  @AdminMinRole("editor")
+  @SelfAudited()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Record that a park's curated values were checked and are right",
+    description:
+      "Writes a `park.verify` audit row: `before` holds the named fields as " +
+      "they stand, `after` is null, and the park row is not touched. Exists " +
+      "because a PATCH with an unchanged value writes nothing and leaves no " +
+      "audit row, so a source check that confirms a value had nowhere to go.",
+  })
+  async verifyPark(
+    @Param("id") id: string,
+    @Body() body: VerifyFieldsDto,
+    @CurrentAdmin() admin: AdminPrincipal,
+  ) {
+    return this.curation.verifyPark(
+      id,
+      { fields: body.fields, reason: body.reason, sourceUrl: body.sourceUrl },
+      admin,
+    );
   }
 
   // ── attractions ───────────────────────────────────────────────────────────

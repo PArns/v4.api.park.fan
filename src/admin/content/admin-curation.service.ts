@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from "@nestjs/common";
@@ -17,7 +18,11 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 import { worksPeriodEndsBeforeItBegins } from "../../attractions/utils/curated-out-of-service.util";
 import { Park } from "../../parks/entities/park.entity";
 import { parseHttpUrl } from "../../common/utils/http-url.util";
-import { AdminAuditService } from "../auth/admin-audit.service";
+import {
+  AdminAuditService,
+  PARK_VERIFY_ACTION,
+  auditEntryKind,
+} from "../auth/admin-audit.service";
 import type { AdminPrincipal } from "../auth/admin-principal";
 import { GlossaryTermIdsService } from "./glossary-term-ids.service";
 import {
@@ -50,6 +55,20 @@ export interface CurationResult<T> {
   entity: T;
   changed: string[];
   auditId: string | null;
+}
+
+export interface ParkVerification {
+  /** Curated field keys that were checked. */
+  fields: string[];
+  reason?: string | null;
+  sourceUrl?: string | null;
+}
+
+export interface VerificationResult {
+  auditId: string;
+  verified: string[];
+  /** The values as they stood when they were checked. */
+  before: Record<string, unknown>;
 }
 
 /**
@@ -374,6 +393,74 @@ export class AdminCurationService {
     return { entity: park, changed, auditId: auditRow?.id ?? null };
   }
 
+  /**
+   * Record that a park's curated values were checked against a source and
+   * found right, without writing anything.
+   *
+   * `curatePark` cannot do this: it skips a value equal to the stored one and,
+   * with nothing left, writes no audit row (PAR-601). So a source check that
+   * confirms a value used to leave no trace in the database, only in a ticket
+   * comment. A `park.verify` row is that trace: `before` holds the values as
+   * they stood when they were checked, `after` stays null because nothing
+   * changed, and `reason` and `sourceUrl` say what was compared against what.
+   *
+   * The park row is not saved and no cache is touched, because there is
+   * nothing new for a reader to see. And unlike a curation, a verify whose
+   * audit row fails to write is an error: the row is the whole result, so
+   * swallowing the failure would report success for a call that did nothing.
+   */
+  async verifyPark(
+    id: string,
+    verification: ParkVerification,
+    actor: AdminPrincipal,
+  ): Promise<VerificationResult> {
+    const sourceUrl = verification.sourceUrl?.trim() ?? "";
+    if (sourceUrl.length === 0) {
+      throw new BadRequestException(
+        "sourceUrl is required: a verification names the page it checked against",
+      );
+    }
+    parseHttpUrl(sourceUrl, "sourceUrl");
+
+    const fields = [...new Set(verification.fields ?? [])];
+    if (fields.length === 0) {
+      throw new BadRequestException("Name at least one field that was checked");
+    }
+    for (const key of fields) {
+      if (!PARK_CURATED_KEYS.has(key)) {
+        throw new BadRequestException(
+          `"${key}" is not a curatable field — see the field descriptors on the detail endpoint`,
+        );
+      }
+    }
+
+    const park = await this.findPark(id);
+    const before: Record<string, unknown> = {};
+    for (const key of fields) {
+      before[key] = (park as unknown as Record<string, unknown>)[key] ?? null;
+    }
+
+    const reason = verification.reason?.trim();
+    const auditRow = await this.audit.record({
+      actor,
+      action: PARK_VERIFY_ACTION,
+      entityType: "park",
+      entityId: park.id,
+      entityLabel: park.name,
+      before,
+      after: null,
+      reason: reason ? reason : null,
+      sourceUrl,
+    });
+    if (!auditRow) {
+      throw new InternalServerErrorException(
+        "The verification could not be recorded",
+      );
+    }
+
+    return { auditId: auditRow.id, verified: fields, before };
+  }
+
   async attractionIdsOf(parkId: string): Promise<string[]> {
     const rows = await this.attractions.find({
       where: { parkId, retiredAt: IsNull() },
@@ -414,6 +501,13 @@ export class AdminCurationService {
     }
     if (!entry.entityId) {
       throw new BadRequestException("That entry names no entity to undo");
+    }
+    // A verification carries a `before` like a curation does, but it changed
+    // nothing, so there is no earlier state to put back.
+    if (auditEntryKind(entry.action) === "verification") {
+      throw new BadRequestException(
+        "That entry records a check against a source, not a change, so there is nothing to undo",
+      );
     }
 
     // Refuse to undo a change something else has already changed again.

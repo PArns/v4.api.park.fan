@@ -978,6 +978,180 @@ describe("AdminCurationService", () => {
     });
   });
 
+  describe("verifying a park (park.verify)", () => {
+    const SOURCE = "https://www.heide-park.de/service/anfahrt/";
+    const heidePark = () => ({
+      id: "park-1",
+      name: "Heide Park",
+      curatedStreetAddress: "Heide Park 1",
+      curatedPostalCode: "29614",
+    });
+
+    it("records a verify row for a value a PATCH would skip as unchanged", async () => {
+      // The PAR-601 case: the same value through curatePark writes nothing and
+      // leaves no audit row.
+      const noop = build(null, heidePark());
+      const patched = await noop.service.curatePark(
+        "park-1",
+        {
+          fields: { curatedStreetAddress: "Heide Park 1" },
+          reason: "checked",
+          sourceUrl: SOURCE,
+        },
+        ACTOR,
+      );
+      expect(patched.auditId).toBeNull();
+      expect(noop.audit.record).not.toHaveBeenCalled();
+
+      const { service, audit } = build(null, heidePark());
+      const result = await service.verifyPark(
+        "park-1",
+        {
+          fields: ["curatedStreetAddress", "curatedPostalCode"],
+          reason: "  street and postcode match the directions page  ",
+          sourceUrl: `  ${SOURCE}  `,
+        },
+        ACTOR,
+      );
+
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith({
+        actor: ACTOR,
+        action: "park.verify",
+        entityType: "park",
+        entityId: "park-1",
+        entityLabel: "Heide Park",
+        before: {
+          curatedStreetAddress: "Heide Park 1",
+          curatedPostalCode: "29614",
+        },
+        after: null,
+        reason: "street and postcode match the directions page",
+        sourceUrl: SOURCE,
+      });
+      expect(result).toEqual({
+        auditId: "audit-1",
+        verified: ["curatedStreetAddress", "curatedPostalCode"],
+        before: {
+          curatedStreetAddress: "Heide Park 1",
+          curatedPostalCode: "29614",
+        },
+      });
+    });
+
+    it("leaves the park row and every cache alone", async () => {
+      const park = heidePark();
+      const snapshot = { ...park };
+      const { service, parks, revalidation, queue, calls } = build(null, park);
+
+      await service.verifyPark(
+        "park-1",
+        { fields: ["curatedStreetAddress"], sourceUrl: SOURCE },
+        ACTOR,
+      );
+
+      expect(park).toEqual(snapshot);
+      expect(parks.save).not.toHaveBeenCalled();
+      expect(revalidation.revalidateTags).not.toHaveBeenCalled();
+      expect(queue.add).not.toHaveBeenCalled();
+      expect(evictMock).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    });
+
+    it("records a field with no curated value as null", async () => {
+      const { service, audit } = build(null, {
+        ...heidePark(),
+        curatedWebsite: undefined,
+      });
+      await service.verifyPark(
+        "park-1",
+        { fields: ["curatedWebsite", "curatedWebsite"], sourceUrl: SOURCE },
+        ACTOR,
+      );
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ before: { curatedWebsite: null } }),
+      );
+    });
+
+    it("rejects a field that is not curatable, before reading the park", async () => {
+      const { service, audit, parks } = build(null, heidePark());
+      await expect(
+        service.verifyPark(
+          "park-1",
+          { fields: ["curatedStreetAddress", "latitude"], sourceUrl: SOURCE },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/"latitude" is not a curatable field/);
+      expect(parks.findOne).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it("rejects an empty field list", async () => {
+      const { service, audit } = build(null, heidePark());
+      await expect(
+        service.verifyPark("park-1", { fields: [], sourceUrl: SOURCE }, ACTOR),
+      ).rejects.toThrow(BadRequestException);
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it("rejects a missing, blank or non-http sourceUrl", async () => {
+      for (const sourceUrl of [undefined, null, "", "   ", "heide-park.de"]) {
+        const { service, audit } = build(null, heidePark());
+        await expect(
+          service.verifyPark(
+            "park-1",
+            { fields: ["curatedStreetAddress"], sourceUrl },
+            ACTOR,
+          ),
+        ).rejects.toThrow(BadRequestException);
+        expect(audit.record).not.toHaveBeenCalled();
+      }
+    });
+
+    it("answers 404 for an unknown park", async () => {
+      const { service, audit } = build(null, null);
+      await expect(
+        service.verifyPark(
+          "nope",
+          { fields: ["curatedStreetAddress"], sourceUrl: SOURCE },
+          ACTOR,
+        ),
+      ).rejects.toThrow(NotFoundException);
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it("fails when the audit row cannot be written, since the row is the result", async () => {
+      const { service, audit } = build(null, heidePark());
+      audit.record = jest.fn(async () => null) as never;
+      await expect(
+        service.verifyPark(
+          "park-1",
+          { fields: ["curatedStreetAddress"], sourceUrl: SOURCE },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/could not be recorded/);
+    });
+
+    it("cannot be undone", async () => {
+      const { service, audit, parks } = build(null, heidePark());
+      audit.findOne = jest.fn(async (): Promise<unknown> => ({
+        id: "audit-v",
+        entityType: "park",
+        entityId: "park-1",
+        action: "park.verify",
+        before: { curatedStreetAddress: "Heide Park 1" },
+        after: null,
+        revertedBy: null,
+        createdAt: new Date("2026-10-02T09:00:00Z"),
+      }));
+      await expect(service.revert("audit-v", ACTOR)).rejects.toThrow(
+        /nothing to undo/,
+      );
+      expect(parks.save).not.toHaveBeenCalled();
+      expect(audit.markReverted).not.toHaveBeenCalled();
+    });
+  });
+
   describe("undo", () => {
     it("puts the previous value back and marks the original reverted", async () => {
       const attraction = anAttraction({ curatedName: "TARON" });
