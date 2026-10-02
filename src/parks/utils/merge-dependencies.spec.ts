@@ -18,6 +18,7 @@ import {
   rewriteSeasonAttractionIds,
   decideWinnerAuthoritative,
   mergeAttractionReviewMarks,
+  planAttractionReviewMarkDrops,
   migrateScheduleEntries,
   parkTablesMissingFrom,
   planWinnerAuthoritative,
@@ -1303,12 +1304,14 @@ describe("applyMergeDependencies", () => {
 
     it("drops the pair's own mark and both kinds of superseded row, then moves the rest", async () => {
       const mutual = {
+        id: "mark-pair",
         kind: "not_a_duplicate",
         attraction_id: "winner-id",
         other_attraction_id: "loser-id",
         reason: "cedar creek is a lazy river",
       };
       const superseded = {
+        id: "mark-other",
         kind: "not_a_duplicate",
         attraction_id: "loser-id",
         other_attraction_id: "other-id",
@@ -1316,6 +1319,8 @@ describe("applyMergeDependencies", () => {
       };
       manager.query
         .mockResolvedValueOnce([{ "?column?": 1 }])
+        .mockResolvedValueOnce([mutual])
+        .mockResolvedValueOnce([superseded])
         .mockResolvedValueOnce([mutual])
         .mockResolvedValueOnce([superseded]);
       const warn = jest
@@ -1327,23 +1332,29 @@ describe("applyMergeDependencies", () => {
       const sql = manager.query.mock.calls.map(([s]: [string]) =>
         s.replace(/\s+/g, " ").trim(),
       );
-      expect(sql).toHaveLength(6);
-      expect(sql[1]).toContain("DELETE FROM attraction_review_marks WHERE");
-      expect(sql[2]).toContain("DELETE FROM attraction_review_marks AS m");
+      expect(sql).toHaveLength(8);
+      // The plan reads, then the merge deletes exactly the rows it read, by id
+      // — one derivation for the merge and the preview (PAR-239).
+      expect(sql[1]).toMatch(/^SELECT \* FROM attraction_review_marks WHERE/);
+      expect(sql[2]).toMatch(/^SELECT m\.\* FROM attraction_review_marks AS m/);
+      expect(sql[3]).toContain("WHERE id = ANY($1::uuid[])");
+      expect(manager.query.mock.calls[3][1]).toEqual([["mark-pair"]]);
+      expect(sql[4]).toContain("WHERE id = ANY($1::uuid[])");
+      expect(manager.query.mock.calls[4][1]).toEqual([["mark-other"]]);
       // Three moves, one per shape. The order is what keeps them from meeting:
       // the first leaves no row naming the loser in `other_attraction_id`, and
       // the third only ever sees rows with no partner at all.
-      expect(sql[3]).toContain(
+      expect(sql[5]).toContain(
         "WHERE attraction_id = $2::uuid AND other_attraction_id IS NOT NULL",
       );
-      expect(sql[4]).toContain("WHERE other_attraction_id = $2::uuid");
-      expect(sql[5]).toContain(
+      expect(sql[6]).toContain("WHERE other_attraction_id = $2::uuid");
+      expect(sql[7]).toContain(
         "WHERE attraction_id = $2::uuid AND other_attraction_id IS NULL",
       );
       // Every rewrite restores the canonical order in the same statement: the
       // CHECK is not deferrable, so a move and a later swap is a merge that
       // rolls back.
-      for (const statement of [sql[3], sql[4]]) {
+      for (const statement of [sql[5], sql[6]]) {
         expect(statement).toContain("LEAST(");
         expect(statement).toContain("GREATEST(");
       }
@@ -1351,8 +1362,8 @@ describe("applyMergeDependencies", () => {
       // Both deletes report through RETURNING, and the log carries the reason
       // rather than a count: that sentence and its URL are the only record that
       // somebody once decided the opposite of what this merge is doing.
-      expect(sql[1]).toContain("RETURNING *");
-      expect(sql[2]).toContain("RETURNING *");
+      expect(sql[3]).toContain("RETURNING *");
+      expect(sql[4]).toContain("RETURNING *");
       expect(warn).toHaveBeenCalledTimes(2);
       expect(warn.mock.calls[0][0]).toContain("cedar creek is a lazy river");
       expect(warn.mock.calls[1][0]).toContain("kondaala is the kids' ride");
@@ -1372,20 +1383,60 @@ describe("applyMergeDependencies", () => {
       // SELECT, which is the shape the code reads. Asserted on the SQL rather
       // than by feeding the mock a driver result, because the driver is what
       // decides the shape and a mock cannot be made to disagree with itself.
+      const row = { id: "mark-pair" };
       manager.query
         .mockResolvedValueOnce([{ "?column?": 1 }])
-        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([row])
+        .mockResolvedValueOnce([{ id: "mark-other" }])
+        .mockResolvedValueOnce([row])
         .mockResolvedValueOnce([]);
 
       await mergeAttractionReviewMarks(manager, "winner-id", "loser-id");
 
-      const [, first, second] = manager.query.mock.calls.map(([s]: [string]) =>
-        s.replace(/\s+/g, " ").trim(),
+      const [, , , first, second] = manager.query.mock.calls.map(
+        ([s]: [string]) => s.replace(/\s+/g, " ").trim(),
       );
       for (const statement of [first, second]) {
         expect(statement).toMatch(/^WITH dropped AS \(\s*DELETE FROM/);
         expect(statement).toMatch(/SELECT \* FROM dropped$/);
       }
+    });
+
+    it("plans the same rows the merge deletes, and flags the pair's own mark", async () => {
+      // The preview reads `marks.plan`; the merge reads the same function
+      // through `apply`. Pinned on the entry, so a second derivation added to
+      // either side shows up here.
+      expect(marks.plan).toBe(planAttractionReviewMarkDrops);
+      const mutual = { id: "mark-pair", kind: "not_a_duplicate" };
+      const superseded = { id: "mark-other", kind: "not_a_duplicate" };
+      manager.query
+        .mockResolvedValueOnce([{ "?column?": 1 }])
+        .mockResolvedValueOnce([mutual])
+        .mockResolvedValueOnce([superseded]);
+
+      const drops = await marks.plan!(manager, "winner-id", "loser-id");
+
+      expect(drops).toEqual([
+        { from: "loser", row: mutual, aboutThisPair: true },
+        { from: "loser", row: superseded },
+      ]);
+      // A plan writes nothing.
+      for (const [sql] of manager.query.mock.calls) {
+        expect(String(sql).trim()).toMatch(/^SELECT /);
+      }
+    });
+
+    it("refuses a plan with no apply beside it", async () => {
+      await expect(
+        applyMergeDependencies(
+          manager,
+          [{ ...marks, apply: undefined }],
+          "winner-id",
+          "loser-id",
+        ),
+      ).rejects.toThrow(/apply/);
+
+      expect(manager.query).not.toHaveBeenCalled();
     });
 
     it("refuses one id on both sides, like applyMergeDependencies does", async () => {
@@ -1415,6 +1466,8 @@ describe("applyMergeDependencies", () => {
 
       await mergeAttractionReviewMarks(manager, "winner-id", "loser-id");
 
+      // The gate, the two planning reads and the three moves; no DELETE runs
+      // for an empty plan.
       expect(manager.query).toHaveBeenCalledTimes(6);
       expect(warn).not.toHaveBeenCalled();
     });

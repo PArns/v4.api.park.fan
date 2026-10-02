@@ -80,6 +80,45 @@ export interface MergeDependency {
     winnerId: string,
     loserId: string,
   ) => Promise<void>;
+  /**
+   * The read-only half of `apply`: the hand-written rows it would delete for
+   * this pair, without deleting them. What `AttractionMergeService.previewMerge`
+   * asks a `custom` entry, the way it asks `planWinnerAuthoritative` for the
+   * strategy above (PAR-239).
+   *
+   * Only meaningful next to an `apply` that calls it. Two derivations of one
+   * rule drift, and the one that drifts unnoticed is the preview — so an
+   * `apply` that declares a `plan` decides what to delete by calling it, and
+   * the rehearsal and the merge read one answer.
+   *
+   * Optional, because a `custom` entry can delete nothing a person wrote:
+   * `park_seasons` rewrites an id inside an array and drops ids whose ride is
+   * already gone, which loses no row.
+   */
+  plan?: (
+    manager: MergeQueryRunner,
+    winnerId: string,
+    loserId: string,
+  ) => Promise<PlannedDrop[]>;
+}
+
+/**
+ * A row a `custom` entry's `apply` would delete, as its `plan` reports it.
+ * `AttractionMergeService` adds the table name and hands it out as a
+ * `DroppedCuration`.
+ */
+export interface PlannedDrop {
+  /** Which attraction the row is filed under before the merge. */
+  from: "winner" | "loser";
+  /** The row as stored, so the loss is recoverable by hand. */
+  row: Record<string, unknown>;
+  /**
+   * The row is a verdict about exactly the two attractions being merged. For a
+   * `not_a_duplicate` review mark that is a person's finding that these two
+   * are different rides, i.e. the statement the merge contradicts. Absent on
+   * every other row.
+   */
+  aboutThisPair?: true;
 }
 
 /**
@@ -144,6 +183,130 @@ export function rideProfileRichness(row: Record<string, unknown>): number {
   return score;
 }
 
+/** What `mergeAttractionReviewMarks` would delete, read without deleting. */
+export interface ReviewMarkPlan {
+  /**
+   * Whether any mark names the loser at all. False for almost every merge, and
+   * then the merge issues no further statement.
+   */
+  touchesLoser: boolean;
+  /** Case 1 below: the marks about exactly this pair. */
+  mutual: Array<Record<string, unknown>>;
+  /** Case 2 below: the loser's pair marks the winner already has a verdict on. */
+  superseded: Array<Record<string, unknown>>;
+}
+
+/**
+ * Cases 1 and 2 of `mergeAttractionReviewMarks`, as two SELECTs. The merge
+ * deletes exactly what this returns, and the merge preview reports it through
+ * `planAttractionReviewMarkDrops`, so both read one derivation (PAR-239).
+ */
+export async function planAttractionReviewMarks(
+  manager: MergeQueryRunner,
+  winnerId: string,
+  loserId: string,
+): Promise<ReviewMarkPlan> {
+  // The same refusal `applyMergeDependencies` and `planWinnerAuthoritative`
+  // make, and for the sharper reason: with one id on both sides the second
+  // SELECT's EXISTS matches every pair mark against ITSELF — the partner is the
+  // row's own other half and the winner is the row's own first half — so the
+  // merge would delete every pair verdict the attraction carries. Every caller
+  // checks today; this is so the one that stops checking fails instead.
+  if (winnerId === loserId) {
+    throw new Error(
+      `Cannot merge review marks with one id on both sides (${winnerId})`,
+    );
+  }
+
+  // Almost no ride carries a review mark, so the ordinary merge is one index
+  // lookup instead of five statements.
+  const touching = asRows(
+    await manager.query(
+      `SELECT 1 FROM attraction_review_marks
+        WHERE attraction_id = $1::uuid OR other_attraction_id = $1::uuid
+        LIMIT 1`,
+      [loserId],
+    ),
+  );
+  if (touching.length === 0) {
+    return { touchesLoser: false, mutual: [], superseded: [] };
+  }
+
+  const mutual = asRows(
+    await manager.query(
+      `SELECT * FROM attraction_review_marks
+        WHERE (attraction_id = $1::uuid AND other_attraction_id = $2::uuid)
+           OR (attraction_id = $2::uuid AND other_attraction_id = $1::uuid)`,
+      [winnerId, loserId],
+    ),
+  );
+
+  // The partner id is the half of the pair that is NOT the loser. Spelled out
+  // twice rather than through a LATERAL, so the statement stays one a reader
+  // can run by hand against a pair of ids. A mutual mark never matches: its
+  // partner is the winner, and the CHECK forbids a mark pairing the winner with
+  // itself.
+  const partner = `CASE WHEN m.attraction_id = $2::uuid
+                        THEN m.other_attraction_id ELSE m.attraction_id END`;
+  const superseded = asRows(
+    await manager.query(
+      `SELECT m.* FROM attraction_review_marks AS m
+        WHERE m.other_attraction_id IS NOT NULL
+          AND (m.attraction_id = $2::uuid OR m.other_attraction_id = $2::uuid)
+          AND EXISTS (
+                SELECT 1 FROM attraction_review_marks AS w
+                 WHERE w.kind = m.kind
+                   AND w.attraction_id = LEAST($1::uuid, ${partner})
+                   AND w.other_attraction_id = GREATEST($1::uuid, ${partner})
+              )`,
+      [winnerId, loserId],
+    ),
+  );
+
+  return { touchesLoser: true, mutual, superseded };
+}
+
+/**
+ * `planAttractionReviewMarks` in the shape the merge preview reports. The mark
+ * about this pair is flagged rather than sorted to the top: a reader looking
+ * for "did somebody already say these are different" asks the flag. Filed
+ * under the loser, because the merge deletes it along with the losing ride; a
+ * pair mark names both, and `aboutThisPair` says so.
+ */
+export async function planAttractionReviewMarkDrops(
+  manager: MergeQueryRunner,
+  winnerId: string,
+  loserId: string,
+): Promise<PlannedDrop[]> {
+  const plan = await planAttractionReviewMarks(manager, winnerId, loserId);
+  return [
+    ...plan.mutual.map((row) => ({
+      from: "loser" as const,
+      row,
+      aboutThisPair: true as const,
+    })),
+    ...plan.superseded.map((row) => ({ from: "loser" as const, row })),
+  ];
+}
+
+/** Deletes the planned marks by id and returns the rows really deleted. */
+async function deleteReviewMarksById(
+  manager: MergeQueryRunner,
+  rows: Array<Record<string, unknown>>,
+): Promise<Array<Record<string, unknown>>> {
+  if (rows.length === 0) return [];
+  return asRows(
+    await manager.query(
+      `WITH dropped AS (
+         DELETE FROM attraction_review_marks
+          WHERE id = ANY($1::uuid[])
+          RETURNING *
+       ) SELECT * FROM dropped`,
+      [rows.map((row) => row.id)],
+    ),
+  );
+}
+
 /**
  * Rewrites a losing attraction's review marks onto the survivor.
  *
@@ -188,15 +351,19 @@ export function rideProfileRichness(row: Record<string, unknown>): number {
  *      would destroy a human's reason to keep a row the index does not object
  *      to.
  *
- * Both deletes report through `RETURNING` rather than reading first and
- * deleting second the way `applyWinnerAuthoritative` does. That branch has to
- * read anyway — the read is what it decides on. Here the read would exist only
- * to log, and a line written from `RETURNING` describes rows that really were
- * deleted rather than rows a failing statement left standing.
+ * Which rows cases 1 and 2 delete is decided by `planAttractionReviewMarks`
+ * and nowhere else: the merge preview reads the same function, so the
+ * rehearsal cannot name a different set of verdicts than the merge drops
+ * (PAR-239). The DELETEs then name those rows by id. Read inside the merge's
+ * transaction, so a mark written between the read and the delete by a
+ * concurrent session can at worst collide with the unique index in the moves
+ * below, which rolls the whole merge back rather than losing a row.
  *
- * Both are wrapped in a CTE for that, and the wrapper is load-bearing rather
- * than a flourish: TypeORM's postgres driver rewrites the result of a bare
- * DELETE or UPDATE into `[rows, rowCount]` (`PostgresQueryRunner`, `switch
+ * Both deletes still report through `RETURNING`, so the log line describes
+ * rows that really were deleted rather than rows the plan read. Both are
+ * wrapped in a CTE for that, and the wrapper is load-bearing rather than a
+ * flourish: TypeORM's postgres driver rewrites the result of a bare DELETE or
+ * UPDATE into `[rows, rowCount]` (`PostgresQueryRunner`, `switch
  * (raw.command)`), so `RETURNING *` would arrive as a two-element array whose
  * second element is a number — and every check below would then find two
  * "rows" to warn about on every merge, whether anything was deleted or not.
@@ -208,41 +375,10 @@ export async function mergeAttractionReviewMarks(
   winnerId: string,
   loserId: string,
 ): Promise<void> {
-  // The same refusal `applyMergeDependencies` and `planWinnerAuthoritative`
-  // make, and for the sharper reason: with one id on both sides the second
-  // DELETE's EXISTS matches every pair mark against ITSELF — the partner is the
-  // row's own other half and the winner is the row's own first half — so it
-  // would delete every pair verdict the attraction carries. Every caller checks
-  // today; this is so the one that stops checking fails instead.
-  if (winnerId === loserId) {
-    throw new Error(
-      `Cannot merge review marks with one id on both sides (${winnerId})`,
-    );
-  }
+  const plan = await planAttractionReviewMarks(manager, winnerId, loserId);
+  if (!plan.touchesLoser) return;
 
-  // Almost no ride carries a review mark, so the ordinary merge is one index
-  // lookup instead of five statements.
-  const touching = asRows(
-    await manager.query(
-      `SELECT 1 FROM attraction_review_marks
-        WHERE attraction_id = $1::uuid OR other_attraction_id = $1::uuid
-        LIMIT 1`,
-      [loserId],
-    ),
-  );
-  if (touching.length === 0) return;
-
-  const mutual = asRows(
-    await manager.query(
-      `WITH dropped AS (
-         DELETE FROM attraction_review_marks
-          WHERE (attraction_id = $1::uuid AND other_attraction_id = $2::uuid)
-             OR (attraction_id = $2::uuid AND other_attraction_id = $1::uuid)
-          RETURNING *
-       ) SELECT * FROM dropped`,
-      [winnerId, loserId],
-    ),
-  );
+  const mutual = await deleteReviewMarksById(manager, plan.mutual);
   if (mutual.length > 0) {
     logger.warn(
       `🗑️  attraction_review_marks: dropping ${mutual.length} mark(s) about ` +
@@ -252,28 +388,7 @@ export async function mergeAttractionReviewMarks(
     );
   }
 
-  // The partner id is the half of the pair that is NOT the loser. Spelled out
-  // twice rather than through a LATERAL, so the statement stays one a reader
-  // can run by hand against a pair of ids.
-  const partner = `CASE WHEN m.attraction_id = $2::uuid
-                        THEN m.other_attraction_id ELSE m.attraction_id END`;
-  const superseded = asRows(
-    await manager.query(
-      `WITH dropped AS (
-         DELETE FROM attraction_review_marks AS m
-          WHERE m.other_attraction_id IS NOT NULL
-            AND (m.attraction_id = $2::uuid OR m.other_attraction_id = $2::uuid)
-            AND EXISTS (
-                  SELECT 1 FROM attraction_review_marks AS w
-                   WHERE w.kind = m.kind
-                     AND w.attraction_id = LEAST($1::uuid, ${partner})
-                     AND w.other_attraction_id = GREATEST($1::uuid, ${partner})
-                )
-          RETURNING *
-       ) SELECT * FROM dropped`,
-      [winnerId, loserId],
-    ),
-  );
+  const superseded = await deleteReviewMarksById(manager, plan.superseded);
   if (superseded.length > 0) {
     logger.warn(
       `🗑️  attraction_review_marks: dropping ${superseded.length} mark(s) ` +
@@ -696,6 +811,7 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     column: "attraction_id",
     strategy: "custom",
     apply: mergeAttractionReviewMarks,
+    plan: planAttractionReviewMarkDrops,
   },
   {
     // Not a row that points at the ride but an id INSIDE a jsonb array
@@ -1392,6 +1508,12 @@ export async function applyMergeDependencies(
       throw new Error(
         `Merge dependency "${dep.table}" declares the custom strategy ` +
           `without an apply function, so nothing would handle it`,
+      );
+    }
+    if (dep.plan && !dep.apply) {
+      throw new Error(
+        `Merge dependency "${dep.table}" declares plan without apply, so ` +
+          `the preview would report deletes the merge never makes`,
       );
     }
     if (dep.apply && dep.strategy !== "custom") {
