@@ -87,7 +87,17 @@ function rank(row: NameDuplicateRow): [number, number, string] {
  *
  * Nothing is lost by dropping the status: the choice is between two rows of the
  * same ride under the same name, and a reader who wants the other row's live
- * data has no way to ask for it either way. Whether the two rows ARE one ride
+ * data has no way to ask for it either way.
+ *
+ * **The blind spot is a dead row that is still active.** Stage 1 assumes the
+ * counter-free row is the real one. When the wiki re-issues an entity under a
+ * new id (seasonal mazes every year, all of Walibi Belgium's rides once), the
+ * old row keeps the counter-free slug and wins, and the live `-2` row is not
+ * served: 43 groups on 2026-10-02 (PAR-621). That is not fixed here by reading
+ * freshness, which would bring the flicker back. It is fixed upstream of this
+ * function: `retireAbsentAttractions` in the children sync retires a row whose
+ * id has left `/children` for 60 days, and a retired row takes no part in the
+ * grouping. Section 5.9 of the doc below has the numbers. Whether the two rows ARE one ride
  * is a curation question and not one a grouping key can answer — see
  * `docs/architecture/attraction-status-and-seasonality.md` §4a.
  */

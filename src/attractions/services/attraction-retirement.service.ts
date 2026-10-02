@@ -40,12 +40,38 @@ export const RECLASSIFIED_UPSTREAM_REASON =
   "Source: https://api.themeparks.wiki/";
 
 /**
- * Every wording the children sync has ever written, newest first. The
- * un-retire check accepts all of them, so a row retired under an older text
- * still comes back when the wiki calls the entity an attraction again.
+ * The exact `retired_reason` the children sync writes when an attraction's id
+ * has been missing from its park's `/children` for
+ * `ABSENT_UPSTREAM_RETIRE_DAYS` while the park itself kept syncing.
+ *
+ * It belongs to the same family as {@link RECLASSIFIED_UPSTREAM_REASON} on
+ * purpose (PO decision, 2026-10-02): nothing is known to have closed, so the
+ * row must not read as "closed permanently", and `syncAttraction` has to lift
+ * the retirement by itself if the id ever comes back. Both follow from it
+ * being listed in {@link RECLASSIFIED_UPSTREAM_REASONS}. The price is that
+ * `retiredKind: "reclassified"` now covers two cases, "the wiki calls it a show
+ * now" and "the wiki stopped listing it"; only this string tells them apart.
+ *
+ * Same obligations as the other one: an exact string, user-facing, and pinned
+ * by a spec — a rewording moves the old value into the list below.
+ */
+export const ABSENT_UPSTREAM_REASON =
+  "ThemeParks.wiki no longer lists this entity among its park's attractions, " +
+  "so it is no longer tracked as a ride. The date is when this was noticed, " +
+  "not when it left the list. Source: https://api.themeparks.wiki/";
+
+/**
+ * Every wording the children sync has ever written for a retirement it may
+ * undo again, newest first: entities reclassified as a show or a restaurant,
+ * and entities that left the park's `/children` altogether. The un-retire
+ * check accepts all of them, so a row retired under an older text still comes
+ * back when the wiki lists the entity as an attraction again, and
+ * `retiredKindOf`, the sitemap and `detect-seasonal` treat all of them as
+ * "not closed".
  */
 export const RECLASSIFIED_UPSTREAM_REASONS: readonly string[] = [
   RECLASSIFIED_UPSTREAM_REASON,
+  ABSENT_UPSTREAM_REASON,
 ];
 
 /** True for a retirement this sync wrote, under any wording it has used. */
@@ -62,8 +88,9 @@ export function isReclassifiedUpstreamReason(
  *   (`POST /admin/retire-attractions`). The frontend renders its page as
  *   "closed permanently since …" and keeps it in the sitemap.
  * - `reclassified` — the children sync retired the row because ThemeParks.wiki
- *   now lists the entity as a show or a restaurant. Nothing closed, so nothing
- *   may say so.
+ *   now lists the entity as a show or a restaurant, or no longer lists it in
+ *   the park at all ({@link ABSENT_UPSTREAM_REASON}). Nothing is known to have
+ *   closed, so nothing may say so.
  */
 export type RetiredKind = "closed" | "reclassified";
 
