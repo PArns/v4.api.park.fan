@@ -13,6 +13,50 @@ const MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB per daily file
 const MAX_ROTATED_FILES = 3; // .log.1/.log.2/.log.3 within a single day
 const RETENTION_DAYS = 7;
 
+/**
+ * The fields these loggers read off a thrown value. Anything can be thrown, so
+ * every field is `unknown`; `errorFields()` gives a non-object an empty view,
+ * which reads the same as the optional chaining (`error?.code`) it replaces.
+ */
+interface ErrorFields {
+  message?: unknown;
+  name?: unknown;
+  code?: unknown;
+  syscall?: unknown;
+  errno?: unknown;
+  address?: unknown;
+  port?: unknown;
+  stack?: unknown;
+  errors?: unknown;
+  cause?: unknown;
+  response?: { status?: unknown; statusText?: unknown; data?: unknown };
+}
+
+function errorFields(error: unknown): ErrorFields {
+  return (typeof error === "object" || typeof error === "function") &&
+    error !== null
+    ? (error as ErrorFields)
+    : {};
+}
+
+function isTimeout(f: ErrorFields): boolean {
+  return (
+    f.code === "ETIMEDOUT" ||
+    f.code === "ECONNABORTED" ||
+    (typeof f.message === "string" &&
+      f.message.toLowerCase().includes("timeout"))
+  );
+}
+
+/** Stack lines from app code (`/app/dist/src/`), without node_modules. */
+function appStackLines(stack: string): string[] {
+  return stack.split("\n").filter((line) => {
+    const hasAppPath = line.includes("/app/dist/src/");
+    const hasNodeModules = line.includes("node_modules");
+    return hasAppPath && !hasNodeModules;
+  });
+}
+
 /** Returns today's date string in UTC: "2026-04-06" */
 function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
@@ -81,7 +125,10 @@ function rotateIfNeeded(filepath: string): void {
  * tail -f /data/parkfan/logs/slow-queries.$(date +%Y-%m-%d).log
  * ```
  */
-export function logToFile(filename: string, data: Record<string, any>): void {
+export function logToFile(
+  filename: string,
+  data: Record<string, unknown>,
+): void {
   const logsDir = join(process.cwd(), "logs");
 
   if (!existsSync(logsDir)) {
@@ -113,104 +160,99 @@ export function logToFile(filename: string, data: Record<string, any>): void {
 export function logExternalApiError(
   source: string,
   operation: string,
-  error: any,
-  context?: Record<string, any>,
+  error: unknown,
+  context?: Record<string, unknown>,
 ): void {
+  const e = errorFields(error);
+  const subErrors: unknown[] | undefined =
+    e.name === "AggregateError" && Array.isArray(e.errors)
+      ? (e.errors as unknown[])
+      : undefined;
+
   // Skip logging timeout errors (too noisy, transient network issues)
-  const isTimeoutError =
-    error?.code === "ETIMEDOUT" ||
-    error?.code === "ECONNABORTED" ||
-    error?.message?.toLowerCase().includes("timeout");
+  const isTimeoutError = isTimeout(e);
 
   // Also check AggregateError sub-errors for timeouts
   const hasOnlyTimeouts =
-    error?.name === "AggregateError" &&
-    Array.isArray(error.errors) &&
-    error.errors.every(
-      (e: any) =>
-        e?.code === "ETIMEDOUT" ||
-        e?.code === "ECONNABORTED" ||
-        e?.message?.toLowerCase().includes("timeout"),
-    );
+    subErrors !== undefined &&
+    subErrors.every((sub) => isTimeout(errorFields(sub)));
 
   if (isTimeoutError || hasOnlyTimeouts) {
     return; // Don't log timeouts
   }
 
-  const errorDetails: Record<string, any> = {
+  const errorDetails: Record<string, unknown> = {
     source,
     operation,
-    errorMessage: error?.message || String(error),
-    errorName: error?.name,
+    errorMessage: e.message || String(error),
+    errorName: e.name,
     context,
   };
 
   // For AggregateError, capture all underlying errors
-  if (error?.name === "AggregateError" && Array.isArray(error.errors)) {
-    errorDetails.aggregateErrors = error.errors.map((err: any) => ({
-      message: err?.message || String(err),
-      name: err?.name,
-      code: err?.code,
-      syscall: err?.syscall,
-      errno: err?.errno,
-      address: err?.address,
-      port: err?.port,
-      stack: err?.stack,
-    }));
+  if (subErrors !== undefined) {
+    errorDetails.aggregateErrors = subErrors.map((err) => {
+      const f = errorFields(err);
+      return {
+        message: f.message || String(err),
+        name: f.name,
+        code: f.code,
+        syscall: f.syscall,
+        errno: f.errno,
+        address: f.address,
+        port: f.port,
+        stack: f.stack,
+      };
+    });
   }
 
   // For TypeError: fetch failed, capture the cause
   if (error instanceof TypeError && error.message === "fetch failed") {
-    const errorWithCause = error as any;
-    if (errorWithCause.cause) {
-      errorDetails.cause = errorWithCause.cause;
+    const cause = errorFields(error).cause;
+    if (cause) {
+      errorDetails.cause = cause;
       errorDetails.causeString = JSON.stringify(
-        errorWithCause.cause,
-        Object.getOwnPropertyNames(errorWithCause.cause),
+        cause,
+        Object.getOwnPropertyNames(cause),
       );
     }
   }
 
   // For Axios errors, capture HTTP details
-  if (error?.response) {
-    errorDetails.httpStatus = error.response.status;
-    errorDetails.httpStatusText = error.response.statusText;
+  if (e.response) {
+    errorDetails.httpStatus = e.response.status;
+    errorDetails.httpStatusText = e.response.statusText;
   }
 
   // Capture error code if available (ECONNREFUSED, ETIMEDOUT, etc.)
-  if (error?.code) {
-    errorDetails.errorCode = error.code;
+  if (e.code) {
+    errorDetails.errorCode = e.code;
   }
 
   // Capture system call info (connect, getaddrinfo, etc.)
-  if (error?.syscall) {
-    errorDetails.syscall = error.syscall;
+  if (e.syscall) {
+    errorDetails.syscall = e.syscall;
   }
 
   // Capture network error details
-  if (error?.errno) {
-    errorDetails.errno = error.errno;
+  if (e.errno) {
+    errorDetails.errno = e.errno;
   }
-  if (error?.address) {
-    errorDetails.address = error.address;
+  if (e.address) {
+    errorDetails.address = e.address;
   }
-  if (error?.port) {
-    errorDetails.port = error.port;
+  if (e.port) {
+    errorDetails.port = e.port;
   }
 
   // Capture full stack trace
-  if (error?.stack) {
-    errorDetails.stack = error.stack;
+  if (e.stack) {
+    errorDetails.stack = e.stack;
 
     // Also extract just the app-relevant stack (without node_modules)
-    const appStackLines = error.stack.split("\n").filter((line: string) => {
-      const hasAppPath = line.includes("/app/dist/src/");
-      const hasNodeModules = line.includes("node_modules");
-      return hasAppPath && !hasNodeModules;
-    });
-
-    if (appStackLines.length > 0) {
-      errorDetails.appStack = appStackLines.join("\n");
+    const appStack = typeof e.stack === "string" ? appStackLines(e.stack) : [];
+    if (appStack.length > 0) {
+      errorDetails.appStack = appStack.join("\n");
     }
   }
 
@@ -223,31 +265,27 @@ export function logExternalApiError(
 export function logJobFailure(
   jobName: string,
   queueName: string,
-  error: any,
-  jobData?: Record<string, any>,
+  error: unknown,
+  jobData?: Record<string, unknown>,
 ): void {
-  const errorDetails: Record<string, any> = {
+  const e = errorFields(error);
+  const errorDetails: Record<string, unknown> = {
     jobName,
     queueName,
-    errorMessage: error?.message || String(error),
-    errorName: error?.name,
-    errorCode: error?.code,
+    errorMessage: e.message || String(error),
+    errorName: e.name,
+    errorCode: e.code,
     jobData,
   };
 
   // Capture full stack trace
-  if (error?.stack) {
-    errorDetails.stack = error.stack;
+  if (e.stack) {
+    errorDetails.stack = e.stack;
 
     // Extract app-relevant stack (without node_modules)
-    const appStackLines = error.stack.split("\n").filter((line: string) => {
-      const hasAppPath = line.includes("/app/dist/src/");
-      const hasNodeModules = line.includes("node_modules");
-      return hasAppPath && !hasNodeModules;
-    });
-
-    if (appStackLines.length > 0) {
-      errorDetails.appStack = appStackLines.join("\n");
+    const appStack = typeof e.stack === "string" ? appStackLines(e.stack) : [];
+    if (appStack.length > 0) {
+      errorDetails.appStack = appStack.join("\n");
     }
   }
 
@@ -259,46 +297,42 @@ export function logJobFailure(
  */
 export function logMLServiceError(
   operation: string,
-  error: any,
-  context?: Record<string, any>,
+  error: unknown,
+  context?: Record<string, unknown>,
 ): void {
-  const errorDetails: Record<string, any> = {
+  const e = errorFields(error);
+  const errorDetails: Record<string, unknown> = {
     service: "ml-service",
     operation,
-    errorMessage: error?.message || String(error),
-    errorName: error?.name,
-    errorCode: error?.code,
+    errorMessage: e.message || String(error),
+    errorName: e.name,
+    errorCode: e.code,
     context,
   };
 
   // Capture HTTP error details if available (axios errors)
-  if (error?.response) {
-    errorDetails.httpStatus = error.response.status;
-    errorDetails.httpStatusText = error.response.statusText;
-    errorDetails.responseData = error.response.data;
+  if (e.response) {
+    errorDetails.httpStatus = e.response.status;
+    errorDetails.httpStatusText = e.response.statusText;
+    errorDetails.responseData = e.response.data;
   }
 
   // Capture network error details
-  if (error?.syscall) {
-    errorDetails.syscall = error.syscall;
+  if (e.syscall) {
+    errorDetails.syscall = e.syscall;
   }
-  if (error?.address) {
-    errorDetails.address = error.address;
+  if (e.address) {
+    errorDetails.address = e.address;
   }
 
   // Capture full stack trace
-  if (error?.stack) {
-    errorDetails.stack = error.stack;
+  if (e.stack) {
+    errorDetails.stack = e.stack;
 
     // Extract app-relevant stack (without node_modules)
-    const appStackLines = error.stack.split("\n").filter((line: string) => {
-      const hasAppPath = line.includes("/app/dist/src/");
-      const hasNodeModules = line.includes("node_modules");
-      return hasAppPath && !hasNodeModules;
-    });
-
-    if (appStackLines.length > 0) {
-      errorDetails.appStack = appStackLines.join("\n");
+    const appStack = typeof e.stack === "string" ? appStackLines(e.stack) : [];
+    if (appStack.length > 0) {
+      errorDetails.appStack = appStack.join("\n");
     }
   }
 
@@ -311,19 +345,20 @@ export function logMLServiceError(
 export function logInfrastructureError(
   component: "database" | "redis" | "cache" | "queue",
   operation: string,
-  error: any,
-  context?: Record<string, any>,
+  error: unknown,
+  context?: Record<string, unknown>,
 ): void {
-  const errorDetails: Record<string, any> = {
+  const e = errorFields(error);
+  const errorDetails: Record<string, unknown> = {
     component,
     operation,
-    errorMessage: error?.message || String(error),
-    errorName: error?.name,
+    errorMessage: e.message || String(error),
+    errorName: e.name,
     context,
   };
 
-  if (error?.stack) {
-    errorDetails.stack = error.stack;
+  if (e.stack) {
+    errorDetails.stack = e.stack;
   }
 
   logToFile("infrastructure-errors", errorDetails);
@@ -336,11 +371,11 @@ export function logRateLimitBlock(
   source: string,
   blockDurationMinutes: number,
   reason?: string,
-  context?: Record<string, any>,
+  context?: Record<string, unknown>,
 ): void {
   // `source` (not `apiName`) to match the field name used by logExternalApiError
   // and the other diagnostic logs, so all log streams key the origin the same way.
-  const logDetails: Record<string, any> = {
+  const logDetails: Record<string, unknown> = {
     source,
     blockDurationMinutes,
     reason,

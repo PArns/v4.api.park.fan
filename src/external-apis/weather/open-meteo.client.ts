@@ -1,6 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import axios, { AxiosInstance } from "axios";
+import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { logRateLimitBlock } from "../../common/utils/file-logger.util";
@@ -12,6 +12,20 @@ import {
   ClimateNormals,
   buildClimateNormals,
 } from "./climate-normals";
+
+/** `error.code` when the thrown value carries one (axios and Node errors do). */
+function errorCode(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "code" in error
+    ? error.code
+    : undefined;
+}
+
+/** `error.message` the way a template literal printed it before typing. */
+function errorMessage(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "message" in error
+    ? error.message
+    : undefined;
+}
 
 /**
  * Open-Meteo Weather API Client
@@ -122,7 +136,7 @@ export class OpenMeteoClient {
    */
   private describeUpstreamError(error: unknown): string {
     if (!axios.isAxiosError(error) || !error.response) {
-      return `code=${(error as any)?.code ?? "unknown"}`;
+      return `code=${String(errorCode(error) ?? "unknown")}`;
     }
     const res = error.response;
     const h = (res.headers ?? {}) as Record<string, string>;
@@ -151,7 +165,7 @@ export class OpenMeteoClient {
    */
   private async requestWithRetry<T>(
     url: string,
-    config: any,
+    config: AxiosRequestConfig,
     retries = 3,
     delay = 1000,
   ): Promise<T> {
@@ -189,7 +203,7 @@ export class OpenMeteoClient {
       const response = await this.client.get<T>(url, config);
 
       return response.data;
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (axios.isAxiosError(error) && error.response) {
         const status = error.response.status;
 
@@ -236,14 +250,13 @@ export class OpenMeteoClient {
       }
 
       // Handle Network Errors (ECONNRESET, etc.)
+      const code = errorCode(error);
       const isNetworkError =
-        error.code === "ECONNRESET" ||
-        error.code === "ETIMEDOUT" ||
-        error.code === "ENOTFOUND";
+        code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ENOTFOUND";
       if (isNetworkError) {
         if (retries > 0) {
           this.logger.warn(
-            `Open-Meteo Network Error (${error.code}). Retrying in ${delay}ms...`,
+            `Open-Meteo Network Error (${String(code)}). Retrying in ${delay}ms...`,
           );
           await new Promise((resolve) => setTimeout(resolve, delay));
           return this.requestWithRetry<T>(url, config, retries - 1, delay * 2);
@@ -461,8 +474,8 @@ export class OpenMeteoClient {
         // this.logger.debug(`Cache hit for weather at ${latitude},${longitude}`); // Too noisy
         return JSON.parse(cached);
       }
-    } catch (err: any) {
-      this.logger.warn(`Redis cache error: ${err.message}`);
+    } catch (err: unknown) {
+      this.logger.warn(`Redis cache error: ${String(errorMessage(err))}`);
     }
 
     return this.dedupe(cacheKey, async () => {
@@ -494,8 +507,10 @@ export class OpenMeteoClient {
           const ttl =
             this.CACHE_TTL + Math.floor(Math.random() * this.CACHE_TTL_JITTER);
           await this.redis.set(cacheKey, JSON.stringify(result), "EX", ttl);
-        } catch (err: any) {
-          this.logger.warn(`Failed to cache weather response: ${err.message}`);
+        } catch (err: unknown) {
+          this.logger.warn(
+            `Failed to cache weather response: ${String(errorMessage(err))}`,
+          );
         }
 
         return result;
