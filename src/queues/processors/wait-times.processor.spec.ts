@@ -452,4 +452,119 @@ describe("WaitTimesProcessor", () => {
       expect(mockQueueDataService.saveLiveData).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("writeHourlyHeartbeats — retired attractions (PAR-295)", () => {
+    const PARK_ID = "park-1";
+    const ACTIVE = "attraction-active";
+    const RETIRED = "attraction-retired";
+    let rows: Array<{
+      id: string;
+      name: string;
+      externalId: string;
+      parkId: string;
+      retiredAt: Date | null;
+    }>;
+    let inserted: Array<{ attractionId: string; isHeartbeat: boolean }>;
+
+    beforeEach(() => {
+      const now = Date.now();
+      rows = [
+        {
+          id: ACTIVE,
+          name: "Active",
+          externalId: "ext-a",
+          parkId: PARK_ID,
+          retiredAt: null,
+        },
+        {
+          id: RETIRED,
+          name: "Retired",
+          externalId: "ext-r",
+          parkId: PARK_ID,
+          retiredAt: null,
+        },
+      ];
+      inserted = [];
+
+      // The repository mock evaluates the `retiredAt: IsNull()` predicate the
+      // way Postgres would, so the spec tests what the query asks for and not
+      // what a mock happens to return.
+      mockAttractionRepository.find.mockImplementation(
+        (opts: { where?: { retiredAt?: { type?: string } } }) =>
+          Promise.resolve(
+            opts?.where?.retiredAt?.type === "isNull"
+              ? rows.filter((r) => r.retiredAt === null)
+              : rows,
+          ),
+      );
+
+      // Park open now.
+      (processor as any).parksService = {
+        findAll: jest
+          .fn()
+          .mockResolvedValue([{ id: PARK_ID, timezone: "UTC" }]),
+        getTodaySchedule: jest.fn().mockResolvedValue([
+          {
+            scheduleType: "OPERATING",
+            openingTime: new Date(now - 3 * 3600_000),
+            closingTime: new Date(now + 3 * 3600_000),
+          },
+        ]),
+      };
+
+      // Latest reading for both rides is two hours old.
+      const lastReading = (attractionId: string) => ({
+        attractionId,
+        timestamp: new Date(now - 2 * 3600_000),
+        status: LiveStatus.OPERATING,
+        waitTime: 25,
+        dataSource: "themeparks-wiki",
+      });
+      const qb: Record<string, jest.Mock> = {};
+      for (const m of [
+        "where",
+        "andWhere",
+        "distinctOn",
+        "orderBy",
+        "addOrderBy",
+      ]) {
+        qb[m] = jest.fn().mockReturnValue(qb);
+      }
+      qb.getMany = jest
+        .fn()
+        .mockResolvedValue([lastReading(ACTIVE), lastReading(RETIRED)]);
+      (processor as any).queueDataRepository = {
+        createQueryBuilder: jest.fn(() => qb),
+        create: jest.fn((r: object) => ({ ...r })),
+        insert: jest.fn((batch: typeof inserted) => {
+          inserted.push(...batch);
+          return Promise.resolve({});
+        }),
+      };
+
+      // Both rides were seen upstream 30 minutes ago.
+      const seen = String(now - 30 * 60_000);
+      redisStore.set(`attraction:last-seen:${ACTIVE}`, seen);
+      redisStore.set(`attraction:last-seen:${RETIRED}`, seen);
+    });
+
+    it("reaches both rides while neither is retired (path is live)", async () => {
+      const written = await (processor as any).writeHourlyHeartbeats();
+
+      expect(written).toBe(2);
+      expect(inserted.map((r) => r.attractionId).sort()).toEqual(
+        [ACTIVE, RETIRED].sort(),
+      );
+      expect(inserted.every((r) => r.isHeartbeat)).toBe(true);
+    });
+
+    it("writes no heartbeat for the ride once it is retired", async () => {
+      rows[1].retiredAt = new Date(Date.now() - 10 * 60_000);
+
+      const written = await (processor as any).writeHourlyHeartbeats();
+
+      expect(written).toBe(1);
+      expect(inserted.map((r) => r.attractionId)).toEqual([ACTIVE]);
+    });
+  });
 });
