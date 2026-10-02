@@ -53,6 +53,11 @@ describe("PlanDayService", () => {
   /** The next park-local date's rollup — only a wrap day reads it. */
   let afterMidnightHistory: Map<string, { slots: unknown[] }>;
   let historyFails: boolean;
+  /** Rollup rows by date, for the `climatology` tier's reference days. */
+  let referenceHistory: Map<string, Map<string, { slots: unknown[] }>>;
+  /** Holiday flags per reference date; a date not listed is a regular day. */
+  let referenceFlags: Map<string, Record<string, boolean>>;
+  let referenceHistoryMock: jest.Mock;
   let leadMae: number | null;
   let rideOpenings: Map<string, RideOpening>;
   let accuracyProfile: Map<
@@ -132,6 +137,7 @@ describe("PlanDayService", () => {
                 const asked = (calendarDay as { date?: string } | null)?.date;
                 return date === asked ? hourlyHistory : afterMidnightHistory;
               }),
+            getParkHourlyHistoryOnDates: referenceHistoryMock,
             getRideOpeningTimes: jest
               .fn()
               .mockImplementation(async () => rideOpenings),
@@ -154,10 +160,44 @@ describe("PlanDayService", () => {
         {
           provide: CalendarService,
           useValue: {
-            buildCalendarResponse: jest.fn().mockImplementation(async () => {
-              if (calendarFails) throw new Error("calendar down");
-              return { days: calendarDay ? [calendarDay] : [] };
-            }),
+            buildCalendarResponse: jest
+              .fn()
+              .mockImplementation(async (_park: Park, from: Date, to: Date) => {
+                if (calendarFails) throw new Error("calendar down");
+                const fromStr = from.toISOString().slice(0, 10);
+                const toStr = to.toISOString().slice(0, 10);
+                const asked = (calendarDay as { date?: string } | null)?.date;
+                // A reference window for the climatology tier lies at least 46
+                // weeks before the planned day; every other call is the planned
+                // day's own, answered exactly as before.
+                const isReference =
+                  asked !== undefined &&
+                  Date.parse(`${asked}T00:00:00Z`) -
+                    Date.parse(`${fromStr}T00:00:00Z`) >
+                    300 * 86_400_000;
+                if (!isReference) {
+                  return { days: calendarDay ? [calendarDay] : [] };
+                }
+                // Every day in the window, regular unless `referenceFlags` says
+                // otherwise.
+                const days: Array<Record<string, unknown>> = [];
+                for (
+                  let d = fromStr;
+                  d <= toStr;
+                  d = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000)
+                    .toISOString()
+                    .slice(0, 10)
+                ) {
+                  days.push({
+                    date: d,
+                    isHoliday: false,
+                    isBridgeDay: false,
+                    isSchoolVacation: false,
+                    ...(referenceFlags.get(d) ?? {}),
+                  });
+                }
+                return { days };
+              }),
           },
         },
         {
@@ -207,6 +247,18 @@ describe("PlanDayService", () => {
     hourlyHistory = new Map();
     afterMidnightHistory = new Map();
     historyFails = false;
+    referenceHistory = new Map();
+    referenceFlags = new Map();
+    referenceHistoryMock = jest
+      .fn()
+      .mockImplementation(async (_parkId: string, dates: string[]) => {
+        const out = new Map<string, Map<string, { slots: unknown[] }>>();
+        for (const d of dates) {
+          const rows = referenceHistory.get(d);
+          if (rows) out.set(d, rows);
+        }
+        return out;
+      });
     calendarFails = false;
     calendarDay = {
       date: "2026-10-17",
@@ -1162,6 +1214,196 @@ describe("PlanDayService", () => {
     // and the distance that happens to be is not the reason.
     expect(plan.tier).toBe("long_range");
     expect(plan.rides).toEqual([]);
+  });
+
+  describe("climatology", () => {
+    /** The seven candidate dates one year back: 52 weeks, ±0–3 weeks. */
+    const referenceDatesFor = (date: string) =>
+      [-3, -2, -1, 0, 1, 2, 3].map((w) => dayShift(date, -364 + 7 * w));
+
+    /** Taron measured on `dates`, `wait` minutes at 10:00–12:00. */
+    const measureOn = (dates: string[], wait: (i: number) => number) => {
+      dates.forEach((d, i) =>
+        referenceHistory.set(
+          d,
+          new Map([
+            [
+              "a-taron",
+              slots([
+                ["10:00", wait(i), 4],
+                ["11:00", wait(i), 4],
+                ["12:00", wait(i), 4],
+              ]),
+            ],
+          ]),
+        ),
+      );
+    };
+
+    const longRangeDay = () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [];
+      return date;
+    };
+
+    it("looks back at comparable days when the model has said nothing", async () => {
+      leadMae = 8.4;
+      const date = longRangeDay();
+      const refs = referenceDatesFor(date).slice(0, 5);
+      measureOn(refs, (i) => [20, 30, 40, 50, 90][i]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("climatology");
+      expect(plan.climatology).toEqual({
+        label: "how_it_was_last_year",
+        holidayState: "regular",
+        referenceDates: [...refs].sort(),
+        minObservationDays: 4,
+      });
+      // A look back is not a forecast: no measured error, no band, and not the
+      // model's lead-time error either.
+      expect(plan.accuracy).toEqual({ basis: "unmeasured" });
+      expect(plan.leadTimeMae).toBeUndefined();
+      expect(plan.ridesUnavailable).toBeUndefined();
+      const [taron] = plan.rides;
+      expect(taron.expectedError).toBeUndefined();
+      expect(taron.uncertaintyMinutes).toBeNull();
+      expect(taron.sampleDays).toBe(5);
+      // The median of 20/30/40/50/90, not the mean (46): one bad day does not
+      // drag the curve.
+      expect(taron.hours).toEqual([
+        { hour: 10, wait: 40 },
+        { hour: 11, wait: 40 },
+        { hour: 12, wait: 40 },
+      ]);
+      expect(taron.dayPeak).toBe(60);
+      // Every candidate is the planned day's weekday.
+      const weekday = (d: string) => new Date(`${d}T00:00:00Z`).getUTCDay();
+      for (const d of plan.climatology!.referenceDates) {
+        expect(weekday(d)).toBe(weekday(date));
+      }
+    });
+
+    it("is never tried on a day the model did answer", async () => {
+      const date = farDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+        },
+      ];
+      measureOn(referenceDatesFor(date), () => 90);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("composed");
+      expect(plan.climatology).toBeUndefined();
+      expect(referenceHistoryMock).not.toHaveBeenCalled();
+    });
+
+    it("stays long_range below the floor of four reference days", async () => {
+      const date = longRangeDay();
+      measureOn(referenceDatesFor(date).slice(0, 3), () => 30);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("long_range");
+      expect(plan.rides).toEqual([]);
+      expect(plan.climatology).toBeUndefined();
+      expect(plan.ridesUnavailable).toBeDefined();
+    });
+
+    it("serves exactly at the floor", async () => {
+      const date = longRangeDay();
+      measureOn(referenceDatesFor(date).slice(0, 4), () => 30);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("climatology");
+      expect(plan.rides[0].sampleDays).toBe(4);
+    });
+
+    it("leaves out an hour fewer than four reference days measured", async () => {
+      const date = longRangeDay();
+      const refs = referenceDatesFor(date).slice(0, 4);
+      measureOn(refs, () => 30);
+      // 13:00 only on the first three days.
+      for (const d of refs.slice(0, 3)) {
+        const row = referenceHistory.get(d)!.get("a-taron")!;
+        row.slots.push(...slots([["13:00", 50, 4]]).slots);
+      }
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].hours.map((h) => h.hour)).toEqual([10, 11, 12]);
+    });
+
+    it("only counts reference days in the same holiday situation", async () => {
+      const date = longRangeDay();
+      const refs = referenceDatesFor(date).slice(0, 5);
+      measureOn(refs, () => 30);
+      // Two of the five were school-holiday days; the planned one is not.
+      referenceFlags.set(refs[0], { isSchoolVacation: true });
+      referenceFlags.set(refs[1], { isSchoolVacation: true });
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("long_range");
+    });
+
+    it("matches a holiday on holidays", async () => {
+      const date = longRangeDay();
+      calendarDay = { ...calendarDay!, isHoliday: true };
+      const refs = referenceDatesFor(date).slice(0, 6);
+      measureOn(refs, (i) => (i < 4 ? 80 : 10));
+      // A bridge day counts as a holiday too.
+      refs
+        .slice(0, 3)
+        .forEach((d) => referenceFlags.set(d, { isHoliday: true }));
+      referenceFlags.set(refs[3], { isBridgeDay: true });
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("climatology");
+      expect(plan.climatology!.holidayState).toBe("holiday");
+      expect(plan.climatology!.referenceDates).toEqual(
+        [...refs.slice(0, 4)].sort(),
+      );
+      expect(plan.rides[0].hours[0].wait).toBe(80);
+    });
+
+    it("does not give a ride out of season a curve", async () => {
+      const date = otherMonthDate();
+      calendarDay = { ...calendarDay!, date };
+      dailyPredictions = [];
+      attractions = [
+        {
+          ...attractions[0],
+          isSeasonal: true,
+          seasonMonths: allMonthsExcept(monthOf(date)),
+        },
+      ];
+      measureOn(referenceDatesFor(date), () => 30);
+      service = await build();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      // The season rule beats this tier exactly as it beats `composed`.
+      expect(plan.tier).toBe("long_range");
+      expect(plan.rides).toEqual([]);
+    });
+
+    it("stays long_range when the rollup read fails", async () => {
+      const date = longRangeDay();
+      referenceHistoryMock.mockRejectedValue(new Error("history down"));
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("long_range");
+    });
   });
 
   it("publishes the measured lead-time error, and asks for the right distance", async () => {

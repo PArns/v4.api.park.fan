@@ -25,6 +25,8 @@ import { formatInParkTimezone } from "../../common/utils/date.util";
 import { formatInTimeZone } from "date-fns-tz";
 import {
   PlanDayDto,
+  PlanDayClimatologyDto,
+  PlanDayHolidayState,
   PlanDayHourDto,
   PlanDayHoursSource,
   PlanDayRideDto,
@@ -69,8 +71,12 @@ import { isCuratedOutOfService } from "../../attractions/utils/curated-out-of-se
  *   historical.
  * - **observed** — a date in the past, answered from what the queues actually
  *   did. Not a forecast at all.
- * - **long_range** — the model has said nothing about this date, so there are
- *   no curves. Reported rather than guessed.
+ * - **climatology** — the model has said nothing about this date, so the
+ *   curves are what was measured on comparable days a year earlier (see
+ *   `climatologyRides`). A look back, never a forecast.
+ * - **long_range** — the model has said nothing about this date and there were
+ *   too few comparable days to look back on, so there are no curves. Reported
+ *   rather than guessed.
  *
  * The alternative to composing was returning nothing past tomorrow, and a
  * planner that goes blank in March for a July trip is not a planner. The
@@ -188,6 +194,31 @@ export class PlanDayService {
    * See docs/frontend/plan-day-endpoint.md §6.
    */
   private static readonly SHAPE_RIDES = 60;
+
+  /**
+   * The fewest reference days a `climatology` curve is built from, per ride and
+   * per hour. Below it the day stays `long_range`.
+   *
+   * Measured 2026-10-02 against production (`attraction_hourly_history` from
+   * 2026-03-01, the 10 most-measured rides of the 15 most-measured parks):
+   * 3,479 ride-days that had all six same-weekday neighbours at ±1–3 weeks,
+   * each predicted by the hourly median of k of those neighbours, 5 draws per
+   * k. Mean absolute error against the held-out day, in minutes:
+   * k=1 6.93 · 2 6.21 · 3 5.86 · 4 5.60 · 5 5.45 · 6 5.32. The fourth day
+   * still takes 4.4 % off the error, every day after it less than 3 %. Two
+   * days is a mean of two, which is an anecdote rather than a climatology.
+   */
+  private static readonly CLIMATOLOGY_MIN_DAYS = 4;
+
+  /** Weeks either side of "52 weeks back" a reference day may sit. */
+  private static readonly CLIMATOLOGY_WEEKS_EITHER_SIDE = 3;
+
+  /**
+   * How many years back the reference window is laid. Two, so the tier keeps
+   * working once a second year exists; the rollup begins 2025-12-24, so today
+   * only the first can answer and the second costs nothing but an empty read.
+   */
+  private static readonly CLIMATOLOGY_YEARS_BACK = 2;
 
   /**
    * Days a show must have been seen on a weekday before its times are projected.
@@ -411,10 +442,17 @@ export class PlanDayService {
       status,
       theDay?.hours?.openingTime ?? null,
       calendarUnavailable,
+      PlanDayService.holidayState(theDay),
     );
     base.tier = built.tier;
     base.rides = built.rides;
     base.accuracy = built.accuracy;
+    if (built.climatology) {
+      base.climatology = built.climatology;
+      // The archive's figure measures the MODEL at this distance, and nothing
+      // on this day came from the model.
+      delete base.leadTimeMae;
+    }
     if (base.rides.length === 0) {
       base.ridesUnavailable = await this.explainEmptyPlan(
         park,
@@ -831,10 +869,18 @@ export class PlanDayService {
      * built on a calendar outage and must not report a data gap for it.
      */
     calendarUnavailable: boolean,
+    /**
+     * The planned day's holiday situation, for the `climatology` tier. `null`
+     * when the calendar has no row for it, and then that tier is not tried:
+     * the holiday situation is part of its key.
+     */
+    holidayState: PlanDayHolidayState | null,
   ): Promise<{
     tier: PlanDayTier;
     rides: PlanDayRideDto[];
     accuracy: PlanDayAccuracyDto;
+    /** Present exactly when `tier` is `climatology`. */
+    climatology?: PlanDayClimatologyDto;
     /**
      * The counts behind an empty `rides`, so the reason can be named without
      * asking the same questions a second time. Carried on every response and
@@ -1127,6 +1173,43 @@ export class PlanDayService {
         ? "composed"
         : "long_range";
 
+    // Nothing from the model at all: look back instead of going blank. Only
+    // here, where the answer would otherwise be `long_range` — a day the model
+    // did answer is never replaced by last year's. Asked with `byId`, which is
+    // `plannable`, so a ride the season rule blocks for this date gets no
+    // curve from this tier either, exactly as it gets none from `composed`.
+    if (tier === "long_range" && rides.length === 0 && holidayState) {
+      const looked = await this.climatologyRides(
+        park,
+        dateStr,
+        openHour,
+        closeHour,
+        byId,
+        headlinerIds,
+        land,
+        holidayState,
+      );
+      if (looked) {
+        return {
+          tier: "climatology",
+          rides: looked.rides,
+          // Not a forecast, so no forecast error describes it.
+          accuracy: { basis: "unmeasured" },
+          climatology: looked.climatology,
+          diagnostics: {
+            rideCount: attractions.length,
+            plannableRideCount: plannable.length,
+            profiledRideCount,
+            shapedRideCount,
+            hasDayLevels: false,
+            observed: false,
+            dependencyUnavailable: false,
+            plannableUnavailable: runningNow.unavailable,
+          },
+        };
+      }
+    }
+
     // `source` says "this hour did not come from where the header says", so an
     // hour that agrees with the tier drops it. Both halves are one rule and are
     // applied in one place, which is what keeps them from drifting apart.
@@ -1285,6 +1368,304 @@ export class PlanDayService {
   }
 
   /**
+   * The `climatology` tier: how comparable days went, a year (or two) back.
+   *
+   * A reference day is the same weekday 52 weeks before the date asked about,
+   * up to {@link CLIMATOLOGY_WEEKS_EITHER_SIDE} weeks either side (so the ISO
+   * week is within three of the target's), repeated for each of
+   * {@link CLIMATOLOGY_YEARS_BACK} years, and it counts only in the same
+   * holiday situation (see {@link holidayState}). Each ride's hour is the
+   * median over the reference days of that day's sample-weighted mean — the
+   * same per-day number `observedRides` serves — and `dayPeak` the median of
+   * the days' peaks.
+   *
+   * A ride needs {@link CLIMATOLOGY_MIN_DAYS} reference days and so does every
+   * hour it is drawn for; with fewer the hour is left out, and with no ride
+   * left the result is `null` and the day stays `long_range`. Any read that
+   * fails also yields `null`: a look back built on half the days is not the one
+   * the label describes.
+   */
+  private async climatologyRides(
+    park: Park,
+    dateStr: string,
+    openHour: number,
+    closeHour: number,
+    byId: ReadonlyMap<string, Attraction>,
+    headlinerIds: ReadonlySet<string>,
+    land: ReadonlyMap<string, string | null>,
+    holidayState: PlanDayHolidayState,
+  ): Promise<{
+    rides: PlanDayRideDto[];
+    climatology: PlanDayClimatologyDto;
+  } | null> {
+    const MIN = PlanDayService.CLIMATOLOGY_MIN_DAYS;
+    const candidates = PlanDayService.climatologyCandidates(dateStr);
+    const wraps = closeHour > 23;
+    const asked = wraps
+      ? [
+          ...new Set(
+            candidates.flatMap((d) => [d, PlanDayService.plusDays(d, 1)]),
+          ),
+        ]
+      : candidates;
+    const history = await this.analyticsService
+      .getParkHourlyHistoryOnDates(park.id, asked)
+      .catch((err: Error) => {
+        this.logger.warn(
+          `Plan day: climatology history unavailable for ${park.slug}: ${err.message}`,
+        );
+        return null;
+      });
+    if (!history) return null;
+
+    // The calendar is asked only about days that were measured at all, and
+    // only once there are enough of them to clear the floor regardless.
+    const measuredDays = candidates.filter(
+      (d) => (history.get(d)?.size ?? 0) > 0,
+    );
+    if (measuredDays.length < MIN) return null;
+    const states = await this.referenceHolidayStates(park, measuredDays);
+    if (!states) return null;
+    const referenceDates = measuredDays
+      .filter((d) => states.get(d) === holidayState)
+      .sort();
+    if (referenceDates.length < MIN) return null;
+
+    // attraction → { hour → one value per reference day, the days' peaks }
+    const perRide = new Map<
+      string,
+      { byHour: Map<number, number[]>; peaks: number[] }
+    >();
+    const empty = new Map<string, AttractionHourlyHistory>();
+    for (const d of referenceDates) {
+      const day = PlanDayService.measuredDay(
+        history.get(d) ?? empty,
+        wraps ? (history.get(PlanDayService.plusDays(d, 1)) ?? empty) : empty,
+        byId,
+        openHour,
+        closeHour,
+      );
+      for (const [attractionId, { byHour, peak }] of day) {
+        const ride = perRide.get(attractionId) ?? {
+          byHour: new Map<number, number[]>(),
+          peaks: [],
+        };
+        let any = false;
+        for (const [hour, [sum, weight]] of byHour) {
+          if (weight === 0) continue;
+          const values = ride.byHour.get(hour) ?? [];
+          values.push(sum / weight);
+          ride.byHour.set(hour, values);
+          any = true;
+        }
+        if (!any) continue;
+        ride.peaks.push(peak);
+        perRide.set(attractionId, ride);
+      }
+    }
+
+    const rides: PlanDayRideDto[] = [];
+    for (const [attractionId, { byHour, peaks }] of perRide) {
+      const attraction = byId.get(attractionId);
+      if (!attraction || peaks.length < MIN) continue;
+      const hours: PlanDayHourDto[] = [];
+      for (let h = openHour; h <= closeHour; h++) {
+        const values = byHour.get(h);
+        if (!values || values.length < MIN) continue;
+        hours.push({
+          hour: h,
+          wait: roundToNearest5Minutes(PlanDayService.median(values)),
+        });
+      }
+      if (hours.length === 0) continue;
+      rides.push({
+        attractionSlug: attraction.slug,
+        attractionName: attraction.name,
+        land: land.get(attractionId) ?? attraction.landName ?? null,
+        hours,
+        dayPeak: roundToNearest5Minutes(PlanDayService.median(peaks)),
+        // No band: the spread of last year's days is not an interval around
+        // this year's.
+        uncertaintyMinutes: null,
+        // The reference days this ride was measured on — which is what the
+        // field means on every tier: the history behind the curve.
+        sampleDays: peaks.length,
+        latitude: PlanDayService.coord(attraction.latitude),
+        longitude: PlanDayService.coord(attraction.longitude),
+        ...(headlinerIds.has(attractionId) ? { isHeadliner: true } : {}),
+        ...PlanDayService.riderFacts(attraction),
+      });
+    }
+    if (rides.length === 0) return null;
+
+    rides.sort(
+      (a, b) =>
+        b.dayPeak - a.dayPeak ||
+        a.attractionName.localeCompare(b.attractionName),
+    );
+    return {
+      rides,
+      climatology: {
+        label: "how_it_was_last_year",
+        holidayState,
+        referenceDates,
+        minObservationDays: MIN,
+      },
+    };
+  }
+
+  /**
+   * The candidate reference dates for {@link climatologyRides}: for each year
+   * back, the same weekday 52 weeks earlier and up to three weeks either side.
+   * Counted in whole weeks from a UTC midnight, so every candidate is the same
+   * weekday as `dateStr` and no DST rule can move one.
+   */
+  private static climatologyCandidates(dateStr: string): string[] {
+    const out: string[] = [];
+    const span = PlanDayService.CLIMATOLOGY_WEEKS_EITHER_SIDE;
+    for (let y = 1; y <= PlanDayService.CLIMATOLOGY_YEARS_BACK; y++) {
+      for (let w = -span; w <= span; w++) {
+        out.push(PlanDayService.plusDays(dateStr, -364 * y + 7 * w));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The holiday situation of a calendar day, the key `climatology` matches on.
+   * A public holiday and a bridge day are `holiday`; a day inside school
+   * holidays that is neither is `school_vacation`. `null` for no row, which is
+   * "unknown" and not "regular".
+   */
+  private static holidayState(
+    day: {
+      isHoliday?: boolean;
+      isBridgeDay?: boolean;
+      isSchoolVacation?: boolean;
+    } | null,
+  ): PlanDayHolidayState | null {
+    if (!day) return null;
+    if (day.isHoliday || day.isBridgeDay) return "holiday";
+    if (day.isSchoolVacation) return "school_vacation";
+    return "regular";
+  }
+
+  /**
+   * The holiday situation of each reference date, from the same calendar the
+   * planned day's comes from — so both sides of the match are derived by one
+   * rule. One calendar read per year back (the dates of one year sit within
+   * seven weeks of each other). `null` when the calendar fails.
+   */
+  private async referenceHolidayStates(
+    park: Park,
+    dates: string[],
+  ): Promise<Map<string, PlanDayHolidayState> | null> {
+    const sorted = [...dates].sort();
+    const spans: Array<[string, string]> = [];
+    for (const d of sorted) {
+      const last = spans[spans.length - 1];
+      // A gap of more than the window's own width starts the next year's read.
+      if (
+        last &&
+        this.daysBetween(last[1], d) <=
+          7 * 2 * PlanDayService.CLIMATOLOGY_WEEKS_EITHER_SIDE
+      ) {
+        last[1] = d;
+      } else {
+        spans.push([d, d]);
+      }
+    }
+    try {
+      const out = new Map<string, PlanDayHolidayState>();
+      for (const [from, to] of spans) {
+        const response = await this.calendarService.buildCalendarResponse(
+          park,
+          new Date(`${from}T12:00:00Z`),
+          new Date(`${to}T12:00:00Z`),
+          "none",
+        );
+        for (const day of response?.days ?? []) {
+          const state = PlanDayService.holidayState(day);
+          if (state) out.set(day.date, state);
+        }
+      }
+      return out;
+    } catch (err) {
+      this.logger.warn(
+        `Plan day: climatology calendar unavailable for ${park.slug}: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
+
+  private static median(values: number[]): number {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2
+      ? sorted[mid]
+      : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  /**
+   * One rolled-up day per ride: hour → [sample-weighted sum, weight], and the
+   * day's peak (max slot P90). `afterMidnight` is the next date's rollup, whose
+   * small hours belong to a day that runs past midnight; it is empty otherwise.
+   * Shared by {@link observedRides} and {@link climatologyRides}, which read
+   * the same table for the same kind of number and must not drift apart.
+   */
+  private static measuredDay(
+    own: Map<string, AttractionHourlyHistory>,
+    afterMidnight: Map<string, AttractionHourlyHistory>,
+    byId: ReadonlyMap<string, Attraction>,
+    openHour: number,
+    closeHour: number,
+  ): Map<string, { byHour: Map<number, [number, number]>; peak: number }> {
+    // attraction → { hour → [weightedSum, weight], the day's peak }
+    const measured = new Map<
+      string,
+      { byHour: Map<number, [number, number]>; peak: number }
+    >();
+
+    const collect = (
+      history: Map<string, AttractionHourlyHistory>,
+      offset: number,
+    ) => {
+      for (const [attractionId, row] of history) {
+        if (!byId.has(attractionId)) continue;
+        for (const slot of row.slots ?? []) {
+          const wallHour = Number(String(slot.time_slot).slice(0, 2));
+          if (!Number.isInteger(wallHour)) continue;
+          const hour = wallHour + offset;
+          if (hour < openHour || hour > closeHour) continue;
+          const wait = Number(slot.avgWait);
+          if (!Number.isFinite(wait)) continue;
+          // A slot with no count still happened; treat it as one reading rather
+          // than dropping it, or a gap in the writer's bookkeeping deletes an
+          // hour of a day somebody actually stood in.
+          const weight =
+            Number(slot.sampleCount) > 0 ? Number(slot.sampleCount) : 1;
+          const ride = measured.get(attractionId) ?? {
+            byHour: new Map<number, [number, number]>(),
+            peak: 0,
+          };
+          const [sum, total] = ride.byHour.get(hour) ?? [0, 0];
+          ride.byHour.set(hour, [sum + wait * weight, total + weight]);
+
+          const slotPeak = Number(slot.p90);
+          if (Number.isFinite(slotPeak)) {
+            ride.peak = Math.max(ride.peak, slotPeak);
+          }
+          measured.set(attractionId, ride);
+        }
+      }
+    };
+
+    collect(own, 0);
+    collect(afterMidnight, 24);
+    return measured;
+  }
+
+  /**
    * A day in the past, from what the queues actually did.
    *
    * `attraction_hourly_history` already holds it: one row per (attraction,
@@ -1340,48 +1721,13 @@ export class PlanDayService {
     const afterMidnight =
       afterMidnightRows ?? new Map<string, AttractionHourlyHistory>();
 
-    // attraction → { hour → [weightedSum, weight], the day's peak }
-    const measured = new Map<
-      string,
-      { byHour: Map<number, [number, number]>; peak: number }
-    >();
-
-    const collect = (
-      history: Map<string, AttractionHourlyHistory>,
-      offset: number,
-    ) => {
-      for (const [attractionId, row] of history) {
-        if (!byId.has(attractionId)) continue;
-        for (const slot of row.slots ?? []) {
-          const wallHour = Number(String(slot.time_slot).slice(0, 2));
-          if (!Number.isInteger(wallHour)) continue;
-          const hour = wallHour + offset;
-          if (hour < openHour || hour > closeHour) continue;
-          const wait = Number(slot.avgWait);
-          if (!Number.isFinite(wait)) continue;
-          // A slot with no count still happened; treat it as one reading rather
-          // than dropping it, or a gap in the writer's bookkeeping deletes an
-          // hour of a day somebody actually stood in.
-          const weight =
-            Number(slot.sampleCount) > 0 ? Number(slot.sampleCount) : 1;
-          const ride = measured.get(attractionId) ?? {
-            byHour: new Map<number, [number, number]>(),
-            peak: 0,
-          };
-          const [sum, total] = ride.byHour.get(hour) ?? [0, 0];
-          ride.byHour.set(hour, [sum + wait * weight, total + weight]);
-
-          const slotPeak = Number(slot.p90);
-          if (Number.isFinite(slotPeak)) {
-            ride.peak = Math.max(ride.peak, slotPeak);
-          }
-          measured.set(attractionId, ride);
-        }
-      }
-    };
-
-    collect(own, 0);
-    collect(afterMidnight, 24);
+    const measured = PlanDayService.measuredDay(
+      own,
+      afterMidnight,
+      byId,
+      openHour,
+      closeHour,
+    );
 
     const rides: PlanDayRideDto[] = [];
     for (const [attractionId, { byHour, peak }] of measured) {

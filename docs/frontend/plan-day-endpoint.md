@@ -26,7 +26,8 @@ response says which one produced it.
 | `observed` | what the queues **actually did**, from the nightly 15-minute rollup | a date in the past |
 | `measured` | the model's own hourly prediction | the day carries at least one hour of it — the model reaches **48 hours** ahead |
 | `composed` | a day-level prediction scaled by the ride's historical hour shape | everything within the daily horizon |
-| `long_range` | the model has produced no day level for this date, so there are **no curves** | past the park's own schedule coverage |
+| `climatology` | **not a forecast**: the median of what was measured on comparable days a year earlier (§1a) | past the park's own schedule coverage, when at least 4 comparable days were measured |
+| `long_range` | the model has produced no day level for this date and there are too few comparable days, so there are **no curves** | past the park's own schedule coverage |
 
 **The tier is derived from the curves that were built, never from the distance.**
 That is not a detail: deciding it by distance meant a day whose hourly rows never
@@ -45,6 +46,59 @@ There is no fixed "daily horizon" constant. `predict.py` walks the park's
 schedule, so the daily forecast ends where the operator's published calendar
 does: 181 to 362 days across the live parks, averaging 193. A hard-coded 60 was
 wrong for every one of them.
+
+### 1a. `climatology`: how it was last year
+
+Past the schedule the model has nothing to say. Rather than going blank, the
+endpoint looks back: the curves are what the queues did on comparable days a year
+earlier. **This is a retrospective, never a prediction**, and the response says so
+in three places:
+
+- `tier: "climatology"`;
+- `climatology.label: "how_it_was_last_year"`, the label a caller shows (wording
+  is the frontend's, the meaning is fixed here);
+- `accuracy.basis: "unmeasured"`, with no `expectedError`, no
+  `uncertaintyMinutes` and no `leadTimeMae`. Nothing measures how far last year
+  is from this year, so no figure is attached.
+
+**Which days count.** The same weekday 52 weeks back, up to three weeks either
+side (seven dates, so the ISO week is within three of the target's), and the same
+again 104 weeks back. A date counts only when it sits in the **same holiday
+situation** as the planned day, read from the same calendar for both sides:
+`holiday` (public holiday or bridge day), `school_vacation`, or `regular`. A
+planned day the calendar has no row for is not tried — its holiday situation is
+part of the key and unknown is not `regular`. The dates used are returned in
+`climatology.referenceDates`, the matched situation in `climatology.holidayState`.
+
+**The curve.** Per ride and hour, the median over the reference days of that
+day's sample-weighted mean (the same per-day number `observed` serves);
+`dayPeak` is the median of the days' P90 peaks. `sampleDays` is the number of
+reference days the ride was measured on.
+
+**The floor: 4 days** (`climatology.minObservationDays`), per ride and per hour.
+A ride, or an hour of it, measured on fewer is left out; with no ride left the day
+stays `long_range` and `ridesUnavailable` explains it as before. Measured
+2026-10-02 against production: 3,479 ride-days of the 10 most-measured rides in
+the 15 most-measured parks (rollup from 2026-03-01) that had all six same-weekday
+neighbours at ±1–3 weeks, each predicted by the hourly median of k of them (5
+draws per k). Mean absolute error against the held-out day, in minutes:
+
+| k   | 1    | 2    | 3    | 4    | 5    | 6    |
+| --- | ---- | ---- | ---- | ---- | ---- | ---- |
+| MAE | 6.93 | 6.21 | 5.86 | 5.60 | 5.45 | 5.32 |
+
+The fourth day still takes 4.4 % off the error, every further day less than 3 %.
+That table is about choosing the floor. It is **not** an accuracy for this tier,
+which compares a year apart rather than weeks apart.
+
+**The season rule wins.** The tier is built from the same ride list as
+`composed`, after the season and works-period filters, so a ride that cannot open
+on the planned day gets no curve from it either (see "A ride out of season is
+absent, not closed" in §6).
+
+**Reach.** `attraction_hourly_history` begins 2025-12-24, so today the tier can
+answer for planned dates from about 2026-12-23 on. The 104-week window costs one
+empty read until a second year exists.
 
 ## 2. A day is often part measured and part composed
 
@@ -416,6 +470,9 @@ far buckets for their first weeks: the 60-day bucket says nothing until the
 archive has been running 60 days. **Absent is the honest answer** — a caller
 should widen the band with distance without attaching a figure rather than invent
 one.
+
+Absent on a `climatology` day: the figure measures the model, and nothing on
+that day came from it.
 
 ## 8. Shows
 

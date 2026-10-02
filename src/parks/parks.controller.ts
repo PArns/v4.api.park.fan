@@ -1478,7 +1478,9 @@ export class ParksController {
       "the model's own hourly prediction, which only exists for today and " +
       "tomorrow; `composed` scales a day-level prediction by the ride's " +
       "historical hour shape; `long_range` is the same past the stored " +
-      "60-day daily horizon. A caller must render the three differently — a " +
+      "60-day daily horizon; `climatology` fills that gap with the median of " +
+      "comparable days a year earlier and is a look back, never a forecast. " +
+      "A caller must render them differently — a " +
       "composed number is not a measured one. Rides with no measured hourly " +
       "shape are omitted rather than drawn flat.",
   })

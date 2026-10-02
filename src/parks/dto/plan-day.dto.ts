@@ -27,7 +27,17 @@ import type { RideOpeningConfidence } from "../../common/types/ride-opening.type
  * the most trustworthy label. Which is the one failure this whole design is
  * arranged against.
  */
-export type PlanDayTier = "observed" | "measured" | "composed" | "long_range";
+export type PlanDayTier =
+  "observed" | "measured" | "composed" | "climatology" | "long_range";
+
+/**
+ * The holiday situation a `climatology` day is matched on. A school-holiday
+ * Tuesday in July and an ordinary Tuesday in July are different days to a
+ * queue, so a reference day only counts when it sits in the same one.
+ * `holiday` covers public holidays and bridge days; `school_vacation` a day
+ * inside school holidays that is not one of those.
+ */
+export type PlanDayHolidayState = "holiday" | "school_vacation" | "regular";
 
 /** Where a single hour's number came from, when it is not the response's tier. */
 export type PlanDayHourSource = "observed" | "measured" | "composed";
@@ -485,7 +495,8 @@ export class PlanDayAccuracyDto {
       "8–30. A forward-recording archive started on 2026-09-03 and will close " +
       "that gap; its 60-day bucket reports sixty days after that. Until then a " +
       "caller should present such a day as indicative and not let anyone plan a " +
-      "morning around a specific number.",
+      "morning around a specific number. A `climatology` day is always " +
+      "`unmeasured`: it is not a forecast, so no forecast error describes it.",
   })
   basis: "measured" | "unmeasured";
 
@@ -583,6 +594,44 @@ export class PlanDayUnavailableDto {
   staleDays?: number;
 }
 
+export class PlanDayClimatologyDto {
+  @ApiProperty({
+    enum: ["how_it_was_last_year"],
+    description:
+      "What this tier is: a look back at comparable days, never a forecast. " +
+      "A caller labels it as such and does not present the numbers as a " +
+      "prediction for the date asked about.",
+  })
+  label: "how_it_was_last_year";
+
+  @ApiProperty({
+    enum: ["holiday", "school_vacation", "regular"],
+    description:
+      "The holiday situation of the date asked about. Every reference date " +
+      "sits in the same one.",
+  })
+  holidayState: PlanDayHolidayState;
+
+  @ApiProperty({
+    type: [String],
+    example: ["2026-06-27", "2026-07-04", "2026-07-11", "2026-07-18"],
+    description:
+      "The measured days the curves are the median of: the same weekday, " +
+      "52 (or 104) weeks back and up to three weeks either side, in the same " +
+      "holiday situation. A ride's `sampleDays` says how many of them it " +
+      "was measured on.",
+  })
+  referenceDates: string[];
+
+  @ApiProperty({
+    example: 4,
+    description:
+      "The fewest reference days a ride, and an hour of it, needs to be " +
+      "served. Below it the day stays `long_range`.",
+  })
+  minObservationDays: number;
+}
+
 export class PlanDayDto {
   @ApiProperty({ example: "phantasialand" })
   parkSlug: string;
@@ -594,7 +643,7 @@ export class PlanDayDto {
   context: PlanDayContextDto;
 
   @ApiProperty({
-    enum: ["observed", "measured", "composed", "long_range"],
+    enum: ["observed", "measured", "composed", "climatology", "long_range"],
     description:
       "How the ride curves were produced, derived from the curves that were " +
       "actually built rather than from the distance. `observed` is not a " +
@@ -606,7 +655,9 @@ export class PlanDayDto {
       "shape. `long_range` means the model has produced no day level for this " +
       "date at all, so there are no ride curves to give: the daily horizon is " +
       "the park's own schedule coverage (about 6 months) rather than a fixed " +
-      "number of days.",
+      "number of days. `climatology` fills that gap with what was measured on " +
+      "comparable days a year earlier (see `climatology`): it is a look back, " +
+      "never a forecast, and carries no error figure.",
   })
   tier: PlanDayTier;
 
@@ -639,6 +690,15 @@ export class PlanDayDto {
       "exists, but nobody has checked how wrong it is.",
   })
   accuracy: PlanDayAccuracyDto;
+
+  @ApiProperty({
+    required: false,
+    type: PlanDayClimatologyDto,
+    description:
+      "Present exactly when `tier` is `climatology`: which days the curves " +
+      "were taken from and how they were matched.",
+  })
+  climatology?: PlanDayClimatologyDto;
 
   @ApiProperty({ type: [PlanDayRideDto] })
   rides: PlanDayRideDto[];
