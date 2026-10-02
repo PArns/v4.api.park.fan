@@ -3,6 +3,7 @@ import { CacheKeys } from "../../common/cache/cache-keys";
 import { safeJsonParse } from "../../common/utils/json.util";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
+import { dayStatusRank } from "../../common/utils/schedule.util";
 import {
   ParkWithAttractionsDto,
   buildClosedAttractions,
@@ -1811,12 +1812,19 @@ export class ParkIntegrationService {
         this.parksService.isParkSeasonal(parkId),
       ]);
 
-      // First entry per date wins, as in the calendar (getSchedule orders
-      // by scheduleType, OPERATING first).
+      // The row that states the day's status wins (OPERATING > CLOSED >
+      // UNKNOWN > event rows), as in the calendar. getSchedule's enum order
+      // puts event rows before CLOSED, so "first row" is not enough.
       const typeByDate = new Map<string, ScheduleType>();
       for (const s of schedules) {
         const d = formatInParkTimezone(s.date, timezone);
-        if (!typeByDate.has(d)) typeByDate.set(d, s.scheduleType);
+        const current = typeByDate.get(d);
+        if (
+          current === undefined ||
+          dayStatusRank(s.scheduleType) < dayStatusRank(current)
+        ) {
+          typeByDate.set(d, s.scheduleType);
+        }
       }
 
       const closed = new Set<string>();

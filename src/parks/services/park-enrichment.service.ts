@@ -13,6 +13,7 @@ import {
 } from "../../common/utils/holiday.utils";
 import { formatInParkTimezone } from "../../common/utils/date.util";
 import { normalizeRegionCode } from "../../common/utils/region.util";
+import { formatTodaySchedule } from "../../common/utils/schedule.util";
 import { fromZonedTime } from "date-fns-tz";
 
 /**
@@ -224,14 +225,7 @@ export class ParkEnrichmentService {
     const todaySchedule = todayScheduleMap.get(park.id);
     const nextSchedule = nextScheduleMap.get(park.id);
 
-    dto.todaySchedule =
-      todaySchedule && todaySchedule.length > 0
-        ? {
-            openingTime: todaySchedule[0].openingTime?.toISOString() || "",
-            closingTime: todaySchedule[0].closingTime?.toISOString() || "",
-            scheduleType: todaySchedule[0].scheduleType,
-          }
-        : undefined;
+    dto.todaySchedule = formatTodaySchedule(todaySchedule);
 
     dto.nextSchedule = nextSchedule
       ? {

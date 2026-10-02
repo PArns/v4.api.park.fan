@@ -660,6 +660,42 @@ describe("ParksService", () => {
     });
   });
 
+  describe("isParkOperatingToday reads the day's status row (PAR-640)", () => {
+    // Stands in for the database: applies the scheduleType filter of the
+    // query the way Postgres would, and returns rows in a fixed order with
+    // the event row first.
+    const dayRows = (types: ScheduleType[]) =>
+      mockScheduleRepository.find.mockImplementationOnce(
+        async ({ where }: { where: { scheduleType?: { value: string[] } } }) =>
+          types
+            .filter(
+              (t) =>
+                !where.scheduleType || where.scheduleType.value.includes(t),
+            )
+            .map((scheduleType) => ({ scheduleType })),
+      );
+
+    beforeEach(() => {
+      mockParkRepository.findOne.mockResolvedValue({
+        id: "p1",
+        timezone: "Europe/Berlin",
+      });
+      mockParkRepository.manager.query.mockClear();
+    });
+
+    it("answers false on a CLOSED day that also carries an event row", async () => {
+      dayRows([ScheduleType.TICKETED_EVENT, ScheduleType.CLOSED]);
+      await expect(service.isParkOperatingToday("p1")).resolves.toBe(false);
+      expect(mockParkRepository.manager.query).not.toHaveBeenCalled();
+    });
+
+    it("answers true on an OPERATING day that also carries an event row", async () => {
+      dayRows([ScheduleType.TICKETED_EVENT, ScheduleType.OPERATING]);
+      await expect(service.isParkOperatingToday("p1")).resolves.toBe(true);
+      expect(mockParkRepository.manager.query).not.toHaveBeenCalled();
+    });
+  });
+
   describe("getUniqueCountries", () => {
     it("should return unique country codes", async () => {
       const mockRawResults = [
@@ -1084,25 +1120,32 @@ describe("ParksService", () => {
     );
 
     it.each([
-      ["isParkCurrentlyOpen", (id: string) => service.isParkCurrentlyOpen(id)],
+      [
+        "isParkCurrentlyOpen",
+        (id: string) => service.isParkCurrentlyOpen(id),
+        "findOne",
+      ],
       [
         "isParkOperatingToday",
         (id: string) => service.isParkOperatingToday(id),
+        "find",
       ],
     ] as const)(
       "%s asks for the park's own row, not whichever row comes back first",
-      async (_name, call) => {
+      async (_name, call, method) => {
         // A CLOSED row with no times ends both methods on their first branch,
         // which keeps the case about the `where` clause and nothing else.
-        mockScheduleRepository.findOne.mockResolvedValue({
+        const closed = {
           scheduleType: "CLOSED",
           openingTime: null,
           closingTime: null,
-        });
+        };
+        mockScheduleRepository.findOne.mockResolvedValue(closed);
+        mockScheduleRepository.find.mockResolvedValue([closed]);
 
         await call(parkId);
 
-        const calls = mockScheduleRepository.findOne.mock.calls;
+        const calls = mockScheduleRepository[method].mock.calls;
         const [options] = calls[calls.length - 1] as [
           { where: Record<string, unknown> },
         ];

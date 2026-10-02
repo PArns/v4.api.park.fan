@@ -36,6 +36,7 @@ import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { ScheduleType } from "../parks/entities/schedule-entry.entity";
+import { dayStatusRank } from "../common/utils/schedule.util";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
 import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
@@ -1307,7 +1308,9 @@ export class MLService {
         })
       : [];
 
-    // parkId -> (park-local date string -> scheduleType)
+    // parkId -> (park-local date string -> scheduleType). The row that states
+    // the day's status wins (OPERATING > CLOSED > UNKNOWN > event rows); the
+    // query has no order, so last-write-wins would let an event row hide CLOSED.
     const schedulesByPark = new Map<string, Map<string, ScheduleType>>();
     for (const s of allSchedules) {
       const timezone = parkInfoCache.get(s.parkId)?.timezone || "UTC";
@@ -1316,7 +1319,14 @@ export class MLService {
         forPark = new Map<string, ScheduleType>();
         schedulesByPark.set(s.parkId, forPark);
       }
-      forPark.set(formatInParkTimezone(s.date, timezone), s.scheduleType);
+      const dateKey = formatInParkTimezone(s.date, timezone);
+      const current = forPark.get(dateKey);
+      if (
+        current === undefined ||
+        dayStatusRank(s.scheduleType) < dayStatusRank(current)
+      ) {
+        forPark.set(dateKey, s.scheduleType);
+      }
     }
 
     for (const [parkId, parkPredictions] of predictionsByPark) {
