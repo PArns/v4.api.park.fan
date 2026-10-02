@@ -661,6 +661,7 @@ describe("AttractionMergeService — previewMerge", () => {
    */
   const serviceWith = (
     profiles: Record<string, Array<Record<string, unknown>>> = {},
+    reviewMarks: (sql: string) => Array<Record<string, unknown>> = () => [],
   ) => {
     const findOne = jest.fn(({ where }: { where: { id: string } }) =>
       Promise.resolve(rows.find((row) => row.id === where.id) ?? null),
@@ -668,8 +669,15 @@ describe("AttractionMergeService — previewMerge", () => {
     const dataSource = {
       getRepository: jest.fn(() => ({ findOne })),
       transaction: jest.fn(async (fn: (m: unknown) => unknown) => fn(manager)),
-      query: jest.fn((_sql: string, params: unknown[] = []) =>
-        Promise.resolve(profiles[String(params[0])] ?? []),
+      // Review marks are a second dependency the planner reads through the
+      // same `query`; they get their own answer so a profile row is never
+      // mistaken for a mark.
+      query: jest.fn((sql: string, params: unknown[] = []) =>
+        Promise.resolve(
+          sql.includes("attraction_review_marks")
+            ? reviewMarks(sql)
+            : (profiles[String(params[0])] ?? []),
+        ),
       ),
     };
     return {
@@ -783,6 +791,48 @@ describe("AttractionMergeService — previewMerge", () => {
         (await inheriting.previewMerge("row-base", "row-suffix"))
           .droppedCurations,
       ).toEqual([]);
+    });
+
+    it("names the review marks the merge drops, and flags the one about this pair", async () => {
+      // PAR-239. The mark about exactly this pair is a person's finding that
+      // the two are different rides — the verdict this merge contradicts —
+      // and the preview is the only place anybody reads it before pressing
+      // the button. The superseded mark is reported too, without the flag.
+      const pairMark = {
+        id: "mark-pair",
+        kind: "not_a_duplicate",
+        attraction_id: "row-base",
+        other_attraction_id: "row-suffix",
+        reason: "cedar creek is a lazy river",
+      };
+      const superseded = {
+        id: "mark-other",
+        kind: "not_a_duplicate",
+        attraction_id: "row-other",
+        other_attraction_id: "row-suffix",
+        reason: "kondaala is the kids' ride",
+      };
+      const { service, dataSource } = serviceWith({}, (sql) => {
+        if (sql.startsWith("SELECT 1")) return [{ "?column?": 1 }];
+        if (sql.includes("AS m")) return [superseded];
+        return [pairMark];
+      });
+
+      const preview = await service.previewMerge("row-base", "row-suffix");
+
+      expect(preview.droppedCurations).toEqual([
+        {
+          table: "attraction_review_marks",
+          from: "loser",
+          row: pairMark,
+          aboutThisPair: true,
+        },
+        { table: "attraction_review_marks", from: "loser", row: superseded },
+      ]);
+      // A rehearsal: every statement it sent is a read.
+      for (const [sql] of dataSource.query.mock.calls) {
+        expect(String(sql).trim()).toMatch(/^SELECT /);
+      }
     });
 
     it("names the losing row, with its contents", async () => {
@@ -1302,8 +1352,12 @@ describe("AttractionMergeService — the curated window it would delete", () => 
     const service = new AttractionMergeService(
       {
         getRepository: jest.fn(() => ({ findOne })),
-        query: jest.fn((_sql: string, params: unknown[] = []) =>
-          Promise.resolve(profiles[String(params[0])] ?? []),
+        query: jest.fn((sql: string, params: unknown[] = []) =>
+          Promise.resolve(
+            sql.includes("attraction_review_marks")
+              ? []
+              : (profiles[String(params[0])] ?? []),
+          ),
         ),
       } as never,
       {} as never,
@@ -1441,7 +1495,9 @@ describe("AttractionMergeService — batch dry run names what it would delete", 
               pairRow("a-base", "a-suffix", "icon"),
               pairRow("b-base", "b-suffix", "maus"),
             ])
-          : Promise.resolve(profiles[String(params[0])] ?? []),
+          : sql.includes("attraction_review_marks")
+            ? Promise.resolve([])
+            : Promise.resolve(profiles[String(params[0])] ?? []),
       ),
     };
     return {
@@ -1506,9 +1562,10 @@ describe("AttractionMergeService — batch dry run names what it would delete", 
 
     await service.mergeDuplicates({ dryRun: true });
 
-    // One ride-profile SELECT per pair; the two attraction reads go through
-    // the repository, not `query`.
-    expect(reads()).toBe(2);
+    // Per pair one ride-profile SELECT and one review-mark index lookup that
+    // finds nothing; the two attraction reads go through the repository, not
+    // `query`.
+    expect(reads()).toBe(4);
   });
 });
 

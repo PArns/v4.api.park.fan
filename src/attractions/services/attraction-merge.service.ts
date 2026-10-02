@@ -110,6 +110,15 @@ export interface DroppedCuration {
    * like there, and `curated_out_of_service_from` is not a key it accepts.
    */
   row: Record<string, unknown>;
+  /**
+   * Set only on a review mark about exactly the two attractions being merged
+   * (`attraction_review_marks`, PAR-239). A `not_a_duplicate` mark there is a
+   * person's finding that the two are different rides — the statement this
+   * merge contradicts. The merge still runs; the preview is where a person
+   * reads this before deciding. Such a mark names both sides and is filed
+   * under `from: "loser"`, because the merge deletes it with the losing ride.
+   */
+  aboutThisPair?: true;
 }
 
 /** The same answer as a merge, minus the merge. See `previewMerge`. */
@@ -260,30 +269,31 @@ export class AttractionMergeService {
    * The curated rows `applyMergeDependencies` would delete for this pair.
    *
    * Reads `ATTRACTION_DEPENDENCIES` rather than naming a table, so a
-   * `winner-authoritative` entry added to that list is reported here without a
-   * second edit — the drift this whole method exists to close would otherwise
+   * `winner-authoritative` entry, or a `custom` one with a `plan`, added to
+   * that list is reported here without a second edit — the drift this whole method exists to close would otherwise
    * reopen with the next curated table somebody declares.
    *
    * Dependent rows only. A curated column on the attraction row itself never
    * appears in that list, so the works period is reported by
    * `planMetadataInheritance` instead and joins this list in `previewMerge`.
    *
-   * Only `winner-authoritative` entries are asked. `discard` rows are derived
-   * and the nightly jobs rewrite them from the history that has just moved onto
-   * the survivor, so naming them would bury the one line that matters under
-   * five that do not — the baselines, the rope drop and the typical waits are
-   * deliberately out of scope (PAR-179).
+   * Every strategy has an answer here:
    *
-   * A `custom` entry is skipped too, and there that is a gap rather than a
-   * decision: `attraction_review_marks` drops two kinds of hand-written verdict
-   * (PAR-149) and this rehearsal names neither. One of them is the mark saying
-   * a person already established that these two are DIFFERENT rides — the most
-   * useful thing this preview could put in front of somebody about to merge
-   * them, and the one thing it does not say. Closing it wants a read-only half
-   * for the strategy, the way `planWinnerAuthoritative` is the twin of
-   * `applyWinnerAuthoritative`, plus a decision about whether such a mark
-   * should stop the merge rather than annotate it: PAR-239. Until then the
-   * merge logs what it drops and the preview does not.
+   *   - `winner-authoritative` entries are asked through
+   *     `planWinnerAuthoritative`, the read-only twin of the merge's own branch.
+   *   - `custom` entries are asked through their `plan`, which their `apply`
+   *     calls to decide what it deletes — one derivation, not two. That is how
+   *     `attraction_review_marks` reports the verdicts a merge drops, and the
+   *     mark about exactly this pair comes back with `aboutThisPair` (PAR-239).
+   *     A `custom` entry without a `plan` deletes no hand-written row:
+   *     `park_seasons` only rewrites ids inside an array.
+   *   - `discard` rows are not reported. They are derived, and the nightly jobs
+   *     rewrite them from the history that has just moved onto the survivor,
+   *     so naming them would bury the one line that matters under five that do
+   *     not — the baselines, the rope drop and the typical waits are
+   *     deliberately out of scope (PAR-179).
+   *   - `move` rows survive on the winner. The same-key rows a conflict key
+   *     deletes first are duplicate observations of one ride, not curations.
    *
    * Outside a transaction, unlike the merge: this is a read, and the pair can
    * change between the rehearsal and the act either way.
@@ -295,6 +305,12 @@ export class AttractionMergeService {
     const dropped: DroppedCuration[] = [];
 
     for (const dep of ATTRACTION_DEPENDENCIES) {
+      if (dep.strategy === "custom" && dep.plan) {
+        for (const drop of await dep.plan(this.dataSource, winnerId, loserId)) {
+          dropped.push({ table: dep.table, ...drop });
+        }
+        continue;
+      }
       if (dep.strategy !== "winner-authoritative") continue;
 
       const decision = await planWinnerAuthoritative(
