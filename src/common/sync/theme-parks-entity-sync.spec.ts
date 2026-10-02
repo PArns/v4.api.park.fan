@@ -5,10 +5,11 @@ import type { EntityResponse } from "../../external-apis/themeparks/themeparks.t
 import { ParkSyncState, ThemeParksEntitySync } from "./theme-parks-entity-sync";
 
 /**
- * Cover for the skeleton `syncAttractions`, `syncShows` and `syncRestaurants`
- * share. The three services' own specs prove their hooks; this one proves the
- * walk around them, including the one thing that is new rather than moved:
- * a park without an external ID is skipped instead of being asked about.
+ * Cover for the skeleton `syncShows` and `syncRestaurants` share
+ * (`syncAttractions` shared it until PAR-327). The two services' own specs
+ * prove their hooks; this one proves the walk around them, including the one
+ * thing that is new rather than moved: a park without an external ID is
+ * skipped instead of being asked about.
  */
 
 interface TestRow {

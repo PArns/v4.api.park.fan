@@ -18,24 +18,24 @@ export interface ParkSyncState {
 }
 
 /**
- * The park walk `syncAttractions`, `syncShows` and `syncRestaurants` used to
- * carry three times over: load the parks, skip the ones that are not from
- * ThemeParks.wiki, fetch their children, keep the children of one entity type,
- * map each one, decide update-or-insert, mint a slug that is unique inside the
- * park, and write.
+ * The park walk `syncShows` and `syncRestaurants` share: load the parks, skip
+ * the ones that are not from ThemeParks.wiki, fetch their children, keep the
+ * children of one entity type, map each one, decide update-or-insert, mint a
+ * slug that is unique inside the park, and write. `syncAttractions` used it
+ * too until PAR-327 removed it; attractions are synced by
+ * `ChildrenMetadataProcessor`.
  *
- * Only that skeleton lives here. Everything the three genuinely disagree about
- * stays with them:
+ * Only that skeleton lives here. Everything the two disagree about stays with
+ * them:
  *
  * - `filterChildren` — which `entityType` this sync consumes.
- * - `loadParkState` — attractions and shows read one park's rows, restaurants
- *   look their rows up by `externalId` across parks.
+ * - `loadParkState` — shows read one park's rows, restaurants look their rows
+ *   up by `externalId` across parks.
  * - `mapChild` — the mapper call, and the one veto (`null` drops the child
  *   without counting it).
- * - `reconcile` — attractions match across sources, the other two by
- *   `externalId`.
+ * - `reconcile` — both match by `externalId`.
  * - `persist` — one `save()` per park for restaurants, `update()`s plus a
- *   batched `save()` for shows, row-by-row writes for attractions.
+ *   batched `save()` for shows.
  *
  * `TUpdate` is whatever `reconcile` hands to `persist`: a patch, or the
  * existing row with the new values already assigned.
@@ -70,8 +70,7 @@ export abstract class ThemeParksEntitySync<
 
   /**
    * Turn one child into a row. Returning `null` drops the child silently and
-   * it is not counted — attractions do that for a child without an
-   * `externalId`, which has nothing to match on.
+   * it is not counted.
    */
   protected abstract mapChild(
     child: TChild,
@@ -98,8 +97,7 @@ export abstract class ThemeParksEntitySync<
   /**
    * Lets a sync take a park before the wiki path sees it, and report how many
    * entities it synced there. `null` leaves the park to the template.
-   * Attractions use it for their Queue-Times and Wartezeiten branches, which
-   * read entirely different APIs.
+   * No sync overrides it today.
    */
   protected claimPark(park: Park): Promise<number | null> {
     void park;

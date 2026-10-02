@@ -3,11 +3,6 @@ import { getRepositoryToken } from "@nestjs/typeorm";
 import { IsNull, MoreThan, Repository } from "typeorm";
 import { AttractionsService } from "./attractions.service";
 import { Attraction } from "./entities/attraction.entity";
-import { ThemeParksClient } from "../external-apis/themeparks/themeparks.client";
-import { QueueTimesClient } from "../external-apis/queue-times/queue-times.client";
-import { WartezeitenClient } from "../external-apis/wartezeiten/wartezeiten.client";
-import { ThemeParksMapper } from "../external-apis/themeparks/themeparks.mapper";
-import { ParksService } from "../parks/parks.service";
 import { createTestAttraction } from "../../test/fixtures/attraction.fixtures";
 import { RECLASSIFIED_UPSTREAM_REASON } from "./services/attraction-retirement.service";
 
@@ -33,21 +28,6 @@ describe("AttractionsService", () => {
     })),
   };
 
-  // Mock services
-  const mockThemeParksClient = {
-    getEntityChildren: jest.fn(),
-    getEntity: jest.fn(),
-  };
-
-  const mockThemeParksMapper = {
-    mapAttraction: jest.fn(),
-  };
-
-  const mockParksService = {
-    findAll: jest.fn(),
-    syncParks: jest.fn(),
-  };
-
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -55,35 +35,6 @@ describe("AttractionsService", () => {
         {
           provide: getRepositoryToken(Attraction),
           useValue: mockAttractionRepository,
-        },
-        {
-          provide: ThemeParksClient,
-          useValue: mockThemeParksClient,
-        },
-        {
-          provide: QueueTimesClient,
-          useValue: {
-            getParks: jest.fn().mockResolvedValue([]),
-            getParkQueueTimes: jest
-              .fn()
-              .mockResolvedValue({ lands: [], rides: [] }),
-          },
-        },
-        {
-          provide: WartezeitenClient,
-          useValue: {
-            getParks: jest.fn().mockResolvedValue([]),
-            getWaitTimes: jest.fn().mockResolvedValue([]),
-            getOpeningTimes: jest.fn().mockResolvedValue([]),
-          },
-        },
-        {
-          provide: ThemeParksMapper,
-          useValue: mockThemeParksMapper,
-        },
-        {
-          provide: ParksService,
-          useValue: mockParksService,
         },
       ],
     }).compile();
