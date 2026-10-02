@@ -6,6 +6,36 @@ import {
 } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
+import { createHash } from "crypto";
+
+/**
+ * How often the scheduler re-runs its registration after startup.
+ *
+ * Every add() in registerScheduledJobs is a repeat add guarded by
+ * hasRepeatableJob, so a second pass changes nothing for a healthy entry. It
+ * exists for the broken ones: Redis runs `allkeys-lru`, and a daily cron's
+ * delayed job hash sits untouched for up to 24 h, which makes it the first
+ * thing eviction takes. Without the periodic pass a broken chain stayed broken
+ * until the next deploy restarted the API (PAR-626).
+ */
+const RE_REGISTER_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Id of the job Bull materialises for one run of a repeatable entry. Mirrors
+ * getRepeatJobId/getRepeatKey in bull@4.16.5 lib/repeatable.js: the entry's
+ * key is the repeat key, `id` is the jobId passed to add(), `next` the run's
+ * timestamp. Exported for the spec, which pins it to a production id.
+ */
+export function materialisedRepeatJobId(entry: {
+  key: string;
+  name: string;
+  id?: string | null;
+  next: number;
+}): string {
+  const md5 = (s: string) => createHash("md5").update(s).digest("hex");
+  const jobIdPart = entry.id ? `${entry.id}:` : ":";
+  return `repeat:${md5(entry.name + jobIdPart + md5(entry.key))}:${entry.next}`;
+}
 
 /**
  * Queue Scheduler Service
@@ -29,6 +59,7 @@ import { Queue } from "bull";
 export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(QueueSchedulerService.name);
   private registerTimer?: NodeJS.Timeout;
+  private reRegisterInterval?: NodeJS.Timeout;
 
   constructor(
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
@@ -82,6 +113,15 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         this.logger.error("Failed to register scheduled jobs", err);
       });
     }, 5000); // 5 second delay
+
+    // Repair pass: re-checks every repeatable entry so a chain broken by an
+    // evicted job hash heals within the hour (see RE_REGISTER_INTERVAL_MS).
+    this.reRegisterInterval = setInterval(() => {
+      this.registerScheduledJobs(true).catch((err) => {
+        this.logger.error("Failed to re-check scheduled jobs", err);
+      });
+    }, RE_REGISTER_INTERVAL_MS);
+    this.reRegisterInterval.unref();
   }
 
   /**
@@ -95,10 +135,18 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       clearTimeout(this.registerTimer);
       this.registerTimer = undefined;
     }
+    if (this.reRegisterInterval) {
+      clearInterval(this.reRegisterInterval);
+      this.reRegisterInterval = undefined;
+    }
   }
 
-  private async registerScheduledJobs(): Promise<void> {
-    this.logger.log("📅 Registering scheduled jobs...");
+  private async registerScheduledJobs(repairPass = false): Promise<void> {
+    if (repairPass) {
+      this.logger.debug("📅 Re-checking scheduled jobs...");
+    } else {
+      this.logger.log("📅 Registering scheduled jobs...");
+    }
 
     // Wait Times: Every 5 minutes
     const hasWaitTimesCron = await this.hasRepeatableJob(
@@ -1186,13 +1234,20 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    this.logger.log("🎉 All scheduled jobs registered!");
+    if (!repairPass) this.logger.log("🎉 All scheduled jobs registered!");
   }
 
   /**
    * Check if a repeatable job with the given jobId already exists.
    * If the job exists but its next scheduled run is in the past (stalled),
    * it is removed so the caller re-registers it with a fresh schedule.
+   *
+   * The same happens when the job materialised for the next run has lost its
+   * hash (PAR-626). Bull then still holds the id in `delayed`, moveToActive
+   * writes `processedOn` into an empty hash, and the run fails as
+   * `__default__` ("Missing process handler"). With the hash the job's `opts`
+   * are gone too, so Bull never schedules the run after it: the entry looks
+   * healthy until its `next` has passed, and then nothing follows.
    */
   private async hasRepeatableJob(
     queue: Queue,
@@ -1219,6 +1274,20 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     if (existing.next && existing.next < Date.now() - STALL_THRESHOLD_MS) {
       this.logger.warn(
         `Repeatable job "${jobId}" is overdue (next: ${new Date(existing.next).toISOString()}), removing stale entry for re-registration`,
+      );
+      await queue.removeRepeatableByKey(existing.key);
+      return false;
+    }
+
+    // The run Bull has queued for `next` must still carry its name. A missing
+    // or nameless hash fails as `__default__` and ends the chain (see above).
+    // removeRepeatableByKey also drops that id from `delayed` and deletes its
+    // hash, so the dangling run cannot fire either.
+    const nextJobKey = queue.toKey(materialisedRepeatJobId(existing));
+    const nextJobName = await queue.client.hget(nextJobKey, "name");
+    if (!nextJobName) {
+      this.logger.warn(
+        `Repeatable job "${jobId}" has lost the job for its next run (${new Date(existing.next).toISOString()}, ${nextJobKey} has no name), re-registering`,
       );
       await queue.removeRepeatableByKey(existing.key);
       return false;
