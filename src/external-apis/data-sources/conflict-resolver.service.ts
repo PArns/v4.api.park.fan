@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
+  EntityLiveData,
   LiveDataResponse,
   LiveStatus,
   OperatingWindow,
@@ -13,17 +14,17 @@ import { EntityMatcherService } from "./entity-matcher.service";
  * Represents an entity (attraction, show, restaurant) that has been
  * aggregated from multiple data sources with conflict resolution applied.
  */
-interface MergedEntity {
-  name: string;
-  source: string; // Primary source
+interface MergedEntity extends EntityLiveData {
+  // `source` is the primary source, `waitTime` the final calculated wait time
   sources: string[]; // All sources that contributed
-  waitTime?: number; // Final calculated wait time
   qtWaitTime?: number; // Temporary: Queue-Times wait time
   wzWaitTime?: number; // Temporary: Wartezeiten wait time
   qtStatus?: LiveStatus; // Temporary: Queue-Times status
   wzStatus?: LiveStatus; // Temporary: Wartezeiten status
-  [key: string]: any; // Additional properties from sources
 }
+
+/** The sources merged onto a base entry, keyed to their temporary fields. */
+type SecondarySource = "queue-times" | "wartezeiten-app";
 
 /**
  * Conflict Resolver Service
@@ -182,10 +183,10 @@ export class ConflictResolverService {
    * @returns Array of merged entities with resolved conflicts
    */
   private mergeEntities(
-    wikiEntities: any[],
-    qtEntities: any[],
-    wzEntities: any[] = [],
-  ): any[] {
+    wikiEntities: EntityLiveData[],
+    qtEntities: EntityLiveData[],
+    wzEntities: EntityLiveData[] = [],
+  ): MergedEntity[] {
     const merged = new Map<string, MergedEntity>();
     const normalizedKeys = new Map<string, string>(); // normName -> originalName in 'merged'
 
@@ -321,17 +322,19 @@ export class ConflictResolverService {
    */
   private updateMergedEntry(
     existing: MergedEntity,
-    entity: any,
-    sourceName: string,
+    entity: EntityLiveData,
+    sourceName: SecondarySource,
   ): void {
     if (!existing.sources.includes(sourceName)) {
       existing.sources.push(sourceName);
     }
 
-    const sourceKey = this.getSourceKey(sourceName);
-    existing[`${sourceKey}Status`] = entity.status;
-    if (entity.waitTime != null) {
-      existing[`${sourceKey}WaitTime`] = entity.waitTime;
+    if (sourceName === "queue-times") {
+      existing.qtStatus = entity.status;
+      if (entity.waitTime != null) existing.qtWaitTime = entity.waitTime;
+    } else {
+      existing.wzStatus = entity.status;
+      if (entity.waitTime != null) existing.wzWaitTime = entity.waitTime;
     }
   }
 
@@ -357,22 +360,6 @@ export class ConflictResolverService {
     }
 
     return (2.0 * intersect) / (bigrams1.size + bigrams2.size);
-  }
-
-  /**
-   * Get short key for source name
-   *
-   * Maps full source names to abbreviated keys for temporary field names.
-   *
-   * @param sourceName - Full source name (e.g., "queue-times")
-   * @returns Abbreviated key (e.g., "qt")
-   */
-  private getSourceKey(sourceName: string): string {
-    const keyMap: Record<string, string> = {
-      "queue-times": "qt",
-      "wartezeiten-app": "wz",
-    };
-    return keyMap[sourceName] || sourceName;
   }
 
   /**
