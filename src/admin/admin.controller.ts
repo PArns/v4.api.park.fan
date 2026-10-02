@@ -46,6 +46,7 @@ import { AdminAuthGuard } from "./auth/admin-auth.guard";
 import { AdminMinRole } from "./auth/admin-auth.decorators";
 import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
 import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.service";
+import { PARK_CACHE_FLUSH_PATTERNS } from "./flush-cache-patterns";
 import {
   AttractionRetirementService,
   RetirementRequest,
@@ -873,7 +874,10 @@ export class AdminController {
    * Flush park-related Redis cache
    *
    * Clears only park-related cached data (schedules, wait times, analytics, etc.)
-   * while preserving Bull queue jobs and system caches.
+   * while preserving Bull queue jobs and system caches. Bull shares this Redis
+   * under `<BULL_PREFIX>:<queue>:*` (default prefix `parkfan`), so the pattern
+   * list names each cache family under `parkfan:` explicitly — see
+   * flush-cache-patterns.ts and its spec.
    */
   @Post("flush-cache")
   @AdminMinRole("owner")
@@ -888,35 +892,7 @@ export class AdminController {
     description: "Park cache flushed successfully",
   })
   async flushCache(): Promise<{ message: string; keysDeleted: number }> {
-    // Park-related cache key patterns. Every entry must match a prefix that
-    // is actually written somewhere (see CacheKeys + inline keys) — the old
-    // list carried six prefixes that no code ever writes (parks:*,
-    // wait-times:*, occupancy:*, predictions:*, show:*, restaurant:*) while
-    // the real calendar/ML/favorites caches survived the flush.
-    //
-    // Deliberately NOT flushed (state, not cache): popularity:* (ranking),
-    // downtime:* (open downtime tracking), prediction:deviation:* (deviation
-    // tracking), ratelimit:* (circuit breakers), ml:accuracy:* and
-    // ml:last-accuracy-check (job markers).
-    const patterns = [
-      "schedule:*",
-      "park:*", // integrated, occupancy, statistics, baselines, …
-      "attraction:*", // integrated, history, baselines, ropedrop, last-seen
-      "calendar:*", // month caches + refresh-check markers
-      "analytics:*",
-      "holiday:*",
-      "weather:*", // forecasts + sync:done markers (flush ⇒ next sync re-runs)
-      "search:*",
-      "discovery:*",
-      "favorites:*",
-      "parkfan:*", // latest queue snapshot + attraction tz cache
-      "accuracy:*", // prediction accuracy badges
-      "ml:park:*", // serving predictions (daily/hourly/yearly)
-      "ml:tft-daily:*",
-      "ml:active-attractions:*",
-      "ml:dashboard:*", // ML dashboard snapshot (5min cache)
-      "location:*", // /nearby shared park-coordinate index
-    ];
+    const patterns = PARK_CACHE_FLUSH_PATTERNS;
 
     let totalDeleted = 0;
 

@@ -13,6 +13,10 @@ import {
 } from "../external-apis/themeparks/themeparks.types";
 import { ParksService } from "../parks/parks.service";
 import {
+  attractionTimezoneCacheKey,
+  latestQueueCacheKey,
+} from "./queue-data-cache-keys";
+import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
@@ -123,11 +127,11 @@ export class QueueDataService {
   ) {}
 
   private latestCacheKey(attractionId: string, queueType: QueueType): string {
-    return `parkfan:queue:latest:${attractionId}:${queueType}`;
+    return latestQueueCacheKey(attractionId, queueType);
   }
 
   private attractionTimezoneCacheKey(attractionId: string): string {
-    return `parkfan:attraction:tz:${attractionId}`;
+    return attractionTimezoneCacheKey(attractionId);
   }
 
   /**
