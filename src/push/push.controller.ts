@@ -117,6 +117,9 @@ export class PushController {
     let tripId: string | undefined;
     if (body?.tripId !== undefined) {
       tripId = requireString(body.tripId, "tripId");
+      // Unlocked and only an early 404: `PushService.subscribe` reads the trip
+      // again under a row lock, which is the check a concurrent delete cannot
+      // slip past.
       const trip = await this.tripsService.find(tripId);
       if (!trip) {
         throw new HttpException("Trip not found", HttpStatus.NOT_FOUND);

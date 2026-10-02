@@ -1,8 +1,10 @@
 import { Test } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
+import { NotFoundException } from "@nestjs/common";
 import { In } from "typeorm";
 import { PushService } from "./push.service";
 import { PushSubscription } from "./entities/push-subscription.entity";
+import { Trip } from "../trips/entities/trip.entity";
 
 /**
  * The property worth pinning here is the one a naive nullable-ification would
@@ -15,6 +17,9 @@ describe("PushService", () => {
   let service: PushService;
   let rows: Map<string, PushSubscription>;
   let findBy: jest.Mock;
+  // Trips that exist, and the options of every trip lookup the transaction made.
+  let trips: Map<string, Pick<Trip, "id" | "expiresAt">>;
+  let tripLookups: Array<{ lock?: { mode: string } }>;
 
   // `await`s the callback INSIDE the try — not `return run()` — because a
   // callback with more than one `await` in it would otherwise see `finally`
@@ -47,7 +52,25 @@ describe("PushService", () => {
 
   beforeEach(async () => {
     rows = new Map();
+    const expiresAt = new Date(Date.now() + 3_600_000);
+    trips = new Map([
+      ["t1", { id: "t1", expiresAt }],
+      ["t2", { id: "t2", expiresAt }],
+    ]);
+    tripLookups = [];
     let nextId = 1;
+    const repositoryFake: Record<string, unknown> = {};
+    const manager = {
+      transaction: async <T>(run: (m: unknown) => Promise<T>) => run(manager),
+      getRepository: () => repositoryFake,
+      findOne: async (
+        _entity: unknown,
+        options: { where: { id: string }; lock?: { mode: string } },
+      ) => {
+        tripLookups.push(options);
+        return trips.get(options.where.id) ?? null;
+      },
+    };
     // Real filtering is TypeORM's job, not this fake's — it just hands back
     // everything currently stored, and a separate test checks the criteria
     // `findByIds` builds (`{ id: In(ids) }`) rather than re-simulating `In`.
@@ -58,7 +81,8 @@ describe("PushService", () => {
         PushService,
         {
           provide: getRepositoryToken(PushSubscription),
-          useValue: {
+          useValue: Object.assign(repositoryFake, {
+            manager,
             create: jest.fn(
               (data: Partial<PushSubscription>) =>
                 ({ ...data }) as PushSubscription,
@@ -116,7 +140,7 @@ describe("PushService", () => {
               }
               return { affected, raw: [] };
             }),
-          },
+          }),
         },
       ],
     }).compile();
@@ -157,6 +181,41 @@ describe("PushService", () => {
       });
       expect(stored?.tripId).toBe("t1");
       expect(stored?.topics).toEqual(["next-up"]);
+    });
+  });
+
+  it("reads the trip under a write lock, so a delete in flight finishes first", async () => {
+    await withVapid(async () => {
+      await service.subscribe({ ...base, tripId: "t1", topics: ["next-up"] });
+      expect(tripLookups).toHaveLength(1);
+      expect(tripLookups[0].lock?.mode).toBe("pessimistic_write");
+    });
+  });
+
+  it("stores nothing when the trip is gone by the time the lock is taken", async () => {
+    await withVapid(async () => {
+      trips.delete("t1");
+      await expect(
+        service.subscribe({ ...base, tripId: "t1", topics: ["next-up"] }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(rows.size).toBe(0);
+    });
+  });
+
+  it("treats a trip past its expiry as gone", async () => {
+    await withVapid(async () => {
+      trips.set("t1", { id: "t1", expiresAt: new Date(Date.now() - 1) });
+      await expect(
+        service.subscribe({ ...base, tripId: "t1", topics: ["next-up"] }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(rows.size).toBe(0);
+    });
+  });
+
+  it("takes no trip lock when the call does not name a trip", async () => {
+    await withVapid(async () => {
+      await service.subscribe({ ...base });
+      expect(tripLookups).toHaveLength(0);
     });
   });
 
