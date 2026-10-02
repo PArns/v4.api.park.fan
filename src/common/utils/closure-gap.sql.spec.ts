@@ -1,3 +1,5 @@
+import { OUTAGE_INTERVALS_SQL } from "../../analytics/utils/outage-reconstruction.sql";
+import { attractionIsCuratedOutOfService } from "../../attractions/utils/curated-out-of-service.util";
 import {
   CLOSURE_GAP_INTERVALS_SQL,
   CURRENT_CLOSURE_GAP_SQL,
@@ -422,5 +424,49 @@ describe("closure-gap statements", () => {
     // declared period with inferred outages.
     expect(CLOSURE_GAP_INTERVALS_SQL).toContain("curated_out_of_service_from");
     expect(CLOSURE_GAP_INTERVALS_SQL).toContain("curated_out_of_service_to");
+  });
+
+  describe("the curated works period comes from the helper, never a copy", () => {
+    const flat = (sql: string) => sql.replace(/\s+/g, " ");
+
+    // Both statements that exclude the window, each with the day it asks
+    // about. A hand-written twin of the predicate is valid SQL over the same
+    // row and stays green everywhere else, so it would not follow a change to
+    // the window's semantics; this is the assertion that turns it red.
+    it.each([
+      [
+        "the nightly closure-gap statement",
+        CLOSURE_GAP_INTERVALS_SQL,
+        "ca",
+        "g.op_day",
+      ],
+      ["the DOWN reconstruction", OUTAGE_INTERVALS_SQL, "a", "c.start_op_day"],
+    ])("%s embeds attractionIsCuratedOutOfService", (_, sql, alias, day) => {
+      expect(flat(sql)).toContain(
+        flat(attractionIsCuratedOutOfService(alias, day)),
+      );
+      // Exactly once: the helper's own arm and no second spelling beside it.
+      expect(
+        sql.match(/curated_out_of_service_from IS NOT NULL/g),
+      ).toHaveLength(1);
+    });
+
+    it("emits what the hand-written predicate said, plus one pair of parentheses", () => {
+      // The predicate CLOSURE_GAP_INTERVALS_SQL carried before PAR-278. The
+      // helper wraps the same three conjuncts in one outer pair, and AND is
+      // associative, so `x AND (a AND b AND c)` is `x AND a AND b AND c`.
+      const handWritten = `(ca.curated_out_of_service_from IS NOT NULL
+               OR ca.curated_out_of_service_to IS NOT NULL)
+          AND (ca.curated_out_of_service_from IS NULL
+               OR g.op_day >= ca.curated_out_of_service_from)
+          AND (ca.curated_out_of_service_to IS NULL
+               OR g.op_day <= ca.curated_out_of_service_to)`;
+      const norm = (sql: string) =>
+        flat(sql).replace(/\( /g, "(").replace(/ \)/g, ")").trim();
+
+      expect(norm(attractionIsCuratedOutOfService("ca", "g.op_day"))).toBe(
+        `(${norm(handWritten)})`,
+      );
+    });
   });
 });

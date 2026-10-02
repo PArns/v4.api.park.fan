@@ -1,4 +1,5 @@
 import { MIN_BLIND_EVIDENCE_HOURS } from "../../analytics/entities/park-downtime-coverage.entity";
+import { attractionIsCuratedOutOfService } from "../../attractions/utils/curated-out-of-service.util";
 import { parkOpenWindowCtes } from "./park-open-window.sql";
 import { RECONCILIATION_SOURCE } from "./source-absent-status.util";
 import { HEARTBEAT_SOURCE } from "./outage-rows.sql";
@@ -639,17 +640,16 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
      AND NOT EXISTS (
        SELECT 1 FROM attractions ca
         WHERE ca.id = g.aid
-          AND (ca.curated_out_of_service_from IS NOT NULL
-               OR ca.curated_out_of_service_to IS NOT NULL)
+          -- The helper, not a copy of its predicate: the DOWN reconstruction
+          -- reads the same one, and a hand-written twin would not follow a
+          -- change to the window's semantics.
+          --
           -- g.op_day, not a third conversion of the same instant. It is the
           -- operating day the gap belongs to, and after the fix above the two
           -- differ for exactly the parks this change is about: a 00:30 gap in
           -- a midnight-wrap park is part of the previous day's operation, so a
           -- works period declared for that day covers it.
-          AND (ca.curated_out_of_service_from IS NULL
-               OR g.op_day >= ca.curated_out_of_service_from)
-          AND (ca.curated_out_of_service_to IS NULL
-               OR g.op_day <= ca.curated_out_of_service_to)
+          AND ${attractionIsCuratedOutOfService("ca", "g.op_day")}
      )
      AND g.gap_min >= ${MIN_GAP_MINUTES}
      -- Not a duty cycle. Below the day floor there is not enough to judge, and
