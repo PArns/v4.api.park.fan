@@ -144,6 +144,10 @@ async function bootstrap(): Promise<void> {
         credentials: true,
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allowedHeaders: ["Content-Type", "Authorization", "X-Admin-API-Key"],
+        // Retry-After is not a CORS-safelisted response header: without this a
+        // cross-origin browser client gets the header on a 429 but reads null.
+        // Exposing it costs no client anything (PAR-242).
+        exposedHeaders: ["Retry-After"],
       });
     } else {
       // No CORS origins configured - disable CORS (Cloudflare will handle it)
@@ -166,6 +170,8 @@ async function bootstrap(): Promise<void> {
       credentials: false,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-Admin-API-Key"],
+      // Same as production: keep Retry-After readable to browser clients.
+      exposedHeaders: ["Retry-After"],
     });
   }
 
