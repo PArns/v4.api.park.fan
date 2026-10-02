@@ -1124,6 +1124,45 @@ returned zero parks. On a populated catalogue it does not run at all, which is
 most days; it runs when the catalogue is bootstrapped. That is the reason this
 is a follow-up (PAR-262) rather than the second half of this section.
 
+### 5.5b A row filed on another park's point: the rides decide (PAR-310)
+
+A park row whose only source is Queue-Times copies the feed's coordinate, and
+its `city` is reverse-geocoded from that coordinate. City and point therefore
+always agree with each other, also when both are wrong, and only the **name**
+could contradict them. No branch of `findDuplicates` read the name without a
+city or a distance next to it. Three such rows were undetected duplicates of a
+ThemeParks.wiki row for about a year, each merged by hand (PAR-245, PAR-309):
+
+| Queue-Times row | filed at | real park | apart | rides shared |
+| --- | --- | --- | --- | --- |
+| `qt-park-297` | Gurnee, 42 m from Hurricane Harbor Chicago | Hurricane Harbor Rockford | 85.7 km | 10 of 10 |
+| `qt-park-294` | Marietta, 198 m from Six Flags White Water | Hurricane Harbor Oklahoma City! | 1,205 km | 17 of 17 |
+| `qt-park-29` | Houston, 49.5 km from the nearest park | Sesame Place Langhorne | 2,195 km | 20 of 20 |
+
+The branch that finds them, `attractionsAgree`, pairs two rows when at least
+**five** attraction names agree and they make up at least **0.8 of the shorter
+list**, and only when `sourcesDisjoint` holds. A check for "a Queue-Times row
+within 1 km of another park" was considered and not built: it catches two of the
+three, and it points at the sister park rather than at the duplicate.
+
+**`sourcesDisjoint` is what keeps the chains apart, not the lists.** Measured on
+2026-10-02 over the public catalogue (211 parks, 7,480 attractions, 22,155
+pairs): Fantawild's water parks share up to 15 of 16 ride names, and two of them
+share 8 of 8. All 49 Fantawild and Boonie Bears rows come from ThemeParks.wiki
+alone, and a source that lists both rows is saying it knows two parks. Among the
+pairs that are not both ThemeParks.wiki rows, the highest share with two or more
+names in common is 0.125. The only pair above it is Wet'n'Wild (17 of 17), the
+real duplicate from §5.5.
+
+A pair found only this way is never `safe` (no source holds an id for both rows,
+so there is no shared id), so neither `autoDetect` nor `repairDuplicates` merges
+it. It shows up in `GET /v1/admin/duplicate-parks`, and `findDuplicates` logs
+the count with a 🎢 warning, which `validateAll` triggers after every park
+metadata sync. Its `reviewReason` gives the distance and, above
+`MAX_INHERIT_DISTANCE_KM`, says to correct the wrong row's location before
+merging, because a merge over a longer distance drops the loser's source ids
+(G-93).
+
 ### 5.6 An entity changed its `entityType` and left its old row behind
 
 ThemeParks.wiki reclassifies entities **without changing their id**. On
