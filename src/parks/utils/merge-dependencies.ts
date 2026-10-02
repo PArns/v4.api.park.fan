@@ -780,10 +780,16 @@ export const SHOW_DEPENDENCIES: MergeDependency[] = [
     // Which of the two survives is arbitrary where they mean different things
     // — `startTime` null is "whichever is next" (the card's bell) and a set one
     // names a single performance (a showtime badge), and the winner's row wins
-    // either way. Recorded as PAR-151 rather than decided here: before this
-    // list existed the CASCADE deleted the losing row outright, so the
-    // subscriber now keeps a working reminder for the same show in every
-    // branch, and picking between them is a product question.
+    // either way. Decided in PAR-151: the winner wins, as everywhere else in
+    // these lists. Keeping the row with a `startTime` (B) or the nearer one (C)
+    // would need a hand-written statement outside `MergeStrategy` and would only
+    // trade one arbitrary rule for another that hits the intended reminder in
+    // about half the cases (a `startTime` reminder is dead after its
+    // performance, an open one keeps running). The case needs a subscriber who
+    // followed the same show from two park pages, once by bell and once by
+    // badge. Before this list existed the CASCADE deleted the losing row
+    // outright, so the subscriber keeps a working reminder for the same show in
+    // every branch.
     //
     // `ride_alerts` is the attraction-side twin of this row, with the same
     // CASCADE and the same unique `(subscriptionId, attractionId)`. It was off
