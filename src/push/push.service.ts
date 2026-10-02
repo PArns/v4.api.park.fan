@@ -1,8 +1,9 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, IsNull, Not, Repository } from "typeorm";
 import * as webpush from "web-push";
 import { PushSubscription } from "./entities/push-subscription.entity";
+import { Trip } from "../trips/entities/trip.entity";
 import {
   getVapidConfig,
   isPushConfigured,
@@ -112,13 +113,38 @@ export class PushService {
   async subscribe(input: SubscribeInput): Promise<PushSubscription | null> {
     if (!isPushConfigured()) return null;
 
-    const existing = await this.repository.findOne({
+    if (input.tripId === undefined) return this.store(this.repository, input);
+
+    // The trip is read under the same row lock `TripsService.remove` and
+    // `update` take (`trips` first, then `push_subscriptions`, the order
+    // `remove` writes them in). A DELETE that commits first leaves no row to
+    // find here, and one that waits for this transaction clears the pointer
+    // written below. An unlocked read let a subscribe land between a delete's
+    // `UPDATE push_subscriptions` and its commit, and the pointer survived
+    // until the nightly sweep.
+    return this.repository.manager.transaction(async (manager) => {
+      const trip = await manager.findOne(Trip, {
+        where: { id: input.tripId },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!trip || trip.expiresAt.getTime() <= Date.now()) {
+        throw new NotFoundException("Trip not found");
+      }
+      return this.store(manager.getRepository(PushSubscription), input);
+    });
+  }
+
+  private async store(
+    repository: Repository<PushSubscription>,
+    input: SubscribeInput,
+  ): Promise<PushSubscription> {
+    const existing = await repository.findOne({
       where: { endpoint: input.endpoint },
     });
 
     const row =
       existing ??
-      this.repository.create({
+      repository.create({
         endpoint: input.endpoint,
         tripId: null,
         topics: [],
@@ -133,7 +159,7 @@ export class PushService {
     // before this is not evidence about the subscription that exists now.
     row.failureCount = 0;
 
-    return this.repository.save(row);
+    return repository.save(row);
   }
 
   /**
