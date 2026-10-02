@@ -941,9 +941,17 @@ export class WaitTimesProcessor {
     try {
       const parks = await this.parksService.findAll();
 
+      // Retired rows are excluded like in the live-data preload above
+      // (PAR-159). Without the predicate a ride retired less than 24 h after
+      // its last sighting still passes every check below, and a heartbeat
+      // would carry its last reading forward every hour until lastSeen ages
+      // out (PAR-295).
       const allAttractions = await this.attractionsService
         .getRepository()
-        .find({ select: ["id", "name", "externalId", "parkId"] });
+        .find({
+          select: ["id", "name", "externalId", "parkId"],
+          where: { retiredAt: IsNull() },
+        });
       const attractionsByPark = new Map<string, typeof allAttractions>();
       for (const a of allAttractions) {
         const list = attractionsByPark.get(a.parkId) ?? [];
