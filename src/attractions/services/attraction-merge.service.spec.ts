@@ -504,7 +504,7 @@ describe("AttractionMergeService — batch", () => {
     expect(report.planned).toHaveLength(2);
     expect(report.failed).toHaveLength(1);
     expect(report.failed[0].error).toMatch(/not found/);
-    expect(report.planned[0].droppedCurations).toBeUndefined();
+    expect(report.planned[0].droppedCurations).toBeNull();
     expect(report.planned[1].droppedCurations).toEqual([]);
   });
 
@@ -1466,6 +1466,24 @@ describe("AttractionMergeService — batch dry run names what it would delete", 
       { table: "attraction_ride_profiles", from: "winner", row: stub },
     ]);
     expect(byBase.maus).toEqual([]);
+  });
+
+  it("names the loser's row where the survivor's profile is the richer one", async () => {
+    const { service } = build({
+      "a-base": [{ ...layout, attractionId: "a-base" }],
+      "a-suffix": [{ ...stub, attractionId: "a-suffix" }],
+    });
+
+    const report = await service.mergeDuplicates({ dryRun: true });
+
+    const icon = report.planned.find((p) => p.baseSlug === "icon");
+    expect(icon?.droppedCurations).toEqual([
+      {
+        table: "attraction_ride_profiles",
+        from: "loser",
+        row: { ...stub, attractionId: "a-suffix" },
+      },
+    ]);
   });
 
   it("still opens no transaction and issues only SELECTs", async () => {

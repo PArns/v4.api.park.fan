@@ -57,9 +57,11 @@ export interface DuplicatePairReport {
    * them for a single pair. Set on the planned pairs of a dry run only: the
    * real run logs what it drops while it drops it, and `findDuplicatePairs`
    * stays a pair detector rather than one read of dependent tables per pair.
-   * Empty for almost every pair (PAR-209).
+   * Empty for almost every pair (PAR-209). `null` means the preview threw and
+   * the pair is also listed under `failed`: nothing is known, which is not the
+   * same answer as `[]`. Absent on every other report.
    */
-  droppedCurations?: DroppedCuration[];
+  droppedCurations?: DroppedCuration[] | null;
 }
 
 export interface DuplicateBatchReport {
@@ -607,7 +609,8 @@ export class AttractionMergeService {
    * entry, `attraction_ride_profiles`, plus one more where the loser holds a
    * profile) — the same read the real run makes anyway — and it is paid on a
    * dry run only. A pair whose preview throws is listed under `failed`, the way
-   * a pair whose merge throws is.
+   * a pair whose merge throws is. The previews run one after another, as the
+   * merges do, and `limit` bounds both.
    */
   async mergeDuplicates(
     options: { dryRun?: boolean; limit?: number } = {},
@@ -643,7 +646,7 @@ export class AttractionMergeService {
           this.logger.error(
             `❌ Preview failed for ${pair.baseSlug} in ${pair.parkName}: ${message}`,
           );
-          report.planned.push(pair);
+          report.planned.push({ ...pair, droppedCurations: null });
           report.failed.push({ pair, error: message });
         }
       }
