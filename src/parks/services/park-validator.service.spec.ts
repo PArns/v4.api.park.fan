@@ -1,10 +1,14 @@
+import { Logger } from "@nestjs/common";
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
+import { IsNull } from "typeorm";
 import { ParkValidatorService } from "./park-validator.service";
 import { Park } from "../entities/park.entity";
+import { Attraction } from "../../attractions/entities/attraction.entity";
 import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.client";
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { determineMergeWinner } from "../utils/park-merge.util";
+import * as names from "../../../test/fixtures/park-attraction-names.fixtures";
 
 /**
  * findDuplicates() is the only automatic guard against the same physical
@@ -29,6 +33,9 @@ describe("ParkValidatorService.findDuplicates", () => {
   let service: ParkValidatorService;
 
   const parkRepository = { find: jest.fn(), count: jest.fn() };
+  // No attractions: the cases below are about the name- and place-led
+  // branches. The attraction branch has its own block at the end of the file.
+  const attractionRepository = { find: jest.fn().mockResolvedValue([]) };
 
   const park = (p: Partial<Park>): Park => ({ ...p }) as Park;
 
@@ -254,6 +261,10 @@ describe("ParkValidatorService.findDuplicates", () => {
       providers: [
         ParkValidatorService,
         { provide: getRepositoryToken(Park), useValue: parkRepository },
+        {
+          provide: getRepositoryToken(Attraction),
+          useValue: attractionRepository,
+        },
         { provide: QueueTimesClient, useValue: {} },
         { provide: WartezeitenClient, useValue: {} },
       ],
@@ -702,5 +713,500 @@ describe("ParkValidatorService.findDuplicates", () => {
         [wetnwildWiki.id, wetnwildQueueTimes.id].sort(),
       ].sort(),
     );
+  });
+});
+
+/**
+ * The attraction branch (PAR-310): two rows that list the same rides are one
+ * park, wherever each of them is filed.
+ *
+ * The three positive pairs are the rows PAR-245 and PAR-309 merged by hand,
+ * as they stood BEFORE those merges: the Queue-Times row on the coordinate
+ * the feed gave it, and the ThemeParks.wiki row it duplicated. None of the
+ * name- or place-led branches saw any of them. The negative pairs are the
+ * ones the ticket named — the parks the Queue-Times rows were filed beside,
+ * the 51 m neighbours in Gurnee, PortAventura's three parks on one point —
+ * and the Fantawild chain, whose water parks share more rides with each
+ * other than some duplicates do.
+ */
+describe("ParkValidatorService.findDuplicates — shared attractions", () => {
+  let service: ParkValidatorService;
+
+  const parkRepository = { find: jest.fn(), count: jest.fn() };
+  const attractionRepository = { find: jest.fn() };
+
+  const park = (p: Partial<Park>): Park =>
+    ({
+      wikiEntityId: null,
+      queueTimesEntityId: null,
+      wartezeitenEntityId: null,
+      ...p,
+    }) as Park;
+
+  /** The attraction rows `loadAttractionNames` reads, for these parks. */
+  const withRides = (...entries: Array<[Park, string[]]>) =>
+    attractionRepository.find.mockResolvedValue(
+      entries.flatMap(([p, rideNames]) =>
+        rideNames.map((name) => ({ parkId: p.id, name })),
+      ),
+    );
+
+  // Rockford — PAR-245. The Queue-Times row sat on the Gurnee point.
+  const qtRockford = park({
+    id: "qt-297-row",
+    name: "Six Flags Hurricane Harbor, Rockford",
+    city: "Gurnee",
+    latitude: 42.370244,
+    longitude: -87.935916,
+    queueTimesEntityId: "qt-park-297",
+  });
+  const wikiRockford = park({
+    id: "3ff03182-50bd-4bf0-806c-ad788f8e981d",
+    name: "Hurricane Harbor Rockford",
+    city: "Cherry Valley",
+    latitude: 42.244906,
+    longitude: -88.964074,
+    wikiEntityId: "d2b68780-b5a0-432b-b93d-6c90f407e704",
+  });
+
+  // Oklahoma City — PAR-309. The Queue-Times row sat in Marietta, Georgia.
+  const qtOklahomaCity = park({
+    id: "23927e0f-0362-4652-85d5-78a2a3a8628e",
+    name: "Six Flags Hurricane Harbor, Oklahoma City",
+    city: "Marietta",
+    latitude: 33.959128,
+    longitude: -84.519548,
+    queueTimesEntityId: "qt-park-294",
+  });
+  const wikiOklahomaCity = park({
+    id: "2e79e779-3632-4f46-829d-96f6d617678e",
+    name: "Hurricane Harbor Oklahoma City!",
+    city: "Oklahoma City",
+    latitude: 35.461539,
+    longitude: -97.588741,
+    wikiEntityId: "3964ae15-a1a8-41a1-aea9-23b456e2911f",
+  });
+
+  // Sesame Place — PAR-309. The Queue-Times row sat in Houston, Texas.
+  const qtSesamePlace = park({
+    id: "05100b38-8f8f-45e5-a0d9-1c0537ed5b9b",
+    name: "Sesame Place",
+    city: "Houston",
+    latitude: 29.6351835,
+    longitude: -95.3269418,
+    queueTimesEntityId: "qt-park-29",
+  });
+  const wikiLanghorne = park({
+    id: "59056cbb-2684-4cd8-b074-da1385b53bff",
+    name: "Sesame Place Langhorne",
+    city: "Langhorne",
+    latitude: 40.18427,
+    longitude: -74.87213,
+    wikiEntityId: "f8afaec2-f022-4398-8f43-46022b91541b",
+  });
+
+  // The parks two of those rows were filed beside, 42 m and 198 m away. The
+  // sources are set disjoint against the Queue-Times rows on purpose, so that
+  // only the ride lists can refuse the pair.
+  const hurricaneHarborChicago = park({
+    id: "a2138d95-67b3-47f2-ae11-93ec402dfc4a",
+    name: "Hurricane Harbor Chicago",
+    city: "Gurnee",
+    latitude: 42.3706,
+    longitude: -87.9361,
+    wikiEntityId: "hh-chicago-wiki",
+  });
+  const whiteWaterAtlanta = park({
+    id: "1a605df8-3600-40eb-ac91-351eb03a558c",
+    name: "Six Flags White Water, Atlanta",
+    city: "Marietta",
+    latitude: 33.957653,
+    longitude: -84.520744,
+    wikiEntityId: "white-water-wiki",
+  });
+  /** 51 m from Hurricane Harbor Chicago; given a different source on purpose. */
+  const sixFlagsGreatAmerica = park({
+    id: "bfad4377-a790-4690-aac3-3a59ec2ad92c",
+    name: "Six Flags Great America",
+    city: "Gurnee",
+    latitude: 42.371,
+    longitude: -87.9358,
+    queueTimesEntityId: "qt-park-sfga",
+  });
+  /** Shares exactly one ride with `qt-park-29`: `Sunny Day Carousel`. */
+  const sesamePlaceSanDiego = park({
+    id: "65c3a22a-ad4e-4873-a6b2-91838ae536f0",
+    name: "Sesame Place San Diego",
+    city: "Chula Vista",
+    latitude: 32.5876,
+    longitude: -117.01073,
+    wikiEntityId: "sesame-san-diego-wiki",
+  });
+
+  const portAventuraPark = park({
+    id: "ef00a632-3cb6-482f-8d0f-ac29575d78ef",
+    name: "PortAventura Park",
+    city: "Vila-seca",
+    latitude: 41.0986786,
+    longitude: 1.151773,
+    wikiEntityId: "pa-wiki",
+    queueTimesEntityId: "qt-park-19",
+  });
+  const ferrariLand = park({
+    id: "3ba2f483-474a-43c5-a818-81537d02da80",
+    name: "Ferrari Land",
+    city: "Vila-seca",
+    latitude: 41.0986786,
+    longitude: 1.151773,
+    wikiEntityId: "fl-wiki",
+    queueTimesEntityId: "qt-park-277",
+  });
+  const caribeAquaticPark = park({
+    id: "6503ee0d-b2bd-43d6-92b8-2a020d8640bd",
+    name: "Caribe Aquatic Park",
+    city: "Vila-seca",
+    latitude: 41.0986786,
+    longitude: 1.151773,
+    wartezeitenEntityId: "caribeaquaticpark",
+  });
+
+  // Fantawild: every row of the chain comes from ThemeParks.wiki alone.
+  const fantawildXiaogan = park({
+    id: "6532853c-715a-4183-82dc-d8a72002e3c9",
+    name: "Fantawild Water Park Xiaogan",
+    city: "Xiao Gan Shi",
+    latitude: 30.8182,
+    longitude: 114.1067,
+    wikiEntityId: "fantawild-xiaogan-wiki",
+  });
+  const fantawildZiyang = park({
+    id: "d5c8ab93-b49b-4ec9-b769-d053a8d1bc25",
+    name: "Fantawild Water World Ziyang",
+    city: "Zi Yang Shi",
+    latitude: 30.1886,
+    longitude: 104.5732,
+    wikiEntityId: "fantawild-ziyang-wiki",
+  });
+  const boonieBearsLinhai = park({
+    id: "98e24967-8e2d-4163-b47d-708222b6ed19",
+    name: "Boonie Bears Water Park Linhai",
+    city: "Tai Zhou Shi",
+    latitude: 28.8601,
+    longitude: 121.1962,
+    wikiEntityId: "boonie-linhai-wiki",
+  });
+  const fantawildGanzhou = park({
+    id: "12e90c3c-ffab-4ae5-abb8-d5c50175b273",
+    name: "Fantawild Water Park Ganzhou",
+    city: "Gan Zhou Shi",
+    latitude: 25.91,
+    longitude: 114.9334,
+    wikiEntityId: "fantawild-ganzhou-wiki",
+  });
+
+  const allRides: Array<[Park, string[]]> = [
+    [qtRockford, names.qtPark297Attractions],
+    [wikiRockford, names.hurricaneHarborRockfordAttractions],
+    [qtOklahomaCity, names.qtPark294Attractions],
+    [wikiOklahomaCity, names.hurricaneHarborOklahomaCityAttractions],
+    [qtSesamePlace, names.qtPark29Attractions],
+    [wikiLanghorne, names.sesamePlaceLanghorneAttractions],
+    [hurricaneHarborChicago, names.hurricaneHarborChicagoAttractions],
+    [whiteWaterAtlanta, names.sixFlagsWhiteWaterAtlantaAttractions],
+    [sixFlagsGreatAmerica, names.sixFlagsGreatAmericaAttractions],
+    [sesamePlaceSanDiego, names.sesamePlaceSanDiegoAttractions],
+    [portAventuraPark, names.portAventuraParkAttractions],
+    [ferrariLand, names.ferrariLandAttractions],
+    [caribeAquaticPark, names.caribeAquaticParkAttractions],
+    [fantawildXiaogan, names.fantawildWaterParkXiaoganAttractions],
+    [fantawildZiyang, names.fantawildWaterWorldZiyangAttractions],
+    [boonieBearsLinhai, names.boonieBearsWaterParkLinhaiAttractions],
+    [fantawildGanzhou, names.fantawildWaterParkGanzhouAttractions],
+  ];
+
+  const idsOf = (pair: { park1: { id: string }; park2: { id: string } }) =>
+    [pair.park1.id, pair.park2.id].sort();
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    attractionRepository.find.mockResolvedValue([]);
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ParkValidatorService,
+        { provide: getRepositoryToken(Park), useValue: parkRepository },
+        {
+          provide: getRepositoryToken(Attraction),
+          useValue: attractionRepository,
+        },
+        { provide: QueueTimesClient, useValue: {} },
+        { provide: WartezeitenClient, useValue: {} },
+      ],
+    }).compile();
+
+    service = module.get(ParkValidatorService);
+  });
+
+  it.each([
+    ["Rockford", qtRockford, wikiRockford, "10 of 10", "85.7 km"],
+    [
+      "Oklahoma City",
+      qtOklahomaCity,
+      wikiOklahomaCity,
+      "17 of 17",
+      "1205.3 km",
+    ],
+    ["Sesame Place", qtSesamePlace, wikiLanghorne, "20 of 20", "2195.1 km"],
+  ])(
+    "finds the %s pair by its rides, as it stood before the merge",
+    async (_label, qtRow, wikiRow, agree, apart) => {
+      parkRepository.find.mockResolvedValue([qtRow, wikiRow]);
+      withRides(...allRides.filter(([p]) => p === qtRow || p === wikiRow));
+
+      const duplicates = await service.findDuplicates();
+
+      expect(duplicates).toHaveLength(1);
+      const [pair] = duplicates;
+      expect(idsOf(pair)).toEqual([qtRow.id, wikiRow.id].sort());
+      expect(pair.reason).toBe(`attraction names agree (${agree})`);
+      // Nothing an automatic merge reads: no shared id, so never safe.
+      expect(pair.safe).toBe(false);
+      // Each pair is further apart than a merge carries source ids across,
+      // which is why the advice is to move the row first (G-93).
+      expect(pair.reviewReason).toContain(`the rows are ${apart} apart`);
+      expect(pair.reviewReason).toContain("correct-location");
+    },
+  );
+
+  it("counter-check: without the rides, no branch sees any of the three", async () => {
+    // The state before this branch existed. All six rows together, no
+    // attraction rows: every name- and place-led branch looks and finds
+    // nothing, which is how the three pairs stayed hidden for a year.
+    parkRepository.find.mockResolvedValue([
+      qtRockford,
+      wikiRockford,
+      qtOklahomaCity,
+      wikiOklahomaCity,
+      qtSesamePlace,
+      wikiLanghorne,
+    ]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("does not pair a Queue-Times row with the park it was filed beside", async () => {
+    // 42 m and 198 m apart, disjoint sources, one or two water-park staples
+    // in common — the shape approach 2 of the ticket would have reported.
+    parkRepository.find.mockResolvedValue([
+      qtRockford,
+      hurricaneHarborChicago,
+      qtOklahomaCity,
+      whiteWaterAtlanta,
+    ]);
+    withRides(...allRides);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("does not flag the real neighbours the ticket names", async () => {
+    // Hurricane Harbor Chicago against Six Flags Great America (51 m), and
+    // PortAventura's three parks on one resort point.
+    parkRepository.find.mockResolvedValue([
+      hurricaneHarborChicago,
+      sixFlagsGreatAmerica,
+      portAventuraPark,
+      ferrariLand,
+      caribeAquaticPark,
+    ]);
+    withRides(...allRides);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("does not flag Sesame Place San Diego, which shares one ride with qt-park-29", async () => {
+    parkRepository.find.mockResolvedValue([qtSesamePlace, sesamePlaceSanDiego]);
+    withRides(...allRides);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("keeps Fantawild's water parks apart although they share up to 15 of 16 rides", async () => {
+    // Xiaogan and Ziyang share 15 of 16 names, Linhai and Ganzhou 8 of 8:
+    // more than enough on the lists alone.
+    parkRepository.find.mockResolvedValue([
+      fantawildXiaogan,
+      fantawildZiyang,
+      boonieBearsLinhai,
+      fantawildGanzhou,
+    ]);
+    withRides(...allRides);
+
+    expect(await service.findDuplicates()).toEqual([]);
+  });
+
+  it("and it is the shared source that keeps them apart, not the lists", async () => {
+    // The same Ziyang row, carried by another source instead of the wiki.
+    // Now no source lists both rows, and the pair is reported. This is the
+    // case that goes red if `sourcesDisjoint` is dropped from the branch.
+    const ziyangElsewhere = park({
+      ...fantawildZiyang,
+      wikiEntityId: null,
+      queueTimesEntityId: "qt-park-ziyang",
+    });
+    parkRepository.find.mockResolvedValue([fantawildXiaogan, ziyangElsewhere]);
+    withRides(
+      [fantawildXiaogan, names.fantawildWaterParkXiaoganAttractions],
+      [ziyangElsewhere, names.fantawildWaterWorldZiyangAttractions],
+    );
+
+    const duplicates = await service.findDuplicates();
+
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].reason).toBe("attraction names agree (15 of 16)");
+  });
+
+  it("needs five names in common, so a park with a few rides is not contained in every park", async () => {
+    // Four shared names out of four is a share of 1.0 and still refused.
+    const four = ["Carousel", "Ferris Wheel", "Bumper Cars", "Log Flume"];
+    const small = park({
+      id: "small",
+      name: "Small Park",
+      city: "A",
+      latitude: 10,
+      longitude: 10,
+      queueTimesEntityId: "qt-park-small",
+    });
+    const large = park({
+      id: "large",
+      name: "Large Park",
+      city: "B",
+      latitude: 20,
+      longitude: 20,
+      wikiEntityId: "large-wiki",
+    });
+    parkRepository.find.mockResolvedValue([small, large]);
+    withRides([small, four], [large, [...four, "Coaster", "Drop Tower"]]);
+
+    expect(await service.findDuplicates()).toEqual([]);
+
+    withRides(
+      [small, [...four, "Coaster"]],
+      [large, [...four, "Coaster", "Drop Tower"]],
+    );
+    const [pair] = await service.findDuplicates();
+    expect(pair.reason).toBe("attraction names agree (5 of 5)");
+  });
+
+  it("finds exactly the three pairs in one pass, and says so in the log", async () => {
+    const warn = jest
+      .spyOn(Logger.prototype, "warn")
+      .mockImplementation(() => undefined);
+    parkRepository.find.mockResolvedValue(allRides.map(([p]) => p));
+    withRides(...allRides);
+
+    const duplicates = await service.findDuplicates();
+
+    expect(duplicates.map(idsOf).sort()).toEqual(
+      [
+        [qtRockford.id, wikiRockford.id].sort(),
+        [qtOklahomaCity.id, wikiOklahomaCity.id].sort(),
+        [qtSesamePlace.id, wikiLanghorne.id].sort(),
+      ].sort(),
+    );
+    expect(duplicates.every((pair) => !pair.safe)).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("🎢 3 park pair(s) list the same attractions"),
+    );
+    warn.mockRestore();
+  });
+
+  describe("the share and what is read", () => {
+    const rides = (n: number, prefix: string) =>
+      Array.from({ length: n }, (_, i) => `${prefix} Ride ${i + 1}`);
+    const qtRow = park({
+      id: "qt-row",
+      name: "Alpha Park",
+      city: "A",
+      latitude: 10,
+      longitude: 10,
+      queueTimesEntityId: "qt-park-alpha",
+    });
+    const wikiRow = park({
+      id: "wiki-row",
+      name: "Beta World",
+      city: "B",
+      latitude: 20,
+      longitude: 20,
+      wikiEntityId: "beta-wiki",
+    });
+
+    beforeEach(() => parkRepository.find.mockResolvedValue([qtRow, wikiRow]));
+
+    it("finds 8 shared names out of 10 — the share floor is inclusive", async () => {
+      withRides(
+        [qtRow, [...rides(8, "Shared"), ...rides(2, "Alpha")]],
+        [wikiRow, [...rides(8, "Shared"), ...rides(4, "Beta")]],
+      );
+
+      const [pair] = await service.findDuplicates();
+
+      expect(pair.reason).toBe("attraction names agree (8 of 10)");
+    });
+
+    it("refuses 7 shared names out of 10, although seven clears the count floor", async () => {
+      withRides(
+        [qtRow, [...rides(7, "Shared"), ...rides(3, "Alpha")]],
+        [wikiRow, [...rides(7, "Shared"), ...rides(4, "Beta")]],
+      );
+
+      expect(await service.findDuplicates()).toEqual([]);
+    });
+
+    it("reads non-retired attractions only, by park and name", async () => {
+      withRides([qtRow, rides(5, "Shared")], [wikiRow, rides(5, "Shared")]);
+
+      await service.findDuplicates();
+
+      expect(attractionRepository.find).toHaveBeenCalledWith({
+        select: ["parkId", "name"],
+        where: { retiredAt: IsNull() },
+      });
+    });
+
+    it("does not count a name that normalises to nothing", async () => {
+      // Four real names plus one made of punctuation only on both sides: an
+      // empty key would otherwise be the fifth shared name.
+      withRides(
+        [qtRow, [...rides(4, "Shared"), "★ ★", ""]],
+        [wikiRow, [...rides(4, "Shared"), "★ ★", ""]],
+      );
+
+      expect(await service.findDuplicates()).toEqual([]);
+    });
+
+    it("gives the distance without the relocation advice under 10 km", async () => {
+      const near = park({ ...wikiRow, latitude: 10.05, longitude: 10 });
+      parkRepository.find.mockResolvedValue([qtRow, near]);
+      withRides([qtRow, rides(5, "Shared")], [near, rides(5, "Shared")]);
+
+      const [pair] = await service.findDuplicates();
+
+      expect(pair.reviewReason).toContain("the rows are 5.6 km apart");
+      expect(pair.reviewReason).not.toContain("correct-location");
+    });
+
+    it("says so when one row has no coordinates", async () => {
+      const unlocated = park({
+        ...wikiRow,
+        latitude: null as unknown as number,
+        longitude: null as unknown as number,
+      });
+      parkRepository.find.mockResolvedValue([qtRow, unlocated]);
+      withRides([qtRow, rides(5, "Shared")], [unlocated, rides(5, "Shared")]);
+
+      const [pair] = await service.findDuplicates();
+
+      expect(pair.reviewReason).toContain("one row has no coordinates");
+    });
   });
 });

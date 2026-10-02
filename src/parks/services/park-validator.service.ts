@@ -2,12 +2,14 @@ import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Not, IsNull } from "typeorm";
 import { Park } from "../entities/park.entity";
+import { Attraction } from "../../attractions/entities/attraction.entity";
 import { QueueTimesClient } from "../../external-apis/queue-times/queue-times.client";
 import { WartezeitenClient } from "../../external-apis/wartezeiten/wartezeiten.client";
 import { normalizeForMatching } from "../../common/utils/slug.util";
 import { calculateHaversineDistance } from "../../common/utils/distance.util";
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
 import { calculateNameSimilarity } from "../utils/park-merge.util";
+import { MAX_INHERIT_DISTANCE_KM } from "../utils/source-id-inheritance.util";
 
 export interface MismatchedQtId {
   parkId: string;
@@ -221,6 +223,95 @@ function usableCoordinate(park: {
 }
 
 /**
+ * Two rows that list the same rides are one park, wherever they are filed.
+ *
+ * This is the branch for a row whose only source is Queue-Times. Such a row
+ * takes the feed's coordinate unchecked, and its `city` is reverse-geocoded
+ * from that coordinate, so city and point can never disagree with each other.
+ * When the feed files a park on another park's point, every branch that asks
+ * the name together with a city or a distance is blind to it. Three rows did
+ * exactly that, each an undetected duplicate of a ThemeParks.wiki row
+ * (PAR-245, PAR-309). Their attraction names, read from the two feeds as they
+ * stood before the merges (2026-10-02):
+ *
+ * | Queue-Times row | wiki row | shared / smaller set | apart |
+ * | -- | -- | -- | -- |
+ * | `qt-park-297` Six Flags Hurricane Harbor, Rockford | Hurricane Harbor Rockford | 10 / 10 | 85.7 km |
+ * | `qt-park-294` Six Flags Hurricane Harbor, Oklahoma City | Hurricane Harbor Oklahoma City! | 17 / 17 | 1,205 km |
+ * | `qt-park-29` Sesame Place | Sesame Place Langhorne | 20 / 20 | 2,195 km |
+ *
+ * **Shared ride names alone do not separate a duplicate from a chain.**
+ * Measured over the public catalogue (211 parks, 7,480 attractions, 22,155
+ * pairs): Fantawild's water parks share up to 15 of 16 names (`Fantawild
+ * Water Park Xiaogan` against `Fantawild Water World Ziyang`), and `Boonie
+ * Bears Water Park Linhai` against `Fantawild Water Park Ganzhou` shares 8 of
+ * 8. All 49 Fantawild and Boonie Bears rows come from ThemeParks.wiki alone,
+ * and a source that lists both rows is saying it knows two parks. So this
+ * branch asks the same `sourcesDisjoint` that `sharedPoint` asks. Among the
+ * pairs that are not both ThemeParks.wiki rows, the highest share with at
+ * least two names in common is 0.125 (Adventureland Resort against seven
+ * parks); the only pair above it is Wet'n'Wild at 17 / 17, the real duplicate
+ * from PAR-160.
+ *
+ * The share is taken against the SMALLER of the two lists, because one row
+ * routinely carries rides the other source does not publish (the wiki rows
+ * above list 11, 19 and 21). The floor of five names keeps a park with one or
+ * two rides from reading as contained in any park that has a carousel:
+ * Fantawild parks with a single attraction reach a share of 1.0 against each
+ * other on one name.
+ *
+ * Retired attractions are left out, as they are on the public routes the
+ * figures above were measured on.
+ *
+ * A pair found this way is never `safe`: `sourcesDisjoint` means no source
+ * holds an id for both rows, so `sharedEntityId` is false, and `safe` needs
+ * it. It is a report for a human, never a merge.
+ */
+const ATTRACTION_OVERLAP_MIN_SHARED = 5;
+const ATTRACTION_OVERLAP_MIN_SHARE = 0.8;
+
+/**
+ * What an operator needs before merging a pair that only the rides tied
+ * together. The distance is the point: the rows disagree about where the park
+ * is, and above `MAX_INHERIT_DISTANCE_KM` a merge does not carry the loser's
+ * source ids over, so the sync would recreate the row days later (G-93,
+ * PAR-245). The location is corrected first, then the pair is merged.
+ */
+function attractionsOnlyReviewReason(
+  overlap: { shared: number; smaller: number },
+  distanceKm: number | null,
+): string {
+  const found = `${overlap.shared} of ${overlap.smaller} attraction names agree while names and locations do not — one row is likely filed at the wrong point`;
+  if (distanceKm === null) return `${found}; one row has no coordinates`;
+  const apart = `the rows are ${distanceKm.toFixed(1)} km apart`;
+  return distanceKm > MAX_INHERIT_DISTANCE_KM
+    ? `${found}; ${apart}, over the ${MAX_INHERIT_DISTANCE_KM} km a merge carries source ids across, so correct the wrong row's location (POST /v1/admin/parks/:id/correct-location) before merging`
+    : `${found}; ${apart}`;
+}
+
+/**
+ * The form an attraction name is compared in: `normalizeForMatching`, then
+ * nothing but letters and digits. The feeds disagree on apostrophes
+ * (`Blackbeard’s` against `Blackbeard's`) and on spacing more often than on
+ * words, and `normalizeForMatching` transliterates CJK names to pinyin, so a
+ * Chinese ride name still yields a key rather than an empty string.
+ */
+function attractionNameKey(name: string): string {
+  return normalizeForMatching(name).replace(/[^a-z0-9]/g, "");
+}
+
+/** How many names two rows share, and the size of the shorter list. */
+function attractionNameOverlap(
+  a: ReadonlySet<string>,
+  b: ReadonlySet<string>,
+): { shared: number; smaller: number } {
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+  let shared = 0;
+  for (const name of small) if (large.has(name)) shared++;
+  return { shared, smaller: small.size };
+}
+
+/**
  * The name floor a pair needs before an automatic merge may delete one of its
  * two rows.
  *
@@ -301,6 +392,8 @@ export class ParkValidatorService {
   constructor(
     @InjectRepository(Park)
     private readonly parkRepository: Repository<Park>,
+    @InjectRepository(Attraction)
+    private readonly attractionRepository: Repository<Attraction>,
     private readonly queueTimesClient: QueueTimesClient,
     private readonly wartezeitenClient: WartezeitenClient,
   ) {}
@@ -509,7 +602,9 @@ export class ParkValidatorService {
    * The exception is `sharedPoint`, where the physical facts lead: two rows on
    * one point that no upstream source lists twice are the same place even when
    * one of them carries a regional suffix the other does not. See
-   * `SHARED_POINT_KM`.
+   * `SHARED_POINT_KM`. The other is `attractionsAgree`, which asks neither
+   * the name nor the geography but the rides: see
+   * `ATTRACTION_OVERLAP_MIN_SHARED`.
    *
    * **A returned pair is a report, not an instruction.** Which of them may be
    * merged with nobody watching is `safe`, and a caller that deletes a row
@@ -529,7 +624,10 @@ export class ParkValidatorService {
       ],
     });
 
+    const attractionNames = await this.loadAttractionNames();
+
     const duplicates: DuplicatePair[] = [];
+    const foundByAttractionsAlone: string[] = [];
 
     for (let i = 0; i < allParks.length; i++) {
       for (let j = i + 1; j < allParks.length; j++) {
@@ -598,7 +696,21 @@ export class ParkValidatorService {
           sourcesDisjoint &&
           nameSimilarity >= SHARED_POINT_NAME_SIMILARITY;
 
-        const isDuplicate =
+        // Two sources, one list of rides. Neither the name nor the point is
+        // asked, because a row filed on a wrong point is exactly what this
+        // branch is for. See ATTRACTION_OVERLAP_MIN_SHARED.
+        const overlap = sourcesDisjoint
+          ? attractionNameOverlap(
+              attractionNames.get(p1.id) ?? new Set<string>(),
+              attractionNames.get(p2.id) ?? new Set<string>(),
+            )
+          : null;
+        const attractionsAgree =
+          overlap !== null &&
+          overlap.shared >= ATTRACTION_OVERLAP_MIN_SHARED &&
+          overlap.shared / overlap.smaller >= ATTRACTION_OVERLAP_MIN_SHARE;
+
+        const foundByNameOrPlace =
           sharedPoint ||
           (sameCity && nameSimilarity >= 0.85) ||
           (geoProximity && nameSimilarity >= 0.85) ||
@@ -610,10 +722,16 @@ export class ParkValidatorService {
           // (Disneyland Paris vs Anaheim) out.
           (nameSimilarity >= AUTO_MERGE_NAME_SIMILARITY && sharedEntityId);
 
+        const isDuplicate = foundByNameOrPlace || attractionsAgree;
+
         if (isDuplicate) {
           const reasons: string[] = [];
           if (sharedPoint)
             reasons.push("same coordinates, one park per source");
+          if (attractionsAgree)
+            reasons.push(
+              `attraction names agree (${overlap.shared} of ${overlap.smaller})`,
+            );
           if (sameCity) reasons.push("same city");
           if (geoProximity) reasons.push("geo proximity < 1km");
           if (nameSimilarity >= 0.98) reasons.push("very high name similarity");
@@ -625,9 +743,13 @@ export class ParkValidatorService {
             sharedEntityId && nameSimilarity >= AUTO_MERGE_NAME_SIMILARITY;
           const reviewReason = safe
             ? null
-            : !sharedEntityId
-              ? "no upstream source holds one id for both rows — this pair rests on names and geometry alone"
-              : `names score ${nameSimilarity.toFixed(4)} against ${AUTO_MERGE_NAME_SIMILARITY} — "${p1.name}" vs "${p2.name}", so the shared id alone would be deciding this`;
+            : attractionsAgree && !foundByNameOrPlace
+              ? attractionsOnlyReviewReason(overlap, distanceKm)
+              : !sharedEntityId
+                ? "no upstream source holds one id for both rows — this pair rests on names and geometry alone"
+                : `names score ${nameSimilarity.toFixed(4)} against ${AUTO_MERGE_NAME_SIMILARITY} — "${p1.name}" vs "${p2.name}", so the shared id alone would be deciding this`;
+          if (attractionsAgree && !foundByNameOrPlace)
+            foundByAttractionsAlone.push(`"${p1.name}" / "${p2.name}"`);
 
           duplicates.push({
             park1: { id: p1.id, name: p1.name, city: p1.city },
@@ -647,7 +769,39 @@ export class ParkValidatorService {
         }
       }
     }
+
+    // These pairs are the ones no other branch would have shown anybody, so
+    // they get a log line of their own: `validateAll` runs after every park
+    // metadata sync and logs only the total.
+    if (foundByAttractionsAlone.length > 0) {
+      this.logger.warn(
+        `🎢 ${foundByAttractionsAlone.length} park pair(s) list the same attractions while their names and locations disagree: ${foundByAttractionsAlone.join(", ")}. One row is likely filed at the wrong point. Review via GET /v1/admin/duplicate-parks.`,
+      );
+    }
     return duplicates;
+  }
+
+  /**
+   * Every park's non-retired attraction names, keyed for comparison. One
+   * query over the attraction table rather than one per park.
+   */
+  private async loadAttractionNames(): Promise<Map<string, Set<string>>> {
+    const attractions = await this.attractionRepository.find({
+      select: ["parkId", "name"],
+      where: { retiredAt: IsNull() },
+    });
+    const byPark = new Map<string, Set<string>>();
+    for (const attraction of attractions) {
+      const key = attractionNameKey(attraction.name ?? "");
+      if (!key) continue;
+      let names = byPark.get(attraction.parkId);
+      if (!names) {
+        names = new Set<string>();
+        byPark.set(attraction.parkId, names);
+      }
+      names.add(key);
+    }
+    return byPark;
   }
 
   async validateAll(): Promise<ValidationReport> {
