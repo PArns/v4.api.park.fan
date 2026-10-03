@@ -324,14 +324,17 @@ describe("curated works window when the operating day is not the start's date (e
     );
     expect(asDay(rows[0].startOpDay)).toBe(NEXT);
     // `gap`, not `recovered`: `lost_sight` weighs the spell's OPEN minutes
-    // against its observed ones, and the night is not open, so what it counts
-    // is the half hour between the park opening at 10:00 and the first morning
-    // reading at 10:30 — over the 10-minute allowance of
-    // MAX_UNOBSERVED_MINUTES_IN_SPELL. A statement of its own, and not a prop
-    // under the day above: the label says the interval is reported as censored,
-    // not that it was cut short at the observation hole. `startOpDay` owes
-    // nothing to it — the 10:30 reading is what carries the interval past the
-    // 16th's 10:00 opening, and `start_op_day` reads only the spell's bounds.
+    // against its operating ones — `spell_open_minutes - operating_minutes`,
+    // and not the `observed_minutes` column beside it, which is heartbeat-
+    // cleaned and leaves as `observedOperatingMinutes` instead. The night is
+    // not open, so what it counts is the half hour between the park opening
+    // at 10:00 and the first morning reading at 10:30 — over the 10-minute
+    // allowance of MAX_UNOBSERVED_MINUTES_IN_SPELL. A statement of its own,
+    // and not a prop under the day above: the label says the interval is
+    // reported as censored, not that it was cut short at the observation
+    // hole. `startOpDay` owes nothing to it — the 10:30 reading is what
+    // carries the interval past the 16th's 10:00 opening, and `start_op_day`
+    // reads only the spell's bounds.
     expect(rows[0].endReason).toBe("gap");
   });
 
