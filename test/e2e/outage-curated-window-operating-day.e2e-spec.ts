@@ -59,10 +59,14 @@ describe("curated works window when the operating day is not the start's date (e
   const CLOSES = new Date(`${NEXT}T02:00:00+02:00`);
 
   // The statement's four bound parameters: park filter, scan start, window end,
-  // as-of. The as-of sits after the ride recovered, so nothing is `ongoing`.
+  // as-of. The last two are one instant because that is how the only caller
+  // binds them: `downtime-reconstruction.processor.ts` hands `asOf` to $3 and
+  // $4 alike. Holding them apart would feed the statement readings from after
+  // its own as-of — a state production cannot reach — and the fixture would
+  // then be proving things about itself rather than about the day keying.
   const SCAN_START = new Date(`${DAY}T00:00:00+02:00`);
   const WIN_END = new Date("2026-06-17T00:00:00+02:00");
-  const AS_OF = new Date(`${NEXT}T03:00:00+02:00`);
+  const AS_OF = WIN_END;
 
   let parkId: string;
   let rideId: string;
@@ -319,6 +323,19 @@ describe("curated works window when the operating day is not the start's date (e
       new Date(`${DAY}T22:00:00+02:00`).toISOString(),
     );
     expect(asDay(rows[0].startOpDay)).toBe(NEXT);
+    // `gap`, not `recovered`: `lost_sight` weighs the spell's OPEN minutes
+    // against its operating ones — `spell_open_minutes - operating_minutes`,
+    // and not the `observed_minutes` column beside it, which is heartbeat-
+    // cleaned and leaves as `observedOperatingMinutes` instead. The night is
+    // not open, so what it counts is the half hour between the park opening
+    // at 10:00 and the first morning reading at 10:30 — over the 10-minute
+    // allowance of MAX_UNOBSERVED_MINUTES_IN_SPELL. A statement of its own,
+    // and not a prop under the day above: the label says the interval is
+    // reported as censored, not that it was cut short at the observation
+    // hole. `startOpDay` owes nothing to it — the 10:30 reading is what
+    // carries the interval past the 16th's 10:00 opening, and `start_op_day`
+    // reads only the spell's bounds.
+    expect(rows[0].endReason).toBe("gap");
   });
 
   it("excludes an after-hours outage under a window on its operating day", async () => {
