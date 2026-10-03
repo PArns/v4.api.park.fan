@@ -18,7 +18,12 @@ export class PredictionDto {
       "Confidence score, 30-100. The description said 0-1 and the served " +
       "values never were: `predict.py` blends a distance term with a spread " +
       "term, each floored at 30. The daily TFT path emitted a flat 0.7 until " +
-      "PAR-111 put it on this same formula.",
+      "PAR-111 put it on this same formula. For `hourly` the distance term " +
+      "(60% weight) is not an error estimate: it falls linearly from 95 to " +
+      "its floor of 50 at 22.5 h ahead and stays there to 48 h, while the " +
+      "measured error over the first 24 h rises only about 4.9%. Beyond " +
+      "24 h the error is not measured. Read it as how far ahead the " +
+      "prediction is, not as how accurate it is.",
   })
   confidence: number;
 
