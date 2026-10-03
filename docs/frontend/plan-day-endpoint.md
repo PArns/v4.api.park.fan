@@ -556,30 +556,14 @@ have put a concert on every remaining Thursday of the year — and it must have
 been seen in the last 28 days, measured against **today** rather than against the
 date asked about, or every date more than four weeks out would reject itself.
 
-**A third guard is the show's own season.** `shows` carries `is_seasonal` and
-`season_months`, written by the same nightly detector that writes the rides', and
-a projection is dropped where the season says `false` for the **planned** month —
-same three values as the rides, so `null` ("seasonal, and nothing else known")
-changes nothing. The case it exists for: a Halloween show last seen on
-1 November, asked about on the 5th for a plan on 20 December. The pattern is four
-days old and the weekday matches, so neither of the other two guards was ever
-going to catch it.
-
-Two differences from the ride rule, both of them properties of the table rather
-than decisions. There is no near-horizon bound, because `shows` has no
-`season_out_since` — the column that makes "shut right now" reach further than it
-should does not exist there, so the only thing to read is a calendar, and a
-calendar is as good six months out as tomorrow. And a **`scheduled` time is never
-filtered**: it is the operator's statement about that day against our detector's
-statement about a year, and an operator publishing a time for a date we call out
-of season is the operator correcting us.
-
-Unlike the ride rules this one **does** apply to a past date, and the difference
-is what is being filtered. A past day's rides come from a measurement, and a
-description of the past may not delete an observation; a projection is no such
-thing — it is our inference from a pattern seen in the last four weeks. The
-observation for a past day is the `scheduled` half, and that passes through
-untouched.
+**A show's season is the pattern window, not `season_months`.** A projection is
+not filtered by month. A Halloween show last seen on 1 November is projected for
+the following Thursdays until 28 days have passed without a sighting, then it
+drops out on the age guard; the same goes for a park that stops publishing
+showtimes. `shows.season_months` stays unread here: on 2026-10-02, 1,414 live
+shows carried `is_seasonal` and none carried `season_months`, and no sync field
+supplies them (PAR-645). A `scheduled` time is never filtered either, since it is
+the operator's statement about that day.
 
 A caller must render `projected` differently from `scheduled`. It is what the
 show did, not a promise that it runs; `observedOn` is there so the reader can see

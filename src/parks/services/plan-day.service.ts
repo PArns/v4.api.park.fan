@@ -721,7 +721,6 @@ export class PlanDayService {
       const pattern = patterns.get(show.id);
       if (!pattern || pattern.times.length === 0) continue;
       if (pattern.observedDays < PlanDayService.MIN_PATTERN_DAYS) continue;
-      if (PlanDayService.showOutOfSeasonOn(show, dateStr)) continue;
       // Measured against TODAY, never against the target date: a pattern is
       // stale because nobody has seen it lately, not because the day asked
       // about is far away. Measuring against the target would reject every
@@ -776,61 +775,6 @@ export class PlanDayService {
     const hour = Number(m[1]);
     const unfolded = wrap !== null && hour <= wrap.closeHour ? hour + 24 : hour;
     return unfolded * 60 + Number(m[2]);
-  }
-
-  /**
-   * Whether a show's season says it cannot run on the day being planned.
-   *
-   * The ride rule one level out, and the case it was written for is a real one:
-   * a Halloween show last seen on 1 November, asked about on the 5th for a plan
-   * on 20 December. Both guards in front of the projection pass — the pattern is
-   * four days old, the weekday matches — and neither of them is asking about a
-   * calendar. `Show` carries `isSeasonal` and `seasonMonths`, written by the
-   * same nightly detector that writes the rides' (`queue-percentile.processor`
-   * handles shows in that job), and nobody was reading them here.
-   *
-   * Same three values, same `=== false`: `null` means "seasonal, nothing else
-   * known" and may not hide a programme we have merely not watched long enough.
-   * Asked about the PLANNED month, like the rides.
-   *
-   * **The near-horizon split from the rides does not arise here, and that is a
-   * property of the table rather than a decision.** `season_out_since` is what
-   * makes "shut right now" reach further than it should, and `shows` has no
-   * such column — nor any curated pair. So the only thing this can read is a
-   * calendar, and a calendar is exactly as good six months out as it is
-   * tomorrow. If the detector ever learns to write a shut-now note for shows,
-   * this needs the same horizon bound the rides have.
-   *
-   * **A published showtime is never filtered.** It is the operator's statement
-   * about the day; this is ours about a pattern. `source` already tells the two
-   * apart, and an operator publishing a time for a date they call out of season
-   * is the operator correcting our detector.
-   *
-   * **And unlike the rides, this does apply to a past date.** The ride rules get
-   * their future-only bound for free by living in `forecastRides`, and the
-   * reason they need it is that a past day is answered from a MEASUREMENT — a
-   * row in the rollup says the ride ran, and a description of the past may not
-   * delete an observation. There is no such row behind a projection: it is our
-   * inference about a day, built from a pattern measured in the last four weeks,
-   * and a Halloween programme belongs no more in last January than in next
-   * December. A past day's observation is the `scheduled` half, and that half
-   * passes through untouched — `getShowtimesOnDate` answers a past date from the
-   * snapshots taken on it, months back.
-   */
-  private static showOutOfSeasonOn(
-    show: { isSeasonal?: boolean | null; seasonMonths?: number[] | null },
-    dateStr: string,
-  ): boolean {
-    return (
-      isCurrentlyInSeason(
-        {
-          isSeasonal: Boolean(show.isSeasonal),
-          seasonMonths: show.seasonMonths ?? null,
-          seasonOutSince: null,
-        },
-        PlanDayService.localNoonOf(dateStr),
-      ) === false
-    );
   }
 
   /** Today, in the park's timezone. */

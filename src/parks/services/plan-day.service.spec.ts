@@ -1960,12 +1960,12 @@ describe("PlanDayService", () => {
       expect(plan.shows.map((s) => s.showSlug)).toEqual(["early", "late"]);
     });
 
-    // The Halloween case, which both existing guards wave through: a show last
-    // seen on 1 November, asked about on the 5th for a plan on 20 December. The
-    // pattern is four days old and the weekday matches, so nothing in front of
-    // the projection was ever going to catch it.
-    describe("out of season", () => {
-      it("does not project a show into a month its season does not cover", async () => {
+    // The season of a show is the pattern window, not `season_months`: a park
+    // that stops publishing showtimes drops out after 28 days.
+    // 1,414 live shows carry `is_seasonal` and none carries `season_months`
+    // (PAR-645), so a month filter would never have fired.
+    describe("season columns", () => {
+      it("does not filter a projection by season months", async () => {
         const date = otherMonthDate();
         calendarDay = { ...calendarDay!, date };
         parkShows = [
@@ -1983,13 +1983,10 @@ describe("PlanDayService", () => {
 
         const plan = await service.buildPlanDay(park, date);
 
-        expect(plan.shows).toEqual([]);
+        expect(plan.shows.map((s) => s.source)).toEqual(["projected"]);
       });
 
-      it("keeps a show whose season is seasonal-but-unknown", async () => {
-        // `null`, the same third value the rides have: seasonal, and nothing
-        // else known. It may not delete a programme we have simply not watched
-        // for long enough to give months to.
+      it("drops a seasonal show once its pattern is older than the window", async () => {
         const date = otherMonthDate();
         calendarDay = { ...calendarDay!, date };
         parkShows = [
@@ -2002,91 +1999,12 @@ describe("PlanDayService", () => {
           },
         ];
         patterns = new Map([
-          ["s-1", pattern({ lastObservedOn: todayMinus(3) })],
-        ]);
-
-        const plan = await service.buildPlanDay(park, date);
-
-        expect(plan.shows.map((s) => s.source)).toEqual(["projected"]);
-      });
-
-      it("asks about the planned month, not the month the request arrives in", async () => {
-        const date = otherMonthDate();
-        calendarDay = { ...calendarDay!, date };
-        parkShows = [
-          {
-            id: "s-1",
-            slug: "big-moments",
-            name: "Big Moments",
-            isSeasonal: true,
-            seasonMonths: [monthOf(date)],
-          },
-        ];
-        patterns = new Map([
-          ["s-1", pattern({ lastObservedOn: todayMinus(3) })],
-        ]);
-
-        const plan = await service.buildPlanDay(park, date);
-
-        expect(plan.shows.map((s) => s.source)).toEqual(["projected"]);
-      });
-
-      it("applies to a past date too, which the ride rules do not", async () => {
-        // The rides stop at today's edge because a past day is answered from a
-        // measurement. A projection is not one: it is our inference from a
-        // pattern seen in the last four weeks, and a Halloween programme
-        // belongs no more in last January than in next December. The
-        // observation for a past day is the `scheduled` half, and that is not
-        // filtered — see the case below.
-        const date = pastDate();
-        calendarDay = { ...calendarDay!, date };
-        parkShows = [
-          {
-            id: "s-1",
-            slug: "big-moments",
-            name: "Big Moments",
-            isSeasonal: true,
-            seasonMonths: allMonthsExcept(monthOf(date)),
-          },
-        ];
-        patterns = new Map([
-          ["s-1", pattern({ lastObservedOn: todayMinus(3) })],
+          ["s-1", pattern({ lastObservedOn: todayMinus(29) })],
         ]);
 
         const plan = await service.buildPlanDay(park, date);
 
         expect(plan.shows).toEqual([]);
-      });
-
-      it("still serves a showtime the operator published for that day", async () => {
-        // The operator's statement about the day, against our detector's
-        // statement about a year. Publishing a time for a date we call out of
-        // season is the operator correcting us, not us catching them.
-        const date = otherMonthDate();
-        calendarDay = { ...calendarDay!, date };
-        parkShows = [
-          {
-            id: "s-1",
-            slug: "big-moments",
-            name: "Big Moments",
-            isSeasonal: true,
-            seasonMonths: allMonthsExcept(monthOf(date)),
-          },
-        ];
-        scheduledTimes = new Map([["s-1", ["20:00"]]]);
-
-        const plan = await service.buildPlanDay(park, date);
-
-        expect(plan.shows).toEqual([
-          {
-            showSlug: "big-moments",
-            showName: "Big Moments",
-            latitude: null,
-            longitude: null,
-            times: ["20:00"],
-            source: "scheduled",
-          },
-        ]);
       });
     });
   });
