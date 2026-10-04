@@ -147,11 +147,17 @@ describe("diffRideAlerts", () => {
 });
 
 describe("diffReopenAlerts", () => {
-  const alert = (armed: boolean, id = "alert-1", attractionId = "ride-1") => ({
+  const alert = (
+    armed: boolean,
+    id = "alert-1",
+    attractionId = "ride-1",
+    lastTriggeredAt: Date | null = null,
+  ) => ({
     id,
     subscriptionId: "sub-1",
     attractionId,
     armed,
+    lastTriggeredAt,
   });
 
   it("fires once on the closed → operating edge and disarms", () => {
@@ -188,6 +194,20 @@ describe("diffReopenAlerts", () => {
     );
     expect(result.triggers).toEqual([]);
     expect(result.armedUpdates).toEqual([{ id: "alert-1", armed: true }]);
+  });
+
+  it("does not re-arm an alert that already fired (evening closing, next morning)", () => {
+    const fired = alert(
+      false,
+      "alert-1",
+      "ride-1",
+      new Date("2026-06-14T10:00:00Z"),
+    );
+    const result = diffReopenAlerts(
+      [{ attractionId: "ride-1", operating: false }],
+      [fired],
+    );
+    expect(result.armedUpdates).toEqual([]);
   });
 
   it("leaves an alert alone when its ride gave no usable reading", () => {

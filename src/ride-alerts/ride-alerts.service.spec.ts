@@ -198,6 +198,7 @@ describe("RideAlertsService", () => {
       status: LiveStatus;
       waitTime: number | null;
       isHeartbeat: boolean | null;
+      timestamp: Date;
     }> = {},
   ) => [
     {
@@ -205,6 +206,7 @@ describe("RideAlertsService", () => {
       status: LiveStatus.OPERATING,
       waitTime: 10,
       isHeartbeat: false,
+      timestamp: new Date(NOW_MS - 60_000),
       ...overrides,
     },
   ];
@@ -584,10 +586,103 @@ describe("RideAlertsService", () => {
       expect(alertRows.get("alert-1")!.armed).toBe(true);
     });
 
+    it("fires for a ride closed 30 minutes ago once a fresh OPERATING row appears", async () => {
+      subs();
+      alertRows.set("alert-1", reopen({ armed: true }));
+      // The reopen sweep asks for a 6 h window, so the DOWN row older than the
+      // 15 minute wait-time window is still the ride's last known status.
+      queueDataService.findCurrentStatusByAttractionIds.mockImplementation(
+        async (_ids: string[], maxAge: number) =>
+          maxAge >= 360
+            ? new Map([
+                [
+                  "ride-1",
+                  [
+                    {
+                      ...standbyReading({ waitTime: 5 })[0],
+                      timestamp: new Date(NOW_MS - 60_000),
+                    },
+                  ],
+                ],
+              ])
+            : new Map(),
+      );
+      await sweep();
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps an alert armed over a closed row far older than the wait-time window", async () => {
+      subs();
+      alertRows.set("alert-1", reopen({ armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockImplementation(
+        async (_ids: string[], maxAge: number) =>
+          maxAge >= 360
+            ? new Map([
+                [
+                  "ride-1",
+                  [
+                    {
+                      ...standbyReading({
+                        status: LiveStatus.DOWN,
+                        waitTime: null,
+                      })[0],
+                      timestamp: new Date(NOW_MS - 40 * 60_000),
+                    },
+                  ],
+                ],
+              ])
+            : new Map(),
+      );
+      await sweep();
+      expect(pushService.send).not.toHaveBeenCalled();
+      expect(alertRows.get("alert-1")!.armed).toBe(true);
+    });
+
+    it("does not treat a stale OPERATING row as a reopening", async () => {
+      subs();
+      alertRows.set("alert-1", reopen({ armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([
+          [
+            "ride-1",
+            [
+              {
+                ...standbyReading({ waitTime: 5 })[0],
+                timestamp: new Date(NOW_MS - 90 * 60_000),
+              },
+            ],
+          ],
+        ]),
+      );
+      await sweep();
+      expect(pushService.send).not.toHaveBeenCalled();
+    });
+
+    it("does not re-arm a spent alert when the ride closes in the evening", async () => {
+      subs();
+      alertRows.set(
+        "alert-1",
+        reopen({
+          armed: false,
+          lastTriggeredAt: new Date("2026-06-15T08:00:00.000Z"),
+        }),
+      );
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([
+          [
+            "ride-1",
+            standbyReading({ status: LiveStatus.CLOSED, waitTime: null }),
+          ],
+        ]),
+      );
+      await sweep();
+      expect(alertRows.get("alert-1")!.armed).toBe(false);
+    });
+
     it("re-arms on a closed reading and fires on the next opening", async () => {
       subs();
       alertRows.set("alert-1", reopen({ armed: false }));
-      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
         new Map([
           [
             "ride-1",
@@ -599,7 +694,7 @@ describe("RideAlertsService", () => {
       expect(alertRows.get("alert-1")!.armed).toBe(true);
       expect(pushService.send).not.toHaveBeenCalled();
 
-      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
         new Map([["ride-1", standbyReading({ waitTime: 0 })]]),
       );
       await sweep();

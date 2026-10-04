@@ -50,6 +50,14 @@ const MAX_READING_AGE_MINUTES = 15;
 /** What `sendTrigger` can send: a wait-time crossing, or (no `waitTime`) a reopening. */
 type SweepTrigger = AlertTrigger | ReopenTrigger;
 
+/**
+ * How far back a `reopen` alert looks for the ride's last status. `queue_data`
+ * stores changes, not samples, so a ride that has been closed for 40 minutes
+ * has no row inside `MAX_READING_AGE_MINUTES` — and 40 minutes closed is the
+ * very case the alert is for. Only the OPERATING reading must still be fresh.
+ */
+const REOPEN_STATUS_WINDOW_MINUTES = 6 * 60;
+
 export interface AttractionForAlert {
   attraction: Attraction;
   park: Park;
@@ -155,6 +163,9 @@ export class RideAlertsService {
         kind,
         thresholdMinutes,
         armed,
+        // A reopen alert is spent once it fires, and asking again is what
+        // spends it anew; wait-time alerts keep their own `lastTriggeredAt`.
+        ...(kind === RIDE_ALERT_KIND_REOPEN ? { lastTriggeredAt: null } : {}),
         // Set explicitly rather than relying on `@UpdateDateColumn`'s
         // `onUpdate` — that is triggered by TypeORM's own `save()`
         // lifecycle, which this raw upsert query does not go through.
@@ -202,7 +213,7 @@ export class RideAlertsService {
     const statusByAttraction =
       await this.queueDataService.findCurrentStatusByAttractionIds(
         [attractionId],
-        MAX_READING_AGE_MINUTES,
+        REOPEN_STATUS_WINDOW_MINUTES,
       );
     const standby = (statusByAttraction.get(attractionId) ?? []).find(
       (row) => row.queueType === QueueType.STANDBY,
@@ -282,10 +293,17 @@ export class RideAlertsService {
       // Reopen alerts first and on their own: they read the status, so a ride
       // that is CLOSED (which has no wait-time reading) is exactly the case
       // they need, and the wait-time path below returns early without one.
+      const reopenStatus =
+        reopenAlerts.length > 0
+          ? await this.queueDataService.findCurrentStatusByAttractionIds(
+              [...new Set(reopenAlerts.map((a) => a.attractionId))],
+              REOPEN_STATUS_WINDOW_MINUTES,
+            )
+          : new Map<string, QueueData[]>();
       const reopenTriggers = await this.diffAndPersistReopen(
         reopenAlerts,
         attractionById,
-        statusByAttraction,
+        reopenStatus,
         nowMs,
       );
 
@@ -414,7 +432,12 @@ export class RideAlertsService {
         readings.push({ attractionId: id, operating: false });
       } else if (standby && standby.status !== LiveStatus.OPERATING) {
         readings.push({ attractionId: id, operating: false });
-      } else if (standby && !standby.isHeartbeat) {
+      } else if (
+        standby &&
+        !standby.isHeartbeat &&
+        nowMs - new Date(standby.timestamp).getTime() <=
+          MAX_READING_AGE_MINUTES * 60_000
+      ) {
         readings.push({ attractionId: id, operating: true });
       }
     }

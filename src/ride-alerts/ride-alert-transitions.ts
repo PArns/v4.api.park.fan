@@ -45,6 +45,8 @@ export interface ReopenAlertRow {
   subscriptionId: string;
   attractionId: string;
   armed: boolean;
+  /** Set once the alert has fired — a reopen alert is spent then and never re-arms. */
+  lastTriggeredAt: Date | null;
 }
 
 export interface ReopenTrigger {
@@ -60,9 +62,10 @@ export interface ReopenAlertDiff {
 }
 
 /**
- * The same edge trigger as `diffRideAlerts`, on a status instead of a wait:
- * `armed` is "last seen not operating", the first operating reading fires and
- * disarms, and only a later non-operating reading arms again. Reading the
+ * An edge trigger like `diffRideAlerts`, on a status instead of a wait, and
+ * one-shot: `armed` is "last seen not operating", the first operating reading
+ * fires and disarms for good. A later non-operating reading arms an alert only
+ * if it has never fired. Reading the
  * status rather than the wait is what makes a ride that merely stays open
  * quiet across any number of cycles.
  */
@@ -86,7 +89,11 @@ export function diffReopenAlerts(
         attractionId: alert.attractionId,
       });
       armedUpdates.push({ id: alert.id, armed: false });
-    } else if (!operating && !alert.armed) {
+    } else if (!operating && !alert.armed && !alert.lastTriggeredAt) {
+      // Only an alert that has not fired yet: it was created against an open
+      // ride and is now seeing it close. A fired one stays spent, or the
+      // evening closing would arm it and tomorrow's opening would send the
+      // same "open again" every day.
       armedUpdates.push({ id: alert.id, armed: true });
     }
   }
