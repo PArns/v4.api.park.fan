@@ -352,11 +352,12 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
       expect(retirementService.retire).not.toHaveBeenCalled();
     });
 
-    it("back-dates a row written just outside the fresh-write window", async () => {
-      // The pair to the case above, with the one deciding fact moved by a day.
-      expect(ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS).toBe(48);
+    it("back-dates a row written outside the fresh-write window", async () => {
+      // The pair to the case above, with the one deciding fact moved past the
+      // window. Four days is what the six measured rows carried.
+      expect(ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS).toBe(72);
       attractionRepo.find.mockResolvedValue([
-        { ...unseeded, updatedAt: daysBefore(3) },
+        { ...unseeded, updatedAt: daysBefore(4) },
       ]);
       manager.query.mockImplementation(async (sql: string) =>
         sql.includes("GROUP BY")

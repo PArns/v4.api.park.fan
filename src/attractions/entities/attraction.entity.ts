@@ -529,12 +529,16 @@ export class Attraction {
    * them was the whole difference in PAR-587.
    *
    * **This is a last-seen timestamp, not a notice.** The sync seeds it from
-   * the earliest evidence it has that the entity still existed — the earlier
-   * of `updatedAt` and the row's last real reading — so a row that went quiet
-   * long before anyone looked does not get a fresh clock the first time the
-   * column is filled. Where there is no real reading at all, `updatedAt` is
-   * the only evidence left, and the seed can then only delay a retirement,
-   * never cause one.
+   * the evidence it has that the entity still existed, and which evidence that
+   * is depends on how recently the row was written. Inside
+   * `ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS` the sync itself wrote it, so the
+   * feed listed it that recently and the clock starts now whatever the
+   * readings say. Outside that window the row is back-dated to the earlier of
+   * `updatedAt` and its last real reading, so a row that went quiet long
+   * before anyone looked does not get a fresh clock the first time the column
+   * is filled. Where there is no real reading at all, `updatedAt` is the only
+   * evidence left, and the seed can then only delay a retirement, never cause
+   * one.
    *
    * **One writer, plus one deliberate exception.** The sync sets it when a
    * park syncs successfully without listing the id, and clears it the moment

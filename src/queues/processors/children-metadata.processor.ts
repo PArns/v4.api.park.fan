@@ -147,11 +147,16 @@ export const ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS = 400;
  * How recent a row's own write has to be for the seed to treat the absence as
  * new rather than back-dating it.
  *
- * Two runs of the `0 4 * * *` children cron, which is the point: the sync
+ * Three runs of the `0 4 * * *` children cron, which is the point: the sync
  * writes every row it lists, so a row written inside this window was listed
  * inside it, and its absence is at most that old whatever its readings say.
  * Back-dating it to an old reading would take away the whole 60-day grace
  * against a feed that drops an id for one run.
+ *
+ * Three rather than two because a park's own run can fail — the error is
+ * caught per park and the cron carries no `attempts`, so one bad run leaves a
+ * listed row's `updatedAt` at almost exactly two days and the branch would be
+ * decided by batch jitter. The third run is the slack for that.
  *
  * **It is not a corner case.** Measured on 2026-10-04: of 2.393 active rows in
  * scope, 520 had received no real reading in 60 days — and 421 of those 520
@@ -164,7 +169,7 @@ export const ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS = 400;
  * newly absent and delays its retirement by a full
  * {@link ABSENT_UPSTREAM_RETIRE_DAYS}. It can only delay, never retire early.
  */
-export const ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS = 48;
+export const ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS = 72;
 
 /**
  * Children Metadata Processor (Combined)
@@ -1146,10 +1151,14 @@ export class ChildrenMetadataProcessor {
    * for rows it finds absent and clears it for rows the feed listed again —
    * and the gate reads it instead (PAR-656, PO decision 2026-10-03).
    *
-   * The one case the clock still shortens: a park whose whole sync failed for
-   * 60 days retires a missing row on its first good run, not 60 days after it.
-   * The reading gate still applies, and the row comes back by itself if the id
-   * is listed again.
+   * The clock can still be short of the true absence, and the case is now a
+   * park whose sync failed for longer than
+   * {@link ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS}: a row that disappeared
+   * during the outage falls outside the fresh-write window, gets back-dated to
+   * its last real reading, and can be retired on the park's first good run
+   * rather than 60 days later. The reading gate still applies, the retirement
+   * carries {@link ABSENT_UPSTREAM_REASON} rather than a closure, and the row
+   * comes back by itself the moment the id is listed again.
    *
    * **The park has to have synced, and this run proves it** (our feed going
    * quiet is not the entity going away). This runs only after a successful
@@ -1275,8 +1284,8 @@ export class ChildrenMetadataProcessor {
     const unseeded = absent.filter((row) => row.absentSince == null);
     if (unseeded.length === 0) return;
 
-    // A row the sync wrote in the last two runs was listed in the last two
-    // runs, so its absence is new and nothing older may be read into it.
+    // A row the sync wrote inside the window was listed inside the window, so
+    // its absence is new and nothing older may be read into it.
     const freshWrite = new Date(
       now.getTime() - ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS * 3_600_000,
     );
@@ -1287,7 +1296,8 @@ export class ChildrenMetadataProcessor {
     }
 
     // Only the back-datable rows are worth the lookback, so a park whose feed
-    // just dropped an id pays nothing for it.
+    // just dropped an id pays nothing for it. This is also the steady state:
+    // after the first run that fills the column, there is nothing to seed.
     const lastRead = new Map<string, Date>();
     if (backdatable.length > 0) {
       const since = new Date(
