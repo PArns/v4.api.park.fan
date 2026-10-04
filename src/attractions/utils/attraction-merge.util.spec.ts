@@ -12,8 +12,9 @@ import {
  * counting at 2, so "alice-in-wonderland-2" is the accidental second row and
  * "alice-in-wonderland" is the URL in the sitemap.
  *
- * There is no alias table for attractions (only `park_slug_aliases`), so a
- * surviving slug that is not the base one simply 404s with no redirect.
+ * The slug that stops answering is recorded in `attraction_slug_aliases` and
+ * redirects (PAR-687), but the base slug is still the one the sitemap and the
+ * index carry, so it is the one the survivor keeps.
  */
 describe("resolveSurvivingSlug", () => {
   it("takes the base slug when the winner is the suffixed row", () => {

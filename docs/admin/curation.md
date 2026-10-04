@@ -507,9 +507,20 @@ every night.
 `curated_name` does **not** regenerate the slug.
 
 For attractions this is not a preference: their URLs are indexed, linked from
-blog posts and stored in the media sidecars, and unlike parks there is no
-`attraction_slug_aliases` table. A slug change is a permanent 404 with nothing
-recording where the ride went.
+blog posts and stored in the media sidecars. Since PAR-687 an old attraction
+slug can redirect: `attraction_slug_aliases` maps it to the ride, and the
+attraction route answers it with a 301. The attraction merge writes the row
+for the slug it removes by itself; **a slug changed by hand needs its alias
+row written in the same step** — otherwise it is a permanent 404 again:
+
+```sql
+INSERT INTO attraction_slug_aliases ("attractionId", slug)
+VALUES ('<attraction id>', '<old slug>') ON CONFLICT DO NOTHING;
+UPDATE attractions SET slug = '<new slug>' WHERE id = '<attraction id>';
+```
+
+Change a slug only for a real error (wrong language, a `-2` left behind). A
+better display name goes into `curated_name`, never into the slug.
 
 For parks, changing the address is `ParkRenameService`'s job — it writes a
 `park_slug_aliases` row so the old path keeps redirecting. Renaming for display
