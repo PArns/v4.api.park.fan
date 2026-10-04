@@ -144,6 +144,29 @@ export const ABSENT_UPSTREAM_READING_DAYS = 7;
 export const ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS = 400;
 
 /**
+ * How recent a row's own write has to be for the seed to treat the absence as
+ * new rather than back-dating it.
+ *
+ * Two runs of the `0 4 * * *` children cron, which is the point: the sync
+ * writes every row it lists, so a row written inside this window was listed
+ * inside it, and its absence is at most that old whatever its readings say.
+ * Back-dating it to an old reading would take away the whole 60-day grace
+ * against a feed that drops an id for one run.
+ *
+ * **It is not a corner case.** Measured on 2026-10-04: of 2.393 active rows in
+ * scope, 520 had received no real reading in 60 days — and 421 of those 520
+ * had been written inside two days, so the feed was listing them. Without this
+ * window every one of those 421 would have been retired on the first run the
+ * wiki failed to list it, instead of 60 days later.
+ *
+ * The cost is in the other direction and is the one this path has always
+ * accepted: a curation write inside the window makes a long-absent row look
+ * newly absent and delays its retirement by a full
+ * {@link ABSENT_UPSTREAM_RETIRE_DAYS}. It can only delay, never retire early.
+ */
+export const ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS = 48;
+
+/**
  * Children Metadata Processor (Combined)
  *
  * OPTIMIZATION: Instead of 3 separate processors calling getEntityChildren(),
@@ -1225,11 +1248,15 @@ export class ChildrenMetadataProcessor {
    * Starts the absence clock on the rows that do not have one yet, and writes
    * the value back onto the objects so this run can already act on it.
    *
-   * The seed is the **earlier** of the row's `updatedAt` and its last real
-   * reading, because both are evidence that the entity still existed and the
-   * older of the two is the one the newer writer may have overwritten. A row
-   * curated yesterday and silent since April is absent since April, not since
-   * yesterday — getting that backwards is the bug this column was added for.
+   * A row written inside {@link ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS} is
+   * seeded with `now`: the sync writes what it lists, so the feed had this row
+   * that recently and the absence starts today no matter how old its readings
+   * are. Only a row whose own write is older than that gets back-dated, to the
+   * **earlier** of its `updatedAt` and its last real reading — both are
+   * evidence that the entity still existed, and the older of the two is the
+   * one the newer writer may have overwritten. A row curated last week and
+   * silent since April is absent since April, not since last week; getting
+   * that backwards is the bug this column was added for.
    *
    * Where no real reading is found inside
    * {@link ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS}, `updatedAt` is all that is
@@ -1248,25 +1275,41 @@ export class ChildrenMetadataProcessor {
     const unseeded = absent.filter((row) => row.absentSince == null);
     if (unseeded.length === 0) return;
 
-    const since = new Date(
-      now.getTime() - ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS * 86_400_000,
+    // A row the sync wrote in the last two runs was listed in the last two
+    // runs, so its absence is new and nothing older may be read into it.
+    const freshWrite = new Date(
+      now.getTime() - ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS * 3_600_000,
     );
-    const readings: { attractionId: string; last_read: Date }[] =
-      await this.mappingRepository.manager.query(
-        `SELECT "attractionId", max("timestamp") AS last_read
-           FROM queue_data
-          WHERE "attractionId" = ANY($1::uuid[])
-            AND "timestamp" >= $2
-            AND data_source <> ALL($3::text[])
-            AND is_heartbeat IS NOT TRUE
-          GROUP BY "attractionId"`,
-        [unseeded.map((row) => row.id), since, [...SYNTHETIC_SOURCES]],
-      );
-    const lastRead = new Map(
-      readings.map((row) => [row.attractionId, new Date(row.last_read)]),
-    );
-
+    const backdatable: typeof unseeded = [];
     for (const row of unseeded) {
+      if (row.updatedAt.getTime() < freshWrite.getTime()) backdatable.push(row);
+      else row.absentSince = now;
+    }
+
+    // Only the back-datable rows are worth the lookback, so a park whose feed
+    // just dropped an id pays nothing for it.
+    const lastRead = new Map<string, Date>();
+    if (backdatable.length > 0) {
+      const since = new Date(
+        now.getTime() - ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS * 86_400_000,
+      );
+      const readings: { attractionId: string; last_read: Date }[] =
+        await this.mappingRepository.manager.query(
+          `SELECT "attractionId", max("timestamp") AS last_read
+             FROM queue_data
+            WHERE "attractionId" = ANY($1::uuid[])
+              AND "timestamp" >= $2
+              AND data_source <> ALL($3::text[])
+              AND is_heartbeat IS NOT TRUE
+            GROUP BY "attractionId"`,
+          [backdatable.map((row) => row.id), since, [...SYNTHETIC_SOURCES]],
+        );
+      for (const row of readings) {
+        lastRead.set(row.attractionId, new Date(row.last_read));
+      }
+    }
+
+    for (const row of backdatable) {
       const read = lastRead.get(row.id);
       row.absentSince =
         read != null && read.getTime() < row.updatedAt.getTime()

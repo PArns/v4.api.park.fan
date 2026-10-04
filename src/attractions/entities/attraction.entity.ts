@@ -538,11 +538,10 @@ export class Attraction {
    *
    * **One writer, plus one deliberate exception.** The sync sets it when a
    * park syncs successfully without listing the id, and clears it the moment
-   * the id is listed again. The exception is `unretire`: an un-retirement
-   * entered by hand is a person stating that the ride exists, which is better
-   * evidence than anything the feed has, so it clears the column and the
-   * absence starts over. Nothing else may touch it — that is the entire point
-   * of the column.
+   * the id is listed again. The exception is `unretire`, which sets it to the
+   * moment of the un-retirement: a person stating that the ride exists is a
+   * sighting, and a better one than anything the feed has. Nothing else may
+   * touch it — that is the entire point of the column.
    */
   @Column({ name: "absent_since", type: "timestamptz", nullable: true })
   absentSince: Date | null;

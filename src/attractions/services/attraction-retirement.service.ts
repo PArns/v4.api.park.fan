@@ -246,12 +246,16 @@ export class AttractionRetirementService {
   /**
    * Undo — a retirement is a claim about the world, and claims can be wrong.
    *
-   * `absentSince` goes with it. A person saying the ride exists is better
-   * evidence than the feed not listing it, so the absence starts over rather
-   * than resuming where it left off: without this, the next children sync
-   * would read a clock older than `ABSENT_UPSTREAM_RETIRE_DAYS` and retire the
-   * row again within the hour. It used to be the pollution of `updatedAt` that
-   * bought those 60 days by accident; now it is stated (PAR-656).
+   * `absentSince` goes with it, and is set to **now** rather than cleared. A
+   * person saying the ride exists is a sighting, and the better one: better
+   * than the feed not listing it and better than an old reading. Clearing the
+   * column instead would hand the row back to the sync as a first absence, and
+   * the seed there may look at readings older than
+   * `ABSENT_UPSTREAM_RETIRE_DAYS` — the retirement a human just undid would be
+   * written again on the next run. The children sync clears the column itself
+   * the moment the id is listed again; until then the absence runs from the
+   * statement. It used to be the pollution of `updatedAt` that bought those 60
+   * days by accident; now it is stated (PAR-656).
    */
   async unretire(attractionId: string): Promise<boolean> {
     const attraction = await this.attractionRepository.findOne({
@@ -263,7 +267,7 @@ export class AttractionRetirementService {
       retiredAt: null,
       retiredReason: null,
       retiredHidden: false,
-      absentSince: null,
+      absentSince: new Date(),
     });
     await invalidateParkCaches(this.redis, attraction.parkId).catch(() => {});
     await this.revalidationService

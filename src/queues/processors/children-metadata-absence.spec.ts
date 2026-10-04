@@ -8,6 +8,7 @@ import {
 import { SYNTHETIC_SOURCES } from "../../common/utils/outage-rows.sql";
 import {
   ABSENT_UPSTREAM_RETIRE_DAYS,
+  ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS,
   ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS,
   ChildrenMetadataProcessor,
 } from "./children-metadata.processor";
@@ -320,6 +321,53 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
       expect(updateParams[1]).toEqual([daysBefore(164).toISOString()]);
 
       // And the same run acts on it, rather than waiting for the next.
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+    });
+
+    it("starts the clock today for a row the sync wrote inside the fresh-write window", async () => {
+      // The regression this window exists to prevent. Measured on 2026-10-04:
+      // 421 of the 2.393 active rows in scope had no real reading in 60 days
+      // AND had been written inside two days, so the feed was listing them.
+      // Back-dating one of those to its last reading retires it on the first
+      // run an id goes missing, instead of 60 days later.
+      attractionRepo.find.mockResolvedValue([
+        { ...unseeded, updatedAt: daysBefore(1) },
+      ]);
+      manager.query.mockImplementation(async (sql: string) =>
+        sql.includes("GROUP BY")
+          ? [{ attractionId: deadRow.id, last_read: daysBefore(164) }]
+          : [],
+      );
+
+      await retireAbsent();
+
+      // No lookback at all: nothing was back-datable, so nothing was asked.
+      expect(
+        manager.query.mock.calls.filter(([sql]: [string]) =>
+          sql.includes("GROUP BY"),
+        ),
+      ).toHaveLength(0);
+      const [, updateParams] = manager.query.mock.calls[0];
+      expect(updateParams[1]).toEqual([now.toISOString()]);
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    it("back-dates a row written just outside the fresh-write window", async () => {
+      // The pair to the case above, with the one deciding fact moved by a day.
+      expect(ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS).toBe(48);
+      attractionRepo.find.mockResolvedValue([
+        { ...unseeded, updatedAt: daysBefore(3) },
+      ]);
+      manager.query.mockImplementation(async (sql: string) =>
+        sql.includes("GROUP BY")
+          ? [{ attractionId: deadRow.id, last_read: daysBefore(164) }]
+          : [],
+      );
+
+      await retireAbsent();
+
+      expect(seedCalls()[0][0]).toContain("GROUP BY");
+      expect(seedCalls()[1][1][1]).toEqual([daysBefore(164).toISOString()]);
       expect(retirementService.retire).toHaveBeenCalledTimes(1);
     });
 
