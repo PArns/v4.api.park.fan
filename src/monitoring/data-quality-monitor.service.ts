@@ -38,6 +38,12 @@ export interface SilencedCluster {
   attractionCount: number;
   lastOperating: string;
   sampleNames: string[];
+  /**
+   * Every ride of the cluster, so the admin can answer it in one step — a
+   * season window on all of them when it is a section closing for the season
+   * (PAR-695). `sampleNames` stays for the log line.
+   */
+  attractions: Array<{ attractionId: string; name: string }>;
 }
 
 export interface ScheduledButSilentPark {
@@ -201,6 +207,7 @@ export class DataQualityMonitorService {
       last_op: string;
       n: string;
       names: string[];
+      rides: Array<{ id: string; name: string }> | null;
     }> = await this.dataSource.query(
       `
       WITH activity AS (
@@ -232,7 +239,11 @@ export class DataQualityMonitorService {
              p.name AS park_name,
              (act.last_op AT TIME ZONE p.timezone)::date::text AS last_op,
              count(*)::text AS n,
-             (array_agg(a.name ORDER BY a.name))[1:4] AS names
+             (array_agg(a.name ORDER BY a.name))[1:4] AS names,
+             json_agg(
+               json_build_object('id', a.id, 'name', COALESCE(a.curated_name, a.name))
+               ORDER BY a.name
+             ) AS rides
         FROM activity act
         JOIN attractions a ON a.id = act.aid
         JOIN parks p ON p.id = a."parkId"
@@ -243,6 +254,11 @@ export class DataQualityMonitorService {
          -- still receiving rows, so this is a silence rather than a deletion
          AND act.last_row > now() - INTERVAL '2 days'
          AND NOT a.open_with_park
+         -- A ride with a known season going quiet is the season ending, which
+         -- is the answer this card asks for. Without this, the admin's
+         -- "season ends" button would leave the card standing (PAR-695).
+         AND NOT COALESCE(a.curated_is_seasonal, a.is_seasonal)
+         AND a.retired_at IS NULL
        GROUP BY a."parkId", p.name, (act.last_op AT TIME ZONE p.timezone)::date
       HAVING count(*) >= $3::int
        ORDER BY count(*) DESC
@@ -256,6 +272,10 @@ export class DataQualityMonitorService {
       attractionCount: Number(r.n),
       lastOperating: r.last_op,
       sampleNames: r.names ?? [],
+      attractions: (r.rides ?? []).map((ride) => ({
+        attractionId: ride.id,
+        name: ride.name,
+      })),
     }));
   }
 

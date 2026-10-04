@@ -62,6 +62,10 @@ describe("DataQualityMonitorService", () => {
           last_op: "2026-06-07",
           n: "44",
           names: ["Ball Pool", "Crazy Taxi"],
+          rides: [
+            { id: "a1", name: "Ball Pool" },
+            { id: "a2", name: "Crazy Taxi" },
+          ],
         },
       ]);
 
@@ -72,8 +76,23 @@ describe("DataQualityMonitorService", () => {
           attractionCount: 44,
           lastOperating: "2026-06-07",
           sampleNames: ["Ball Pool", "Crazy Taxi"],
+          attractions: [
+            { attractionId: "a1", name: "Ball Pool" },
+            { attractionId: "a2", name: "Crazy Taxi" },
+          ],
         },
       ]);
+    });
+
+    it("leaves out rides whose season is known, so answering the card clears it (PAR-695)", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findSilencedClusters();
+
+      const [sql] = query.mock.calls[0] as [string];
+      expect(sql).toMatch(
+        /NOT COALESCE\(a\.curated_is_seasonal, a\.is_seasonal\)/,
+      );
+      expect(sql).toMatch(/a\.retired_at IS NULL/);
     });
   });
 
