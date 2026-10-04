@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { DataSource } from "typeorm";
 import { observedReadingsSql } from "../common/utils/closure-gap.sql";
 import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
+import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 
@@ -64,6 +65,27 @@ export interface ScheduledButSilentPark {
  * from filling the log.
  */
 export const SILENT_PARK_LOOKAHEAD_DAYS = 7;
+
+/**
+ * A ride the children sync retired for being absent from ThemeParks.wiki's
+ * `/children`, while nobody has said whether it is seasonal (PAR-684).
+ *
+ * The absence step skips a row whose season is known, but the detector cannot
+ * know one before `MIN_OBSERVED_DAYS` of watching — so a maze in its first year
+ * is retired like a ride that was torn down. This is the list a human answers:
+ * a season window in the admin (`curated_is_seasonal` true) or "not seasonal"
+ * (false), and either answer takes the row off it.
+ */
+export interface AbsenceRetiredUnreviewed {
+  attractionId: string;
+  name: string;
+  slug: string;
+  parkId: string;
+  parkName: string;
+  retiredAt: string;
+  /** Park-local date of the last observed reading, or null if there is none. */
+  lastReading: string | null;
+}
 
 export interface FailingJob {
   queue: string;
@@ -336,6 +358,70 @@ export class DataQualityMonitorService {
       lastReading: r.last_reading,
       operatingDaysAhead: Number(r.days_ahead),
       lastScheduledDay: r.last_day,
+    }));
+  }
+
+  /**
+   * Rides the absence step retired while nobody has said whether they are
+   * seasonal — the "season or gone?" list (PAR-684, option B).
+   *
+   * `retireAbsentAttractions` leaves a row alone when its season is known, but
+   * the detector needs `MIN_OBSERVED_DAYS` before it can know one, so every
+   * seasonal attraction in its first year is retired like a ride that was torn
+   * down. On 2026-10-03 that was 17 mazes and walk-throughs (PAR-684); the
+   * retirement itself is right for the rest of the list, the 22 Wet'n'Wild
+   * facilities among them.
+   *
+   * Like `findScheduledButSilentParks` it does not go quiet by itself: a row
+   * leaves the list when an editor writes `curated_is_seasonal` — true puts a
+   * season window on it and the sync lifts the retirement when the wiki lists
+   * the attraction again, under its old id or a new one; false says "not
+   * seasonal" and the retirement stands. A row the detector already calls
+   * seasonal is not listed: the absence step would not have retired it unless a
+   * twin replaced it, and that is a merge question, not a season question.
+   */
+  async findAbsenceRetiredUnreviewed(): Promise<AbsenceRetiredUnreviewed[]> {
+    const rows: Array<{
+      id: string;
+      name: string;
+      slug: string;
+      park_id: string;
+      park_name: string;
+      retired_at: Date;
+      last_reading: string | null;
+    }> = await this.dataSource.query(
+      `
+      SELECT a.id,
+             COALESCE(a.curated_name, a.name) AS name,
+             a.slug,
+             p.id AS park_id,
+             p.name AS park_name,
+             a.retired_at,
+             -- Bounded like the silent-park query: an unbounded max() plans
+             -- against every chunk of the hypertable, once per row.
+             (SELECT max(qd.timestamp AT TIME ZONE p.timezone)::date::text
+                FROM queue_data qd
+               WHERE qd."attractionId" = a.id
+                 AND qd.timestamp > now() - INTERVAL '400 days'
+                 AND COALESCE(${observedReadingsSql("qd")}, true)) AS last_reading
+        FROM attractions a
+        JOIN parks p ON p.id = a."parkId"
+       WHERE a.retired_reason = $1
+         AND a.curated_is_seasonal IS NULL
+         AND NOT a.is_seasonal
+       ORDER BY p.name, a.name
+      `,
+      [ABSENT_UPSTREAM_REASON],
+    );
+
+    return rows.map((r) => ({
+      attractionId: r.id,
+      name: r.name,
+      slug: r.slug,
+      parkId: r.park_id,
+      parkName: r.park_name,
+      retiredAt: new Date(r.retired_at).toISOString(),
+      lastReading: r.last_reading,
     }));
   }
 
