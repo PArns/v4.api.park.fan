@@ -1,4 +1,5 @@
 import { transliterate } from "transliteration";
+import { isReclassifiedUpstreamReason } from "../services/attraction-retirement.service";
 
 /**
  * Reduces a ride name to its bare letters and digits.
@@ -59,11 +60,26 @@ export interface IncomingAttraction {
  * Harbor Arlington and "Discovery Bay" twice in New Jersey.
  *
  * A row carrying its own wiki UUID has already been claimed by the wiki. Only
- * rows with no id from this source, or none at all, may be matched by name.
+ * rows with no id from this source, or none at all, may be matched by name —
+ * with one exception, which needs `listedExternalIds`.
+ *
+ * **A re-issue is not a rename.** The wiki hands seasonal attractions a new
+ * entity id every season (Six Flags Fiesta Texas: nine mazes, gone on
+ * 2026-06-03, back under new ids on 2026-09-17), and the rule above turned each
+ * of them into a second row with a `-2` slug, its history starting from zero
+ * (PAR-682). What tells the two cases apart is the park's `/children`, not the
+ * name: after a rename the neighbour's id is still listed, after a re-issue the
+ * old id is gone. So a row whose own wiki id is absent from `listedExternalIds`
+ * may be claimed by name — the caller then moves it onto the incoming id.
+ *
+ * Only rows that are active or carry a retirement the sync wrote itself
+ * qualify: a ride a human retired as closed stays closed, even when a new ride
+ * takes its name.
  */
 export function findExistingAttraction(
   incoming: IncomingAttraction,
   candidates: AttractionMatchCandidate[],
+  listedExternalIds?: ReadonlySet<string>,
 ): AttractionMatchCandidate | null {
   const byExternalId = candidates.find(
     (c) => c.externalId && c.externalId === incoming.externalId,
@@ -88,7 +104,20 @@ export function findExistingAttraction(
       // neighbour and both end up with the same name.
       !(c.externalId && sourceOf(c.externalId) === incomingSource),
   );
-  return byName ?? null;
+  if (byName) return byName;
+
+  if (!listedExternalIds || incomingSource !== "wiki") return null;
+  const reissued = candidates.find(
+    (c) =>
+      c.name &&
+      normalizeName(c.name) === normalizedIncoming &&
+      c.externalId &&
+      sourceOf(c.externalId) === "wiki" &&
+      !listedExternalIds.has(c.externalId) &&
+      (c.retiredReason == null ||
+        isReclassifiedUpstreamReason(c.retiredReason)),
+  );
+  return reissued ?? null;
 }
 
 /** Which upstream issued an id. Queue-Times ids carry a `qt-ride-` prefix. */

@@ -208,4 +208,46 @@ describe("findExistingAttraction — a rename must not steal a neighbour's row",
 
     expect(result?.id).toBe("b");
   });
+
+  /**
+   * A re-issue is not a rename: the wiki hands a seasonal maze a new id every
+   * season, and the old id leaves `/children`. Only then may the row be taken
+   * by name (PAR-682).
+   */
+  describe("a re-issued id", () => {
+    const incoming = {
+      externalId: "5a4ad529-9f16-44d9-9535-6b4a92523d20",
+      name: "Wally the Walrus",
+    };
+
+    it("takes the row once its own wiki id is no longer listed", () => {
+      const result = findExistingAttraction(
+        incoming,
+        [wikiRow()],
+        new Set([incoming.externalId]),
+      );
+
+      expect(result?.id).toBe("a");
+    });
+
+    it("still refuses while the row's id is listed — the rename case", () => {
+      const result = findExistingAttraction(
+        incoming,
+        [wikiRow()],
+        new Set([incoming.externalId, wikiRow().externalId!]),
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it("does not take a row a human retired", () => {
+      const result = findExistingAttraction(
+        incoming,
+        [wikiRow({ retiredReason: "Closed for good. Source: https://…" })],
+        new Set([incoming.externalId]),
+      );
+
+      expect(result).toBeNull();
+    });
+  });
 });
