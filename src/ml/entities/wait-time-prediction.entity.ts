@@ -62,7 +62,7 @@ export class WaitTimePrediction {
   predictionType: "hourly" | "daily";
 
   @Column({ type: "float", nullable: true })
-  confidence: number; // 0-100 confidence score
+  confidence: number | null; // 0-100 confidence score
 
   // Width of the model's uncertainty band, in whole minutes: the top trained
   // quantile (alpha=0.95) minus the served median. `confidence` above folds this

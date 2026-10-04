@@ -57,6 +57,7 @@ import {
   freeFlowQueues,
 } from "../../common/utils/free-flow-status.util";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
+import { servedAdjustedConfidence } from "../../ml/utils/hourly-confidence.util";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { mapRideProfile } from "../../attractions/dto/ride-profile.dto";
 import { AttractionOutageService } from "../../attractions/services/attraction-outage.service";
@@ -1877,7 +1878,7 @@ export class ParkIntegrationService {
         return predictions.map((p) => ({
           ...p,
           currentWaitTime: deviationFlag.actualWaitTime,
-          confidenceAdjusted: p.confidence * 0.5, // Halve confidence
+          confidenceAdjusted: servedAdjustedConfidence(p), // Halve confidence
           deviationDetected: true,
           deviationInfo: {
             message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
@@ -1923,7 +1924,7 @@ export class ParkIntegrationService {
       return predictions.map((p) => ({
         ...p,
         currentWaitTime: deviationFlag.actualWaitTime,
-        confidenceAdjusted: p.confidence * 0.5,
+        confidenceAdjusted: servedAdjustedConfidence(p),
         deviationDetected: true,
         deviationInfo: {
           message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"} than predicted`,
