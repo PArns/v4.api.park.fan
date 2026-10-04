@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
 import { Attraction } from "../entities/attraction.entity";
+import { AttractionSlugAlias } from "../entities/attraction-slug-alias.entity";
 import { worksPeriodEndsBeforeItBegins } from "../utils/curated-out-of-service.util";
 import { ATTRACTION_CURATED_FIELDS } from "../../admin/content/curated-field.spec-list";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -443,6 +444,26 @@ export class AttractionMergeService {
         ...(rewordedName ? { name: survivingName } : {}),
         lastMergedAt: new Date(),
       });
+
+      // Every slug that stops answering here keeps answering with a 301
+      // (PAR-687): the loser's, and the winner's own when it took the base
+      // slug from the loser. The loser's older aliases were already moved
+      // onto the winner by `ATTRACTION_DEPENDENCIES`.
+      const retiredSlugs = [
+        loser.slug,
+        ...(renamed ? [winner.slug] : []),
+      ].filter((slug): slug is string => !!slug && slug !== survivingSlug);
+      if (retiredSlugs.length > 0) {
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into(AttractionSlugAlias)
+          .values(
+            retiredSlugs.map((slug) => ({ attractionId: winnerId, slug })),
+          )
+          .orIgnore()
+          .execute();
+      }
 
       return {
         winnerId,

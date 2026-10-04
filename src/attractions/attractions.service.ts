@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, IsNull, MoreThan, Repository } from "typeorm";
 import { Attraction } from "./entities/attraction.entity";
+import { AttractionSlugAlias } from "./entities/attraction-slug-alias.entity";
 import { NegativeCache } from "../common/utils/negative-cache.util";
 import { normalizeSortDirection, paginate } from "../common/utils/query.util";
 import {
@@ -296,6 +297,55 @@ export class AttractionsService {
       },
       relations: ["park", "park.destination"],
     });
+  }
+
+  /**
+   * Where an attraction slug that no longer answers has gone, if it was ever
+   * recorded (PAR-687).
+   *
+   * The park is read through the alias's attraction, so a ride a park merge
+   * moved keeps its old slugs without a write of its own. Returns null when
+   * nothing is recorded, or when the alias would point at the path it came
+   * from — a redirect to itself is a loop, not an answer.
+   */
+  async resolveSlugAlias(
+    continentSlug: string,
+    countrySlug: string,
+    citySlug: string,
+    parkSlug: string,
+    attractionSlug: string,
+  ): Promise<{
+    continentSlug: string;
+    countrySlug: string;
+    citySlug: string;
+    parkSlug: string;
+    attractionSlug: string;
+  } | null> {
+    const row = await this.attractionRepository
+      .createQueryBuilder("attraction")
+      .innerJoin(
+        AttractionSlugAlias,
+        "alias",
+        "alias.attractionId = attraction.id AND alias.slug = :attractionSlug",
+        { attractionSlug },
+      )
+      .innerJoin("attraction.park", "park")
+      .where("park.continentSlug = :continentSlug", { continentSlug })
+      .andWhere("park.countrySlug = :countrySlug", { countrySlug })
+      .andWhere("park.citySlug = :citySlug", { citySlug })
+      .andWhere("park.slug = :parkSlug", { parkSlug })
+      .orderBy("alias.createdAt", "DESC")
+      .select("attraction.slug", "slug")
+      .getRawOne<{ slug: string }>();
+
+    if (!row?.slug || row.slug === attractionSlug) return null;
+    return {
+      continentSlug,
+      countrySlug,
+      citySlug,
+      parkSlug,
+      attractionSlug: row.slug,
+    };
   }
 
   /**

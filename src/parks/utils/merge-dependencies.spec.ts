@@ -80,6 +80,7 @@ describe("merge dependency tables", () => {
     "attraction_review_marks",
     "attraction_ride_profiles",
     "attraction_rope_drop",
+    "attraction_slug_aliases",
     "attraction_typical_waits",
     "catboost_daily_forecasts",
     "forecast_data",

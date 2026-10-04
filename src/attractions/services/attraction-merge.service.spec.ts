@@ -3,8 +3,19 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { DataSource } from "typeorm";
 import { AttractionMergeService } from "./attraction-merge.service";
 import { Attraction } from "../entities/attraction.entity";
+import { AttractionSlugAlias } from "../entities/attraction-slug-alias.entity";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
+
+/** The alias insert every real merge now issues (PAR-687), as a no-op. */
+function noopAliasInsert() {
+  const builder: Record<string, jest.Mock> = {};
+  for (const step of ["insert", "into", "values", "orIgnore"]) {
+    builder[step] = jest.fn(() => builder);
+  }
+  builder.execute = jest.fn().mockResolvedValue({});
+  return builder;
+}
 
 /**
  * 147 pairs of rows describe the same ride twice inside one park, because the
@@ -12,17 +23,25 @@ import { RevalidationService } from "../../common/revalidation/revalidation.serv
  * merged ACROSS parks, so there was no way to collapse them.
  *
  * The surviving row must end up on the base slug: that is the URL in the
- * sitemap and in Google's index, and attractions have no alias table to
- * redirect from the "-2" one.
+ * sitemap and in Google's index. The slug that stops answering is recorded in
+ * `attraction_slug_aliases` (PAR-687), so it redirects instead of 404ing.
  */
 describe("AttractionMergeService", () => {
   let service: AttractionMergeService;
 
+  const aliasInsert = {
+    insert: jest.fn().mockReturnThis(),
+    into: jest.fn().mockReturnThis(),
+    values: jest.fn().mockReturnThis(),
+    orIgnore: jest.fn().mockReturnThis(),
+    execute: jest.fn().mockResolvedValue({}),
+  };
   const manager = {
     findOne: jest.fn(),
     query: jest.fn().mockResolvedValue([]),
     delete: jest.fn().mockResolvedValue({ affected: 1 }),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
+    createQueryBuilder: jest.fn(() => aliasInsert),
   };
   const dataSource = {
     transaction: jest.fn(async (fn: any) => fn(manager)),
@@ -102,6 +121,40 @@ describe("AttractionMergeService", () => {
     await service.mergeAttractions("row-base", "row-suffix");
 
     expect(manager.delete).toHaveBeenCalledWith(Attraction, "row-suffix");
+  });
+
+  describe("old slugs keep answering (PAR-687)", () => {
+    it("records the loser's slug on the survivor", async () => {
+      givenRows([baseRow, suffixRow]);
+
+      await service.mergeAttractions("row-base", "row-suffix");
+
+      expect(aliasInsert.into).toHaveBeenCalledWith(AttractionSlugAlias);
+      expect(aliasInsert.values).toHaveBeenCalledWith([
+        { attractionId: "row-base", slug: "alice-in-wonderland-2" },
+      ]);
+      expect(aliasInsert.orIgnore).toHaveBeenCalled();
+    });
+
+    it("records the survivor's own slug when it moves onto the base", async () => {
+      givenRows([baseRow, suffixRow]);
+
+      await service.mergeAttractions("row-suffix", "row-base");
+
+      // The base slug is taken over, so it is not an alias; the survivor's
+      // former `-2` slug is.
+      expect(aliasInsert.values).toHaveBeenCalledWith([
+        { attractionId: "row-suffix", slug: "alice-in-wonderland-2" },
+      ]);
+    });
+
+    it("writes no alias when no slug stops answering", async () => {
+      givenRows([baseRow, { ...suffixRow, slug: "alice-in-wonderland" }]);
+
+      await service.mergeAttractions("row-base", "row-suffix");
+
+      expect(aliasInsert.values).not.toHaveBeenCalled();
+    });
   });
 
   it("moves the survivor onto the base slug when it held the suffixed one", async () => {
@@ -652,6 +705,7 @@ describe("AttractionMergeService — previewMerge", () => {
     query: jest.fn().mockResolvedValue([]),
     delete: jest.fn(),
     update: jest.fn(),
+    createQueryBuilder: jest.fn(noopAliasInsert),
   };
 
   /**
@@ -1197,6 +1251,7 @@ describe("AttractionMergeService — the curated window it would delete", () => 
       query: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockResolvedValue({ affected: 1 }),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      createQueryBuilder: jest.fn(noopAliasInsert),
     };
     const warn = jest
       .spyOn(Logger.prototype, "warn")
@@ -1635,6 +1690,7 @@ describe("AttractionMergeService — the single curated values it would delete",
       query: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockResolvedValue({ affected: 1 }),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      createQueryBuilder: jest.fn(noopAliasInsert),
     };
     const warn = jest
       .spyOn(Logger.prototype, "warn")

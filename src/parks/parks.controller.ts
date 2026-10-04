@@ -1945,6 +1945,11 @@ export class ParksController {
     description: "Attraction details with full integration",
     type: AttractionResponseDto,
   })
+  @ApiResponse({
+    status: 301,
+    description:
+      "The attraction moved to a new slug (merge or slug correction); follow the Location header",
+  })
   @ApiResponse({ status: 404, description: "Park or attraction not found" })
   async getAttractionByGeographicPath(
     @Param("continent") continent: string,
@@ -1952,9 +1957,10 @@ export class ParksController {
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
     @Param("attractionSlug") attractionSlug: string,
+    @Res({ passthrough: true }) res: Response,
     @Query("days", new QueryIntPipe({ name: "days", min: 1, max: 365 }))
     days?: number,
-  ): Promise<AttractionResponseDto> {
+  ): Promise<AttractionResponseDto | undefined> {
     const attraction = await this.attractionsService.findByGeographicPath(
       continent,
       country,
@@ -1964,6 +1970,28 @@ export class ParksController {
     );
 
     if (!attraction) {
+      // A merge removes the loser's slug and a slug correction removes the
+      // old one; both are recorded, so an indexed or linked URL answers with
+      // a permanent redirect instead of a 404 (PAR-687). Mirrors the park
+      // route below.
+      const canonical = await this.attractionsService.resolveSlugAlias(
+        continent,
+        country,
+        city,
+        parkSlug,
+        attractionSlug,
+      );
+      if (canonical) {
+        const query = days !== undefined ? `?days=${days}` : "";
+        res.redirect(
+          301,
+          `/v1/parks/${canonical.continentSlug}/${canonical.countrySlug}/` +
+            `${canonical.citySlug}/${canonical.parkSlug}/attractions/` +
+            `${canonical.attractionSlug}${query}`,
+        );
+        return undefined;
+      }
+
       throw new NotFoundException(
         `Attraction with slug "${attractionSlug}" not found in park "${parkSlug}" at ${city}, ${country}, ${continent}`,
       );
