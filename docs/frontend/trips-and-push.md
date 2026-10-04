@@ -69,7 +69,7 @@ would guarantee the two disagree.
 
 What this API does insist on is a floor, because an unauthenticated write
 endpoint that accepts any JSON is a free key-value store with a good domain in
-front of it, and it *will* be found:
+front of it, and it _will_ be found:
 
 - an object with a numeric `version` and a map of `parks`,
 - each park with a `slug` and (optionally) a map of days,
@@ -132,11 +132,11 @@ subscribed.
 
 It refuses, rather than storing something that can never produce a notification:
 
-| status | when |
-| --- | --- |
-| 503 | this deploy has no VAPID keypair |
-| 404 | `tripId` was sent but names no trip |
-| 400 | the endpoint is not an https URL **at a known push service**, or `topics` was sent with no known topic left |
+| status | when                                                                                                        |
+| ------ | ----------------------------------------------------------------------------------------------------------- |
+| 503    | this deploy has no VAPID keypair                                                                            |
+| 404    | `tripId` was sent but names no trip                                                                         |
+| 400    | the endpoint is not an https URL **at a known push service**, or `topics` was sent with no known topic left |
 
 The endpoint host is checked against the four push services (FCM, Mozilla, WNS,
 Apple), extensible through `PUSH_ENDPOINT_HOSTS`. That check is not tidiness: the
@@ -158,7 +158,12 @@ yet. A topic goes in the same commit as the thing that sends it, or not at all.
 ### What arrives
 
 ```json
-{ "title": "In 10 Min.: Taron", "body": "14:30 Uhr, Phantasialand", "url": "/", "tag": "next-up:phantasialand:2026-10-17:e17:870" }
+{
+  "title": "In 10 Min.: Taron",
+  "body": "14:30 Uhr, Phantasialand",
+  "url": "/",
+  "tag": "next-up:phantasialand:2026-10-17:e17:870"
+}
 ```
 
 Written in the **subscriber's** language (de, en, nl, fr, es, it; anything else
@@ -238,10 +243,10 @@ comes from.
 
 The write refuses two things a stored alert could never do anything about:
 
-| status | when |
-| --- | --- |
-| 404 | no subscription for that endpoint, or no such (non-retired) attraction |
-| 400 | `thresholdMinutes` out of range, or this park's wait times can never be read (`getNoLiveWaitTimesReason`) |
+| status | when                                                                                                      |
+| ------ | --------------------------------------------------------------------------------------------------------- |
+| 404    | no subscription for that endpoint, or no such (non-retired) attraction                                    |
+| 400    | `thresholdMinutes` out of range, or this park's wait times can never be read (`getNoLiveWaitTimesReason`) |
 
 Being out of season is **not** refused — an alert may be set up ahead of a
 ride's season, it simply will not fire until the ride is confirmed running
@@ -273,8 +278,34 @@ reading under the threshold fires and flips it to `false`; it flips back to
 which is what lets the same alert fire again later the same day if a queue
 builds back up and drops a second time.
 
+### Reopen alerts (`kind: "reopen"`)
+
+The same endpoint and the same row, a different promise: `POST { endpoint,
+attractionId, kind: "reopen" }` asks to be told once when a ride that is closed
+opens again. `kind` is `null` on the original wait-time alert, and
+`thresholdMinutes` is `null` on a reopen alert (the request ignores it). A
+subscription has one alert per ride, so sending the other kind replaces the
+existing one. No new topic: the alert hangs off the ride-alert row, not
+`PUSH_TOPICS`. The park gate is the same (`getNoLiveWaitTimesReason` answers
+400), so a park with no readable status gets no reopen alert either.
+
+It reads the **status**, never the wait. `armed` means "the ride was last seen
+not operating"; the first fresh, non-heartbeat `OPERATING` reading in season
+fires and disarms, and only a later non-operating reading arms it again
+(`diffReopenAlerts`). A ride that stays open is quiet across any number of
+cycles. A ride out of season reads as not operating: it arms the alert and can
+never fire it. A fresh alert starts armed only if the ride is seen not
+operating right now; open or unknown starts disarmed, so a stale reading cannot
+announce a reopening that never happened. The day-boundary re-arm of wait-time
+alerts does not apply: it would arm an alert on an open ride and fire at once.
+
 ```json
-{ "title": "Taron: nur noch 15 Min.", "body": "Phantasialand", "url": "/parks/europe/germany/bruehl/phantasialand/taron", "tag": "ride-alert:3f2c…" }
+{
+  "title": "Taron: nur noch 15 Min.",
+  "body": "Phantasialand",
+  "url": "/parks/europe/germany/bruehl/phantasialand/taron",
+  "tag": "ride-alert:3f2c…"
+}
 ```
 
 ## 5. Followed shows (`/v1/push/show-follows`)
@@ -301,7 +332,7 @@ That function needs **no timezone math to decide whether a showtime is
 due**, unlike `dueNotifications`: `ShowLiveData.showtimes[].startTime` is
 already a full, park-day-projected ISO instant by the time it gets there, so
 subtracting it from "now" is a plain duration. The park's timezone is only
-read to *format* the display clock (`atTime`, e.g. `"20:30"`) — a show whose
+read to _format_ the display clock (`atTime`, e.g. `"20:30"`) — a show whose
 timezone this deploy cannot resolve or format is skipped entirely rather than
 shown in the wrong hour, the same rule §3 follows for trips. The window is
 25–35 minutes before the showtime (wider than the five-minute tick, for the
@@ -310,7 +341,12 @@ dedupe key is the showtime's own ISO string — already unique, so unlike a
 trip block's `startMinute` it needs no separate date component.
 
 ```json
-{ "title": "In 30 Min.: Feuerwerk", "body": "20:30 Uhr, Europa-Park", "url": "/parks/europe/germany/rust/europa-park#shows", "tag": "show-start:9ab1…:2026-10-17T18:30:00.000Z" }
+{
+  "title": "In 30 Min.: Feuerwerk",
+  "body": "20:30 Uhr, Europa-Park",
+  "url": "/parks/europe/germany/rust/europa-park#shows",
+  "tag": "show-start:9ab1…:2026-10-17T18:30:00.000Z"
+}
 ```
 
 ## 6. Operational notes

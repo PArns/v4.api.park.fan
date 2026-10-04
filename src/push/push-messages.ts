@@ -152,3 +152,34 @@ export function writeRideAlertMessage(
 ): PushMessage {
   return writeFromTable(RIDE_ALERT_WRITERS, notification, locale);
 }
+
+/** What a ride-reopens notification needs — no wait time, the ride is simply open again. */
+export type RideReopenCopy = Omit<RideAlertCopy, "waitTime">;
+
+const RIDE_REOPEN_WRITERS: Record<
+  string,
+  (notification: RideReopenCopy) => { title: string; body: string }
+> = {
+  de: (n) => ({
+    title: `${n.attractionName} ist wieder offen`,
+    body: n.parkName,
+  }),
+  en: (n) => ({ title: `${n.attractionName} is open again`, body: n.parkName }),
+  nl: (n) => ({ title: `${n.attractionName} is weer open`, body: n.parkName }),
+  fr: (n) => ({ title: `${n.attractionName} a rouvert`, body: n.parkName }),
+  es: (n) => ({
+    title: `${n.attractionName} vuelve a estar abierta`,
+    body: n.parkName,
+  }),
+  it: (n) => ({
+    title: `${n.attractionName} è di nuovo aperta`,
+    body: n.parkName,
+  }),
+};
+
+export function writeRideReopenMessage(
+  notification: RideReopenCopy,
+  locale: string,
+): PushMessage {
+  return writeFromTable(RIDE_REOPEN_WRITERS, notification, locale);
+}

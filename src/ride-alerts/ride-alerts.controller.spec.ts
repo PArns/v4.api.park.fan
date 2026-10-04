@@ -68,12 +68,14 @@ describe("RideAlertsController", () => {
         async (
           subscriptionId: string,
           attractionId: string,
-          thresholdMinutes: number,
+          thresholdMinutes: number | null,
+          kind: string | null = null,
         ) =>
           ({
             id: "alert-1",
             subscriptionId,
             attractionId,
+            kind,
             thresholdMinutes,
             armed: true,
             lastTriggeredAt: null,
@@ -126,7 +128,7 @@ describe("RideAlertsController", () => {
       { endpoint: ENDPOINT, attractionId: "ride-1", thresholdMinutes: 20 },
       req(),
     );
-    expect(rideAlerts.upsert).toHaveBeenCalledWith("sub-1", "ride-1", 20);
+    expect(rideAlerts.upsert).toHaveBeenCalledWith("sub-1", "ride-1", 20, null);
     expect(result.thresholdMinutes).toBe(20);
     expect(result.armed).toBe(true);
     expect(result.outOfSeason).toBe(false);
@@ -134,6 +136,38 @@ describe("RideAlertsController", () => {
     expect(result.path).toBe(
       "/parks/europe/germany/bruehl/phantasialand/taron",
     );
+  });
+
+  it("creates a reopen alert without a threshold", async () => {
+    const result = await controller.create(
+      { endpoint: ENDPOINT, attractionId: "ride-1", kind: "reopen" },
+      req(),
+    );
+    expect(rideAlerts.upsert).toHaveBeenCalledWith(
+      "sub-1",
+      "ride-1",
+      null,
+      "reopen",
+    );
+    expect(result.kind).toBe("reopen");
+  });
+
+  it("refuses a reopen alert at a park whose status can never be read", async () => {
+    rideAlerts.findAttractionForAlert.mockResolvedValueOnce({
+      attraction: attraction(),
+      park: park({
+        name: "Hansa-Park",
+        slug: "hansa-park",
+        citySlug: "sierksdorf",
+      }),
+    });
+    await expect(
+      controller.create(
+        { endpoint: ENDPOINT, attractionId: "ride-1", kind: "reopen" },
+        req(),
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(rideAlerts.upsert).not.toHaveBeenCalled();
   });
 
   it("surfaces a ride confirmed out of season rather than hiding a dormant alert", async () => {
@@ -227,7 +261,7 @@ describe("RideAlertsController", () => {
       { endpoint: ENDPOINT, attractionId: "ride-1", thresholdMinutes: 15 },
       req(),
     );
-    expect(rideAlerts.upsert).toHaveBeenCalledWith("sub-1", "ride-1", 15);
+    expect(rideAlerts.upsert).toHaveBeenCalledWith("sub-1", "ride-1", 15, null);
   });
 
   it("removes an alert idempotently", async () => {

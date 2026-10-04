@@ -29,6 +29,71 @@ export interface AlertRow {
   armed: boolean;
 }
 
+/**
+ * What one cycle saw of a ride a `reopen` alert watches. `operating` is true
+ * only for a fresh, non-heartbeat OPERATING reading of a ride in season; a
+ * ride that is closed, down, refurbishing or out of season reads `false`. A
+ * ride with no usable reading is simply absent.
+ */
+export interface ReopenReading {
+  attractionId: string;
+  operating: boolean;
+}
+
+export interface ReopenAlertRow {
+  id: string;
+  subscriptionId: string;
+  attractionId: string;
+  armed: boolean;
+}
+
+export interface ReopenTrigger {
+  alertId: string;
+  subscriptionId: string;
+  attractionId: string;
+}
+
+export interface ReopenAlertDiff {
+  triggers: ReopenTrigger[];
+  /** `armed` changes to persist, keyed by id. */
+  armedUpdates: { id: string; armed: boolean }[];
+}
+
+/**
+ * The same edge trigger as `diffRideAlerts`, on a status instead of a wait:
+ * `armed` is "last seen not operating", the first operating reading fires and
+ * disarms, and only a later non-operating reading arms again. Reading the
+ * status rather than the wait is what makes a ride that merely stays open
+ * quiet across any number of cycles.
+ */
+export function diffReopenAlerts(
+  readings: ReopenReading[],
+  alerts: ReopenAlertRow[],
+): ReopenAlertDiff {
+  const operatingByAttraction = new Map(
+    readings.map((r) => [r.attractionId, r.operating]),
+  );
+  const triggers: ReopenTrigger[] = [];
+  const armedUpdates: { id: string; armed: boolean }[] = [];
+
+  for (const alert of alerts) {
+    const operating = operatingByAttraction.get(alert.attractionId);
+    if (operating === undefined) continue;
+    if (operating && alert.armed) {
+      triggers.push({
+        alertId: alert.id,
+        subscriptionId: alert.subscriptionId,
+        attractionId: alert.attractionId,
+      });
+      armedUpdates.push({ id: alert.id, armed: false });
+    } else if (!operating && !alert.armed) {
+      armedUpdates.push({ id: alert.id, armed: true });
+    }
+  }
+
+  return { triggers, armedUpdates };
+}
+
 export interface AlertTrigger {
   alertId: string;
   subscriptionId: string;

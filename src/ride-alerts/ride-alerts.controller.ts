@@ -26,7 +26,10 @@ import {
   RideAlertsService,
   MAX_RIDE_ALERTS_PER_SUBSCRIPTION,
 } from "./ride-alerts.service";
-import { RideAlert } from "./entities/ride-alert.entity";
+import {
+  RideAlert,
+  RIDE_ALERT_KIND_REOPEN,
+} from "./entities/ride-alert.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import {
   CreateRideAlertDto,
@@ -79,7 +82,8 @@ export class RideAlertsController {
     summary: "Watch an attraction's wait time",
     description:
       "An upsert on (endpoint, attractionId): re-sending for a ride already " +
-      "watched replaces the threshold and re-arms the alert.",
+      "watched replaces the threshold (or the kind) and re-arms the alert. " +
+      '`kind: "reopen"` asks to be told when the ride opens again instead.',
   })
   @ApiResponse({ status: 200, type: RideAlertResponseDto })
   @ApiResponse({
@@ -120,6 +124,7 @@ export class RideAlertsController {
       );
     }
 
+    const kind = body.kind ?? null;
     const existing = await this.rideAlerts.find(
       subscription.id,
       found.attraction.id,
@@ -136,7 +141,8 @@ export class RideAlertsController {
     const alert = await this.rideAlerts.upsert(
       subscription.id,
       found.attraction.id,
-      body.thresholdMinutes,
+      kind === RIDE_ALERT_KIND_REOPEN ? null : body.thresholdMinutes!,
+      kind,
     );
     return RideAlertsController.present(alert, found.attraction);
   }
@@ -188,6 +194,7 @@ export class RideAlertsController {
       // only fires if the attraction row itself is deleted, which retirement
       // is not. Same "surface it rather than let it look live" reasoning.
       retired: attraction.retiredAt !== null,
+      kind: alert.kind ?? null,
       thresholdMinutes: alert.thresholdMinutes,
       armed: alert.armed,
       createdAt: alert.createdAt.toISOString(),

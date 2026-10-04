@@ -70,6 +70,7 @@ describe("RideAlertsService", () => {
       id: "alert-1",
       subscriptionId: "sub-1",
       attractionId: "ride-1",
+      kind: null,
       thresholdMinutes: 20,
       armed: true,
       lastTriggeredAt: null,
@@ -538,6 +539,178 @@ describe("RideAlertsService", () => {
       expect(first.attractionId).toBe("ride-1");
       expect(second.attractionId).toBe("ride-1");
       expect(alertRows.size).toBe(1);
+    });
+  });
+
+  describe("reopen alerts", () => {
+    const reopen = (overrides: Partial<RideAlert> = {}) =>
+      alert({ kind: "reopen", thresholdMinutes: null, ...overrides });
+    const subs = () =>
+      pushService.findByIds.mockResolvedValue(
+        new Map([["sub-1", { id: "sub-1", locale: "de" }]]),
+      );
+    const sweep = () =>
+      service.checkAndNotify(PHANTASIALAND, ["ride-1"], NOW_MS);
+
+    it("fires once when a ride seen closed opens, over several ticks", async () => {
+      subs();
+      alertRows.set("alert-1", reopen({ armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([["ride-1", standbyReading({ waitTime: 5 })]]),
+      );
+      await sweep();
+      await sweep();
+      await sweep();
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+      expect(pushService.send.mock.calls[0][1].title).toBe(
+        "Taron ist wieder offen",
+      );
+      expect(alertRows.get("alert-1")!.armed).toBe(false);
+    });
+
+    it("does not fire for a ride that is still closed, and keeps the alert armed", async () => {
+      subs();
+      alertRows.set("alert-1", reopen({ armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([
+          [
+            "ride-1",
+            standbyReading({ status: LiveStatus.DOWN, waitTime: null }),
+          ],
+        ]),
+      );
+      await sweep();
+      expect(pushService.send).not.toHaveBeenCalled();
+      expect(alertRows.get("alert-1")!.armed).toBe(true);
+    });
+
+    it("re-arms on a closed reading and fires on the next opening", async () => {
+      subs();
+      alertRows.set("alert-1", reopen({ armed: false }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+        new Map([
+          [
+            "ride-1",
+            standbyReading({ status: LiveStatus.CLOSED, waitTime: null }),
+          ],
+        ]),
+      );
+      await sweep();
+      expect(alertRows.get("alert-1")!.armed).toBe(true);
+      expect(pushService.send).not.toHaveBeenCalled();
+
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+        new Map([["ride-1", standbyReading({ waitTime: 0 })]]),
+      );
+      await sweep();
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores an OPERATING heartbeat", async () => {
+      subs();
+      alertRows.set("alert-1", reopen({ armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([["ride-1", standbyReading({ isHeartbeat: true })]]),
+      );
+      await sweep();
+      expect(pushService.send).not.toHaveBeenCalled();
+    });
+
+    it("never fires for a ride confirmed out of season, and arms it instead", async () => {
+      subs();
+      attractionRows.set(
+        "ride-1",
+        attraction({ isSeasonal: true, seasonMonths: [11, 12, 1] }),
+      );
+      alertRows.set("alert-1", reopen({ armed: false }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([["ride-1", standbyReading({ waitTime: 5 })]]),
+      );
+      await sweep();
+      expect(pushService.send).not.toHaveBeenCalled();
+      expect(alertRows.get("alert-1")!.armed).toBe(true);
+    });
+
+    it("is not re-armed by the day boundary of wait-time alerts", async () => {
+      subs();
+      alertRows.set(
+        "alert-1",
+        reopen({
+          armed: false,
+          lastTriggeredAt: new Date("2026-06-14T10:00:00.000Z"),
+        }),
+      );
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([["ride-1", standbyReading({ waitTime: 5 })]]),
+      );
+      await sweep();
+      expect(pushService.send).not.toHaveBeenCalled();
+      expect(alertRows.get("alert-1")!.armed).toBe(false);
+    });
+
+    it("lets a reopen alert and a wait-time alert on other rides run in one cycle", async () => {
+      subs();
+      attractionRows.set(
+        "ride-2",
+        attraction({ id: "ride-2", slug: "black-mamba" }),
+      );
+      alertRows.set("alert-1", reopen({ armed: true }));
+      alertRows.set(
+        "alert-2",
+        alert({
+          id: "alert-2",
+          attractionId: "ride-2",
+          subscriptionId: "sub-1",
+        }),
+      );
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([
+          ["ride-1", standbyReading({ waitTime: 5 })],
+          ["ride-2", standbyReading({ waitTime: 10 })],
+        ]),
+      );
+      await service.checkAndNotify(PHANTASIALAND, ["ride-1", "ride-2"], NOW_MS);
+      expect(pushService.send).toHaveBeenCalledTimes(2);
+    });
+
+    describe("upsert", () => {
+      it("arms a fresh reopen alert only for a ride seen not operating", async () => {
+        queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+          new Map([
+            [
+              "ride-1",
+              standbyReading({ status: LiveStatus.DOWN, waitTime: null }),
+            ],
+          ]),
+        );
+        const result = await service.upsert("sub-1", "ride-1", null, "reopen");
+        expect(result.armed).toBe(true);
+        expect(result.kind).toBe("reopen");
+        expect(result.thresholdMinutes).toBeNull();
+      });
+
+      it("does not arm against an open ride or an unknown one", async () => {
+        queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+          new Map([["ride-1", standbyReading({ waitTime: 5 })]]),
+        );
+        expect(
+          (await service.upsert("sub-1", "ride-1", null, "reopen")).armed,
+        ).toBe(false);
+        queueDataService.findCurrentStatusByAttractionIds.mockResolvedValueOnce(
+          new Map(),
+        );
+        expect(
+          (await service.upsert("sub-1", "ride-1", null, "reopen")).armed,
+        ).toBe(false);
+      });
+
+      it("switching back to a wait-time alert clears the kind", async () => {
+        await service.upsert("sub-1", "ride-1", null, "reopen");
+        const result = await service.upsert("sub-1", "ride-1", 20);
+        expect(result.kind).toBeNull();
+        expect(result.thresholdMinutes).toBe(20);
+        expect(alertRows.size).toBe(1);
+      });
     });
   });
 });
