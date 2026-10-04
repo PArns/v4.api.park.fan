@@ -2091,6 +2091,15 @@ def predict_wait_times(
 
         # Time-based confidence (60% weight)
         if prediction_type == "hourly":
+            # NOT an error estimate. This line is a distance heuristic and is
+            # not fitted to measured error: over the first 24 h the measured
+            # MAE rises about 4.9% (10.913 -> 11.453, 421 attractions paired
+            # across eight 3 h bands, prediction_accuracy, 30 days) while this
+            # term falls from 95 to 50. Beyond 24 h the error is not measurable
+            # at all, because recordPredictions keeps only the latest
+            # prediction per target time (PAR-658). The floor is reached at
+            # 22.5 h, so 103 of the 192 slots (53.6%) share the same value.
+            # Read it as "how far ahead", never as "how accurate" (PAR-449).
             time_confidence = max(
                 50, 95 - (hours_ahead * 2)
             )  # 95% at t+1h, drops to 50%
