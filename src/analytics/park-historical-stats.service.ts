@@ -838,6 +838,16 @@ export class ParkHistoricalStatsService {
    * headliners of that ride's daily peak (P90 of the day's hourly P90s) and
    * the day's typical wait (AVG of hourly P50s). Computed from the hourly
    * pre-aggregation (queue_data_aggregates), restricted to headliners.
+   *
+   * A day the park's schedule calls CLOSED is not a day here, neither as a
+   * value nor as a sample day (PAR-692). The aggregate keeps only OPERATING
+   * rows, but some feeds report rides as OPERATING with a wait of 0 while the
+   * park is shut: Europa-Park had 25,418 such headliner rows on the 28 CLOSED
+   * days of February 2026, around the clock, and `byMonth` printed February as
+   * 28 sample days with a median of 0. The test is the one `/calendar` shows:
+   * a park-level CLOSED entry and no park-level OPERATING entry on that date.
+   * `byMonth`, `byDayOfWeek`, `totalSampleDays` and the typical-day-peak all
+   * read these rows, so one filter covers all four.
    */
   private async queryHeadlinerDayValues(
     parkId: string,
@@ -867,7 +877,21 @@ export class ParkHistoricalStatsService {
            EXTRACT(DOW FROM day)::int   AS dow,
            AVG(day_peak)                AS day_value_p90,
            AVG(day_typical)             AS day_value_p50
-         FROM per_attraction_day
+         FROM per_attraction_day pad
+         WHERE NOT EXISTS (
+                 SELECT 1 FROM schedule_entries closed_day
+                 WHERE closed_day."parkId" = $1::uuid
+                   AND closed_day."attractionId" IS NULL
+                   AND closed_day.date = pad.day
+                   AND closed_day."scheduleType" = 'CLOSED'
+               )
+            OR EXISTS (
+                 SELECT 1 FROM schedule_entries operating_day
+                 WHERE operating_day."parkId" = $1::uuid
+                   AND operating_day."attractionId" IS NULL
+                   AND operating_day.date = pad.day
+                   AND operating_day."scheduleType" = 'OPERATING'
+               )
          GROUP BY day
          ORDER BY day`,
         [
