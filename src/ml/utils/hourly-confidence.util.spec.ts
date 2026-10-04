@@ -57,16 +57,26 @@ describe("servedHourlyConfidence", () => {
 });
 
 describe("servedAdjustedConfidence", () => {
+  const row = (
+    leadMs: number,
+    confidence: number | null = 80,
+    predictionType: "hourly" | "daily" = "hourly",
+  ) => ({ confidence, predictedTime: at(leadMs), predictionType });
+
   it("halves the served value up to 24 h", () => {
-    expect(servedAdjustedConfidence(80, at(23 * H), NOW)).toBe(40);
-    expect(servedAdjustedConfidence(80, at(24 * H), NOW)).toBe(40);
+    expect(servedAdjustedConfidence(row(23 * H), NOW)).toBe(40);
+    expect(servedAdjustedConfidence(row(24 * H), NOW)).toBe(40);
   });
 
-  it("follows the same null rule past 24 h", () => {
-    expect(servedAdjustedConfidence(80, at(25 * H), NOW)).toBeNull();
+  it("follows the same null rule past 24 h for hourly", () => {
+    expect(servedAdjustedConfidence(row(25 * H), NOW)).toBeNull();
+  });
+
+  it("leaves a daily row halved however far ahead it is", () => {
+    expect(servedAdjustedConfidence(row(72 * H, 80, "daily"), NOW)).toBe(40);
   });
 
   it("is null where the confidence is missing", () => {
-    expect(servedAdjustedConfidence(null, at(H), NOW)).toBeNull();
+    expect(servedAdjustedConfidence(row(H, null), NOW)).toBeNull();
   });
 });

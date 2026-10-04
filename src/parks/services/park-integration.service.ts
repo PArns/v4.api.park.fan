@@ -1878,10 +1878,7 @@ export class ParkIntegrationService {
         return predictions.map((p) => ({
           ...p,
           currentWaitTime: deviationFlag.actualWaitTime,
-          confidenceAdjusted: servedAdjustedConfidence(
-            p.confidence,
-            p.predictedTime,
-          ), // Halve confidence
+          confidenceAdjusted: servedAdjustedConfidence(p), // Halve confidence
           deviationDetected: true,
           deviationInfo: {
             message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
@@ -1927,10 +1924,7 @@ export class ParkIntegrationService {
       return predictions.map((p) => ({
         ...p,
         currentWaitTime: deviationFlag.actualWaitTime,
-        confidenceAdjusted: servedAdjustedConfidence(
-          p.confidence,
-          p.predictedTime,
-        ),
+        confidenceAdjusted: servedAdjustedConfidence(p),
         deviationDetected: true,
         deviationInfo: {
           message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"} than predicted`,

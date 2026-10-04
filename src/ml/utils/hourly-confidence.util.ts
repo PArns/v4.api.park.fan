@@ -34,13 +34,24 @@ export function servedHourlyConfidence(
 
 /**
  * `confidenceAdjusted` for a prediction whose live wait deviated from it:
- * half the served confidence, and `null` wherever that is `null`.
+ * half the confidence, and `null` wherever the served confidence is `null`.
+ * Only `hourly` rows are nulled past 24 h; `daily` rows are halved as before.
  */
 export function servedAdjustedConfidence(
-  confidence: number | null | undefined,
-  predictedTime: string | Date,
+  prediction: {
+    confidence: number | null | undefined;
+    predictedTime: string | Date;
+    predictionType: "hourly" | "daily";
+  },
   now: number = Date.now(),
 ): number | null {
-  const served = servedHourlyConfidence(confidence, predictedTime, now);
+  const served =
+    prediction.predictionType === "hourly"
+      ? servedHourlyConfidence(
+          prediction.confidence,
+          prediction.predictedTime,
+          now,
+        )
+      : (prediction.confidence ?? null);
   return served === null ? null : served * 0.5;
 }
