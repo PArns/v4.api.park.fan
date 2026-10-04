@@ -854,6 +854,52 @@ describe("AttractionIntegrationService", () => {
       expect(result.effectiveStatus).toBe("OPERATING");
       expect(result.hourlyForecast).toHaveLength(1);
     });
+
+    it("serves hourly confidence as null only for slots more than 24 h ahead", async () => {
+      mockRedis.get.mockResolvedValue(null);
+      mockQueueDataService.findCurrentStatusByAttraction.mockResolvedValue([]);
+      mockQueueDataService.findForecastsByAttraction.mockResolvedValue([]);
+      mockParkRepository.findOne.mockResolvedValue({
+        ...unreadablePark,
+        slug: "europa-park",
+      });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["park-hansa", "OPERATING"]]),
+      );
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
+      mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
+        null,
+      );
+      const ahead = (hours: number) =>
+        new Date(Date.now() + hours * 3_600_000).toISOString();
+      const row = (hours: number) => ({
+        predictedTime: ahead(hours),
+        predictedWaitTime: 30,
+        confidence: 50,
+        crowdLevel: "moderate",
+        baseline: 25,
+        trend: "stable",
+        modelVersion: "v1.0.0",
+      });
+      mockMLService.getAttractionPredictionsWithFallback.mockResolvedValue([
+        row(23),
+        row(25),
+      ]);
+
+      const result = await service.buildIntegratedResponse(
+        createTestAttraction("park-hansa", {
+          id: "attraction-readable",
+          slug: "some-ride",
+          park: { ...unreadablePark, slug: "europa-park" } as never,
+        }),
+      );
+
+      expect(result.hourlyForecast?.map((f) => f.confidence)).toEqual([
+        50,
+        null,
+      ]);
+    });
   });
 
   describe("calculateAttractionHistory across a DST change", () => {
