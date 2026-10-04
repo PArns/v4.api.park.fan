@@ -17,6 +17,12 @@ next time. Detail: [Attraction Status & Seasonality §5.9/5.9a](../architecture/
   watching, so **a maze in its first year is protected only by curation**. When a
   seasonal event starts or ends, its attractions get a season window in the
   admin — from the operator's event page, with the dates of that page.
+- Whatever slips through lands on the **"season or gone?" list**
+  (`/admin/data-quality`, `absenceRetiredUnreviewed`; one WARN per park from the
+  nightly data-quality job): rows the absence step retired while
+  `curated_is_seasonal` is unset. Answering it is setting that column — `true`
+  with the months (the sync lifts the retirement when the wiki lists the ride
+  again), `false` when it is really gone (PAR-684, option B).
 - A retirement written by the sync must undo itself
   (`RECLASSIFIED_UPSTREAM_REASONS`); a human retirement must never be undone by
   the sync.

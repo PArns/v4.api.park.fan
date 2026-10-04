@@ -270,14 +270,24 @@ export class AdminController {
   }
 
   @Get("data-quality")
-  @ApiOperation({ summary: "Silenced attraction clusters and failing jobs" })
+  @ApiOperation({
+    summary:
+      "Silenced attraction clusters, failing jobs, and absence-retired rides nobody has given a season",
+  })
   async getDataQuality(@Query("windowDays") windowDays?: string) {
     const days = Math.min(Math.max(Number(windowDays) || 14, 1), 400);
-    const [silencedClusters, failingJobs] = await Promise.all([
-      this.dataQualityMonitor.findSilencedClusters(days),
-      this.dataQualityMonitor.findFailingJobs(),
-    ]);
-    return { windowDays: days, silencedClusters, failingJobs };
+    const [silencedClusters, failingJobs, absenceRetiredUnreviewed] =
+      await Promise.all([
+        this.dataQualityMonitor.findSilencedClusters(days),
+        this.dataQualityMonitor.findFailingJobs(),
+        this.dataQualityMonitor.findAbsenceRetiredUnreviewed(),
+      ]);
+    return {
+      windowDays: days,
+      silencedClusters,
+      failingJobs,
+      absenceRetiredUnreviewed,
+    };
   }
 
   /**

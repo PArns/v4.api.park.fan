@@ -19,6 +19,8 @@ describe("DataQualityProcessor", () => {
       findScheduledButSilentParks:
         monitor.findScheduledButSilentParks ?? jest.fn(async () => []),
       findFailingJobs: monitor.findFailingJobs ?? jest.fn(async () => []),
+      findAbsenceRetiredUnreviewed:
+        monitor.findAbsenceRetiredUnreviewed ?? jest.fn(async () => []),
     } as never);
 
   let warn: jest.SpyInstance;
@@ -33,7 +35,7 @@ describe("DataQualityProcessor", () => {
 
   afterEach(() => jest.restoreAllMocks());
 
-  it("reports clean only when all three checks ran", async () => {
+  it("reports clean only when all four checks ran", async () => {
     await build({}).handleMonitorDataQuality({} as never);
 
     expect(error).not.toHaveBeenCalled();
@@ -75,8 +77,34 @@ describe("DataQualityProcessor", () => {
 
     expect(log).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("2 of 3 checks ran"),
+      expect.stringContaining("3 of 4 checks ran"),
     );
+  });
+
+  it("names unreviewed absence retirements once per park, not once per ride (PAR-684)", async () => {
+    const row = (name: string, parkName: string) => ({
+      attractionId: name,
+      name,
+      slug: name,
+      parkId: parkName,
+      parkName,
+      retiredAt: "2026-10-03T03:29:45.000Z",
+      lastReading: "2026-04-24",
+    });
+    await build({
+      findAbsenceRetiredUnreviewed: jest.fn(async () => [
+        row("Restroom", "Wet'n'Wild"),
+        row("Lockers", "Wet'n'Wild"),
+        row("Asylum", "Parque de Atracciones de Madrid"),
+      ]),
+    }).handleMonitorDataQuality({} as never);
+
+    const lines = warn.mock.calls.map(([m]) => String(m));
+    expect(lines.filter((l) => l.startsWith("🪦"))).toEqual([
+      expect.stringContaining("Wet'n'Wild: 2 ride(s)"),
+      expect.stringContaining("Parque de Atracciones de Madrid: 1 ride(s)"),
+    ]);
+    expect(log).not.toHaveBeenCalled();
   });
 
   it("names a park that has never been read without claiming a date", async () => {

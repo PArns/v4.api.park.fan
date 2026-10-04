@@ -47,10 +47,14 @@ export class DataQualityProcessor {
           return [] as T[];
         });
 
-    const [clusters, silentParks, failing] = await Promise.all([
+    const [clusters, silentParks, failing, unreviewed] = await Promise.all([
       guard("Silenced-cluster", this.monitor.findSilencedClusters()),
       guard("Scheduled-but-silent", this.monitor.findScheduledButSilentParks()),
       guard("Failing-job", this.monitor.findFailingJobs()),
+      guard(
+        "Absence-retired-unreviewed",
+        this.monitor.findAbsenceRetiredUnreviewed(),
+      ),
     ]);
 
     for (const c of clusters) {
@@ -79,16 +83,33 @@ export class DataQualityProcessor {
       );
     }
 
-    const nothingFound =
-      clusters.length === 0 && silentParks.length === 0 && failing.length === 0;
+    // One line per park rather than per ride: Wet'n'Wild alone is 22 rows of
+    // restrooms and lockers, and a nightly wall of them is how a list stops
+    // being read. The admin page shows every row.
+    const byPark = new Map<string, string[]>();
+    for (const r of unreviewed) {
+      byPark.set(r.parkName, [...(byPark.get(r.parkName) ?? []), r.name]);
+    }
+    for (const [parkName, names] of byPark) {
+      this.logger.warn(
+        `🪦 ${parkName}: ${names.length} ride(s) retired as absent upstream with no season decided ` +
+          `(e.g. ${names.slice(0, 3).join(", ")}). Out of season, or gone? Answer under /admin/data-quality.`,
+      );
+    }
 
-    if (nothingFound && ran === 3) {
+    const nothingFound =
+      clusters.length === 0 &&
+      silentParks.length === 0 &&
+      failing.length === 0 &&
+      unreviewed.length === 0;
+
+    if (nothingFound && ran === 4) {
       this.logger.log(
-        "✅ Data quality clean: no silenced clusters, no silent scheduled parks, no failing jobs",
+        "✅ Data quality clean: no silenced clusters, no silent scheduled parks, no failing jobs, no unreviewed absence retirements",
       );
     } else if (nothingFound) {
       this.logger.warn(
-        `⚠️ Data quality inconclusive: ${ran} of 3 checks ran, the rest threw`,
+        `⚠️ Data quality inconclusive: ${ran} of 4 checks ran, the rest threw`,
       );
     }
   }

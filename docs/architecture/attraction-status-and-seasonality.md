@@ -1561,6 +1561,15 @@ re-issue the old id is gone. Two changes follow:
   name. That twin predates the first change, and the dead row beside it would
   take the name group back, so it is retired as before.
 
+A seasonal row the detector has not seen long enough is still retired. Those
+rows are listed for a human (PAR-684, option B): `findAbsenceRetiredUnreviewed`
+— `retired_reason = ABSENT_UPSTREAM_REASON`, `curated_is_seasonal IS NULL`,
+`NOT is_seasonal` — served as `absenceRetiredUnreviewed` on
+`GET /v1/admin/data-quality` and warned once per park by the nightly
+data-quality job. Setting `curated_is_seasonal` either way takes a row off. On
+2026-10-04 the list held 38 rows, 22 of them Wet'n'Wild facilities whose
+retirement is right.
+
 Not caught: a re-issue under a **different** name, such as Movie Park's
 `Hell House` → `Helhuis`. Those pairs are found by coordinates, not by name
 (G-137 in the Linear learnings), and merged or retired by hand.

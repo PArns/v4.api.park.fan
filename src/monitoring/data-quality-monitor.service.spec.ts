@@ -1,4 +1,5 @@
 import { DataQualityMonitorService } from "./data-quality-monitor.service";
+import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
 
 /**
  * Each detector exists because of a specific failure that ran for weeks:
@@ -68,6 +69,65 @@ describe("DataQualityMonitorService", () => {
           attractionCount: 44,
           lastOperating: "2026-06-07",
           sampleNames: ["Ball Pool", "Crazy Taxi"],
+        },
+      ]);
+    });
+  });
+
+  /**
+   * PAR-684, option B: the absence step cannot know a season the detector has
+   * not seen yet, so a maze in its first year is retired like a demolished
+   * ride. This list is what a human answers.
+   */
+  describe("findAbsenceRetiredUnreviewed", () => {
+    it("asks only for rows the absence step retired, by the exact reason", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findAbsenceRetiredUnreviewed();
+
+      const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toMatch(/a\.retired_reason = \$1/);
+      expect(params).toEqual([ABSENT_UPSTREAM_REASON]);
+    });
+
+    it("leaves out every row someone already answered, and every row the detector calls seasonal", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findAbsenceRetiredUnreviewed();
+
+      const [sql] = query.mock.calls[0] as [string];
+      expect(sql).toMatch(/a\.curated_is_seasonal IS NULL/);
+      expect(sql).toMatch(/NOT a\.is_seasonal/);
+    });
+
+    it("bounds the last-reading lookup, so it does not plan against every chunk", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findAbsenceRetiredUnreviewed();
+
+      const [sql] = query.mock.calls[0] as [string];
+      expect(sql).toMatch(/qd\.timestamp > now\(\) - INTERVAL '400 days'/);
+    });
+
+    it("maps a row into something an editor can open", async () => {
+      const query = jest.fn().mockResolvedValue([
+        {
+          id: "a1",
+          name: "Asylum",
+          slug: "asylum",
+          park_id: "p1",
+          park_name: "Parque de Atracciones de Madrid",
+          retired_at: new Date("2026-10-03T03:29:45Z"),
+          last_reading: "2026-04-23",
+        },
+      ]);
+
+      expect(await build(query).findAbsenceRetiredUnreviewed()).toEqual([
+        {
+          attractionId: "a1",
+          name: "Asylum",
+          slug: "asylum",
+          parkId: "p1",
+          parkName: "Parque de Atracciones de Madrid",
+          retiredAt: "2026-10-03T03:29:45.000Z",
+          lastReading: "2026-04-23",
         },
       ]);
     });
