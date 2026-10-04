@@ -1,7 +1,44 @@
 import {
   findExistingAttraction,
   AttractionMatchCandidate,
+  reissueNamesMatch,
 } from "./attraction-match.util";
+
+/**
+ * The hint on the re-issue candidate list (PAR-686). Every case is a pair
+ * measured in production on 2026-10-04 — absence-retired row against a younger
+ * row within 30 m — with the verdict a human gave it.
+ */
+describe("reissueNamesMatch", () => {
+  it.each([
+    [
+      "NEW! – Cinema Slasher presented by M&M’S®",
+      "Cinema Slasher presented by M&M'S®",
+    ],
+    ["Rockville’s Festival of Fright", "Rockville Festival of Fright"],
+    ["HAUNTED HOUSE: NEW! The Conjuring Universe", "The Conjuring Universe"],
+    ["HAUNTED HOUSE: SAW: Legacy of Terror", "SAW Legacy of Terror"],
+    [
+      "Twisted: Theatre of Torment presented by SKITTLES®",
+      "Twisted: Theater of Torment presented by SKITTLES®",
+    ],
+  ])("flags %s → %s", (before, after) => {
+    expect(reissueNamesMatch(before, after)).toBe(true);
+  });
+
+  it.each([
+    // Different films in one 4D cinema, 0 m apart.
+    ["4D - Rokken Roll", "4D - Festive Adventure"],
+    ["4D - Rokken Roll", "4D - Wanted Alive"],
+    // A scare zone next to the park railway.
+    ["Steampunkins", "Fiesta Texas Railroad - Western"],
+    ["Trick-or-Treat Trail", "Rockville Festival of Fright"],
+    // One shared word is not a match.
+    ["Stormy", "Stormy Cruise"],
+  ])("does not flag %s → %s", (before, after) => {
+    expect(reissueNamesMatch(before, after)).toBe(false);
+  });
+});
 
 /**
  * Every attraction sync path used to look up existing rows by `externalId`

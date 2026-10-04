@@ -57,6 +57,26 @@ export class DataQualityProcessor {
       ),
     ]);
 
+    // Its own guard and outside the clean/inconclusive count: a candidate pair
+    // is a question, not a fault, and most of the list is legitimately two
+    // attractions in one building. One line, so the count is visible nightly.
+    let reissue: Awaited<
+      ReturnType<DataQualityMonitorService["findReissueCandidates"]>
+    > = [];
+    try {
+      reissue = await this.monitor.findReissueCandidates();
+    } catch (e) {
+      this.logger.error(`Re-issue-candidate check failed: ${asMessage(e)}`);
+    }
+    const likely = reissue.filter((c) => c.namesMatch).length;
+    if (likely > 0) {
+      this.logger.warn(
+        `🔁 ${likely} retired ride(s) have a live ride with a similar name within 30 m — ` +
+          `likely re-issued under a new name (${reissue.length} nearby pairs in all). ` +
+          `Merge or dismiss under /admin/duplicates.`,
+      );
+    }
+
     for (const c of clusters) {
       this.logger.warn(
         `🔇 ${c.parkName}: ${c.attractionCount} attractions stopped reporting on ${c.lastOperating} ` +

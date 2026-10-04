@@ -21,6 +21,8 @@ describe("DataQualityProcessor", () => {
       findFailingJobs: monitor.findFailingJobs ?? jest.fn(async () => []),
       findAbsenceRetiredUnreviewed:
         monitor.findAbsenceRetiredUnreviewed ?? jest.fn(async () => []),
+      findReissueCandidates:
+        monitor.findReissueCandidates ?? jest.fn(async () => []),
     } as never);
 
   let warn: jest.SpyInstance;
@@ -79,6 +81,51 @@ describe("DataQualityProcessor", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("3 of 4 checks ran"),
     );
+  });
+
+  describe("re-issue candidates (PAR-686)", () => {
+    const pair = (namesMatch: boolean) => ({
+      parkId: "p",
+      parkName: "Six Flags Great America",
+      previous: {} as never,
+      current: {} as never,
+      meters: 16.4,
+      namesMatch,
+    });
+
+    it("warns with the count of likely pairs and the total", async () => {
+      await build({
+        findReissueCandidates: jest.fn(async () => [pair(true), pair(false)]),
+      }).handleMonitorDataQuality({} as never);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/^🔁 1 retired ride\(s\).*2 nearby pairs in all/),
+      );
+    });
+
+    it("stays quiet about nearby pairs whose names say nothing, and still reports clean", async () => {
+      // Most of the radius is two attractions in one building — Walibi
+      // Belgium's three 4D films at 0 m. Those are not a nightly warning.
+      await build({
+        findReissueCandidates: jest.fn(async () => [pair(false)]),
+      }).handleMonitorDataQuality({} as never);
+
+      expect(warn).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("clean"));
+    });
+
+    it("does not count as a check that ran or failed", async () => {
+      await build({
+        findReissueCandidates: jest.fn(async () => {
+          throw new Error("statement timeout");
+        }),
+      }).handleMonitorDataQuality({} as never);
+
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("statement timeout"),
+      );
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("clean"));
+    });
   });
 
   it("names unreviewed absence retirements once per park, not once per ride (PAR-684)", async () => {

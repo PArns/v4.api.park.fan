@@ -1,4 +1,7 @@
-import { DataQualityMonitorService } from "./data-quality-monitor.service";
+import {
+  DataQualityMonitorService,
+  REISSUE_CANDIDATE_METERS,
+} from "./data-quality-monitor.service";
 import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
 
 /**
@@ -129,6 +132,96 @@ describe("DataQualityMonitorService", () => {
           retiredAt: "2026-10-03T03:29:45.000Z",
           lastReading: "2026-04-23",
         },
+      ]);
+    });
+  });
+
+  /**
+   * PAR-686: the wiki re-issues a ride under a new id AND a new name, which the
+   * sync's exact-name claim cannot see. The list shows every nearby pair to a
+   * human, with a name hint; nothing merges by itself.
+   */
+  describe("findReissueCandidates", () => {
+    const row = (over: Record<string, unknown> = {}) => ({
+      park_id: "p1",
+      park_name: "Six Flags Great America",
+      o_id: "old",
+      o_name: "HAUNTED HOUSE: SAW: Legacy of Terror",
+      o_slug: "haunted-house-saw-legacy-of-terror",
+      o_ext: "wiki-old",
+      o_created: new Date("2025-12-24T00:00:00Z"),
+      o_last: "2025-11-01",
+      n_id: "new",
+      n_name: "SAW Legacy of Terror",
+      n_slug: "saw-legacy-of-terror",
+      n_ext: "wiki-new",
+      n_created: new Date("2026-09-17T00:00:00Z"),
+      n_last: "2026-10-03",
+      meters: "24.98",
+      ...over,
+    });
+
+    it("asks for absence-retired rows only, inside the radius, minus pairs marked not-a-duplicate", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findReissueCandidates();
+
+      const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toMatch(/o\.retired_reason = \$1/);
+      expect(sql).toMatch(/pr\.meters <= \$2/);
+      expect(sql).toMatch(/m\.kind = 'not_a_duplicate'/);
+      // Marks are stored in canonical order; the lookup has to use it too.
+      expect(sql).toMatch(
+        /LEAST\(o\.id, n\.id\)[\s\S]*GREATEST\(o\.id, n\.id\)/,
+      );
+      expect(params).toEqual([
+        ABSENT_UPSTREAM_REASON,
+        REISSUE_CANDIDATE_METERS,
+      ]);
+    });
+
+    it("maps both sides and flags a name match", async () => {
+      const query = jest.fn().mockResolvedValue([row()]);
+      const [candidate] = await build(query).findReissueCandidates();
+
+      expect(candidate).toEqual({
+        parkId: "p1",
+        parkName: "Six Flags Great America",
+        previous: {
+          attractionId: "old",
+          name: "HAUNTED HOUSE: SAW: Legacy of Terror",
+          slug: "haunted-house-saw-legacy-of-terror",
+          externalId: "wiki-old",
+          createdAt: "2025-12-24T00:00:00.000Z",
+          lastReading: "2025-11-01",
+        },
+        current: {
+          attractionId: "new",
+          name: "SAW Legacy of Terror",
+          slug: "saw-legacy-of-terror",
+          externalId: "wiki-new",
+          createdAt: "2026-09-17T00:00:00.000Z",
+          lastReading: "2026-10-03",
+        },
+        meters: 25,
+        namesMatch: true,
+      });
+    });
+
+    it("keeps a pair whose names say nothing, and sorts name matches first", async () => {
+      const query = jest.fn().mockResolvedValue([
+        row({
+          park_name: "Movie Park Germany",
+          o_name: "Hell House",
+          n_name: "Helhuis",
+          meters: "9.3",
+        }),
+        row(),
+      ]);
+      const candidates = await build(query).findReissueCandidates();
+
+      expect(candidates.map((c) => [c.previous.name, c.namesMatch])).toEqual([
+        ["HAUNTED HOUSE: SAW: Legacy of Terror", true],
+        ["Hell House", false],
       ]);
     });
   });
