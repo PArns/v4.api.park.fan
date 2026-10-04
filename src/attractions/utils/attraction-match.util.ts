@@ -124,3 +124,69 @@ export function findExistingAttraction(
 function sourceOf(externalId: string): "queue-times" | "wiki" {
   return externalId.startsWith("qt-ride-") ? "queue-times" : "wiki";
 }
+
+/**
+ * Prefixes upstream feeds put in front of a seasonal attraction's name and
+ * drop again when they re-issue it ("HAUNTED HOUSE: SAW: Legacy of Terror" →
+ * "SAW Legacy of Terror"). Matched on the lower-cased, transliterated name.
+ */
+const REISSUE_NAME_PREFIXES = [
+  /^haunted house\s*:\s*/,
+  /^new!?\s*[-–—:]?\s*/,
+  /^wp\s*-\s*/,
+];
+
+/** Lower-cased words of a name, with the re-issue prefixes and possessive 's gone. */
+function reissueTokens(name: string): string[] {
+  let text = transliterate(name.replace(/[®™©℠]/g, ""))
+    .toLowerCase()
+    .trim();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const prefix of REISSUE_NAME_PREFIXES) {
+      const next = text.replace(prefix, "");
+      if (next !== text) {
+        text = next;
+        changed = true;
+      }
+    }
+  }
+  return text
+    .replace(/['’]s\b/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/**
+ * Whether two names look like one attraction the feed re-issued under a new id
+ * AND a changed name (PAR-686). A HINT on the admin's candidate list, never a
+ * decision: the list shows every nearby pair, and a human merges or dismisses
+ * it (PO decision 2026-10-04, option B).
+ *
+ * True when, after dropping the known prefixes, one name's words are all in the
+ * other's (`Cinema Slasher presented by M&M'S®` inside `NEW! – Cinema Slasher
+ * presented by M&M’S®`), or the two word sets overlap by at least 60 %
+ * (`Theatre` vs `Theater`). Measured on 2026-10-04 against the 15
+ * absence-retired rows with a younger row within 30 m: 5 hits, 0 false hits,
+ * 4 misses (three Movie Park language pairs, one renamed slide complex). A
+ * one-word name only matches exactly — `Stormy` inside `Stormy Cruise` says
+ * nothing.
+ */
+export function reissueNamesMatch(a: string, b: string): boolean {
+  const left = reissueTokens(a);
+  const right = reissueTokens(b);
+  if (left.length === 0 || right.length === 0) return false;
+  if (left.join(" ") === right.join(" ")) return true;
+
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  const [shorter, longer] =
+    leftSet.size <= rightSet.size ? [leftSet, rightSet] : [rightSet, leftSet];
+  if (shorter.size < 2) return false;
+  if ([...shorter].every((token) => longer.has(token))) return true;
+
+  const shared = [...leftSet].filter((token) => rightSet.has(token)).length;
+  const union = new Set([...leftSet, ...rightSet]).size;
+  return shared / union >= 0.6;
+}

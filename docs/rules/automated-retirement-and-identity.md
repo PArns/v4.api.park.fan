@@ -53,7 +53,14 @@ run. Before such a PR merges:
   attraction once. Distance alone is not proof — seasonal overlays sit 0–20 m
   from a permanent ride.
 - Re-issues under a **different** name (`HAUNTED HOUSE: SAW…` → `SAW…`, Dutch
-  vs English) are not caught by the name match (PAR-686).
+  vs English) are not caught by the name match. They are **listed, never merged
+  by a machine** (PAR-686, option B): `/admin/duplicates` shows every
+  absence-retired row with a younger live row within 30 m
+  (`findReissueCandidates`), with both upstream ids, last readings and a name
+  hint (`reissueNamesMatch`), and a human merges (`adoptLoserExternalId`, so
+  the survivor takes the id the feed lists — without it the sync grows the
+  loser back) or dismisses with a `not_a_duplicate` mark. Distance alone is
+  never enough: Walibi Belgium's three 4D films sit at 0 m.
 
 ## 4. Names come from the operator, never from a translation
 

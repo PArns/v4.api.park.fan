@@ -123,6 +123,37 @@ describe("AttractionMergeService", () => {
     expect(manager.delete).toHaveBeenCalledWith(Attraction, "row-suffix");
   });
 
+  describe("a re-issued pair: the survivor takes the listed id (PAR-686)", () => {
+    const oldRow = { ...baseRow, externalId: "wiki-old" };
+    const newRow = { ...suffixRow, externalId: "wiki-new" };
+
+    it("moves the loser's upstream id onto the survivor when asked", async () => {
+      givenRows([oldRow, newRow]);
+
+      await service.mergeAttractions("row-base", "row-suffix", {
+        adoptLoserExternalId: true,
+      });
+
+      expect(manager.update).toHaveBeenCalledWith(
+        Attraction,
+        "row-base",
+        expect.objectContaining({ externalId: "wiki-new" }),
+      );
+      // Only after the loser is gone: externalId is unique.
+      const deleteOrder = manager.delete.mock.invocationCallOrder[0];
+      const updateOrder = manager.update.mock.invocationCallOrder[0];
+      expect(deleteOrder).toBeLessThan(updateOrder);
+    });
+
+    it("keeps the survivor's own id by default", async () => {
+      givenRows([oldRow, newRow]);
+
+      await service.mergeAttractions("row-base", "row-suffix");
+
+      expect(manager.update.mock.calls[0][2]).not.toHaveProperty("externalId");
+    });
+  });
+
   describe("old slugs keep answering (PAR-687)", () => {
     it("records the loser's slug on the survivor", async () => {
       givenRows([baseRow, suffixRow]);

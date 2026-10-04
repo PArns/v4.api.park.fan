@@ -1570,7 +1570,16 @@ data-quality job. Setting `curated_is_seasonal` either way takes a row off. On
 2026-10-04 the list held 38 rows, 22 of them Wet'n'Wild facilities whose
 retirement is right.
 
-Not caught: a re-issue under a **different** name, such as Movie Park's
+Re-issues under a changed name are listed for a human (PAR-686, option B):
+`findReissueCandidates` pairs every absence-retired row with each younger live
+row within `REISSUE_CANDIDATE_METERS` (30), skipping pairs with a
+`not_a_duplicate` mark, and `reissueNamesMatch` hints which look like one
+attraction. `/admin/duplicates` merges a pair with `adoptLoserExternalId` — the
+merge alone keeps the survivor's own id, and when the names differ the sync
+cannot claim it, so the loser would come back. Measured 2026-10-04: 25 pairs,
+9 with matching names.
+
+Not caught automatically: a re-issue under a **different** name, such as Movie Park's
 `Hell House` → `Helhuis`. Those pairs are found by coordinates, not by name
 (G-137 in the Linear learnings), and merged or retired by hand.
 

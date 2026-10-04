@@ -3,6 +3,7 @@ import { DataSource } from "typeorm";
 import { observedReadingsSql } from "../common/utils/closure-gap.sql";
 import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
 import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
+import { reissueNamesMatch } from "../attractions/utils/attraction-match.util";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 
@@ -86,6 +87,46 @@ export interface AbsenceRetiredUnreviewed {
   /** Park-local date of the last observed reading, or null if there is none. */
   lastReading: string | null;
 }
+
+/** One row of a re-issue candidate pair, as the admin needs it to decide. */
+export interface ReissueCandidateSide {
+  attractionId: string;
+  name: string;
+  slug: string;
+  externalId: string | null;
+  createdAt: string;
+  /** Park-local date of the last observed reading in 400 days, or null. */
+  lastReading: string | null;
+}
+
+/**
+ * A ride the absence step retired, next to a younger live ride within
+ * `REISSUE_CANDIDATE_METERS` of it — possibly the same attraction the feed
+ * re-issued under a new id AND a new name (PAR-686), which the sync's name
+ * match cannot claim. Shown to a human with a merge and a dismiss button;
+ * nothing here merges by itself (PO decision 2026-10-04, option B).
+ */
+export interface ReissueCandidate {
+  parkId: string;
+  parkName: string;
+  /** The retired row: history and the old slug. The natural survivor. */
+  previous: ReissueCandidateSide;
+  /** The live row the feed lists now. */
+  current: ReissueCandidateSide;
+  meters: number;
+  /** `reissueNamesMatch` — a hint, never the decision. */
+  namesMatch: boolean;
+}
+
+/**
+ * How close two rows have to be to be shown as a re-issue candidate.
+ *
+ * Measured 2026-10-04: every confirmed different-name re-issue lay within 26 m
+ * (Movie Park 5–12 m, Six Flags Great America 16–25 m). Seasonal overlays sit
+ * just as close — Walibi Belgium's 4D films at 0 m — which is why distance
+ * only decides what is shown, never what is merged.
+ */
+export const REISSUE_CANDIDATE_METERS = 30;
 
 export interface FailingJob {
   queue: string;
@@ -423,6 +464,139 @@ export class DataQualityMonitorService {
       retiredAt: new Date(r.retired_at).toISOString(),
       lastReading: r.last_reading,
     }));
+  }
+
+  /**
+   * Retired rows with a younger live row right beside them — candidates for a
+   * re-issue under a changed name (PAR-686).
+   *
+   * The sync claims a re-issued row only when the name matches exactly
+   * (PAR-682). The wiki often renames on the way — `HAUNTED HOUSE: SAW: Legacy
+   * of Terror` came back as `SAW Legacy of Terror`, Movie Park's mazes came
+   * back in Dutch — and then the old row stays retired beside a new one with no
+   * history. Distance and a name hint put such pairs in front of a human; the
+   * admin page merges (`adoptLoserExternalId`, so the survivor takes the listed
+   * id) or dismisses with a `not_a_duplicate` mark, which keeps the pair off
+   * this list for good.
+   *
+   * Every pair within the radius is returned, matching name or not: Movie
+   * Park's language pairs were real and match nothing, Walibi Belgium's 4D
+   * films are 0 m apart and are three films. `namesMatch` sorts and hints; the
+   * human decides.
+   */
+  async findReissueCandidates(): Promise<ReissueCandidate[]> {
+    const rows: Array<{
+      park_id: string;
+      park_name: string;
+      o_id: string;
+      o_name: string;
+      o_slug: string;
+      o_ext: string | null;
+      o_created: Date;
+      o_last: string | null;
+      n_id: string;
+      n_name: string;
+      n_slug: string;
+      n_ext: string | null;
+      n_created: Date;
+      n_last: string | null;
+      meters: string;
+    }> = await this.dataSource.query(
+      `
+      WITH pairs AS (
+        SELECT o.id AS o_id, n.id AS n_id, p.id AS park_id, p.name AS park_name,
+               p.timezone,
+               6371000 * 2 * asin(sqrt(
+                 power(sin(radians(n.latitude::float8 - o.latitude::float8) / 2), 2) +
+                 cos(radians(o.latitude::float8)) * cos(radians(n.latitude::float8)) *
+                 power(sin(radians(n.longitude::float8 - o.longitude::float8) / 2), 2)
+               )) AS meters
+          FROM attractions o
+          JOIN attractions n
+            ON n."parkId" = o."parkId"
+           AND n.id <> o.id
+           AND n.retired_at IS NULL
+           AND n."createdAt" > o."createdAt"
+          JOIN parks p ON p.id = o."parkId"
+         WHERE o.retired_reason = $1
+           AND o.latitude IS NOT NULL AND n.latitude IS NOT NULL
+           -- A pair somebody already looked at and called two things.
+           AND NOT EXISTS (
+             SELECT 1 FROM attraction_review_marks m
+              WHERE m.kind = 'not_a_duplicate'
+                AND m.attraction_id = LEAST(o.id, n.id)
+                AND m.other_attraction_id = GREATEST(o.id, n.id)
+           )
+      )
+      SELECT pr.park_id, pr.park_name, pr.meters::text AS meters,
+             o.id AS o_id, COALESCE(o.curated_name, o.name) AS o_name, o.slug AS o_slug,
+             o."externalId" AS o_ext, o."createdAt" AS o_created,
+             (SELECT max(qd.timestamp AT TIME ZONE pr.timezone)::date::text
+                FROM queue_data qd
+               WHERE qd."attractionId" = o.id
+                 AND qd.timestamp > now() - INTERVAL '400 days'
+                 AND COALESCE(${observedReadingsSql("qd")}, true)) AS o_last,
+             n.id AS n_id, COALESCE(n.curated_name, n.name) AS n_name, n.slug AS n_slug,
+             n."externalId" AS n_ext, n."createdAt" AS n_created,
+             (SELECT max(qd.timestamp AT TIME ZONE pr.timezone)::date::text
+                FROM queue_data qd
+               WHERE qd."attractionId" = n.id
+                 AND qd.timestamp > now() - INTERVAL '400 days'
+                 AND COALESCE(${observedReadingsSql("qd")}, true)) AS n_last
+        FROM pairs pr
+        JOIN attractions o ON o.id = pr.o_id
+        JOIN attractions n ON n.id = pr.n_id
+       WHERE pr.meters <= $2
+       ORDER BY pr.park_name, pr.meters
+      `,
+      [ABSENT_UPSTREAM_REASON, REISSUE_CANDIDATE_METERS],
+    );
+
+    const side = (
+      id: string,
+      name: string,
+      slug: string,
+      externalId: string | null,
+      createdAt: Date,
+      lastReading: string | null,
+    ): ReissueCandidateSide => ({
+      attractionId: id,
+      name,
+      slug,
+      externalId,
+      createdAt: new Date(createdAt).toISOString(),
+      lastReading,
+    });
+
+    return rows
+      .map((r) => ({
+        parkId: r.park_id,
+        parkName: r.park_name,
+        previous: side(
+          r.o_id,
+          r.o_name,
+          r.o_slug,
+          r.o_ext,
+          r.o_created,
+          r.o_last,
+        ),
+        current: side(
+          r.n_id,
+          r.n_name,
+          r.n_slug,
+          r.n_ext,
+          r.n_created,
+          r.n_last,
+        ),
+        meters: Math.round(Number(r.meters) * 10) / 10,
+        namesMatch: reissueNamesMatch(r.o_name, r.n_name),
+      }))
+      .sort(
+        (a, b) =>
+          Number(b.namesMatch) - Number(a.namesMatch) ||
+          a.parkName.localeCompare(b.parkName) ||
+          a.meters - b.meters,
+      );
   }
 
   /**
