@@ -37,6 +37,7 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
   const mappingRepository = {
     find: jest.fn(),
     findOne: jest.fn(),
+    save: jest.fn(),
     manager,
   };
   const themeParksMapper = { mapAttraction: jest.fn() };
@@ -291,6 +292,170 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
       await (processor as any).syncAttraction({}, parkId);
 
       expect(retirementService.unretire).toHaveBeenCalledWith(deadRow.id);
+    });
+  });
+
+  /**
+   * A maze missing from `/children` between November and September is out of
+   * season, not gone. The first run of the absence step retired 186 rows in
+   * 41 parks on 2026-10-03, seasonal mazes among them (PAR-682).
+   */
+  describe("a seasonal row between two seasons", () => {
+    const seasonal = (over: Record<string, unknown> = {}) => ({
+      ...deadRow,
+      isSeasonal: true,
+      curatedIsSeasonal: null,
+      ...over,
+    });
+
+    it("keeps a row the detector calls seasonal", async () => {
+      attractionRepo.find.mockResolvedValue([seasonal()]);
+
+      await retireAbsent();
+
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    it("keeps a row an editor marked seasonal against the detector", async () => {
+      attractionRepo.find.mockResolvedValue([
+        seasonal({ isSeasonal: false, curatedIsSeasonal: true }),
+      ]);
+
+      await retireAbsent();
+
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    it("retires a row an editor marked not seasonal against the detector", async () => {
+      attractionRepo.find.mockResolvedValue([
+        seasonal({ curatedIsSeasonal: false }),
+      ]);
+
+      await retireAbsent();
+
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+    });
+
+    it("retires a seasonal row whose name a row of this run already carries", async () => {
+      // The `-2` twin grown before the sync learned to hand a re-issued id to
+      // the old row. Left active, the dead row takes the name group back.
+      attractionRepo.find
+        .mockResolvedValueOnce([seasonal()])
+        .mockResolvedValueOnce([{ id: "row-twin", name: "Ghost Town NEW!" }]);
+
+      await retireAbsent([liveExternalId], ["row-twin"]);
+
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+      expect(retirementService.retire.mock.calls[0][0][0].attractionId).toBe(
+        deadRow.id,
+      );
+    });
+
+    it("keeps it when the row of this run carries another name", async () => {
+      attractionRepo.find
+        .mockResolvedValueOnce([seasonal()])
+        .mockResolvedValueOnce([{ id: "row-other", name: "Fright Lights" }]);
+
+      await retireAbsent([liveExternalId], ["row-other"]);
+
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The wiki hands seasonal attractions a new entity id every season. The old
+   * row has to take the new id, or the sync grows a `-2` twin with no history
+   * beside it — 16 such pairs on 2026-10-03 (PAR-682).
+   */
+  describe("the wiki re-issues the entity under a new id", () => {
+    const newId = "9f8e7d6c-5b4a-4321-8fed-cba987654321";
+
+    beforeEach(() => {
+      themeParksMapper.mapAttraction.mockReturnValue({
+        externalId: newId,
+        name: deadRow.name,
+        parkId,
+      });
+      // The insert path, taken when no row qualifies: a fresh `-2` twin.
+      attractionRepo.save.mockResolvedValue({
+        id: "row-twin",
+        externalId: newId,
+      });
+    });
+
+    const sync = (listed: string[] | undefined) =>
+      (processor as any).syncAttraction({}, parkId, {
+        claimed: new Set<string>(),
+        listedExternalIds: listed ? new Set(listed) : undefined,
+      });
+
+    const oldRow = (over: Record<string, unknown> = {}) => ({
+      ...deadRow,
+      slug: "ghost-town-new",
+      queueTimesEntityId: null,
+      retiredReason: ABSENT_UPSTREAM_REASON,
+      ...over,
+    });
+
+    it("moves the old row onto the new id and lifts its retirement", async () => {
+      attractionRepo.find.mockResolvedValue([oldRow()]);
+
+      await sync([newId]);
+
+      expect(attractionRepo.save).not.toHaveBeenCalled();
+      expect(attractionRepo.update).toHaveBeenCalledWith(
+        deadRow.id,
+        expect.objectContaining({ externalId: newId }),
+      );
+      expect(mappingRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          internalEntityId: deadRow.id,
+          externalSource: "themeparks-wiki",
+          externalEntityId: newId,
+        }),
+      );
+      expect(retirementService.unretire).toHaveBeenCalledWith(deadRow.id);
+    });
+
+    it("also takes an active row whose id left the list", async () => {
+      attractionRepo.find.mockResolvedValue([oldRow({ retiredReason: null })]);
+
+      await sync([newId]);
+
+      expect(attractionRepo.save).not.toHaveBeenCalled();
+      expect(attractionRepo.update).toHaveBeenCalledWith(
+        deadRow.id,
+        expect.objectContaining({ externalId: newId }),
+      );
+    });
+
+    it("does not take a row whose id is still listed — that is a rename next door", async () => {
+      attractionRepo.find.mockResolvedValue([oldRow({ retiredReason: null })]);
+
+      await sync([newId, deadRow.externalId]);
+
+      expect(attractionRepo.update).not.toHaveBeenCalled();
+      expect(attractionRepo.save).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not take a ride a human retired as closed", async () => {
+      attractionRepo.find.mockResolvedValue([
+        oldRow({ retiredReason: "Closed permanently. Source: https://…" }),
+      ]);
+
+      await sync([newId]);
+
+      expect(attractionRepo.update).not.toHaveBeenCalled();
+      expect(attractionRepo.save).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not take anything without the listed ids", async () => {
+      attractionRepo.find.mockResolvedValue([oldRow({ retiredReason: null })]);
+
+      await sync(undefined);
+
+      expect(attractionRepo.update).not.toHaveBeenCalled();
+      expect(attractionRepo.save).toHaveBeenCalledTimes(1);
     });
   });
 
