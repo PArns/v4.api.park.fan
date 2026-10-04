@@ -2,7 +2,7 @@ import { Processor, Process, InjectQueue } from "@nestjs/bull";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, IsNull, LessThan, Not, Repository } from "typeorm";
+import { In, IsNull, Not, Repository } from "typeorm";
 import { Job, Queue } from "bull";
 import { AttractionsService } from "../../attractions/attractions.service";
 import {
@@ -123,6 +123,25 @@ export const ABSENT_UPSTREAM_RETIRE_DAYS = 60;
  * the window the 77 still-measured rows of 2026-10-02 were counted in.
  */
 export const ABSENT_UPSTREAM_READING_DAYS = 7;
+
+/**
+ * How far back the seed of `absent_since` looks for a row's last real reading.
+ *
+ * It has to reach past {@link ABSENT_UPSTREAM_RETIRE_DAYS}, or the seed is
+ * useless for exactly the rows the column was added for: all six rows measured
+ * on 2026-10-04 had been silent far longer than 60 days, so a 60-day lookback
+ * would have found nothing and fallen back to the `updatedAt` the curation
+ * wrote. 400 days covers the whole retention of `queue_data` (oldest row
+ * 2025-12-24) and is still a time bound, which is what keeps TimescaleDB's
+ * chunk exclusion working (📚 G-128) — an unbounded `max()` over the hypertable
+ * is the shape that took the API down on 2026-09-28 (📚 G-123).
+ *
+ * Measured against production in the grouped form the job uses: 0.49 s for the
+ * six rows, 6.70 s for a constructed 200-row set. The real candidate set is a
+ * park's rows that are absent upstream AND have no `absent_since` yet — around
+ * six per park on the first run after the deploy, and none after it.
+ */
+export const ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS = 400;
 
 /**
  * Children Metadata Processor (Combined)
@@ -1090,15 +1109,24 @@ export class ChildrenMetadataProcessor {
    * under a new id, the dead row keeps the counter-free slug, and
    * `outranksNameDuplicate` hands it the name group (PAR-621).
    *
-   * **Absence is read from the row, not from a history.** `syncAttraction`
-   * writes every row it matches on every run, and `updatedAt` is an
-   * `@UpdateDateColumn`, so a row the feed still lists is never older than the
-   * last sync. Checked against `/children` for 243 rows in four parks with no
-   * crossing in either direction. Any other repository write also moves the
-   * column, which can only delay a retirement, never cause one. The one case
-   * it shortens: a park whose whole sync failed for 60 days retires a missing
-   * row on its first good run, not 60 days after it; the reading gate still
-   * applies, and the row comes back by itself if the id is listed again.
+   * **Absence is read from `absent_since`, a column this path owns.** It used
+   * to be read off `updatedAt`, on the grounds that `syncAttraction` writes
+   * every row it matches on every run — true, and checked against `/children`
+   * for 243 rows in four parks with no crossing in either direction. What the
+   * docstring then called a price worth paying ("any other repository write
+   * also moves the column, which can only delay a retirement, never cause
+   * one") turned out to land on the rows that get the most care: a curation
+   * write pushed six absent rows in three parks out by a full
+   * {@link ABSENT_UPSTREAM_RETIRE_DAYS} days, and in PAR-587 that was the
+   * entire difference between two duplicates resolving themselves and a dead
+   * row keeping the slug. So this run also maintains the column — it sets it
+   * for rows it finds absent and clears it for rows the feed listed again —
+   * and the gate reads it instead (PAR-656, PO decision 2026-10-03).
+   *
+   * The one case the clock still shortens: a park whose whole sync failed for
+   * 60 days retires a missing row on its first good run, not 60 days after it.
+   * The reading gate still applies, and the row comes back by itself if the id
+   * is listed again.
    *
    * **The park has to have synced, and this run proves it** (our feed going
    * quiet is not the entity going away). This runs only after a successful
@@ -1132,30 +1160,50 @@ export class ChildrenMetadataProcessor {
     const cutoff = new Date(
       now.getTime() - ABSENT_UPSTREAM_RETIRE_DAYS * 86_400_000,
     );
+    // Every active row of the park, not just the old ones: the `absent_since`
+    // bookkeeping below has to see a row the run before this one marked as
+    // absent in order to clear it again, and that row can be a day old.
     const rows = await this.attractionsService.getRepository().find({
       where: {
         parkId,
         retiredAt: IsNull(),
         queueTimesEntityId: IsNull(),
-        updatedAt: LessThan(cutoff),
       },
-      select: ["id", "name", "externalId"],
+      select: ["id", "name", "externalId", "updatedAt", "absentSince"],
     });
 
-    const absent = rows.filter(
+    // A row the wiki could list at all: it carries a wiki id, and that id is
+    // not a Queue-Times one the wiki never issued. Rows outside this set are
+    // left alone entirely — the feed says nothing about them in either
+    // direction, so neither the clock nor the retirement applies.
+    const inScope = rows.filter(
+      (row) => !!row.externalId && !row.externalId.startsWith("qt-ride-"),
+    );
+    const absent = inScope.filter(
       (row) =>
-        !claimedRowIds.has(row.id) &&
-        !!row.externalId &&
-        !row.externalId.startsWith("qt-ride-") &&
-        !listedExternalIds.has(row.externalId),
+        !claimedRowIds.has(row.id) && !listedExternalIds.has(row.externalId),
+    );
+    const absentIds = new Set(absent.map((row) => row.id));
+    await this.clearAbsenceWindow(
+      inScope.filter((row) => !absentIds.has(row.id)),
     );
     if (absent.length === 0) return;
 
-    const unclaimed = await this.withoutForeignSourceMappings(absent);
+    // A row absent for the first time gets its clock here, and from then on
+    // nothing but this path and a hand-entered un-retirement moves it.
+    await this.seedAbsenceWindow(absent, now);
+
+    const due = absent.filter(
+      (row) =>
+        row.absentSince != null && row.absentSince.getTime() < cutoff.getTime(),
+    );
+    if (due.length === 0) return;
+
+    const unclaimed = await this.withoutForeignSourceMappings(due);
     const silent = await this.withoutRecentReadings(unclaimed, now);
     if (silent.length === 0) return;
 
-    // The wiki does not say when an entity left the list; `updatedAt` only
+    // The wiki does not say when an entity left the list; `absent_since` only
     // bounds it from below. So this is the day it was noticed, and the reason
     // says so.
     await this.attractionRetirementService.retire(
@@ -1171,6 +1219,95 @@ export class ChildrenMetadataProcessor {
         `for ${ABSENT_UPSTREAM_RETIRE_DAYS}+ days — ` +
         silent.map((a) => a.name).join(", "),
     );
+  }
+
+  /**
+   * Starts the absence clock on the rows that do not have one yet, and writes
+   * the value back onto the objects so this run can already act on it.
+   *
+   * The seed is the **earlier** of the row's `updatedAt` and its last real
+   * reading, because both are evidence that the entity still existed and the
+   * older of the two is the one the newer writer may have overwritten. A row
+   * curated yesterday and silent since April is absent since April, not since
+   * yesterday — getting that backwards is the bug this column was added for.
+   *
+   * Where no real reading is found inside
+   * {@link ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS}, `updatedAt` is all that is
+   * left. The seed is then at worst too late, which only ever delays a
+   * retirement: measured on 2026-10-04, that was one row of six (`NEXUS AI`,
+   * created 2026-08-20, never once read by a real source).
+   *
+   * The write is raw SQL on purpose. Going through the repository would move
+   * `updatedAt` as well, and a bookkeeping column that disturbs the column it
+   * was built to replace is worth nothing.
+   */
+  private async seedAbsenceWindow(
+    absent: { id: string; updatedAt: Date; absentSince: Date | null }[],
+    now: Date,
+  ): Promise<void> {
+    const unseeded = absent.filter((row) => row.absentSince == null);
+    if (unseeded.length === 0) return;
+
+    const since = new Date(
+      now.getTime() - ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS * 86_400_000,
+    );
+    const readings: { attractionId: string; last_read: Date }[] =
+      await this.mappingRepository.manager.query(
+        `SELECT "attractionId", max("timestamp") AS last_read
+           FROM queue_data
+          WHERE "attractionId" = ANY($1::uuid[])
+            AND "timestamp" >= $2
+            AND data_source <> ALL($3::text[])
+            AND is_heartbeat IS NOT TRUE
+          GROUP BY "attractionId"`,
+        [unseeded.map((row) => row.id), since, [...SYNTHETIC_SOURCES]],
+      );
+    const lastRead = new Map(
+      readings.map((row) => [row.attractionId, new Date(row.last_read)]),
+    );
+
+    for (const row of unseeded) {
+      const read = lastRead.get(row.id);
+      row.absentSince =
+        read != null && read.getTime() < row.updatedAt.getTime()
+          ? read
+          : row.updatedAt;
+    }
+
+    await this.mappingRepository.manager.query(
+      `UPDATE attractions AS a
+          SET absent_since = v.absent_since
+         FROM (SELECT * FROM unnest($1::uuid[], $2::timestamptz[])
+                 AS t(id, absent_since)) AS v
+        WHERE a.id = v.id AND a.absent_since IS NULL`,
+      [
+        unseeded.map((row) => row.id),
+        unseeded.map((row) => row.absentSince!.toISOString()),
+      ],
+    );
+  }
+
+  /**
+   * Stops the clock on rows the feed listed again, or that this run claimed
+   * under another id. Only the rows that carry a value are written, so a park
+   * whose feed is complete issues no statement at all.
+   *
+   * `syncAttraction` already lifts its own retirement when an id comes back;
+   * this is the other half, and it runs for rows that were never retired too —
+   * a row that was absent for a week and is listed again must not keep a
+   * six-day head start for the next time it disappears.
+   */
+  private async clearAbsenceWindow(
+    present: { id: string; absentSince: Date | null }[],
+  ): Promise<void> {
+    const stale = present.filter((row) => row.absentSince != null);
+    if (stale.length === 0) return;
+
+    await this.mappingRepository.manager.query(
+      `UPDATE attractions SET absent_since = NULL WHERE id = ANY($1::uuid[])`,
+      [stale.map((row) => row.id)],
+    );
+    for (const row of stale) row.absentSince = null;
   }
 
   /**

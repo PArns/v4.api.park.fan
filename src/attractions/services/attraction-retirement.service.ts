@@ -243,7 +243,16 @@ export class AttractionRetirementService {
     return results;
   }
 
-  /** Undo — a retirement is a claim about the world, and claims can be wrong. */
+  /**
+   * Undo — a retirement is a claim about the world, and claims can be wrong.
+   *
+   * `absentSince` goes with it. A person saying the ride exists is better
+   * evidence than the feed not listing it, so the absence starts over rather
+   * than resuming where it left off: without this, the next children sync
+   * would read a clock older than `ABSENT_UPSTREAM_RETIRE_DAYS` and retire the
+   * row again within the hour. It used to be the pollution of `updatedAt` that
+   * bought those 60 days by accident; now it is stated (PAR-656).
+   */
   async unretire(attractionId: string): Promise<boolean> {
     const attraction = await this.attractionRepository.findOne({
       where: { id: attractionId },
@@ -254,6 +263,7 @@ export class AttractionRetirementService {
       retiredAt: null,
       retiredReason: null,
       retiredHidden: false,
+      absentSince: null,
     });
     await invalidateParkCaches(this.redis, attraction.parkId).catch(() => {});
     await this.revalidationService

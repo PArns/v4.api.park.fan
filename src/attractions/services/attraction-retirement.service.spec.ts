@@ -90,6 +90,10 @@ describe("AttractionRetirementService", () => {
       retiredReason: null,
       // A ride that comes back must not stay hidden by a leftover flag.
       retiredHidden: false,
+      // Nor by a clock that outlives the statement it contradicts: the
+      // children sync reads `absentSince` and would retire the row again
+      // within the hour if the absence resumed where it left off (PAR-656).
+      absentSince: null,
     });
   });
 
