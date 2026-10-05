@@ -1,4 +1,8 @@
-import { writeMessage, writeRideAlertMessage } from "./push-messages";
+import {
+  writeMessage,
+  writeRideAlertMessage,
+  writeRideReopenMessage,
+} from "./push-messages";
 
 describe("writeMessage", () => {
   const notification = {
@@ -71,6 +75,30 @@ describe("writeRideAlertMessage", () => {
   it("carries the url and dedupe key through", () => {
     const message = writeRideAlertMessage(notification, "en");
     expect(message.url).toBe(notification.url);
+    expect(message.tag).toBe(notification.dedupeKey);
+  });
+});
+
+describe("writeRideReopenMessage", () => {
+  const notification = {
+    dedupeKey: "ride-alert:alert-1",
+    attractionName: "Taron",
+    parkName: "Phantasialand",
+    url: "/parks/europe/germany/bruehl/phantasialand/taron",
+  };
+
+  it.each([
+    ["de", "Taron ist wieder offen"],
+    ["en", "Taron is open again"],
+    ["nl", "Taron is weer open"],
+    ["fr", "Taron a rouvert"],
+    ["es", "Taron vuelve a estar abierta"],
+    ["it", "Taron è di nuovo aperta"],
+    ["xx", "Taron is open again"],
+  ])("writes %s", (locale, title) => {
+    const message = writeRideReopenMessage(notification, locale);
+    expect(message.title).toBe(title);
+    expect(message.body).toBe("Phantasialand");
     expect(message.tag).toBe(notification.dedupeKey);
   });
 });

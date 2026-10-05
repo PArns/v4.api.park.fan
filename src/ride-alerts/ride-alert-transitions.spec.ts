@@ -1,4 +1,8 @@
-import { diffRideAlerts, type AlertRow } from "./ride-alert-transitions";
+import {
+  diffReopenAlerts,
+  diffRideAlerts,
+  type AlertRow,
+} from "./ride-alert-transitions";
 
 /**
  * `armed` is the whole of the dedup here — no Redis marker, no lead window —
@@ -139,5 +143,76 @@ describe("diffRideAlerts", () => {
 
   it("answers empty diffs for empty input", () => {
     expect(diffRideAlerts([], [])).toEqual({ triggers: [], armedUpdates: [] });
+  });
+});
+
+describe("diffReopenAlerts", () => {
+  const alert = (
+    armed: boolean,
+    id = "alert-1",
+    attractionId = "ride-1",
+    lastTriggeredAt: Date | null = null,
+  ) => ({
+    id,
+    subscriptionId: "sub-1",
+    attractionId,
+    armed,
+    lastTriggeredAt,
+  });
+
+  it("fires once on the closed → operating edge and disarms", () => {
+    const result = diffReopenAlerts(
+      [{ attractionId: "ride-1", operating: true }],
+      [alert(true)],
+    );
+    expect(result.triggers.map((t) => t.alertId)).toEqual(["alert-1"]);
+    expect(result.armedUpdates).toEqual([{ id: "alert-1", armed: false }]);
+  });
+
+  it("stays silent on every later cycle while the ride stays open", () => {
+    const result = diffReopenAlerts(
+      [{ attractionId: "ride-1", operating: true }],
+      [alert(false)],
+    );
+    expect(result.triggers).toEqual([]);
+    expect(result.armedUpdates).toEqual([]);
+  });
+
+  it("stays silent while the ride is still closed", () => {
+    const result = diffReopenAlerts(
+      [{ attractionId: "ride-1", operating: false }],
+      [alert(true)],
+    );
+    expect(result.triggers).toEqual([]);
+    expect(result.armedUpdates).toEqual([]);
+  });
+
+  it("re-arms when the ride is seen not operating again", () => {
+    const result = diffReopenAlerts(
+      [{ attractionId: "ride-1", operating: false }],
+      [alert(false)],
+    );
+    expect(result.triggers).toEqual([]);
+    expect(result.armedUpdates).toEqual([{ id: "alert-1", armed: true }]);
+  });
+
+  it("does not re-arm an alert that already fired (evening closing, next morning)", () => {
+    const fired = alert(
+      false,
+      "alert-1",
+      "ride-1",
+      new Date("2026-06-14T10:00:00Z"),
+    );
+    const result = diffReopenAlerts(
+      [{ attractionId: "ride-1", operating: false }],
+      [fired],
+    );
+    expect(result.armedUpdates).toEqual([]);
+  });
+
+  it("leaves an alert alone when its ride gave no usable reading", () => {
+    const result = diffReopenAlerts([], [alert(true), alert(false, "alert-2")]);
+    expect(result.triggers).toEqual([]);
+    expect(result.armedUpdates).toEqual([]);
   });
 });

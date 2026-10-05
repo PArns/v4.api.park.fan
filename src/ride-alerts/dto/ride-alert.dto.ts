@@ -1,13 +1,17 @@
 import { ApiProperty } from "@nestjs/swagger";
 import {
+  IsIn,
   IsInt,
   IsNotEmpty,
+  IsOptional,
   IsString,
   IsUUID,
   Max,
   MaxLength,
   Min,
+  ValidateIf,
 } from "class-validator";
+import { RIDE_ALERT_KIND_REOPEN } from "../entities/ride-alert.entity";
 
 /**
  * Every field carries a class-validator decorator for the same reason as
@@ -29,18 +33,35 @@ export class CreateRideAlertDto {
   attractionId: string;
 
   @ApiProperty({
+    required: false,
+    enum: [RIDE_ALERT_KIND_REOPEN],
     description:
-      "Notify once the STANDBY wait drops below this many minutes. " +
+      "What to be told about. Omitted (or null) is the wait-time alert and " +
+      "needs `thresholdMinutes`. `reopen` notifies once when the ride opens " +
+      "after being seen closed, down or in refurbishment, and ignores " +
+      "`thresholdMinutes`. A ride has one alert per browser, so sending the " +
+      "other kind replaces the existing one.",
+  })
+  @IsOptional()
+  @IsIn([RIDE_ALERT_KIND_REOPEN])
+  kind?: typeof RIDE_ALERT_KIND_REOPEN | null;
+
+  @ApiProperty({
+    required: false,
+    description:
+      "Notify once the STANDBY wait drops below this many minutes. Required " +
+      "unless `kind` is `reopen`. " +
       "Re-sending for an attraction already watched replaces the threshold " +
       "and re-arms the alert — a changed number is a fresh ask, not a no-op.",
     example: 20,
     minimum: 1,
     maximum: 240,
   })
+  @ValidateIf((o: CreateRideAlertDto) => o.kind !== RIDE_ALERT_KIND_REOPEN)
   @IsInt()
   @Min(1)
   @Max(240)
-  thresholdMinutes: number;
+  thresholdMinutes?: number;
 }
 
 export class DeleteRideAlertDto {
@@ -70,8 +91,21 @@ export class RideAlertResponseDto {
       "guards elsewhere.",
   })
   path: string | null;
-  @ApiProperty({ example: 20 })
-  thresholdMinutes: number;
+  @ApiProperty({
+    nullable: true,
+    enum: [RIDE_ALERT_KIND_REOPEN],
+    description:
+      "What this alert waits for. `null` is the wait-time alert (fires below " +
+      "`thresholdMinutes`); `reopen` fires when the ride opens again.",
+  })
+  kind: string | null;
+  @ApiProperty({
+    example: 20,
+    nullable: true,
+    description:
+      "`null` for a `reopen` alert, which has no wait-time threshold.",
+  })
+  thresholdMinutes: number | null;
   @ApiProperty({
     description:
       "Whether the ride is currently out of season (per the curated " +
