@@ -529,6 +529,29 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
       expect(retirementService.retire).not.toHaveBeenCalled();
     });
 
+    /**
+     * The clock is bookkeeping about the feed, not about the retirement, so it
+     * runs for a row the season gate keeps. Order it the other way and the
+     * editor who answers the "season or gone?" list with `false` starts a
+     * fresh 60 days, instead of the row retiring on the absence it already
+     * carries — which is what the twin case below reads off a 121-day clock.
+     */
+    it("still starts the clock on a row it keeps", async () => {
+      attractionRepo.find.mockResolvedValue([
+        seasonal({ updatedAt: daysBefore(164), absentSince: null }),
+      ]);
+
+      await retireAbsent();
+
+      const seedUpdate = manager.query.mock.calls.find(([sql]: [string]) =>
+        sql.includes("SET absent_since = v.absent_since"),
+      );
+      expect(seedUpdate).toBeDefined();
+      expect(seedUpdate![1][0]).toEqual([deadRow.id]);
+      expect(seedUpdate![1][1]).toEqual([daysBefore(164).toISOString()]);
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
     it("keeps a row an editor marked seasonal against the detector", async () => {
       attractionRepo.find.mockResolvedValue([
         seasonal({ isSeasonal: false, curatedIsSeasonal: true }),
