@@ -284,8 +284,9 @@ export class NotRunTodayDto {
   @ApiProperty({
     description:
       "The last instant the ride is known to have been running, ISO 8601 " +
-      "UTC, clipped to the park's opening hours. Always within the last " +
-      "seven days — a ride that has not run for longer gets no " +
+      "UTC, clipped to the park's opening hours. Always on one of the six " +
+      "days before today in the park's timezone, so its weekday is never " +
+      "today's — a ride that has not run for longer gets no " +
       '`notRunToday` at all, because „not yet today" would promise an ' +
       "opening nobody announced. Name it by weekday and time in the park's " +
       "timezone, as the outage line names its start.",
