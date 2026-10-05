@@ -6,7 +6,6 @@ import { DataSource } from "typeorm";
 import type { Redis } from "ioredis";
 import { randomUUID } from "node:crypto";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
-import { subDays } from "date-fns";
 import { getDatabaseConfig } from "../../src/config/database.config";
 import { RedisModule, REDIS_CLIENT } from "../../src/common/redis/redis.module";
 import { QueueDataModule } from "../../src/queue-data/queue-data.module";
@@ -43,13 +42,24 @@ describe("Park historical stats — days the schedule calls CLOSED (E2E)", () =>
   let redis: Redis;
   let service: ParkHistoricalStatsService;
 
-  /** Four consecutive park-local days, 10 to 13 days ago: four distinct weekdays. */
+  /**
+   * The park-local date `n` days back, by calendar arithmetic rather than by
+   * shifting an instant.
+   *
+   * `subDays(new Date(), n)` then formatted in the park's zone is not the same
+   * thing: the host runs in UTC and the test parks in America/New_York, so in
+   * the UTC hour where the two zones disagree about the date, a window that
+   * spans a US DST transition maps two different `n` onto the same park-local
+   * date. The counts below are exact equalities, so one duplicate turns a green
+   * suite red in March and November — and the runner's 04:00 UTC slot sits
+   * inside exactly that hour (G-56). Anchoring on the park-local date and
+   * stepping a pure date takes the instant out of the arithmetic.
+   */
   function daysAgo(park: Park, n: number): string {
-    return formatInTimeZone(
-      subDays(new Date(), n),
-      park.timezone,
-      "yyyy-MM-dd",
-    );
+    const today = formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd");
+    const anchor = new Date(`${today}T00:00:00Z`);
+    anchor.setUTCDate(anchor.getUTCDate() - n);
+    return anchor.toISOString().slice(0, 10);
   }
 
   /** Two measured hours (12:00 and 13:00 park time) for one ride on one day. */

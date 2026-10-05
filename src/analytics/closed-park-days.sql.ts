@@ -1,6 +1,16 @@
 /**
- * The one place that decides whether a calendar day counts as a measured day
- * for a park, shared by every aggregate query so the three cannot drift.
+ * Whether a calendar day counts as a measured day for a park, shared by the
+ * three aggregate queries in `park-historical-stats.service.ts` so they cannot
+ * drift apart.
+ *
+ * It is NOT the only statement of this rule in the repo. `PARK_DAY_IS_CLOSED_SQL`
+ * in `src/ml/services/prediction-accuracy.service.ts` says the same thing for
+ * the ML accuracy figures, as a correlated `EXISTS` keyed on an outer park
+ * column rather than on a bound park id — it spans every park in one query and
+ * cannot read the CTE below without being restructured. It also compares
+ * `se.date = DATE(pa.target_time)`, a UTC day against this park-local column.
+ * Folding the two together changes published accuracy numbers and needs its own
+ * before/after, so it is a separate ticket, not a drive-by.
  *
  * `queue_data_aggregates` keeps only OPERATING rows, but some feeds report
  * rides as OPERATING with a wait of 0 while the park is shut, around the clock.
