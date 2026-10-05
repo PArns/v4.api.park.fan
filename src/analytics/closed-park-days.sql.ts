@@ -1,16 +1,19 @@
 /**
- * Whether a calendar day counts as a measured day for a park, shared by the
- * three aggregate queries in `park-historical-stats.service.ts` so they cannot
- * drift apart.
+ * Whether a calendar day counts as a measured day for a park. This file is the
+ * only statement of the rule in the repo, in two shapes: the CTE pair below,
+ * used by the three aggregate queries in `park-historical-stats.service.ts`,
+ * and {@link closedParkDayExists} for a query that spans every park at once.
  *
- * It is NOT the only statement of this rule in the repo. `PARK_DAY_IS_CLOSED_SQL`
- * in `src/ml/services/prediction-accuracy.service.ts` says the same thing for
- * the ML accuracy figures, as a correlated `EXISTS` keyed on an outer park
- * column rather than on a bound park id — it spans every park in one query and
- * cannot read the CTE below without being restructured. It also compares
- * `se.date = DATE(pa.target_time)`, a UTC day against this park-local column.
- * Folding the two together changes published accuracy numbers and needs its own
- * before/after, so it is a separate ticket, not a drive-by.
+ * The two shapes exist because the park arrives differently. The aggregate
+ * queries bind one park id and one timezone as parameters, so their day
+ * expression can say `AT TIME ZONE $2`. The ML accuracy query
+ * (`PARK_DAY_IS_CLOSED_SQL` in `src/ml/services/prediction-accuracy.service.ts`)
+ * runs over every park in one statement and reads both the park id and the
+ * timezone off joined columns, so it cannot read a CTE keyed on a bound id.
+ * Restructuring it into the park-bound shape would mean one query per park
+ * instead of one, for a figure the ML dashboard and the alert service both poll
+ * hourly. It gets its own fragment here instead, so the rule still lives in one
+ * file.
  *
  * `queue_data_aggregates` keeps only OPERATING rows, but some feeds report
  * rides as OPERATING with a wait of 0 while the park is shut, around the clock.
@@ -24,15 +27,22 @@
  * says nothing about the park, and an OPERATING entry beside the CLOSED one
  * means the park opened after all.
  *
- * Both halves are deliberately exported as text rather than a query builder:
- * the three callers are raw SQL with different shapes — one filters a grouped
- * day column, the others filter aggregate rows directly — and the only thing
- * they must share is the rule, not the query around it.
+ * The fragments are deliberately exported as text rather than a query builder:
+ * the callers are raw SQL with different shapes — one filters a grouped day
+ * column, others filter aggregate rows directly, one hangs off a query builder's
+ * `andWhere` — and the only thing they must share is the rule, not the query
+ * around it.
  *
  * `schedule_entries.date` is a PARK-LOCAL date, so every caller hands in a
- * park-local day expression. Comparing it against a UTC day would be wrong for
- * every park off UTC and silently wrong for parks with a negative offset, where
- * an evening hour already belongs to the next UTC date.
+ * park-local day expression. Comparing it against a UTC day asks the calendar
+ * about the wrong date in both directions, and measurably: the ML accuracy
+ * query did exactly that until PAR-707, and against production over 30 days,
+ * 334 of its rows landed on the neighbouring day. At `America/New_York` (−4)
+ * Sesame Place's 20:00–23:45 rows carried the NEXT UTC date and 270 of them
+ * were charged to a shut day the park had been open on; at `Asia/Riyadh` (+3)
+ * Six Flags Qiddiya City's 00:00–00:15 rows carried the PREVIOUS one and 64
+ * went the other way. So it is not only a negative-offset problem — every park
+ * off UTC is wrong in its own edge-of-day hours.
  */
 
 /**
@@ -89,5 +99,44 @@ export function isNotAClosedParkDay(parkLocalDayExpr: string): string {
   return `NOT EXISTS (
             SELECT 1 FROM closed_park_days
             WHERE closed_park_days.day = ${parkLocalDayExpr}
+          )`;
+}
+
+/**
+ * The same rule as a self-contained `EXISTS`, for a query that spans every park
+ * and therefore cannot bind the park as a parameter. True when the given park's
+ * given day is shut. Needs no CTE, so it drops into a query builder's
+ * `andWhere`; negate it at the call site to keep a day in.
+ *
+ * `EXISTS` rather than a join on purpose: event rows (`TICKETED_EVENT` and the
+ * like) can share a day with the status row, and a join would then count every
+ * outer row once per schedule row of its day (PAR-640).
+ *
+ * @param parkIdExpr SQL yielding the park's `uuid`, e.g. `'a."parkId"'`.
+ *   A compile-time constant from our own SQL, never user input.
+ * @param parkLocalDayExpr SQL yielding a PARK-LOCAL `date` — a `timestamptz`
+ *   needs `AT TIME ZONE` against the park's own timezone column first, e.g.
+ *   `'(pa.target_time AT TIME ZONE p.timezone)::date'`. `DATE(x)` on its own
+ *   reads the session timezone (UTC in production) and is the bug this
+ *   parameter exists to prevent. A compile-time constant from our own SQL,
+ *   never user input.
+ */
+export function closedParkDayExists(
+  parkIdExpr: string,
+  parkLocalDayExpr: string,
+): string {
+  return `EXISTS (
+            SELECT 1 FROM schedule_entries se
+            WHERE se."parkId" = ${parkIdExpr}
+              AND se.date = ${parkLocalDayExpr}
+              AND se."attractionId" IS NULL
+              AND se."scheduleType" = 'CLOSED'
+              AND NOT EXISTS (
+                    SELECT 1 FROM schedule_entries operating_day
+                    WHERE operating_day."parkId" = se."parkId"
+                      AND operating_day."attractionId" IS NULL
+                      AND operating_day.date = se.date
+                      AND operating_day."scheduleType" = 'OPERATING'
+                  )
           )`;
 }
