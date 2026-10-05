@@ -23,6 +23,7 @@ import { RideDayCurveDto } from "./dto/ride-day-curve.dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { rateOrUnknown } from "../common/utils/crowd-level.util";
 import { HISTORICAL_STATS_CACHE_VERSION } from "../common/cache/cache-keys";
+import { closedParkDaysCte, isNotAClosedParkDay } from "./closed-park-days.sql";
 
 /** Response schema version — bump when the contract changes (see DTO). */
 const SCHEMA_VERSION = 3;
@@ -213,6 +214,7 @@ export class ParkHistoricalStatsService {
       ),
       this.queryTopAttractions(
         park.id,
+        park.timezone,
         startStr,
         endStr,
         topN,
@@ -306,10 +308,12 @@ export class ParkHistoricalStatsService {
     topN: number,
     minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
   ): Promise<ParkHourlyProfileDto> {
-    // v5: retired rides no longer count towards the top N. The bump makes the
-    // filter apply on deploy instead of up to 24 h later, when the v4 entry
-    // would have expired. No invalidation glob exists for this key.
-    const cacheKey = `park:hourly-profile:v5:${park.id}:${years}:${topN}:${minAttractionDays}`;
+    // v6: days the park's schedule calls CLOSED no longer count (PAR-698).
+    // v5 was retired rides no longer counting towards the top N. The bump
+    // makes the filter apply on deploy instead of up to 24 h later, when the
+    // previous entry would have expired. No invalidation glob exists for this
+    // key — the version segment is the only way to retire one.
+    const cacheKey = `park:hourly-profile:v6:${park.id}:${years}:${topN}:${minAttractionDays}`;
     const cached = safeJsonParse<ParkHourlyProfileDto>(
       await this.redis.get(cacheKey),
     );
@@ -754,6 +758,13 @@ export class ParkHistoricalStatsService {
    * two hours in summer and one in winter, i.e. by a different amount inside
    * the same window.
    */
+  /**
+   * The hourly matrix behind `/stats/hourly`: one row per ride and hour of the
+   * park-local day, for the rides that clear the sample floor.
+   *
+   * Days the park's schedule calls CLOSED are dropped by the shared rule in
+   * `closed-park-days.sql.ts`, in both halves of the statement (PAR-698).
+   */
   private async queryHourlyProfile(
     parkId: string,
     timezone: string,
@@ -763,7 +774,8 @@ export class ParkHistoricalStatsService {
     minAttractionDays: number,
   ): Promise<Record<string, unknown>[]> {
     return this.aggregateRepo.manager.query(
-      `WITH eligible AS (
+      `WITH ${closedParkDaysCte("$1")},
+       eligible AS (
          SELECT qda."attractionId"                    AS aid,
                 COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date)::int AS sample_days
          FROM queue_data_aggregates qda
@@ -776,6 +788,7 @@ export class ParkHistoricalStatsService {
            AND qda.hour <  ($4::date + INTERVAL '1 day')
            AND qda."sampleCount" >= $5
            AND a.retired_at IS NULL
+           AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
          GROUP BY qda."attractionId"
          HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6
          ORDER BY AVG(qda.p90) DESC
@@ -801,6 +814,11 @@ export class ParkHistoricalStatsService {
          AND qda.hour >= $3::date
          AND qda.hour <  ($4::date + INTERVAL '1 day')
          AND qda."sampleCount" >= $5
+         -- Both halves of this query filter: the CTE decides WHICH rides are
+         -- ranked, the outer SELECT decides WHAT their hours average to. With
+         -- the rule only in the CTE, a park's shut days would be gone from the
+         -- ranking and still in every number the table prints.
+         AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
        GROUP BY a.id, a.slug, name, land, hour_of_day, e.sample_days
        ORDER BY a.slug, hour_of_day`,
       [
@@ -840,14 +858,9 @@ export class ParkHistoricalStatsService {
    * pre-aggregation (queue_data_aggregates), restricted to headliners.
    *
    * A day the park's schedule calls CLOSED is not a day here, neither as a
-   * value nor as a sample day (PAR-692). The aggregate keeps only OPERATING
-   * rows, but some feeds report rides as OPERATING with a wait of 0 while the
-   * park is shut: Europa-Park had 25,418 such headliner rows on the 28 CLOSED
-   * days of February 2026, around the clock, and `byMonth` printed February as
-   * 28 sample days with a median of 0. The test is the one `/calendar` shows:
-   * a park-level CLOSED entry and no park-level OPERATING entry on that date.
-   * `byMonth`, `byDayOfWeek`, `totalSampleDays` and the typical-day-peak all
-   * read these rows, so one filter covers all four.
+   * value nor as a sample day (PAR-692) — the rule and its evidence live in
+   * `closed-park-days.sql.ts`. `byMonth`, `byDayOfWeek`, `totalSampleDays` and
+   * the typical-day-peak all read these rows, so one filter covers all four.
    */
   private async queryHeadlinerDayValues(
     parkId: string,
@@ -858,7 +871,8 @@ export class ParkHistoricalStatsService {
   ): Promise<DayValue[]> {
     const rows: Array<Record<string, unknown>> =
       await this.aggregateRepo.manager.query(
-        `WITH per_attraction_day AS (
+        `WITH ${closedParkDaysCte("$1")},
+         per_attraction_day AS (
            SELECT
              (qda.hour AT TIME ZONE $2)::date                     AS day,
              qda."attractionId"                                   AS aid,
@@ -878,20 +892,7 @@ export class ParkHistoricalStatsService {
            AVG(day_peak)                AS day_value_p90,
            AVG(day_typical)             AS day_value_p50
          FROM per_attraction_day pad
-         WHERE NOT EXISTS (
-                 SELECT 1 FROM schedule_entries closed_day
-                 WHERE closed_day."parkId" = $1::uuid
-                   AND closed_day."attractionId" IS NULL
-                   AND closed_day.date = pad.day
-                   AND closed_day."scheduleType" = 'CLOSED'
-               )
-            OR EXISTS (
-                 SELECT 1 FROM schedule_entries operating_day
-                 WHERE operating_day."parkId" = $1::uuid
-                   AND operating_day."attractionId" IS NULL
-                   AND operating_day.date = pad.day
-                   AND operating_day."scheduleType" = 'OPERATING'
-               )
+         WHERE ${isNotAClosedParkDay("pad.day")}
          GROUP BY day
          ORDER BY day`,
         [
@@ -914,6 +915,7 @@ export class ParkHistoricalStatsService {
 
   private async queryTopAttractions(
     parkId: string,
+    timezone: string,
     startDate: string,
     endDate: string,
     topN: number,
@@ -937,26 +939,41 @@ export class ParkHistoricalStatsService {
     // aggregates stay in the table (retiring deletes nothing), so without it
     // Toverland's table led with Maximus' Blitz Bahn months after it was taken
     // down, linking to a ride page that answers 404.
+    //
+    // Days a park-level schedule entry calls CLOSED are dropped by the same
+    // rule the day values use (`closed-park-days.sql.ts`): a feed that posts a
+    // wait of 0 all through a shut day otherwise pulls a ride's average down
+    // and counts the day towards its sample floor. 31 % of Europa-Park's
+    // aggregate rows over one year sat on such days (PAR-698).
+    //
+    // The day is park-local, which is also why the window counts are. They
+    // read `DATE(qda.hour)` until PAR-698 — a UTC day, while
+    // `schedule_entries.date` and the sibling queries here are park-local.
+    // Dropping rows by one day notion and counting days by another inside one
+    // query cannot be right; the counts move for 1,468 of 5,692 rides and the
+    // 20-day floor decides differently for 14 of them.
     return this.aggregateRepo.manager.query(
-      `SELECT
+      `WITH ${closedParkDaysCte("$1")}
+       SELECT
          a.slug,
          COALESCE(a.curated_name, a.name)                        AS name,
          COALESCE(a.curated_land_name, a.land_name)              AS land,
          COALESCE(a.curated_attraction_type, a."attractionType") AS attraction_type,
          AVG(qda.p50)                               AS avg_p50,
          AVG(qda.p90)                               AS avg_p90,
-         COUNT(DISTINCT DATE(qda.hour))::int         AS sample_days
+         COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date)::int AS sample_days
        FROM queue_data_aggregates qda
        JOIN attractions a ON a.id::text = qda."attractionId"
        WHERE qda."parkId" = $1
-         AND qda.hour >= $2::date
-         AND qda.hour <  ($3::date + INTERVAL '1 day')
+         AND qda.hour >= $3::date
+         AND qda.hour <  ($4::date + INTERVAL '1 day')
          AND a.retired_at IS NULL
+         AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
        GROUP BY a.id, a.slug, name, land, attraction_type
-       HAVING COUNT(DISTINCT DATE(qda.hour)) >= $5
+       HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6
        ORDER BY avg_p90 DESC
-       LIMIT $4`,
-      [parkId, startDate, endDate, topN, minAttractionDays],
+       LIMIT $5`,
+      [parkId, timezone, startDate, endDate, topN, minAttractionDays],
     );
   }
 

@@ -184,13 +184,16 @@ describe("ParkHistoricalStatsService", () => {
       String(c[0]).includes("ORDER BY avg_p90 DESC"),
     )!;
     const params = topCall[1] as unknown[];
-    expect(params[3]).toBe(25);
+    expect(params[4]).toBe(25);
     // Ranking by average P90 makes a one-day average outrank a season's worth
     // of them — Walibi Hollands Sky Diver led its park's table off a single
-    // measured day. $5 is the floor that keeps it out.
-    expect(params[4]).toBe(20);
+    // measured day. $6 is the floor that keeps it out.
+    expect(params[5]).toBe(20);
+    // The day is park-local, like the schedule entries the CLOSED-day rule
+    // reads and like the sibling queries here (PAR-698). $2 is the timezone.
+    expect(params[1]).toBe("Europe/Berlin");
     expect(String(topCall[0])).toContain(
-      "HAVING COUNT(DISTINCT DATE(qda.hour)) >= $5",
+      "HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6",
     );
   });
 
@@ -260,10 +263,10 @@ describe("ParkHistoricalStatsService", () => {
     expect(aggregateQuery).not.toHaveBeenCalled();
   });
 
-  it("keys the cache by park, years, topN, minSampleDays and the attraction floor (v3)", async () => {
+  it("keys the cache by park, years, topN, minSampleDays and the attraction floor", async () => {
     await service.getParkHistoricalStats(park, 2, 10, 30);
     expect(redis.get).toHaveBeenCalledWith(
-      "park:historical-stats:v3:park-uuid:2:10:30:20",
+      `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:park-uuid:2:10:30:20`,
     );
   });
 
@@ -342,7 +345,7 @@ describe("ParkHistoricalStatsService", () => {
         )![0],
       );
       const eligible = sql.slice(
-        sql.indexOf("WITH eligible AS"),
+        sql.indexOf("eligible AS"),
         sql.indexOf("ORDER BY AVG(qda.p90) DESC"),
       );
       // The CTE was found and reaches the ranking, or the checks below read

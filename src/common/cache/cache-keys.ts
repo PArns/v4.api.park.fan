@@ -16,7 +16,7 @@
  * (`CacheKeys.parkHistoricalStatsPattern`) both read it: v3 shipped with a
  * glob still searching v2, so no eviction ever matched a key (PAR-570).
  */
-export const HISTORICAL_STATS_CACHE_VERSION = 3;
+export const HISTORICAL_STATS_CACHE_VERSION = 4;
 
 export const CacheKeys = {
   /** Integrated park response (hottest endpoint; warmed by cache-warmup). */
