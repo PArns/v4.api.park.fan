@@ -358,74 +358,24 @@ export class AttractionOutageService {
       // No early return on an empty result, and that is the point: it used to
       // `return out` here, which is the NOTE above reached by a different road.
       if (rows.length > 0) {
-        // The curves answer "how much longer", which is optional by design —
-        // `estimate` is documented as absent whenever the curve cannot answer.
-        // Letting a failed read of them escape into the catch below would drop
-        // the outage lines this query just placed AND, because `out` would then
-        // be empty, hand every reported-DOWN ride to a statement that answers
-        // with a different word. A missing estimate must not cost a sentence.
-        const curves = await this.loadCurves().catch((error) => {
-          this.logger.warn(
-            `Recovery curves unavailable for park ${park.id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-          return {
-            byPark: new Map<string, DowntimeRecoveryCurve[]>(),
-            pooled: [],
-          };
-        });
-
-        // Resolved once. curvesFor filters both the park array and the pooled
-        // array on every call, and the signal is the constant "down" for every
-        // row -- eight rides down meant eight identical filterings.
-        const downCurves = this.curvesFor(curves, park.id, "down");
-
-        // Estimate first, calendar second, and the order is the point: the
-        // extra query is worth a round trip only where there is a quartile
-        // pair to place, and "reads DOWN in a park with hours" is not that.
-        // An outage under the curve's first bucket, a bucket under the sample
-        // floor and a curve read that just failed all arrive here with nothing
-        // to project — the last of those being exactly the moment the database
-        // is already in trouble.
-        //
-        // A park that publishes no hours has no operating clock, so its elapsed
-        // figure is zero for a reason that has nothing to do with the ride.
-        // Reading a curve at that zero would answer every outage there with
-        // "just started".
-        const estimates = new Map(
-          rows.map((row) => {
-            const elapsed = Number(row.elapsedOperatingMinutes);
-            return [
-              row.attractionId,
-              row.hasWindows && Number.isFinite(elapsed)
-                ? estimateOutage(downCurves, elapsed)
-                : undefined,
-            ] as const;
-          }),
+        const estimates = await this.estimatesFor(
+          park,
+          "down",
+          rows.map((row) => ({
+            attractionId: row.attractionId,
+            elapsed: Number(row.elapsedOperatingMinutes),
+            hasWindows: row.hasWindows,
+          })),
+          asOf,
         );
-        const windows = [...estimates.values()].some((e) => e?.remaining)
-          ? await this.loadUpcomingWindows(park.id, asOf)
-          : [];
 
         for (const row of rows) {
-          const estimate = estimates.get(row.attractionId);
           out.set(row.attractionId, {
             startedAt: new Date(row.startedAt),
             startObserved: row.startObserved === true,
             rowsInRun: Number(row.rowsInRun) || 0,
             signal: "down",
-            // Re-derived with the calendar rather than patched onto the object,
-            // so `estimateOutage` stays the one place the window comes from.
-            // The call is pure and reads eleven curve rows.
-            estimate:
-              estimate && windows.length > 0
-                ? estimateOutage(
-                    downCurves,
-                    Number(row.elapsedOperatingMinutes),
-                    { windows, asOf },
-                  )
-                : estimate,
+            estimate: estimates.get(row.attractionId),
           });
         }
       }
@@ -487,6 +437,81 @@ export class AttractionOutageService {
   }
 
   /**
+   * "How much longer", for the outages of one signal in one park.
+   *
+   * Both signals answer it the same way and from their own curve, so the steps
+   * live once. They were written out inline for the reported signal alone
+   * while the closure signal had no estimate; a second copy beside the closure
+   * statement would have been two places for one rule to drift.
+   *
+   * Never throws. The curves answer an optional question — `estimate` is
+   * documented as absent whenever the curve cannot answer — so a failed read
+   * of them costs the estimate and not the outage line, and with it not the
+   * hand-off to the closure statement that `getCurrentOutages` decides on.
+   */
+  private async estimatesFor(
+    park: OutageParkContext,
+    signal: OutageSignal,
+    rows: Array<{ attractionId: string; elapsed: number; hasWindows: boolean }>,
+    asOf: Date,
+  ): Promise<Map<string, OutageEstimate | undefined>> {
+    const out = new Map<string, OutageEstimate | undefined>();
+    if (rows.length === 0) return out;
+
+    const curves = await this.loadCurves().catch((error) => {
+      this.logger.warn(
+        `Recovery curves unavailable for park ${park.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return {
+        byPark: new Map<string, DowntimeRecoveryCurve[]>(),
+        pooled: [],
+      };
+    });
+
+    // Resolved once. curvesFor filters both the park array and the pooled
+    // array on every call, and the signal is the same for every row -- eight
+    // rides down meant eight identical filterings.
+    const signalCurves = this.curvesFor(curves, park.id, signal);
+
+    // Estimate first, calendar second, and the order is the point: the extra
+    // query is worth a round trip only where there is a quartile pair to place.
+    // An outage under the curve's first bucket, a bucket under the sample floor
+    // and a curve read that just failed all arrive here with nothing to
+    // project — the last of those being exactly the moment the database is
+    // already in trouble.
+    //
+    // A park that publishes no hours has no operating clock, so its elapsed
+    // figure is zero for a reason that has nothing to do with the ride. Reading
+    // a curve at that zero would answer every outage there with "just started".
+    for (const row of rows) {
+      out.set(
+        row.attractionId,
+        row.hasWindows && Number.isFinite(row.elapsed)
+          ? estimateOutage(signalCurves, row.elapsed)
+          : undefined,
+      );
+    }
+    const windows = [...out.values()].some((e) => e?.remaining)
+      ? await this.loadUpcomingWindows(park.id, asOf)
+      : [];
+    if (windows.length === 0) return out;
+
+    // Re-derived with the calendar rather than patched onto the object, so
+    // `estimateOutage` stays the one place the window comes from. The call is
+    // pure and reads eleven curve rows.
+    for (const row of rows) {
+      if (!out.get(row.attractionId)) continue;
+      out.set(
+        row.attractionId,
+        estimateOutage(signalCurves, row.elapsed, { windows, asOf }),
+      );
+    }
+    return out;
+  }
+
+  /**
    * Faults inferred from a closure, for a park whose feed never says DOWN.
    *
    * Kept in its own method and behind its own try/catch: it is an addition for
@@ -504,6 +529,7 @@ export class AttractionOutageService {
       const rows: Array<{
         attractionId: string;
         startedAt: Date;
+        elapsedOperatingMinutes: number | string;
       }> = await this.queueDataRepository.manager.query(
         CURRENT_CLOSURE_GAP_SQL,
         [ids, park.timezone, asOf, park.id],
@@ -512,6 +538,34 @@ export class AttractionOutageService {
       // the loop below already does nothing on an empty array — but it is the
       // shape that put the bug in `getCurrentOutages`, waiting for the first
       // line to be added after the loop.
+
+      // How much longer, from this signal's OWN curve. It was withheld here
+      // while that curve could only have been fit on closures that came back
+      // the same day — zero censoring, every ride that broke at 15:00 and
+      // stayed shut excluded before anything was counted, and an estimate that
+      // could only err towards "it will be back soon". The nightly statement
+      // now keeps those closures, follows them across the night and stores the
+      // ones that never ended censored, so the curve sees the cases a visitor
+      // fears most (see CLOSURE_GAP_INTERVALS_SQL).
+      //
+      // Never the DOWN curve: `curvesFor` filters by signal, and a closure
+      // answered from reported spells would be read against a different end
+      // definition. The wording problem is the page's — it has a sentence for
+      // this signal that does not say „behoben" or „gemeldet".
+      //
+      // A park in this statement always publishes hours (a row only leaves it
+      // while the park is inside a window), so the elapsed figure is always on
+      // a real operating clock and there is no hasWindows to ask.
+      const estimates = await this.estimatesFor(
+        park,
+        "closed_gap",
+        rows.map((row) => ({
+          attractionId: row.attractionId,
+          elapsed: Number(row.elapsedOperatingMinutes),
+          hasWindows: true,
+        })),
+        asOf,
+      );
 
       for (const row of rows) {
         // Never over a reported one. The caller only asks about rides the DOWN
@@ -526,30 +580,7 @@ export class AttractionOutageService {
           startObserved: true,
           rowsInRun: 1,
           signal: "closed_gap",
-          // NO ESTIMATE, deliberately, and this is the load-bearing line.
-          //
-          // The curve for this signal would be fit on a population defined by
-          // having recovered. `CLOSURE_GAP_INTERVALS_SQL` only emits an
-          // interval once the ride is OPERATING again, and the processor stores
-          // every one of them as `recovered` — so censoring in that population
-          // is not the 15.6 % that licensed the estimate in the first place, it
-          // is **zero**, because every closure that never came back was
-          // excluded before counting. The cases thrown away are exactly the
-          // visitor's worst ones: the ride that broke at 15:00 and is out for
-          // the day, and the irregular early finish this signal openly cannot
-          // separate from a fault. A survivorship-biased curve can only err
-          // towards "it will be back soon".
-          //
-          // It also removes the wording problem underneath. The estimate copy
-          // has no signal variant — it says „Störungen wie diese" and „waren
-          // behoben" — so it undid, one line lower, the entire distinction the
-          // sentence above it makes. There is no honest number to attach here
-          // yet, and the line without one still carries the only thing this
-          // signal knows: since when the ride has stood still.
-          //
-          // To turn it back on: keep a closure open when the park shuts, store
-          // it censored rather than dropping it, and the Kaplan-Meier already
-          // in `downtime-recovery.service.ts` does the right thing unchanged.
+          estimate: estimates.get(row.attractionId),
         });
       }
     } catch (error) {

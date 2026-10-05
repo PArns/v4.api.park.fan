@@ -176,7 +176,15 @@ const RECOVERY_CURVE_SQL = `
     SELECT a."parkId"          AS park_id,
            o.signal            AS signal,
            o.operating_minutes AS mins,
-           (o.end_reason IN ('recovered', 'reclassified')) AS observed
+           -- What counts as the event being estimated, which is "running
+           -- again", and it differs by signal in one reason. A reported DOWN that
+           -- turns into REFURBISHMENT has ended as a fault -- planned work took
+           -- its place -- and that end is observed. A closure that turns into
+           -- REFURBISHMENT is the ride still not running under another name, so
+           -- for closed_gap it is censored there: counted as an event it would
+           -- shorten the curve, the direction this signal was kept off it for.
+           (o.end_reason = 'recovered'
+            OR (o.signal = 'down' AND o.end_reason = 'reclassified')) AS observed
       FROM attraction_outages o
       JOIN attractions a ON a.id = o."attractionId"
      WHERE o.started_at >= $1::timestamptz
@@ -203,13 +211,17 @@ const RECOVERY_CURVE_SQL = `
        -- minutes are mostly carried heartbeat is not a measurement. Those
        -- cannot be rescued by censoring, because their TIME is wrong, not just
        -- their ending.
-       -- Reported outages only. A closed_gap interval is stored as recovered by
-       -- construction — the statement that produces it only emits one once the
-       -- ride is running again — so its curve would have zero censoring and be
-       -- survivorship-biased by definition. Nothing reads it (the serving path
-       -- hard-codes "no estimate" for that signal), so this is dead work that
-       -- would become a live bug the moment someone wired it up.
-       AND o.signal = 'down'
+       -- Both signals, each into its own curve: signal is in every PARTITION
+       -- below and in the pooled UNION, so the two populations are never mixed.
+       --
+       -- closed_gap was filtered out here while its intervals were stored as
+       -- recovered by construction -- the nightly statement only returned a
+       -- closure once the ride was running again the same day -- so its curve
+       -- would have had zero censoring and been survivorship-biased by
+       -- definition. The statement now keeps the closures that did not come
+       -- back, follows them across the night and stores the ones that never
+       -- ended censored (CLOSURE_GAP_INTERVALS_SQL), which is the population a
+       -- Kaplan-Meier needs and the reason the filter could go.
        AND NOT o.likely_works_period
        AND NOT o.start_censored
        AND o.operating_minutes > 0

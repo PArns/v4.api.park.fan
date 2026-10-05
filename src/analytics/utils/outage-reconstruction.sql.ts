@@ -454,5 +454,13 @@ export const OUTAGE_SCAN_START_SQL = `
          ) AS scan_start
     FROM attraction_outages o
    WHERE ($2::uuid[] IS NULL OR o."parkId" = ANY($2::uuid[]))
+     -- Reported spells only. A closure is cut off LIVE_LOOKBACK_HOURS after it
+     -- began, so the requested window always reaches back past the start of
+     -- any closure still worth re-reading -- and a closure stored censored at
+     -- that horizon keeps ended_at = NULL for good. Counted here, every such row
+     -- older than the window would pin the scan to the floor below, which is
+     -- twice the window on every night after the first closure that never came
+     -- back: the super-linear cost the 30-day default exists to avoid.
+     AND o.signal = 'down'
      AND (o.ended_at IS NULL OR o.started_at >= $1::timestamptz)
 `;

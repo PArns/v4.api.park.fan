@@ -232,11 +232,14 @@ export class AttractionOutageDto {
 
   @ApiProperty({
     description:
-      "How long outages like this one usually still take from here. Absent " +
-      "whenever the measured curve cannot answer — too short to have a " +
-      "bucket, too thin a sample, or a park that publishes no opening hours " +
-      "so there is no operating clock to count on. Absence NEVER means the " +
-      "outage is about to end.",
+      "How long outages like this one usually still take from here, read " +
+      "off the curve of this outage's own `signal` — a `closed_gap` is never " +
+      "answered from reported DOWN spells. Absent whenever the measured curve " +
+      "cannot answer — too short to have a bucket, too thin a sample, or a " +
+      "park that publishes no opening hours so there is no operating clock " +
+      "to count on. Absence NEVER means the outage is about to end. For a " +
+      "`closed_gap`, word it like the outage line: nobody reported it, so no " +
+      "sentence may say 'resolved' or 'reported' about it.",
     required: false,
     type: () => OutageEstimateDto,
   })

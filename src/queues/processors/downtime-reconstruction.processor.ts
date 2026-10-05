@@ -251,11 +251,12 @@ export class DowntimeReconstructionProcessor {
     // tracked: a free-flow (`open_with_park`) ride in a blind park, which the
     // closure-gap statement does not exclude and the exposure statement does.
     // If such a ride stops producing gaps, its `closed_gap` rows stay until the
-    // 400-day prune. Nothing published reads them — the profile, coverage and
-    // recovery-curve queries all filter `signal = 'down'`, as `closure-gap.sql`
-    // says in its own docblock — so today that costs a row and no figure. It is
-    // still the right trade if that ever changes: a stale row a later run can
-    // correct, against a loss no run can undo.
+    // 400-day prune. The profile and coverage queries filter `signal = 'down'`
+    // and never see them; the recovery curve does read them now, and for the
+    // curve a row that stays is a closure that was measured when it happened —
+    // a real observation that is merely no longer being repeated, not a wrong
+    // one. It is still the right trade: a stale row a later run can correct,
+    // against a loss no run can undo.
     //
     // The outages primary key is (`attractionId`, `started_at`), and the
     // exposure table's primary key is (`attractionId`, `op_day`), so the
@@ -329,11 +330,15 @@ export class DowntimeReconstructionProcessor {
           .execute();
       }
 
-      // A closure gap is a complete, observed interval by construction: the
-      // statement only returns one once the ride has come back, so it always
-      // has both edges and never needs the censoring machinery. Its minutes are
-      // wall minutes measured inside opening hours, which for a same-day gap is
-      // the same number as operating minutes.
+      // A closure is written as the statement measured it. It used to be a
+      // complete interval by construction -- only a ride that came back the
+      // same day was returned -- so this loop stamped every row `recovered`
+      // with wall minutes for operating ones. Since standing closures are kept,
+      // a row may have no end (`ongoing`, `window_edge`), may span a night, and
+      // may end in something other than a recovery, and each of those is a
+      // fact the recovery curve reads: stamping them all `recovered` would put
+      // back, one step later, exactly the survivorship the statement now
+      // avoids. See CLOSURE_GAP_INTERVALS_SQL.
       for (const batch of chunked(closureGaps, 500)) {
         await manager
           .createQueryBuilder()
@@ -345,12 +350,22 @@ export class DowntimeReconstructionProcessor {
               parkId: row.parkId,
               startedAt: row.startedAt,
               endedAt: row.endedAt,
-              operatingMinutes: row.wallMinutes,
-              observedOperatingMinutes: row.wallMinutes,
+              operatingMinutes: row.operatingMinutes,
+              // Every closure minute is read off an observed status change --
+              // the statement admits no carried row -- so there is no
+              // heartbeat share to discount.
+              observedOperatingMinutes: row.operatingMinutes,
               wallMinutes: row.wallMinutes,
-              operatingDays: 1,
-              endReason: "recovered" as AttractionOutage["endReason"],
-              durationUsable: true,
+              operatingDays: row.operatingDays,
+              endReason: row.endReason as AttractionOutage["endReason"],
+              // A recovery only. `isDurationUsable` would also accept
+              // `reclassified`, which for a reported DOWN is planned work
+              // replacing a fault; for a closure it is the ride still not
+              // running under another name, and its length is a lower bound.
+              durationUsable:
+                row.endReason === "recovered" && row.operatingMinutes > 0,
+              // Never: a closure is cut off at LIVE_LOOKBACK_HOURS, a long way
+              // inside the seven days that mark a works period.
               likelyWorksPeriod: false,
               rowsInSpell: 1,
               heartbeatRows: 0,
@@ -520,9 +535,13 @@ interface ClosureGapRow {
   attractionId: string;
   parkId: string;
   startedAt: Date;
-  endedAt: Date;
+  /** Null when the closure did not end inside its horizon. */
+  endedAt: Date | null;
   startOpDay: string;
   wallMinutes: number;
+  operatingMinutes: number;
+  operatingDays: number;
+  endReason: "recovered" | "reclassified" | "ongoing" | "window_edge";
 }
 
 interface ExposureRow {

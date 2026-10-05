@@ -1,6 +1,6 @@
 import { MIN_BLIND_EVIDENCE_HOURS } from "../../analytics/entities/park-downtime-coverage.entity";
 import { attractionIsCuratedOutOfService } from "../../attractions/utils/curated-out-of-service.util";
-import { parkOpenWindowCtes } from "./park-open-window.sql";
+import { overlapMinutesSql, parkOpenWindowCtes } from "./park-open-window.sql";
 import { RECONCILIATION_SOURCE } from "./source-absent-status.util";
 import { HEARTBEAT_SOURCE } from "./outage-rows.sql";
 /**
@@ -18,43 +18,73 @@ import { HEARTBEAT_SOURCE } from "./outage-rows.sql";
  *
  * ## The definition, and why each clause is load-bearing
  *
- * A closure gap is a ride that **was OPERATING earlier the same park-local
- * operating day**, went `CLOSED` inside opening hours, and **came back to
- * OPERATING the same day**. Each of the filters below removes a class of
- * non-fault that measurement showed dominates the raw signal:
+ * A closure is a ride that **was OPERATING**, went `CLOSED` inside a published
+ * opening window with at least `MIN_PARK_MINUTES_LEFT` of that window still to
+ * run, and did not close together with the rest of the park. It ends at the
+ * ride's next status that is not `CLOSED`, and the nightly statement stores it
+ * in one of two shapes:
+ *
+ * - a **gap** came back to OPERATING the same operating day — the shape this
+ *   file was first written for, and still nearly all of the rows;
+ * - a **standing closure** did not. It is followed across the night to the
+ *   ride's next status, as the DOWN reconstruction follows a DOWN spell, and is
+ *   cut off `LIVE_LOOKBACK_HOURS` after it began. That is the longest the live
+ *   line can stand, so a curve read against a live elapsed figure never needs
+ *   more; a closure still running then is stored censored (`window_edge`, or
+ *   `ongoing` while the cut-off has not been reached yet).
+ *
+ * The second shape is what lets the recovery curve be built for this signal at
+ * all. It used to be dropped, which left a population defined by having
+ * recovered the same day — zero censoring, and every closure that broke at 15:00
+ * and stayed shut gone before anything was counted. A curve fit on that can only
+ * err towards "it will be back soon". Kept, and censored where it never came
+ * back inside the horizon, the cases the visitor fears most are in the
+ * denominator, and the Kaplan-Meier in `downtime-recovery.service.ts` does the
+ * rest unchanged.
+ *
+ * Each of the filters below removes a class of non-fault that measurement
+ * showed dominates the raw signal:
  *
  * | Filter | What it removes | Measured |
  * | --- | --- | --- |
- * | came back the same day | the park shutting for the night | a closing park does not reopen |
+ * | `MIN_PARK_MINUTES_LEFT` | the park shutting for the night | every ride closes at closing time |
  * | `MAX_SIMULTANEOUS_CLOSERS` | park-wide events (weather, closing time) | **61.2 %** of raw transitions are 5+ rides in one minute |
  * | MAX_REGULAR_DAYS | a ride with its own shorter hours | 130 ride-hour pairs close on 10+ days at the same hour |
  * | MAX_GAP_DAY_SHARE | a show or duty cycle, which closes at a different time each day | 71 rides carry a gap on 60 %+ of their operating days |
- *
- * The live statement applies one more, `MAX_EARLY_END_SHARE`, which this one
- * deliberately does not — see below.
+ * | MAX_EARLY_END_SHARE | a ride whose day ends before the park's | Futuroscope's cinemas end early on 100 % of days, a real fault on 8 % |
  * | `MIN_GAP_MINUTES` | one poll of noise | 27.1 % of raw gaps are exactly one 5-minute cycle |
  *
- * Raw transitions over 21 days: 25 759. After all four: **3618**, over 1137
- * rides in 121 parks, with quartiles 15/20/35 minutes — close to the DOWN
- * signal's own 10/25/50 and unlike anything a scheduled closure looks like.
+ * Raw transitions over 21 days, measured before standing closures were kept:
+ * 25 759. After the filters of the time: **3618** gaps, over 1137 rides in 121
+ * parks, with quartiles 15/20/35 minutes — close to the DOWN signal's own
+ * 10/25/50 and unlike anything a scheduled closure looks like. Those figures
+ * describe the gap shape alone and predate the two filters this version added to
+ * the nightly statement (the minutes-left floor and the early-end share), so
+ * they are an upper bound on today's gap count rather than a measurement of it.
  *
- * ## Why the early-end filter is live-only
+ * ## The early-end filter, and why the nightly statement can now afford it
  *
  * `MAX_EARLY_END_SHARE` catches a ride whose DAY habitually ends before the
- * park's — Futuroscope's cinemas score 100 % against a real fault's 8 %. It
- * needs, per ride and per day, the last OPERATING reading against that day's
- * published closing time, and over a 21-day reconstruction that comparison does
- * not finish: measured at 61 s over seven days as a lateral, and past 110 s
- * over 21 even hoisted into a grouped CTE and scoped to candidates.
+ * park's. Live it compares each day's last OPERATING reading against that day's
+ * published close, and over a 21-day reconstruction that comparison did not
+ * finish: 61 s over seven days as a lateral, past 110 s over 21 even hoisted
+ * into a grouped CTE and scoped to candidates.
  *
- * It is live-only on purpose, and the asymmetry is safe today because nothing
- * published reads these rows: the profile and coverage queries filter
- * `signal = 'down'`, and so does the recovery curve. What the nightly job
- * stores for `closed_gap` is a record, not a figure.
+ * The nightly statement does not need that comparison any more, because it now
+ * stores the event the comparison was looking for. A day "ends early" exactly
+ * when the ride's last OPERATING run gives way to a closure with an hour or more
+ * of the window left that does not come back that day — which is a standing
+ * closure, already found, already keyed on its operating day. The share is a
+ * count over rows the statement holds, divided by the denominator the duty-cycle
+ * test already reads. It is applied to the whole ride, gaps included, which is
+ * what `todo.md` §2f asked for before anything published `closed_gap` history:
+ * the stored rows no longer carry the cinema noise the live line refuses to
+ * show.
  *
- * **This becomes a real defect the moment anything publishes `closed_gap`
- * history** — the stored rows would carry cinema noise the live line refuses to
- * show. `todo.md` carries it.
+ * The two definitions differ in one respect, and it is the safe one. Live reads
+ * the last OPERATING *reading*; the nightly statement reads the last OPERATING
+ * *run*, which ends where the status changes. For a ride that writes rows while
+ * it runs — every ride with a moving wait time — they are the same instant.
  *
  * ## Only where DOWN is absent
  *
@@ -270,11 +300,16 @@ export const LIVE_LOOKBACK_HOURS = 26;
 export const MAX_GAP_HOURS = 12;
 
 /**
- * Closure gaps as intervals, for one park filter and window.
+ * Closures as intervals, for one park filter and window: the same-day gaps and
+ * the standing closures the file docblock describes, in one result.
  *
  * Parameters: `$1` uuid[] park filter or NULL, `$2` window start, `$3` window
  * end. Deliberately the same shape as `OUTAGE_INTERVALS_SQL` so the processor
- * can run both and write one table.
+ * can run both and write one table, and it emits the columns that table needs
+ * rather than leaving the processor to invent them: `operatingMinutes` and
+ * `operatingDays` on the operating clock, `endedAt` null for a closure that did
+ * not end inside its horizon, and `endReason` from the DOWN reconstruction's own
+ * vocabulary (`recovered`, `reclassified`, `ongoing`, `window_edge`).
  *
  * The window functions do all the work in one pass; an earlier version used
  * correlated subqueries for "was it OPERATING before" and "did it come back",
@@ -345,11 +380,32 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
        AND qd.timestamp <  $3::timestamptz
   ),
   seq AS (
+    -- The previous READING's status, so chg below can keep only the readings
+    -- that change it.
     SELECT *,
+           lag(st) OVER (PARTITION BY aid ORDER BY ts) AS row_prev_st
+      FROM src
+  ),
+  -- Status changes only: one row where each run of a status begins.
+  --
+  -- The triple used to be read off adjacent READINGS, so a second CLOSED
+  -- reading inside one closure made the first one's next_st CLOSED and dropped
+  -- the closure -- the shape the carried heartbeat once gave every gap past ~65
+  -- minutes, and the one a source writing the same status twice still could.
+  -- Over the runs, a closure's next row is by construction the first reading
+  -- that is not CLOSED, however many CLOSED readings sit inside it, which is
+  -- also exactly what a standing closure needs to find its end.
+  --
+  -- The second window pass is over status changes rather than over the scan,
+  -- which is the whole of its cost: a running ride writes a row every time its
+  -- wait moves, and none of those rows change its status.
+  chg AS (
+    SELECT aid, pid, tz, ts, st,
            lag(st)  OVER w AS prev_st,
            lead(st) OVER w AS next_st,
            lead(ts) OVER w AS next_ts
-      FROM src
+      FROM seq
+     WHERE st IS DISTINCT FROM row_prev_st
     WINDOW w AS (PARTITION BY aid ORDER BY ts)
   ),
   -- The operating day of each edge of a candidate gap, from the WINDOW that
@@ -374,11 +430,14 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   -- 2. **Not a second window definition.** win comes from
   --    parkOpenWindowCtes(), so the closing-time repair, the disjoint-union
   --    flattening and the day anchoring are inherited rather than rewritten.
-  -- 3. **Not on the wide scan.** It hangs off the candidate transitions
-  --    (~25 000 over 21 days), not off src, which reads every STANDBY reading
-  --    the blind parks produced in the window. The st/prev_st/next_st filters
-  --    are quals on the outer side of both LEFT JOINs, so they still prune
-  --    first.
+  -- 3. **Not on the wide scan.** It hangs off the OPERATING -> CLOSED status
+  --    changes in chg, not off src, which reads every STANDBY reading the
+  --    blind parks produced in the window. That is more rows than the ~25 000
+  --    same-day gaps it hung off over 21 days before standing closures were
+  --    kept -- every ride closes at closing time -- and still a status change
+  --    per ride and closure rather than a reading per poll. The st/prev_st
+  --    filters are quals on the outer side of both LEFT JOINs, so they still
+  --    prune first.
   --
   -- win is disjoint per park, so each join matches at most one row. Two
   -- windows CAN share an op_day (a park publishing a morning and an evening
@@ -416,12 +475,13 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
   -- the same units as that one. A calendar day here was a second notion of
   -- "the day of an outage" in a job that writes both.
   gap_edges AS (
-    SELECT s.aid, s.pid, s.tz, s.ts, s.next_ts,
+    SELECT s.aid, s.pid, s.tz, s.ts, s.next_ts, s.next_st,
+           wo.closes_at AS window_closes_at,
            COALESCE(wo.op_day, (s.ts AT TIME ZONE s.tz)::date)
              AS start_op_day,
            COALESCE(wb.op_day, (s.next_ts AT TIME ZONE s.tz)::date)
              AS end_op_day
-      FROM seq s
+      FROM chg s
       LEFT JOIN win wo
         ON wo.park_id = s.pid
        AND s.ts >= wo.opens_at
@@ -430,30 +490,120 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
         ON wb.park_id = s.pid
        AND s.next_ts >= wb.opens_at
        AND s.next_ts <  wb.closes_at
+     -- Every closure, whatever came after it. Which of the two shapes it takes
+     -- is decided once, in closures below, from what this CTE carries.
      WHERE s.st = 'CLOSED'
        AND s.prev_st = 'OPERATING'
-       AND s.next_st = 'OPERATING'
-       AND s.next_ts IS NOT NULL
-       AND s.next_ts < s.ts + INTERVAL '${MAX_GAP_HOURS} hours'
+  ),
+  -- Which of the two shapes a closure takes, as two flags computed once and read
+  -- by both branches. Written out in each branch they would be two copies of one
+  -- definition, free to let a closure count as a gap and a standing closure at
+  -- once, or as neither.
+  closures AS (
+    SELECT g.*,
+           COALESCE(
+             g.next_st = 'OPERATING'
+             AND g.next_ts < g.ts + INTERVAL '${MAX_GAP_HOURS} hours'
+             -- Back the same operating day. A park shutting does not reopen.
+             AND g.start_op_day = g.end_op_day,
+             FALSE
+           ) AS returns_same_day,
+           -- Inside a published window with an hour of it still to run. The
+           -- live line asks the same of every closure it shows
+           -- (MIN_PARK_MINUTES_LEFT in open_today), so a row that fails it is
+           -- one the page could never have drawn -- and the recovery curve is
+           -- read against what the page draws.
+           --
+           -- On gaps too, and that is the half that is not cosmetic. A gap that
+           -- starts in the last hour has to come back before the close to be a
+           -- gap at all, so it is short by construction: kept, it would be a
+           -- second survivorship bias inside the population built to remove the
+           -- first. And a closure outside every published window is in hours
+           -- the exposure table does not count either -- a hard-ticket evening
+           -- is neither exposure nor outage, the rule park-open-window.sql
+           -- states for the DOWN reconstruction.
+           COALESCE(
+             g.window_closes_at
+               >= g.ts + INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes',
+             FALSE
+           ) AS mid_day
+      FROM gap_edges g
   ),
   raw_gaps AS (
     SELECT aid, pid, tz,
            ts        AS started_at,
            next_ts   AS ended_at,
            start_op_day                              AS op_day,
-           EXTRACT(HOUR FROM ts AT TIME ZONE tz)::int AS closed_hour,
-           EXTRACT(EPOCH FROM (next_ts - ts)) / 60.0  AS gap_min
-      FROM gap_edges
-     -- Back the same operating day. A park shutting does not reopen.
-     WHERE start_op_day = end_op_day
+           EXTRACT(HOUR FROM ts AT TIME ZONE tz)::int AS closed_hour
+      FROM closures
+     WHERE returns_same_day AND mid_day
   ),
+  -- The closures that did NOT come back the same operating day, followed to the
+  -- ride's next status for at most LIVE_LOOKBACK_HOURS.
+  --
+  -- They used to be dropped, and the population they left behind was defined by
+  -- having recovered: zero censoring, and the rides that broke at 15:00 and
+  -- stayed shut were gone before anything was counted. Here they are kept, and
+  -- the night is a pause rather than an ending -- the same rule the DOWN
+  -- reconstruction stitches by. The minutes are counted on the operating clock
+  -- below, so a ride that stopped at 16:10, stood through the night and ran
+  -- again at 09:30 has stood for its last 110 minutes of Sunday and its first 30
+  -- of Monday, which is also exactly what the live line's elapsed figure says
+  -- about it at 09:29.
+  --
+  -- The horizon is the live line's own lookback. A closure older than that has
+  -- left the page, so no live elapsed figure is ever read past it, and a ride
+  -- standing still for a week is a works period or a season, not a fault: it is
+  -- cut off there and stored censored, where it keeps the curve honest about
+  -- how often a closure does NOT end rather than inflating how long one does.
+  raw_stands AS (
+    SELECT aid, pid, tz,
+           ts AS started_at,
+           CASE WHEN next_ts < ts + INTERVAL '${LIVE_LOOKBACK_HOURS} hours'
+                THEN next_ts END AS ended_at,
+           CASE WHEN next_ts < ts + INTERVAL '${LIVE_LOOKBACK_HOURS} hours'
+                THEN next_st END AS end_st,
+           start_op_day                              AS op_day,
+           EXTRACT(HOUR FROM ts AT TIME ZONE tz)::int AS closed_hour
+      FROM closures
+     WHERE NOT returns_same_day AND mid_day
+  ),
+  -- Both shapes, measured to the instant the statement stops looking: the end
+  -- where there is one, else the horizon, else the scan's own end for a closure
+  -- that is still inside its horizon.
+  cand AS (
+    SELECT aid, pid, tz, started_at, ended_at,
+           COALESCE(ended_at,
+                    LEAST(started_at + INTERVAL '${LIVE_LOOKBACK_HOURS} hours',
+                          $3::timestamptz)) AS measured_until,
+           end_st, op_day, closed_hour, kind
+      FROM (
+        SELECT aid, pid, tz, started_at, ended_at, 'OPERATING'::text AS end_st,
+               op_day, closed_hour, 'gap'::text AS kind
+          FROM raw_gaps
+        UNION ALL
+        SELECT aid, pid, tz, started_at, ended_at, end_st,
+               op_day, closed_hour, 'stand'::text AS kind
+          FROM raw_stands
+      ) u
+  ),
+  -- Counted over EVERY closure of the park in that minute, whichever shape it
+  -- took and whether or not it passed the minutes-left floor. It used to count
+  -- the same-day gaps alone, so a storm that shut ten rides of which two came
+  -- back left those two standing at two closers -- a park-wide event recorded
+  -- as two faults. The live statement has always counted every CLOSED reading
+  -- of the park (park_closers), which is the side this now matches.
   simultaneity AS (
-    SELECT pid, date_trunc('minute', started_at) AS minute, count(*) AS closers
-      FROM raw_gaps GROUP BY 1, 2
+    SELECT pid, date_trunc('minute', ts) AS minute, count(*) AS closers
+      FROM closures GROUP BY 1, 2
   ),
+  -- Over both shapes, because the case it exists for is mostly the second: a
+  -- ride with its own shorter hours closes at 16:00 every day and does NOT come
+  -- back, so before standing closures were kept it never reached this filter at
+  -- all.
   regularity AS (
     SELECT aid, closed_hour, count(DISTINCT op_day) AS days
-      FROM raw_gaps GROUP BY 1, 2
+      FROM cand GROUP BY 1, 2
   ),
   -- A ride that stops on more days than not is describing its timetable.
   -- The hour filter above cannot see this: a show closes at a different time
@@ -605,24 +755,68 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
      GROUP BY e."attractionId"
   ),
   cycle AS (
-    -- The numerator over the same span as the denominator above -- which is
-    -- the scan window for both, so no filter is needed here. Bounding this to
-    -- CYCLE_WINDOW_DAYS while raw_gaps still spanned the scan left old gaps
-    -- divided by a recent-only denominator.
-    SELECT g.aid,
-           count(DISTINCT g.op_day)::numeric AS gap_days,
+    -- The numerators over the same span as the denominator above -- which is
+    -- the scan window for all of them, so no filter is needed here. Bounding
+    -- this to CYCLE_WINDOW_DAYS while raw_gaps still spanned the scan left old
+    -- gaps divided by a recent-only denominator.
+    --
+    -- stand_days is the early-end numerator: a day whose last OPERATING run
+    -- gave way, with an hour or more of the window left, to a closure that did
+    -- not come back. It is counted before the simultaneity and regularity
+    -- filters, as the live early_end counts every early day whatever ended it.
+    SELECT c.aid,
+           count(DISTINCT c.op_day) FILTER (WHERE c.kind = 'gap')::numeric
+             AS gap_days,
+           count(DISTINCT c.op_day) FILTER (WHERE c.kind = 'stand')::numeric
+             AS stand_days,
            COALESCE(MAX(ac.active_days), 0)  AS active_days
-      FROM raw_gaps g
-      LEFT JOIN active ac ON ac.aid = g.aid
-     GROUP BY g.aid
+      FROM cand c
+      LEFT JOIN active ac ON ac.aid = c.aid
+     GROUP BY c.aid
+  ),
+  -- Minutes on the operating clock: the overlap of [start, measured_until) with
+  -- the park's windows, summed over windows and never over the outer bounds, so
+  -- a closure standing through a night is not credited with the night. The
+  -- recovery curve is read against a live elapsed figure computed the same way.
+  --
+  -- win reaches far enough on both sides: its openings run from two days
+  -- before $2 to $3, every closure starts at or after $2, and measured_until
+  -- never passes $3.
+  cand_minutes AS (
+    SELECT c.aid, c.started_at,
+           SUM(${overlapMinutesSql("c.started_at", "c.measured_until", "w.opens_at", "w.closes_at")})
+             AS operating_minutes,
+           COUNT(DISTINCT w.op_day) AS operating_days
+      FROM cand c
+      JOIN win w
+        ON w.park_id = c.pid
+       AND w.opens_at  < c.measured_until
+       AND w.closes_at > c.started_at
+     GROUP BY c.aid, c.started_at
   )
   SELECT g.aid                                  AS "attractionId",
          g.pid                                  AS "parkId",
          g.started_at                           AS "startedAt",
          g.ended_at                             AS "endedAt",
          g.op_day                               AS "startOpDay",
-         ROUND(g.gap_min)::int                  AS "wallMinutes"
-    FROM raw_gaps g
+         ROUND(EXTRACT(EPOCH FROM (g.measured_until - g.started_at)) / 60.0)::int
+                                                AS "wallMinutes",
+         ROUND(m.operating_minutes)::int        AS "operatingMinutes",
+         GREATEST(m.operating_days, 1)::int     AS "operatingDays",
+         -- The end-reason vocabulary the DOWN reconstruction writes, so the
+         -- curve's "observed" test reads both signals with one predicate per
+         -- reason. What differs is which reasons count as a recovery, and that
+         -- is decided there, not here.
+         CASE
+           WHEN g.end_st = 'OPERATING'          THEN 'recovered'
+           WHEN g.end_st IS NOT NULL            THEN 'reclassified'
+           WHEN g.started_at + INTERVAL '${LIVE_LOOKBACK_HOURS} hours'
+                > $3::timestamptz               THEN 'ongoing'
+           ELSE 'window_edge'
+         END                                    AS "endReason"
+    FROM cand g
+    JOIN cand_minutes m
+      ON m.aid = g.aid AND m.started_at = g.started_at
     JOIN simultaneity s
       ON s.pid = g.pid AND s.minute = date_trunc('minute', g.started_at)
     JOIN regularity r
@@ -651,7 +845,9 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
           -- works period declared for that day covers it.
           AND ${attractionIsCuratedOutOfService("ca", "g.op_day")}
      )
-     AND g.gap_min >= ${MIN_GAP_MINUTES}
+     -- On the operating clock, so a standing closure is judged by the same
+     -- minutes it is stored with.
+     AND m.operating_minutes >= ${MIN_GAP_MINUTES}
      -- Not a duty cycle. Below the day floor there is not enough to judge, and
      -- the ride is kept.
      --
@@ -663,6 +859,11 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
      -- left arm still carries the OR.
      AND (c.active_days < ${MIN_DAYS_FOR_CYCLE_TEST}
           OR c.gap_days / NULLIF(c.active_days, 0) <= ${MAX_GAP_DAY_SHARE})
+     -- Not a ride whose day simply ends earlier than the park's -- the live
+     -- statement's early_end, read off the standing closures this statement
+     -- already holds. Same floor and the same NULLIF, for the same reasons.
+     AND (c.active_days < ${MIN_DAYS_FOR_CYCLE_TEST}
+          OR c.stand_days / NULLIF(c.active_days, 0) <= ${MAX_EARLY_END_SHARE})
    ORDER BY g.pid, g.aid, g.started_at
 `;
 
@@ -1213,12 +1414,28 @@ export const CURRENT_CLOSURE_GAP_SQL = `
      GROUP BY q.aid
   )
   SELECT s.aid                                   AS "attractionId",
-         s.started_at                            AS "startedAt"
+         s.started_at                            AS "startedAt",
+         -- Operating minutes the ride has stood for, the figure the recovery
+         -- curve is read at: the overlap of [started_at, $3) with the park's
+         -- windows, summed over windows so a closure that stood through a night
+         -- is not credited with the night. The nightly statement measures the
+         -- closures the curve is built from the same way (cand_minutes).
+         --
+         -- No hasWindows beside it, unlike the DOWN statement: a row only
+         -- leaves this statement while park_open has one, so the park always
+         -- publishes hours here. win reaches back CYCLE_WINDOW_DAYS + 1 days and
+         -- run_start only LIVE_LOOKBACK_HOURS, so the start is always covered.
+         COALESCE((
+           SELECT ROUND(SUM(${overlapMinutesSql("s.started_at", "$3::timestamptz", "w.opens_at", "w.closes_at")}))
+             FROM win w
+            WHERE w.closes_at > s.started_at
+              AND w.opens_at  < $3::timestamptz
+         ), 0)::int                              AS "elapsedOperatingMinutes"
     FROM run_start s
     JOIN open_today o ON o.aid = s.aid
     -- No re-join to park_closers. It used to be here to carry a
-    -- simultaneousClosers column that nothing ever read -- addClosureGaps types
-    -- its rows as { attractionId, startedAt } -- so the join's only effect was
+    -- simultaneousClosers column that nothing ever read -- addClosureGaps reads
+    -- the columns selected above and nothing else -- so the join's only effect was
     -- one more CTE scan per call on the path this statement exists to make
     -- cheap. The threshold itself is applied in open_today.
     LEFT JOIN cycle cy ON cy.aid = s.aid

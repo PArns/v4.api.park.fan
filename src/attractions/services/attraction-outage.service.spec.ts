@@ -173,25 +173,14 @@ describe("AttractionOutageService — the closure path", () => {
   it("an inferred closure is never dressed as a reported one", async () => {
     // The load-bearing line, and nothing exercised it: every other test in this
     // file resolves the closure query to []. `signal` travels to the page, and
-    // `closed_gap` must read „steht still" rather than „gemeldet". `estimate`
-    // must stay absent too — the curve for this signal would be fit on a
-    // population defined by having recovered, so it can only err towards "it
-    // will be back soon", and the estimate copy has no signal variant.
-    curves.find.mockResolvedValue([
-      { parkId: null, signal: "down", elapsedMinutes: 0, medianRemaining: 30 },
-      {
-        parkId: null,
-        signal: "closed_gap",
-        elapsedMinutes: 0,
-        medianRemaining: 30,
-      },
-    ]);
+    // `closed_gap` must read „steht still" rather than „gemeldet".
     query.mockImplementation((_sql: string, params: unknown[]) =>
       Array.isArray(params) && params[3] === PARK.id
         ? Promise.resolve([
             {
               attractionId: OPEN_RIDE.id,
               startedAt: new Date("2026-09-08T11:20:00Z"),
+              elapsedOperatingMinutes: 45,
             },
           ])
         : Promise.resolve([]),
@@ -202,7 +191,79 @@ describe("AttractionOutageService — the closure path", () => {
     const row = out.get(OPEN_RIDE.id);
     expect(row?.signal).toBe("closed_gap");
     expect(row?.startObserved).toBe(true);
-    expect(row?.estimate).toBeUndefined();
+  });
+
+  describe("how much longer, for a closure", () => {
+    // One bucket of each signal at 45 elapsed minutes, deliberately different,
+    // so an answer can only be told apart by which curve it was read from.
+    const curveRow = (signal: "down" | "closed_gap", p30: string) => ({
+      parkId: null,
+      signal,
+      elapsedMinutes: 45,
+      atRisk: 5000,
+      recoveryWithin30: p30,
+      recoveryWithin60: "0.600",
+      remainingP25: 20,
+      remainingMedian: 45,
+      remainingP75: 120,
+    });
+    const closureRow = (elapsedOperatingMinutes: number | string) => [
+      {
+        attractionId: OPEN_RIDE.id,
+        startedAt: new Date("2026-09-08T11:20:00Z"),
+        elapsedOperatingMinutes,
+      },
+    ];
+    const routeClosure = (rows: unknown[]) =>
+      query.mockImplementation((sql: string, params: unknown[]) => {
+        if (sql.includes('AS "opensAt"')) return Promise.resolve([]);
+        return Array.isArray(params) && params[3] === PARK.id
+          ? Promise.resolve(rows)
+          : Promise.resolve([]);
+      });
+
+    it("reads the closure's own curve at the elapsed figure the statement measured", async () => {
+      // Withheld while that curve could only be fit on closures that came back
+      // the same day. The nightly statement now keeps the ones that did not,
+      // so the curve is built — and this is where it is read.
+      curves.find.mockResolvedValue([
+        curveRow("down", "0.900"),
+        curveRow("closed_gap", "0.250"),
+      ]);
+      routeClosure(closureRow("52"));
+
+      const out = await service.getCurrentOutages(PARK, [OPEN_RIDE]);
+
+      const estimate = out.get(OPEN_RIDE.id)?.estimate;
+      expect(estimate).toBeDefined();
+      // Postgres hands an integer back as a string; the figure is still read.
+      expect(estimate?.elapsedMinutes).toBe(52);
+      expect(estimate?.bucketMinutes).toBe(45);
+      expect(estimate?.recoveryWithin30).toBe(0.25);
+    });
+
+    it("never answers a closure from the reported curve", async () => {
+      // A closure read against DOWN spells would get a different end
+      // definition and a different censoring regime. With no curve of its own
+      // the honest answer is none.
+      curves.find.mockResolvedValue([curveRow("down", "0.900")]);
+      routeClosure(closureRow(52));
+
+      const out = await service.getCurrentOutages(PARK, [OPEN_RIDE]);
+
+      expect(out.get(OPEN_RIDE.id)?.signal).toBe("closed_gap");
+      expect(out.get(OPEN_RIDE.id)?.estimate).toBeUndefined();
+    });
+
+    it("a failed curve read costs the closure its estimate, not its line", async () => {
+      curves.find.mockRejectedValue(new Error("curves gone"));
+      routeClosure(closureRow(52));
+
+      const out = await service.getCurrentOutages(PARK, [OPEN_RIDE]);
+
+      expect(out.get(OPEN_RIDE.id)?.signal).toBe("closed_gap");
+      expect(out.get(OPEN_RIDE.id)?.estimate).toBeUndefined();
+    });
   });
 
   it("a closure never overwrites a reported outage already placed", async () => {
