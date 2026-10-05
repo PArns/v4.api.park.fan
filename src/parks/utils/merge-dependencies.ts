@@ -526,22 +526,51 @@ export async function remapSeasonAttractionIds(
 }
 
 /**
- * Reparents a losing ride's hourly percentile buckets, recomputing the row id
- * the natural key determines.
+ * The columns of `queue_data_aggregates` that `moveAggregateBuckets` carries
+ * across unchanged, in the order it writes them.
+ *
+ * Spelled out because that statement is an INSERT, not an UPDATE (see below), and
+ * an INSERT names every column it carries. A column added to `QueueDataAggregate`
+ * and forgotten here would not raise — it would arrive as a merge that silently
+ * drops that value from every reparented bucket. `merge-dependencies.spec.ts`
+ * compares this list against the entity metadata for that reason.
+ *
+ * `id` and `"attractionId"` are the two the move replaces, `hour` the one it reads
+ * from the deleted row and names itself; none of the three is in the list.
+ */
+export const AGGREGATE_CARRIED_COLUMNS = [
+  "parkId",
+  "p25",
+  "p50",
+  "p75",
+  "p90",
+  "p95",
+  "p99",
+  "iqr",
+  "stdDev",
+  "mean",
+  "sampleCount",
+  "createdAt",
+  "updatedAt",
+] as const;
+
+/**
+ * Reparents a losing ride's hourly percentile buckets under the key the natural
+ * key determines.
  *
  * `queue_data_aggregates.id` is `md5("attractionId" || '|' || hour)` — the
  * attraction is named TWICE in a row of this table, once in the column and once
- * inside the primary key. That is what makes it a `custom` entry and not a
- * `move`: every statement the three generic strategies issue names exactly one
- * column, so a `move` rewrote `"attractionId"` and left `id` on the hash of the
- * LOSER. The bucket then sat under a key no writer can derive, `ON CONFLICT
+ * inside the primary key `(id, hour)`. That is what makes it a `custom` entry and
+ * not a `move`: every statement the three generic strategies issue names exactly
+ * one column, so a `move` rewrote `"attractionId"` and left `id` on the hash of
+ * the LOSER. The bucket then sat under a key no writer can derive, `ON CONFLICT
  * (id, hour)` stopped matching it, and the next path writing that bucket
  * (`calculate-percentiles` with DO UPDATE, `backfill-percentiles` with DO
  * NOTHING) inserted a SECOND row for the same `("attractionId", hour)`. Readers
  * `SUM("sampleCount")` and take `percentile_cont` across the rows of an hour, so
  * such a pair does not blur a figure, it doubles it. Measured on production
- * 2026-10-05: 4.029 rows with `hour >= 2026-06-05` (the day the deterministic id
- * went live) carried a hash of some other id, on 56 rides in 7 parks, and 2.473
+ * 2026-10-05: 4,029 rows with `hour >= 2026-06-05` (the day the deterministic id
+ * went live) carried a hash of some other id, on 56 rides in 7 parks, and 2,473
  * of them were already sitting beside the correctly-keyed row they collide with.
  *
  * `move` rather than `discard`, although the numbers are derived: nothing
@@ -551,23 +580,38 @@ export async function remapSeasonAttractionIds(
  * permanent hole in the survivor's history — the same reason `queue_data` one
  * entry up is a `move`.
  *
- * Three statements, in this order:
- *   1. Drop the loser's buckets for hours the survivor already holds. After the
- *      id is recomputed they ARE the survivor's `(id, hour)`, and the UPDATE
- *      would roll the whole merge back — the reason `conflictColumns` exists on
- *      every other keyed entry on this list. Keeping the survivor's row is also
- *      the right half of the trade: it is the one every reader sees today.
- *   2. Collapse what is left of the loser's own duplicate buckets to one row per
- *      hour, newest `updatedAt` first — the rule `dedupe-percentile-aggregates`
- *      applies table-wide. Without this the loser's OWN pre-existing duplicates
- *      (there are such rows today) would hash onto one id and abort the merge.
- *   3. Reparent the rest, deriving the id from the value the column ends up
- *      holding so the two cannot disagree.
+ * **It is a DELETE and an INSERT rather than an UPDATE of the key, and that is
+ * not a style choice.** This is a compressed hypertable (`compressAfterDays: 30`;
+ * 37 of 42 chunks compressed in production on 2026-10-05), and against a
+ * compressed chunk the in-place rewrite fails two different ways. TimescaleDB
+ * refuses `UPDATE` of a primary-key column — `cannot update column "id" of a
+ * compressed chunk` — and a `SELECT ctid` over the hypertable raises `transparent
+ * decompression only supports tableoid system column`, which rules out the
+ * ctid-keyed dedupe the table-wide job uses. Worse than either, a
+ * `DELETE … WHERE hour IN (SELECT …)` against a compressed chunk reports
+ * `DELETE 0` and removes nothing, so the colliding row would survive into the
+ * rewrite. All three measured in a throwaway container on the version the server
+ * runs (2.24.0) and on what `timescale/timescaledb:latest-pg18` resolves to today
+ * (2.30.2); the tag both compose files pin is floating, and the PK-UPDATE
+ * rejection is new in that window.
+ *
+ * One statement, and its shape carries the three decisions:
+ *   - `DELETE … RETURNING *` takes the loser's buckets out, which a compressed
+ *     chunk does allow.
+ *   - `DISTINCT ON (hour) … ORDER BY "updatedAt" DESC` keeps one row per hour,
+ *     newest first — the rule `dedupe-percentile-aggregates` applies table-wide.
+ *     The loser can hold duplicate buckets of its own today, and two of them hash
+ *     onto one id the moment they are rewritten.
+ *   - `ON CONFLICT (id, hour) DO NOTHING` drops a bucket for an hour the survivor
+ *     already states, because after the rehash it IS the survivor's key. That
+ *     replaces the dedupe DELETE every other keyed entry on this list spells out
+ *     with `conflictColumns`, and it was verified to see a row inside a compressed
+ *     chunk rather than insert a duplicate beside it.
  *
  * Neither surviving row is what a recompute over the merged `queue_data` would
  * produce — after the merge the readings of both rides are one series, and an
- * hour both of them reported now has a bucket built from one of them. Fixing
- * that is a backfill over the window, not something a merge can do inside its
+ * hour both of them reported now has a bucket built from one of them. Fixing that
+ * is a backfill over the window, not something a merge can do inside its
  * transaction; what this guarantees is one row per bucket and a key every writer
  * can derive again.
  */
@@ -582,41 +626,20 @@ export async function moveAggregateBuckets(
     );
   }
 
-  await manager.query(
-    `DELETE FROM queue_data_aggregates
-      WHERE "attractionId" = $2
-        AND hour IN (
-          SELECT hour FROM queue_data_aggregates WHERE "attractionId" = $1
-        )`,
-    [winnerId, loserId],
-  );
+  const carried = AGGREGATE_CARRIED_COLUMNS.map((c) => `"${c}"`).join(", ");
 
-  // ctid is unique only within a chunk of a hypertable, so the join carries
-  // (attractionId, hour) as well — duplicates of one bucket share a time chunk,
-  // so this never has to cross one. Same shape as the table-wide dedupe job.
   await manager.query(
-    `WITH ranked AS (
-       SELECT ctid AS ct, hour AS h,
-              row_number() OVER (
-                PARTITION BY hour ORDER BY "updatedAt" DESC NULLS LAST, ctid
-              ) AS rn
-         FROM queue_data_aggregates
-        WHERE "attractionId" = $1
+    `WITH moved AS (
+       DELETE FROM queue_data_aggregates WHERE "attractionId" = $2 RETURNING *
+     ), one_per_hour AS (
+       SELECT DISTINCT ON (hour) *
+         FROM moved
+        ORDER BY hour, "updatedAt" DESC NULLS LAST, id
      )
-     DELETE FROM queue_data_aggregates q
-      USING ranked r
-      WHERE q.ctid = r.ct
-        AND q."attractionId" = $1
-        AND q.hour = r.h
-        AND r.rn > 1`,
-    [loserId],
-  );
-
-  await manager.query(
-    `UPDATE queue_data_aggregates
-        SET "attractionId" = $1,
-            id = ${aggregateIdSql("$1::text", "hour")}
-      WHERE "attractionId" = $2`,
+     INSERT INTO queue_data_aggregates (id, hour, "attractionId", ${carried})
+     SELECT ${aggregateIdSql("$1::text", "hour")}, hour, $1, ${carried}
+       FROM one_per_hour
+     ON CONFLICT (id, hour) DO NOTHING`,
     [winnerId, loserId],
   );
 }

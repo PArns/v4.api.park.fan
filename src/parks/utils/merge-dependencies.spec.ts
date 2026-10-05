@@ -3,6 +3,7 @@ import { ParkSeasonService } from "../services/park-season.service";
 import { getMetadataArgsStorage } from "typeorm";
 import { AttractionRideProfile } from "../../attractions/entities/attraction-ride-profile.entity";
 import { AttractionReviewMark } from "../../attractions/entities/attraction-review-mark.entity";
+import { QueueDataAggregate } from "../../analytics/entities/queue-data-aggregate.entity";
 import {
   HOURLY_AGGREGATE_SELECT,
   aggregateIdSql,
@@ -25,6 +26,7 @@ import {
   planAttractionReviewMarkDrops,
   migrateScheduleEntries,
   moveAggregateBuckets,
+  AGGREGATE_CARRIED_COLUMNS,
   parkTablesMissingFrom,
   planWinnerAuthoritative,
   rideProfileRichness,
@@ -1502,14 +1504,15 @@ describe("applyMergeDependencies", () => {
  * attraction is named twice in a row of this table. A generic `move` rewrote only
  * the column and left the key on the loser's hash — the bucket then matched no
  * `ON CONFLICT (id, hour)` any writer can form, and the next run inserted a
- * second row for the same `("attractionId", hour)`. 4.029 rows on production
+ * second row for the same `("attractionId", hour)`. 4,029 rows on production
  * carried such a key on 2026-10-05 (PAR-704).
  *
- * The behaviour — a re-run of the real upsert producing no second row — is
- * checked against a live TimescaleDB in `test/e2e/park-merge.e2e-spec.ts`. What
- * is checked here is the shape no database can show: that the id is derived from
- * the ONE expression the rollup also uses, and that the two deletes run before
- * the move.
+ * The behaviour — a re-run of the real upsert producing no second row, against a
+ * COMPRESSED chunk — is checked in `test/e2e/park-merge.e2e-spec.ts`. What is
+ * checked here is the shape no database can show: that the id is derived from the
+ * ONE expression the rollup also uses, that every column of the row is carried
+ * across, and that the statement is a DELETE/INSERT rather than an UPDATE of the
+ * primary key, which TimescaleDB refuses on a compressed chunk.
  */
 describe("moveAggregateBuckets", () => {
   const manager = { query: jest.fn().mockResolvedValue([]) };
@@ -1534,55 +1537,71 @@ describe("moveAggregateBuckets", () => {
     expect(parkSide).toMatchObject({ column: "parkId", strategy: "move" });
   });
 
-  it("drops the hours the survivor already holds, then its own duplicates, then moves", async () => {
+  it("carries every column of the row the entity declares", () => {
+    // The INSERT names its columns, so a column added to the entity and not here
+    // is a merge that silently drops that value from every bucket it moves. The
+    // three named below are the ones the statement writes itself: `id` and
+    // `"attractionId"` because it replaces them, `hour` because it is the one
+    // value it reads from the deleted row unchanged and names on its own.
+    const declared: string[] = getMetadataArgsStorage()
+      .filterColumns(QueueDataAggregate)
+      .map((column) => String(column.propertyName));
+
+    expect(declared.length).toBeGreaterThan(0);
+    expect([...AGGREGATE_CARRIED_COLUMNS].sort()).toEqual(
+      declared
+        .filter((name) => !["id", "hour", "attractionId"].includes(name))
+        .sort(),
+    );
+  });
+
+  it("deletes and re-inserts rather than updating the primary key", async () => {
     await moveAggregateBuckets(manager, "winner-id", "loser-id");
 
-    expect(manager.query).toHaveBeenCalledTimes(3);
-
-    // 1. The loser's rows for an hour the survivor states. After the id is
-    // recomputed they ARE the survivor's (id, hour), so without this the UPDATE
-    // rolls the whole merge back.
-    expect(sqlOf(0)).toMatch(/^DELETE FROM queue_data_aggregates/);
-    expect(sqlOf(0)).toContain(
-      `SELECT hour FROM queue_data_aggregates WHERE "attractionId" = $1`,
+    // One statement, and deliberately not an UPDATE: this is a compressed
+    // hypertable, and TimescaleDB raises `cannot update column "id" of a
+    // compressed chunk` on the version `latest-pg18` resolves to.
+    expect(manager.query).toHaveBeenCalledTimes(1);
+    const sql = sqlOf(0);
+    expect(sql).not.toMatch(/UPDATE queue_data_aggregates/);
+    expect(sql).toContain(
+      `DELETE FROM queue_data_aggregates WHERE "attractionId" = $2 RETURNING *`,
     );
+    expect(sql).toContain("INSERT INTO queue_data_aggregates");
     expect(manager.query.mock.calls[0][1]).toEqual(["winner-id", "loser-id"]);
 
-    // 2. What is left of the loser's own duplicate buckets — the table holds
-    // such rows today, and two of them hash onto one id the moment they move.
-    expect(sqlOf(1)).toContain("DELETE FROM queue_data_aggregates q");
-    expect(sqlOf(1)).toContain("row_number() OVER ( PARTITION BY hour");
-    expect(sqlOf(1)).toContain('"updatedAt" DESC NULLS LAST, ctid');
-    expect(manager.query.mock.calls[1][1]).toEqual(["loser-id"]);
-
-    // 3. The move, which writes both columns naming the attraction.
-    expect(sqlOf(2)).toMatch(/^UPDATE queue_data_aggregates/);
-    expect(manager.query.mock.calls[2][1]).toEqual(["winner-id", "loser-id"]);
+    // One row per hour, newest first — the loser carries duplicate buckets of its
+    // own today, and two of them hash onto one id once they are rewritten.
+    expect(sql).toContain(
+      `SELECT DISTINCT ON (hour) * FROM moved ORDER BY hour, "updatedAt" DESC NULLS LAST, id`,
+    );
+    // And the survivor keeps the hours it already states. This replaces the
+    // dedupe DELETE that `conflictColumns` spells out on every other keyed entry:
+    // after the rehash the loser's row IS the survivor's key.
+    expect(sql).toContain("ON CONFLICT (id, hour) DO NOTHING");
   });
 
   it("derives the new id from the same expression the rollup writes", async () => {
     await moveAggregateBuckets(manager, "winner-id", "loser-id");
 
-    const update = sqlOf(2);
+    const sql = sqlOf(0);
     // The parameter is cast to text and hashed with it, not normalized through
     // uuid: the column is `text`, so the id has to be the hash of the bytes the
     // column ends up holding.
-    expect(update).toContain(`SET "attractionId" = $1`);
-    expect(update).toContain(`id = ${aggregateIdSql("$1::text", "hour")}`);
+    expect(sql).toContain(aggregateIdSql("$1::text", "hour"));
 
     // The claim this test exists for: one formula, two call sites. A copy here
     // that drifted from the rollup would produce a valid uuid that no writer can
     // re-derive, which is the original bug wearing the fix's clothes.
-    const rollupId = aggregateIdSql('s."attractionId"', "s.hour");
-    expect(HOURLY_AGGREGATE_SELECT).toContain(rollupId);
-    expect(update.replace("$1::text", 's."attractionId"')).toContain(
-      rollupId.replace("s.hour", "hour"),
+    expect(HOURLY_AGGREGATE_SELECT).toContain(
+      aggregateIdSql('s."attractionId"', "s.hour"),
     );
   });
 
   it("refuses one id on both sides, before any statement", async () => {
-    // With one id on both sides the first DELETE reads the loser's hours as the
-    // survivor's and empties the bucket history of the ride it was asked to keep.
+    // With one id on both sides the DELETE takes the survivor's own buckets and
+    // the INSERT puts them back under the key they already had — a round trip
+    // that loses whichever duplicate `DISTINCT ON` discards.
     await expect(
       moveAggregateBuckets(manager, "same-id", "same-id"),
     ).rejects.toThrow(/both sides/i);
@@ -1597,19 +1616,11 @@ describe("moveAggregateBuckets", () => {
 
     await applyMergeDependencies(manager, [entry], "winner-id", "loser-id");
 
-    const statements = manager.query.mock.calls.map((call) =>
-      (call[0] as string).replace(/\s+/g, " ").trim(),
-    );
-    expect(statements).toHaveLength(3);
-    // The failure mode this pins: a `custom` entry that also got picked up by
-    // the generic path would issue a fourth statement rewriting the column
-    // alone, undoing the id in the same transaction.
-    expect(
-      statements.filter((sql) =>
-        sql.startsWith("UPDATE queue_data_aggregates"),
-      ),
-    ).toHaveLength(1);
-    expect(statements[2]).toContain("id = md5(");
+    // The failure mode this pins: a `custom` entry that also got picked up by the
+    // generic path would issue a second statement rewriting the column alone,
+    // undoing the id in the same transaction.
+    expect(manager.query).toHaveBeenCalledTimes(1);
+    expect(sqlOf(0)).toContain("ON CONFLICT (id, hour) DO NOTHING");
   });
 });
 

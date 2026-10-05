@@ -575,6 +575,48 @@ describe("Park merge (E2E)", () => {
         ),
       );
 
+    /**
+     * Whether `timescaledb.compress` was already on when this block started.
+     *
+     * Read rather than assumed, like the `show_live_data` case further down and
+     * for the same reason: it depends on which suite booted
+     * `TimescaleInitService` first, and hard-coding `compress = false` afterwards
+     * would disable compression for every later file and orphan its policy.
+     */
+    let compressWasEnabled = false;
+
+    beforeAll(async () => {
+      const rows = await dataSource.query(
+        `SELECT compression_enabled FROM timescaledb_information.hypertables
+          WHERE hypertable_name = 'queue_data_aggregates'`,
+      );
+      compressWasEnabled = rows[0]?.compression_enabled === true;
+      if (!compressWasEnabled) {
+        await dataSource.query(
+          `ALTER TABLE queue_data_aggregates SET (timescaledb.compress)`,
+        );
+      }
+    });
+
+    afterAll(async () => {
+      await dataSource.query(
+        `SELECT decompress_chunk(c, if_compressed => true)
+           FROM show_chunks('queue_data_aggregates') c`,
+      );
+      if (!compressWasEnabled) {
+        await dataSource.query(
+          `ALTER TABLE queue_data_aggregates SET (timescaledb.compress = false)`,
+        );
+      }
+    });
+
+    async function compressBuckets(): Promise<void> {
+      await dataSource.query(
+        `SELECT compress_chunk(c, if_not_compressed => true)
+           FROM show_chunks('queue_data_aggregates') c`,
+      );
+    }
+
     async function bucketsOf(
       attractionId: string,
     ): Promise<Array<{ hour: string; id: string; sampleCount: number }>> {
@@ -623,9 +665,10 @@ describe("Park merge (E2E)", () => {
       );
       // A duplicate the loser already carries, under the random id every row
       // written before June 2026 has. Such rows exist in production today, and
-      // two of them hash onto one id the moment they move — so without the
-      // loser-side dedupe this row alone aborts the merge with 23505 and every
-      // assertion below fails on a rolled-back transaction.
+      // the two of them hash onto ONE id the moment they are rewritten — so
+      // without `DISTINCT ON (hour)` this row alone aborts the merge with 23505
+      // and every assertion below fails on a rolled-back transaction. It is also
+      // the older of the pair, so it must be the one that loses.
       await aggregateRow(
         GHOST_ATTR,
         GHOST_PARK,
@@ -637,6 +680,27 @@ describe("Park merge (E2E)", () => {
 
       expect(await bucketsOf(GHOST_ATTR)).toHaveLength(3);
       expect(await bucketsOf(WINNER_ATTR)).toHaveLength(1);
+
+      await compressBuckets();
+
+      // The premise, asserted rather than assumed (📚 G-72). An uncompressed
+      // chunk answers an easier question than production asks: TimescaleDB
+      // refuses `UPDATE` of a primary-key column of a compressed chunk
+      // (`cannot update column "id" of a compressed chunk`) and silently deletes
+      // nothing for a `hour IN (SELECT …)` subquery against one, so a merge that
+      // rewrote the key in place would pass here and abort in production.
+      expect(
+        await count(
+          `SELECT count(*) c FROM timescaledb_information.chunks
+            WHERE hypertable_name = 'queue_data_aggregates' AND NOT is_compressed`,
+        ),
+      ).toBe(0);
+      expect(
+        await count(
+          `SELECT count(*) c FROM timescaledb_information.chunks
+            WHERE hypertable_name = 'queue_data_aggregates' AND is_compressed`,
+        ),
+      ).toBeGreaterThan(0);
 
       await parksService.repairDuplicates();
 
