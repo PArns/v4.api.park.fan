@@ -38,11 +38,25 @@
  * about the wrong date in both directions, and measurably: the ML accuracy
  * query did exactly that until PAR-707, and against production over 30 days,
  * 334 of its rows landed on the neighbouring day. At `America/New_York` (−4)
- * Sesame Place's 20:00–23:45 rows carried the NEXT UTC date and 270 of them
- * were charged to a shut day the park had been open on; at `Asia/Riyadh` (+3)
- * Six Flags Qiddiya City's 00:00–00:15 rows carried the PREVIOUS one and 64
- * went the other way. So it is not only a negative-offset problem — every park
- * off UTC is wrong in its own edge-of-day hours.
+ * Sesame Place's 20:00–23:45 rows carried the NEXT UTC date (270 rows, charged
+ * to a shut day on a date the park's own calendar calls OPERATING); at
+ * `Asia/Riyadh` (+3) Six Flags Qiddiya City's 00:00–00:15 rows carried the
+ * PREVIOUS one (64 rows, the other way). So it is not only a negative-offset
+ * problem — every park off UTC is wrong in its own edge-of-day hours.
+ *
+ * What the day expression means is the PARK-LOCAL CALENDAR day, and that is a
+ * deliberate approximation shared by all callers rather than a claim about the
+ * operating day. The two part company at both ends of the day, in opposite
+ * directions, and production has an example of each. Sesame Place closed at
+ * 18:00 on 2026-09-07, so its 20:00–23:45 rows are after closing time on a day
+ * the calendar calls OPERATING, and they now count. Six Flags Qiddiya City's
+ * operating day 2026-10-04 ran 16:00 → 00:00, so its 00:00–00:15 rows are the
+ * closing edge of that operating day while the calendar day they fall on
+ * (2026-10-05) is shut, and they now do not count. Both are the right answer to
+ * "which calendar day is this?" and neither is an answer to "which operating
+ * day is this?". Clipping the rule to operating hours would change what it
+ * decides, for every caller at once, so it is tracked separately (PAR-722) and
+ * is not what PAR-707 did.
  */
 
 /**
