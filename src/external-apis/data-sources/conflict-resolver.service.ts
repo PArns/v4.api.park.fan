@@ -7,6 +7,7 @@ import {
 } from "./interfaces/data-source.interface";
 import { normalizeForMatching } from "../../common/utils/slug.util";
 import { EntityMatcherService } from "./entity-matcher.service";
+import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 
 /**
  * Merged Entity Structure
@@ -41,7 +42,7 @@ type SecondarySource = "queue-times" | "wartezeiten-app";
  * - **3 sources, 2 agree**: Use consensus value (majority vote)
  * - **3 sources, all different**: Use median (robust against outliers)
  * - **2 sources**: Use average
- * - **Always**: Round to nearest 5 minutes
+ * - **Always**: Round to nearest 5 minutes (13, Disney's walk-on, stays 13)
  *
  * ### Operating Hours
  * Priority-based fallback:
@@ -67,7 +68,6 @@ export class ConflictResolverService {
   private readonly logger = new Logger(ConflictResolverService.name);
 
   // Constants for wait time processing
-  private readonly WAIT_TIME_ROUNDING_INTERVAL = 5; // minutes
   private readonly WAIT_TIME_DISCREPANCY_THRESHOLD = 15; // minutes
   private readonly TIMESTAMP_COMPARISON_WINDOW = 10 * 60 * 1000; // 10 minutes in ms
 
@@ -370,7 +370,7 @@ export class ConflictResolverService {
    * - **3 sources, all different**: Use median (robust against outliers)
    * - **2 sources**: Use average
    * - **1 source**: Use that value
-   * - **Always**: Round to nearest 5 minutes
+   * - **Always**: Round to nearest 5 minutes (13, Disney's walk-on, stays 13)
    *
    * @param waitTimes - Array of wait times from different sources (in minutes)
    * @returns Calculated wait time rounded to nearest 5 minutes
@@ -390,10 +390,7 @@ export class ConflictResolverService {
   private calculateConsensusWaitTime(waitTimes: number[]): number {
     if (waitTimes.length === 0) return 0;
     if (waitTimes.length === 1) {
-      return (
-        Math.round(waitTimes[0] / this.WAIT_TIME_ROUNDING_INTERVAL) *
-        this.WAIT_TIME_ROUNDING_INTERVAL
-      );
+      return roundToNearest5Minutes(waitTimes[0]);
     }
 
     let finalWaitTime: number;
@@ -416,11 +413,8 @@ export class ConflictResolverService {
       finalWaitTime = waitTimes.reduce((a, b) => a + b, 0) / waitTimes.length;
     }
 
-    // Round to nearest interval (e.g., 5 minutes)
-    return (
-      Math.round(finalWaitTime / this.WAIT_TIME_ROUNDING_INTERVAL) *
-      this.WAIT_TIME_ROUNDING_INTERVAL
-    );
+    // Nearest 5 minutes, except Disney's 13-minute walk-on
+    return roundToNearest5Minutes(finalWaitTime);
   }
 
   /**

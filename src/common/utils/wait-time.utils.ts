@@ -21,19 +21,30 @@
 export const MAX_PLAUSIBLE_WAIT_TIME = 400;
 
 /**
+ * The one posted wait that is not on the five-minute grid, and must stay off it.
+ *
+ * Disney posts 13 minutes for a walk-on. It is the park's own signal, not a
+ * queue length, so rounding it to 15 would turn "walk on" into an ordinary
+ * short queue. The frontend's `roundWaitTo5` carries the same exception.
+ */
+export const WALK_ON_WAIT_MINUTES = 13;
+
+/**
  * Round wait time to nearest 5 minutes for UX consistency
  *
  * Theme parks typically display wait times in 5-minute increments.
  * This provides better user experience and consistency with actual queue displays.
+ * Exactly {@link WALK_ON_WAIT_MINUTES} is returned unchanged.
  *
  * @param value - Raw wait time value (any number)
- * @returns Rounded integer in 5-minute increments
+ * @returns Rounded integer in 5-minute increments, or 13
  *
  * @example
  * ```ts
  * roundToNearest5Minutes(7.2)  // Returns 5
  * roundToNearest5Minutes(8.9)  // Returns 10
  * roundToNearest5Minutes(12.4) // Returns 10
+ * roundToNearest5Minutes(13)   // Returns 13 (Disney's walk-on)
  * roundToNearest5Minutes(34.7)  // Returns 35
  * roundToNearest5Minutes(0.5)  // Returns 0
  * ```
@@ -45,6 +56,9 @@ export function roundToNearest5Minutes(value: number): number {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n) || n < 2.5) {
     return 0; // Invalid input or very short wait → 0
+  }
+  if (n === WALK_ON_WAIT_MINUTES) {
+    return n;
   }
 
   // Add 2.5 and floor divide by 5, then multiply by 5

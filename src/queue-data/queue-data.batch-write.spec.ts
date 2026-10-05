@@ -290,6 +290,79 @@ describe("QueueDataService — batched live-data writes", () => {
       expect(rows[0].waitTime).toBeUndefined();
       expect(rows[0].status).toBe(LiveStatus.OPERATING);
     });
+
+    it("stores every posted wait on the five-minute grid", async () => {
+      redis.mget.mockResolvedValue([null, null, null]);
+
+      await service.saveLiveDataBatch([
+        {
+          attractionId: ATTRACTION,
+          liveData: liveResponse({
+            queue: {
+              [QueueType.STANDBY]: { waitTime: 61 },
+              [QueueType.SINGLE_RIDER]: { waitTime: 12 },
+              [QueueType.PAID_STANDBY]: { waitTime: 1 },
+            },
+          }),
+        },
+      ]);
+
+      const [rows] = queueRepo.insert.mock.calls[0];
+      const waitByType = Object.fromEntries(
+        rows.map((r: QueueData) => [r.queueType, r.waitTime]),
+      );
+      expect(waitByType).toEqual({
+        [QueueType.STANDBY]: 60,
+        [QueueType.SINGLE_RIDER]: 10,
+        [QueueType.PAID_STANDBY]: 0,
+      });
+    });
+
+    it("stores Disney's 13-minute walk-on as 13, not 15", async () => {
+      redis.mget.mockResolvedValue([null]);
+
+      await service.saveLiveDataBatch([
+        {
+          attractionId: ATTRACTION,
+          liveData: liveResponse({
+            queue: { [QueueType.STANDBY]: { waitTime: 13 } },
+          }),
+        },
+      ]);
+
+      const [rows] = queueRepo.insert.mock.calls[0];
+      expect(rows[0].waitTime).toBe(13);
+    });
+
+    it("keeps a posted null as null rather than rounding it to 0", async () => {
+      redis.mget.mockResolvedValue([null]);
+
+      await service.saveLiveDataBatch([
+        {
+          attractionId: ATTRACTION,
+          liveData: liveResponse({
+            // Typed as a number, but the wiki sends null for a ride that
+            // posts no wait.
+            queue: {
+              [QueueType.STANDBY]: { waitTime: null as unknown as number },
+            },
+          }),
+        },
+      ]);
+
+      const [rows] = queueRepo.insert.mock.calls[0];
+      expect(rows[0].waitTime).toBeNull();
+    });
+
+    it("rewrites an off-grid row the first time the rounded reading arrives", async () => {
+      const saved = await runWithCached(
+        cachedLatest({ waitTime: 61 }),
+        liveResponse({ queue: { [QueueType.STANDBY]: { waitTime: 61 } } }),
+      );
+      expect(saved.get(ATTRACTION)).toBe(1);
+      const [rows] = queueRepo.insert.mock.calls[0];
+      expect(rows[0].waitTime).toBe(60);
+    });
   });
 
   describe("written rows", () => {
