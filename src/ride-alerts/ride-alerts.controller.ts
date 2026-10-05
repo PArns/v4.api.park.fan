@@ -90,7 +90,8 @@ export class RideAlertsController {
     status: 400,
     description:
       "Malformed threshold, or this park's wait times can never be read " +
-      "(see `noLiveWaitTimesReason`) — an alert against it could never fire.",
+      "(see `noLiveWaitTimesReason`), or a reopen alert on a free-flow " +
+      "attraction (`openWithPark`) — an alert against it could never fire.",
   })
   @ApiResponse({
     status: 404,
@@ -125,6 +126,17 @@ export class RideAlertsController {
     }
 
     const kind = body.kind ?? null;
+
+    // A free-flow area (playground, splash pad) is served as OPERATING
+    // whenever its park is, while its own feed row stays CLOSED all day: it
+    // has no closed-to-open flank for the alert to read, so an alert on one
+    // would never fire.
+    if (kind === RIDE_ALERT_KIND_REOPEN && found.attraction.openWithPark) {
+      throw new BadRequestException(
+        "This attraction is open whenever its park is — a reopen alert here would never fire",
+      );
+    }
+
     const existing = await this.rideAlerts.find(
       subscription.id,
       found.attraction.id,

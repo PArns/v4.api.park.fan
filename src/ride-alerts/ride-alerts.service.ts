@@ -254,6 +254,7 @@ export class RideAlertsService {
     park: ParkForRideAlertCheck,
     polledAttractionIds: string[],
     nowMs: number,
+    resolveParkStatus?: () => Promise<"OPERATING" | "CLOSED">,
   ): Promise<void> {
     try {
       if (polledAttractionIds.length === 0) return;
@@ -300,11 +301,25 @@ export class RideAlertsService {
               REOPEN_STATUS_WINDOW_MINUTES,
             )
           : new Map<string, QueueData[]>();
+      // Asked only when a reopen alert exists, and a failure reads as
+      // "unknown" (not closed): the park gate narrows what fires, so a broken
+      // lookup must not also silence every reopen alert in the park.
+      let parkClosed = false;
+      if (reopenAlerts.length > 0 && resolveParkStatus) {
+        parkClosed =
+          (await resolveParkStatus().catch((error: unknown) => {
+            this.logger.warn(
+              `Park status lookup failed for ${park.name}: ${(error as Error)?.message ?? error}`,
+            );
+            return null;
+          })) === "CLOSED";
+      }
       const reopenTriggers = await this.diffAndPersistReopen(
         reopenAlerts,
         attractionById,
         reopenStatus,
         nowMs,
+        parkClosed,
       );
 
       const readings = RideAlertsService.buildEligibleReadings(
@@ -407,13 +422,17 @@ export class RideAlertsService {
    * season reads as not operating — it can arm an alert but never fire it,
    * and the `!== false` rule still holds: only a confirmed `false` counts.
    * A closed heartbeat is a usable "not operating"; an OPERATING heartbeat is
-   * not an observation and contributes nothing.
+   * not an observation and contributes nothing. A closed park reads every
+   * ride as not operating, because a source that keeps reporting `OPERATING`
+   * after closing time is contradicted by `effectiveStatus`, which shows the
+   * ride closed.
    */
   private async diffAndPersistReopen(
     reopenAlerts: RideAlert[],
     attractionById: Map<string, Attraction>,
     statusByAttraction: Map<string, QueueData[]>,
     nowMs: number,
+    parkClosed: boolean,
   ): Promise<SweepTrigger[]> {
     if (reopenAlerts.length === 0) return [];
     const readings: ReopenReading[] = [];
@@ -428,7 +447,7 @@ export class RideAlertsService {
       const standby = (statusByAttraction.get(id) ?? []).find(
         (row) => row.queueType === QueueType.STANDBY,
       );
-      if (outOfSeason) {
+      if (outOfSeason || parkClosed) {
         readings.push({ attractionId: id, operating: false });
       } else if (standby && standby.status !== LiveStatus.OPERATING) {
         readings.push({ attractionId: id, operating: false });
