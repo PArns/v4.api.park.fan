@@ -8,7 +8,10 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Show } from "../../shows/entities/show.entity";
 import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attraction-retirement.service";
 import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
-import { HOURLY_AGGREGATE_SELECT } from "./hourly-aggregate.sql";
+import {
+  HOURLY_AGGREGATE_SELECT,
+  HOURLY_AGGREGATE_UPSERT,
+} from "./hourly-aggregate.sql";
 
 /**
  * The evidence half of this detector, and the reason it is a shared string.
@@ -90,27 +93,7 @@ export class QueuePercentileProcessor {
       // Use PostgreSQL percentile_cont for efficient calculation
       // Aggregates by hour for each attraction
       const result = await this.aggregateRepository.query(
-        `
-        INSERT INTO queue_data_aggregates (
-          id, hour, "attractionId", "parkId",
-          p25, p50, p75, p90, p95, p99,
-          iqr, "stdDev", mean, "sampleCount",
-          "createdAt", "updatedAt"
-        )
-        ${HOURLY_AGGREGATE_SELECT}
-        ON CONFLICT (id, hour) DO UPDATE SET
-          p25 = EXCLUDED.p25,
-          p50 = EXCLUDED.p50,
-          p75 = EXCLUDED.p75,
-          p90 = EXCLUDED.p90,
-          p95 = EXCLUDED.p95,
-          p99 = EXCLUDED.p99,
-          iqr = EXCLUDED.iqr,
-          "stdDev" = EXCLUDED."stdDev",
-          mean = EXCLUDED.mean,
-          "sampleCount" = EXCLUDED."sampleCount",
-          "updatedAt" = NOW()
-      `,
+        HOURLY_AGGREGATE_UPSERT,
         [yesterday, today],
       );
 

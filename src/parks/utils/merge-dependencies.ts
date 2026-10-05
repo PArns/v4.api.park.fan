@@ -1,4 +1,5 @@
 import { Logger } from "@nestjs/common";
+import { aggregateIdSql } from "../../queues/processors/hourly-aggregate.sql";
 
 export type MergeStrategy =
   "move" | "discard" | "winner-authoritative" | "custom";
@@ -27,9 +28,11 @@ export interface MergeDependency {
    *             more than one column, or carries a constraint across two of
    *             them, cannot be expressed as one column plus a conflict key,
    *             because every statement the three strategies issue names
-   *             exactly one column. Declared on exactly two entries:
-   *             `attraction_review_marks` (PAR-149) and `park_seasons`, whose
-   *             ride ids sit inside a jsonb array (PAR-106).
+   *             exactly one column. Declared on exactly three entries:
+   *             `attraction_review_marks` (PAR-149), `park_seasons`, whose
+   *             ride ids sit inside a jsonb array (PAR-106), and
+   *             `queue_data_aggregates`, whose primary key holds a hash of the
+   *             attraction id (PAR-704).
    */
   strategy: MergeStrategy;
   /**
@@ -523,6 +526,102 @@ export async function remapSeasonAttractionIds(
 }
 
 /**
+ * Reparents a losing ride's hourly percentile buckets, recomputing the row id
+ * the natural key determines.
+ *
+ * `queue_data_aggregates.id` is `md5("attractionId" || '|' || hour)` — the
+ * attraction is named TWICE in a row of this table, once in the column and once
+ * inside the primary key. That is what makes it a `custom` entry and not a
+ * `move`: every statement the three generic strategies issue names exactly one
+ * column, so a `move` rewrote `"attractionId"` and left `id` on the hash of the
+ * LOSER. The bucket then sat under a key no writer can derive, `ON CONFLICT
+ * (id, hour)` stopped matching it, and the next path writing that bucket
+ * (`calculate-percentiles` with DO UPDATE, `backfill-percentiles` with DO
+ * NOTHING) inserted a SECOND row for the same `("attractionId", hour)`. Readers
+ * `SUM("sampleCount")` and take `percentile_cont` across the rows of an hour, so
+ * such a pair does not blur a figure, it doubles it. Measured on production
+ * 2026-10-05: 4.029 rows with `hour >= 2026-06-05` (the day the deterministic id
+ * went live) carried a hash of some other id, on 56 rides in 7 parks, and 2.473
+ * of them were already sitting beside the correctly-keyed row they collide with.
+ *
+ * `move` rather than `discard`, although the numbers are derived: nothing
+ * recomputes a dropped bucket on its own. `calculate-percentiles` only ever
+ * writes `[yesterday, today)`, and `backfill-percentiles` fills gaps but is
+ * triggered by hand over a bounded `days` window. A discard would therefore be a
+ * permanent hole in the survivor's history — the same reason `queue_data` one
+ * entry up is a `move`.
+ *
+ * Three statements, in this order:
+ *   1. Drop the loser's buckets for hours the survivor already holds. After the
+ *      id is recomputed they ARE the survivor's `(id, hour)`, and the UPDATE
+ *      would roll the whole merge back — the reason `conflictColumns` exists on
+ *      every other keyed entry on this list. Keeping the survivor's row is also
+ *      the right half of the trade: it is the one every reader sees today.
+ *   2. Collapse what is left of the loser's own duplicate buckets to one row per
+ *      hour, newest `updatedAt` first — the rule `dedupe-percentile-aggregates`
+ *      applies table-wide. Without this the loser's OWN pre-existing duplicates
+ *      (there are such rows today) would hash onto one id and abort the merge.
+ *   3. Reparent the rest, deriving the id from the value the column ends up
+ *      holding so the two cannot disagree.
+ *
+ * Neither surviving row is what a recompute over the merged `queue_data` would
+ * produce — after the merge the readings of both rides are one series, and an
+ * hour both of them reported now has a bucket built from one of them. Fixing
+ * that is a backfill over the window, not something a merge can do inside its
+ * transaction; what this guarantees is one row per bucket and a key every writer
+ * can derive again.
+ */
+export async function moveAggregateBuckets(
+  manager: MergeQueryRunner,
+  winnerId: string,
+  loserId: string,
+): Promise<void> {
+  if (winnerId === loserId) {
+    throw new Error(
+      `Cannot move percentile buckets with one id on both sides (${winnerId})`,
+    );
+  }
+
+  await manager.query(
+    `DELETE FROM queue_data_aggregates
+      WHERE "attractionId" = $2
+        AND hour IN (
+          SELECT hour FROM queue_data_aggregates WHERE "attractionId" = $1
+        )`,
+    [winnerId, loserId],
+  );
+
+  // ctid is unique only within a chunk of a hypertable, so the join carries
+  // (attractionId, hour) as well — duplicates of one bucket share a time chunk,
+  // so this never has to cross one. Same shape as the table-wide dedupe job.
+  await manager.query(
+    `WITH ranked AS (
+       SELECT ctid AS ct, hour AS h,
+              row_number() OVER (
+                PARTITION BY hour ORDER BY "updatedAt" DESC NULLS LAST, ctid
+              ) AS rn
+         FROM queue_data_aggregates
+        WHERE "attractionId" = $1
+     )
+     DELETE FROM queue_data_aggregates q
+      USING ranked r
+      WHERE q.ctid = r.ct
+        AND q."attractionId" = $1
+        AND q.hour = r.h
+        AND r.rn > 1`,
+    [loserId],
+  );
+
+  await manager.query(
+    `UPDATE queue_data_aggregates
+        SET "attractionId" = $1,
+            id = ${aggregateIdSql("$1::text", "hour")}
+      WHERE "attractionId" = $2`,
+    [winnerId, loserId],
+  );
+}
+
+/**
  * Every table referencing `attractions`, with what a merge must do to it.
  *
  * Verified against the live catalog and exercised end-to-end by a rollback-only
@@ -689,7 +788,14 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     strategy: "move",
     conflictColumns: ["target_date", "forecast_date"],
   },
-  { table: "queue_data_aggregates", column: "attractionId", strategy: "move" },
+  {
+    // `custom` because the row names the attraction twice — in the column and
+    // inside `id`, which is a hash of it. See `moveAggregateBuckets`.
+    table: "queue_data_aggregates",
+    column: "attractionId",
+    strategy: "custom",
+    apply: moveAggregateBuckets,
+  },
   {
     table: "ml_accuracy_comparisons",
     column: "attractionId",
@@ -1065,6 +1171,8 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
   // night. Moving the curve would keep a row derived from a population that no
   // longer exists.
   { table: "downtime_recovery_curves", column: "park_id", strategy: "discard" },
+  // A plain `move` unlike its attraction-side twin: `id` is a hash of
+  // `"attractionId"` and the hour, and `parkId` is in neither.
   { table: "queue_data_aggregates", column: "parkId", strategy: "move" },
   { table: "ml_accuracy_comparisons", column: "parkId", strategy: "move" },
   { table: "ml_prediction_anomalies", column: "park_id", strategy: "move" },

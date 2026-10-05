@@ -4,6 +4,10 @@ import { getMetadataArgsStorage } from "typeorm";
 import { AttractionRideProfile } from "../../attractions/entities/attraction-ride-profile.entity";
 import { AttractionReviewMark } from "../../attractions/entities/attraction-review-mark.entity";
 import {
+  HOURLY_AGGREGATE_SELECT,
+  aggregateIdSql,
+} from "../../queues/processors/hourly-aggregate.sql";
+import {
   ATTRACTION_DEPENDENCIES,
   CURATED_RIDE_PROFILE_FIELDS,
   PARK_CHILD_ENTITIES,
@@ -20,6 +24,7 @@ import {
   mergeAttractionReviewMarks,
   planAttractionReviewMarkDrops,
   migrateScheduleEntries,
+  moveAggregateBuckets,
   parkTablesMissingFrom,
   planWinnerAuthoritative,
   rideProfileRichness,
@@ -326,7 +331,7 @@ describe("merge dependency tables", () => {
   });
 
   it("hands attraction_review_marks to a function of its own", () => {
-    // One of two `custom` entries, and the bar is the table's shape: two
+    // One of three `custom` entries, and the bar is the table's shape: two
     // attraction columns plus a CHECK across them, so no combination of
     // `column` and `conflictColumns` can express it. The three generic
     // statements each name exactly one column.
@@ -348,7 +353,12 @@ describe("merge dependency tables", () => {
     const seasons = ATTRACTION_DEPENDENCIES.find(
       (d) => d.table === "park_seasons",
     );
-    expect(custom).toEqual([marks, seasons]);
+    // The third names the attraction in `"attractionId"` and, hashed, inside the
+    // primary key (PAR-704) — the same bar, met by a different shape.
+    const aggregates = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "queue_data_aggregates",
+    );
+    expect(custom).toEqual([aggregates, marks, seasons]);
   });
 
   it("names the two attraction columns review marks really has", () => {
@@ -1484,6 +1494,122 @@ describe("applyMergeDependencies", () => {
 
     expect(manager.query).toHaveBeenCalledTimes(1);
     expect(manager.query.mock.calls[0][0]).toMatch(/^UPDATE queue_data/);
+  });
+});
+
+/**
+ * `queue_data_aggregates.id` is `md5("attractionId" || '|' || hour)`, so the
+ * attraction is named twice in a row of this table. A generic `move` rewrote only
+ * the column and left the key on the loser's hash — the bucket then matched no
+ * `ON CONFLICT (id, hour)` any writer can form, and the next run inserted a
+ * second row for the same `("attractionId", hour)`. 4.029 rows on production
+ * carried such a key on 2026-10-05 (PAR-704).
+ *
+ * The behaviour — a re-run of the real upsert producing no second row — is
+ * checked against a live TimescaleDB in `test/e2e/park-merge.e2e-spec.ts`. What
+ * is checked here is the shape no database can show: that the id is derived from
+ * the ONE expression the rollup also uses, and that the two deletes run before
+ * the move.
+ */
+describe("moveAggregateBuckets", () => {
+  const manager = { query: jest.fn().mockResolvedValue([]) };
+  const sqlOf = (call: number) =>
+    (manager.query.mock.calls[call][0] as string).replace(/\s+/g, " ").trim();
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it("is how the attraction side declares the table, and the park side is untouched", () => {
+    const attractionSide = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "queue_data_aggregates",
+    )!;
+    expect(attractionSide.strategy).toBe("custom");
+    expect(attractionSide.apply).toBe(moveAggregateBuckets);
+
+    // `parkId` appears in neither half of the hash, so the generic move is
+    // still right there. Asserted rather than assumed: moving this entry to
+    // `custom` as well would make every park merge recompute ids it must not.
+    const parkSide = PARK_DEPENDENCIES.find(
+      (d) => d.table === "queue_data_aggregates",
+    )!;
+    expect(parkSide).toMatchObject({ column: "parkId", strategy: "move" });
+  });
+
+  it("drops the hours the survivor already holds, then its own duplicates, then moves", async () => {
+    await moveAggregateBuckets(manager, "winner-id", "loser-id");
+
+    expect(manager.query).toHaveBeenCalledTimes(3);
+
+    // 1. The loser's rows for an hour the survivor states. After the id is
+    // recomputed they ARE the survivor's (id, hour), so without this the UPDATE
+    // rolls the whole merge back.
+    expect(sqlOf(0)).toMatch(/^DELETE FROM queue_data_aggregates/);
+    expect(sqlOf(0)).toContain(
+      `SELECT hour FROM queue_data_aggregates WHERE "attractionId" = $1`,
+    );
+    expect(manager.query.mock.calls[0][1]).toEqual(["winner-id", "loser-id"]);
+
+    // 2. What is left of the loser's own duplicate buckets — the table holds
+    // such rows today, and two of them hash onto one id the moment they move.
+    expect(sqlOf(1)).toContain("DELETE FROM queue_data_aggregates q");
+    expect(sqlOf(1)).toContain("row_number() OVER ( PARTITION BY hour");
+    expect(sqlOf(1)).toContain('"updatedAt" DESC NULLS LAST, ctid');
+    expect(manager.query.mock.calls[1][1]).toEqual(["loser-id"]);
+
+    // 3. The move, which writes both columns naming the attraction.
+    expect(sqlOf(2)).toMatch(/^UPDATE queue_data_aggregates/);
+    expect(manager.query.mock.calls[2][1]).toEqual(["winner-id", "loser-id"]);
+  });
+
+  it("derives the new id from the same expression the rollup writes", async () => {
+    await moveAggregateBuckets(manager, "winner-id", "loser-id");
+
+    const update = sqlOf(2);
+    // The parameter is cast to text and hashed with it, not normalized through
+    // uuid: the column is `text`, so the id has to be the hash of the bytes the
+    // column ends up holding.
+    expect(update).toContain(`SET "attractionId" = $1`);
+    expect(update).toContain(`id = ${aggregateIdSql("$1::text", "hour")}`);
+
+    // The claim this test exists for: one formula, two call sites. A copy here
+    // that drifted from the rollup would produce a valid uuid that no writer can
+    // re-derive, which is the original bug wearing the fix's clothes.
+    const rollupId = aggregateIdSql('s."attractionId"', "s.hour");
+    expect(HOURLY_AGGREGATE_SELECT).toContain(rollupId);
+    expect(update.replace("$1::text", 's."attractionId"')).toContain(
+      rollupId.replace("s.hour", "hour"),
+    );
+  });
+
+  it("refuses one id on both sides, before any statement", async () => {
+    // With one id on both sides the first DELETE reads the loser's hours as the
+    // survivor's and empties the bucket history of the ride it was asked to keep.
+    await expect(
+      moveAggregateBuckets(manager, "same-id", "same-id"),
+    ).rejects.toThrow(/both sides/i);
+
+    expect(manager.query).not.toHaveBeenCalled();
+  });
+
+  it("is reached through applyMergeDependencies, with no generic move beside it", async () => {
+    const entry = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "queue_data_aggregates",
+    )!;
+
+    await applyMergeDependencies(manager, [entry], "winner-id", "loser-id");
+
+    const statements = manager.query.mock.calls.map((call) =>
+      (call[0] as string).replace(/\s+/g, " ").trim(),
+    );
+    expect(statements).toHaveLength(3);
+    // The failure mode this pins: a `custom` entry that also got picked up by
+    // the generic path would issue a fourth statement rewriting the column
+    // alone, undoing the id in the same transaction.
+    expect(
+      statements.filter((sql) =>
+        sql.startsWith("UPDATE queue_data_aggregates"),
+      ),
+    ).toHaveLength(1);
+    expect(statements[2]).toContain("id = md5(");
   });
 });
 

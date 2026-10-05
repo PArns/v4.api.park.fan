@@ -27,6 +27,38 @@
  */
 export const ANCHOR_LOOKBACK = "3 hours";
 
+/**
+ * The `id` of a `queue_data_aggregates` row, as SQL over its natural key.
+ *
+ * The PK is `(id, hour)`, so a deterministic id is what makes that PK enforce
+ * one row per `(attractionId, hour)` and lets `ON CONFLICT (id, hour)` fire at
+ * all. Before June 2026 this was `gen_random_uuid()`, the conflict target never
+ * matched, and every re-run, retry and backfill inserted a duplicate row —
+ * double-counting `sampleCount` and skewing every percentile.
+ *
+ * A function rather than a copy per statement, because the id is derived in two
+ * unrelated places: the rollup below writes it, and an attraction merge has to
+ * recompute it when it reparents a bucket (`ATTRACTION_DEPENDENCIES`). A second
+ * derivation of this formula that drifts produces exactly the duplicate rows the
+ * formula exists to prevent, and it would drift silently — a wrong hash is a
+ * valid uuid.
+ *
+ * `hourExpr` is rendered with `::text`, so its value depends on the session
+ * `TimeZone`. Every writer reaches this table through the application pool, so
+ * every one of them renders it the same way; a reader comparing ids from a psql
+ * session has to set `TimeZone` to the pool's (UTC) to get the same bytes.
+ *
+ * `attractionIdExpr` must be the value the row's `"attractionId"` column ends up
+ * holding, byte for byte — the column is `text`, so the hash is over the stored
+ * text and not over a canonicalized uuid.
+ */
+export function aggregateIdSql(
+  attractionIdExpr: string,
+  hourExpr: string,
+): string {
+  return `md5(${attractionIdExpr} || '|' || ${hourExpr}::text)::uuid`;
+}
+
 export const HOURLY_AGGREGATE_SELECT = `
   WITH observed AS (
     SELECT
@@ -64,13 +96,10 @@ export const HOURLY_AGGREGATE_SELECT = `
     SELECT * FROM anchors
   )
   SELECT
-    -- DETERMINISTIC id derived from the natural key (attractionId, hour).
-    -- The PK is (id, hour), so a stable id makes that PK enforce one row
-    -- per (attractionId, hour) and lets ON CONFLICT (id, hour) actually
-    -- fire. Previously this was gen_random_uuid(), so the conflict target
-    -- never matched and every re-run/retry/backfill inserted duplicate
-    -- rows — double-counting sampleCount and skewing the percentiles.
-    md5(s."attractionId" || '|' || s.hour::text)::uuid as id,
+    -- DETERMINISTIC id derived from the natural key (attractionId, hour);
+    -- see aggregateIdSql above for why, and for the one other place that
+    -- derives it.
+    ${aggregateIdSql('s."attractionId"', "s.hour")} as id,
     s.hour as hour,
     s."attractionId",
     a."parkId",
@@ -91,4 +120,37 @@ export const HOURLY_AGGREGATE_SELECT = `
   INNER JOIN attractions a ON a.id = s."attractionId"
   GROUP BY s.hour, s."attractionId", a."parkId"
   HAVING COUNT(*) >= 2
+`;
+
+/**
+ * The nightly upsert of `calculate-percentiles`, as one statement.
+ *
+ * Exported rather than written at the call site so a test can issue the real
+ * thing: the whole point of the deterministic id is that `ON CONFLICT (id, hour)`
+ * fires on a bucket that already exists, and a test that re-states the clause
+ * proves its own copy fires instead. The merge path recomputing the id
+ * (`moveAggregateBuckets`) is checked against this statement for that reason.
+ *
+ * Parameters as in `HOURLY_AGGREGATE_SELECT`: `$1` window start, `$2` window end.
+ */
+export const HOURLY_AGGREGATE_UPSERT = `
+  INSERT INTO queue_data_aggregates (
+    id, hour, "attractionId", "parkId",
+    p25, p50, p75, p90, p95, p99,
+    iqr, "stdDev", mean, "sampleCount",
+    "createdAt", "updatedAt"
+  )
+  ${HOURLY_AGGREGATE_SELECT}
+  ON CONFLICT (id, hour) DO UPDATE SET
+    p25 = EXCLUDED.p25,
+    p50 = EXCLUDED.p50,
+    p75 = EXCLUDED.p75,
+    p90 = EXCLUDED.p90,
+    p95 = EXCLUDED.p95,
+    p99 = EXCLUDED.p99,
+    iqr = EXCLUDED.iqr,
+    "stdDev" = EXCLUDED."stdDev",
+    mean = EXCLUDED.mean,
+    "sampleCount" = EXCLUDED."sampleCount",
+    "updatedAt" = NOW()
 `;
