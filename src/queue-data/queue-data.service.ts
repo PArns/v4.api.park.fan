@@ -545,7 +545,7 @@ export class QueueDataService {
               // object. Most feeds post multiples of five; Movie Park's rides
               // read 61 instead of 60 on 2026-10-04, and on 2026-10-05 the
               // wiki sent Europa-Park 1, 3 and 6, which the park payload
-              // served as they came.
+              // served as they came. Disney's 13 (a walk-on) is kept as is.
               queueData.waitTime =
                 typeof raw === "number" ? roundToNearest5Minutes(raw) : raw;
             }

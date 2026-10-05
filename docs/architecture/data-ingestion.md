@@ -24,6 +24,8 @@ When two sources report different wait times for the *same* attraction:
 ### Wait times are stored in five-minute steps
 Every STANDBY, SINGLE_RIDER and PAID_STANDBY wait is rounded with `roundToNearest5Minutes`
 in `QueueDataService.buildQueueCandidates`, the one place every source's row passes through.
+The one exception is 13: Disney posts it for a walk-on, so `roundToNearest5Minutes` returns
+exactly 13 unchanged (`WALK_ON_WAIT_MINUTES`) and it is never stored or served as 15.
 The park, attraction and favorites payloads serve `queue_data.waitTime` as stored, so a value
 that reaches the table off the grid reaches the user off the grid.
 

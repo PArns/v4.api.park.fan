@@ -300,7 +300,7 @@ describe("QueueDataService — batched live-data writes", () => {
           liveData: liveResponse({
             queue: {
               [QueueType.STANDBY]: { waitTime: 61 },
-              [QueueType.SINGLE_RIDER]: { waitTime: 13 },
+              [QueueType.SINGLE_RIDER]: { waitTime: 12 },
               [QueueType.PAID_STANDBY]: { waitTime: 1 },
             },
           }),
@@ -313,9 +313,25 @@ describe("QueueDataService — batched live-data writes", () => {
       );
       expect(waitByType).toEqual({
         [QueueType.STANDBY]: 60,
-        [QueueType.SINGLE_RIDER]: 15,
+        [QueueType.SINGLE_RIDER]: 10,
         [QueueType.PAID_STANDBY]: 0,
       });
+    });
+
+    it("stores Disney's 13-minute walk-on as 13, not 15", async () => {
+      redis.mget.mockResolvedValue([null]);
+
+      await service.saveLiveDataBatch([
+        {
+          attractionId: ATTRACTION,
+          liveData: liveResponse({
+            queue: { [QueueType.STANDBY]: { waitTime: 13 } },
+          }),
+        },
+      ]);
+
+      const [rows] = queueRepo.insert.mock.calls[0];
+      expect(rows[0].waitTime).toBe(13);
     });
 
     it("keeps a posted null as null rather than rounding it to 0", async () => {

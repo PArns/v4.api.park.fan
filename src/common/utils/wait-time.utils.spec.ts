@@ -14,6 +14,15 @@ describe("roundToNearest5Minutes", () => {
     expect(roundToNearest5Minutes(12.5)).toBe(15);
   });
 
+  it("leaves Disney's 13-minute walk-on unrounded", () => {
+    expect(roundToNearest5Minutes(13)).toBe(13);
+    expect(roundToNearest5Minutes("13" as unknown as number)).toBe(13);
+    // Only the posted 13 itself; its neighbours stay on the grid.
+    expect(roundToNearest5Minutes(12)).toBe(10);
+    expect(roundToNearest5Minutes(13.4)).toBe(15);
+    expect(roundToNearest5Minutes(14)).toBe(15);
+  });
+
   it("returns 0 for sub-minimum and negative inputs", () => {
     expect(roundToNearest5Minutes(0)).toBe(0);
     expect(roundToNearest5Minutes(0.5)).toBe(0);
