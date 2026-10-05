@@ -4,12 +4,16 @@ import { parkOpenWindowCtes } from "./park-open-window.sql";
 /**
  * How far back the last run of a ride is looked for, in days.
  *
- * Seven, for the reason the outage line names its start by weekday: inside a
- * week a weekday is unambiguous, and the page states the instant as „Sonntag,
- * 18:00" rather than as a date. A ride that has not run for longer than that is
- * not „not running yet today" — it is closed for something longer than a day,
- * and saying „noch" about it would promise an opening nobody announced. Such a
- * ride gets no line at all.
+ * The page states the instant as a weekday and a time („Sonntag, 18:00 Uhr"),
+ * not as a date, so the instant has to fall on one of the six days before
+ * today in the park's own calendar. Seven days back is today's weekday again:
+ * on a Monday, „zuletzt Montag, 17:00 Uhr" reads as this afternoon. The readings
+ * are scanned this far back, and the statement then drops any `lastRunAt`
+ * whose local date is not inside those six days.
+ *
+ * A ride that has not run for longer than that is not „not running yet today"
+ * — it is closed for something longer than a day, and saying „noch" about it
+ * would promise an opening nobody announced. Such a ride gets no line at all.
  */
 export const NOT_RUN_TODAY_LOOKBACK_DAYS = 7;
 
@@ -132,21 +136,29 @@ export const NOT_RUN_TODAY_SQL = `
       FROM readings
      WHERE st = 'OPERATING'
      ORDER BY aid, ts DESC
+  ),
+  not_run AS (
+    SELECT n.aid,
+           LEAST(
+             lr.ended_at,
+             GREATEST(
+               lr.last_operating,
+               (SELECT w.closes_at FROM win w
+                 WHERE w.opens_at <= lr.last_operating
+                 ORDER BY w.opens_at DESC
+                 LIMIT 1)
+             )
+           ) AS last_run_at
+      FROM newest n
+      JOIN last_run lr ON lr.aid = n.aid
+     CROSS JOIN day_start d
+     WHERE n.st = 'CLOSED'
+       AND lr.last_operating < d.at
   )
-  SELECT n.aid AS "attractionId",
-         LEAST(
-           lr.ended_at,
-           GREATEST(
-             lr.last_operating,
-             (SELECT w.closes_at FROM win w
-               WHERE w.opens_at <= lr.last_operating
-               ORDER BY w.opens_at DESC
-               LIMIT 1)
-           )
-         ) AS "lastRunAt"
-    FROM newest n
-    JOIN last_run lr ON lr.aid = n.aid
-   CROSS JOIN day_start d
-   WHERE n.st = 'CLOSED'
-     AND lr.last_operating < d.at
+  SELECT nr.aid AS "attractionId", nr.last_run_at AS "lastRunAt"
+    FROM not_run nr
+   -- On one of the six days before today, in the park's calendar: a seventh
+   -- day back would be named by today's weekday.
+   WHERE (nr.last_run_at AT TIME ZONE $2::text)::date
+         > ($3::timestamptz AT TIME ZONE $2::text)::date - 7
 `;

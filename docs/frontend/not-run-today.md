@@ -25,9 +25,11 @@ All of these, decided by `AttractionOutageService.getNotRunToday` and
   that reading belongs to yesterday. A ride that ran in an early-entry hour has
   run today, a ride that ran before a midday break has too, and a ride whose
   feed leaves it OPERATING overnight and flips it in the morning has not;
-- it did run within the last `NOT_RUN_TODAY_LOOKBACK_DAYS` (7). A ride that has
-  not run for longer is closed for something longer than a day, and "not yet
-  today" would promise an opening nobody announced. It gets no field.
+- `lastRunAt` falls on one of the six days before today, in the park's own
+  calendar. Seven days back is today's weekday again, and „zuletzt Montag,
+  17:00 Uhr" on a Monday reads as this afternoon. A ride that has not run for
+  longer is closed for something longer than a day, and "not yet today" would
+  promise an opening nobody announced. It gets no field.
 
 ## What `lastRunAt` is
 

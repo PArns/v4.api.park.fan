@@ -27,6 +27,7 @@ import {
  * | TAIL | runs Monday, one more OPERATING reading 45 s after the close | last run Monday 18:00:45 — that reading is still Monday |
  * | MORNING | ran on Tuesday morning and stopped | nothing — that is a closure, not "not yet" |
  * | STALE | last ran eight days ago | nothing — longer than "today" can mean |
+ * | WEEKAGO | last ran on the Tuesday a week before | nothing — „Dienstag" on a Tuesday reads as today |
  * | RUNNING | running now | nothing |
  */
 describe("rides that have not run yet today (e2e)", () => {
@@ -39,6 +40,8 @@ describe("rides that have not run yet today (e2e)", () => {
   const MON = "2026-06-08";
   const TUE = "2026-06-09";
   const AS_OF = at(TUE, "11:00:00");
+  /** The Tuesday before TUE: inside seven days of AS_OF, and its weekday. */
+  const WEEK_AGO = "2026-06-02";
 
   let parkId: string;
   const rides = new Map<string, string>();
@@ -75,6 +78,7 @@ describe("rides that have not run yet today (e2e)", () => {
       "TAIL",
       "MORNING",
       "STALE",
+      "WEEKAGO",
       "RUNNING",
     ]) {
       const ride = await dataSource.getRepository(Attraction).save(
@@ -92,6 +96,7 @@ describe("rides that have not run yet today (e2e)", () => {
 
     const windows: Array<[string, string, string]> = [
       ["2026-05-31", "10:00:00", "18:00:00"],
+      [WEEK_AGO, "10:00:00", "18:00:00"],
       [MON, "10:00:00", "18:00:00"],
       ...tuesday.map(([o, c]): [string, string, string] => [TUE, o, c]),
     ];
@@ -126,6 +131,9 @@ describe("rides that have not run yet today (e2e)", () => {
 
     await reading("STALE", at("2026-05-31", "10:00:00"), "OPERATING");
     await reading("STALE", at("2026-05-31", "18:00:00"), "CLOSED");
+
+    await reading("WEEKAGO", at(WEEK_AGO, "13:00:00"), "OPERATING");
+    await reading("WEEKAGO", at(WEEK_AGO, "16:00:00"), "CLOSED");
 
     await reading("RUNNING", at(TUE, "10:00:00"), "OPERATING");
   };
@@ -215,7 +223,7 @@ describe("rides that have not run yet today (e2e)", () => {
     expect(out.get("FLIPS")).toBe(at(MON, "18:00:00").toISOString());
   });
 
-  it("says nothing about a ride that ran this morning, one that is running, or one gone for over a week", async () => {
+  it("says nothing about a ride that ran this morning, one that is running, or one last run on today's weekday or before", async () => {
     await seed();
     expect(NOT_RUN_TODAY_LOOKBACK_DAYS).toBe(7);
 
@@ -224,6 +232,9 @@ describe("rides that have not run yet today (e2e)", () => {
     expect(out.has("MORNING")).toBe(false);
     expect(out.has("RUNNING")).toBe(false);
     expect(out.has("STALE")).toBe(false);
+    // Ran at 16:00 on the Tuesday before: 6 days 19 hours ago, inside the
+    // seven-day scan, and named „Dienstag" on a Tuesday.
+    expect(out.has("WEEKAGO")).toBe(false);
     expect([...out.keys()].sort()).toEqual(["CARRIES", "FLIPS", "TAIL"]);
   });
 
