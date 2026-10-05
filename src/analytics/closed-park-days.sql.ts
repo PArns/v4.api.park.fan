@@ -34,6 +34,15 @@
  * and leaving the window out keeps the fragment free of placeholders the
  * callers would have to renumber.
  *
+ * The park id is cast `::text::uuid` rather than straight to `uuid`, and the
+ * detour is load-bearing. `queue_data_aggregates."parkId"` is a text column,
+ * so every caller also compares the same placeholder against text. Postgres
+ * infers one type per parameter: a bare `$1::uuid` here, in a CTE that is
+ * textually first, pins the parameter to `uuid` and the aggregate comparison
+ * further down then fails with `operator does not exist: text = uuid`. Casting
+ * through text pins it to text and leaves the comparison a constant, so the
+ * partial index on `("parkId", date)` is still used.
+ *
  * @param parkIdParam The caller's placeholder holding the park id, e.g. `"$1"`.
  *   A compile-time constant from our own SQL, never user input.
  */
@@ -41,7 +50,7 @@ export function closedParkDaysCte(parkIdParam: string): string {
   return `closed_park_days AS (
      SELECT se.date AS day
      FROM schedule_entries se
-     WHERE se."parkId" = ${parkIdParam}::uuid
+     WHERE se."parkId" = ${parkIdParam}::text::uuid
        AND se."attractionId" IS NULL
        AND se."scheduleType" = 'CLOSED'
        AND NOT EXISTS (
