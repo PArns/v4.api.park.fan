@@ -21,6 +21,7 @@ import {
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
 import { PARK_OBSERVED_READING_SQL } from "../common/utils/closure-gap.sql";
+import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 
 /** One attraction's already-fetched live payload, as handed to the batch writer. */
 export interface LiveDataBatchItem {
@@ -535,7 +536,18 @@ export class QueueDataService {
               );
               // Leave queueData.waitTime unset (null) — status change still saved
             } else {
-              queueData.waitTime = raw;
+              // Stored on the five-minute grid, because nothing after this
+              // point rounds a live reading again: the park, attraction and
+              // favorites payloads serve this column as it is. The rounding
+              // in ConflictResolverService does not reach it — that writes
+              // the entity's `waitTime`, while a source that sends a queue
+              // object (ThemeParks.wiki, Wartezeiten) is stored from the
+              // object. Most feeds post multiples of five; Movie Park's rides
+              // read 61 instead of 60 on 2026-10-04, and on 2026-10-05 the
+              // wiki sent Europa-Park 1, 3 and 6, which the park payload
+              // served as they came.
+              queueData.waitTime =
+                typeof raw === "number" ? roundToNearest5Minutes(raw) : raw;
             }
           }
           break;
