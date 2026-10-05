@@ -38,13 +38,24 @@ export const NOT_RUN_TODAY_GRACE_MINUTES = 15;
  * reason. What can be said about every one of them is true and neutral: it has
  * not run today, and it last ran on Sunday at 18:00.
  *
- * ## "Today" starts when the park last closed
+ * ## "Today" starts halfway through the night
  *
- * Not at today's opening time and not at local midnight. A ride that runs
- * during an early-entry hour before the published opening has run today; a ride
- * whose feed never flips it to CLOSED at night and flips it in the morning has
- * not. Both are answered by asking for any OPERATING reading after the end of
- * the park's previous window.
+ * The middle of the gap between the last window of an earlier operating day
+ * and the first window of today's. Not local midnight, which falls inside the
+ * evening of a park that closes at 01:00. Not today's opening, or a ride that
+ * ran during an early-entry hour would count as not having run. And not the
+ * previous close itself, which is what this statement first used: feeds keep
+ * polling a ride after the gates shut, and a poll just after the close can
+ * still read OPERATING with a new wait. That one reading made a ride that ran
+ * until Sunday's close and stood all Monday count as having run on Monday, so
+ * it got no line at all. Halfway through the night is hours away from both
+ * edges. A ride whose feed never flips it to CLOSED at night is
+ * not affected: only status and wait changes are readings here, so its last
+ * OPERATING reading is the one from the day before.
+ *
+ * Every window of today's operating day counts (`op_day`), not only the one the
+ * park is in: in a park with a midday break, a ride that ran in the morning has
+ * run today.
  *
  * ## When it last ran, clipped to the park's hours
  *
@@ -66,25 +77,35 @@ export const NOT_RUN_TODAY_SQL = `
     from: `$3::timestamptz - INTERVAL '${NOT_RUN_TODAY_LOOKBACK_DAYS + 1} days'`,
     to: `$3::timestamptz + INTERVAL '1 day'`,
   })},
-  -- The window the park is in now, open long enough for the grace period. No
-  -- row means a shut park, and a CLOSED ride in a shut park is a shut park.
+  -- The window the park is in now. No row means a shut park, and a CLOSED
+  -- ride in a shut park is a shut park.
   park_open AS (
-    SELECT w.opens_at
+    SELECT w.op_day
       FROM win w
      WHERE w.opens_at <= $3::timestamptz
-           - INTERVAL '${NOT_RUN_TODAY_GRACE_MINUTES} minutes'
        AND w.closes_at > $3::timestamptz
      ORDER BY w.closes_at DESC
      LIMIT 1
   ),
-  -- Where "today" begins: the end of the park's previous window, or today's
-  -- opening when the lookback holds none.
+  day_bounds AS (
+    SELECT (SELECT MIN(w.opens_at) FROM win w WHERE w.op_day = po.op_day)
+             AS day_opens,
+           (SELECT MAX(w.closes_at) FROM win w WHERE w.op_day < po.op_day)
+             AS prev_closes
+      FROM park_open po
+  ),
+  -- Where "today" begins: halfway between the previous operating day's last
+  -- close and today's first opening, or today's opening when the lookback
+  -- holds no earlier day. No row until the day's first opening is the grace
+  -- period old.
   day_start AS (
     SELECT COALESCE(
-             (SELECT MAX(w.closes_at) FROM win w WHERE w.closes_at <= po.opens_at),
-             po.opens_at
+             b.prev_closes + (b.day_opens - b.prev_closes) / 2,
+             b.day_opens
            ) AS at
-      FROM park_open po
+      FROM day_bounds b
+     WHERE b.day_opens <= $3::timestamptz
+           - INTERVAL '${NOT_RUN_TODAY_GRACE_MINUTES} minutes'
   ),
   readings AS (
     SELECT qd."attractionId" AS aid,
@@ -93,7 +114,7 @@ export const NOT_RUN_TODAY_SQL = `
            lead(qd.timestamp) OVER (PARTITION BY qd."attractionId"
                                     ORDER BY qd.timestamp) AS next_ts
       FROM queue_data qd
-     WHERE EXISTS (SELECT 1 FROM park_open)
+     WHERE EXISTS (SELECT 1 FROM day_start)
        AND qd."attractionId" = ANY($1::uuid[])
        AND qd."queueType" = 'STANDBY'
        AND ${observedReadingsSql("qd")}
