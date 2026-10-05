@@ -24,6 +24,7 @@ import {
  * | --- | --- | --- |
  * | FLIPS | runs Monday, CLOSED at Monday's close | last run Monday 18:00 |
  * | CARRIES | runs Monday, the feed only flips it on Tuesday 09:30 | last run Monday 18:00, not Tuesday 09:30 |
+ * | TAIL | runs Monday, one more OPERATING reading 45 s after the close | last run Monday 18:00:45 — that reading is still Monday |
  * | MORNING | ran on Tuesday morning and stopped | nothing — that is a closure, not "not yet" |
  * | STALE | last ran eight days ago | nothing — longer than "today" can mean |
  * | RUNNING | running now | nothing |
@@ -42,7 +43,12 @@ describe("rides that have not run yet today (e2e)", () => {
   let parkId: string;
   const rides = new Map<string, string>();
 
-  const seed = async (): Promise<void> => {
+  /** Tuesday's published windows. One by default; a case can split the day. */
+  const ONE_WINDOW: Array<[string, string]> = [["10:00:00", "18:00:00"]];
+
+  const seed = async (
+    tuesday: Array<[string, string]> = ONE_WINDOW,
+  ): Promise<void> => {
     rides.clear();
     const park = await dataSource.getRepository(Park).save(
       dataSource.getRepository(Park).create({
@@ -63,7 +69,14 @@ describe("rides that have not run yet today (e2e)", () => {
     );
     parkId = park.id;
 
-    for (const name of ["FLIPS", "CARRIES", "MORNING", "STALE", "RUNNING"]) {
+    for (const name of [
+      "FLIPS",
+      "CARRIES",
+      "TAIL",
+      "MORNING",
+      "STALE",
+      "RUNNING",
+    ]) {
       const ride = await dataSource.getRepository(Attraction).save(
         dataSource.getRepository(Attraction).create({
           externalId: `e2e-not-run-${name}`,
@@ -77,15 +90,20 @@ describe("rides that have not run yet today (e2e)", () => {
       rides.set(name, ride.id);
     }
 
-    for (const day of ["2026-05-31", MON, TUE]) {
+    const windows: Array<[string, string, string]> = [
+      ["2026-05-31", "10:00:00", "18:00:00"],
+      [MON, "10:00:00", "18:00:00"],
+      ...tuesday.map(([o, c]): [string, string, string] => [TUE, o, c]),
+    ];
+    for (const [day, opens, closes] of windows) {
       await dataSource.getRepository(ScheduleEntry).save(
         dataSource.getRepository(ScheduleEntry).create({
           parkId,
           attractionId: null,
           date: day as unknown as Date,
           scheduleType: ScheduleType.OPERATING,
-          openingTime: at(day, "10:00:00"),
-          closingTime: at(day, "18:00:00"),
+          openingTime: at(day, opens),
+          closingTime: at(day, closes),
         }),
       );
     }
@@ -95,6 +113,11 @@ describe("rides that have not run yet today (e2e)", () => {
 
     await reading("CARRIES", at(MON, "10:00:00"), "OPERATING");
     await reading("CARRIES", at(TUE, "09:30:00"), "CLOSED");
+
+    // The poll that lands just after the close still sees the ride running.
+    await reading("TAIL", at(MON, "10:00:00"), "OPERATING");
+    await reading("TAIL", at(MON, "18:00:45"), "OPERATING");
+    await reading("TAIL", at(MON, "18:10:00"), "CLOSED");
 
     await reading("MORNING", at(MON, "10:00:00"), "OPERATING");
     await reading("MORNING", at(MON, "18:00:00"), "CLOSED");
@@ -168,6 +191,30 @@ describe("rides that have not run yet today (e2e)", () => {
     expect(out.get("CARRIES")).toBe(at(MON, "18:00:00").toISOString());
   });
 
+  it("counts a reading just after yesterday's close as yesterday", async () => {
+    // "Today" used to begin at the previous close itself, so this reading
+    // made the ride count as having run today, and it got no line at all.
+    await seed();
+
+    const out = await run(AS_OF);
+
+    expect(out.get("TAIL")).toBe(at(MON, "18:00:45").toISOString());
+  });
+
+  it("does not start a new day at a midday break", async () => {
+    // Two windows on Tuesday. MORNING ran in the first one, so it has run
+    // today, whatever the second window says.
+    await seed([
+      ["10:00:00", "12:00:00"],
+      ["13:00:00", "18:00:00"],
+    ]);
+
+    const out = await run(at(TUE, "15:00:00"));
+
+    expect(out.has("MORNING")).toBe(false);
+    expect(out.get("FLIPS")).toBe(at(MON, "18:00:00").toISOString());
+  });
+
   it("says nothing about a ride that ran this morning, one that is running, or one gone for over a week", async () => {
     await seed();
     expect(NOT_RUN_TODAY_LOOKBACK_DAYS).toBe(7);
@@ -177,7 +224,7 @@ describe("rides that have not run yet today (e2e)", () => {
     expect(out.has("MORNING")).toBe(false);
     expect(out.has("RUNNING")).toBe(false);
     expect(out.has("STALE")).toBe(false);
-    expect([...out.keys()].sort()).toEqual(["CARRIES", "FLIPS"]);
+    expect([...out.keys()].sort()).toEqual(["CARRIES", "FLIPS", "TAIL"]);
   });
 
   it("waits out the first minutes of the day, and says nothing once the park has shut", async () => {

@@ -15,13 +15,16 @@ All of these, decided by `AttractionOutageService.getNotRunToday` and
 - the ride's resolved status is `CLOSED`, and it has no `outage`;
 - it is not out of season (`isCurrentlyInSeason !== false`) and not inside a
   curated works period — the page already says why such a ride is shut;
-- its park is inside a published OPERATING window and has been for
-  `NOT_RUN_TODAY_GRACE_MINUTES` (15), so the minutes in which rides open one
-  poll at a time do not put the line on every ride;
-- the ride has no observed OPERATING reading since the park's previous window
-  closed. That, not local midnight or today's opening, is where "today" starts:
-  a ride that ran in an early-entry hour has run today, and a ride whose feed
-  leaves it OPERATING overnight and flips it in the morning has not;
+- its park is inside a published OPERATING window, and the day's first window
+  opened at least `NOT_RUN_TODAY_GRACE_MINUTES` (15) ago, so the minutes in
+  which rides open one poll at a time do not put the line on every ride;
+- the ride has no observed OPERATING reading since the middle of the night:
+  halfway between the previous operating day's last close and today's first
+  opening. Not local midnight, not today's opening, and not the previous close
+  itself. Feeds often read a ride OPERATING once more just after the close, and
+  that reading belongs to yesterday. A ride that ran in an early-entry hour has
+  run today, a ride that ran before a midday break has too, and a ride whose
+  feed leaves it OPERATING overnight and flips it in the morning has not;
 - it did run within the last `NOT_RUN_TODAY_LOOKBACK_DAYS` (7). A ride that has
   not run for longer is closed for something longer than a day, and "not yet
   today" would promise an opening nobody announced. It gets no field.
