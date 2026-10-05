@@ -532,6 +532,19 @@ describe("Park merge (E2E)", () => {
      * the sample counts below say what was measured in each hour and nothing else.
      */
     const INHERITED_HOUR = "2026-03-02 18:00:00+00";
+    /**
+     * The survivor holds this hour under an id nothing can derive — a legacy
+     * `gen_random_uuid()` row, the shape 39 % of the table still has, or the hash
+     * of an earlier loser (1,556 such rows in production with no correctly keyed
+     * twin). `ON CONFLICT (id, hour)` does NOT fire for it, so the dedupe has to
+     * be written on the natural key or the merge creates a real duplicate bucket.
+     *
+     * Deliberately without readings in `queue_data`: the re-run at the end would
+     * otherwise write the derivable id beside the legacy row and produce the
+     * duplicate this case is about, from the pre-existing row rather than from the
+     * merge. Repairing those is `dedupe-percentile-aggregates`, not this.
+     */
+    const LEGACY_HOUR = "2026-03-02 22:00:00+00";
 
     const aggregateRow = (
       attractionId: string,
@@ -678,8 +691,25 @@ describe("Park merge (E2E)", () => {
         "2026-03-03 01:00:00+00",
       );
 
-      expect(await bucketsOf(GHOST_ATTR)).toHaveLength(3);
-      expect(await bucketsOf(WINNER_ATTR)).toHaveLength(1);
+      await aggregateRow(
+        WINNER_ATTR,
+        WINNER_PARK,
+        LEGACY_HOUR,
+        "11111111-1111-4111-8111-111111111111",
+        7,
+        "2026-03-03 02:00:00+00",
+      );
+      await aggregateRow(
+        GHOST_ATTR,
+        GHOST_PARK,
+        LEGACY_HOUR,
+        await expectedId(GHOST_ATTR, LEGACY_HOUR),
+        8,
+        "2026-03-03 02:00:00+00",
+      );
+
+      expect(await bucketsOf(GHOST_ATTR)).toHaveLength(4);
+      expect(await bucketsOf(WINNER_ATTR)).toHaveLength(2);
 
       await compressBuckets();
 
@@ -707,19 +737,23 @@ describe("Park merge (E2E)", () => {
       // 1 · One row per hour on the survivor, and nothing left on the ghost.
       expect(await bucketsOf(GHOST_ATTR)).toHaveLength(0);
       const afterMerge = await bucketsOf(WINNER_ATTR);
-      expect(afterMerge).toHaveLength(2);
+      expect(afterMerge).toHaveLength(3);
 
-      // 2 · The survivor's own bucket won the shared hour; the inherited one is
-      //     the loser's newer of two, carried over with its sample count.
-      expect(afterMerge.map((row) => row.sampleCount)).toEqual([2, 3]);
+      // 2 · Hour by hour: the survivor keeps the two it already stated — the one
+      //     keyed correctly AND the one keyed with a legacy uuid — and inherits
+      //     the third as the newer of the loser's two duplicates.
+      expect(afterMerge.map((row) => row.sampleCount)).toEqual([2, 3, 7]);
 
-      // 3 · Both ids are now what the rollup derives — the claim the merge used
-      //     to break. Checked against the database's own md5, not a copy of the
-      //     expression under test.
+      // 3 · The ids the merge wrote are what the rollup derives — the claim it
+      //     used to break. Checked against the database's own md5, not a copy of
+      //     the expression under test. The legacy row is NOT rekeyed: repairing
+      //     those is the dedupe job's, and rewriting the survivor's own bucket on
+      //     the strength of a merge is not this entry's business.
       expect(afterMerge[0].id).toBe(await expectedId(WINNER_ATTR, SHARED_HOUR));
       expect(afterMerge[1].id).toBe(
         await expectedId(WINNER_ATTR, INHERITED_HOUR),
       );
+      expect(afterMerge[2].id).toBe("11111111-1111-4111-8111-111111111111");
 
       // 4 · The assertion of the ticket: the real nightly statement runs again
       //     over both hours and ON CONFLICT (id, hour) fires on the rows that
@@ -731,7 +765,7 @@ describe("Park merge (E2E)", () => {
       ]);
 
       const afterRerun = await bucketsOf(WINNER_ATTR);
-      expect(afterRerun).toHaveLength(2);
+      expect(afterRerun).toHaveLength(3);
       expect(
         await count(
           `SELECT count(*) c FROM (
@@ -742,7 +776,7 @@ describe("Park merge (E2E)", () => {
       ).toBe(0);
       // And the re-run did reach these buckets rather than skip them: the merged
       // readings of both rides are now one series, so the shared hour holds five.
-      expect(afterRerun.map((row) => row.sampleCount)).toEqual([5, 3]);
+      expect(afterRerun.map((row) => row.sampleCount)).toEqual([5, 3, 7]);
     });
   });
 

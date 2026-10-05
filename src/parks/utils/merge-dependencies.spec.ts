@@ -1575,9 +1575,22 @@ describe("moveAggregateBuckets", () => {
     expect(sql).toContain(
       `SELECT DISTINCT ON (hour) * FROM moved ORDER BY hour, "updatedAt" DESC NULLS LAST, id`,
     );
-    // And the survivor keeps the hours it already states. This replaces the
-    // dedupe DELETE that `conflictColumns` spells out on every other keyed entry:
-    // after the rehash the loser's row IS the survivor's key.
+    // And the survivor keeps the hours it already states — on the NATURAL key,
+    // not left to the constraint. The two differ exactly where the survivor's own
+    // row is wrongly keyed: `md5(winner|hour)` then collides with nothing, and
+    // `ON CONFLICT` alone would insert a second row for that bucket. The hours are
+    // read before the DELETE because `DELETE … WHERE hour IN (SELECT …)` against a
+    // compressed chunk removes nothing at all.
+    expect(sql).toContain(
+      `WITH winner_hours AS MATERIALIZED ( SELECT DISTINCT hour FROM queue_data_aggregates WHERE "attractionId" = $1 )`,
+    );
+    expect(sql).toContain(
+      "WHERE NOT EXISTS ( SELECT 1 FROM winner_hours w WHERE w.hour = o.hour )",
+    );
+    expect(sql.indexOf("winner_hours AS MATERIALIZED")).toBeLessThan(
+      sql.indexOf("DELETE FROM queue_data_aggregates"),
+    );
+    // The constraint-level guard stays behind it.
     expect(sql).toContain("ON CONFLICT (id, hour) DO NOTHING");
   });
 

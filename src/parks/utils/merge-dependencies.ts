@@ -602,18 +602,30 @@ export const AGGREGATE_CARRIED_COLUMNS = [
  *     newest first — the rule `dedupe-percentile-aggregates` applies table-wide.
  *     The loser can hold duplicate buckets of its own today, and two of them hash
  *     onto one id the moment they are rewritten.
- *   - `ON CONFLICT (id, hour) DO NOTHING` drops a bucket for an hour the survivor
- *     already states, because after the rehash it IS the survivor's key. That
- *     replaces the dedupe DELETE every other keyed entry on this list spells out
- *     with `conflictColumns`, and it was verified to see a row inside a compressed
- *     chunk rather than insert a duplicate beside it.
+ *   - `NOT EXISTS (… winner_hours …)` drops a bucket for an hour the survivor
+ *     already states — the dedupe every other keyed entry on this list spells out
+ *     with `conflictColumns`, and it has to be written on the NATURAL key rather
+ *     than left to `ON CONFLICT (id, hour)`. The two are not the same test here:
+ *     a survivor row whose own `id` is not derivable — a legacy random id, or the
+ *     hash of an earlier loser, 1,556 such rows in production with no correctly
+ *     keyed twin — collides with nothing, so `ON CONFLICT` alone would insert a
+ *     second row for that bucket and recreate exactly the duplicate this entry
+ *     exists to stop. The hours are read into a MATERIALIZED CTE before the
+ *     DELETE: `DELETE … WHERE hour IN (SELECT …)` against a compressed chunk
+ *     reports `DELETE 0` and removes nothing, so the test cannot sit in the
+ *     DELETE at all.
+ *   - `ON CONFLICT (id, hour) DO NOTHING` stays behind it as the constraint-level
+ *     guard, and was verified to see a row inside a compressed chunk rather than
+ *     insert a duplicate beside it.
  *
  * Neither surviving row is what a recompute over the merged `queue_data` would
  * produce — after the merge the readings of both rides are one series, and an
  * hour both of them reported now has a bucket built from one of them. Fixing that
  * is a backfill over the window, not something a merge can do inside its
- * transaction; what this guarantees is one row per bucket and a key every writer
- * can derive again.
+ * transaction; what this guarantees is that the merge adds no second row for a
+ * bucket and that every row it writes carries a key the rollup can derive again.
+ * A survivor row that was already wrongly keyed stays wrongly keyed — repairing
+ * those is `dedupe-percentile-aggregates`, not this.
  */
 export async function moveAggregateBuckets(
   manager: MergeQueryRunner,
@@ -629,7 +641,9 @@ export async function moveAggregateBuckets(
   const carried = AGGREGATE_CARRIED_COLUMNS.map((c) => `"${c}"`).join(", ");
 
   await manager.query(
-    `WITH moved AS (
+    `WITH winner_hours AS MATERIALIZED (
+       SELECT DISTINCT hour FROM queue_data_aggregates WHERE "attractionId" = $1
+     ), moved AS (
        DELETE FROM queue_data_aggregates WHERE "attractionId" = $2 RETURNING *
      ), one_per_hour AS (
        SELECT DISTINCT ON (hour) *
@@ -637,8 +651,11 @@ export async function moveAggregateBuckets(
         ORDER BY hour, "updatedAt" DESC NULLS LAST, id
      )
      INSERT INTO queue_data_aggregates (id, hour, "attractionId", ${carried})
-     SELECT ${aggregateIdSql("$1::text", "hour")}, hour, $1, ${carried}
-       FROM one_per_hour
+     SELECT ${aggregateIdSql("$1::text", "hour")}, o.hour, $1, ${carried}
+       FROM one_per_hour o
+      WHERE NOT EXISTS (
+        SELECT 1 FROM winner_hours w WHERE w.hour = o.hour
+      )
      ON CONFLICT (id, hour) DO NOTHING`,
     [winnerId, loserId],
   );
