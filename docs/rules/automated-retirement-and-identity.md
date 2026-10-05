@@ -39,6 +39,14 @@ run. Before such a PR merges:
    "All gates held" is not the same as "every row should go": PAR-621's gates
    all held and 141 of 186 were still wrong.
 3. State in the PR what the first run will do and how it is undone.
+4. **A gate the database cannot answer has to be fetched.** This job decides
+   absence against `/children`, and no query over `attractions` reproduces
+   that: `updatedAt` is a proxy, not the feed. On 2026-10-05 the selection for
+   PAR-656 passed 8 rows through every database-side gate and **1** through the
+   feed — the other 7 were listed upstream the whole time. Counting without
+   the fetch would have overstated the first run eightfold. Fetch `/children`
+   for each park that owns a candidate (23 parks, one request each) and make
+   the listing check part of the count that goes into the PR.
 
 ## 3. Identity is the upstream id — and the upstream re-issues ids
 
