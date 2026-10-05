@@ -22,13 +22,22 @@ export type OutageSignal = (typeof OUTAGE_SIGNALS)[number];
 export const DOWNTIME_END_REASONS = [
   /** A real OPERATING reading. The only end that is unambiguously a recovery. */
   "recovered",
-  /** Turned into REFURBISHMENT. Observed, and not a lost sight — planned work. */
+  /**
+   * Turned into REFURBISHMENT. For a reported DOWN that is observed and not a
+   * lost sight — planned work replaced the fault. For a `closed_gap` it is the
+   * ride still not running under another name, and the recovery curve treats
+   * it as censored.
+   */
   "reclassified",
   /** Went CLOSED with no recovery. Censored: the estimand is time to recovery. */
   "closed",
   /** Still down at `as_of`. */
   "ongoing",
-  /** The scan window ended mid-outage. Administrative censoring. */
+  /**
+   * The scan window ended mid-outage. Administrative censoring. For a
+   * `closed_gap` also: still standing `LIVE_LOOKBACK_HOURS` after it began,
+   * which is as far as a closure is followed.
+   */
   "window_edge",
   /** No reading for longer than the carry cap. We lost sight; not evidence. */
   "gap",
@@ -110,8 +119,10 @@ export class AttractionOutage {
    * Which signal this interval was read from.
    *
    * `down` is a reported DOWN run — the operator's own feed saying the ride is
-   * not running. `closed_gap` is inferred: the ride was OPERATING earlier that
-   * day, went CLOSED inside opening hours, and came back the same day.
+   * not running. `closed_gap` is inferred: the ride was OPERATING, went CLOSED
+   * inside opening hours with an hour of them left, and either came back the
+   * same day or was followed to its next status for at most
+   * `LIVE_LOOKBACK_HOURS` (see `CLOSURE_GAP_INTERVALS_SQL`).
    *
    * They are stored together and must never be summed without looking, because
    * they are not equally strong evidence. A DOWN is a statement; a closure gap

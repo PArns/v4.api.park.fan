@@ -50,7 +50,7 @@ import { mapRideProfile } from "../dto/ride-profile.dto";
 import { PopularityService } from "../../popularity/popularity.service";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 import { AttractionOutageService } from "./attraction-outage.service";
-import { toOutageDto } from "../dto/attraction-outage.dto";
+import { toNotRunTodayDto, toOutageDto } from "../dto/attraction-outage.dto";
 import { toDowntimeBlock } from "../dto/downtime-reliability.dto";
 import { AttractionDowntimeProfile } from "../../analytics/entities/attraction-downtime-profile.entity";
 import { servedHourlyConfidence } from "../../ml/utils/hourly-confidence.util";
@@ -351,6 +351,24 @@ export class AttractionIntegrationService {
         ],
       );
       dto.outage = toOutageDto(outages.get(attraction.id));
+
+      // Not run yet today, and when it last did — the park list asks the same
+      // service the same question, so both pages say one thing about the ride.
+      if (!dto.outage) {
+        const notRun = await this.outageService.getNotRunToday(
+          { id: attraction.parkId, timezone: attraction.park.timezone },
+          [
+            {
+              id: attraction.id,
+              effectiveStatus: dto.effectiveStatus,
+              isCurrentlyInSeason: dto.isCurrentlyInSeason,
+              curatedOutOfServiceFrom: attraction.curatedOutOfServiceFrom,
+              curatedOutOfServiceTo: attraction.curatedOutOfServiceTo,
+            },
+          ],
+        );
+        dto.notRunToday = toNotRunTodayDto(notRun.get(attraction.id));
+      }
     }
 
     // --- How often it has been reported down, or why we say nothing ---

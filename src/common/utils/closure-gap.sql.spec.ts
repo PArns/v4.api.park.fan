@@ -4,6 +4,7 @@ import {
   CLOSURE_GAP_INTERVALS_SQL,
   CURRENT_CLOSURE_GAP_SQL,
   LIVE_LOOKBACK_HOURS,
+  MAX_EARLY_END_SHARE,
   MAX_GAP_HOURS,
   MIN_GAP_MINUTES,
   MIN_PARK_MINUTES_LEFT,
@@ -78,8 +79,12 @@ describe("closure-gap statements", () => {
   );
 
   it("the nightly statement emits the window-derived day, not a third cast", () => {
+    // The same-day comparison moved into `closures`, where it is computed once
+    // for both shapes; raw_gaps reads its flag.
+    const shapes = cteBody(CLOSURE_GAP_INTERVALS_SQL, "closures");
+    expect(shapes).toContain("g.start_op_day = g.end_op_day");
+    expect(shapes).not.toMatch(/AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/);
     const gaps = cteBody(CLOSURE_GAP_INTERVALS_SQL, "raw_gaps");
-    expect(gaps).toContain("start_op_day = end_op_day");
     expect(gaps).not.toMatch(/AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/);
     // The emitted day is the window-derived one too: it leaves as "startOpDay"
     // and the processor keys outage starts into attraction_exposure_days with
@@ -333,6 +338,87 @@ describe("closure-gap statements", () => {
       expect(body).toContain("run_readings");
       expect(body).not.toContain("FROM queue_data");
     }
+  });
+
+  describe("standing closures in the nightly statement", () => {
+    // A closure that did not come back the same operating day used to be
+    // dropped, which left the stored population defined by having recovered.
+    // These pin the clauses that keep it, bound it and filter it; the E2E spec
+    // (closure-standing.e2e-spec.ts) shows the rows they produce.
+
+    it("decides the two shapes once, and each branch reads the flags", () => {
+      const shapes = cteBody(CLOSURE_GAP_INTERVALS_SQL, "closures");
+      expect(shapes).toMatch(/AS returns_same_day/);
+      expect(shapes).toMatch(/AS mid_day/);
+      expect(cteBody(CLOSURE_GAP_INTERVALS_SQL, "raw_gaps")).toMatch(
+        /WHERE returns_same_day AND mid_day/,
+      );
+      expect(cteBody(CLOSURE_GAP_INTERVALS_SQL, "raw_stands")).toMatch(
+        /WHERE NOT returns_same_day AND mid_day/,
+      );
+    });
+
+    it("asks every closure for the hour the live line asks for", () => {
+      // MIN_PARK_MINUTES_LEFT on gaps too: one that starts in the last hour is
+      // short by construction, and the live line never shows it.
+      expect(cteBody(CLOSURE_GAP_INTERVALS_SQL, "closures")).toContain(
+        `>= g.ts + INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'`,
+      );
+    });
+
+    it("follows a standing closure for the live line's own lookback and no further", () => {
+      const stands = cteBody(CLOSURE_GAP_INTERVALS_SQL, "raw_stands");
+      expect(stands).toContain(
+        `next_ts < ts + INTERVAL '${LIVE_LOOKBACK_HOURS} hours'`,
+      );
+      // And the measurement stops at the horizon or at the scan's own end.
+      expect(cteBody(CLOSURE_GAP_INTERVALS_SQL, "cand")).toMatch(
+        new RegExp(
+          `LEAST\\(started_at \\+ INTERVAL '${LIVE_LOOKBACK_HOURS} hours',\\s*\\$3::timestamptz\\)`,
+        ),
+      );
+    });
+
+    it("measures minutes on the operating clock, summed over windows", () => {
+      const minutes = cteBody(CLOSURE_GAP_INTERVALS_SQL, "cand_minutes");
+      expect(minutes).toContain("JOIN win w");
+      expect(minutes).toMatch(/SUM\(GREATEST\(\s*0,/);
+      expect(minutes).toContain("c.measured_until");
+    });
+
+    it("counts simultaneity over every closure of the park, not the gaps alone", () => {
+      const body = cteBody(CLOSURE_GAP_INTERVALS_SQL, "simultaneity");
+      expect(body).toMatch(/FROM closures\b/);
+      expect(body).not.toContain("raw_gaps");
+    });
+
+    it("applies the early-end share to the whole ride", () => {
+      expect(cteBody(CLOSURE_GAP_INTERVALS_SQL, "cycle")).toMatch(
+        /FILTER \(WHERE c\.kind = 'stand'\)::numeric\s+AS stand_days/,
+      );
+      expect(CLOSURE_GAP_INTERVALS_SQL).toMatch(
+        new RegExp(
+          `c\\.stand_days / NULLIF\\(c\\.active_days, 0\\) <= ${MAX_EARLY_END_SHARE}`,
+        ),
+      );
+    });
+
+    it("writes the reconstruction's end-reason vocabulary", () => {
+      for (const reason of ["recovered", "reclassified", "ongoing"]) {
+        expect(CLOSURE_GAP_INTERVALS_SQL).toContain(`THEN '${reason}'`);
+      }
+      expect(CLOSURE_GAP_INTERVALS_SQL).toContain("ELSE 'window_edge'");
+    });
+  });
+
+  it("the live statement measures the elapsed minutes the curve is read at", () => {
+    // Summed over win, the same operating clock cand_minutes stores the
+    // closures with — never now() minus started_at, which credits a closure
+    // with the night it stood through.
+    expect(CURRENT_CLOSURE_GAP_SQL).toMatch(/AS "elapsedOperatingMinutes"/);
+    expect(CURRENT_CLOSURE_GAP_SQL).toMatch(
+      /SUM\(GREATEST\(\s*0,[\s\S]*?FROM win w[\s\S]*?AS "elapsedOperatingMinutes"/,
+    );
   });
 
   it("the nightly denominator is restricted to the parks it serves", () => {

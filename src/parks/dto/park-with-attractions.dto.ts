@@ -30,7 +30,10 @@ import { RideProfileDto } from "../../attractions/dto/ride-profile.dto";
 import { FastPassDto } from "../../attractions/dto/fast-pass.dto";
 import { resolveFastPass } from "../../attractions/utils/fast-pass.util";
 import { LiveWaitTimesDto, buildLiveWaitTimes } from "./live-wait-times.dto";
-import { AttractionOutageDto } from "../../attractions/dto/attraction-outage.dto";
+import {
+  AttractionOutageDto,
+  NotRunTodayDto,
+} from "../../attractions/dto/attraction-outage.dto";
 import { WorksPeriodDto } from "../../attractions/dto/works-period.dto";
 import { resolveWorksPeriod } from "../../attractions/utils/curated-out-of-service.util";
 import {
@@ -92,6 +95,19 @@ export class ParkAttractionDto {
     type: AttractionOutageDto,
   })
   outage?: AttractionOutageDto;
+
+  @ApiProperty({
+    description:
+      "Present while the ride reads CLOSED in a park that has been open for a " +
+      "quarter of an hour, and has not run at all since the park last " +
+      "closed — with the last instant it was known to run. Never beside an " +
+      "`outage`, never for a ride out of season or inside a curated works " +
+      "period. It says nothing about why: the feed cannot tell a cold day " +
+      "from a maintenance day from a fault.",
+    required: false,
+    type: NotRunTodayDto,
+  })
+  notRunToday?: NotRunTodayDto;
 
   @ApiProperty({
     description:

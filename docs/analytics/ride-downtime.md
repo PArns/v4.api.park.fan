@@ -310,6 +310,46 @@ carries `down` or `closed_gap` all the way to the page: „Störung gemeldet
 seit 14:20 Uhr" against „Steht seit 14:20 Uhr still". Nobody told us about the
 second one — we noticed the ride stopped and came back.
 
+#### Standing closures, and an estimate for this signal (2026-10-05, PAR-157)
+
+Until this date the nightly statement returned a closure only once the ride was
+running again the same operating day. Everything stored for `closed_gap` was
+therefore `recovered`, the population had zero censoring, and the rides that
+broke at 15:00 and stayed shut were gone before anything was counted. A
+recovery curve fit on that can only err towards "it will be back soon", so the
+serving path withheld the estimate for this signal and the curve query filtered
+it out.
+
+The statement now keeps a closure that does not come back the same day as a
+**standing closure**: followed to the ride's next status for at most
+`LIVE_LOOKBACK_HOURS` (26 h, the longest the live line can stand), measured on
+the operating clock so a night is a pause rather than an ending, and stored
+`recovered`, `reclassified`, `ongoing` or `window_edge`. Four filters changed with
+it, all towards the population the live line can show:
+
+- every closure, gap or not, starts inside a published window with
+  `MIN_PARK_MINUTES_LEFT` still to run — a gap in the last hour is short by
+  construction and the live line never shows it;
+- simultaneity counts every closure of the park in that minute, as the live
+  statement always has, so a storm that shuts ten rides is not two faults
+  because two came back;
+- regularity counts both shapes, which is where a ride with its own shorter
+  hours actually shows up;
+- the early-end share now runs nightly as well, read off the standing closures
+  the statement holds rather than off a per-day comparison against the close
+  (the 61 s / 110 s problem in `todo.md` §2f).
+
+`RECOVERY_CURVE_SQL` builds one curve per signal; for `closed_gap` a
+`reclassified` end (the ride turned REFURBISHMENT) is censored rather than an
+event. The live statement returns `elapsedOperatingMinutes` on the same clock and
+the service reads the estimate from the closure's own curve. The frontend words
+it without „Störung" or „behoben".
+
+Not yet measured against production: the statement's run time over 21 and 30
+days, how many stored closures the new filters remove, and the curve's
+calibration for this signal. The cases it was written for are pinned on
+TimescaleDB in `test/e2e/closure-standing.e2e-spec.ts`.
+
 The live query adds a closing-time guard the historical one does not need: a
 ride reading CLOSED in a shut park is a shut park, so it returns nothing outside
 a published OPERATING window. Verified against Phantasialand: at 17:30 it reports

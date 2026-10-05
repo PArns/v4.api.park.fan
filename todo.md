@@ -491,7 +491,7 @@ was harmless because both columns are nullable with no default (verified: 226 of
 `default: false`, that 139 ms catalogue edit becomes an operation TimescaleDB
 refuses on compressed chunks.**
 
-### 2f. Known asymmetry: the early-end filter is live-only
+### 2f. The early-end filter was live-only (closed 2026-10-05, PAR-157)
 
 `MAX_EARLY_END_SHARE` catches a ride whose day habitually ends before the
 park's — Futuroscope's cinemas score 100 % against a real fault's 8 % — and it
@@ -500,15 +500,23 @@ comparison (last OPERATING reading vs that day's published close, per ride per
 day) does not finish: 61 s over seven days as a lateral, past 110 s over 21 even
 hoisted and scoped to candidates.
 
-Safe today because nothing published reads those rows — profiles, coverage and
-the recovery curve all filter `signal = 'down'`. What the nightly job stores for
-`closed_gap` is a record, not a figure.
+It was safe while nothing published read those rows — profiles, coverage and
+the recovery curve all filtered `signal = 'down'`. Since PAR-157 the recovery
+curve reads `closed_gap` too, which is why the filter had to move first.
 
-- [ ] **Make it affordable before anything publishes `closed_gap` history.** The
-      stored rows currently carry cinema noise the live line refuses to show.
-      Most likely shape: a per-(attraction, day) "ended early" flag written by
-      the reconstruction itself, so the share is a cheap count rather than a
-      re-derivation.
+- [x] **Make it affordable before anything publishes `closed_gap` history.**
+      Done 2026-10-05 (PAR-157), in a shape cheaper than the flag this item
+      proposed: the nightly statement now stores standing closures — the event
+      an early end is — so the share is a count over rows it already holds.
+      Applied to the whole ride, gaps included. See the file docblock of
+      `closure-gap.sql.ts`.
+- [ ] **Measure it** (PAR-157's own criteria): the statement's run time over 21
+      and 30 days before and after, with `uptime`; how many of the stored
+      `closed_gap` rows the minutes-left floor, the park-wide simultaneity count
+      and the early-end share remove, and over how many rides; and the first
+      nightly curve for `closed_gap` — at-risk per bucket against
+      `MIN_ESTIMATE_SAMPLE`, and the 30/60-minute shares beside the DOWN
+      curve's. None of it can be read from a container without production.
 
 ### 3. Done, 2026-09-06
 

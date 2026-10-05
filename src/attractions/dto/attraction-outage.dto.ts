@@ -232,11 +232,14 @@ export class AttractionOutageDto {
 
   @ApiProperty({
     description:
-      "How long outages like this one usually still take from here. Absent " +
-      "whenever the measured curve cannot answer — too short to have a " +
-      "bucket, too thin a sample, or a park that publishes no opening hours " +
-      "so there is no operating clock to count on. Absence NEVER means the " +
-      "outage is about to end.",
+      "How long outages like this one usually still take from here, read " +
+      "off the curve of this outage's own `signal` — a `closed_gap` is never " +
+      "answered from reported DOWN spells. Absent whenever the measured curve " +
+      "cannot answer — too short to have a bucket, too thin a sample, or a " +
+      "park that publishes no opening hours so there is no operating clock " +
+      "to count on. Absence NEVER means the outage is about to end. For a " +
+      "`closed_gap`, word it like the outage line: nobody reported it, so no " +
+      "sentence may say 'resolved' or 'reported' about it.",
     required: false,
     type: () => OutageEstimateDto,
   })
@@ -265,4 +268,34 @@ export function toOutageDto(
         }
       : undefined,
   };
+}
+
+/**
+ * A ride that is closed while its park is open and has not run since the park
+ * last closed, and when it last ran.
+ *
+ * Its own field beside `outage` and never a third `signal`: an outage is a claim
+ * that something stopped the ride, and this is not one. A water ride on a cold
+ * day, a maintenance day and a ride with a later opening time all read the same
+ * from the feed, so all that may be said is the neutral half — not yet today,
+ * last on Sunday at 18:00. See `NOT_RUN_TODAY_SQL`.
+ */
+export class NotRunTodayDto {
+  @ApiProperty({
+    description:
+      "The last instant the ride is known to have been running, ISO 8601 " +
+      "UTC, clipped to the park's opening hours. Always within the last " +
+      "seven days — a ride that has not run for longer gets no " +
+      '`notRunToday` at all, because „not yet today" would promise an ' +
+      "opening nobody announced. Name it by weekday and time in the park's " +
+      "timezone, as the outage line names its start.",
+    example: "2026-10-04T16:00:00.000Z",
+  })
+  lastRunAt: string;
+}
+
+export function toNotRunTodayDto(
+  lastRunAt: Date | undefined,
+): NotRunTodayDto | undefined {
+  return lastRunAt ? { lastRunAt: lastRunAt.toISOString() } : undefined;
 }

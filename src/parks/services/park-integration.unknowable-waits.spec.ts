@@ -252,6 +252,7 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
           provide: AttractionOutageService,
           useValue: {
             getCurrentOutages: jest.fn().mockResolvedValue(new Map()),
+            getNotRunToday: jest.fn().mockResolvedValue(new Map()),
           },
         },
         { provide: REDIS_CLIENT, useValue: redis },
