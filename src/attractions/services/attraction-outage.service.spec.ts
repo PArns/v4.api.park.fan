@@ -458,6 +458,70 @@ describe("AttractionOutageService — the closure path", () => {
     });
   });
 
+  describe("rides that have not run yet today", () => {
+    const CLOSED_RIDE = { id: OPEN_RIDE.id, effectiveStatus: "CLOSED" };
+
+    it("asks only about closed rides that are in season and outside a works period", async () => {
+      // A ride out of season or behind a curated works period already says why
+      // it is shut, and „not yet today" would promise an opening.
+      const out = await service.getNotRunToday(PARK, [
+        CLOSED_RIDE,
+        { id: DOWN_RIDE.id, effectiveStatus: "DOWN" },
+        {
+          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          effectiveStatus: "CLOSED",
+          isCurrentlyInSeason: false,
+        },
+        {
+          id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          effectiveStatus: "CLOSED",
+          curatedOutOfServiceFrom: "2000-01-01",
+          curatedOutOfServiceTo: "2999-12-31",
+        },
+        {
+          id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+          effectiveStatus: "CLOSED",
+          isCurrentlyInSeason: null,
+        },
+      ]);
+
+      expect(out.size).toBe(0);
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(query.mock.calls[0][1]).toEqual([
+        [CLOSED_RIDE.id, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"],
+        PARK.timezone,
+        expect.any(Date),
+        PARK.id,
+      ]);
+    });
+
+    it("asks nothing when no ride is closed", async () => {
+      await service.getNotRunToday(PARK, [
+        { id: DOWN_RIDE.id, effectiveStatus: "DOWN" },
+      ]);
+      expect(query).not.toHaveBeenCalled();
+    });
+
+    it("hands back the instant the statement found, as a Date", async () => {
+      query.mockResolvedValue([
+        { attractionId: CLOSED_RIDE.id, lastRunAt: "2026-10-04T16:00:00.000Z" },
+      ]);
+
+      const out = await service.getNotRunToday(PARK, [CLOSED_RIDE]);
+
+      expect(out.get(CLOSED_RIDE.id)?.toISOString()).toBe(
+        "2026-10-04T16:00:00.000Z",
+      );
+    });
+
+    it("a failing lookup costs the line, never the page", async () => {
+      query.mockRejectedValue(new Error("statement timeout"));
+      await expect(
+        service.getNotRunToday(PARK, [CLOSED_RIDE]),
+      ).resolves.toEqual(new Map());
+    });
+  });
+
   it("asks nothing at all for a park that cannot emit DOWN", async () => {
     // From configuration, not from the outcome: no wiki_entity_id means no
     // source here produces the status, so there is nothing to ask about.

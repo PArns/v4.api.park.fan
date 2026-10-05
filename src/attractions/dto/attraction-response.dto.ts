@@ -19,7 +19,7 @@ import {
   IndoorOutdoor,
 } from "../../common/types/indoor-outdoor.type";
 import { HistoryDayDto } from "./history-day.dto";
-import { AttractionOutageDto } from "./attraction-outage.dto";
+import { AttractionOutageDto, NotRunTodayDto } from "./attraction-outage.dto";
 import {
   DowntimeFiguresDto,
   DowntimeWithheldDto,
@@ -213,6 +213,19 @@ export class AttractionResponseDto {
     type: AttractionOutageDto,
   })
   outage?: AttractionOutageDto;
+
+  @ApiProperty({
+    description:
+      "Present while the ride reads CLOSED in a park that has been open for a " +
+      "quarter of an hour, and has not run at all since the park last " +
+      "closed — with the last instant it was known to run. Never beside an " +
+      "`outage`, never for a ride out of season or inside a curated works " +
+      "period. It says nothing about why: the feed cannot tell a cold day " +
+      "from a maintenance day from a fault.",
+    required: false,
+    type: NotRunTodayDto,
+  })
+  notRunToday?: NotRunTodayDto;
 
   @ApiProperty({
     description:

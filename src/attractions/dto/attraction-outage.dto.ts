@@ -269,3 +269,33 @@ export function toOutageDto(
       : undefined,
   };
 }
+
+/**
+ * A ride that is closed while its park is open and has not run since the park
+ * last closed, and when it last ran.
+ *
+ * Its own field beside `outage` and never a third `signal`: an outage is a claim
+ * that something stopped the ride, and this is not one. A water ride on a cold
+ * day, a maintenance day and a ride with a later opening time all read the same
+ * from the feed, so all that may be said is the neutral half — not yet today,
+ * last on Sunday at 18:00. See `NOT_RUN_TODAY_SQL`.
+ */
+export class NotRunTodayDto {
+  @ApiProperty({
+    description:
+      "The last instant the ride is known to have been running, ISO 8601 " +
+      "UTC, clipped to the park's opening hours. Always within the last " +
+      "seven days — a ride that has not run for longer gets no " +
+      '`notRunToday` at all, because „not yet today" would promise an ' +
+      "opening nobody announced. Name it by weekday and time in the park's " +
+      "timezone, as the outage line names its start.",
+    example: "2026-10-04T16:00:00.000Z",
+  })
+  lastRunAt: string;
+}
+
+export function toNotRunTodayDto(
+  lastRunAt: Date | undefined,
+): NotRunTodayDto | undefined {
+  return lastRunAt ? { lastRunAt: lastRunAt.toISOString() } : undefined;
+}

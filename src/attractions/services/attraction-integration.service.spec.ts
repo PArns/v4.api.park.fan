@@ -167,6 +167,7 @@ describe("AttractionIntegrationService", () => {
           provide: AttractionOutageService,
           useValue: {
             getCurrentOutages: jest.fn().mockResolvedValue(new Map()),
+            getNotRunToday: jest.fn().mockResolvedValue(new Map()),
           },
         },
       ],

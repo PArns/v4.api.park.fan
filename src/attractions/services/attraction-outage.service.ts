@@ -8,6 +8,7 @@ import {
 } from "../../common/utils/outage-rows.sql";
 import { DowntimeRecoveryCurve } from "../../analytics/entities/downtime-recovery-curve.entity";
 import { CURRENT_CLOSURE_GAP_SQL } from "../../common/utils/closure-gap.sql";
+import { NOT_RUN_TODAY_SQL } from "../../common/utils/not-run-today.sql";
 import { upcomingOperatingWindowsSql } from "../../common/utils/park-open-window.sql";
 import type { OperatingWindow } from "../../analytics/utils/operating-clock.util";
 import type { OutageSignal } from "../../analytics/entities/attraction-outage.entity";
@@ -79,6 +80,19 @@ export interface OutageCandidate extends CuratedOutOfServiceSource {
    * count. Only the reason above is load-bearing.
    */
   effectiveStatus?: string | null;
+}
+
+/** What `getNotRunToday` needs to know about a candidate ride. */
+export interface NotRunTodayCandidate extends CuratedOutOfServiceSource {
+  id: string;
+  /** The ride's resolved status. Only `CLOSED` is asked about. */
+  effectiveStatus?: string | null;
+  /**
+   * `false` keeps the ride out: a ride out of season is not one of the park's
+   * rides today, and „not yet today" would promise it. `null` (unknown) is
+   * asked about, as everywhere `isCurrentlyInSeason` is read.
+   */
+  isCurrentlyInSeason?: boolean | null;
 }
 
 /** What the service needs to know about the park. */
@@ -433,6 +447,63 @@ export class AttractionOutageService {
       await this.addClosureGaps(park, notDown, asOf, out);
     }
 
+    return out;
+  }
+
+  /**
+   * The rides that have not run yet today, with the last instant each one did.
+   *
+   * Asked about the rides the caller resolved to `CLOSED` and found no outage
+   * for — a ride with an outage line has a stronger sentence already, and the
+   * closure statement has answered for every ride that ran this morning and
+   * stopped. What is left is a ride that has not run since the park last
+   * closed, which the feed cannot explain and the page may only state. The
+   * definition and its edges are on `NOT_RUN_TODAY_SQL`.
+   *
+   * A ride out of season or inside a curated works period is not asked about:
+   * the page already says why it is shut, and „not yet today" would promise an
+   * opening.
+   *
+   * Never throws, for the reason the outage lookups do not: a line under a
+   * badge is a nicety, the park page is not.
+   *
+   * @returns attractionId → when it last ran, for the rides that qualify.
+   */
+  async getNotRunToday(
+    park: Pick<OutageParkContext, "id" | "timezone">,
+    candidates: NotRunTodayCandidate[],
+    asOf: Date = new Date(),
+  ): Promise<Map<string, Date>> {
+    const out = new Map<string, Date>();
+    const ids = candidates
+      .filter(
+        (c) =>
+          c.effectiveStatus === "CLOSED" &&
+          c.isCurrentlyInSeason !== false &&
+          !isCuratedOutOfService(c, park.timezone),
+      )
+      .map((c) => c.id);
+    if (ids.length === 0) return out;
+
+    try {
+      const rows: Array<{ attractionId: string; lastRunAt: Date | string }> =
+        await this.queueDataRepository.manager.query(NOT_RUN_TODAY_SQL, [
+          ids,
+          park.timezone,
+          asOf,
+          park.id,
+        ]);
+      for (const row of rows) {
+        const at = new Date(row.lastRunAt);
+        if (!Number.isNaN(at.getTime())) out.set(row.attractionId, at);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Not-run-today lookup failed for park ${park.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     return out;
   }
 

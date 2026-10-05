@@ -61,7 +61,10 @@ import { servedAdjustedConfidence } from "../../ml/utils/hourly-confidence.util"
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { mapRideProfile } from "../../attractions/dto/ride-profile.dto";
 import { AttractionOutageService } from "../../attractions/services/attraction-outage.service";
-import { toOutageDto } from "../../attractions/dto/attraction-outage.dto";
+import {
+  toNotRunTodayDto,
+  toOutageDto,
+} from "../../attractions/dto/attraction-outage.dto";
 import { PopularityService } from "../../popularity/popularity.service";
 import {
   computeBestVisitTimes,
@@ -1093,6 +1096,39 @@ export class ParkIntegrationService {
           for (const attraction of dto.attractions) {
             const outage = toOutageDto(outages.get(attraction.id));
             if (outage) attraction.outage = outage;
+          }
+        }
+      }
+
+      // --- Rides that have not run yet today, and when they last did ---
+      //
+      // After the outages and only for the rides without one: a ride that ran
+      // this morning and stopped has a stronger sentence already. Not behind
+      // the wiki gate above either — that gate is about whether a park can
+      // report DOWN, and „not yet today" needs nothing but OPERATING and CLOSED
+      // readings, which every source writes. One query for the park, as above.
+      if (dto.attractions.length > 0) {
+        const curated = new Map(
+          (park.attractions ?? []).map((a) => [a.id, a] as const),
+        );
+        const notRun = await this.attractionOutageService.getNotRunToday(
+          { id: park.id, timezone: park.timezone },
+          dto.attractions
+            .filter((a) => !a.outage)
+            .map((a) => ({
+              id: a.id,
+              effectiveStatus: a.effectiveStatus,
+              isCurrentlyInSeason: a.isCurrentlyInSeason,
+              curatedOutOfServiceFrom:
+                curated.get(a.id)?.curatedOutOfServiceFrom ?? null,
+              curatedOutOfServiceTo:
+                curated.get(a.id)?.curatedOutOfServiceTo ?? null,
+            })),
+        );
+        if (notRun.size > 0) {
+          for (const attraction of dto.attractions) {
+            const line = toNotRunTodayDto(notRun.get(attraction.id));
+            if (line) attraction.notRunToday = line;
           }
         }
       }

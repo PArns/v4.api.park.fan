@@ -103,6 +103,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
           provide: AttractionOutageService,
           useValue: {
             getCurrentOutages: jest.fn().mockResolvedValue(new Map()),
+            getNotRunToday: jest.fn().mockResolvedValue(new Map()),
           },
         },
         { provide: REDIS_CLIENT, useValue: noopRedis },
