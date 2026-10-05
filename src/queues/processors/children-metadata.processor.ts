@@ -154,11 +154,22 @@ export const ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS = 400;
  * How recent a row's own write has to be for the seed to treat the absence as
  * new rather than back-dating it.
  *
- * Three runs of the `0 4 * * *` children cron, which is the point: the sync
- * writes every row it lists, so a row written inside this window was listed
- * inside it, and its absence is at most that old whatever its readings say.
- * Back-dating it to an old reading would take away the whole 60-day grace
- * against a feed that drops an id for one run.
+ * Three runs of the `0 4 * * *` children cron. A row the sync wrote inside
+ * that window was listed inside it, so its absence is at most that old
+ * whatever its readings say, and back-dating it to an old reading would take
+ * away the whole 60-day grace against a feed that drops an id for one run.
+ *
+ * **The converse does not hold, and this is a heuristic rather than a proof.**
+ * `updatedAt` only moves on a real `UPDATE`, so the sync listing a row it does
+ * not change leaves the column where it was. Measured on 2026-10-05: of the
+ * 2.501 active rows in scope, 106 carry a write older than this window and
+ * **23 of those 106 are still listed upstream** — 7 of them with every other
+ * gate open (Knott's Soak City, a water park with no readings in October).
+ * Should the feed drop one of those ids, the seed back-dates it and the row is
+ * due the same day instead of 60 days later. The retirement is reversible and
+ * lands on the "season or gone?" list, so this is a known cost rather than an
+ * open bug; what the window cannot be is evidence of absence. PAR-714 carries
+ * the measurement and the options.
  *
  * Three rather than two because a park's own run can fail — the error is
  * caught per park and the cron carries no `attempts`, so one bad run leaves a
