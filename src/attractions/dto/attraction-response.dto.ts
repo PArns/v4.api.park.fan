@@ -267,7 +267,12 @@ export class AttractionResponseDto {
   hourlyForecast?: {
     predictedTime: string;
     predictedWaitTime: number;
-    confidence: number;
+    /**
+     * 30-100, or `null` for a slot more than 24 h ahead of the response: past
+     * that lead the stored value is the distance term's floor, not a measured
+     * accuracy (PAR-449, PAR-658). Exactly 24 h still carries the value.
+     */
+    confidence: number | null;
     /**
      * Width of the model's uncertainty band in minutes (top trained quantile
      * minus the served median), so a chart can draw the band rather than infer

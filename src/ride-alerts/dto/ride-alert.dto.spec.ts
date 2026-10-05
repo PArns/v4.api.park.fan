@@ -36,6 +36,37 @@ describe("CreateRideAlertDto", () => {
   });
 });
 
+describe("CreateRideAlertDto kind", () => {
+  const base = {
+    endpoint: "https://fcm.googleapis.com/fcm/send/e1",
+    attractionId: "3f3e6a10-3b1a-4c1f-9e2e-2b6a2f6c9d10",
+  };
+
+  it("accepts a reopen alert without a threshold", async () => {
+    const dto = plainToInstance(CreateRideAlertDto, {
+      ...base,
+      kind: "reopen",
+    });
+    expect(await validate(dto)).toHaveLength(0);
+  });
+
+  it("still requires a threshold when no kind is given", async () => {
+    const dto = plainToInstance(CreateRideAlertDto, base);
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === "thresholdMinutes")).toBe(true);
+  });
+
+  it("rejects an unknown kind", async () => {
+    const dto = plainToInstance(CreateRideAlertDto, {
+      ...base,
+      kind: "rain",
+      thresholdMinutes: 20,
+    });
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === "kind")).toBe(true);
+  });
+});
+
 describe("DeleteRideAlertDto", () => {
   it("rejects a non-UUID attractionId", async () => {
     const dto = plainToInstance(DeleteRideAlertDto, {

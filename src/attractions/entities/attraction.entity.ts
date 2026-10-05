@@ -161,11 +161,11 @@ export class Attraction {
    *
    * It is a DISPLAY name and nothing else. `slug` is deliberately NOT
    * regenerated from it: attraction URLs are indexed, linked from blog posts
-   * and stored in the media sidecars, and unlike parks there is no
-   * `attraction_slug_aliases` table to redirect an old path — a slug change
-   * here is a permanent 404 with nothing recording where the ride went. So a
-   * ride can be renamed on the page while keeping the address it has always
-   * had, which is also what a visitor following an old link wants.
+   * and stored in the media sidecars. A slug change needs an
+   * `attraction_slug_aliases` row to redirect the old path (PAR-687) and is a
+   * separate decision from the display name. So a ride can be renamed on the
+   * page while keeping the address it has always had, which is also what a
+   * visitor following an old link wants.
    *
    * Read it through `resolveCuratedAttraction`, never inline.
    */

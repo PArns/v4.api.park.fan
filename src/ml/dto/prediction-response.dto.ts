@@ -18,9 +18,20 @@ export class PredictionDto {
       "Confidence score, 30-100. The description said 0-1 and the served " +
       "values never were: `predict.py` blends a distance term with a spread " +
       "term, each floored at 30. The daily TFT path emitted a flat 0.7 until " +
-      "PAR-111 put it on this same formula.",
+      "PAR-111 put it on this same formula. For `hourly` the distance term " +
+      "(60% weight) is not an error estimate: it falls linearly from 95 to " +
+      "its floor of 50 at 22.5 h ahead and stays there to 48 h, while the " +
+      "measured error over the first 24 h rises only about 4.9%. Beyond " +
+      "24 h the error is not measured, so an `hourly` prediction more than " +
+      "24 h ahead of the moment of the response carries `null`: the floor of " +
+      "50 would read as a measured accuracy and is not one (PAR-449, " +
+      "PAR-658). Exactly 24 h still carries the value. `daily` predictions " +
+      "are unchanged. Read a number as how far ahead the prediction is, not " +
+      "as how accurate it is.",
+    type: Number,
+    nullable: true,
   })
-  confidence: number;
+  confidence: number | null;
 
   @ApiProperty({
     description:
@@ -90,10 +101,13 @@ export class PredictionDto {
     description:
       "Adjusted confidence score when deviation detected: half of " +
       "`confidence`, so it shares that field's 30-100 scale and not the 0-1 " +
-      "this said. Halving is applied in `park-integration.service.ts`.",
+      "this said. Halving is applied in `park-integration.service.ts`. " +
+      "`null` wherever `confidence` is `null`.",
     required: false,
+    type: Number,
+    nullable: true,
   })
-  confidenceAdjusted?: number;
+  confidenceAdjusted?: number | null;
 
   @ApiProperty({
     description: "Whether a deviation from prediction was detected",

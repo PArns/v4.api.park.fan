@@ -1,17 +1,26 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, IsNull, Repository } from "typeorm";
-import { RideAlert } from "./entities/ride-alert.entity";
 import {
+  RideAlert,
+  RIDE_ALERT_KIND_REOPEN,
+} from "./entities/ride-alert.entity";
+import {
+  diffReopenAlerts,
   diffRideAlerts,
   type AlertTrigger,
+  type ReopenReading,
+  type ReopenTrigger,
   type RideReading,
 } from "./ride-alert-transitions";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { Park } from "../parks/entities/park.entity";
 import { PushSubscription } from "../push/entities/push-subscription.entity";
 import { PushService } from "../push/push.service";
-import { writeRideAlertMessage } from "../push/push-messages";
+import {
+  writeRideAlertMessage,
+  writeRideReopenMessage,
+} from "../push/push-messages";
 import { isWithinQuietHours } from "../push/quiet-hours";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -37,6 +46,17 @@ export const MAX_RIDE_ALERTS_PER_SUBSCRIPTION = 100;
  * sized for a batch admin view, not a "is this happening right now" decision.
  */
 const MAX_READING_AGE_MINUTES = 15;
+
+/** What `sendTrigger` can send: a wait-time crossing, or (no `waitTime`) a reopening. */
+type SweepTrigger = AlertTrigger | ReopenTrigger;
+
+/**
+ * How far back a `reopen` alert looks for the ride's last status. `queue_data`
+ * stores changes, not samples, so a ride that has been closed for 40 minutes
+ * has no row inside `MAX_READING_AGE_MINUTES` — and 40 minutes closed is the
+ * very case the alert is for. Only the OPERATING reading must still be fresh.
+ */
+const REOPEN_STATUS_WINDOW_MINUTES = 6 * 60;
 
 export interface AttractionForAlert {
   attraction: Attraction;
@@ -124,18 +144,28 @@ export class RideAlertsService {
   async upsert(
     subscriptionId: string,
     attractionId: string,
-    thresholdMinutes: number,
+    thresholdMinutes: number | null,
+    kind: string | null = null,
   ): Promise<RideAlert> {
-    const armed = await this.isBelowThresholdAlreadyUnknownOrFalse(
-      attractionId,
-      thresholdMinutes,
-    );
+    const armed =
+      kind === RIDE_ALERT_KIND_REOPEN
+        ? await this.isSeenNotOperating(attractionId)
+        : await this.isBelowThresholdAlreadyUnknownOrFalse(
+            attractionId,
+            thresholdMinutes ?? 0,
+          );
     await this.repository.upsert(
       {
         subscriptionId,
         attractionId,
+        // Both written on every call, `null` included: switching a ride from
+        // one kind to the other must clear the other kind's column.
+        kind,
         thresholdMinutes,
         armed,
+        // A reopen alert is spent once it fires, and asking again is what
+        // spends it anew; wait-time alerts keep their own `lastTriggeredAt`.
+        ...(kind === RIDE_ALERT_KIND_REOPEN ? { lastTriggeredAt: null } : {}),
         // Set explicitly rather than relying on `@UpdateDateColumn`'s
         // `onUpdate` — that is triggered by TypeORM's own `save()`
         // lifecycle, which this raw upsert query does not go through.
@@ -169,6 +199,26 @@ export class RideAlertsService {
       return true;
     }
     return standby.waitTime >= thresholdMinutes;
+  }
+
+  /**
+   * Whether a fresh `reopen` alert starts armed: only when the ride is seen
+   * NOT operating right now. Unknown (no fresh reading) does not arm, unlike
+   * a wait-time alert — arming against an open ride whose reading merely went
+   * stale would announce a reopening that never happened. The sweep arms it on
+   * the first cycle that does see the ride closed. A closed heartbeat counts:
+   * it carries the last status, and only an OPERATING heartbeat is untrusted.
+   */
+  private async isSeenNotOperating(attractionId: string): Promise<boolean> {
+    const statusByAttraction =
+      await this.queueDataService.findCurrentStatusByAttractionIds(
+        [attractionId],
+        REOPEN_STATUS_WINDOW_MINUTES,
+      );
+    const standby = (statusByAttraction.get(attractionId) ?? []).find(
+      (row) => row.queueType === QueueType.STANDBY,
+    );
+    return !!standby && standby.status !== LiveStatus.OPERATING;
   }
 
   /** Idempotent — removing an alert that is not there is not an error. */
@@ -233,13 +283,37 @@ export class RideAlertsService {
           MAX_READING_AGE_MINUTES,
         );
 
+      const waitAlerts = alerts.filter(
+        (a) => a.kind !== RIDE_ALERT_KIND_REOPEN,
+      );
+      const reopenAlerts = alerts.filter(
+        (a) => a.kind === RIDE_ALERT_KIND_REOPEN,
+      );
+
+      // Reopen alerts first and on their own: they read the status, so a ride
+      // that is CLOSED (which has no wait-time reading) is exactly the case
+      // they need, and the wait-time path below returns early without one.
+      const reopenStatus =
+        reopenAlerts.length > 0
+          ? await this.queueDataService.findCurrentStatusByAttractionIds(
+              [...new Set(reopenAlerts.map((a) => a.attractionId))],
+              REOPEN_STATUS_WINDOW_MINUTES,
+            )
+          : new Map<string, QueueData[]>();
+      const reopenTriggers = await this.diffAndPersistReopen(
+        reopenAlerts,
+        attractionById,
+        reopenStatus,
+        nowMs,
+      );
+
       const readings = RideAlertsService.buildEligibleReadings(
         watchedIds,
         attractionById,
         statusByAttraction,
         nowMs,
       );
-      if (readings.length === 0) return;
+      if (readings.length === 0 && reopenTriggers.length === 0) return;
 
       // A ride CLOSED overnight produces no reading, so `diffRideAlerts`
       // never sees it and never re-arms it — an alert that fired yesterday
@@ -250,7 +324,7 @@ export class RideAlertsService {
       // today's reading — the same way any other daily state here resets.
       if (park.timezone) {
         const startOfToday = getStartOfDayInTimezoneAt(nowMs, park.timezone);
-        const staleDisarmed = alerts.filter(
+        const staleDisarmed = waitAlerts.filter(
           (a) =>
             !a.armed && a.lastTriggeredAt && a.lastTriggeredAt < startOfToday,
         );
@@ -263,7 +337,11 @@ export class RideAlertsService {
         }
       }
 
-      const { triggers, armedUpdates } = diffRideAlerts(readings, alerts);
+      const { triggers: waitTriggers, armedUpdates } = diffRideAlerts(
+        readings,
+        waitAlerts as (RideAlert & { thresholdMinutes: number })[],
+      );
+      const triggers: SweepTrigger[] = [...reopenTriggers, ...waitTriggers];
 
       // Re-arms (wait recovered above threshold) send nothing and race
       // nothing — one bulk update instead of one per alert.
@@ -322,6 +400,54 @@ export class RideAlertsService {
         `Ride-alert check failed for park ${park.name}: ${(error as Error)?.message ?? error}`,
       );
     }
+  }
+
+  /**
+   * Re-arms and collects the `reopen` alerts for one cycle. A ride out of
+   * season reads as not operating — it can arm an alert but never fire it,
+   * and the `!== false` rule still holds: only a confirmed `false` counts.
+   * A closed heartbeat is a usable "not operating"; an OPERATING heartbeat is
+   * not an observation and contributes nothing.
+   */
+  private async diffAndPersistReopen(
+    reopenAlerts: RideAlert[],
+    attractionById: Map<string, Attraction>,
+    statusByAttraction: Map<string, QueueData[]>,
+    nowMs: number,
+  ): Promise<SweepTrigger[]> {
+    if (reopenAlerts.length === 0) return [];
+    const readings: ReopenReading[] = [];
+    for (const id of new Set(reopenAlerts.map((a) => a.attractionId))) {
+      const attraction = attractionById.get(id);
+      if (!attraction) continue;
+      const outOfSeason =
+        isCurrentlyInSeason(
+          resolveCuratedFacts(attraction),
+          new Date(nowMs),
+        ) === false;
+      const standby = (statusByAttraction.get(id) ?? []).find(
+        (row) => row.queueType === QueueType.STANDBY,
+      );
+      if (outOfSeason) {
+        readings.push({ attractionId: id, operating: false });
+      } else if (standby && standby.status !== LiveStatus.OPERATING) {
+        readings.push({ attractionId: id, operating: false });
+      } else if (
+        standby &&
+        !standby.isHeartbeat &&
+        nowMs - new Date(standby.timestamp).getTime() <=
+          MAX_READING_AGE_MINUTES * 60_000
+      ) {
+        readings.push({ attractionId: id, operating: true });
+      }
+    }
+
+    const { triggers, armedUpdates } = diffReopenAlerts(readings, reopenAlerts);
+    const reArmIds = armedUpdates.filter((u) => u.armed).map((u) => u.id);
+    if (reArmIds.length > 0) {
+      await this.repository.update({ id: In(reArmIds) }, { armed: true });
+    }
+    return triggers;
   }
 
   /**
@@ -387,7 +513,7 @@ export class RideAlertsService {
    * window ends, and a line each would be a trace rather than an event.
    */
   private async sendTrigger(
-    trigger: AlertTrigger,
+    trigger: SweepTrigger,
     subscriptions: Map<string, PushSubscription>,
     attractionById: Map<string, Attraction>,
     park: ParkForRideAlertCheck,
@@ -417,16 +543,19 @@ export class RideAlertsService {
       const attraction = attractionById.get(trigger.attractionId);
       if (!attraction) return;
 
-      const message = writeRideAlertMessage(
-        {
-          dedupeKey: `ride-alert:${trigger.alertId}`,
-          attractionName: resolveCuratedFacts(attraction).name,
-          parkName: park.name,
-          waitTime: trigger.waitTime,
-          url: frontendAttractionPath(park, { slug: attraction.slug }) ?? "/",
-        },
-        subscription.locale,
-      );
+      const copy = {
+        dedupeKey: `ride-alert:${trigger.alertId}`,
+        attractionName: resolveCuratedFacts(attraction).name,
+        parkName: park.name,
+        url: frontendAttractionPath(park, { slug: attraction.slug }) ?? "/",
+      };
+      const message =
+        "waitTime" in trigger
+          ? writeRideAlertMessage(
+              { ...copy, waitTime: trigger.waitTime },
+              subscription.locale,
+            )
+          : writeRideReopenMessage(copy, subscription.locale);
       const sent = await this.pushService.send(subscription, message);
       if (!sent) {
         // Delivery failed (push service having a bad minute, or a dead

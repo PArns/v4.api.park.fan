@@ -273,6 +273,33 @@ reading under the threshold fires and flips it to `false`; it flips back to
 which is what lets the same alert fire again later the same day if a queue
 builds back up and drops a second time.
 
+### Reopen alerts (`kind: "reopen"`)
+
+The same endpoint and the same row, a different promise: `POST { endpoint,
+attractionId, kind: "reopen" }` asks to be told once when a ride that is closed
+opens again. `kind` is `null` on the original wait-time alert, and
+`thresholdMinutes` is `null` on a reopen alert (the request ignores it). A
+subscription has one alert per ride, so sending the other kind replaces the
+existing one. No new topic: the alert hangs off the ride-alert row, not
+`PUSH_TOPICS`. The park gate is the same (`getNoLiveWaitTimesReason` answers
+400), so a park with no readable status gets no reopen alert either.
+
+It reads the **status**, never the wait. `armed` means "the ride was last seen
+not operating". The first fresh (15 minutes), non-heartbeat `OPERATING` reading
+in season fires and disarms, and the alert is then spent: it never re-arms, or
+the evening closing would arm it and every morning would send it again. Sending
+the `POST` again asks anew. Before it has fired, a non-operating reading arms
+it (an alert created against an open ride). A ride out of season reads as not
+operating: it can arm an alert and never fire it.
+
+`queue_data` stores changes, not samples, so a ride closed for 40 minutes has no
+row inside the 15 minute window the wait-time alerts use. The reopen sweep and
+the create call therefore read the last status over 6 hours; only the
+`OPERATING` row has to be fresh. A fresh alert starts armed only if the ride is
+seen not operating right now; open or unknown starts disarmed, so a stale
+reading cannot announce a reopening that never happened. The day-boundary
+re-arm of wait-time alerts does not apply to reopen alerts.
+
 ```json
 { "title": "Taron: nur noch 15 Min.", "body": "Phantasialand", "url": "/parks/europe/germany/bruehl/phantasialand/taron", "tag": "ride-alert:3f2c…" }
 ```

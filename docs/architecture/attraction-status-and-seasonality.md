@@ -1532,6 +1532,57 @@ What it leaves alone: 6 of the 43 pairs, where a second source still fills the
 dead row. Both rows are alive there, and which one is the ride is a curation
 question (§4a).
 
+#### 5.9a Seasonal rows, and a re-issue is not a rename (PAR-682)
+
+**Measured 2026-10-03/04.** The first run retired 186 rows in 41 parks. Every
+gate held — none had a real reading in 7 days, 182 none in 60 — but 141 of
+them were seasonal, mostly Halloween mazes between two seasons. The season
+window (`curated_is_seasonal` / `curated_season_months` in the admin, the
+detector's `is_seasonal` otherwise) already says that a maze is missing from
+November to September; a retirement says something else. And 16 of the 186 had
+a live twin under the same name with a `-2` slug, its history starting from
+zero.
+
+The twins came from `findExistingAttraction`, which never let a row holding a
+wiki id be matched by name — the guard against a rename handing one ride's row
+to its neighbour (§4a, Sea World). A re-issue looks the same by name, but not
+in `/children`: after a rename the neighbour's id is still listed, after a
+re-issue the old id is gone. Two changes follow:
+
+- **The sync takes a re-issued row.** `syncAttraction` passes the ids the
+  response carried; a row whose own wiki id is no longer listed may be claimed
+  by name, and moves onto the new `externalId` (plus its `themeparks-wiki`
+  mapping), keeping history and slug. Only active rows or rows carrying a
+  sync-written retirement qualify — a ride a human retired as closed stays
+  closed. A row reached through a shared Queue-Times id keeps its wiki id while
+  that id is listed.
+- **The absence step skips seasonal rows** (`isSeasonalRow`: the curated value
+  wins, `false` included) — unless a row this run claimed carries the same
+  name. That twin predates the first change, and the dead row beside it would
+  take the name group back, so it is retired as before.
+
+A seasonal row the detector has not seen long enough is still retired. Those
+rows are listed for a human (PAR-684, option B): `findAbsenceRetiredUnreviewed`
+— `retired_reason = ABSENT_UPSTREAM_REASON`, `curated_is_seasonal IS NULL`,
+`NOT is_seasonal` — served as `absenceRetiredUnreviewed` on
+`GET /v1/admin/data-quality` and warned once per park by the nightly
+data-quality job. Setting `curated_is_seasonal` either way takes a row off. On
+2026-10-04 the list held 38 rows, 22 of them Wet'n'Wild facilities whose
+retirement is right.
+
+Re-issues under a changed name are listed for a human (PAR-686, option B):
+`findReissueCandidates` pairs every absence-retired row with each younger live
+row within `REISSUE_CANDIDATE_METERS` (30), skipping pairs with a
+`not_a_duplicate` mark, and `reissueNamesMatch` hints which look like one
+attraction. `/admin/duplicates` merges a pair with `adoptLoserExternalId` — the
+merge alone keeps the survivor's own id, and when the names differ the sync
+cannot claim it, so the loser would come back. Measured 2026-10-04: 25 pairs,
+9 with matching names.
+
+Not caught automatically: a re-issue under a **different** name, such as Movie Park's
+`Hell House` → `Helhuis`. Those pairs are found by coordinates, not by name
+(G-137 in the Linear learnings), and merged or retired by hand.
+
 ---
 
 ## 6. Diagnostic SQL

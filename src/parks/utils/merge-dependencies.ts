@@ -546,6 +546,14 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
   { table: "queue_data", column: "attractionId", strategy: "move" },
   { table: "forecast_data", column: "attractionId", strategy: "move" },
 
+  // --- old paths: the loser's former slugs keep redirecting (PAR-687) ---
+  {
+    table: "attraction_slug_aliases",
+    column: "attractionId",
+    strategy: "move",
+    conflictColumns: ["slug"],
+  },
+
   // --- keyed history and predictions: dedupe on the key, then keep the rest ---
   {
     table: "wait_time_predictions",

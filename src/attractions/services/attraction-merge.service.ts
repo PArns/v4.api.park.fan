@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
 import { Attraction } from "../entities/attraction.entity";
+import { AttractionSlugAlias } from "../entities/attraction-slug-alias.entity";
 import { worksPeriodEndsBeforeItBegins } from "../utils/curated-out-of-service.util";
 import { ATTRACTION_CURATED_FIELDS } from "../../admin/content/curated-field.spec-list";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -329,9 +330,19 @@ export class AttractionMergeService {
     return dropped;
   }
 
+  /**
+   * @param options.adoptLoserExternalId The survivor takes the loser's
+   *   `externalId`. For a pair the wiki RE-ISSUED (PAR-686): the old row keeps
+   *   history and slug, but the id the feed lists now is the loser's. Without
+   *   this the survivor keeps an id nobody lists, and when the two names
+   *   differ the next children sync cannot claim it by name either — it grows
+   *   the loser back as a new row. Same-name re-issues heal on the next sync
+   *   without it (PAR-682); passing it there is harmless.
+   */
   async mergeAttractions(
     winnerId: string,
     loserId: string,
+    options: { adoptLoserExternalId?: boolean } = {},
   ): Promise<AttractionMergeResult> {
     if (winnerId === loserId) {
       throw new Error(`Cannot merge attraction ${winnerId} into itself`);
@@ -437,12 +448,42 @@ export class AttractionMergeService {
       // happened whether or not the survivor changed its name or inherited a
       // column, and what depends on this stamp is the reconstruction skipping a
       // ride whose history is now two interleaved series.
+      // `externalId` is unique across the table, so this, too, can only
+      // follow the delete.
+      const adoptedExternalId =
+        options.adoptLoserExternalId &&
+        loser.externalId &&
+        loser.externalId !== winner.externalId
+          ? loser.externalId
+          : null;
+
       await manager.update(Attraction, winnerId, {
         ...inherited,
         ...(renamed ? { slug: survivingSlug } : {}),
         ...(rewordedName ? { name: survivingName } : {}),
+        ...(adoptedExternalId ? { externalId: adoptedExternalId } : {}),
         lastMergedAt: new Date(),
       });
+
+      // Every slug that stops answering here keeps answering with a 301
+      // (PAR-687): the loser's, and the winner's own when it took the base
+      // slug from the loser. The loser's older aliases were already moved
+      // onto the winner by `ATTRACTION_DEPENDENCIES`.
+      const retiredSlugs = [
+        loser.slug,
+        ...(renamed ? [winner.slug] : []),
+      ].filter((slug): slug is string => !!slug && slug !== survivingSlug);
+      if (retiredSlugs.length > 0) {
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into(AttractionSlugAlias)
+          .values(
+            retiredSlugs.map((slug) => ({ attractionId: winnerId, slug })),
+          )
+          .orIgnore()
+          .execute();
+      }
 
       return {
         winnerId,

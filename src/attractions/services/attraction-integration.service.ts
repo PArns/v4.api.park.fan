@@ -53,6 +53,7 @@ import { AttractionOutageService } from "./attraction-outage.service";
 import { toOutageDto } from "../dto/attraction-outage.dto";
 import { toDowntimeBlock } from "../dto/downtime-reliability.dto";
 import { AttractionDowntimeProfile } from "../../analytics/entities/attraction-downtime-profile.entity";
+import { servedHourlyConfidence } from "../../ml/utils/hourly-confidence.util";
 
 /**
  * Attraction Integration Service
@@ -408,7 +409,7 @@ export class AttractionIntegrationService {
         ? enrichedPredictions.map((p) => ({
             predictedTime: p.predictedTime,
             predictedWaitTime: p.predictedWaitTime,
-            confidence: p.confidence,
+            confidence: servedHourlyConfidence(p.confidence, p.predictedTime),
             uncertaintyMinutes: p.uncertaintyMinutes ?? null,
             trend: p.trend,
           }))

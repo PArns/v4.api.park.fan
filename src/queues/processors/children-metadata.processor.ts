@@ -47,6 +47,12 @@ interface SyncClaimContext {
    * has no existing row — a park whose rides all match costs no query at all.
    */
   showNames?: Set<string>;
+  /**
+   * Every id the park's `/children` carried in this run, whatever its type.
+   * Lets `findExistingAttraction` tell a re-issued entity (old id gone) from a
+   * rename (old id still listed). Only the wiki path fills it.
+   */
+  listedExternalIds?: Set<string>;
 }
 
 /**
@@ -111,10 +117,11 @@ export function isReclassifiedAsAttractionReason(
  * How long an attraction's id has to be missing from its park's `/children`,
  * while the park keeps syncing, before the sync retires the row.
  *
- * PO decision, 2026-10-02 (PAR-621). Well past any feed hiccup, and short
- * enough to retire a season's mazes before the wiki lists next season's under
- * new ids beside them. Measured that day: 417 of 515 absent rows had been
- * missing for more than 60 days, 311 for more than 90.
+ * PO decision, 2026-10-02 (PAR-621). Well past any feed hiccup. Measured that
+ * day: 417 of 515 absent rows had been missing for more than 60 days, 311 for
+ * more than 90. Seasonal rows are not retired by it at all ({@link
+ * isSeasonalRow}, PAR-682): a maze between two seasons is not gone, and when
+ * the wiki lists it again under a new id the sync moves the old row onto it.
  */
 export const ABSENT_UPSTREAM_RETIRE_DAYS = 60;
 
@@ -170,6 +177,26 @@ export const ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS = 400;
  * {@link ABSENT_UPSTREAM_RETIRE_DAYS}. It can only delay, never retire early.
  */
 export const ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS = 72;
+
+/**
+ * Whether the absence step leaves a row alone because it is seasonal.
+ *
+ * A maze that is missing from `/children` between November and September is
+ * out of season, not gone, and the season window says exactly that — the
+ * retirement said something else (PAR-682). The curated column wins where an
+ * editor set one, `false` included: that is "the detector is wrong, this is
+ * not seasonal", and such a row is retired like any other.
+ *
+ * A seasonal row the wiki re-issues under a new id is not left behind as a
+ * twin either: `findExistingAttraction` hands it the new id, because its old
+ * one is no longer listed.
+ */
+export function isSeasonalRow(row: {
+  isSeasonal: boolean;
+  curatedIsSeasonal: boolean | null;
+}): boolean {
+  return (row.curatedIsSeasonal ?? row.isSeasonal) === true;
+}
 
 /**
  * Children Metadata Processor (Combined)
@@ -308,8 +335,17 @@ export class ChildrenMetadataProcessor {
               let parkShows = 0;
               let parkRestaurants = 0;
 
+              // Every id the response carried counts as listed, whatever its
+              // type or exclusion — the same set the absence step reads below.
+              const listedExternalIds = new Set(
+                childrenResponse.children.map((child) => child.id),
+              );
+
               // Sync Attractions
-              const attractionCtx: SyncClaimContext = { claimed: new Set() };
+              const attractionCtx: SyncClaimContext = {
+                claimed: new Set(),
+                listedExternalIds,
+              };
               for (const attractionEntity of attractions) {
                 await this.syncAttraction(
                   attractionEntity,
@@ -399,7 +435,7 @@ export class ChildrenMetadataProcessor {
                   park.id,
                   park.name,
                   attractions.length,
-                  new Set(childrenResponse.children.map((child) => child.id)),
+                  listedExternalIds,
                   attractionCtx.claimed,
                 );
               } catch (e) {
@@ -678,17 +714,48 @@ export class ChildrenMetadataProcessor {
         queueTimesEntityId: mappedData.queueTimesEntityId,
       },
       existingAttractions.filter((a) => !ctx?.claimed.has(a.id)),
+      ctx?.listedExternalIds,
     );
 
     if (existing) {
       ctx?.claimed.add(existing.id);
+
+      // A re-issued entity: the row answered to a wiki id the park no longer
+      // lists, and the wiki now reports the same attraction under a new one.
+      // The row moves onto the new id, so it keeps its history and its slug
+      // instead of growing a `-2` twin beside it (PAR-682). A Queue-Times id
+      // on the row is left alone — that is the cross-source adoption the name
+      // match has always done, and it never rewrote the id. Nor is an id the
+      // park still lists: a row reached through a shared Queue-Times id can
+      // belong to another live wiki entity, and taking its id would orphan it.
+      const reissued =
+        !!ctx?.listedExternalIds &&
+        !!existing.externalId &&
+        !existing.externalId.startsWith("qt-ride-") &&
+        existing.externalId !== mappedData.externalId &&
+        !ctx.listedExternalIds.has(existing.externalId);
+
       // Update existing attraction (keep existing slug)
       await this.attractionsService.getRepository().update(existing.id, {
         name: mappedData.name,
         latitude: mappedData.latitude,
         longitude: mappedData.longitude,
         attractionType: mappedData.attractionType,
+        ...(reissued ? { externalId: mappedData.externalId } : {}),
       });
+
+      if (reissued) {
+        await this.createMapping(
+          existing.id,
+          "attraction",
+          "themeparks-wiki",
+          mappedData.externalId!,
+        );
+        this.logger.log(
+          `♻️ ${mappedData.name}: wiki re-issued ${existing.externalId} as ` +
+            `${mappedData.externalId}; row ${existing.id} keeps its history`,
+        );
+      }
 
       // The entity is an attraction again, so the retirement
       // `retireReclassifiedAttractions` wrote is wrong now. Only that exact
@@ -1201,7 +1268,15 @@ export class ChildrenMetadataProcessor {
         retiredAt: IsNull(),
         queueTimesEntityId: IsNull(),
       },
-      select: ["id", "name", "externalId", "updatedAt", "absentSince"],
+      select: [
+        "id",
+        "name",
+        "externalId",
+        "updatedAt",
+        "absentSince",
+        "isSeasonal",
+        "curatedIsSeasonal",
+      ],
     });
 
     // A row the wiki could list at all: it carries a wiki id, and that id is
@@ -1223,6 +1298,12 @@ export class ChildrenMetadataProcessor {
 
     // A row absent for the first time gets its clock here, and from then on
     // nothing but this path and a hand-entered un-retirement moves it.
+    //
+    // The clock records what the feed did, so it runs for a seasonal row too
+    // and the season gate below decides what follows from it. That order is
+    // the point: an editor who answers the "season or gone?" list with
+    // `curated_is_seasonal = false` gets the row retired on the absence it has
+    // already accrued, not 60 days after the answer.
     await this.seedAbsenceWindow(absent, now);
 
     const due = absent.filter(
@@ -1231,7 +1312,18 @@ export class ChildrenMetadataProcessor {
     );
     if (due.length === 0) return;
 
-    const unclaimed = await this.withoutForeignSourceMappings(due);
+    // A seasonal row is out of season, not gone — unless a row this run
+    // claimed already carries its name. That twin was grown before the sync
+    // learned to hand a re-issued id to the old row, and the dead row beside
+    // it would take the name group back from it (§5.9 of the status doc), so
+    // it is retired as before.
+    const claimedNames = await this.claimedAttractionNames(claimedRowIds);
+    const retirable = due.filter(
+      (row) => !isSeasonalRow(row) || claimedNames.has(normalizeName(row.name)),
+    );
+    if (retirable.length === 0) return;
+
+    const unclaimed = await this.withoutForeignSourceMappings(retirable);
     const silent = await this.withoutRecentReadings(unclaimed, now);
     if (silent.length === 0) return;
 
@@ -1251,6 +1343,18 @@ export class ChildrenMetadataProcessor {
         `for ${ABSENT_UPSTREAM_RETIRE_DAYS}+ days — ` +
         silent.map((a) => a.name).join(", "),
     );
+  }
+
+  /** Normalized names of the rows this run matched, for the twin check. */
+  private async claimedAttractionNames(
+    claimedRowIds: Set<string>,
+  ): Promise<Set<string>> {
+    if (claimedRowIds.size === 0) return new Set();
+    const rows = await this.attractionsService.getRepository().find({
+      where: { id: In([...claimedRowIds]) },
+      select: ["id", "name"],
+    });
+    return new Set(rows.map((row) => normalizeName(row.name)));
   }
 
   /**

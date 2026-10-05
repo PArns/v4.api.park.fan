@@ -206,6 +206,26 @@ export class AdminController {
     return { recorded: await this.reviewService.record(body.marks ?? []) };
   }
 
+  /**
+   * Retired rows with a younger live row right beside them, for the admin to
+   * merge or dismiss (PAR-686). Same list as `reissueCandidates` on
+   * `data-quality`; its own route so the duplicates screen does not pull the
+   * whole data-quality report to show one section.
+   */
+  @Get("reissue-candidates")
+  @ApiOperation({
+    summary:
+      "Absence-retired rides with a younger live ride within 30 m — possible re-issues under a new name",
+  })
+  async getReissueCandidates() {
+    const candidates = await this.dataQualityMonitor.findReissueCandidates();
+    return {
+      total: candidates.length,
+      namesMatch: candidates.filter((c) => c.namesMatch).length,
+      candidates,
+    };
+  }
+
   @Get("retirement-candidates")
   @ApiOperation({
     summary: "Attractions whose feed went quiet, minus those already cleared",
@@ -270,14 +290,30 @@ export class AdminController {
   }
 
   @Get("data-quality")
-  @ApiOperation({ summary: "Silenced attraction clusters and failing jobs" })
+  @ApiOperation({
+    summary:
+      "Silenced attraction clusters, failing jobs, and absence-retired rides nobody has given a season",
+  })
   async getDataQuality(@Query("windowDays") windowDays?: string) {
     const days = Math.min(Math.max(Number(windowDays) || 14, 1), 400);
-    const [silencedClusters, failingJobs] = await Promise.all([
+    const [
+      silencedClusters,
+      failingJobs,
+      absenceRetiredUnreviewed,
+      reissueCandidates,
+    ] = await Promise.all([
       this.dataQualityMonitor.findSilencedClusters(days),
       this.dataQualityMonitor.findFailingJobs(),
+      this.dataQualityMonitor.findAbsenceRetiredUnreviewed(),
+      this.dataQualityMonitor.findReissueCandidates(),
     ]);
-    return { windowDays: days, silencedClusters, failingJobs };
+    return {
+      windowDays: days,
+      silencedClusters,
+      failingJobs,
+      absenceRetiredUnreviewed,
+      reissueCandidates,
+    };
   }
 
   /**
@@ -1557,6 +1593,13 @@ export class AdminController {
           type: "string",
           description: "Merge exactly one pair: the row to remove",
         },
+        adoptLoserExternalId: {
+          type: "boolean",
+          description:
+            "Single pair only: the kept row takes the removed row's upstream id. " +
+            "For a ride the feed re-issued under a new id (PAR-686).",
+          default: false,
+        },
       },
     },
   })
@@ -1568,6 +1611,7 @@ export class AdminController {
       limit?: number;
       winnerId?: string;
       loserId?: string;
+      adoptLoserExternalId?: boolean;
     } = {},
   ): Promise<unknown> {
     if (body.winnerId && body.loserId) {
@@ -1587,6 +1631,7 @@ export class AdminController {
       return this.attractionMergeService.mergeAttractions(
         body.winnerId,
         body.loserId,
+        { adoptLoserExternalId: body.adoptLoserExternalId === true },
       );
     }
 

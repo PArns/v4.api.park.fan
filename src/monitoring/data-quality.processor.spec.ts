@@ -19,6 +19,10 @@ describe("DataQualityProcessor", () => {
       findScheduledButSilentParks:
         monitor.findScheduledButSilentParks ?? jest.fn(async () => []),
       findFailingJobs: monitor.findFailingJobs ?? jest.fn(async () => []),
+      findAbsenceRetiredUnreviewed:
+        monitor.findAbsenceRetiredUnreviewed ?? jest.fn(async () => []),
+      findReissueCandidates:
+        monitor.findReissueCandidates ?? jest.fn(async () => []),
     } as never);
 
   let warn: jest.SpyInstance;
@@ -33,7 +37,7 @@ describe("DataQualityProcessor", () => {
 
   afterEach(() => jest.restoreAllMocks());
 
-  it("reports clean only when all three checks ran", async () => {
+  it("reports clean only when all four checks ran", async () => {
     await build({}).handleMonitorDataQuality({} as never);
 
     expect(error).not.toHaveBeenCalled();
@@ -75,8 +79,79 @@ describe("DataQualityProcessor", () => {
 
     expect(log).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("2 of 3 checks ran"),
+      expect.stringContaining("3 of 4 checks ran"),
     );
+  });
+
+  describe("re-issue candidates (PAR-686)", () => {
+    const pair = (namesMatch: boolean) => ({
+      parkId: "p",
+      parkName: "Six Flags Great America",
+      previous: {} as never,
+      current: {} as never,
+      meters: 16.4,
+      namesMatch,
+    });
+
+    it("warns with the count of likely pairs and the total", async () => {
+      await build({
+        findReissueCandidates: jest.fn(async () => [pair(true), pair(false)]),
+      }).handleMonitorDataQuality({} as never);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/^🔁 1 retired ride\(s\).*2 nearby pairs in all/),
+      );
+    });
+
+    it("stays quiet about nearby pairs whose names say nothing, and still reports clean", async () => {
+      // Most of the radius is two attractions in one building — Walibi
+      // Belgium's three 4D films at 0 m. Those are not a nightly warning.
+      await build({
+        findReissueCandidates: jest.fn(async () => [pair(false)]),
+      }).handleMonitorDataQuality({} as never);
+
+      expect(warn).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("clean"));
+    });
+
+    it("does not count as a check that ran or failed", async () => {
+      await build({
+        findReissueCandidates: jest.fn(async () => {
+          throw new Error("statement timeout");
+        }),
+      }).handleMonitorDataQuality({} as never);
+
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("statement timeout"),
+      );
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("clean"));
+    });
+  });
+
+  it("names unreviewed absence retirements once per park, not once per ride (PAR-684)", async () => {
+    const row = (name: string, parkName: string) => ({
+      attractionId: name,
+      name,
+      slug: name,
+      parkId: parkName,
+      parkName,
+      retiredAt: "2026-10-03T03:29:45.000Z",
+      lastReading: "2026-04-24",
+    });
+    await build({
+      findAbsenceRetiredUnreviewed: jest.fn(async () => [
+        row("Restroom", "Wet'n'Wild"),
+        row("Lockers", "Wet'n'Wild"),
+        row("Asylum", "Parque de Atracciones de Madrid"),
+      ]),
+    }).handleMonitorDataQuality({} as never);
+
+    const lines = warn.mock.calls.map(([m]) => String(m));
+    expect(lines.filter((l) => l.startsWith("🪦"))).toEqual([
+      expect.stringContaining("Wet'n'Wild: 2 ride(s)"),
+      expect.stringContaining("Parque de Atracciones de Madrid: 1 ride(s)"),
+    ]);
+    expect(log).not.toHaveBeenCalled();
   });
 
   it("names a park that has never been read without claiming a date", async () => {

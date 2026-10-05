@@ -2,6 +2,8 @@ import { Injectable, Logger } from "@nestjs/common";
 import { DataSource } from "typeorm";
 import { observedReadingsSql } from "../common/utils/closure-gap.sql";
 import { PARK_FEED_SILENT_DAYS } from "../common/utils/no-live-data-status.util";
+import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
+import { reissueNamesMatch } from "../attractions/utils/attraction-match.util";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 
@@ -36,6 +38,12 @@ export interface SilencedCluster {
   attractionCount: number;
   lastOperating: string;
   sampleNames: string[];
+  /**
+   * Every ride of the cluster, so the admin can answer it in one step — a
+   * season window on all of them when it is a section closing for the season
+   * (PAR-695). `sampleNames` stays for the log line.
+   */
+  attractions: Array<{ attractionId: string; name: string }>;
 }
 
 export interface ScheduledButSilentPark {
@@ -64,6 +72,67 @@ export interface ScheduledButSilentPark {
  * from filling the log.
  */
 export const SILENT_PARK_LOOKAHEAD_DAYS = 7;
+
+/**
+ * A ride the children sync retired for being absent from ThemeParks.wiki's
+ * `/children`, while nobody has said whether it is seasonal (PAR-684).
+ *
+ * The absence step skips a row whose season is known, but the detector cannot
+ * know one before `MIN_OBSERVED_DAYS` of watching — so a maze in its first year
+ * is retired like a ride that was torn down. This is the list a human answers:
+ * a season window in the admin (`curated_is_seasonal` true) or "not seasonal"
+ * (false), and either answer takes the row off it.
+ */
+export interface AbsenceRetiredUnreviewed {
+  attractionId: string;
+  name: string;
+  slug: string;
+  parkId: string;
+  parkName: string;
+  retiredAt: string;
+  /** Park-local date of the last observed reading, or null if there is none. */
+  lastReading: string | null;
+}
+
+/** One row of a re-issue candidate pair, as the admin needs it to decide. */
+export interface ReissueCandidateSide {
+  attractionId: string;
+  name: string;
+  slug: string;
+  externalId: string | null;
+  createdAt: string;
+  /** Park-local date of the last observed reading in 400 days, or null. */
+  lastReading: string | null;
+}
+
+/**
+ * A ride the absence step retired, next to a younger live ride within
+ * `REISSUE_CANDIDATE_METERS` of it — possibly the same attraction the feed
+ * re-issued under a new id AND a new name (PAR-686), which the sync's name
+ * match cannot claim. Shown to a human with a merge and a dismiss button;
+ * nothing here merges by itself (PO decision 2026-10-04, option B).
+ */
+export interface ReissueCandidate {
+  parkId: string;
+  parkName: string;
+  /** The retired row: history and the old slug. The natural survivor. */
+  previous: ReissueCandidateSide;
+  /** The live row the feed lists now. */
+  current: ReissueCandidateSide;
+  meters: number;
+  /** `reissueNamesMatch` — a hint, never the decision. */
+  namesMatch: boolean;
+}
+
+/**
+ * How close two rows have to be to be shown as a re-issue candidate.
+ *
+ * Measured 2026-10-04: every confirmed different-name re-issue lay within 26 m
+ * (Movie Park 5–12 m, Six Flags Great America 16–25 m). Seasonal overlays sit
+ * just as close — Walibi Belgium's 4D films at 0 m — which is why distance
+ * only decides what is shown, never what is merged.
+ */
+export const REISSUE_CANDIDATE_METERS = 30;
 
 export interface FailingJob {
   queue: string;
@@ -138,6 +207,7 @@ export class DataQualityMonitorService {
       last_op: string;
       n: string;
       names: string[];
+      rides: Array<{ id: string; name: string }> | null;
     }> = await this.dataSource.query(
       `
       WITH activity AS (
@@ -169,7 +239,11 @@ export class DataQualityMonitorService {
              p.name AS park_name,
              (act.last_op AT TIME ZONE p.timezone)::date::text AS last_op,
              count(*)::text AS n,
-             (array_agg(a.name ORDER BY a.name))[1:4] AS names
+             (array_agg(a.name ORDER BY a.name))[1:4] AS names,
+             json_agg(
+               json_build_object('id', a.id, 'name', COALESCE(a.curated_name, a.name))
+               ORDER BY a.name
+             ) AS rides
         FROM activity act
         JOIN attractions a ON a.id = act.aid
         JOIN parks p ON p.id = a."parkId"
@@ -180,6 +254,11 @@ export class DataQualityMonitorService {
          -- still receiving rows, so this is a silence rather than a deletion
          AND act.last_row > now() - INTERVAL '2 days'
          AND NOT a.open_with_park
+         -- A ride with a known season going quiet is the season ending, which
+         -- is the answer this card asks for. Without this, the admin's
+         -- "season ends" button would leave the card standing (PAR-695).
+         AND NOT COALESCE(a.curated_is_seasonal, a.is_seasonal)
+         AND a.retired_at IS NULL
        GROUP BY a."parkId", p.name, (act.last_op AT TIME ZONE p.timezone)::date
       HAVING count(*) >= $3::int
        ORDER BY count(*) DESC
@@ -193,6 +272,10 @@ export class DataQualityMonitorService {
       attractionCount: Number(r.n),
       lastOperating: r.last_op,
       sampleNames: r.names ?? [],
+      attractions: (r.rides ?? []).map((ride) => ({
+        attractionId: ride.id,
+        name: ride.name,
+      })),
     }));
   }
 
@@ -337,6 +420,203 @@ export class DataQualityMonitorService {
       operatingDaysAhead: Number(r.days_ahead),
       lastScheduledDay: r.last_day,
     }));
+  }
+
+  /**
+   * Rides the absence step retired while nobody has said whether they are
+   * seasonal — the "season or gone?" list (PAR-684, option B).
+   *
+   * `retireAbsentAttractions` leaves a row alone when its season is known, but
+   * the detector needs `MIN_OBSERVED_DAYS` before it can know one, so every
+   * seasonal attraction in its first year is retired like a ride that was torn
+   * down. On 2026-10-03 that was 17 mazes and walk-throughs (PAR-684); the
+   * retirement itself is right for the rest of the list, the 22 Wet'n'Wild
+   * facilities among them.
+   *
+   * Like `findScheduledButSilentParks` it does not go quiet by itself: a row
+   * leaves the list when an editor writes `curated_is_seasonal` — true puts a
+   * season window on it and the sync lifts the retirement when the wiki lists
+   * the attraction again, under its old id or a new one; false says "not
+   * seasonal" and the retirement stands. A row the detector already calls
+   * seasonal is not listed: the absence step would not have retired it unless a
+   * twin replaced it, and that is a merge question, not a season question.
+   */
+  async findAbsenceRetiredUnreviewed(): Promise<AbsenceRetiredUnreviewed[]> {
+    const rows: Array<{
+      id: string;
+      name: string;
+      slug: string;
+      park_id: string;
+      park_name: string;
+      retired_at: Date;
+      last_reading: string | null;
+    }> = await this.dataSource.query(
+      `
+      SELECT a.id,
+             COALESCE(a.curated_name, a.name) AS name,
+             a.slug,
+             p.id AS park_id,
+             p.name AS park_name,
+             a.retired_at,
+             -- Bounded like the silent-park query: an unbounded max() plans
+             -- against every chunk of the hypertable, once per row.
+             (SELECT max(qd.timestamp AT TIME ZONE p.timezone)::date::text
+                FROM queue_data qd
+               WHERE qd."attractionId" = a.id
+                 AND qd.timestamp > now() - INTERVAL '400 days'
+                 AND COALESCE(${observedReadingsSql("qd")}, true)) AS last_reading
+        FROM attractions a
+        JOIN parks p ON p.id = a."parkId"
+       WHERE a.retired_reason = $1
+         AND a.curated_is_seasonal IS NULL
+         AND NOT a.is_seasonal
+       ORDER BY p.name, a.name
+      `,
+      [ABSENT_UPSTREAM_REASON],
+    );
+
+    return rows.map((r) => ({
+      attractionId: r.id,
+      name: r.name,
+      slug: r.slug,
+      parkId: r.park_id,
+      parkName: r.park_name,
+      retiredAt: new Date(r.retired_at).toISOString(),
+      lastReading: r.last_reading,
+    }));
+  }
+
+  /**
+   * Retired rows with a younger live row right beside them — candidates for a
+   * re-issue under a changed name (PAR-686).
+   *
+   * The sync claims a re-issued row only when the name matches exactly
+   * (PAR-682). The wiki often renames on the way — `HAUNTED HOUSE: SAW: Legacy
+   * of Terror` came back as `SAW Legacy of Terror`, Movie Park's mazes came
+   * back in Dutch — and then the old row stays retired beside a new one with no
+   * history. Distance and a name hint put such pairs in front of a human; the
+   * admin page merges (`adoptLoserExternalId`, so the survivor takes the listed
+   * id) or dismisses with a `not_a_duplicate` mark, which keeps the pair off
+   * this list for good.
+   *
+   * Every pair within the radius is returned, matching name or not: Movie
+   * Park's language pairs were real and match nothing, Walibi Belgium's 4D
+   * films are 0 m apart and are three films. `namesMatch` sorts and hints; the
+   * human decides.
+   */
+  async findReissueCandidates(): Promise<ReissueCandidate[]> {
+    const rows: Array<{
+      park_id: string;
+      park_name: string;
+      o_id: string;
+      o_name: string;
+      o_slug: string;
+      o_ext: string | null;
+      o_created: Date;
+      o_last: string | null;
+      n_id: string;
+      n_name: string;
+      n_slug: string;
+      n_ext: string | null;
+      n_created: Date;
+      n_last: string | null;
+      meters: string;
+    }> = await this.dataSource.query(
+      `
+      WITH pairs AS (
+        SELECT o.id AS o_id, n.id AS n_id, p.id AS park_id, p.name AS park_name,
+               p.timezone,
+               6371000 * 2 * asin(sqrt(
+                 power(sin(radians(n.latitude::float8 - o.latitude::float8) / 2), 2) +
+                 cos(radians(o.latitude::float8)) * cos(radians(n.latitude::float8)) *
+                 power(sin(radians(n.longitude::float8 - o.longitude::float8) / 2), 2)
+               )) AS meters
+          FROM attractions o
+          JOIN attractions n
+            ON n."parkId" = o."parkId"
+           AND n.id <> o.id
+           AND n.retired_at IS NULL
+           AND n."createdAt" > o."createdAt"
+          JOIN parks p ON p.id = o."parkId"
+         WHERE o.retired_reason = $1
+           AND o.latitude IS NOT NULL AND n.latitude IS NOT NULL
+           -- A pair somebody already looked at and called two things.
+           AND NOT EXISTS (
+             SELECT 1 FROM attraction_review_marks m
+              WHERE m.kind = 'not_a_duplicate'
+                AND m.attraction_id = LEAST(o.id, n.id)
+                AND m.other_attraction_id = GREATEST(o.id, n.id)
+           )
+      )
+      SELECT pr.park_id, pr.park_name, pr.meters::text AS meters,
+             o.id AS o_id, COALESCE(o.curated_name, o.name) AS o_name, o.slug AS o_slug,
+             o."externalId" AS o_ext, o."createdAt" AS o_created,
+             (SELECT max(qd.timestamp AT TIME ZONE pr.timezone)::date::text
+                FROM queue_data qd
+               WHERE qd."attractionId" = o.id
+                 AND qd.timestamp > now() - INTERVAL '400 days'
+                 AND COALESCE(${observedReadingsSql("qd")}, true)) AS o_last,
+             n.id AS n_id, COALESCE(n.curated_name, n.name) AS n_name, n.slug AS n_slug,
+             n."externalId" AS n_ext, n."createdAt" AS n_created,
+             (SELECT max(qd.timestamp AT TIME ZONE pr.timezone)::date::text
+                FROM queue_data qd
+               WHERE qd."attractionId" = n.id
+                 AND qd.timestamp > now() - INTERVAL '400 days'
+                 AND COALESCE(${observedReadingsSql("qd")}, true)) AS n_last
+        FROM pairs pr
+        JOIN attractions o ON o.id = pr.o_id
+        JOIN attractions n ON n.id = pr.n_id
+       WHERE pr.meters <= $2
+       ORDER BY pr.park_name, pr.meters
+      `,
+      [ABSENT_UPSTREAM_REASON, REISSUE_CANDIDATE_METERS],
+    );
+
+    const side = (
+      id: string,
+      name: string,
+      slug: string,
+      externalId: string | null,
+      createdAt: Date,
+      lastReading: string | null,
+    ): ReissueCandidateSide => ({
+      attractionId: id,
+      name,
+      slug,
+      externalId,
+      createdAt: new Date(createdAt).toISOString(),
+      lastReading,
+    });
+
+    return rows
+      .map((r) => ({
+        parkId: r.park_id,
+        parkName: r.park_name,
+        previous: side(
+          r.o_id,
+          r.o_name,
+          r.o_slug,
+          r.o_ext,
+          r.o_created,
+          r.o_last,
+        ),
+        current: side(
+          r.n_id,
+          r.n_name,
+          r.n_slug,
+          r.n_ext,
+          r.n_created,
+          r.n_last,
+        ),
+        meters: Math.round(Number(r.meters) * 10) / 10,
+        namesMatch: reissueNamesMatch(r.o_name, r.n_name),
+      }))
+      .sort(
+        (a, b) =>
+          Number(b.namesMatch) - Number(a.namesMatch) ||
+          a.parkName.localeCompare(b.parkName) ||
+          a.meters - b.meters,
+      );
   }
 
   /**

@@ -1,4 +1,8 @@
-import { DataQualityMonitorService } from "./data-quality-monitor.service";
+import {
+  DataQualityMonitorService,
+  REISSUE_CANDIDATE_METERS,
+} from "./data-quality-monitor.service";
+import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
 
 /**
  * Each detector exists because of a specific failure that ran for weeks:
@@ -58,6 +62,10 @@ describe("DataQualityMonitorService", () => {
           last_op: "2026-06-07",
           n: "44",
           names: ["Ball Pool", "Crazy Taxi"],
+          rides: [
+            { id: "a1", name: "Ball Pool" },
+            { id: "a2", name: "Crazy Taxi" },
+          ],
         },
       ]);
 
@@ -68,7 +76,171 @@ describe("DataQualityMonitorService", () => {
           attractionCount: 44,
           lastOperating: "2026-06-07",
           sampleNames: ["Ball Pool", "Crazy Taxi"],
+          attractions: [
+            { attractionId: "a1", name: "Ball Pool" },
+            { attractionId: "a2", name: "Crazy Taxi" },
+          ],
         },
+      ]);
+    });
+
+    it("leaves out rides whose season is known, so answering the card clears it (PAR-695)", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findSilencedClusters();
+
+      const [sql] = query.mock.calls[0] as [string];
+      expect(sql).toMatch(
+        /NOT COALESCE\(a\.curated_is_seasonal, a\.is_seasonal\)/,
+      );
+      expect(sql).toMatch(/a\.retired_at IS NULL/);
+    });
+  });
+
+  /**
+   * PAR-684, option B: the absence step cannot know a season the detector has
+   * not seen yet, so a maze in its first year is retired like a demolished
+   * ride. This list is what a human answers.
+   */
+  describe("findAbsenceRetiredUnreviewed", () => {
+    it("asks only for rows the absence step retired, by the exact reason", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findAbsenceRetiredUnreviewed();
+
+      const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toMatch(/a\.retired_reason = \$1/);
+      expect(params).toEqual([ABSENT_UPSTREAM_REASON]);
+    });
+
+    it("leaves out every row someone already answered, and every row the detector calls seasonal", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findAbsenceRetiredUnreviewed();
+
+      const [sql] = query.mock.calls[0] as [string];
+      expect(sql).toMatch(/a\.curated_is_seasonal IS NULL/);
+      expect(sql).toMatch(/NOT a\.is_seasonal/);
+    });
+
+    it("bounds the last-reading lookup, so it does not plan against every chunk", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findAbsenceRetiredUnreviewed();
+
+      const [sql] = query.mock.calls[0] as [string];
+      expect(sql).toMatch(/qd\.timestamp > now\(\) - INTERVAL '400 days'/);
+    });
+
+    it("maps a row into something an editor can open", async () => {
+      const query = jest.fn().mockResolvedValue([
+        {
+          id: "a1",
+          name: "Asylum",
+          slug: "asylum",
+          park_id: "p1",
+          park_name: "Parque de Atracciones de Madrid",
+          retired_at: new Date("2026-10-03T03:29:45Z"),
+          last_reading: "2026-04-23",
+        },
+      ]);
+
+      expect(await build(query).findAbsenceRetiredUnreviewed()).toEqual([
+        {
+          attractionId: "a1",
+          name: "Asylum",
+          slug: "asylum",
+          parkId: "p1",
+          parkName: "Parque de Atracciones de Madrid",
+          retiredAt: "2026-10-03T03:29:45.000Z",
+          lastReading: "2026-04-23",
+        },
+      ]);
+    });
+  });
+
+  /**
+   * PAR-686: the wiki re-issues a ride under a new id AND a new name, which the
+   * sync's exact-name claim cannot see. The list shows every nearby pair to a
+   * human, with a name hint; nothing merges by itself.
+   */
+  describe("findReissueCandidates", () => {
+    const row = (over: Record<string, unknown> = {}) => ({
+      park_id: "p1",
+      park_name: "Six Flags Great America",
+      o_id: "old",
+      o_name: "HAUNTED HOUSE: SAW: Legacy of Terror",
+      o_slug: "haunted-house-saw-legacy-of-terror",
+      o_ext: "wiki-old",
+      o_created: new Date("2025-12-24T00:00:00Z"),
+      o_last: "2025-11-01",
+      n_id: "new",
+      n_name: "SAW Legacy of Terror",
+      n_slug: "saw-legacy-of-terror",
+      n_ext: "wiki-new",
+      n_created: new Date("2026-09-17T00:00:00Z"),
+      n_last: "2026-10-03",
+      meters: "24.98",
+      ...over,
+    });
+
+    it("asks for absence-retired rows only, inside the radius, minus pairs marked not-a-duplicate", async () => {
+      const query = jest.fn().mockResolvedValue([]);
+      await build(query).findReissueCandidates();
+
+      const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toMatch(/o\.retired_reason = \$1/);
+      expect(sql).toMatch(/pr\.meters <= \$2/);
+      expect(sql).toMatch(/m\.kind = 'not_a_duplicate'/);
+      // Marks are stored in canonical order; the lookup has to use it too.
+      expect(sql).toMatch(
+        /LEAST\(o\.id, n\.id\)[\s\S]*GREATEST\(o\.id, n\.id\)/,
+      );
+      expect(params).toEqual([
+        ABSENT_UPSTREAM_REASON,
+        REISSUE_CANDIDATE_METERS,
+      ]);
+    });
+
+    it("maps both sides and flags a name match", async () => {
+      const query = jest.fn().mockResolvedValue([row()]);
+      const [candidate] = await build(query).findReissueCandidates();
+
+      expect(candidate).toEqual({
+        parkId: "p1",
+        parkName: "Six Flags Great America",
+        previous: {
+          attractionId: "old",
+          name: "HAUNTED HOUSE: SAW: Legacy of Terror",
+          slug: "haunted-house-saw-legacy-of-terror",
+          externalId: "wiki-old",
+          createdAt: "2025-12-24T00:00:00.000Z",
+          lastReading: "2025-11-01",
+        },
+        current: {
+          attractionId: "new",
+          name: "SAW Legacy of Terror",
+          slug: "saw-legacy-of-terror",
+          externalId: "wiki-new",
+          createdAt: "2026-09-17T00:00:00.000Z",
+          lastReading: "2026-10-03",
+        },
+        meters: 25,
+        namesMatch: true,
+      });
+    });
+
+    it("keeps a pair whose names say nothing, and sorts name matches first", async () => {
+      const query = jest.fn().mockResolvedValue([
+        row({
+          park_name: "Movie Park Germany",
+          o_name: "Hell House",
+          n_name: "Helhuis",
+          meters: "9.3",
+        }),
+        row(),
+      ]);
+      const candidates = await build(query).findReissueCandidates();
+
+      expect(candidates.map((c) => [c.previous.name, c.namesMatch])).toEqual([
+        ["HAUNTED HOUSE: SAW: Legacy of Terror", true],
+        ["Hell House", false],
       ]);
     });
   });
