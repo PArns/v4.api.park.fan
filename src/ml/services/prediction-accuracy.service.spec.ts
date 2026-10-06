@@ -206,7 +206,48 @@ describe("PredictionAccuracyService", () => {
       const sql = PARK_DAY_IS_CLOSED_SQL.replace(/\s+/g, " ");
       expect(sql).toContain(`se."scheduleType" = 'CLOSED'`);
       expect(sql).toContain(`se."attractionId" IS NULL`);
-      expect(sql).toMatch(/NOT EXISTS \(.*so\."scheduleType" = 'OPERATING'/);
+      expect(sql).toMatch(
+        /NOT EXISTS \(.*operating_day\."scheduleType" = 'OPERATING'/,
+      );
+    });
+
+    // PAR-707. `schedule_entries.date` is park-local; `DATE(pa.target_time)`
+    // reads the session timezone, which is UTC in production. Measured over 30
+    // days of production, 334 rows were charged to the neighbouring day — 270
+    // at Sesame Place Langhorne (UTC-4, evening rows carried the NEXT UTC date)
+    // and 64 at Six Flags Qiddiya City (UTC+3, after-midnight rows carried the
+    // PREVIOUS one). Both directions, so this is not only a negative-offset bug.
+    it("reads the prediction's day in the park's timezone, not UTC", () => {
+      const sql = PARK_DAY_IS_CLOSED_SQL.replace(/\s+/g, " ");
+      expect(sql).toContain(
+        "se.date = (pa.target_time AT TIME ZONE p.timezone)::date",
+      );
+      expect(sql).not.toContain("DATE(pa.target_time)");
+    });
+
+    it("joins parks, because the day expression needs p.timezone", async () => {
+      const calls: Array<[string, unknown[]]> = [];
+      (accuracyRepo as any).count = jest.fn().mockResolvedValue(0);
+      const original = accuracyRepo.createQueryBuilder.getMockImplementation();
+      accuracyRepo.createQueryBuilder.mockImplementation(
+        () => recordingBuilder(calls) as any,
+      );
+      try {
+        await (service as any).computeSystemAccuracyStats(7);
+      } finally {
+        accuracyRepo.createQueryBuilder.mockImplementation(original!);
+      }
+
+      // An INNER JOIN, not a LEFT one: a prediction whose park vanished must not
+      // silently turn its day expression NULL and pass the NOT EXISTS gate.
+      expect(
+        calls.some(
+          ([m, args]) =>
+            m === "innerJoin" &&
+            args[0] === "parks" &&
+            String(args[2]).includes('p.id = a."parkId"'),
+        ),
+      ).toBe(true);
     });
   });
 

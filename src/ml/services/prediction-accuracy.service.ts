@@ -9,6 +9,7 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
 import { safeJsonParse } from "../../common/utils/json.util";
+import { closedParkDayExists } from "../../analytics/closed-park-days.sql";
 
 /** Per-prediction-type accuracy breakdown. mae/coveragePercent are null when the
  *  type is not scored against actuals (`tracked: false`) — e.g. daily predictions,
@@ -86,24 +87,22 @@ export type TopBottomPerformers = {
  */
 /**
  * True when the park's status for the prediction's day is CLOSED: a park-level
- * CLOSED row and no OPERATING row. An EXISTS instead of a JOIN, because event
- * rows (TICKETED_EVENT etc.) can share the day with the status row (PAR-640) —
- * a join would count every prediction once per row of its day.
+ * CLOSED row and no OPERATING row.
+ *
+ * The rule itself lives in `src/analytics/closed-park-days.sql.ts` and is
+ * shared with the three aggregate queries in `park-historical-stats.service.ts`
+ * — this constant only binds it to the columns of `computeSystemAccuracyStats`.
+ *
+ * The day is read in the PARK's timezone, which is why the query joins `parks p`
+ * for a column it otherwise never selects. It used to read `DATE(pa.target_time)`
+ * instead, a UTC day against the park-local `schedule_entries.date`: see
+ * PAR-707 and the measurement in the shared file for the 334 rows that charged
+ * production to the neighbouring day.
  */
-export const PARK_DAY_IS_CLOSED_SQL = `EXISTS (
-  SELECT 1 FROM schedule_entries se
-  WHERE se."parkId" = a."parkId"
-    AND se.date = DATE(pa.target_time)
-    AND se."attractionId" IS NULL
-    AND se."scheduleType" = 'CLOSED'
-    AND NOT EXISTS (
-      SELECT 1 FROM schedule_entries so
-      WHERE so."parkId" = se."parkId"
-        AND so.date = se.date
-        AND so."attractionId" IS NULL
-        AND so."scheduleType" = 'OPERATING'
-    )
-)`;
+export const PARK_DAY_IS_CLOSED_SQL = closedParkDayExists(
+  'a."parkId"',
+  "(pa.target_time AT TIME ZONE p.timezone)::date",
+);
 
 @Injectable()
 export class PredictionAccuracyService {
@@ -1392,6 +1391,11 @@ export class PredictionAccuracyService {
         "pb",
         'pb."parkId" = a."parkId" AND pb."typicalDayPeak" IS NOT NULL',
       )
+      // Joined for `p.timezone` alone: PARK_DAY_IS_CLOSED_SQL reads the
+      // prediction's day in the park's own timezone, because
+      // `schedule_entries.date` is park-local. Every park has one (211 of 211 in
+      // production), so this adds no rows and drops none.
+      .innerJoin("parks", "p", 'p.id = a."parkId"')
       .select("COUNT(*)", "matchedCount")
       .addSelect("AVG(pa.absolute_error)", "mae")
       .addSelect(
