@@ -744,7 +744,7 @@ export class QueuePercentileProcessor {
    * The decision runs over loaded rows rather than inside the UPDATE, so there
    * is one implementation of it and no SQL twin to drift from the TypeScript
    * one — the trap `resolveCuratedFacts` exists to close. The whole unjudged
-   * catalogue is 7,531 rows of nine columns (2026-10-06), which is nothing
+   * catalogue is 7,531 rows of ten columns (2026-10-06), which is nothing
    * beside the hypertable scans above, and narrowing it in SQL would mean
    * resolving seasonality a second time in a second language.
    *

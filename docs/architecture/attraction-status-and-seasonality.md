@@ -1830,7 +1830,7 @@ something whose name screams maze. That is also what makes a wrong token cheap
 — one admin write, and the rule never returns to that row.
 
 The decision runs in TypeScript over loaded rows rather than inside the
-`UPDATE`. The whole unjudged catalogue is 7,531 rows of nine columns
+`UPDATE`. The whole unjudged catalogue is 7,531 rows of ten columns
 (2026-10-06), which is nothing beside the hypertable scans in the same job, and
 the alternative is resolving seasonality a second time in a second language —
 the drift `resolveCuratedFacts` exists to prevent (§4).
