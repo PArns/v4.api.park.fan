@@ -74,7 +74,13 @@ export class QueueData {
   @JoinColumn({ name: "attractionId" })
   attraction: Attraction;
 
-  @Column({ type: "text" })
+  /**
+   * `uuid`, like `attractions.id`. The relation's `@JoinColumn` above creates
+   * this column and TypeORM takes its type from the referenced key, so a `text`
+   * declared here was never what the database held. `queue_data_aggregates`
+   * is the one table keyed by a `text` attractionId.
+   */
+  @Column({ type: "uuid" })
   attractionId: string;
 
   @Column({

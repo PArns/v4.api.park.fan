@@ -115,10 +115,10 @@ they were got right.
 **`a.id`, not `a.id::text`.** This is the one that decides whether the statement
 runs at all, and it read the wrong way round until it was tried: with the cast,
 the whole `UPDATE` aborts on `operator does not exist: text = uuid` and writes
-nothing. `queue_data."attractionId"` is `uuid` in the database. The entity says
-`@Column({ type: "text" })` (`src/queue-data/entities/queue-data.entity.ts:77`),
-but the column is created by the relation's `@JoinColumn`, and the decorator
-beside it does not change that — the repo documents this trap in three places of
+nothing. `queue_data."attractionId"` is `uuid` in the database. The entity used to say
+`@Column({ type: "text" })`, but the column is created by the relation's
+`@JoinColumn`, and the decorator beside it did not change that (PAR-721 made the
+entity say `uuid`) — the repo documents this trap in three places of
 its own (`plan-day.service.ts:1458`,
 `park-historical-stats.service.ts:649-651`,
 `prediction-lead-snapshot.entity.ts:64-71`), one of which records it shipping

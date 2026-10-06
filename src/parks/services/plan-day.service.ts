@@ -1807,8 +1807,7 @@ export class PlanDayService {
    *
    * The join is `a.id`, NOT `a.id::text`. `queue_data.attractionId` is a uuid —
    * the `@JoinColumn` on the entity's `attraction` relation is what creates the
-   * column, and the `@Column({ type: "text" })` written beside it on the same
-   * property does not change that. Only `queue_data_aggregates.attractionId` is
+   * column, and the entity used to declare `text` beside it (PAR-721). Only `queue_data_aggregates.attractionId` is
    * text, and it is the table every older analytics query reads, so `::text`
    * looks like the house style and is wrong here. The note at the top of
    * `park-historical-stats.service.ts` says exactly this and this method was

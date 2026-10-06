@@ -976,7 +976,7 @@ park in another timezone whose outage crosses local midnight inside one window.
 
 Two column traps that were checked in the entities:
 
-- `queue_data."attractionId"` is **uuid** at DB level despite `@Column({type:'text'})`. Join
+- `queue_data."attractionId"` is **uuid**, in the database and, since PAR-721, in the entity. Join
   `a.id = qd."attractionId"`, never `a.id::text`. The damage report is in `plan-day.service.ts:857-869`.
 - **No cast on `queue_data.timestamp` in a WHERE clause.** `(qd.timestamp AT TIME ZONE tz)::date` hides
   the column from chunk exclusion: 254 chunks, 35,967 buffers, 1.1 s cold for nine rows.
