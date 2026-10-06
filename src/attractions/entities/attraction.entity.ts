@@ -514,6 +514,43 @@ export class Attraction {
   retiredAt: Date | null;
 
   /**
+   * Since when this attraction's id has been missing from its park's
+   * `/children`, written by the children sync and read by nothing else. Null
+   * means the feed listed it on the last successful run.
+   *
+   * It exists because the absence used to be read off `updatedAt`, and
+   * `updatedAt` is an `@UpdateDateColumn`: every writer moves it. The sync's
+   * own writes are what made that defensible — a row the feed still lists is
+   * never older than the last run — but a curation write moves it too, and
+   * then the clock restarts on the rows that got the most attention. Measured
+   * on 2026-10-04: six active rows in three parks, all absent upstream and all
+   * carrying the `updatedAt` of a curation charge, had their retirement pushed
+   * out by a full `ABSENT_UPSTREAM_RETIRE_DAYS` days (PAR-656). One of
+   * them was the whole difference in PAR-587.
+   *
+   * **This is a last-seen timestamp, not a notice.** The sync seeds it from
+   * the evidence it has that the entity still existed, and which evidence that
+   * is depends on how recently the row was written. Inside
+   * `ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS` the sync itself wrote it, so the
+   * feed listed it that recently and the clock starts now whatever the
+   * readings say. Outside that window the row is back-dated to the earlier of
+   * `updatedAt` and its last real reading, so a row that went quiet long
+   * before anyone looked does not get a fresh clock the first time the column
+   * is filled. Where there is no real reading at all, `updatedAt` is the only
+   * evidence left, and the seed can then only delay a retirement, never cause
+   * one.
+   *
+   * **One writer, plus one deliberate exception.** The sync sets it when a
+   * park syncs successfully without listing the id, and clears it the moment
+   * the id is listed again. The exception is `unretire`, which sets it to the
+   * moment of the un-retirement: a person stating that the ride exists is a
+   * sighting, and a better one than anything the feed has. Nothing else may
+   * touch it — that is the entire point of the column.
+   */
+  @Column({ name: "absent_since", type: "timestamptz", nullable: true })
+  absentSince: Date | null;
+
+  /**
    * When this ride last absorbed another one.
    *
    * A merge reparents the loser's history with

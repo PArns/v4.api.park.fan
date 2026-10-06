@@ -90,7 +90,17 @@ describe("AttractionRetirementService", () => {
       retiredReason: null,
       // A ride that comes back must not stay hidden by a leftover flag.
       retiredHidden: false,
+      // The absence runs from the statement, not from the old evidence it
+      // contradicts. Clearing it instead would hand the row to the children
+      // sync as a first absence, whose seed reads readings that can be older
+      // than the window — and the retirement a human just undid would be
+      // written again on the next run (PAR-656).
+      absentSince: expect.any(Date),
     });
+    const [, patch] = update.mock.calls[0];
+    expect(Date.now() - (patch.absentSince as Date).getTime()).toBeLessThan(
+      5_000,
+    );
   });
 
   it("hides a closed ride on its park page and tells the frontend", async () => {

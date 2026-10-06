@@ -1,4 +1,4 @@
-import { IsNull, LessThan } from "typeorm";
+import { IsNull } from "typeorm";
 import {
   ABSENT_UPSTREAM_REASON,
   RECLASSIFIED_UPSTREAM_REASONS,
@@ -8,6 +8,8 @@ import {
 import { SYNTHETIC_SOURCES } from "../../common/utils/outage-rows.sql";
 import {
   ABSENT_UPSTREAM_RETIRE_DAYS,
+  ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS,
+  ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS,
   ChildrenMetadataProcessor,
 } from "./children-metadata.processor";
 
@@ -48,17 +50,29 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
   const parkName = "Six Flags Over Texas";
   const now = new Date("2026-10-02T03:30:00Z");
 
-  /** `Ghost Town NEW!`, last listed on 2026-06-03. */
+  const daysBefore = (days: number) =>
+    new Date(now.getTime() - days * 86_400_000);
+
+  /**
+   * `Ghost Town NEW!`, last listed on 2026-06-03 and carrying the clock to
+   * prove it. `absentSince` is what the gate reads, so it is set here and the
+   * seeding path below gets its own fixtures — a row in the steady state is
+   * seeded, and these tests are about the gate rather than about the seed.
+   */
   const deadRow = {
     id: "row-ghost-town",
     name: "Ghost Town NEW!",
     externalId: "0b7d7c55-1a2b-4c3d-8e9f-001122334455",
+    updatedAt: daysBefore(121),
+    absentSince: daysBefore(121),
   };
   const liveExternalId = "f2d2b7fd-4618-4a73-98fd-efffd99840de";
 
   beforeEach(() => {
     jest.clearAllMocks();
-    attractionRepo.find.mockResolvedValue([deadRow]);
+    // A fresh copy per test: the processor writes the seeded or cleared clock
+    // back onto the row objects it was handed.
+    attractionRepo.find.mockResolvedValue([{ ...deadRow }]);
     mappingRepository.find.mockResolvedValue([]);
     mappingRepository.findOne.mockResolvedValue(null);
     manager.query.mockResolvedValue([]);
@@ -109,25 +123,58 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
       ]);
     });
 
-    it("asks only for this park's rows untouched for 60 days, without a Queue-Times id", async () => {
-      // The window is enforced by the query, so the query is what is pinned:
-      // a row the sync wrote 59 days ago never reaches the filter below it.
+    it("asks for this park's active rows without a Queue-Times id, and brings the clock along", async () => {
+      // The query no longer carries the window. It used to filter on
+      // `updatedAt`, which is why a curation write bought a row 60 more days
+      // (PAR-656); the window is now applied to `absentSince` in the two
+      // cases below, and this run has to see rows of every age in order to
+      // stop the clock on the ones the feed listed again.
       await retireAbsent();
 
-      const cutoff = new Date(
-        now.getTime() - ABSENT_UPSTREAM_RETIRE_DAYS * 86_400_000,
-      );
-      expect(ABSENT_UPSTREAM_RETIRE_DAYS).toBe(60);
       expect(attractionRepo.find).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
             parkId,
             retiredAt: IsNull(),
             queueTimesEntityId: IsNull(),
-            updatedAt: LessThan(cutoff),
           },
+          select: expect.arrayContaining(["updatedAt", "absentSince"]),
         }),
       );
+    });
+
+    it("retires a row whose clock passed the window and keeps one a day short of it", async () => {
+      expect(ABSENT_UPSTREAM_RETIRE_DAYS).toBe(60);
+
+      attractionRepo.find.mockResolvedValue([
+        { ...deadRow, absentSince: daysBefore(61) },
+      ]);
+      await retireAbsent();
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+
+      jest.clearAllMocks();
+      mappingRepository.find.mockResolvedValue([]);
+      manager.query.mockResolvedValue([]);
+      attractionRepo.find.mockResolvedValue([
+        { ...deadRow, absentSince: daysBefore(59) },
+      ]);
+      await retireAbsent();
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    it("no longer lets a curation write push the retirement out by a window", async () => {
+      // The six rows measured on 2026-10-04: absent upstream for months,
+      // `updatedAt` set to the day a curation charge wrote them. Under the old
+      // gate none of them was a candidate at all.
+      attractionRepo.find.mockResolvedValue([
+        { ...deadRow, updatedAt: daysBefore(4), absentSince: daysBefore(164) },
+      ]);
+
+      await retireAbsent();
+
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+      const [requests] = retirementService.retire.mock.calls[0];
+      expect(requests[0].reason).toBe(ABSENT_UPSTREAM_REASON);
     });
 
     it("keeps the row when its id is still listed", async () => {
@@ -238,6 +285,172 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
     });
   });
 
+  describe("the absence clock", () => {
+    /** The same row before anything had written `absent_since`. */
+    const unseeded = {
+      ...deadRow,
+      updatedAt: daysBefore(4),
+      absentSince: null,
+    };
+
+    /** `[seedReadingQuery, seedUpdate, recentReadingQuery]`, in call order. */
+    const seedCalls = () => manager.query.mock.calls;
+
+    it("seeds from the last real reading when it is older than the row's own write", async () => {
+      // The case the column exists for: curated four days ago, silent since
+      // April. The clock has to say April, or the retirement waits 56 days for
+      // a fact that was already true.
+      attractionRepo.find.mockResolvedValue([{ ...unseeded }]);
+      manager.query.mockImplementation(async (sql: string) =>
+        sql.includes("GROUP BY")
+          ? [{ attractionId: deadRow.id, last_read: daysBefore(164) }]
+          : [],
+      );
+
+      await retireAbsent();
+
+      const [sql, params] = seedCalls()[0];
+      expect(sql).toContain("GROUP BY");
+      expect(sql).toContain("is_heartbeat IS NOT TRUE");
+      expect(params[0]).toEqual([deadRow.id]);
+      expect(params[1]).toEqual(daysBefore(ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS));
+      expect(params[2]).toEqual([...SYNTHETIC_SOURCES]);
+
+      const [updateSql, updateParams] = seedCalls()[1];
+      expect(updateSql).toContain("SET absent_since = v.absent_since");
+      expect(updateSql).toContain("a.absent_since IS NULL");
+      expect(updateParams[1]).toEqual([daysBefore(164).toISOString()]);
+
+      // And the same run acts on it, rather than waiting for the next.
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+    });
+
+    it("starts the clock today for a row the sync wrote inside the fresh-write window", async () => {
+      // The regression this window exists to prevent. Measured on 2026-10-04:
+      // 421 of the 2.393 active rows in scope had no real reading in 60 days
+      // AND had been written inside two days, so the feed was listing them.
+      // Back-dating one of those to its last reading retires it on the first
+      // run an id goes missing, instead of 60 days later.
+      attractionRepo.find.mockResolvedValue([
+        { ...unseeded, updatedAt: daysBefore(1) },
+      ]);
+      manager.query.mockImplementation(async (sql: string) =>
+        sql.includes("GROUP BY")
+          ? [{ attractionId: deadRow.id, last_read: daysBefore(164) }]
+          : [],
+      );
+
+      await retireAbsent();
+
+      // No lookback at all: nothing was back-datable, so nothing was asked.
+      expect(
+        manager.query.mock.calls.filter(([sql]: [string]) =>
+          sql.includes("GROUP BY"),
+        ),
+      ).toHaveLength(0);
+      const [, updateParams] = manager.query.mock.calls[0];
+      expect(updateParams[1]).toEqual([now.toISOString()]);
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    it("back-dates a row written outside the fresh-write window", async () => {
+      // The pair to the case above, with the one deciding fact moved past the
+      // window. Four days is what the six measured rows carried.
+      expect(ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS).toBe(72);
+      attractionRepo.find.mockResolvedValue([
+        { ...unseeded, updatedAt: daysBefore(4) },
+      ]);
+      manager.query.mockImplementation(async (sql: string) =>
+        sql.includes("GROUP BY")
+          ? [{ attractionId: deadRow.id, last_read: daysBefore(164) }]
+          : [],
+      );
+
+      await retireAbsent();
+
+      expect(seedCalls()[0][0]).toContain("GROUP BY");
+      expect(seedCalls()[1][1][1]).toEqual([daysBefore(164).toISOString()]);
+      expect(retirementService.retire).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to the row's own write when no real reading is left", async () => {
+      // `NEXUS AI` on 2026-10-04: created 2026-08-20, 1025 rows in
+      // `queue_data`, every one of them our own bookkeeping. The seed can then
+      // only be too late, which delays a retirement and never causes one.
+      attractionRepo.find.mockResolvedValue([{ ...unseeded }]);
+
+      await retireAbsent();
+
+      const [, updateParams] = seedCalls()[1];
+      expect(updateParams[1]).toEqual([daysBefore(4).toISOString()]);
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    it("keeps the earlier value when the row's own write is the older one", async () => {
+      attractionRepo.find.mockResolvedValue([
+        { ...unseeded, updatedAt: daysBefore(200) },
+      ]);
+      manager.query.mockImplementation(async (sql: string) =>
+        sql.includes("GROUP BY")
+          ? [{ attractionId: deadRow.id, last_read: daysBefore(164) }]
+          : [],
+      );
+
+      await retireAbsent();
+
+      const [, updateParams] = seedCalls()[1];
+      expect(updateParams[1]).toEqual([daysBefore(200).toISOString()]);
+    });
+
+    it("asks for no reading at all when every row already has a clock", async () => {
+      await retireAbsent();
+
+      // Only the seven-day reading gate, no seed lookback: the 400-day window
+      // is paid for once per row and never again.
+      expect(manager.query).toHaveBeenCalledTimes(1);
+      expect(manager.query.mock.calls[0][1][1]).toEqual(daysBefore(7));
+    });
+
+    it("stops the clock on a row the feed listed again", async () => {
+      await retireAbsent([liveExternalId, deadRow.externalId]);
+
+      const [sql, params] = manager.query.mock.calls[0];
+      expect(sql).toContain("SET absent_since = NULL");
+      expect(params[0]).toEqual([deadRow.id]);
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    it("stops the clock on a row this run claimed under another id", async () => {
+      await retireAbsent([liveExternalId], [deadRow.id]);
+
+      const [sql] = manager.query.mock.calls[0];
+      expect(sql).toContain("SET absent_since = NULL");
+    });
+
+    it("writes nothing when the listed rows never carried a clock", async () => {
+      attractionRepo.find.mockResolvedValue([
+        { ...deadRow, absentSince: null },
+      ]);
+
+      await retireAbsent([liveExternalId, deadRow.externalId]);
+
+      expect(manager.query).not.toHaveBeenCalled();
+    });
+
+    it("leaves a Queue-Times row out of both directions", async () => {
+      // Its id is one the wiki never issued, so the feed not listing it says
+      // nothing. Neither the clock nor the retirement applies.
+      attractionRepo.find.mockResolvedValue([
+        { ...deadRow, externalId: "qt-ride-1234" },
+      ]);
+
+      await retireAbsent();
+
+      expect(manager.query).not.toHaveBeenCalled();
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+  });
+
   describe("a row another source still fills", () => {
     it("keeps a row that received a reading of its own within the week", async () => {
       manager.query.mockResolvedValue([{ attractionId: deadRow.id }]);
@@ -313,6 +526,29 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
 
       await retireAbsent();
 
+      expect(retirementService.retire).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The clock is bookkeeping about the feed, not about the retirement, so it
+     * runs for a row the season gate keeps. Order it the other way and the
+     * editor who answers the "season or gone?" list with `false` starts a
+     * fresh 60 days, instead of the row retiring on the absence it already
+     * carries — which is what the twin case below reads off a 121-day clock.
+     */
+    it("still starts the clock on a row it keeps", async () => {
+      attractionRepo.find.mockResolvedValue([
+        seasonal({ updatedAt: daysBefore(164), absentSince: null }),
+      ]);
+
+      await retireAbsent();
+
+      const seedUpdate = manager.query.mock.calls.find(([sql]: [string]) =>
+        sql.includes("SET absent_since = v.absent_since"),
+      );
+      expect(seedUpdate).toBeDefined();
+      expect(seedUpdate![1][0]).toEqual([deadRow.id]);
+      expect(seedUpdate![1][1]).toEqual([daysBefore(164).toISOString()]);
       expect(retirementService.retire).not.toHaveBeenCalled();
     });
 
