@@ -109,9 +109,8 @@ export function rowBreaksOutageRun(row: {
  *
  * Shape notes that are easy to get wrong and were checked against the entities:
  *
- * - `queue_data."attractionId"` is **uuid** at DB level despite the
- *   `@Column({ type: "text" })` written beside the relation. `= ANY($1::uuid[])`,
- *   never a `::text` comparison. The damage report is in
+ * - `queue_data."attractionId"` is **uuid**, and the entity now says so too.
+ *   `= ANY($1::uuid[])`, never a `::text` comparison. The damage report is in
  *   `plan-day.service.ts:857-869`: the cast raised
  *   `operator does not exist: text = uuid`, a catch swallowed it, and the set
  *   came back empty on every park, silently.
