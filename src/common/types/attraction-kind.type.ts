@@ -16,7 +16,13 @@
  * every 20 minutes builds a queue whether or not anybody wants to ride — so a
  * measured wait means something different there than on a coaster.
  *
- * The other three are here from the start deliberately. A single-valued enum
+ * `MAZE` is a walk-through horror attraction with scare actors that runs only
+ * during a Halloween event (a "Halloween Horror Nights" house, a "Scarefest"
+ * maze). Year-round haunted attractions stay what they were: a Haunted Mansion
+ * or a Geisterbahn is a dark ride (`RIDE`), a permanent walk-through is
+ * `WALKTHROUGH`. The test is the event, not the theme.
+ *
+ * The other three were here from the start deliberately. A single-valued enum
  * is a boolean wearing a costume, and the categories the curated-type
  * docstring already names as upstream's failure modes (water rides filed as
  * ATTRACTION, walkthroughs filed as RIDE) are the ones an editor needs to be
@@ -32,6 +38,7 @@ export const ATTRACTION_KIND_VALUES = [
   "TRANSPORT",
   "SHOW",
   "WALKTHROUGH",
+  "MAZE",
 ] as const;
 
 export type AttractionKind = (typeof ATTRACTION_KIND_VALUES)[number];
