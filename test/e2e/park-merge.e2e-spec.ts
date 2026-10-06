@@ -17,6 +17,7 @@ import {
   SHOW_DEPENDENCIES,
 } from "../../src/parks/utils/merge-dependencies";
 import { HYPERTABLES } from "../../src/database/hypertables";
+import { HOURLY_AGGREGATE_UPSERT } from "../../src/queues/processors/hourly-aggregate.sql";
 
 /**
  * The merge transaction against a real Postgres.
@@ -494,6 +495,289 @@ describe("Park merge (E2E)", () => {
         WINNER_PARK,
       ]),
     ).toBe(1);
+  });
+
+  /**
+   * `queue_data_aggregates` — the one table whose PRIMARY KEY holds a hash of
+   * the attraction id (PAR-704).
+   *
+   * `id` is `md5("attractionId" || '|' || hour)`, and that is load-bearing: the
+   * PK is `(id, hour)`, so a deterministic id is what makes the PK enforce one
+   * row per bucket and lets the nightly `ON CONFLICT (id, hour)` fire. A generic
+   * `move` rewrote the column and left `id` on the LOSER's hash, so after a merge
+   * the survivor held a bucket under a key no writer can form — and the next run
+   * over that hour inserted a SECOND row for the same `("attractionId", hour)`.
+   * Readers `SUM("sampleCount")` and take `percentile_cont` across the rows of an
+   * hour, so the pair does not blur the figure, it doubles it.
+   *
+   * This is the case a recorded manager cannot decide, and the reason it lives
+   * here rather than beside the unit tests: the assertion is that the real
+   * `HOURLY_AGGREGATE_UPSERT` writes NO second row, which only a real PK can
+   * answer. On `main` the re-run below leaves two rows for the one hour the
+   * survivor inherited.
+   *
+   * The hours are fixed instants rather than offsets from `NOW()`: the seed, the
+   * ids and the re-run window all have to name the same bucket, and a window
+   * built from the clock puts a row in the previous hour whenever the suite runs
+   * near the top of one (📚 G-56).
+   */
+  describe("percentile buckets of a merged ride", () => {
+    /** The survivor has a bucket of its own here — the loser's has to go. */
+    const SHARED_HOUR = "2026-03-02 14:00:00+00";
+    /**
+     * Only the loser has one here — it has to move, with a recomputed id.
+     *
+     * Four hours after the shared one, so the rollup's carry-forward anchor
+     * (`ANCHOR_LOOKBACK`, 3 h) cannot reach the readings of the earlier hour and
+     * the sample counts below say what was measured in each hour and nothing else.
+     */
+    const INHERITED_HOUR = "2026-03-02 18:00:00+00";
+    /**
+     * The survivor holds this hour under an id nothing can derive — a legacy
+     * `gen_random_uuid()` row, the shape 39 % of the table still has, or the hash
+     * of an earlier loser (1,556 such rows in production with no correctly keyed
+     * twin). `ON CONFLICT (id, hour)` does NOT fire for it, so the dedupe has to
+     * be written on the natural key or the merge creates a real duplicate bucket.
+     *
+     * Deliberately without readings in `queue_data`: the re-run at the end would
+     * otherwise write the derivable id beside the legacy row and produce the
+     * duplicate this case is about, from the pre-existing row rather than from the
+     * merge. Repairing those is `dedupe-percentile-aggregates`, not this.
+     */
+    const LEGACY_HOUR = "2026-03-02 22:00:00+00";
+
+    const aggregateRow = (
+      attractionId: string,
+      parkId: string,
+      hour: string,
+      id: string,
+      sampleCount: number,
+      updatedAt: string,
+    ) =>
+      dataSource.query(
+        `INSERT INTO queue_data_aggregates
+           (id, hour, "attractionId", "parkId", p25, p50, p75, p90, p95, p99,
+            iqr, "stdDev", mean, "sampleCount", "createdAt", "updatedAt")
+         VALUES ($1, $2::timestamptz, $3, $4, 10, 20, 30, 40, 45, 50,
+                 20, 5, 25, $5, $6::timestamptz, $6::timestamptz)`,
+        [id, hour, attractionId, parkId, sampleCount, updatedAt],
+      );
+
+    /** The id the rollup would have written for this bucket. */
+    const expectedId = async (
+      attractionId: string,
+      hour: string,
+    ): Promise<string> => {
+      const [row] = await dataSource.query(
+        `SELECT md5($1 || '|' || $2::timestamptz::text)::uuid AS id`,
+        [attractionId, hour],
+      );
+      return row.id as string;
+    };
+
+    /** Readings in one hour, enough of them to clear `HAVING COUNT(*) >= 2`. */
+    const readings = (attractionId: string, hour: string, minutes: number[]) =>
+      Promise.all(
+        minutes.map((minute, index) =>
+          dataSource.query(
+            `INSERT INTO queue_data (id, "attractionId", "queueType", status, "waitTime", timestamp, "data_source")
+             VALUES (gen_random_uuid(), $1, 'STANDBY', 'OPERATING', $2,
+                     $3::timestamptz + ($4 || ' minutes')::interval, 'queue-times')`,
+            [attractionId, 20 + index, hour, minute],
+          ),
+        ),
+      );
+
+    /**
+     * Whether `timescaledb.compress` was already on when this block started.
+     *
+     * Read rather than assumed, like the `show_live_data` case further down and
+     * for the same reason: it depends on which suite booted
+     * `TimescaleInitService` first, and hard-coding `compress = false` afterwards
+     * would disable compression for every later file and orphan its policy.
+     */
+    let compressWasEnabled = false;
+
+    beforeAll(async () => {
+      const rows = await dataSource.query(
+        `SELECT compression_enabled FROM timescaledb_information.hypertables
+          WHERE hypertable_name = 'queue_data_aggregates'`,
+      );
+      compressWasEnabled = rows[0]?.compression_enabled === true;
+      if (!compressWasEnabled) {
+        await dataSource.query(
+          `ALTER TABLE queue_data_aggregates SET (timescaledb.compress)`,
+        );
+      }
+    });
+
+    afterAll(async () => {
+      await dataSource.query(
+        `SELECT decompress_chunk(c, if_compressed => true)
+           FROM show_chunks('queue_data_aggregates') c`,
+      );
+      if (!compressWasEnabled) {
+        await dataSource.query(
+          `ALTER TABLE queue_data_aggregates SET (timescaledb.compress = false)`,
+        );
+      }
+    });
+
+    async function compressBuckets(): Promise<void> {
+      await dataSource.query(
+        `SELECT compress_chunk(c, if_not_compressed => true)
+           FROM show_chunks('queue_data_aggregates') c`,
+      );
+    }
+
+    async function bucketsOf(
+      attractionId: string,
+    ): Promise<Array<{ hour: string; id: string; sampleCount: number }>> {
+      return dataSource.query(
+        `SELECT hour, id, "sampleCount" FROM queue_data_aggregates
+          WHERE "attractionId" = $1 ORDER BY hour, id`,
+        [attractionId],
+      );
+    }
+
+    it("recomputes the bucket id, so a later run writes no second row", async () => {
+      await seedCollidingParks();
+      await expectPairIsMergeable();
+
+      // Readings for both hours, under the ride that owns them before the merge.
+      // They are what the re-run at the end aggregates — without them the upsert
+      // would insert nothing and the assertion would hold for the wrong reason
+      // (📚 G-72).
+      await readings(GHOST_ATTR, SHARED_HOUR, [5, 15, 25]);
+      await readings(WINNER_ATTR, SHARED_HOUR, [10, 20]);
+      await readings(GHOST_ATTR, INHERITED_HOUR, [5, 15, 25]);
+
+      await aggregateRow(
+        WINNER_ATTR,
+        WINNER_PARK,
+        SHARED_HOUR,
+        await expectedId(WINNER_ATTR, SHARED_HOUR),
+        2,
+        "2026-03-03 02:00:00+00",
+      );
+      await aggregateRow(
+        GHOST_ATTR,
+        GHOST_PARK,
+        SHARED_HOUR,
+        await expectedId(GHOST_ATTR, SHARED_HOUR),
+        3,
+        "2026-03-03 02:00:00+00",
+      );
+      await aggregateRow(
+        GHOST_ATTR,
+        GHOST_PARK,
+        INHERITED_HOUR,
+        await expectedId(GHOST_ATTR, INHERITED_HOUR),
+        3,
+        "2026-03-03 02:00:00+00",
+      );
+      // A duplicate the loser already carries, under the random id every row
+      // written before June 2026 has. Such rows exist in production today, and
+      // the two of them hash onto ONE id the moment they are rewritten — so
+      // without `DISTINCT ON (hour)` this row alone aborts the merge with 23505
+      // and every assertion below fails on a rolled-back transaction. It is also
+      // the older of the pair, so it must be the one that loses.
+      await aggregateRow(
+        GHOST_ATTR,
+        GHOST_PARK,
+        INHERITED_HOUR,
+        "99999999-9999-4999-8999-999999999999",
+        99,
+        "2026-03-03 01:00:00+00",
+      );
+
+      await aggregateRow(
+        WINNER_ATTR,
+        WINNER_PARK,
+        LEGACY_HOUR,
+        "11111111-1111-4111-8111-111111111111",
+        7,
+        "2026-03-03 02:00:00+00",
+      );
+      await aggregateRow(
+        GHOST_ATTR,
+        GHOST_PARK,
+        LEGACY_HOUR,
+        await expectedId(GHOST_ATTR, LEGACY_HOUR),
+        8,
+        "2026-03-03 02:00:00+00",
+      );
+
+      expect(await bucketsOf(GHOST_ATTR)).toHaveLength(4);
+      expect(await bucketsOf(WINNER_ATTR)).toHaveLength(2);
+
+      await compressBuckets();
+
+      // The premise, asserted rather than assumed (📚 G-72). An uncompressed
+      // chunk answers an easier question than production asks: TimescaleDB
+      // refuses `UPDATE` of a primary-key column of a compressed chunk
+      // (`cannot update column "id" of a compressed chunk`) and silently deletes
+      // nothing for a `hour IN (SELECT …)` subquery against one, so a merge that
+      // rewrote the key in place would pass here and abort in production.
+      expect(
+        await count(
+          `SELECT count(*) c FROM timescaledb_information.chunks
+            WHERE hypertable_name = 'queue_data_aggregates' AND NOT is_compressed`,
+        ),
+      ).toBe(0);
+      expect(
+        await count(
+          `SELECT count(*) c FROM timescaledb_information.chunks
+            WHERE hypertable_name = 'queue_data_aggregates' AND is_compressed`,
+        ),
+      ).toBeGreaterThan(0);
+
+      await parksService.repairDuplicates();
+
+      // 1 · One row per hour on the survivor, and nothing left on the ghost.
+      expect(await bucketsOf(GHOST_ATTR)).toHaveLength(0);
+      const afterMerge = await bucketsOf(WINNER_ATTR);
+      expect(afterMerge).toHaveLength(3);
+
+      // 2 · Hour by hour: the survivor keeps the two it already stated — the one
+      //     keyed correctly AND the one keyed with a legacy uuid — and inherits
+      //     the third as the newer of the loser's two duplicates.
+      expect(afterMerge.map((row) => row.sampleCount)).toEqual([2, 3, 7]);
+
+      // 3 · The ids the merge wrote are what the rollup derives — the claim it
+      //     used to break. Checked against the database's own md5, not a copy of
+      //     the expression under test. The legacy row is NOT rekeyed: repairing
+      //     those is the dedupe job's, and rewriting the survivor's own bucket on
+      //     the strength of a merge is not this entry's business.
+      expect(afterMerge[0].id).toBe(await expectedId(WINNER_ATTR, SHARED_HOUR));
+      expect(afterMerge[1].id).toBe(
+        await expectedId(WINNER_ATTR, INHERITED_HOUR),
+      );
+      expect(afterMerge[2].id).toBe("11111111-1111-4111-8111-111111111111");
+
+      // 4 · The assertion of the ticket: the real nightly statement runs again
+      //     over both hours and ON CONFLICT (id, hour) fires on the rows that
+      //     are already there. Two rows for one bucket is the failure, and it is
+      //     what `main` produces for INHERITED_HOUR.
+      await dataSource.query(HOURLY_AGGREGATE_UPSERT, [
+        new Date("2026-03-02T14:00:00Z"),
+        new Date("2026-03-02T19:00:00Z"),
+      ]);
+
+      const afterRerun = await bucketsOf(WINNER_ATTR);
+      expect(afterRerun).toHaveLength(3);
+      expect(
+        await count(
+          `SELECT count(*) c FROM (
+             SELECT 1 FROM queue_data_aggregates
+             GROUP BY "attractionId", hour HAVING count(*) > 1
+           ) d`,
+        ),
+      ).toBe(0);
+      // And the re-run did reach these buckets rather than skip them: the merged
+      // readings of both rides are now one series, so the shared hour holds five.
+      expect(afterRerun.map((row) => row.sampleCount)).toEqual([5, 3, 7]);
+    });
   });
 
   /**

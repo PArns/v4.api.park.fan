@@ -3,6 +3,11 @@ import { ParkSeasonService } from "../services/park-season.service";
 import { getMetadataArgsStorage } from "typeorm";
 import { AttractionRideProfile } from "../../attractions/entities/attraction-ride-profile.entity";
 import { AttractionReviewMark } from "../../attractions/entities/attraction-review-mark.entity";
+import { QueueDataAggregate } from "../../analytics/entities/queue-data-aggregate.entity";
+import {
+  HOURLY_AGGREGATE_SELECT,
+  aggregateIdSql,
+} from "../../queues/processors/hourly-aggregate.sql";
 import {
   ATTRACTION_DEPENDENCIES,
   CURATED_RIDE_PROFILE_FIELDS,
@@ -20,6 +25,8 @@ import {
   mergeAttractionReviewMarks,
   planAttractionReviewMarkDrops,
   migrateScheduleEntries,
+  moveAggregateBuckets,
+  AGGREGATE_CARRIED_COLUMNS,
   parkTablesMissingFrom,
   planWinnerAuthoritative,
   rideProfileRichness,
@@ -326,7 +333,7 @@ describe("merge dependency tables", () => {
   });
 
   it("hands attraction_review_marks to a function of its own", () => {
-    // One of two `custom` entries, and the bar is the table's shape: two
+    // One of three `custom` entries, and the bar is the table's shape: two
     // attraction columns plus a CHECK across them, so no combination of
     // `column` and `conflictColumns` can express it. The three generic
     // statements each name exactly one column.
@@ -348,7 +355,12 @@ describe("merge dependency tables", () => {
     const seasons = ATTRACTION_DEPENDENCIES.find(
       (d) => d.table === "park_seasons",
     );
-    expect(custom).toEqual([marks, seasons]);
+    // The third names the attraction in `"attractionId"` and, hashed, inside the
+    // primary key (PAR-704) — the same bar, met by a different shape.
+    const aggregates = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "queue_data_aggregates",
+    );
+    expect(custom).toEqual([aggregates, marks, seasons]);
   });
 
   it("names the two attraction columns review marks really has", () => {
@@ -1484,6 +1496,144 @@ describe("applyMergeDependencies", () => {
 
     expect(manager.query).toHaveBeenCalledTimes(1);
     expect(manager.query.mock.calls[0][0]).toMatch(/^UPDATE queue_data/);
+  });
+});
+
+/**
+ * `queue_data_aggregates.id` is `md5("attractionId" || '|' || hour)`, so the
+ * attraction is named twice in a row of this table. A generic `move` rewrote only
+ * the column and left the key on the loser's hash — the bucket then matched no
+ * `ON CONFLICT (id, hour)` any writer can form, and the next run inserted a
+ * second row for the same `("attractionId", hour)`. 4,029 rows on production
+ * carried such a key on 2026-10-05 (PAR-704).
+ *
+ * The behaviour — a re-run of the real upsert producing no second row, against a
+ * COMPRESSED chunk — is checked in `test/e2e/park-merge.e2e-spec.ts`. What is
+ * checked here is the shape no database can show: that the id is derived from the
+ * ONE expression the rollup also uses, that every column of the row is carried
+ * across, and that the statement is a DELETE/INSERT rather than an UPDATE of the
+ * primary key, which TimescaleDB refuses on a compressed chunk.
+ */
+describe("moveAggregateBuckets", () => {
+  const manager = { query: jest.fn().mockResolvedValue([]) };
+  const sqlOf = (call: number) =>
+    (manager.query.mock.calls[call][0] as string).replace(/\s+/g, " ").trim();
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it("is how the attraction side declares the table, and the park side is untouched", () => {
+    const attractionSide = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "queue_data_aggregates",
+    )!;
+    expect(attractionSide.strategy).toBe("custom");
+    expect(attractionSide.apply).toBe(moveAggregateBuckets);
+
+    // `parkId` appears in neither half of the hash, so the generic move is
+    // still right there. Asserted rather than assumed: moving this entry to
+    // `custom` as well would make every park merge recompute ids it must not.
+    const parkSide = PARK_DEPENDENCIES.find(
+      (d) => d.table === "queue_data_aggregates",
+    )!;
+    expect(parkSide).toMatchObject({ column: "parkId", strategy: "move" });
+  });
+
+  it("carries every column of the row the entity declares", () => {
+    // The INSERT names its columns, so a column added to the entity and not here
+    // is a merge that silently drops that value from every bucket it moves. The
+    // three named below are the ones the statement writes itself: `id` and
+    // `"attractionId"` because it replaces them, `hour` because it is the one
+    // value it reads from the deleted row unchanged and names on its own.
+    const declared: string[] = getMetadataArgsStorage()
+      .filterColumns(QueueDataAggregate)
+      .map((column) => String(column.propertyName));
+
+    expect(declared.length).toBeGreaterThan(0);
+    expect([...AGGREGATE_CARRIED_COLUMNS].sort()).toEqual(
+      declared
+        .filter((name) => !["id", "hour", "attractionId"].includes(name))
+        .sort(),
+    );
+  });
+
+  it("deletes and re-inserts rather than updating the primary key", async () => {
+    await moveAggregateBuckets(manager, "winner-id", "loser-id");
+
+    // One statement, and deliberately not an UPDATE: this is a compressed
+    // hypertable, and TimescaleDB raises `cannot update column "id" of a
+    // compressed chunk` on the version `latest-pg18` resolves to.
+    expect(manager.query).toHaveBeenCalledTimes(1);
+    const sql = sqlOf(0);
+    expect(sql).not.toMatch(/UPDATE queue_data_aggregates/);
+    expect(sql).toContain(
+      `DELETE FROM queue_data_aggregates WHERE "attractionId" = $2 RETURNING *`,
+    );
+    expect(sql).toContain("INSERT INTO queue_data_aggregates");
+    expect(manager.query.mock.calls[0][1]).toEqual(["winner-id", "loser-id"]);
+
+    // One row per hour, newest first — the loser carries duplicate buckets of its
+    // own today, and two of them hash onto one id once they are rewritten.
+    expect(sql).toContain(
+      `SELECT DISTINCT ON (hour) * FROM moved ORDER BY hour, "updatedAt" DESC NULLS LAST, id`,
+    );
+    // And the survivor keeps the hours it already states — on the NATURAL key,
+    // not left to the constraint. The two differ exactly where the survivor's own
+    // row is wrongly keyed: `md5(winner|hour)` then collides with nothing, and
+    // `ON CONFLICT` alone would insert a second row for that bucket. The hours are
+    // read before the DELETE because `DELETE … WHERE hour IN (SELECT …)` against a
+    // compressed chunk removes nothing at all.
+    expect(sql).toContain(
+      `WITH winner_hours AS MATERIALIZED ( SELECT DISTINCT hour FROM queue_data_aggregates WHERE "attractionId" = $1 )`,
+    );
+    expect(sql).toContain(
+      "WHERE NOT EXISTS ( SELECT 1 FROM winner_hours w WHERE w.hour = o.hour )",
+    );
+    expect(sql.indexOf("winner_hours AS MATERIALIZED")).toBeLessThan(
+      sql.indexOf("DELETE FROM queue_data_aggregates"),
+    );
+    // The constraint-level guard stays behind it.
+    expect(sql).toContain("ON CONFLICT (id, hour) DO NOTHING");
+  });
+
+  it("derives the new id from the same expression the rollup writes", async () => {
+    await moveAggregateBuckets(manager, "winner-id", "loser-id");
+
+    const sql = sqlOf(0);
+    // The parameter is cast to text and hashed with it, not normalized through
+    // uuid: the column is `text`, so the id has to be the hash of the bytes the
+    // column ends up holding.
+    expect(sql).toContain(aggregateIdSql("$1::text", "hour"));
+
+    // The claim this test exists for: one formula, two call sites. A copy here
+    // that drifted from the rollup would produce a valid uuid that no writer can
+    // re-derive, which is the original bug wearing the fix's clothes.
+    expect(HOURLY_AGGREGATE_SELECT).toContain(
+      aggregateIdSql('s."attractionId"', "s.hour"),
+    );
+  });
+
+  it("refuses one id on both sides, before any statement", async () => {
+    // With one id on both sides the DELETE takes the survivor's own buckets and
+    // the INSERT puts them back under the key they already had — a round trip
+    // that loses whichever duplicate `DISTINCT ON` discards.
+    await expect(
+      moveAggregateBuckets(manager, "same-id", "same-id"),
+    ).rejects.toThrow(/both sides/i);
+
+    expect(manager.query).not.toHaveBeenCalled();
+  });
+
+  it("is reached through applyMergeDependencies, with no generic move beside it", async () => {
+    const entry = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "queue_data_aggregates",
+    )!;
+
+    await applyMergeDependencies(manager, [entry], "winner-id", "loser-id");
+
+    // The failure mode this pins: a `custom` entry that also got picked up by the
+    // generic path would issue a second statement rewriting the column alone,
+    // undoing the id in the same transaction.
+    expect(manager.query).toHaveBeenCalledTimes(1);
+    expect(sqlOf(0)).toContain("ON CONFLICT (id, hour) DO NOTHING");
   });
 });
 
