@@ -482,6 +482,20 @@ describe("AdminCurationService", () => {
       expect(saved.attractionKind).toBe("TRANSPORT");
     });
 
+    it("accepts MAZE", async () => {
+      const { service, attractions } = build(anAttraction());
+      await service.curateAttraction(
+        "ride-1",
+        { fields: { attractionKind: "MAZE" }, reason: "Halloween maze" },
+        ACTOR,
+      );
+      const saved = attractions.save.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(saved.attractionKind).toBe("MAZE");
+    });
+
     it("clears the kind rather than storing an empty string", async () => {
       // "Nobody decided" is null. An empty string would read as a value
       // everywhere the column is tested for presence — including the admin's

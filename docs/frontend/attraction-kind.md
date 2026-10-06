@@ -7,8 +7,8 @@ ride in a park payload:
 { "attractionKind": "TRANSPORT" }
 ```
 
-Four values, and they are the whole list: `RIDE`, `TRANSPORT`, `SHOW`,
-`WALKTHROUGH`. They come from `ATTRACTION_KIND_VALUES`, which is also what the
+Five values, and they are the whole list: `RIDE`, `TRANSPORT`, `SHOW`,
+`WALKTHROUGH`, `MAZE`. They come from `ATTRACTION_KIND_VALUES`, which is also what the
 Swagger enum and the admin editor's dropdown read, so the three cannot drift
 apart.
 

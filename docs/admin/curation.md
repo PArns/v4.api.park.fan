@@ -32,7 +32,8 @@ its `stats` column.
 `attraction_kind` is the odd one in that list, because it sits next to a synced
 column it does **not** correct. `attraction_type` is the feed's free text —
 empty in practice, one value across ~7,400 rows — and `attraction_kind` is a
-closed set we decide: `RIDE`, `TRANSPORT`, `SHOW`, `WALKTHROUGH`. Both stay, so
+closed set we decide: `RIDE`, `TRANSPORT`, `SHOW`, `WALKTHROUGH`, `MAZE` (a scare-actor walk-through that
+runs only during a Halloween event). Both stay, so
 an editor can record that Queue-Times calls something a "Family Ride" and that
 it is in fact a railway. It is also the first enum on the attraction half; every
 other one describes a park.
