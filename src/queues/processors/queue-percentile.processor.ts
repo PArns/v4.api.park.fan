@@ -7,6 +7,10 @@ import { QueueDataAggregate } from "../../analytics/entities/queue-data-aggregat
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Show } from "../../shows/entities/show.entity";
 import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attraction-retirement.service";
+import {
+  type MazeRuleRow,
+  selectMazeRows,
+} from "../../attractions/utils/maze-rule";
 import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
 import {
   HOURLY_AGGREGATE_SELECT,
@@ -586,6 +590,15 @@ export class QueuePercentileProcessor {
       `✅ Attractions: marked ${allCandidates.length} as seasonal (${survivingCandidates.length} with history, ${zeroHistoryCandidates.length} zero-history).`,
     );
 
+    // Step 5: file the Halloween mazes.
+    //
+    // Here rather than in a job of its own because the rule reads the two
+    // columns the steps above have just written. Run on its own cron it would
+    // decide against a season up to a day old, and on the one night that
+    // matters — the night a maze's season is first recognised — it would be
+    // the stale reader.
+    await this.classifyHalloweenMazes();
+
     // ── Shows ──────────────────────────────────────────────────────────────
     // Signal: ThemeParks.wiki stops updating `lastUpdated` when a show is no
     // longer running. We use the same thresholds as attractions.
@@ -719,6 +732,82 @@ export class QueuePercentileProcessor {
     }
 
     this.logger.log(`✅ Shows: marked ${showCandidates.length} as seasonal.`);
+  }
+
+  /**
+   * File the Halloween mazes nobody has judged yet.
+   *
+   * The rule itself is in `attractions/utils/maze-rule`, including why each of
+   * its three conditions is there and what it reaches. This method is the two
+   * queries around it.
+   *
+   * The decision runs over loaded rows rather than inside the UPDATE, so there
+   * is one implementation of it and no SQL twin to drift from the TypeScript
+   * one — the trap `resolveCuratedFacts` exists to close. The whole unjudged
+   * catalogue is 7,531 rows of nine columns (2026-10-06), which is nothing
+   * beside the hypertable scans above, and narrowing it in SQL would mean
+   * resolving seasonality a second time in a second language.
+   *
+   * `attraction_kind IS NULL` is in the SELECT, in the filter and in the
+   * UPDATE. The nightly job is not the only writer here — an editor can be in
+   * the admin while it runs — and the one thing this must never do is take a
+   * verdict back.
+   */
+  private async classifyHalloweenMazes(): Promise<void> {
+    const rows: MazeRuleRow[] = await this.dataSource.query(
+      `SELECT a.id,
+              a."parkId"               AS "parkId",
+              a.attraction_kind        AS "attractionKind",
+              a.name,
+              a.curated_name           AS "curatedName",
+              a.is_seasonal            AS "isSeasonal",
+              a.curated_is_seasonal    AS "curatedIsSeasonal",
+              a.season_months          AS "seasonMonths",
+              a.curated_season_months  AS "curatedSeasonMonths",
+              -- Cast to text so the rule reads a park-local 'YYYY-MM-DD'
+              -- whatever the driver would have made of a date column.
+              a.season_out_since::text AS "seasonOutSince"
+         FROM attractions a
+        WHERE a.attraction_kind IS NULL`,
+    );
+
+    // Every month a non-cancelled Halloween season touches, per park. A
+    // cancelled season is not evidence of anything; a park that announced
+    // nothing has no row at all, which is why the fixed autumn window stays
+    // the rule's floor rather than its fallback.
+    const halloweenRows: Array<{ parkId: string; months: number[] }> =
+      await this.dataSource.query(
+        `SELECT ps.park_id AS "parkId",
+                array_agg(DISTINCT EXTRACT(MONTH FROM g)::int) AS months
+           FROM park_seasons ps
+           CROSS JOIN generate_series(
+                        date_trunc('month', ps.start_date::timestamp),
+                        date_trunc('month', ps.end_date::timestamp),
+                        INTERVAL '1 month') g
+          WHERE ps.kind = 'halloween'
+            AND ps.status <> 'cancelled'
+          GROUP BY ps.park_id`,
+      );
+
+    const ids = selectMazeRows(
+      rows,
+      new Map(halloweenRows.map((r) => [r.parkId, r.months])),
+    );
+    if (ids.length === 0) {
+      this.logger.log("   🎃 No unjudged attraction matched the maze rule.");
+      return;
+    }
+
+    const written = await this.dataSource.query(
+      `UPDATE attractions
+          SET attraction_kind = 'MAZE'
+        WHERE id = ANY($1::uuid[])
+          AND attraction_kind IS NULL`,
+      [ids],
+    );
+    this.logger.log(
+      `   🎃 Filed ${written[1] ?? 0} attraction(s) as MAZE (${ids.length} selected).`,
+    );
   }
 
   /**
