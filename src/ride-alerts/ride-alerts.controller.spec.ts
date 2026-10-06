@@ -152,6 +152,26 @@ describe("RideAlertsController", () => {
     expect(result.kind).toBe("reopen");
   });
 
+  it("refuses a reopen alert on a free-flow attraction but accepts a wait-time alert", async () => {
+    rideAlerts.findAttractionForAlert.mockResolvedValue({
+      attraction: attraction({ openWithPark: true }),
+      park: park(),
+    });
+    await expect(
+      controller.create(
+        { endpoint: ENDPOINT, attractionId: "ride-1", kind: "reopen" },
+        req(),
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(rideAlerts.upsert).not.toHaveBeenCalled();
+
+    await controller.create(
+      { endpoint: ENDPOINT, attractionId: "ride-1", thresholdMinutes: 20 },
+      req(),
+    );
+    expect(rideAlerts.upsert).toHaveBeenCalledWith("sub-1", "ride-1", 20, null);
+  });
+
   it("refuses a reopen alert at a park whose status can never be read", async () => {
     rideAlerts.findAttractionForAlert.mockResolvedValueOnce({
       attraction: attraction(),

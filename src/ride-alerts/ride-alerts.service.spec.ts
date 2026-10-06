@@ -570,6 +570,71 @@ describe("RideAlertsService", () => {
       expect(alertRows.get("alert-1")!.armed).toBe(false);
     });
 
+    it("reads a closed park as not operating and does not fire on a source that still says OPERATING", async () => {
+      subs();
+      alertRows.set("alert-1", reopen({ armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([["ride-1", standbyReading({ waitTime: 5 })]]),
+      );
+      await service.checkAndNotify(
+        PHANTASIALAND,
+        ["ride-1"],
+        NOW_MS,
+        async () => "CLOSED",
+      );
+      expect(pushService.send).not.toHaveBeenCalled();
+      expect(alertRows.get("alert-1")!.armed).toBe(true);
+    });
+
+    it("re-arms a spent alert while the park is closed, then fires when the park is open", async () => {
+      subs();
+      alertRows.set("alert-1", reopen({ armed: false }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([["ride-1", standbyReading({ waitTime: 5 })]]),
+      );
+      await service.checkAndNotify(
+        PHANTASIALAND,
+        ["ride-1"],
+        NOW_MS,
+        async () => "CLOSED",
+      );
+      expect(alertRows.get("alert-1")!.armed).toBe(true);
+      await service.checkAndNotify(
+        PHANTASIALAND,
+        ["ride-1"],
+        NOW_MS,
+        async () => "OPERATING",
+      );
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps firing when the park status lookup fails", async () => {
+      subs();
+      alertRows.set("alert-1", reopen({ armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map([["ride-1", standbyReading({ waitTime: 5 })]]),
+      );
+      await service.checkAndNotify(
+        PHANTASIALAND,
+        ["ride-1"],
+        NOW_MS,
+        async () => {
+          throw new Error("db down");
+        },
+      );
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not ask for the park status when no reopen alert exists", async () => {
+      alertRows.set("alert-1", alert({ armed: true }));
+      queueDataService.findCurrentStatusByAttractionIds.mockResolvedValue(
+        new Map(),
+      );
+      const resolve = jest.fn();
+      await service.checkAndNotify(PHANTASIALAND, ["ride-1"], NOW_MS, resolve);
+      expect(resolve).not.toHaveBeenCalled();
+    });
+
     it("does not fire for a ride that is still closed, and keeps the alert armed", async () => {
       subs();
       alertRows.set("alert-1", reopen({ armed: true }));

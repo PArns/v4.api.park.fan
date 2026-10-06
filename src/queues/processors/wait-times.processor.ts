@@ -340,6 +340,10 @@ export class WaitTimesProcessor {
                     park,
                     [...seenAttractionIds],
                     startTime,
+                    async () =>
+                      (
+                        await this.parksService.getBatchParkStatus([park.id])
+                      ).get(park.id) ?? "CLOSED",
                   );
                 }
 
