@@ -484,11 +484,7 @@ export class CalendarService {
     const measuredOperationDays =
       reopenCandidates.length > 0
         ? await this.parksService
-            .getMeasuredOperationDays(
-              park.id,
-              reopenCandidates,
-              park.timezone,
-            )
+            .getMeasuredOperationDays(park.id, reopenCandidates, park.timezone)
             .catch((err) => {
               // A day stays shut when the counter-check cannot run: the
               // operator's entry is the fallback, never the unchecked guess.
