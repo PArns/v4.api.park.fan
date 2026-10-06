@@ -102,6 +102,7 @@ export type TopBottomPerformers = {
 export const PARK_DAY_IS_CLOSED_SQL = closedParkDayExists(
   'a."parkId"',
   "(pa.target_time AT TIME ZONE p.timezone)::date",
+  "p.timezone",
 );
 
 @Injectable()

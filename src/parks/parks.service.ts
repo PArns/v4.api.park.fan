@@ -53,6 +53,14 @@ import {
   crossTypeConflictSql,
   sameTypeDuplicateSql,
 } from "./utils/schedule-dedup.sql";
+import {
+  MEASURED_OPERATION_DEAD_HOURS_FROM,
+  MEASURED_OPERATION_DEAD_HOURS_TO,
+  MEASURED_OPERATION_MAX_BLOCK_HOURS,
+  MEASURED_OPERATION_MIN_BLOCK_HOURS,
+  MEASURED_OPERATION_MIN_DISTINCT_WAITS,
+} from "./utils/measured-operation.gate";
+import { measuredOperationDayExists } from "../analytics/closed-park-days.sql";
 import { captureParkPath, samePath } from "./services/park-rename.service";
 import {
   DuplicatePair,
@@ -2086,6 +2094,18 @@ export class ParksService {
    * Logic:
    * - Opening: First 15min window where >= 10% of attractions (min 2, max 10) show activity, rounded down.
    * - Closing: Last 15min window with activity, rounded up.
+   *
+   * A **strictly past** day additionally has to look like a day: enough variety
+   * in its wait times, a block of plausible length, and nothing in the dead
+   * hours of the night. The rule, the three thresholds and what each of them
+   * was measured to reject live in `measured-operation.gate.ts`; since PAR-697
+   * an answer from here can overrule a park-level `CLOSED` entry, so a feed
+   * artefact may not produce one.
+   *
+   * *Today* is exempt from all three. A day in progress has no block length yet
+   * — at 11:00 it cannot have four hours — and the `UNKNOWN` branch in
+   * `CalendarService.buildCalendarDay` reads today's answer to decide whether
+   * the park opened at all. The gate judges finished days.
    */
   async getDerivedHistoricalHours(
     parkId: string,
@@ -2127,11 +2147,17 @@ export class ParksService {
         SELECT COUNT(*) as total_attr FROM park_rides
       ),
       -- Past days: pre-aggregated 15-min slots (park-local "HH:MM").
+      -- The waits column carries the slot's distinct wait values so the
+      -- day-level gate below can count the day's variety; the rollup only keeps
+      -- qualifying samples (OPERATING / STANDBY / waitTime >= 5), so every
+      -- element counts.
       hist_activity AS (
         SELECT
           h.date as "date",
           (s->>'time_slot') as "slot",
-          COUNT(DISTINCT h."attractionId") as "active_count"
+          COUNT(DISTINCT h."attractionId") as "active_count",
+          COALESCE(array_agg(DISTINCT (s->>'p90')), '{}') as "waits",
+          false as "is_today"
         FROM attraction_hourly_history h
         CROSS JOIN LATERAL jsonb_array_elements(h.slots) s
         WHERE h."attractionId" IN (SELECT id FROM park_rides)
@@ -2149,7 +2175,12 @@ export class ParksService {
               + (date_part('minute', q.timestamp AT TIME ZONE $4)::int / 15 * interval '15 min'),
             'HH24:MI'
           ) as "slot",
-          COUNT(DISTINCT q."attractionId") FILTER (WHERE q."waitTime" >= 5) as "active_count"
+          COUNT(DISTINCT q."attractionId") FILTER (WHERE q."waitTime" >= 5) as "active_count",
+          COALESCE(
+            array_agg(DISTINCT q."waitTime"::text) FILTER (WHERE q."waitTime" >= 5),
+            '{}'
+          ) as "waits",
+          true as "is_today"
         FROM queue_data q
         WHERE q."attractionId" IN (SELECT id FROM park_rides)
           AND (now() AT TIME ZONE $4)::date >= $2::date
@@ -2162,20 +2193,52 @@ export class ParksService {
         UNION ALL
         SELECT * FROM today_activity
       ),
+      -- The slots that carry the day: the original 10 %-of-rides bar, named so
+      -- the gate below reads the same set the bounds are taken from.
+      qualifying AS (
+        SELECT "date", "slot", "waits", "is_today"
+        FROM activity
+        WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))
+      ),
       daily_bounds AS (
         SELECT
           "date",
-          MIN("slot") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))) as "first_slot",
-          MAX("slot") FILTER (WHERE "active_count" >= LEAST(10, GREATEST(2, (SELECT total_attr FROM park_info) * 0.10))) as "last_slot"
-        FROM activity
+          bool_or("is_today") as "is_today",
+          MIN("slot") as "first_slot",
+          MAX("slot") as "last_slot",
+          COUNT(*) FILTER (
+            WHERE LEFT("slot", 2)::int
+                  BETWEEN ${MEASURED_OPERATION_DEAD_HOURS_FROM}
+                      AND ${MEASURED_OPERATION_DEAD_HOURS_TO}
+          ) as "dead_hour_slots"
+        FROM qualifying
+        GROUP BY 1
+      ),
+      -- Variety over the whole day rather than per slot: the failure mode is a
+      -- feed reporting one number on every ride (measured-operation.gate.ts).
+      daily_variety AS (
+        SELECT q."date", COUNT(DISTINCT w) as "distinct_waits"
+        FROM qualifying q, unnest(q."waits") as w
         GROUP BY 1
       )
       SELECT
-        "date",
-        date_trunc('hour', "date"::timestamp + "first_slot"::time) as "derived_open",
-        date_trunc('hour', "date"::timestamp + "last_slot"::time + INTERVAL '59 minutes') as "derived_close"
-      FROM daily_bounds
-      WHERE "first_slot" IS NOT NULL AND "last_slot" IS NOT NULL
+        b."date",
+        date_trunc('hour', b."date"::timestamp + b."first_slot"::time) as "derived_open",
+        date_trunc('hour', b."date"::timestamp + b."last_slot"::time + INTERVAL '59 minutes') as "derived_close"
+      FROM daily_bounds b
+      LEFT JOIN daily_variety v ON v."date" = b."date"
+      WHERE b."first_slot" IS NOT NULL AND b."last_slot" IS NOT NULL
+        AND (
+          -- A day in progress has no block length yet; see the doc comment.
+          b."is_today"
+          OR (
+            COALESCE(v."distinct_waits", 0) >= ${MEASURED_OPERATION_MIN_DISTINCT_WAITS}
+            AND b."dead_hour_slots" = 0
+            AND (b."last_slot"::time - b."first_slot"::time)
+                BETWEEN INTERVAL '${MEASURED_OPERATION_MIN_BLOCK_HOURS} hours'
+                    AND INTERVAL '${MEASURED_OPERATION_MAX_BLOCK_HOURS} hours'
+          )
+        )
     `,
       [parkId, fromDate, toDate, timezone],
     );
@@ -2200,6 +2263,52 @@ export class ParksService {
 
     return map;
   }
+
+  /**
+   * Of the given park-local days, the ones measured ride activity says the park
+   * operated on, against a park-level `CLOSED` entry that says otherwise.
+   *
+   * Thin on purpose: the verdict itself is `measuredOperationDayExists` in
+   * `src/analytics/closed-park-days.sql.ts`, the same fragment the four
+   * statistics callers read. That shared text is what keeps the calendar and
+   * the statistics from drifting apart on which days count — the split PAR-692
+   * closed and PAR-697 must not reopen. The thresholds behind it, and what each
+   * was measured to reject, are in `./utils/measured-operation.gate.ts`.
+   *
+   * Asked with an explicit day list rather than a range, because that is what
+   * makes it affordable: the gate's second conjunct reads raw `queue_data` for
+   * one park-local day at a time, so it is asked only about the days that are
+   * about to overrule a `CLOSED` entry — a handful per calendar window, never
+   * the window.
+   *
+   * @param days Park-local `YYYY-MM-DD` dates. Returns a subset of these.
+   */
+  async getMeasuredOperationDays(
+    parkId: string,
+    days: string[],
+    timezone: string,
+  ): Promise<Set<string>> {
+    if (days.length === 0) return new Set();
+
+    const rows = await this.scheduleRepository.manager.query(
+      `
+      SELECT d AS day
+      FROM unnest($2::date[]) AS d
+      WHERE ${measuredOperationDayExists("$1", "d", "$3")}
+      `,
+      [parkId, days, timezone],
+    );
+
+    // `day` comes back as the driver's mapping of a `date` — a string on some
+    // drivers, a Date at UTC midnight on others. Both read back as the same
+    // park-local calendar day the caller handed in.
+    return new Set<string>(
+      rows.map((r: { day: Date | string }) =>
+        typeof r.day === "string" ? r.day : r.day.toISOString().slice(0, 10),
+      ),
+    );
+  }
+
   /**
    * Fills missing schedule entries with CLOSED or UNKNOWN and holiday/bridge metadata.
    *
