@@ -1791,3 +1791,128 @@ Castle_ and _Paul's Playboat_. Exactly four of the 32 carry curated months;
 everything else runs with its park. Still held for want of any stated operating
 window: Peppa Pig's _Muddy Puddles Splash Pad_ and Walibi Rhône-Alpes' two
 _Exotic Island_ play areas. See `todo.md`.
+
+## 8. The one verdict a rule may write: `MAZE` (PAR-725)
+
+`attraction_kind` is a hand-written verdict about what a thing is **for**, and
+the type's docstring says why nothing can be derived from a name: `Big Thunder
+Mountain Railroad` sounds like transport and is a coaster, `Haunted Mansion`
+sounds like a maze and is a dark ride. One corner of it is derivable anyway,
+and only because three independent marks coincide there.
+
+A Halloween maze leaves all three at once:
+
+1. an **event-horror name** — `maze`, `haunt`, `scare`, `fright`, `slasher`,
+   `hexenhaus`, the full list in `attractions/utils/maze-rule.ts`;
+2. a **season**, resolved curated-before-detected through
+   `resolveCuratedFacts`;
+3. a season that **touches autumn** — September to November, or a month a
+   non-cancelled `halloween` row in `park_seasons` covers.
+
+None of the three is enough. The name is not, because `Haunted Mansion` and
+`Geisterbahn` run all year. The season is not, because a water park's entire
+slide inventory is seasonal and stops in September — 258 production rows are
+seasonal with an autumn last-operating month and not one of them is a maze.
+
+The rule runs as the last attraction step of `detect-seasonal`, which is also
+where it has to run: it reads `is_seasonal` and `season_months`, and the steps
+above it have just rewritten both. On its own cron it would read a season up to
+a day old, and be the stale reader on the one night that matters — the night a
+maze's season is first recognised.
+
+### It only ever fills a blank
+
+The write is `UPDATE attractions SET attraction_kind = 'MAZE' WHERE id =
+ANY(...) AND attraction_kind IS NULL`, and the same predicate sits in the
+SELECT and in the filter. There is no curated twin column here and no resolver
+to arbitrate: an editor's answer is simply final, including the answer `RIDE` on
+something whose name screams maze. That is also what makes a wrong token cheap
+— one admin write, and the rule never returns to that row.
+
+The decision runs in TypeScript over loaded rows rather than inside the
+`UPDATE`. The whole unjudged catalogue is 7,531 rows of ten columns
+(2026-10-06), which is nothing beside the hypertable scans in the same job, and
+the alternative is resolving seasonality a second time in a second language —
+the drift `resolveCuratedFacts` exists to prevent (§4).
+
+### The token list is measured, not guessed
+
+Calibrated against all 7,575 production attraction names on 2026-10-06. Two
+findings shaped it, and both are the kind that only shows up against real data:
+
+- **The pattern anchors at the start of a word**, suffixes free. Matched
+  anywhere in the name, `fear` claimed Liseberg's **AtmosFear** — a 116 m drop
+  tower — and `evil` claimed every `D-evil`: Jersey Devil Coaster, Dare Devil
+  Dive, Daredevil Falls, Lil' Devil Coaster, 8 rows. Anchored, both fall away
+  while `Fear Acres` and `Evil Dead Burn` stay, and `haunt` still reaches
+  `Haunted`.
+- **`voodoo` is not a token.** All four rows carrying it are rides: Voodoo Drop
+  (Six Flags America), Voodoo (Flamingo Land), Voodoo Bayou (Kennywood), and
+  Voodoo Express — a Kentucky Kingdom water slide, confirmed on the park's own
+  page. A word that names a theme rather than an event does not belong in the
+  list, however Halloween it sounds.
+
+Anchored and without `voodoo`, the first run selects **9 rows in 2 parks**, all
+9 genuine mazes. Matched freely it selected 11, two of them wrong.
+
+```
+Six Flags Fiesta Texas      | Carnival of Terrors         | {9,10,11} | terror
+Six Flags Fiesta Texas      | Cinema Slasher …            | {9,10,11} | slasher
+Six Flags Fiesta Texas      | Cirkus Bezerkus: Big Top …  | {9,10,11} | terror
+Six Flags Fiesta Texas      | Fear Acres                  | {9,10,11} | fear
+Six Flags Fiesta Texas      | Hexenhaus …                 | {9,10,11} | hexenhaus
+Six Flags Fiesta Texas      | Twisted: Theater of Torment | {9,10,11} | torment
+Universal Studios Hollywood | Evil Dead Burn - Express    | {9}       | evil
+Universal Studios Hollywood | Kill-Ceanera - Express      | {9}       | kill
+Universal Studios Hollywood | Killer Klowns - Express     | {9}       | kill
+```
+
+### Season evidence is read in two steps, because the months are nearly empty
+
+Only **18** of 1,098 seasonal production rows carry a month list at all. So the
+rule reads the resolved months first and, failing those, the month of
+`season_out_since` — the last park-local day the detector saw the ride running,
+which is the only thing a flagged ride without months can say about itself
+(§3.2). With neither, there is no evidence and the rule refuses: 633 rows are in
+that state, and "seasonal, and we do not know when" is not evidence of
+Halloween.
+
+### `park_seasons` is empty, so the second branch carries nothing yet
+
+`SELECT count(*) FROM park_seasons` returned **0** on 2026-10-06. The Halloween
+branch is built and tested but contributes no row until the first season is
+curated. It is there because a park's own dates beat a fixed window as soon as
+they exist — Europa-Park's Horror Nights reach into the last days of November.
+The fixed September–November window is the rule's floor, not its fallback.
+
+### What the rule does not reach is the season, not the name
+
+**Of the nine mazes already filed by hand at Movie Park Germany, the rule would
+have found two.** Seven resolve as not seasonal:
+
+```
+Final Stop · Hell House · Murder Museum · Blood Moon Trailer Park ·
+A Quiet Place · Circus of Freaks · Ahoj-Brause Horror Lab   → is_seasonal = f
+Jason Universe (curated months [9,10,11]) · The Slaughterhouse → the rule hits
+```
+
+`detect-seasonal` wants ≥ 20 observed `OPERATING` rows and a current `CLOSED`
+from the feed (§3). A maze that runs twelve evenings in October and then loses
+its wiki id (§5.9a) reaches neither. Six of the seven carry a name the list
+matches, so extending the tokens would not help — the gate in front of them is
+seasonality.
+
+That remainder is hand work (PAR-727). Measured on 2026-10-06, **174** unjudged
+rows match the name and fail the gate, 133 of them not seasonal at all; that
+list, not the 258 autumn water slides, is where the real mazes are. A pattern
+that keeps turning up in it belongs in the token list rather than in another
+round of writes.
+
+### The verdict survives a re-issued wiki id
+
+The wiki hands a maze a new entity id every season, so a verdict that did not
+survive that would need re-entering every autumn — in exactly the weeks when
+the rule's own season gate is weakest. It survives because the re-issue reuses
+the row (§5.9a): the sync's update moves `externalId` and the three synced
+fields and mentions nothing else. On a merge, `attractionKind` travels on
+`INHERITABLE_COLUMNS`. Both are held by specs.
