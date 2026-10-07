@@ -549,9 +549,10 @@ Per (attraction, park-local operating day): `operatingMinutes` = the sum over re
 of the overlap of `[seg_start, seg_end)` with the _disjoint union_ of that day's `OPERATING` windows,
 each segment capped at 70 minutes from its own row.
 
-- **The 70-minute cap** is what keeps an ingestion gap from becoming downtime. `writeHourlyHeartbeats`
-  writes when the newest STANDBY row is over 60 minutes old and the sync runs every 5, so an observed
-  ride's rows sit at most ~65 minutes apart. A longer gap has four indistinguishable causes and none of
+- **The 70-minute cap** is what keeps an ingestion gap from becoming downtime. Once the newest STANDBY
+  row is over 60 minutes old, the next sync rewrites it (the 60-minute rule) or, for a ride no sync
+  delivered in the last 10 minutes, `writeHourlyHeartbeats` carries it (PAR-720). The sync runs every 5,
+  so an observed ride's rows sit at most ~65 minutes apart. A longer gap has four indistinguishable causes and none of
   them is evidence. The time becomes `unobservedMinutes` and leaves the denominator. The error is always
   _less_ exposure, never invented exposure.
 - **The four-heartbeat cap** is what keeps our own writer from inventing duration. A heartbeat copies
