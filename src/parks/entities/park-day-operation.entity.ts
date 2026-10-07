@@ -57,6 +57,14 @@ export class ParkDayOperation {
    * `getDerivedHistoricalHours` produced them for this day — or `null` when the
    * day has none, which is the normal case for a day the gate refused.
    *
+   * `timestamp`, not `timestamptz`, on purpose: these are wall-clock readings,
+   * never instants. The slots are
+   * built `AT TIME ZONE` the park's zone, so `derived_open` leaves the query as
+   * a naive park-local time; it travels through a `Date` whose UTC fields hold
+   * that wall clock, and a `timestamp` column stores those digits unchanged. A
+   * `timestamptz` would turn them into an instant that is off by the park's
+   * offset.
+   *
    * Stored even though the calendar computes the same hours for its own window:
    * a verdict without the hours it was taken from cannot be checked after the
    * fact, and the statistics callers have no other way to see them.

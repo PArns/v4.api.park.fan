@@ -11,8 +11,8 @@
  *
  * The old bar was one condition: at a 15-min slot, at least 10 % of the park's
  * rides (min 2, max 10) show activity. Measured against production over
- * 2025-12-24 … 2026-10-04, that bar alone would have opened 1 227 of the 6 070
- * park-level `CLOSED` days; 193 of them survive the conditions below. The ones
+ * 2025-12-24 … 2026-10-07, that bar alone would have opened 1 238 of the 6 174
+ * park-level `CLOSED` days; 210 of them survive the conditions below. The ones
  * it loses are not noise, they are three named failure modes:
  *
  * 1. **A feed that reports one number on every ride.** Walibi Holland's
@@ -80,9 +80,16 @@ export const MEASURED_OPERATION_MAX_BLOCK_HOURS = 14;
  * both bounds inclusive.
  *
  * 02:00–05:59 local is chosen because it is outside every operator's published
- * hours in our data, including the ones that close after midnight — their late
- * hours fall on the calendar day they started, and 02:00 is past the last of
- * them.
+ * hours in our data, including the ones that close after midnight: 02:00 is
+ * past the last of them.
+ *
+ * Those late hours do NOT count toward the day they started. The day is a
+ * park-local calendar day, so readings between 00:00 and 01:59 land on the
+ * next day, whose block then runs from just after midnight to its own evening
+ * and exceeds {@link MEASURED_OPERATION_MAX_BLOCK_HOURS}. A park that operates
+ * past midnight is therefore never reopened by this gate. That is the safe
+ * direction (the operator's CLOSED stands); judging by operating day instead
+ * of calendar day is PAR-722.
  */
 export const MEASURED_OPERATION_DEAD_HOURS_FROM = 2;
 export const MEASURED_OPERATION_DEAD_HOURS_TO = 5;
