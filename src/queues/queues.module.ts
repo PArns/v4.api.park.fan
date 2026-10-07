@@ -33,6 +33,7 @@ import { PushNotificationProcessor } from "./processors/push-notification.proces
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
 import { ShowPatternProcessor } from "./processors/show-pattern.processor";
 import { RopeDropProcessor } from "./processors/rope-drop.processor";
+import { ParkDayOperationProcessor } from "./processors/park-day-operation.processor";
 import { TypicalWaitsProcessor } from "./processors/typical-waits.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
 import { NfForecastProcessor } from "./processors/nf-forecast.processor";
@@ -178,6 +179,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     StatsProcessor,
     P50BaselineProcessor, // P50 + P90 baseline processor
     AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
+    ParkDayOperationProcessor, // Measured-operation verdict per park-day (daily)
     DowntimeReconstructionProcessor, // Outage intervals + exposure + profiles
     PushNotificationProcessor, // The five-minute tick that sends "next up"
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans

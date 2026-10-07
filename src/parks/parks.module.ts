@@ -11,6 +11,8 @@ import { CalendarService } from "./services/calendar.service";
 import { PlanDayService } from "./services/plan-day.service";
 import { PlanDayCoverageService } from "./services/plan-day-coverage.service";
 import { PlanDayCoverage } from "./entities/plan-day-coverage.entity";
+import { ParkDayOperation } from "./entities/park-day-operation.entity";
+import { ParkDayOperationService } from "./services/park-day-operation.service";
 import { BestDaysService } from "./services/best-days.service";
 import { ParkValidatorService } from "./services/park-validator.service";
 import { ParkRepairService } from "./services/park-repair.service";
@@ -55,6 +57,7 @@ import { PopularityModule } from "../popularity/popularity.module";
       ExternalEntityMapping,
       Attraction,
       PlanDayCoverage,
+      ParkDayOperation,
     ]),
     ThemeParksModule,
     DestinationsModule,
@@ -84,6 +87,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     CalendarService,
     PlanDayService,
     PlanDayCoverageService,
+    ParkDayOperationService,
     BestDaysService,
     ParkValidatorService,
     ParkRepairService,
@@ -99,6 +103,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     ParkEnrichmentService,
     CalendarService,
     PlanDayCoverageService,
+    ParkDayOperationService,
     BestDaysService,
     ParkValidatorService,
     ParkRepairService,

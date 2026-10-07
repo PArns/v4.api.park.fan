@@ -2,6 +2,7 @@ import { Injectable, Logger, Inject } from "@nestjs/common";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { safeJsonParse } from "../../common/utils/json.util";
 import { ParksService } from "../parks.service";
+import { ParkDayOperationService } from "./park-day-operation.service";
 import { WeatherService } from "../weather.service";
 import { MLService } from "../../ml/ml.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
@@ -95,6 +96,7 @@ export class CalendarService {
 
   constructor(
     private readonly parksService: ParksService,
+    private readonly parkDayOperationService: ParkDayOperationService,
     private readonly weatherService: WeatherService,
     private readonly mlService: MLService,
     private readonly analyticsService: AnalyticsService,
@@ -461,39 +463,23 @@ export class CalendarService {
           })
         : null;
 
-    // The past days this window would call shut while ride activity says
-    // otherwise. Patrick decided on 2026-10-06 (PAR-697) that for a day that
-    // has already happened the measurement wins over the operator's own entry,
-    // in the calendar and therefore in the statistics that read the calendar's
-    // rule — but only once the activity clears the measured-operation gate,
-    // whose last condition needs raw rows rather than the rollup. Asked here,
-    // once per window, for the candidate days only; the per-day builder below
-    // just reads the answer.
-    const reopenCandidates = datesToBuild
-      .map((date) => formatInParkTimezone(date, park.timezone))
-      .filter(
-        (dateStr) =>
-          dateStr < today &&
-          derivedHistoricalHours.has(dateStr) &&
-          pickDayStatusEntry(
-            schedules.filter(
-              (s) => formatInParkTimezone(s.date, park.timezone) === dateStr,
-            ),
-          )?.scheduleType === ScheduleType.CLOSED,
-      );
-    const measuredOperationDays =
-      reopenCandidates.length > 0
-        ? await this.parksService
-            .getMeasuredOperationDays(park.id, reopenCandidates, park.timezone)
-            .catch((err) => {
-              // A day stays shut when the counter-check cannot run: the
-              // operator's entry is the fallback, never the unchecked guess.
-              this.logger.warn(
-                `Measured-operation check unavailable for ${park.slug}: ${err.message}`,
-              );
-              return new Set<string>();
-            })
-        : new Set<string>();
+    // The past days of this window that measured ride activity calls operating
+    // days. Patrick decided on 2026-10-06 (PAR-697) that for a day that has
+    // already happened the measurement wins over the operator's own entry, in
+    // the calendar and therefore in the statistics that read the calendar's
+    // rule — and on 2026-10-07 that the verdict is taken by the nightly job
+    // rather than per read. So this is one index lookup over the window, and
+    // the per-day builder below just reads the answer.
+    const measuredOperationDays = await this.parkDayOperationService
+      .getMeasuredOperationDays(park.id, fromStr, toStr)
+      .catch((err) => {
+        // A day stays shut when the verdicts cannot be read: the operator's
+        // entry is the fallback, never the unchecked guess.
+        this.logger.warn(
+          `Measured-operation verdicts unavailable for ${park.slug}: ${err.message}`,
+        );
+        return new Set<string>();
+      });
 
     // Build the calendar days in parallel, but bounded — see
     // CALENDAR_DAY_BUDGET.
@@ -831,10 +817,10 @@ export class CalendarService {
     headlinerForecast?: HeadlinerForecast,
     climateNormals: ClimateNormals | null = null,
     /**
-     * Ride activity confirms this strictly-past day was an operating day, past
-     * the measured-operation gate and its heartbeat-free counter-check. Decided
-     * in `getParkCalendar`, which asks once per window; see the status branch
-     * below for what it overrules.
+     * Ride activity confirms this strictly-past day was an operating day: the
+     * stored verdict of the measured-operation gate, read once per window in
+     * `buildCalendarResponse`. See the status branch below for what it
+     * overrules.
      */
     measuredOperation: boolean = false,
   ): Promise<CalendarDay> {
@@ -1012,7 +998,8 @@ export class CalendarService {
     // narrower branch than the UNKNOWN recovery above, in three ways:
     //
     // - `measuredOperation` is not "some ride reported a wait". It is the
-    //   measured-operation gate plus the counter-check over observed rows only
+    //   verdict the nightly job stored for this day, taken by the four-part
+    //   measured-operation gate over observed, fresh readings only
     //   (`measured-operation.gate.ts`). Across production, 1 227 shut days show
     //   some activity and 193 clear this bar.
     // - Strictly past, never today and never a future day. A future day has no
