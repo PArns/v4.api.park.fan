@@ -653,6 +653,41 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
       expect(retirementService.unretire).toHaveBeenCalledWith(deadRow.id);
     });
 
+    /**
+     * A maze keeps its verdict across the re-issue.
+     *
+     * The wiki hands a maze a new entity id every season, so a verdict that
+     * did not survive that would have to be re-entered every autumn — and
+     * since PAR-725 one of the writers is a nightly rule whose own gate is the
+     * season, which is at its weakest in exactly the weeks after a re-issue.
+     * It survives because the row is reused rather than replaced: this update
+     * moves `externalId` and the three synced fields, and touches nothing a
+     * person or that rule wrote. Asserted on the payload, because "the update
+     * does not mention it" is the whole mechanism.
+     */
+    it("leaves attraction_kind alone, so a MAZE verdict survives the new id", async () => {
+      attractionRepo.find.mockResolvedValue([
+        oldRow({ attractionKind: "MAZE" }),
+      ]);
+
+      await sync([newId]);
+
+      expect(attractionRepo.update).toHaveBeenCalledTimes(1);
+      const payload = attractionRepo.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(payload).toHaveProperty("externalId", newId);
+      expect(payload).not.toHaveProperty("attractionKind");
+      expect(Object.keys(payload).sort()).toEqual([
+        "attractionType",
+        "externalId",
+        "latitude",
+        "longitude",
+        "name",
+      ]);
+    });
+
     it("also takes an active row whose id left the list", async () => {
       attractionRepo.find.mockResolvedValue([oldRow({ retiredReason: null })]);
 

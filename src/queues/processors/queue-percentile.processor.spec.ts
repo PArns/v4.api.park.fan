@@ -447,3 +447,93 @@ describe("QueuePercentileProcessor — no season without a year of watching", ()
     }
   });
 });
+
+/**
+ * The maze rule's two queries, and the guarantee that has to hold in SQL as
+ * well as in the filter: an editor's verdict is never taken back.
+ *
+ * The rule itself is tested in `attractions/utils/maze-rule.spec.ts`. What is
+ * left here is the wiring — that the job asks for the unjudged rows, hands the
+ * decision to the rule, and writes only the ids it got back.
+ */
+describe("QueuePercentileProcessor — classifyHalloweenMazes", () => {
+  const callMazeStep = async (query: jest.Mock) => {
+    const processor = new QueuePercentileProcessor(
+      {} as never,
+      {} as never,
+      {} as never,
+      { query } as never,
+    );
+    await (processor as any).classifyHalloweenMazes();
+    return query.mock.calls.map((c) => c[0] as string);
+  };
+
+  const mazeRow = {
+    id: "11111111-1111-4111-8111-111111111111",
+    parkId: "park-1",
+    attractionKind: null,
+    name: "Fear Acres",
+    curatedName: null,
+    isSeasonal: true,
+    curatedIsSeasonal: null,
+    seasonMonths: [9, 10, 11],
+    curatedSeasonMonths: null,
+    seasonOutSince: null,
+  };
+
+  it("selects only unjudged rows and writes the ids the rule returned", async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([
+        mazeRow,
+        { ...mazeRow, id: "slide", name: "Tidal Wave Bay" },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([[], 1]);
+
+    const [selectSql, seasonSql, updateSql] = await callMazeStep(query);
+
+    expect(selectSql).toContain("WHERE a.attraction_kind IS NULL");
+    // `season_out_since` has to arrive as a park-local 'YYYY-MM-DD' string;
+    // a driver-parsed Date would shift the month at a timezone boundary.
+    expect(selectSql).toContain('a.season_out_since::text AS "seasonOutSince"');
+    expect(seasonSql).toContain("ps.kind = 'halloween'");
+    expect(seasonSql).toContain("ps.status <> 'cancelled'");
+
+    expect(updateSql.replace(/\s+/g, " ")).toContain(
+      "UPDATE attractions SET attraction_kind = 'MAZE' WHERE id = ANY($1::uuid[]) AND attraction_kind IS NULL",
+    );
+    expect(query.mock.calls[2][1]).toEqual([[mazeRow.id]]);
+  });
+
+  it("issues no UPDATE at all when nothing matches", async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ ...mazeRow, name: "White Water Canyon" }])
+      .mockResolvedValueOnce([]);
+
+    const sqls = await callMazeStep(query);
+
+    expect(sqls).toHaveLength(2);
+    expect(sqls.some((s) => s.includes("UPDATE"))).toBe(false);
+  });
+
+  it("passes each park's Halloween months through to the rule", async () => {
+    const august = {
+      ...mazeRow,
+      seasonMonths: null,
+      seasonOutSince: "2026-08-20",
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([august])
+      .mockResolvedValueOnce([{ parkId: "park-1", months: [8, 9] }])
+      .mockResolvedValueOnce([[], 1]);
+
+    await callMazeStep(query);
+
+    // Without the park season this row is out of the autumn window; with it
+    // the park's own dates carry it.
+    expect(query.mock.calls[2][1]).toEqual([[august.id]]);
+  });
+});

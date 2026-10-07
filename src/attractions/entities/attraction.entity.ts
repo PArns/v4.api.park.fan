@@ -335,9 +335,16 @@ export class Attraction {
    * production, and a Postgres enum turns every added value into an
    * `ALTER TYPE` that a running query can trip over.
    *
-   * No sync writes it. It is read straight off the row by both DTO mappers,
-   * not through `resolveCuratedFacts` — that resolver is for the columns a
-   * sync fights over, and this one has a single writer.
+   * No sync writes it, and it is read straight off the row by both DTO
+   * mappers rather than through `resolveCuratedFacts` — that resolver is for
+   * the columns a sync fights over, and nothing here overwrites a verdict.
+   *
+   * One job does write it, and only into a blank: `detect-seasonal` files
+   * Halloween mazes as `MAZE` where this column is null
+   * (`attractions/utils/maze-rule`). It never touches a row that already
+   * carries a value, which is what keeps this a single-writer column in the
+   * sense that matters — an editor's answer is final, and there is no curated
+   * twin column to resolve against.
    */
   @Column({ name: "attraction_kind", type: "text", nullable: true })
   attractionKind: AttractionKind | null;
