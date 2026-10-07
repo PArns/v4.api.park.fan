@@ -136,6 +136,34 @@ describe("ParkDayOperationService", () => {
     ]);
   });
 
+  it("stops at the park's last finished day", async () => {
+    // 2026-10-07 11:00 UTC is 13:00 on the 7th in Amsterdam, so the park's last
+    // finished day is the 6th. A fill asked for "… → today" may not write a
+    // verdict for a day in progress: the calendar refuses a non-past day on its
+    // own, the four statistics callers do not, and the two disagreeing about
+    // one day is the split this issue closes.
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-07T11:00:00Z"));
+    repository.query.mockResolvedValue(operatingStats);
+
+    const result = await service.computeRange(park, "2026-10-04", "2026-10-07");
+
+    expect(result.daysJudged).toBe(3);
+    expect(
+      repository.upsert.mock.calls[0][0].map((r: ParkDayOperation) => r.day),
+    ).toEqual(["2026-10-04", "2026-10-05", "2026-10-06"]);
+    jest.useRealTimers();
+  });
+
+  it("writes nothing when the whole range is still running", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-07T11:00:00Z"));
+
+    const result = await service.computeRange(park, "2026-10-07", "2026-10-09");
+
+    expect(result).toEqual({ daysJudged: 0, operatingDays: 0 });
+    expect(repository.upsert).not.toHaveBeenCalled();
+    jest.useRealTimers();
+  });
+
   it("writes nothing for an inverted range", async () => {
     const result = await service.computeRange(park, "2026-04-20", "2026-04-18");
 

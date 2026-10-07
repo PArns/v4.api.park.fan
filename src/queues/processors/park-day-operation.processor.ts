@@ -1,10 +1,12 @@
 import { Process, Processor } from "@nestjs/bull";
 import { Logger } from "@nestjs/common";
 import { Job } from "bull";
-import { subDays } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { ParksService } from "../../parks/parks.service";
-import { ParkDayOperationService } from "../../parks/services/park-day-operation.service";
+import {
+  parkLocalDayBefore,
+  ParkDayOperationService,
+} from "../../parks/services/park-day-operation.service";
 
 /**
  * Park Day Operation Processor
@@ -54,12 +56,18 @@ export class ParkDayOperationProcessor {
     let operatingDays = 0;
 
     for (const park of parks) {
-      const yesterday = formatInTimeZone(
-        subDays(new Date(), 1),
-        park.timezone,
-        "yyyy-MM-dd",
-      );
+      let yesterday = "";
       try {
+        // The park's last finished calendar day, by stepping a date rather than
+        // shifting an instant: `subDays(new Date(), 1)` formatted in the park's
+        // zone is a fixed 24-hour step on a UTC host, so in a zone whose local
+        // time at 4:45 UTC sits near midnight a DST transition makes it name
+        // the day that is still running (G-56, PAR-535). `timezone` is a synced
+        // column, so an unusable value throws here — inside the try, because
+        // one park's bad cell may not cost every later park its verdict.
+        yesterday = parkLocalDayBefore(
+          formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd"),
+        );
         const result = await this.parkDayOperationService.computeRange(
           park,
           yesterday,

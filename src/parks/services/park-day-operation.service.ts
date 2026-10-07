@@ -1,6 +1,7 @@
 import { forwardRef, Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import { formatInTimeZone } from "date-fns-tz";
 import { ParkDayOperation } from "../entities/park-day-operation.entity";
 import { ParksService } from "../parks.service";
 import {
@@ -94,22 +95,35 @@ export class ParkDayOperationService {
    * The derived hours come from one `getDerivedHistoricalHours` call over the
    * whole range rather than one per day, because that function reads the
    * `attraction_hourly_history` rollup and caches per range.
+   *
+   * **`toDay` is clamped to the park's last finished day.** The gate judges a
+   * day's shape — how long its block ran, whether it has variety — and a day in
+   * progress has none of that yet. The clamp lives here rather than in the
+   * callers because the readers would honour such a row: the calendar refuses a
+   * non-past day on its own, the four statistics callers do not, and the two
+   * disagreeing about one day is exactly what this issue closes. A fill asked
+   * for `… → today` therefore stops at yesterday instead of writing a verdict
+   * that only half the readers would apply.
    */
   async computeRange(
     park: ParkDayOperationTarget,
     fromDay: string,
     toDay: string,
   ): Promise<ParkDayOperationRunResult> {
-    const days = enumerateParkLocalDays(fromDay, toDay);
+    const lastFinishedDay = parkLocalDayBefore(
+      formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd"),
+    );
+    const judgeableTo = toDay < lastFinishedDay ? toDay : lastFinishedDay;
+    const days = enumerateParkLocalDays(fromDay, judgeableTo);
     if (days.length === 0) return { daysJudged: 0, operatingDays: 0 };
 
     const derivedHours = await this.parksService
-      .getDerivedHistoricalHours(park.id, fromDay, toDay, park.timezone)
+      .getDerivedHistoricalHours(park.id, fromDay, judgeableTo, park.timezone)
       .catch((err: unknown) => {
         // The hours are stored beside the verdict, not part of it. A rollup
         // that is not there yet must not cost the day its judgement.
         this.logger.warn(
-          `Derived hours unavailable for ${park.slug} ${fromDay}…${toDay}: ${
+          `Derived hours unavailable for ${park.slug} ${fromDay}…${judgeableTo}: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
@@ -173,6 +187,13 @@ export class ParkDayOperationService {
           : Number(row.block_minutes),
     };
   }
+}
+
+/** The park-local calendar day before `day`, as `YYYY-MM-DD`. */
+export function parkLocalDayBefore(day: string): string {
+  const cursor = new Date(`${day}T00:00:00Z`);
+  cursor.setUTCDate(cursor.getUTCDate() - 1);
+  return cursor.toISOString().slice(0, 10);
 }
 
 /**

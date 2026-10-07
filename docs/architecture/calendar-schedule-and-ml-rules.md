@@ -57,6 +57,8 @@ For a **strictly past** day, measured ride activity outranks the operator's own 
 - `calculate-yesterday-park-day-operation`, daily at **4:45**, every park's own yesterday. After the 4:30 `attraction-hourly-history` rollup, because the stored hours are read from it; before the 5:00 downtime job, because both read the same `queue_data` chunks.
 - `backfill-park-day-operation` `{ parkId?, fromDate, toDate }` — the one-time fill of the past after a deploy, and a re-judgement after a threshold change. Run it in portions: a Coolify deploy renews the Postgres container and ends whatever is writing, so the portion size is the damage radius.
 
+Both paths judge **finished** days only: `ParkDayOperationService.computeRange` clamps `toDate` to the park's last finished local day. A day in progress has no block length to judge, and a verdict for it would be honoured by the four statistics callers while the calendar refuses it — the two sides disagreeing about one day is what this rule exists to prevent.
+
 Measured against production on 2026-10-07 over `2025-12-24` … `2026-10-07`: 6,174 park-level shut days, 1,238 of them with any measured activity, **210 opened by the gate** across 27 parks (151 of those `CLOSED` entries came from `fillScheduleGaps` rather than from the operator's feed).
 
 ---
