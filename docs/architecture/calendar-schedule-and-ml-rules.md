@@ -55,7 +55,7 @@ For a **strictly past** day, measured ride activity outranks the operator's own 
 **Who writes it:** queue `park-day-operation`.
 
 - `calculate-yesterday-park-day-operation`, daily at **4:45**, every park's own yesterday. After the 4:30 `attraction-hourly-history` rollup, because the stored hours are read from it; before the 5:00 downtime job, because both read the same `queue_data` chunks.
-- `backfill-park-day-operation` `{ parkId?, fromDate, toDate }` — the one-time fill of the past after a deploy, and a re-judgement after a threshold change. Run it in portions: a Coolify deploy renews the Postgres container and ends whatever is writing, so the portion size is the damage radius.
+- `backfill-park-day-operation` `{ parkId?, fromDate, toDate }` — the one-time fill of the past after a deploy, and a re-judgement after a threshold change. Run it in portions: a Coolify deploy renews the Postgres container and ends whatever is writing, so the portion size is the damage radius. Queue it with `POST /v1/admin/backfill-park-day-operation` (owner) and a body `{ "fromDate": "2026-01-01", "toDate": "2026-01-31" }` — one call per month slice, the next one after the log line `✅ Fill complete` of the previous. Re-running a slice is harmless; the rows upsert on `(park_id, day)`.
 
 Both paths judge **finished** days only: `ParkDayOperationService.computeRange` clamps `toDate` to the park's last finished local day. A day in progress has no block length to judge, and a verdict for it would be honoured by the four statistics callers while the calendar refuses it — the two sides disagreeing about one day is what this rule exists to prevent.
 

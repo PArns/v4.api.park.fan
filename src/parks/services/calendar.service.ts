@@ -1000,8 +1000,8 @@ export class CalendarService {
     // - `measuredOperation` is not "some ride reported a wait". It is the
     //   verdict the nightly job stored for this day, taken by the four-part
     //   measured-operation gate over observed, fresh readings only
-    //   (`measured-operation.gate.ts`). Across production, 1 227 shut days show
-    //   some activity and 193 clear this bar.
+    //   (`measured-operation.gate.ts`). Across production, 1 238 shut days show
+    //   some activity and 210 clear this bar (2025-12-24 … 2026-10-07).
     // - Strictly past, never today and never a future day. A future day has no
     //   measurement to weigh against the feed, so there the operator stays the
     //   only source.

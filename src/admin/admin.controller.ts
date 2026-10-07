@@ -151,6 +151,7 @@ export class AdminController {
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
     @InjectQueue("shape-shadow") private shapeShadowQueue: Queue,
+    @InjectQueue("park-day-operation") private parkDayOperationQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly parkValidatorService: ParkValidatorService,
     private readonly parkRepairService: ParkRepairService,
@@ -867,6 +868,52 @@ export class AdminController {
     );
     return {
       message: "Seasonal detection job queued",
+      jobId: job.id.toString(),
+    };
+  }
+
+  /**
+   * Judges a range of past park-local days for measured operation (PAR-697),
+   * the fill the nightly 4:45 job never does for days before its first run.
+   *
+   * One job per call, so the caller chooses the portion: a Coolify deploy
+   * renews Postgres and kills whatever is writing, and the portion is the
+   * damage radius (G-134). Month slices over the `queue_data` retention window
+   * are the intended use; re-running a slice is harmless, the rows upsert.
+   */
+  @Post("backfill-park-day-operation")
+  @AdminMinRole("owner")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Backfill measured-operation verdicts",
+    description:
+      "Queues backfill-park-day-operation for { fromDate, toDate } (YYYY-MM-DD, park-local, inclusive), optionally for one parkId.",
+  })
+  @ApiResponse({ status: 202, description: "Backfill job queued" })
+  async triggerParkDayOperationBackfill(
+    @Body() body: { fromDate?: string; toDate?: string; parkId?: string },
+  ): Promise<{ message: string; jobId: string }> {
+    const isDay = (v: unknown): v is string =>
+      typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    if (!isDay(body?.fromDate) || !isDay(body?.toDate)) {
+      throw new BadRequestException(
+        "fromDate and toDate are required as YYYY-MM-DD",
+      );
+    }
+    if (body.fromDate > body.toDate) {
+      throw new BadRequestException("fromDate must not be after toDate");
+    }
+    const job = await this.parkDayOperationQueue.add(
+      "backfill-park-day-operation",
+      {
+        fromDate: body.fromDate,
+        toDate: body.toDate,
+        ...(body.parkId ? { parkId: body.parkId } : {}),
+      },
+      { priority: 5 },
+    );
+    return {
+      message: `Measured-operation backfill queued for ${body.fromDate} → ${body.toDate}`,
       jobId: job.id.toString(),
     };
   }
