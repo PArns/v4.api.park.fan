@@ -56,8 +56,25 @@ export default async function globalSetup(): Promise<void> {
     );
 
     console.log("🐳 Starting TimescaleDB test container...");
+    // Pinned to the TimescaleDB version production runs. Production is
+    // PostgreSQL 18.6 with TimescaleDB 2.24.0; this tag reports 18.1 / 2.24.0.
+    // It used to be `latest-pg16`, which was off on both axes and in opposite
+    // directions — PostgreSQL a major version behind, TimescaleDB six minor
+    // versions ahead (16.15 / 2.30.2). DML limits on compressed chunks moved
+    // between those TimescaleDB versions, so the suite that exists to measure
+    // what a park merge does to a compressed chunk was asking a different
+    // server than the one that answers in production (PAR-704).
+    //
+    // `latest-pg18` would not fix it: production's container carries exactly
+    // that tag and runs 2.24.0, while the registry serves 2.30.2 on it today. A
+    // running instance is the state of its last pull, so the tag names no
+    // version. And the remaining PostgreSQL patch gap cannot be closed from
+    // here — the image couples the two versions, so a base of 18.6 only comes
+    // with TimescaleDB 2.30.x, which is the larger gap this pin removes.
+    // How to move the pin when production's version changes:
+    // docs/development/e2e-database-version.md
     postgres = await new PostgreSqlContainer(
-      "timescale/timescaledb:latest-pg16",
+      "timescale/timescaledb:2.24.0-pg18",
     )
       .withDatabase("parkfan_test")
       .withUsername("test_user")
