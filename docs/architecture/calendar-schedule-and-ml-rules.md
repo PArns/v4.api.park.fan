@@ -37,6 +37,30 @@ Related: [Schedule Sync & Calendar](schedule-sync-and-calendar.md), [ML Model Ov
 
 Before PAR-410 the yearly route never read the schedule: on 2026-09-22 it recommended 28 of the 49 days `/calendar` called CLOSED at Legoland Billund in an 89-day window, and all of February 2027 at Phantasialand. The response ends about 182 days out (the CatBoost daily horizon), not 365.
 
+### 1.5 A past CLOSED day the measurement overrules (PAR-697)
+
+For a **strictly past** day, measured ride activity outranks the operator's own park-level `CLOSED` entry — in the calendar (`status: "OPERATING"`, `isEstimated: true`, the reconstructed hours) and in the four callers of the shut-day rule (`src/analytics/closed-park-days.sql.ts`), so the two cannot disagree about which days count. Today and every future day are unaffected: a future day has no measurement to weigh, and a day in progress has no shape to judge.
+
+**The rule** is `src/parks/utils/measured-operation.gate.ts`, four conditions over the day's qualifying raw readings, each with the production day it rejects:
+
+| Condition | Rejects |
+|-----------|---------|
+| ≥ 3 different wait values across the day | a feed reporting one number on every ride (Walibi Holland 2026-09-11: 14 rides, same value, same minute) |
+| 4–14 h from the first qualifying reading to the last, both bounds inclusive | a burst (the same day was 55 minutes) and a reading that never stops |
+| no qualifying reading in 02:00–05:59 park-local | a feed stuck on its last value (352 of 551 candidate days carried waits through the night) |
+| `timestamp - "lastUpdated"` ≤ 60 min, and `observedReadingsSql` | a frozen upstream and our own bookkeeping (PAR-748: the night rows are 0 heartbeats, 46.7 % stale feed). `lastUpdated IS NULL` is rejected with them — undecidable, and a statement against the operator is not made on an undecidable row |
+
+**The verdict is materialised, not computed per read.** The rule needs raw `queue_data` for the day it judges; evaluated in the read path it cost the ML-accuracy query 1.4 s → 7.4 s. `park_day_operations` holds one row per (park, park-local day): the verdict, the derived hours it was taken from, and when. Readers do a primary-key lookup (`measuredOperationDayExists`), and **a day with no row keeps the operator's entry** — the pre-PAR-697 rule, by construction rather than as a special case.
+
+**Who writes it:** queue `park-day-operation`.
+
+- `calculate-yesterday-park-day-operation`, daily at **4:45**, every park's own yesterday. After the 4:30 `attraction-hourly-history` rollup, because the stored hours are read from it; before the 5:00 downtime job, because both read the same `queue_data` chunks.
+- `backfill-park-day-operation` `{ parkId?, fromDate, toDate }` — the one-time fill of the past after a deploy, and a re-judgement after a threshold change. Run it in portions: a Coolify deploy renews the Postgres container and ends whatever is writing, so the portion size is the damage radius.
+
+Both paths judge **finished** days only: `ParkDayOperationService.computeRange` clamps `toDate` to the park's last finished local day. A day in progress has no block length to judge, and a verdict for it would be honoured by the four statistics callers while the calendar refuses it — the two sides disagreeing about one day is what this rule exists to prevent.
+
+Measured against production on 2026-10-07 over `2025-12-24` … `2026-10-07`: 6,174 park-level shut days, 1,238 of them with any measured activity, **210 opened by the gate** across 27 parks (151 of those `CLOSED` entries came from `fillScheduleGaps` rather than from the operator's feed).
+
 ---
 
 ## 2. Schedule Sync

@@ -2,6 +2,7 @@ import { Injectable, Logger, Inject } from "@nestjs/common";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { safeJsonParse } from "../../common/utils/json.util";
 import { ParksService } from "../parks.service";
+import { ParkDayOperationService } from "./park-day-operation.service";
 import { WeatherService } from "../weather.service";
 import { MLService } from "../../ml/ml.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
@@ -95,6 +96,7 @@ export class CalendarService {
 
   constructor(
     private readonly parksService: ParksService,
+    private readonly parkDayOperationService: ParkDayOperationService,
     private readonly weatherService: WeatherService,
     private readonly mlService: MLService,
     private readonly analyticsService: AnalyticsService,
@@ -461,6 +463,24 @@ export class CalendarService {
           })
         : null;
 
+    // The past days of this window that measured ride activity calls operating
+    // days. Patrick decided on 2026-10-06 (PAR-697) that for a day that has
+    // already happened the measurement wins over the operator's own entry, in
+    // the calendar and therefore in the statistics that read the calendar's
+    // rule — and on 2026-10-07 that the verdict is taken by the nightly job
+    // rather than per read. So this is one index lookup over the window, and
+    // the per-day builder below just reads the answer.
+    const measuredOperationDays = await this.parkDayOperationService
+      .getMeasuredOperationDays(park.id, fromStr, toStr)
+      .catch((err) => {
+        // A day stays shut when the verdicts cannot be read: the operator's
+        // entry is the fallback, never the unchecked guess.
+        this.logger.warn(
+          `Measured-operation verdicts unavailable for ${park.slug}: ${err.message}`,
+        );
+        return new Set<string>();
+      });
+
     // Build the calendar days in parallel, but bounded — see
     // CALENDAR_DAY_BUDGET.
     const days = await this.buildDaysBounded(datesToBuild, (date) => {
@@ -487,6 +507,7 @@ export class CalendarService {
           ? historicalForecastByDate.get(dateStr)
           : headlinerForecastByDate.get(dateStr),
         climateNormals,
+        measuredOperationDays.has(dateStr),
       );
     });
 
@@ -795,6 +816,13 @@ export class CalendarService {
     ratable: boolean = true,
     headlinerForecast?: HeadlinerForecast,
     climateNormals: ClimateNormals | null = null,
+    /**
+     * Ride activity confirms this strictly-past day was an operating day: the
+     * stored verdict of the measured-operation gate, read once per window in
+     * `buildCalendarResponse`. See the status branch below for what it
+     * overrules.
+     */
+    measuredOperation: boolean = false,
   ): Promise<CalendarDay> {
     const dateStr = formatInParkTimezone(date, park.timezone);
     // Find the row that states this day's status. An event row can sit beside
@@ -963,6 +991,32 @@ export class CalendarService {
         isEstimated = true;
       }
       // If it is 'today' and no activity yet, we keep it as UNKNOWN (allowing predictions below)
+    }
+
+    // A past day the operator calls shut, which we measured open (PAR-697).
+    // Here the calendar publishes a statement AGAINST the feed, so it is a
+    // narrower branch than the UNKNOWN recovery above, in three ways:
+    //
+    // - `measuredOperation` is not "some ride reported a wait". It is the
+    //   verdict the nightly job stored for this day, taken by the four-part
+    //   measured-operation gate over observed, fresh readings only
+    //   (`measured-operation.gate.ts`). Across production, 1 227 shut days show
+    //   some activity and 193 clear this bar.
+    // - Strictly past, never today and never a future day. A future day has no
+    //   measurement to weigh against the feed, so there the operator stays the
+    //   only source.
+    // - Independent of `parkHasOperatingSchedule`, unlike the branch above.
+    //   That condition limits the UNKNOWN recovery to parks with no OPERATING
+    //   row at all, and the parks this is about are the opposite case: Walibi
+    //   Holland publishes a full schedule and four of its days are wrong in it.
+    //
+    // `isEstimated: true` is what keeps this honest — the day carries derived
+    // hours and is marked as reconstructed, the same way a recovered UNKNOWN
+    // day is. Note that the hours branch further down already attached them to
+    // such a day while leaving it CLOSED; this is also what ends that split.
+    if (isStrictlyPast && status === "CLOSED" && measuredOperation) {
+      status = "OPERATING";
+      isEstimated = true;
     }
 
     // Seasonal Closure detection (Gap-fill)

@@ -157,6 +157,7 @@ describe("merge dependency tables", () => {
     "ml_accuracy_comparisons",
     "ml_prediction_anomalies",
     "park_daily_stats",
+    "park_day_operations",
     "park_downtime_coverage",
     "park_occupancy",
     "park_p50_baselines",

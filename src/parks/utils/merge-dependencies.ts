@@ -1205,6 +1205,17 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
   { table: "attraction_exposure_days", column: "parkId", strategy: "move" },
   { table: "attraction_downtime_profiles", column: "parkId", strategy: "move" },
   { table: "park_downtime_coverage", column: "parkId", strategy: "discard" },
+  // `park_id`, snake_case like the curves below. Move, not discard: the nightly
+  // job judges only yesterday, so a dropped verdict for an older day stays gone
+  // until somebody runs the backfill, and the calendar falls back to the
+  // operator's CLOSED for it. The primary key is (park_id, day), so a day both
+  // parks hold keeps the winner's verdict.
+  {
+    table: "park_day_operations",
+    column: "park_id",
+    strategy: "move",
+    conflictColumns: ["day"],
+  },
   // `park_id`, not `parkId`: this table is written by raw SQL and its column is
   // snake_case. Discard rather than move — a curve is an aggregate over the
   // loser's intervals, and those move to the winner and are recomputed the same

@@ -58,6 +58,16 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
     },
   },
   {
+    // Measured-operation verdicts: one aggregate over one day's chunks per
+    // park for the nightly job, but the fill job walks months × 100+ parks —
+    // same stall risk as the hourly-history backfill, same headroom.
+    name: "park-day-operation",
+    settings: {
+      lockDuration: 600000, // 10 min
+      lockRenewTime: 300000,
+    },
+  },
+  {
     // The whole catalogue in two statements over a compressed hypertable,
     // then the profiles. Slower than the hourly-history rollup and for the
     // same reason — it reads history rather than a rollup — so it gets the

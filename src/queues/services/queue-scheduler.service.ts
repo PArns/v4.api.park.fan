@@ -87,6 +87,8 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 + P90 baseline
     @InjectQueue("attraction-hourly-history")
     private attractionHourlyHistoryQueue: Queue,
+    @InjectQueue("park-day-operation")
+    private parkDayOperationQueue: Queue,
     @InjectQueue("downtime") private downtimeQueue: Queue,
     @InjectQueue("push-notifications")
     private pushNotificationsQueue: Queue,
@@ -1008,6 +1010,31 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
             cron: "30 4 * * *", // Daily at 4:30am
           },
           jobId: "attraction-hourly-history-cron",
+        },
+      );
+    }
+
+    // Measured-operation verdicts: daily at 4:45 AM, between the hourly-history
+    // rollup at 4:30 and the downtime reconstruction at 5:00.
+    //
+    // After 4:30 because the derived hours stored beside each verdict are read
+    // from the rollup that job writes, so judging yesterday any earlier stores
+    // a verdict whose hours are missing. Before 5:00 because both read the same
+    // `queue_data` chunks and overlapping them decompresses each chunk twice at
+    // once.
+    const hasParkDayOperationCron = await this.hasRepeatableJob(
+      this.parkDayOperationQueue,
+      "park-day-operation-cron",
+    );
+    if (!hasParkDayOperationCron) {
+      await this.parkDayOperationQueue.add(
+        "calculate-yesterday-park-day-operation",
+        {},
+        {
+          repeat: {
+            cron: "45 4 * * *", // Daily at 4:45am
+          },
+          jobId: "park-day-operation-cron",
         },
       );
     }
