@@ -43,6 +43,8 @@ After the entity loop finishes for a park, the processor:
 
 `writeHourlyHeartbeats` previously preserved `last.status` for any attraction silent for >1h, which meant stale `OPERATING` status survived forever. It now reads the same `attraction:last-seen:{id}` key and **skips heartbeat writes** when the attraction has been missing from all sources for >24h. The reconciliation step has already written `CLOSED`, so nothing needs backfilling.
 
+The same key now also stops the heartbeat at the **other** end (PAR-720): a ride a feed delivered in the last 10 minutes gets no heartbeat, because the next sync writes its hourly row itself through the 60-minute rule in `isSignificantChange`, as an observation. Without that the heartbeat — which runs right after the sync in the same tick — won the race whenever the 60-minute mark fell between the two, and a quiet ride the feed kept reporting carried heartbeat rows instead of readings for hours (2026-10-01: 76 % of the heartbeats 3–6 h after the last observation were followed by an observation with the same wait). Ten minutes is two sync ticks, not an hour, so a source that is not fetched every tick (wartezeiten-app rotates) keeps its heartbeat and its rows stay inside the downtime reconstruction's 70 minutes.
+
 ### 4. Seasonal detection does NOT pick these rows up
 
 `QueuePercentileProcessor.handleDetectSeasonal` (scheduled daily at 2:30 am) looks for attractions whose current status is `CLOSED` on days when the park was demonstrably open. A row written here has that exact shape, so this section used to say the detector would flag a disappeared attraction automatically — and it did, which was the defect (PAR-32).

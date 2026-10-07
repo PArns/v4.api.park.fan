@@ -585,6 +585,9 @@ export class WaitTimesProcessor {
 
   private readonly LAST_SEEN_TTL_SECONDS = 14 * 24 * 3600; // 14 days buffer
   private readonly STALE_THRESHOLD_MS = 24 * 3600 * 1000; // 24h
+  // A ride a feed delivered more recently than this gets its hourly row from
+  // that feed's next sync instead of from a heartbeat (PAR-720). Two sync ticks.
+  private readonly FEED_WILL_WRITE_MS = 10 * 60 * 1000; // 10 min
 
   private async touchAttractionLastSeen(attractionId: string): Promise<void> {
     try {
@@ -1024,11 +1027,29 @@ export class WaitTimesProcessor {
               // upstream source for >24h — the reverse-reconciliation step
               // has already written a CLOSED entry, and further heartbeats
               // would just re-stamp `lastUpdated=now` and mask staleness.
+              //
+              // Skip it, too, for attractions a feed delivered in this sync or
+              // the one before (PAR-720). This method runs right after the sync
+              // in the same tick, so whenever the 60-minute mark fell between
+              // the two, the heartbeat used to win, and the next sync saw a
+              // fresh row and wrote nothing. A quiet ride the feed kept
+              // reporting then carried heartbeats only, for hours. Measured on
+              // 2026-10-01: of the heartbeats whose last observed row was 3–6 h
+              // old, 76 % were followed by an observed row with the SAME wait.
+              // Left alone, the next sync writes that row itself through the
+              // 60-minute rule in `isSignificantChange`, as an observation.
+              //
+              // Ten minutes and not an hour: a source that is not fetched every
+              // tick (wartezeiten-app rotates) would otherwise leave a gap past
+              // `MAX_SEGMENT_MINUTES`, which the downtime reconstruction reads
+              // as unobserved time. Its rides keep their heartbeat.
               const raw = lastSeenValues[i];
               const lastSeenMs = raw ? parseInt(raw, 10) : 0;
+              const sinceSeenMs = now.getTime() - lastSeenMs;
               return (
                 !!lastSeenMs &&
-                now.getTime() - lastSeenMs <= this.STALE_THRESHOLD_MS
+                sinceSeenMs > this.FEED_WILL_WRITE_MS &&
+                sinceSeenMs <= this.STALE_THRESHOLD_MS
               );
             })
             .map((a) => {

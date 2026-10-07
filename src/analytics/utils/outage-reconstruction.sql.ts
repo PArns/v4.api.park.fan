@@ -43,9 +43,10 @@ export const OUTAGE_FINGERPRINT_VERSION = 1;
 /**
  * How long one row may speak for.
  *
- * `writeHourlyHeartbeats` writes when the newest STANDBY row is over 60 minutes
- * old and the sync runs every 5, so an observed ride's rows sit at most ~65
- * minutes apart. Past 70 the silence is one of the four indistinguishable causes
+ * Once the newest STANDBY row is over 60 minutes old, the next sync rewrites it
+ * (the 60-minute rule) or, for a ride no sync delivered in the last 10 minutes,
+ * `writeHourlyHeartbeats` carries it (PAR-720). The sync runs every 5, so an
+ * observed ride's rows sit at most ~65 minutes apart. Past 70 the silence is one of the four indistinguishable causes
  * and none of them is evidence: the time becomes `unobserved` and leaves the
  * denominator. The failure mode is always LESS exposure, never invented exposure.
  */

@@ -12,8 +12,9 @@
  *
  * The anchor counts only when that row is OPERATING with a wait time: a
  * CLOSED/DOWN row before the hour is the newest fact, and nothing is carried
- * over it. It is looked up no further back than `ANCHOR_LOOKBACK`; the heartbeat
- * writes a row once the newest one is an hour old, so three hours is already slack.
+ * over it. It is looked up no further back than `ANCHOR_LOOKBACK`; the sync's 60-minute
+ * rule or the heartbeat writes a row once the newest one is an hour old, so
+ * three hours is already slack.
  * The two extra bounds on `p.timestamp` in the LATERAL are implied by the window
  * (`$1 <= hour < $2`) but are constants, so chunk exclusion happens at plan time
  * instead of once per row (281 chunk nodes and 10.3 s for one day become 3 and 0.3 s).

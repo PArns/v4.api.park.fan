@@ -453,7 +453,7 @@ describe("WaitTimesProcessor", () => {
     });
   });
 
-  describe("writeHourlyHeartbeats — retired attractions (PAR-295)", () => {
+  describe("writeHourlyHeartbeats — retired rides (PAR-295), feed priority (PAR-720)", () => {
     const PARK_ID = "park-1";
     const ACTIVE = "attraction-active";
     const RETIRED = "attraction-retired";
@@ -560,6 +560,36 @@ describe("WaitTimesProcessor", () => {
 
     it("writes no heartbeat for the ride once it is retired", async () => {
       rows[1].retiredAt = new Date(Date.now() - 10 * 60_000);
+
+      const written = await (processor as any).writeHourlyHeartbeats();
+
+      expect(written).toBe(1);
+      expect(inserted.map((r) => r.attractionId)).toEqual([ACTIVE]);
+    });
+
+    // PAR-720: the heartbeat ran right after the sync and won the race against
+    // the feed's own 60-minute rule, so a quiet ride the feed kept reporting
+    // carried heartbeats instead of observations for hours. The 30-minute
+    // fixture above is the other half: a source not fetched in the last two
+    // syncs (wartezeiten-app rotates) keeps its heartbeat, or its rows would
+    // drift past the downtime reconstruction's 70 minutes.
+    it("leaves a ride the last sync delivered to the next sync", async () => {
+      redisStore.set(
+        `attraction:last-seen:${RETIRED}`,
+        String(Date.now() - 5 * 60_000),
+      );
+
+      const written = await (processor as any).writeHourlyHeartbeats();
+
+      expect(written).toBe(1);
+      expect(inserted.map((r) => r.attractionId)).toEqual([ACTIVE]);
+    });
+
+    it("writes no heartbeat for a ride absent from every feed for over 24 h", async () => {
+      redisStore.set(
+        `attraction:last-seen:${RETIRED}`,
+        String(Date.now() - 25 * 3600_000),
+      );
 
       const written = await (processor as any).writeHourlyHeartbeats();
 
