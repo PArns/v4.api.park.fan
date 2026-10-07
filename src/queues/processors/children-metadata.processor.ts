@@ -272,6 +272,7 @@ export class ChildrenMetadataProcessor {
       let syncedAttractions = 0;
       let syncedShows = 0;
       let syncedRestaurants = 0;
+      let skippedChildren = 0;
 
       this.logger.log(`📊 Total parks to process: ${totalParks}`);
 
@@ -293,6 +294,31 @@ export class ChildrenMetadataProcessor {
           batch.map(async (park, index) => {
             const parkIndex = i + index + 1;
 
+            // One child that cannot be written must not cost this park the
+            // rest of its feed. Until PAR-714 the sync loops ran bare inside
+            // the park-wide try/catch below, so the first throw ended the
+            // park: the remaining children, the reclassification and absence
+            // steps, the mapping job and the cache eviction all went with it.
+            // Knott's Soak City lost eight of nine rows for 71 days and Cedar
+            // Point Shores fifteen of seventeen, both to a single child at
+            // feed index 1 whose row lives in the resort's other park —
+            // `externalId` is globally unique, so that insert can never
+            // succeed. Skipping the child costs one row; the throw cost the
+            // park. Shared by the Queue-Times path below and the wiki path.
+            let parkSkipped = 0;
+            const skipChild = (
+              kind: string,
+              name: string,
+              id: string,
+              e: unknown,
+            ): void => {
+              parkSkipped++;
+              this.logger.error(
+                `⏭️  ${park.name}: skipped ${kind} ${name} (${id}) ` +
+                  `and kept going: ${e}`,
+              );
+            };
+
             // Fallback: If no Wiki ID, try Queue-Times
             if (!park.wikiEntityId) {
               if (park.queueTimesEntityId) {
@@ -308,23 +334,38 @@ export class ChildrenMetadataProcessor {
                     if (entity.entityType === "ATTRACTION") {
                       // Map QT entity to internal entity structure manually or via helper
                       // Since QT data is thinner, we use a simplified sync
-                      await this.syncQtAttraction(entity, park.id, qtCtx);
-                      qtAttractions++;
+                      try {
+                        await this.syncQtAttraction(entity, park.id, qtCtx);
+                        qtAttractions++;
+                      } catch (e) {
+                        skipChild(
+                          "qt-attraction",
+                          entity.name,
+                          entity.externalId,
+                          e,
+                        );
+                      }
                     }
                   }
                   return {
                     attractions: qtAttractions,
                     shows: 0,
                     restaurants: 0,
+                    skipped: parkSkipped,
                   };
                 } catch (e) {
                   this.logger.error(
                     `Failed to fetch from QT for ${park.name}: ${e}`,
                   );
-                  return { attractions: 0, shows: 0, restaurants: 0 };
+                  return {
+                    attractions: 0,
+                    shows: 0,
+                    restaurants: 0,
+                    skipped: parkSkipped,
+                  };
                 }
               }
-              return { attractions: 0, shows: 0, restaurants: 0 };
+              return { attractions: 0, shows: 0, restaurants: 0, skipped: 0 };
             }
 
             try {
@@ -367,24 +408,54 @@ export class ChildrenMetadataProcessor {
                 listedExternalIds,
               };
               for (const attractionEntity of attractions) {
-                await this.syncAttraction(
-                  attractionEntity,
-                  park.id,
-                  attractionCtx,
-                );
-                parkAttractions++;
+                try {
+                  await this.syncAttraction(
+                    attractionEntity,
+                    park.id,
+                    attractionCtx,
+                  );
+                  parkAttractions++;
+                } catch (e) {
+                  skipChild(
+                    "attraction",
+                    attractionEntity.name,
+                    attractionEntity.id,
+                    e,
+                  );
+                }
               }
 
               // Sync Shows
               for (const showEntity of shows) {
-                await this.syncShow(showEntity, park.id);
-                parkShows++;
+                try {
+                  await this.syncShow(showEntity, park.id);
+                  parkShows++;
+                } catch (e) {
+                  skipChild("show", showEntity.name, showEntity.id, e);
+                }
               }
 
               // Sync Restaurants
               for (const restaurantEntity of restaurants) {
-                await this.syncRestaurant(restaurantEntity, park.id);
-                parkRestaurants++;
+                try {
+                  await this.syncRestaurant(restaurantEntity, park.id);
+                  parkRestaurants++;
+                } catch (e) {
+                  skipChild(
+                    "restaurant",
+                    restaurantEntity.name,
+                    restaurantEntity.id,
+                    e,
+                  );
+                }
+              }
+
+              if (parkSkipped > 0) {
+                this.logger.warn(
+                  `⚠️  ${park.name}: ${parkSkipped} of ` +
+                    `${attractions.length + shows.length + restaurants.length} ` +
+                    `listed children could not be written`,
+                );
               }
 
               // An entity can change its entityType upstream while keeping its
@@ -498,13 +569,19 @@ export class ChildrenMetadataProcessor {
                 attractions: parkAttractions,
                 shows: parkShows,
                 restaurants: parkRestaurants,
+                skipped: parkSkipped,
               };
             } catch (error) {
               this.logger.error(
                 `❌ [${parkIndex}/${totalParks}] Failed to sync ${park.name}:`,
                 error,
               );
-              return { attractions: 0, shows: 0, restaurants: 0 };
+              return {
+                attractions: 0,
+                shows: 0,
+                restaurants: 0,
+                skipped: parkSkipped,
+              };
             }
           }),
         );
@@ -514,6 +591,7 @@ export class ChildrenMetadataProcessor {
           syncedAttractions += result.attractions;
           syncedShows += result.shows;
           syncedRestaurants += result.restaurants;
+          skippedChildren += result.skipped;
         });
 
         // Log progress after each batch
@@ -541,6 +619,11 @@ export class ChildrenMetadataProcessor {
       this.logger.log(
         `   - Total Children: ${syncedAttractions + syncedShows + syncedRestaurants}`,
       );
+      if (skippedChildren > 0) {
+        // Never silent: a skip means a listed child has no row this run, and
+        // the per-child error above names which one and why (PAR-714).
+        this.logger.warn(`   - Skipped Children: ${skippedChildren}`);
+      }
       this.logger.log(
         `   - API Requests: ${totalParks} (vs. ${totalParks * 3} with old approach)`,
       );
