@@ -453,6 +453,90 @@ describe("QueueDataService", () => {
    * pass on a comparison that only ever runs when the clock already forces a
    * write anyway.
    */
+  /**
+   * PAR-758. The delta check compared a feed reading against whatever row was
+   * newest, including our own. A ride back in the feed with the CLOSED its
+   * reconciliation row already said stayed on that row, reading UNKNOWN, until
+   * the 60-minute rule fired. `timestamp` is now, so only the new rule can
+   * make these significant.
+   */
+  describe("a feed reading after our own row", () => {
+    const significantChange = (
+      latest: Partial<QueueData>,
+      newData: Partial<QueueData>,
+    ) =>
+      (
+        service as unknown as {
+          isSignificantChange: (
+            latest: Partial<QueueData> | null,
+            newData: Partial<QueueData>,
+            queueType: QueueType,
+            timezone: string,
+          ) => boolean;
+        }
+      ).isSignificantChange(
+        latest,
+        newData,
+        QueueType.STANDBY,
+        "Europe/Amsterdam",
+      );
+
+    const closed = { status: LiveStatus.CLOSED, waitTime: 0 };
+    const feed = {
+      ...closed,
+      dataSource: "themeparks-wiki",
+      isHeartbeat: false,
+    };
+
+    it("saves the same CLOSED a reconciliation row already said", () => {
+      expect(
+        significantChange(
+          {
+            ...closed,
+            dataSource: "system-reconciliation",
+            isHeartbeat: false,
+            timestamp: new Date(),
+          },
+          feed,
+        ),
+      ).toBe(true);
+    });
+
+    it("saves the same value a heartbeat carried", () => {
+      expect(
+        significantChange(
+          {
+            ...closed,
+            dataSource: "themeparks-wiki",
+            isHeartbeat: true,
+            timestamp: new Date(),
+          },
+          feed,
+        ),
+      ).toBe(true);
+    });
+
+    it("does not let the reconciliation rewrite its own CLOSED every tick", () => {
+      const reconciliation = {
+        ...closed,
+        dataSource: "system-reconciliation",
+        isHeartbeat: false,
+      };
+      expect(
+        significantChange(
+          { ...reconciliation, timestamp: new Date() },
+          reconciliation,
+        ),
+      ).toBe(false);
+    });
+
+    it("still drops an unchanged feed reading after a feed reading", () => {
+      expect(significantChange({ ...feed, timestamp: new Date() }, feed)).toBe(
+        false,
+      );
+    });
+  });
+
   describe("a virtual line that stops handing out slots", () => {
     const significantChange = (
       latest: Partial<QueueData>,
