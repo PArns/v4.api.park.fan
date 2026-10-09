@@ -53,7 +53,8 @@ def load_tables(con, export: Path, materialize: bool = False) -> None:
     """Attach the export's ``bench.duckdb`` read-only (shared by all shards; blocks are
     paged in on demand) or, with ``materialize``, copy the Parquet tables into memory."""
     x = con.execute
-    names = ("parks", "attractions", "windows", "slots", "ride_day", "tft", "cbd", "park_day_cov", "truth")
+    names = ("parks", "attractions", "windows", "slots", "ride_day", "hour_stats", "tft", "cbd",
+             "park_day_cov", "truth")
     db = export / "bench.duckdb"
     if db.exists() and not materialize:
         x(f"ATTACH '{db}' AS b (READ_ONLY)")
@@ -73,11 +74,27 @@ def load_tables(con, export: Path, materialize: bool = False) -> None:
 
 
 def git_sha() -> str:
+    env = os.environ.get("MLBENCH_GIT_SHA")
+    if env and env != "unknown":
+        return env
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True,
                                        cwd=Path(__file__).parent, stderr=subprocess.DEVNULL).strip()
     except Exception:
-        return os.environ.get("MLBENCH_GIT_SHA", "unknown")
+        return "unknown"
+
+
+def code_hash() -> str:
+    """sha256 over the mlbench sources (path + bytes), so a run can be tied to code
+    even when the SHA is a working tree."""
+    import hashlib
+
+    h = hashlib.sha256()
+    root = Path(__file__).resolve().parent
+    for p in sorted(root.rglob("*.py")):
+        h.update(str(p.relative_to(root)).encode())
+        h.update(p.read_bytes())
+    return h.hexdigest()
 
 
 def load_model(spec: str) -> Model:
@@ -114,14 +131,21 @@ def slot_agg_sql(models: list[str], refs: list[str], quantile_models: list[str],
 
 
 def rideday_sql(models: list[str], cfg: BenchConfig) -> str:
-    """Per (lead, ride-day, model) decision quantities, on the slots where both the
-    truth and the model exist."""
+    """Per (lead, ride-day, model) decision quantities.
+
+    A ride-day only counts for a model when the model covers EVERY truth slot of
+    it (``full``): then all models are scored on the same slots, so ride-day
+    metrics can be paired ride-day by ride-day (``rdpair``)."""
     cols = ", ".join(models)
+    wp, ws_ = cfg.rope_worth_peak, cfg.rope_worth_savings
     return f"""
-    WITH long AS (
-      SELECT L, aid, park_id, date, ws, ko, y, busy, model, pred
-      FROM (SELECT L, aid, park_id, date, ws, ko, y, busy, {cols} FROM tg WHERE y IS NOT NULL)
-      UNPIVOT (pred FOR model IN ({cols}))),
+    WITH base AS (
+      SELECT L, aid, park_id, date, ws, ko_t, y, busy, sk, {cols},
+             count(*) OVER (PARTITION BY L, aid, date) AS n_truth
+      FROM tg WHERE y IS NOT NULL),
+    long AS (
+      SELECT L, aid, park_id, date, ws, ko_t, y, busy, sk, n_truth, model, pred
+      FROM base UNPIVOT (pred FOR model IN ({cols}))),
     r AS (
       SELECT *,
         rank() OVER g_y + (count(*) OVER (PARTITION BY L, aid, date, model, y) - 1) / 2.0 AS ry,
@@ -131,75 +155,131 @@ def rideday_sql(models: list[str], cfg: BenchConfig) -> str:
         first_value(ws) OVER (PARTITION BY L, aid, date, model ORDER BY pred, ws) AS best_ws
       FROM long
       WINDOW g_y AS (PARTITION BY L, aid, date, model ORDER BY y),
-             g_p AS (PARTITION BY L, aid, date, model ORDER BY pred))
-    SELECT L, aid, park_id, date, model, any_value(busy) busy, count(*) n,
-      quantile_cont(y, 0.9) true_p90, quantile_cont(pred, 0.9) pred_p90,
-      max(y) ymax, min(y) ymin_, max(pred) pmax,
-      CASE WHEN isfinite(corr(ry, rp)) THEN corr(ry, rp) END sp,
-      bool_or(pbest <= 2 AND y = ymin) hit2,
-      bool_or(y = ymin AND abs(ws - best_ws) <= 2) hit30,
-      max(y) FILTER (WHERE pbest = 1) - min(y) regret,
-      sum(abs(pred - y)) FILTER (WHERE ko < 4) fh_sae, count(*) FILTER (WHERE ko < 4) fh_n,
-      arg_min(pred, ko) p_open, arg_min(y, ko) y_open
-    FROM r GROUP BY L, aid, park_id, date, model"""
+             g_p AS (PARTITION BY L, aid, date, model ORDER BY pred)),
+    g AS (
+      SELECT L, aid, park_id, date, model, any_value(busy) busy, any_value(sk) sk, count(*) n,
+        any_value(n_truth) n_truth,
+        quantile_cont(y, 0.9) true_p90, quantile_cont(pred, 0.9) pred_p90,
+        max(y) ymax, min(y) ymin_, max(pred) pmax,
+        CASE WHEN isfinite(corr(ry, rp)) THEN corr(ry, rp) END sp,
+        bool_or(pbest <= 2 AND y = ymin) hit2,
+        bool_or(y = ymin AND abs(ws - best_ws) <= 2) hit30,
+        max(y) FILTER (WHERE pbest = 1) - min(y) regret,
+        arg_min(pred, ko_t) p_open, arg_min(y, ko_t) y_open
+      FROM r GROUP BY L, aid, park_id, date, model)
+    SELECT *, n = n_truth AS fullcov, n >= {cfg.min_ride_day_slots} AS ok,
+           n >= {cfg.min_ride_day_slots} AND ymax > ymin_ AS ok_rank,
+           pmax >= {wp} AND pmax - p_open >= {ws_} AS worth_p,
+           ymax >= {wp} AND ymax - y_open >= {ws_} AS worth_t
+    FROM g"""
 
 
-def rideday_agg_sql(cfg: BenchConfig) -> str:
+def rideday_pair_sql(refs: list[str], cfg: BenchConfig) -> str:
+    """Ride-day decision metrics, PAIRED: every row compares model ``model`` with
+    ``ref`` on the ride-days both cover in full (``ref = model`` gives the model's own
+    figure on its own full-coverage ride-days)."""
     wp, ws_ = cfg.rope_worth_peak, cfg.rope_worth_savings
+    ref_list = ", ".join(f"'{r}'" for r in refs)
     return f"""
-    WITH d AS (
-      SELECT *, n >= {cfg.min_ride_day_slots} AS ok,
-        n >= {cfg.min_ride_day_slots} AND ymax > ymin_ AS ok_rank,
-        pmax >= {wp} AND pmax - p_open >= {ws_} AS worth_p,
-        ymax >= {wp} AND ymax - y_open >= {ws_} AS worth_t
-      FROM rd)
-    SELECT L, park_id, date, model, busy,
-      count(*) FILTER (WHERE ok) n_rd,
-      sum(abs(pred_p90 - true_p90)) FILTER (WHERE ok) dp_sae,
-      sum(pred_p90 - true_p90) FILTER (WHERE ok) dp_se,
-      count(sp) FILTER (WHERE ok_rank) sp_n, sum(sp) FILTER (WHERE ok_rank) sp_sum,
-      count(*) FILTER (WHERE ok_rank) bt_n,
-      sum(CAST(hit2 AS INTEGER)) FILTER (WHERE ok_rank) hit2,
-      sum(CAST(hit30 AS INTEGER)) FILTER (WHERE ok_rank) hit30,
-      sum(regret) FILTER (WHERE ok_rank) regret,
-      sum(fh_sae) fh_sae, sum(fh_n) fh_n,
-      count(*) FILTER (WHERE ok AND worth_p AND worth_t) w_tp,
-      count(*) FILTER (WHERE ok AND worth_p AND NOT worth_t) w_fp,
-      count(*) FILTER (WHERE ok AND NOT worth_p AND worth_t) w_fn,
-      count(*) FILTER (WHERE ok AND NOT worth_p AND NOT worth_t) w_tn
-    FROM d GROUP BY ALL
-    UNION ALL
-    -- the production rope-drop rule (window medians, one verdict per ride) on the same ride-days
-    SELECT d.L, d.park_id, d.date, 'prod_ropedrop_hist', d.busy, count(*), NULL, NULL, NULL, NULL,
-      NULL, NULL, NULL, NULL, NULL, NULL,
-      count(*) FILTER (WHERE wh AND worth_t), count(*) FILTER (WHERE wh AND NOT worth_t),
-      count(*) FILTER (WHERE NOT wh AND worth_t), count(*) FILTER (WHERE NOT wh AND NOT worth_t)
-    FROM (SELECT d.*, h.busy_peak >= {wp} AND h.busy_peak - h.open_wait >= {ws_} AS wh
-          FROM d JOIN ropehist h USING (aid) WHERE d.ok AND d.model = 'wt_med') d
+    WITH f0 AS (SELECT * FROM rd WHERE fullcov AND ok),
+    hist AS (  -- the production rope-drop rule: one verdict per ride from the window medians
+      SELECT f.L, f.aid, f.park_id, f.date, 'prod_ropedrop_hist' AS model, f.busy, f.sk, f.ok_rank,
+             NULL::DOUBLE AS true_p90, NULL::DOUBLE AS pred_p90, NULL::DOUBLE AS sp, NULL::BOOLEAN AS hit2,
+             NULL::BOOLEAN AS hit30, NULL::DOUBLE AS regret,
+             h.busy_peak >= {wp} AND h.busy_peak - h.open_wait >= {ws_} AS worth_p, f.worth_t
+      FROM f0 f JOIN ropehist h USING (aid) WHERE f.model = 'wt_med'),
+    f AS (SELECT L, aid, park_id, date, model, busy, sk, ok_rank, true_p90, pred_p90, sp, hit2, hit30,
+                 regret, worth_p, worth_t FROM f0 UNION ALL SELECT * FROM hist)
+    SELECT a.L, a.park_id, a.date, a.model, b.model AS ref, a.busy, a.sk,
+      count(*) FILTER (WHERE a.pred_p90 IS NOT NULL AND b.pred_p90 IS NOT NULL) AS dp_n,
+      sum(abs(a.pred_p90 - a.true_p90)) FILTER (WHERE b.pred_p90 IS NOT NULL) AS dp_m,
+      sum(abs(b.pred_p90 - b.true_p90)) FILTER (WHERE a.pred_p90 IS NOT NULL) AS dp_r,
+      count(*) FILTER (WHERE a.ok_rank AND a.hit2 IS NOT NULL AND b.hit2 IS NOT NULL) AS bt_n,
+      sum(CAST(a.hit2 AS INTEGER)) FILTER (WHERE a.ok_rank AND b.hit2 IS NOT NULL) AS hit2_m,
+      sum(CAST(b.hit2 AS INTEGER)) FILTER (WHERE a.ok_rank AND a.hit2 IS NOT NULL) AS hit2_r,
+      sum(CAST(a.hit30 AS INTEGER)) FILTER (WHERE a.ok_rank AND b.hit30 IS NOT NULL) AS hit30_m,
+      sum(CAST(b.hit30 AS INTEGER)) FILTER (WHERE a.ok_rank AND a.hit30 IS NOT NULL) AS hit30_r,
+      sum(a.regret) FILTER (WHERE a.ok_rank AND b.regret IS NOT NULL) AS regret_m,
+      sum(b.regret) FILTER (WHERE a.ok_rank AND a.regret IS NOT NULL) AS regret_r,
+      count(*) FILTER (WHERE a.sp IS NOT NULL AND b.sp IS NOT NULL) AS sp_n,
+      sum(a.sp) FILTER (WHERE b.sp IS NOT NULL) AS sp_m,
+      sum(b.sp) FILTER (WHERE a.sp IS NOT NULL) AS sp_r,
+      count(*) FILTER (WHERE a.worth_p IS NOT NULL AND b.worth_p IS NOT NULL) AS w_n,
+      sum(CAST(a.worth_p = a.worth_t AS INTEGER)) FILTER (WHERE b.worth_p IS NOT NULL) AS w_m,
+      sum(CAST(b.worth_p = b.worth_t AS INTEGER)) FILTER (WHERE a.worth_p IS NOT NULL) AS w_r,
+      count(*) FILTER (WHERE a.worth_p AND a.worth_t) AS w_tp,
+      count(*) FILTER (WHERE a.worth_p AND NOT a.worth_t) AS w_fp,
+      count(*) FILTER (WHERE NOT a.worth_p AND a.worth_t) AS w_fn,
+      count(*) FILTER (WHERE NOT a.worth_p AND NOT a.worth_t) AS w_tn
+    FROM f a JOIN f b ON b.L = a.L AND b.aid = a.aid AND b.date = a.date
+    WHERE b.model IN ({ref_list}) OR b.model = a.model
     GROUP BY ALL"""
 
 
-PAIRS_SQL = """
-    WITH h AS (SELECT r.* FROM rd r JOIN rides a USING (aid)
-               WHERE a.is_headliner AND r.n >= {minslots}),
-    pw AS (
-      SELECT a.L, a.park_id, a.date, a.model,
-             count(*) FILTER (WHERE abs(a.true_p90 - b.true_p90) >= 1) pw_n,
-             count(*) FILTER (WHERE abs(a.true_p90 - b.true_p90) >= 1
-                              AND sign(a.pred_p90 - b.pred_p90) = sign(a.true_p90 - b.true_p90)) pw_ok
-      FROM h a JOIN h b ON a.L = b.L AND a.park_id = b.park_id AND a.date = b.date
-                         AND a.model = b.model AND a.aid < b.aid
-      GROUP BY ALL),
-    sp AS (
-      SELECT L, park_id, date, model, CASE WHEN isfinite(corr(rt, rp)) THEN corr(rt, rp) END dsp,
-             count(*) dsp_n FROM (
-        SELECT *, rank() OVER (PARTITION BY L, park_id, date, model ORDER BY true_p90) rt,
-                  rank() OVER (PARTITION BY L, park_id, date, model ORDER BY pred_p90) rp
-        FROM rd WHERE n >= {minslots}) GROUP BY ALL HAVING count(*) >= 5)
-    SELECT coalesce(pw.L, sp.L) L, coalesce(pw.park_id, sp.park_id) park_id,
-           coalesce(pw.date, sp.date) date, coalesce(pw.model, sp.model) model,
-           pw.pw_n, pw.pw_ok, sp.dsp, sp.dsp_n
-    FROM pw FULL OUTER JOIN sp USING (L, park_id, date, model)"""
+def pairs_sql(refs: list[str], cfg: BenchConfig) -> str:
+    """D4 headliner dayPeak ordering and UC3 across-ride dayPeak Spearman, paired on
+    the same ride pairs / the same set of rides."""
+    ref_list = ", ".join(f"'{r}'" for r in refs)
+    return f"""
+    WITH f AS (SELECT r.* FROM rd r WHERE r.fullcov AND r.ok),
+    h AS (SELECT f.* FROM f JOIN rides a USING (aid) WHERE a.is_headliner),
+    pm AS (SELECT a.L, a.park_id, a.date, a.model, a.aid AS aa, b.aid AS ab,
+                  sign(a.pred_p90 - b.pred_p90) = sign(a.true_p90 - b.true_p90) AS ok
+           FROM h a JOIN h b ON a.L = b.L AND a.park_id = b.park_id AND a.date = b.date
+                             AND a.model = b.model AND a.aid < b.aid
+           WHERE abs(a.true_p90 - b.true_p90) >= 1),
+    pw AS (SELECT m.L, m.park_id, m.date, m.model, r.model AS ref, count(*) AS pw_n,
+                  sum(CAST(m.ok AS INTEGER)) AS pw_m, sum(CAST(r.ok AS INTEGER)) AS pw_r
+           FROM pm m JOIN pm r ON r.L = m.L AND r.date = m.date AND r.aa = m.aa AND r.ab = m.ab
+           WHERE r.model IN ({ref_list}) OR r.model = m.model GROUP BY ALL),
+    j AS (SELECT a.L, a.park_id, a.date, a.model, b.model AS ref, a.aid, a.true_p90 t,
+                 a.pred_p90 pa, b.pred_p90 pb
+          FROM f a JOIN f b ON b.L = a.L AND b.aid = a.aid AND b.date = a.date
+          WHERE b.model IN ({ref_list}) OR b.model = a.model),
+    jr AS (SELECT *, rank() OVER w_t rt, rank() OVER w_a ra, rank() OVER w_b rb FROM j
+           WINDOW w_t AS (PARTITION BY L, park_id, date, model, ref ORDER BY t),
+                  w_a AS (PARTITION BY L, park_id, date, model, ref ORDER BY pa),
+                  w_b AS (PARTITION BY L, park_id, date, model, ref ORDER BY pb)),
+    sp AS (SELECT L, park_id, date, model, ref, corr(rt, ra) sa, corr(rt, rb) sb
+           FROM jr GROUP BY ALL HAVING count(*) >= 5),
+    sp2 AS (SELECT * FROM sp WHERE isfinite(sa) AND isfinite(sb))
+    SELECT coalesce(pw.L, sp2.L) AS L, coalesce(pw.park_id, sp2.park_id) AS park_id,
+           coalesce(pw.date, sp2.date) AS date, coalesce(pw.model, sp2.model) AS model,
+           coalesce(pw.ref, sp2.ref) AS ref, pw.pw_n, pw.pw_m, pw.pw_r,
+           CASE WHEN sp2.sa IS NOT NULL THEN 1 END AS dsp_n, sp2.sa AS dsp_m, sp2.sb AS dsp_r
+    FROM pw FULL OUTER JOIN sp2 USING (L, park_id, date, model, ref)"""
+
+
+# D8: production's stated error (src/ml/services/forecast-accuracy.service.ts) is the
+# global MAE of TFT's predicted_peak against the day's max hourly P90, by predicted
+# band (quiet < 30 <= mid < 60 <= busy) x lead bucket (d1/d3/d7/d14/d30/d60), over
+# the 45 days before today, cells with >= 500 comparisons. "stated" rebuilds that
+# table as of the origin; "realised" scores the forecasts served at the origin
+# (the fresh-TFT as-of read, tft_d) against the same truth.
+def _lead_bucket(expr: str) -> str:
+    return (f"CASE WHEN {expr} <= 1 THEN 'd1' WHEN {expr} <= 3 THEN 'd3' WHEN {expr} <= 7 THEN 'd7' "
+            f"WHEN {expr} <= 14 THEN 'd14' WHEN {expr} <= 30 THEN 'd30' ELSE 'd60' END")
+
+
+D8_TFT_SQL = """
+WITH st AS (
+  SELECT CASE WHEN f.peak >= 60 THEN 'busy' WHEN f.peak >= 30 THEN 'mid' ELSE 'quiet' END AS band,
+         {bucket_f} AS bucket,
+         abs(f.peak - r.peak_h90) AS err
+  FROM tft f JOIN ride_day r ON r.aid = f.aid AND r.date = f.target_date
+  WHERE f.target_date >= DATE '{c}' - 45 AND f.target_date < DATE '{c}'
+    AND f.target_date > f.forecast_date AND f.target_date - f.forecast_date <= 60 AND r.peak_h90 > 0),
+stated AS (SELECT 'stated' AS kind, band, bucket, count(*) AS n, sum(err) AS sae FROM st
+           GROUP BY ALL HAVING count(*) >= 500),
+rl AS (
+  SELECT CASE WHEN t.peak >= 60 THEN 'busy' WHEN t.peak >= 30 THEN 'mid' ELSE 'quiet' END AS band,
+         {bucket_t} AS bucket,
+         abs(t.peak - r.peak_h90) AS err
+  FROM tft_d t JOIN ride_day r ON r.aid = t.aid AND r.date = t.target_date
+  WHERE t.target_date > DATE '{c}' AND t.target_date - DATE '{c}' <= 60 AND r.peak_h90 > 0),
+realised AS (SELECT 'realised' AS kind, band, bucket, count(*) AS n, sum(err) AS sae FROM rl GROUP BY ALL)
+SELECT DATE '{c}' AS origin, * FROM stated UNION ALL SELECT DATE '{c}', * FROM realised
+"""
 
 
 # --------------------------------------------------------------------------- runner
@@ -258,23 +338,62 @@ class Runner:
     # ------------------------------------------------------------------ plug-ins
     def grid_sql(self, c: dt.date, leads: list[int], origin_table: str = "o",
                  max_lead: int = 365) -> str:
+        """Every 15-min slot of each target day's window AS KNOWN AT THE ORIGIN (``pw``)."""
         lead_list = ",".join(str(L) for L in leads if L <= max_lead) or "NULL"
         return f"""
-        WITH days AS (SELECT w.park_id, w.date, w.open_utc, w.close_utc
-                      FROM windows w WHERE w.date IN (SELECT DATE '{c}' + unnest([{lead_list}]))),
-        g AS (SELECT r.aid AS attraction_id, d.park_id, d.date, d.open_utc, d.close_utc,
-                     unnest(range(d.open_utc, d.close_utc, INTERVAL 15 MINUTE)) AS slot_start_utc
+        WITH days AS (SELECT pw.park_id, pw.date, pw.open_p, pw.close_p FROM pw
+                      WHERE pw.open_p IS NOT NULL AND pw.close_p > pw.open_p
+                        AND pw.date IN (SELECT DATE '{c}' + unnest([{lead_list}]))),
+        g AS (SELECT r.aid AS attraction_id, d.park_id, d.date, d.open_p, d.close_p,
+                     unnest(range(d.open_p, d.close_p, INTERVAL 15 MINUTE)) AS slot_start_utc
               FROM days d JOIN rides r ON r.park_id = d.park_id WHERE r.aid IN (SELECT aid FROM rs))
         SELECT g.attraction_id, g.park_id, g.date, g.slot_start_utc,
                timezone(o.timezone, g.slot_start_utc) AS slot_local,
                CAST(date_diff('minute', CAST(g.date AS TIMESTAMP), timezone(o.timezone, g.slot_start_utc)) // 15 AS INTEGER) AS ws,
-               CAST(date_diff('minute', g.open_utc, g.slot_start_utc) // 15 AS INTEGER) AS ko,
-               CAST((date_diff('minute', g.slot_start_utc, g.close_utc) - 1) // 15 AS INTEGER) AS kc,
+               CAST(date_diff('minute', g.open_p, g.slot_start_utc) // 15 AS INTEGER) AS ko,
+               CAST((date_diff('minute', g.slot_start_utc, g.close_p) - 1) // 15 AS INTEGER) AS kc,
                CAST(g.date - DATE '{c}' AS INTEGER) AS lead_days
         FROM g JOIN {origin_table} o ON o.park_id = g.park_id
-        WHERE g.slot_start_utc >= o.origin_utc"""
+        WHERE g.slot_start_utc >= o.origin_utc
+        ORDER BY g.attraction_id, g.slot_start_utc"""
+
+    def history_view(self, c: dt.date, origin_table: str) -> HistoryView:
+        con = self.con
+
+        def fetch(days: int) -> pd.DataFrame:
+            return con.execute(f"""
+                SELECT t.aid AS attraction_id, t.park_id, t.date, t.slot_utc AS slot_start_utc,
+                       t.slot_local, t.ws, t.ko, t.kc, t.y
+                FROM truth t JOIN {origin_table} o ON o.park_id = t.park_id
+                WHERE t.date >= DATE '{c}' - {int(days)} AND t.date <= DATE '{c}'
+                  AND t.slot_utc + INTERVAL 15 MINUTE <= o.origin_utc
+                ORDER BY t.aid, t.slot_utc""").df()
+
+        return HistoryView(fetch)
+
+    def covariates(self, c: dt.date, max_lead: int, oracle_weather: bool) -> pd.DataFrame:
+        """Known-future covariates: holidays and weekday as built; the window as known at
+        the origin; schedule-derived flags only where the schedule was known; weather
+        only for models that opt in to the oracle."""
+        weather = ("cov.temp_max, cov.temp_min, cov.precip_sum, cov.wind_max, cov.weather_code, "
+                   "cov.weather_source" if oracle_weather else "NULL AS weather_source")
+        return self.con.execute(f"""
+            SELECT cov.* EXCLUDE (open_local, close_local, open_utc, close_utc, has_published_window,
+                                  sched_is_holiday, sched_is_bridge_day, temp_max, temp_min, precip_sum,
+                                  wind_max, weather_code, weather_source),
+                   pw.sched_known AS schedule_known_at_origin, pw.open_p AS open_utc, pw.close_p AS close_utc,
+                   timezone(o.timezone, pw.open_p) AS open_local, timezone(o.timezone, pw.close_p) AS close_local,
+                   CASE WHEN pw.sched_known THEN cov.sched_is_holiday END AS sched_is_holiday,
+                   CASE WHEN pw.sched_known THEN cov.sched_is_bridge_day END AS sched_is_bridge_day,
+                   {weather}
+            FROM park_day_cov cov JOIN o ON o.park_id = cov.park_id
+            LEFT JOIN pw ON pw.park_id = cov.park_id AND pw.date = cov.date
+            WHERE cov.date >= DATE '{c}' AND cov.date <= DATE '{c}' + {int(max_lead)}
+            ORDER BY cov.park_id, cov.date""").df()
 
     def maybe_fit(self, m: Model, c: dt.date) -> None:
+        if type(m).fit is Model.fit:
+            return                       # nothing to train: do not pull the panel at all
         last = self._last_fit.get(m.name)
         if last is not None and (m.refit_every_days is None or (c - last).days < m.refit_every_days):
             return
@@ -283,61 +402,80 @@ class Runner:
         panel = self.con.execute(f"""
             SELECT aid AS attraction_id, park_id, date, slot_utc AS slot_start_utc, slot_local,
                    ws, ko, kc, y FROM truth
-            WHERE slot_utc + INTERVAL 15 MINUTE <= TIMESTAMPTZ '{cutoff}' {lo}""").df()
+            WHERE slot_utc + INTERVAL 15 MINUTE <= TIMESTAMPTZ '{cutoff}' {lo}
+            ORDER BY aid, slot_utc""").df()
         m.fit(panel, pd.Timestamp(cutoff))
         self._last_fit[m.name] = c
+
+    def plugin_predict(self, m: Model, c: dt.date, leads: list[int], kind: str = "daily",
+                       hour: int | None = None, origin_table: str = "o") -> pd.DataFrame:
+        """One model's forecasts at one origin, restricted to the grid it was asked for."""
+        x = self.con.execute
+        hour = self.cfg.origin_hour_local if hour is None else hour
+        origin = Origin(c, kind, hour, x(f"SELECT * FROM {origin_table}").df(),
+                        self.history_view(c, origin_table))
+        grid = x(self.grid_sql(c, leads, origin_table=origin_table, max_lead=m.max_lead_days)).df()
+        if grid.empty:
+            return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
+        cov = self.covariates(c, max(leads), m.uses_oracle_weather)
+        pred = m.predict(origin, grid, cov)
+        if pred is None or len(pred) == 0:
+            return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
+        p = pred.rename(columns={"attraction_id": "aid", "slot_start_utc": "slot_utc"}).copy()
+        for q in ("q80", "q95"):
+            if q not in p:
+                p[q] = np.nan
+        keys = grid.rename(columns={"attraction_id": "aid", "slot_start_utc": "slot_utc"})[["aid", "slot_utc"]]
+        p["slot_utc"] = pd.to_datetime(p["slot_utc"], utc=True)
+        keys["slot_utc"] = pd.to_datetime(keys["slot_utc"], utc=True)
+        return keys.merge(p[["aid", "slot_utc", "q50", "q80", "q95"]], on=["aid", "slot_utc"], how="inner")
+
+    def plugin_predict_daily(self, m: Model, c: dt.date) -> pd.DataFrame | None:
+        x = self.con.execute
+        leads = self.daily_leads(c) or [1]
+        origin = Origin(c, "daily", self.cfg.origin_hour_local, x("SELECT * FROM o").df(),
+                        self.history_view(c, "o"))
+        days = x(f"""SELECT r.aid AS attraction_id, r.park_id, DATE '{c}' + L AS date, L AS lead_days
+                     FROM rides r, (SELECT unnest([{','.join(map(str, leads))}]) L)
+                     WHERE r.aid IN (SELECT aid FROM rs) ORDER BY 1, 3""").df()
+        return m.predict_daily(origin, days, self.covariates(c, max(leads), m.uses_oracle_weather))
 
     def run_plugins_daily(self, c: dt.date, leads: list[int]) -> tuple[list[str], list[str], list[str]]:
         """Adds plug-in columns to tg and lv. Returns (slot cols, quantile models, level cols)."""
         x = self.con.execute
         slot_cols, qmodels, lvl_cols = [], [], []
-        cov = x(f"""SELECT * FROM park_day_cov WHERE date >= DATE '{c}'
-                    AND date <= DATE '{c}' + {max(leads + self.daily_leads(c) + [0])}""").df()
         for m in self.models:
+            name = m.scored_name()
             self.maybe_fit(m, c)
-            origin = Origin(c, "daily", self.cfg.origin_hour_local, x("SELECT * FROM o").df(),
-                            HistoryView(self.con, "o", c))
-            grid = x(self.grid_sql(c, leads, max_lead=m.max_lead_days)).df()
-            pred = m.predict(origin, grid, cov) if len(grid) else None
-            if pred is not None and len(pred):
-                p = pred.rename(columns={"attraction_id": "aid", "slot_start_utc": "slot_utc"})
-                for q in ("q80", "q95"):
-                    if q not in p:
-                        p[q] = np.nan
-                self.con.register("pm", p[["aid", "slot_utc", "q50", "q80", "q95"]])
-                x(f"""CREATE OR REPLACE TEMP TABLE tgm AS SELECT t.*, pm.q50 AS {m.name},
-                      pm.q80 AS {m.name}__q80, pm.q95 AS {m.name}__q95
-                      FROM tg t LEFT JOIN pm ON pm.aid = t.aid AND pm.slot_utc = t.slot_utc""")
-                self.con.unregister("pm")
-            else:
-                x(f"""CREATE OR REPLACE TEMP TABLE tgm AS SELECT t.*, NULL::DOUBLE AS {m.name},
-                      NULL::DOUBLE AS {m.name}__q80, NULL::DOUBLE AS {m.name}__q95 FROM tg t""")
+            p = self.plugin_predict(m, c, leads)
+            self.con.register("pm", p)
+            x(f"""CREATE OR REPLACE TEMP TABLE tgm AS SELECT t.*, pm.q50 AS {name},
+                  pm.q80 AS {name}__q80, pm.q95 AS {name}__q95
+                  FROM tg t LEFT JOIN pm ON pm.aid = t.aid AND pm.slot_utc = t.slot_utc""")
+            self.con.unregister("pm")
             x("DROP TABLE tg")
             x("ALTER TABLE tgm RENAME TO tg")
-            slot_cols.append(m.name)
+            slot_cols.append(name)
             if m.provides_quantiles:
-                qmodels.append(m.name)
-            days = x(f"""SELECT r.aid AS attraction_id, r.park_id, DATE '{c}' + L AS date, L AS lead_days
-                         FROM rides r, (SELECT unnest([{','.join(map(str, self.daily_leads(c) or [1]))}]) L)
-                         WHERE r.aid IN (SELECT aid FROM rs)""").df()
-            daily = m.predict_daily(origin, days, cov)
+                qmodels.append(name)
+            daily = self.plugin_predict_daily(m, c)
             if daily is not None and len(daily):
-                col = f"lvl_{m.name}"
+                col = f"lvl_{name}"
                 d = daily.rename(columns={"attraction_id": "aid", "level": "lvl"})
                 d["date"] = pd.to_datetime(d["date"]).dt.date
                 self.con.register("pd_", d[["aid", "date", "lvl"]])
                 x(f"""CREATE OR REPLACE TEMP TABLE lvm AS SELECT l.*, p.lvl AS {col} FROM lv l
                       LEFT JOIN pd_ p ON p.aid = l.aid AND p.date = l.date""")
                 x(f"""CREATE OR REPLACE TEMP TABLE tgm AS SELECT t.*, p.lvl AS {col},
-                      CASE WHEN t.ko < 4 AND p.lvl IS NOT NULL THEN t.h5
-                           WHEN t.ref_lvl > 0 THEN t.h5 * p.lvl / t.ref_lvl END AS {m.name}_x_h5
+                      CASE WHEN t.ko BETWEEN 0 AND 3 AND p.lvl IS NOT NULL THEN t.h5
+                           WHEN t.ref_lvl > 0 THEN t.h5 * p.lvl / t.ref_lvl END AS {name}_x_h5
                       FROM tg t LEFT JOIN pd_ p ON p.aid = t.aid AND p.date = t.date""")
                 self.con.unregister("pd_")
                 x("DROP TABLE lv")
                 x("ALTER TABLE lvm RENAME TO lv")
                 x("DROP TABLE tg")
                 x("ALTER TABLE tgm RENAME TO tg")
-                slot_cols.append(f"{m.name}_x_h5")
+                slot_cols.append(f"{name}_x_h5")
                 lvl_cols.append(col)
         return slot_cols, qmodels, lvl_cols
 
@@ -367,17 +505,20 @@ class Runner:
             models = B.SLOT_MODELS + plug_cols
             scored = models + B.ORACLES
             self.write("slot", slot_agg_sql(scored, B.REF_CANDIDATES, ["wt_med"] + qmodels, "tg",
-                                            ["L", "park_id", "date", "busy"]), c)
+                                            ["L", "park_id", "date", "busy", "fh", "sk"]), c)
             self._tick('slot')
             x(f"CREATE OR REPLACE TEMP TABLE rd AS {rideday_sql(models, cfg)}")
             self._tick('rd')
-            self.write("rideday", rideday_agg_sql(cfg), c)
+            self.write("rideday", rideday_pair_sql(B.REF_CANDIDATES, cfg), c)
             self._tick('rideday')
-            self.write("pairs", PAIRS_SQL.format(minslots=cfg.min_ride_day_slots), c)
+            self.write("pairs", pairs_sql(B.REF_CANDIDATES, cfg), c)
             self._tick('pairs')
             self.write("openness", self.openness_sql(models), c)
             self._tick('openness')
             self.write("levels", "SELECT * FROM lv", c)
+            self.write("d8tft", D8_TFT_SQL.format(
+                c=c.isoformat(), bucket_f=_lead_bucket("f.target_date - f.forecast_date"),
+                bucket_t=_lead_bucket(f"t.target_date - DATE '{c.isoformat()}'")), c)
             self._tick('lvwrite')
             self.optimiser(c, models)
             self._tick('optim')
@@ -416,7 +557,7 @@ class Runner:
                      row_number() OVER (PARTITION BY r.park_id
                                         ORDER BY r.is_headliner DESC, d.lvl DESC, r.aid) rk
               FROM rides r JOIN dl d ON d.aid = r.aid AND d.wk = 2)
-            SELECT t.L, t.park_id, t.date, t.aid, t.ko, t.y, {cols},
+            SELECT t.L, t.park_id, t.date, t.aid, t.ko_t AS ko, t.y, {cols},
                    p.lat, p.lng, p.land,
                    CAST(date_diff('minute', w.open_utc, w.close_utc) // 15 AS INTEGER) AS nslots
             FROM tg t JOIN pick p ON p.aid = t.aid AND p.rk <= {cfg.optimiser_rides}
@@ -483,16 +624,12 @@ class Runner:
             x(f"CREATE OR REPLACE TEMP TABLE oh AS {B.origin_sql(c.isoformat(), h)}")
             pcols, pjoins = "", ""
             for m in plug:
-                origin = Origin(c, "intraday", h, x("SELECT * FROM oh").df(), HistoryView(self.con, "oh", c))
-                grid = x(self.grid_sql(c, [0, 1], origin_table="oh")).df()
-                cov = x(f"SELECT * FROM park_day_cov WHERE date BETWEEN DATE '{c}' AND DATE '{c}' + 1").df()
-                pred = m.predict(origin, grid, cov) if len(grid) else None
-                p = (pred if pred is not None else pd.DataFrame(columns=["attraction_id", "slot_start_utc", "q50"]))
-                p = p.rename(columns={"attraction_id": "aid", "slot_start_utc": "slot_utc"})[["aid", "slot_utc", "q50"]]
-                self.con.register(f"pi_{m.name}", p)
-                pcols += f", pi_{m.name}.q50 AS {m.name}"
-                pjoins += (f" LEFT JOIN pi_{m.name} ON pi_{m.name}.aid = t.aid"
-                           f" AND pi_{m.name}.slot_utc = t.slot_utc")
+                name = m.scored_name()
+                p = self.plugin_predict(m, c, [0, 1], kind="intraday", hour=h, origin_table="oh")
+                self.con.register(f"pi_{name}", p)
+                pcols += f", pi_{name}.q50 AS {name}"
+                pjoins += (f" LEFT JOIN pi_{name} ON pi_{name}.aid = t.aid"
+                           f" AND pi_{name}.slot_utc = t.slot_utc")
             x(f"""CREATE OR REPLACE TEMP TABLE ih_{h} AS
                 SELECT {h} AS h, t.aid, t.park_id, t.date, t.slot_utc, t.y, t.busy, a.is_headliner AS hl,
                        CAST(date_diff('minute', oh.origin_utc, t.slot_utc) AS INTEGER) + 15 AS lead_min,
@@ -505,7 +642,7 @@ class Runner:
                 {pjoins}
                 WHERE t.L = 0 AND t.slot_utc >= oh.origin_utc""")
             for m in plug:
-                self.con.unregister(f"pi_{m.name}")
+                self.con.unregister(f"pi_{m.scored_name()}")
             frames.append(f"SELECT * FROM ih_{h}")
         x(f"CREATE OR REPLACE TEMP TABLE ih AS {' UNION ALL BY NAME '.join(frames)}")
         for h in cfg.intraday_hours_local:
@@ -514,34 +651,36 @@ class Runner:
                CASE WHEN lead_min <= 120 THEN 'm' || lpad(CAST(lead_min AS VARCHAR), 3, '0')
                     WHEN lead_min <= 240 THEN 'h2-4' WHEN lead_min <= 480 THEN 'h4-8' ELSE 'h8+' END AS lead_key
              FROM ih""")
-        models = B.INTRADAY_MODELS + [m.name for m in plug]
+        models = B.INTRADAY_MODELS + [m.scored_name() for m in plug]
         self.write("intraday", slot_agg_sql(models, B.INTRADAY_REFS, [], "ih",
                                             ["lead_key", "park_id", "date", "busy", "hl"]), c)
-        # D1 next-best-ride: suggestion = forecast max in the next 120 min >= live + 10
-        thr, look = cfg.next_best_min_saving, cfg.next_best_lookahead_min
+        # D1 next-best-ride (lib/planner/next-best-ride.ts): suggest a ride when the
+        # forecast maximum inside the lookahead is >= live + 10. The candidate set is
+        # the same for every model — every (origin, ride) with a live OPERATING wait —
+        # and the lookahead is fixed (60 or 120 min), never the model's own peak time.
+        thr = cfg.next_best_min_saving
         parts = []
-        for m in models:
-            if m == "persistence":
-                continue
-            parts.append(f"""
-              SELECT h, aid, park_id, date, '{m}' AS model, any_value(persistence) live,
-                     max({m}) pred_peak, arg_max(lead_min, {m}) peak_lead, max(y) true_peak
-              FROM ih WHERE persistence IS NOT NULL AND lead_min - 15 <= {look}
-              GROUP BY h, aid, park_id, date HAVING count({m}) > 0""")
+        for look in (60, cfg.next_best_lookahead_min):
+            for m in models:
+                if m == "persistence":
+                    continue
+                parts.append(f"""
+                  SELECT h, aid, park_id, date, '0-{look}' AS bucket, '{m}' AS model,
+                         any_value(persistence) live, max({m}) pred_peak, max(y) true_peak
+                  FROM ih WHERE persistence IS NOT NULL AND lead_min - 15 <= {look}
+                  GROUP BY h, aid, park_id, date""")
         x(f"CREATE OR REPLACE TEMP TABLE nb AS {' UNION ALL '.join(parts)}")
         self.write("nextbest", f"""
-            WITH s AS (SELECT *, pred_peak - live >= {thr} AS sug,
-                              coalesce(true_peak - live >= {thr}, false) AS opp,
-                              row_number() OVER (PARTITION BY h, park_id, model
-                                                 ORDER BY pred_peak - live DESC, aid) AS rk,
-                              CASE WHEN peak_lead - 15 < 60 THEN '0-60' ELSE '60-120' END AS bucket
-                       FROM nb)
+            WITH s AS (SELECT *, coalesce(pred_peak - live >= {thr}, false) AS sug,
+                              coalesce(true_peak - live >= {thr}, false) AS opp FROM nb),
+            r AS (SELECT *, CASE WHEN sug THEN row_number() OVER (PARTITION BY h, park_id, bucket, model, sug
+                                                    ORDER BY pred_peak - live DESC, aid) END AS rk FROM s)
             SELECT park_id, date, model, bucket, count(*) n_cand,
                    count(*) FILTER (WHERE sug) n_sug, count(*) FILTER (WHERE sug AND opp) n_ok,
                    count(*) FILTER (WHERE opp) n_opp,
                    count(*) FILTER (WHERE sug AND rk <= {cfg.next_best_limit}) n_sug3,
                    count(*) FILTER (WHERE sug AND opp AND rk <= {cfg.next_best_limit}) n_ok3
-            FROM s GROUP BY ALL""", c)
+            FROM r GROUP BY ALL""", c)
 
 
 # --------------------------------------------------------------------------- CLI
@@ -557,6 +696,8 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--memory", default=None)
     p.add_argument("--threads", type=int, default=None)
     p.add_argument("--leads", default=None, help="override slot leads, e.g. 0,1,3,7")
+    p.add_argument("--reference", action="store_true",
+                   help="a run others compare against: refuse to start without git SHA and image id")
 
 
 def main(args: argparse.Namespace) -> int:
@@ -572,8 +713,14 @@ def main(args: argparse.Namespace) -> int:
     out.mkdir(parents=True, exist_ok=True)
     i, n = (int(v) for v in args.shard.split("/"))
     models = [load_model(s) for s in args.model]
-    meta = {"config": json.loads(cfg.to_json()), "models": [m.name for m in models],
-            "git_sha": git_sha(), "export": str(args.export),
+    sha = git_sha()
+    image = os.environ.get("MLBENCH_IMAGE_ID", "unknown")
+    if args.reference and ("unknown" in (sha, image) or sha.endswith("-dirty")):
+        raise SystemExit("--reference needs a known git SHA (--build-arg GIT_SHA) and MLBENCH_IMAGE_ID "
+                         f"(-e MLBENCH_IMAGE_ID=$(docker image inspect -f '{{{{.Id}}}}' <tag>)); got {sha}, {image}")
+    meta = {"config": json.loads(cfg.to_json()), "models": [m.scored_name() for m in models],
+            "git_sha": sha, "code_sha256": code_hash(), "image_id": image, "reference": args.reference,
+            "export": str(args.export),
             "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "argv": sys.argv}
     (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))

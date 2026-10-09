@@ -84,7 +84,9 @@ class LevelH5Example(Model):
         h_lin = np.where(mid < 30, h0 + ((30 - mid) / 60.0) * (hm - h0), h0 + ((mid - 30) / 60.0) * (hp - h0))
         h_lin = pd.Series(h_lin, index=g.index)
         wt = lookup(wsp, g["ws"])
-        edge = pd.Series(np.where(g["ko"] < 4, p_open, np.where(g["kc"] < 4, p_close, np.nan)), index=g.index)
+        first = g["ko"].between(0, 3)
+        last = g["kc"].between(0, 3)
+        edge = pd.Series(np.where(first, p_open, np.where(last, p_close, np.nan)), index=g.index)
         h5 = edge.fillna(h_lin).fillna(wt)
 
         # levels: window ride-day P90s
@@ -106,7 +108,7 @@ class LevelH5Example(Model):
         ref = np.where(np.isnan(ref_t), ref_a, ref_t)
         with np.errstate(invalid="ignore", divide="ignore"):
             scaled = np.where(ref > 0, h5.to_numpy() * lvl / ref, np.nan)
-        q50 = np.where(g["ko"] < 4, h5.to_numpy(), scaled)
+        q50 = np.where(first, h5.to_numpy(), scaled)
         out = pd.DataFrame({"attraction_id": g["attraction_id"], "slot_start_utc": g["slot_start_utc"],
                             "q50": q50})
         return out[np.isfinite(out["q50"])]

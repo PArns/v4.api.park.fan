@@ -59,7 +59,9 @@ def write(raw: Path, seed: int = 7) -> dict:
             cl = dt.datetime.combine(d, dt.time(18 if d.weekday() < 5 else 20), z)
             sched.append({"park_id": pid, "date": d.isoformat(), "schedule_type": "OPERATING",
                           "opening_us": _us(op), "closing_us": _us(cl), "is_holiday": False,
-                          "is_bridge_day": False, "updated_us": _us(op)})
+                          "is_bridge_day": False,
+                          # most days are published 20 days ahead, every third only the day before
+                          "updated_us": _us(op - dt.timedelta(days=1 if i % 3 == 0 else 20))})
             weekend = 1.5 if d.weekday() >= 5 else 1.0
             for k in range(4):
                 aid = f"{pid}-r{k}"

@@ -51,10 +51,15 @@ after another, resumable (finished files are skipped).
   (+ `headliner_attractions`, coordinates, land), park-level `schedule_entries`,
   `holidays`, `weather_data`.
 - **No weather forecast archive exists** (`weather_data` keeps only the current
-  16-day forecast) — the covariates carry daily actuals flagged `ORACLE_actuals`.
-- **No schedule history exists** (`schedule_entries` keeps the latest version of
-  a day) — every window is flagged `published_final`.
+  16-day forecast) — the covariates carry daily actuals flagged `ORACLE_actuals`,
+  which baselines never read and plug-ins only get by opting in.
+- **Schedule history is partial**: `schedule_entries` keeps the latest version
+  of a day, but `updatedAt` says when it was last written. A window last written
+  after an origin was not known at that origin (15 % of the scored slots at d1,
+  ~40 % at d30 in the 2026-10-09 export; the median operator publishing horizon
+  is 39 d), so the runner treats it as unknown — see "Protocol".
 - `headliner_attractions` is the current table (548-day window), not ex-ante.
+  It only decides which rides count as headliners (UC4 / D2 / D4 / D6).
 
 ## Truth
 
@@ -73,9 +78,21 @@ P90 of the ride-day's truth slots (≥ 8 slots); park level = mean over headline
   08, 10 … 20 (UC1, UC2 rest-of-day). Evaluation from the first truth day + 56.
 - **Information cut**: profiles read only slots that END before the park's
   origin; TFT / CatBoost daily levels are the latest rows with
-  `created_at < origin`; long-history baselines read a month snapshot cut at the
-  first day of the origin's month. `tests/test_runner.py::test_information_cut`
-  poisons everything after the origin and asserts no forecast moves.
+  `created_at < origin` and, like production's serving read, at most 3 days
+  stale; long-history baselines read a month snapshot cut at the first day of the
+  origin's month; production's hourly profile is rebuilt as of the day before.
+- **Opening hours as known at the origin**: a target day's published window is
+  used only if its schedule row was last written before the origin; otherwise
+  the forecast uses a window projected from the last 56 days (median opening and
+  closing time per weekday type) — production's observed-hours fallback. Every
+  opening-aligned forecast (H5's first and last hour, `prod_served`'s open hours,
+  the plug-in grid) reads that window; the truth and the "first hour" segment of
+  the scores stay on the published one. Scores are also split by schedule
+  known / projected at the origin.
+- `tests/test_runner.py::test_information_cut_baselines` and
+  `::test_information_cut_plugins` (run for EVERY registered model) poison truth,
+  ride-day levels, hourly stats, TFT/CatBoost rows written after the origin,
+  windows written after the origin and the weather, and assert no forecast moves.
 - Ex-ante busy = the ride's q90 over the 56 days before the origin ≥ 45 min.
 - Lead grid: d0 (intraday + 06:00), d1–d7, d10, d14, d21, d30, d45, d60, d90 for
   slot curves; UC4 daily levels at every lead 1–90 plus 120/180/270/365.
@@ -90,38 +107,63 @@ P90 of the ride-day's truth slots (≥ 8 slots); park level = mean over headline
 | `clim` | reference fallback | same slot + weekday type + season over all history before the month snapshot, else all seasons (no ride has a previous year yet) |
 | `h5` | 4 | opening-aligned first hour, close-aligned last hour, hourly median interpolated |
 | `lvlh5_naive` / `lvlh5_tft` / `lvlh5_cbd` | 5a / 5b / — | H5 × level ÷ window median daily P90; first hour unscaled |
-| `prod_served` | 6 | `/plan/day` composed tier: 365-day hourly P50 profile, max-normalised to TFT (else CatBoost daily) level, rounded to 5; d ≥ 3 only (d0–d2 serve CatBoost hourly, which is not stored per lead) |
+| `prod_served` / `prod_served_lin` | 6 | `/plan/day` composed tier rebuilt as of the origin: the `/stats/hourly` profile (one year ending yesterday; AVG over days of each hour's P50 with ≥ 2 samples; rides with ≥ 20 days; the park's hour axis keeps an hour measured on ≥ 10 days and ≥ 0.4 × the best hour's days and reported by ≥ 50 % of the rides; rounded to 5), `composeDayCurve` over the open hours known at the origin (midnight wrap), max-normalised to the served day level (TFT ≤ 3 days stale, else CatBoost daily), rounded to 5. `prod_served` = the hourly step the planner reads; `_lin` = the same curve interpolated between hour centres. d ≥ 3 only (d0–d2 serve CatBoost hourly, which is not stored per lead). The hourly P50 is approximated from the 15-min truth (`hour_stats`), not read from `queue_data_aggregates` |
 | `oracle_level` / `oracle_shape` | decomposition | H5 × TRUE level / TRUE shape × naive level — never in the hand-over |
 
 ## Decision metrics (frontend: park.fan)
 
+Every decision metric is PAIRED at the level it lives on — never only at the
+park-day: slot by slot (MAE, first hour), ride-day by ride-day (best time,
+dayPeak error, rope drop; a ride-day counts for a model only if the model covers
+every truth slot of it, so all models are scored on the same slots), ride pair by
+ride pair (dayPeak ordering), park-day by park-day (optimiser), day pair by day
+pair (day comparison).
+
 | ID | What is simulated |
 |---|---|
-| D1 | `next-best-ride.ts`: suggest when max forecast in the next 120 min ≥ live + 10 (walk 0); precision = the TRUE max also ≥ live + 10; top-3 per park and origin; recall |
+| D1 | `next-best-ride.ts`: candidates = every (intraday origin, ride) with a live OPERATING wait, the same set for every model; suggest when the forecast maximum inside a FIXED lookahead (60 or 120 min) ≥ live + 10 (walk 0); precision = the TRUE maximum there is also ≥ live + 10; top-3 per park and origin; recall |
 | D2 | `LIVE_WINDOW_MIN = 45`: bias / MAE at leads 15–45 min on headliners — `persistence` is what production serves there |
 | D3 | best slot: hit if a true-minimum slot is in the predicted lowest two / within ±30 min; regret = true wait at predicted best − true minimum |
 | D4 | `optimize.ts` objective Σwait + 0.5·Σidle on the park's top 4 rides (headliners first, ex-ante level); exact optimum over orders and 0–120 min delays (the beam search converges to it on 4 rides); regret = true cost of the forecast's plan − truth-optimal cost. Plus headliner dayPeak pairwise ordering |
-| D5 | first-hour MAE; worth = peak ≥ 60 ∧ peak − opening wait ≥ 45 per ride-day, and the production rule on window medians (`prod_ropedrop_hist`) |
-| D6 | park level ÷ typical-day peak → `determineCrowdLevel` ladder; exact / ±1 bucket, busy (high+) recall & precision, cross-park ordering on a date |
-| D7 | `day-comparison.ts` rank = bucket + min(0.99, avg/120): winner accuracy on pairs with true gap ≥ 0.5, tie (< 0.1) rate; calendar star = rank ≤ month median − 0.5 among ≥ 4 days |
-| D8 | coverage of q80/q95, field coverage (share of slots that HAVE an interval), stated typical error (trailing 28-day MAE at the lead, what `expectedError` reports) vs realised |
-| D9 | share of operating slots / headliner-days with a forecast per lead (incl. 90–365 d), forecast present vs ride operated |
+| D5 | first-hour MAE (first 4 slots of the PUBLISHED window, also split by schedule known / projected); worth = peak ≥ 60 ∧ peak − opening wait ≥ 45 per ride-day, and the production rule on window medians (`prod_ropedrop_hist`) |
+| D6 | park level ÷ typical-day peak → `determineCrowdLevel` ladder; exact (paired) / ±1 bucket, busy (high+) recall & precision, cross-park ordering on a date |
+| D7 | `day-comparison.ts` rank = bucket + min(0.99, avg/120): winner accuracy on pairs with true gap ≥ 0.5 (paired, CI over origin-park), tie (< 0.1) rate; calendar star = rank ≤ month median − 0.5 among ≥ 4 days, precision / recall with CIs |
+| D8 | **what production states**: `forecast-accuracy.service.ts` publishes the global MAE of TFT's predicted peak against the day's max hourly P90 by predicted band (quiet / mid / busy) × lead bucket (d1/d3/d7/d14/d30/d60) over the 45 days before today. It is rebuilt as of each origin and compared with the realised error of the forecasts served at that origin. Plus empirical q80/q95 coverage, field coverage, and (secondary) the trailing 28-day slot MAE |
+| D9 | share of operating slots / headliner-days with a forecast per lead (incl. 90–365 d), forecast present vs ride operated. The baselines have no openness logic, so their D9 is the bar a model with an open/closed decision has to beat |
 
-D4 simplifications: no overflow / headliner dropping (all 4 rides fit or the
-park-day is skipped), no fixed blocks, opensAt floors or early entry; the wait at
-a start is the 15-min slot value (the owner's 15-min requirement), truth gaps are
-filled from the nearest slot of the same ride-day.
+D4 limits: a fixed ride set (top 4), no overflow / headliner dropping (the
+park-day is skipped if the rides cannot all start before closing), no fixed
+blocks, opensAt floors, early entry or live corrections; the wait at a start is
+the 15-min slot value (the frontend reads the hourly point today); truth gaps are
+filled from the nearest slot of the same ride-day; walking from coordinates, else
+3 / 8 min (`leg.ts`).
 
 ## Horizon outputs
 
 `tables/lead_availability.csv` (origin days per lead, LOW-N < 30, "not measurable
 yet" with the date it becomes measurable), `coverage_horizon.csv` (TFT / CatBoost
-/ weather / operator schedule), `horizon_curve_mae.csv` + `decision_metrics.csv`
-(metric vs lead with CIs and the paired difference vs the per-lead reference),
-`usable_horizon.csv` (largest lead, contiguous from the shortest, where the paired
-CI excludes 0), `handover.csv` (per use case × lead: the significant winner, else
-the reference — the serving router's input). Reference per lead = the best naive
-candidate (persistence → snaive7 → wt_med → clim) that covers ≥ 50 % of the rows.
+/ weather / operator schedule), `cells.csv` (every metric × use case × lead ×
+segment × region × model: value with park-day CI, paired difference vs the
+reference with park-day AND park-cluster CIs, coverage), `usable_horizon.csv`
+and `handover.csv`.
+
+- **Wins** = the paired difference's **park-cluster** bootstrap CI (all days of
+  a park resampled together) excludes 0. Days of one park are not independent,
+  so the park-day CI is too narrow; both are in `cells.csv`.
+- **Reference per lead** = the best naive candidate (persistence → snaive7 →
+  wt_med → clim) on the metric itself, among candidates covering ≥ 50 % of what
+  the best-covered one covers. Picking the best of several on the same data
+  favours the reference a little (winner's curse), which makes a model's win
+  conservative.
+- **Gates** for the hand-over and the usable horizon: ≥ 30 origin days, and the
+  model's paired rows ≥ 30 % of the reference's own. Winners are ranked by the
+  PAIRED margin. Usable horizon = the largest lead, contiguous from the model's
+  first scored lead, at which it wins; a lead where it is the reference, is
+  untested or fails a gate breaks the run.
+- **Headline horizon curves come from a common target window**
+  (`report --target-from … --target-to …`). On the full period, lead L starts at
+  first origin + L and TFT / CatBoost only exist from late May, so lead would be
+  confounded with season.
 
 ## Adding a model
 
@@ -130,26 +172,46 @@ candidate (persistence → snaive7 → wt_med → clim) that covers ≥ 50 % of 
    example reproduces baseline 5a through the plug-in path and a test asserts
    the two score identically — keep that as the pattern.
 2. Register it in `mlbench/models/__init__.py` (`REGISTRY`), or pass
-   `--model package.module:Class`.
-3. Run (celestrial):
+   `--model package.module:Class`. A registered model is automatically covered by
+   `test_information_cut_plugins` — run `pytest` before any run you report.
+3. What a plug-in gets (`mlbench/models/base.py`): DataFrames only, never a
+   database connection — `origin.history.df(days)` (truth ending before the
+   origin), `train_panel` in `fit`, the horizon grid of the window known at the
+   origin, and covariates without weather unless `uses_oracle_weather = True`
+   (then it is scored as `<name>_owx`). Rows outside the grid are dropped.
+4. Run (celestrial):
 
 ```bash
 cd ~/claude-worktrees/<your-checkout>
-docker build -t ml-bench:<tag> --build-context mlsvc=ml-service ml-bench
+docker build -t ml-bench:<tag> --build-arg GIT_SHA=<commit sha> \
+  --build-context mlsvc=ml-service ml-bench
 docker run --rm --gpus all ml-bench:<tag> gpu-check          # must list sm_120
-docker run -d --name mlbench-<model> --gpus all --cpus 6 --memory 8g --cpu-shares 256 \
-  --entrypoint nice -v /data/parkfan/ml-bench:/data -v $PWD/ml-bench/results:/app/results \
+IMAGE_ID=<output of: docker image inspect -f '{{.Id}}' ml-bench:<tag>>
+docker run -d --name mlbench-<model> --gpus all --user 1000:1000 -e HOME=/tmp \
+  -e MLBENCH_IMAGE_ID=$IMAGE_ID --cpus 6 --memory 8g --cpu-shares 256 --entrypoint nice \
+  -v /data/parkfan/ml-bench:/data -v $PWD/ml-bench/results:/app/results \
   ml-bench:<tag> -n 10 python -m mlbench run --export /data/exports/20261009 \
-  --out /app/results/<run-id> --model <name> --memory 5GB --threads 4
-docker run --rm -v /data/parkfan/ml-bench:/data -v $PWD/ml-bench/results:/app/results \
-  ml-bench:<tag> report --run /app/results/<run-id>
+  --out /app/results/<run-id> --model <name> --memory 5GB --threads 4 --reference
+docker run --rm --user 1000:1000 -e HOME=/tmp -v /data/parkfan/ml-bench:/data \
+  -v $PWD/ml-bench/results:/app/results ml-bench:<tag> report --run /app/results/<run-id> \
+  --target-from 2026-08-15 --target-to 2026-10-07          # the headline (common window)
+docker run --rm --user 1000:1000 -e HOME=/tmp -v /data/parkfan/ml-bench:/data \
+  -v $PWD/ml-bench/results:/app/results ml-bench:<tag> report --run /app/results/<run-id>
 ```
 
 `--from/--to` limit the origins, `--leads 0,1,3,7` the slot leads, `--shard i/n`
 splits origins across containers. Every run re-scores the baselines, so the
 model's numbers are always paired against the same reference on the same rows.
+`--reference` refuses to start without a git SHA and an image id; every run
+records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 
 ## Results
+
+> **Superseded — re-run pending.** The figures below come from the first run,
+> before the PAR-827 review fixes: ride-day metrics were paired only per
+> park-day, opening-aligned forecasts read windows published after the origin,
+> and `prod_served` was not the production profile. They will be replaced by the
+> re-run on the same export.
 
 First full baseline run: `ml-bench/results/20261009-baselines/` (export of
 2026-10-09: 289 UTC days, 44.2 M change-log rows → 13.5 M truth slots, 3,601

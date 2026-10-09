@@ -1,8 +1,9 @@
 """The model plug-in interface (BENCH-SPEC "Model interface").
 
 A model is a class with ``fit`` and ``predict``; the runner owns the data split,
-the information cut and all scoring. A model never sees a truth value whose slot
-ends after its origin.
+the information cut and all scoring. **A model never receives a database
+connection** — only DataFrames the runner has already cut at the origin — so a
+plug-in cannot read the future even by accident:
 
     fit(train_panel, cutoff)
     predict(origin, horizon_slots, known_future_covariates)
@@ -15,8 +16,27 @@ Optional, for the crowd calendar (UC4) and long leads:
 
 When a model implements ``predict_daily`` the runner also scores
 ``<name>_x_h5``: its daily level composed with the H5 profile (the same ratio
-scaling as baseline 5), at every slot lead — so a daily model gets a 15-min
-curve at long leads without producing slots itself.
+scaling as baseline 5), at every slot lead.
+
+What the runner hands over, and what it guarantees:
+
+* ``origin.history.df(days)`` / ``train_panel``: truth slots that END before the
+  park's origin (``slot_start_utc + 15 min <= origin_utc``), nothing else.
+* ``horizon_slots``: every 15-min slot of each target day's opening window AS
+  KNOWN AT THE ORIGIN — the published window if its schedule row was written
+  before the origin, else the window projected from the last 56 days
+  (``schedule_known_at_origin`` in the covariates says which). Rows the model
+  returns for slots outside this grid are dropped.
+* ``known_future_covariates``: one row per (park_id, date) — weekday, holiday
+  flags (ml-service ``holiday_features.py``), the window above. Weather is
+  stripped unless the model sets ``uses_oracle_weather = True``: no forecast
+  archive exists, so the only weather is the ACTUAL weather of the target day
+  (an oracle). An opting-in model is scored under ``<name>_owx`` so its rows can
+  never be mistaken for an honest forecast.
+
+``tests/test_runner.py::test_information_cut_plugins`` poisons every input after
+the origin and asserts that no registered model's forecast moves — keep it green
+for any model you add.
 
 Register a model in ``mlbench/models/__init__.py`` (``REGISTRY``) or pass
 ``--model package.module:ClassName`` to ``mlbench run``.
@@ -24,10 +44,26 @@ Register a model in ``mlbench/models/__init__.py`` (``REGISTRY``) or pass
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import pandas as pd
+
+
+class HistoryView:
+    """Truth strictly before the origin, as a DataFrame.
+
+    ``df(days=56)``: ``attraction_id, park_id, date, slot_start_utc, slot_local, ws,
+    ko, kc, y`` for the last ``days`` service days; every slot ends before its
+    park's origin. Fetched by the runner; the model never sees the connection.
+    """
+
+    def __init__(self, fetch: Callable[[int], pd.DataFrame]):
+        self._fetch = fetch
+
+    def df(self, days: int = 56) -> pd.DataFrame:
+        return self._fetch(int(days))
 
 
 @dataclass
@@ -42,35 +78,8 @@ class Origin:
     date: Any                       # datetime.date
     kind: str                       # 'daily' | 'intraday'
     hour_local: int
-    origin_utc: pd.DataFrame        # park_id, origin_utc (tz-aware UTC)
-    history: Any                    # HistoryView — truth strictly before each park's origin_utc
-
-
-class HistoryView:
-    """Lazy access to the truth panel strictly before the origin.
-
-    ``df(days=56)`` returns ``attraction_id, park_id, date, slot_start_utc,
-    slot_local, ws, ko, kc, y`` for the last ``days`` service days (all slots end
-    before the park's origin). ``sql(days)`` returns the same as a DuckDB SQL
-    string for models that prefer to aggregate in DuckDB via ``con``.
-    """
-
-    def __init__(self, con, origin_table: str, origin_date):
-        self.con = con
-        self.origin_table = origin_table
-        self.origin_date = origin_date
-
-    def sql(self, days: int = 56) -> str:
-        return f"""
-            SELECT t.aid AS attraction_id, t.park_id, t.date, t.slot_utc AS slot_start_utc,
-                   t.slot_local, t.ws, t.ko, t.kc, t.y
-            FROM truth t JOIN {self.origin_table} o ON o.park_id = t.park_id
-            WHERE t.date >= DATE '{self.origin_date}' - {int(days)}
-              AND t.date < DATE '{self.origin_date}'
-              AND t.slot_utc + INTERVAL 15 MINUTE <= o.origin_utc"""
-
-    def df(self, days: int = 56) -> pd.DataFrame:
-        return self.con.execute(self.sql(days)).df()
+    origin_utc: pd.DataFrame        # park_id, timezone, origin_utc (tz-aware UTC)
+    history: HistoryView
 
 
 class Model:
@@ -86,21 +95,24 @@ class Model:
     #: refit cadence in days (None = fit once at the first origin)
     refit_every_days: ClassVar[int | None] = 28
     #: days of truth handed to fit() (None = all history before the cutoff)
-    train_days: ClassVar[int | None] = None
+    train_days: ClassVar[int | None] = 365
+    #: opt in to ORACLE weather (actuals); the model is then scored as <name>_owx
+    uses_oracle_weather: ClassVar[bool] = False
+
+    @classmethod
+    def scored_name(cls) -> str:
+        return f"{cls.name}_owx" if cls.uses_oracle_weather else cls.name
 
     def fit(self, train_panel: pd.DataFrame, cutoff: pd.Timestamp) -> None:  # noqa: B027
-        """Train on ``train_panel`` (truth slots that end before ``cutoff``)."""
+        """Train on ``train_panel`` (truth slots that end before ``cutoff``). Only
+        called when a subclass overrides it."""
 
     def predict(self, origin: Origin, horizon_slots: pd.DataFrame,
                 known_future_covariates: pd.DataFrame) -> pd.DataFrame:
         """Return one row per requested slot you can forecast.
 
         ``horizon_slots``: attraction_id, park_id, date, slot_start_utc, slot_local,
-        ws, ko, kc, lead_days — every 15-min slot inside the PUBLISHED window of each
-        target day, for every ride with truth in the 56 days before the origin
-        (not only the slots that later turn out to be operating).
-        ``known_future_covariates``: one row per (park_id, date) — see
-        ``park_day_cov`` in mlbench/build.py; weather columns are ORACLE actuals.
+        ws, ko, kc, lead_days (see the module docstring for what the grid is).
         """
         raise NotImplementedError
 

@@ -36,7 +36,7 @@ from __future__ import annotations
 from .config import BenchConfig, season_sql
 
 SLOT_MODELS = ["snaive7", "wt_med", "clim", "h5", "lvlh5_naive", "lvlh5_tft", "lvlh5_cbd",
-               "prod_served"]
+               "prod_served", "prod_served_lin"]
 ORACLES = ["oracle_level", "oracle_shape"]
 REF_CANDIDATES = ["snaive7", "wt_med", "clim"]
 INTRADAY_MODELS = ["persistence", "snaive7", "wt_med", "clim", "h5", "lvlh5_naive", "lvlh5_tft"]
@@ -77,6 +77,19 @@ def window_tables(con, c: str, cfg: BenchConfig) -> None:
     x(f"""CREATE OR REPLACE TEMP TABLE p60 AS SELECT * FROM (
         SELECT aid, {WK} AS wk, ws // 4 AS idx, median(y) med, count(DISTINCT date) n
         FROM hw GROUP BY GROUPING SETS ((aid, ws // 4, we), (aid, ws // 4))) WHERE {keep}""")
+    # Opening hours as projected from the window, for target days whose published
+    # window was not known at the origin (the schedule row was written later):
+    # median local opening / closing minute per park and weekday type over the
+    # windows of the last 56 days — the same "observed hours" fallback production
+    # uses past the operator's publishing horizon.
+    x(f"""CREATE OR REPLACE TEMP TABLE wproj AS
+        SELECT park_id, {WK} AS wk,
+               median(date_diff('minute', CAST(date AS TIMESTAMP), open_local)) AS open_min,
+               median(date_diff('minute', CAST(date AS TIMESTAMP), close_local)) AS close_min,
+               count(*) n
+        FROM (SELECT *, dayofweek(date) IN (0, 6) AS we FROM windows
+              WHERE date >= DATE '{c}' - {W} AND date < DATE '{c}')
+        GROUP BY GROUPING SETS ((park_id, we), (park_id))""")
     # ex-ante busy flag: ride's q90 of window slots
     x("CREATE OR REPLACE TEMP TABLE rs AS SELECT aid, quantile_cont(y, 0.9) q90 FROM hw GROUP BY aid")
     # window ride-day P90s (same >= 8-slot rule as ride_day)
@@ -114,13 +127,6 @@ def snapshot_tables(con, m0: str, cfg: BenchConfig) -> None:
         FROM (SELECT r.aid, r.p90, dayofweek(r.date) IN (0, 6) we, {season_sql('r.date')} season
               FROM ride_day r WHERE r.date < DATE '{m0}')
         GROUP BY GROUPING SETS ((aid, season, we), (aid, we))) WHERE n >= {la}""")
-    # production hourly P50 profile: median of ride-day-hour means
-    x(f"""CREATE OR REPLACE TABLE prodprof AS
-        WITH hm AS (SELECT aid, date, ws // 4 h, avg(y) m FROM snap_hist
-                    WHERE date >= DATE '{m0}' - {cfg.prod_profile_days} GROUP BY ALL),
-        rd AS (SELECT aid FROM hm GROUP BY aid HAVING count(DISTINCT date) >= {cfg.prod_min_ride_days})
-        SELECT hm.aid, h, median(m) v FROM hm JOIN rd USING (aid)
-        GROUP BY ALL HAVING count(*) >= {cfg.prod_min_hour_days}""")
     # typical-day peak per park: median over operating days of the headliner-mean P90
     x(f"""CREATE OR REPLACE TABLE typpeak AS
         SELECT park_id, median(lvl) typical_peak, count(*) ndays FROM (
@@ -129,13 +135,17 @@ def snapshot_tables(con, m0: str, cfg: BenchConfig) -> None:
         GROUP BY park_id HAVING count(*) >= {cfg.typical_peak_min_days}""")
 
 
-def asof_levels_sql(table: str, c: str, max_lead: int) -> str:
-    """Latest daily-level forecast created before each park's origin, per (ride, target)."""
+def asof_levels_sql(table: str, c: str, max_lead: int, stale_days: int = 3) -> str:
+    """Latest daily-level forecast created before each park's origin, per (ride, target).
+
+    Same staleness guard as production's serving read (ml.service.ts
+    getServingDailyPredictions: ``forecast_date >= today - 3``): a forecast whose run
+    is older than that is not served, so it is not scored either."""
     return f"""
         SELECT f.aid, f.target_date, arg_max(f.peak, f.created_utc) AS peak
         FROM {table} f JOIN rides r ON r.aid = f.aid JOIN o ON o.park_id = r.park_id
         WHERE f.target_date >= DATE '{c}' AND f.target_date <= DATE '{c}' + {int(max_lead)}
-          AND f.created_utc < o.origin_utc
+          AND f.created_utc < o.origin_utc AND f.forecast_date >= DATE '{c}' - {int(stale_days)}
         GROUP BY ALL"""
 
 
@@ -146,13 +156,38 @@ def target_tables(con, c: str, leads: list[int], cfg: BenchConfig) -> None:
     maxl = max(leads)
     x(f"CREATE OR REPLACE TEMP TABLE tft_o AS {asof_levels_sql('tft', c, maxl)}")
     x(f"CREATE OR REPLACE TEMP TABLE cbd_o AS {asof_levels_sql('cbd', c, maxl)}")
+    # pw: the window a forecast made at the origin can use for each target day —
+    # the published one if its last write precedes the origin, else the projection.
+    x(f"""CREATE OR REPLACE TEMP TABLE pw AS
+        WITH d AS (SELECT o.park_id, o.timezone, o.origin_utc, DATE '{c}' + L AS date
+                   FROM o, (SELECT CAST(unnest(range(0, 366)) AS INTEGER) AS L)),
+        k AS (SELECT d.*, w.open_utc, w.close_utc, w.updated_utc,
+                     w.updated_utc IS NOT NULL AND w.updated_utc < d.origin_utc AS sched_known
+              FROM d LEFT JOIN windows w ON w.park_id = d.park_id AND w.date = d.date)
+        SELECT k.park_id, k.date, k.sched_known,
+               CASE WHEN k.sched_known THEN k.open_utc
+                    ELSE timezone(k.timezone, CAST(k.date AS TIMESTAMP)
+                                  + to_minutes(CAST(coalesce(p1.open_min, p2.open_min) AS BIGINT))) END AS open_p,
+               CASE WHEN k.sched_known THEN k.close_utc
+                    ELSE timezone(k.timezone, CAST(k.date AS TIMESTAMP)
+                                  + to_minutes(CAST(coalesce(p1.close_min, p2.close_min) AS BIGINT))) END AS close_p
+        FROM k
+        LEFT JOIN wproj p1 ON p1.park_id = k.park_id AND p1.wk = CAST(dayofweek(k.date) IN (0, 6) AS INTEGER)
+             AND p1.n >= 3
+        LEFT JOIN wproj p2 ON p2.park_id = k.park_id AND p2.wk = 2""")
+    # ko/kc (used by every forecast) are counted from the window known at the origin;
+    # ko_t/kc_t (used only to SEGMENT the scores, e.g. "first hour") from the published one.
     x(f"""CREATE OR REPLACE TEMP TABLE tg0 AS
-        SELECT s.aid, s.park_id, s.date, s.slot_utc, s.ws, s.ko, s.kc, s.status,
+        SELECT s.aid, s.park_id, s.date, s.slot_utc, s.ws, s.ko AS ko_t, s.kc AS kc_t,
+               CAST(date_diff('minute', pw.open_p, s.slot_utc) // 15 AS INTEGER) AS ko,
+               CAST((date_diff('minute', s.slot_utc, pw.close_p) - 1) // 15 AS INTEGER) AS kc,
+               coalesce(pw.sched_known, false) AS sk, s.status,
                CASE WHEN s.status = 'OPERATING' AND s.wait >= 5 THEN s.wait::DOUBLE END AS y,
                CAST(s.date - DATE '{c}' AS INTEGER) AS L,
                CAST(dayofweek(s.date) IN (0, 6) AS INTEGER) AS we, dayofweek(s.date) AS dow,
                {season_sql('s.date')} AS season
         FROM slots s JOIN o ON o.park_id = s.park_id
+        LEFT JOIN pw ON pw.park_id = s.park_id AND pw.date = s.date
         WHERE s.date IN (SELECT DATE '{c}' + unnest([{lead_list}]))
           AND s.slot_utc >= o.origin_utc
           AND s.aid IN (SELECT aid FROM rs)""")
@@ -202,52 +237,101 @@ def target_tables(con, c: str, leads: list[int], cfg: BenchConfig) -> None:
                ON s7.aid = t.aid AND s7.date = t.date - 7 AND s7.ws = t.ws""")
     x("""CREATE OR REPLACE TEMP TABLE tg3 AS
         SELECT t.*,
-          coalesce(CASE WHEN t.ko < 4 THEN t.p_open WHEN t.kc < 4 THEN t.p_close END, t.h_lin, t.wt_med) AS h5
+          coalesce(CASE WHEN t.ko BETWEEN 0 AND 3 THEN t.p_open WHEN t.kc BETWEEN 0 AND 3 THEN t.p_close END,
+                   t.h_lin, t.wt_med) AS h5
         FROM tg2 t""")
     x("""CREATE OR REPLACE TEMP TABLE tg AS
-        SELECT t.*,
-          CASE WHEN t.ko < 4 THEN t.h5 WHEN t.ref_lvl > 0 THEN t.h5 * t.lvl_naive4 / t.ref_lvl END AS lvlh5_naive,
-          CASE WHEN t.ko < 4 AND t.lvl_tft IS NOT NULL THEN t.h5
+        SELECT t.*, t.ko_t BETWEEN 0 AND 3 AS fh,
+          CASE WHEN t.ko BETWEEN 0 AND 3 THEN t.h5 WHEN t.ref_lvl > 0 THEN t.h5 * t.lvl_naive4 / t.ref_lvl END AS lvlh5_naive,
+          CASE WHEN t.ko BETWEEN 0 AND 3 AND t.lvl_tft IS NOT NULL THEN t.h5
                WHEN t.ref_lvl > 0 THEN t.h5 * t.lvl_tft / t.ref_lvl END AS lvlh5_tft,
-          CASE WHEN t.ko < 4 AND t.lvl_cbd IS NOT NULL THEN t.h5
+          CASE WHEN t.ko BETWEEN 0 AND 3 AND t.lvl_cbd IS NOT NULL THEN t.h5
                WHEN t.ref_lvl > 0 THEN t.h5 * t.lvl_cbd / t.ref_lvl END AS lvlh5_cbd,
-          CASE WHEN t.ko < 4 AND t.true_p90 IS NOT NULL THEN t.h5
+          CASE WHEN t.ko BETWEEN 0 AND 3 AND t.true_p90 IS NOT NULL THEN t.h5
                WHEN t.ref_lvl > 0 THEN t.h5 * t.true_p90 / t.ref_lvl END AS oracle_level,
           CASE WHEN t.true_p90 > 0 THEN t.y / t.true_p90 * t.lvl_naive4 END AS oracle_shape
         FROM tg3 t""")
+    prod_profile(con, c, cfg)
     prod_served(con, cfg)
     for t in ("tg0", "tg1", "tg2", "tg3"):
         x(f"DROP TABLE IF EXISTS {t}")
 
 
-def prod_served(con, cfg: BenchConfig) -> None:
-    """composeDayCurve (src/common/utils/day-shape.util.ts) over the target days."""
+def prod_profile(con, c: str, cfg: BenchConfig) -> None:
+    """Production's hourly shape as /plan/day reads it on the origin day
+    (park-historical-stats.service.ts queryHourlyProfile + getParkHourlyProfile):
+
+    * window: one year ending yesterday; hourly rows with >= 2 samples;
+    * rides with >= 20 measured days (minAttractionDays);
+    * p50 of an hour = AVG over days of that day's hourly P50;
+    * the park's hour axis keeps an hour when its best ride measured it on
+      >= 10 days and >= 0.4 x the best hour's days (MIN_HOUR_DAY_RATIO), and
+      >= 50 % of the rides report it (MIN_HOUR_RIDE_RATIO);
+    * values rounded to five (roundToNearest5Minutes); wall-clock hours 0-23.
+    """
     x = con.execute
-    # open hours per (ride, target day): openHour .. unfolded closeHour, inclusive
+    x(f"""CREATE OR REPLACE TEMP TABLE prodprof AS
+        WITH hs AS (SELECT * FROM hour_stats
+                    WHERE date >= DATE '{c}' - {cfg.prod_profile_days} AND date < DATE '{c}'),
+        el AS (SELECT aid FROM hs GROUP BY aid HAVING count(DISTINCT date) >= {cfg.prod_min_ride_days}),
+        ph AS (SELECT hs.aid, hs.park_id, hs.h, avg(hs.p50) AS p50, count(DISTINCT hs.date) AS hour_days
+               FROM hs JOIN el USING (aid) GROUP BY ALL),
+        axis AS (SELECT park_id, h, max(hour_days) AS d FROM ph GROUP BY ALL),
+        best AS (SELECT park_id, max(d) AS bd FROM axis GROUP BY ALL),
+        rides_n AS (SELECT park_id, count(DISTINCT aid) AS n FROM ph GROUP BY ALL),
+        hcount AS (SELECT park_id, h, count(DISTINCT aid) AS n FROM ph GROUP BY ALL),
+        vis AS (SELECT a.park_id, a.h FROM axis a JOIN best b USING (park_id)
+                JOIN hcount hc USING (park_id, h) JOIN rides_n rn USING (park_id)
+                WHERE a.d >= {cfg.prod_min_hour_days} AND a.d >= b.bd * 0.4 AND hc.n >= rn.n * 0.5)
+        SELECT ph.aid, ph.h, CASE WHEN ph.p50 < 2.5 THEN 0 ELSE floor((ph.p50 + 2.5) / 5) * 5 END AS v
+        FROM ph JOIN vis USING (park_id, h)""")
+
+
+def prod_served(con, cfg: BenchConfig) -> None:
+    """composeDayCurve (src/common/utils/day-shape.util.ts) over the target days, with
+    the level /plan/day serves (fresh TFT, else CatBoost daily) and the open hours
+    known at the origin. ``prod_served`` = the hourly step the planner reads
+    (estimate.ts looks up the hour), ``prod_served_lin`` = the same curve linearly
+    interpolated between hour centres."""
+    x = con.execute
     x(f"""CREATE OR REPLACE TEMP TABLE ph AS
         WITH rdays AS (
           SELECT DISTINCT t.aid, t.park_id, t.date, coalesce(t.lvl_tft, t.lvl_cbd) AS level
           FROM tg t WHERE t.L >= {cfg.prod_min_lead} AND coalesce(t.lvl_tft, t.lvl_cbd) IS NOT NULL
             AND t.aid IN (SELECT aid FROM prodprof)),
-        hrs AS (
-          SELECT r.*, unnest(range(hour(w.open_local),
-                 CASE WHEN CAST(w.close_local AS DATE) > w.date THEN hour(w.close_local) + 24
-                      ELSE hour(w.close_local) END + 1)) AS h
-          FROM rdays r JOIN windows w ON w.park_id = r.park_id AND w.date = r.date),
-        lo AS (SELECT h.*, p.h AS ph_lo, p.v AS pv_lo FROM hrs h ASOF LEFT JOIN prodprof p
-               ON p.aid = h.aid AND p.h <= h.h),
-        hi AS (SELECT l.*, p.h AS ph_hi, p.v AS pv_hi FROM lo l ASOF LEFT JOIN
-               (SELECT aid, -h AS nh, h, v FROM prodprof) p ON p.aid = l.aid AND p.nh <= -l.h),
-        iv AS (SELECT *, CASE WHEN ph_lo IS NULL THEN pv_hi WHEN ph_hi IS NULL THEN pv_lo
-                              WHEN ph_hi = ph_lo THEN pv_lo
-                              ELSE pv_lo + (pv_hi - pv_lo) * (h - ph_lo) / (ph_hi - ph_lo) END AS v
-               FROM hi)
-        SELECT aid, date, h, v, level, max(v) OVER (PARTITION BY aid, date) AS peak FROM iv""")
+        oh AS (SELECT r.*, hour(timezone(o.timezone, pw.open_p)) AS oh,
+                      hour(timezone(o.timezone, pw.close_p)) AS chw
+               FROM rdays r JOIN pw ON pw.park_id = r.park_id AND pw.date = r.date
+               JOIN o ON o.park_id = r.park_id WHERE pw.open_p IS NOT NULL),
+        oh2 AS (SELECT *, CASE WHEN chw < oh THEN chw + 24 ELSE chw END AS ch FROM oh),
+        hrs AS (SELECT oh2.*, unnest(range(oh, ch + 1)) AS h FROM oh2),
+        -- the shape is wall-clock; on a day that runs past midnight the small hours
+        -- move to the end of the day (the "wraps" branch of composeDayCurve)
+        meas AS (SELECT o2.aid, o2.date, CASE WHEN o2.ch > 23 AND p.h < o2.oh THEN p.h + 24 ELSE p.h END AS mh,
+                        p.v FROM oh2 o2 JOIN prodprof p ON p.aid = o2.aid),
+        lo AS (SELECT h.*, m.mh AS lh, m.v AS lv FROM hrs h ASOF LEFT JOIN meas m
+               ON m.aid = h.aid AND m.date = h.date AND m.mh <= h.h),
+        hi AS (SELECT l.*, m.mh AS hh, m.v AS hv FROM lo l ASOF LEFT JOIN
+               (SELECT aid, date, -mh AS nh, mh, v FROM meas) m
+               ON m.aid = l.aid AND m.date = l.date AND m.nh <= -l.h),
+        iv AS (SELECT *, CASE WHEN lh IS NULL THEN hv WHEN hh IS NULL THEN lv WHEN hh = lh THEN lv
+                              ELSE lv + (hv - lv) * (h - lh) / (hh - lh) END AS v FROM hi),
+        sc AS (SELECT *, max(v) OVER (PARTITION BY aid, date) AS peak FROM iv WHERE v IS NOT NULL)
+        SELECT aid, date, h,
+               CASE WHEN peak > 0 THEN (CASE WHEN v * level / peak < 2.5 THEN 0
+                                             ELSE floor((v * level / peak + 2.5) / 5) * 5 END)
+                    ELSE 0 END AS w
+        FROM sc""")
     x("""CREATE OR REPLACE TEMP TABLE tgp AS
-        SELECT t.*, CASE WHEN ph.peak > 0 THEN (CASE WHEN ph.v * ph.level / ph.peak < 2.5 THEN 0
-                                              ELSE floor((ph.v * ph.level / ph.peak + 2.5) / 5) * 5 END)
-                         WHEN ph.peak IS NOT NULL THEN 0 END AS prod_served
-        FROM tg t LEFT JOIN ph ON ph.aid = t.aid AND ph.date = t.date AND ph.h = t.ws // 4""")
+        WITH t AS (SELECT *, (ws * 15 + 7.5) / 60.0 - 0.5 AS hc FROM tg)
+        SELECT t.* EXCLUDE (hc), a.w AS prod_served,
+               CASE WHEN b.w IS NULL AND c2.w IS NULL THEN NULL
+                    ELSE coalesce(b.w, c2.w) + (coalesce(c2.w, b.w) - coalesce(b.w, c2.w))
+                         * (t.hc - floor(t.hc)) END AS prod_served_lin
+        FROM t
+        LEFT JOIN ph a ON a.aid = t.aid AND a.date = t.date AND a.h = t.ws // 4
+        LEFT JOIN ph b ON b.aid = t.aid AND b.date = t.date AND b.h = CAST(floor(t.hc) AS INTEGER)
+        LEFT JOIN ph c2 ON c2.aid = t.aid AND c2.date = t.date AND c2.h = CAST(floor(t.hc) AS INTEGER) + 1""")
     x("DROP TABLE tg")
     x("ALTER TABLE tgp RENAME TO tg")
 

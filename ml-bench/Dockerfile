@@ -8,7 +8,8 @@
 # The ml-service holiday implementation is passed in as a second build context
 # rather than copied into this directory: the benchmark's holiday flags must be
 # exactly the ones the production models are trained on.
-#   docker build -t ml-bench --build-context mlsvc=ml-service ml-bench
+#   docker build -t ml-bench --build-arg GIT_SHA=$(git rev-parse HEAD) \
+#     --build-context mlsvc=ml-service ml-bench
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -23,6 +24,12 @@ COPY --from=mlsvc holiday_features.py holiday_utils.py /opt/ml-service/
 ENV MLBENCH_ML_SERVICE_DIR=/opt/ml-service
 
 COPY . .
+
+# Provenance: every run records this SHA plus a hash of the mlbench sources
+# (`docker build --build-arg GIT_SHA=$(git rev-parse HEAD) …`). A reference run
+# (`run --reference`) refuses to start without it.
+ARG GIT_SHA=unknown
+ENV MLBENCH_GIT_SHA=${GIT_SHA}
 
 ENTRYPOINT ["python", "-m", "mlbench"]
 CMD ["--help"]

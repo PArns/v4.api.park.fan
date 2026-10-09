@@ -127,7 +127,10 @@ def build(raw: Path, out: Path, con, ml_service_dir: Path | None = None) -> dict
         SELECT s.park_id, CAST(s.date AS DATE) AS date,
                make_timestamptz(min(s.opening_us)) AS open_utc,
                make_timestamptz(max(s.closing_us)) AS close_utc,
-               count(*) AS n_windows, 'published_final' AS schedule_source
+               count(*) AS n_windows, 'published_final' AS schedule_source,
+               -- the last write of the day's OPERATING rows: a window written after an
+               -- origin was not known at that origin (the runner projects it instead)
+               make_timestamptz(max(s.updated_us)) AS updated_utc
         FROM schedule s
         WHERE s.schedule_type = 'OPERATING' AND s.opening_us IS NOT NULL AND s.closing_us IS NOT NULL
           AND s.closing_us > s.opening_us AND s.closing_us - s.opening_us <= 86400000000
@@ -190,10 +193,20 @@ def build(raw: Path, out: Path, con, ml_service_dir: Path | None = None) -> dict
     x("""CREATE OR REPLACE TABLE truth AS
         SELECT aid, park_id, date, slot_utc, slot_local, ws, ko, kc, wait::DOUBLE AS y
         FROM slots WHERE status = 'OPERATING' AND wait >= 5""")
+    # Per ride-day-hour (wall clock) P50/P90 with >= 2 slots: the analogue of
+    # queue_data_aggregates' hourly rows (sampleCount >= 2), which production's
+    # hourly profile (/stats/hourly) and expectedError are built from.
+    x("""CREATE OR REPLACE TABLE hour_stats AS
+        SELECT aid, park_id, date, CAST(hour(slot_local) AS INTEGER) AS h,
+               quantile_cont(y, 0.5) AS p50, quantile_cont(y, 0.9) AS p90, count(*) AS n
+        FROM truth GROUP BY ALL HAVING count(*) >= 2""")
     x("""CREATE OR REPLACE TABLE ride_day AS
-        SELECT aid, park_id, date, quantile_cont(y, 0.9) AS p90, count(*) AS n_slots,
-               min(y) AS y_min, max(y) AS y_max
-        FROM truth GROUP BY ALL HAVING count(*) >= 8""")
+        WITH d AS (SELECT aid, park_id, date, quantile_cont(y, 0.9) AS p90, count(*) AS n_slots,
+                          min(y) AS y_min, max(y) AS y_max
+                   FROM truth GROUP BY ALL HAVING count(*) >= 8),
+        hp AS (SELECT aid, date, max(p90) AS peak_h90 FROM hour_stats GROUP BY ALL)
+        -- peak_h90 = production's expectedError truth: the day's max hourly P90
+        SELECT d.*, hp.peak_h90 FROM d LEFT JOIN hp USING (aid, date)""")
     for t in ("slots", "truth", "ride_day"):
         stats[t] = x(f"SELECT count(*) FROM {t}").fetchone()[0]
     stats["truth_dates"] = [str(v) for v in x("SELECT min(date), max(date) FROM truth").fetchone()]
@@ -203,7 +216,7 @@ def build(raw: Path, out: Path, con, ml_service_dir: Path | None = None) -> dict
     covariates(con, ml_service_dir)
 
     for t in ("parks", "attractions", "holidays", "weather", "tft", "cbd", "windows",
-              "slots", "truth", "ride_day", "park_day_cov"):
+              "slots", "truth", "ride_day", "hour_stats", "park_day_cov"):
         order = {"slots": "ORDER BY date, park_id, aid, slot_utc",
                  "truth": "ORDER BY date, park_id, aid, slot_utc"}.get(t, "")
         x(f"COPY (SELECT * FROM {t} {order}) TO '{out}/{t}.parquet' (FORMAT parquet, COMPRESSION zstd)")
@@ -212,7 +225,7 @@ def build(raw: Path, out: Path, con, ml_service_dir: Path | None = None) -> dict
     db = out.parent / "bench.duckdb"
     db.unlink(missing_ok=True)
     x(f"ATTACH '{db}' AS b")
-    for t in ("parks", "attractions", "windows", "ride_day", "park_day_cov", "tft", "cbd"):
+    for t in ("parks", "attractions", "windows", "ride_day", "hour_stats", "park_day_cov", "tft", "cbd"):
         x(f"CREATE TABLE b.{t} AS SELECT * FROM {t}")
     x("CREATE TABLE b.slots AS SELECT * FROM slots ORDER BY date, park_id, aid, slot_utc")
     x("""CREATE TABLE b.truth AS SELECT *, CAST(dayofweek(date) IN (0, 6) AS INTEGER) AS we,
