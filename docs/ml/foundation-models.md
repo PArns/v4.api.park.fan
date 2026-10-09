@@ -98,7 +98,11 @@ the daily path of the same variants.
 - `--parks <ids|@file>` restricts a run to a subset of parks. The filter is
   applied to the `parks` table, from which origins, targets and ride sets are all
   built, so the baselines are re-scored on exactly the same subset — a subset run
-  stays a valid paired comparison, it only loses N.
+  stays a valid paired comparison, it only loses N. An id that matches no park
+  stops the run; the comment of an `@file` is cut per line BEFORE the commas are
+  split, because a header like `# 12 EU, 10 NA, 8 Asia` otherwise contributes
+  ` 10 NA` as an id (the first subset run recorded 32 parks for a 30-park file —
+  the two extra entries matched nothing, so the scored rows were unaffected).
 - `qn95__<model>` — a separate q95 denominator in the slot aggregate, because
   TimesFM 3.0 has no q95 and D8's q95 coverage would otherwise be divided by the
   q80 count.
