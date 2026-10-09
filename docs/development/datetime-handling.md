@@ -226,7 +226,7 @@ park's wall clock off a UTC value and were fixed the same way:
 
 | Value | Rule |
 |---|---|
-| `weatherForecast[].time` sent to `/predict` | A UTC instant (`…Z`). Open-Meteo answers park-local hours without an offset; `WeatherService.getHourlyForecast` converts them (`parkLocalHourToUtcIso`). |
+| `weatherForecast[].time` sent to `/predict` | A UTC instant (`…Z`). The hourly Open-Meteo call asks for `timezone:"GMT"`: with `"auto"` it applies ONE offset (the one at request time) to the whole response, so its strings are neither UTC nor the park's wall clock across a DST change. The DB fallback (`synthesizeHourlyFromDaily`) steps real UTC hours between local midnights. |
 | Historical occupancy profile lookup | Keyed on park-local `(Postgres DOW, hour)`; read with `local_timestamp`, `pg_dow = (pandas_dow + 1) % 7`. |
 | Daily peak hours (`DAILY_PEAK_HOURS`) | Hours on the park's clock, collapsed per park-local date; the daily row is published at park-local **noon** of its day (`daily_anchor_time`), which has the same UTC date for every offset in (−12 h, +12 h). |
 | Any API-side date key for a prediction | `MLService.localDateOf(predictedTime, tz)`, never `predictedTime.slice(0, 10)` on an instant. |

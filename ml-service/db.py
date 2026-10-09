@@ -598,8 +598,11 @@ def fetch_historical_park_occupancy(
     cache_key = f"hist_occ:{','.join(sorted(park_ids))}:{lookback_weeks}:{end_time}"
 
     # Check cache
-    if cache_key in _historical_occupancy_cache:
-        cached_data, cache_time = _historical_occupancy_cache[cache_key]
+    # .get(), not `in` + [] — another worker thread may evict the entry between
+    # the two (the eviction below runs on every miss).
+    cached = _historical_occupancy_cache.get(cache_key)
+    if cached is not None:
+        cached_data, cache_time = cached
         import time
 
         if time.time() - cache_time < _historical_occupancy_cache_ttl:
@@ -709,7 +712,7 @@ def fetch_historical_park_occupancy(
         now = time.time()
         for stale_key in [
             k
-            for k, (_, t) in _historical_occupancy_cache.items()
+            for k, (_, t) in list(_historical_occupancy_cache.items())
             if now - t >= _historical_occupancy_cache_ttl
         ]:
             _historical_occupancy_cache.pop(stale_key, None)

@@ -82,6 +82,14 @@ def test_daily_anchor_is_local_noon_and_keeps_the_utc_date():
     )
 
 
+def test_daily_anchor_refuses_an_offset_of_twelve_hours_or_more():
+    import pytest
+
+    # Auckland in January is UTC+13: its noon is the previous UTC date.
+    with pytest.raises(AssertionError):
+        predict.daily_anchor_time("2026-01-16", "Pacific/Auckland")
+
+
 class _FakeModel:
     version = "test"
 
@@ -206,3 +214,82 @@ def test_occupancy_cache_drops_expired_entries(monkeypatch):
     )
     assert "hist_occ:old" not in db._historical_occupancy_cache
     assert np.isclose(len(db._historical_occupancy_cache), 1)
+
+
+# --- 4. Wiring: the real entry points use the helpers above ----------------
+
+
+class _StopAfterRows(Exception):
+    pass
+
+
+def test_create_prediction_features_builds_rows_from_timestamps_by_park(monkeypatch):
+    """The per-park daily timestamps must reach the feature frame.
+
+    Stops `create_prediction_features` at the local-time conversion (the first
+    step after the rows are built) and inspects the frame it was handed.
+    """
+    import features
+
+    captured = {}
+
+    def stop(df, parks_metadata):
+        captured["df"] = df.copy()
+        raise _StopAfterRows()
+
+    monkeypatch.setattr(predict, "fetch_parks_metadata", lambda: PARKS_METADATA)
+    monkeypatch.setattr(db, "fetch_historical_park_occupancy", lambda *a, **k: {})
+    monkeypatch.setattr(features, "convert_to_local_time", stop)
+
+    shared = [datetime(2026, 1, 16, 14, 0, tzinfo=timezone.utc)]
+    la_ts = predict.generate_future_timestamps(
+        datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc), "daily", "America/Los_Angeles"
+    )[:3]
+    try:
+        predict.create_prediction_features(
+            ["ride-la", "ride-tokyo"],
+            [LA, TOKYO],
+            shared,
+            datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+            timestamps_by_park={LA: la_ts},
+        )
+    except _StopAfterRows:
+        pass
+
+    df = captured["df"]
+    la_rows = df[df["parkId"] == LA]["timestamp"].tolist()
+    tokyo_rows = df[df["parkId"] == TOKYO]["timestamp"].tolist()
+    assert [pd.Timestamp(t) for t in la_rows] == [pd.Timestamp(t) for t in la_ts]
+    # A park without its own list keeps the shared one.
+    assert [pd.Timestamp(t) for t in tokyo_rows] == [pd.Timestamp(shared[0])]
+
+
+def test_add_park_occupancy_feature_reads_the_profile_on_the_local_clock():
+    """Both inference branches of add_park_occupancy_feature use the local profile."""
+    from features import add_park_occupancy_feature
+
+    # Monday 2026-07-06 20:00 PDT = Tuesday 03:00 UTC.
+    profile = {LA: {(1, 20): 140.0, (2, 3): 5.0}}
+
+    def frame():
+        return convert_to_local_time(
+            pd.DataFrame(
+                [{"parkId": LA, "timestamp": pd.Timestamp("2026-07-07 03:00", tz="UTC")}]
+            ),
+            PARKS_METADATA,
+        )
+
+    # No real-time occupancy: historical lookup for every row.
+    out = add_park_occupancy_feature(frame(), {"historicalOccupancy": profile})
+    assert out["park_occupancy_pct"].tolist() == [140.0]
+
+    # Real-time occupancy present, row > 2 h after base_time: historical lookup.
+    out = add_park_occupancy_feature(
+        frame(),
+        {
+            "parkOccupancy": {LA: 80.0},
+            "historicalOccupancy": profile,
+            "baseTime": datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc),
+        },
+    )
+    assert out["park_occupancy_pct"].tolist() == [140.0]

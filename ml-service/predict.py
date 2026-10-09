@@ -417,14 +417,23 @@ def fetch_recent_rolling_stats(
 
 def _park_timezones(park_ids: List[str]) -> Dict[str, str]:
     """{parkId: IANA timezone} for the given parks, "UTC" where none is on record."""
+    import logging
+
+    logger = logging.getLogger(__name__)
     try:
         meta = fetch_parks_metadata()
         tz_map = meta.set_index(meta["park_id"].astype(str))["timezone"].to_dict()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Park timezones unavailable ({e}); daily rows fall back to UTC")
         tz_map = {}
-    return {
-        str(p): (tz_map.get(str(p)) or "UTC") for p in {str(x) for x in park_ids}
-    }
+    result = {}
+    for p in {str(x) for x in park_ids}:
+        tz_name = tz_map.get(p)
+        if not tz_name:
+            logger.warning(f"Park {p} has no timezone on record; daily rows use UTC")
+            tz_name = "UTC"
+        result[p] = tz_name
+    return result
 
 
 def daily_anchor_time(local_date: str, tz_name: str) -> str:
@@ -438,13 +447,17 @@ def daily_anchor_time(local_date: str, tz_name: str) -> str:
     lands on the same date in UTC for every offset between -12 h and +12 h, and
     `DATE(predictedTime AT TIME ZONE p.timezone)` reads the right day for all of
     them (PAR-818).
+
+    ASSUMES the park's offset lies strictly between -12 h and +12 h (true for
+    every park on record). A park at +13 h (Auckland in summer) would have its
+    noon on the previous UTC date; the assert makes that loud instead of silent.
     """
-    return (
-        pd.Timestamp(f"{local_date} 12:00:00")
-        .tz_localize(tz_name or "UTC", nonexistent="shift_forward", ambiguous=False)
-        .tz_convert("UTC")
-        .isoformat()
+    noon = pd.Timestamp(f"{local_date} 12:00:00").tz_localize(
+        tz_name or "UTC", nonexistent="shift_forward", ambiguous=False
     )
+    offset_h = noon.utcoffset().total_seconds() / 3600
+    assert -12 < offset_h < 12, f"daily anchor needs |offset| < 12 h, got {offset_h}"
+    return noon.tz_convert("UTC").isoformat()
 
 
 def generate_future_timestamps(
@@ -947,6 +960,10 @@ def create_prediction_features(
             # Normalize both columns to timezone-naive UTC for robust merging
             if wf_df["time"].dt.tz is not None:
                 wf_df["time"] = wf_df["time"].dt.tz_convert("UTC").dt.tz_localize(None)
+            # One row per hour, or the left merge below multiplies prediction
+            # rows (a wall-clock source maps a DST night's two hours onto one
+            # instant — PAR-818).
+            wf_df = wf_df.drop_duplicates(subset="time", keep="first")
 
             df["join_time"] = df["timestamp"].dt.round("h")
             if df["join_time"].dt.tz is not None:
