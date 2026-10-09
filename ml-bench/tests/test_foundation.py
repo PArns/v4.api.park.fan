@@ -99,3 +99,33 @@ def test_variants_registered():
     assert {"chronos2", "chronos2_owx", "chronos2_grid", "chronos2_nocov", "timesfm3",
             "timesfm3_owx"} <= set(REGISTRY)
     assert Chronos2.provides_quantiles and Chronos2Grid.context_mode == "grid"
+
+
+def test_parse_park_ids_cuts_the_comment_before_the_commas():
+    """A subset file's header is prose with commas in it. Splitting on commas first
+    turns "# 12 EU, 10 NA" into the ids " 10 NA" — which is how the first PAR-828
+    subset run reported 32 parks for a 30-park file."""
+    from mlbench.runner import parse_park_ids
+
+    raw = ("# PAR-828 representative subset: 12 EU, 10 NA, 8 Asia (large and small)\n"
+           "# EU\n"
+           "park-a\n"
+           "park-b, park-c   # two on one line, with a trailing comment\n"
+           "\n")
+    assert parse_park_ids(raw) == ["park-a", "park-b", "park-c"]
+    assert parse_park_ids("x,y") == ["x", "y"]
+
+
+def test_unknown_park_id_is_refused(synth_export, tmp_path):
+    """An id in no export must stop the run, not quietly shrink the subset."""
+    from mlbench.runner import load_tables
+    from mlbench.build import connect
+
+    con = connect("1GB", 2)
+    real = duckdb.connect().execute(
+        f"SELECT id FROM '{synth_export}/parquet/parks.parquet' LIMIT 1").fetchone()[0]
+    load_tables(con, synth_export, materialize=True, park_ids=[real])
+    assert con.execute("SELECT count(*) FROM parks").fetchone()[0] == 1
+    with pytest.raises(SystemExit, match="in no export"):
+        load_tables(connect("1GB", 2), synth_export, materialize=True,
+                    park_ids=[real, "not-a-park"])

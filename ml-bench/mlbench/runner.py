@@ -78,6 +78,12 @@ def load_tables(con, export: Path, materialize: bool = False,
             x(f"CREATE OR REPLACE VIEW parks AS SELECT * FROM b.parks WHERE id IN ({ids})")
         else:
             x(f"DELETE FROM parks WHERE id NOT IN ({ids})")
+        # An id that matches no park would otherwise silently shrink the subset: the
+        # run looks fine and every table is simply built over fewer parks.
+        kept = {r[0] for r in x("SELECT id FROM parks").fetchall()}
+        missing = sorted(set(park_ids) - kept)
+        if missing:
+            raise SystemExit(f"--parks: {len(missing)} id(s) are in no export: {missing[:5]}")
     x("""CREATE OR REPLACE TABLE rides AS
         SELECT a.id AS aid, a.park_id, coalesce(a.is_headliner, false) AS is_headliner,
                a.latitude AS lat, a.longitude AS lng, a.land, p.timezone
@@ -708,6 +714,20 @@ class Runner:
 
 # --------------------------------------------------------------------------- CLI
 
+def parse_park_ids(raw: str) -> list[str]:
+    """``--parks`` as ids: comma-separated, or the contents of an ``@file``.
+
+    The comment is cut per LINE and before the commas are split, because a header
+    like ``# 12 EU, 10 NA, 8 Asia`` otherwise contributes " 10 NA" and " 8 Asia" as
+    ids — which `load_tables` now refuses, but which used to pass silently."""
+    out: list[str] = []
+    for line in raw.splitlines():
+        for v in line.split("#", 1)[0].split(","):
+            if v.strip():
+                out.append(v.strip())
+    return out
+
+
 def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--export", required=True, help="export dir (with parquet/)")
     p.add_argument("--out", default=None, help="results/<run-id> (default: ml-bench/results/<utc stamp>)")
@@ -755,8 +775,7 @@ def main(args: argparse.Namespace) -> int:
     park_ids = None
     if args.parks:
         raw = Path(args.parks[1:]).read_text() if args.parks.startswith("@") else args.parks
-        park_ids = [v.strip() for v in raw.replace(",", "\n").splitlines()
-                    if v.strip() and not v.strip().startswith("#")]
+        park_ids = parse_park_ids(raw)
         meta["parks"] = park_ids
         (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
     r = Runner(Path(args.export), out, cfg, models, (i, n), origins, park_ids=park_ids)
