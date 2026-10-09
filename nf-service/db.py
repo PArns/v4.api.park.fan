@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -331,13 +332,19 @@ FUTR_EXOG = [
 ]
 
 
-def persist_forecast(yhat: pd.DataFrame, version: str, value_col: str) -> int:
+def persist_forecast(
+    yhat: pd.DataFrame, version: str, value_col: str, forecast_date: date
+) -> int:
     """Store the forward daily-peak forecast so it can be scored against actuals
     once each target date passes (the forward-scoreboard vs CatBoost).
 
-    One row per (attraction, target_date, forecast_date=today). Re-running on the
-    same day overwrites that day's forecast; past forecast_dates are immutable, so
-    the genuine forward record (made before the target) is preserved for scoring.
+    One row per (attraction, target_date, forecast_date). `forecast_date` is the
+    day the run that PRODUCED `yhat` made it, passed in by the caller — never the
+    day this function happens to be called. Writing `now()` here is what let a
+    re-persist of yesterday's cached parquet land under today's date (PAR-814):
+    the reader and the scoreboard both take forecast_date as the forecast's age.
+    Re-running for the same forecast_date overwrites that day's rows; past
+    forecast_dates are immutable, so the genuine forward record is preserved.
 
     `value_col` is the MEDIAN/point forecast column. Because the model's target is
     the daily P90 (NF_TARGET_PERCENTILE), the persisted predicted_peak = E[daily-P90]
@@ -367,7 +374,7 @@ def persist_forecast(yhat: pd.DataFrame, version: str, value_col: str) -> int:
         INSERT INTO tft_forecasts
             (attraction_id, target_date, forecast_date, predicted_peak, model_version)
         VALUES
-            (:aid, :td, (now() AT TIME ZONE 'UTC')::date, :pp, :ver)
+            (:aid, :td, :fd, :pp, :ver)
         ON CONFLICT (attraction_id, target_date, forecast_date)
         DO UPDATE SET predicted_peak = EXCLUDED.predicted_peak,
                       model_version  = EXCLUDED.model_version,
@@ -375,7 +382,7 @@ def persist_forecast(yhat: pd.DataFrame, version: str, value_col: str) -> int:
         """
     )
     params = [
-        {"aid": str(r.attraction_id), "td": r.target_date,
+        {"aid": str(r.attraction_id), "td": r.target_date, "fd": forecast_date,
          "pp": float(r.predicted_peak), "ver": version}
         for r in rows.itertuples(index=False)
     ]

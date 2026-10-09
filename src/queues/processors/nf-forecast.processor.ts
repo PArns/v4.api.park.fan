@@ -10,12 +10,27 @@ import { ModelComparison } from "../../ml/entities/model-comparison.entity";
 const nfServiceUrl = getNfServiceUrl;
 const SCORE_LOOKBACK_DAYS = 14; // re-score the last N matured days each run (idempotent)
 
+/** nf-service `GET /train/status` (the runner's status file). */
+interface NfTrainStatus {
+  is_training?: boolean;
+  status?: string;
+  version?: string | null;
+  error?: string | null;
+  forecast_date?: string;
+  info?: {
+    rows?: number;
+    persisted?: number;
+    chunks?: { total?: number; ok?: number; skipped?: number };
+  };
+}
+
 /**
  * NeuralForecast (TFT) training + the TFT-vs-CatBoost forward scoreboard.
  *
  * - train-nf: run AFTER the CatBoost 06:00 cron (07:30) so the two PyTorch/CatBoost
- *   training spikes never overlap on the shared host. Triggers nf /train, polls to
- *   completion, then nf /forecast (which persists forward forecasts to tft_forecasts).
+ *   training spikes never overlap on the shared host. Triggers nf /train and polls
+ *   until THIS run completes; the runner persists tft_forecasts itself. A timeout or
+ *   any other end state fails the job (attempts: 1) and persists nothing.
  * - score-comparison: score each model's genuine FORWARD daily-peak forecast (made
  *   before the target date) against the realised actual daily P90 peak, per target
  *   date, into model_comparisons. Fair by construction (no holdout leakage).
@@ -67,37 +82,62 @@ export class NfForecastProcessor {
       const version = start.data?.version;
       this.logger.log(`TFT training started: ${version}`);
 
-      // Poll to completion (TFT on CPU can take a while; generous bound).
+      // Poll to completion (generous bound: a run takes ~11 min on the GPU).
       const pollSeconds = 30;
       const maxAttempts = (90 * 60) / pollSeconds; // up to 90 min
       let attempts = 0;
+      let done: NfTrainStatus | null = null;
       while (attempts < maxAttempts) {
         await new Promise((r) => setTimeout(r, pollSeconds * 1000));
         attempts++;
-        const st = (
+        const st: NfTrainStatus = (
           await axios.get(`${nfServiceUrl()}/train/status`, { timeout: 15000 })
         ).data;
-        if (st.status === "completed") {
-          this.logger.log(`✅ TFT training completed: ${st.version}`);
-          break;
-        }
         if (st.status === "failed") {
           throw new Error(`TFT training failed: ${st.error}`);
+        }
+        if (st.status === "completed" || !st.is_training) {
+          // Only THIS run's completion counts. A status that stopped training
+          // under another version, or settled on anything but "completed"
+          // (nf-service restarted mid-run -> "idle", "reset on startup"), means
+          // this run produced nothing.
+          if (st.status !== "completed" || st.version !== version) {
+            throw new Error(
+              `TFT run ${version} ended without completing: status=${st.status}, ` +
+                `version=${st.version}, error=${st.error ?? "none"}`,
+            );
+          }
+          done = st;
+          break;
         }
         if (attempts % 4 === 0) {
           this.logger.log(`TFT training… (${attempts}/${maxAttempts})`);
         }
       }
 
-      // Forecast + persist forward records for the scoreboard.
-      this.logger.log("Running TFT forecast (persists tft_forecasts)…");
-      const fc = await axios.post(
-        `${nfServiceUrl()}/forecast`,
-        {},
-        { timeout: 300000 },
-      );
+      // The runner persists tft_forecasts itself, under the forecast_date of
+      // the run that produced them. Nothing is re-persisted from here: on a
+      // timeout this job used to fall through to nf /forecast, which wrote the
+      // PREVIOUS night's cached parquet under today's forecast_date (PAR-814,
+      // 2026-10-09). A missing day is safe: the readers accept a forecast up
+      // to three days old and fall back to the previous forecast_date.
+      if (!done) {
+        throw new Error(
+          `TFT run ${version} did not complete within ${(maxAttempts * pollSeconds) / 60} min — ` +
+            "no forecast persisted for today",
+        );
+      }
+
+      const chunks = done.info?.chunks;
+      if (chunks?.skipped) {
+        this.logger.warn(
+          `TFT run ${version}: ${chunks.skipped} of ${chunks.total} park chunk(s) failed and were skipped — ` +
+            "their parks keep the previous forecast_date",
+        );
+      }
       this.logger.log(
-        `✅ TFT forecast cached: ${fc.data?.rows} rows, ${fc.data?.persisted} persisted`,
+        `✅ TFT training completed: ${version} — ${done.info?.rows ?? "?"} rows, ` +
+          `${done.info?.persisted ?? "?"} persisted for ${done.forecast_date ?? "?"}`,
       );
       return { status: "ok", version };
     } catch (e: any) {

@@ -210,23 +210,47 @@ def _tft_column(cols: list[str]) -> str | None:
 
 @app.post("/forecast")
 def run_forecast():
-    """Re-persist the latest cached forecast to tft_forecasts (idempotent upsert).
+    """Re-persist the cached forecast of the last COMPLETED run (idempotent upsert).
 
-    Training is done by /train, which trains + forecasts + persists in one process
-    (the model is intentionally not saved — see forecast.train_and_forecast). This
-    endpoint therefore serves the cached forecast rather than reloading a model;
-    call /train to refresh it."""
-    import db
+    Training is done by /train, whose runner trains + forecasts + persists in one
+    process (the model is intentionally not saved — see forecast.train_and_forecast),
+    so the nightly job no longer calls this. It stays as a manual repair path, and
+    it re-writes exactly the rows that run wrote: same version, same forecast_date.
+
+    It refuses (409) unless the status file says the last run completed and names
+    the forecast_date it made the parquet on. Anything else — training, failed,
+    "reset on startup", or a status from before forecast_date was recorded — means
+    the parquet on disk is from an older run than the status describes, and
+    persisting it would label an old forecast as a fresh one (PAR-814: on
+    2026-10-09 all 231,480 rows were the 2026-10-08 forecast under the new date)."""
+    from datetime import date
+
     import pandas as pd
+
+    import db
 
     if not os.path.exists(_FORECAST_FILE):
         raise HTTPException(status_code=404, detail="No forecast yet — run /train first")
+    st = _read_status()
+    if st.get("status") != "completed" or not st.get("forecast_date"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Last run is not a completed one with a recorded forecast_date "
+                f"(status={st.get('status')!r}, version={st.get('version')!r}) — "
+                "refusing to re-persist a forecast this run did not produce"
+            ),
+        )
     try:
+        forecast_date = date.fromisoformat(st["forecast_date"])
         y_hat = pd.read_parquet(_FORECAST_FILE)
         tcol = _tft_column(list(y_hat.columns))
-        version = _read_status().get("version") or "unknown"
-        persisted = db.persist_forecast(y_hat, version, tcol) if tcol else 0
-        return {"status": "ok", "rows": int(len(y_hat)), "persisted": int(persisted)}
+        version = st.get("version") or "unknown"
+        persisted = db.persist_forecast(y_hat, version, tcol, forecast_date) if tcol else 0
+        return {
+            "status": "ok", "rows": int(len(y_hat)), "persisted": int(persisted),
+            "version": version, "forecast_date": forecast_date.isoformat(),
+        }
     except Exception as e:  # noqa: BLE001
         import traceback
         # Full traceback to the server log; only a short message to the client

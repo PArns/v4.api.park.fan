@@ -449,7 +449,7 @@ bewertet werden. Kein Holdout-Leak, kein In-Sample-Vorteil; Zahlen sammeln sich 
 
 ### Cron-Sequenz (alle UTC)
 - **06:00** CatBoost train (bestehend, `ml-training`).
-- **07:30** `nf-training` Job `train-nf`: TFT train → poll bis fertig → `/forecast` (persistiert).
+- **07:30** `nf-training` Job `train-nf`: TFT train → poll until THIS run (its version) is `completed`; the runner persists `tft_forecasts` itself. A poll timeout or any other end state fails the job and persists nothing (PAR-814 — it used to fall through to `/forecast`, which re-wrote the previous night's parquet under today's date).
   Bewusst nach CatBoost, damit die beiden Trainings-Spikes nicht auf dem 28-GiB-Host kollidieren.
 - **08:30** `nf-training` Job `score-comparison`: bewertet ausgereifte Zieltage.
 
@@ -464,7 +464,7 @@ bewertet werden. Kein Holdout-Leak, kein In-Sample-Vorteil; Zahlen sammeln sich 
 - Gespeichert je `(targetDate, model)`: `n`, `mae`, `bias`, `meanActual`, `meanPred`, `avgLeadDays`.
 
 ### Persistenz / Tabellen (keine Migration — synchronize/CREATE IF NOT EXISTS)
-- **`tft_forecasts`** (nf-service schreibt in `persist_forecast`, `/forecast`-Endpoint): ein Row je
+- **`tft_forecasts`** (nf-service writes it in `persist_forecast`, called by `train_runner` with the run's own `forecast_date`; `/forecast` only re-persists a `completed` run under that same date): ein Row je
   `(attraction_id, target_date, forecast_date)`, upsert → vergangene `forecast_date`-Stände bleiben
   als echte Forward-Records erhalten.
 - **`model_comparisons`** (NestJS TypeORM-Entity, `synchronize=true` legt die Tabelle an): das Scoreboard.
