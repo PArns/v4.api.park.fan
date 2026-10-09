@@ -214,9 +214,11 @@ and writes R², level MAE, UC4 ranking, univariate effects and permutation
 importance (CPU, ~4 min on 1.9 M rows). It reads `parquet/` and
 `raw/schedule.csv.gz` (ticketed events, extra hours and the `updated_us` that
 decides whether a schedule was known at the origin). The plug-in
-`driver_level` (`--model driver_level`) serves the same gradient-boosted model's
-level through `predict_daily`, so the runner scores `driver_level_x_h5` and
-`lvl_driver_level`. Findings: [level-drivers.md](level-drivers.md).
+`driver_level` (`--model driver_level`) is the same gradient-boosted model built
+from nothing but the runner's DataFrames (history + known-future covariates,
+accumulated across origins; no weather, no event flags): `driver_level` = the
+naive level × H5 curve scaled by exp(ŷ), `lvl_driver_level` / `driver_level_x_h5`
+from `predict_daily`. Findings: [level-drivers.md](level-drivers.md).
 
 ## Results
 

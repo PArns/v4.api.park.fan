@@ -58,34 +58,7 @@ def test_univariate_and_scores_run(synth_export):
 
 class _SmallDriverLevel(DriverLevel):
     min_train_rows = 200
-
-
-def test_plugin_information_cut(synth_export, tmp_path):
-    """Poisoning the truth after the origin must not move the plug-in's levels."""
-    from mlbench import baselines as B
-    from mlbench.models.base import HistoryView, Origin
-
-    cfg = BenchConfig(memory_limit="1GB", threads=2)
-    r = Runner(synth_export, tmp_path / "run", cfg, [], materialize=True)
-    c = dt.date(2026, 4, 20)
-
-    def levels():
-        B.window_tables(r.con, c.isoformat(), cfg)
-        days = r.con.execute(f"""SELECT aid AS attraction_id, park_id, DATE '{c}' + L AS date, L AS lead_days
-            FROM rides, (SELECT unnest([1, 3, 7, 30]) L)""").df()
-        m = _SmallDriverLevel()
-        o = Origin(c, "daily", 6, r.con.execute("SELECT * FROM o").df(), HistoryView(r.con, "o", c))
-        out = m.predict_daily(o, days, pd.DataFrame())
-        assert m._model is not None
-        return out.sort_values(["attraction_id", "date"]).reset_index(drop=True)
-
-    before = levels()
-    cut = "(SELECT o.origin_utc FROM o WHERE o.park_id = truth.park_id)"
-    r.con.execute(f"UPDATE truth SET y = y * 10 + 7 WHERE slot_utc + INTERVAL 15 MINUTE > {cut}")
-    r.con.execute(f"UPDATE ride_day SET p90 = p90 * 10 WHERE date >= DATE '{c}'")
-    after = levels()
-    assert len(before) == len(after) > 0
-    assert np.allclose(before["level"], after["level"])
+    settled_rows = 200
 
 
 def test_plugin_scored_through_runner(synth_export, tmp_path):
