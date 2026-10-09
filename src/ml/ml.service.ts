@@ -253,6 +253,43 @@ export class MLService {
     maxDays?: number,
     liveStatus?: "OPERATING" | "CLOSED",
   ): Promise<BulkPredictionResponseDto> {
+    const raw = await this.getRawParkPredictions(
+      parkId,
+      predictionType,
+      maxDays,
+      liveStatus,
+    );
+    if (!this.servePcnIntraday || predictionType !== "hourly") return raw;
+
+    // Champion-swap consistency: the park-level hourly curve (park page, plan/day,
+    // calendar today, favorites) must show the SAME served waits as the
+    // per-attraction read paths, which apply the PCN override + persistence blend.
+    // Overridden on COPIES, so neither the Redis entry nor the raw object a caller
+    // may still hold ever carries a PCN number.
+    const predictions = (raw.predictions ?? []).map((p) => ({ ...p }));
+    await this.applyPcnIntradayOverride(
+      predictions,
+      new Date(currentSlotStartMs()),
+    );
+    return { ...raw, predictions };
+  }
+
+  /**
+   * The ml-service answer for a park exactly as CatBoost produced it — Redis-cached,
+   * never touched by the PCN champion-swap override.
+   *
+   * This is the ONLY park-level read `storePredictions` may be fed from:
+   * `wait_time_predictions` and `prediction_accuracy` are the CatBoost side of the
+   * PCN-vs-CatBoost board, so a served (PCN/blended) number written there would make
+   * the board compare PCN against itself. Serving surfaces use
+   * {@link getParkPredictions}, which applies the override on top of this.
+   */
+  async getRawParkPredictions(
+    parkId: string,
+    predictionType: "hourly" | "daily" = "hourly",
+    maxDays?: number,
+    liveStatus?: "OPERATING" | "CLOSED",
+  ): Promise<BulkPredictionResponseDto> {
     // Get park timezone for cache key
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
@@ -283,17 +320,6 @@ export class MLService {
           },
         );
         cachedData.count = cachedData.predictions.length;
-      }
-
-      // Champion-swap consistency: the park-level hourly curve must show the SAME
-      // served waits as the per-attraction read paths (which apply the PCN override).
-      // Applied AFTER the cache read — the cache stays CatBoost-pure so PCN's 15-min
-      // re-inference stays fresh across the 30-min cache TTL.
-      if (this.servePcnIntraday && predictionType === "hourly") {
-        await this.applyPcnIntradayOverride(
-          cachedData.predictions ?? [],
-          new Date(currentSlotStartMs()),
-        );
       }
 
       return cachedData;
@@ -514,15 +540,6 @@ export class MLService {
           return predTime <= cutoffDate;
         });
         response.data.count = response.data.predictions.length;
-      }
-
-      // Champion-swap consistency (see the cached branch above): override AFTER the
-      // cache write, so the cached payload stays CatBoost-pure.
-      if (this.servePcnIntraday && predictionType === "hourly") {
-        await this.applyPcnIntradayOverride(
-          response.data.predictions ?? [],
-          new Date(currentSlotStartMs()),
-        );
       }
 
       return response.data;
@@ -1594,7 +1611,10 @@ export class MLService {
   }
 
   /** Freshest forward PCN forecast per (attraction, slot) for upcoming slots, keyed by
-   * the slot's UTC ISO string (matching CatBoost's predictedTime). Carries BOTH served
+   * the slot's epoch milliseconds. Never by an ISO string: the DB read paths hand
+   * CatBoost's predictedTime over as `…T12:15:00.000Z` (`Date.toISOString()`), the
+   * park-level path as python's `…T12:15:00+00:00` (`isoformat()`) — the same instant
+   * spelled two ways, and a string key matched only the first (PAR-817). Carries BOTH served
    * quantiles per slot: q0.5 → `display` (the shown wait), q0.8 → `crowd` (the crowd
    * signal) — mirroring the CatBoost per-purpose split
    * (docs/ml/quantile-serving-and-calibration.md). pcn_forecasts stores park-LOCAL naive
@@ -1610,10 +1630,10 @@ export class MLService {
   private async getPcnIntradayWaits(
     attractionIds: string[],
     startTime?: Date,
-  ): Promise<Map<string, Map<string, { display: number; crowd?: number }>>> {
+  ): Promise<Map<string, Map<number, { display: number; crowd?: number }>>> {
     const out = new Map<
       string,
-      Map<string, { display: number; crowd?: number }>
+      Map<number, { display: number; crowd?: number }>
     >();
     if (attractionIds.length === 0) return out;
     try {
@@ -1641,8 +1661,8 @@ export class MLService {
       for (const r of rows) {
         const m =
           out.get(r.aid) ??
-          new Map<string, { display: number; crowd?: number }>();
-        const key = new Date(r.predicted_time).toISOString();
+          new Map<number, { display: number; crowd?: number }>();
+        const key = new Date(r.predicted_time).getTime();
         const entry = m.get(key) ?? { display: NaN };
         if (Math.abs(Number(r.quantile) - 0.8) < 1e-6) {
           entry.crowd = Number(r.wait);
@@ -1684,14 +1704,15 @@ export class MLService {
     const nowMs = (startTime ?? new Date()).getTime();
     let overridden = 0;
     for (const p of hourly) {
-      const q = pcn.get(p.attractionId)?.get(p.predictedTime);
+      // Compare instants, not strings — see getPcnIntradayWaits.
+      const slotMs = Date.parse(p.predictedTime);
+      const q = pcn.get(p.attractionId)?.get(slotMs);
       if (q === undefined) continue;
       // §7.7 anchor-gated persistence blend (validated on the shadow board: busy 1h +2.2..+2.8,
       // aggregate ~neutral): at short lead the wait "L hours from now" is better predicted by
       // "the wait now" than by the model, so blend the served q0.5 toward the current wait —
       // decaying to pure PCN by 3h and only for rides with a real wait (the anchor gate).
-      const leadHours =
-        (new Date(p.predictedTime).getTime() - nowMs) / 3_600_000;
+      const leadHours = (slotMs - nowMs) / 3_600_000;
       const displayWait = persistenceBlendServe(
         q.display,
         anchors.get(p.attractionId),
