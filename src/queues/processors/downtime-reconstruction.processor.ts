@@ -8,7 +8,15 @@ import {
   OUTAGE_INTERVALS_SQL,
   OUTAGE_SCAN_START_SQL,
 } from "../../analytics/utils/outage-reconstruction.sql";
-import { CLOSURE_GAP_INTERVALS_SQL } from "../../common/utils/closure-gap.sql";
+import {
+  CLOSURE_GAP_INTERVALS_SQL,
+  CLOSURE_GAP_PLANNER_SETTINGS,
+} from "../../common/utils/closure-gap.sql";
+import {
+  applyStatementLimits,
+  queryWithLimits,
+  StatementLimits,
+} from "../../common/utils/statement-limits.util";
 import { DowntimeRecoveryService } from "../../analytics/downtime-recovery.service";
 import { DowntimeProfileService } from "../../analytics/downtime-profile.service";
 import { AttractionOutage } from "../../analytics/entities/attraction-outage.entity";
@@ -138,8 +146,10 @@ export class DowntimeReconstructionProcessor {
 
     let scanStart = windowFrom;
     try {
-      const rows: Array<{ scan_start: Date | null }> =
-        await this.dataSource.query(OUTAGE_SCAN_START_SQL, [
+      const rows = await queryWithLimits<Array<{ scan_start: Date | null }>>(
+        this.dataSource,
+        OUTAGE_SCAN_START_SQL,
+        [
           windowFrom,
           parkIds,
           // Hard floor on how far back the scan may reach, whatever it finds
@@ -147,7 +157,9 @@ export class DowntimeReconstructionProcessor {
           // long outage to keep its start, bounded enough that the statement
           // cannot grow without limit.
           new Date(asOf.getTime() - windowDays * 2 * 24 * 60 * 60 * 1000),
-        ]);
+        ],
+        SCAN_START_LIMITS,
+      );
       if (rows[0]?.scan_start) scanStart = new Date(rows[0].scan_start);
     } catch (error) {
       // An empty or unreadable outage table is the first-run case. Falling back
@@ -157,19 +169,24 @@ export class DowntimeReconstructionProcessor {
       );
     }
 
+    // Every read below runs under a deadline sized from the scan it covers. A
+    // statement that blows it fails loudly instead of holding the queue's only
+    // slot for days; see `reconstructionReadLimits`.
+    const readLimits = reconstructionReadLimits(scanStart, asOf);
+
     const [intervals, exposure] = await Promise.all([
-      this.dataSource.query(OUTAGE_INTERVALS_SQL, [
-        parkIds,
-        scanStart,
-        asOf,
-        asOf,
-      ]) as Promise<IntervalRow[]>,
-      this.dataSource.query(OUTAGE_EXPOSURE_SQL, [
-        parkIds,
-        scanStart,
-        asOf,
-        asOf,
-      ]) as Promise<ExposureRow[]>,
+      queryWithLimits<IntervalRow[]>(
+        this.dataSource,
+        OUTAGE_INTERVALS_SQL,
+        [parkIds, scanStart, asOf, asOf],
+        readLimits,
+      ),
+      queryWithLimits<ExposureRow[]>(
+        this.dataSource,
+        OUTAGE_EXPOSURE_SQL,
+        [parkIds, scanStart, asOf, asOf],
+        readLimits,
+      ),
     ]);
 
     // Third statement, for the parks the first two cannot see. It restricts
@@ -187,11 +204,17 @@ export class DowntimeReconstructionProcessor {
     // catch block instead of through the population.
     let closureGapsRead = true;
     try {
-      closureGaps = (await this.dataSource.query(CLOSURE_GAP_INTERVALS_SQL, [
-        parkIds,
-        scanStart,
-        asOf,
-      ])) as ClosureGapRow[];
+      // With nested loops off, and that is not a tuning nicety: the planner
+      // estimates one row for every CTE of this statement and stacks its final
+      // aggregates as nested loops, which over the nightly 60-day scan never
+      // finished (PAR-820). A timeout lands in the catch below, so the closure
+      // signal is skipped for the night and the DOWN reconstruction is kept.
+      closureGaps = await queryWithLimits<ClosureGapRow[]>(
+        this.dataSource,
+        CLOSURE_GAP_INTERVALS_SQL,
+        [parkIds, scanStart, asOf],
+        { ...readLimits, planner: CLOSURE_GAP_PLANNER_SETTINGS },
+      );
     } catch (error) {
       closureGapsRead = false;
       this.logger.warn(
@@ -285,6 +308,7 @@ export class DowntimeReconstructionProcessor {
       : `\n            AND signal = 'down'`;
 
     await this.dataSource.transaction(async (manager) => {
+      await applyStatementLimits(manager, WRITE_LIMITS);
       await manager.query(
         `DELETE FROM attraction_outages
           WHERE started_at >= $1
@@ -489,17 +513,22 @@ export class DowntimeReconstructionProcessor {
       asOf.getTime() - this.RETENTION_DAYS * 24 * 60 * 60 * 1000,
     );
     try {
-      const outages = await this.dataSource.query(
+      const outages = await queryWithLimits<unknown>(
+        this.dataSource,
         `DELETE FROM attraction_outages WHERE started_at < $1`,
         [cutoff],
+        WRITE_LIMITS,
       );
-      const exposure = await this.dataSource.query(
+      const exposure = await queryWithLimits<unknown>(
+        this.dataSource,
         `DELETE FROM attraction_exposure_days WHERE op_day < $1::date`,
         [cutoff],
+        WRITE_LIMITS,
       );
-      const removed =
-        (Array.isArray(outages) ? 0 : (outages?.[1] ?? 0)) +
-        (Array.isArray(exposure) ? 0 : (exposure?.[1] ?? 0));
+      // TypeORM's Postgres driver answers a DELETE with `[rows, rowCount]`.
+      const affected = (raw: unknown): number =>
+        Array.isArray(raw) && typeof raw[1] === "number" ? raw[1] : 0;
+      const removed = affected(outages) + affected(exposure);
       if (removed > 0) {
         this.logger.log(`🧹 Pruned rows older than ${this.RETENTION_DAYS}d`);
       }
@@ -512,6 +541,77 @@ export class DowntimeReconstructionProcessor {
     }
   }
 }
+
+const MINUTE_MS = 60 * 1000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
+
+/**
+ * Deadlines for the reconstruction's reads, from the scan they cover.
+ *
+ * Sized from production on 2026-10-09 (PAR-820), over the nightly scan of 60
+ * days — `OUTAGE_SCAN_START_SQL` pins it to its floor of twice the 30-day
+ * window, so 60 and not 30 is what the cron actually reads: statement 1 takes
+ * ~30 s, statement 2 ~52 s, the closure-gap statement 12.7 s with its planner
+ * settings (~110 s before PAR-157 changed it, never finishing after). The floor
+ * of ten minutes is more than ten times the slowest of them.
+ *
+ * Above the floor it grows with the scan, ten seconds per day, so a staged
+ * hand-run fill (`windowDays` up to 400, a scan of up to 800 days) is not cut
+ * off by a deadline meant for the nightly run. The 270-day stage of the first
+ * fill took 1713 s for the whole job; the budget there is 90 minutes per
+ * statement.
+ *
+ * `lock_timeout` is short on purpose. These are reads: the only lock they can
+ * wait on is one somebody else asked for ACCESS EXCLUSIVE on, and a read
+ * queued behind that becomes the head of the queue every other reader of the
+ * table then waits behind. Failing the job costs one night; queueing can cost
+ * the API (PAR-563, PAR-819).
+ */
+export function reconstructionReadLimits(
+  scanStart: Date,
+  asOf: Date,
+): StatementLimits {
+  const scanDays = Math.max(
+    1,
+    Math.ceil((asOf.getTime() - scanStart.getTime()) / DAY_MS),
+  );
+  return {
+    statementTimeoutMs: Math.max(
+      READ_TIMEOUT_FLOOR_MS,
+      scanDays * READ_TIMEOUT_PER_SCAN_DAY_MS,
+    ),
+    lockTimeoutMs: LOCK_TIMEOUT_MS,
+  };
+}
+
+/** See `reconstructionReadLimits`. */
+export const READ_TIMEOUT_FLOOR_MS = 10 * MINUTE_MS;
+export const READ_TIMEOUT_PER_SCAN_DAY_MS = 10 * 1000;
+export const LOCK_TIMEOUT_MS = 30 * 1000;
+
+/**
+ * The scan-start lookup reads `attraction_outages` only, by index — it has
+ * never shown up in the slow-query log at all.
+ */
+const SCAN_START_LIMITS: StatementLimits = {
+  statementTimeoutMs: 2 * MINUTE_MS,
+  lockTimeoutMs: LOCK_TIMEOUT_MS,
+};
+
+/**
+ * The write transaction and the retention prune.
+ *
+ * The slowest write measured is the outage DELETE at 7.7-14.7 s (slow-query
+ * log, 2026-10-02..05); five minutes per statement is twenty times that. The
+ * idle limit ends the session if the process stalls between two statements
+ * while holding the transaction's row locks and snapshot open, which
+ * `statement_timeout` cannot see.
+ */
+export const WRITE_LIMITS: StatementLimits = {
+  statementTimeoutMs: 5 * MINUTE_MS,
+  lockTimeoutMs: LOCK_TIMEOUT_MS,
+  idleInTransactionTimeoutMs: 2 * MINUTE_MS,
+};
 
 interface IntervalRow {
   attractionId: string;

@@ -399,6 +399,46 @@ so the two merged into a single row carrying 71 rides and 4979 outages. Grouping
 is on `parkId` now, and the rows carry `parkCity` so a human can tell them
 apart.
 
+### The closure-gap statement stopped finishing (2026-10-06 – 10-09, PAR-820)
+
+The nightly job failed every run from 2026-10-06 (`job stalled more than
+allowable limit`), and all four tables stood at 2026-10-05 05:00. **Cause,
+proven:** the closure-gap statement as PAR-157 rewrote it (deployed 2026-10-05)
+does not finish over the nightly scan. The slow-query log shows statements 1
+and 2 completing at their usual ~30 s / ~52 s on every run from 10-06 on, and
+the closure-gap statement — 100–113 s on 10-02..10-05 — never once after. The
+planner puts `rows=1` on every CTE after `blind_parks` and stacks the final
+grouped joins (`simultaneity`, `cycle`, `cand_minutes`, `regularity`) as nested
+loops that re-run each aggregate per outer row:
+
+| scan                      | planner's choice | `enable_nestloop = off` |
+| ------------------------- | ---------------: | ----------------------: |
+| 3 days                    |           14.3 s |                   9.9 s |
+| 10 days                   |  > 300 s timeout |                   9.1 s |
+| 60 days (the nightly run) |  not in 12 hours |  12.7 s, 4404 rows      |
+
+Note the nightly scan is **60 days, not 30**: `OUTAGE_SCAN_START_SQL` finds a
+`down` spell still open further back and the scan is pinned to its floor of
+twice the window.
+
+The job had no deadline anywhere, so the hung statement held the `downtime`
+queue's only slot (the 10-09 05:00 slot never started) and was ended only by
+deploys — which Bull reports as a stall. Postgres does not notice a dead client
+until it next writes to it, so each killed run's statement also kept running
+on the server.
+
+What changed: every statement the job issues runs in its own transaction under
+`SET LOCAL` deadlines (`reconstructionReadLimits`, `WRITE_LIMITS`,
+`src/common/utils/statement-limits.util.ts`) — reads 10 minutes, or 10 s per
+scanned day above that for a staged fill; writes 5 minutes; `lock_timeout`
+30 s so a read never queues behind an ACCESS EXCLUSIVE request and becomes the
+head of everyone else's queue (PAR-563, PAR-819). The closure-gap statement
+additionally runs with `enable_nestloop = off` (`CLOSURE_GAP_PLANNER_SETTINGS`).
+A timeout there falls into the existing swallowed branch: one night without
+closure gaps, the DOWN reconstruction kept. Expected whole-job time with the
+fix: ~1.5–2 minutes for the reconstruction (statements 1 and 2 in parallel,
+then ~13 s for closures, ~15 s of writes), plus the profile and curve rebuilds.
+
 ### The first production fill, staged
 
 Phase 3's tables were filled for real on **2026-09-11**, against the production

@@ -300,6 +300,15 @@ export const LIVE_LOOKBACK_HOURS = 26;
 export const MAX_GAP_HOURS = 12;
 
 /**
+ * Planner settings `CLOSURE_GAP_INTERVALS_SQL` must run under, applied with
+ * `SET LOCAL` so they end with the statement's own transaction. See that
+ * statement's docblock for the measurement.
+ */
+export const CLOSURE_GAP_PLANNER_SETTINGS: Readonly<Record<string, string>> = {
+  enable_nestloop: "off",
+};
+
+/**
  * Closures as intervals, for one park filter and window: the same-day gaps and
  * the standing closures the file docblock describes, in one result.
  *
@@ -314,6 +323,17 @@ export const MAX_GAP_HOURS = 12;
  * The window functions do all the work in one pass; an earlier version used
  * correlated subqueries for "was it OPERATING before" and "did it come back",
  * and it was killed by the server at 30 days.
+ *
+ * **Run it with `enable_nestloop = off`** (`CLOSURE_GAP_PLANNER_SETTINGS`).
+ * The planner cannot estimate any of the CTEs after `blind_parks` — a
+ * subplan-filtered anti join, then filters on window-function output — and
+ * puts `rows=1` on every one of them, so it stacks the final grouped joins
+ * (`simultaneity`, `cycle`, `cand_minutes`, `regularity`) as nested loops that
+ * re-run each aggregate once per outer row. Measured against production on
+ * 2026-10-09 (PAR-820): 14 s over 3 days, past a 300 s timeout over 10, and
+ * over the nightly 60-day scan it did not finish in 12 hours. With nested loops
+ * off the same statement takes 9.9 s over 3 days, 9.1 s over 10 and 12.7 s over
+ * 60 (4404 rows). A planner setting changes the plan, never the result.
  */
 export const CLOSURE_GAP_INTERVALS_SQL = `
   WITH ${parkOpenWindowCtes()},
