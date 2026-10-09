@@ -386,3 +386,29 @@ initial zig Millionen alter `pcn_forecasts`-Zeilen — der DELETE läuft über d
 kleine Batches). Optional vorab manuell in Batches löschen. (b) Nach dem nächtlichen
 Retrain (08:30) trainieren die Modelle auf den neuen 11 Kanälen; bis dahin servieren
 die alten Checkpoints unverändert über den Kanal-Contract.
+
+## 9. §8 row 5 was a no-op on the park-level path (PAR-817, 2026-10-09)
+
+Row 5 above wired the override into `getParkPredictions`, but it never fired there.
+`getPcnIntradayWaits` keyed its lookup on `Date.toISOString()` (`…T12:15:00.000Z`) and
+`applyPcnIntradayOverride` looked up `p.predictedTime` as a string. The DB read paths
+build `predictedTime` with `toISOString()` too, so ride pages matched; the park-level
+path hands over the ml-service response, whose `predictedTime` is python
+`isoformat()` (`…T12:15:00+00:00`, `ml-service/predict.py`). Same instant, different
+string, zero matches. Park page curve, `/plan/day` (today's hours), calendar today and
+favorites therefore served pure CatBoost while ride pages served PCN + the §7.7
+persistence blend — one slot, two numbers.
+
+Rules since then:
+
+- **The lookup compares instants** (epoch ms on both sides), never ISO strings.
+- **Serving and storing are separate reads.** `getRawParkPredictions` is the cached,
+  CatBoost-pure ml-service answer and the only park-level read the 15-min/daily
+  prediction cron may hand to `storePredictions`; `wait_time_predictions` and
+  `prediction_accuracy` are the CatBoost side of the PCN-vs-CatBoost board. The
+  served `getParkPredictions` applies the override on copies of the predictions, so
+  neither the Redis entry nor the stored rows ever carry a `+pcn` number. (Before the
+  fix the cron called the served method — harmless only because the override was a
+  no-op; fixing the keys alone would have written PCN into the CatBoost board.)
+- The blend anchor (`fetchCurrentWaits`, latest STANDBY wait within 3 h) is read
+  from `queue_data` per call, so it works identically on every path.

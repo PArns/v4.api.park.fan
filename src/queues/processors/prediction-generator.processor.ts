@@ -129,8 +129,10 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
             try {
               // Pass pre-computed live status to avoid redundant getBatchParkStatus call
               const liveStatus = statusMap.get(park.id);
-              // Get hourly predictions for the generation horizon (48h)
-              const response = await this.mlService.getParkPredictions(
+              // Get hourly predictions for the generation horizon (48h).
+              // RAW CatBoost, never the served (PCN-overridden) curve: these rows
+              // are the CatBoost side of the PCN-vs-CatBoost board (PAR-817).
+              const response = await this.mlService.getRawParkPredictions(
                 park.id,
                 "hourly",
                 undefined,
@@ -303,7 +305,7 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
               // so we know it operates today. Avoids getBatchParkStatus returning "CLOSED"
               // at night (outside operating hours) which would suppress is_park_open for
               // UNKNOWN-schedule future dates in the ML feature pipeline.
-              const response = await this.mlService.getParkPredictions(
+              const response = await this.mlService.getRawParkPredictions(
                 park.id,
                 "daily",
                 undefined,

@@ -18,6 +18,7 @@ import { HolidaysService } from "../holidays/holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
+import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
 
 describe("MLService", () => {
   let service: MLService;
@@ -47,6 +48,8 @@ describe("MLService", () => {
   const mockPredictionRepository = {
     find: jest.fn(),
     save: jest.fn(),
+    // Raw SQL reads (pcn_forecasts for the PCN champion-swap override).
+    manager: { query: jest.fn().mockResolvedValue([]) },
     createQueryBuilder: jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
@@ -255,6 +258,146 @@ describe("MLService", () => {
 
       expect(result).toEqual(cachedData);
       expect(mockRedis.get).toHaveBeenCalled();
+    });
+  });
+
+  describe("PCN champion-swap on the park-level path (PAR-817)", () => {
+    const parkId = "park-pcn";
+    const HOUR = 3_600_000;
+    /** python `datetime.isoformat()` of a UTC-aware timestamp — what predict.py emits. */
+    const pyIso = (ms: number) =>
+      new Date(ms).toISOString().replace(".000Z", "+00:00");
+
+    let farSlot: number; // lead 4 h → past the blend horizon, pure PCN
+    let nearSlot: number; // lead 30 min → blended toward the current wait
+    let catboostPayload: string;
+    const prevFlag = process.env.SERVE_PCN_INTRADAY;
+
+    beforeEach(() => {
+      process.env.SERVE_PCN_INTRADAY = "true";
+      const slot0 = currentSlotStartMs();
+      farSlot = slot0 + 4 * HOUR;
+      nearSlot = slot0 + 0.5 * HOUR;
+      catboostPayload = JSON.stringify({
+        predictions: [farSlot, nearSlot].map((ms) => ({
+          attractionId: "attr-1",
+          predictedTime: pyIso(ms),
+          predictedWaitTime: 20,
+          predictionType: "hourly",
+          confidence: 80,
+          crowdLevel: "low",
+          baseline: 40,
+          modelVersion: "v1",
+        })),
+        count: 2,
+        modelVersion: "v1",
+      });
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        timezone: "UTC",
+        countryCode: "DE",
+        regionCode: null,
+      });
+      mockRedis.get.mockResolvedValue(catboostPayload);
+      // pcn_forecasts rows: q0.5 = 60 for both slots, q0.8 = 70.
+      mockPredictionRepository.manager.query.mockResolvedValue(
+        [farSlot, nearSlot].flatMap((ms) => [
+          {
+            aid: "attr-1",
+            predicted_time: new Date(ms),
+            quantile: 0.5,
+            wait: "60",
+          },
+          {
+            aid: "attr-1",
+            predicted_time: new Date(ms),
+            quantile: 0.8,
+            wait: "70",
+          },
+        ]),
+      );
+      // Blend anchor: the ride's current wait.
+      mockQueueDataRepository.createQueryBuilder.mockImplementation(() => ({
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        distinctOn: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([]),
+        getMany: jest
+          .fn()
+          .mockResolvedValue([{ attractionId: "attr-1", waitTime: 100 }]),
+      }));
+    });
+
+    afterEach(() => {
+      if (prevFlag === undefined) delete process.env.SERVE_PCN_INTRADAY;
+      else process.env.SERVE_PCN_INTRADAY = prevFlag;
+      mockPredictionRepository.manager.query.mockResolvedValue([]);
+      mockRedis.get.mockReset();
+    });
+
+    it("applies the override to python's `+00:00` predictedTime strings", async () => {
+      const result = await service.getParkPredictions(parkId, "hourly");
+      const at = (ms: number) =>
+        result.predictions.find((p) => Date.parse(p.predictedTime) === ms)!;
+
+      // Lead 4 h: pure PCN q0.5, crowd level from q0.8 (70 / 40 = 175 %).
+      expect(at(farSlot).predictedWaitTime).toBe(60);
+      expect(at(farSlot).crowdLevel).toBe("very_high");
+      expect(at(farSlot).modelVersion).toBe("v1+pcn");
+      // Lead 30 min: the persistence blend serves the current wait (α = 1 up to 1 h),
+      // so the anchor read works on this path too.
+      expect(at(nearSlot).predictedWaitTime).toBe(100);
+      expect(at(nearSlot).modelVersion).toBe("v1+pcn");
+      // Only the value is served; the time string the client sees is unchanged.
+      expect(at(farSlot).predictedTime).toBe(pyIso(farSlot));
+    });
+
+    it("getRawParkPredictions returns CatBoost untouched (the store path)", async () => {
+      const raw = await service.getRawParkPredictions(parkId, "hourly");
+
+      expect(raw).toEqual(JSON.parse(catboostPayload));
+      expect(mockPredictionRepository.manager.query).not.toHaveBeenCalled();
+    });
+
+    it("never writes a PCN number into the Redis entry the store path reads", async () => {
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(
+          key.startsWith("ml:active-attractions:")
+            ? JSON.stringify(["attr-1"])
+            : null,
+        ),
+      );
+      mockAttractionRepository.find.mockResolvedValue([{ id: "attr-1" }]);
+      mockWeatherService.getHourlyForecast.mockResolvedValue([]);
+      jest
+        .spyOn(service as any, "enrichForecastWithHolidays")
+        .mockResolvedValue([]);
+      jest.spyOn(service as any, "buildFeatureContext").mockResolvedValue({});
+      mockAnalyticsService.getP50BaselineFromCache.mockResolvedValue(0);
+      (mockAnalyticsService as any).getTypicalDayPeakFromCache = jest
+        .fn()
+        .mockResolvedValue(0);
+      const mlClient = (service as any).mlClient;
+      mlClient.post = jest
+        .fn()
+        .mockResolvedValue({ data: JSON.parse(catboostPayload) });
+
+      const served = await service.getParkPredictions(parkId, "hourly");
+
+      expect(served.predictions.every((p) => p.modelVersion === "v1+pcn")).toBe(
+        true,
+      );
+      const written = mockRedis.set.mock.calls.find(
+        ([key]) => typeof key === "string" && key.startsWith("ml:park:"),
+      );
+      expect(written).toBeDefined();
+      expect(JSON.parse(written![1] as string)).toEqual(
+        JSON.parse(catboostPayload),
+      );
     });
   });
 
