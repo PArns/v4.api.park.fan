@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # runs in its own process. On the full panel these OOM-killed the fit; per chunk
     # they're fine. 0 = single-thread loading.
     NF_NUM_WORKERS: int = 4
+    # Watchdog: a training run still going after this many minutes is killed and
+    # marked failed (PAR-814). A run takes ~11 min on the GPU. Without it a hung
+    # runner (2026-10-09: blocked through a DB outage) holds is_training=true, so
+    # every later /train is refused and the nightly job reads "already running".
+    NF_TRAIN_DEADLINE_MINUTES: int = 120
     # Parks per training chunk. Combined with the small windows_batch_size this keeps
     # each fit comfortably in memory; also lets the dataloader workers run.
     NF_PARK_CHUNK_SIZE: int = 10

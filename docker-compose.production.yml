@@ -14,6 +14,11 @@ services:
       - "postgres"
       - "-c"
       - "max_parallel_workers_per_gather=2"
+      # Log every lock wait longer than deadlock_timeout (1 s) with the pids
+      # holding and waiting. The 2026-10-07..09 outages were lock queues, and
+      # with this off nothing recorded who held the lock (runbook §0b).
+      - "-c"
+      - "log_lock_waits=on"
     ports:
       - "${DB_PORT:-5433}:5432"
     environment:

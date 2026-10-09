@@ -433,6 +433,10 @@ check whether more seasonal coverage supports a longer horizon, recalibrate the 
 - `MLService.getTftDailyPredictions(parkId, days=30)` — freshest `tft_forecasts` per
   (headliner, day), 3-day staleness guard (stalled nf-service → CatBoost fallback),
   cached per park-day.
+- **Write side (PAR-814)**: `forecast_date` is the day the run that made the forecast STARTED
+  (UTC), fixed by `train_runner` and recorded in `nf_training_status.json`; never the day
+  a write happens. A night whose run times out or dies writes nothing, and the reader
+  above falls back to the previous `forecast_date`.
 - `MLService.getServingDailyPredictions(parkId, tftDays=30)` — TFT overrides CatBoost
   for covered ≤30d (attraction,day); CatBoost for the long tail + uncovered rows.
 - Consumed by `CalendarService` (predicted crowd levels) and the yearly endpoint

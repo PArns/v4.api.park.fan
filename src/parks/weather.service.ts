@@ -21,7 +21,7 @@ import {
 } from "../common/utils/date.util";
 import { ClimateNormals } from "../external-apis/weather/climate-normals";
 import { addDays } from "date-fns";
-import { fromZonedTime } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 
 /**
  * Weather Service
@@ -486,7 +486,9 @@ export class WeatherService {
    * cached by parkId to reduce API calls
    */
   async getHourlyForecast(parkId: string): Promise<WeatherForecastItemDto[]> {
-    const cacheKey = `weather:hourly:park:${parkId}`;
+    // v2: `time` is a UTC instant since PAR-818 (was park-local naive) — a new
+    // key so no entry in the old shape is ever read as the new one.
+    const cacheKey = `weather:hourly:v2:park:${parkId}`;
 
     // Try cache first
     try {
@@ -502,7 +504,7 @@ export class WeatherService {
     try {
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: ["latitude", "longitude"],
+        select: ["latitude", "longitude", "timezone"],
       });
 
       if (!park || !park.latitude || !park.longitude) {
@@ -517,10 +519,12 @@ export class WeatherService {
         park.longitude,
       );
 
-      // Map to DTO
+      // Map to DTO. The client asks Open-Meteo for GMT and returns UTC
+      // instants (`…Z`); normalised here to the full ISO form.
+      const tz = park.timezone || "UTC";
       const mappedForecast: WeatherForecastItemDto[] = forecast.hours.map(
         (h) => ({
-          time: h.time,
+          time: parkLocalHourToUtcIso(h.time, tz),
           temperature: h.temperature,
           precipitation: h.precipitation,
           rain: h.rain,
@@ -564,44 +568,7 @@ export class WeatherService {
         });
 
         if (dailyData.length > 0) {
-          const synthesizedForecast: WeatherForecastItemDto[] = [];
-
-          for (const day of dailyData) {
-            // Create 24 hours for each day
-            const dateStr =
-              day.date instanceof Date
-                ? day.date.toISOString().split("T")[0]
-                : day.date; // Handle string/date discrepancies
-
-            for (let hour = 0; hour < 24; hour++) {
-              // Simple sinusoidal interpolation for temperature
-              // Min at 4am, Max at 2pm (14:00)
-              const minTemp = Number(day.temperatureMin || 15);
-              const maxTemp = Number(day.temperatureMax || 25);
-              const tempRange = maxTemp - minTemp;
-
-              // Shift curve so peak is at 14:00
-              // cos((h - 14) / 12 * PI) gives peak at 14, trough at 2/26
-              // simplified interpolation
-              const normalizedTime = ((hour - 14) / 12) * Math.PI;
-              const temp =
-                Math.round(
-                  ((Math.cos(normalizedTime) * -0.5 + 0.5) * tempRange +
-                    minTemp) *
-                    10,
-                ) / 10;
-
-              synthesizedForecast.push({
-                time: `${dateStr}T${hour.toString().padStart(2, "0")}:00`,
-                temperature: temp,
-                precipitation: Number(day.precipitationSum || 0) / 24, // Distribute evenly (naive)
-                rain: Number(day.rainSum || 0) / 24,
-                snowfall: Number(day.snowfallSum || 0) / 24,
-                weatherCode: day.weatherCode || 0,
-                windSpeed: Number(day.windSpeedMax || 0) / 2, // Assume avg is half max
-              });
-            }
-          }
+          const synthesizedForecast = synthesizeHourlyFromDaily(dailyData, tz);
 
           this.logger.log(
             `✓ Bootstrapped ${synthesizedForecast.length} hourly weather points from DB for park ${parkId}`,
@@ -962,4 +929,85 @@ export class WeatherService {
       );
     }
   }
+}
+
+/**
+ * A park-local wall-clock hour without an offset (`2026-07-04T14:00`, Open-Meteo
+ * with timezone:"auto") as the UTC instant it names (`2026-07-04T12:00:00.000Z`
+ * in Berlin). A string that already carries an offset or `Z` is an instant and
+ * only normalised (PAR-818).
+ */
+export function parkLocalHourToUtcIso(time: string, timezone: string): string {
+  const hasOffset = /(Z|[+-]\d{2}:?\d{2})$/.test(time);
+  const instant = hasOffset ? new Date(time) : fromZonedTime(time, timezone);
+  return Number.isNaN(instant.getTime()) ? time : instant.toISOString();
+}
+
+/**
+ * Hourly points synthesised from stored DAILY weather, for when Open-Meteo is
+ * unreachable. Each point is one real hour of the park's local day, as a UTC
+ * instant (PAR-818): the hours are stepped in UTC between two local midnights,
+ * so a spring-forward day has 23 points and a fall-back day 25. Building them
+ * as `${date}T${hh}:00` on the wall clock instead maps the non-existent 02:00
+ * onto 03:00 and drops one of the two 02:00s — duplicate and missing instants
+ * in the ML merge.
+ *
+ * Temperature follows a sinusoid with its minimum at 02:00 and maximum at
+ * 14:00 local; precipitation, rain and snow are spread evenly over the day.
+ */
+export function synthesizeHourlyFromDaily(
+  days: Array<
+    Pick<
+      WeatherData,
+      | "date"
+      | "temperatureMin"
+      | "temperatureMax"
+      | "precipitationSum"
+      | "rainSum"
+      | "snowfallSum"
+      | "weatherCode"
+      | "windSpeedMax"
+    >
+  >,
+  timezone: string,
+): WeatherForecastItemDto[] {
+  const out: WeatherForecastItemDto[] = [];
+  for (const day of days) {
+    const dateStr =
+      day.date instanceof Date
+        ? day.date.toISOString().split("T")[0]
+        : String(day.date); // a `date` column arrives as "YYYY-MM-DD"
+    const start = fromZonedTime(`${dateStr}T00:00:00`, timezone).getTime();
+    const end = fromZonedTime(
+      `${addDays(new Date(`${dateStr}T12:00:00Z`), 1)
+        .toISOString()
+        .slice(0, 10)}T00:00:00`,
+      timezone,
+    ).getTime();
+    const hoursInDay = Math.round((end - start) / 3_600_000);
+
+    const minTemp = Number(day.temperatureMin || 15);
+    const maxTemp = Number(day.temperatureMax || 25);
+    const tempRange = maxTemp - minTemp;
+
+    for (let t = start; t < end; t += 3_600_000) {
+      const instant = new Date(t);
+      const hour = Number(formatInTimeZone(instant, timezone, "H"));
+      const normalizedTime = ((hour - 14) / 12) * Math.PI;
+      const temp =
+        Math.round(
+          ((Math.cos(normalizedTime) * -0.5 + 0.5) * tempRange + minTemp) * 10,
+        ) / 10;
+      out.push({
+        time: instant.toISOString(),
+        temperature: temp,
+        precipitation: Number(day.precipitationSum || 0) / hoursInDay,
+        rain: Number(day.rainSum || 0) / hoursInDay,
+        snowfall: Number(day.snowfallSum || 0) / hoursInDay,
+        weatherCode: day.weatherCode || 0,
+        windSpeed: Number(day.windSpeedMax || 0) / 2, // Assume avg is half max
+      });
+    }
+  }
+  return out;
 }
