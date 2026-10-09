@@ -14,6 +14,7 @@ import { RideStatsProcessor } from "./processors/ride-stats.processor";
 import { CuratedDataProcessor } from "./processors/curated-data.processor";
 import { SixFlagsClient } from "../external-apis/six-flags/six-flags.client";
 import { WaitTimesProcessor } from "./processors/wait-times.processor";
+import { LiveCacheWarmupProcessor } from "./processors/live-cache-warmup.processor";
 import { WeatherProcessor } from "./processors/weather.processor";
 import { WeatherWarningsProcessor } from "./processors/weather-warnings.processor";
 import { HolidaysProcessor } from "./processors/holidays.processor";
@@ -165,6 +166,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     CuratedDataProcessor,
     EntityMappingsProcessor, // Phase 6.6.3: Multi-source mapping processor
     WaitTimesProcessor,
+    LiveCacheWarmupProcessor, // Cache warmup after each sync (PAR-822)
     WeatherProcessor,
     WeatherWarningsProcessor,
     WeatherHistoricalProcessor,

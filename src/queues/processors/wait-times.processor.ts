@@ -16,7 +16,6 @@ import {
 } from "../../queue-data/queue-data.service";
 import { MultiSourceOrchestrator } from "../../external-apis/data-sources/multi-source-orchestrator.service";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
-import { CacheWarmupService } from "../services/cache-warmup.service";
 import { PopularityService } from "../../popularity/popularity.service";
 import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import {
@@ -37,6 +36,11 @@ import {
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
 import { dedupePollEntities } from "../../common/utils/dedupe-poll-entities.util";
 import { RideAlertsService } from "../../ride-alerts/ride-alerts.service";
+import {
+  LIVE_CACHE_WARMUP_JOB,
+  LIVE_CACHE_WARMUP_QUEUE,
+  LiveCacheWarmupJobData,
+} from "./live-cache-warmup.processor";
 
 @Processor("wait-times")
 export class WaitTimesProcessor {
@@ -64,17 +68,22 @@ export class WaitTimesProcessor {
     private restaurantsService: RestaurantsService,
     private queueDataService: QueueDataService,
     private readonly orchestrator: MultiSourceOrchestrator,
-    private readonly cacheWarmupService: CacheWarmupService,
     private readonly popularityService: PopularityService,
     private readonly predictionDeviationService: PredictionDeviationService,
     private readonly rideAlertsService: RideAlertsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    @InjectQueue(LIVE_CACHE_WARMUP_QUEUE)
+    private readonly liveCacheWarmupQueue: Queue,
   ) {}
 
   @Process("fetch-wait-times")
   async handleSyncWaitTimes(_job: Job): Promise<void> {
     this.logger.log("🎢 Starting BATCH wait times sync...");
     const startTime = Date.now();
+    // Per-phase wall-clock for the structured log at the end (PAR-822).
+    // `*SumMs` fields add up per-park work across the five parks a batch runs
+    // in parallel, so they show where the time goes, not wall-clock.
+    const phases = new WaitTimesPhaseTimer();
 
     try {
       const allParks = await this.parksService.findAll();
@@ -103,6 +112,7 @@ export class WaitTimesProcessor {
       // refreshed over a few cycles instead of the popular ~12 always winning.
       const wzEligible =
         await this.selectStaleWartezeitenParks(prioritizedParks);
+      phases.mark("prepareMs");
 
       // Counters
       let savedAttractions = 0;
@@ -135,6 +145,7 @@ export class WaitTimesProcessor {
                 );
 
               // Pre-fetch entity mappings
+              let t = Date.now();
               const [pAttractions, pShows, pRestaurants] = await Promise.all([
                 this.attractionsService.getRepository().find({
                   // A retired attraction is absent from every feed by
@@ -198,11 +209,17 @@ export class WaitTimesProcessor {
                   mappingLookup.set(`themeparks-wiki:${r.externalId}`, r.id);
               });
 
+              phases.add("mappingsSumMs", Date.now() - t);
+
               // Fetch live data
+              t = Date.now();
               const liveData = await this.orchestrator.fetchParkLiveData(
                 park.id,
                 parkExternalIdMap,
+                (source, ms) => phases.add(`fetch.${source}.SumMs`, ms),
               );
+              phases.add("fetchSumMs", Date.now() - t);
+              t = Date.now();
 
               // Update Schedule from Live Data (Fallback)
               if (
@@ -400,6 +417,7 @@ export class WaitTimesProcessor {
                   );
                 }
               }
+              phases.add("writeSumMs", Date.now() - t);
             } catch (_e) {
               this.logger.debug(`Failed to process park ${park.name}`);
             }
@@ -418,34 +436,64 @@ export class WaitTimesProcessor {
         }
       }
 
+      phases.mark("parksMs");
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(`✅ Wait times sync complete in ${duration}s!`);
       this.logger.log(
         `📊 Updated: ${savedAttractions} attractions, ${savedShows} shows, ${savedRestaurants} restaurants`,
       );
 
-      // Warmup & Heartbeats
+      // Heartbeats stay in this job: they are writes that must follow the
+      // sync in the same tick (PAR-720 relies on that ordering).
       try {
-        // Run the heavy warmups SEQUENTIALLY, not via Promise.all: each one
-        // already fans out batched DB work against queue_data, and firing all
-        // three at once every 5 min recreates the connection-pool/DB-saturation
-        // peak this sync is meant to avoid. Sequential keeps the per-tick DB
-        // pressure bounded while still finishing well within the 5-min window.
-        await this.cacheWarmupService.warmupOperatingParks();
-        await this.cacheWarmupService.warmupTopAttractions(1000);
-        await this.cacheWarmupService.warmupParkOccupancy(
-          prioritizedParks.map((p) => p.id),
-        );
         const hb = await this.writeHourlyHeartbeats();
         if (hb > 0) this.logger.log(`💓 Wrote ${hb} hourly heartbeats`);
       } catch (e) {
         this.logger.warn(
-          `Cache warmup or heartbeat write failed: ${(e as Error)?.message ?? e}`,
+          `Heartbeat write failed: ${(e as Error)?.message ?? e}`,
         );
       }
+      phases.mark("heartbeatsMs");
+
+      // The cache warmup (park + attraction integrated caches, occupancy) runs
+      // in its own queue (PAR-822). Inside this job it took ~210 s of a ~263 s
+      // run and, since this queue runs one job at a time, held back the next
+      // fetch whenever a run went past five minutes.
+      await this.requestLiveCacheWarmup(
+        prioritizedParks.map((p) => p.id),
+        startTime,
+      );
+      phases.mark("enqueueWarmupMs");
+
+      this.logger.log(
+        `⏱️  wait-times phases ${JSON.stringify(phases.toJSON(Date.now() - startTime))}`,
+      );
     } catch (error) {
       this.logger.error("❌ Wait times sync failed", error);
       throw error;
+    }
+  }
+
+  /**
+   * Ask the live-cache-warmup queue to refresh the caches this sync made
+   * stale. Never throws: a failed enqueue costs one cycle's warm caches (they
+   * still expire and rebuild on read), never the sync.
+   */
+  private async requestLiveCacheWarmup(
+    parkIds: string[],
+    syncStartedAt: number,
+  ): Promise<void> {
+    const data: LiveCacheWarmupJobData = { parkIds, syncStartedAt };
+    try {
+      await this.liveCacheWarmupQueue.add(LIVE_CACHE_WARMUP_JOB, data, {
+        removeOnComplete: true,
+        removeOnFail: 20,
+        attempts: 1,
+      });
+    } catch (e) {
+      this.logger.warn(
+        `Failed to enqueue live cache warmup: ${(e as Error)?.message ?? e}`,
+      );
     }
   }
 
@@ -1092,5 +1140,29 @@ export class WaitTimesProcessor {
       );
     }
     return totalHeartbeats;
+  }
+}
+
+/**
+ * Wall-clock bookkeeping for one wait-times run. `mark` records the time since
+ * the previous mark (sequential phases); `add` accumulates per-park durations,
+ * which overlap because parks are processed five at a time.
+ */
+export class WaitTimesPhaseTimer {
+  private last = Date.now();
+  private readonly values: Record<string, number> = {};
+
+  mark(name: string): void {
+    const now = Date.now();
+    this.values[name] = (this.values[name] ?? 0) + (now - this.last);
+    this.last = now;
+  }
+
+  add(name: string, ms: number): void {
+    this.values[name] = (this.values[name] ?? 0) + ms;
+  }
+
+  toJSON(totalMs: number): Record<string, number> {
+    return { ...this.values, totalMs };
   }
 }

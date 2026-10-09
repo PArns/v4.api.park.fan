@@ -221,6 +221,9 @@ export class MultiSourceOrchestrator {
   async fetchParkLiveData(
     parkId: string,
     externalIds: Map<string, string>,
+    // Optional per-source wall-clock, for the wait-times phase log (PAR-822).
+    // Called once per source that was asked, success or failure.
+    onSourceTiming?: (sourceName: string, ms: number) => void,
   ): Promise<LiveDataResponse> {
     const liveDataBySource = new Map<string, LiveDataResponse>();
 
@@ -233,6 +236,7 @@ export class MultiSourceOrchestrator {
           return;
         }
 
+        const fetchStartedAt = Date.now();
         try {
           const liveData = await source.fetchParkLiveData(externalId);
           liveDataBySource.set(sourceName, liveData);
@@ -267,6 +271,8 @@ export class MultiSourceOrchestrator {
               { parkId, sourceName, externalId },
             );
           }
+        } finally {
+          onSourceTiming?.(sourceName, Date.now() - fetchStartedAt);
         }
       },
     );

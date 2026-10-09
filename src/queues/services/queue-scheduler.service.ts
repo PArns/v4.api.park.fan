@@ -49,7 +49,8 @@ export function materialisedRepeatJobId(entry: {
  * - wait-times: Every 5 minutes (frequent updates)
  * - park-metadata: Daily at 3am (metadata changes rarely)
  * - children-metadata: Daily at 4am (Phase 6.2: Combined Attractions + Shows + Restaurants - 67% fewer requests!)
- * - weather: Every 12 hours (0:00 and 12:00)
+ * - weather: full every 12 hours (0:00 and 12:00), current-only at 7:00 and 19:00
+ * - live-cache-warmup: enqueued by every wait-times run, not on a cron
  * - weather-historical: Daily at 5am (mark past data as historical)
  * - holidays: Monthly on 1st at 2am (holidays change rarely)
  * - ml-predictions: Every 15 minutes (fresh crowd/wait predictions)
@@ -330,13 +331,18 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    // Weather current-only sync: Every 6 hours (live conditions for today).
-    // Real-time conditions are served by the nowcast (15-min cache), so the DB
-    // "current" record only needs periodic refresh — this respects the quota.
+    // Weather current-only sync: at 07:00 and 19:00, between the two full runs
+    // (live conditions for today). Real-time conditions are served by the
+    // nowcast (15-min cache), so the DB "current" record only needs periodic
+    // refresh — this respects the quota. It used to be `0 */6 * * *`, which
+    // also fired at 00:00 and 12:00 together with the full sync — the full
+    // run saves the current day as well, so that second run was pure
+    // duplicate Open-Meteo traffic (PAR-822: 265 s + 694 s back to back).
+    const WEATHER_CURRENT_CRON = "0 7,19 * * *";
     const hasWeatherCurrentCron = await this.hasRepeatableJob(
       this.weatherQueue,
       "weather-current-cron",
-      "0 */6 * * *",
+      WEATHER_CURRENT_CRON,
     );
 
     if (!hasWeatherCurrentCron) {
@@ -344,7 +350,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         "fetch-weather",
         { currentOnly: true },
         {
-          repeat: { cron: "0 */6 * * *" },
+          repeat: { cron: WEATHER_CURRENT_CRON },
           jobId: "weather-current-cron",
         },
       );
