@@ -82,21 +82,23 @@ export class MLTrainingProcessor {
       const mlServiceUrl = getMlServiceUrl();
       this.logger.log(`Triggering training via ${mlServiceUrl}/train`);
 
+      // Configurable timeout via ML_TRAINING_TIMEOUT_MINUTES. Default 90: a
+      // run took 2520 s on 2026-10-07 against the old 45-minute (2700 s) limit.
+      const timeoutMinutes = parseInt(
+        process.env.ML_TRAINING_TIMEOUT_MINUTES || "90",
+        10,
+      );
+
+      // The ml-service skips the optional refit when it would not finish
+      // inside this budget (PAR-815), instead of running into our timeout.
       const response = await axios.post(`${mlServiceUrl}/train`, {
         version,
+        timeBudgetSeconds: timeoutMinutes * 60,
       });
 
       this.logger.log("Training started:", response.data);
 
       // Poll for training completion
-      // Configurable timeout via ML_TRAINING_TIMEOUT_MINUTES. Default 90: a
-      // run took 2520 s on 2026-10-07 against the old 45-minute (2700 s) limit;
-      // TRAIN_MAX_ROWS in the ml-service bounds the fit, 90 leaves headroom for
-      // the fetch and feature engineering that still grow until the lookback cap.
-      const timeoutMinutes = parseInt(
-        process.env.ML_TRAINING_TIMEOUT_MINUTES || "90",
-        10,
-      );
       const pollIntervalSeconds = 30; // Check every 30 seconds
       const maxAttempts = (timeoutMinutes * 60) / pollIntervalSeconds; // Convert to attempts
 
@@ -286,15 +288,20 @@ export class MLTrainingProcessor {
           : `Trained on ${new Date().toISOString().split("T")[0]}`,
       });
 
-      await this.mlModelRepository.save(model);
+      // One transaction: retire the previous champion(s) and insert the new
+      // row together, so no reader ever sees zero or two active rows.
+      await this.mlModelRepository.manager.transaction(async (em) => {
+        if (!rejectChallenger) {
+          await em.update(
+            MLModel,
+            { isActive: true, version: Not(version) },
+            { isActive: false },
+          );
+        }
+        await em.save(MLModel, model);
+      });
 
       if (!rejectChallenger) {
-        // Accepted: retire the previous champion(s) only once the new row exists,
-        // so there is never a moment with no active row.
-        await this.mlModelRepository.update(
-          { isActive: true, version: Not(version) },
-          { isActive: false },
-        );
         // Only now do the workers switch (PAR-815). Before, the training
         // subprocess wrote the sentinel itself and a rejected or failed run had
         // to be reverted afterwards — racing threadpool reloads that could flip
@@ -316,6 +323,11 @@ export class MLTrainingProcessor {
       );
       // Per-phase durations and row counts the ml-service saved with the model
       // (PAR-815), so a slow run shows whether fetch, features or fit grew.
+      if (modelInfo.refitSkipped) {
+        this.logger.warn(
+          `   Final refit was SKIPPED (serving the early-stopped model): ${JSON.stringify(modelInfo.refitSkipped)}`,
+        );
+      }
       if (modelInfo.trainingTimings) {
         this.logger.log(
           `   Phase timings: ${JSON.stringify(modelInfo.trainingTimings)}`,
@@ -420,18 +432,29 @@ export class MLTrainingProcessor {
       }
     }
 
-    await this.mlModelRepository.update(
-      { version },
-      {
-        isActive: false,
-        notes: `Activation failed (${lastError}) ${new Date().toISOString().split("T")[0]}`,
-      },
-    );
-    if (previousChampion) {
-      await this.mlModelRepository.update(
-        { version: previousChampion.version },
-        { isActive: true },
+    await this.mlModelRepository.manager.transaction(async (em) => {
+      await em.update(
+        MLModel,
+        { version },
+        {
+          isActive: false,
+          notes: `Activation failed (${lastError}) ${new Date().toISOString().split("T")[0]}`,
+        },
       );
+      if (previousChampion) {
+        await em.update(
+          MLModel,
+          { version: previousChampion.version },
+          { isActive: true },
+        );
+      }
+    });
+    // Best effort: point the sentinel back at whatever the DB now says is
+    // active, in case one of the failed attempts got as far as writing it.
+    try {
+      await axios.post(`${mlServiceUrl}/model/reload`);
+    } catch {
+      // Workers keep what they serve; boot reads the DB-active row anyway.
     }
     throw new Error(
       `Could not activate ${version} on the ml-service (${lastError}) — ` +
@@ -504,6 +527,11 @@ export class MLTrainingProcessor {
 
   private readonly MODELS_TO_KEEP = 30;
   private readonly ORPHAN_MIN_AGE_MS = 2 * 24 * 60 * 60 * 1000;
+  // Sanity caps on one orphan sweep. The first run after PAR-815 deletes 196
+  // of 226 versions (86.7%); anything beyond these looks like a broken
+  // registry rather than leftovers, so nothing is deleted.
+  private readonly ORPHAN_MAX_PER_RUN = 250;
+  private readonly ORPHAN_MAX_SHARE = 0.9;
 
   private async cleanupOldModels(): Promise<void> {
     try {
@@ -554,6 +582,14 @@ export class MLTrainingProcessor {
 
       // Orphans: files on disk whose version has no ml_models row. Versions
       // retired above count as handled, so they are not asked for twice.
+      if (allModels.length === 0) {
+        // An empty registry is far more likely a wrong database or a failed
+        // read than a world without models — every file would look orphaned.
+        this.logger.error(
+          "❌ Orphan sweep skipped: ml_models returned 0 rows — deleting nothing",
+        );
+        return;
+      }
       const registered = allModels.map((m) => m.version);
       const listing = await axios.get(`${mlServiceUrl}/models/files`);
       const onDisk = (listing.data?.versions ?? []) as SavedModelFiles[];
@@ -567,6 +603,17 @@ export class MLTrainingProcessor {
         Date.now(),
         this.ORPHAN_MIN_AGE_MS,
       );
+      if (
+        orphans.length > this.ORPHAN_MAX_PER_RUN ||
+        (onDisk.length > 0 &&
+          orphans.length > this.ORPHAN_MAX_SHARE * onDisk.length)
+      ) {
+        this.logger.error(
+          `❌ Orphan sweep skipped: ${orphans.length} of ${onDisk.length} versions on disk look orphaned ` +
+            `(limits: ${this.ORPHAN_MAX_PER_RUN} per run, ${this.ORPHAN_MAX_SHARE * 100}% of disk) — deleting nothing`,
+        );
+        return;
+      }
       let deletedOrphans = 0;
       let orphanBytes = 0;
       for (const orphan of orphans) {
@@ -623,8 +670,9 @@ export class MLTrainingProcessor {
    * Only allows alphanumeric, dash, underscore, and dot characters
    */
   private sanitizeVersion(version: string): string | null {
-    // Allow only safe characters: alphanumeric, dash, underscore, dot
-    if (!/^[a-zA-Z0-9._-]+$/.test(version)) {
+    // Same rule as the ml-service's _SAFE_VERSION: alphanumeric first (so no
+    // leading "." or "-"), then alphanumeric, dash, underscore, dot.
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(version)) {
       return null;
     }
     // Prevent path traversal patterns

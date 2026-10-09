@@ -124,13 +124,21 @@ def test_delete_refuses_path_like_versions():
 # --- train_standalone ------------------------------------------------------
 
 
+_LAST_KWARGS: dict = {}
+
+
 def _run_standalone(fake_train, version="v20261009_0600"):
     """Run train_standalone.main() with train.train_model replaced."""
     with _ModelDir() as d:
         status_file = os.path.join(d, "training_status.json")
         sentinel_file = os.path.join(d, "active_version.txt")
         original = train.train_model
-        train.train_model = lambda version: fake_train(d, version)
+        def _fake(version, **kwargs):
+            _LAST_KWARGS.clear()
+            _LAST_KWARGS.update(kwargs)
+            return fake_train(d, version)
+
+        train.train_model = _fake
         old_argv = sys.argv
         sys.argv = ["train_standalone.py", version, status_file, sentinel_file]
         try:
@@ -176,6 +184,17 @@ def test_saved_model_completes_without_activating_itself():
     assert sentinel is False
     # The per-phase timings saved with the model reach the training status.
     assert status["timings"] == {"fetch": {"seconds": 1.0, "rows": 12}}
+
+
+def test_time_budget_reaches_train_model():
+    os.environ["TRAIN_TIME_BUDGET_SECONDS"] = "5400"
+    try:
+        _run_standalone(lambda d, v: None)
+    finally:
+        del os.environ["TRAIN_TIME_BUDGET_SECONDS"]
+    assert _LAST_KWARGS == {"time_budget_seconds": 5400.0}
+    _run_standalone(lambda d, v: None)
+    assert _LAST_KWARGS == {"time_budget_seconds": None}
 
 
 # --- cap_training_rows -----------------------------------------------------

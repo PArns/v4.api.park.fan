@@ -75,7 +75,11 @@ def main() -> int:
         from model import load_saved_metadata
         from train import train_model
         logger.info(f"Starting training for version {version}")
-        metrics = train_model(version=version)
+        budget = os.environ.get("TRAIN_TIME_BUDGET_SECONDS")
+        metrics = train_model(
+            version=version,
+            time_budget_seconds=float(budget) if budget else None,
+        )
 
         # train_model returns None when it stops early (no data, empty training
         # set) without saving anything. Reporting "completed" (and, before
@@ -100,6 +104,7 @@ def main() -> int:
             "error": None,
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "timings": saved.get("training_timings"),
+            "refit_skipped": saved.get("refit_skipped"),
         })
 
         logger.info(f"Training completed for version {version}")

@@ -745,6 +745,9 @@ def fetch_active_model_version() -> str:
         SELECT version
         FROM ml_models
         WHERE "isActive" = true
+        -- Deterministic if two rows are ever active at once: the newest wins,
+        -- the same row the training processor just activated (PAR-815).
+        ORDER BY "trainedAt" DESC
         LIMIT 1
     """
     )

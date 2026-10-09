@@ -394,12 +394,46 @@ def cap_training_rows(
     return df[keep].reset_index(drop=True)
 
 
-def train_model(version: str = None) -> Optional[dict]:
+def estimate_refit(
+    elapsed_seconds: float,
+    fit_seconds: float,
+    rows_all: int,
+    rows_train: int,
+    budget_seconds: Optional[float],
+    margin_seconds: float,
+) -> dict:
+    """Would the final refit finish inside the caller's budget?
+
+    The refit is estimated as the early-stopped fit's duration scaled by the row
+    ratio (refit rows / fit training rows). In production early stopping never
+    fires (tree_count = CATBOOST_ITERATIONS = 2000), so the refit runs as many
+    trees as the fit did, on ~1.25x the rows. No budget means no limit.
+    """
+    estimate = fit_seconds * (rows_all / max(rows_train, 1))
+    if budget_seconds is None:
+        return {"fits": True, "estimated_seconds": round(estimate, 1)}
+    remaining = budget_seconds - margin_seconds - elapsed_seconds
+    return {
+        "fits": estimate <= remaining,
+        "estimated_seconds": round(estimate, 1),
+        "remaining_seconds": round(remaining, 1),
+        "elapsed_seconds": round(elapsed_seconds, 1),
+        "budget_seconds": budget_seconds,
+        "margin_seconds": margin_seconds,
+    }
+
+
+def train_model(
+    version: str = None, time_budget_seconds: Optional[float] = None
+) -> Optional[dict]:
     """
     Train a new model
 
     Args:
         version: Model version string (e.g., 'v1.0.0'). If None, uses config.MODEL_VERSION
+
+        time_budget_seconds: The caller's timeout. The optional final refit is
+            skipped when it would not finish inside it (see estimate_refit).
 
     Returns:
         The validation metrics once the model is saved, or None when training
@@ -408,6 +442,10 @@ def train_model(version: str = None) -> Optional[dict]:
     """
     if version is None:
         version = settings.MODEL_VERSION
+
+    import time
+
+    budget_start = time.perf_counter()  # the caller's clock started ~here
 
     logger.info(f"\n{'=' * 60}")
     logger.info("🚀 Training Wait Time Prediction Model")
@@ -468,8 +506,6 @@ def train_model(version: str = None) -> Optional[dict]:
 
     # Per-phase durations and row counts (PAR-815). Saved in the model metadata
     # and the training status so a slow nightly run shows which phase grew.
-    import time
-
     run_start = time.perf_counter()
     timings: dict = {}
 
@@ -809,43 +845,75 @@ def train_model(version: str = None) -> Optional[dict]:
     # comparison says otherwise. Validation metrics (the gate's input) stay those
     # of the early-stopped fit; the hold-out metrics above are its honest
     # out-of-time score.
+    refit_plan = None
     if settings.TRAIN_REFIT_ON_ALL_ROWS and not df_holdout.empty:
+        refit_plan = estimate_refit(
+            elapsed_seconds=time.perf_counter() - budget_start,
+            fit_seconds=timings["fit"]["seconds"],
+            rows_all=len(df) + len(df_holdout),
+            rows_train=timings["fit"]["train_rows"],
+            budget_seconds=time_budget_seconds,
+            margin_seconds=settings.TRAIN_REFIT_SAFETY_MARGIN_SECONDS,
+        )
+        if not refit_plan["fits"]:
+            # Serving the early-stopped model a day longer beats a timed-out
+            # run that registers nothing at all.
+            model.metadata["refit_skipped"] = {"reason": "time_budget", **refit_plan}
+            logger.warning(
+                f"⏭️  Final refit SKIPPED: estimated {refit_plan['estimated_seconds']:.0f}s "
+                f"> {refit_plan['remaining_seconds']:.0f}s left in the budget "
+                f"({refit_plan['budget_seconds']:.0f}s - {refit_plan['margin_seconds']:.0f}s margin "
+                f"- {refit_plan['elapsed_seconds']:.0f}s elapsed). Serving the early-stopped model."
+            )
+    if refit_plan is not None and refit_plan["fits"]:
         refit_iterations = model.best_iteration_count()
         logger.info(
             f"🔁 Refitting on all rows ({len(df):,} pool + {len(df_holdout):,} hold-out) "
-            f"with {refit_iterations} iterations..."
+            f"with {refit_iterations} iterations (estimated {refit_plan['estimated_seconds']:.0f}s)..."
         )
+        # Free everything the refit does not need before building its frames;
+        # otherwise df, df_all and the feature matrix are alive together.
         del X_train, X_val, y_train, y_val, X, y
         gc.collect()
         df_holdout = apply_training_dropout(df_holdout, settings, logger)
         df_all = pd.concat([df, df_holdout], ignore_index=True)
-        del df_holdout
+        del df, df_holdout
+        gc.collect()
         # Recomputed on the combined frame rather than concatenated: the sparse
         # split above re-sorts `df`, so the pool's weight array may no longer be
         # in df's row order.
         all_weights = compute_sample_weights(df_all, accuracy_stats)
+        rows_all = len(df_all)
+        X_all = df_all[feature_columns]
+        y_all = df_all["waitTime"]
+        del df_all
+        gc.collect()
         refit_start = time.perf_counter()
         model.refit(
-            df_all[feature_columns],
-            df_all["waitTime"],
+            X_all,
+            y_all,
             iterations=refit_iterations,
             sample_weights=all_weights,
         )
+        del X_all, y_all, all_weights
         timings["refit"] = {
             "seconds": round(time.perf_counter() - refit_start, 1),
-            "rows": len(df_all),
+            "rows": rows_all,
             "iterations": refit_iterations,
+            "estimated_seconds": refit_plan["estimated_seconds"],
         }
         logger.info(
-            f"   ⏱️  Refit: {timings['refit']['seconds']:.1f}s ({len(df_all):,} rows)"
+            f"   ⏱️  Refit: {timings['refit']['seconds']:.1f}s ({rows_all:,} rows)"
         )
-        del df_all
         gc.collect()
     elif not settings.TRAIN_REFIT_ON_ALL_ROWS:
         logger.info("   Final refit disabled (TRAIN_REFIT_ON_ALL_ROWS=False)")
 
-    # 8. Feature importance
-    logger.info("🔍 Top 10 Feature Importances:")
+    # 8. Feature importance — of the SERVED model (the refit one when the refit
+    # ran). metrics["feature_importances"] in the metadata keeps those of the
+    # early-stopped fit, which the validation metrics describe.
+    served = "refit" if "refit" in timings else "early-stopped"
+    logger.info(f"🔍 Top 10 Feature Importances (served model: {served}):")
     importance = model.get_feature_importance().head(10)
     for idx, row in importance.iterrows():
         logger.info(f"   {row['feature']:30s} {row['importance']:>8.2f}")

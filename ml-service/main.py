@@ -267,6 +267,7 @@ class ModelInfoResponse(BaseModel):
     hyperparameters: Optional[dict] = None
     featureStats: Optional[List[dict]] = None
     trainingTimings: Optional[dict] = None
+    refitSkipped: Optional[dict] = None
 
 
 # Endpoints
@@ -343,6 +344,7 @@ def get_saved_model_info(version: str):
         hyperparameters=metadata.get("hyperparameters"),
         featureStats=metadata.get("feature_stats"),
         trainingTimings=metadata.get("training_timings"),
+        refitSkipped=metadata.get("refit_skipped"),
     )
 
 
@@ -352,6 +354,7 @@ def _protected_versions() -> Dict[str, Optional[str]]:
     a training run is writing right now."""
     status = _read_training_status()
     return {
+        "db_active": fetch_active_model_version(),
         "sentinel": _read_sentinel(),
         "loaded": model.version if model is not None else None,
         "training": status.get("current_version") if status.get("is_training") else None,
@@ -462,6 +465,9 @@ class TrainRequest(BaseModel):
     """Training request"""
 
     version: Optional[str] = None
+    # The caller's timeout in seconds. The training subprocess skips the
+    # optional final refit when it would not finish inside it (PAR-815).
+    timeBudgetSeconds: Optional[float] = None
 
 
 @app.post("/train")
@@ -509,9 +515,13 @@ async def train_model_endpoint(request: TrainRequest):
         try:
             # Subprocess gets a fresh Python interpreter — no module-cache issues,
             # and an OOM kill only tears down this process, not the uvicorn workers.
+            env = dict(os.environ)
+            if request.timeBudgetSeconds:
+                env["TRAIN_TIME_BUDGET_SECONDS"] = str(request.timeBudgetSeconds)
             proc = subprocess.Popen(
                 [sys.executable, _train_standalone, version, _TRAINING_STATUS_FILE],
                 cwd=os.path.dirname(_train_standalone),
+                env=env,
             )
             # Record the subprocess PID immediately so a worker recycling between
             # launch and the subprocess's own first status write can still tell the
@@ -568,6 +578,7 @@ async def get_training_status():
         "status": status.get("status", "idle"),
         "error": status.get("error"),
         "timings": status.get("timings"),
+        "refit_skipped": status.get("refit_skipped"),
     }
 
 

@@ -48,7 +48,7 @@ The ML Service is a standalone Python application responsible for predicting wai
 3. **Validation**: 
    - **Chronological hold-out**: the newest 30 days are split off first and never seen by the early-stopped fit.
    - **Randomized Weekly Block Split**: To ensure robust validation during seasonal transitions (e.g., winter to spring), the remaining pool is grouped into weekly blocks. 20% of these weeks are randomly selected for validation (and early stopping), while the rest are used for training. This ensures that both sets contain representative data from all operational phases.
-   - **Hold-out score, then refit** (PAR-815): the early-stopped model is scored on the 30-day hold-out, and `holdout_metrics` (MAE, MAE on busy rows with actual ≥ 60 min, RMSE/MAPE/R², sample counts) is saved in the model metadata. Then the **served** model is refitted on ALL rows — pool plus hold-out — with the early-stopped tree count (best iteration + 1, deliberately not scaled up for the ~15–20% larger set), the same dropout and the same sample weights. Before this, the served model never learned the newest 30 days, so a season change reached it a month late. `TRAIN_REFIT_ON_ALL_ROWS` (default on) switches the refit off; it roughly doubles the fit phase, and `training_timings.refit` shows its cost. The champion/challenger gate still compares the **validation** MAE of the early-stopped fit; the persisted hold-out MAE is there for a future out-of-time gate. Note: the hold-out score describes the early-stopped model, not the refitted one, which has seen those rows.
+   - **Hold-out score, then refit** (PAR-815): the early-stopped model is scored on the 30-day hold-out, and `holdout_metrics` (MAE, MAE on busy rows with actual ≥ 60 min, RMSE/MAPE/R², sample counts) is saved in the model metadata. Then the **served** model is refitted on ALL rows — pool plus hold-out — with the early-stopped tree count (best iteration + 1, deliberately not scaled up for the ~15–20% larger set), the same dropout and the same sample weights. Before this, the served model never learned the newest 30 days, so a season change reached it a month late. `TRAIN_REFIT_ON_ALL_ROWS` (default on) switches the refit off. In production early stopping never fires (`tree_count_` = `CATBOOST_ITERATIONS` = 2000), so the refit runs a full 2000 trees on ~1.25× the rows. The training processor therefore passes its timeout to `/train` (`timeBudgetSeconds`), and the refit is **skipped** — logged, and flagged as `refit_skipped` in the metadata and `/train/status` — when elapsed time + fit time × (refit rows / fit rows) would come closer than `TRAIN_REFIT_SAFETY_MARGIN_SECONDS` (600) to that budget. The early-stopped model is then served for that day. `training_timings.refit` shows the actual cost. The champion/challenger gate still compares the **validation** MAE of the early-stopped fit; the persisted hold-out MAE is there for a future out-of-time gate. Note: the hold-out score describes the early-stopped model, not the refitted one, which has seen those rows.
    - **Metrics**: RMSE/MAE metrics are logged and stored in the database.
      The training processor reads them from `GET /model/info/:version`, which
      serves that version's own `metadata_<version>.pkl` — never from
@@ -62,8 +62,15 @@ The ML Service is a standalone Python application responsible for predicting wai
      `POST /model/reload`. That endpoint loads the DB-active version and writes
      `/app/models/active_version.txt`, which every other worker picks up on its
      next `/predict`; the boot path (`_load_active_model`) reads the same DB row.
-     If the reload does not confirm the new version, the DB is rolled back to the
-     previous champion and the job fails. A rejected, failed or timed-out run
+     Retiring the old champion and inserting the new row happen in ONE
+     transaction. `fetch_active_model_version` orders by `trainedAt DESC`, so
+     even two active rows would resolve deterministically. If the reload does
+     not confirm the new version, the DB is rolled back to the previous champion
+     (again in one transaction), a best-effort `/model/reload` points the
+     sentinel back at it, and the job fails. There is deliberately no partial
+     unique index on `isActive`: with `synchronize: true` in production, an index
+     that cannot be built (any second active row) would stop the API from
+     booting, which costs more than the invariant it guards. A rejected, failed or timed-out run
      never changes what is served.
    - **Model files** (PAR-815): the API keeps the newest 30 `ml_models` rows
      plus the active one; older rows lose their files and their row. Files are
@@ -71,8 +78,11 @@ The ML Service is a standalone Python application responsible for predicting wai
      `DELETE /models/files/:version`) because the API container does not mount
      the models volume. Versions on disk with no row (failed, timed-out or
      unregistered runs) are deleted once their files are two days old. The
-     ml-service refuses unsafe version names and the sentinel, loaded and
-     in-training versions.
+     ml-service refuses unsafe version names and the DB-active, sentinel, loaded
+     and in-training versions. The sweep deletes nothing (and logs an error)
+     when `ml_models` returns no rows, or when it would delete more than 250
+     versions or more than 90% of the versions on disk. The first sweep after
+     deploy is expected to remove 196 of 226 versions (~2.4 GB).
 4. **Training-time budget** (PAR-815): the window runs from the first row
    (2025-12-24) to now, capped at `TRAIN_LOOKBACK_YEARS` (2), so it grows daily
    (1682 s on 2026-09-04, 2520 s on 2026-10-07). The model trains on the **full**

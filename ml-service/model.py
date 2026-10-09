@@ -43,7 +43,11 @@ def load_saved_metadata(version: str) -> Optional[Dict[str, Any]]:
 
 def is_safe_version(version: str) -> bool:
     """A version string that can only ever name a file directly in MODEL_DIR."""
-    return bool(version) and ".." not in version and bool(_SAFE_VERSION.match(version))
+    return (
+        bool(version)
+        and ".." not in version
+        and _SAFE_VERSION.fullmatch(version) is not None
+    )
 
 
 # The two files a saved version consists of.
@@ -371,10 +375,12 @@ class WaitTimeModel:
         tree count comes from the early-stopped fit. Keeps the metadata of that
         fit (its validation metrics are what the champion/challenger gate reads)
         and records the refit under metadata["refit"].
+
+        Converts the id columns of `X_all` IN PLACE (no copy, to keep peak
+        memory down): pass a frame the caller owns and no longer needs.
         """
         import time
 
-        X_all = X_all.copy()
         for col in ("parkId", "attractionId"):
             if col in X_all.columns:
                 X_all[col] = X_all[col].astype(str)

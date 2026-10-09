@@ -133,6 +133,12 @@ class Settings(BaseSettings):
     # newest 30 days (PAR-815). Roughly doubles the fit phase; set False if a run
     # gets too close to ML_TRAINING_TIMEOUT_MINUTES (see training_timings).
     TRAIN_REFIT_ON_ALL_ROWS: bool = True
+    # The refit is skipped (logged, flagged as refit_skipped in metadata and
+    # status) when elapsed + estimated refit time would come closer than this
+    # to the caller's time budget (ML_TRAINING_TIMEOUT_MINUTES, passed in by the
+    # training processor). Covers saving, the gap between the processor's clock
+    # and ours, and estimate error.
+    TRAIN_REFIT_SAFETY_MARGIN_SECONDS: int = 600
     TRAIN_FULL_RESOLUTION_DAYS: int = 90
     TRAIN_TEST_SPLIT: float = 0.85
     VALIDATION_DAYS: int = (

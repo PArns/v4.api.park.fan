@@ -107,6 +107,31 @@ def test_sample_weights_match_the_accuracy_and_busy_formulas():
         s.ENABLE_SAMPLE_WEIGHTS, s.CATBOOST_BUSY_WEIGHT, s.SAMPLE_WEIGHT_FACTOR = old
 
 
+def test_refit_estimate_scales_the_fit_by_the_row_ratio():
+    plan = train.estimate_refit(
+        elapsed_seconds=2400,
+        fit_seconds=1600,
+        rows_all=5_000_000,
+        rows_train=4_000_000,
+        budget_seconds=90 * 60,
+        margin_seconds=600,
+    )
+    assert plan["estimated_seconds"] == 2000.0
+    assert plan["remaining_seconds"] == 5400 - 600 - 2400
+    assert plan["fits"] is True  # 2000 s needed, 2400 s left
+
+
+def test_refit_is_skipped_when_it_would_overrun_the_budget():
+    fits = train.estimate_refit(1500, 1600, 5_000_000, 4_000_000, 5400, 600)
+    late = train.estimate_refit(3000, 1600, 5_000_000, 4_000_000, 5400, 600)
+    assert fits["fits"] is True  # 2000 s needed, 3300 s left
+    assert late["fits"] is False  # 2000 s needed, 1800 s left
+
+
+def test_refit_without_a_budget_always_fits():
+    assert train.estimate_refit(10**6, 1600, 2, 1, None, 600)["fits"] is True
+
+
 def test_refit_is_on_by_default():
     from config import Settings
 

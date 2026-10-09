@@ -37,6 +37,16 @@ describe("MLTrainingProcessor", () => {
     update: jest.fn().mockResolvedValue(undefined),
     create: jest.fn((m: Record<string, unknown>) => m),
     save: jest.fn().mockResolvedValue(undefined),
+    // Transactions route through the same recorders, so the assertions below
+    // see every write in order; `transaction` itself proves they were grouped.
+    manager: {
+      transaction: jest.fn(),
+    },
+  };
+  const transactionalEm = {
+    update: (_entity: unknown, where: unknown, set: unknown) =>
+      mlModelRepo.update(where, set),
+    save: (_entity: unknown, row: unknown) => mlModelRepo.save(row),
   };
   const queueDataRepo = {
     createQueryBuilder: jest.fn(() => ({
@@ -57,6 +67,10 @@ describe("MLTrainingProcessor", () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     delete process.env.ML_SERVICE_URL;
+    mlModelRepo.manager.transaction.mockImplementation(
+      async (cb: (em: typeof transactionalEm) => Promise<unknown>) =>
+        cb(transactionalEm),
+    );
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -128,9 +142,15 @@ describe("MLTrainingProcessor", () => {
       );
     };
 
-    it("never sends a version containing `..` or `/` to the ml-service", async () => {
+    it("never sends `..`, `/` or a leading `.`/`-` to the ml-service", async () => {
       const safe = Array.from({ length: 30 }, (_, i) => `v2026_safe_${i}`);
-      setupAllModels([...safe, "../../../etc/passwd", "/etc/passwd"]);
+      setupAllModels([
+        ...safe,
+        "../../../etc/passwd",
+        "/etc/passwd",
+        ".hidden",
+        "-flag",
+      ]);
 
       await processor.handleCleanupModels({} as Job);
 
@@ -232,12 +252,13 @@ describe("MLTrainingProcessor", () => {
     });
 
     it("never deletes the sentinel, loaded or in-training version", async () => {
-      mlModelRepo.find.mockResolvedValueOnce([]);
+      mlModelRepo.find.mockResolvedValueOnce(models(1));
       mockModelFiles(
         [
           { version: "v_sentinel", ageDays: 9 },
           { version: "v_loaded", ageDays: 9 },
           { version: "v_training", ageDays: 9 },
+          { version: "v_0", ageDays: 9 },
         ],
         { sentinel: "v_sentinel", loaded: "v_loaded", training: "v_training" },
       );
@@ -255,6 +276,69 @@ describe("MLTrainingProcessor", () => {
 
       // Deleted once as a retired model, not a second time as an orphan.
       expect(deletedVersions()).toEqual(["v_30"]);
+    });
+  });
+
+  describe("cleanupOldModels orphan guards", () => {
+    it("deletes nothing when ml_models is empty", async () => {
+      mlModelRepo.find.mockResolvedValueOnce([]);
+      mockModelFiles([{ version: "v20260930_0600", ageDays: 9 }]);
+
+      await processor.handleCleanupModels({} as Job);
+
+      expect(deletedVersions()).toEqual([]);
+      expect(mockedAxios.get).not.toHaveBeenCalled();
+    });
+
+    it("deletes nothing when more than 90% of the versions on disk look orphaned", async () => {
+      mlModelRepo.find.mockResolvedValueOnce(models(1));
+      mockModelFiles([
+        { version: "v_0", ageDays: 9 },
+        ...Array.from({ length: 10 }, (_, i) => ({
+          version: `v_orphan_${i}`,
+          ageDays: 9,
+        })),
+      ]);
+
+      await processor.handleCleanupModels({} as Job);
+
+      expect(deletedVersions()).toEqual([]);
+    });
+
+    it("deletes nothing when more than 250 versions look orphaned", async () => {
+      mlModelRepo.find.mockResolvedValueOnce(models(30));
+      mockModelFiles([
+        ...Array.from({ length: 30 }, (_, i) => ({
+          version: `v_${i}`,
+          ageDays: 9,
+        })),
+        ...Array.from({ length: 251 }, (_, i) => ({
+          version: `v_orphan_${i}`,
+          ageDays: 9,
+        })),
+      ]);
+
+      await processor.handleCleanupModels({} as Job);
+
+      expect(deletedVersions()).toEqual([]);
+    });
+
+    it("lets the expected first production sweep through (196 of 226)", async () => {
+      mlModelRepo.find.mockResolvedValueOnce(models(30));
+      mockModelFiles([
+        ...Array.from({ length: 30 }, (_, i) => ({
+          version: `v_${i}`,
+          ageDays: 9,
+        })),
+        ...Array.from({ length: 196 }, (_, i) => ({
+          version: `v_orphan_${i}`,
+          ageDays: 9,
+        })),
+      ]);
+
+      await processor.handleCleanupModels({} as Job);
+
+      expect(deletedVersions()).toHaveLength(196);
     });
   });
 
@@ -363,7 +447,7 @@ describe("MLTrainingProcessor", () => {
       expect(saved.isActive).toBe(true);
     });
 
-    it("activates only AFTER the row is saved and the old champion retired", async () => {
+    it("retires the champion and saves the row in one transaction, then activates", async () => {
       routeGets(() =>
         Promise.resolve({ data: savedInfo("v20261006_0600", 4.433) }),
       );
@@ -377,8 +461,14 @@ describe("MLTrainingProcessor", () => {
       );
       expect(reloadIdx).toBeGreaterThanOrEqual(0);
       const reloadOrder = mockedAxios.post.mock.invocationCallOrder[reloadIdx];
-      expect(saveOrder).toBeLessThan(retireOrder);
-      expect(retireOrder).toBeLessThan(reloadOrder);
+      expect(mlModelRepo.manager.transaction).toHaveBeenCalledTimes(1);
+      expect(retireOrder).toBeLessThan(saveOrder);
+      expect(saveOrder).toBeLessThan(reloadOrder);
+      // The ml-service gets the processor's timeout as its time budget.
+      expect(mockedAxios.post).toHaveBeenCalledWith(`${ML}/train`, {
+        version: "v20261006_0600",
+        timeBudgetSeconds: 90 * 60,
+      });
       // The retire step leaves the new row alone.
       const [where, set] = mlModelRepo.update.mock.calls[0];
       expect(where.isActive).toBe(true);
@@ -402,7 +492,8 @@ describe("MLTrainingProcessor", () => {
 
       expect(
         mockedAxios.post.mock.calls.filter(([u]) => u === `${ML}/model/reload`),
-      ).toHaveLength(3);
+      ).toHaveLength(4); // 3 activation attempts + 1 best-effort reload after the rollback
+      expect(mlModelRepo.manager.transaction).toHaveBeenCalledTimes(2);
       expect(mlModelRepo.update).toHaveBeenCalledWith(
         { version: "v20261006_0600" },
         expect.objectContaining({ isActive: false }),
