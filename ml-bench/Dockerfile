@@ -20,6 +20,14 @@ RUN pip install --no-cache-dir --index-url ${TORCH_INDEX} "torch>=2.7.0"
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Optional model dependencies, one requirements file per model family, e.g.
+#   docker build --build-arg EXTRA_REQUIREMENTS=requirements-foundation.txt ...
+# (PAR-828: Chronos-2 + TimesFM-3). Installed before the code is copied, so a code
+# change does not reinstall them.
+ARG EXTRA_REQUIREMENTS=
+COPY requirements*.txt ./
+RUN if [ -n "$EXTRA_REQUIREMENTS" ]; then pip install --no-cache-dir -r "$EXTRA_REQUIREMENTS"; fi
+
 COPY --from=mlsvc holiday_features.py holiday_utils.py /opt/ml-service/
 ENV MLBENCH_ML_SERVICE_DIR=/opt/ml-service
 

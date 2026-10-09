@@ -733,9 +733,11 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
     d8q = pd.DataFrame()
     if "slot" in d.tables:
         qm = [c[len("qn__"):] for c in d.cols("slot") if c.startswith("qn__")]
+        # a model may provide q80 but not q95 (TimesFM 3.0's head stops at 0.9)
+        n95 = {m: (f"qn95__{m}" if f"qn95__{m}" in d.cols("slot") else f"qn__{m}") for m in qm}
         if qm:
             d8q = d.df(f"""SELECT L, {', '.join(f'sum(q80__{m}) / nullif(sum(qn__{m}), 0) AS "{m} cov_q80", '
-                                                f'sum(q95__{m}) / nullif(sum(qn__{m}), 0) AS "{m} cov_q95", '
+                                                f'sum(q95__{m}) / nullif(sum({n95[m]}), 0) AS "{m} cov_q95", '
                                                 f'sum(qn__{m}) / nullif(sum(n_truth), 0) AS "{m} field_coverage"'
                                                 for m in qm)} FROM slot GROUP BY L ORDER BY L""")
     d8p = pd.DataFrame()
