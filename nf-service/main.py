@@ -155,6 +155,14 @@ def gpu_stats():
 @app.get("/train/status")
 def train_status():
     st = _read_status()
+    # Backstop for the watchdog in /train: a run past its deadline is reported as
+    # overdue, so a caller never mistakes a hung run for one still progressing.
+    if st.get("is_training") and st.get("started_at"):
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(st["started_at"])
+            st["overdue"] = age.total_seconds() > settings.NF_TRAIN_DEADLINE_MINUTES * 60
+        except ValueError:
+            pass
     # While training, merge the live progress (chunk/step/% + loss) the forecast
     # callback writes, so a UI / the admin system-health endpoint can show the %.
     if st.get("is_training"):
@@ -183,13 +191,23 @@ def train(req: TrainRequest):
         # OOM kills only the runner — uvicorn survives. A daemon thread waits on it
         # and clears a stale lock if the runner is killed without a terminal status.
         proc = subprocess.Popen([sys.executable, runner, version])
-        proc.wait()
+        deadline_min = settings.NF_TRAIN_DEADLINE_MINUTES
+        try:
+            proc.wait(timeout=deadline_min * 60)
+            error = f"train_runner exited {proc.returncode} without completing (likely OOM-killed)"
+        except subprocess.TimeoutExpired:
+            # Hung (2026-10-09: blocked through a DB outage until a restart 4.5 h
+            # later). Kill it so the lock clears and the next /train can run.
+            logger.error("train_runner %s exceeded %d min — killing it", version, deadline_min)
+            proc.kill()
+            proc.wait()
+            error = f"train_runner exceeded the {deadline_min}-min deadline and was killed"
         logger.info("train_runner %s exited with code %s", version, proc.returncode)
         st = _read_status()
         if st.get("is_training") and st.get("version") == version:
             _write_status({
                 "is_training": False, "status": "failed", "version": version,
-                "error": f"train_runner exited {proc.returncode} without completing (likely OOM-killed)",
+                "error": error,
             })
 
     threading.Thread(target=_launch, daemon=True).start()
@@ -210,23 +228,47 @@ def _tft_column(cols: list[str]) -> str | None:
 
 @app.post("/forecast")
 def run_forecast():
-    """Re-persist the latest cached forecast to tft_forecasts (idempotent upsert).
+    """Re-persist the cached forecast of the last COMPLETED run (idempotent upsert).
 
-    Training is done by /train, which trains + forecasts + persists in one process
-    (the model is intentionally not saved — see forecast.train_and_forecast). This
-    endpoint therefore serves the cached forecast rather than reloading a model;
-    call /train to refresh it."""
-    import db
+    Training is done by /train, whose runner trains + forecasts + persists in one
+    process (the model is intentionally not saved — see forecast.train_and_forecast),
+    so the nightly job no longer calls this. It stays as a manual repair path, and
+    it re-writes exactly the rows that run wrote: same version, same forecast_date.
+
+    It refuses (409) unless the status file says the last run completed and names
+    the forecast_date it made the parquet on. Anything else — training, failed,
+    "reset on startup", or a status from before forecast_date was recorded — means
+    the parquet on disk is from an older run than the status describes, and
+    persisting it would label an old forecast as a fresh one (PAR-814: on
+    2026-10-09 all 231,480 rows were the 2026-10-08 forecast under the new date)."""
+    from datetime import date
+
     import pandas as pd
+
+    import db
 
     if not os.path.exists(_FORECAST_FILE):
         raise HTTPException(status_code=404, detail="No forecast yet — run /train first")
+    st = _read_status()
+    if st.get("status") != "completed" or not st.get("forecast_date"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Last run is not a completed one with a recorded forecast_date "
+                f"(status={st.get('status')!r}, version={st.get('version')!r}) — "
+                "refusing to re-persist a forecast this run did not produce"
+            ),
+        )
     try:
+        forecast_date = date.fromisoformat(st["forecast_date"])
         y_hat = pd.read_parquet(_FORECAST_FILE)
         tcol = _tft_column(list(y_hat.columns))
-        version = _read_status().get("version") or "unknown"
-        persisted = db.persist_forecast(y_hat, version, tcol) if tcol else 0
-        return {"status": "ok", "rows": int(len(y_hat)), "persisted": int(persisted)}
+        version = st.get("version") or "unknown"
+        persisted = db.persist_forecast(y_hat, version, tcol, forecast_date) if tcol else 0
+        return {
+            "status": "ok", "rows": int(len(y_hat)), "persisted": int(persisted),
+            "version": version, "forecast_date": forecast_date.isoformat(),
+        }
     except Exception as e:  # noqa: BLE001
         import traceback
         # Full traceback to the server log; only a short message to the client
