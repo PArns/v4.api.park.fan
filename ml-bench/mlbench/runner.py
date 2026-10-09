@@ -130,7 +130,7 @@ def slot_agg_sql(models: list[str], refs: list[str], quantile_models: list[str],
     return f"SELECT {k}, {', '.join(cols)} FROM {table} WHERE y IS NOT NULL GROUP BY {k}"
 
 
-def rideday_sql(models: list[str], cfg: BenchConfig) -> str:
+def rideday_sql(models: list[str], cfg: BenchConfig, lead: int | None = None) -> str:
     """Per (lead, ride-day, model) decision quantities.
 
     A ride-day only counts for a model when the model covers EVERY truth slot of
@@ -142,7 +142,7 @@ def rideday_sql(models: list[str], cfg: BenchConfig) -> str:
     WITH base AS (
       SELECT L, aid, park_id, date, ws, ko_t, y, busy, sk, {cols},
              count(*) OVER (PARTITION BY L, aid, date) AS n_truth
-      FROM tg WHERE y IS NOT NULL),
+      FROM tg WHERE y IS NOT NULL {'' if lead is None else f'AND L = {int(lead)}'}),
     long AS (
       SELECT L, aid, park_id, date, ws, ko_t, y, busy, sk, n_truth, model, pred
       FROM base UNPIVOT (pred FOR model IN ({cols}))),
@@ -322,6 +322,7 @@ class Runner:
         self.origins = all_origins[shard[0]::shard[1]]
         self._snap_month = None
         self._last_fit: dict[str, dt.date] = {}
+        self.resume = False
 
     # ------------------------------------------------------------------ helpers
     def write(self, table: str, sql: str, c: dt.date, suffix: str = "") -> None:
@@ -487,6 +488,8 @@ class Runner:
         cfg = self.cfg
         x = self.con.execute
         for i, c in enumerate(self.origins):
+            if self.resume and (self.parts / "intraday" / f"{c.isoformat()}.parquet").exists():
+                continue                      # the last table an origin writes: it is complete
             t0 = time.monotonic()
             self._t = t0
             self._stages: list[str] = []
@@ -510,7 +513,11 @@ class Runner:
             self.write("slot", slot_agg_sql(scored, B.REF_CANDIDATES, ["wt_med"] + qmodels, "tg",
                                             ["L", "park_id", "date", "busy", "fh", "sk"]), c)
             self._tick('slot')
-            x(f"CREATE OR REPLACE TEMP TABLE rd AS {rideday_sql(models, cfg)}")
+            # one lead at a time: the window functions over (slots x models) are the
+            # memory peak of an origin, and summer origins exceeded 1.8 GB in one go
+            for j, L in enumerate(leads):
+                verb = "CREATE OR REPLACE TEMP TABLE rd AS" if j == 0 else "INSERT INTO rd"
+                x(f"{verb} {rideday_sql(models, cfg, L)}")
             self._tick('rd')
             self.write("rideday", rideday_pair_sql(B.REF_CANDIDATES, cfg), c)
             self._tick('rideday')
@@ -699,6 +706,8 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--memory", default=None)
     p.add_argument("--threads", type=int, default=None)
     p.add_argument("--leads", default=None, help="override slot leads, e.g. 0,1,3,7")
+    p.add_argument("--resume", action="store_true",
+                   help="skip origins whose outputs are complete (after an interrupted shard)")
     p.add_argument("--reference", action="store_true",
                    help="a run others compare against: refuse to start without git SHA and image id")
 
@@ -729,6 +738,7 @@ def main(args: argparse.Namespace) -> int:
     (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
     origins = (args.origin_from or "1900-01-01", args.origin_to or "2999-12-31")
     r = Runner(Path(args.export), out, cfg, models, (i, n), origins)
+    r.resume = args.resume
     t0 = time.monotonic()
     r.run()
     meta["finished_utc"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
