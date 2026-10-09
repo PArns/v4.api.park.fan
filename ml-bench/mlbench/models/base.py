@@ -98,6 +98,10 @@ class Model:
     train_days: ClassVar[int | None] = 365
     #: opt in to ORACLE weather (actuals); the model is then scored as <name>_owx
     uses_oracle_weather: ClassVar[bool] = False
+    #: also hand over the known covariates (holidays, weekday) of this many days BEFORE
+    #: the origin, for models that read covariates alongside their context window.
+    #: Past rows carry no window (open_utc/close_utc NULL) — use the history for that.
+    covariate_history_days: ClassVar[int] = 0
 
     @classmethod
     def scored_name(cls) -> str:

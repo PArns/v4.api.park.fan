@@ -49,9 +49,14 @@ PROFILE = os.environ.get("MLBENCH_PROFILE") == "1"
 
 # --------------------------------------------------------------------------- setup
 
-def load_tables(con, export: Path, materialize: bool = False) -> None:
+def load_tables(con, export: Path, materialize: bool = False,
+                park_ids: list[str] | None = None) -> None:
     """Attach the export's ``bench.duckdb`` read-only (shared by all shards; blocks are
-    paged in on demand) or, with ``materialize``, copy the Parquet tables into memory."""
+    paged in on demand) or, with ``materialize``, copy the Parquet tables into memory.
+
+    ``park_ids`` restricts the run to a subset of parks (``--parks``): every origin,
+    target and ride set is built from ``parks``, so filtering it filters everything —
+    the baselines are re-scored on exactly the same subset."""
     x = con.execute
     names = ("parks", "attractions", "windows", "slots", "ride_day", "hour_stats", "tft", "cbd",
              "park_day_cov", "truth")
@@ -67,6 +72,12 @@ def load_tables(con, export: Path, materialize: bool = False) -> None:
         x(f"""CREATE OR REPLACE TABLE truth AS
             SELECT t.*, CAST(dayofweek(t.date) IN (0, 6) AS INTEGER) AS we, dayofweek(t.date) AS dow
             FROM read_parquet('{pq}/truth.parquet') t""")
+    if park_ids:
+        ids = ", ".join("'" + p.replace("'", "") + "'" for p in park_ids)
+        if db.exists() and not materialize:
+            x(f"CREATE OR REPLACE VIEW parks AS SELECT * FROM b.parks WHERE id IN ({ids})")
+        else:
+            x(f"DELETE FROM parks WHERE id NOT IN ({ids})")
     x("""CREATE OR REPLACE TABLE rides AS
         SELECT a.id AS aid, a.park_id, coalesce(a.is_headliner, false) AS is_headliner,
                a.latitude AS lat, a.longitude AS lng, a.land, p.timezone
@@ -124,6 +135,7 @@ def slot_agg_sql(models: list[str], refs: list[str], quantile_models: list[str],
     for m in quantile_models:
         q80, q95 = ("wt_q80", "wt_q95") if m == "wt_med" else (f"{m}__q80", f"{m}__q95")
         cols += [f"count({q80}) FILTER (WHERE y IS NOT NULL) AS qn__{m}",
+                 f"count({q95}) FILTER (WHERE y IS NOT NULL) AS qn95__{m}",
                  f"sum(CAST(y <= {q80} AS INTEGER)) AS q80__{m}",
                  f"sum(CAST(y <= {q95} AS INTEGER)) AS q95__{m}"]
     k = ", ".join(keys)
@@ -287,7 +299,7 @@ SELECT DATE '{c}' AS origin, * FROM stated UNION ALL SELECT DATE '{c}', * FROM r
 class Runner:
     def __init__(self, export: Path, out: Path, cfg: BenchConfig, models: list[Model],
                  shard: tuple[int, int] = (0, 1), origins: tuple[str, str] | None = None,
-                 materialize: bool = False):
+                 materialize: bool = False, park_ids: list[str] | None = None):
         from .build import connect
 
         self.cfg = cfg
@@ -299,7 +311,7 @@ class Runner:
         work = out / "work"
         work.mkdir(parents=True, exist_ok=True)
         self.con = connect(cfg.memory_limit, cfg.threads, temp_dir=str(work / f"tmp{shard[0]}"))
-        load_tables(self.con, export, materialize)
+        load_tables(self.con, export, materialize, park_ids)
         d0, d1 = self.con.execute("SELECT min(date), max(date) FROM truth").fetchone()
         # The last export day is UTC; a park-local day west of UTC is only complete one
         # day earlier, so the last scored day is queue_to - 1 (same for the first day).
@@ -371,7 +383,8 @@ class Runner:
 
         return HistoryView(fetch)
 
-    def covariates(self, c: dt.date, max_lead: int, oracle_weather: bool) -> pd.DataFrame:
+    def covariates(self, c: dt.date, max_lead: int, oracle_weather: bool,
+                   history_days: int = 0) -> pd.DataFrame:
         """Known-future covariates: holidays and weekday as built; the window as known at
         the origin; schedule-derived flags only where the schedule was known; weather
         only for models that opt in to the oracle."""
@@ -388,7 +401,7 @@ class Runner:
                    {weather}
             FROM park_day_cov cov JOIN o ON o.park_id = cov.park_id
             LEFT JOIN pw ON pw.park_id = cov.park_id AND pw.date = cov.date
-            WHERE cov.date >= DATE '{c}' AND cov.date <= DATE '{c}' + {int(max_lead)}
+            WHERE cov.date >= DATE '{c}' - {int(history_days)} AND cov.date <= DATE '{c}' + {int(max_lead)}
             ORDER BY cov.park_id, cov.date""").df()
 
     def maybe_fit(self, m: Model, c: dt.date) -> None:
@@ -417,7 +430,7 @@ class Runner:
         grid = x(self.grid_sql(c, leads, origin_table=origin_table, max_lead=m.max_lead_days)).df()
         if grid.empty:
             return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
-        cov = self.covariates(c, max(leads), m.uses_oracle_weather)
+        cov = self.covariates(c, max(leads), m.uses_oracle_weather, m.covariate_history_days)
         pred = m.predict(origin, grid, cov)
         if pred is None or len(pred) == 0:
             return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
@@ -438,7 +451,7 @@ class Runner:
         days = x(f"""SELECT r.aid AS attraction_id, r.park_id, DATE '{c}' + L AS date, L AS lead_days
                      FROM rides r, (SELECT unnest([{','.join(map(str, leads))}]) L)
                      WHERE r.aid IN (SELECT aid FROM rs) ORDER BY 1, 3""").df()
-        return m.predict_daily(origin, days, self.covariates(c, max(leads), m.uses_oracle_weather))
+        return m.predict_daily(origin, days, self.covariates(c, max(leads), m.uses_oracle_weather, m.covariate_history_days))
 
     def run_plugins_daily(self, c: dt.date, leads: list[int]) -> tuple[list[str], list[str], list[str]]:
         """Adds plug-in columns to tg and lv. Returns (slot cols, quantile models, level cols)."""
@@ -696,6 +709,8 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--memory", default=None)
     p.add_argument("--threads", type=int, default=None)
     p.add_argument("--leads", default=None, help="override slot leads, e.g. 0,1,3,7")
+    p.add_argument("--parks", default=None,
+                   help="restrict to these park ids: comma-separated, or @file with one id per line")
     p.add_argument("--reference", action="store_true",
                    help="a run others compare against: refuse to start without git SHA and image id")
 
@@ -725,7 +740,14 @@ def main(args: argparse.Namespace) -> int:
             "argv": sys.argv}
     (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
     origins = (args.origin_from or "1900-01-01", args.origin_to or "2999-12-31")
-    r = Runner(Path(args.export), out, cfg, models, (i, n), origins)
+    park_ids = None
+    if args.parks:
+        raw = Path(args.parks[1:]).read_text() if args.parks.startswith("@") else args.parks
+        park_ids = [v.strip() for v in raw.replace(",", "\n").splitlines()
+                    if v.strip() and not v.strip().startswith("#")]
+        meta["parks"] = park_ids
+        (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
+    r = Runner(Path(args.export), out, cfg, models, (i, n), origins, park_ids=park_ids)
     t0 = time.monotonic()
     r.run()
     meta["finished_utc"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
