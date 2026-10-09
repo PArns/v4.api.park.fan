@@ -97,6 +97,11 @@ class DriverLevel(Model):
         con.execute(f"""CREATE OR REPLACE TEMP TABLE q AS
             SELECT aid, park_id, date - L AS origin, date, L FROM rdh, (SELECT unnest([{leads}]) AS L)
             WHERE date - L >= DATE '{d0}' + {self.window_days} AND date < DATE '{c}'""")
+        # keep memory flat: a deterministic hash sample of ~2x the rows the model is fitted on
+        n = con.execute("SELECT count(*) FROM q").fetchone()[0]
+        if n > 2 * self.max_train_rows:
+            keep = max(1, int(1000 * 2 * self.max_train_rows / n))
+            con.execute(f"DELETE FROM q WHERE hash(aid, date, L) % 1000 >= {keep}")
         tr = D.add_asof(con.execute(D.driver_rows_sql(self.window_days)).df())
         if len(tr) < self.min_train_rows:
             return
