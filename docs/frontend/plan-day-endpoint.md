@@ -248,11 +248,14 @@ the compressed hypertable. What that costs, plainly:
   (`plan-day:h5:v2:<parkId>:<date>`); a day's rollup row reaches the profile at
   the next rebuild. A failed or timed-out build is replayed for 45 s in process
   rather than retried per request.
-- The read uses `idx_attraction_hourly_history_park_date` (`("parkId", date)`),
-  built `CONCURRENTLY` in the background at boot by `H5ProfileService` and
-  declared `synchronize: false`, so neither a blocking build nor a drop ever
-  happens on deploy. Manual equivalent:
-  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_attraction_hourly_history_park_date ON attraction_hourly_history ("parkId", date);`
+- **Cost, measured on production 2026-10-10** (`attraction_hourly_history`:
+  1.68 M rows, 552 MB heap, 132 MB of indexes): the history read BitmapAnds the
+  existing `parkId` and `date` indexes — Europa-Park 25 ms (5,082 ride-days,
+  32,955 slots, 1,090 buffers, all cache hits), Magic Kingdom 18 ms, a small
+  park 8 ms — once per park per six hours. No new index: a `("parkId", date)`
+  one would save only the ~5 ms of the date bitmap (a full scan-and-sort of
+  those keys takes 0.5 s, so a concurrent build would be seconds), not worth
+  ~20 MB and a DDL step on deploy. Revisit if the read stops being cached.
 
 ### The composer A/B in the forward archive
 

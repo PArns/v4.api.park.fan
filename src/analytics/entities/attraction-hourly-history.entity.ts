@@ -31,10 +31,6 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
 @Entity("attraction_hourly_history")
 @Index("idx_attraction_hourly_history_park", ["parkId"])
 @Index("idx_attraction_hourly_history_date", ["date"])
-// ("parkId", date) for the H5 profile read (PAR-834). Built CONCURRENTLY by
-// `H5ProfileService.onModuleInit`, never by synchronize: a plain CREATE INDEX at
-// boot would block the nightly writer for the length of the build.
-@Index("idx_attraction_hourly_history_park_date", { synchronize: false })
 export class AttractionHourlyHistory {
   @PrimaryColumn("uuid")
   attractionId: string;

@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
@@ -42,9 +42,6 @@ const CACHE_PREFIX = "plan-day:h5:v2";
  */
 export const H5_NEGATIVE_CACHE_MS = 45_000;
 
-/** The composite index the window read wants; built out of band, see below. */
-const PARK_DATE_INDEX = "idx_attraction_hourly_history_park_date";
-
 /**
  * Every ride's H5 profile for one park, as of today (PAR-834).
  *
@@ -58,9 +55,17 @@ const PARK_DATE_INDEX = "idx_attraction_hourly_history_park_date";
  * Cached per park and park-local date in Redis, with one in-flight build per
  * key, so the planner's first request of the day for a park pays for it and
  * every other one (and the forward archive's d0–d90 walk) reads the cache.
+ *
+ * NO NEW INDEX, on measurement (production, 2026-10-10, 1.68 M rows / 552 MB
+ * heap): the history read BitmapAnds the existing `parkId` and `date` indexes
+ * and runs in 25 ms for Europa-Park (5,082 ride-days, 1,090 buffers, all
+ * cached), 18 ms for Magic Kingdom, 8 ms for a small park — once per park per
+ * six hours. A `("parkId", date)` index would save the ~5 ms the date bitmap
+ * costs, which is not worth ~20 MB and a DDL step on every deploy. Revisit if
+ * the read stops being cached or the table grows by an order of magnitude.
  */
 @Injectable()
-export class H5ProfileService implements OnModuleInit {
+export class H5ProfileService {
   private readonly logger = new Logger(H5ProfileService.name);
   private readonly inFlight = new Map<
     string,
@@ -76,56 +81,6 @@ export class H5ProfileService implements OnModuleInit {
     @InjectDataSource() private readonly dataSource: DataSource,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
-
-  onModuleInit(): void {
-    // Fire and forget, like the trigram and ride-profile indexes: the read is
-    // correct without it (the single-column parkId index serves it).
-    void this.ensureParkDateIndex();
-  }
-
-  /**
-   * `(parkId, date)` on `attraction_hourly_history`, built CONCURRENTLY so the
-   * table's nightly writer is never blocked, and declared `synchronize: false`
-   * on the entity so TypeORM neither builds it blocking at boot nor drops it.
-   * A concurrent build that died leaves an INVALID index that `IF NOT EXISTS`
-   * would skip forever, so an invalid one is dropped and rebuilt. Bounded by a
-   * session statement timeout; on failure the read simply keeps using the
-   * single-column index. Manual equivalent:
-   * `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_attraction_hourly_history_park_date
-   *    ON attraction_hourly_history ("parkId", date);`
-   */
-  private async ensureParkDateIndex(): Promise<void> {
-    const runner = this.dataSource.createQueryRunner();
-    try {
-      await runner.connect();
-      await runner.query(`SET statement_timeout = '10min'`);
-      await runner.query(`SET lock_timeout = '30s'`);
-      const state: Array<{ valid: boolean }> = await runner.query(
-        `SELECT i.indisvalid AS valid FROM pg_class c
-           JOIN pg_index i ON i.indexrelid = c.oid
-          WHERE c.relname = $1`,
-        [PARK_DATE_INDEX],
-      );
-      if (state[0]?.valid === true) return;
-      if (state[0]?.valid === false) {
-        await runner.query(
-          `DROP INDEX CONCURRENTLY IF EXISTS ${PARK_DATE_INDEX}`,
-        );
-      }
-      await runner.query(
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${PARK_DATE_INDEX}
-           ON attraction_hourly_history ("parkId", date)`,
-      );
-    } catch (err) {
-      this.logger.warn(
-        `${PARK_DATE_INDEX} not built: ${(err as Error).message}`,
-      );
-    } finally {
-      await runner.query(`RESET statement_timeout`).catch(() => undefined);
-      await runner.query(`RESET lock_timeout`).catch(() => undefined);
-      await runner.release();
-    }
-  }
 
   /**
    * @param localToday the park-local date the window ends before

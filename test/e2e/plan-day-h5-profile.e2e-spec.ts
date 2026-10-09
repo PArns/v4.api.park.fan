@@ -153,18 +153,4 @@ describe("H5 profiles from the rollup (e2e)", () => {
     const cached = await redis.get(`plan-day:h5:v2:${park.id}:${TODAY}`);
     expect(cached).not.toBeNull();
   });
-
-  it("builds the (parkId, date) index concurrently at boot, and it is valid", async () => {
-    // onModuleInit fires it and does not wait; give it a moment.
-    let rows: Array<{ valid: boolean }> = [];
-    for (let i = 0; i < 50 && rows.length === 0; i++) {
-      rows = await dataSource.query(
-        `SELECT i.indisvalid AS valid FROM pg_class c
-           JOIN pg_index i ON i.indexrelid = c.oid
-          WHERE c.relname = 'idx_attraction_hourly_history_park_date'`,
-      );
-      if (rows.length === 0) await new Promise((r) => setTimeout(r, 100));
-    }
-    expect(rows).toEqual([{ valid: true }]);
-  });
 });
