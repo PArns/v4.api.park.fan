@@ -1065,7 +1065,7 @@ export class MLService {
    * any (attraction, day) TFT doesn't cover. Keeps the calendar and yearly views on
    * the SAME source. NOT used by the prediction-generator writer (which must persist
    * pure CatBoost into wait_time_predictions so the TFT-vs-CatBoost scoreboard stays
-   * fair) — that path keeps calling getParkPredictions("daily") directly.
+   * fair) — that path calls getRawParkPredictions("daily"), never the served read.
    */
   async getServingDailyPredictions(
     parkId: string,
