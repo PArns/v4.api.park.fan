@@ -4,7 +4,8 @@
 # Chronos-2 (amazon/chronos-2): Apache-2.0 code and weights.
 chronos-forecasting==2.3.2
 # TimesFM 3.0 (google/timesfm-3.0-pytorch): code Apache-2.0, WEIGHTS under the
-# TimesFM Non-Commercial License v1.0 (non-commercial, non-production use only).
-# park.fan is non-commercial; the benchmark is not production. Serving these weights
-# in production would NOT be covered by that licence.
+# TimesFM Non-Commercial License v1.0 — non-commercial use only (checked on the model
+# card 2026-10-09). park.fan is non-commercial, so this offline benchmark is covered.
+# Whether a public production service still counts as non-commercial is an OWNER
+# decision on the licence text, not a technical one.
 timesfm==3.0.2
