@@ -70,6 +70,13 @@ engine = create_engine(
     pool_size=20,  # Increased from 10
     max_overflow=10,  # Allow 10 extra connections beyond pool_size
     pool_timeout=30,  # Wait max 30s for connection from pool
+    connect_args={
+        # Name the session (all services share the `parkfan` role) and end a
+        # transaction left idle for 10 min, which would otherwise hold its
+        # locks indefinitely. See docs/troubleshooting/db-health-runbook.md §0b.
+        "application_name": "parkfan-ml-service",
+        "options": "-c idle_in_transaction_session_timeout=600000",
+    },
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

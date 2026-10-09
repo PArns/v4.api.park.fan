@@ -105,7 +105,7 @@
 
 ### 🔧 Troubleshooting
 - [Common Issues](docs/troubleshooting/common-issues.md) - Stale cache, occupancy, timezone, ML.
-- [DB Health Runbook](docs/troubleshooting/db-health-runbook.md) - Copy-paste SQL for table sizes, unused indexes, dead tuples, slow queries, OOM checks. **§0: ad-hoc SQL against production runs through `scripts/prod-psql.sh`, never `docker exec … psql` by hand** — it sets `statement_timeout=5min`, `idle_in_transaction_session_timeout=1min` and `lock_timeout=10s` on that session only, because the pool connects as the same `parkfan` role. A `SELECT` left open with no deadline queued the `queue_data` compression policy behind it and took the whole API down for 32 minutes on 2026-09-28.
+- [DB Health Runbook](docs/troubleshooting/db-health-runbook.md) - Copy-paste SQL for table sizes, unused indexes, dead tuples, slow queries, OOM checks. **§0: ad-hoc SQL against production runs through `scripts/prod-psql.sh`, never `docker exec … psql` by hand** — it sets `statement_timeout=5min`, `idle_in_transaction_session_timeout=1min` and `lock_timeout=10s` on that session only, because the pool connects as the same `parkfan` role. A `SELECT` left open with no deadline queued the `queue_data` compression policy behind it and took the whole API down for 32 minutes on 2026-09-28. **§0b: no TimescaleDB job may queue for an ACCESS EXCLUSIVE lock** (2026-10-09 outage).
 
 ### 🚀 Deployment
 - [Coolify Deployment](docs/deployment/coolify.md) - Production deployment guide.

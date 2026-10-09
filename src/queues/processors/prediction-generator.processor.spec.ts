@@ -36,6 +36,13 @@ describe("PredictionGeneratorProcessor", () => {
     purgeHourlyPredictionsBefore: jest
       .fn()
       .mockResolvedValue({ deleted: 0, windows: 0, done: true }),
+    dropExpiredPredictionChunks: jest.fn().mockResolvedValue({
+      due: 0,
+      dropped: 0,
+      lockTimedOut: false,
+      attempts: 0,
+      overdue: 0,
+    }),
   };
 
   // Rides along with the daily run to record what was predicted at each lead
@@ -402,6 +409,87 @@ describe("PredictionGeneratorProcessor", () => {
   });
 
   describe("cleanup-old (daily retention)", () => {
+    it("drops expired chunks at the 90-day backstop before the row cleanup", async () => {
+      await processor.handleCleanupOld({} as Job);
+
+      expect(mlService.dropExpiredPredictionChunks).toHaveBeenCalledWith(90, {
+        overdueAfterDays: 14,
+      });
+      expect(
+        mlService.dropExpiredPredictionChunks.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        mlService.purgeHourlyPredictionsBefore.mock.invocationCallOrder[0],
+      );
+    });
+
+    describe("visibility of missed drops", () => {
+      const logger = () =>
+        (
+          processor as unknown as {
+            logger: { warn: jest.Mock; error: jest.Mock };
+          }
+        ).logger;
+      let warn: jest.SpyInstance;
+      let error: jest.SpyInstance;
+
+      beforeEach(() => {
+        warn = jest.spyOn(logger(), "warn").mockImplementation(() => undefined);
+        error = jest
+          .spyOn(logger(), "error")
+          .mockImplementation(() => undefined);
+      });
+      afterEach(() => {
+        warn.mockRestore();
+        error.mockRestore();
+      });
+
+      it("warns, but does not raise an error, for a recent miss", async () => {
+        mlService.dropExpiredPredictionChunks.mockResolvedValueOnce({
+          due: 1,
+          dropped: 0,
+          lockTimedOut: true,
+          attempts: 4,
+          overdue: 0,
+        });
+
+        await processor.handleCleanupOld({} as Job);
+
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("not dropped"),
+        );
+        expect(error).not.toHaveBeenCalled();
+      });
+
+      it("logs at error level once a chunk is past 90 + 14 days", async () => {
+        mlService.dropExpiredPredictionChunks.mockResolvedValueOnce({
+          due: 3,
+          dropped: 0,
+          lockTimedOut: true,
+          attempts: 4,
+          overdue: 2,
+        });
+
+        await processor.handleCleanupOld({} as Job);
+
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(error.mock.calls[0][0]).toContain(
+          "2 prediction chunk(s) are more than 104 days old",
+        );
+      });
+    });
+
+    it("still runs the row cleanup when the chunk drop fails", async () => {
+      mlService.dropExpiredPredictionChunks.mockRejectedValueOnce(
+        new Error("boom"),
+      );
+
+      await expect(
+        processor.handleCleanupOld({} as Job),
+      ).resolves.toBeUndefined();
+      expect(mlService.purgeHourlyPredictionsBefore).toHaveBeenCalledTimes(1);
+      expect(mlService.deleteOldPredictions).toHaveBeenCalledTimes(1);
+    });
+
     it("purges hourly by createdAt in windows and daily by predictedTime", async () => {
       mlService.purgeHourlyPredictionsBefore.mockResolvedValueOnce({
         deleted: 12_000,
