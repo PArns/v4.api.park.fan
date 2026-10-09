@@ -84,8 +84,10 @@ def window_tables(con, c: str, cfg: BenchConfig) -> None:
     # uses past the operator's publishing horizon.
     x(f"""CREATE OR REPLACE TEMP TABLE wproj AS
         SELECT park_id, {WK} AS wk,
-               median(date_diff('minute', CAST(date AS TIMESTAMP), open_local)) AS open_min,
-               median(date_diff('minute', CAST(date AS TIMESTAMP), close_local)) AS close_min,
+               -- rounded to the quarter hour: a median of an even count can land between
+               -- two openings (10:07:30), and every slot grid is quarter-hour aligned
+               round(median(date_diff('minute', CAST(date AS TIMESTAMP), open_local)) / 15) * 15 AS open_min,
+               round(median(date_diff('minute', CAST(date AS TIMESTAMP), close_local)) / 15) * 15 AS close_min,
                count(*) n
         FROM (SELECT *, dayofweek(date) IN (0, 6) AS we FROM windows
               WHERE date >= DATE '{c}' - {W} AND date < DATE '{c}')

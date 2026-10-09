@@ -345,7 +345,10 @@ class Runner:
                       WHERE pw.open_p IS NOT NULL AND pw.close_p > pw.open_p
                         AND pw.date IN (SELECT DATE '{c}' + unnest([{lead_list}]))),
         g AS (SELECT r.aid AS attraction_id, d.park_id, d.date, d.open_p, d.close_p,
-                     unnest(range(d.open_p, d.close_p, INTERVAL 15 MINUTE)) AS slot_start_utc
+                     -- slots on the quarter-hour grid with open <= start < close (a published
+                     -- window may open off the grid, e.g. 09:50)
+                     unnest(range(make_timestamptz(((epoch_us(d.open_p) + 899999999) // 900000000) * 900000000),
+                                  d.close_p, INTERVAL 15 MINUTE)) AS slot_start_utc
               FROM days d JOIN rides r ON r.park_id = d.park_id WHERE r.aid IN (SELECT aid FROM rs))
         SELECT g.attraction_id, g.park_id, g.date, g.slot_start_utc,
                timezone(o.timezone, g.slot_start_utc) AS slot_local,
