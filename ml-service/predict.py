@@ -415,8 +415,53 @@ def fetch_recent_rolling_stats(
     return _cached_read(_recent_rolling_stats_cache, cache_key, read)
 
 
+def _park_timezones(park_ids: List[str]) -> Dict[str, str]:
+    """{parkId: IANA timezone} for the given parks, "UTC" where none is on record."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        meta = fetch_parks_metadata()
+        tz_map = meta.set_index(meta["park_id"].astype(str))["timezone"].to_dict()
+    except Exception as e:
+        logger.warning(f"Park timezones unavailable ({e}); daily rows fall back to UTC")
+        tz_map = {}
+    result = {}
+    for p in {str(x) for x in park_ids}:
+        tz_name = tz_map.get(p)
+        if not tz_name:
+            logger.warning(f"Park {p} has no timezone on record; daily rows use UTC")
+            tz_name = "UTC"
+        result[p] = tz_name
+    return result
+
+
+def daily_anchor_time(local_date: str, tz_name: str) -> str:
+    """The instant a collapsed DAILY row is published at: park-local NOON of its day.
+
+    A daily prediction is a statement about a park-local calendar day, not about
+    the hour whose slot happened to be the maximum. Publishing the winning slot's
+    instant put a Los Angeles 16:00 peak on the NEXT UTC date in winter (00:00
+    UTC), and every consumer that reads the day off the ISO string — the calendar,
+    /plan/day, the TFT merge — would have filed it under tomorrow. Local noon
+    lands on the same date in UTC for every offset between -12 h and +12 h, and
+    `DATE(predictedTime AT TIME ZONE p.timezone)` reads the right day for all of
+    them (PAR-818).
+
+    ASSUMES the park's offset lies strictly between -12 h and +12 h (true for
+    every park on record). A park at +13 h (Auckland in summer) would have its
+    noon on the previous UTC date; the assert makes that loud instead of silent.
+    """
+    noon = pd.Timestamp(f"{local_date} 12:00:00").tz_localize(
+        tz_name or "UTC", nonexistent="shift_forward", ambiguous=False
+    )
+    offset_h = noon.utcoffset().total_seconds() / 3600
+    assert -12 < offset_h < 12, f"daily anchor needs |offset| < 12 h, got {offset_h}"
+    return noon.tz_convert("UTC").isoformat()
+
+
 def generate_future_timestamps(
-    base_time: datetime, prediction_type: str
+    base_time: datetime, prediction_type: str, tz_name: Optional[str] = None
 ) -> List[datetime]:
     """
     Generate future timestamps for predictions
@@ -424,9 +469,12 @@ def generate_future_timestamps(
     Args:
         base_time: Starting time
         prediction_type: 'hourly' or 'daily'
+        tz_name: The park's IANA timezone. Only read for 'daily': the peak
+            hours (DAILY_PEAK_HOURS) are hours on the PARK'S clock, and the
+            days are the park's calendar days after today (PAR-818).
 
     Returns:
-        List of future timestamps
+        List of future timestamps (UTC instants)
     """
     if prediction_type == "hourly":
         # Round base_time to the NEXT 15-minute slot
@@ -445,13 +493,25 @@ def generate_future_timestamps(
         # Predict several peak-window hours per day; predict_wait_times collapses them
         # to the per-day MAX = a daily-PEAK proxy (≈ P90, matching the calendar's
         # typical-day-peak baseline). A single 14:00 value under-read the peak.
+        #
+        # The hours are PARK-LOCAL (PAR-818). They used to be set on the UTC
+        # base_time, so "12,14,16" meant 05/07/09 in Los Angeles and 21/23/01 in
+        # Tokyo — the "peak" was read off the morning or the night. Each day is
+        # the park's own calendar day, the hour is put on that day's wall clock
+        # and only then converted to the UTC instant the features expect.
         hours = [int(h) for h in str(settings.DAILY_PEAK_HOURS).split(",") if h.strip()]
         if not hours:
             hours = [14]
+        tz = tz_name or "UTC"
+        base = pd.Timestamp(base_time)
+        if base.tzinfo is None:
+            base = base.tz_localize("UTC")
+        local_today = base.tz_convert(tz).normalize().tz_localize(None)
         return [
-            (base_time + timedelta(days=i)).replace(
-                hour=h, minute=0, second=0, microsecond=0
-            )
+            (local_today + pd.Timedelta(days=i, hours=h))
+            .tz_localize(tz, nonexistent="shift_forward", ambiguous=False)
+            .tz_convert("UTC")
+            .to_pydatetime()
             for i in range(1, settings.DAILY_PREDICTIONS + 1)
             for h in hours
         ]
@@ -785,6 +845,7 @@ def create_prediction_features(
     current_wait_times: Dict[str, int] = None,
     recent_wait_times: Dict[str, int] = None,
     feature_context: Optional[Dict[str, Any]] = None,
+    timestamps_by_park: Optional[Dict[str, List[datetime]]] = None,
 ) -> pd.DataFrame:
     """
     Create feature DataFrame for predictions with all features from DB
@@ -796,6 +857,8 @@ def create_prediction_features(
         base_time: Current time for fetching historical data
         weather_forecast: Optional list of hourly weather forecast items
         current_wait_times: Optional dict of {attractionId: waitTime} for current state
+        timestamps_by_park: Optional {parkId: timestamps} overriding `timestamps`
+            for that park — daily rows sit on each park's own clock (PAR-818)
 
     Returns:
         DataFrame with features ready for prediction
@@ -803,7 +866,8 @@ def create_prediction_features(
     # Create base DataFrame
     rows = []
     for attraction_id, park_id in zip(attraction_ids, park_ids):
-        for ts in timestamps:
+        park_timestamps = (timestamps_by_park or {}).get(str(park_id), timestamps)
+        for ts in park_timestamps:
             rows.append(
                 {
                     "attractionId": attraction_id,
@@ -896,6 +960,10 @@ def create_prediction_features(
             # Normalize both columns to timezone-naive UTC for robust merging
             if wf_df["time"].dt.tz is not None:
                 wf_df["time"] = wf_df["time"].dt.tz_convert("UTC").dt.tz_localize(None)
+            # One row per hour, or the left merge below multiplies prediction
+            # rows (a wall-clock source maps a DST night's two hours onto one
+            # instant — PAR-818).
+            wf_df = wf_df.drop_duplicates(subset="time", keep="first")
 
             df["join_time"] = df["timestamp"].dt.round("h")
             if df["join_time"].dt.tz is not None:
@@ -1999,6 +2067,22 @@ def predict_wait_times(
     # Generate future timestamps
     timestamps = generate_future_timestamps(base_time, prediction_type)
 
+    # Daily rows sit on each park's OWN clock (PAR-818): one timestamp list per
+    # park timezone, so "the peak hours of tomorrow" mean the park's afternoon.
+    timestamps_by_park: Optional[Dict[str, List[datetime]]] = None
+    park_tz: Dict[str, str] = {}
+    if prediction_type == "daily":
+        park_tz = _park_timezones(park_ids)
+        by_tz: Dict[str, List[datetime]] = {}
+        timestamps_by_park = {}
+        for pid in {str(p) for p in park_ids}:
+            tz_name = park_tz.get(pid, "UTC")
+            if tz_name not in by_tz:
+                by_tz[tz_name] = generate_future_timestamps(
+                    base_time, prediction_type, tz_name
+                )
+            timestamps_by_park[pid] = by_tz[tz_name]
+
     # Create features with all DB-loaded data
     # Reduced logging - only log summary, not details
 
@@ -2012,6 +2096,7 @@ def predict_wait_times(
         current_wait_times,
         recent_wait_times,
         feature_context,
+        timestamps_by_park=timestamps_by_park,
     )
 
     # OPTIMIZATION: Skip ML inference for CLOSED days when schedule exists.
@@ -2073,6 +2158,7 @@ def predict_wait_times(
 
     # Format results (OPERATING and UNKNOWN rows; CLOSED never reach the client)
     results = []
+    result_local_dates: List[str] = []  # park-local date per result (daily collapse)
     for i, (idx, row) in enumerate(df_inference.iterrows()):
         pred_wait = round_to_nearest_5(predictions[i])
         # Crowd-level uses the (busy-calibrated) crowd quantile, which differs from
@@ -2193,6 +2279,7 @@ def predict_wait_times(
                 "trend": "stable",  # Default
             }
         )
+        result_local_dates.append(str(row.get("date_local", row["timestamp"].date())))
 
         # Calculate Trend
         # Compare current prediction window to previous window or current actual
@@ -2226,12 +2313,22 @@ def predict_wait_times(
     # per (attraction, day) = the MAX predicted wait (peak proxy ≈ P90), so the daily
     # value matches the typical-day-peak baseline the calendar uses (not the lower
     # 14:00 value, which under-read the peak by 13-45 min on busy headliner days).
+    #
+    # The day is the park-LOCAL date (PAR-818), never the first ten characters of
+    # the UTC ISO string: with the peak hours on the park's clock, Los Angeles'
+    # 16:00 slot is 00:00 UTC of the next day in winter and would otherwise be
+    # collapsed into tomorrow. The surviving row is re-published at local noon of
+    # its day (see daily_anchor_time) so every downstream date key agrees.
     if prediction_type == "daily" and results:
         best: Dict[Any, Dict[str, Any]] = {}
-        for r in results:
-            key = (r["attractionId"], r["predictedTime"][:10])  # (attraction, YYYY-MM-DD)
+        for r, local_date in zip(results, result_local_dates):
+            key = (r["attractionId"], local_date)  # (attraction, park-local YYYY-MM-DD)
             if key not in best or r["predictedWaitTime"] > best[key]["predictedWaitTime"]:
                 best[key] = r
+        for (_, local_date), r in best.items():
+            r["predictedTime"] = daily_anchor_time(
+                local_date, park_tz.get(str(r["parkId"]), "UTC")
+            )
         results = list(best.values())
 
     # NOTE: CLOSED/UNKNOWN rows were excluded before inference (no ML call for closed days).

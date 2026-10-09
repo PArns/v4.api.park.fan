@@ -204,7 +204,8 @@ _DDL_SHAPE_COMPARISONS = text(
 
 def fetch_daily_levels(park_id: str, tz: str, lo_day, hi_day) -> pd.DataFrame:
     """Freshest DAILY forecast per (attraction, park-local day) in [lo_day, hi_day] — the
-    LEVEL the shape expands. predictionType='daily' is one row/(ride, day) at 12:00 UTC."""
+    LEVEL the shape expands. predictionType='daily' is one row/(ride, day) at park-local noon (PAR-818;
+    it was the winning 12/14/16 UTC slot before)."""
     bin_day = '(wp."predictedTime" AT TIME ZONE :tz)::date'
     sql = text(
         f"""
