@@ -127,6 +127,12 @@ class Settings(BaseSettings):
     # capped) on an out-of-time window shows no accuracy loss; the per-phase
     # timings in the model metadata say whether the fit is the phase worth capping.
     TRAIN_MAX_ROWS: int = 0
+    # After the early-stopped fit (train pool + validation weeks) is evaluated on
+    # the 30-day hold-out, refit the served model on ALL rows — pool + hold-out —
+    # with the best iteration count. Otherwise the served model never learns the
+    # newest 30 days (PAR-815). Roughly doubles the fit phase; set False if a run
+    # gets too close to ML_TRAINING_TIMEOUT_MINUTES (see training_timings).
+    TRAIN_REFIT_ON_ALL_ROWS: bool = True
     TRAIN_FULL_RESOLUTION_DAYS: int = 90
     TRAIN_TEST_SPLIT: float = 0.85
     VALIDATION_DAYS: int = (
