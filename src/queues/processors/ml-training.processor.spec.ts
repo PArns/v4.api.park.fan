@@ -1,32 +1,31 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { Job } from "bull";
 import { getRepositoryToken } from "@nestjs/typeorm";
-import * as fs from "fs/promises";
-import { MLTrainingProcessor } from "./ml-training.processor";
+import {
+  MLTrainingProcessor,
+  selectOrphanVersions,
+} from "./ml-training.processor";
 import { MLModel } from "../../ml/entities/ml-model.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { MLFeatureDriftService } from "../../ml/services/ml-feature-drift.service";
 import axios from "axios";
 
-jest.mock("fs/promises");
 jest.mock("axios");
 jest.mock("../../common/utils/file-logger.util", () => ({
   logJobFailure: jest.fn(),
 }));
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
+const ML = "http://ml-service:8000";
 
 /**
- * Coverage for the daily 6 AM ML training cron. We don't try to test
- * the actual Python HTTP training call (heavy mock surface, low value)
- * — instead we focus on the **security-critical** helpers and the
- * cleanup path which has been the source of subtle bugs in the past:
+ * Coverage for the daily 6 AM ML training cron and the model cleanup:
  *   1. Path-traversal protection on model version strings.
- *   2. Path-safety against MODEL_DIR escape.
- *   3. Cleanup keeps the active model regardless of age.
- *   4. Cleanup retains the last N models even when older models are
- *      active.
- *   5. Cleanup tolerates missing files (model dir partially gone).
+ *   2. Cleanup keeps the active model and the newest N regardless of age.
+ *   3. Files are deleted through the ml-service (the API container does not
+ *      mount the models volume), including orphans with no DB row.
+ *   4. Registration reads the trained version's own metadata, and only an
+ *      accepted, registered version is activated.
  */
 describe("MLTrainingProcessor", () => {
   let processor: MLTrainingProcessor;
@@ -57,7 +56,7 @@ describe("MLTrainingProcessor", () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    (fs.unlink as jest.Mock).mockResolvedValue(undefined);
+    delete process.env.ML_SERVICE_URL;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -71,177 +70,215 @@ describe("MLTrainingProcessor", () => {
     processor = module.get(MLTrainingProcessor);
   });
 
-  /**
-   * The two sanitisation methods are private — exercise them through
-   * the public surface (cleanupOldModels) and observe what happens
-   * when a malicious version reaches the loop.
-   */
+  const DAY_S = 24 * 60 * 60;
+  const nowS = () => Date.now() / 1000;
+
+  /** ml-service file listing + delete, recorded per version. */
+  const mockModelFiles = (
+    versions: Array<{ version: string; ageDays: number }>,
+    protectedVersions: Record<string, string | null> = {
+      sentinel: null,
+      loaded: null,
+      training: null,
+    },
+  ) => {
+    mockedAxios.get.mockImplementation((url: string) =>
+      url === `${ML}/models/files`
+        ? Promise.resolve({
+            data: {
+              versions: versions.map((v) => ({
+                version: v.version,
+                files: [`catboost_${v.version}.cbm`],
+                bytes: 60 * 1024 * 1024,
+                mtime: nowS() - v.ageDays * DAY_S,
+              })),
+              protected: protectedVersions,
+            },
+          })
+        : Promise.reject(new Error(`unexpected GET ${url}`)),
+    );
+    mockedAxios.delete.mockResolvedValue({ data: {} });
+  };
+
+  const deletedVersions = () =>
+    mockedAxios.delete.mock.calls.map(([u]) =>
+      decodeURIComponent(String(u).replace(`${ML}/models/files/`, "")),
+    );
+
+  const models = (n: number, activeIdx = -1) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `m${i}`,
+      version: `v_${i}`,
+      // Sorted DESC at the repository level → newest first
+      trainedAt: new Date(2026, 0, n - i),
+      isActive: i === activeIdx,
+    }));
+
   describe("sanitizeVersion (path traversal protection)", () => {
-    // Rather than calling the private helper directly, we drive cleanup
-    // with crafted versions and observe whether fs.unlink is invoked.
-    // A safe version → fs.unlink fires; a rejected version → it doesn't.
+    beforeEach(() => mockModelFiles([]));
+
     const setupAllModels = (versions: string[]) => {
-      const models = versions.map((v, i) => ({
-        id: `m${i}`,
-        version: v,
-        trainedAt: new Date(2020, 0, 1 + i),
-        isActive: false,
-      }));
-      mlModelRepo.find.mockResolvedValueOnce(models);
+      mlModelRepo.find.mockResolvedValueOnce(
+        versions.map((v, i) => ({
+          id: `m${i}`,
+          version: v,
+          trainedAt: new Date(2020, 0, versions.length - i),
+          isActive: false,
+        })),
+      );
     };
 
-    it("rejects versions containing `..` (directory traversal)", async () => {
-      // 31 safe models + 1 malicious — only the malicious one is
-      // selected for deletion (oldest).
-      const safe = Array.from({ length: 31 }, (_, i) => `v2026_safe_${i}`);
-      const malicious = "../../../etc/passwd";
-      setupAllModels([malicious, ...safe]);
+    it("never sends a version containing `..` or `/` to the ml-service", async () => {
+      const safe = Array.from({ length: 30 }, (_, i) => `v2026_safe_${i}`);
+      setupAllModels([...safe, "../../../etc/passwd", "/etc/passwd"]);
 
       await processor.handleCleanupModels({} as Job);
 
-      // unlink NOT called for the malicious version.
-      const unlinkCalls = (fs.unlink as jest.Mock).mock.calls.map(
-        ([p]: [string]) => p,
-      );
-      const maliciousAttempts = unlinkCalls.filter((p) =>
-        p.includes(malicious),
-      );
-      expect(maliciousAttempts).toHaveLength(0);
+      expect(deletedVersions()).toEqual([]);
+      expect(mlModelRepo.remove).not.toHaveBeenCalled();
     });
 
-    it("rejects versions containing `/` (absolute paths)", async () => {
-      const safe = Array.from({ length: 31 }, (_, i) => `v_safe_${i}`);
-      const malicious = "/etc/passwd";
-      setupAllModels([malicious, ...safe]);
-
-      await processor.handleCleanupModels({} as Job);
-
-      const unlinkCalls = (fs.unlink as jest.Mock).mock.calls.map(
-        ([p]: [string]) => p,
-      );
-      expect(unlinkCalls.some((p) => p.includes(malicious))).toBe(false);
-    });
-
-    it("accepts safe alphanumeric + dot + dash + underscore versions", async () => {
-      // 31 safe — oldest one (last) gets deleted.
+    it("deletes safe alphanumeric + dot + dash + underscore versions", async () => {
       const versions = Array.from(
-        { length: 32 },
+        { length: 31 },
         (_, i) => `v2026.01.${String(i).padStart(2, "0")}_safe`,
       );
       setupAllModels(versions);
 
       await processor.handleCleanupModels({} as Job);
 
-      // At least one safe model deleted (oldest beyond retention=30).
-      expect(fs.unlink).toHaveBeenCalled();
-      const unlinkCalls = (fs.unlink as jest.Mock).mock.calls.map(
-        ([p]: [string]) => p,
-      );
-      // All attempted paths include the catboost prefix → sanitiser
-      // didn't reject them.
-      expect(unlinkCalls.some((p) => p.includes("catboost_"))).toBe(true);
+      expect(deletedVersions()).toEqual(["v2026.01.30_safe"]);
     });
   });
 
   describe("cleanupOldModels retention", () => {
+    beforeEach(() => mockModelFiles([]));
+
     it("keeps the most recent MODELS_TO_KEEP=30 models and deletes the rest", async () => {
-      // 35 models → 5 should be deleted (oldest at the bottom of the
-      // DESC-sorted list).
-      const models = Array.from({ length: 35 }, (_, i) => ({
-        id: `m${i}`,
-        version: `v_${i}`,
-        // Sorted DESC at the repository level → newest first
-        trainedAt: new Date(2026, 0, 35 - i),
-        isActive: false,
-      }));
-      mlModelRepo.find.mockResolvedValueOnce(models);
+      mlModelRepo.find.mockResolvedValueOnce(models(35));
 
       await processor.handleCleanupModels({} as Job);
 
-      // 5 DB removes (35 - 30).
-      expect(mlModelRepo.remove).toHaveBeenCalledTimes(5);
-      // The DB entries removed are the 5 OLDEST (last in the array).
       const removedIds = mlModelRepo.remove.mock.calls.map(
         ([m]: [{ id: string }]) => m.id,
       );
       expect(removedIds).toEqual(["m30", "m31", "m32", "m33", "m34"]);
+      expect(deletedVersions()).toEqual([
+        "v_30",
+        "v_31",
+        "v_32",
+        "v_33",
+        "v_34",
+      ]);
     });
 
     it("always keeps the active model even if it falls outside the retention window", async () => {
-      // 35 models, the OLDEST one is active. Even though it would
-      // otherwise be deleted, the active flag protects it.
-      const models = Array.from({ length: 35 }, (_, i) => ({
-        id: `m${i}`,
-        version: `v_${i}`,
-        trainedAt: new Date(2026, 0, 35 - i),
-        isActive: i === 34, // oldest is active
-      }));
-      mlModelRepo.find.mockResolvedValueOnce(models);
+      mlModelRepo.find.mockResolvedValueOnce(models(35, 34));
 
       await processor.handleCleanupModels({} as Job);
 
-      // The active model (m34) must NOT be in the remove calls.
       const removedIds = mlModelRepo.remove.mock.calls.map(
         ([m]: [{ id: string }]) => m.id,
       );
       expect(removedIds).not.toContain("m34");
-      // 4 deletes instead of 5 — the active one took its retention slot.
       expect(mlModelRepo.remove).toHaveBeenCalledTimes(4);
     });
 
-    it("skips cleanup entirely when fewer than MODELS_TO_KEEP models exist", async () => {
-      const models = Array.from({ length: 10 }, (_, i) => ({
-        id: `m${i}`,
-        version: `v_${i}`,
-        trainedAt: new Date(),
-        isActive: false,
-      }));
-      mlModelRepo.find.mockResolvedValueOnce(models);
-
-      await processor.handleCleanupModels({} as Job);
-
-      expect(mlModelRepo.remove).not.toHaveBeenCalled();
-      expect(fs.unlink).not.toHaveBeenCalled();
-    });
-
-    it("tolerates missing files on disk (partial cleanup) without crashing", async () => {
-      const models = Array.from({ length: 32 }, (_, i) => ({
-        id: `m${i}`,
-        version: `v_${i}`,
-        trainedAt: new Date(2026, 0, 32 - i),
-        isActive: false,
-      }));
-      mlModelRepo.find.mockResolvedValueOnce(models);
-      // First unlink (.cbm) fails — file already gone — but DB cleanup
-      // should still happen.
-      (fs.unlink as jest.Mock).mockRejectedValue(
-        Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+    it("removes the DB row when the files are already gone (404)", async () => {
+      mlModelRepo.find.mockResolvedValueOnce(models(32));
+      mockedAxios.delete.mockRejectedValue(
+        Object.assign(new Error("Not Found"), { response: { status: 404 } }),
       );
 
       await processor.handleCleanupModels({} as Job);
 
-      // DB entries still removed for the 2 over-retention models.
       expect(mlModelRepo.remove).toHaveBeenCalledTimes(2);
     });
 
+    it("keeps the DB row when the ml-service could not delete or protects the files", async () => {
+      mlModelRepo.find.mockResolvedValueOnce(models(32));
+      mockedAxios.delete
+        .mockRejectedValueOnce(new Error("ECONNREFUSED"))
+        .mockRejectedValueOnce(
+          Object.assign(new Error("Conflict"), { response: { status: 409 } }),
+        );
+
+      await processor.handleCleanupModels({} as Job);
+
+      expect(mlModelRepo.remove).not.toHaveBeenCalled();
+    });
+
     it("doesn't rethrow when cleanup fails (training job must not fail on cleanup)", async () => {
-      // Make repository.find throw.
       mlModelRepo.find.mockRejectedValueOnce(new Error("DB exploded"));
 
-      // No throw — cleanup is best-effort by design.
       await expect(
         processor.handleCleanupModels({} as Job),
       ).resolves.toBeUndefined();
     });
   });
 
-  /**
-   * PAR-815: the processor used to read the new model's metrics from
-   * `/model/info`, which answers with whatever model the worker has loaded.
-   * Workers only reload on their next /predict, so after a 60 s wait it took the
-   * PREVIOUS model's metrics and registered them under the new version — the
-   * champion/challenger gate then compared the champion with itself.
-   */
+  describe("cleanupOldModels orphans", () => {
+    it("deletes old files whose version has no DB row, through the ml-service", async () => {
+      mlModelRepo.find.mockResolvedValueOnce(models(3));
+      mockModelFiles([
+        { version: "v_0", ageDays: 10 }, // registered
+        { version: "v20260930_0600", ageDays: 9 }, // orphan
+        { version: "v20261008_0600", ageDays: 1 }, // too young
+      ]);
+
+      await processor.handleCleanupModels({} as Job);
+
+      expect(deletedVersions()).toEqual(["v20260930_0600"]);
+    });
+
+    it("never deletes the sentinel, loaded or in-training version", async () => {
+      mlModelRepo.find.mockResolvedValueOnce([]);
+      mockModelFiles(
+        [
+          { version: "v_sentinel", ageDays: 9 },
+          { version: "v_loaded", ageDays: 9 },
+          { version: "v_training", ageDays: 9 },
+        ],
+        { sentinel: "v_sentinel", loaded: "v_loaded", training: "v_training" },
+      );
+
+      await processor.handleCleanupModels({} as Job);
+
+      expect(deletedVersions()).toEqual([]);
+    });
+
+    it("treats files of versions retired in the same run as handled, not orphans", async () => {
+      mlModelRepo.find.mockResolvedValueOnce(models(31));
+      mockModelFiles([{ version: "v_30", ageDays: 40 }]);
+
+      await processor.handleCleanupModels({} as Job);
+
+      // Deleted once as a retired model, not a second time as an orphan.
+      expect(deletedVersions()).toEqual(["v_30"]);
+    });
+  });
+
+  describe("selectOrphanVersions", () => {
+    const now = Date.UTC(2026, 9, 9);
+    const at = (days: number) => now / 1000 - days * DAY_S;
+
+    it("selects unregistered, unprotected versions older than the minimum age", () => {
+      const picked = selectOrphanVersions(
+        [
+          { version: "a", mtime: at(3) },
+          { version: "b", mtime: at(3) },
+          { version: "c", mtime: at(3) },
+          { version: "d", mtime: at(1) },
+        ],
+        ["a"],
+        ["b"],
+        now,
+        2 * DAY_S * 1000,
+      ).map((v) => v.version);
+      expect(picked).toEqual(["c"]);
+    });
+  });
+
   describe("handleTrainModels — registering a trained version", () => {
     const ML = "http://ml-service:8000";
     let setTimeoutSpy: jest.SpyInstance;

@@ -12,7 +12,13 @@ import subprocess
 import sys
 import threading
 
-from model import WaitTimeModel, load_saved_metadata
+from model import (
+    WaitTimeModel,
+    delete_saved_version,
+    is_safe_version,
+    list_saved_versions,
+    load_saved_metadata,
+)
 from predict import predict_wait_times, predict_for_park
 from schedule_filter import filter_predictions_by_schedule
 from config import get_settings
@@ -338,6 +344,43 @@ def get_saved_model_info(version: str):
         featureStats=metadata.get("feature_stats"),
         trainingTimings=metadata.get("training_timings"),
     )
+
+
+def _protected_versions() -> Dict[str, Optional[str]]:
+    """Versions whose files must never be deleted: the one the sentinel names
+    (what every worker serves next), the one this worker has loaded, and the one
+    a training run is writing right now."""
+    status = _read_training_status()
+    return {
+        "sentinel": _read_sentinel(),
+        "loaded": model.version if model is not None else None,
+        "training": status.get("current_version") if status.get("is_training") else None,
+    }
+
+
+@app.get("/models/files")
+def list_model_files():
+    """Saved versions on disk (for the API's cleanup, which has no access to the
+    models volume), plus the versions that are protected from deletion."""
+    return {"versions": list_saved_versions(), "protected": _protected_versions()}
+
+
+@app.delete("/models/files/{version}")
+def delete_model_files(version: str):
+    """Delete one version's .cbm and .pkl. 400 for an unsafe version, 409 for a
+    protected one (sentinel, loaded, or in training), 404 when nothing existed."""
+    if not is_safe_version(version):
+        raise HTTPException(status_code=400, detail="Invalid model version")
+    protected = _protected_versions()
+    if version in protected.values():
+        raise HTTPException(
+            status_code=409, detail=f"{version} is protected: {protected}"
+        )
+    deleted = delete_saved_version(version)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"No files for {version}")
+    logger.info(f"🧹 Deleted model files for {version}: {deleted}")
+    return {"version": version, "deleted": deleted}
 
 
 @app.post("/model/reload")

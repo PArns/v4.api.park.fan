@@ -65,6 +65,14 @@ The ML Service is a standalone Python application responsible for predicting wai
      If the reload does not confirm the new version, the DB is rolled back to the
      previous champion and the job fails. A rejected, failed or timed-out run
      never changes what is served.
+   - **Model files** (PAR-815): the API keeps the newest 30 `ml_models` rows
+     plus the active one; older rows lose their files and their row. Files are
+     listed and deleted through the ml-service (`GET /models/files`,
+     `DELETE /models/files/:version`) because the API container does not mount
+     the models volume. Versions on disk with no row (failed, timed-out or
+     unregistered runs) are deleted once their files are two days old. The
+     ml-service refuses unsafe version names and the sentinel, loaded and
+     in-training versions.
 4. **Training-time budget** (PAR-815): the window runs from the first row
    (2025-12-24) to now, capped at `TRAIN_LOOKBACK_YEARS` (2), so it grows daily
    (1682 s on 2026-09-04, 2520 s on 2026-10-07). The model trains on the **full**

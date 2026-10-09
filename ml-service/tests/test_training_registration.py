@@ -73,6 +73,54 @@ def test_saved_metadata_refuses_path_like_versions():
             assert model_module.load_saved_metadata(bad) is None, bad
 
 
+# --- list_saved_versions / delete_saved_version (orphan cleanup) -----------
+
+
+def test_lists_versions_from_cbm_and_pkl_only():
+    with _ModelDir() as d:
+        _save_fake_model(d, "v20261001_0600")
+        with open(os.path.join(d, "catboost_v20261002_0600.cbm"), "wb") as f:
+            f.write(b"x")  # model file without metadata still counts
+        for other in ["active_version.txt", "training_status.json", "notes.cbm",
+                      "catboost_..evil.cbm"]:
+            with open(os.path.join(d, other), "w") as f:
+                f.write("x")
+        versions = {e["version"]: e for e in model_module.list_saved_versions()}
+        assert set(versions) == {"v20261001_0600", "v20261002_0600"}
+        assert sorted(versions["v20261001_0600"]["files"]) == [
+            "catboost_v20261001_0600.cbm",
+            "metadata_v20261001_0600.pkl",
+        ]
+        assert versions["v20261001_0600"]["bytes"] > 0
+        assert versions["v20261001_0600"]["mtime"] > 0
+
+
+def test_delete_removes_exactly_the_two_version_files():
+    with _ModelDir() as d:
+        _save_fake_model(d, "v20261001_0600")
+        _save_fake_model(d, "v20261001_06001")  # a prefix-sharing neighbour
+        deleted = model_module.delete_saved_version("v20261001_0600")
+        assert sorted(deleted) == [
+            "catboost_v20261001_0600.cbm",
+            "metadata_v20261001_0600.pkl",
+        ]
+        assert sorted(os.listdir(d)) == [
+            "catboost_v20261001_06001.cbm",
+            "metadata_v20261001_06001.pkl",
+        ]
+        assert model_module.delete_saved_version("v20261001_0600") == []
+
+
+def test_delete_refuses_path_like_versions():
+    with _ModelDir():
+        for bad in ["../etc/passwd", "a/b", "..", "", ".hidden"]:
+            try:
+                model_module.delete_saved_version(bad)
+            except ValueError:
+                continue
+            raise AssertionError(f"accepted {bad!r}")
+
+
 # --- train_standalone ------------------------------------------------------
 
 

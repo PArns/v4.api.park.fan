@@ -29,7 +29,7 @@ def load_saved_metadata(version: str) -> Optional[Dict[str, Any]]:
     Registering that model's metrics under the new version is how the champion/
     challenger gate ended up comparing a champion with itself (PAR-815).
     """
-    if not version or ".." in version or not _SAFE_VERSION.match(version):
+    if not is_safe_version(version):
         return None
     model_path = os.path.join(settings.MODEL_DIR, f"catboost_{version}.cbm")
     metadata_path = os.path.join(settings.MODEL_DIR, f"metadata_{version}.pkl")
@@ -39,6 +39,73 @@ def load_saved_metadata(version: str) -> Optional[Dict[str, Any]]:
     if not isinstance(metadata, dict):
         return None
     return metadata
+
+
+def is_safe_version(version: str) -> bool:
+    """A version string that can only ever name a file directly in MODEL_DIR."""
+    return bool(version) and ".." not in version and bool(_SAFE_VERSION.match(version))
+
+
+# The two files a saved version consists of.
+_VERSION_FILE_PATTERNS = (
+    re.compile(r"^catboost_(?P<version>.+)\.cbm$"),
+    re.compile(r"^metadata_(?P<version>.+)\.pkl$"),
+)
+
+
+def list_saved_versions() -> List[Dict[str, Any]]:
+    """Every version with a model or metadata file in MODEL_DIR.
+
+    One entry per version: its file names, total bytes and the newest mtime
+    (epoch seconds). Files that are not a version's .cbm/.pkl, and names that
+    are not a safe version, are ignored — so nothing outside that pattern can
+    ever be offered for deletion.
+    """
+    versions: Dict[str, Dict[str, Any]] = {}
+    try:
+        names = os.listdir(settings.MODEL_DIR)
+    except FileNotFoundError:
+        return []
+    for name in names:
+        for pattern in _VERSION_FILE_PATTERNS:
+            m = pattern.match(name)
+            if not m or not is_safe_version(m.group("version")):
+                continue
+            path = os.path.join(settings.MODEL_DIR, name)
+            if not os.path.isfile(path) or os.path.islink(path):
+                continue
+            st = os.stat(path)
+            entry = versions.setdefault(
+                m.group("version"),
+                {"version": m.group("version"), "files": [], "bytes": 0, "mtime": 0.0},
+            )
+            entry["files"].append(name)
+            entry["bytes"] += st.st_size
+            entry["mtime"] = max(entry["mtime"], st.st_mtime)
+    return sorted(versions.values(), key=lambda e: e["version"])
+
+
+def delete_saved_version(version: str) -> List[str]:
+    """Delete `catboost_<version>.cbm` and `metadata_<version>.pkl`.
+
+    Returns the names deleted (empty when neither existed). Raises ValueError
+    for an unsafe version. Callers decide whether the version may go; this only
+    guarantees that nothing but those two files in MODEL_DIR is touched.
+    """
+    if not is_safe_version(version):
+        raise ValueError(f"unsafe model version: {version!r}")
+    model_dir = os.path.realpath(settings.MODEL_DIR)
+    deleted = []
+    for name in (f"catboost_{version}.cbm", f"metadata_{version}.pkl"):
+        path = os.path.join(model_dir, name)
+        if os.path.dirname(os.path.realpath(path)) != model_dir:
+            continue
+        try:
+            os.unlink(path)
+            deleted.append(name)
+        except FileNotFoundError:
+            pass
+    return deleted
 
 
 class WaitTimeModel:

@@ -4,8 +4,6 @@ import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { exec } from "child_process";
 import { promisify } from "util";
-import * as fs from "fs/promises";
-import * as path from "path";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Not, Repository } from "typeorm";
 import { MLModel } from "../../ml/entities/ml-model.entity";
@@ -15,6 +13,38 @@ import axios from "axios";
 import { logJobFailure } from "../../common/utils/file-logger.util";
 
 const _execAsync = promisify(exec);
+
+/** One saved version on the ml-service's models volume (`GET /models/files`). */
+export interface SavedModelFiles {
+  version: string;
+  files?: string[];
+  bytes?: number;
+  /** Newest file mtime, epoch SECONDS. */
+  mtime: number;
+}
+
+/**
+ * Versions whose files can go: no `ml_models` row, not protected (sentinel,
+ * loaded, in training — as the ml-service reports them), and untouched for at
+ * least `minAgeMs`, so a run that is still training or not yet registered is
+ * never caught.
+ */
+export function selectOrphanVersions(
+  onDisk: SavedModelFiles[],
+  registeredVersions: Iterable<string>,
+  protectedVersions: Iterable<string>,
+  nowMs: number,
+  minAgeMs: number,
+): SavedModelFiles[] {
+  const keep = new Set<string>([...registeredVersions, ...protectedVersions]);
+  return onDisk.filter(
+    (v) =>
+      typeof v.version === "string" &&
+      !keep.has(v.version) &&
+      typeof v.mtime === "number" &&
+      nowMs - v.mtime * 1000 >= minAgeMs,
+  );
+}
 
 /**
  * ML Training Queue Processor
@@ -457,8 +487,15 @@ export class MLTrainingProcessor {
    * - Always keeps the active model regardless of position
    *
    * Deletes:
-   * - Models beyond the 30-model window (both files and DB entries)
-   * - Orphaned model files without DB entries
+   * - Models beyond the 30-model window (files and DB entries)
+   * - Orphaned model files: versions on disk with no `ml_models` row, older
+   *   than ORPHAN_MIN_AGE_MS (runs that failed, timed out or were never
+   *   registered, ~60 MB each)
+   *
+   * Files are listed and deleted through the ml-service (`GET/DELETE
+   * /models/files`): the API container does not mount the models volume, so
+   * the `fs.unlink` this used to call never deleted anything (PAR-815). The
+   * ml-service refuses to delete the sentinel, loaded or in-training version.
    */
   @Process("cleanup-models")
   async handleCleanupModels(_job: Job): Promise<void> {
@@ -466,10 +503,12 @@ export class MLTrainingProcessor {
   }
 
   private readonly MODELS_TO_KEEP = 30;
+  private readonly ORPHAN_MIN_AGE_MS = 2 * 24 * 60 * 60 * 1000;
 
   private async cleanupOldModels(): Promise<void> {
     try {
       this.logger.log("🧹 Cleaning up old models...");
+      const mlServiceUrl = getMlServiceUrl();
 
       // Get all models sorted by training date (newest first)
       const allModels = await this.mlModelRepository.find({
@@ -480,25 +519,17 @@ export class MLTrainingProcessor {
       const keepSet = new Set(
         allModels.slice(0, this.MODELS_TO_KEEP).map((m) => m.id),
       );
-      // Ensure the active model is always kept
       allModels.filter((m) => m.isActive).forEach((m) => keepSet.add(m.id));
 
-      const modelsToKeep = allModels.filter((m) => keepSet.has(m.id));
       const modelsToDelete = allModels.filter((m) => !keepSet.has(m.id));
-
-      if (modelsToDelete.length === 0) {
-        this.logger.log(
-          `   Skipping cleanup: All ${allModels.length} model(s) within retention limit (${this.MODELS_TO_KEEP})`,
-        );
-        return;
-      }
-
-      this.logger.log(
-        `   Keeping ${modelsToKeep.length} models (last ${this.MODELS_TO_KEEP}), deleting ${modelsToDelete.length}`,
-      );
-
+      const removedIds = new Set<string>();
       let deletedFiles = 0;
-      let deletedDbEntries = 0;
+
+      if (modelsToDelete.length > 0) {
+        this.logger.log(
+          `   Keeping ${allModels.length - modelsToDelete.length} models (last ${this.MODELS_TO_KEEP}), deleting ${modelsToDelete.length}`,
+        );
+      }
 
       for (const model of modelsToDelete) {
         // SECURITY: Validate version to prevent path traversal
@@ -509,72 +540,81 @@ export class MLTrainingProcessor {
           );
           continue;
         }
-
-        // Delete model file (.cbm)
-        try {
-          // SECURITY: Use path.join to prevent path traversal, validate against MODEL_DIR
-          const modelPath = path.join(
-            process.env.MODEL_DIR || "/app/models",
-            `catboost_${sanitizedVersion}.cbm`,
-          );
-          // SECURITY: Ensure path is within MODEL_DIR to prevent directory traversal
-          if (
-            !this.isPathSafe(modelPath, process.env.MODEL_DIR || "/app/models")
-          ) {
-            this.logger.warn(
-              `   ⚠ Unsafe model path detected, skipping: ${modelPath}`,
-            );
-            continue;
-          }
-          await fs.unlink(modelPath);
-          this.logger.debug(`   ✓ Deleted model file: ${sanitizedVersion}`);
-          deletedFiles++;
-        } catch (fileError) {
-          // File might not exist, that's ok
-          this.logger.debug(
-            `   ⚠ Could not delete model file ${sanitizedVersion}: ${fileError instanceof Error ? fileError.message : String(fileError)}`,
-          );
-        }
-
-        // Delete metadata file (.pkl)
-        try {
-          // SECURITY: Use path.join and validate path
-          const metadataPath = path.join(
-            process.env.MODEL_DIR || "/app/models",
-            `metadata_${sanitizedVersion}.pkl`,
-          );
-          // SECURITY: Ensure path is within MODEL_DIR
-          if (
-            !this.isPathSafe(
-              metadataPath,
-              process.env.MODEL_DIR || "/app/models",
-            )
-          ) {
-            this.logger.warn(
-              `   ⚠ Unsafe metadata path detected, skipping: ${metadataPath}`,
-            );
-            continue;
-          }
-          await fs.unlink(metadataPath);
-          this.logger.debug(`   ✓ Deleted metadata file: ${sanitizedVersion}`);
-        } catch (_metaError) {
-          // Metadata might not exist, that's ok
-        }
-
-        // Delete DB entry
+        const outcome = await this.deleteModelFiles(
+          mlServiceUrl,
+          sanitizedVersion,
+        );
+        // Keep the row when the files could not be dealt with, so the next run
+        // retries instead of leaving them behind as orphans.
+        if (outcome === "failed" || outcome === "protected") continue;
+        if (outcome === "deleted") deletedFiles++;
         await this.mlModelRepository.remove(model);
-        deletedDbEntries++;
-        this.logger.debug(`   ✓ Deleted DB entry: ${model.version}`);
+        removedIds.add(model.id);
+      }
+
+      // Orphans: files on disk whose version has no ml_models row. Versions
+      // retired above count as handled, so they are not asked for twice.
+      const registered = allModels.map((m) => m.version);
+      const listing = await axios.get(`${mlServiceUrl}/models/files`);
+      const onDisk = (listing.data?.versions ?? []) as SavedModelFiles[];
+      const protectedVersions = Object.values(
+        (listing.data?.protected ?? {}) as Record<string, string | null>,
+      ).filter((v): v is string => typeof v === "string");
+      const orphans = selectOrphanVersions(
+        onDisk,
+        registered,
+        protectedVersions,
+        Date.now(),
+        this.ORPHAN_MIN_AGE_MS,
+      );
+      let deletedOrphans = 0;
+      let orphanBytes = 0;
+      for (const orphan of orphans) {
+        const version = this.sanitizeVersion(orphan.version);
+        if (!version) continue;
+        if (
+          (await this.deleteModelFiles(mlServiceUrl, version)) === "deleted"
+        ) {
+          deletedOrphans++;
+          orphanBytes += orphan.bytes ?? 0;
+        }
       }
 
       this.logger.log(
-        `✅ Cleanup complete: Deleted ${deletedFiles} model files and ${deletedDbEntries} DB entries`,
+        `✅ Cleanup complete: ${deletedFiles} retired model(s) and ${removedIds.size} DB entries removed, ` +
+          `${deletedOrphans} orphaned version(s) deleted (${(orphanBytes / 1024 / 1024).toFixed(0)} MB)`,
       );
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error(`❌ Model cleanup failed: ${errorMessage}`);
       // Don't throw - cleanup failure shouldn't fail the training job
+    }
+  }
+
+  /** Delete one version's files through the ml-service. */
+  private async deleteModelFiles(
+    mlServiceUrl: string,
+    version: string,
+  ): Promise<"deleted" | "missing" | "protected" | "failed"> {
+    try {
+      await axios.delete(
+        `${mlServiceUrl}/models/files/${encodeURIComponent(version)}`,
+      );
+      this.logger.debug(`   ✓ Deleted model files: ${version}`);
+      return "deleted";
+    } catch (e) {
+      const status = (e as { response?: { status?: number } })?.response
+        ?.status;
+      if (status === 404) return "missing";
+      if (status === 409) {
+        this.logger.warn(`   ⚠ ${version} is protected by the ml-service`);
+        return "protected";
+      }
+      this.logger.warn(
+        `   ⚠ Could not delete model files ${version}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return "failed";
     }
   }
 
@@ -596,20 +636,5 @@ export class MLTrainingProcessor {
       return null;
     }
     return version;
-  }
-
-  /**
-   * SECURITY: Check if file path is safe (within allowed directory)
-   * Prevents directory traversal attacks
-   */
-  private isPathSafe(filePath: string, allowedDir: string): boolean {
-    try {
-      const resolvedPath = path.resolve(filePath);
-      const resolvedDir = path.resolve(allowedDir);
-      // Check if resolved path starts with allowed directory
-      return resolvedPath.startsWith(resolvedDir);
-    } catch {
-      return false;
-    }
   }
 }
