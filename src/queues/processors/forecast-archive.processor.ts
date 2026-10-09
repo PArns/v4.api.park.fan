@@ -12,17 +12,15 @@ import { ForecastArchiveScoringService } from "../../parks/services/forecast-arc
  *   hours intraday). Why it is
  *   hourly and not one job per timezone: the origin is a park-local time, and
  *   one hourly job reading every park's clock covers all offsets.
- * - `score` runs daily at 12:00 UTC, when yesterday (UTC) is over in every
- *   park's timezone, scores it against queue_data truth and prunes the archive.
+ * - `score` ({@link ForecastArchiveScoreProcessor}, its own queue) runs daily
+ *   at 12:00 UTC, when yesterday (UTC) is over in every park's timezone,
+ *   scores it against queue_data truth and prunes the archive.
  */
 @Processor("forecast-archive")
 export class ForecastArchiveProcessor {
   private readonly logger = new Logger(ForecastArchiveProcessor.name);
 
-  constructor(
-    private readonly archiveService: ForecastArchiveService,
-    private readonly scoringService: ForecastArchiveScoringService,
-  ) {}
+  constructor(private readonly archiveService: ForecastArchiveService) {}
 
   @Process("capture")
   async handleCapture(_job: Job): Promise<void> {
@@ -36,6 +34,21 @@ export class ForecastArchiveProcessor {
       );
     }
   }
+}
+
+/**
+ * The forward archive's daily scoring, on queue `forecast-archive-score` so a
+ * long run never delays the hourly capture (which would cost Europe its 14:00
+ * intraday origin).
+ */
+@Processor("forecast-archive-score")
+export class ForecastArchiveScoreProcessor {
+  private readonly logger = new Logger(ForecastArchiveScoreProcessor.name);
+
+  constructor(
+    private readonly archiveService: ForecastArchiveService,
+    private readonly scoringService: ForecastArchiveScoringService,
+  ) {}
 
   @Process("score")
   async handleScore(_job: Job): Promise<void> {

@@ -423,11 +423,11 @@ describe("D1 next-best-ride", () => {
     });
   });
 
-  it("no qualifying hour is a non-suggestion", () => {
+  it("no qualifying hour is counted apart from a gap under 10", () => {
     const acc = run({ ...base, laterWait: null, laterAt: null }, [20, 20]);
     expect(sumsOf(acc, "EU|D1|h0-2|all|all")).toEqual({
-      d1None: 1,
-      d1NoneWorse: 0,
+      d1NoHour: 1,
+      d1NoHourWorse: 0,
     });
   });
 
@@ -572,8 +572,24 @@ describe("review fixes", () => {
     return acc;
   };
 
+  it("scores the plan band one-sided: an over-forecast is always covered", () => {
+    // dayPeak 60 against truth P90 43.5: 16.5 over, band 3 — inside, because
+    // the band only bounds how much LONGER the day can run.
+    const over = sumsOf(
+      score([planCurve({ dayPeak: 60, peakBand: 3 })]),
+      "EU|UC3|d2|all|all",
+    );
+    expect(over).toMatchObject({ nPeakBand: 1, nPeakBandCov: 1 });
+    // Under-forecast by 13.5 with a 10-min band: outside.
+    const under = sumsOf(
+      score([planCurve({ dayPeak: 30, peakBand: 10 })]),
+      "EU|UC3|d2|all|all",
+    );
+    expect(under).toMatchObject({ nPeakBand: 1, nPeakBandCov: 0 });
+  });
+
   it("scores the plan band around dayPeak per ride-day, never per hour", () => {
-    // truth P90 of 30,35,40,45 = 43.5; |40 − 43.5| = 3.5 ≤ 5 → covered.
+    // truth P90 of 30,35,40,45 = 43.5; 43.5 − 40 = 3.5 ≤ 5 → covered.
     const acc = score([planCurve({ peakBand: 5 })]);
     const s = sumsOf(acc, "EU|UC3|d2|measured|all");
     expect(s.nPeakBand).toBe(1);

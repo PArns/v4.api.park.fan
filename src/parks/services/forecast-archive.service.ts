@@ -220,8 +220,9 @@ export class ForecastArchiveService {
         async ({ park, kind, marker }) => {
           try {
             const r = await this.capturePark(park, kind, clock());
-            // Claimed only once the capture is in: a failed park is retried by
-            // the next run inside the same origin hour.
+            // Claimed only once the capture is in. The cron runs once an
+            // hour, so a failed park misses this origin; the marker only keeps
+            // a manual or late re-run inside the hour from capturing it twice.
             await this.redis
               .set(marker, "1", "EX", 3 * 3600)
               .catch(() => undefined);
@@ -260,7 +261,7 @@ export class ForecastArchiveService {
         .getHeadlinerAttractions(park.id)
         .then((h) => new Set(h.map((x) => x.attractionId)))
         .catch(() => new Set<string>()),
-      this.rideQ90(park.id, localToday),
+      this.rideQ90(park.id, park.timezone, localToday),
       this.attractionRepository.find({
         where: { parkId: park.id },
         select: ["id", "slug"],
@@ -449,24 +450,29 @@ export class ForecastArchiveService {
       });
     });
 
-    for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
-      await this.curveRepository
-        .createQueryBuilder()
-        .insert()
-        .into(ForecastArchiveCurve)
-        .values(rows.slice(i, i + INSERT_CHUNK))
-        .orIgnore()
-        .execute();
-    }
-    if (parkDays.length > 0) {
-      await this.parkDayRepository
-        .createQueryBuilder()
-        .insert()
-        .into(ForecastArchiveParkDay)
-        .values(parkDays)
-        .orIgnore()
-        .execute();
-    }
+    // Curves and park-days in ONE transaction: a park-day insert that failed
+    // after its curves went in would leave curves the retry duplicates under a
+    // new origin.
+    await this.curveRepository.manager.transaction(async (em) => {
+      for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+        await em
+          .createQueryBuilder()
+          .insert()
+          .into(ForecastArchiveCurve)
+          .values(rows.slice(i, i + INSERT_CHUNK))
+          .orIgnore()
+          .execute();
+      }
+      if (parkDays.length > 0) {
+        await em
+          .createQueryBuilder()
+          .insert()
+          .into(ForecastArchiveParkDay)
+          .values(parkDays)
+          .orIgnore()
+          .execute();
+      }
+    });
 
     if (
       kind === "daily" &&
@@ -847,20 +853,24 @@ export class ForecastArchiveService {
   }
 
   /**
-   * Each ride's q90 of TIME-WEIGHTED 15-min waits over the 56 days before
-   * today — BENCH-SPEC's ex-ante busy input. `attraction_hourly_history.slots`
-   * holds only the quarter-hours that had a reading (`queue_data` writes on
-   * change), so a q90 over them weighs a busy, jittery hour more than a calm
-   * one. The slots are therefore forward-filled onto the full quarter-hour grid
-   * of each ride-day (first to last slot, a value in force for at most 3 h, the
-   * truth's rule) before the percentile. Read from the rollup, not
+   * Each ride's q90 of TIME-WEIGHTED 15-min waits inside the park's published
+   * windows over the 56 days before today — BENCH-SPEC's ex-ante busy input.
+   * `attraction_hourly_history.slots` holds only the quarter-hours that had a
+   * reading (`queue_data` writes on change), so a q90 over them weighs a busy,
+   * jittery hour more than a calm one. The slots are therefore forward-filled
+   * (a value in force for at most 3 h, the truth's rule) onto the quarter-hour
+   * grid of each day's published OPERATING window — from the park's opening,
+   * not from the first slot the rollup happens to hold, which can be a stray
+   * reading at 00:00. A window that runs past midnight is cut at 23:59; a day
+   * without a published window contributes nothing. Read from the rollup, not
    * `queue_data`: ~40 rides × 56 rows of jsonb per park. Cached for the day.
    */
   private async rideQ90(
     parkId: string,
+    timezone: string,
     localToday: string,
   ): Promise<Map<string, number>> {
-    const key = `forecast-archive:q90tw:${parkId}:${localToday}`;
+    const key = `forecast-archive:q90w:${parkId}:${localToday}`;
     const cached = await this.redis.get(key).catch(() => null);
     if (cached) {
       try {
@@ -877,7 +887,22 @@ export class ForecastArchiveService {
         Array<{ id: string; q90: number | string | null }>
       >(
         this.curveRepository.manager.connection,
-        `WITH s AS (
+        `WITH win AS (
+           SELECT se.date AS d,
+                  min((se."openingTime" AT TIME ZONE $3)::time) AS o,
+                  max(CASE
+                        WHEN (se."closingTime" AT TIME ZONE $3)::date > se.date
+                          THEN time '23:59'
+                        ELSE (se."closingTime" AT TIME ZONE $3)::time
+                      END) AS c
+             FROM schedule_entries se
+            WHERE se."parkId" = $1
+              AND se.date >= $2::date - 56 AND se.date < $2::date
+              AND se."scheduleType" = 'OPERATING' AND se."attractionId" IS NULL
+              AND se."openingTime" IS NOT NULL AND se."closingTime" IS NOT NULL
+            GROUP BY se.date
+         ),
+         s AS (
            SELECT h."attractionId" AS id, h.date AS d,
                   (x->>'time_slot')::time AS t, (x->>'avgWait')::float AS w
              FROM attraction_hourly_history h
@@ -885,10 +910,18 @@ export class ForecastArchiveService {
             WHERE h."parkId" = $1
               AND h.date >= $2::date - 56 AND h.date < $2::date
          ),
-         b AS (SELECT id, d, min(t) AS t0, max(t) AS t1 FROM s GROUP BY 1, 2),
+         b AS (
+           SELECT DISTINCT s.id, s.d, w.o, w.c
+             FROM s JOIN win w ON w.d = s.d
+            WHERE w.c > w.o
+         ),
          g AS (
            SELECT b.id, b.d, gs::time AS t
-             FROM b, generate_series(b.d + b.t0, b.d + b.t1, interval '15 minutes') gs
+             FROM b, generate_series(
+               b.d + b.o - make_interval(mins => extract(minute FROM b.o)::int % 15,
+                                         secs => extract(second FROM b.o)),
+               b.d + b.c - interval '1 minute',
+               interval '15 minutes') gs
          ),
          j AS (
            SELECT g.id, g.d, g.t, s.w, s.t AS st,
@@ -905,7 +938,7 @@ export class ForecastArchiveService {
            FROM f
           WHERE w >= 5 AND t - st <= interval '3 hours'
           GROUP BY id`,
-        [parkId, localToday],
+        [parkId, localToday, timezone],
         READ_LIMITS,
       );
       for (const r of rows) {

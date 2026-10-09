@@ -263,6 +263,9 @@ describe("ForecastArchiveService.capturePark", () => {
         connection: {
           transaction: async (fn: (m: unknown) => unknown) => fn(em),
         },
+        // Curves and park-days are written in one transaction.
+        transaction: async (fn: (m: unknown) => unknown) =>
+          fn({ createQueryBuilder: () => qb }),
       },
     };
     const ml = {

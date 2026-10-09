@@ -96,6 +96,8 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     @InjectQueue("trips") private tripsQueue: Queue,
     @InjectQueue("show-patterns") private showPatternsQueue: Queue,
     @InjectQueue("forecast-archive") private forecastArchiveQueue: Queue,
+    @InjectQueue("forecast-archive-score")
+    private forecastArchiveScoreQueue: Queue,
     @InjectQueue("rope-drop") private ropeDropQueue: Queue,
     @InjectQueue("typical-waits") private typicalWaitsQueue: Queue,
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
@@ -1164,11 +1166,11 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
     const hasArchiveScoreCron = await this.hasRepeatableJob(
-      this.forecastArchiveQueue,
+      this.forecastArchiveScoreQueue,
       "forecast-archive-score-cron",
     );
     if (!hasArchiveScoreCron) {
-      await this.forecastArchiveQueue.add(
+      await this.forecastArchiveScoreQueue.add(
         "score",
         {},
         {

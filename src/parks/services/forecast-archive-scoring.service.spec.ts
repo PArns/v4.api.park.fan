@@ -165,7 +165,7 @@ describe("ForecastArchiveScoringService.scoreDue", () => {
     expect(uc3.n).toBe(8);
     // The 17-character label that broke the old varchar(16) is written.
     expect(byKey.has("EU|UC3|d1|level_climatology|all")).toBe(true);
-    // dayPeak 45 vs truth P90 40 → within the 12-min band.
+    // dayPeak 45 vs truth P90 40: an over-forecast, inside the one-sided band.
     expect(uc3).toMatchObject({ nPeak: 1, nPeakBand: 1, nPeakBandCov: 1 });
     // D6: calendar day value P90(20,40,30 ≥ 10) = 38 ÷ 30 = 127 % → high.
     expect(byKey.get("EU|D6|d1|predicted|all")).toMatchObject({

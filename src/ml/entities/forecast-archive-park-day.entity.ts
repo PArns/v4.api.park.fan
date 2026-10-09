@@ -99,11 +99,6 @@ export class ForecastArchiveParkDay {
   leadTimeMae: number | null;
 
   /**
-   * Which model produced the day levels of the plan's rides: `tft`,
-   * `catboost`, `mixed` (both), `climatology` or `none`. Reconstructed the
-   * way the planner picks them (see `ForecastArchiveCurve.levelSource`).
-   */
-  /**
    * The park's typical-day-peak baseline as it stood at the origin — D6's
    * denominator, kept here so a later baseline rebuild cannot move it.
    */
@@ -119,6 +114,11 @@ export class ForecastArchiveParkDay {
   @Column({ name: "crowd_level_fallback", type: "boolean", default: false })
   crowdLevelFallback: boolean;
 
+  /**
+   * Which model produced the day levels of the plan's rides: `tft`,
+   * `catboost`, `mixed` (both), `climatology` or `none`. Reconstructed the
+   * way the planner picks them (see `ForecastArchiveCurve.levelSource`).
+   */
   @Column({
     name: "level_source",
     type: "varchar",

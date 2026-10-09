@@ -19,11 +19,13 @@
  * | `nRho`, `sRho` | ride-days with a defined slot Spearman, Σ rho |
  * | `nPeak`, `sPeakAe`, `sPeakE` | ride-days with dayPeak + truth P90, Σ\|err\|, Σerr |
  * | `nStated`, `sStated`, `sStatedAe` | of those, the ones with a served expectedError, Σ stated, Σ realised \|err\| (D8) |
- * | `nPeakBand`, `nPeakBandCov` | plan_day: ride-days with a served band, of those with \|dayPeak − truth P90\| ≤ band (D8) — never pooled with the slot band |
+ * | `nPeakBand`, `nPeakBandCov` | plan_day: ride-days with a served band, of those with truth P90 − dayPeak ≤ band — one-sided, like the band (D8); never pooled with the slot band |
  * | `nRank`, `sRank`, `pairs`, `pairsOk` | park-days with a dayPeak rank Spearman, Σ rho; ride pairs, correctly ordered (D4 ordering) |
  * | `truthRides`, `truthRidesOffered`, `offered`, `offeredNotOperating`, `parkDays`, `parkDaysEmpty` | coverage (D9) |
  * | `n`, `exact`, `within1`, `busyTrue`, `busyPred`, `busyBoth`, `unknownPred`, `crossPairs`, `crossPairsOk` | crowd bucket per park-day (D6) |
- * | `d1Sugg`, `d1SuggOk`, `d1None`, `d1NoneWorse` | next-best-ride suggestions and how many held; the base rate among non-suggestions (D1) |
+ * | `d1Sugg`, `d1SuggOk` | next-best-ride suggestions and how many held (D1) |
+ * | `d1None`, `d1NoneWorse` | rides with a qualifying plan hour but a gap under 10 min, and how many got 10 min worse anyway — the base rate (D1) |
+ * | `d1NoHour`, `d1NoHourWorse` | rides with no qualifying plan hour at all (closing soon, no curve), counted apart so they do not dilute the base rate (D1) |
  *
  * UC3 and D9 rows are also written under `level_<tft|catboost|climatology|
  * mixed|none>`, the model behind the day level, so the board can split the
@@ -510,9 +512,12 @@ export function scoreNextBestRide(
     };
   }
 
+  const noHour = curve.laterWait === null || curve.laterWait === undefined;
   const counters: Record<string, number> = suggested
     ? { d1Sugg: 1, d1SuggOk: worse ? 1 : 0 }
-    : { d1None: 1, d1NoneWorse: worse ? 1 : 0 };
+    : noHour
+      ? { d1NoHour: 1, d1NoHourWorse: worse ? 1 : 0 }
+      : { d1None: 1, d1NoneWorse: worse ? 1 : 0 };
   for (const seg of segments) {
     acc.add(region, "D1", "h0-2", "all", seg, counters);
     if (trigger) {
@@ -658,7 +663,9 @@ export function scoreParkDay(
         }
         if (curve.peakBand !== null && curve.peakBand !== undefined) {
           peakCounters.nPeakBand = 1;
-          peakCounters.nPeakBandCov = Math.abs(e) <= curve.peakBand ? 1 : 0;
+          // One-sided: the band is an upper half-width, so an over-forecast
+          // (dayPeak above the truth) is always inside it.
+          peakCounters.nPeakBandCov = -e <= curve.peakBand ? 1 : 0;
         }
         plan.peaks.push({ pred: curve.dayPeak, truth: p90 });
       }

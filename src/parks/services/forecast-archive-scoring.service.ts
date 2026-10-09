@@ -510,6 +510,7 @@ export class ForecastArchiveScoringService {
           ? Math.round((1 - s.d1SuggOk / s.d1Sugg) * 1000) / 1000
           : null,
       nextBestRideBaseRate: ratio("d1NoneWorse", "d1None"),
+      nextBestRideNoHourRate: ratio("d1NoHourWorse", "d1NoHour"),
     };
   }
 }

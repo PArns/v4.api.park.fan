@@ -151,8 +151,9 @@ export class ForecastArchiveCurve {
   modelVersion: string | null;
 
   /**
-   * The ride's q90 of 15-min average waits over the 56 days before the origin
-   * (from `attraction_hourly_history`). Kept as the number rather than the
+   * The ride's q90 of time-weighted 15-min waits inside the published
+   * windows over the 56 days before the origin (from
+   * `attraction_hourly_history`). Kept as the number rather than the
    * busy flag so the threshold (45 min in BENCH-SPEC) can move later. It is the
    * EX-ANTE busy segment: known at the origin, never the realised value.
    */
@@ -189,9 +190,11 @@ export class ForecastArchiveCurve {
   laterAt: Date | null;
 
   /**
-   * plan_day only: the served `uncertaintyMinutes` — a band around `dayPeak`,
-   * NOT around each hour, so it is scored per ride-day
-   * (\|dayPeak − truth P90\| ≤ band) and never pooled with the per-slot band.
+   * plan_day only: the served `uncertaintyMinutes` — a ONE-sided upper
+   * half-width around `dayPeak` (the p95 of the signed residual
+   * `actual − predicted peak`, forecast-accuracy.service.ts), NOT around each
+   * hour. Scored per ride-day as (truth P90 − dayPeak) ≤ band and never pooled
+   * with the per-slot band.
    */
   @Column({ name: "peak_band", type: "smallint", nullable: true })
   peakBand: number | null;
