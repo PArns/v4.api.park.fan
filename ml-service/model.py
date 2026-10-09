@@ -3,6 +3,7 @@ CatBoost model wrapper
 """
 
 import os
+import re
 from typing import Optional, Dict, Any, List
 import joblib
 from catboost import CatBoostRegressor, Pool
@@ -13,6 +14,102 @@ from config import get_settings
 from features import get_feature_columns, get_categorical_features
 
 settings = get_settings()
+
+# A model version names two files under MODEL_DIR, so it must never carry a path.
+_SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def load_saved_metadata(version: str) -> Optional[Dict[str, Any]]:
+    """Metadata of one saved version, read from its own files — or None.
+
+    Returns None unless both `catboost_<version>.cbm` and `metadata_<version>.pkl`
+    exist. Deliberately does NOT go through the in-memory model: a worker keeps
+    serving the previous version until its next /predict notices the sentinel, so
+    the loaded model's metadata says nothing about the version just trained.
+    Registering that model's metrics under the new version is how the champion/
+    challenger gate ended up comparing a champion with itself (PAR-815).
+    """
+    if not is_safe_version(version):
+        return None
+    model_path = os.path.join(settings.MODEL_DIR, f"catboost_{version}.cbm")
+    metadata_path = os.path.join(settings.MODEL_DIR, f"metadata_{version}.pkl")
+    if not (os.path.isfile(model_path) and os.path.isfile(metadata_path)):
+        return None
+    metadata = joblib.load(metadata_path)
+    if not isinstance(metadata, dict):
+        return None
+    return metadata
+
+
+def is_safe_version(version: str) -> bool:
+    """A version string that can only ever name a file directly in MODEL_DIR."""
+    return (
+        bool(version)
+        and ".." not in version
+        and _SAFE_VERSION.fullmatch(version) is not None
+    )
+
+
+# The two files a saved version consists of.
+_VERSION_FILE_PATTERNS = (
+    re.compile(r"^catboost_(?P<version>.+)\.cbm$"),
+    re.compile(r"^metadata_(?P<version>.+)\.pkl$"),
+)
+
+
+def list_saved_versions() -> List[Dict[str, Any]]:
+    """Every version with a model or metadata file in MODEL_DIR.
+
+    One entry per version: its file names, total bytes and the newest mtime
+    (epoch seconds). Files that are not a version's .cbm/.pkl, and names that
+    are not a safe version, are ignored — so nothing outside that pattern can
+    ever be offered for deletion.
+    """
+    versions: Dict[str, Dict[str, Any]] = {}
+    try:
+        names = os.listdir(settings.MODEL_DIR)
+    except FileNotFoundError:
+        return []
+    for name in names:
+        for pattern in _VERSION_FILE_PATTERNS:
+            m = pattern.match(name)
+            if not m or not is_safe_version(m.group("version")):
+                continue
+            path = os.path.join(settings.MODEL_DIR, name)
+            if not os.path.isfile(path) or os.path.islink(path):
+                continue
+            st = os.stat(path)
+            entry = versions.setdefault(
+                m.group("version"),
+                {"version": m.group("version"), "files": [], "bytes": 0, "mtime": 0.0},
+            )
+            entry["files"].append(name)
+            entry["bytes"] += st.st_size
+            entry["mtime"] = max(entry["mtime"], st.st_mtime)
+    return sorted(versions.values(), key=lambda e: e["version"])
+
+
+def delete_saved_version(version: str) -> List[str]:
+    """Delete `catboost_<version>.cbm` and `metadata_<version>.pkl`.
+
+    Returns the names deleted (empty when neither existed). Raises ValueError
+    for an unsafe version. Callers decide whether the version may go; this only
+    guarantees that nothing but those two files in MODEL_DIR is touched.
+    """
+    if not is_safe_version(version):
+        raise ValueError(f"unsafe model version: {version!r}")
+    model_dir = os.path.realpath(settings.MODEL_DIR)
+    deleted = []
+    for name in (f"catboost_{version}.cbm", f"metadata_{version}.pkl"):
+        path = os.path.join(model_dir, name)
+        if os.path.dirname(os.path.realpath(path)) != model_dir:
+            continue
+        try:
+            os.unlink(path)
+            deleted.append(name)
+        except FileNotFoundError:
+            pass
+    return deleted
 
 
 class WaitTimeModel:
@@ -92,8 +189,75 @@ class WaitTimeModel:
             X_val[self.feature_columns], y_val, cat_features=self.categorical_features
         )
 
-        # Initialize model with virtual ensembles for uncertainty estimation
         import time
+
+        catboost_params = self._build_catboost_params()
+        training_start = time.time()
+
+        self.model = CatBoostRegressor(**catboost_params)
+
+        # Train
+        self.model.fit(train_pool, eval_set=val_pool, use_best_model=True)
+
+        training_time = time.time() - training_start
+        best_iteration = self.model.get_best_iteration()
+        tree_count = self.model.tree_count_
+        print(
+            f"\n   Training completed in {training_time:.2f}s ({training_time / 60:.1f} minutes)"
+        )
+        print(f"   Best iteration: {best_iteration}")
+        print(f"   Total trees: {tree_count}")
+
+        # Calculate metrics. Collapse multi-column predict() output to a point
+        # prediction (same logic as WaitTimeModel.predict): MultiQuantile → median
+        # quantile column; RMSEWithUncertainty → the mean column.
+        y_pred = self.model.predict(X_val[self.feature_columns])
+        alphas = self._multiquantile_alphas()
+        if alphas and y_pred.ndim == 2 and y_pred.shape[1] == len(alphas):
+            med_idx = int(np.argmin([abs(a - 0.5) for a in alphas]))
+            y_pred = y_pred[:, med_idx]
+        elif y_pred.ndim == 2 and y_pred.shape[1] == 2:
+            y_pred = y_pred[:, 0]
+        metrics = self._calculate_metrics(y_val, y_pred)
+
+        # Add feature importances to metrics
+        try:
+            fi_raw = self.model.get_feature_importance()
+            total = fi_raw.sum()
+            if total > 0:
+                fi_pct = {col: float(v / total * 100) for col, v in zip(self.feature_columns, fi_raw)}
+                metrics["feature_importances"] = dict(sorted(fi_pct.items(), key=lambda x: -x[1]))
+            else:
+                metrics["feature_importances"] = {}
+        except Exception as e:
+            print(f"⚠️  Could not compute feature importances: {e}")
+            metrics["feature_importances"] = {}
+
+        # Store metadata
+        self.metadata = {
+            "version": self.version,
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+            "train_samples": len(X_train),
+            "val_samples": len(X_val),
+            "metrics": metrics,
+            "features_used": self.feature_columns,
+            "categorical_features": self.categorical_features,
+            "hyperparameters": {
+                "iterations": settings.CATBOOST_ITERATIONS,
+                "learning_rate": settings.CATBOOST_LEARNING_RATE,
+                "depth": settings.CATBOOST_DEPTH,
+                "l2_leaf_reg": settings.CATBOOST_L2_LEAF_REG,
+                "rsm": getattr(settings, "CATBOOST_RSM", 1.0),
+                "min_data_in_leaf": getattr(settings, "CATBOOST_MIN_DATA_IN_LEAF", 1),
+                "border_count": getattr(settings, "CATBOOST_BORDER_COUNT", 254),
+            },
+            "feature_stats": self._compute_feature_stats(X_train),
+        }
+
+        return metrics
+
+    def _build_catboost_params(self) -> Dict[str, Any]:
+        """CatBoost parameters shared by the early-stopped fit and the final refit."""
         import os
 
         # Determine thread count. -1 means "all cores minus a reserved headroom"
@@ -107,8 +271,6 @@ class WaitTimeModel:
 
         print(f"   Thread count: {thread_count}")
         print(f"   Task type: {settings.CATBOOST_TASK_TYPE}")
-
-        training_start = time.time()
 
         # Loss / uncertainty config (env-gated, default unchanged). A Quantile
         # loss predicts an upper conditional quantile to lift the under-predicted
@@ -191,67 +353,56 @@ class WaitTimeModel:
                 settings, "CATBOOST_MIN_DATA_IN_LEAF", 1
             )
 
-        self.model = CatBoostRegressor(**catboost_params)
+        return catboost_params
 
-        # Train
-        self.model.fit(train_pool, eval_set=val_pool, use_best_model=True)
+    def best_iteration_count(self) -> int:
+        """Trees in the early-stopped model (best iteration + 1)."""
+        best = self.model.get_best_iteration() if self.model is not None else None
+        if best is None:
+            return int(self.model.tree_count_)
+        return int(best) + 1
 
-        training_time = time.time() - training_start
-        best_iteration = self.model.get_best_iteration()
-        tree_count = self.model.tree_count_
-        print(
-            f"\n   Training completed in {training_time:.2f}s ({training_time / 60:.1f} minutes)"
+    def refit(
+        self,
+        X_all: pd.DataFrame,
+        y_all: pd.Series,
+        iterations: int,
+        sample_weights: Optional[np.ndarray] = None,
+    ) -> None:
+        """Replace the fitted model by one trained on ALL rows for `iterations`.
+
+        Same parameters as train(), but no eval set and no early stopping — the
+        tree count comes from the early-stopped fit. Keeps the metadata of that
+        fit (its validation metrics are what the champion/challenger gate reads)
+        and records the refit under metadata["refit"].
+
+        Converts the id columns of `X_all` IN PLACE (no copy, to keep peak
+        memory down): pass a frame the caller owns and no longer needs.
+        """
+        import time
+
+        for col in ("parkId", "attractionId"):
+            if col in X_all.columns:
+                X_all[col] = X_all[col].astype(str)
+        pool = Pool(
+            X_all[self.feature_columns],
+            y_all,
+            cat_features=self.categorical_features,
+            weight=sample_weights,
         )
-        print(f"   Best iteration: {best_iteration}")
-        print(f"   Total trees: {tree_count}")
-
-        # Calculate metrics. Collapse multi-column predict() output to a point
-        # prediction (same logic as WaitTimeModel.predict): MultiQuantile → median
-        # quantile column; RMSEWithUncertainty → the mean column.
-        y_pred = self.model.predict(X_val[self.feature_columns])
-        alphas = self._multiquantile_alphas()
-        if alphas and y_pred.ndim == 2 and y_pred.shape[1] == len(alphas):
-            med_idx = int(np.argmin([abs(a - 0.5) for a in alphas]))
-            y_pred = y_pred[:, med_idx]
-        elif y_pred.ndim == 2 and y_pred.shape[1] == 2:
-            y_pred = y_pred[:, 0]
-        metrics = self._calculate_metrics(y_val, y_pred)
-
-        # Add feature importances to metrics
-        try:
-            fi_raw = self.model.get_feature_importance()
-            total = fi_raw.sum()
-            if total > 0:
-                fi_pct = {col: float(v / total * 100) for col, v in zip(self.feature_columns, fi_raw)}
-                metrics["feature_importances"] = dict(sorted(fi_pct.items(), key=lambda x: -x[1]))
-            else:
-                metrics["feature_importances"] = {}
-        except Exception as e:
-            print(f"⚠️  Could not compute feature importances: {e}")
-            metrics["feature_importances"] = {}
-
-        # Store metadata
-        self.metadata = {
-            "version": self.version,
-            "trained_at": datetime.now(timezone.utc).isoformat(),
-            "train_samples": len(X_train),
-            "val_samples": len(X_val),
-            "metrics": metrics,
-            "features_used": self.feature_columns,
-            "categorical_features": self.categorical_features,
-            "hyperparameters": {
-                "iterations": settings.CATBOOST_ITERATIONS,
-                "learning_rate": settings.CATBOOST_LEARNING_RATE,
-                "depth": settings.CATBOOST_DEPTH,
-                "l2_leaf_reg": settings.CATBOOST_L2_LEAF_REG,
-                "rsm": getattr(settings, "CATBOOST_RSM", 1.0),
-                "min_data_in_leaf": getattr(settings, "CATBOOST_MIN_DATA_IN_LEAF", 1),
-                "border_count": getattr(settings, "CATBOOST_BORDER_COUNT", 254),
-            },
-            "feature_stats": self._compute_feature_stats(X_train),
+        params = self._build_catboost_params()
+        params["iterations"] = int(iterations)
+        params.pop("early_stopping_rounds", None)
+        start = time.time()
+        final = CatBoostRegressor(**params)
+        final.fit(pool)
+        self.model = final
+        self.metadata["refit"] = {
+            "iterations": int(iterations),
+            "rows": int(len(X_all)),
+            "seconds": round(time.time() - start, 1),
         }
-
-        return metrics
+        self.metadata["final_train_samples"] = int(len(X_all))
 
     def _compute_feature_stats(self, X_train) -> list:
         """Compute per-feature distribution stats from training data for drift detection."""

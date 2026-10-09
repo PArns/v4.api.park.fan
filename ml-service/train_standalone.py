@@ -5,7 +5,13 @@ Launched by main.py via subprocess.Popen so an OOM kill during training
 only tears down this process, not the uvicorn workers serving predictions.
 
 Usage (internal — called by main.py):
-    python train_standalone.py <version> <status_file> <sentinel_file>
+    python train_standalone.py <version> <status_file>
+
+This process only writes the model file, its metadata and the training status.
+It never writes the active-version sentinel: what the workers serve changes only
+when the NestJS training processor has registered the version in `ml_models`,
+passed the champion/challenger gate and called `POST /model/reload` (PAR-815).
+A rejected, failed or timed-out run therefore never touches what is served.
 """
 
 import faulthandler
@@ -39,13 +45,14 @@ def _write_json(path: str, data: dict) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) < 4:
-        logger.error("Usage: train_standalone.py <version> <status_file> <sentinel_file>")
+    # A third argument (the sentinel path older main.py versions passed) is
+    # accepted and ignored.
+    if len(sys.argv) < 3:
+        logger.error("Usage: train_standalone.py <version> <status_file>")
         return 1
 
     version = sys.argv[1]
     status_file = sys.argv[2]
-    sentinel_file = sys.argv[3]
 
     started_at = datetime.now(timezone.utc).isoformat()
 
@@ -65,9 +72,29 @@ def main() -> int:
     })
 
     try:
+        from model import load_saved_metadata
         from train import train_model
         logger.info(f"Starting training for version {version}")
-        train_model(version=version)
+        budget = os.environ.get("TRAIN_TIME_BUDGET_SECONDS")
+        metrics = train_model(
+            version=version,
+            time_budget_seconds=float(budget) if budget else None,
+        )
+
+        # train_model returns None when it stops early (no data, empty training
+        # set) without saving anything. Reporting "completed" (and, before
+        # PAR-815, writing the sentinel) announced a version that does not exist:
+        # every worker retried loading it on every request.
+        if metrics is None:
+            raise RuntimeError(
+                "train_model stopped early without saving a model "
+                "(no training data or an empty training set — see log above)"
+            )
+        saved = load_saved_metadata(version)
+        if saved is None:
+            raise RuntimeError(
+                f"train_model returned, but no model file and metadata exist for {version}"
+            )
 
         _write_json(status_file, {
             "is_training": False,
@@ -76,14 +103,9 @@ def main() -> int:
             "status": "completed",
             "error": None,
             "finished_at": datetime.now(timezone.utc).isoformat(),
+            "timings": saved.get("training_timings"),
+            "refit_skipped": saved.get("refit_skipped"),
         })
-
-        try:
-            with open(sentinel_file, "w") as f:
-                f.write(version)
-            logger.info(f"Sentinel written for {version}")
-        except Exception as e:
-            logger.warning(f"Could not write sentinel: {e}")
 
         logger.info(f"Training completed for version {version}")
         return 0
