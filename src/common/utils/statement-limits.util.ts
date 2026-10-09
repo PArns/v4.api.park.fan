@@ -12,10 +12,13 @@ import { DataSource, EntityManager } from "typeorm";
  * collapsed, blocking the queue's only slot and being killed only by deploys.
  *
  * `statement_timeout` is enforced by the server, so it also bounds the
- * orphaned case. `lock_timeout` keeps the statement from queueing indefinitely
- * behind an ACCESS EXCLUSIVE request — and, more to the point on a hypertable,
- * from becoming the head of a queue everyone else then waits behind (the
- * 2026-09-28 compression-policy outage, PAR-563).
+ * orphaned case — and it is what limits the damage a long statement does to
+ * others: while it runs it holds its snapshot and its locks, and a strong lock
+ * request queued behind those is what every later reader then waits on (the
+ * 2026-09-28 compression-policy outage, PAR-563). `lock_timeout` is about this
+ * statement only: a read waiting behind a pending ACCESS EXCLUSIVE blocks nobody
+ * (the pending request is the head of that queue), it just makes the job fail
+ * fast instead of sitting there.
  */
 export interface StatementLimits {
   /** Per statement, server-enforced. */

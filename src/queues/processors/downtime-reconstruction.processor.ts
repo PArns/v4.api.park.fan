@@ -551,7 +551,7 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
  * Sized from production on 2026-10-09 (PAR-820), over the nightly scan of 60
  * days — `OUTAGE_SCAN_START_SQL` pins it to its floor of twice the 30-day
  * window, so 60 and not 30 is what the cron actually reads: statement 1 takes
- * ~30 s, statement 2 ~52 s, the closure-gap statement 12.7 s with its planner
+ * ~30 s, statement 2 ~52 s, the closure-gap statement 5.7 s with its planner
  * settings (~110 s before PAR-157 changed it, never finishing after). The floor
  * of ten minutes is more than ten times the slowest of them.
  *
@@ -559,13 +559,16 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
  * hand-run fill (`windowDays` up to 400, a scan of up to 800 days) is not cut
  * off by a deadline meant for the nightly run. The 270-day stage of the first
  * fill took 1713 s for the whole job; the budget there is 90 minutes per
- * statement.
+ * statement. Hand runs are enqueued with `attempts: 1` (admin controller), so
+ * a fill that hits its deadline fails once rather than three times over.
  *
- * `lock_timeout` is short on purpose. These are reads: the only lock they can
- * wait on is one somebody else asked for ACCESS EXCLUSIVE on, and a read
- * queued behind that becomes the head of the queue every other reader of the
- * table then waits behind. Failing the job costs one night; queueing can cost
- * the API (PAR-563, PAR-819).
+ * `statement_timeout` is the limit that protects everyone else: a running read
+ * holds its snapshot and chunk locks, and a compression or retention job asking
+ * for a strong lock queues behind it — with every later reader queued behind
+ * that request (PAR-563). `lock_timeout` protects only this job: a read waiting
+ * behind a pending ACCESS EXCLUSIVE blocks nobody, since the pending request is
+ * the head of that queue, so 30 s just makes the job fail fast instead of
+ * waiting out somebody else's maintenance.
  */
 export function reconstructionReadLimits(
   scanStart: Date,

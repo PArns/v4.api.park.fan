@@ -417,6 +417,13 @@ loops that re-run each aggregate per outer row:
 | 10 days                   |  > 300 s timeout |                   9.1 s |
 | 60 days (the nightly run) |  not in 12 hours |  12.7 s, 4404 rows      |
 
+With nested loops off, ~9 s of those 12.7 s were `blind_parks`' evidence-hours
+check: written as a correlated subquery, it became a sequential scan of the
+whole `attraction_exposure_days` table (~1.07 M rows, growing with its 400-day
+retention) once per park, loops=192. It is now one grouped pass joined once —
+the same 92 blind parks — and the 60-day statement takes **5.7 s** (same 4404
+rows).
+
 Note the nightly scan is **60 days, not 30**: `OUTAGE_SCAN_START_SQL` finds a
 `down` spell still open further back and the scan is pinned to its floor of
 twice the window.
@@ -430,14 +437,19 @@ on the server.
 What changed: every statement the job issues runs in its own transaction under
 `SET LOCAL` deadlines (`reconstructionReadLimits`, `WRITE_LIMITS`,
 `src/common/utils/statement-limits.util.ts`) — reads 10 minutes, or 10 s per
-scanned day above that for a staged fill; writes 5 minutes; `lock_timeout`
-30 s so a read never queues behind an ACCESS EXCLUSIVE request and becomes the
-head of everyone else's queue (PAR-563, PAR-819). The closure-gap statement
+scanned day above that for a staged fill; writes 5 minutes. `statement_timeout`
+is the limit that protects the rest of the database: a running statement holds
+its snapshot and chunk locks, and a compression or retention job's strong lock
+request — with every later reader behind it — queues on those (PAR-563).
+`lock_timeout` (30 s) protects only the job: a read waiting behind a pending
+ACCESS EXCLUSIVE blocks nobody, since that request is the head of the queue, so
+it just makes the job fail fast. Hand runs from the admin endpoint are enqueued
+with `attempts: 1`; the nightly cron keeps the default three. The closure-gap statement
 additionally runs with `enable_nestloop = off` (`CLOSURE_GAP_PLANNER_SETTINGS`).
 A timeout there falls into the existing swallowed branch: one night without
 closure gaps, the DOWN reconstruction kept. Expected whole-job time with the
 fix: ~1.5–2 minutes for the reconstruction (statements 1 and 2 in parallel,
-then ~13 s for closures, ~15 s of writes), plus the profile and curve rebuilds.
+then ~6 s for closures, ~15 s of writes), plus the profile and curve rebuilds.
 
 ### The first production fill, staged
 

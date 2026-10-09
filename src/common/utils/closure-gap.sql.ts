@@ -332,8 +332,10 @@ export const CLOSURE_GAP_PLANNER_SETTINGS: Readonly<Record<string, string>> = {
  * re-run each aggregate once per outer row. Measured against production on
  * 2026-10-09 (PAR-820): 14 s over 3 days, past a 300 s timeout over 10, and
  * over the nightly 60-day scan it did not finish in 12 hours. With nested loops
- * off the same statement takes 9.9 s over 3 days, 9.1 s over 10 and 12.7 s over
- * 60 (4404 rows). A planner setting changes the plan, never the result.
+ * off the same statement took 9.9 s over 3 days, 9.1 s over 10 and 12.7 s over
+ * 60 (4404 rows) — ~9 s of that in `blind_parks`' evidence check, which ran
+ * once per park; as one grouped pass the 60-day statement takes 5.7 s, same
+ * rows. A planner setting changes the plan, never the result.
  */
 export const CLOSURE_GAP_INTERVALS_SQL = `
   WITH ${parkOpenWindowCtes()},
@@ -367,8 +369,22 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
     -- produced a NULL op_day and every one of its rows fell out at the
     -- same-day comparison below. Two copies of one park filter is the drift
     -- this file keeps extracting helpers to prevent.
+    --
+    -- The evidence hours are ONE grouped pass joined once, not a correlated
+    -- subquery per park. The statement runs with nested loops off
+    -- (CLOSURE_GAP_PLANNER_SETTINGS), and under that setting the correlated
+    -- form became a sequential scan of the whole exposure table per park:
+    -- loops=192 over ~1.07 M rows, ~9 s of the statement's 12.7 s, and growing
+    -- with the table's 400-day retention (PAR-820). Same 92 parks either way.
     SELECT z.park_id AS pid, z.tz AS tz
       FROM park_tz z
+      LEFT JOIN (
+        SELECT ea."parkId" AS pid,
+               SUM(ed.operating_minutes) / 60.0 AS hours
+          FROM attraction_exposure_days ed
+          JOIN attractions ea ON ea.id = ed."attractionId"
+         GROUP BY ea."parkId"
+      ) ev ON ev.pid = z.park_id
      WHERE NOT EXISTS (
          SELECT 1 FROM queue_data d
            JOIN attractions da ON da.id = d."attractionId"
@@ -376,12 +392,7 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
             AND d."queueType" = 'STANDBY'
             AND d.status = 'DOWN'
        )
-       AND COALESCE((
-         SELECT SUM(ed.operating_minutes) / 60.0
-           FROM attraction_exposure_days ed
-           JOIN attractions ea ON ea.id = ed."attractionId"
-          WHERE ea."parkId" = z.park_id
-       ), 0) >= ${MIN_BLIND_EVIDENCE_HOURS}
+       AND COALESCE(ev.hours, 0) >= ${MIN_BLIND_EVIDENCE_HOURS}
   ),
   src AS (
     -- The timezone comes from blind_parks, which now carries it. This used to
