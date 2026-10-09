@@ -181,8 +181,8 @@ def target_tables(con, c: str, leads: list[int], cfg: BenchConfig) -> None:
     # ko_t/kc_t (used only to SEGMENT the scores, e.g. "first hour") from the published one.
     x(f"""CREATE OR REPLACE TEMP TABLE tg0 AS
         SELECT s.aid, s.park_id, s.date, s.slot_utc, s.ws, s.ko AS ko_t, s.kc AS kc_t,
-               CAST(date_diff('minute', pw.open_p, s.slot_utc) // 15 AS INTEGER) AS ko,
-               CAST((date_diff('minute', s.slot_utc, pw.close_p) - 1) // 15 AS INTEGER) AS kc,
+               CAST(floor(date_diff('minute', pw.open_p, s.slot_utc) / 15) AS INTEGER) AS ko,
+               CAST(floor((date_diff('minute', s.slot_utc, pw.close_p) - 1) / 15) AS INTEGER) AS kc,
                coalesce(pw.sched_known, false) AS sk, s.status,
                CASE WHEN s.status = 'OPERATING' AND s.wait >= 5 THEN s.wait::DOUBLE END AS y,
                CAST(s.date - DATE '{c}' AS INTEGER) AS L,

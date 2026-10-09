@@ -183,8 +183,8 @@ def build(raw: Path, out: Path, con, ml_service_dir: Path | None = None) -> dict
               WHERE m.slot_utc >= w.open_utc AND m.slot_utc < w.close_utc)
             SELECT aid, park_id, date, slot_utc, slot_local,
                    CAST(date_diff('minute', CAST(date AS TIMESTAMP), slot_local) // 15 AS INTEGER) AS ws,
-                   CAST(date_diff('minute', open_utc, slot_utc) // 15 AS INTEGER) AS ko,
-                   CAST((date_diff('minute', slot_utc, close_utc) - 1) // 15 AS INTEGER) AS kc,
+                   CAST(floor(date_diff('minute', open_utc, slot_utc) / 15) AS INTEGER) AS ko,
+                   CAST(floor((date_diff('minute', slot_utc, close_utc) - 1) / 15) AS INTEGER) AS kc,
                    status, wait, age_min
             FROM c
             -- overlapping service days (two windows containing one slot): keep the later day

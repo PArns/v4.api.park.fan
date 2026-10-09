@@ -353,8 +353,8 @@ class Runner:
         SELECT g.attraction_id, g.park_id, g.date, g.slot_start_utc,
                timezone(o.timezone, g.slot_start_utc) AS slot_local,
                CAST(date_diff('minute', CAST(g.date AS TIMESTAMP), timezone(o.timezone, g.slot_start_utc)) // 15 AS INTEGER) AS ws,
-               CAST(date_diff('minute', g.open_p, g.slot_start_utc) // 15 AS INTEGER) AS ko,
-               CAST((date_diff('minute', g.slot_start_utc, g.close_p) - 1) // 15 AS INTEGER) AS kc,
+               CAST(floor(date_diff('minute', g.open_p, g.slot_start_utc) / 15) AS INTEGER) AS ko,
+               CAST(floor((date_diff('minute', g.slot_start_utc, g.close_p) - 1) / 15) AS INTEGER) AS kc,
                CAST(g.date - DATE '{c}' AS INTEGER) AS lead_days
         FROM g JOIN {origin_table} o ON o.park_id = g.park_id
         WHERE g.slot_start_utc >= o.origin_utc
@@ -562,7 +562,7 @@ class Runner:
               FROM rides r JOIN dl d ON d.aid = r.aid AND d.wk = 2)
             SELECT t.L, t.park_id, t.date, t.aid, t.ko_t AS ko, t.y, {cols},
                    p.lat, p.lng, p.land,
-                   CAST(date_diff('minute', w.open_utc, w.close_utc) // 15 AS INTEGER) AS nslots
+                   CAST(floor(date_diff('minute', w.open_utc, w.close_utc) / 15) AS INTEGER) AS nslots
             FROM tg t JOIN pick p ON p.aid = t.aid AND p.rk <= {cfg.optimiser_rides}
             JOIN windows w ON w.park_id = t.park_id AND w.date = t.date
             WHERE t.L IN ({','.join(map(str, leads))})""").df()
