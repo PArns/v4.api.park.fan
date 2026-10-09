@@ -9,6 +9,8 @@ import { ModelComparison } from "../../ml/entities/model-comparison.entity";
 
 const nfServiceUrl = getNfServiceUrl;
 const SCORE_LOOKBACK_DAYS = 14; // re-score the last N matured days each run (idempotent)
+/** How long this job waits for a run; also the age past which an in-flight run is hung. */
+const TRAIN_DEADLINE_MINUTES = 90;
 
 /** nf-service `GET /train/status` (the runner's status file). */
 interface NfTrainStatus {
@@ -16,6 +18,8 @@ interface NfTrainStatus {
   status?: string;
   version?: string | null;
   error?: string | null;
+  started_at?: string;
+  overdue?: boolean;
   forecast_date?: string;
   info?: {
     rows?: number;
@@ -27,7 +31,7 @@ interface NfTrainStatus {
 /**
  * NeuralForecast (TFT) training + the TFT-vs-CatBoost forward scoreboard.
  *
- * - train-nf: run AFTER the CatBoost 06:00 cron (07:30) so the two PyTorch/CatBoost
+ * - train-nf: runs at 03:00 UTC, well BEFORE the CatBoost 06:00 cron, so the two
  *   training spikes never overlap on the shared host. Triggers nf /train and polls
  *   until THIS run completes; the runner persists tft_forecasts itself. A timeout or
  *   any other end state fails the job (attempts: 1) and persists nothing.
@@ -53,10 +57,23 @@ export class NfForecastProcessor {
       // Overlap guard: a TFT train can run up to ~90 min. If one is still in
       // flight (long run, manual trigger, or a re-fire), skip rather than stack a
       // second training on the shared host. nf-service also rejects with 409.
-      const pre = (
+      const pre: NfTrainStatus = (
         await axios.get(`${nfServiceUrl()}/train/status`, { timeout: 15000 })
       ).data;
       if (pre?.is_training) {
+        // A run older than our own deadline is not "in progress", it is hung.
+        // Skipping quietly would report success night after night while the
+        // reader's three-day window runs out and TFT drops off the calendar
+        // (PAR-814: on 2026-10-09 a runner sat at is_training from 03:00 until
+        // a container restart at 07:31).
+        const startedMs = pre.started_at ? Date.parse(pre.started_at) : NaN;
+        const ageMin = (Date.now() - startedMs) / 60_000;
+        if (pre.overdue || !(ageMin <= TRAIN_DEADLINE_MINUTES)) {
+          throw new Error(
+            `TFT run ${pre.version} has been "training" since ${pre.started_at ?? "an unknown time"} — ` +
+              `past the ${TRAIN_DEADLINE_MINUTES}-min deadline, treating it as hung`,
+          );
+        }
         this.logger.warn(
           "TFT training already in progress — skipping this run.",
         );
@@ -84,7 +101,7 @@ export class NfForecastProcessor {
 
       // Poll to completion (generous bound: a run takes ~11 min on the GPU).
       const pollSeconds = 30;
-      const maxAttempts = (90 * 60) / pollSeconds; // up to 90 min
+      const maxAttempts = (TRAIN_DEADLINE_MINUTES * 60) / pollSeconds;
       let attempts = 0;
       let done: NfTrainStatus | null = null;
       while (attempts < maxAttempts) {
@@ -128,6 +145,11 @@ export class NfForecastProcessor {
         );
       }
 
+      if (done.info?.persisted === 0) {
+        this.logger.warn(
+          `TFT run ${version} completed but persisted 0 rows — no forecast for ${done.forecast_date ?? "today"}`,
+        );
+      }
       const chunks = done.info?.chunks;
       if (chunks?.skipped) {
         this.logger.warn(

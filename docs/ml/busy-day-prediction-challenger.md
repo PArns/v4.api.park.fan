@@ -448,10 +448,10 @@ Scoreboard** — beide Modelle machen echte Vorwärts-Prognosen, die nach Eintre
 bewertet werden. Kein Holdout-Leak, kein In-Sample-Vorteil; Zahlen sammeln sich über Tage an.
 
 ### Cron-Sequenz (alle UTC)
-- **06:00** CatBoost train (bestehend, `ml-training`).
-- **07:30** `nf-training` Job `train-nf`: TFT train → poll until THIS run (its version) is `completed`; the runner persists `tft_forecasts` itself. A poll timeout or any other end state fails the job and persists nothing (PAR-814 — it used to fall through to `/forecast`, which re-wrote the previous night's parquet under today's date).
-  Bewusst nach CatBoost, damit die beiden Trainings-Spikes nicht auf dem 28-GiB-Host kollidieren.
-- **08:30** `nf-training` Job `score-comparison`: bewertet ausgereifte Zieltage.
+- **03:00** `nf-training` job `train-nf`: TFT train → poll until THIS run (its version) is `completed`; the runner persists `tft_forecasts` itself. A poll timeout (90 min) or any other end state fails the job and persists nothing (PAR-814 — it used to fall through to `/forecast`, which re-wrote the previous night's parquet under today's date). If the pre-check finds a run that has been `training` for longer than 90 min, the job fails rather than skipping; nf-service itself kills a runner after `NF_TRAIN_DEADLINE_MINUTES` (120) and marks it `failed`.
+  Deliberately well before CatBoost, so the two training spikes never collide on the shared host.
+- **06:00** CatBoost train (existing, `ml-training`).
+- **07:00** `nf-training` job `score-comparison`: scores matured target days.
 
 ### Vergleichs-Methodik (apples-to-apples)
 - **Kanonisches Ziel = tatsächlicher Tages-P90-Peak je Attraktion** (was der Kalender nutzt).

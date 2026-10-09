@@ -18,20 +18,22 @@ import db
 
 
 def run(version: str) -> None:
+    started_at = datetime.now(timezone.utc)
+    # The day this run makes the forecast (UTC, as forecast_date always was),
+    # fixed at START: the panel is read from here on, so a run that crosses
+    # midnight still describes the day it began. Written to the status file next
+    # to the version, so a later /forecast re-persist of this parquet lands on
+    # the same key instead of on whatever day it happens to be called (PAR-814).
+    forecast_date = started_at.date()
     main._write_status({
         "is_training": True, "status": "training", "version": version,
-        "started_at": datetime.now(timezone.utc).isoformat(), "error": None,
+        "started_at": started_at.isoformat(), "error": None,
     })
     try:
         y_hat = forecast.train_and_forecast(version)
         chunks = dict(y_hat.attrs.get("chunks") or {})
         y_hat.to_parquet(main._FORECAST_FILE)
         tcol = main._tft_column(list(y_hat.columns))
-        # The day this run made the forecast (UTC, as forecast_date always was).
-        # Fixed here and written to the status file next to the version, so a
-        # later /forecast re-persist of this parquet lands on the same key
-        # instead of on whatever day it happens to be called (PAR-814).
-        forecast_date = datetime.now(timezone.utc).date()
         persisted = (
             db.persist_forecast(y_hat, version, tcol, forecast_date) if tcol else 0
         )

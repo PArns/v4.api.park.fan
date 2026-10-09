@@ -151,12 +151,84 @@ describe("NfForecastProcessor.handleTrainNf", () => {
     );
   });
 
-  it("skips when a training is already in flight", async () => {
-    statuses = [{ is_training: true, status: "training", version: "other" }];
+  it("warns when a completed run persisted nothing", async () => {
+    statuses = [
+      { is_training: false, status: "completed", version: "nf20261008" },
+      {
+        is_training: false,
+        status: "completed",
+        version: VERSION,
+        forecast_date: "2026-10-09",
+        info: { rows: 0, persisted: 0 },
+      },
+    ];
+
+    const { result } = await run();
+
+    expect(result).toEqual({ status: "ok", version: VERSION });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("persisted 0 rows"),
+    );
+  });
+
+  const minutesAgo = (m: number) =>
+    new Date(Date.now() - m * 60_000).toISOString();
+
+  it("skips when a recent training is already in flight", async () => {
+    statuses = [
+      {
+        is_training: true,
+        status: "training",
+        version: "other",
+        started_at: minutesAgo(10),
+      },
+    ];
 
     const { result } = await run();
 
     expect(result).toEqual({ status: "skipped" });
     expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it("fails instead of skipping when the in-flight run is hung", async () => {
+    // The night after 2026-10-09 would have found the 03:00 run still
+    // "training" 24 h later and reported a quiet skip.
+    statuses = [
+      {
+        is_training: true,
+        status: "training",
+        version: "nf20261009_030000",
+        started_at: minutesAgo(24 * 60),
+      },
+    ];
+
+    const { error } = await run();
+
+    expect(error?.message).toMatch(/past the 90-min deadline/);
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it("fails when nf-service itself reports the run overdue", async () => {
+    statuses = [
+      {
+        is_training: true,
+        status: "training",
+        version: "other",
+        started_at: minutesAgo(10),
+        overdue: true,
+      },
+    ];
+
+    const { error } = await run();
+
+    expect(error?.message).toMatch(/treating it as hung/);
+  });
+
+  it("fails when an in-flight run carries no start time", async () => {
+    statuses = [{ is_training: true, status: "training", version: "other" }];
+
+    const { error } = await run();
+
+    expect(error?.message).toMatch(/an unknown time/);
   });
 });

@@ -155,6 +155,14 @@ def gpu_stats():
 @app.get("/train/status")
 def train_status():
     st = _read_status()
+    # Backstop for the watchdog in /train: a run past its deadline is reported as
+    # overdue, so a caller never mistakes a hung run for one still progressing.
+    if st.get("is_training") and st.get("started_at"):
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(st["started_at"])
+            st["overdue"] = age.total_seconds() > settings.NF_TRAIN_DEADLINE_MINUTES * 60
+        except ValueError:
+            pass
     # While training, merge the live progress (chunk/step/% + loss) the forecast
     # callback writes, so a UI / the admin system-health endpoint can show the %.
     if st.get("is_training"):
@@ -183,13 +191,23 @@ def train(req: TrainRequest):
         # OOM kills only the runner — uvicorn survives. A daemon thread waits on it
         # and clears a stale lock if the runner is killed without a terminal status.
         proc = subprocess.Popen([sys.executable, runner, version])
-        proc.wait()
+        deadline_min = settings.NF_TRAIN_DEADLINE_MINUTES
+        try:
+            proc.wait(timeout=deadline_min * 60)
+            error = f"train_runner exited {proc.returncode} without completing (likely OOM-killed)"
+        except subprocess.TimeoutExpired:
+            # Hung (2026-10-09: blocked through a DB outage until a restart 4.5 h
+            # later). Kill it so the lock clears and the next /train can run.
+            logger.error("train_runner %s exceeded %d min — killing it", version, deadline_min)
+            proc.kill()
+            proc.wait()
+            error = f"train_runner exceeded the {deadline_min}-min deadline and was killed"
         logger.info("train_runner %s exited with code %s", version, proc.returncode)
         st = _read_status()
         if st.get("is_training") and st.get("version") == version:
             _write_status({
                 "is_training": False, "status": "failed", "version": version,
-                "error": f"train_runner exited {proc.returncode} without completing (likely OOM-killed)",
+                "error": error,
             })
 
     threading.Thread(target=_launch, daemon=True).start()

@@ -13,10 +13,12 @@ stubbed, so no database and no torch are touched.
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
+import time
 import types
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 _MODEL_DIR = tempfile.mkdtemp(prefix="nf-test-")
 os.environ["MODEL_DIR"] = _MODEL_DIR
@@ -29,7 +31,9 @@ _calls: list[dict] = []
 _db = types.ModuleType("db")
 
 
-def _persist_forecast(yhat, version, value_col, forecast_date):
+def _persist_forecast(yhat, version, value_col, forecast_date=None):
+    # forecast_date defaults so the pre-fix three-argument call still lands here
+    # and these tests fail on the missing guard, not on the signature.
     _calls.append({"version": version, "forecast_date": forecast_date, "rows": len(yhat)})
     return len(yhat)
 
@@ -75,7 +79,9 @@ def test_refuses_while_the_next_run_is_training():
 
 
 def test_refuses_after_reset_on_startup():
-    """The 2026-10-09 state: the run died, startup cleared the lock."""
+    """How 2026-10-09 ended: the run hung at "training" (that is the state the
+    04:30 call met, covered above) until the 07:31 container restart reset it
+    to idle. Neither state may re-persist the old parquet."""
     _calls.clear()
     _write_parquet()
     _status(is_training=False, status="idle", version="nf20261009_030000",
@@ -135,6 +141,46 @@ def test_runner_records_forecast_date_and_chunk_counts():
     assert st["forecast_date"] == today.isoformat(), st
     assert st["info"]["chunks"] == {"total": 10, "ok": 9, "skipped": 1}, st
     assert _calls == [{"version": "nf_test", "forecast_date": today, "rows": 1}], _calls
+
+
+def test_status_reports_a_run_past_its_deadline_as_overdue():
+    old = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+    _status(is_training=True, status="training", version="v", started_at=old)
+    assert main.train_status()["overdue"] is True
+    fresh = datetime.now(timezone.utc).isoformat()
+    _status(is_training=True, status="training", version="v", started_at=fresh)
+    assert main.train_status()["overdue"] is False
+
+
+def test_watchdog_kills_a_hung_runner_and_marks_it_failed():
+    real_popen = subprocess.Popen
+    deadline = main.settings.NF_TRAIN_DEADLINE_MINUTES
+    _status(is_training=False, status="completed", version="prev")
+    # A "runner" that never finishes and never writes a status.
+    hung = []
+
+    def _fake_popen(args, *a, **kw):
+        _status(is_training=True, status="training", version="hung_run",
+                started_at=datetime.now(timezone.utc).isoformat())
+        proc = real_popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        hung.append(proc)
+        return proc
+
+    subprocess.Popen = _fake_popen
+    main.settings.NF_TRAIN_DEADLINE_MINUTES = 0.02  # ~1.2 s
+    try:
+        main.train(main.TrainRequest(version="hung_run"))
+        for _ in range(100):
+            if main._read_status().get("status") == "failed":
+                break
+            time.sleep(0.1)
+    finally:
+        subprocess.Popen = real_popen
+        main.settings.NF_TRAIN_DEADLINE_MINUTES = deadline
+    st = main._read_status()
+    assert st["status"] == "failed" and st["is_training"] is False, st
+    assert "deadline" in st["error"], st
+    assert hung[0].poll() is not None, "runner still alive"
 
 
 if __name__ == "__main__":
