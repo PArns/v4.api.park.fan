@@ -252,3 +252,13 @@ export function secondsUntilEndOfDayInTimezone(
     Math.ceil((nextMidnight.getTime() - now.getTime()) / 1000),
   );
 }
+
+/**
+ * `YYYY-MM-DD` plus n calendar days, without touching a timezone — for
+ * park-local date strings that are already in the right zone.
+ */
+export function addIsoDays(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}

@@ -28,6 +28,7 @@ The application relies heavily on background processing for data consistency and
 | `StatsProcessor` | Hourly (today's stats), Daily 01:00 (yesterday) | Aggregates `queue_data` into `park_daily_stats`. |
 | `PredictionGeneratorProcessor` | Every 15 min | Generates ML predictions for the next 12h. |
 | `MlTrainingProcessor` | Daily 06:00 | Retrains the ML model on recent data. Labels now use the P90-based crowd-level definition; models recalibrate within ~1 cycle after the refactor. |
+| `ForecastArchiveProcessor` (`forecast-archive`) + `ForecastArchiveScoreProcessor` (`forecast-archive-score`) | Hourly :05 (`capture`), Daily 12:00 UTC (`score`, own queue so it never delays a capture) | Archives the served intraday curves at each park's own 06:00 (d10–d90 planner leads at 07:00, served curve + live anchor at 10–18 every 2 h) and scores yesterday against truth per lead. See [Forward archive](../ml/forward-archive.md). |
 | `PredictionAccuracyProcessor` | Every 15 min | Compares past predictions vs. actuals to score model performance. |
 
 ### Helper & Cleanups

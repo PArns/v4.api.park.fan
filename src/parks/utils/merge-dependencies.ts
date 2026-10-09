@@ -787,6 +787,19 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     conflictColumns: ["target_date", "lead_days"],
   },
   {
+    // The forward archive of served curves (PAR-831): no FK, same reasoning
+    // as `prediction_lead_snapshots` above — the served curve at a lead cannot
+    // be recomputed later, so a loser's rows move. Its PK is
+    // `(origin_at, attraction_id, surface, target_date)`; a capture that saw
+    // both twins at one origin keeps the winner's row. `park_id` is left on
+    // the loser's park: a park merge reparents nothing here, and the rows
+    // expire 14 days after their target date.
+    table: "forecast_archive_curves",
+    column: "attraction_id",
+    strategy: "move",
+    conflictColumns: ["origin_at", "surface", "target_date"],
+  },
+  {
     // Discarded rather than moved: the profile is an aggregate over a window
     // that the merge has just invalidated, and the survivor is skipped by the
     // reconstruction until `last_merged_at` falls out of range anyway. Carrying
