@@ -242,7 +242,15 @@ def add_calendar_covariates(
             school = set(local[local["holiday_type"] == "school"]["date"])
             bridge = set(local[local["holiday_type"] == "bridge"]["date"])
             # Neighbor: vectorised — (country,region_norm) in neigh OR country specified region-wide.
-            nmask = h["cr"].isin(neigh) | h["country"].isin(countries_wide)
+            # A regionally specified neighbour also has its country's NATIONAL rows
+            # (NL-LI gets Koningsdag, stored as (NL, None)) — regional OR national,
+            # as ml-service/holiday_features.py does (PAR-816).
+            neigh_countries = {c for (c, _r) in neigh}
+            nmask = (
+                h["cr"].isin(neigh)
+                | h["country"].isin(countries_wide)
+                | (h["region_norm"].isna() & h["country"].isin(neigh_countries))
+            )
             neighbor = set(h[nmask & h_pub_or_school]["date"])
             cache[sig] = (local_public, neighbor, school, bridge)
             return cache[sig]

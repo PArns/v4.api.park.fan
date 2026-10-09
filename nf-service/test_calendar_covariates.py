@@ -55,6 +55,24 @@ def test_alias_and_short_codes_match_too():
         assert out["is_holiday_neighbor"].tolist() == [1, 0], code
 
 
+def test_regional_neighbour_picks_up_its_countrys_national_holidays():
+    """NL-LI must see Koningsdag, which is stored nationally as (NL, None)."""
+    holidays = pd.DataFrame(
+        [
+            {"date": pd.Timestamp("2026-04-27"), "country": "NL", "region": None, "holiday_type": "public"},
+            {"date": pd.Timestamp("2026-04-28"), "country": "BE", "region": None, "holiday_type": "public"},
+        ]
+    )
+    frame = pd.DataFrame(
+        {"unique_id": ["a1", "a1"], "ds": pd.to_datetime(["2026-04-27", "2026-04-28"])}
+    )
+    out = db.add_calendar_covariates(
+        frame, _meta([{"countryCode": "NL", "regionCode": "NL-LI"}]), holidays
+    )
+    # NL national counts for the NL-LI neighbour; BE is not a neighbour.
+    assert out["is_holiday_neighbor"].tolist() == [1, 0]
+
+
 def test_norm_region():
     assert db._norm_region("DE-NW") == "NW"
     assert db._norm_region("NDS") == "NI"

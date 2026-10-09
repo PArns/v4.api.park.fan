@@ -18,7 +18,11 @@ from db import (
     fetch_attraction_ids_for_park,
 )
 from config import get_settings
-from holiday_features import assign_holiday_features, parse_influencing_regions
+from holiday_features import (
+    assign_holiday_features,
+    holiday_fetch_window,
+    parse_influencing_regions,
+)
 
 settings = get_settings()
 
@@ -1110,17 +1114,12 @@ def create_prediction_features(
             if isinstance(region, dict) and region.get("countryCode"):
                 all_countries.add(region["countryCode"])
 
-    # Fetch by the park-LOCAL date range, at midnight and padded by a day.
-    # `holidays.date` is a DATE; compared against the first row's timestamp
-    # (e.g. today 10:00) it is promoted to midnight and today's holidays fell
-    # out of the window for every hourly forecast.
-    local_dates = df["local_timestamp"].dt.date
-    midnight = datetime.min.time()
-    holidays_start = datetime.combine(local_dates.min() - timedelta(days=1), midnight)
-    holidays_end = datetime.combine(local_dates.max() + timedelta(days=1), midnight)
+    # Fetch by the park-LOCAL date range (see holiday_fetch_window: the old
+    # UTC-timestamp window dropped today's holidays from every hourly forecast).
+    holidays_start, holidays_end = holiday_fetch_window(df["local_timestamp"])
     holidays_df = fetch_holidays(list(all_countries), holidays_start, holidays_end)
 
-    df["local_date"] = local_dates
+    df["local_date"] = df["local_timestamp"].dt.date
     df = assign_holiday_features(
         df, parks_metadata, holidays_df, park_col="parkId", date_col="local_date"
     )

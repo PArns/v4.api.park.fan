@@ -213,6 +213,22 @@ def park_day_holiday_features(
     return out
 
 
+def holiday_fetch_window(local_timestamps: pd.Series) -> tuple[_dt.datetime, _dt.datetime]:
+    """(start, end) for `fetch_holidays`, from the park-LOCAL timestamps of a frame.
+
+    `holidays.date` is a DATE and the query is `date BETWEEN start AND end`, so a
+    day d is fetched only if start <= d 00:00 <= end. Inference used the frame's
+    first UTC timestamp as `start` (e.g. today 10:00), which put today — and,
+    west of UTC, the local day before the UTC one — outside the window: every
+    hourly forecast read today as no holiday. Midnight-aligned, padded by a day.
+    """
+    local_days = pd.to_datetime(local_timestamps).dt.date
+    midnight = _dt.time.min
+    start = _dt.datetime.combine(local_days.min() - _dt.timedelta(days=1), midnight)
+    end = _dt.datetime.combine(local_days.max() + _dt.timedelta(days=1), midnight)
+    return start, end
+
+
 def assign_holiday_features(
     df: pd.DataFrame,
     parks_metadata: pd.DataFrame,
