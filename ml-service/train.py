@@ -289,7 +289,9 @@ def cap_training_rows(
 ) -> pd.DataFrame:
     """Bound the training pool at `max_rows` without dropping any season.
 
-    The newest `full_resolution_days` (by `timestamp`) are kept whole; the older
+    The newest `full_resolution_days` of `df` (by `timestamp`) are kept whole.
+    train_model calls this on the pool AFTER the 30-day hold-out is split off, so
+    with the default 90 that block is days 30-120 before the newest data. The older
     rows are thinned by a uniform random sample so that the total fits the budget.
     A uniform sample keeps every month's share of the older rows, which a rolling
     window would not. If the recent block alone exceeds the budget, the whole pool

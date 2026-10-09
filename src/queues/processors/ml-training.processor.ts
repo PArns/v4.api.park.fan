@@ -7,7 +7,7 @@ import { promisify } from "util";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Not, Repository } from "typeorm";
 import { MLModel } from "../../ml/entities/ml-model.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { MLFeatureDriftService } from "../../ml/services/ml-feature-drift.service";
@@ -96,29 +96,20 @@ export class MLTrainingProcessor {
         } else if (status.status === "failed") {
           throw new Error(`Training failed: ${status.error}`);
         } else if (status.status === "idle" && attempts >= 2) {
-          // "idle" can mean training already finished before our first poll.
-          // Check if the model/info endpoint reports a version matching ours.
+          // "idle" can mean training already finished before our first poll
+          // and the status file was reset. The version's own saved files are
+          // the proof it completed (/model/info would only name the model the
+          // workers serve, which training no longer changes).
           try {
-            const infoRes = await axios.get(`${mlServiceUrl}/model/info`);
-            const activeVersion = infoRes.data?.version;
-            if (activeVersion === version) {
-              isTraining = false;
-              this.logger.log(
-                `✅ Training already completed (detected via model/info: ${activeVersion})`,
-              );
-            } else if (
-              activeVersion &&
-              activeVersion > version &&
-              attempts >= 5
-            ) {
-              // A newer version is active — our training superseded by another run
-              isTraining = false;
-              this.logger.log(
-                `ℹ️  Newer model active (${activeVersion}), stopping poll`,
-              );
-            }
+            await axios.get(
+              `${mlServiceUrl}/model/info/${encodeURIComponent(version)}`,
+            );
+            isTraining = false;
+            this.logger.log(
+              `✅ Training already completed (saved files for ${version} found)`,
+            );
           } catch {
-            // model/info not reachable, keep polling
+            // not saved (yet) or not reachable — keep polling
           }
         }
       }
@@ -142,10 +133,8 @@ export class MLTrainingProcessor {
       // itself (v20261006 stored v20261003's MAE 5.06; its own pkl said 4.43).
       const modelInfo = await this.fetchTrainedModelInfo(mlServiceUrl, version);
       if (!modelInfo) {
-        // Nothing trustworthy to register. The training subprocess has already
-        // pointed the workers at this version via its sentinel, so put them back
-        // on the DB-active champion before failing the job.
-        await this.revertToDbChampion(mlServiceUrl);
+        // Nothing trustworthy to register. Serving is untouched: the training
+        // subprocess never activates a version, only activateModel() below does.
         throw new Error(
           `No saved metrics for ${version} — not registering it as a model`,
         );
@@ -202,9 +191,9 @@ export class MLTrainingProcessor {
       // from auto-replacing a good champion. A freshly trained model has seen newer
       // data and should generally win, so we only reject large regressions — normal
       // day-to-day MAE variance (a few %) is expected and the newer model is kept.
-      // The ml-service writes its own sentinel on training success, so on rejection
-      // we re-load the DB-active champion below to revert that. Validation MAE is
-      // compared apples-to-apples (both from model metadata).
+      // Training never changes what is served; only activateModel() below does,
+      // after this gate. Validation MAE is compared apples-to-apples (both from
+      // the versions' own saved metadata).
       const champion = await this.mlModelRepository.findOne({
         where: { isActive: true },
       });
@@ -224,12 +213,6 @@ export class MLTrainingProcessor {
           `⛔ Challenger ${version} (MAE ${metrics.mae.toFixed(2)}) is worse than ` +
             `champion ${champion!.version} (MAE ${championMae.toFixed(2)}) × ${REGRESSION_TOLERANCE} — ` +
             `keeping champion active, registering challenger as inactive.`,
-        );
-      } else {
-        // Accepted: deactivate the previous champion(s)
-        await this.mlModelRepository.update(
-          { isActive: true },
-          { isActive: false },
         );
       }
 
@@ -275,10 +258,18 @@ export class MLTrainingProcessor {
 
       await this.mlModelRepository.save(model);
 
-      // If rejected, the ml-service already activated the challenger via its own
-      // sentinel during training — revert it to the still-active DB champion.
-      if (rejectChallenger) {
-        await this.revertToDbChampion(mlServiceUrl);
+      if (!rejectChallenger) {
+        // Accepted: retire the previous champion(s) only once the new row exists,
+        // so there is never a moment with no active row.
+        await this.mlModelRepository.update(
+          { isActive: true, version: Not(version) },
+          { isActive: false },
+        );
+        // Only now do the workers switch (PAR-815). Before, the training
+        // subprocess wrote the sentinel itself and a rejected or failed run had
+        // to be reverted afterwards — racing threadpool reloads that could flip
+        // the workers back to the unregistered version.
+        await this.activateModel(mlServiceUrl, version, champion);
       }
 
       const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
@@ -365,18 +356,57 @@ export class MLTrainingProcessor {
     return null;
   }
 
-  /** Point every ml-service worker back at the DB-active model. Best-effort. */
-  private async revertToDbChampion(mlServiceUrl: string): Promise<void> {
-    try {
-      const res = await axios.post(`${mlServiceUrl}/model/reload`);
+  /**
+   * Make the ml-service serve the DB-active model, which is now `version`.
+   * `POST /model/reload` loads the DB-active version in one worker and writes
+   * the sentinel the other workers pick up on their next /predict; the boot path
+   * (`_load_active_model`) reads the same DB row. If the reload does not confirm
+   * `version`, the DB is rolled back to the previous champion, so the DB and what
+   * is served never disagree, and the job fails.
+   */
+  private async activateModel(
+    mlServiceUrl: string,
+    version: string,
+    previousChampion: MLModel | null,
+  ): Promise<void> {
+    const attempts = 3;
+    let lastError = "";
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const res = await axios.post(`${mlServiceUrl}/model/reload`);
+        if (res.data?.version === version) {
+          this.logger.log(`   Activated ${version} on the ml-service`);
+          return;
+        }
+        lastError = `reload reported version ${String(res.data?.version)}`;
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : String(e);
+      }
       this.logger.warn(
-        `   Reverted ml-service to the DB-active model ${String(res.data?.version)}`,
+        `   Activating ${version} failed (attempt ${i}/${attempts}): ${lastError}`,
       );
-    } catch (e) {
-      this.logger.error(
-        `   Failed to revert ml-service to the DB-active model: ${e instanceof Error ? e.message : String(e)}`,
+      if (i < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+    }
+
+    await this.mlModelRepository.update(
+      { version },
+      {
+        isActive: false,
+        notes: `Activation failed (${lastError}) ${new Date().toISOString().split("T")[0]}`,
+      },
+    );
+    if (previousChampion) {
+      await this.mlModelRepository.update(
+        { version: previousChampion.version },
+        { isActive: true },
       );
     }
+    throw new Error(
+      `Could not activate ${version} on the ml-service (${lastError}) — ` +
+        `kept ${previousChampion?.version ?? "no model"} active`,
+    );
   }
 
   /**

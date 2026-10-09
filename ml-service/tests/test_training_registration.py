@@ -113,7 +113,11 @@ def test_missing_model_file_is_a_failure_and_writes_no_sentinel():
     assert sentinel is False
 
 
-def test_saved_model_completes_and_writes_the_sentinel():
+def test_saved_model_completes_without_activating_itself():
+    """Training only saves files and status. The sentinel is written by
+    /model/reload once the API has registered the version and it passed the
+    gate, so a rejected or timed-out run never changes what is served."""
+
     def fake_train(d, v):
         _save_fake_model(d, v)
         return {"mae": 4.433}
@@ -121,7 +125,7 @@ def test_saved_model_completes_and_writes_the_sentinel():
     code, status, sentinel = _run_standalone(fake_train)
     assert code == 0
     assert status["status"] == "completed"
-    assert sentinel is True
+    assert sentinel is False
     # The per-phase timings saved with the model reach the training status.
     assert status["timings"] == {"fetch": {"seconds": 1.0, "rows": 12}}
 

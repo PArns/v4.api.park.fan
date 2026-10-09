@@ -257,13 +257,14 @@ describe("MLTrainingProcessor", () => {
       featureStats: [],
     });
 
-    /** Routes GETs: status is "completed"; the loaded model is the OLD one. */
-    const routeGets = (byVersion: () => Promise<unknown>) => {
+    /** Routes GETs: status as given; the loaded model is the OLD one. */
+    const routeGets = (
+      byVersion: () => Promise<unknown>,
+      trainStatus: Record<string, unknown> = { status: "completed" },
+    ) => {
       mockedAxios.get.mockImplementation((url: string) => {
         if (url === `${ML}/train/status`) {
-          return Promise.resolve({
-            data: { status: "completed", current_version: "x" },
-          });
+          return Promise.resolve({ data: trainStatus });
         }
         if (url === `${ML}/model/info`) {
           // A worker still serving the previous champion.
@@ -284,9 +285,16 @@ describe("MLTrainingProcessor", () => {
         fn();
         return 0 as unknown as NodeJS.Timeout;
       }) as unknown as typeof setTimeout);
-      mockedAxios.post.mockResolvedValue({
-        data: { version: "v20261003_0600" },
-      });
+      // /model/reload loads the DB-active row; after an accepted run that is
+      // the new version.
+      mockedAxios.post.mockImplementation((url: string) =>
+        Promise.resolve({
+          data:
+            url === `${ML}/model/reload`
+              ? { version: "v20261006_0600" }
+              : { status: "training_started" },
+        }),
+      );
       mlModelRepo.findOne.mockResolvedValue({
         version: "v20261003_0600",
         mae: 5.06,
@@ -318,7 +326,82 @@ describe("MLTrainingProcessor", () => {
       expect(saved.isActive).toBe(true);
     });
 
-    it("does not register a version whose saved metadata is missing, and reverts serving", async () => {
+    it("activates only AFTER the row is saved and the old champion retired", async () => {
+      routeGets(() =>
+        Promise.resolve({ data: savedInfo("v20261006_0600", 4.433) }),
+      );
+
+      await processor.handleTrainModels({} as Job);
+
+      const saveOrder = mlModelRepo.save.mock.invocationCallOrder[0];
+      const retireOrder = mlModelRepo.update.mock.invocationCallOrder[0];
+      const reloadIdx = mockedAxios.post.mock.calls.findIndex(
+        ([u]) => u === `${ML}/model/reload`,
+      );
+      expect(reloadIdx).toBeGreaterThanOrEqual(0);
+      const reloadOrder = mockedAxios.post.mock.invocationCallOrder[reloadIdx];
+      expect(saveOrder).toBeLessThan(retireOrder);
+      expect(retireOrder).toBeLessThan(reloadOrder);
+      // The retire step leaves the new row alone.
+      const [where, set] = mlModelRepo.update.mock.calls[0];
+      expect(where.isActive).toBe(true);
+      expect(where.version).toBeDefined();
+      expect(set).toEqual({ isActive: false });
+    });
+
+    it("rolls the DB back to the champion when the ml-service cannot activate the new version", async () => {
+      routeGets(() =>
+        Promise.resolve({ data: savedInfo("v20261006_0600", 4.433) }),
+      );
+      mockedAxios.post.mockImplementation((url: string) =>
+        url === `${ML}/model/reload`
+          ? Promise.reject(new Error("Failed to reload model"))
+          : Promise.resolve({ data: {} }),
+      );
+
+      await expect(processor.handleTrainModels({} as Job)).rejects.toThrow(
+        /Could not activate v20261006_0600.*kept v20261003_0600 active/,
+      );
+
+      expect(
+        mockedAxios.post.mock.calls.filter(([u]) => u === `${ML}/model/reload`),
+      ).toHaveLength(3);
+      expect(mlModelRepo.update).toHaveBeenCalledWith(
+        { version: "v20261006_0600" },
+        expect.objectContaining({ isActive: false }),
+      );
+      expect(mlModelRepo.update).toHaveBeenCalledWith(
+        { version: "v20261003_0600" },
+        { isActive: true },
+      );
+    });
+
+    it("never touches serving when training fails", async () => {
+      routeGets(() => Promise.reject(new Error("unreachable")), {
+        status: "failed",
+        error: "boom",
+      });
+
+      await expect(processor.handleTrainModels({} as Job)).rejects.toThrow(
+        /Training failed: boom/,
+      );
+      expect(mockedAxios.post).not.toHaveBeenCalledWith(`${ML}/model/reload`);
+      expect(mlModelRepo.save).not.toHaveBeenCalled();
+    });
+
+    it("never touches serving when training times out", async () => {
+      routeGets(() => Promise.reject(new Error("unreachable")), {
+        status: "training",
+      });
+
+      await expect(processor.handleTrainModels({} as Job)).rejects.toThrow(
+        /Training timeout - exceeded 90 minutes/,
+      );
+      expect(mockedAxios.post).not.toHaveBeenCalledWith(`${ML}/model/reload`);
+      expect(mlModelRepo.save).not.toHaveBeenCalled();
+    });
+
+    it("does not register a version whose saved metadata is missing, and leaves serving alone", async () => {
       routeGets(() =>
         Promise.reject(
           Object.assign(new Error("Not Found"), { response: { status: 404 } }),
@@ -331,7 +414,7 @@ describe("MLTrainingProcessor", () => {
 
       expect(mlModelRepo.save).not.toHaveBeenCalled();
       expect(mlModelRepo.update).not.toHaveBeenCalled();
-      expect(mockedAxios.post).toHaveBeenCalledWith(`${ML}/model/reload`);
+      expect(mockedAxios.post).not.toHaveBeenCalledWith(`${ML}/model/reload`);
       // 404 is final — no retries against a version that does not exist.
       expect(
         mockedAxios.get.mock.calls.filter(([u]) =>
@@ -368,7 +451,8 @@ describe("MLTrainingProcessor", () => {
       expect(saved.mae).toBe(5.5);
       expect(saved.isActive).toBe(false);
       expect(mlModelRepo.update).not.toHaveBeenCalled();
-      expect(mockedAxios.post).toHaveBeenCalledWith(`${ML}/model/reload`);
+      // Rejected: the champion keeps serving and nothing has to be reverted.
+      expect(mockedAxios.post).not.toHaveBeenCalledWith(`${ML}/model/reload`);
     });
   });
 });

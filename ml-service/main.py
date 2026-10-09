@@ -37,7 +37,9 @@ app = FastAPI(
 model: Optional[WaitTimeModel] = None
 _model_lock = threading.Lock()
 
-# Sentinel file: written after training so all workers detect the new version.
+# Sentinel file: written by /model/reload (called by the NestJS training processor
+# once a new version is registered and passed the gate) and at boot, so all
+# workers detect the active version. Training itself never writes it (PAR-815).
 # Path is on the shared models volume so every worker process sees it.
 _SENTINEL_FILE = os.path.join(
     os.environ.get("MODEL_DIR", "/app/models"), "active_version.txt"
@@ -90,7 +92,7 @@ def _load_active_model() -> None:
 def _get_active_model() -> Optional[WaitTimeModel]:
     """
     Return the current model, reloading first if the sentinel signals a newer
-    version (training writes it on completion). Cheap on the hot path — one file
+    version (/model/reload writes it once a trained version is registered). Cheap on the hot path — one file
     read. The lock serializes the in-place swap against concurrent threadpool
     requests; callers use the returned reference for the whole request so a
     mid-request swap on another thread can't tear out the model they're using.
@@ -364,8 +366,8 @@ async def reload_model():
 
         return {
             "status": "success",
-            "message": f"Model reloaded. Version: {model.version} (sentinel written for all workers)",
-            "version": model.version,
+            "message": f"Model reloaded. Version: {model_version} (sentinel written for all workers)",
+            "version": model_version,
         }
     except Exception as e:
         logger.error(f"❌ Error reloading model: {e}")
@@ -465,7 +467,7 @@ async def train_model_endpoint(request: TrainRequest):
             # Subprocess gets a fresh Python interpreter — no module-cache issues,
             # and an OOM kill only tears down this process, not the uvicorn workers.
             proc = subprocess.Popen(
-                [sys.executable, _train_standalone, version, _TRAINING_STATUS_FILE, _SENTINEL_FILE],
+                [sys.executable, _train_standalone, version, _TRAINING_STATUS_FILE],
                 cwd=os.path.dirname(_train_standalone),
             )
             # Record the subprocess PID immediately so a worker recycling between
@@ -539,7 +541,7 @@ def predict(request: PredictionRequest):
     """
     # sync def: Starlette runs this in a threadpool, so concurrent /predict calls
     # overlap (notably their many DB queries) instead of serializing on the event
-    # loop. _get_active_model() also reloads if training wrote a new sentinel version.
+    # loop. _get_active_model() also reloads if /model/reload wrote a new sentinel version.
     current_model = _get_active_model()
 
     if current_model is None:
