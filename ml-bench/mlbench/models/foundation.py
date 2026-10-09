@@ -8,8 +8,8 @@ Two models, one series construction:
   the rides of a park. Context up to 8192 steps, 64 output patches × 16 = 1024 steps
   without autoregressive unrolling.
 * **TimesFM 3.0** (``google/timesfm-3.0-pytorch``; weights under the TimesFM
-  Non-Commercial License v1.0 — fine for park.fan, which is non-commercial, and for
-  this offline benchmark; NOT for production serving). Past-and-future covariates
+  Non-Commercial License v1.0 — non-commercial use only, which covers park.fan and
+  this offline benchmark; production serving is an owner decision on the licence). Past-and-future covariates
   are native in 3.0. Its variate attention is capped at 32 variates (targets AND
   covariates), which a park with 40–70 rides does not fit, so each ride is a
   univariate task with the covariates as extra variates. Quantile head 0.1 … 0.9:
