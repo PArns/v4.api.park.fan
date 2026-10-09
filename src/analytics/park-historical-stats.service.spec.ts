@@ -357,6 +357,37 @@ describe("ParkHistoricalStatsService", () => {
       expect(eligible).toContain("AND a.retired_at IS NULL");
     });
 
+    it("groups the hours outside a fenced read of the hypertable (PAR-832)", async () => {
+      // One grouped SELECT straight over queue_data_aggregates, with the
+      // closed-day anti join beside a COUNT(DISTINCT local day), made
+      // TimescaleDB's ChunkAppend fail at plan time with
+      // `no tlist entry for key 6` for five parks in production. The failure
+      // depends on row estimates and does not reproduce on a test database,
+      // so the shape that avoids it is pinned here instead.
+      aggregateQuery.mockImplementation(routeHourly(hourRows));
+      await service.getParkHourlyProfile(park, 1, 8);
+      const sql = String(
+        aggregateQuery.mock.calls.find((c) =>
+          String(c[0]).includes("hour_of_day"),
+        )![0],
+      );
+      const measured = sql.slice(
+        sql.indexOf("measured AS ("),
+        sql.lastIndexOf("SELECT"),
+      );
+      expect(measured).toContain("FROM queue_data_aggregates qda");
+      // Both halves still drop the park's shut days (PAR-698).
+      expect(measured).toContain("closed_park_days");
+      expect(measured).toMatch(/OFFSET 0\s*\)/);
+
+      const outer = sql.slice(sql.lastIndexOf("SELECT"));
+      expect(outer).toContain("FROM measured m");
+      expect(outer).toContain("COUNT(DISTINCT m.local_day)");
+      // The grouped query must not reach the hypertable itself again.
+      expect(outer).not.toContain("queue_data_aggregates");
+      expect(outer).not.toContain("closed_park_days");
+    });
+
     it("keeps only hours measured on enough days, ascending", async () => {
       aggregateQuery.mockImplementation(routeHourly(hourRows));
       const result = await service.getParkHourlyProfile(park, 1, 8);

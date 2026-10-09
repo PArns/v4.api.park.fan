@@ -764,6 +764,22 @@ export class ParkHistoricalStatsService {
    *
    * Days the park's schedule calls CLOSED are dropped by the shared rule in
    * `closed-park-days.sql.ts`, in both halves of the statement (PAR-698).
+   *
+   * The rows are read in `measured`, behind an `OFFSET 0` fence, and grouped
+   * OUTSIDE it — and that split is load-bearing (PAR-832). Written as one
+   * grouped SELECT over `queue_data_aggregates`, the planner (PostgreSQL 18.6,
+   * TimescaleDB 2.24.0) sorted the hypertable's chunks for the
+   * `COUNT(DISTINCT local day)` aggregate on an expression the closed-day anti
+   * join had made equal to `closed_park_days.day`, and TimescaleDB's
+   * ChunkAppend then failed to find that sort key in its target list:
+   * `XX000 no tlist entry for key 6`. It depended on the plan, so on the
+   * park's row estimates: 5 of 211 parks (Europa-Park, Energylandia,
+   * Hersheypark, Kennywood, Plopsaland) failed at the planner's 60-ride
+   * fetch, and every future day of their `/plan/day` came back with no rides.
+   * Behind the fence the grouping sees a subquery scan rather than chunks, so
+   * no sort is pushed into them. Do not inline it back: the results are
+   * identical, measured on all 211 parks, and the failure is not reproducible
+   * on a small database.
    */
   private async queryHourlyProfile(
     parkId: string,
@@ -793,34 +809,46 @@ export class ParkHistoricalStatsService {
          HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6
          ORDER BY AVG(qda.p90) DESC
          LIMIT $7
+       ),
+       measured AS (
+         SELECT qda."attractionId"                                 AS aid,
+                EXTRACT(HOUR FROM (qda.hour AT TIME ZONE $2))::int AS hour_of_day,
+                (qda.hour AT TIME ZONE $2)::date                   AS local_day,
+                qda.p25,
+                qda.p50,
+                qda.p90
+         FROM queue_data_aggregates qda
+         WHERE qda."parkId" = $1
+           AND qda.hour >= $3::date
+           AND qda.hour <  ($4::date + INTERVAL '1 day')
+           AND qda."sampleCount" >= $5
+           AND qda."attractionId" IN (SELECT aid FROM eligible)
+           -- Both halves of this query filter: eligible decides WHICH rides
+           -- are ranked, this decides WHAT their hours average to. With the
+           -- rule only in the ranking, a park's shut days would be gone from
+           -- it and still in every number the table prints.
+           AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
+         -- The planner fence (PAR-832, see the doc comment). Not a no-op.
+         OFFSET 0
        )
        SELECT
          a.slug,
          COALESCE(a.curated_name, a.name)           AS name,
          COALESCE(a.curated_land_name, a.land_name) AS land,
-         EXTRACT(HOUR FROM (qda.hour AT TIME ZONE $2))::int AS hour_of_day,
-         AVG(qda.p25)                               AS p25,
-         AVG(qda.p50)                               AS p50,
-         AVG(qda.p90)                               AS p90,
+         m.hour_of_day,
+         AVG(m.p25)                                 AS p25,
+         AVG(m.p50)                                 AS p50,
+         AVG(m.p90)                                 AS p90,
          -- Days THIS HOUR was measured for THIS ride. Distinct from
          -- e.sample_days, which counts the ride's measured days across the
          -- whole window and is the same number for all 24 of its hours.
-         COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date)::int AS hour_days,
+         COUNT(DISTINCT m.local_day)::int           AS hour_days,
          e.sample_days
-       FROM queue_data_aggregates qda
-       JOIN eligible e   ON e.aid = qda."attractionId"
-       JOIN attractions a ON a.id::text = qda."attractionId"
-       WHERE qda."parkId" = $1
-         AND qda.hour >= $3::date
-         AND qda.hour <  ($4::date + INTERVAL '1 day')
-         AND qda."sampleCount" >= $5
-         -- Both halves of this query filter: the CTE decides WHICH rides are
-         -- ranked, the outer SELECT decides WHAT their hours average to. With
-         -- the rule only in the CTE, a park's shut days would be gone from the
-         -- ranking and still in every number the table prints.
-         AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
-       GROUP BY a.id, a.slug, name, land, hour_of_day, e.sample_days
-       ORDER BY a.slug, hour_of_day`,
+       FROM measured m
+       JOIN eligible e    ON e.aid = m.aid
+       JOIN attractions a ON a.id::text = m.aid
+       GROUP BY a.id, a.slug, name, land, m.hour_of_day, e.sample_days
+       ORDER BY a.slug, m.hour_of_day`,
       [
         parkId,
         timezone,

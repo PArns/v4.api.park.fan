@@ -12,6 +12,14 @@ import { ForecastAccuracyService } from "../../ml/services/forecast-accuracy.ser
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { Park } from "../entities/park.entity";
 import { RideOpening } from "../../common/types/ride-opening.type";
+import { logInfrastructureError } from "../../common/utils/file-logger.util";
+import { Logger } from "@nestjs/common";
+
+// The failure paths below would otherwise append to ./logs on every run.
+jest.mock("../../common/utils/file-logger.util", () => ({
+  ...jest.requireActual("../../common/utils/file-logger.util"),
+  logInfrastructureError: jest.fn(),
+}));
 
 /**
  * The endpoint's job is to be honest about which of three regimes produced a
@@ -3268,6 +3276,40 @@ describe("PlanDayService", () => {
 
       expect(plan.context.openHour).toBeNull();
       expect(plan.ridesUnavailable?.reason).toBe("data_unavailable");
+    });
+
+    it("logs a failed profile where the monitor reads it (PAR-832)", async () => {
+      const date = farDate();
+      calendarDay = { date, status: "OPERATING", hours: null };
+      profileMock = jest
+        .fn()
+        .mockRejectedValue(new Error("no tlist entry for key 6"));
+      service = await build();
+      const errorSpy = jest
+        .spyOn(Logger.prototype, "error")
+        .mockImplementation(() => undefined);
+      const warnSpy = jest.spyOn(Logger.prototype, "warn");
+      (logInfrastructureError as jest.Mock).mockClear();
+
+      await service.buildPlanDay(park, date);
+
+      // A WARN that only `docker logs` kept is how a planner bug emptied every
+      // composed day of five parks for days without anyone seeing it.
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("hourly profile unavailable"),
+        expect.anything(),
+      );
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("hourly profile unavailable"),
+      );
+      expect(logInfrastructureError).toHaveBeenCalledWith(
+        "database",
+        "plan-day hourly profile",
+        expect.any(Error),
+        expect.objectContaining({ parkSlug: park.slug }),
+      );
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
     });
 
     it("still reports a stated closure when a dependency is down", async () => {
