@@ -56,15 +56,19 @@ The ML Service is a standalone Python application responsible for predicting wai
      exist (PAR-815).
 4. **Training-time budget** (PAR-815): the window runs from the first row
    (2025-12-24) to now, capped at `TRAIN_LOOKBACK_YEARS` (2), so it grows daily
-   (1682 s on 2026-09-04, 2520 s on 2026-10-07). `TRAIN_MAX_ROWS` (default
-   4.5M, 0 = off) bounds the training pool after the 30-day hold-out: the last
-   `TRAIN_FULL_RESOLUTION_DAYS` (90) stay whole and older rows are thinned by a
-   seeded uniform sample, so every month keeps its share — a rolling window would
-   drop the oldest season while no ride has a full year yet. The thinning runs
-   after feature engineering, so feature values are unchanged; fetch and feature
-   engineering still grow until the lookback cap, which is why the processor's
-   `ML_TRAINING_TIMEOUT_MINUTES` default is 90. Peak memory only falls
-   (`CATBOOST_USED_RAM_LIMIT` and the container limit are untouched).
+   (1682 s on 2026-09-04, 2520 s on 2026-10-07). The model trains on the **full**
+   pool; the processor's `ML_TRAINING_TIMEOUT_MINUTES` default is 90 to give it
+   headroom. Every run records per-phase durations and row counts (`fetch`,
+   `features`, `pool`, `fit`, `total_seconds`) as `training_timings` in the model
+   metadata, in `/train/status` (`timings`) and in `/model/info/:version`
+   (`trainingTimings`); the processor logs them — that is where to look before
+   changing anything about the budget.
+   - **Opt-in row cap, NOT enabled:** `TRAIN_MAX_ROWS` (default 0 = off) bounds
+     the pool after the 30-day hold-out: the last `TRAIN_FULL_RESOLUTION_DAYS`
+     (90) stay whole and older rows are thinned by a seeded uniform sample, so
+     every month keeps its share; it runs after feature engineering, so feature
+     values are unchanged, and it only shortens the fit. Enable it only after an
+     A/B (full vs capped) on an out-of-time window shows no accuracy loss.
 
 
 ## Usage

@@ -258,6 +258,7 @@ class ModelInfoResponse(BaseModel):
     file_size_mb: Optional[float] = None
     hyperparameters: Optional[dict] = None
     featureStats: Optional[List[dict]] = None
+    trainingTimings: Optional[dict] = None
 
 
 # Endpoints
@@ -333,6 +334,7 @@ def get_saved_model_info(version: str):
         file_size_mb=round(os.path.getsize(model_path) / (1024 * 1024), 2),
         hyperparameters=metadata.get("hyperparameters"),
         featureStats=metadata.get("feature_stats"),
+        trainingTimings=metadata.get("training_timings"),
     )
 
 
@@ -520,6 +522,7 @@ async def get_training_status():
         "finished_at": status.get("finished_at"),
         "status": status.get("status", "idle"),
         "error": status.get("error"),
+        "timings": status.get("timings"),
     }
 
 

@@ -399,9 +399,22 @@ def train_model(version: str = None) -> Optional[dict]:
         logger.info(f"   Total rows available: {result.total_rows:,}")
         logger.info("")
 
+    # Per-phase durations and row counts (PAR-815). Saved in the model metadata
+    # and the training status so a slow nightly run shows which phase grew.
+    import time
+
+    run_start = time.perf_counter()
+    timings: dict = {}
+
     # 2. Fetch training data
     logger.info("📊 Fetching training data from PostgreSQL...")
+    phase_start = time.perf_counter()
     df = fetch_training_data(start_date, end_date)
+    timings["fetch"] = {
+        "seconds": round(time.perf_counter() - phase_start, 1),
+        "rows": len(df),
+    }
+    logger.info(f"   ⏱️  Fetch: {timings['fetch']['seconds']:.1f}s, {len(df):,} rows")
     after_fetch_memory = get_memory_usage()
     logger.info(f"   Rows fetched: {len(df):,}")
     logger.info(
@@ -421,13 +434,17 @@ def train_model(version: str = None) -> Optional[dict]:
     logger.info("")
 
     # 3. Feature engineering
-    import time
-
     logger.info("🔧 Engineering features...")
     before_features_memory = get_memory_usage()
+    rows_before_features = len(df)
     feature_start = time.time()
     df = engineer_features(df, start_date, end_date)
     feature_time = time.time() - feature_start
+    timings["features"] = {
+        "seconds": round(feature_time, 1),
+        "rows_in": rows_before_features,
+        "rows_out": len(df),
+    }
     after_features_memory = get_memory_usage()
     logger.info(f"   Features: {len(get_feature_columns())}")
     logger.info(
@@ -456,12 +473,19 @@ def train_model(version: str = None) -> Optional[dict]:
         f"   Chronological hold-out: {len(df_holdout):,} rows (last 30 days, >{holdout_cutoff.strftime('%Y-%m-%d')})"
     )
     logger.info(f"   Training pool (excl. hold-out): {len(df):,} rows")
+    rows_before_cap = len(df)
     df = cap_training_rows(
         df,
         settings.TRAIN_MAX_ROWS,
         settings.TRAIN_FULL_RESOLUTION_DAYS,
         settings.CATBOOST_RANDOM_SEED,
     )
+    timings["pool"] = {
+        "holdout_rows": len(df_holdout),
+        "rows_before_cap": rows_before_cap,
+        "rows_after_cap": len(df),
+        "max_rows": settings.TRAIN_MAX_ROWS,
+    }
     gc.collect()
     logger.info("")
 
@@ -701,7 +725,17 @@ def train_model(version: str = None) -> Optional[dict]:
 
     model = WaitTimeModel(version)
 
+    fit_start = time.perf_counter()
     metrics = model.train(X_train, y_train, X_val, y_val, sample_weights=train_weights)
+    timings["fit"] = {
+        "seconds": round(time.perf_counter() - fit_start, 1),
+        "train_rows": len(X_train),
+        "val_rows": len(X_val),
+    }
+    logger.info(
+        f"   ⏱️  Fit: {timings['fit']['seconds']:.1f}s "
+        f"({len(X_train):,} train / {len(X_val):,} val rows)"
+    )
 
     logger.info("\n" + "=" * 60)
     logger.info("✅ Training Complete!")
@@ -754,6 +788,17 @@ def train_model(version: str = None) -> Optional[dict]:
     logger.info("")
 
     # 9. Save model
+    timings["total_seconds"] = round(time.perf_counter() - run_start, 1)
+    model.metadata["training_timings"] = timings
+    logger.info(
+        "⏱️  Phases: fetch %.0fs · features %.0fs · fit %.0fs · total %.0fs (excl. range query and save)"
+        % (
+            timings["fetch"]["seconds"],
+            timings["features"]["seconds"],
+            timings["fit"]["seconds"],
+            timings["total_seconds"],
+        )
+    )
     logger.info("💾 Saving model...")
     model.save()
     logger.info("")

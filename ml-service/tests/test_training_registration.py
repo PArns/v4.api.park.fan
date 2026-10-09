@@ -39,7 +39,12 @@ def _save_fake_model(model_dir, version, mae=4.433):
     with open(os.path.join(model_dir, f"catboost_{version}.cbm"), "wb") as f:
         f.write(b"cbm")
     joblib.dump(
-        {"metrics": {"mae": mae}, "train_samples": 10, "val_samples": 2},
+        {
+            "metrics": {"mae": mae},
+            "train_samples": 10,
+            "val_samples": 2,
+            "training_timings": {"fetch": {"seconds": 1.0, "rows": 12}},
+        },
         os.path.join(model_dir, f"metadata_{version}.pkl"),
     )
 
@@ -117,6 +122,8 @@ def test_saved_model_completes_and_writes_the_sentinel():
     assert code == 0
     assert status["status"] == "completed"
     assert sentinel is True
+    # The per-phase timings saved with the model reach the training status.
+    assert status["timings"] == {"fetch": {"seconds": 1.0, "rows": 12}}
 
 
 # --- cap_training_rows -----------------------------------------------------
@@ -130,6 +137,14 @@ def _pool(days=300, rows_per_day=100):
             "waitTime": np.arange(days * rows_per_day),
         }
     )
+
+
+def test_cap_is_off_by_default():
+    """The owner's call: train on the full pool. The cap is opt-in until an
+    out-of-time A/B (full vs capped) shows it costs no accuracy."""
+    from config import Settings
+
+    assert Settings.model_fields["TRAIN_MAX_ROWS"].default == 0
 
 
 def test_cap_is_a_no_op_under_the_budget_or_when_disabled():

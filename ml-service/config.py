@@ -120,9 +120,11 @@ class Settings(BaseSettings):
     # TRAIN_FULL_RESOLUTION_DAYS stay complete and OLDER rows are thinned by a
     # uniform random sample — every month keeps its share of rows, so no season
     # drops out (a rolling window would drop the oldest months, and no ride has a
-    # full year of history yet). The pool was ~3.9M rows on 2026-10-08, so 4.5M
-    # first bites in early November 2026. 0 disables the cap.
-    TRAIN_MAX_ROWS: int = 4_500_000
+    # full year of history yet). OPT-IN, default 0 = off: the model trains on the
+    # full pool (~3.9M rows on 2026-10-08). Enable only after an A/B (full vs
+    # capped) on an out-of-time window shows no accuracy loss; the per-phase
+    # timings in the model metadata say whether the fit is the phase worth capping.
+    TRAIN_MAX_ROWS: int = 0
     TRAIN_FULL_RESOLUTION_DAYS: int = 90
     TRAIN_TEST_SPLIT: float = 0.85
     VALIDATION_DAYS: int = (

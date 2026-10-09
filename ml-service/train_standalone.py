@@ -79,7 +79,8 @@ def main() -> int:
                 "train_model stopped early without saving a model "
                 "(no training data or an empty training set — see log above)"
             )
-        if load_saved_metadata(version) is None:
+        saved = load_saved_metadata(version)
+        if saved is None:
             raise RuntimeError(
                 f"train_model returned, but no model file and metadata exist for {version}"
             )
@@ -91,6 +92,7 @@ def main() -> int:
             "status": "completed",
             "error": None,
             "finished_at": datetime.now(timezone.utc).isoformat(),
+            "timings": saved.get("training_timings"),
         })
 
         try:

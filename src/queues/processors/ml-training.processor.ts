@@ -293,6 +293,13 @@ export class MLTrainingProcessor {
       this.logger.log(
         `   Features: ${(modelInfo.features as string[] | undefined)?.length || 0}`,
       );
+      // Per-phase durations and row counts the ml-service saved with the model
+      // (PAR-815), so a slow run shows whether fetch, features or fit grew.
+      if (modelInfo.trainingTimings) {
+        this.logger.log(
+          `   Phase timings: ${JSON.stringify(modelInfo.trainingTimings)}`,
+        );
+      }
 
       // Cleanup old models (keep only active + last 2 backups)
       await this.cleanupOldModels();
