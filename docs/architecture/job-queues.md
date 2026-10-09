@@ -33,7 +33,7 @@ The application relies heavily on background processing for data consistency and
 ### Helper & Cleanups
 | Processor | Purpose |
 | --- | --- |
-| `CacheWarmupProcessor` | Pre-fills Redis caches after data syncs to ensure low latency. |
+| `LiveCacheWarmupProcessor` (`live-cache-warmup`) | Pre-fills the park/attraction/occupancy Redis caches after each wait-times sync. Enqueued by `WaitTimesProcessor`, not a cron; kept out of the `wait-times` job so the warmup never delays the next fetch (PAR-822). |
 | `EntityMappingsProcessor` | Maps external IDs (e.g., from different APIs) to our internal UUIDs. |
 | `GeoipUpdateProcessor` | Refreshes GeoLite2-City data every 48 hours. |
 
@@ -44,6 +44,10 @@ The application relies heavily on background processing for data consistency and
     *   Normalizes status / wait time across sources.
     *   Saves to Postgres (`queue_data`).
     *   Updates Redis real-time keys.
+    *   Writes the hourly heartbeats, then enqueues `warmup-after-sync` on `live-cache-warmup`.
+    *   Logs `⏱️ wait-times phases {json}`: `prepareMs`, `parksMs`, `heartbeatsMs`, plus per-park
+        sums (`mappingsSumMs`, `fetchSumMs`, `fetch.<source>.SumMs`, `writeSumMs`) that overlap
+        because five parks run in parallel.
 
 ## Recently Retired Jobs
 

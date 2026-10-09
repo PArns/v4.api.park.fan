@@ -145,6 +145,7 @@ export interface FailingJob {
 /** Queues whose failures matter — every queue this app registers. */
 const MONITORED_QUEUES = [
   "wait-times",
+  "live-cache-warmup",
   "park-metadata",
   "children-metadata",
   "manual-metadata",

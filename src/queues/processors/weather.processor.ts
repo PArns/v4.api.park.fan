@@ -184,9 +184,10 @@ export class WeatherProcessor {
         `✅ Weather sync complete! Saved ${totalCurrent} current, ${totalForecast} forecast records`,
       );
 
-      // Mark this sync type as done. TTL sits just under the cron interval
-      // (full=12h, current=6h) so the next scheduled run always proceeds, but a
-      // restart in between skips the redundant re-sync.
+      // Mark this sync type as done. TTL sits under the cron interval (full
+      // every 12h; current at 06:00/18:00, also 12h apart since PAR-822) so the
+      // next scheduled run always proceeds, but a restart in between skips the
+      // redundant re-sync.
       const doneTtl = currentOnly ? 5 * 60 * 60 : 11 * 60 * 60;
       await this.redis.set(doneKey, new Date().toISOString(), "EX", doneTtl);
     } catch (error: unknown) {

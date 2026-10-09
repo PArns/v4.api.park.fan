@@ -15,6 +15,9 @@ export function bullPrefix(): string {
  */
 export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   { name: "wait-times" },
+  // The cache warmup after each wait-times sync, off the fetch's critical
+  // path (PAR-822). See LiveCacheWarmupProcessor.
+  { name: "live-cache-warmup" },
   { name: "park-metadata" },
   { name: "children-metadata" }, // Phase 6.2: Combined Attractions + Shows + Restaurants
   { name: "six-flags-heights" }, // Ride heights the wiki does not carry

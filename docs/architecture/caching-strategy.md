@@ -112,9 +112,17 @@ Warmup tasks are executed **sequentially** to prevent database connection conten
 
 ### When Warmup Runs
 
+The post-sync warmup has its own queue (`live-cache-warmup`, `LiveCacheWarmupProcessor`) since
+PAR-822. Inside the `wait-times` job it took ~210 s of a ~263 s run (measured 2026-10-09: park
+caches ~68 s, top-1000 attractions ~92 s, occupancy ~43 s — about 125 s of it the 1 s pause between
+batches), and because `wait-times` runs one job at a time, a run past five minutes delayed the next
+fetch. The three warmups still run sequentially, in the same order, with the same pacing. When a
+newer warmup request is already waiting, the one about to start returns at once, so a backlog
+collapses to the newest request. Both jobs log a `⏱️ … phases {json}` line with their per-phase wall-clock.
+
 | Trigger                                | When                                 | What gets warmed                                                                                                                       |
 | -------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **Wait-times sync** (every 5 min)      | After `WaitTimesProcessor`           | Parks (Operating + Popular), top 1000 attractions (User hits + Data density), occupancy, geo discovery, global stats, park statistics. |
+| **Wait-times sync** (every 5 min)      | `live-cache-warmup` job, enqueued at the end of every `WaitTimesProcessor` run | Parks (Operating + Popular), top 1000 attractions (User hits + Data density), occupancy, geo discovery, global stats, park statistics. |
 | **Hourly predictions**                 | After `PredictionGeneratorProcessor` | Parks opening in next 12h.                                                                                                             |
 | **warmup-calendar-daily** (daily, 5am) | Cron on `park-metadata`              | **Calendar** for **all parks** (-1 month to +3 months).                                                                                |
 

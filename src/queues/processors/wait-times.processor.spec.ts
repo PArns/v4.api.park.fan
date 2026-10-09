@@ -10,7 +10,6 @@ import { ShowsService } from "../../shows/shows.service";
 import { RestaurantsService } from "../../restaurants/restaurants.service";
 import { QueueDataService } from "../../queue-data/queue-data.service";
 import { MultiSourceOrchestrator } from "../../external-apis/data-sources/multi-source-orchestrator.service";
-import { CacheWarmupService } from "../services/cache-warmup.service";
 import { PopularityService } from "../../popularity/popularity.service";
 import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { RideAlertsService } from "../../ride-alerts/ride-alerts.service";
@@ -95,6 +94,11 @@ describe("WaitTimesProcessor", () => {
     getRepository: () => mockAttractionRepository,
   };
 
+  const liveCacheWarmupQueue = { add: jest.fn().mockResolvedValue({}) };
+  const mockParksService = { findAll: jest.fn() };
+  const mockPopularityService = { getTopParks: jest.fn() };
+  const mockOrchestrator = { fetchParkLiveData: jest.fn() };
+
   beforeEach(async () => {
     redisStore.clear();
     pipelineOps.length = 0;
@@ -116,7 +120,7 @@ describe("WaitTimesProcessor", () => {
           provide: getRepositoryToken(Park),
           useValue: { findOne: jest.fn(), update: jest.fn() },
         },
-        { provide: ParksService, useValue: { findAll: jest.fn() } },
+        { provide: ParksService, useValue: mockParksService },
         { provide: AttractionsService, useValue: mockAttractionsService },
         { provide: ShowsService, useValue: { getRepository: () => ({}) } },
         {
@@ -124,9 +128,12 @@ describe("WaitTimesProcessor", () => {
           useValue: { getRepository: () => ({}) },
         },
         { provide: QueueDataService, useValue: mockQueueDataService },
-        { provide: MultiSourceOrchestrator, useValue: {} },
-        { provide: CacheWarmupService, useValue: {} },
-        { provide: PopularityService, useValue: { getTopParks: jest.fn() } },
+        { provide: MultiSourceOrchestrator, useValue: mockOrchestrator },
+        {
+          provide: getQueueToken("live-cache-warmup"),
+          useValue: liveCacheWarmupQueue,
+        },
+        { provide: PopularityService, useValue: mockPopularityService },
         { provide: PredictionDeviationService, useValue: {} },
         {
           provide: RideAlertsService,
@@ -137,6 +144,43 @@ describe("WaitTimesProcessor", () => {
     }).compile();
 
     processor = module.get(WaitTimesProcessor);
+  });
+
+  describe("handleSyncWaitTimes — cache warmup off the critical path (PAR-822)", () => {
+    it("enqueues the warmup instead of running it inside the sync", async () => {
+      const parks = [
+        { id: "park-b", name: "B", wikiEntityId: "wiki-b" },
+        { id: "park-a", name: "A", wikiEntityId: "wiki-a" },
+      ];
+      mockParksService.findAll.mockResolvedValue(parks);
+      mockPopularityService.getTopParks.mockResolvedValue(["park-a"]);
+      mockAttractionRepository.find.mockResolvedValue([]);
+      mockOrchestrator.fetchParkLiveData.mockResolvedValue({ entities: [] });
+
+      await processor.handleSyncWaitTimes({} as never);
+
+      expect(liveCacheWarmupQueue.add).toHaveBeenCalledTimes(1);
+      const [name, data, opts] = liveCacheWarmupQueue.add.mock.calls[0];
+      expect(name).toBe("warmup-after-sync");
+      // Priority order from the sync (popular first) is what occupancy uses.
+      expect(data.parkIds).toEqual(["park-a", "park-b"]);
+      expect(typeof data.syncStartedAt).toBe("number");
+      expect(opts).toMatchObject({ removeOnComplete: true });
+    });
+
+    it("finishes the sync when the enqueue fails", async () => {
+      mockParksService.findAll.mockResolvedValue([
+        { id: "park-a", name: "A", wikiEntityId: "wiki-a" },
+      ]);
+      mockPopularityService.getTopParks.mockResolvedValue([]);
+      mockAttractionRepository.find.mockResolvedValue([]);
+      mockOrchestrator.fetchParkLiveData.mockResolvedValue({ entities: [] });
+      liveCacheWarmupQueue.add.mockRejectedValueOnce(new Error("redis down"));
+
+      await expect(
+        processor.handleSyncWaitTimes({} as never),
+      ).resolves.toBeUndefined();
+    });
   });
 
   describe("processLandData (N+1 → bulk-diff land sync)", () => {
