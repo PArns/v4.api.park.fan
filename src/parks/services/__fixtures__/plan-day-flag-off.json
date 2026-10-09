@@ -1,0 +1,175 @@
+{
+  "2026-09-14": {
+    "parkSlug": "phantasialand",
+    "timezone": "Europe/Berlin",
+    "context": {
+      "date": "2026-09-14",
+      "status": "OPERATING",
+      "openHour": 9,
+      "closeHour": 18,
+      "hoursSource": "schedule",
+      "crowdLevel": "high",
+      "weather": null,
+      "isHoliday": false,
+      "isBridgeDay": false,
+      "isSchoolVacation": false,
+      "isWeekend": false,
+      "neighborHolidays": [],
+      "liveWaitTimes": {
+        "available": true,
+        "reason": null
+      }
+    },
+    "tier": "measured",
+    "leadDays": 0,
+    "leadTimeMae": null,
+    "accuracy": {
+      "basis": "unmeasured"
+    },
+    "rides": [
+      {
+        "attractionSlug": "taron",
+        "attractionName": "Taron",
+        "land": "Mystery",
+        "hours": [
+          {
+            "hour": 9,
+            "wait": 30
+          },
+          {
+            "hour": 10,
+            "wait": 30
+          },
+          {
+            "hour": 11,
+            "wait": 30
+          },
+          {
+            "hour": 12,
+            "wait": 45,
+            "source": "composed"
+          },
+          {
+            "hour": 13,
+            "wait": 55,
+            "source": "composed"
+          },
+          {
+            "hour": 14,
+            "wait": 60,
+            "source": "composed"
+          },
+          {
+            "hour": 15,
+            "wait": 50,
+            "source": "composed"
+          },
+          {
+            "hour": 16,
+            "wait": 40,
+            "source": "composed"
+          },
+          {
+            "hour": 17,
+            "wait": 30,
+            "source": "composed"
+          },
+          {
+            "hour": 18,
+            "wait": 20,
+            "source": "composed"
+          }
+        ],
+        "dayPeak": 60,
+        "uncertaintyMinutes": 12,
+        "sampleDays": 141,
+        "latitude": null,
+        "longitude": null
+      }
+    ],
+    "shows": []
+  },
+  "2026-09-24": {
+    "parkSlug": "phantasialand",
+    "timezone": "Europe/Berlin",
+    "context": {
+      "date": "2026-09-24",
+      "status": "OPERATING",
+      "openHour": 9,
+      "closeHour": 18,
+      "hoursSource": "schedule",
+      "crowdLevel": "high",
+      "weather": null,
+      "isHoliday": false,
+      "isBridgeDay": false,
+      "isSchoolVacation": false,
+      "isWeekend": false,
+      "neighborHolidays": [],
+      "liveWaitTimes": {
+        "available": true,
+        "reason": null
+      }
+    },
+    "tier": "composed",
+    "leadDays": 10,
+    "leadTimeMae": null,
+    "accuracy": {
+      "basis": "unmeasured"
+    },
+    "rides": [
+      {
+        "attractionSlug": "taron",
+        "attractionName": "Taron",
+        "land": "Mystery",
+        "hours": [
+          {
+            "hour": 9,
+            "wait": 30
+          },
+          {
+            "hour": 10,
+            "wait": 30
+          },
+          {
+            "hour": 11,
+            "wait": 40
+          },
+          {
+            "hour": 12,
+            "wait": 45
+          },
+          {
+            "hour": 13,
+            "wait": 55
+          },
+          {
+            "hour": 14,
+            "wait": 60
+          },
+          {
+            "hour": 15,
+            "wait": 50
+          },
+          {
+            "hour": 16,
+            "wait": 40
+          },
+          {
+            "hour": 17,
+            "wait": 30
+          },
+          {
+            "hour": 18,
+            "wait": 20
+          }
+        ],
+        "dayPeak": 60,
+        "uncertaintyMinutes": 12,
+        "sampleDays": 141,
+        "latitude": null,
+        "longitude": null
+      }
+    ],
+    "shows": []
+  }
+}

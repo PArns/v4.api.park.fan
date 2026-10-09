@@ -9,6 +9,7 @@ import { ParkIntegrationService } from "./services/park-integration.service";
 import { ParkEnrichmentService } from "./services/park-enrichment.service";
 import { CalendarService } from "./services/calendar.service";
 import { PlanDayService } from "./services/plan-day.service";
+import { H5ProfileService } from "./services/h5-profile.service";
 import { PlanDayCoverageService } from "./services/plan-day-coverage.service";
 import { PlanDayCoverage } from "./entities/plan-day-coverage.entity";
 import { ForecastArchiveService } from "./services/forecast-archive.service";
@@ -94,6 +95,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     ParkEnrichmentService,
     CalendarService,
     PlanDayService,
+    H5ProfileService,
     PlanDayCoverageService,
     ForecastArchiveService,
     ForecastArchiveScoringService,

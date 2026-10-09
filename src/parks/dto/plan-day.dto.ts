@@ -89,6 +89,80 @@ export class PlanDayHourDto {
   source?: PlanDayHourSource;
 }
 
+/**
+ * Which composition produced a ride's composed numbers (PAR-834).
+ *
+ * - `peak_scaled` — the year's hourly P50 profile stretched so its maximum is
+ *   the day level (`composeDayCurve`). Hourly only.
+ * - `h5` — the H5 hybrid profile of the ride's last 56 days, 15-minute, plain:
+ *   no TFT level was available for the day.
+ * - `h5_tft` — the same profile scaled by the RATIO of the TFT day level to the
+ *   ride's median daily P90 over those 56 days; the rope-drop hour unscaled.
+ */
+export type PlanDayComposer = "peak_scaled" | "h5" | "h5_tft";
+
+/** One quarter-hour of a shadow curve. Internal, never serialised. */
+export interface PlanDaySlotShadow {
+  minute: number;
+  start: string;
+  wait: number;
+  /** `ARCHIVE_SOURCE_CODES`: `k` old composer, `h` plain H5, `t` H5 × TFT. */
+  code: "k" | "h" | "t";
+}
+
+/**
+ * The composer A/B the forward archive writes (PAR-834), computed on every
+ * capture whatever `PLAN_DAY_H5_COMPOSER` says: per ride, the old composer,
+ * plain H5 and routed H5 (`h5LevelFor`) on the same quarter-hours. Internal —
+ * `PlanDayService.buildPlanDayWithShadow` returns it beside the plan, and no
+ * endpoint serialises it.
+ */
+export interface PlanDayShadowCurve {
+  attractionId: string;
+  composer: "peak_scaled" | "h5" | "h5_routed";
+  slots: PlanDaySlotShadow[];
+}
+
+export class PlanDaySlotDto {
+  @ApiProperty({
+    example: 855,
+    description:
+      "Park-local wall-clock minute the slot STARTS at, counted from the " +
+      "planned date's midnight and unfolded past it exactly like " +
+      "`PlanDayHourDto.hour`: 600 is 10:00, 1440 the midnight that ends a day " +
+      "running past it, 1455 its 00:15. `floor(minute / 60)` is the slot's " +
+      "`hours[].hour`. Always a multiple of 15.",
+  })
+  minute: number;
+
+  @ApiProperty({
+    example: "2026-10-17T12:15:00.000Z",
+    description:
+      "The same slot start as an instant (UTC). Use it for anything that " +
+      "crosses a DST switch; use `minute` to place the slot on the day's axis.",
+  })
+  start: string;
+
+  @ApiProperty({
+    example: 37,
+    description:
+      "Expected wait in minutes for this quarter-hour, in WHOLE minutes and " +
+      "NOT rounded to 5: the five-minute step is a display convention, and " +
+      "rounding a 15-minute series to it before an estimator reads it throws " +
+      "away the resolution the series exists for. Round for display.",
+  })
+  wait: number;
+
+  @ApiProperty({
+    required: false,
+    enum: ["measured", "composed"],
+    description:
+      "Present only where this slot did NOT come from the response's `tier`, " +
+      "with the same meaning as `PlanDayHourDto.source`.",
+  })
+  source?: PlanDayHourSource;
+}
+
 export class PlanDayRideDto {
   @ApiProperty({ example: "taron" })
   attractionSlug: string;
@@ -111,6 +185,36 @@ export class PlanDayRideDto {
       "the queue is the same all day.",
   })
   hours: PlanDayHourDto[];
+
+  @ApiProperty({
+    type: [PlanDaySlotDto],
+    required: false,
+    description:
+      "The same day in QUARTER-HOURS (PAR-834), ascending by `minute`. Present " +
+      "only while the H5 composer is switched on (`PLAN_DAY_H5_COMPOSER`), and " +
+      "then on every ride that has a 15-minute answer: the model's own " +
+      "15-minute predictions where `hours` says `measured`, the H5 profile " +
+      "where it says `composed`. ABSENT is not empty — it means this response " +
+      "or this ride has no 15-minute series, and `hours` is the answer. A " +
+      "slot that is missing from a present series has no 15-minute value " +
+      "either (an hour the profile never measured, or one composed by the " +
+      "hourly fallback, see `composer`): read the hour's value there. " +
+      "`hours[h]` is the mean of the slots of hour `h`, rounded to 5, wherever " +
+      "it was built from slots — so the two never disagree about an hour.",
+  })
+  slots?: PlanDaySlotDto[];
+
+  @ApiProperty({
+    required: false,
+    enum: ["peak_scaled", "h5", "h5_tft"],
+    description:
+      "Which composition produced this ride's COMPOSED numbers; absent when " +
+      "none of its numbers were composed (all measured, or another tier). " +
+      "Diagnostic: it is how the forward archive tells the old composer from " +
+      "the new one, and it changes nothing a reader has to do. See " +
+      "docs/frontend/plan-day-endpoint.md §2a.",
+  })
+  composer?: PlanDayComposer;
 
   @ApiProperty({
     example: 50,
@@ -214,9 +318,23 @@ export class PlanDayRideDto {
 
   @ApiProperty({
     example: 141,
-    description: "Measured days behind the historical shape.",
+    description:
+      "Measured days behind the ride's year-long hourly shape — the same " +
+      "number whichever composer drew the curve, so a reader's 'is this ride " +
+      "well known' floor means the same thing on every day. The days behind " +
+      "an H5 curve are `profileDays`.",
   })
   sampleDays: number;
+
+  @ApiProperty({
+    required: false,
+    example: 49,
+    description:
+      "Present on an H5-composed ride (`composer` `h5` / `h5_tft`): the days " +
+      "of the 56-day window that had readings for this ride. Diagnostic; not a " +
+      "replacement for `sampleDays`.",
+  })
+  profileDays?: number;
 
   @ApiProperty({
     required: false,

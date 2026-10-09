@@ -318,7 +318,20 @@ function segmentsOf(curve: ArchivedCurve): string[] {
 }
 
 /** Sources whose number comes from the day level, not the hourly model. */
-const LEVEL_DERIVED = new Set(["composed", "climatology"]);
+/**
+ * The composer A/B surfaces (PAR-834) and the source each is scored under.
+ * Their own use case, so nothing they add reaches a UC3 number the served
+ * planner is judged by.
+ */
+export const SHADOW_USE_CASE = "UC3S";
+const SHADOW_SOURCES: Partial<Record<ArchiveSurface, string>> = {
+  plan_day_shadow_peak: "shadow_peak_scaled",
+  plan_day_shadow_h5: "shadow_h5",
+  plan_day_shadow_routed: "shadow_h5_routed",
+};
+
+// `composed_h5` is not here: the plain H5 profile uses no day level at all.
+const LEVEL_DERIVED = new Set(["composed", "composed_h5_tft", "climatology"]);
 
 interface Compared {
   slot: number;
@@ -546,7 +559,27 @@ export function scoreParkDay(
     }
   >();
 
-  for (const curve of input.curves) {
+  // The routed H5 curve is only archived where it differs from plain H5 (a
+  // TFT level applied); elsewhere it IS the plain curve, so the plain row is
+  // scored a second time under the routed name and the two always cover the
+  // same ride-days.
+  const routed = new Set(
+    input.curves
+      .filter((c) => c.surface === "plan_day_shadow_routed")
+      .map((c) => `${c.originAt}|${c.attractionId}`),
+  );
+  const curves = [
+    ...input.curves,
+    ...input.curves
+      .filter(
+        (c) =>
+          c.surface === "plan_day_shadow_h5" &&
+          !routed.has(`${c.originAt}|${c.attractionId}`),
+      )
+      .map((c) => ({ ...c, surface: "plan_day_shadow_routed" as const })),
+  ];
+
+  for (const curve of curves) {
     const truthSlots = truth.get(curve.attractionId);
     const segments = segmentsOf(curve);
 
@@ -578,6 +611,15 @@ export function scoreParkDay(
       curve.surface === "plan_day" && curve.levelSource
         ? `level_${curve.levelSource}`
         : null;
+    // A composer A/B row (PAR-834): scored under its own use case and one
+    // source per composer, and never into "all" — the three are the same
+    // slots three times, and pooling them would triple-count the day.
+    const shadowSource = SHADOW_SOURCES[curve.surface] ?? null;
+    if (shadowSource) {
+      for (const c of compared) {
+        c.src = shadowSource;
+      }
+    }
 
     // ---- slot metrics: MAE, bias, band coverage ----
     for (const c of compared) {
@@ -589,7 +631,7 @@ export function scoreParkDay(
         useCase = bucket.useCase;
         lead = bucket.lead;
       } else {
-        useCase = "UC3";
+        useCase = shadowSource ? SHADOW_USE_CASE : "UC3";
         lead = dayLead(curve.leadDays);
       }
       const err = c.pred - c.truth;
@@ -605,6 +647,7 @@ export function scoreParkDay(
       }
       for (const seg of segments) {
         acc.add(region, useCase, lead, c.src, seg, counters);
+        if (shadowSource) continue;
         acc.add(region, useCase, lead, "all", seg, counters);
         if (levelKey && LEVEL_DERIVED.has(c.src)) {
           acc.add(region, useCase, lead, levelKey, seg, counters);
@@ -615,7 +658,12 @@ export function scoreParkDay(
     // ---- ride-day metrics: best time (D3), slot Spearman, dayPeak ----
     // Only a whole day is a ride-day: intraday origins see a few hours of it.
     if (curve.originKind === "intraday") continue;
-    const useCase = curve.surface === "park_hourly" ? "UC2" : "UC3";
+    const useCase =
+      curve.surface === "park_hourly"
+        ? "UC2"
+        : shadowSource
+          ? SHADOW_USE_CASE
+          : "UC3";
     const lead = dayLead(curve.leadDays);
     const srcs = new Set(compared.map((c) => c.src));
     const rideSource = srcs.size === 1 ? [...srcs][0] : "mixed";
@@ -676,6 +724,7 @@ export function scoreParkDay(
     if (Object.keys(rideCounters).length > 0) {
       for (const seg of segments) {
         acc.add(region, useCase, lead, rideSource, seg, rideCounters);
+        if (shadowSource) continue;
         acc.add(region, useCase, lead, "all", seg, rideCounters);
         if (levelKey) {
           // dayPeak IS the level; the shape metrics only when the hours were.

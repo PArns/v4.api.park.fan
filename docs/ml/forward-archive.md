@@ -44,6 +44,38 @@ its source in `sources` (`p` = pcn_blend, `c` = catboost); `/plan/day` hours
 record `m` measured (the hour-mean of that same served curve), `k` composed,
 `l` climatology, `o` observed. `-` is a slot the payload did not carry.
 
+**Composer A/B (PAR-834).** With `PLAN_DAY_H5_COMPOSER=true` a planner ride that
+carries `slots` is archived at **15 minutes** (`slot_minutes = 15`), exactly as
+the frontend contract reads it: the slot where there is one, the hour's value for
+an hour with no slot at all. Composed numbers are coded by their composer, so the
+board scores the two side by side under their own source names: `k` composed
+(old: hourly P50 stretched to the level), `h` `composed_h5` (H5, no level), `t`
+`composed_h5_tft` (H5 × TFT level ÷ the ride's 56-day P90). `composed_h5_tft`
+counts as level-derived for the `level_<x>` split; `composed_h5` does not — it
+uses no level. Rides the flag leaves on the old composer stay hourly with `k`.
+
+**Composer shadow (PAR-834), whatever the flag says.** The 06:00 / 07:00 captures
+call `PlanDayService.buildPlanDayWithShadow` and also write, per ride that has
+both an old-composer curve and an H5 profile, the composers side by side on the
+SAME quarter-hours: surface 3 `plan_day_shadow_peak` (old composer, its hour
+repeated across four quarters, `k`), 4 `plan_day_shadow_h5` (plain H5, `h`),
+5 `plan_day_shadow_routed` (H5 as the flag would serve it — `h5LevelFor`'s
+routing, `t`). Surface 5 is written only where a level was applied (busy rides,
+d0–d6); where it is missing the scorer reads surface 4 under its name too, so the
+three always cover the same ride-days. Scored under use case **`UC3S`**, sources
+`shadow_peak_scaled` / `shadow_h5` / `shadow_h5_routed`, never into `all` and
+never into `UC3` — slot MAE/bias and the ride-day shape metrics (best-time
+regret, Spearman); no dayPeak or coverage, which do not depend on the composer.
+Measured hours play no part: this compares composers, not the hourly model.
+
+Added size (estimate from §2's measured row counts, not yet measured): at most
+two shadow rows per planner ride and lead (~57 k planner rows a day) plus the
+routed row for busy rides d0–d6 (~8 k) — **≤ ~120 k rows / ~43 MB a day**
+(~0.35 KB per 15-minute row with its index entry), steady state **≤ ~1.5 GB**,
+two thirds of it the d10–d90 rows waiting for their day. If that is too much,
+capping the shadow at d30 drops the long-lead share (d45/d60/d90 hold most of the
+row-days) to roughly a third.
+
 Per curve row: `waits` (served q50 per slot), `day_peak` and `expected_error`
 (plan_day), `model_version` (CatBoost version without `+pcn`), `ride_q90_56d`
 and `is_headliner`, plus:

@@ -1,4 +1,10 @@
-import { forwardRef, Inject, Injectable, Logger } from "@nestjs/common";
+import {
+  forwardRef,
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { IsNull, Repository } from "typeorm";
 import { Park } from "../entities/park.entity";
@@ -19,19 +25,31 @@ import {
   composeDayCurve,
   unfoldedCloseHour,
 } from "../../common/utils/day-shape.util";
+import {
+  composeH5Day,
+  h5LevelFor,
+  gridOf,
+  SLOT_MINUTES,
+} from "../../common/utils/h5-profile.util";
+import type { H5RideProfile } from "../../common/utils/h5-profile.util";
+import { H5ProfileService } from "./h5-profile.service";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { RideOpening } from "../../common/types/ride-opening.type";
 import { formatInParkTimezone } from "../../common/utils/date.util";
 import { logInfrastructureError } from "../../common/utils/file-logger.util";
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import {
   PlanDayDto,
   PlanDayClimatologyDto,
+  PlanDayComposer,
   PlanDayHolidayState,
   PlanDayHourDto,
   PlanDayHoursSource,
   PlanDayRideDto,
   PlanDayShowDto,
+  PlanDayShadowCurve,
+  PlanDaySlotDto,
+  PlanDaySlotShadow,
   PlanDayTier,
 } from "../dto/plan-day.dto";
 import type {
@@ -250,9 +268,54 @@ export class PlanDayService {
     @Inject(forwardRef(() => ShowsService))
     private readonly showsService: ShowsService,
     private readonly accuracyService: ForecastAccuracyService,
+    // Optional so a module graph without it (the specs, a partial E2E module)
+    // serves exactly what it served before: no H5, no slots.
+    @Optional() private readonly h5ProfileService?: H5ProfileService,
   ) {}
 
+  /**
+   * Whether composed days are built from the H5 profile in quarter-hours
+   * (PAR-834) instead of the year's hourly P50 profile stretched to the day
+   * level. Off unless `PLAN_DAY_H5_COMPOSER=true`, so it can be switched on and
+   * read off the forward archive (PAR-831) before it becomes the default. Read
+   * per request rather than once at boot, so the specs can flip it.
+   */
+  static h5ComposerEnabled(): boolean {
+    return process.env.PLAN_DAY_H5_COMPOSER === "true";
+  }
+
+  /**
+   * The farthest lead the H5 composer serves. 90 days is the farthest lead the
+   * offline benchmark scored it at; beyond it nothing says a profile of the
+   * last 56 days describes the day, and the year-long profile scaled to the
+   * day level — which at least carries the season through its level — stays.
+   */
+  private static readonly H5_MAX_LEAD_DAYS = 90;
+
   async buildPlanDay(park: Park, dateStr: string): Promise<PlanDayDto> {
+    return this.build(park, dateStr, null);
+  }
+
+  /**
+   * The served plan plus, for the forward archive only, the three composers'
+   * curves side by side on the same rides and quarter-hours — whatever the
+   * flag says (see {@link PlanDayShadowCurve}). Never serialised: the endpoint
+   * calls {@link buildPlanDay}.
+   */
+  async buildPlanDayWithShadow(
+    park: Park,
+    dateStr: string,
+  ): Promise<{ plan: PlanDayDto; shadow: PlanDayShadowCurve[] }> {
+    const shadow: PlanDayShadowCurve[] = [];
+    const plan = await this.build(park, dateStr, shadow);
+    return { plan, shadow };
+  }
+
+  private async build(
+    park: Park,
+    dateStr: string,
+    shadow: PlanDayShadowCurve[] | null,
+  ): Promise<PlanDayDto> {
     const today = formatInParkTimezone(new Date(), park.timezone);
     const leadDays = this.daysBetween(today, dateStr);
     const isFuture = leadDays >= 0;
@@ -444,6 +507,15 @@ export class PlanDayService {
       theDay?.hours?.openingTime ?? null,
       calendarUnavailable,
       PlanDayService.holidayState(theDay),
+      PlanDayService.minuteWindow(
+        hoursSource === "schedule",
+        theDay?.hours?.openingTime,
+        theDay?.hours?.closingTime,
+        park.timezone,
+        openHour,
+        lastHour,
+      ),
+      shadow,
     );
     base.tier = built.tier;
     base.rides = built.rides;
@@ -824,6 +896,14 @@ export class PlanDayService {
      * the holiday situation is part of its key.
      */
     holidayState: PlanDayHolidayState | null,
+    /**
+     * The day's window to the MINUTE, on the unfolded wall-clock axis of
+     * `h5-profile.util.ts`, and whether it is the operator's published one.
+     * The 15-minute series is laid on it.
+     */
+    window: { openMin: number; closeMin: number; published: boolean },
+    /** Collects the composer A/B curves when the forward archive asks. */
+    shadow: PlanDayShadowCurve[] | null,
   ): Promise<{
     tier: PlanDayTier;
     rides: PlanDayRideDto[];
@@ -925,27 +1005,37 @@ export class PlanDayService {
     // answer — never re-derived from `dayPeak`, because a headliner having a
     // quiet Tuesday is still a headliner, and a planner that pointed at the
     // day's tallest bars instead would recommend whatever happens to be busy.
-    const [levels, downIds, headlinerIds, openings, measured, runningNow] =
-      await Promise.all([
-        this.dayLevels(park, dateStr),
-        this.downYesterday(park, dateStr),
-        this.headlinerIds(park),
-        this.rideOpenings(park),
-        withinHourly
-          ? this.measuredHours(park, dateStr, openHour, closeHour)
-          : Promise.resolve({
-              hours: new Map<string, Map<number, number>>(),
-              bands: new Map<string, number>(),
-              unavailable: false,
-            }),
-        this.runningNow(
-          park,
-          parkStatus,
-          publishedOpening,
-          leadDays,
-          seasonOnly,
-        ),
-      ]);
+    const useH5 =
+      PlanDayService.h5ComposerEnabled() &&
+      this.h5ProfileService !== undefined &&
+      leadDays <= PlanDayService.H5_MAX_LEAD_DAYS;
+    const [
+      levels,
+      downIds,
+      headlinerIds,
+      openings,
+      measured,
+      runningNow,
+      h5Profiles,
+    ] = await Promise.all([
+      this.dayLevels(park, dateStr),
+      this.downYesterday(park, dateStr),
+      this.headlinerIds(park),
+      this.rideOpenings(park),
+      withinHourly
+        ? this.measuredHours(park, dateStr, openHour, closeHour)
+        : Promise.resolve({
+            hours: new Map<string, Map<number, number>>(),
+            slots: new Map<string, Map<number, number>>(),
+            bands: new Map<string, number>(),
+            unavailable: false,
+          }),
+      this.runningNow(park, parkStatus, publishedOpening, leadDays, seasonOnly),
+      // The shadow wants the profiles whatever the flag says.
+      useH5 || (shadow !== null && leadDays <= PlanDayService.H5_MAX_LEAD_DAYS)
+        ? this.loadH5Profiles(park)
+        : Promise.resolve(null),
+    ]);
 
     const dayLevels = levels.levels;
     for (const id of runningNow.ids) blocked.delete(id);
@@ -993,6 +1083,69 @@ export class PlanDayService {
       composed.set(attraction.id, new Map(curve.map((p) => [p.hour, p.wait])));
     }
 
+    // The H5 composition (PAR-834), quarter-hour by quarter-hour, for every
+    // ride that has both a day level and an H5 profile. The day-level gate is
+    // the old composer's and stays: a ride the model said nothing about for
+    // this date is not composed by either, so the tier ladder below is
+    // unchanged. Whether a level scales the profile is `h5LevelFor`'s routing
+    // (TFT only, busy rides only, d0–d6 only — the benchmark's horizon table);
+    // everywhere else the plain profile is served. A ride without an H5
+    // profile keeps the old composer's hours.
+    const h5Slots = new Map<string, Map<number, number>>();
+    const composerOf = new Map<string, PlanDayComposer>();
+    const h5Days = new Map<string, number>();
+    // The plain profile per ride, for the shadow archive only.
+    const h5Plain = new Map<string, Map<number, number>>();
+    if (h5Profiles) {
+      const weekend = this.isWeekend(dateStr);
+      for (const attraction of plannable) {
+        const level = dayLevels.get(attraction.id);
+        const profileOfRide: H5RideProfile | undefined = h5Profiles.get(
+          attraction.id,
+        );
+        if (!level || !profileOfRide) continue;
+        const day = {
+          profile: profileOfRide,
+          openMin: window.openMin,
+          closeMin: window.closeMin,
+          alignToSchedule: window.published,
+          weekend,
+        };
+        const { slots, levelApplied } = composeH5Day({
+          ...day,
+          level: h5LevelFor(
+            profileOfRide,
+            leadDays,
+            level.modelVersion === "tft" ? level.predictedWaitTime : null,
+          ),
+        });
+        if (slots.length === 0) continue;
+        h5Slots.set(
+          attraction.id,
+          new Map(slots.map((s) => [s.minute, s.wait])),
+        );
+        composerOf.set(attraction.id, levelApplied ? "h5_tft" : "h5");
+        h5Days.set(attraction.id, profileOfRide.days);
+        if (shadow) {
+          h5Plain.set(
+            attraction.id,
+            levelApplied
+              ? new Map(
+                  composeH5Day({ ...day, level: null }).slots.map((s) => [
+                    s.minute,
+                    s.wait,
+                  ]),
+                )
+              : h5Slots.get(attraction.id)!,
+          );
+        }
+      }
+    }
+    // H5 is only SERVED with the flag on; the shadow reads it either way.
+    const servedH5 = useH5 ? h5Slots : new Map<string, Map<number, number>>();
+    // One instant per grid minute, shared by every ride of the day.
+    const slotInstant = PlanDayService.slotInstants(dateStr, park.timezone);
+
     const rides: PlanDayRideDto[] = [];
     // The accuracy cells actually quoted, so `sampleSize` below counts the
     // comparisons behind what was served rather than behind a bucket that may
@@ -1001,12 +1154,17 @@ export class PlanDayService {
     for (const attractionId of new Set([
       ...measured.hours.keys(),
       ...composed.keys(),
+      ...servedH5.keys(),
     ])) {
       const attraction = byId.get(attractionId);
       if (!attraction) continue;
 
       const measuredHours = measured.hours.get(attractionId);
-      const composedHours = composed.get(attractionId);
+      const measuredSlots = measured.slots.get(attractionId);
+      const rideH5 = servedH5.get(attractionId);
+      // An H5 ride's composed hours come from its slots; the old composer's
+      // hours are for the rides H5 has no profile for.
+      const composedHours = rideH5 ? undefined : composed.get(attractionId);
 
       // The ride's own first hour, never earlier than the park's. Half the rides
       // report OPERATING before the gates open — the feed carries the operator's
@@ -1044,6 +1202,95 @@ export class PlanDayService {
       // Every hour carries its origin here; the ones that agree with the day's
       // tier lose it again below, once the tier is known. Written the other way
       // round the tier would have to be guessed before the loop that decides it.
+      // The quarter-hours, while the H5 composer is on: the model's own
+      // 15-minute answer where it gave one, the H5 profile where it did not,
+      // and nothing where neither did. From the ride's own opening (on the
+      // grid), like `hours`. A composed slot inside an hour the model answered
+      // is left out, so an hour is never half one regime and half the other.
+      const rideStart = opensAt
+        ? Math.floor(PlanDayService.minutesOf(opensAt) / SLOT_MINUTES) *
+          SLOT_MINUTES
+        : -Infinity;
+
+      // The composer A/B for the forward archive: the old composer, plain H5
+      // and routed H5 on the SAME quarter-hours — those all three answer, from
+      // the ride's own opening — so the board compares like with like. The
+      // old composer's hour is repeated across its four quarters, which is
+      // what a visitor reading it at 15 minutes gets. Measured hours play no
+      // part: this compares composers, not the hourly model.
+      if (shadow) {
+        const old = composed.get(attractionId);
+        const plain = h5Plain.get(attractionId);
+        const routed = h5Slots.get(attractionId);
+        if (old && plain && routed) {
+          const routedCode =
+            composerOf.get(attractionId) === "h5_tft" ? "t" : "h";
+          const curves: Record<
+            PlanDayShadowCurve["composer"],
+            PlanDaySlotShadow[]
+          > = { peak_scaled: [], h5: [], h5_routed: [] };
+          for (const minute of gridOf(window.openMin, window.closeMin)) {
+            const hour = Math.floor(minute / 60);
+            if (minute < rideStart || hour < rideOpenHour) continue;
+            const k = old.get(hour);
+            const h = plain.get(minute);
+            const t = routed.get(minute);
+            if (k === undefined || h === undefined || t === undefined) continue;
+            const start = slotInstant(minute);
+            curves.peak_scaled.push({ minute, start, wait: k, code: "k" });
+            curves.h5.push({ minute, start, wait: Math.round(h), code: "h" });
+            curves.h5_routed.push({
+              minute,
+              start,
+              wait: Math.round(t),
+              code: routedCode,
+            });
+          }
+          if (curves.h5.length > 0) {
+            // The routed curve only where a level made it differ from plain
+            // H5 (busy rides, d0–d6): elsewhere it is the plain curve, and the
+            // scorer reads the plain row under both names.
+            const composers: ReadonlyArray<PlanDayShadowCurve["composer"]> =
+              routedCode === "t"
+                ? ["peak_scaled", "h5", "h5_routed"]
+                : ["peak_scaled", "h5"];
+            for (const composer of composers) {
+              shadow.push({ attractionId, composer, slots: curves[composer] });
+            }
+          }
+        }
+      }
+
+      const slots: PlanDaySlotDto[] = [];
+      const composedByHour = new Map<number, number[]>();
+      if (useH5) {
+        for (const minute of gridOf(window.openMin, window.closeMin)) {
+          if (minute < rideStart) continue;
+          const hour = Math.floor(minute / 60);
+          const fromModel = measuredSlots?.get(minute);
+          if (fromModel !== undefined) {
+            slots.push({
+              minute,
+              start: slotInstant(minute),
+              wait: Math.max(0, Math.round(fromModel)),
+              source: "measured",
+            });
+            continue;
+          }
+          const fromH5 = rideH5?.get(minute);
+          if (fromH5 === undefined || measuredHours?.has(hour)) continue;
+          slots.push({
+            minute,
+            start: slotInstant(minute),
+            wait: Math.max(0, Math.round(fromH5)),
+            source: "composed",
+          });
+          const list = composedByHour.get(hour) ?? [];
+          list.push(fromH5);
+          composedByHour.set(hour, list);
+        }
+      }
+
       const hours: PlanDayHourDto[] = [];
       for (let h = rideOpenHour; h <= closeHour; h++) {
         const fromModel = measuredHours?.get(h);
@@ -1051,12 +1298,51 @@ export class PlanDayService {
           hours.push({ hour: h, wait: fromModel, source: "measured" });
           continue;
         }
+        // An H5 ride's hour is the mean of its slots — the series the planner
+        // will read at 15 minutes, collapsed the way `measuredHours` collapses
+        // the model's. An hour with no slot (the park closes on the hour, or
+        // the profile never measured it) is absent rather than invented.
+        const fromSlots = composedByHour.get(h);
+        if (fromSlots && fromSlots.length > 0) {
+          const mean = fromSlots.reduce((a, b) => a + b, 0) / fromSlots.length;
+          hours.push({
+            hour: h,
+            wait: Math.max(0, roundToNearest5Minutes(mean)),
+            source: "composed",
+          });
+          continue;
+        }
         const fromShape = composedHours?.get(h);
         if (fromShape !== undefined) {
           hours.push({ hour: h, wait: fromShape, source: "composed" });
         }
       }
+      // A park closing on the hour has no slot in its closing hour, so an H5
+      // curve would end an hour before the closing time the card draws. The
+      // closing hour carries the last composed slot's value — the same point
+      // the old composer put there — and no slot, so a 15-minute reader still
+      // finds nothing after the closing.
+      if (
+        rideH5 &&
+        window.closeMin === closeHour * 60 &&
+        !hours.some((p) => p.hour === closeHour)
+      ) {
+        const lastHourSlots = composedByHour.get(closeHour - 1);
+        const last = lastHourSlots?.[lastHourSlots.length - 1];
+        if (last !== undefined) {
+          hours.push({
+            hour: closeHour,
+            wait: Math.max(0, roundToNearest5Minutes(last)),
+            source: "composed",
+          });
+        }
+      }
       if (hours.length === 0) continue;
+      const composer: PlanDayComposer | undefined = hours.some(
+        (p) => p.source === "composed",
+      )
+        ? (composerOf.get(attractionId) ?? "peak_scaled")
+        : undefined;
 
       const level = dayLevels.get(attractionId);
       const dayPeak =
@@ -1073,15 +1359,27 @@ export class PlanDayService {
         attractionName: attraction.name,
         land: land.get(attractionId) ?? attraction.landName ?? null,
         hours,
+        ...(slots.length > 0 ? { slots } : {}),
+        ...(composer ? { composer } : {}),
         // The day's peak, from the day-level forecast — the same statistic on
         // every tier. The maximum of `hours` is a fallback for a ride the daily
-        // run has no row for, and nothing better exists there.
+        // run has no row for, and nothing better exists there. NOT the maximum
+        // of an H5 curve either: H5 is a median profile scaled by a ratio of
+        // P90s, so its top slot is a typical busy quarter-hour, not the day's
+        // P90, and the two are allowed to differ.
         dayPeak,
         // The band belongs to the number it surrounds, so it comes from the
         // same row as `dayPeak`; the widest hourly band is the fallback.
         uncertaintyMinutes:
           level?.uncertaintyMinutes ?? measured.bands.get(attractionId) ?? null,
+        // The YEAR's measured days, whatever composed the curve: the frontend's
+        // soft floor (`rideFloor`, ≥ 30 days) reads it as "is this ride well
+        // known", and the H5 window's day count would quietly switch it off.
         sampleDays: sampleDays.get(attractionId) ?? 0,
+        // The H5 window days behind an H5 curve, in a field of its own.
+        ...(composer === "h5" || composer === "h5_tft"
+          ? { profileDays: h5Days.get(attractionId) }
+          : {}),
         ...(cell ? { expectedError: cell.mae } : {}),
         // The confidence rides along with the time and never alone: it grades
         // `opensAt`, so a bare tier next to an absent time would grade nothing.
@@ -1173,6 +1471,9 @@ export class PlanDayService {
       for (const hour of ride.hours) {
         if (hour.source === tier) delete hour.source;
       }
+      for (const slot of ride.slots ?? []) {
+        if (slot.source === tier) delete slot.source;
+      }
     }
 
     // Busiest first: a planner reads the top of this list to decide what to
@@ -1255,6 +1556,11 @@ export class PlanDayService {
     closeHour: number,
   ): Promise<{
     hours: Map<string, Map<number, number>>;
+    /**
+     * attraction → unfolded wall-clock minute → the model's 15-minute value,
+     * as served (not rounded): the quarter-hours the hours above are means of.
+     */
+    slots: Map<string, Map<number, number>>;
     bands: Map<string, number>;
     unavailable: boolean;
   }> {
@@ -1274,6 +1580,7 @@ export class PlanDayService {
 
     // attraction → hour → slot values
     const slots = new Map<string, Map<number, number[]>>();
+    const quarters = new Map<string, Map<number, number>>();
     const bands = new Map<string, number>();
 
     const nextDate = PlanDayService.plusDays(dateStr, 1);
@@ -1288,10 +1595,16 @@ export class PlanDayService {
       // midnight, and to tomorrow otherwise — which the range test below
       // settles on its own: on an ordinary day `closeHour` is at most 23, so
       // every hour that arrives here as 24 or later falls out.
-      const hour =
-        Number(formatInTimeZone(when, park.timezone, "HH")) +
-        (localDate === dateStr ? 0 : 24);
+      const [hh, mm] = formatInTimeZone(when, park.timezone, "HH:mm")
+        .split(":")
+        .map(Number);
+      const hour = hh + (localDate === dateStr ? 0 : 24);
       if (hour < openHour || hour > closeHour) continue;
+
+      const byMinute =
+        quarters.get(p.attractionId) ?? new Map<number, number>();
+      byMinute.set(hour * 60 + mm, p.predictedWaitTime);
+      quarters.set(p.attractionId, byMinute);
 
       const hours = slots.get(p.attractionId) ?? new Map<number, number[]>();
       const values = hours.get(hour) ?? [];
@@ -1320,7 +1633,59 @@ export class PlanDayService {
       if (means.size > 0) hours.set(attractionId, means);
     }
 
-    return { hours, bands, unavailable };
+    return { hours, slots: quarters, bands, unavailable };
+  }
+
+  /**
+   * Every ride's H5 profile for this park, or null — the composed days then
+   * fall back to the old composer, exactly as with the flag off. Logged as an
+   * infrastructure error for the same reason the hourly profile is: the
+   * response is still a 200 and nothing else would record it.
+   */
+  private async loadH5Profiles(
+    park: Park,
+  ): Promise<Map<string, H5RideProfile> | null> {
+    if (!this.h5ProfileService) return null;
+    const today = formatInParkTimezone(new Date(), park.timezone);
+    return this.h5ProfileService
+      .getProfiles(park, today)
+      .catch((err: Error) => {
+        this.logger.error(
+          `Plan day: H5 profiles unavailable for ${park.slug}: ${err.message}`,
+          err.stack,
+        );
+        logInfrastructureError("database", "plan-day h5 profile", err, {
+          parkSlug: park.slug,
+        });
+        return null;
+      });
+  }
+
+  /**
+   * The instant (ISO, UTC) a wall-clock minute of the planned day starts at,
+   * memoised per minute. Resolved through the park's zone per slot, so a DST
+   * switch inside the day lands where the clock says; minute 1440 and later is
+   * the next date's wall clock.
+   */
+  private static slotInstants(
+    dateStr: string,
+    timezone: string,
+  ): (minute: number) => string {
+    const memo = new Map<number, string>();
+    return (minute: number) => {
+      const hit = memo.get(minute);
+      if (hit) return hit;
+      const day = PlanDayService.plusDays(dateStr, Math.floor(minute / 1440));
+      const within = ((minute % 1440) + 1440) % 1440;
+      const hh = String(Math.floor(within / 60)).padStart(2, "0");
+      const mm = String(within % 60).padStart(2, "0");
+      const iso = fromZonedTime(
+        `${day}T${hh}:${mm}:00`,
+        timezone,
+      ).toISOString();
+      memo.set(minute, iso);
+      return iso;
+    };
   }
 
   /**
@@ -2381,6 +2746,51 @@ export class PlanDayService {
     const at = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(at.getTime())) return null;
     return formatInTimeZone(at, timezone, "HH:mm");
+  }
+
+  /**
+   * The day's open window to the minute, counted from the planned date's
+   * park-local midnight and unfolded past it (a 01:00 close is 1500).
+   *
+   * From the published opening and closing where the operator stated them.
+   * Otherwise — the observed-hours fallback (§4 of the endpoint doc) — the
+   * whole hours the window was derived from: `openHour:00` to the end of the
+   * last measured hour, marked as not published so nothing is aligned to an
+   * opening nobody announced.
+   */
+  static minuteWindow(
+    published: boolean,
+    openingTime: Date | string | undefined,
+    closingTime: Date | string | undefined,
+    timezone: string,
+    openHour: number,
+    lastHour: number,
+  ): { openMin: number; closeMin: number; published: boolean } {
+    const fallback = {
+      openMin: openHour * 60,
+      closeMin: (lastHour + 1) * 60,
+      published: false,
+    };
+    if (!published || !openingTime || !closingTime) return fallback;
+    const open =
+      openingTime instanceof Date ? openingTime : new Date(openingTime);
+    const close =
+      closingTime instanceof Date ? closingTime : new Date(closingTime);
+    if (Number.isNaN(open.getTime()) || Number.isNaN(close.getTime())) {
+      return fallback;
+    }
+    // The opening on the clock, the closing as the opening plus the window's
+    // length — the same reading `openHour`/`closeHour` get (the clock hour of
+    // each instant, unfolded), so the minute window and the hour window can
+    // never name different days. Elapsed and wall-clock length differ only for
+    // a window spanning a DST switch at 02:00–03:00.
+    const openMin = PlanDayService.minutesOf(
+      formatInTimeZone(open, timezone, "HH:mm"),
+    );
+    const closeMin =
+      openMin + Math.round((close.getTime() - open.getTime()) / 60_000);
+    if (closeMin <= openMin || closeMin - openMin > 1440) return fallback;
+    return { openMin, closeMin, published: true };
   }
 
   /** Minutes since midnight for an `HH:mm`. */

@@ -16,6 +16,15 @@ export const ARCHIVE_SURFACES = {
   park_hourly: 1,
   /** `PlanDayService.buildPlanDay` — the planner's hourly curve per ride. */
   plan_day: 2,
+  /**
+   * The composer A/B (PAR-834), NOT served: `buildPlanDayWithShadow`'s three
+   * curves per ride and day, on the same quarter-hours, captured whatever
+   * `PLAN_DAY_H5_COMPOSER` says. One surface per composer, because the key
+   * holds one row per (origin, ride, surface, target date).
+   */
+  plan_day_shadow_peak: 3,
+  plan_day_shadow_h5: 4,
+  plan_day_shadow_routed: 5,
 } as const;
 export type ArchiveSurface = keyof typeof ARCHIVE_SURFACES;
 
@@ -43,7 +52,12 @@ export const ARCHIVE_SOURCE_CODES = {
   p: "pcn_blend",
   c: "catboost",
   m: "measured",
+  /** Composed by the old composer: hourly P50 profile stretched to the level. */
   k: "composed",
+  /** Composed by H5 (PAR-834), plain profile — no TFT level for the day. */
+  h: "composed_h5",
+  /** Composed by H5 scaled by the TFT level ÷ the ride's 56-day P90. */
+  t: "composed_h5_tft",
   l: "climatology",
   o: "observed",
 } as const;
@@ -110,7 +124,11 @@ export class ForecastArchiveCurve {
   @Column({ name: "slot_start", type: "timestamptz" })
   slotStart: Date;
 
-  /** Native resolution of the surface: 15 for park_hourly, 60 for plan_day. */
+  /**
+   * Native resolution of the surface: 15 for park_hourly; 60 for plan_day,
+   * or 15 for a plan_day ride the H5 composer served in quarter-hours
+   * (PAR-834).
+   */
   @Column({ name: "slot_minutes", type: "smallint" })
   slotMinutes: number;
 
