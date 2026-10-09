@@ -123,6 +123,14 @@ def test_end_to_end_report(synth_export, tmp_path):
     assert {"UC1", "UC2", "UC3"} <= set(curve["uc"])
     # MAE of a model is never pooled across leads: one row per (uc, lead, segment, model)
     assert not curve.duplicated(["uc", "lead", "segment", "model"]).any()
+    # pairing: in the first hour the level-scaled curves ARE h5 by construction, so the
+    # first-hour scores must coincide exactly (they did not when pairing was per park-day)
+    cells = pd.read_csv(tdir / "cells.csv")
+    fh = cells[cells["metric"] == "first-hour MAE (opening-aligned)"].pivot_table(
+        index="lead", columns="model", values="value")
+    both = fh[["h5", "lvlh5_tft"]].dropna()
+    assert len(both) > 0
+    assert np.allclose(both["h5"], both["lvlh5_tft"])
 
 
 def test_reference_run_refuses_unknown_provenance(synth_export, tmp_path, monkeypatch):

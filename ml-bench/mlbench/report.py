@@ -185,11 +185,14 @@ def run_cells(d: Data, cfg: BenchConfig, table: str, key: str, keys: list, refs:
               regions=("all", "EU", "NA", "Asia"), metric: str = "MAE") -> pd.DataFrame:
     rows = []
     for k in keys:
+        # one narrow copy per lead, so the per-model UNION below scans ~1/15 of the table
+        d.con.execute(f"CREATE OR REPLACE TEMP TABLE cell_src AS SELECT * FROM {table} "
+                      f"WHERE {key} = {k!r} AND ({extra})")
         for seg, cond in segments:
             for region in regions:
                 rc = "TRUE" if region == "all" else f"region = '{region}'"
-                where = f"{key} = {k!r} AND ({cond}) AND {rc} AND ({extra})"
-                base = slot_base(d, table, where, refs)
+                where = f"({cond}) AND {rc}"
+                base = slot_base(d, "cell_src", where, refs)
                 rows += evaluate(base, cfg, refs, True, {"uc": uc_of(k), "lead": k, "segment": seg,
                                                          "region": region, "metric": metric})
     return pd.DataFrame(rows)
