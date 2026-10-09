@@ -80,6 +80,9 @@ importers:
       compression:
         specifier: ^1.8.2
         version: 1.8.2
+      cron-parser:
+        specifier: ^4.9.0
+        version: 4.9.0
       date-fns:
         specifier: ^4.4.0
         version: 4.4.0

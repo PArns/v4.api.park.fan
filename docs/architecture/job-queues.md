@@ -37,6 +37,29 @@ The application relies heavily on background processing for data consistency and
 | `EntityMappingsProcessor` | Maps external IDs (e.g., from different APIs) to our internal UUIDs. |
 | `GeoipUpdateProcessor` | Refreshes GeoLite2-City data every 48 hours. |
 
+## Failed Jobs: Retention and Monitoring
+
+- **Retention** is bounded by `defaultJobOptions` in `src/queues/queues.module.ts`:
+  the last 100 completed and the last 500 failed jobs per queue. Nothing else
+  deletes job history. Until PAR-821 the bootstrap ran `queue.clean(0, …)` on six
+  queues at every start, which erased each queue's failures on every deploy.
+- **The nightly sweep** (`monitor-data-quality`, 06:45, `DataQualityMonitorService.findFailingJobs`)
+  reads `<prefix>:<queue>:failed` for every queue in `BULL_QUEUE_REGISTRATIONS`
+  (`src/queues/queue-registrations.ts`). `MONITORED_QUEUES` is derived from that
+  list; a queue leaves it only through `UNMONITORED_QUEUES`, with a reason, and
+  the spec fails for a registered queue that is in neither. A new queue is
+  monitored by registering it.
+- **Window:** a failure is reported until the job has had its next scheduled run.
+  The window is read from the queue's repeat ZSET (`failureWindowStarts`): at
+  least 26 h (the sweep's own cadence), and for a slower cron back to its previous
+  fire minus 2 h — so a weekly or monthly job's failure stays visible until it
+  runs again, and a failure that was fixed stops being reported instead of
+  sitting in the last 500 forever.
+- **Blind spot:** a job added with `removeOnFail: true` leaves no failed entry,
+  so this sweep cannot see it (today: the term audit and this sweep itself in
+  `queue-scheduler.service.ts`, the ride-stats and curated-data processors, the
+  curation re-apply in `admin-curation.service.ts`).
+
 ## Flow Example: Wait Time Sync
 1.  **Trigger**: CRON triggers `sync-wait-times` job (every 5 min).
 2.  **WaitTimesProcessor**:

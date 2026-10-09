@@ -1,7 +1,11 @@
 import {
   DataQualityMonitorService,
+  MONITORED_QUEUES,
   REISSUE_CANDIDATE_METERS,
+  UNMONITORED_QUEUES,
+  failureWindowStarts,
 } from "./data-quality-monitor.service";
+import { BULL_QUEUE_REGISTRATIONS } from "../queues/queue-registrations";
 import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retirement.service";
 
 /**
@@ -338,17 +342,34 @@ describe("DataQualityMonitorService", () => {
   });
 
   describe("findFailingJobs", () => {
-    const clientWith = (
-      failedIds: string[],
-      hash: Record<string, string[]>,
-    ) => ({
-      zrange: jest
-        .fn()
-        .mockImplementation((key: string) =>
-          key.includes("analytics")
-            ? Promise.resolve(failedIds)
-            : Promise.resolve([]),
-        ),
+    const HOUR = 60 * 60 * 1000;
+    const DAY = 24 * HOUR;
+    // A Wednesday, 06:45 UTC — when the nightly sweep runs.
+    const NOW = Date.UTC(2026, 9, 7, 6, 45);
+
+    /**
+     * `failed` maps a queue to its failed ZSET as [id, finishedAt] pairs;
+     * `repeat` maps a queue to its repeat-key ZSET; `hash` maps a job key to
+     * [name, failedReason, finishedOn].
+     */
+    const clientWith = ({
+      failed = {},
+      repeat = {},
+      hash = {},
+    }: {
+      failed?: Record<string, Array<[string, number]>>;
+      repeat?: Record<string, string[]>;
+      hash?: Record<string, Array<string | null>>;
+    }) => ({
+      zrange: jest.fn().mockImplementation((key: string) => {
+        const [, queue, kind] = key.split(":");
+        if (kind === "failed") {
+          return Promise.resolve(
+            (failed[queue] ?? []).flatMap(([id, at]) => [id, String(at)]),
+          );
+        }
+        return Promise.resolve(repeat[queue] ?? []);
+      }),
       hmget: jest
         .fn()
         .mockImplementation((key: string) =>
@@ -359,16 +380,33 @@ describe("DataQualityMonitorService", () => {
     it("groups a queue's failures by job name and keeps the newest reason", async () => {
       // The real fixture: detect-seasonal's corpse in production still reads
       // 'syntax error at or near "attr_activity"'.
-      const client = clientWith(["78", "79"], {
-        "parkfan:analytics:78": ["detect-seasonal", "older failure", "1000"],
-        "parkfan:analytics:79": [
-          "detect-seasonal",
-          'syntax error at or near "attr_activity"\n    at Parser...',
-          "2000",
-        ],
+      const older = NOW - 5 * HOUR;
+      const newer = NOW - 2 * HOUR;
+      const client = clientWith({
+        failed: {
+          analytics: [
+            ["78", older],
+            ["79", newer],
+          ],
+        },
+        hash: {
+          "parkfan:analytics:78": [
+            "detect-seasonal",
+            "older failure",
+            String(older),
+          ],
+          "parkfan:analytics:79": [
+            "detect-seasonal",
+            'syntax error at or near "attr_activity"\n    at Parser...',
+            String(newer),
+          ],
+        },
       });
 
-      const [failing] = await build(jest.fn(), client).findFailingJobs();
+      const [failing] = await build(jest.fn(), client).findFailingJobs(
+        100,
+        NOW,
+      );
 
       expect(failing.queue).toBe("analytics");
       expect(failing.jobName).toBe("detect-seasonal");
@@ -377,12 +415,165 @@ describe("DataQualityMonitorService", () => {
       expect(failing.lastReason).toBe(
         'syntax error at or near "attr_activity"',
       );
-      expect(failing.lastFailedAt).toBe(new Date(2000).toISOString());
+      expect(failing.lastFailedAt).toBe(new Date(newer).toISOString());
     });
 
     it("reports nothing when no queue holds a failure", async () => {
-      const client = clientWith([], {});
-      expect(await build(jest.fn(), client).findFailingJobs()).toEqual([]);
+      const client = clientWith({});
+      expect(await build(jest.fn(), client).findFailingJobs(100, NOW)).toEqual(
+        [],
+      );
+    });
+
+    it("reads the queues the old hand-written list left out", async () => {
+      // PAR-821: four days of downtime failures were never read, because
+      // `downtime` was not on the list.
+      const at = NOW - HOUR;
+      const client = clientWith({
+        failed: { downtime: [["5", at]] },
+        hash: {
+          "parkfan:downtime:5": [
+            "compute-downtime",
+            "canceling statement due to statement timeout",
+            String(at),
+          ],
+        },
+      });
+
+      const failing = await build(jest.fn(), client).findFailingJobs(100, NOW);
+      expect(failing.map((f) => `${f.queue}/${f.jobName}`)).toEqual([
+        "downtime/compute-downtime",
+      ]);
+    });
+
+    it("drops a daily job's failure once the sweep has had its night", async () => {
+      // Without the window a failure fixed in July stays in Bull's last 500
+      // and is reported every night until 500 newer ones push it out.
+      const recent = NOW - 20 * HOUR;
+      const stale = NOW - 3 * DAY;
+      const client = clientWith({
+        failed: {
+          downtime: [
+            ["1", stale],
+            ["2", recent],
+          ],
+        },
+        repeat: { downtime: ["compute-downtime:downtime-cron:::0 3 * * *"] },
+        hash: {
+          "parkfan:downtime:1": ["compute-downtime", "old", String(stale)],
+          "parkfan:downtime:2": ["compute-downtime", "new", String(recent)],
+        },
+      });
+
+      const [failing] = await build(jest.fn(), client).findFailingJobs(
+        100,
+        NOW,
+      );
+      expect(failing.failures).toBe(1);
+      expect(failing.lastReason).toBe("new");
+    });
+
+    it("keeps a weekly job's failure until its next scheduled run", async () => {
+      // six-flags-heights runs Mondays at 03:00. The sweep on Wednesday must still
+      // report Monday's failure — a flat 26 h window would have shown it once.
+      const mondayRun = Date.UTC(2026, 9, 5, 3, 5);
+      const client = clientWith({
+        failed: { "six-flags-heights": [["9", mondayRun]] },
+        repeat: {
+          "six-flags-heights": [
+            "sync-heights:six-flags-heights-cron::UTC:0 3 * * 1",
+          ],
+        },
+        hash: {
+          "parkfan:six-flags-heights:9": [
+            "sync-heights",
+            "Six Flags 503",
+            String(mondayRun),
+          ],
+        },
+      });
+
+      const failing = await build(jest.fn(), client).findFailingJobs(100, NOW);
+      expect(failing).toHaveLength(1);
+      expect(failing[0].jobName).toBe("sync-heights");
+
+      // A week later the next Monday run has happened; the old failure is gone.
+      const later = await build(jest.fn(), client).findFailingJobs(
+        100,
+        NOW + 7 * DAY,
+      );
+      expect(later).toEqual([]);
+    });
+  });
+
+  describe("monitored queues", () => {
+    const registered = BULL_QUEUE_REGISTRATIONS.map((q) => q.name as string);
+
+    it("monitors every registered queue that is not explicitly opted out", () => {
+      const unaccounted = registered.filter(
+        (name) =>
+          !MONITORED_QUEUES.includes(name) && !(name in UNMONITORED_QUEUES),
+      );
+      expect(unaccounted).toEqual([]);
+    });
+
+    it("opts a queue out only by name and with a reason", () => {
+      for (const [name, reason] of Object.entries(UNMONITORED_QUEUES)) {
+        expect(registered).toContain(name);
+        expect(MONITORED_QUEUES).not.toContain(name);
+        expect(reason.trim().length).toBeGreaterThan(20);
+      }
+    });
+
+    it("includes the queues the hand-written list missed", () => {
+      for (const name of [
+        "downtime",
+        "p50-baseline",
+        "push-notifications",
+        "geoip-update",
+        "ride-stats",
+      ]) {
+        expect(MONITORED_QUEUES).toContain(name);
+      }
+    });
+  });
+
+  describe("failureWindowStarts", () => {
+    const HOUR = 60 * 60 * 1000;
+    const NOW = Date.UTC(2026, 9, 7, 6, 45);
+
+    it("opens a monthly job's window at its last run, read from the last segment", () => {
+      const starts = failureWindowStarts(
+        ["sync-holidays:holidays-cron::UTC:0 2 1 * *"],
+        NOW,
+      );
+      expect(starts.get("sync-holidays")).toBe(
+        Date.UTC(2026, 9, 1, 2) - 2 * HOUR,
+      );
+    });
+
+    it("never narrows below the sweep's own 26 hours", () => {
+      const starts = failureWindowStarts(
+        ["fetch-wait-times:wt-cron:::*/5 * * * *"],
+        NOW,
+      );
+      expect(starts.get("fetch-wait-times")).toBe(NOW - 26 * HOUR);
+    });
+
+    it("handles an `every` interval and skips what it cannot parse", () => {
+      const every72h = String(72 * HOUR);
+      const starts = failureWindowStarts(
+        [`g:geo:::${every72h}`, "broken", "x:::: not a cron"],
+        NOW,
+      );
+      expect(starts.get("g")).toBe(
+        Math.min(
+          NOW - 26 * HOUR,
+          Math.floor(NOW / (72 * HOUR)) * 72 * HOUR - 2 * HOUR,
+        ),
+      );
+      expect(starts.has("x")).toBe(false);
+      expect(starts.has("broken")).toBe(false);
     });
   });
 });
