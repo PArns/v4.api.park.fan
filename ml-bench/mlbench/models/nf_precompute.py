@@ -266,9 +266,14 @@ def default_origins(con, export: Path, window_days: int = 56) -> tuple[dt.date, 
 def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to: str | None,
         max_steps: int, parks: list[str] | None = None, intraday: bool = True, scale: float = 1.0,
         memory: str = "4GB", threads: int = 4, log=print, quiet: str | None = None) -> dict:
+    import torch
+
     from ..build import connect
     from ..runner import load_tables
 
+    # torch defaults to one thread per HOST core: 24 threads in a 4-6 CPU container
+    # throttle each other to a crawl (measured: 300 TiDE steps > 20 min on celestrial).
+    torch.set_num_threads(threads)
     con = connect(memory, threads)
     load_tables(con, export)
     first, last = default_origins(con, export)
