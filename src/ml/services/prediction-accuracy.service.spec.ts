@@ -24,6 +24,7 @@ describe("PredictionAccuracyService", () => {
   const accuracyRepo = {
     upsert: jest.fn().mockResolvedValue({ identifiers: [] }),
     findOne: jest.fn(),
+    count: jest.fn(),
     find: jest.fn().mockResolvedValue([]),
     query: jest.fn().mockResolvedValue([]),
     manager: {
@@ -365,6 +366,599 @@ describe("PredictionAccuracyService", () => {
       expect(result.badge).toBe("good");
       // Layer 3 also primes the Redis cache so the next hit is L1.
       expect(redisStore.get("accuracy:badge:a-1:30d")).toBeDefined();
+    });
+  });
+  describe("cleanupOldRecords — retention windows", () => {
+    const deleteBuilder = (affected: number) => {
+      const b = {
+        delete: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected }),
+      };
+      return b;
+    };
+
+    it("deletes MISSED/PENDING after 7 days and COMPLETED after 90 days", async () => {
+      const missed = deleteBuilder(3);
+      const completed = deleteBuilder(2);
+      accuracyRepo.createQueryBuilder
+        .mockReturnValueOnce(missed as never)
+        .mockReturnValueOnce(completed as never);
+      const now = Date.now();
+
+      await service.cleanupOldRecords();
+
+      const day = 24 * 60 * 60 * 1000;
+      const [, missedParams] = missed.where.mock.calls[0];
+      const [, completedParams] = completed.where.mock.calls[0];
+      expect(
+        Math.abs(now - missedParams.sevenDaysAgo.getTime() - 7 * day),
+      ).toBeLessThan(5000);
+      expect(
+        Math.abs(now - completedParams.ninetyDaysAgo.getTime() - 90 * day),
+      ).toBeLessThan(5000);
+      expect(missed.andWhere).toHaveBeenCalledWith(
+        "comparisonStatus IN (:...statuses)",
+        { statuses: ["MISSED", "PENDING"] },
+      );
+      expect(completed.andWhere).toHaveBeenCalledWith(
+        "comparisonStatus = :status",
+        { status: "COMPLETED" },
+      );
+    });
+
+    it("swallows a database error instead of failing the comparison job", async () => {
+      const failing = deleteBuilder(0);
+      failing.execute.mockRejectedValue(new Error("db down"));
+      accuracyRepo.createQueryBuilder.mockReturnValueOnce(failing as never);
+
+      await expect(service.cleanupOldRecords()).resolves.toBeUndefined();
+    });
+  });
+
+  describe("compareWithActuals — matching predictions to queue data", () => {
+    const MIN = 60 * 1000;
+    const target = (minutesAgo: number) =>
+      new Date(Date.now() - minutesAgo * MIN);
+
+    const pending = (over: Record<string, unknown>) => ({
+      id: "p",
+      attractionId: "a-1",
+      targetTime: target(60),
+      predictedWaitTime: 20,
+      comparisonStatus: "PENDING",
+      actualWaitTime: null,
+      absoluteError: null,
+      percentageError: null,
+      wasUnplannedClosure: false,
+      ...over,
+    });
+
+    const actual = (
+      attractionId: string,
+      at: Date,
+      status: string,
+      waitTime: number | null,
+    ) => ({ attractionId, timestamp: at, status, waitTime });
+
+    /** Stubs the pending batch, the delete queries and the queue_data fetch. */
+    const arrange = (
+      predictions: Array<ReturnType<typeof pending>>,
+      records: Array<ReturnType<typeof actual>>,
+    ) => {
+      const del = {
+        delete: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      };
+      accuracyRepo.createQueryBuilder
+        .mockReturnValueOnce(del as never)
+        .mockReturnValueOnce(del as never);
+      accuracyRepo.find.mockResolvedValueOnce(predictions);
+      queueDataRepo.createQueryBuilder.mockReturnValueOnce({
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue(records),
+      } as never);
+    };
+
+    const lastCheck = () =>
+      JSON.parse(redisStore.get("ml:last-accuracy-check") ?? "{}");
+
+    it("returns 0 and writes the check marker when nothing is ready", async () => {
+      const del = {
+        delete: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      };
+      accuracyRepo.createQueryBuilder
+        .mockReturnValueOnce(del as never)
+        .mockReturnValueOnce(del as never);
+      accuracyRepo.find.mockResolvedValueOnce([]);
+
+      const res = await service.compareWithActuals();
+
+      expect(res).toEqual({ newComparisons: 0 });
+      expect(accuracyRepo.query).not.toHaveBeenCalled();
+      expect(lastCheck().newComparisonsAdded).toBe(0);
+    });
+
+    it("computes absolute and percentage error from an operating match", async () => {
+      // predicted 20, actual 30 → |20−30| = 10, 10/30·100 = 33.33…
+      const p = pending({ predictedWaitTime: 20 });
+      arrange([p], [actual("a-1", p.targetTime, "OPERATING", 30)]);
+
+      const res = await service.compareWithActuals();
+
+      expect(res).toEqual({ newComparisons: 1 });
+      expect(p.comparisonStatus).toBe("COMPLETED");
+      expect(p.actualWaitTime).toBe(30);
+      expect(p.absoluteError).toBe(10);
+      expect(p.percentageError).toBeCloseTo(33.333, 2);
+      expect(p.wasUnplannedClosure).toBe(false);
+      expect(lastCheck().newComparisonsAdded).toBe(1);
+    });
+
+    it("leaves percentageError null when the actual wait is 0", async () => {
+      const p = pending({ predictedWaitTime: 15 });
+      arrange([p], [actual("a-1", p.targetTime, "OPERATING", 0)]);
+
+      await service.compareWithActuals();
+
+      expect(p.comparisonStatus).toBe("COMPLETED");
+      expect(p.absoluteError).toBe(15);
+      expect(p.percentageError).toBeNull();
+    });
+
+    it("counts CLOSED at the target time as an unplanned closure with the full predicted error", async () => {
+      const p = pending({ predictedWaitTime: 25 });
+      arrange([p], [actual("a-1", p.targetTime, "CLOSED", null)]);
+
+      const res = await service.compareWithActuals();
+
+      expect(res.newComparisons).toBe(1);
+      expect(p.wasUnplannedClosure).toBe(true);
+      expect(p.actualWaitTime).toBe(0);
+      expect(p.absoluteError).toBe(25);
+      expect(p.percentageError).toBeNull();
+    });
+
+    it("does not fabricate a 0-wait row for OPERATING without a wait value", async () => {
+      const recent = pending({ id: "recent", targetTime: target(60) });
+      const old = pending({ id: "old", targetTime: target(180) });
+      arrange(
+        [old, recent],
+        [
+          actual("a-1", old.targetTime, "OPERATING", null),
+          actual("a-1", recent.targetTime, "OPERATING", null),
+        ],
+      );
+
+      const res = await service.compareWithActuals();
+
+      // 60 min old: stays PENDING; 180 min old (> 2 h): MISSED, never COMPLETED.
+      expect(recent.comparisonStatus).toBe("PENDING");
+      expect(old.comparisonStatus).toBe("MISSED");
+      expect(res.newComparisons).toBe(0);
+    });
+
+    it("marks an unmatched prediction MISSED only after 2 hours", async () => {
+      const young = pending({ id: "young", targetTime: target(90) });
+      const stale = pending({ id: "stale", targetTime: target(150) });
+      arrange([stale, young], []);
+
+      await service.compareWithActuals();
+
+      expect(young.comparisonStatus).toBe("PENDING");
+      expect(stale.comparisonStatus).toBe("MISSED");
+    });
+
+    it("ignores queue data further than 30 minutes from the target and picks the closest record", async () => {
+      const farAway = pending({ id: "far", attractionId: "a-2" });
+      const near = pending({ id: "near", attractionId: "a-1" });
+      arrange(
+        [near, farAway],
+        [
+          // 10 min off, 5 min off → the 5 min record (wait 40) wins for a-1.
+          actual(
+            "a-1",
+            new Date(near.targetTime.getTime() - 10 * MIN),
+            "OPERATING",
+            10,
+          ),
+          actual(
+            "a-1",
+            new Date(near.targetTime.getTime() + 5 * MIN),
+            "OPERATING",
+            40,
+          ),
+          // 31 min off → outside the window for a-2.
+          actual(
+            "a-2",
+            new Date(farAway.targetTime.getTime() + 31 * MIN),
+            "OPERATING",
+            50,
+          ),
+        ],
+      );
+
+      await service.compareWithActuals();
+
+      expect(near.actualWaitTime).toBe(40);
+      expect(farAway.comparisonStatus).toBe("PENDING");
+    });
+
+    it("writes MISSED and COMPLETED rows in two bulk statements", async () => {
+      const done = pending({ id: "done", predictedWaitTime: 20 });
+      const gone = pending({
+        id: "gone",
+        attractionId: "a-2",
+        targetTime: target(200),
+      });
+      arrange([gone, done], [actual("a-1", done.targetTime, "OPERATING", 30)]);
+
+      await service.compareWithActuals();
+
+      expect(accuracyRepo.query).toHaveBeenCalledTimes(2);
+      const [missedSql, missedArgs] = accuracyRepo.query.mock.calls[0];
+      expect(missedSql).toContain("MISSED");
+      expect(missedArgs).toEqual([["gone"]]);
+      const [, completedArgs] = accuracyRepo.query.mock.calls[1];
+      expect(completedArgs).toEqual([
+        ["done"],
+        [30],
+        [10],
+        [expect.closeTo(33.333, 2)],
+        [false],
+      ]);
+    });
+  });
+
+  describe("getAttractionAccuracyStats — rounding and empty window", () => {
+    it("rounds the SQL aggregates to one decimal", async () => {
+      accuracyRepo.query.mockResolvedValueOnce([
+        {
+          total_predictions: "120",
+          compared_predictions: "80",
+          mae: "6.449",
+          mape: "21.351",
+          rmse: "8.05",
+        },
+      ]);
+
+      const res = await service.getAttractionAccuracyStats("a-1", 14);
+
+      expect(res).toEqual({
+        totalPredictions: 120,
+        comparedPredictions: 80,
+        averageAbsoluteError: 6.4,
+        averagePercentageError: 21.4,
+        rmse: 8.1,
+      });
+      const [, params] = accuracyRepo.query.mock.calls[0];
+      expect(params[0]).toBe("a-1");
+      expect(params[2]).toBe(400);
+    });
+
+    it("returns zero error figures but keeps the total when nothing was compared", async () => {
+      accuracyRepo.query.mockResolvedValueOnce([
+        {
+          total_predictions: "12",
+          compared_predictions: "0",
+          mae: null,
+          mape: null,
+          rmse: null,
+        },
+      ]);
+
+      expect(await service.getAttractionAccuracyStats("a-1")).toEqual({
+        totalPredictions: 12,
+        comparedPredictions: 0,
+        averageAbsoluteError: 0,
+        averagePercentageError: 0,
+        rmse: 0,
+      });
+    });
+  });
+
+  describe("getRecentComparisons", () => {
+    it("maps rows and bounds the actual wait below the sentinel codes", async () => {
+      const t = new Date("2026-10-01T10:00:00Z");
+      accuracyRepo.find.mockResolvedValueOnce([
+        {
+          targetTime: t,
+          predictedWaitTime: 20,
+          actualWaitTime: 25,
+          absoluteError: 5,
+          percentageError: 20,
+          modelVersion: "v9",
+          id: "ignored",
+        },
+      ]);
+
+      const res = await service.getRecentComparisons("a-1", 5);
+
+      expect(res).toEqual([
+        {
+          targetTime: t,
+          predictedWaitTime: 20,
+          actualWaitTime: 25,
+          absoluteError: 5,
+          percentageError: 20,
+          modelVersion: "v9",
+        },
+      ]);
+      const arg = accuracyRepo.find.mock.calls[0][0];
+      expect(arg.take).toBe(5);
+      expect(arg.order).toEqual({ targetTime: "DESC" });
+      expect(arg.where.attractionId).toBe("a-1");
+    });
+  });
+
+  describe("calculateMetricsFromRecords — hand-computed", () => {
+    const calc = (records: unknown[]) =>
+      (
+        service as unknown as {
+          calculateMetricsFromRecords: (r: unknown[]) => {
+            mae: number;
+            rmse: number;
+            mape: number;
+            r2Score: number;
+          };
+        }
+      ).calculateMetricsFromRecords(records);
+
+    it("returns zeros for an empty set", () => {
+      expect(calc([])).toEqual({ mae: 0, rmse: 0, mape: 0, r2Score: 0 });
+    });
+
+    it("computes MAE, RMSE, MAPE and R² from errors 2 and 4", () => {
+      // actual 10/20, predicted 12/16: errors 2, 4.
+      // MAE = 3; RMSE = √((4+16)/2) = √10 = 3.16; MAPE = (20+20)/2 = 20.
+      // mean actual 15 → SSTot = 25+25 = 50, SSRes = 4+16 = 20 → R² = 1 − 20/50 = 0.6.
+      const res = calc([
+        {
+          actualWaitTime: 10,
+          predictedWaitTime: 12,
+          absoluteError: 2,
+          percentageError: 20,
+        },
+        {
+          actualWaitTime: 20,
+          predictedWaitTime: 16,
+          absoluteError: 4,
+          percentageError: 20,
+        },
+      ]);
+      expect(res).toEqual({ mae: 3, rmse: 3.2, mape: 20, r2Score: 0.6 });
+    });
+
+    it("skips null percentage errors in MAPE and gives R² 0 when actuals are constant", () => {
+      const res = calc([
+        {
+          actualWaitTime: 10,
+          predictedWaitTime: 15,
+          absoluteError: 5,
+          percentageError: 50,
+        },
+        {
+          actualWaitTime: 10,
+          predictedWaitTime: 10,
+          absoluteError: 0,
+          percentageError: null,
+        },
+      ]);
+      expect(res.mape).toBe(50);
+      expect(res.r2Score).toBe(0);
+    });
+  });
+
+  describe("checkRetrainingNeeded — thresholds", () => {
+    const withOverall = (mae: number, mape: number) =>
+      jest.spyOn(service, "getSystemAccuracyStats").mockResolvedValue({
+        overall: {
+          mae,
+          rmse: 0,
+          mape,
+          r2Score: 0,
+          totalPredictions: 100,
+          matchedPredictions: 100,
+          coveragePercent: 100,
+        },
+      } as never);
+
+    it("recommends retraining above MAE 8", async () => {
+      withOverall(8.1, 10);
+      const res = await service.checkRetrainingNeeded();
+      expect(res.needed).toBe(true);
+      expect(res.reason).toBe("accuracy_degradation");
+    });
+
+    it("recommends retraining above MAPE 35 when MAE is fine", async () => {
+      withOverall(8, 35.1);
+      const res = await service.checkRetrainingNeeded();
+      expect(res.needed).toBe(true);
+      expect(res.reason).toBe("high_percentage_error");
+    });
+
+    it("does not recommend retraining at exactly MAE 8 and MAPE 35", async () => {
+      withOverall(8, 35);
+      const res = await service.checkRetrainingNeeded();
+      expect(res.needed).toBe(false);
+      expect(res.metrics).not.toBeNull();
+    });
+
+    it("reports not needed with null metrics when the stats query fails", async () => {
+      jest
+        .spyOn(service, "getSystemAccuracyStats")
+        .mockRejectedValue(new Error("boom"));
+      expect(await service.checkRetrainingNeeded()).toEqual({
+        needed: false,
+        metrics: null,
+      });
+    });
+  });
+  describe("getHealthStatus — counts and success rates", () => {
+    it("derives active, stalled and the rounded success rates from the counts", async () => {
+      // Call order in the service: pending, stalled, missed7, completed7,
+      // completed30, closures24h, total30.
+      accuracyRepo.count
+        .mockResolvedValueOnce(50)
+        .mockResolvedValueOnce(12)
+        .mockResolvedValueOnce(25)
+        .mockResolvedValueOnce(75)
+        .mockResolvedValueOnce(600)
+        .mockResolvedValueOnce(4)
+        .mockResolvedValueOnce(800);
+      accuracyRepo.find.mockResolvedValueOnce([
+        {
+          attractionId: "a-1",
+          targetTime: new Date("2026-10-01T10:00:00Z"),
+          predictedWaitTime: 20,
+          actualWaitTime: 25,
+          absoluteError: 5,
+          comparisonStatus: "COMPLETED",
+          createdAt: new Date("2026-10-01T09:00:00Z"),
+        },
+      ]);
+
+      const res = await service.getHealthStatus();
+
+      expect(res.pendingComparisons).toEqual({
+        total: 50,
+        stalled: 12,
+        active: 38,
+      });
+      expect(res.missedComparisons.total7Days).toBe(25);
+      expect(res.unplannedClosures24h).toBe(4);
+      // 75 / (75 + 25) = 75 %; 600 / 800 = 75 %.
+      expect(res.successRate).toEqual({ last7Days: 75, last30Days: 75 });
+      expect(res.recentSamples).toHaveLength(1);
+      expect(res.recentSamples[0].status).toBe("COMPLETED");
+    });
+
+    it("reports 0 % instead of dividing by zero on an empty window", async () => {
+      accuracyRepo.count.mockResolvedValue(0);
+      accuracyRepo.find.mockResolvedValueOnce([]);
+
+      const res = await service.getHealthStatus();
+
+      expect(res.successRate).toEqual({ last7Days: 0, last30Days: 0 });
+      expect(res.recentSamples).toEqual([]);
+      accuracyRepo.count.mockReset();
+    });
+  });
+
+  describe("cachedAgg — read-through cache", () => {
+    const agg = (key: string, compute: () => Promise<unknown>) =>
+      (
+        service as unknown as {
+          cachedAgg: (
+            k: string,
+            ttl: number,
+            c: () => Promise<unknown>,
+          ) => Promise<unknown>;
+        }
+      ).cachedAgg(key, 60, compute);
+
+    it("computes on a miss, stores the JSON and serves the next call from Redis", async () => {
+      const compute = jest.fn().mockResolvedValue({ mae: 4.2 });
+
+      expect(await agg("k", compute)).toEqual({ mae: 4.2 });
+      expect(await agg("k", compute)).toEqual({ mae: 4.2 });
+
+      expect(compute).toHaveBeenCalledTimes(1);
+      expect(redis.set).toHaveBeenCalledWith(
+        "k",
+        JSON.stringify({ mae: 4.2 }),
+        "EX",
+        60,
+      );
+    });
+
+    it("does not cache a failed computation", async () => {
+      const compute = jest.fn().mockRejectedValue(new Error("db"));
+
+      await expect(agg("k2", compute)).rejects.toThrow("db");
+
+      expect(redisStore.has("k2")).toBe(false);
+    });
+  });
+
+  describe("calculateMAE", () => {
+    const mae = (records: unknown[]) =>
+      (
+        service as unknown as { calculateMAE: (r: unknown[]) => number }
+      ).calculateMAE(records);
+
+    it("averages absolute errors to one decimal and treats null as 0", () => {
+      // (3 + 4 + 0) / 3 = 2.333… → 2.3
+      expect(
+        mae([
+          { absoluteError: 3 },
+          { absoluteError: 4 },
+          { absoluteError: null },
+        ]),
+      ).toBe(2.3);
+    });
+
+    it("returns 0 for an empty set", () => {
+      expect(mae([])).toBe(0);
+    });
+  });
+  describe("getBatchAttractionAccuracy — one query for many rides", () => {
+    it("returns an empty map without a query for an empty id list", async () => {
+      const res = await service.getBatchAttractionAccuracy([]);
+      expect(res.size).toBe(0);
+      expect(accuracyRepo.query).not.toHaveBeenCalled();
+    });
+
+    it("derives each badge from its own MAE and fills missing rides with insufficient_data", async () => {
+      accuracyRepo.query.mockResolvedValueOnce([
+        {
+          attractionId: "a-1",
+          totalPredictions: "60",
+          comparedPredictions: "40",
+          mae: "3.5",
+        },
+        {
+          attractionId: "a-2",
+          totalPredictions: "30",
+          comparedPredictions: "9",
+          mae: "2",
+        },
+      ]);
+
+      const res = await service.getBatchAttractionAccuracy([
+        "a-1",
+        "a-2",
+        "a-3",
+      ]);
+
+      expect(res.get("a-1")).toMatchObject({
+        badge: "excellent",
+        last30Days: { mae: 3.5, comparedPredictions: 40, totalPredictions: 60 },
+      });
+      // 9 compared predictions is below the 10 needed, whatever the MAE.
+      expect(res.get("a-2")?.badge).toBe("insufficient_data");
+      expect(res.get("a-3")).toMatchObject({
+        badge: "insufficient_data",
+        last30Days: { mae: 0, comparedPredictions: 0, totalPredictions: 0 },
+      });
+    });
+
+    it("falls back to insufficient_data for every ride when the query fails", async () => {
+      accuracyRepo.query.mockRejectedValueOnce(new Error("timeout"));
+
+      const res = await service.getBatchAttractionAccuracy(["a-1", "a-2"]);
+
+      expect([...res.keys()]).toEqual(["a-1", "a-2"]);
+      expect(res.get("a-1")?.message).toBe("Error fetching accuracy data");
     });
   });
 });
