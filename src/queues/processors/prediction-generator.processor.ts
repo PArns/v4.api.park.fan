@@ -9,6 +9,7 @@ import { ForecastAccuracyService } from "../../ml/services/forecast-accuracy.ser
 import { ParksService } from "../../parks/parks.service";
 import { CacheWarmupService } from "../services/cache-warmup.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { PREDICTION_CHUNK_RETENTION_DAYS } from "../../database/hypertables";
 
 /**
  * How long before its published opening a closed park starts getting hourly
@@ -436,6 +437,12 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
   async handleCleanupOld(_job: Job): Promise<void> {
     this.logger.log("🧹 Cleaning up old predictions...");
 
+    // Whole chunks past the 90-day backstop first: dropping a chunk is cheaper
+    // than the DELETEs below scanning it. Kept out of the try below on purpose
+    // — a chunk that could not be dropped today is dropped tomorrow, and must
+    // never cost the row cleanup its run.
+    await this.dropExpiredPredictionChunks();
+
     try {
       const now = new Date();
 
@@ -483,6 +490,34 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
         error instanceof Error ? error.message : String(error);
       this.logger.error(`Prediction cleanup failed: ${errorMessage}`);
       throw error;
+    }
+  }
+
+  /**
+   * The 90-day chunk retention that used to be TimescaleDB job 1007. It runs
+   * here, with a lock_timeout, because the policy queued every query on
+   * `attractions` behind its lock request for five minutes at a time — see
+   * {@link MLService.dropExpiredPredictionChunks}.
+   */
+  private async dropExpiredPredictionChunks(): Promise<void> {
+    try {
+      const result = await this.mlService.dropExpiredPredictionChunks(
+        PREDICTION_CHUNK_RETENTION_DAYS,
+      );
+      if (result.lockTimedOut) {
+        this.logger.warn(
+          `⏳ ${result.due} prediction chunk(s) past ${PREDICTION_CHUNK_RETENTION_DAYS} days ` +
+            `not dropped: the lock on attractions was busy. Retrying next run.`,
+        );
+      } else if (result.dropped > 0) {
+        this.logger.log(
+          `🗑️  Dropped ${result.dropped} prediction chunk(s) past ${PREDICTION_CHUNK_RETENTION_DAYS} days`,
+        );
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error(`Prediction chunk retention failed: ${errorMessage}`);
     }
   }
 }

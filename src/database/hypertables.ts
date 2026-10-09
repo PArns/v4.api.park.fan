@@ -104,3 +104,17 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
     orderBy: "predictedTime ASC",
   },
 ];
+
+/**
+ * `wait_time_predictions` chunks whose whole range is older than this many days
+ * are dropped by the nightly `cleanup-old` job
+ * (`MLService.dropExpiredPredictionChunks`).
+ *
+ * It is a backstop: the row cleanup already removes hourly rows after 9 days
+ * and daily rows 90 days past their target, so a chunk this old is near-empty.
+ * It used to be a TimescaleDB retention policy and is not one any more —
+ * `drop_chunks` locks every table the hypertable references (`attractions`)
+ * ACCESS EXCLUSIVE, and the policy had no way to give up on that lock quickly.
+ * See docs/troubleshooting/db-health-runbook.md §0b.
+ */
+export const PREDICTION_CHUNK_RETENTION_DAYS = 90;

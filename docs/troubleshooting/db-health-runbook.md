@@ -71,6 +71,109 @@ is why there is no `idle_session_timeout` here.
 
 ---
 
+## 0b. TimescaleDB jobs and lock queues (2026-10-07 … 09)
+
+Ad-hoc sessions were one way in. The TimescaleDB background jobs are the other:
+two of them asked for an `ACCESS EXCLUSIVE` lock and waited for it, and every
+reader that arrived afterwards queued behind the waiting request — Postgres
+grants locks in arrival order, so a pending `ACCESS EXCLUSIVE` blocks even
+`SELECT`s that do not conflict with whatever the holder has. The API pool (80
+connections, `connectionTimeoutMillis` 15 s) filled with queued readers and
+every request after that failed with `timeout exceeded when trying to connect`.
+
+### What happened
+
+| When (UTC) | Job | Lock it waited for | Effect |
+|---|---|---|---|
+| 10-07 15:59–20:28, 10-08 21:20–10-09 01:49 | 1007, retention on `wait_time_predictions` | `ACCESS EXCLUSIVE` on **`attractions`** | 20 five-minute stalls; in each, every query touching `attractions` waited until the job gave up |
+| 10-09 02:12–07:31 | 1000, compression on `queue_data` | `ACCESS EXCLUSIVE` on the 30-day-old chunk (`_hyper_1_2162_chunk`, 2026-09-08) | API down for 5 h 16 min, until the 07:24 deploy restarted Postgres |
+
+**Why a retention job locks `attractions`.** `drop_chunks` begins with
+`lock_referenced_tables()`: an `ACCESS EXCLUSIVE` lock on every table the
+hypertable has a foreign key to (a guard against TimescaleDB issue #865), and
+`wait_time_predictions` → `attractions` is such a key. It takes this lock on
+every run, **before** looking for a chunk to drop — on 10-08 there was nothing to
+drop at all and it still stalled for ten hours. The policy's `max_runtime` was
+5 min and `retry_period` 5 min, so it gave up and came back roughly hourly.
+
+**Why compression locks out readers.** `compress_chunk` ends by truncating the
+uncompressed rows, which needs `ACCESS EXCLUSIVE` on the chunk. Under the default
+`timescaledb.compress_truncate_behaviour = truncate_only` it waits for that lock
+with no deadline (the compression policies run with `max_runtime` 0). The 02:12
+run of job 1000 was still waiting when the deploy stopped Postgres; the job
+history shows it as a crash at 07:31:34 and the chunk was compressed by the
+retry at 08:46.
+
+**The evidence.**
+
+- `slow-queries.*.log`: every one of the 20 retention attempts that failed while
+  the API was still answering is followed by a burst of 8–73 queries over 60 s
+  finishing **in the same second the attempt ended** (10-07 16:04:25, 16:15:02,
+  …, 10-09 01:49:44) — 655 queries in all, up to 300 s long, and all 655 name
+  `attractions`. That is the signature of a lock queue draining.
+- From 02:15:03 on 10-09 the slow-query log holds **no** entry until 07:31:47:
+  nothing that started finished. Queries do not stall that way on their own.
+- `_timescaledb_catalog.chunk.creation_time` of the compressed chunks: the daily
+  `queue_data` compression ran at 02:12 every day from 09-29 to 10-08, and on
+  10-09 at 08:46 — after the restart.
+- Reproduced on `timescale/timescaledb:2.24.0-pg18`: with one session holding a
+  plain `SELECT` transaction on `attractions`, `drop_chunks` on a hypertable with
+  **no** chunk to drop waits on `AccessExclusiveLock` on `attractions`, and a
+  third session's `SELECT count(*) FROM attractions` hangs behind it. The same
+  for `compress_chunk` and a reader of the chunk. With
+  `compress_truncate_behaviour = truncate_or_delete` set on the database,
+  `compress_chunk` finished in 5 s with the reader still open, and readers were
+  never blocked; a background job confirmed the database-level value reaches
+  TimescaleDB workers.
+
+**What is not known: who held the lock.** Each stall needs a session that kept a
+lock on `attractions` (and, on 10-09, on a 30-day-old `queue_data` chunk) for
+hours — from at most 10-07 15:59 until the 20:54 deploy, and from at most 10-08
+21:20 until the 10-09 07:24 deploy. Both ended with a Postgres restart. It was
+not a statement that finished (nothing in the slow-query log or in
+`pg_stat_statements` ran that long), so it was either idle in a transaction or
+never completed. `log_lock_waits` was off, the container's log went with the
+container, and every client connects as `parkfan` with no `application_name`,
+so `pg_stat_activity` could not have named it either. The changes below close
+both blind spots for next time.
+
+### What changed
+
+| Change | Where | Why |
+|---|---|---|
+| The retention policy is removed at boot; the nightly `cleanup-old` job (03:30) drops chunks past 90 days itself | `TimescaleInitService.setupRetentionPolicies`, `MLService.dropExpiredPredictionChunks` | It calls `show_chunks` first, which locks nothing, so `attractions` is untouched on days nothing is due. When something is, `drop_chunks` runs under a transaction-local `lock_timeout` of 2 s; a timeout is logged and retried the next night |
+| `timescaledb.compress_truncate_behaviour = truncate_or_delete` on the database | `TimescaleInitService.setupCompressTruncateBehaviour` | Compression tries the truncate lock without queueing for 5 s, then deletes the rows instead. Readers never wait. The cost is dead tuples for autovacuum |
+| `application_name` per service (`parkfan-api`, `parkfan-ml-service`, `parkfan-pcn-service`, `parkfan-nf-service`, `parkfan-shape-service`) | `typeorm.config.ts`, each service's `db.py` | So `pg_stat_activity` and lock-wait log lines say whose session it is |
+| `idle_in_transaction_session_timeout` = 10 min on application connections | same | A session parked in a transaction can no longer hold its locks for hours. Per connection, so `scripts/prod-psql.sh` and the TimescaleDB workers keep their own settings |
+| `log_lock_waits=on` | `docker-compose.production.yml` | Any lock wait over `deadlock_timeout` (1 s) is logged with the holding and waiting pids |
+
+### When a stall looks like this again
+
+```sql
+-- Who waits for what, and who holds it.
+SELECT w.pid AS waiting_pid, w.application_name AS waiting_app, w.wait_event_type,
+       pg_blocking_pids(w.pid) AS blocked_by, left(w.query, 80) AS waiting_query
+FROM pg_stat_activity w
+WHERE cardinality(pg_blocking_pids(w.pid)) > 0;
+
+SELECT pid, application_name, client_addr, state, now() - xact_start AS xact_age,
+       left(query, 120) AS query
+FROM pg_stat_activity
+WHERE xact_start < now() - interval '5 minutes'
+ORDER BY xact_start;
+
+-- Job runs that failed or crashed (successes are not logged by default).
+SELECT job_id, succeeded, start_time, finish_time, sqlerrcode, err_message
+FROM timescaledb_information.job_history
+ORDER BY finish_time DESC LIMIT 20;
+```
+
+The tell in the logs is the same as on 2026-09-28: blocked queries all end in
+the same second, and that second is a job's `finish_time` (or its `next_start`
+in `timescaledb_information.jobs`).
+
+---
+
 ## 1. Table Sizes & Bloat
 
 ```sql

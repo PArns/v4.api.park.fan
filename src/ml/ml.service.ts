@@ -1840,6 +1840,74 @@ export class MLService {
   }
 
   /**
+   * Drops whole `wait_time_predictions` chunks older than `retainDays`, without
+   * ever letting the drop queue up the rest of the database behind it.
+   *
+   * This replaces the TimescaleDB retention policy (job 1007), and the reason is
+   * a lock on a table this hypertable does not even contain: `drop_chunks`
+   * begins by taking an ACCESS EXCLUSIVE lock on every table the hypertable has
+   * a foreign key to (TimescaleDB `lock_referenced_tables`, a guard against
+   * deadlocks), and `wait_time_predictions` references `attractions`. It takes
+   * that lock on every run, whether a chunk is due or not. While the request
+   * waits for some long-lived reader of `attractions` to finish, every new
+   * query that touches `attractions` — nearly every API read — queues behind
+   * it. The policy waited for its full five-minute `max_runtime`, 25 times in a
+   * row on 2026-10-07/08, and each time ~30–70 API queries finished in the same
+   * second the attempt gave up (docs/troubleshooting/db-health-runbook.md §0b).
+   *
+   * Two things make this version safe:
+   *
+   * 1. `show_chunks` first. It reads the catalog and locks nothing, so on the
+   *    six days a week when no chunk has aged out, `attractions` is not touched.
+   * 2. `lock_timeout` on the drop itself, local to its transaction. If the lock
+   *    is not free within `lockTimeoutMs`, Postgres gives up the request instead
+   *    of holding the queue; readers wait that long at most, and the chunks are
+   *    dropped by a later run. A chunk left one more day costs nothing.
+   *
+   * Never throws for a lock timeout — that is the designed outcome when the
+   * table is busy, not a failure.
+   */
+  async dropExpiredPredictionChunks(
+    retainDays: number,
+    lockTimeoutMs = 2000,
+  ): Promise<{ due: number; dropped: number; lockTimedOut: boolean }> {
+    const olderThan = `${retainDays} days`;
+
+    const due: Array<{ chunk: string }> =
+      await this.predictionRepository.manager.query(
+        `SELECT c::text AS chunk
+           FROM show_chunks('wait_time_predictions', older_than => $1::interval) AS c`,
+        [olderThan],
+      );
+    if (due.length === 0) {
+      return { due: 0, dropped: 0, lockTimedOut: false };
+    }
+
+    try {
+      const dropped: Array<{ chunk: string }> =
+        await this.predictionRepository.manager.transaction(async (em) => {
+          // set_config(..., true) is SET LOCAL: it ends with this transaction
+          // and never leaks onto the pooled connection.
+          await em.query(`SELECT set_config('lock_timeout', $1, true)`, [
+            `${Math.max(1, Math.round(lockTimeoutMs))}ms`,
+          ]);
+          return em.query(
+            `SELECT c::text AS chunk
+               FROM drop_chunks('wait_time_predictions', older_than => $1::interval) AS c`,
+            [olderThan],
+          );
+        });
+      return { due: due.length, dropped: dropped.length, lockTimedOut: false };
+    } catch (error) {
+      // 55P03 lock_not_available: the lock_timeout above fired.
+      if ((error as { code?: string })?.code === "55P03") {
+        return { due: due.length, dropped: 0, lockTimedOut: true };
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Oldest `createdAt` still present for a prediction type, or null when there
    * are none. Served by the ["predictionType", "createdAt"] index.
    */

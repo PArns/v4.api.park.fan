@@ -33,6 +33,9 @@ describe("PredictionGeneratorProcessor", () => {
     purgeHourlyPredictionsBefore: jest
       .fn()
       .mockResolvedValue({ deleted: 0, windows: 0, done: true }),
+    dropExpiredPredictionChunks: jest
+      .fn()
+      .mockResolvedValue({ due: 0, dropped: 0, lockTimedOut: false }),
   };
 
   // Rides along with the daily run to record what was predicted at each lead
@@ -370,6 +373,29 @@ describe("PredictionGeneratorProcessor", () => {
   });
 
   describe("cleanup-old (daily retention)", () => {
+    it("drops expired chunks at the 90-day backstop before the row cleanup", async () => {
+      await processor.handleCleanupOld({} as Job);
+
+      expect(mlService.dropExpiredPredictionChunks).toHaveBeenCalledWith(90);
+      expect(
+        mlService.dropExpiredPredictionChunks.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        mlService.purgeHourlyPredictionsBefore.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("still runs the row cleanup when the chunk drop fails", async () => {
+      mlService.dropExpiredPredictionChunks.mockRejectedValueOnce(
+        new Error("boom"),
+      );
+
+      await expect(
+        processor.handleCleanupOld({} as Job),
+      ).resolves.toBeUndefined();
+      expect(mlService.purgeHourlyPredictionsBefore).toHaveBeenCalledTimes(1);
+      expect(mlService.deleteOldPredictions).toHaveBeenCalledTimes(1);
+    });
+
     it("purges hourly by createdAt in windows and daily by predictedTime", async () => {
       mlService.purgeHourlyPredictionsBefore.mockResolvedValueOnce({
         deleted: 12_000,

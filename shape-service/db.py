@@ -44,7 +44,19 @@ def get_engine():
         f"postgresql://{settings.DB_USER}:{settings.DB_PASSWORD}"
         f"@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
     )
-    return create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5)
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=5,
+        connect_args={
+            # Name the session (all services share the `parkfan` role) and end a
+            # transaction left idle for 10 min, which would otherwise hold its
+            # locks indefinitely. See docs/troubleshooting/db-health-runbook.md §0b.
+            "application_name": "parkfan-shape-service",
+            "options": "-c idle_in_transaction_session_timeout=600000",
+        },
+    )
 
 
 def engine():
