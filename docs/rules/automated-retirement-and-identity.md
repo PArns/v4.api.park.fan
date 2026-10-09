@@ -69,6 +69,15 @@ run. Before such a PR merges:
   the survivor takes the id the feed lists — without it the sync grows the
   loser back) or dismisses with a `not_a_duplicate` mark. Distance alone is
   never enough: Walibi Belgium's three 4D films sit at 0 m.
+- **`attractions.externalId` is unique globally, `slug` only per park.** The
+  wiki hangs single children on **both** parks of a resort, so the second park
+  asks for a row it can never insert: the lookup in `syncAttraction` is
+  park-scoped, finds nothing, and the insert hits
+  `UQ_a94e9dc2762dfca8a463d173657`. Four such children on 2026-10-07 —
+  `Gremmie Lagoon` and `Beach House Slides` (Knott's Berry Farm, also listed
+  under Knott's Soak City), `Muffleheads Beach Bar` and `Cedar Creek` (Cedar
+  Point, also under Cedar Point Shores). The child is skipped and logged; which
+  park should own the row is open (PAR-743).
 
 ## 4. Names come from the operator, never from a translation
 
@@ -83,7 +92,27 @@ Attraction URLs are indexed. A slug that stops answering needs an
 `attraction_slug_aliases` row (PAR-687); the merge writes one itself, a manual
 change writes it in the same transaction (SQL in [Curation](../admin/curation.md)).
 
-## 6. Production one-offs run the deployed code, from a clean checkout
+## 6. One child must not cost its park the whole feed
+
+- A per-park `try/catch` around a loop over children is **not** error handling,
+  it is a kill switch: the first child that throws ends the park, and
+  everything downstream of the loop — the reclassification steps, the absence
+  step, the mapping job, the cache eviction — never runs. Each child gets its
+  own `try/catch` (`handleFetchChildren`, all three loops plus the Queue-Times
+  fallback).
+- Found by PAR-714 after **71 days**: Knott's Soak City wrote 1 of 9 rows per
+  run, Cedar Point Shores 2 of 17, both to a single unwritable child at feed
+  index 1 (§3). Nothing in the run said so — the park-wide handler logs one
+  line and returns zeros, which reads like a park with no children.
+- **Locate such a stall at the feed order, not in the code.** Line the feed's
+  order up against each row's `updatedAt`: the boundary between the rows
+  written tonight and the rows frozen months ago names the child that throws.
+  It found both parks with one query.
+- A skip is **never silent**: it carries park, child name, upstream id and the
+  error, and is counted per park and per run (`Skipped Children: N`). A listed
+  child without a row is a fact someone has to see.
+
+## 7. Production one-offs run the deployed code, from a clean checkout
 
 - A one-off script that imports repository code (a merge through
   `AttractionMergeService`, say) runs from a **clean checkout of the deployed
