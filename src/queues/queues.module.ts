@@ -32,6 +32,7 @@ import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly
 import { DowntimeReconstructionProcessor } from "./processors/downtime-reconstruction.processor";
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
+import { ForecastArchiveProcessor } from "./processors/forecast-archive.processor";
 import { ShowPatternProcessor } from "./processors/show-pattern.processor";
 import { RopeDropProcessor } from "./processors/rope-drop.processor";
 import { ParkDayOperationProcessor } from "./processors/park-day-operation.processor";
@@ -185,6 +186,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     DowntimeReconstructionProcessor, // Outage intervals + exposure + profiles
     PushNotificationProcessor, // The five-minute tick that sends "next up"
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans
+    ForecastArchiveProcessor, // Forward archive of served curves + scoring (PAR-831)
     ShowPatternProcessor, // Nightly per-weekday showtime patterns
     RopeDropProcessor, // Rope-drop recommendations (daily)
     TypicalWaitsProcessor, // Typical P50/P90 peak-wait stats (daily)

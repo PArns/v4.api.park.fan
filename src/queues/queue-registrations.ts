@@ -122,4 +122,15 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   // Showtime patterns: the nightly rebuild that lets a planned day show a
   // projected programme, since no feed publishes showtimes ahead of today.
   { name: "show-patterns" },
+  {
+    // Forward archive of served intraday curves (PAR-831): an hourly capture
+    // that, in the hour Europe reaches 06:00, builds ~90 parks × 8 plan days;
+    // and a daily scoring run over every park. Same headroom as the other
+    // park-wide batch jobs so neither is flagged stalled halfway through.
+    name: "forecast-archive",
+    settings: {
+      lockDuration: 900000, // 15 min
+      lockRenewTime: 300000,
+    },
+  },
 ];

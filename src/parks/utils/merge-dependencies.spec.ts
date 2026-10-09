@@ -90,6 +90,7 @@ describe("merge dependency tables", () => {
     "attraction_slug_aliases",
     "attraction_typical_waits",
     "catboost_daily_forecasts",
+    "forecast_archive_curves",
     "forecast_data",
     "headliner_attractions",
     "ml_accuracy_comparisons",

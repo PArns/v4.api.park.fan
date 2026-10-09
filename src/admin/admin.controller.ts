@@ -41,6 +41,7 @@ import { ParkRenameService } from "../parks/services/park-rename.service";
 import { ParkMergeService } from "../parks/services/park-merge.service";
 import { determineMergeWinner } from "../parks/utils/park-merge.util";
 import { SystemHealthService } from "./system-health.service";
+import { ForecastArchiveScoringService } from "../parks/services/forecast-archive-scoring.service";
 import { DowntimeMeasurementService } from "./downtime-measurement.service";
 import { AdminAuthGuard } from "./auth/admin-auth.guard";
 import { AdminMinRole } from "./auth/admin-auth.decorators";
@@ -164,6 +165,7 @@ export class AdminController {
     private readonly dataQualityMonitor: DataQualityMonitorService,
     private readonly retirementService: AttractionRetirementService,
     private readonly reviewService: AttractionReviewService,
+    private readonly forecastArchiveScoring: ForecastArchiveScoringService,
   ) {}
 
   /**
@@ -554,6 +556,41 @@ export class AdminController {
   ): Promise<Record<string, unknown>> {
     const n = Math.min(Math.max(parseInt(days ?? "14", 10) || 14, 1), 90);
     return this.systemHealth.comparisonBoard(n);
+  }
+
+  /**
+   * The forward archive's board (PAR-831): how the curves users were SERVED
+   * at each lead turned out, per use case x lead x source x segment, pooled
+   * over the last `days` scored target dates. Read-only and cached for 2 h —
+   * the scores move once a day.
+   */
+  @Get("forecast-archive")
+  @ApiOperation({
+    summary: "Forward archive scores (served curves vs truth, per lead)",
+    description:
+      "UC1/UC2 (served 15-min curve, slot leads h0-1 … h24-48 and ride-day " +
+      "leads d0-d2), UC3 (plan/day d0-d7), D6 (crowd bucket per park-day), " +
+      "D9 (coverage). Counters are pooled before dividing. See " +
+      "docs/ml/forward-archive.md.",
+  })
+  @ApiQuery({ name: "days", required: false, description: "1-90, default 14" })
+  @ApiQuery({
+    name: "region",
+    required: false,
+    description: "ALL (default), EU, NA, ASIA, OTHER",
+  })
+  async getForecastArchive(
+    @Query("days") days?: string,
+    @Query("region") region?: string,
+  ): Promise<Record<string, unknown>> {
+    const n = Math.min(Math.max(parseInt(days ?? "14", 10) || 14, 1), 90);
+    const r = (region ?? "ALL").toUpperCase();
+    if (!["ALL", "EU", "NA", "ASIA", "OTHER"].includes(r)) {
+      throw new BadRequestException(
+        "region must be ALL, EU, NA, ASIA or OTHER",
+      );
+    }
+    return this.forecastArchiveScoring.getBoard(n, r);
   }
 
   /**

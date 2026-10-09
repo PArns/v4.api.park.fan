@@ -95,6 +95,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     private pushNotificationsQueue: Queue,
     @InjectQueue("trips") private tripsQueue: Queue,
     @InjectQueue("show-patterns") private showPatternsQueue: Queue,
+    @InjectQueue("forecast-archive") private forecastArchiveQueue: Queue,
     @InjectQueue("rope-drop") private ropeDropQueue: Queue,
     @InjectQueue("typical-waits") private typicalWaitsQueue: Queue,
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
@@ -1140,6 +1141,39 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         {
           repeat: { cron: "45 4 * * *" },
           jobId: "trip-sweep-cron",
+        },
+      );
+    }
+
+    // Forward archive of served curves (PAR-831): capture hourly at :05 —
+    // each park is captured in the hour its OWN clock shows an origin (06
+    // daily, 10–18 intraday), so one hourly job covers every offset — and score
+    // daily at 12:00 UTC, when yesterday is over in every park timezone.
+    const hasArchiveCaptureCron = await this.hasRepeatableJob(
+      this.forecastArchiveQueue,
+      "forecast-archive-capture-cron",
+    );
+    if (!hasArchiveCaptureCron) {
+      await this.forecastArchiveQueue.add(
+        "capture",
+        {},
+        {
+          repeat: { cron: "5 * * * *" },
+          jobId: "forecast-archive-capture-cron",
+        },
+      );
+    }
+    const hasArchiveScoreCron = await this.hasRepeatableJob(
+      this.forecastArchiveQueue,
+      "forecast-archive-score-cron",
+    );
+    if (!hasArchiveScoreCron) {
+      await this.forecastArchiveQueue.add(
+        "score",
+        {},
+        {
+          repeat: { cron: "0 12 * * *" },
+          jobId: "forecast-archive-score-cron",
         },
       );
     }
