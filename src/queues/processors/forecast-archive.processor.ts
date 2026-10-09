@@ -26,7 +26,7 @@ export class ForecastArchiveProcessor {
 
   @Process("capture")
   async handleCapture(_job: Job): Promise<void> {
-    const result = await this.archiveService.captureDue(new Date());
+    const result = await this.archiveService.captureDue();
     // Quiet on the hours no park is at an origin.
     if (result.parks > 0 || result.failed > 0) {
       this.logger.log(

@@ -793,7 +793,7 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     // `(origin_at, attraction_id, surface, target_date)`; a capture that saw
     // both twins at one origin keeps the winner's row. `park_id` is left on
     // the loser's park: a park merge reparents nothing here, and the rows
-    // expire after 35 days.
+    // expire 14 days after their target date.
     table: "forecast_archive_curves",
     column: "attraction_id",
     strategy: "move",

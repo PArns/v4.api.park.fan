@@ -13,19 +13,23 @@
  * | counter | meaning |
  * |---|---|
  * | `n`, `sae`, `se` | slots compared, Σ\|pred − truth\|, Σ(pred − truth) |
- * | `nBand`, `nBandCov` | slots with a served band, of those with truth ≤ pred + band (D8) |
- * | `rd`, `hitTop2`, `hit30`, `regret` | ride-days scored for best time, hits, Σ regret minutes (D3) |
+ * | `nBand`, `nBandCov` | park_hourly only: slots with a served band (q95 − q50), of those with truth ≤ pred + band (D8) |
+ * | `rd`, `regret` | ride-days scored for best time, Σ regret minutes — the D3 headline |
+ * | `rdHit`, `hitTop2`, `hit30`, `rdFlat` | ride-days with a clear best time, hits among them; ride-days whose minimum is shared by > 25 % of slots (no best time to find) |
  * | `nRho`, `sRho` | ride-days with a defined slot Spearman, Σ rho |
  * | `nPeak`, `sPeakAe`, `sPeakE` | ride-days with dayPeak + truth P90, Σ\|err\|, Σerr |
  * | `nStated`, `sStated`, `sStatedAe` | of those, the ones with a served expectedError, Σ stated, Σ realised \|err\| (D8) |
+ * | `nPeakBand`, `nPeakBandCov` | plan_day: ride-days with a served band, of those with \|dayPeak − truth P90\| ≤ band (D8) — never pooled with the slot band |
  * | `nRank`, `sRank`, `pairs`, `pairsOk` | park-days with a dayPeak rank Spearman, Σ rho; ride pairs, correctly ordered (D4 ordering) |
  * | `truthRides`, `truthRidesOffered`, `offered`, `offeredNotOperating`, `parkDays`, `parkDaysEmpty` | coverage (D9) |
  * | `n`, `exact`, `within1`, `busyTrue`, `busyPred`, `busyBoth`, `unknownPred`, `crossPairs`, `crossPairsOk` | crowd bucket per park-day (D6) |
  * | `d1Sugg`, `d1SuggOk`, `d1None`, `d1NoneWorse` | next-best-ride suggestions and how many held; the base rate among non-suggestions (D1) |
  *
- * UC3 and D9 rows are written twice: under the slot / plan source and under
- * `level_<tft|catboost|climatology|mixed|none>`, the model behind the day
- * level, so the board can split the horizon by level source.
+ * UC3 and D9 rows are also written under `level_<tft|catboost|climatology|
+ * mixed|none>`, the model behind the day level, so the board can split the
+ * horizon by level source — but only for numbers that come from the level:
+ * composed / climatology hours, and dayPeak. A `measured` hour is the hourly
+ * model's, whatever the day level was.
  */
 import { determineCrowdLevel } from "../../common/utils/crowd-level.util";
 import {
@@ -51,6 +55,9 @@ export const D1_GAP_MINUTES = 10;
 export const D1_WINDOW_MINUTES = 120;
 /** Truth slots the D1 window needs before the outcome is judged. */
 const D1_MIN_TRUTH_SLOTS = 2;
+/** A ride-day whose true minimum is shared by more than this share of its
+ *  slots has no best time to find: it counts for regret, not for hit rates. */
+export const FLAT_MIN_SHARE = 0.25;
 const THIRTY_MIN_MS = 30 * 60_000;
 
 export interface TruthReading {
@@ -239,13 +246,19 @@ export interface ArchivedCurve {
   slotMinutes: number;
   waits: (number | null)[];
   sources: string;
+  /** park_hourly only: per-slot q95 − q50. */
   bands: (number | null)[] | null;
   dayPeak: number | null;
   expectedError: number | null;
+  /** plan_day only: the served band around dayPeak. */
+  peakBand?: number | null;
   rideQ90: number | null;
   isHeadliner: boolean;
-  /** park_hourly: live STANDBY wait at the origin (D1 anchor). */
+  /** Live STANDBY wait in force at the origin (D1 anchor). */
   liveWait?: number | null;
+  /** plan_day intraday: the frontend's next-best-ride "later" hour (D1). */
+  laterWait?: number | null;
+  laterAt?: number | null;
   /** plan_day: model behind the day level. */
   levelSource?: string | null;
 }
@@ -257,6 +270,10 @@ export interface ArchivedParkDay {
   crowdLevel: string | null;
   predictedCrowdLevel: string | null;
   levelSource?: string | null;
+  /** The park's typical-day-peak baseline as it stood at the origin. */
+  typicalDayPeak?: number | null;
+  /** `crowdLevel` came from the calendar's fallback chain, not a forecast. */
+  crowdLevelFallback?: boolean;
 }
 
 export interface ParkDayScoringInput {
@@ -267,9 +284,12 @@ export interface ParkDayScoringInput {
   truth: Map<string, Map<number, number>>;
   /** Whether the park published an OPERATING window for the date at all. */
   hadWindows: boolean;
-  headlinerIds: ReadonlySet<string>;
-  /** Park's typical-day-peak baseline; ≤ 0 = not ratable (D6 skipped). */
-  typicalDayPeak: number;
+  /**
+   * The realised day value in the calendar's own statistic (see
+   * {@link calendarDayValue}); null when no headliner had a qualifying row.
+   * D6 divides it by each park-day's `typicalDayPeak`.
+   */
+  calendarDayValue: number | null;
 }
 
 /** One park-day's crowd bucket, for the cross-park pairs of D6. */
@@ -294,6 +314,9 @@ function segmentsOf(curve: ArchivedCurve): string[] {
   if (curve.isHeadliner) out.push("headliner");
   return out;
 }
+
+/** Sources whose number comes from the day level, not the hourly model. */
+const LEVEL_DERIVED = new Set(["composed", "climatology"]);
 
 interface Compared {
   slot: number;
@@ -330,10 +353,15 @@ export function dayLead(leadDays: number): string {
  * quietest turn out to be the quietest? Ties in the prediction (an hourly
  * product serves four equal quarter-hours) resolve to the earliest slot, which
  * is what a "go at" recommendation reads first.
+ *
+ * Regret is the headline: it is defined on every ride-day. The hit rates are
+ * not, and are null on a FLAT ride-day — one whose true minimum is held by more
+ * than {@link FLAT_MIN_SHARE} of the slots. A quiet ride at 5 minutes all day
+ * would otherwise "hit" whatever the forecast said and inflate the rate.
  */
 export function bestTimeOutcome(compared: Compared[]): {
-  hitTop2: boolean;
-  hit30: boolean;
+  hitTop2: boolean | null;
+  hit30: boolean | null;
   regret: number;
 } | null {
   if (compared.length < MIN_RIDE_DAY_SLOTS) return null;
@@ -341,15 +369,20 @@ export function bestTimeOutcome(compared: Compared[]): {
     (a, b) => a.pred - b.pred || a.slot - b.slot,
   );
   const trueMin = Math.min(...compared.map((c) => c.truth));
-  const top2 = byPred.slice(0, 2);
   const best = byPred[0];
+  const regret = best.truth - trueMin;
+  const atMin = compared.filter((c) => c.truth === trueMin).length;
+  if (atMin / compared.length > FLAT_MIN_SHARE) {
+    return { hitTop2: null, hit30: null, regret };
+  }
+  const top2 = byPred.slice(0, 2);
   return {
     hitTop2: top2.some((c) => c.truth === trueMin),
     hit30: compared.some(
       (c) =>
         c.truth === trueMin && Math.abs(c.slot - best.slot) <= THIRTY_MIN_MS,
     ),
-    regret: best.truth - trueMin,
+    regret,
   };
 }
 
@@ -361,24 +394,98 @@ function rideDayTruthP90(
 }
 
 /**
- * D1, next-best-ride (BENCH-SPEC decision table): the frontend suggests a ride
- * when its live wait is at least {@link D1_GAP_MINUTES} below its forecast
- * somewhere in the next {@link D1_WINDOW_MINUTES}. The suggestion was right
- * when the ride actually got that much worse within the same window.
+ * The realised park-day value in the CALENDAR's statistic, so D6's numerator
+ * and denominator are the same function: `calculateTypicalDayPeak` takes, per
+ * headliner and park-local date, the P90 of the raw change-log rows that are
+ * STANDBY, OPERATING and ≥ 10 min (no opening-window filter), averages it over
+ * the headliners, and the baseline is the median of that over 548 days. This
+ * is that day value for one date; `inDay` decides the park-local date.
+ */
+export function calendarDayValue(
+  readings: ReadonlyMap<string, readonly TruthReading[]>,
+  headlinerIds: ReadonlySet<string>,
+  inDay: (timestamp: number) => boolean,
+): number | null {
+  const p90s: number[] = [];
+  for (const id of headlinerIds) {
+    const values = (readings.get(id) ?? [])
+      .filter(
+        (r) =>
+          inDay(r.timestamp) &&
+          r.status === "OPERATING" &&
+          r.waitTime !== null &&
+          r.waitTime >= 10,
+      )
+      .map((r) => r.waitTime as number);
+    const p90 = percentileCont(values, 0.9);
+    if (p90 !== null) p90s.push(p90);
+  }
+  if (p90s.length === 0) return null;
+  return p90s.reduce((a, b) => a + b, 0) / p90s.length;
+}
+
+/**
+ * The frontend's next-best-ride "later" value, ported from
+ * `park.fan/lib/planner/next-best-ride.ts` (`suggestNextRides`): the maximum
+ * forecast over the whole hours of today's `/plan/day` curve whose START lies
+ * in [now + walk, now + 120 min] and whose unfolded hour is before the
+ * unfolded close hour. The archive has no visitor position, so walk = 0.
+ * `hours[].hour` is the plan's own axis (24+ past midnight); `nowMinute` is
+ * park-local minutes since midnight.
+ */
+export function nextRideLater(
+  hours: ReadonlyArray<{ hour: number; wait: number }>,
+  openHour: number | null,
+  rawCloseHour: number | null,
+  nowMinute: number,
+): { hour: number; wait: number } | null {
+  const wrapAt =
+    openHour != null && rawCloseHour != null && rawCloseHour < openHour
+      ? openHour
+      : null;
+  const unfold = (hour: number) =>
+    wrapAt != null && hour < wrapAt ? hour + 24 : hour;
+  const closeHour =
+    openHour != null && rawCloseHour != null
+      ? rawCloseHour < openHour
+        ? rawCloseHour + 24
+        : rawCloseHour
+      : rawCloseHour;
+  const now =
+    wrapAt != null && nowMinute < wrapAt * 60 ? nowMinute + 24 * 60 : nowMinute;
+  const horizon = now + D1_WINDOW_MINUTES;
+  let peak: { hour: number; wait: number } | null = null;
+  for (const h of hours) {
+    const axis = unfold(h.hour);
+    const start = axis * 60;
+    if (start < now || start > horizon) continue;
+    if (closeHour != null && axis >= closeHour) continue;
+    if (!peak || h.wait > peak.wait) peak = { hour: h.hour, wait: h.wait };
+  }
+  return peak;
+}
+
+/**
+ * D1, next-best-ride (BENCH-SPEC decision table), on the decision the frontend
+ * actually makes: a ride is suggested when its in-force live wait is at least
+ * {@link D1_GAP_MINUTES} below the "later" forecast {@link nextRideLater}
+ * found. The suggestion held when the ride's truth reached live + 10 within
+ * the same 120 minutes.
  *
  * Every judged origin lands in `D1|h0-2|all` (suggestions AND the base rate
  * among non-suggestions, so precision can be read against chance); a
- * suggestion is also counted under the lead bucket and source of the first
- * forecast slot that triggered it.
+ * suggestion is also counted under the lead bucket and source of its "later"
+ * hour.
  */
 export function scoreNextBestRide(
   curve: ArchivedCurve,
-  live: number,
   truthSlots: Map<number, number>,
   segments: string[],
   region: string,
   acc: ScoreAccumulator,
 ): void {
+  const live = curve.liveWait;
+  if (live === null || live === undefined) return;
   const end = curve.originAt + D1_WINDOW_MINUTES * 60_000;
   const future = [...truthSlots.entries()].filter(
     ([slot]) => slot > curve.originAt && slot <= end,
@@ -386,22 +493,24 @@ export function scoreNextBestRide(
   if (future.length < D1_MIN_TRUTH_SLOTS) return;
   const worse = future.some(([, v]) => v >= live + D1_GAP_MINUTES);
 
+  const suggested =
+    curve.laterWait !== null &&
+    curve.laterWait !== undefined &&
+    curve.laterWait - live >= D1_GAP_MINUTES;
   let trigger: { lead: string; src: string } | null = null;
-  const step = curve.slotMinutes * 60_000;
-  for (let i = 0; i < curve.waits.length; i++) {
-    const slot = curve.slotStart + i * step;
-    if (slot <= curve.originAt || slot > end) continue;
-    const w = curve.waits[i];
-    if (w === null || w === undefined || w < live + D1_GAP_MINUTES) continue;
-    const bucket = slotLeadBucket((slot - curve.originAt) / 60_000);
+  if (suggested && curve.laterAt) {
+    const idx = Math.round(
+      (curve.laterAt - curve.slotStart) / (curve.slotMinutes * 60_000),
+    );
     trigger = {
-      lead: bucket?.lead ?? "h0-2",
-      src: sourceName(curve.sources[i]),
+      lead:
+        slotLeadBucket(Math.max(0, (curve.laterAt - curve.originAt) / 60_000))
+          ?.lead ?? "h0-2",
+      src: sourceName(curve.sources[idx]),
     };
-    break;
   }
 
-  const counters: Record<string, number> = trigger
+  const counters: Record<string, number> = suggested
     ? { d1Sugg: 1, d1SuggOk: worse ? 1 : 0 }
     : { d1None: 1, d1NoneWorse: worse ? 1 : 0 };
   for (const seg of segments) {
@@ -434,6 +543,17 @@ export function scoreParkDay(
 
   for (const curve of input.curves) {
     const truthSlots = truth.get(curve.attractionId);
+    const segments = segmentsOf(curve);
+
+    // An intraday planner row exists for D1 alone: its hours are the 2-hour
+    // look-ahead, not a day to score.
+    if (curve.surface === "plan_day" && curve.originKind === "intraday") {
+      if (truthSlots) {
+        scoreNextBestRide(curve, truthSlots, segments, region, acc);
+      }
+      continue;
+    }
+
     const compared: Compared[] = [];
     if (truthSlots) {
       for (const [slot, value] of truthSlots) {
@@ -449,7 +569,6 @@ export function scoreParkDay(
       }
     }
     compared.sort((a, b) => a.slot - b.slot);
-    const segments = segmentsOf(curve);
     const levelKey =
       curve.surface === "plan_day" && curve.levelSource
         ? `level_${curve.levelSource}`
@@ -474,32 +593,18 @@ export function scoreParkDay(
         sae: Math.abs(err),
         se: err,
       };
-      if (c.band !== null) {
+      // One-sided q95 − q50 band, park_hourly only (plan_day has none per hour).
+      if (c.band !== null && curve.surface === "park_hourly") {
         counters.nBand = 1;
         counters.nBandCov = c.truth <= c.pred + c.band ? 1 : 0;
       }
       for (const seg of segments) {
         acc.add(region, useCase, lead, c.src, seg, counters);
         acc.add(region, useCase, lead, "all", seg, counters);
-        if (levelKey) acc.add(region, useCase, lead, levelKey, seg, counters);
+        if (levelKey && LEVEL_DERIVED.has(c.src)) {
+          acc.add(region, useCase, lead, levelKey, seg, counters);
+        }
       }
-    }
-
-    // ---- D1: next-best-ride suggestion from the live anchor ----
-    if (
-      curve.surface === "park_hourly" &&
-      curve.liveWait !== null &&
-      curve.liveWait !== undefined &&
-      truthSlots
-    ) {
-      scoreNextBestRide(
-        curve,
-        curve.liveWait,
-        truthSlots,
-        segments,
-        region,
-        acc,
-      );
     }
 
     // ---- ride-day metrics: best time (D3), slot Spearman, dayPeak ----
@@ -510,23 +615,29 @@ export function scoreParkDay(
     const srcs = new Set(compared.map((c) => c.src));
     const rideSource = srcs.size === 1 ? [...srcs][0] : "mixed";
 
-    const rideCounters: Record<string, number> = {};
+    const shapeCounters: Record<string, number> = {};
     const best = bestTimeOutcome(compared);
     if (best) {
-      rideCounters.rd = 1;
-      rideCounters.hitTop2 = best.hitTop2 ? 1 : 0;
-      rideCounters.hit30 = best.hit30 ? 1 : 0;
-      rideCounters.regret = best.regret;
+      shapeCounters.rd = 1;
+      shapeCounters.regret = best.regret;
+      if (best.hitTop2 === null) {
+        shapeCounters.rdFlat = 1;
+      } else {
+        shapeCounters.rdHit = 1;
+        shapeCounters.hitTop2 = best.hitTop2 ? 1 : 0;
+        shapeCounters.hit30 = best.hit30 ? 1 : 0;
+      }
     }
     const rho = spearman(
       compared.map((c) => c.pred),
       compared.map((c) => c.truth),
     );
     if (rho !== null && compared.length >= MIN_RIDE_DAY_SLOTS) {
-      rideCounters.nRho = 1;
-      rideCounters.sRho = rho;
+      shapeCounters.nRho = 1;
+      shapeCounters.sRho = rho;
     }
 
+    const peakCounters: Record<string, number> = {};
     if (curve.surface === "plan_day") {
       const plan = planByOrigin.get(curve.originAt) ?? {
         leadDays: curve.leadDays,
@@ -537,25 +648,36 @@ export function scoreParkDay(
       const p90 = rideDayTruthP90(truthSlots);
       if (curve.dayPeak !== null && p90 !== null) {
         const e = curve.dayPeak - p90;
-        rideCounters.nPeak = 1;
-        rideCounters.sPeakAe = Math.abs(e);
-        rideCounters.sPeakE = e;
+        peakCounters.nPeak = 1;
+        peakCounters.sPeakAe = Math.abs(e);
+        peakCounters.sPeakE = e;
         if (curve.expectedError !== null) {
-          rideCounters.nStated = 1;
-          rideCounters.sStated = curve.expectedError;
-          rideCounters.sStatedAe = Math.abs(e);
+          peakCounters.nStated = 1;
+          peakCounters.sStated = curve.expectedError;
+          peakCounters.sStatedAe = Math.abs(e);
+        }
+        if (curve.peakBand !== null && curve.peakBand !== undefined) {
+          peakCounters.nPeakBand = 1;
+          peakCounters.nPeakBandCov = Math.abs(e) <= curve.peakBand ? 1 : 0;
         }
         plan.peaks.push({ pred: curve.dayPeak, truth: p90 });
       }
       planByOrigin.set(curve.originAt, plan);
     }
 
+    const rideCounters = { ...shapeCounters, ...peakCounters };
     if (Object.keys(rideCounters).length > 0) {
       for (const seg of segments) {
         acc.add(region, useCase, lead, rideSource, seg, rideCounters);
         acc.add(region, useCase, lead, "all", seg, rideCounters);
         if (levelKey) {
-          acc.add(region, useCase, lead, levelKey, seg, rideCounters);
+          // dayPeak IS the level; the shape metrics only when the hours were.
+          const levelCounters = LEVEL_DERIVED.has(rideSource)
+            ? rideCounters
+            : peakCounters;
+          if (Object.keys(levelCounters).length > 0) {
+            acc.add(region, useCase, lead, levelKey, seg, levelCounters);
+          }
         }
       }
     }
@@ -628,47 +750,48 @@ export function scoreParkDay(
 
   // ---- D6: crowd bucket per park-day ----
   const observations: CrowdObservation[] = [];
-  if (input.typicalDayPeak > 0) {
-    const headlinerPeaks: number[] = [];
-    for (const id of input.headlinerIds) {
-      const p90 = rideDayTruthP90(truth.get(id));
-      if (p90 !== null) headlinerPeaks.push(p90);
-    }
-    if (headlinerPeaks.length > 0) {
-      const level =
-        headlinerPeaks.reduce((a, b) => a + b, 0) / headlinerPeaks.length;
-      const ratio = (level / input.typicalDayPeak) * 100;
+  if (input.calendarDayValue !== null) {
+    for (const parkDay of input.parkDays) {
+      const typical = parkDay.typicalDayPeak ?? 0;
+      if (!(typical > 0)) continue;
+      const ratio = (input.calendarDayValue / typical) * 100;
       const truthOrd = crowdOrdinal(determineCrowdLevel(ratio))!;
-      for (const parkDay of input.parkDays) {
-        const lead = dayLead(parkDay.leadDays);
-        for (const [source, value] of [
-          ["predicted", parkDay.predictedCrowdLevel],
-          ["plan_day", parkDay.crowdLevel],
-        ] as const) {
-          const predOrd = crowdOrdinal(value);
-          if (predOrd === null) {
-            acc.add(region, "D6", lead, source, "all", { unknownPred: 1 });
-            continue;
-          }
-          const busyTrue = truthOrd >= BUSY_ORDINAL;
-          const busyPred = predOrd >= BUSY_ORDINAL;
-          acc.add(region, "D6", lead, source, "all", {
-            n: 1,
-            exact: predOrd === truthOrd ? 1 : 0,
-            within1: Math.abs(predOrd - truthOrd) <= 1 ? 1 : 0,
-            busyTrue: busyTrue ? 1 : 0,
-            busyPred: busyPred ? 1 : 0,
-            busyBoth: busyTrue && busyPred ? 1 : 0,
-          });
-          observations.push({
-            region,
-            lead,
-            source,
-            predicted: predOrd,
-            truth: truthOrd,
-            truthRatio: ratio,
-          });
+      const lead = dayLead(parkDay.leadDays);
+      // The planner's crowdLevel is a forecast only where the calendar had one;
+      // otherwise it is the fallback chain (ML crowd / placeholder moderate),
+      // and on d0 it is overridden with the live reading at the origin.
+      const planSource = parkDay.crowdLevelFallback
+        ? "fallback"
+        : parkDay.leadDays === 0
+          ? "plan_day_live"
+          : "plan_day";
+      for (const [source, value] of [
+        ["predicted", parkDay.predictedCrowdLevel],
+        [planSource, parkDay.crowdLevel],
+      ] as const) {
+        const predOrd = crowdOrdinal(value);
+        if (predOrd === null) {
+          acc.add(region, "D6", lead, source, "all", { unknownPred: 1 });
+          continue;
         }
+        const busyTrue = truthOrd >= BUSY_ORDINAL;
+        const busyPred = predOrd >= BUSY_ORDINAL;
+        acc.add(region, "D6", lead, source, "all", {
+          n: 1,
+          exact: predOrd === truthOrd ? 1 : 0,
+          within1: Math.abs(predOrd - truthOrd) <= 1 ? 1 : 0,
+          busyTrue: busyTrue ? 1 : 0,
+          busyPred: busyPred ? 1 : 0,
+          busyBoth: busyTrue && busyPred ? 1 : 0,
+        });
+        observations.push({
+          region,
+          lead,
+          source,
+          predicted: predOrd,
+          truth: truthOrd,
+          truthRatio: ratio,
+        });
       }
     }
   }

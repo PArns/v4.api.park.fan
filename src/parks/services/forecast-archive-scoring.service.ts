@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Redis } from "ioredis";
+import { fromZonedTime } from "date-fns-tz";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { Park } from "../entities/park.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
@@ -22,15 +23,28 @@ import {
   ScoreAccumulator,
   TruthReading,
   buildTruthSlots,
+  calendarDayValue,
   regionOf,
   scoreCrossParkCrowd,
   scoreParkDay,
 } from "../../ml/utils/forecast-archive-scoring.util";
 import { mapWithDbBudget } from "../../common/utils/db-job-budget";
+import { addIsoDays, formatInParkTimezone } from "../../common/utils/date.util";
 import {
-  addIsoDays,
-  withStatementLimits,
-} from "../utils/forecast-archive-limits";
+  StatementLimits,
+  queryWithLimits,
+} from "../../common/utils/statement-limits.util";
+
+/** One park-day's reads, and the board's archive summary. */
+const READ_LIMITS: StatementLimits = {
+  statementTimeoutMs: 60_000,
+  lockTimeoutMs: 5_000,
+  idleInTransactionTimeoutMs: 10_000,
+};
+
+/** Bumped by every scoring run; the board cache is keyed on it, so one
+ *  INCR retires every cached `days` × region variant at once. */
+const BOARD_VERSION_KEY = "forecast-archive:board:version";
 
 /** Parks scored side by side. */
 const BATCH_SIZE = 4;
@@ -126,7 +140,7 @@ export class ForecastArchiveScoringService {
         ),
       );
     if (dates.length > 0) {
-      await this.redis.del(...this.boardKeys()).catch(() => undefined);
+      await this.redis.incr(BOARD_VERSION_KEY).catch(() => undefined);
     }
     return { dates };
   }
@@ -198,21 +212,36 @@ export class ForecastArchiveScoringService {
       })
     ).map((a) => a.id);
 
+    // The whole park-local day (D6's calendar statistic has no window) plus
+    // the 3 h of forward-fill reach before the first window.
+    const dayStart = fromZonedTime(`${targetDate}T00:00:00`, park.timezone);
+    const dayEnd = fromZonedTime(
+      `${addIsoDays(targetDate, 1)}T00:00:00`,
+      park.timezone,
+    );
+    const readings =
+      attractionIds.length > 0
+        ? await this.truthReadings(
+            attractionIds,
+            Math.min(
+              dayStart.getTime(),
+              ...windows.map((w) => w.open - 3 * 3_600_000),
+            ),
+            Math.max(dayEnd.getTime(), ...windows.map((w) => w.close)),
+          )
+        : new Map<string, TruthReading[]>();
+
     const truth = new Map<string, Map<number, number>>();
-    if (windows.length > 0 && attractionIds.length > 0) {
-      const readings = await this.truthReadings(attractionIds, windows);
+    if (windows.length > 0) {
       for (const [id, list] of readings) {
         truth.set(id, buildTruthSlots(list, windows));
       }
     }
 
-    const [headliners, typicalDayPeak] = await Promise.all([
-      this.analyticsService
-        .getHeadlinerAttractions(park.id)
-        .then((h) => new Set(h.map((x) => x.attractionId)))
-        .catch(() => new Set<string>()),
-      this.analyticsService.getTypicalDayPeakFromCache(park.id).catch(() => 0),
-    ]);
+    const headliners = await this.analyticsService
+      .getHeadlinerAttractions(park.id)
+      .then((h) => new Set(h.map((x) => x.attractionId)))
+      .catch(() => new Set<string>());
 
     return scoreParkDay(
       {
@@ -227,11 +256,18 @@ export class ForecastArchiveScoringService {
           crowdLevel: d.crowdLevel,
           predictedCrowdLevel: d.predictedCrowdLevel,
           levelSource: d.levelSource,
+          typicalDayPeak:
+            d.typicalDayPeak === null ? null : Number(d.typicalDayPeak),
+          crowdLevelFallback: d.crowdLevelFallback,
         })),
         truth,
         hadWindows: windows.length > 0,
-        headlinerIds: headliners,
-        typicalDayPeak,
+        calendarDayValue: calendarDayValue(
+          readings,
+          headliners,
+          (ts) =>
+            formatInParkTimezone(new Date(ts), park.timezone) === targetDate,
+        ),
       },
       acc,
     );
@@ -253,7 +289,10 @@ export class ForecastArchiveScoringService {
       expectedError: c.expectedError,
       rideQ90: c.rideQ90,
       isHeadliner: c.isHeadliner,
+      peakBand: c.peakBand,
       liveWait: c.liveWait,
+      laterWait: c.laterWait,
+      laterAt: c.laterAt ? new Date(c.laterAt).getTime() : null,
       levelSource: c.levelSource,
     };
   }
@@ -263,15 +302,16 @@ export class ForecastArchiveScoringService {
     parkId: string,
     date: string,
   ): Promise<OperatingWindow[]> {
-    const rows: Array<{ open: Date; close: Date }> =
-      await this.parkRepository.manager.query(
-        `SELECT "openingTime" AS open, "closingTime" AS close
+    const rows = await queryWithLimits<Array<{ open: Date; close: Date }>>(
+      this.parkRepository.manager.connection,
+      `SELECT "openingTime" AS open, "closingTime" AS close
          FROM schedule_entries
         WHERE "parkId" = $1 AND date = $2::date
           AND "scheduleType" = 'OPERATING' AND "attractionId" IS NULL
           AND "openingTime" IS NOT NULL AND "closingTime" IS NOT NULL`,
-        [parkId, date],
-      );
+      [parkId, date],
+      READ_LIMITS,
+    );
     return rows
       .map((r) => ({
         open: new Date(r.open).getTime(),
@@ -280,33 +320,24 @@ export class ForecastArchiveScoringService {
       .filter((w) => w.close > w.open);
   }
 
-  /** STANDBY change-log rows covering the windows, grouped per ride. */
+  /** STANDBY change-log rows in [fromMs, toMs), grouped per ride. */
   private async truthReadings(
     attractionIds: string[],
-    windows: OperatingWindow[],
+    fromMs: number,
+    toMs: number,
   ): Promise<Map<string, TruthReading[]>> {
-    const from = new Date(
-      Math.min(...windows.map((w) => w.open)) - 3 * 3_600_000,
-    );
-    const to = new Date(Math.max(...windows.map((w) => w.close)));
-    const rows: Array<{
-      id: string;
-      ts: Date;
-      status: string;
-      wait: number | null;
-    }> = await withStatementLimits(
-      this.curveRepository.manager,
-      { statementTimeoutMs: 60_000, lockTimeoutMs: 5_000 },
-      (em) =>
-        em.query(
-          `SELECT "attractionId" AS id, timestamp AS ts, status::text AS status, "waitTime" AS wait
-             FROM queue_data
-            WHERE "attractionId" = ANY($1::uuid[])
-              AND "queueType" = 'STANDBY'
-              AND timestamp >= $2 AND timestamp < $3
-            ORDER BY "attractionId", timestamp`,
-          [attractionIds, from, to],
-        ),
+    const rows = await queryWithLimits<
+      Array<{ id: string; ts: Date; status: string; wait: number | null }>
+    >(
+      this.curveRepository.manager.connection,
+      `SELECT "attractionId" AS id, timestamp AS ts, status::text AS status, "waitTime" AS wait
+         FROM queue_data
+        WHERE "attractionId" = ANY($1::uuid[])
+          AND "queueType" = 'STANDBY'
+          AND timestamp >= $2 AND timestamp < $3
+        ORDER BY "attractionId", timestamp`,
+      [attractionIds, new Date(fromMs), new Date(toMs)],
+      READ_LIMITS,
     );
     const out = new Map<string, TruthReading[]>();
     for (const r of rows) {
@@ -319,16 +350,6 @@ export class ForecastArchiveScoringService {
       out.set(r.id, list);
     }
     return out;
-  }
-
-  private boardKeys(): string[] {
-    const keys: string[] = [];
-    for (const region of ["ALL", "EU", "NA", "ASIA", "OTHER"]) {
-      for (const days of [7, 14, 28]) {
-        keys.push(`forecast-archive:board:${region}:${days}`);
-      }
-    }
-    return keys;
   }
 
   /**
@@ -346,7 +367,8 @@ export class ForecastArchiveScoringService {
     archive: Array<Record<string, unknown>>;
     rows: ForecastArchiveBoardRow[];
   }> {
-    const cacheKey = `forecast-archive:board:${region}:${days}`;
+    const version = await this.redis.get(BOARD_VERSION_KEY).catch(() => null);
+    const cacheKey = `forecast-archive:board:v${version ?? 0}:${region}:${days}`;
     const cached = await this.redis.get(cacheKey).catch(() => null);
     if (cached) {
       try {
@@ -403,20 +425,18 @@ export class ForecastArchiveScoringService {
           a.segment.localeCompare(b.segment),
       );
 
-    const archive: Array<Record<string, unknown>> = await withStatementLimits(
-      this.curveRepository.manager,
-      { statementTimeoutMs: 20_000, lockTimeoutMs: 2_000 },
-      (em) =>
-        em.query(
-          // The last 24 h only, so the PK's leading `origin_at` bounds the
-          // read; the oldest origin is one PK probe.
-          `SELECT surface, origin_kind AS "originKind", count(*)::int AS "rowsLast24h",
-                  max(origin_at) AS "lastOrigin",
-                  (SELECT min(origin_at) FROM forecast_archive_curves) AS "firstOrigin"
-             FROM forecast_archive_curves
-            WHERE origin_at > now() - interval '24 hours'
-            GROUP BY 1, 2 ORDER BY 1, 2`,
-        ),
+    const archive = await queryWithLimits<Array<Record<string, unknown>>>(
+      this.curveRepository.manager.connection,
+      // The last 24 h only, so the PK's leading `origin_at` bounds the read;
+      // the oldest origin is one PK probe.
+      `SELECT surface, origin_kind AS "originKind", count(*)::int AS "rowsLast24h",
+              max(origin_at) AS "lastOrigin",
+              (SELECT min(origin_at) FROM forecast_archive_curves) AS "firstOrigin"
+         FROM forecast_archive_curves
+        WHERE origin_at > now() - interval '24 hours'
+        GROUP BY 1, 2 ORDER BY 1, 2`,
+      [],
+      READ_LIMITS,
     ).catch(() => []);
 
     const sortedDates = [...allDates].sort();
@@ -461,15 +481,19 @@ export class ForecastArchiveScoringService {
       bias: ratio("se", "n", 2),
       bandCoverage: ratio("nBandCov", "nBand"),
       bandFieldCoverage: ratio("nBand", "n"),
-      bestTimeHitTop2: ratio("hitTop2", "rd"),
-      bestTimeHit30: ratio("hit30", "rd"),
+      // Regret is the D3 headline; hit rates exclude flat ride-days.
       bestTimeRegret: ratio("regret", "rd", 2),
+      bestTimeHitTop2: ratio("hitTop2", "rdHit"),
+      bestTimeHit30: ratio("hit30", "rdHit"),
+      bestTimeFlatShare: ratio("rdFlat", "rd"),
       slotSpearman: ratio("sRho", "nRho"),
       dayPeakMae: ratio("sPeakAe", "nPeak", 2),
       dayPeakBias: ratio("sPeakE", "nPeak", 2),
       statedError: ratio("sStated", "nStated", 2),
       realisedErrorWhereStated: ratio("sStatedAe", "nStated", 2),
       statedFieldCoverage: ratio("nStated", "nPeak"),
+      dayPeakBandCoverage: ratio("nPeakBandCov", "nPeakBand"),
+      dayPeakBandFieldCoverage: ratio("nPeakBand", "nPeak"),
       dayPeakRankSpearman: ratio("sRank", "nRank"),
       dayPeakPairOrder: ratio("pairsOk", "pairs"),
       rideCoverage: ratio("truthRidesOffered", "truthRides"),

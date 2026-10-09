@@ -1,7 +1,7 @@
 # Forward archive of served intraday curves (PAR-831)
 
 **What it answers:** how good was the curve a visitor was actually *served*, one
-to seven days before their visit? Nothing else in the database can say. Every
+to ninety days before their visit? Nothing else in the database can say. Every
 forecast table keeps only the freshest answer per target —
 `wait_time_predictions` deletes the future rows on each run,
 `prediction_accuracy` keeps the last prediction per slot — so by the time a day
@@ -26,11 +26,15 @@ it drifted the board would score a product nobody is shown.
 
 | origin (park-local) | surface | method | resolution | content |
 | --- | --- | --- | --- | --- |
-| 06:00 daily | `park_hourly` | `MLService.getParkPredictions(park, "hourly")` | 15 min (native) | next 48 h, one row per ride × local date (d0, d1, d2 partial) |
+| 06:00 daily | `park_hourly` | `MLService.getParkPredictions(park, "hourly")` | 15 min (native) | next 48 h, one row per ride × operating day (d0, d1, d2 partial) |
 | 06:00 daily | `plan_day` | `PlanDayService.buildPlanDay(park, date)` | 60 min (native, served as a step) | d0 … d7, one row per ride |
-| 06:00 daily | park-day row | `buildPlanDay` + `CalendarService.buildCalendarResponse` | per park-day | tier, `crowdLevel`, `predictedCrowdLevel`, hours, `ridesOffered`, `ridesUnavailable`, `accuracy`, `leadTimeMae` |
+| 06:00 daily | park-day row | `buildPlanDay` + `CalendarService.buildCalendarResponse` | per park-day | tier, `crowdLevel` (+ whether it was a fallback), `predictedCrowdLevel`, `typicalDayPeak` at the origin, hours, `ridesOffered`, `ridesUnavailable`, `accuracy`, `leadTimeMae`, level source |
 | 07:00 (long leads) | `plan_day` + park-day row | same as the 06:00 planner | 60 min | **d10, d14, d21, d30, d45, d60, d90** only; leads count from the same park-local date. An hour after 06:00 so the Europe burst is spread over two hours |
-| 10, 12, 14, 16, 18 | `park_hourly` | same as above | 15 min | next 4 h only (UC1 + short UC2) plus the live anchor; only parks whose 06:00 capture found a curve for today |
+| 10, 12, 14, 16, 18 | `park_hourly` | same as above | 15 min | next 4 h only (UC1 + short UC2), with the live anchor |
+| 10, 12, 14, 16, 18 | `plan_day` (D1 row) | `buildPlanDay(park, today)` | 60 min | per planned ride: the plan hours of the 2-h look-ahead, the frontend's next-best-ride "later" value and the live anchor — feeds D1 only |
+
+Intraday origins run only for parks whose 06:00 capture found a curve for today,
+so a closed park costs nothing all day.
 
 `getParkPredictions` is the **served** read: CatBoost hourly with the PCN
 override and §7.7 persistence blend applied where PCN answered. Each slot records
@@ -38,13 +42,21 @@ its source in `sources` (`p` = pcn_blend, `c` = catboost); `/plan/day` hours
 record `m` measured (the hour-mean of that same served curve), `k` composed,
 `l` climatology, `o` observed. `-` is a slot the payload did not carry.
 
-Per curve row: `waits` (served q50 per slot), `bands` (served
-`uncertaintyMinutes` per slot — CatBoost's q95 − q50; on plan_day the ride's one
-band repeated), `day_peak` and `expected_error` (plan_day), `model_version`
-(CatBoost version without `+pcn`), `ride_q90_56d` and `is_headliner`, plus:
+Per curve row: `waits` (served q50 per slot), `day_peak` and `expected_error`
+(plan_day), `model_version` (CatBoost version without `+pcn`), `ride_q90_56d`
+and `is_headliner`, plus:
 
-- `live_wait` (park_hourly): the ride's latest STANDBY reading at the origin,
-  OPERATING and no older than 30 min — the anchor of D1.
+- `bands` (park_hourly only): served `uncertaintyMinutes` per slot — CatBoost's
+  q95 − q50, one-sided.
+- `peak_band` (plan_day only): the ride's served `uncertaintyMinutes`. On the
+  planner it is a band around **`dayPeak`**, not around each hour, so it is
+  scored per ride-day and never pooled with the per-slot band.
+- `live_wait`, `live_age_min` (park_hourly and the D1 rows): the STANDBY reading
+  **in force** at the origin — the last change-log row at or before it, no older
+  than 3 h (the truth's own rule), kept only when OPERATING with a wait — and its
+  age. A "row in the last 30 min" rule missed half the operating rides:
+  `queue_data` writes only on change.
+- `later_wait`, `later_at` (D1 rows): the frontend's next-best-ride value.
 - `level_source` (plan_day, and on the park-day row): which model produced the
   day level the curve is built on — `tft`, `catboost`, `climatology` (a
   climatology day), on the park-day also `mixed` / `none`. The planner payload
@@ -53,16 +65,32 @@ band repeated), `day_peak` and `expected_error` (plan_day), `model_version`
   `predictedTime.slice(0, 10)` is the date, TFT rows carrying
   `modelVersion: "tft"`. Internal only, not in the API.
 
-**Ex-ante busy** (`ride_q90_56d`) is the ride's q90 of 15-min **average** waits
-(`attraction_hourly_history.slots[].avgWait ≥ 5`) over the 56 days before the
-origin — BENCH-SPEC's busy segment (≥ 45 min), read from the rollup instead of a
-`queue_data` scan, and stored as the number so the threshold can move. It is not
-filtered to published windows, which the spec's truth is; the difference is the
-rollup's, and it is the same for every model.
+**Operating day.** A served 15-min slot before 04:00 park-local belongs to the
+previous date, so a park open until 01:00 keeps its evening in one row and is
+scored against the schedule window that holds it.
 
-**Schedule:** one hourly job at :05 UTC reads each park's clock, so every
-timezone (including half-hour offsets) gets its origin within the hour. A Redis
-`NX` marker makes each park × origin hour capture once, whatever re-runs.
+**Ex-ante busy** (`ride_q90_56d`) is the ride's q90 of **time-weighted** 15-min
+waits over the 56 days before the origin — BENCH-SPEC's busy segment (≥ 45 min),
+stored as the number so the threshold can move. It is read from
+`attraction_hourly_history`, whose `slots` hold only the quarter-hours that had a
+reading (a change log again), so each ride-day is forward-filled onto the full
+quarter-hour grid between its first and last slot (a value in force for at most
+3 h) before the percentile; without that a jittery busy hour outweighs a calm
+one. It is not filtered to published windows, which the spec's truth is — a
+known, model-independent divergence.
+
+**Origin and schedule.** One hourly job at :05 UTC reads each park's clock, so
+every timezone (including half-hour offsets) gets its origin within the hour.
+Each park's `origin_at` is read from the clock **immediately before its own
+capture** — one instant for the whole run overstated every later park's leads by
+however long the parks before it took. A park × origin hour is marked done in
+Redis only after its capture succeeded, so a failed park is retried by the next
+run inside the hour.
+
+**A plan that throws is an empty plan.** If `buildPlanDay` fails (as it does for
+Europa-Park while PAR-832 is open), the park-day row is still written, with
+`ridesOffered = 0` and `rides_unavailable = capture_error`, so D9 counts the day
+rather than dropping it from the denominator.
 
 **Not archived:** the q80 crowd quantile (only `crowdLevel` is served).
 
@@ -70,17 +98,18 @@ timezone (including half-hour offsets) gets its origin within the hour. A Redis
 
 Inputs from production: 4,158 rides in 126 parks carry an hourly curve, 76.4
 operating slots per ride on average within 48 h (max 192); `queue_data` writes
-148 k STANDBY rows a day. Tuple sizes measured with `pg_column_size` on literal
-rows: 592 B for a 76-slot row, 224 B for 16 slots, 208 B for an 11-hour
-plan_day row.
+148 k STANDBY rows a day; 50 of the 211 parks are in Europe. Tuple sizes
+measured with `pg_column_size` on literal rows: 592 B for a 76-slot row, 224 B
+for 16 slots, 208 B for an 11-hour plan_day row.
 
 | part | rows / day | written / day (incl. ~100 B of indexes per row) | lives | steady state |
 | --- | --- | --- | --- | --- |
 | park_hourly, 06:00 | ~10 k | ~4 MB | target + 14 d (~15 d) | ~60 MB |
 | park_hourly, intraday | ≤ ~21 k | ≤ ~7 MB | ~14 d | ~95 MB |
+| plan_day D1 rows, intraday | ≤ ~20 k | ≤ ~5 MB | ~14 d | ~70 MB |
 | plan_day d0–d7 | ~30 k | ~10 MB | ~17.5 d avg | ~175 MB |
 | plan_day d10–d90 | ~27 k | ~9 MB | lead + 14 d (Σ 368 row-days per ride) | ~460 MB |
-| **curves total** | **~87 k** | **~29 MB** | | **~0.8 GB** |
+| **curves total** | **~107 k** | **~35 MB** | | **~0.85 GB** |
 | park days | ~3.2 k | ~0.8 MB | target + 180 d | ~140 MB |
 | scores | ~1.5 k | ~0.5 MB | 400 d | ~200 MB |
 
@@ -90,41 +119,51 @@ steady state is dominated by long-lead rows waiting for their day — the price 
 measuring d90 at all.
 
 Writes are batched (≤ 1,000 rows per `INSERT … ON CONFLICT DO NOTHING`). The
-heaviest capture hours are the two in which Europe reaches 06:00 and 07:00: ~90
-parks × 8 `buildPlanDay` calls (06:00) and ~90 × 7 (07:00, long leads), on warm
-caches, three parks at a time under the shared `DbJobBudget`; the queue has a
-15-minute lock headroom. Per capture the extra reads are one
-`getServingDailyPredictions` (single-flight, the call `buildPlanDay` makes
-anyway) and, for served curves, one `DISTINCT ON` over the last 30 min of
-`queue_data` for the live anchor.
+heaviest capture hours are the two in which Europe's 50 parks reach 06:00 and
+07:00: ~50 × 8 `buildPlanDay` calls (06:00) and ~50 × 7 (07:00, long leads), on
+warm caches, three parks at a time under the shared `DbJobBudget`; the queue has
+a 15-minute lock headroom. Each intraday origin adds one `buildPlanDay` (today)
+per open park. Per capture the extra reads are one `getServingDailyPredictions`
+(single-flight, the call `buildPlanDay` makes anyway), one `DISTINCT ON` over the
+last 3 h of `queue_data` for the live anchor, and once a day per park the
+forward-filled q90 over 56 days of the hourly rollup (cached).
 
-**Not a hypertable, no foreign key.** At ~0.8 GB a plain table is fine, and
+**Not a hypertable, no foreign key.** At ~0.85 GB a plain table is fine, and
 retention is an app-side `DELETE` in 20,000-row batches with `lock_timeout` 2 s
 and `statement_timeout` 60 s — never a TimescaleDB policy, whose `drop_chunks`
 locks every FK target ACCESS EXCLUSIVE ([runbook §0b](../troubleshooting/db-health-runbook.md)).
-Every query the jobs run against `queue_data`, `attraction_hourly_history` and
-the archive itself sets `statement_timeout`/`lock_timeout` locally
-(`withStatementLimits`).
+Every query the jobs run against `queue_data`, `attraction_hourly_history`,
+`schedule_entries` and the archive itself goes through `queryWithLimits`
+(`src/common/utils/statement-limits.util.ts`) with `statement_timeout`,
+`lock_timeout` and `idle_in_transaction_session_timeout`.
 
 **Scoring cost:** per park and day, five indexed reads (curves via
 `(park_id, target_date)`, park days, schedule, attractions) plus one `queue_data`
-read of that park's STANDBY rows from 3 h before the first window to the last
-close — yesterday's chunk, uncompressed, ~150 k rows across all parks. ~1,000
-small queries once a day.
+read of that park's STANDBY rows over the whole park-local day (and the 3 h of
+forward-fill before the first window) — yesterday's chunk, uncompressed,
+~150 k rows across all parks. ~1,000 small queries once a day.
 
-## 3. Truth (BENCH-SPEC)
+## 3. Truth
 
-15-min slots on the UTC quarter-hour grid (= the park-local grid for every
-quarter-hour offset). A slot's value is the STANDBY row in force at its
-midpoint — `queue_data` is a change log, so the last row at or before it, no
-older than 3 h. It counts only when that row is OPERATING with a wait ≥ 5 and the
-midpoint lies inside a published park-wide OPERATING window from
+**Slots (BENCH-SPEC).** 15-min slots on the UTC quarter-hour grid (= the
+park-local grid for every quarter-hour offset). A slot's value is the STANDBY
+row in force at its midpoint — `queue_data` is a change log, so the last row at
+or before it, no older than 3 h. It counts only when that row is OPERATING with a
+wait ≥ 5 and the midpoint lies inside a published park-wide OPERATING window from
 `schedule_entries` for that date (windows are instants, so DST and midnight
 crossings need no special case). A ride-day's level is the P90 of its truth
-slots (≥ 4); a park-day's level is the mean of its headliners' levels, divided by
-the park's `typicalDayPeak` and bucketed with `determineCrowdLevel` — the
-calendar's regime ([crowd-level rules](../rules/crowd-levels.md)). The
-`typicalDayPeak` is today's value, not the one at the origin; it moves slowly.
+slots (≥ 4).
+
+**Crowd bucket (D6) — the calendar's own statistic, on both sides.** The
+denominator is the park's `typicalDayPeak` **as stored at the origin** (on the
+park-day row), and that baseline is the median, over 548 days, of a day value:
+per headliner the P90 of the raw change-log rows that are STANDBY, OPERATING and
+≥ 10 min on that park-local date — no window, no forward-fill — averaged over
+the headliners (`AnalyticsService.calculateTypicalDayPeak`). The numerator is
+that same day value for the target date (`calendarDayValue`), not the 15-min
+truth: dividing a time-weighted P90 by a change-weighted baseline would shift
+every bucket by the difference of the two statistics. The ratio is bucketed with
+`determineCrowdLevel` ([crowd-level rules](../rules/crowd-levels.md)).
 
 A plan_day hour is compared with each of its four quarter-hours (as served — a
 step; BENCH-SPEC's interpolated variant is left to the bench runner).
@@ -135,35 +174,51 @@ Daily at 12:00 UTC, when the previous UTC date is over in every park timezone;
 up to three missed dates are caught up. One row per
 `(target_date, region, use_case, lead, source, segment)` in
 `forecast_archive_scores`, with **additive counters** in `sums` (so any window
-pools by adding, then divides once). `region` ∈ EU / NA / ASIA / OTHER and an
-explicit `ALL`. `segment` ∈ `all`, `busy` (ex-ante), `headliner`. `source` is
-the slot source, `mixed` for a ride-day with several, or `all`.
+pools by adding, then divides once). A date is replaced as a whole (delete +
+insert in one transaction). `region` ∈ EU / NA / ASIA / OTHER and an explicit
+`ALL`. `segment` ∈ `all`, `busy` (ex-ante), `headliner`. `source` is the slot
+source, `mixed` for a ride-day with several, or `all`. The key columns' widths
+are `SCORE_KEY_WIDTHS` (`source` is `varchar(32)`); a spec asserts every label the
+scorer can emit fits, because one over-long label fails the whole date's insert.
 
 | use case | lead | what |
 | --- | --- | --- |
 | UC1 | `h0-1`, `h1-2` (slot lead after origin) | MAE, bias, band coverage — any origin |
 | UC2 | `h2-6`, `h6-12`, `h12-24`, `h24-48` | same |
-| D1 | `h0-2` (all origins with a live anchor) and the trigger slot's `h0-1` / `h1-2` × source | next-best-ride: a suggestion is made when live ≥ 10 min below the forecast anywhere in the next 120 min; **precision** = the ride's truth reached live + 10 within those 120 min; false-suggestion rate = 1 − precision; **base rate** = the same outcome among origins with no suggestion, so precision can be read against chance |
-| UC2 | `d0` … `d2` (06:00 origin) | D3 best time: hit rate (true best slot among the predicted top-2), hit within ±30 min of the predicted best, **regret** (truth at predicted best − true minimum); slot Spearman |
-| UC3 | `d0` … `d7`, `d10`, `d14`, `d21`, `d30`, `d45`, `d60`, `d90` | slot MAE/bias/band coverage; D3 per ride-day; dayPeak MAE and bias vs truth P90; **D8**: stated `expectedError` vs realised \|dayPeak error\| on the same ride-days, and the share of ride-days that carry a stated error at all; park-day dayPeak rank Spearman and pairwise ordering (pairs ≥ 5 min apart; D4's ordering half) |
-| D6 | same leads, source `predicted` (calendar `predictedCrowdLevel`) or `plan_day` (`context.crowdLevel`) | exact / ±1 bucket accuracy, busy-day (high+) recall and precision, `unknownPred`, cross-park pairwise ordering on the same date |
-| D9 | same leads, source = plan tier | rides that operated (≥ 1 truth slot) that the plan offered; offered rides that never operated; park-days with operating rides but an empty plan |
+| D1 | `h0-2` (every judged origin) and the later hour's `h0-1` / `h1-2` × source | next-best-ride, **exactly the frontend's rule** (`park.fan/lib/planner/next-best-ride.ts`, ported as `nextRideLater`): "later" = the maximum of today's `/plan/day` hours whose START lies in [now + walk, now + 120 min] and that are before the unfolded close hour; a suggestion when later − live ≥ 10. The archive has no visitor position, so walk = 0. **Precision** = the ride's truth reached live + 10 within those 120 min; false-suggestion rate = 1 − precision; **base rate** = the same outcome among rides with no suggestion, so precision can be read against chance |
+| UC2 | `d0` … `d2` (06:00 origin) | D3 best time and slot Spearman (below) |
+| UC3 | `d0` … `d7`, `d10`, `d14`, `d21`, `d30`, `d45`, `d60`, `d90` | slot MAE/bias; D3 per ride-day; dayPeak MAE and bias vs truth P90; **D8**: share of ride-days with \|dayPeak − truth P90\| ≤ the served band, stated `expectedError` vs realised \|dayPeak error\| on the same ride-days, and the share of ride-days carrying each field; park-day dayPeak rank Spearman and pairwise ordering (pairs ≥ 5 min apart; D4's ordering half) |
+| D6 | same leads; source `predicted` (calendar `predictedCrowdLevel`), `plan_day` (the planner's `crowdLevel` where the calendar had a forecast), `plan_day_live` (d0, where the planner's `crowdLevel` is the live-overridden one) or `fallback` (no calendar forecast: ML crowd or placeholder `moderate` — scored apart, never as a forecast) | exact / ±1 bucket accuracy, busy-day (high+) recall and precision, `unknownPred`, cross-park pairwise ordering on the same date |
+| D9 | same leads, source = plan tier | rides that operated (≥ 1 truth slot) that the plan offered; offered rides that never operated; park-days with operating rides but an empty plan (including `capture_error`) |
 
-UC3 and D9 rows are also written under `source = level_<tft|catboost|climatology|mixed|none>`
-— the model behind the day level — so the board splits the horizon curve by
-level source (TFT covers ≤ 60 days, CatBoost beyond).
+**D3 best time.** Regret (truth at the predicted best slot − true minimum) is the
+headline: it is defined on every ride-day. The hit rates — true best slot among
+the predicted top 2, and within ±30 min of the predicted best — are counted only
+on ride-days with a clear best time: when the true minimum is shared by more than
+25 % of the slots (a ride at 5 min all day) any forecast would "hit", so those
+ride-days are counted as `rdFlat` instead.
 
-D8 band coverage is `truth ≤ pred + band` over slots with a band; it is the q95
-upper side as served, and the CatBoost band is known to cover only 53–57 %
-([quantile serving](./quantile-serving-and-calibration.md)). `bandFieldCoverage`
-is the share of slots that carry a band at all.
+**Level-source split.** UC3 and D9 rows are also written under
+`source = level_<tft|catboost|climatology|mixed|none>` so the board splits the
+horizon curve by the model behind the day level (TFT ≤ 60 days, CatBoost
+beyond) — but only for numbers that come from the level: composed / climatology
+hours, and dayPeak. A `measured` hour is the hourly model's, whatever the day
+level was.
+
+**D8 bands.** On park_hourly the band is `truth ≤ pred + band` per slot — the q95
+upper side as served; the CatBoost band is known to cover only 53–57 %
+([quantile serving](./quantile-serving-and-calibration.md)). On plan_day it is
+\|dayPeak − truth P90\| ≤ band per ride-day. The two are different statistics
+and are never pooled.
 
 ## 5. Admin board
 
 `GET /v1/admin/forecast-archive?days=14&region=ALL` (admin auth, read-only,
-cached 2 h; scoring evicts it). Returns the pooled counters and derived metrics
-per use case × lead × source × segment over the last `days` scored dates, plus
-the last 24 h of archive rows per surface and origin kind and the first origin.
+cached 2 h). The cache key carries a version that every scoring run increments,
+so all `days` × region variants are retired at once. Returns the pooled counters
+and derived metrics per use case × lead × source × segment over the last `days`
+scored dates, plus the last 24 h of archive rows per surface and origin kind and
+the first origin.
 
 ## 6. When the first scores appear
 
@@ -182,8 +237,10 @@ is scored at 12:00 UTC on *D + 1*:
 - **D4** optimiser regret: needs the frontend's optimiser objective re-run on
   archived vs true curves; the dayPeak pairwise ordering half is scored here.
 - **D7** day-comparison winner: needs the calendar's per-day levels for a whole
-  month (UC4), which the 8-day park-day rows do not cover.
+  month (UC4), which the park-day rows do not cover.
 - **UC4** (daily per park out to d365) stays with `prediction_lead_snapshots`.
+- D1 assumes the visitor is at the ride (walk = 0); a walk distribution would
+  shift "later" by up to an hour for distant rides.
 - D6 is not split by level source (the calendar's `predictedCrowdLevel` mixes
   both models within a park-day).
 - Bootstrap CIs over park-days: the scores are pooled per region; the raw

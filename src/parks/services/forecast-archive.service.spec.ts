@@ -1,5 +1,4 @@
 import { ForecastArchiveService } from "./forecast-archive.service";
-import { ForecastArchiveScoringService } from "./forecast-archive-scoring.service";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { PlanDayDto } from "../dto/plan-day.dto";
 import { Park } from "../entities/park.entity";
@@ -26,12 +25,15 @@ function pred(
 
 describe("ForecastArchiveService.originKindAt", () => {
   it("reads the park's own clock", () => {
-    // 04:05 UTC = 06:05 in Berlin (CEST) → daily; 22:05 New York the day before.
+    // 04:05 UTC = 06:05 in Berlin (CEST) → daily; 00:05 in New York.
     const at = new Date("2026-10-08T04:05:00Z");
     expect(ForecastArchiveService.originKindAt(at, TZ)).toBe("daily");
     expect(
       ForecastArchiveService.originKindAt(at, "America/New_York"),
     ).toBeNull();
+    expect(
+      ForecastArchiveService.originKindAt(new Date("2026-10-08T05:05:00Z"), TZ),
+    ).toBe("long");
     expect(
       ForecastArchiveService.originKindAt(new Date("2026-10-08T10:05:00Z"), TZ),
     ).toBe("intraday");
@@ -42,14 +44,14 @@ describe("ForecastArchiveService.originKindAt", () => {
 });
 
 describe("ForecastArchiveService.curvesFromServed", () => {
-  it("splits the served curve per ride and park-local date, keeps PCN per slot", () => {
+  it("splits the served curve per ride and operating day, keeps PCN per slot", () => {
     const preds = [
       pred("r1", "2026-10-08T08:00:00Z", 20),
       pred("r1", "2026-10-08T08:15:00Z", 25, "v20261008+pcn"),
       // 08:30 missing — a gap the row must keep, not close up.
       pred("r1", "2026-10-08T08:45:00Z", 30, "v20261008", null),
-      // 22:00 UTC is already the 9th in Berlin.
-      pred("r1", "2026-10-08T22:00:00Z", 5),
+      // 06:00 on the 9th in Berlin: the next operating day.
+      pred("r1", "2026-10-09T04:00:00Z", 5),
       pred("r2", "2026-10-08T08:00:00Z", 40),
       {
         ...pred("r2", "2026-10-08T09:00:00Z", 40),
@@ -84,6 +86,22 @@ describe("ForecastArchiveService.curvesFromServed", () => {
     expect(rows.find((r) => r.attractionId === "r2")!.waits).toEqual([40]);
   });
 
+  it("keeps a midnight-crossing evening on its operating day", () => {
+    const rows = ForecastArchiveService.curvesFromServed(
+      [
+        pred("r1", "2026-10-08T21:45:00Z", 20), // 23:45 local
+        pred("r1", "2026-10-08T22:30:00Z", 10), // 00:30 local on the 9th
+      ],
+      TZ,
+      "2026-10-08",
+      0,
+      Number.POSITIVE_INFINITY,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].targetDate).toBe("2026-10-08");
+    expect(rows[0].waits).toEqual([20, null, null, 10]);
+  });
+
   it("an intraday origin keeps only its window", () => {
     const preds = [0, 1, 2, 3, 4, 5].map((i) =>
       pred(
@@ -102,7 +120,6 @@ describe("ForecastArchiveService.curvesFromServed", () => {
       Date.parse("2026-10-08T12:00:00Z"),
     );
     expect(rows).toHaveLength(1);
-    // 08:00 … 11:00 hourly = 13 quarter-hour slots, four of them filled.
     expect(rows[0].waits.filter((w) => w !== null)).toHaveLength(4);
   });
 });
@@ -111,7 +128,7 @@ describe("ForecastArchiveService.curvesFromPlanDay", () => {
   const plan = (tier: PlanDayDto["tier"], rides: PlanDayDto["rides"]) =>
     ({ tier, rides }) as unknown as PlanDayDto;
 
-  it("stores the planner's hours with source per hour and the ride's band", () => {
+  it("stores the planner's hours with source per hour and the dayPeak band", () => {
     const rows = ForecastArchiveService.curvesFromPlanDay(
       plan("measured", [
         {
@@ -143,7 +160,9 @@ describe("ForecastArchiveService.curvesFromPlanDay", () => {
       slotMinutes: 60,
       waits: [30, 45],
       sources: "mk",
-      bands: [9, 9],
+      // The band is around dayPeak, not around each hour.
+      bands: null,
+      peakBand: 9,
       dayPeak: 55,
       expectedError: 14,
     });
@@ -171,12 +190,45 @@ describe("ForecastArchiveService.curvesFromPlanDay", () => {
     // Midnight of the 9th in Toronto (EDT, UTC-4) = 04:00 UTC.
     expect(rows[0].slotStart.toISOString()).toBe("2026-10-09T04:00:00.000Z");
     expect(rows[0].sources).toBe("kk");
-    expect(rows[0].bands).toBeNull();
+    expect(rows[0].peakBand).toBeNull();
+  });
+});
+
+describe("ForecastArchiveService.nextRideRows (D1)", () => {
+  it("applies the frontend rule on hour starts and keeps the look-ahead hours", () => {
+    const plan = {
+      tier: "measured",
+      context: { openHour: 10, closeHour: 18 },
+      rides: [
+        {
+          attractionSlug: "taron",
+          hours: [10, 11, 12, 13, 14].map((hour) => ({
+            hour,
+            wait: [20, 30, 50, 40, 60][hour - 10],
+          })),
+          dayPeak: 60,
+        },
+      ],
+    } as unknown as PlanDayDto;
+    // 10:10 CEST: hours starting 11:00 and 12:00 qualify (13:00 is 170 min out).
+    const rows = ForecastArchiveService.nextRideRows(
+      plan,
+      new Map([["taron", "id-taron"]]),
+      TZ,
+      "2026-10-08",
+      new Date("2026-10-08T08:10:00Z"),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].laterWait).toBe(50);
+    expect(rows[0].laterAt!.toISOString()).toBe("2026-10-08T10:00:00.000Z");
+    // 10:00 (begun) through 12:00 kept for audit.
+    expect(rows[0].waits).toEqual([20, 30, 50]);
+    expect(rows[0].slotStart.toISOString()).toBe("2026-10-08T08:00:00.000Z");
   });
 });
 
 describe("ForecastArchiveService.capturePark", () => {
-  function build(served: PredictionDto[]) {
+  function build(served: PredictionDto[], opts: { planThrows?: boolean } = {}) {
     const inserted: unknown[][] = [];
     const qb = {
       insert: () => qb,
@@ -188,17 +240,29 @@ describe("ForecastArchiveService.capturePark", () => {
       orIgnore: () => qb,
       execute: async () => ({}),
     };
+    const sql: string[] = [];
+    const em = {
+      query: async (q: string) => {
+        sql.push(q);
+        return q.includes("DISTINCT ON")
+          ? [
+              {
+                id: "id-taron",
+                status: "OPERATING",
+                wait: 35,
+                ts: new Date(Date.now() - 50 * 60_000),
+              },
+            ]
+          : [];
+      },
+    };
     const repo = {
       create: (x: unknown) => x,
       createQueryBuilder: () => qb,
       manager: {
-        transaction: async (fn: (em: unknown) => unknown) =>
-          fn({
-            query: async (sql: string) =>
-              sql.includes("DISTINCT ON")
-                ? [{ id: "id-taron", status: "OPERATING", wait: 35 }]
-                : [],
-          }),
+        connection: {
+          transaction: async (fn: (m: unknown) => unknown) => fn(em),
+        },
       },
     };
     const ml = {
@@ -222,29 +286,36 @@ describe("ForecastArchiveService.capturePark", () => {
     const planDay = {
       buildPlanDay: jest
         .fn()
-        .mockImplementation(async (_p: Park, date: string) => ({
-          tier: "measured",
-          context: {
-            status: "OPERATING",
-            crowdLevel: "high",
-            openHour: 10,
-            closeHour: 18,
-          },
-          accuracy: { basis: "measured", typicalError: 9 },
-          leadTimeMae: 12,
-          rides:
-            date === "2026-10-08" || date === "2026-10-18"
+        .mockImplementation(async (_p: Park, date: string) => {
+          if (opts.planThrows && date === "2026-10-09") {
+            throw new Error("no tlist entry for key 6");
+          }
+          const has = date === "2026-10-08" || date === "2026-10-18";
+          return {
+            tier: "measured",
+            context: {
+              status: "OPERATING",
+              crowdLevel: "high",
+              openHour: 10,
+              closeHour: 18,
+            },
+            accuracy: { basis: "measured", typicalError: 9 },
+            leadTimeMae: 12,
+            rides: has
               ? [
                   {
                     attractionSlug: "taron",
-                    hours: [{ hour: 10, wait: 30 }],
+                    hours: [10, 11, 12, 13].map((hour) => ({
+                      hour,
+                      wait: 30,
+                    })),
                     dayPeak: 40,
                   },
                 ]
               : [],
-          ridesUnavailable:
-            date === "2026-10-08" ? undefined : { reason: "no_forecast" },
-        })),
+            ridesUnavailable: has ? undefined : { reason: "no_forecast" },
+          };
+        }),
     };
     const calendar = {
       buildCalendarResponse: jest.fn().mockResolvedValue({
@@ -255,6 +326,7 @@ describe("ForecastArchiveService.capturePark", () => {
       getHeadlinerAttractions: jest
         .fn()
         .mockResolvedValue([{ attractionId: "id-taron" }]),
+      getTypicalDayPeakFromCache: jest.fn().mockResolvedValue(42),
     };
     const redis = {
       get: jest.fn().mockResolvedValue(null),
@@ -274,88 +346,91 @@ describe("ForecastArchiveService.capturePark", () => {
       analytics as never,
       redis as never,
     );
-    return { service, ml, planDay, inserted, redis };
+    return { service, ml, planDay, inserted, redis, sql };
   }
+  const park = { id: "p1", slug: "phl", timezone: TZ } as Park;
+
+  afterEach(() => jest.useRealTimers());
 
   it("archives the SERVED curve (never the raw one) and d0…d7 of the planner", async () => {
     jest.useFakeTimers().setSystemTime(new Date("2026-10-08T04:05:00Z"));
-    try {
-      const { service, ml, planDay, inserted, redis } = build([
-        pred("id-taron", "2026-10-08T08:00:00Z", 20, "v1+pcn"),
-      ]);
-      const park = { id: "p1", slug: "phl", timezone: TZ } as Park;
-      const res = await service.capturePark(park, "daily", new Date());
+    const { service, ml, planDay, inserted, redis, sql } = build([
+      pred("id-taron", "2026-10-08T08:00:00Z", 20, "v1+pcn"),
+    ]);
+    const res = await service.capturePark(park, "daily", new Date());
 
-      expect(ml.getParkPredictions).toHaveBeenCalledWith("p1", "hourly");
-      expect(ml.getRawParkPredictions).not.toHaveBeenCalled();
-      expect(planDay.buildPlanDay).toHaveBeenCalledTimes(8);
-      expect(res).toEqual({ curves: 2, parkDays: 8 });
-      expect(ml.getServingDailyPredictions).toHaveBeenCalledWith("p1");
+    expect(ml.getParkPredictions).toHaveBeenCalledWith("p1", "hourly");
+    expect(ml.getRawParkPredictions).not.toHaveBeenCalled();
+    expect(ml.getServingDailyPredictions).toHaveBeenCalledWith("p1");
+    expect(planDay.buildPlanDay).toHaveBeenCalledTimes(8);
+    expect(res).toEqual({ curves: 2, parkDays: 8 });
+    // Every read carries its own limits (statement-limits.util).
+    expect(sql.some((q) => q.startsWith("SET LOCAL statement_timeout"))).toBe(
+      true,
+    );
+    expect(sql.some((q) => q.startsWith("SET LOCAL idle_in_transaction"))).toBe(
+      true,
+    );
 
-      const curves = inserted[0] as Array<Record<string, unknown>>;
-      expect(curves.map((c) => c.surface).sort()).toEqual([1, 2]);
-      expect(curves[0]).toMatchObject({
-        parkId: "p1",
-        isHeadliner: true,
-        originKind: 1,
-      });
+    const curves = inserted[0] as Array<Record<string, unknown>>;
+    const served = curves.find((c) => c.surface === 1)!;
+    const planned = curves.find((c) => c.surface === 2)!;
+    expect(served).toMatchObject({
+      parkId: "p1",
+      isHeadliner: true,
+      originKind: 1,
+      liveWait: 35,
+      liveAgeMin: 50,
+      levelSource: null,
+    });
+    expect(planned).toMatchObject({ liveWait: null, levelSource: "tft" });
 
-      const parkDays = inserted[1] as Array<Record<string, unknown>>;
-      expect(parkDays[0]).toMatchObject({
-        targetDate: "2026-10-08",
-        predictedCrowdLevel: "moderate",
-        crowdLevel: "high",
-        ridesOffered: 1,
-        ridesUnavailable: null,
-        typicalError: 9,
-        levelSource: "tft",
-      });
-      expect(parkDays[1]).toMatchObject({
-        ridesOffered: 0,
-        ridesUnavailable: "no_forecast",
-      });
-      // Today had a served curve → the intraday origins are armed.
-      expect(redis.set).toHaveBeenCalledWith(
-        "forecast-archive:active:p1:2026-10-08",
-        "1",
-        "EX",
-        26 * 3600,
-      );
-    } finally {
-      jest.useRealTimers();
-    }
+    const parkDays = inserted[1] as Array<Record<string, unknown>>;
+    expect(parkDays[0]).toMatchObject({
+      targetDate: "2026-10-08",
+      predictedCrowdLevel: "moderate",
+      crowdLevelFallback: false,
+      crowdLevel: "high",
+      typicalDayPeak: 42,
+      ridesOffered: 1,
+      ridesUnavailable: null,
+      typicalError: 9,
+      levelSource: "tft",
+    });
+    expect(parkDays[1]).toMatchObject({
+      ridesOffered: 0,
+      ridesUnavailable: "no_forecast",
+      crowdLevelFallback: true,
+      levelSource: "none",
+    });
+    expect(redis.set).toHaveBeenCalledWith(
+      "forecast-archive:active:p1:2026-10-08",
+      "1",
+      "EX",
+      26 * 3600,
+    );
   });
 
-  it("stores the live anchor on the served curve and the level source on the plan", async () => {
+  it("records a plan that threw as an empty plan (D9), not a crash", async () => {
     jest.useFakeTimers().setSystemTime(new Date("2026-10-08T04:05:00Z"));
-    try {
-      const { service, inserted } = build([
-        pred("id-taron", "2026-10-08T08:00:00Z", 20),
-      ]);
-      const park = { id: "p1", slug: "phl", timezone: TZ } as Park;
-      await service.capturePark(park, "daily", new Date());
-      const curves = inserted[0] as Array<Record<string, unknown>>;
-      const served = curves.find((c) => c.surface === 1)!;
-      const planned = curves.find((c) => c.surface === 2)!;
-      expect(served.liveWait).toBe(35);
-      expect(served.levelSource).toBeNull();
-      expect(planned.liveWait).toBeNull();
-      expect(planned.levelSource).toBe("tft");
-    } finally {
-      jest.useRealTimers();
-    }
+    const { service, inserted } = build([], { planThrows: true });
+    const res = await service.capturePark(park, "daily", new Date());
+    expect(res.parkDays).toBe(8);
+    const parkDays = inserted[1] as Array<Record<string, unknown>>;
+    expect(parkDays.find((d) => d.targetDate === "2026-10-09")).toMatchObject({
+      ridesOffered: 0,
+      ridesUnavailable: ForecastArchiveService.CAPTURE_ERROR_REASON,
+      tier: null,
+    });
   });
 
   it("the long-lead origin builds only d10 … d90 and no served curve", async () => {
     jest.useFakeTimers().setSystemTime(new Date("2026-10-08T05:05:00Z"));
-    try {
-      const { service, ml, planDay, inserted } = build([]);
-      const park = { id: "p1", slug: "phl", timezone: TZ } as Park;
-      const res = await service.capturePark(park, "long", new Date());
-      expect(ml.getParkPredictions).not.toHaveBeenCalled();
-      expect(
-        planDay.buildPlanDay.mock.calls.map((c: unknown[]) => c[1]),
-      ).toEqual([
+    const { service, ml, planDay, inserted } = build([]);
+    const res = await service.capturePark(park, "long", new Date());
+    expect(ml.getParkPredictions).not.toHaveBeenCalled();
+    expect(planDay.buildPlanDay.mock.calls.map((c: unknown[]) => c[1])).toEqual(
+      [
         "2026-10-18",
         "2026-10-22",
         "2026-10-29",
@@ -363,71 +438,73 @@ describe("ForecastArchiveService.capturePark", () => {
         "2026-11-22",
         "2026-12-07",
         "2027-01-06",
-      ]);
-      expect(res).toEqual({ curves: 1, parkDays: 7 });
-      const curve = (inserted[0] as Array<Record<string, unknown>>)[0];
-      expect(curve).toMatchObject({
-        leadDays: 10,
-        originKind: 3,
-        levelSource: "catboost",
-      });
-    } finally {
-      jest.useRealTimers();
-    }
-  });
-
-  it("an intraday origin captures no planner days", async () => {
-    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T08:05:00Z"));
-    try {
-      const { service, planDay } = build([
-        pred("id-taron", "2026-10-08T08:15:00Z", 20),
-      ]);
-      const park = { id: "p1", slug: "phl", timezone: TZ } as Park;
-      const res = await service.capturePark(park, "intraday", new Date());
-      expect(planDay.buildPlanDay).not.toHaveBeenCalled();
-      expect(res).toEqual({ curves: 1, parkDays: 0 });
-    } finally {
-      jest.useRealTimers();
-    }
-  });
-});
-
-describe("ForecastArchiveService long leads and live anchor", () => {
-  it("07:00 park-local is the long-lead origin", () => {
-    expect(
-      ForecastArchiveService.originKindAt(new Date("2026-10-08T05:05:00Z"), TZ),
-    ).toBe("long");
-  });
-});
-
-describe("ForecastArchiveScoringService board helpers", () => {
-  it("derives means from pooled counters and leaves foreign counters null", () => {
-    const m = ForecastArchiveScoringService.deriveMetrics({
-      n: 4,
-      sae: 30,
-      se: -10,
-      rd: 2,
-      hitTop2: 1,
-      hit30: 2,
-      regret: 10,
+      ],
+    );
+    expect(res).toEqual({ curves: 1, parkDays: 7 });
+    const curve = (inserted[0] as Array<Record<string, unknown>>)[0];
+    expect(curve).toMatchObject({
+      leadDays: 10,
+      originKind: 3,
+      levelSource: "catboost",
     });
-    expect(m.mae).toBe(7.5);
-    expect(m.bias).toBe(-2.5);
-    expect(m.bestTimeHitTop2).toBe(0.5);
-    expect(m.bestTimeRegret).toBe(5);
-    // `n` is shared with D6 rows; without `exact` it is not a crowd row.
-    expect(m.crowdExact).toBeNull();
-    expect(m.bandCoverage).toBeNull();
   });
 
-  it("orders slot leads before day leads", () => {
-    const leads = ["d1", "h24-48", "d0", "h0-1", "h2-6"];
-    expect(
-      leads.sort(
-        (a, b) =>
-          ForecastArchiveScoringService.leadOrder(a) -
-          ForecastArchiveScoringService.leadOrder(b),
-      ),
-    ).toEqual(["h0-1", "h2-6", "h24-48", "d0", "d1"]);
+  it("an intraday origin archives the served window and the D1 decision", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T08:10:00Z"));
+    const { service, planDay, inserted } = build([
+      pred("id-taron", "2026-10-08T08:15:00Z", 20),
+    ]);
+    const res = await service.capturePark(park, "intraday", new Date());
+    expect(planDay.buildPlanDay).toHaveBeenCalledTimes(1);
+    expect(planDay.buildPlanDay).toHaveBeenCalledWith(park, "2026-10-08");
+    expect(res).toEqual({ curves: 2, parkDays: 0 });
+    const nextRide = (inserted[0] as Array<Record<string, unknown>>).find(
+      (c) => c.surface === 2,
+    )!;
+    expect(nextRide).toMatchObject({
+      originKind: 2,
+      liveWait: 35,
+      laterWait: 30,
+      levelSource: null,
+    });
+  });
+});
+
+describe("ForecastArchiveService.captureDue", () => {
+  it("takes each park's origin from the clock right before its capture, and claims the hour after", async () => {
+    const service = Object.create(
+      ForecastArchiveService.prototype,
+    ) as ForecastArchiveService;
+    const parks = [
+      { id: "a", slug: "a", timezone: TZ },
+      { id: "b", slug: "b", timezone: TZ },
+    ];
+    const redis = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue("OK"),
+    };
+    Object.assign(service, {
+      parkRepository: { find: jest.fn().mockResolvedValue(parks) },
+      redis,
+      logger: { warn: jest.fn(), debug: jest.fn() },
+    });
+    const origins: number[] = [];
+    const capture = jest
+      .spyOn(service, "capturePark")
+      .mockImplementation(async (p, _k, at) => {
+        origins.push(at.getTime());
+        if (p.id === "b") throw new Error("boom");
+        return { curves: 1, parkDays: 0 };
+      });
+    let t = Date.parse("2026-10-08T04:05:00Z");
+    const res = await service.captureDue(() => new Date((t += 60_000)));
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(new Set(origins).size).toBe(2);
+    expect(res).toMatchObject({ parks: 1, failed: 1 });
+    // Only the park that succeeded is marked done for this origin hour.
+    expect(redis.set).toHaveBeenCalledTimes(1);
+    expect(redis.set.mock.calls[0][0]).toBe(
+      "forecast-archive:origin:a:2026-10-08:06",
+    );
   });
 });

@@ -123,9 +123,9 @@ export class ForecastArchiveCurve {
   sources: string;
 
   /**
-   * Served `uncertaintyMinutes` per slot — the upper half-width of the band, as
-   * the payload carried it. NULL when no slot had one. On plan_day this is the
-   * ride's single band repeated, because the planner serves one per ride.
+   * park_hourly only: served `uncertaintyMinutes` per slot — CatBoost's
+   * q95 − q50, the upper half-width of the band. NULL when no slot had one,
+   * and always NULL on plan_day (see `peakBand`).
    */
   @Column({ type: "smallint", array: true, nullable: true })
   bands: (number | null)[] | null;
@@ -163,12 +163,38 @@ export class ForecastArchiveCurve {
   isHeadliner: boolean;
 
   /**
-   * park_hourly only: the ride's latest STANDBY wait at the origin (OPERATING,
-   * no older than 30 min), NULL when there was none. The anchor of decision
-   * metric D1 (next-best-ride: live at least 10 min below the forecast).
+   * The ride's STANDBY wait IN FORCE at the origin — the last change-log row
+   * at or before it, OPERATING, no older than 3 h (the truth's own staleness
+   * rule; `queue_data` writes only on change, so "a row in the last 30 min"
+   * missed half the operating rides). NULL when there was none. The anchor of
+   * decision metric D1.
    */
   @Column({ name: "live_wait", type: "smallint", nullable: true })
   liveWait: number | null;
+
+  /** Minutes between that reading and the origin. */
+  @Column({ name: "live_age_min", type: "smallint", nullable: true })
+  liveAgeMin: number | null;
+
+  /**
+   * plan_day rows of an INTRADAY origin only: the frontend's next-best-ride
+   * "later" value — the maximum of today's plan hours whose start lies in
+   * [origin, origin + 120 min] before the close hour (`nextRideLater`) — and
+   * the start of that hour. NULL when no hour qualified.
+   */
+  @Column({ name: "later_wait", type: "smallint", nullable: true })
+  laterWait: number | null;
+
+  @Column({ name: "later_at", type: "timestamptz", nullable: true })
+  laterAt: Date | null;
+
+  /**
+   * plan_day only: the served `uncertaintyMinutes` — a band around `dayPeak`,
+   * NOT around each hour, so it is scored per ride-day
+   * (\|dayPeak − truth P90\| ≤ band) and never pooled with the per-slot band.
+   */
+  @Column({ name: "peak_band", type: "smallint", nullable: true })
+  peakBand: number | null;
 
   /**
    * plan_day only: which model produced the day LEVEL the curve is built on —

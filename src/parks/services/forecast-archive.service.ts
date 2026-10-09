@@ -16,24 +16,46 @@ import {
   ForecastArchiveCurve,
 } from "../../ml/entities/forecast-archive-curve.entity";
 import { ForecastArchiveParkDay } from "../../ml/entities/forecast-archive-park-day.entity";
+import { nextRideLater } from "../../ml/utils/forecast-archive-scoring.util";
 import { PlanDayService } from "./plan-day.service";
 import { CalendarService } from "./calendar.service";
 import { PlanDayDto } from "../dto/plan-day.dto";
-import { formatInParkTimezone } from "../../common/utils/date.util";
-import { currentSlotStartMs } from "../../common/utils/best-visit-times.util";
+import { addIsoDays, formatInParkTimezone } from "../../common/utils/date.util";
 import { mapWithDbBudget } from "../../common/utils/db-job-budget";
 import {
-  addIsoDays,
-  withStatementLimits,
-} from "../utils/forecast-archive-limits";
+  StatementLimits,
+  queryWithLimits,
+} from "../../common/utils/statement-limits.util";
 
 const SLOT_MS = 15 * 60_000;
 
 /** Parks captured side by side; the shared DB budget caps the sum anyway. */
 const BATCH_SIZE = 3;
 
-/** Insert chunk: ~1,000 rows × 16 columns stays far below the 65,535 bind cap. */
+/** Insert chunk: ~1,000 rows × 20 columns stays far below the 65,535 bind cap. */
 const INSERT_CHUNK = 1000;
+
+/** Reads made while capturing: one park's rides, small. */
+const READ_LIMITS: StatementLimits = {
+  statementTimeoutMs: 30_000,
+  lockTimeoutMs: 2_000,
+  idleInTransactionTimeoutMs: 10_000,
+};
+
+/** One retention batch. */
+const PRUNE_LIMITS: StatementLimits = {
+  statementTimeoutMs: 60_000,
+  lockTimeoutMs: 2_000,
+  idleInTransactionTimeoutMs: 10_000,
+};
+
+/**
+ * Where a park's operating day ends for the served 15-min curve: a slot before
+ * this park-local hour belongs to the PREVIOUS date, so the 00:30 slot of a
+ * park open until 01:00 is scored against the day whose schedule window holds
+ * it, not against the next calendar date.
+ */
+const OPERATING_DAY_BOUNDARY_HOURS = 4;
 
 /** What one capture wrote. */
 export interface ArchiveCaptureResult {
@@ -53,8 +75,17 @@ export type CurveDraft = Omit<
   | "rideQ90"
   | "isHeadliner"
   | "liveWait"
+  | "liveAgeMin"
+  | "laterWait"
+  | "laterAt"
   | "levelSource"
 >;
+
+/** The in-force reading at the origin, per ride. */
+export interface LiveAnchor {
+  wait: number;
+  ageMin: number;
+}
 
 /**
  * The forward archive's write side (PAR-831): reads the curves the endpoints
@@ -71,9 +102,13 @@ export type CurveDraft = Omit<
  *   after the 06:00 origin so the Europe burst is spread over two hours. Leads
  *   count from the same park-local date.
  * - **intraday origins, 10/12/14/16/18 park-local**: the served 15-min curve
- *   for the next 4 h only — UC1 (≤ 2 h) and the short end of UC2. Only for
- *   parks whose daily capture found a curve for today, so a closed park costs
- *   nothing all day.
+ *   for the next 4 h (UC1 and the short end of UC2), and today's plan reduced
+ *   to the frontend's next-best-ride decision (D1). Only for parks whose daily
+ *   capture found a curve for today, so a closed park costs nothing all day.
+ *
+ * Each park's origin is the instant its own capture starts, taken right before
+ * the served calls — not one instant for the whole run, which overstated every
+ * lead by however long the parks before it took.
  *
  * Nothing here computes a forecast. A second implementation would measure
  * itself, and the first time it drifted from the endpoint the archive would be
@@ -87,8 +122,8 @@ export class ForecastArchiveService {
   /** The sparse long leads, captured an hour after the daily origin. */
   static readonly LONG_ORIGIN_HOUR = 7;
   static readonly LONG_LEADS: readonly number[] = [10, 14, 21, 30, 45, 60, 90];
-  /** D1's live anchor: the latest STANDBY reading no older than this. */
-  static readonly LIVE_ANCHOR_MAX_AGE_MINUTES = 30;
+  /** D1's live anchor: the reading in force, no older than the truth allows. */
+  static readonly LIVE_ANCHOR_MAX_AGE_MINUTES = 180;
   static readonly INTRADAY_ORIGIN_HOURS: readonly number[] = [
     10, 12, 14, 16, 18,
   ];
@@ -96,6 +131,8 @@ export class ForecastArchiveService {
   static readonly PLAN_DAY_MAX_LEAD = 7;
   /** How far ahead an intraday origin keeps the served curve. */
   static readonly INTRADAY_WINDOW_MINUTES = 240;
+  /** The frontend's next-best-ride look-ahead (`NEXT_RIDE_LOOKAHEAD_MIN`). */
+  static readonly NEXT_RIDE_LOOKAHEAD_MINUTES = 120;
   /**
    * Curves are kept this many days past their TARGET date — never counted from
    * the origin, or a d90 row would be gone before its day could be scored.
@@ -106,6 +143,8 @@ export class ForecastArchiveService {
   /** Park-day rows, past their target date: ~3.2 k a day at ~240 B with
    *  indexes, so half a year is ~140 MB. The scores are kept longer. */
   static readonly PARK_DAY_RETENTION_DAYS = 180;
+  /** The reason recorded when `buildPlanDay` threw (D9 counts it as empty). */
+  static readonly CAPTURE_ERROR_REASON = "capture_error";
 
   constructor(
     @InjectRepository(Park)
@@ -126,7 +165,7 @@ export class ForecastArchiveService {
   /**
    * Which origin, if any, a park is at right now. Read from the park's own
    * clock: an hourly job runs once per UTC hour, and each park is captured in
-   * the hour its local clock shows 06, 10, 12 … — whatever its offset.
+   * the hour its local clock shows 06, 07, 10, 12 … — whatever its offset.
    */
   static originKindAt(now: Date, timezone: string): ArchiveOriginKind | null {
     const hour = Number(formatInTimeZone(now, timezone, "H"));
@@ -138,34 +177,34 @@ export class ForecastArchiveService {
     return null;
   }
 
-  /** The hourly job: capture every park that sits at an origin now. */
-  async captureDue(now: Date = new Date()): Promise<ArchiveCaptureResult> {
+  /**
+   * The hourly job: capture every park that sits at an origin now. `clock` is
+   * read once per park, immediately before its capture.
+   */
+  async captureDue(
+    clock: () => Date = () => new Date(),
+  ): Promise<ArchiveCaptureResult> {
+    const runStart = clock();
     const parks = await this.parkRepository.find();
-    const due: Array<{ park: Park; kind: ArchiveOriginKind }> = [];
+    const due: Array<{ park: Park; kind: ArchiveOriginKind; marker: string }> =
+      [];
     for (const park of parks) {
       if (!park.timezone) continue;
-      const kind = ForecastArchiveService.originKindAt(now, park.timezone);
+      const kind = ForecastArchiveService.originKindAt(runStart, park.timezone);
       if (!kind) continue;
-      const localDate = formatInParkTimezone(now, park.timezone);
+      const localDate = formatInParkTimezone(runStart, park.timezone);
       if (kind === "intraday") {
         const active = await this.redis
           .get(this.activeKey(park.id, localDate))
           .catch(() => null);
         if (!active) continue;
       }
-      // One capture per park and origin hour, whatever re-runs the job.
-      const hour = formatInTimeZone(now, park.timezone, "HH");
-      const claimed = await this.redis
-        .set(
-          `forecast-archive:origin:${park.id}:${localDate}:${hour}`,
-          "1",
-          "EX",
-          3 * 3600,
-          "NX",
-        )
-        .catch(() => "OK");
-      if (claimed !== "OK") continue;
-      due.push({ park, kind });
+      const hour = formatInTimeZone(runStart, park.timezone, "HH");
+      const marker = `forecast-archive:origin:${park.id}:${localDate}:${hour}`;
+      // Already captured this origin hour (a re-run of the job).
+      const done = await this.redis.get(marker).catch(() => null);
+      if (done) continue;
+      due.push({ park, kind, marker });
     }
 
     const result: ArchiveCaptureResult = {
@@ -176,13 +215,24 @@ export class ForecastArchiveService {
     };
     for (let i = 0; i < due.length; i += BATCH_SIZE) {
       const batch = due.slice(i, i + BATCH_SIZE);
-      const done = await mapWithDbBudget(batch, ({ park, kind }) =>
-        this.capturePark(park, kind, now).catch((err: Error) => {
-          this.logger.warn(
-            `Forward archive: ${park.slug} (${kind}) failed: ${err.message}`,
-          );
-          return null;
-        }),
+      const done = await mapWithDbBudget(
+        batch,
+        async ({ park, kind, marker }) => {
+          try {
+            const r = await this.capturePark(park, kind, clock());
+            // Claimed only once the capture is in: a failed park is retried by
+            // the next run inside the same origin hour.
+            await this.redis
+              .set(marker, "1", "EX", 3 * 3600)
+              .catch(() => undefined);
+            return r;
+          } catch (err) {
+            this.logger.warn(
+              `Forward archive: ${park.slug} (${kind}) failed: ${(err as Error).message}`,
+            );
+            return null;
+          }
+        },
       );
       for (const d of done) {
         if (!d) {
@@ -201,55 +251,82 @@ export class ForecastArchiveService {
   async capturePark(
     park: Park,
     kind: ArchiveOriginKind,
-    now: Date,
+    originAt: Date,
   ): Promise<{ curves: number; parkDays: number }> {
-    // One instant for every row of this capture — leads are measured from it.
-    const originAt = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
     const localToday = formatInParkTimezone(originAt, park.timezone);
 
-    const [headliners, q90] = await Promise.all([
+    const [headliners, q90, attractions] = await Promise.all([
       this.analyticsService
         .getHeadlinerAttractions(park.id)
         .then((h) => new Set(h.map((x) => x.attractionId)))
         .catch(() => new Set<string>()),
       this.rideQ90(park.id, localToday),
+      this.attractionRepository.find({
+        where: { parkId: park.id },
+        select: ["id", "slug"],
+      }),
     ]);
+    const slugToId = new Map(attractions.map((a) => [a.slug, a.id]));
 
-    const drafts: CurveDraft[] = [];
-    let live = new Map<string, number>();
+    const drafts: Array<
+      CurveDraft & { laterWait?: number | null; laterAt?: Date | null }
+    > = [];
+    const live =
+      kind === "long"
+        ? new Map<string, LiveAnchor>()
+        : await this.liveWaits(
+            attractions.map((a) => a.id),
+            originAt,
+          );
 
     // ---- served 15-min curve (not on the long-lead origin) ----
-    const served = await (kind === "long"
-      ? Promise.resolve({ predictions: [] as PredictionDto[] })
-      : this.mlService
-          .getParkPredictions(park.id, "hourly")
-          .catch((err: Error) => {
-            this.logger.debug(
-              `Forward archive: no hourly curve for ${park.slug}: ${err.message}`,
-            );
-            return { predictions: [] as PredictionDto[] };
-          }));
-    const fromMs = currentSlotStartMs();
-    const untilMs =
-      kind === "intraday"
-        ? originAt.getTime() +
-          ForecastArchiveService.INTRADAY_WINDOW_MINUTES * 60_000
-        : Number.POSITIVE_INFINITY;
-    drafts.push(
-      ...ForecastArchiveService.curvesFromServed(
-        served.predictions ?? [],
-        park.timezone,
-        localToday,
-        fromMs,
-        untilMs,
-      ),
-    );
-
-    if (drafts.length > 0) {
-      live = await this.liveWaits(
-        [...new Set(drafts.map((d) => d.attractionId))],
-        originAt,
+    if (kind !== "long") {
+      const served = await this.mlService
+        .getParkPredictions(park.id, "hourly")
+        .catch((err: Error) => {
+          this.logger.debug(
+            `Forward archive: no hourly curve for ${park.slug}: ${err.message}`,
+          );
+          return { predictions: [] as PredictionDto[] };
+        });
+      const fromMs = Math.floor(originAt.getTime() / SLOT_MS) * SLOT_MS;
+      const untilMs =
+        kind === "intraday"
+          ? originAt.getTime() +
+            ForecastArchiveService.INTRADAY_WINDOW_MINUTES * 60_000
+          : Number.POSITIVE_INFINITY;
+      drafts.push(
+        ...ForecastArchiveService.curvesFromServed(
+          served.predictions ?? [],
+          park.timezone,
+          localToday,
+          fromMs,
+          untilMs,
+        ),
       );
+    }
+
+    // ---- intraday: today's plan, as the next-best-ride decision (D1) ----
+    if (kind === "intraday") {
+      const plan = await this.planDayService
+        .buildPlanDay(park, localToday)
+        .catch((err: Error) => {
+          this.logger.debug(
+            `Forward archive: plan/day ${park.slug} today failed: ${err.message}`,
+          );
+          return null;
+        });
+      if (plan) {
+        drafts.push(
+          ...ForecastArchiveService.nextRideRows(
+            plan,
+            slugToId,
+            park.timezone,
+            localToday,
+            originAt,
+          ),
+        );
+      }
     }
 
     // ---- planner curve and the park-day rows ----
@@ -264,67 +341,74 @@ export class ForecastArchiveService {
             )
           : [...ForecastArchiveService.LONG_LEADS];
       const lastDate = addIsoDays(localToday, leads[leads.length - 1]);
-      const [slugToId, calendar, levelSources] = await Promise.all([
-        this.attractionRepository
-          .find({ where: { parkId: park.id }, select: ["id", "slug"] })
-          .then((rows) => new Map(rows.map((a) => [a.slug, a.id]))),
+      const [calendar, levelSources, typicalDayPeak] = await Promise.all([
         this.predictedCrowdLevels(
           park,
           addIsoDays(localToday, leads[0]),
           lastDate,
         ),
         this.levelSources(park),
+        this.analyticsService
+          .getTypicalDayPeakFromCache(park.id)
+          .catch(() => 0),
       ]);
       for (const lead of leads) {
         const date = addIsoDays(localToday, lead);
-        let plan: PlanDayDto;
+        let plan: PlanDayDto | null = null;
         try {
           plan = await this.planDayService.buildPlanDay(park, date);
         } catch (err) {
-          // Unmeasured, not empty: no park-day row, so coverage is not
-          // understated by our own failure.
           this.logger.warn(
             `Forward archive: plan/day ${park.slug} ${date} failed: ${(err as Error).message}`,
           );
-          continue;
         }
-        const planned = ForecastArchiveService.curvesFromPlanDay(
-          plan,
-          slugToId,
-          park.timezone,
-          date,
-          lead,
-        );
         const sourcesOfDay = new Set<string>();
-        for (const d of planned) {
-          const src =
-            plan.tier === "climatology"
-              ? "climatology"
-              : levelSources.get(`${d.attractionId}|${date}`);
-          if (src) {
-            levelOf.set(`${d.attractionId}|${date}`, src);
-            sourcesOfDay.add(src);
+        if (plan) {
+          const planned = ForecastArchiveService.curvesFromPlanDay(
+            plan,
+            slugToId,
+            park.timezone,
+            date,
+            lead,
+          );
+          for (const d of planned) {
+            const src =
+              plan.tier === "climatology"
+                ? "climatology"
+                : levelSources.get(`${d.attractionId}|${date}`);
+            if (src) {
+              levelOf.set(`${d.attractionId}|${date}`, src);
+              sourcesOfDay.add(src);
+            }
           }
+          drafts.push(...planned);
         }
-        drafts.push(...planned);
+        const predicted = calendar.get(date) ?? null;
+        // A plan that could not be built is still a day the visitor got no
+        // curves for: recorded as an empty plan, so D9 counts it rather than
+        // the day silently dropping out of the denominator.
         parkDays.push(
           this.parkDayRepository.create({
             originAt,
             parkId: park.id,
             targetDate: date,
             leadDays: lead,
-            tier: plan.tier ?? null,
-            status: plan.context?.status ?? null,
-            crowdLevel: plan.context?.crowdLevel ?? null,
-            predictedCrowdLevel: calendar.get(date) ?? null,
-            openHour: plan.context?.openHour ?? null,
-            closeHour: plan.context?.closeHour ?? null,
-            hoursSource: plan.context?.hoursSource ?? null,
-            ridesOffered: plan.rides.length,
-            ridesUnavailable: plan.ridesUnavailable?.reason ?? null,
-            accuracyBasis: plan.accuracy?.basis ?? null,
-            typicalError: plan.accuracy?.typicalError ?? null,
-            leadTimeMae: plan.leadTimeMae ?? null,
+            tier: plan?.tier ?? null,
+            status: plan?.context?.status ?? null,
+            crowdLevel: plan?.context?.crowdLevel ?? null,
+            predictedCrowdLevel: predicted,
+            crowdLevelFallback: predicted === null,
+            typicalDayPeak: typicalDayPeak > 0 ? typicalDayPeak : null,
+            openHour: plan?.context?.openHour ?? null,
+            closeHour: plan?.context?.closeHour ?? null,
+            hoursSource: plan?.context?.hoursSource ?? null,
+            ridesOffered: plan?.rides?.length ?? 0,
+            ridesUnavailable: plan
+              ? (plan.ridesUnavailable?.reason ?? null)
+              : ForecastArchiveService.CAPTURE_ERROR_REASON,
+            accuracyBasis: plan?.accuracy?.basis ?? null,
+            typicalError: plan?.accuracy?.typicalError ?? null,
+            leadTimeMae: plan?.leadTimeMae ?? null,
             levelSource:
               sourcesOfDay.size === 0
                 ? "none"
@@ -337,8 +421,11 @@ export class ForecastArchiveService {
     }
 
     const originKind = ARCHIVE_ORIGIN_KINDS[kind];
-    const rows = drafts.map((d) =>
-      this.curveRepository.create({
+    const rows = drafts.map((d) => {
+      const anchor = live.get(d.attractionId);
+      const isNextRide =
+        d.surface === ARCHIVE_SURFACES.plan_day && kind === "intraday";
+      return this.curveRepository.create({
         ...d,
         originAt,
         originKind,
@@ -346,15 +433,21 @@ export class ForecastArchiveService {
         rideQ90: q90.get(d.attractionId) ?? null,
         isHeadliner: headliners.has(d.attractionId),
         liveWait:
-          d.surface === ARCHIVE_SURFACES.park_hourly
-            ? (live.get(d.attractionId) ?? null)
+          d.surface === ARCHIVE_SURFACES.park_hourly || isNextRide
+            ? (anchor?.wait ?? null)
             : null,
+        liveAgeMin:
+          d.surface === ARCHIVE_SURFACES.park_hourly || isNextRide
+            ? (anchor?.ageMin ?? null)
+            : null,
+        laterWait: isNextRide ? (d.laterWait ?? null) : null,
+        laterAt: isNextRide ? (d.laterAt ?? null) : null,
         levelSource:
-          d.surface === ARCHIVE_SURFACES.plan_day
+          d.surface === ARCHIVE_SURFACES.plan_day && !isNextRide
             ? (levelOf.get(`${d.attractionId}|${d.targetDate}`) ?? null)
             : null,
-      }),
-    );
+      });
+    });
 
     for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
       await this.curveRepository
@@ -392,8 +485,10 @@ export class ForecastArchiveService {
   }
 
   /**
-   * The served hourly predictions as one row per ride and park-local date.
-   * Slots the payload did not carry stay NULL with source `-`.
+   * The served hourly predictions as one row per ride and OPERATING day. A
+   * slot before {@link OPERATING_DAY_BOUNDARY_HOURS} park-local belongs to the
+   * previous date, so a midnight-crossing window stays one row. Slots the
+   * payload did not carry stay NULL with source `-`.
    */
   static curvesFromServed(
     predictions: PredictionDto[],
@@ -407,7 +502,7 @@ export class ForecastArchiveService {
       if (p.predictionType !== "hourly") continue;
       const t = Date.parse(p.predictedTime);
       if (!Number.isFinite(t) || t < fromMs || t >= untilMs) continue;
-      const date = formatInParkTimezone(new Date(t), timezone);
+      const date = ForecastArchiveService.operatingDate(t, timezone);
       const key = `${p.attractionId}|${date}`;
       const list = groups.get(key) ?? [];
       list.push(p);
@@ -454,10 +549,29 @@ export class ForecastArchiveService {
         bands: anyBand ? bands : null,
         dayPeak: null,
         expectedError: null,
+        peakBand: null,
         modelVersion,
       });
     }
     return out;
+  }
+
+  /** The operating day an instant belongs to (04:00 park-local boundary). */
+  static operatingDate(t: number, timezone: string): string {
+    return formatInParkTimezone(
+      new Date(t - OPERATING_DAY_BOUNDARY_HOURS * 3_600_000),
+      timezone,
+    );
+  }
+
+  /** The instant a plan hour starts (24+ = after that day's midnight). */
+  static planHourInstant(date: string, hour: number, timezone: string): Date {
+    const dayOffset = Math.floor(hour / 24);
+    const hh = String(hour % 24).padStart(2, "0");
+    return fromZonedTime(
+      `${addIsoDays(date, dayOffset)}T${hh}:00:00`,
+      timezone,
+    );
   }
 
   /**
@@ -491,32 +605,111 @@ export class ForecastArchiveService {
           ? ForecastArchiveService.planSourceCode(h.source)
           : tierCode;
       }
-      const band =
-        ride.uncertaintyMinutes != null
-          ? Math.round(ride.uncertaintyMinutes)
-          : null;
-      const dayOffset = Math.floor(firstHour / 24);
-      const hh = String(firstHour % 24).padStart(2, "0");
       out.push({
         attractionId,
         surface: ARCHIVE_SURFACES.plan_day,
         targetDate: date,
         leadDays: lead,
-        slotStart: fromZonedTime(
-          `${addIsoDays(date, dayOffset)}T${hh}:00:00`,
+        slotStart: ForecastArchiveService.planHourInstant(
+          date,
+          firstHour,
           timezone,
         ),
         slotMinutes: 60,
         waits,
         sources: sources.join(""),
-        bands:
-          band === null ? null : waits.map((w) => (w === null ? null : band)),
+        bands: null,
         dayPeak: Number.isFinite(ride.dayPeak)
           ? Math.round(ride.dayPeak)
           : null,
         expectedError:
           ride.expectedError != null ? Math.round(ride.expectedError) : null,
+        peakBand:
+          ride.uncertaintyMinutes != null
+            ? Math.round(ride.uncertaintyMinutes)
+            : null,
         modelVersion: null,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Today's plan reduced to what the frontend's next-best-ride rule reads
+   * (`park.fan/lib/planner/next-best-ride.ts`): per ride, the plan hours whose
+   * start lies in [origin, origin + 120 min] before the close hour, and the
+   * maximum of them (`nextRideLater`). One row per planned ride — also when no
+   * hour qualifies, which is a non-suggestion and part of D1's base rate.
+   */
+  static nextRideRows(
+    plan: PlanDayDto,
+    slugToId: ReadonlyMap<string, string>,
+    timezone: string,
+    date: string,
+    originAt: Date,
+  ): Array<CurveDraft & { laterWait: number | null; laterAt: Date | null }> {
+    const openHour = plan.context?.openHour ?? null;
+    const closeHour = plan.context?.closeHour ?? null;
+    const nowMinute =
+      Number(formatInTimeZone(originAt, timezone, "H")) * 60 +
+      Number(formatInTimeZone(originAt, timezone, "m"));
+    const tierCode = ForecastArchiveService.planSourceCode(plan.tier);
+    const out: Array<
+      CurveDraft & { laterWait: number | null; laterAt: Date | null }
+    > = [];
+    for (const ride of plan.rides ?? []) {
+      const attractionId = slugToId.get(ride.attractionSlug);
+      if (!attractionId) continue;
+      const later = nextRideLater(ride.hours, openHour, closeHour, nowMinute);
+      // The hours the rule looked at, kept for audit.
+      const windowEnd =
+        originAt.getTime() +
+        ForecastArchiveService.NEXT_RIDE_LOOKAHEAD_MINUTES * 60_000;
+      const inWindow = [...ride.hours]
+        .sort((a, b) => a.hour - b.hour)
+        .map((h) => ({
+          h,
+          at: ForecastArchiveService.planHourInstant(date, h.hour, timezone),
+        }))
+        .filter(
+          ({ at }) =>
+            at.getTime() >= originAt.getTime() - 60 * 60_000 &&
+            at.getTime() <= windowEnd,
+        );
+      const first = inWindow[0]?.at ?? originAt;
+      const waits: (number | null)[] = [];
+      const sources: string[] = [];
+      for (const { h, at } of inWindow) {
+        const idx = Math.round((at.getTime() - first.getTime()) / 3_600_000);
+        while (waits.length < idx) {
+          waits.push(null);
+          sources.push("-");
+        }
+        waits[idx] = Math.round(h.wait);
+        sources[idx] = h.source
+          ? ForecastArchiveService.planSourceCode(h.source)
+          : tierCode;
+      }
+      out.push({
+        attractionId,
+        surface: ARCHIVE_SURFACES.plan_day,
+        targetDate: date,
+        leadDays: 0,
+        slotStart: first,
+        slotMinutes: 60,
+        waits,
+        sources: sources.join(""),
+        bands: null,
+        dayPeak: Number.isFinite(ride.dayPeak)
+          ? Math.round(ride.dayPeak)
+          : null,
+        expectedError: null,
+        peakBand: null,
+        modelVersion: null,
+        laterWait: later ? Math.round(later.wait) : null,
+        laterAt: later
+          ? ForecastArchiveService.planHourInstant(date, later.hour, timezone)
+          : null,
       });
     }
     return out;
@@ -549,8 +742,9 @@ export class ForecastArchiveService {
   }
 
   /**
-   * The calendar's `predictedCrowdLevel` for today … today+7 — the forecast
-   * bucket the "Prognose heute" hero reads. One calendar call per park and day.
+   * The calendar's `predictedCrowdLevel` per date — the forecast bucket the
+   * "Prognose heute" hero reads. Absent where the calendar had no forecast,
+   * which is what marks the planner's `crowdLevel` as a fallback.
    */
   private async predictedCrowdLevels(
     park: Park,
@@ -600,41 +794,48 @@ export class ForecastArchiveService {
   }
 
   /**
-   * D1's anchor: each ride's latest STANDBY reading at the origin, when it is
-   * OPERATING with a wait and no older than {@link LIVE_ANCHOR_MAX_AGE_MINUTES}.
+   * D1's anchor: each ride's STANDBY reading IN FORCE at the origin — the
+   * last change-log row at or before it, no older than
+   * {@link LIVE_ANCHOR_MAX_AGE_MINUTES} (the truth's staleness rule). Kept
+   * only when it says OPERATING with a wait, which is what the frontend's
+   * rule requires of the live row.
    */
   private async liveWaits(
     attractionIds: string[],
     originAt: Date,
-  ): Promise<Map<string, number>> {
-    const out = new Map<string, number>();
+  ): Promise<Map<string, LiveAnchor>> {
+    const out = new Map<string, LiveAnchor>();
+    if (attractionIds.length === 0) return out;
     try {
-      const rows: Array<{ id: string; status: string; wait: number | null }> =
-        await withStatementLimits(
-          this.curveRepository.manager,
-          { statementTimeoutMs: 20_000, lockTimeoutMs: 2_000 },
-          (em) =>
-            em.query(
-              `SELECT DISTINCT ON ("attractionId") "attractionId" AS id,
-                      status::text AS status, "waitTime" AS wait
-                 FROM queue_data
-                WHERE "attractionId" = ANY($1::uuid[])
-                  AND "queueType" = 'STANDBY'
-                  AND timestamp > $2 AND timestamp <= $3
-                ORDER BY "attractionId", timestamp DESC`,
-              [
-                attractionIds,
-                new Date(
-                  originAt.getTime() -
-                    ForecastArchiveService.LIVE_ANCHOR_MAX_AGE_MINUTES * 60_000,
-                ),
-                originAt,
-              ],
-            ),
-        );
+      const rows = await queryWithLimits<
+        Array<{ id: string; status: string; wait: number | null; ts: Date }>
+      >(
+        this.curveRepository.manager.connection,
+        `SELECT DISTINCT ON ("attractionId") "attractionId" AS id,
+                status::text AS status, "waitTime" AS wait, timestamp AS ts
+           FROM queue_data
+          WHERE "attractionId" = ANY($1::uuid[])
+            AND "queueType" = 'STANDBY'
+            AND timestamp > $2 AND timestamp <= $3
+          ORDER BY "attractionId", timestamp DESC`,
+        [
+          attractionIds,
+          new Date(
+            originAt.getTime() -
+              ForecastArchiveService.LIVE_ANCHOR_MAX_AGE_MINUTES * 60_000,
+          ),
+          originAt,
+        ],
+        READ_LIMITS,
+      );
       for (const r of rows) {
         if (r.status === "OPERATING" && r.wait !== null) {
-          out.set(r.id, Number(r.wait));
+          out.set(r.id, {
+            wait: Number(r.wait),
+            ageMin: Math.round(
+              (originAt.getTime() - new Date(r.ts).getTime()) / 60_000,
+            ),
+          });
         }
       }
     } catch (err) {
@@ -646,16 +847,20 @@ export class ForecastArchiveService {
   }
 
   /**
-   * Each ride's q90 of 15-min average waits over the 56 days before today —
-   * BENCH-SPEC's ex-ante busy input — from the hourly-history rollup rather
-   * than `queue_data`: ~40 rides × 56 rows of jsonb per park instead of a
-   * compressed-hypertable scan. Cached for the park-local day.
+   * Each ride's q90 of TIME-WEIGHTED 15-min waits over the 56 days before
+   * today — BENCH-SPEC's ex-ante busy input. `attraction_hourly_history.slots`
+   * holds only the quarter-hours that had a reading (`queue_data` writes on
+   * change), so a q90 over them weighs a busy, jittery hour more than a calm
+   * one. The slots are therefore forward-filled onto the full quarter-hour grid
+   * of each ride-day (first to last slot, a value in force for at most 3 h, the
+   * truth's rule) before the percentile. Read from the rollup, not
+   * `queue_data`: ~40 rides × 56 rows of jsonb per park. Cached for the day.
    */
   private async rideQ90(
     parkId: string,
     localToday: string,
   ): Promise<Map<string, number>> {
-    const key = `forecast-archive:q90:${parkId}:${localToday}`;
+    const key = `forecast-archive:q90tw:${parkId}:${localToday}`;
     const cached = await this.redis.get(key).catch(() => null);
     if (cached) {
       try {
@@ -668,24 +873,41 @@ export class ForecastArchiveService {
     }
     const out = new Map<string, number>();
     try {
-      const rows: Array<{ id: string; q90: number | string | null }> =
-        await withStatementLimits(
-          this.curveRepository.manager,
-          { statementTimeoutMs: 30_000, lockTimeoutMs: 2_000 },
-          (em) =>
-            em.query(
-              `SELECT h."attractionId" AS id,
-                      percentile_cont(0.9) WITHIN GROUP (ORDER BY (s->>'avgWait')::float) AS q90
-                 FROM attraction_hourly_history h
-                 CROSS JOIN LATERAL jsonb_array_elements(h.slots) s
-                WHERE h."parkId" = $1
-                  AND h.date >= $2::date - 56
-                  AND h.date < $2::date
-                  AND (s->>'avgWait')::float >= 5
-                GROUP BY h."attractionId"`,
-              [parkId, localToday],
-            ),
-        );
+      const rows = await queryWithLimits<
+        Array<{ id: string; q90: number | string | null }>
+      >(
+        this.curveRepository.manager.connection,
+        `WITH s AS (
+           SELECT h."attractionId" AS id, h.date AS d,
+                  (x->>'time_slot')::time AS t, (x->>'avgWait')::float AS w
+             FROM attraction_hourly_history h
+             CROSS JOIN LATERAL jsonb_array_elements(h.slots) x
+            WHERE h."parkId" = $1
+              AND h.date >= $2::date - 56 AND h.date < $2::date
+         ),
+         b AS (SELECT id, d, min(t) AS t0, max(t) AS t1 FROM s GROUP BY 1, 2),
+         g AS (
+           SELECT b.id, b.d, gs::time AS t
+             FROM b, generate_series(b.d + b.t0, b.d + b.t1, interval '15 minutes') gs
+         ),
+         j AS (
+           SELECT g.id, g.d, g.t, s.w, s.t AS st,
+                  count(s.w) OVER (PARTITION BY g.id, g.d ORDER BY g.t) AS grp
+             FROM g LEFT JOIN s ON s.id = g.id AND s.d = g.d AND s.t = g.t
+         ),
+         f AS (
+           SELECT id, t,
+                  first_value(w) OVER (PARTITION BY id, d, grp ORDER BY t) AS w,
+                  first_value(st) OVER (PARTITION BY id, d, grp ORDER BY t) AS st
+             FROM j
+         )
+         SELECT id, percentile_cont(0.9) WITHIN GROUP (ORDER BY w) AS q90
+           FROM f
+          WHERE w >= 5 AND t - st <= interval '3 hours'
+          GROUP BY id`,
+        [parkId, localToday],
+        READ_LIMITS,
+      );
       for (const r of rows) {
         const v = Number(r.q90);
         if (Number.isFinite(v)) out.set(r.id, Math.round(v));
@@ -703,9 +925,9 @@ export class ForecastArchiveService {
   }
 
   /**
-   * App-side retention, in short batches with a lock deadline — never a
-   * TimescaleDB policy (db-health-runbook §0b). The tables have no foreign key,
-   * so a DELETE locks nothing but its own rows.
+   * App-side retention by TARGET date, in short batches with a lock deadline —
+   * never a TimescaleDB policy (db-health-runbook §0b). The tables have no
+   * foreign key, so a DELETE locks nothing but its own rows.
    */
   async pruneExpired(
     now: Date = new Date(),
@@ -713,7 +935,6 @@ export class ForecastArchiveService {
     const today = now.toISOString().slice(0, 10);
     const curves = await this.pruneTable(
       "forecast_archive_curves",
-      "target_date",
       addIsoDays(
         today,
         -ForecastArchiveService.CURVE_RETENTION_AFTER_TARGET_DAYS,
@@ -721,36 +942,27 @@ export class ForecastArchiveService {
     );
     const parkDays = await this.pruneTable(
       "forecast_archive_park_days",
-      "target_date",
       addIsoDays(today, -ForecastArchiveService.PARK_DAY_RETENTION_DAYS),
     );
     return { curves, parkDays };
   }
 
-  private async pruneTable(
-    table: string,
-    column: string,
-    before: string,
-  ): Promise<number> {
+  private async pruneTable(table: string, before: string): Promise<number> {
     let total = 0;
     // 50 × 20,000 rows covers a day's backlog several times over; a longer
     // backlog drains over the following nights.
     for (let i = 0; i < 50; i++) {
-      const deleted: number = await withStatementLimits(
-        this.curveRepository.manager,
-        { statementTimeoutMs: 60_000, lockTimeoutMs: 2_000 },
-        async (em) => {
-          const res: Array<{ n: string }> = await em.query(
-            `WITH gone AS (
-               DELETE FROM ${table}
-                WHERE ctid IN (SELECT ctid FROM ${table} WHERE ${column} < $1::date LIMIT 20000)
-                RETURNING 1)
-             SELECT count(*)::text AS n FROM gone`,
-            [before],
-          );
-          return Number(res?.[0]?.n ?? 0);
-        },
+      const res = await queryWithLimits<Array<{ n: string }>>(
+        this.curveRepository.manager.connection,
+        `WITH gone AS (
+           DELETE FROM ${table}
+            WHERE ctid IN (SELECT ctid FROM ${table} WHERE target_date < $1::date LIMIT 20000)
+            RETURNING 1)
+         SELECT count(*)::text AS n FROM gone`,
+        [before],
+        PRUNE_LIMITS,
       );
+      const deleted = Number(res?.[0]?.n ?? 0);
       total += deleted;
       if (deleted < 20000) break;
     }

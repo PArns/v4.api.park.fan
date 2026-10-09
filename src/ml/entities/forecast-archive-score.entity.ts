@@ -1,6 +1,19 @@
 import { Column, Entity, Index, PrimaryColumn } from "typeorm";
 
 /**
+ * Column widths of the score key. Every label the scorer emits must fit —
+ * `forecast-archive-scoring.util.spec.ts` asserts it, because one over-long
+ * label fails its 500-row INSERT and rolls back the whole scoring date.
+ */
+export const SCORE_KEY_WIDTHS = {
+  region: 8,
+  useCase: 8,
+  lead: 8,
+  source: 32,
+  segment: 12,
+} as const;
+
+/**
  * Daily scores of the forward archive (PAR-831), one row per
  * (target date × region × use case × lead × source × segment).
  *
@@ -21,23 +34,27 @@ export class ForecastArchiveScore {
   targetDate: string;
 
   /** EU / NA / ASIA / OTHER / ALL. */
-  @PrimaryColumn({ type: "varchar", length: 8 })
+  @PrimaryColumn({ type: "varchar", length: SCORE_KEY_WIDTHS.region })
   region: string;
 
   /** UC1 / UC2 / UC3 / D6 / D9. */
-  @PrimaryColumn({ name: "use_case", type: "varchar", length: 8 })
+  @PrimaryColumn({
+    name: "use_case",
+    type: "varchar",
+    length: SCORE_KEY_WIDTHS.useCase,
+  })
   useCase: string;
 
   /** h0-1 … h24-48 for 15-min slot leads, d0 … d7 for day leads. */
-  @PrimaryColumn({ type: "varchar", length: 8 })
+  @PrimaryColumn({ type: "varchar", length: SCORE_KEY_WIDTHS.lead })
   lead: string;
 
   /** Slot source (pcn_blend, catboost, measured, composed, …), `mixed`, or `all`. */
-  @PrimaryColumn({ type: "varchar", length: 16 })
+  @PrimaryColumn({ type: "varchar", length: SCORE_KEY_WIDTHS.source })
   source: string;
 
   /** all / busy (ex-ante) / headliner. */
-  @PrimaryColumn({ type: "varchar", length: 12 })
+  @PrimaryColumn({ type: "varchar", length: SCORE_KEY_WIDTHS.segment })
   segment: string;
 
   @Column({ type: "jsonb" })

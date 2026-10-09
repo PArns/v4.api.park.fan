@@ -3,6 +3,9 @@ import {
   ScoreAccumulator,
   bestTimeOutcome,
   buildTruthSlots,
+  calendarDayValue,
+  dayLead,
+  nextRideLater,
   crowdOrdinal,
   percentileCont,
   regionOf,
@@ -11,6 +14,8 @@ import {
   slotLeadBucket,
   spearman,
 } from "./forecast-archive-scoring.util";
+import { SCORE_KEY_WIDTHS } from "../entities/forecast-archive-score.entity";
+import { ARCHIVE_SOURCE_CODES } from "../entities/forecast-archive-curve.entity";
 
 const T0 = Date.parse("2026-10-08T08:00:00Z");
 const MIN = 60_000;
@@ -200,12 +205,13 @@ describe("scoreParkDay", () => {
             tier: "measured",
             crowdLevel: "high",
             predictedCrowdLevel: "moderate",
+            typicalDayPeak: 50,
+            crowdLevelFallback: false,
           },
         ],
         truth,
         hadWindows: true,
-        headlinerIds: new Set([ride]),
-        typicalDayPeak: 50,
+        calendarDayValue: 54,
       },
       acc,
     );
@@ -256,10 +262,11 @@ describe("scoreParkDay", () => {
       parkDaysEmpty: 0,
     });
 
-    // D6: headliner P90 54 ÷ 50 = 108 % → moderate.
+    // D6: calendar day value 54 ÷ the origin's baseline 50 = 108 % → moderate.
     const d6 = sumsOf(acc, "EU|D6|d0|predicted|all");
     expect(d6).toMatchObject({ n: 1, exact: 1, within1: 1, busyTrue: 0 });
-    const d6plan = sumsOf(acc, "EU|D6|d0|plan_day|all");
+    // d0's planner crowdLevel is the live-overridden one: scored apart.
+    const d6plan = sumsOf(acc, "EU|D6|d0|plan_day_live|all");
     expect(d6plan).toMatchObject({ n: 1, exact: 0, within1: 1, busyPred: 1 });
     expect(obs).toHaveLength(2);
   });
@@ -281,8 +288,7 @@ describe("scoreParkDay", () => {
         ],
         truth,
         hadWindows: true,
-        headlinerIds: new Set(),
-        typicalDayPeak: 0,
+        calendarDayValue: null,
       },
       acc,
     );
@@ -306,8 +312,7 @@ describe("scoreParkDay", () => {
         parkDays: [],
         truth,
         hadWindows: true,
-        headlinerIds: new Set(),
-        typicalDayPeak: 0,
+        calendarDayValue: null,
       },
       acc,
     );
@@ -316,25 +321,57 @@ describe("scoreParkDay", () => {
   });
 });
 
+describe("nextRideLater (frontend next-best-ride rule)", () => {
+  const hours = [10, 11, 12, 13, 14, 15].map((hour) => ({
+    hour,
+    wait: hour * 2,
+  }));
+
+  it("takes the max over hour STARTS in [now, now + 120] before close", () => {
+    // 11:10 → hours starting 12:00 and 13:00 qualify; 11:00 has begun.
+    expect(nextRideLater(hours, 10, 18, 11 * 60 + 10)).toEqual({
+      hour: 13,
+      wait: 26,
+    });
+    // The close hour itself is not an open hour.
+    expect(nextRideLater(hours, 10, 13, 11 * 60 + 10)).toEqual({
+      hour: 12,
+      wait: 24,
+    });
+    expect(nextRideLater(hours, 10, 18, 16 * 60)).toBeNull();
+  });
+
+  it("unfolds a day that runs past midnight", () => {
+    const late = [22, 23, 24].map((hour) => ({ hour, wait: hour }));
+    // 22:30 at a 16 → 1 park: 23:00 and 00:00 (axis 24) qualify.
+    expect(nextRideLater(late, 16, 1, 22 * 60 + 30)).toEqual({
+      hour: 24,
+      wait: 24,
+    });
+  });
+});
+
 describe("D1 next-best-ride", () => {
   const origin = T0;
+  // An intraday plan row: hours 08:00 … 10:00, later = 40 at 09:00.
   const base: ArchivedCurve = {
     attractionId: "r",
-    surface: "park_hourly",
+    surface: "plan_day",
     originKind: "intraday",
     originAt: origin,
     leadDays: 0,
     slotStart: origin,
-    slotMinutes: 15,
-    // forecast climbs to 40 at +45 min
-    waits: [20, 25, 28, 40, 40, 40, 40, 40, 40],
-    sources: "cccpcpccc",
+    slotMinutes: 60,
+    waits: [20, 40, 30],
+    sources: "mkm",
     bands: null,
-    dayPeak: null,
+    dayPeak: 40,
     expectedError: null,
     rideQ90: null,
     isHeadliner: false,
     liveWait: 20,
+    laterWait: 40,
+    laterAt: origin + 60 * MIN,
   };
   const truthOf = (values: number[]) =>
     new Map<string, Map<number, number>>([
@@ -349,25 +386,25 @@ describe("D1 next-best-ride", () => {
         parkDays: [],
         truth: truthOf(values),
         hadWindows: true,
-        headlinerIds: new Set(),
-        typicalDayPeak: 0,
+        calendarDayValue: null,
       },
       acc,
     );
     return acc;
   };
 
-  it("counts a suggestion that held", () => {
+  it("counts a suggestion that held, under the later hour's lead and source", () => {
     const acc = run(base, [20, 25, 35, 40]);
     expect(sumsOf(acc, "EU|D1|h0-2|all|all")).toEqual({
       d1Sugg: 1,
       d1SuggOk: 1,
     });
-    // Triggered by the +45 min slot (40 ≥ 20 + 10), a PCN slot.
-    expect(sumsOf(acc, "EU|D1|h0-1|pcn_blend|all")).toEqual({
+    expect(sumsOf(acc, "EU|D1|h0-1|composed|all")).toEqual({
       d1Sugg: 1,
       d1SuggOk: 1,
     });
+    // An intraday plan row feeds D1 only.
+    expect(acc.entries().some((e) => e.useCase === "UC3")).toBe(false);
   });
 
   it("counts a suggestion that did not hold", () => {
@@ -378,11 +415,19 @@ describe("D1 next-best-ride", () => {
     });
   });
 
-  it("records the base rate when there is no suggestion", () => {
+  it("records the base rate when the gap is under 10 minutes", () => {
     const acc = run({ ...base, liveWait: 35 }, [35, 50]);
     expect(sumsOf(acc, "EU|D1|h0-2|all|all")).toEqual({
       d1None: 1,
       d1NoneWorse: 1,
+    });
+  });
+
+  it("no qualifying hour is a non-suggestion", () => {
+    const acc = run({ ...base, laterWait: null, laterAt: null }, [20, 20]);
+    expect(sumsOf(acc, "EU|D1|h0-2|all|all")).toEqual({
+      d1None: 1,
+      d1NoneWorse: 0,
     });
   });
 
@@ -432,8 +477,7 @@ describe("level-source split and long leads", () => {
           ["a1", new Map([0, 1, 2, 3].map((i) => [T0 + i * SLOT, 30 + i * 5]))],
         ]),
         hadWindows: true,
-        headlinerIds: new Set(),
-        typicalDayPeak: 0,
+        calendarDayValue: null,
       },
       acc,
     );
@@ -487,5 +531,209 @@ describe("scoreCrossParkCrowd (D6 pairs)", () => {
       crossPairs: 3,
       crossPairsOk: 2,
     });
+  });
+});
+
+describe("review fixes", () => {
+  const origin = T0 - 135 * MIN;
+  const planCurve = (over: Partial<ArchivedCurve>): ArchivedCurve => ({
+    attractionId: "a1",
+    surface: "plan_day",
+    originKind: "daily",
+    originAt: origin,
+    leadDays: 2,
+    slotStart: T0,
+    slotMinutes: 60,
+    waits: [30],
+    sources: "m",
+    bands: null,
+    dayPeak: 40,
+    expectedError: null,
+    rideQ90: null,
+    isHeadliner: false,
+    ...over,
+  });
+  const truth = new Map([
+    ["a1", new Map([0, 1, 2, 3].map((i) => [T0 + i * SLOT, 30 + i * 5]))],
+  ]);
+  const score = (curves: ArchivedCurve[]) => {
+    const acc = new ScoreAccumulator();
+    scoreParkDay(
+      {
+        region: "EU",
+        curves,
+        parkDays: [],
+        truth,
+        hadWindows: true,
+        calendarDayValue: null,
+      },
+      acc,
+    );
+    return acc;
+  };
+
+  it("scores the plan band around dayPeak per ride-day, never per hour", () => {
+    // truth P90 of 30,35,40,45 = 43.5; |40 − 43.5| = 3.5 ≤ 5 → covered.
+    const acc = score([planCurve({ peakBand: 5 })]);
+    const s = sumsOf(acc, "EU|UC3|d2|measured|all");
+    expect(s.nPeakBand).toBe(1);
+    expect(s.nPeakBandCov).toBe(1);
+    expect(s.nBand).toBeUndefined();
+    expect(
+      sumsOf(score([planCurve({ peakBand: 3 })]), "EU|UC3|d2|all|all")
+        .nPeakBandCov,
+    ).toBe(0);
+  });
+
+  it("files a measured hour's numbers under the level source only for dayPeak", () => {
+    const acc = score([planCurve({ levelSource: "tft" })]);
+    const lvl = sumsOf(acc, "EU|UC3|d2|level_tft|all");
+    expect(lvl.nPeak).toBe(1);
+    expect(lvl.n).toBeUndefined();
+    expect(lvl.rd).toBeUndefined();
+    const composed = sumsOf(
+      score([planCurve({ levelSource: "tft", sources: "k" })]),
+      "EU|UC3|d2|level_tft|all",
+    );
+    expect(composed.n).toBe(4);
+    expect(composed.rd).toBe(1);
+  });
+
+  it("a flat ride-day counts for regret, not for the hit rates", () => {
+    const c = (i: number, pred: number, truthValue: number) => ({
+      slot: T0 + i * SLOT,
+      pred,
+      truth: truthValue,
+      src: "catboost",
+      band: null,
+    });
+    // 5 min in three of four slots: any forecast would "hit".
+    expect(
+      bestTimeOutcome([c(0, 30, 5), c(1, 10, 5), c(2, 20, 5), c(3, 5, 20)]),
+    ).toEqual({ hitTop2: null, hit30: null, regret: 15 });
+  });
+
+  it("calendarDayValue mirrors the typical-day-peak statistic", () => {
+    const inDay = (t: number) => t >= T0 && t < T0 + 24 * 60 * MIN;
+    const readings = new Map([
+      [
+        "h1",
+        [
+          { timestamp: T0, status: "OPERATING", waitTime: 10 },
+          { timestamp: T0 + MIN, status: "OPERATING", waitTime: 20 },
+          { timestamp: T0 + 2 * MIN, status: "OPERATING", waitTime: 5 },
+          { timestamp: T0 + 3 * MIN, status: "DOWN", waitTime: 90 },
+          { timestamp: T0 - MIN, status: "OPERATING", waitTime: 99 },
+        ],
+      ],
+      ["h2", [{ timestamp: T0, status: "OPERATING", waitTime: 40 }]],
+      ["other", [{ timestamp: T0, status: "OPERATING", waitTime: 100 }]],
+    ]);
+    // h1: P90 of [10, 20] = 19; h2: 40 → mean 29.5. Below 10, DOWN, the
+    // previous day and non-headliners do not count.
+    expect(
+      calendarDayValue(readings, new Set(["h1", "h2"]), inDay),
+    ).toBeCloseTo(29.5);
+    expect(calendarDayValue(readings, new Set(["none"]), inDay)).toBeNull();
+  });
+
+  it("D6 scores the planner's fallback crowdLevel apart", () => {
+    const acc = new ScoreAccumulator();
+    scoreParkDay(
+      {
+        region: "EU",
+        curves: [],
+        parkDays: [
+          {
+            originAt: origin,
+            leadDays: 3,
+            tier: "composed",
+            crowdLevel: "moderate",
+            predictedCrowdLevel: null,
+            typicalDayPeak: 40,
+            crowdLevelFallback: true,
+          },
+        ],
+        truth,
+        hadWindows: true,
+        calendarDayValue: 40,
+      },
+      acc,
+    );
+    expect(sumsOf(acc, "EU|D6|d3|fallback|all").n).toBe(1);
+    expect(sumsOf(acc, "EU|D6|d3|predicted|all")).toEqual({ unknownPred: 1 });
+    expect(acc.entries().some((e) => e.source === "plan_day")).toBe(false);
+  });
+
+  it("every key the scorer can emit fits its column (B1)", () => {
+    const sources = [
+      ...Object.values(ARCHIVE_SOURCE_CODES),
+      "all",
+      "mixed",
+      "unknown",
+      ...["tft", "catboost", "climatology", "mixed", "none"].map(
+        (l) => `level_${l}`,
+      ),
+      "observed",
+      "measured",
+      "composed",
+      "climatology",
+      "long_range",
+      "none",
+      "predicted",
+      "plan_day",
+      "plan_day_live",
+      "fallback",
+    ];
+    const leads = [
+      "h0-1",
+      "h1-2",
+      "h0-2",
+      "h2-6",
+      "h6-12",
+      "h12-24",
+      "h24-48",
+      ...Array.from({ length: 366 }, (_, i) => dayLead(i)),
+    ];
+    const tooLong = (values: string[], width: number) =>
+      values.filter((v) => v.length > width);
+    expect(tooLong(sources, SCORE_KEY_WIDTHS.source)).toEqual([]);
+    expect(tooLong(leads, SCORE_KEY_WIDTHS.lead)).toEqual([]);
+    expect(
+      tooLong(["EU", "NA", "ASIA", "OTHER", "ALL"], SCORE_KEY_WIDTHS.region),
+    ).toEqual([]);
+    expect(
+      tooLong(
+        ["UC1", "UC2", "UC3", "D1", "D6", "D9"],
+        SCORE_KEY_WIDTHS.useCase,
+      ),
+    ).toEqual([]);
+    expect(
+      tooLong(["all", "busy", "headliner"], SCORE_KEY_WIDTHS.segment),
+    ).toEqual([]);
+
+    // And what a mixed scenario actually emits.
+    const acc = score([
+      planCurve({ levelSource: "climatology", sources: "l", leadDays: 90 }),
+      planCurve({
+        surface: "park_hourly",
+        slotMinutes: 15,
+        waits: [30, 35, 40, 45],
+        sources: "cpcp",
+        bands: [5, 5, 5, 5],
+        rideQ90: 60,
+        isHeadliner: true,
+      }),
+    ]);
+    for (const e of acc.entries()) {
+      expect(e.source.length).toBeLessThanOrEqual(SCORE_KEY_WIDTHS.source);
+      expect(e.lead.length).toBeLessThanOrEqual(SCORE_KEY_WIDTHS.lead);
+      expect(e.useCase.length).toBeLessThanOrEqual(SCORE_KEY_WIDTHS.useCase);
+      expect(e.segment.length).toBeLessThanOrEqual(SCORE_KEY_WIDTHS.segment);
+      expect(e.region.length).toBeLessThanOrEqual(SCORE_KEY_WIDTHS.region);
+    }
+    expect(acc.entries().some((e) => e.source === "level_climatology")).toBe(
+      true,
+    );
   });
 });

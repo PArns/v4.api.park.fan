@@ -103,6 +103,22 @@ export class ForecastArchiveParkDay {
    * `catboost`, `mixed` (both), `climatology` or `none`. Reconstructed the
    * way the planner picks them (see `ForecastArchiveCurve.levelSource`).
    */
+  /**
+   * The park's typical-day-peak baseline as it stood at the origin — D6's
+   * denominator, kept here so a later baseline rebuild cannot move it.
+   */
+  @Column({ name: "typical_day_peak", type: "real", nullable: true })
+  typicalDayPeak: number | null;
+
+  /**
+   * True when the calendar had no forecast for the day (`predictedCrowdLevel`
+   * absent), so `crowdLevel` came from its fallback chain — the per-ride ML
+   * crowd or the placeholder `moderate` (calendar.service.ts). Scored apart,
+   * as `fallback`, never as a forecast.
+   */
+  @Column({ name: "crowd_level_fallback", type: "boolean", default: false })
+  crowdLevelFallback: boolean;
+
   @Column({
     name: "level_source",
     type: "varchar",
