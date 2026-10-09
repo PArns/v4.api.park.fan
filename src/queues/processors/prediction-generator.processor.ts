@@ -9,7 +9,10 @@ import { ForecastAccuracyService } from "../../ml/services/forecast-accuracy.ser
 import { ParksService } from "../../parks/parks.service";
 import { CacheWarmupService } from "../services/cache-warmup.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
-import { PREDICTION_CHUNK_RETENTION_DAYS } from "../../database/hypertables";
+import {
+  PREDICTION_CHUNK_OVERDUE_DAYS,
+  PREDICTION_CHUNK_RETENTION_DAYS,
+} from "../../database/hypertables";
 
 /**
  * How long before its published opening a closed park starts getting hourly
@@ -503,11 +506,22 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
     try {
       const result = await this.mlService.dropExpiredPredictionChunks(
         PREDICTION_CHUNK_RETENTION_DAYS,
+        { overdueAfterDays: PREDICTION_CHUNK_OVERDUE_DAYS },
       );
-      if (result.lockTimedOut) {
+      if (result.lockTimedOut && result.overdue > 0) {
+        // One missed night is expected in a busy window; two weeks of them
+        // means something holds attractions every night at this hour.
+        this.logger.error(
+          `🚨 ${result.overdue} prediction chunk(s) are more than ` +
+            `${PREDICTION_CHUNK_RETENTION_DAYS + PREDICTION_CHUNK_OVERDUE_DAYS} days old and still ` +
+            `not dropped: the lock on attractions was busy in all ${result.attempts} attempts ` +
+            `again tonight. See db-health-runbook §0b for who holds it.`,
+        );
+      } else if (result.lockTimedOut) {
         this.logger.warn(
           `⏳ ${result.due} prediction chunk(s) past ${PREDICTION_CHUNK_RETENTION_DAYS} days ` +
-            `not dropped: the lock on attractions was busy. Retrying next run.`,
+            `not dropped: the lock on attractions was busy in all ${result.attempts} attempts. ` +
+            `Retrying next run.`,
         );
       } else if (result.dropped > 0) {
         this.logger.log(

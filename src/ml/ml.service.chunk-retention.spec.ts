@@ -28,20 +28,37 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 describe("MLService — prediction chunk retention", () => {
   let service: MLService;
   let outer: string[];
+  let outerParams: unknown[][];
   let inner: Array<{ sql: string; params: unknown[] }>;
   let dueChunks: Array<{ chunk: string }>;
-  let dropError: (Error & { code?: string }) | null;
+  /** show_chunks answer for the overdue probe (`older_than` 104 days). */
+  let overdueChunks: Array<{ chunk: string }>;
+  /** Consumed one per drop_chunks call; null = that attempt succeeds. */
+  let dropErrors: Array<(Error & { code?: string }) | null>;
+
+  const lockTimeout = () =>
+    Object.assign(new Error("canceling statement due to lock timeout"), {
+      code: "55P03",
+    });
+  const dropCalls = () => inner.filter((q) => q.sql.includes("drop_chunks"));
 
   beforeEach(async () => {
     outer = [];
+    outerParams = [];
     inner = [];
     dueChunks = [];
-    dropError = null;
+    overdueChunks = [];
+    dropErrors = [];
 
     const manager = {
-      query: jest.fn((sql: string) => {
+      query: jest.fn((sql: string, params: unknown[] = []) => {
         outer.push(sql);
-        if (sql.includes("show_chunks")) return Promise.resolve(dueChunks);
+        outerParams.push(params);
+        if (sql.includes("show_chunks")) {
+          return Promise.resolve(
+            params[0] === "90 days" ? dueChunks : overdueChunks,
+          );
+        }
         return Promise.resolve([]);
       }),
       transaction: jest.fn((cb: (em: unknown) => Promise<unknown>) =>
@@ -49,7 +66,8 @@ describe("MLService — prediction chunk retention", () => {
           query: jest.fn((sql: string, params: unknown[] = []) => {
             inner.push({ sql, params });
             if (sql.includes("drop_chunks")) {
-              if (dropError) return Promise.reject(dropError);
+              const error = dropErrors.shift();
+              if (error) return Promise.reject(error);
               return Promise.resolve(dueChunks);
             }
             return Promise.resolve([]);
@@ -86,21 +104,39 @@ describe("MLService — prediction chunk retention", () => {
     service = module.get<MLService>(MLService);
   });
 
+  const CHUNK = { chunk: "_timescaledb_internal._hyper_16_1229_chunk" };
+  // Retries without waiting; the spacing itself is a plain setTimeout.
+  const fast = { retryDelayMs: 0 };
+
   it("does not call drop_chunks when no chunk is due — that call alone locks attractions", async () => {
     const result = await service.dropExpiredPredictionChunks(90);
 
-    expect(result).toEqual({ due: 0, dropped: 0, lockTimedOut: false });
+    expect(result).toEqual({
+      due: 0,
+      dropped: 0,
+      lockTimedOut: false,
+      attempts: 0,
+      overdue: 0,
+    });
     expect(outer).toHaveLength(1);
     expect(outer[0]).toContain("show_chunks('wait_time_predictions'");
     expect(inner).toHaveLength(0);
   });
 
   it("sets a transaction-local lock_timeout before dropping", async () => {
-    dueChunks = [{ chunk: "_timescaledb_internal._hyper_16_1229_chunk" }];
+    dueChunks = [CHUNK];
 
-    const result = await service.dropExpiredPredictionChunks(90, 1500);
+    const result = await service.dropExpiredPredictionChunks(90, {
+      lockTimeoutMs: 1500,
+    });
 
-    expect(result).toEqual({ due: 1, dropped: 1, lockTimedOut: false });
+    expect(result).toEqual({
+      due: 1,
+      dropped: 1,
+      lockTimedOut: false,
+      attempts: 1,
+      overdue: 0,
+    });
     expect(inner).toHaveLength(2);
     // set_config(..., true) is SET LOCAL — it must not outlive the transaction
     // on a pooled connection.
@@ -110,26 +146,93 @@ describe("MLService — prediction chunk retention", () => {
     expect(inner[1].params).toEqual(["90 days"]);
   });
 
-  it("reports a lock timeout instead of throwing, so the next run retries", async () => {
-    dueChunks = [{ chunk: "_timescaledb_internal._hyper_16_1229_chunk" }];
-    dropError = Object.assign(
-      new Error("canceling statement due to lock timeout"),
-      { code: "55P03" },
-    );
+  it("retries after a lock timeout and succeeds once the lock is free", async () => {
+    dueChunks = [CHUNK];
+    dropErrors = [lockTimeout(), lockTimeout(), null];
 
-    const result = await service.dropExpiredPredictionChunks(90);
+    const result = await service.dropExpiredPredictionChunks(90, fast);
 
-    expect(result).toEqual({ due: 1, dropped: 0, lockTimedOut: true });
+    expect(result).toEqual({
+      due: 1,
+      dropped: 1,
+      lockTimedOut: false,
+      attempts: 3,
+      overdue: 0,
+    });
+    expect(dropCalls()).toHaveLength(3);
+    // Every attempt sets its own short lock_timeout — none of them waits long.
+    const timeouts = inner.filter((q) => q.sql.includes("set_config"));
+    expect(timeouts).toHaveLength(3);
+    expect(timeouts.every((q) => q.params[0] === "2000ms")).toBe(true);
   });
 
-  it("rethrows any other error", async () => {
-    dueChunks = [{ chunk: "_timescaledb_internal._hyper_16_1229_chunk" }];
-    dropError = Object.assign(new Error("permission denied"), {
-      code: "42501",
+  it("waits retryDelayMs between attempts", async () => {
+    jest.useFakeTimers();
+    try {
+      dueChunks = [CHUNK];
+      dropErrors = [lockTimeout(), null];
+
+      const pending = service.dropExpiredPredictionChunks(90, {
+        retryDelayMs: 30_000,
+      });
+      await jest.advanceTimersByTimeAsync(29_999);
+      expect(dropCalls()).toHaveLength(1);
+      await jest.advanceTimersByTimeAsync(1);
+      const result = await pending;
+
+      expect(dropCalls()).toHaveLength(2);
+      expect(result.attempts).toBe(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("gives up after the last attempt without throwing, and counts overdue chunks", async () => {
+    dueChunks = [CHUNK];
+    overdueChunks = [CHUNK];
+    dropErrors = [lockTimeout(), lockTimeout(), lockTimeout(), lockTimeout()];
+
+    const result = await service.dropExpiredPredictionChunks(90, {
+      ...fast,
+      attempts: 4,
+      overdueAfterDays: 14,
     });
 
-    await expect(service.dropExpiredPredictionChunks(90)).rejects.toThrow(
+    expect(result).toEqual({
+      due: 1,
+      dropped: 0,
+      lockTimedOut: true,
+      attempts: 4,
+      overdue: 1,
+    });
+    expect(dropCalls()).toHaveLength(4);
+    // The overdue probe looks 90 + 14 days back.
+    expect(outerParams[outerParams.length - 1]).toEqual(["104 days"]);
+  });
+
+  it("reports zero overdue while the misses are recent", async () => {
+    dueChunks = [CHUNK];
+    overdueChunks = [];
+    dropErrors = [lockTimeout(), lockTimeout()];
+
+    const result = await service.dropExpiredPredictionChunks(90, {
+      ...fast,
+      attempts: 2,
+    });
+
+    expect(result.lockTimedOut).toBe(true);
+    expect(result.overdue).toBe(0);
+  });
+
+  it("rethrows any other error without retrying", async () => {
+    dueChunks = [CHUNK];
+    dropErrors = [
+      Object.assign(new Error("permission denied"), { code: "42501" }),
+    ];
+
+    await expect(service.dropExpiredPredictionChunks(90, fast)).rejects.toThrow(
       "permission denied",
     );
+    expect(dropCalls()).toHaveLength(1);
   });
 });

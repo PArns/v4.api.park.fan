@@ -118,3 +118,10 @@ export const HYPERTABLES: ReadonlyArray<HypertableSpec> = [
  * See docs/troubleshooting/db-health-runbook.md §0b.
  */
 export const PREDICTION_CHUNK_RETENTION_DAYS = 90;
+
+/**
+ * Past `PREDICTION_CHUNK_RETENTION_DAYS` plus this many days, a chunk that the
+ * nightly job still could not drop is logged at error level: one missed night
+ * in the busy 03:30 window is expected, two weeks of misses are not.
+ */
+export const PREDICTION_CHUNK_OVERDUE_DAYS = 14;

@@ -134,18 +134,37 @@ not a statement that finished (nothing in the slow-query log or in
 `pg_stat_statements` ran that long), so it was either idle in a transaction or
 never completed. `log_lock_waits` was off, the container's log went with the
 container, and every client connects as `parkfan` with no `application_name`,
-so `pg_stat_activity` could not have named it either. The changes below close
-both blind spots for next time.
+so `pg_stat_activity` could not have named it either.
+
+**The fix does not depend on finding it.** The two job-side changes below close
+both outage paths whoever holds the lock and for however long: the chunk drop
+waits at most 2 s per attempt, and compression no longer waits in the lock queue
+at all. The connection-side changes do something narrower. `application_name`
+and `log_lock_waits` make the next holder nameable, and
+`idle_in_transaction_session_timeout` bounds a holder only while it is idle in a
+transaction. A statement that is still running is not bounded: no application
+pool sets `statement_timeout`, and `pg_stat_statements` has the park-open-window
+`WITH park_tz AS …` query at a mean of 167 s and a maximum of 685 s, and
+`INSERT INTO queue_data_aggregates` at up to 284 s.
 
 ### What changed
 
 | Change | Where | Why |
 |---|---|---|
-| The retention policy is removed at boot; the nightly `cleanup-old` job (03:30) drops chunks past 90 days itself | `TimescaleInitService.setupRetentionPolicies`, `MLService.dropExpiredPredictionChunks` | It calls `show_chunks` first, which locks nothing, so `attractions` is untouched on days nothing is due. When something is, `drop_chunks` runs under a transaction-local `lock_timeout` of 2 s; a timeout is logged and retried the next night |
+| The retention policy is removed at boot; the nightly `cleanup-old` job (03:30) drops chunks past 90 days itself | `TimescaleInitService.setupRetentionPolicies`, `MLService.dropExpiredPredictionChunks` | It calls `show_chunks` first, which locks nothing, so `attractions` is untouched on days nothing is due. When something is, `drop_chunks` runs under a transaction-local `lock_timeout` of 2 s, up to 4 attempts 30 s apart. If all four time out it warns and the next night tries again; once a chunk is more than 90 + 14 days old and still there, it logs at **error** level, because by then the misses are a pattern |
 | `timescaledb.compress_truncate_behaviour = truncate_or_delete` on the database | `TimescaleInitService.setupCompressTruncateBehaviour` | Compression tries the truncate lock without queueing for 5 s, then deletes the rows instead. Readers never wait. The cost is dead tuples for autovacuum |
 | `application_name` per service (`parkfan-api`, `parkfan-ml-service`, `parkfan-pcn-service`, `parkfan-nf-service`, `parkfan-shape-service`) | `typeorm.config.ts`, each service's `db.py` | So `pg_stat_activity` and lock-wait log lines say whose session it is |
-| `idle_in_transaction_session_timeout` = 10 min on application connections | same | A session parked in a transaction can no longer hold its locks for hours. Per connection, so `scripts/prod-psql.sh` and the TimescaleDB workers keep their own settings |
+| `idle_in_transaction_session_timeout` = 10 min on application connections | same | A session left **idle** in a transaction is ended after 10 minutes. A running statement is not affected (see the follow-up below). Per connection, so `scripts/prod-psql.sh` and the TimescaleDB workers keep their own settings |
 | `log_lock_waits=on` | `docker-compose.production.yml` | Any lock wait over `deadlock_timeout` (1 s) is logged with the holding and waiting pids |
+
+### Follow-up, not done here
+
+A `statement_timeout` for the application pools. It is the only thing that
+would bound a long-running statement as a lock holder, but it would also cut off
+the legitimate long ones above (685 s, 284 s), so the value has to come from
+measuring those first. Until then a running statement can still hold a lock for
+as long as it runs. Since the jobs no longer queue, that delays the drop or the
+compression and no longer stalls the readers.
 
 ### When a stall looks like this again
 

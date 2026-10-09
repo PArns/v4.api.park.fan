@@ -1855,56 +1855,110 @@ export class MLService {
    * row on 2026-10-07/08, and each time ~30–70 API queries finished in the same
    * second the attempt gave up (docs/troubleshooting/db-health-runbook.md §0b).
    *
-   * Two things make this version safe:
+   * Three things make this version safe:
    *
    * 1. `show_chunks` first. It reads the catalog and locks nothing, so on the
    *    six days a week when no chunk has aged out, `attractions` is not touched.
    * 2. `lock_timeout` on the drop itself, local to its transaction. If the lock
    *    is not free within `lockTimeoutMs`, Postgres gives up the request instead
-   *    of holding the queue; readers wait that long at most, and the chunks are
-   *    dropped by a later run. A chunk left one more day costs nothing.
+   *    of holding the queue, so readers wait that long at most — whoever holds
+   *    the lock and however long they hold it.
+   * 3. A few short retries, `retryDelayMs` apart. The job runs at 03:30 UTC,
+   *    the busiest batch window, where one 2 s attempt is easily unlucky; a
+   *    later attempt usually finds a gap. Each attempt still queues readers
+   *    for at most `lockTimeoutMs`.
    *
    * Never throws for a lock timeout — that is the designed outcome when the
-   * table is busy, not a failure.
+   * table is busy, not a failure. When every attempt timed out, `overdue`
+   * counts the chunks that have been due for more than `overdueAfterDays`
+   * already: the caller's signal that the misses are no longer one-offs.
    */
   async dropExpiredPredictionChunks(
     retainDays: number,
-    lockTimeoutMs = 2000,
-  ): Promise<{ due: number; dropped: number; lockTimedOut: boolean }> {
+    options: {
+      lockTimeoutMs?: number;
+      attempts?: number;
+      retryDelayMs?: number;
+      overdueAfterDays?: number;
+    } = {},
+  ): Promise<{
+    due: number;
+    dropped: number;
+    lockTimedOut: boolean;
+    attempts: number;
+    overdue: number;
+  }> {
+    const lockTimeoutMs = options.lockTimeoutMs ?? 2000;
+    const maxAttempts = Math.max(1, options.attempts ?? 4);
+    const retryDelayMs = options.retryDelayMs ?? 30_000;
+    const overdueAfterDays = options.overdueAfterDays ?? 14;
     const olderThan = `${retainDays} days`;
 
-    const due: Array<{ chunk: string }> =
+    const due = await this.countPredictionChunksOlderThan(olderThan);
+    if (due === 0) {
+      return {
+        due: 0,
+        dropped: 0,
+        lockTimedOut: false,
+        attempts: 0,
+        overdue: 0,
+      };
+    }
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1 && retryDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+      try {
+        const dropped: Array<{ chunk: string }> =
+          await this.predictionRepository.manager.transaction(async (em) => {
+            // set_config(..., true) is SET LOCAL: it ends with this transaction
+            // and never leaks onto the pooled connection.
+            await em.query(`SELECT set_config('lock_timeout', $1, true)`, [
+              `${Math.max(1, Math.round(lockTimeoutMs))}ms`,
+            ]);
+            return em.query(
+              `SELECT c::text AS chunk
+                 FROM drop_chunks('wait_time_predictions', older_than => $1::interval) AS c`,
+              [olderThan],
+            );
+          });
+        return {
+          due,
+          dropped: dropped.length,
+          lockTimedOut: false,
+          attempts: attempt,
+          overdue: 0,
+        };
+      } catch (error) {
+        // 55P03 lock_not_available: the lock_timeout above fired — retry.
+        if ((error as { code?: string })?.code !== "55P03") throw error;
+      }
+    }
+
+    const overdue = await this.countPredictionChunksOlderThan(
+      `${retainDays + overdueAfterDays} days`,
+    );
+    return {
+      due,
+      dropped: 0,
+      lockTimedOut: true,
+      attempts: maxAttempts,
+      overdue,
+    };
+  }
+
+  /** `wait_time_predictions` chunks lying entirely before now - `olderThan`. */
+  private async countPredictionChunksOlderThan(
+    olderThan: string,
+  ): Promise<number> {
+    const rows: Array<{ chunk: string }> =
       await this.predictionRepository.manager.query(
         `SELECT c::text AS chunk
            FROM show_chunks('wait_time_predictions', older_than => $1::interval) AS c`,
         [olderThan],
       );
-    if (due.length === 0) {
-      return { due: 0, dropped: 0, lockTimedOut: false };
-    }
-
-    try {
-      const dropped: Array<{ chunk: string }> =
-        await this.predictionRepository.manager.transaction(async (em) => {
-          // set_config(..., true) is SET LOCAL: it ends with this transaction
-          // and never leaks onto the pooled connection.
-          await em.query(`SELECT set_config('lock_timeout', $1, true)`, [
-            `${Math.max(1, Math.round(lockTimeoutMs))}ms`,
-          ]);
-          return em.query(
-            `SELECT c::text AS chunk
-               FROM drop_chunks('wait_time_predictions', older_than => $1::interval) AS c`,
-            [olderThan],
-          );
-        });
-      return { due: due.length, dropped: dropped.length, lockTimedOut: false };
-    } catch (error) {
-      // 55P03 lock_not_available: the lock_timeout above fired.
-      if ((error as { code?: string })?.code === "55P03") {
-        return { due: due.length, dropped: 0, lockTimedOut: true };
-      }
-      throw error;
-    }
+    return rows.length;
   }
 
   /**
