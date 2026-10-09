@@ -59,9 +59,12 @@ export class MLTrainingProcessor {
       this.logger.log("Training started:", response.data);
 
       // Poll for training completion
-      // Configurable timeout via ML_TRAINING_TIMEOUT_MINUTES (default: 45 minutes)
+      // Configurable timeout via ML_TRAINING_TIMEOUT_MINUTES. Default 90: a
+      // run took 2520 s on 2026-10-07 against the old 45-minute (2700 s) limit;
+      // TRAIN_MAX_ROWS in the ml-service bounds the fit, 90 leaves headroom for
+      // the fetch and feature engineering that still grow until the lookback cap.
       const timeoutMinutes = parseInt(
-        process.env.ML_TRAINING_TIMEOUT_MINUTES || "45",
+        process.env.ML_TRAINING_TIMEOUT_MINUTES || "90",
         10,
       );
       const pollIntervalSeconds = 30; // Check every 30 seconds
@@ -131,29 +134,21 @@ export class MLTrainingProcessor {
         (Date.now() - startTime) / 1000,
       );
 
-      // Wait for the new model to be loaded by all workers before reading metrics.
-      // The "completed" status is set before the sentinel file is written; workers
-      // reload lazily on the next request, so /model/info can still return the old
-      // version for a few seconds after training finishes.
-      let modelInfo: Record<string, unknown> = {};
-      for (let i = 0; i < 12; i++) {
-        const res = await axios.get(`${mlServiceUrl}/model/info`);
-        if (res.data?.version === version) {
-          modelInfo = res.data;
-          break;
-        }
-        this.logger.log(
-          `Waiting for workers to load ${version} (current: ${res.data?.version}), retry ${i + 1}/12...`,
+      // Metrics come from THIS version's own saved metadata, never from
+      // /model/info: that describes whatever model the answering worker has
+      // loaded, and a worker only reloads on its next /predict. When workers had
+      // not switched within the old 60 s wait, the previous model's metrics were
+      // registered under the new version and the gate compared the champion with
+      // itself (v20261006 stored v20261003's MAE 5.06; its own pkl said 4.43).
+      const modelInfo = await this.fetchTrainedModelInfo(mlServiceUrl, version);
+      if (!modelInfo) {
+        // Nothing trustworthy to register. The training subprocess has already
+        // pointed the workers at this version via its sentinel, so put them back
+        // on the DB-active champion before failing the job.
+        await this.revertToDbChampion(mlServiceUrl);
+        throw new Error(
+          `No saved metrics for ${version} — not registering it as a model`,
         );
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-      }
-
-      if (!modelInfo.version) {
-        this.logger.warn(
-          `Workers did not load ${version} within 60s — using last available metrics`,
-        );
-        const fallback = await axios.get(`${mlServiceUrl}/model/info`);
-        modelInfo = fallback.data;
       }
 
       const metricsData = (modelInfo.metrics ?? {}) as Record<string, number>;
@@ -283,16 +278,7 @@ export class MLTrainingProcessor {
       // If rejected, the ml-service already activated the challenger via its own
       // sentinel during training — revert it to the still-active DB champion.
       if (rejectChallenger) {
-        try {
-          await axios.post(`${mlServiceUrl}/model/reload`);
-          this.logger.warn(
-            `   Reverted ml-service to champion ${champion!.version}`,
-          );
-        } catch (e) {
-          this.logger.error(
-            `   Failed to revert ml-service to champion: ${e instanceof Error ? e.message : String(e)}`,
-          );
-        }
+        await this.revertToDbChampion(mlServiceUrl);
       }
 
       const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
@@ -331,6 +317,58 @@ export class MLTrainingProcessor {
       });
 
       throw error;
+    }
+  }
+
+  /**
+   * The saved metadata of exactly `version` (`GET /model/info/:version`), or
+   * null when the ml-service has no model file and metadata for it or reports
+   * no MAE. Retries briefly, because the request can land on a worker while the
+   * shared volume is busy; a 404 is final.
+   */
+  private async fetchTrainedModelInfo(
+    mlServiceUrl: string,
+    version: string,
+  ): Promise<Record<string, unknown> | null> {
+    const attempts = 3;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const res = await axios.get(
+          `${mlServiceUrl}/model/info/${encodeURIComponent(version)}`,
+        );
+        const info = res.data as Record<string, unknown> | undefined;
+        const mae = (info?.metrics as Record<string, unknown> | undefined)?.mae;
+        if (info?.version !== version || typeof mae !== "number" || mae <= 0) {
+          this.logger.error(
+            `ml-service returned no usable metrics for ${version} (version ${String(info?.version)}, MAE ${String(mae)})`,
+          );
+          return null;
+        }
+        return info;
+      } catch (e) {
+        const status = (e as { response?: { status?: number } })?.response
+          ?.status;
+        this.logger.warn(
+          `Reading saved metadata for ${version} failed (attempt ${i}/${attempts}): ${e instanceof Error ? e.message : String(e)}`,
+        );
+        if (status === 404 || i === attempts) return null;
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+    }
+    return null;
+  }
+
+  /** Point every ml-service worker back at the DB-active model. Best-effort. */
+  private async revertToDbChampion(mlServiceUrl: string): Promise<void> {
+    try {
+      const res = await axios.post(`${mlServiceUrl}/model/reload`);
+      this.logger.warn(
+        `   Reverted ml-service to the DB-active model ${String(res.data?.version)}`,
+      );
+    } catch (e) {
+      this.logger.error(
+        `   Failed to revert ml-service to the DB-active model: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }
 

@@ -65,9 +65,24 @@ def main() -> int:
     })
 
     try:
+        from model import load_saved_metadata
         from train import train_model
         logger.info(f"Starting training for version {version}")
-        train_model(version=version)
+        metrics = train_model(version=version)
+
+        # train_model returns None when it stops early (no data, empty training
+        # set) without saving anything. Reporting "completed" and writing the
+        # sentinel then announced a version that does not exist: every worker
+        # retried loading it on every request, and the next restart served 503.
+        if metrics is None:
+            raise RuntimeError(
+                "train_model stopped early without saving a model "
+                "(no training data or an empty training set — see log above)"
+            )
+        if load_saved_metadata(version) is None:
+            raise RuntimeError(
+                f"train_model returned, but no model file and metadata exist for {version}"
+            )
 
         _write_json(status_file, {
             "is_training": False,

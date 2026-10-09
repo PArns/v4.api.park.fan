@@ -3,6 +3,7 @@ CatBoost model wrapper
 """
 
 import os
+import re
 from typing import Optional, Dict, Any, List
 import joblib
 from catboost import CatBoostRegressor, Pool
@@ -13,6 +14,31 @@ from config import get_settings
 from features import get_feature_columns, get_categorical_features
 
 settings = get_settings()
+
+# A model version names two files under MODEL_DIR, so it must never carry a path.
+_SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def load_saved_metadata(version: str) -> Optional[Dict[str, Any]]:
+    """Metadata of one saved version, read from its own files — or None.
+
+    Returns None unless both `catboost_<version>.cbm` and `metadata_<version>.pkl`
+    exist. Deliberately does NOT go through the in-memory model: a worker keeps
+    serving the previous version until its next /predict notices the sentinel, so
+    the loaded model's metadata says nothing about the version just trained.
+    Registering that model's metrics under the new version is how the champion/
+    challenger gate ended up comparing a champion with itself (PAR-815).
+    """
+    if not version or ".." in version or not _SAFE_VERSION.match(version):
+        return None
+    model_path = os.path.join(settings.MODEL_DIR, f"catboost_{version}.cbm")
+    metadata_path = os.path.join(settings.MODEL_DIR, f"metadata_{version}.pkl")
+    if not (os.path.isfile(model_path) and os.path.isfile(metadata_path)):
+        return None
+    metadata = joblib.load(metadata_path)
+    if not isinstance(metadata, dict):
+        return None
+    return metadata
 
 
 class WaitTimeModel:

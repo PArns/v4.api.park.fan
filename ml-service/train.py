@@ -4,6 +4,7 @@ Model training script
 
 import argparse
 from datetime import timedelta
+from typing import Optional
 import pandas as pd
 import psutil
 import os
@@ -283,12 +284,60 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
     return df
 
 
-def train_model(version: str = None) -> None:
+def cap_training_rows(
+    df: pd.DataFrame, max_rows: int, full_resolution_days: int, seed: int
+) -> pd.DataFrame:
+    """Bound the training pool at `max_rows` without dropping any season.
+
+    The newest `full_resolution_days` (by `timestamp`) are kept whole; the older
+    rows are thinned by a uniform random sample so that the total fits the budget.
+    A uniform sample keeps every month's share of the older rows, which a rolling
+    window would not. If the recent block alone exceeds the budget, the whole pool
+    is sampled uniformly instead, so older months still stay represented.
+
+    Thinning happens AFTER feature engineering on purpose: the lag and rolling
+    features are computed from each ride's full series, so a row keeps the same
+    feature values it would have had without the cap.
+    """
+    if max_rows <= 0 or len(df) <= max_rows:
+        return df
+
+    recent_cutoff = df["timestamp"].max() - pd.Timedelta(days=full_resolution_days)
+    recent_mask = (df["timestamp"] >= recent_cutoff).to_numpy()
+    n_recent = int(recent_mask.sum())
+    budget_old = max_rows - n_recent
+
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    keep = recent_mask.copy()
+    if budget_old > 0:
+        old_positions = np.flatnonzero(~recent_mask)
+        keep[rng.choice(old_positions, size=budget_old, replace=False)] = True
+    else:
+        keep[:] = False
+        keep[rng.choice(len(df), size=max_rows, replace=False)] = True
+
+    logger.info(
+        f"   Row cap: {len(df):,} rows > TRAIN_MAX_ROWS {max_rows:,} — kept the last "
+        f"{full_resolution_days} days whole ({n_recent:,} rows), thinned older rows "
+        f"to {max(budget_old, 0):,}"
+        + ("" if budget_old > 0 else " (recent block alone over budget: sampled all rows)")
+    )
+    return df[keep].reset_index(drop=True)
+
+
+def train_model(version: str = None) -> Optional[dict]:
     """
     Train a new model
 
     Args:
         version: Model version string (e.g., 'v1.0.0'). If None, uses config.MODEL_VERSION
+
+    Returns:
+        The validation metrics once the model is saved, or None when training
+        stopped early (no data, empty training set) and nothing was saved. Callers
+        must treat None as a failure — `train_standalone.py` does.
     """
     if version is None:
         version = settings.MODEL_VERSION
@@ -407,6 +456,13 @@ def train_model(version: str = None) -> None:
         f"   Chronological hold-out: {len(df_holdout):,} rows (last 30 days, >{holdout_cutoff.strftime('%Y-%m-%d')})"
     )
     logger.info(f"   Training pool (excl. hold-out): {len(df):,} rows")
+    df = cap_training_rows(
+        df,
+        settings.TRAIN_MAX_ROWS,
+        settings.TRAIN_FULL_RESOLUTION_DAYS,
+        settings.CATBOOST_RANDOM_SEED,
+    )
+    gc.collect()
     logger.info("")
 
     # 4.5 Training Dropout — simulate the inference scenario for future predictions.
@@ -705,6 +761,7 @@ def train_model(version: str = None) -> None:
     logger.info("=" * 60)
     logger.info(f"✅ Model {version} ready for deployment!")
     logger.info("=" * 60)
+    return metrics
 
 
 if __name__ == "__main__":

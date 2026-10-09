@@ -2,6 +2,8 @@
 Prediction logic for hourly and daily forecasts
 """
 
+import threading
+
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
@@ -197,6 +199,11 @@ def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
 _recent_wait_times_cache = {}
 _recent_rolling_stats_cache = {}
 _recent_wait_times_cache_ttl = 900  # 15 minutes
+# Serializes eviction and insertion on the two caches above. Each gunicorn worker
+# is its own PROCESS with its own copy of these dicts, so workers never race each
+# other here; the race is between the THREADS of one worker, because the sync
+# `def predict` handlers run in FastAPI's threadpool. Lookups stay lock-free.
+_recent_cache_lock = threading.Lock()
 
 # How far back the hour-by-hour lookups reach. Every lookup in
 # create_prediction_features is keyed on a local date at most 30 days before
@@ -221,17 +228,21 @@ _SERVING_QUEUE_FILTER = """
 
 
 def _evict_expired_entries(cache: dict, now_ts: float, ttl: float) -> None:
-    """Drop cache buckets older than `ttl`, tolerating concurrent removal.
+    """Drop cache buckets older than `ttl`, tolerating concurrent mutation.
 
-    Gunicorn serves /predict from several workers over this one module-level
-    dict, so a key collected as expired can already be gone by the time we act
-    on it. `del` raised KeyError for the worker that lost that race, and the
-    exception escaped `fetch_recent_wait_times` to kill the entire prediction
-    request — the API logged it as "Failed to get predictions from ML service".
-    `pop(..., None)` makes losing the race a no-op, which is the correct
-    outcome: the entry we wanted gone is gone.
+    The cache is a module-level dict shared by the threadpool threads of one
+    worker process (sync `def predict` handlers). Two races follow from that:
+
+    - Iterating `cache.items()` while another thread inserts a bucket raised
+      "dictionary changed size during iteration" and failed the whole request
+      with an HTTP 500 (PAR-815). The iteration now runs over a snapshot taken
+      in one C-level call, and `_cached_read` holds `_recent_cache_lock` around
+      eviction and insertion.
+    - A key collected as expired can already be gone by the time we act on it;
+      `del` raised KeyError for the thread that lost that race (2026-08-31).
+      `pop(..., None)` makes losing it a no-op — the entry we wanted gone is gone.
     """
-    for key in [k for k, (_, ts) in cache.items() if now_ts - ts >= ttl]:
+    for key in [k for k, (_, ts) in list(cache.items()) if now_ts - ts >= ttl]:
         cache.pop(key, None)
 
 
@@ -254,8 +265,10 @@ def _cached_read(cache: dict, cache_key: str, read) -> pd.DataFrame:
         return hit[0].copy()
     df = read()
     now_ts = time.time()
-    _evict_expired_entries(cache, now_ts, _recent_wait_times_cache_ttl)
-    cache[cache_key] = (df.copy(), now_ts)
+    entry = (df.copy(), now_ts)
+    with _recent_cache_lock:
+        _evict_expired_entries(cache, now_ts, _recent_wait_times_cache_ttl)
+        cache[cache_key] = entry
     return df
 
 

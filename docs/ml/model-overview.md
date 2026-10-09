@@ -48,6 +48,23 @@ The ML Service is a standalone Python application responsible for predicting wai
 3. **Validation**: 
    - **Randomized Weekly Block Split**: To ensure robust validation during seasonal transitions (e.g., winter to spring), data is grouped into weekly blocks. 20% of these weeks are randomly selected for validation, while the rest are used for training. This ensures that both sets contain representative data from all operational phases.
    - **Metrics**: RMSE/MAE metrics are logged and stored in the database.
+     The training processor reads them from `GET /model/info/:version`, which
+     serves that version's own `metadata_<version>.pkl` — never from
+     `/model/info`, which describes whatever model the answering worker still
+     has loaded. A version without a saved model file and metadata is not
+     registered, and `train_standalone.py` writes the sentinel only once both
+     exist (PAR-815).
+4. **Training-time budget** (PAR-815): the window runs from the first row
+   (2025-12-24) to now, capped at `TRAIN_LOOKBACK_YEARS` (2), so it grows daily
+   (1682 s on 2026-09-04, 2520 s on 2026-10-07). `TRAIN_MAX_ROWS` (default
+   4.5M, 0 = off) bounds the training pool after the 30-day hold-out: the last
+   `TRAIN_FULL_RESOLUTION_DAYS` (90) stay whole and older rows are thinned by a
+   seeded uniform sample, so every month keeps its share — a rolling window would
+   drop the oldest season while no ride has a full year yet. The thinning runs
+   after feature engineering, so feature values are unchanged; fetch and feature
+   engineering still grow until the lookback cap, which is why the processor's
+   `ML_TRAINING_TIMEOUT_MINUTES` default is 90. Peak memory only falls
+   (`CATBOOST_USED_RAM_LIMIT` and the container limit are untouched).
 
 
 ## Usage

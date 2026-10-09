@@ -112,6 +112,18 @@ class Settings(BaseSettings):
 
     # Training Configuration
     TRAIN_LOOKBACK_YEARS: int = 2
+    # Row budget for the training pool (train + validation, after the 30-day
+    # chronological hold-out is split off). History starts 2025-12-24 and the
+    # window only closes at TRAIN_LOOKBACK_YEARS, so until then every day adds
+    # ~25k rows and ~13-25 s of training: 2.49M rows / 1682 s on 2026-09-04,
+    # 3.29M / 2520 s on 2026-10-07 (PAR-815). Above the budget, the most recent
+    # TRAIN_FULL_RESOLUTION_DAYS stay complete and OLDER rows are thinned by a
+    # uniform random sample — every month keeps its share of rows, so no season
+    # drops out (a rolling window would drop the oldest months, and no ride has a
+    # full year of history yet). The pool was ~3.9M rows on 2026-10-08, so 4.5M
+    # first bites in early November 2026. 0 disables the cap.
+    TRAIN_MAX_ROWS: int = 4_500_000
+    TRAIN_FULL_RESOLUTION_DAYS: int = 90
     TRAIN_TEST_SPLIT: float = 0.85
     VALIDATION_DAYS: int = (
         30  # Used for large datasets (>60 days); smaller datasets use adaptive % split

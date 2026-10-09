@@ -12,7 +12,7 @@ import subprocess
 import sys
 import threading
 
-from model import WaitTimeModel
+from model import WaitTimeModel, load_saved_metadata
 from predict import predict_wait_times, predict_for_park
 from schedule_filter import filter_predictions_by_schedule
 from config import get_settings
@@ -304,6 +304,35 @@ async def get_model_info():
         file_size_mb=file_size_mb,
         hyperparameters=model.metadata.get("hyperparameters"),
         featureStats=model.metadata.get("feature_stats"),
+    )
+
+
+@app.get("/model/info/{version}", response_model=ModelInfoResponse)
+def get_saved_model_info(version: str):
+    """Information about one saved version, read from that version's own files.
+
+    `/model/info` describes whatever model THIS worker has loaded, which after a
+    training run is still the previous version until the worker's next /predict
+    reloads it. The training processor registers a new version from this endpoint
+    instead, so it can never record the previous model's metrics under the new
+    version's name. 404 when the version has no model file or no metadata.
+    """
+    metadata = load_saved_metadata(version)
+    if metadata is None:
+        raise HTTPException(
+            status_code=404, detail=f"No saved model and metadata for {version}"
+        )
+    model_path = os.path.join(settings.MODEL_DIR, f"catboost_{version}.cbm")
+    return ModelInfoResponse(
+        version=version,
+        trainedAt=metadata.get("trained_at"),
+        metrics=metadata.get("metrics"),
+        features=metadata.get("features_used"),
+        train_samples=metadata.get("train_samples"),
+        val_samples=metadata.get("val_samples"),
+        file_size_mb=round(os.path.getsize(model_path) / (1024 * 1024), 2),
+        hyperparameters=metadata.get("hyperparameters"),
+        featureStats=metadata.get("feature_stats"),
     )
 
 

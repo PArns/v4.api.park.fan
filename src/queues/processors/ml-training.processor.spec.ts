@@ -6,8 +6,15 @@ import { MLTrainingProcessor } from "./ml-training.processor";
 import { MLModel } from "../../ml/entities/ml-model.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { MLFeatureDriftService } from "../../ml/services/ml-feature-drift.service";
+import axios from "axios";
 
 jest.mock("fs/promises");
+jest.mock("axios");
+jest.mock("../../common/utils/file-logger.util", () => ({
+  logJobFailure: jest.fn(),
+}));
+
+const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 /**
  * Coverage for the daily 6 AM ML training cron. We don't try to test
@@ -27,9 +34,26 @@ describe("MLTrainingProcessor", () => {
   const mlModelRepo = {
     find: jest.fn(),
     remove: jest.fn().mockResolvedValue(undefined),
+    findOne: jest.fn(),
+    update: jest.fn().mockResolvedValue(undefined),
+    create: jest.fn((m: Record<string, unknown>) => m),
+    save: jest.fn().mockResolvedValue(undefined),
   };
-  const queueDataRepo = {};
-  const featureDriftService = {};
+  const queueDataRepo = {
+    createQueryBuilder: jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({
+        minTime: "2025-12-24T00:00:00Z",
+        maxTime: "2026-10-07T00:00:00Z",
+      }),
+    })),
+  };
+  const featureDriftService = {
+    storeFeatureStats: jest.fn().mockResolvedValue(undefined),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -208,6 +232,143 @@ describe("MLTrainingProcessor", () => {
       await expect(
         processor.handleCleanupModels({} as Job),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  /**
+   * PAR-815: the processor used to read the new model's metrics from
+   * `/model/info`, which answers with whatever model the worker has loaded.
+   * Workers only reload on their next /predict, so after a 60 s wait it took the
+   * PREVIOUS model's metrics and registered them under the new version — the
+   * champion/challenger gate then compared the champion with itself.
+   */
+  describe("handleTrainModels — registering a trained version", () => {
+    const ML = "http://ml-service:8000";
+    let setTimeoutSpy: jest.SpyInstance;
+
+    const savedInfo = (version: string, mae: number) => ({
+      version,
+      trainedAt: "2026-10-06T06:40:00Z",
+      metrics: { mae, rmse: 9.1, mape: 30, r2: 0.8 },
+      features: ["hour", "attractionId"],
+      train_samples: 3108818,
+      val_samples: 665830,
+      hyperparameters: {},
+      featureStats: [],
+    });
+
+    /** Routes GETs: status is "completed"; the loaded model is the OLD one. */
+    const routeGets = (byVersion: () => Promise<unknown>) => {
+      mockedAxios.get.mockImplementation((url: string) => {
+        if (url === `${ML}/train/status`) {
+          return Promise.resolve({
+            data: { status: "completed", current_version: "x" },
+          });
+        }
+        if (url === `${ML}/model/info`) {
+          // A worker still serving the previous champion.
+          return Promise.resolve({ data: savedInfo("v20261003_0600", 5.06) });
+        }
+        if (url.startsWith(`${ML}/model/info/`)) return byVersion();
+        return Promise.reject(new Error(`unexpected GET ${url}`));
+      });
+    };
+
+    beforeEach(() => {
+      delete process.env.ML_SERVICE_URL;
+      jest.useFakeTimers({ now: new Date("2026-10-06T06:00:00Z") });
+      // Skip the 30 s poll waits and retry backoffs.
+      setTimeoutSpy = jest.spyOn(global, "setTimeout").mockImplementation(((
+        fn: () => void,
+      ) => {
+        fn();
+        return 0 as unknown as NodeJS.Timeout;
+      }) as unknown as typeof setTimeout);
+      mockedAxios.post.mockResolvedValue({
+        data: { version: "v20261003_0600" },
+      });
+      mlModelRepo.findOne.mockResolvedValue({
+        version: "v20261003_0600",
+        mae: 5.06,
+        isActive: true,
+      });
+      mlModelRepo.find.mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+      setTimeoutSpy.mockRestore();
+      jest.useRealTimers();
+    });
+
+    it("registers the metrics saved for THIS version, not the loaded model's", async () => {
+      routeGets(() =>
+        Promise.resolve({ data: savedInfo("v20261006_0600", 4.433) }),
+      );
+
+      await processor.handleTrainModels({} as Job);
+
+      expect(mockedAxios.get).toHaveBeenCalledWith(
+        `${ML}/model/info/v20261006_0600`,
+      );
+      expect(mockedAxios.get).not.toHaveBeenCalledWith(`${ML}/model/info`);
+      expect(mlModelRepo.save).toHaveBeenCalledTimes(1);
+      const saved = mlModelRepo.save.mock.calls[0][0];
+      expect(saved.version).toBe("v20261006_0600");
+      expect(saved.mae).toBe(4.433);
+      expect(saved.isActive).toBe(true);
+    });
+
+    it("does not register a version whose saved metadata is missing, and reverts serving", async () => {
+      routeGets(() =>
+        Promise.reject(
+          Object.assign(new Error("Not Found"), { response: { status: 404 } }),
+        ),
+      );
+
+      await expect(processor.handleTrainModels({} as Job)).rejects.toThrow(
+        /No saved metrics for v20261006_0600/,
+      );
+
+      expect(mlModelRepo.save).not.toHaveBeenCalled();
+      expect(mlModelRepo.update).not.toHaveBeenCalled();
+      expect(mockedAxios.post).toHaveBeenCalledWith(`${ML}/model/reload`);
+      // 404 is final — no retries against a version that does not exist.
+      expect(
+        mockedAxios.get.mock.calls.filter(([u]) =>
+          String(u).startsWith(`${ML}/model/info/`),
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("refuses metrics that belong to another version or carry no MAE", async () => {
+      routeGets(() =>
+        Promise.resolve({ data: { ...savedInfo("v20261006_0600", 0) } }),
+      );
+
+      await expect(processor.handleTrainModels({} as Job)).rejects.toThrow(
+        /No saved metrics/,
+      );
+      expect(mlModelRepo.save).not.toHaveBeenCalled();
+    });
+
+    it("gates the challenger on its own MAE", async () => {
+      // Champion 4.0 × 1.25 = 5.0 < 5.5 → rejected, registered inactive.
+      mlModelRepo.findOne.mockResolvedValue({
+        version: "v20261003_0600",
+        mae: 4.0,
+        isActive: true,
+      });
+      routeGets(() =>
+        Promise.resolve({ data: savedInfo("v20261006_0600", 5.5) }),
+      );
+
+      await processor.handleTrainModels({} as Job);
+
+      const saved = mlModelRepo.save.mock.calls[0][0];
+      expect(saved.mae).toBe(5.5);
+      expect(saved.isActive).toBe(false);
+      expect(mlModelRepo.update).not.toHaveBeenCalled();
+      expect(mockedAxios.post).toHaveBeenCalledWith(`${ML}/model/reload`);
     });
   });
 });
