@@ -50,11 +50,20 @@ The application relies heavily on background processing for data consistency and
   the spec fails for a registered queue that is in neither. A new queue is
   monitored by registering it.
 - **Window:** a failure is reported until the job has had its next scheduled run.
-  The window is read from the queue's repeat ZSET (`failureWindowStarts`): at
-  least 26 h (the sweep's own cadence), and for a slower cron back to its previous
-  fire minus 2 h — so a weekly or monthly job's failure stays visible until it
-  runs again, and a failure that was fixed stops being reported instead of
-  sitting in the last 500 forever.
+  The nightly sweep starts from its own previous run (stored in Redis under
+  `data-quality:failing-jobs:last-sweep`; 26 h when that key is missing, and
+  always 26 h for the admin page), so a daily failure is reported on one night.
+  For a slower cron the window reaches back to its previous fire minus 2 h, read
+  from the queue's repeat ZSET (`failureWindowStarts`, parsed from the right) —
+  so a weekly or monthly job's failure stays visible until it runs again, and a
+  fixed failure stops being reported instead of sitting in the last 500 forever.
+- **A later success clears it:** a job name is dropped when the queue's
+  `completed` set holds a run of that name that finished after its newest
+  failure (a manual rerun clears a weekly failure the same night). Two limits:
+  the completed set keeps only 100 runs, so on a busy queue an older success
+  may be gone and the failure is still reported; and the match is by job name,
+  so an intermittent failure of a five-minute job that has since succeeded
+  again is not reported.
 - **Blind spot:** a job added with `removeOnFail: true` leaves no failed entry,
   so this sweep cannot see it (today: the term audit and this sweep itself in
   `queue-scheduler.service.ts`, the ride-stats and curated-data processors, the

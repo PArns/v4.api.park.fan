@@ -2,6 +2,7 @@ import {
   DataQualityMonitorService,
   MONITORED_QUEUES,
   REISSUE_CANDIDATE_METERS,
+  FAILING_JOB_LAST_SWEEP_KEY,
   UNMONITORED_QUEUES,
   failureWindowStarts,
 } from "./data-quality-monitor.service";
@@ -354,13 +355,31 @@ describe("DataQualityMonitorService", () => {
      */
     const clientWith = ({
       failed = {},
+      completed = {},
       repeat = {},
       hash = {},
+      lastSweep = null,
     }: {
       failed?: Record<string, Array<[string, number]>>;
+      /** Same shape as `failed`: [id, finishedAt] pairs of the completed ZSET. */
+      completed?: Record<string, Array<[string, number]>>;
       repeat?: Record<string, string[]>;
       hash?: Record<string, Array<string | null>>;
+      lastSweep?: string | null;
     }) => ({
+      get: jest.fn().mockResolvedValue(lastSweep),
+      set: jest.fn().mockResolvedValue("OK"),
+      zrangebyscore: jest
+        .fn()
+        .mockImplementation((key: string, min: string) => {
+          const [, queue] = key.split(":");
+          const floor = Number(min.replace("(", ""));
+          return Promise.resolve(
+            (completed[queue] ?? [])
+              .filter(([, at]) => at > floor)
+              .flatMap(([id, at]) => [id, String(at)]),
+          );
+        }),
       zrange: jest.fn().mockImplementation((key: string) => {
         const [, queue, kind] = key.split(":");
         if (kind === "failed") {
@@ -504,6 +523,106 @@ describe("DataQualityMonitorService", () => {
       );
       expect(later).toEqual([]);
     });
+
+    it("clears a failure once a later run of the same job succeeded", async () => {
+      // A manual rerun of the weekly heights sync on Tuesday: the Monday
+      // failure must not stay red until next Monday.
+      const mondayRun = Date.UTC(2026, 9, 5, 3, 5);
+      const rerun = Date.UTC(2026, 9, 6, 10, 0);
+      const client = clientWith({
+        failed: { "six-flags-heights": [["9", mondayRun]] },
+        completed: { "six-flags-heights": [["12", rerun]] },
+        repeat: {
+          "six-flags-heights": [
+            "sync-heights:six-flags-heights-cron::UTC:0 3 * * 1",
+          ],
+        },
+        hash: {
+          "parkfan:six-flags-heights:9": [
+            "sync-heights",
+            "Six Flags 503",
+            String(mondayRun),
+          ],
+          "parkfan:six-flags-heights:12": ["sync-heights"],
+        },
+      });
+
+      expect(await build(jest.fn(), client).findFailingJobs(100, NOW)).toEqual(
+        [],
+      );
+    });
+
+    it("keeps a failure when only an earlier run or another job succeeded", async () => {
+      const failedAt = NOW - 3 * HOUR;
+      const client = clientWith({
+        failed: { downtime: [["2", failedAt]] },
+        completed: {
+          downtime: [
+            ["1", failedAt - HOUR], // the same job, but before the failure
+            ["3", NOW - HOUR], // after it, but a different job
+          ],
+        },
+        hash: {
+          "parkfan:downtime:2": ["compute-downtime", "boom", String(failedAt)],
+          "parkfan:downtime:1": ["compute-downtime"],
+          "parkfan:downtime:3": ["fill-downtime"],
+        },
+      });
+
+      const failing = await build(jest.fn(), client).findFailingJobs(100, NOW);
+      expect(failing.map((f) => f.jobName)).toEqual(["compute-downtime"]);
+    });
+
+    describe("findFailingJobsSinceLastSweep", () => {
+      // A daily job failing at 06:00 sat inside two consecutive 26 h windows
+      // (06:45 and 06:45 the next day). Anchored on the previous sweep, it is
+      // reported once.
+      const failedAt = NOW - 24 * HOUR - 45 * 60 * 1000; // yesterday 06:00
+      const fixture = (lastSweep: string | null) =>
+        clientWith({
+          failed: { downtime: [["2", failedAt]] },
+          hash: {
+            "parkfan:downtime:2": [
+              "compute-downtime",
+              "boom",
+              String(failedAt),
+            ],
+          },
+          lastSweep,
+        });
+
+      it("does not report again what the previous sweep already saw", async () => {
+        const client = fixture(String(NOW - 24 * HOUR));
+        expect(
+          await build(jest.fn(), client).findFailingJobsSinceLastSweep(NOW),
+        ).toEqual([]);
+        expect(client.set).toHaveBeenCalledWith(
+          FAILING_JOB_LAST_SWEEP_KEY,
+          String(NOW),
+          "EX",
+          expect.any(Number),
+        );
+      });
+
+      it("falls back to 26 h when no previous sweep is on record", async () => {
+        const client = fixture(null);
+        const failing = await build(
+          jest.fn(),
+          client,
+        ).findFailingJobsSinceLastSweep(NOW);
+        expect(failing).toHaveLength(1);
+      });
+
+      it("ignores a garbage or future anchor", async () => {
+        for (const raw of ["nope", String(NOW + HOUR)]) {
+          const failing = await build(
+            jest.fn(),
+            fixture(raw),
+          ).findFailingJobsSinceLastSweep(NOW);
+          expect(failing).toHaveLength(1);
+        }
+      });
+    });
   });
 
   describe("monitored queues", () => {
@@ -558,6 +677,17 @@ describe("DataQualityMonitorService", () => {
         NOW,
       );
       expect(starts.get("fetch-wait-times")).toBe(NOW - 26 * HOUR);
+    });
+
+    it("parses from the right, so a colon in the job name survives", () => {
+      const starts = failureWindowStarts(
+        ["ns:sync-heights:heights-cron::UTC:0 3 * * 1"],
+        NOW,
+      );
+      // Previous Monday 03:00 UTC is 2026-10-05.
+      expect(starts.get("ns:sync-heights")).toBe(
+        Date.UTC(2026, 9, 5, 3) - 2 * HOUR,
+      );
     });
 
     it("handles an `every` interval and skips what it cannot parse", () => {
