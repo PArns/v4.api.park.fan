@@ -18,7 +18,11 @@ from db import (
     fetch_attraction_ids_for_park,
 )
 from config import get_settings
-from holiday_utils import normalize_region_code
+from holiday_features import (
+    assign_holiday_features,
+    holiday_fetch_window,
+    parse_influencing_regions,
+)
 
 settings = get_settings()
 
@@ -1165,279 +1169,29 @@ def create_prediction_features(
     # Restore original order
     df = df.loc[original_index]
 
-    # Holiday features
-    df_start = df["timestamp"].min()
-    df_end = df["timestamp"].max()
-
+    # Holiday features — the same function training calls
+    # (holiday_features.assign_holiday_features), so the two paths cannot drift.
+    # Until PAR-816 this block was its own re-implementation: last-write-wins
+    # on duplicate holiday rows, only 'public' counted as a holiday (training:
+    # public/bank/bridge), no national fallback for the neighbour slots, and no
+    # Easter Sunday fallback.
     all_countries = set()
     for _, park in parks_metadata.iterrows():
         all_countries.add(park["country"])
+        for region in parse_influencing_regions(park.get("influencingRegions")):
+            if isinstance(region, dict) and region.get("countryCode"):
+                all_countries.add(region["countryCode"])
 
-        # Legacy fallback
+    # Fetch by the park-LOCAL date range (see holiday_fetch_window: the old
+    # UTC-timestamp window dropped today's holidays from every hourly forecast).
+    holidays_start, holidays_end = holiday_fetch_window(df["local_timestamp"])
+    holidays_df = fetch_holidays(list(all_countries), holidays_start, holidays_end)
 
-        # New JSON support
-        raw_influences = park.get("influencingRegions")
-        import json
-
-        if isinstance(raw_influences, str):
-            try:
-                regions = json.loads(raw_influences)
-                if regions:
-                    all_countries.update(
-                        [r["countryCode"] for r in regions if r.get("countryCode")]
-                    )
-            except Exception:
-                pass
-        elif isinstance(raw_influences, list):
-            all_countries.update(
-                [r["countryCode"] for r in raw_influences if r.get("countryCode")]
-            )
-
-    holidays_df = fetch_holidays(list(all_countries), df_start, df_end)
-
-    if not holidays_df.empty:
-        holidays_df["date"] = pd.to_datetime(holidays_df["date"])
-
-        # Create lookup with type: {(country, region, date): type} AND {(country, date): type}
-        holiday_lookup = {}
-        for _, row in holidays_df.iterrows():
-            # Key 1: With specific region (if available) -> (country, region, date)
-            if row.get("region"):
-                key_regional = (row["country"], row["region"], row["date"].date())
-                holiday_lookup[key_regional] = row["holiday_type"]
-            else:
-                # Key 2: National holiday (no region) -> (country, None, date)??
-                # Actually, my new loop checks (country, region, date) then (country, date).
-                # So we should populate (country, date) for national holidays.
-                key_national = (row["country"], row["date"].date())
-                holiday_lookup[key_national] = row["holiday_type"]
-    else:
-        holiday_lookup = {}
-
-    # OPTIMIZATION: Vectorized holiday lookups (replaces slow loop)
-    # Pre-process parks metadata to create lookup structures
-    park_country_map = parks_metadata.set_index("park_id")[
-        ["country", "region_code"]
-    ].to_dict("index")
-
-    # Parse influencing regions once per park (not per row!)
-    park_influences_map = {}
-    for _, park_row in parks_metadata.iterrows():
-        park_id = park_row["park_id"]
-        raw_influences = park_row.get("influencingRegions")
-
-        influencing_regions = []
-        if isinstance(raw_influences, list):
-            influencing_regions = raw_influences
-        elif isinstance(raw_influences, str):
-            import json
-
-            try:
-                influencing_regions = json.loads(raw_influences)
-            except Exception:
-                influencing_regions = []
-
-        park_influences_map[park_id] = influencing_regions  # ALL (was [:3], dropped NL/BE etc.)
-
-    # Add local date column for holiday matching
     df["local_date"] = df["local_timestamp"].dt.date
-
-    # Convert holidays_df to easier lookup format
-    if not holidays_df.empty:
-        # Create separate DataFrames for regional and national holidays
-        holidays_df["date_only"] = pd.to_datetime(holidays_df["date"]).dt.date
-
-        # Regional holidays (with region) — normalize region codes to match training
-        holidays_regional = holidays_df[holidays_df["region"].notna()].copy()
-        holidays_regional["region_normalized"] = holidays_regional["region"].apply(
-            normalize_region_code
-        )
-        holidays_regional["lookup_key"] = (
-            holidays_regional["country"]
-            + "|"
-            + holidays_regional["region_normalized"].fillna("")
-            + "|"
-            + holidays_regional["date_only"].astype(str)
-        )
-
-        # National holidays (no region)
-        holidays_national = holidays_df[holidays_df["region"].isna()].copy()
-        holidays_national["lookup_key"] = (
-            holidays_national["country"]
-            + "||"
-            + holidays_national["date_only"].astype(str)
-        )
-
-        # Combine for fast lookup
-        holiday_type_lookup = {}
-        for _, row in holidays_regional.iterrows():
-            holiday_type_lookup[row["lookup_key"]] = row["holiday_type"]
-        for _, row in holidays_national.iterrows():
-            holiday_type_lookup[row["lookup_key"]] = row["holiday_type"]
-
-        # Country-wide "any region" sets for null-region influencing entries (e.g. BE, whose
-        # school breaks are regional not nationwide). Mirrors features.py.
-        country_any_school = set()
-        country_any_public = set()
-        for _, row in holidays_df.iterrows():
-            if row["holiday_type"] == "school":
-                country_any_school.add((row["country"], row["date_only"]))
-            elif row["holiday_type"] in ("public", "bank", "bridge"):
-                country_any_public.add((row["country"], row["date_only"]))
-
-    # Initialize holiday columns (vectorized)
-    df["is_holiday_primary"] = 0
-    df["is_school_holiday_primary"] = 0
-    df["is_holiday_neighbor_1"] = 0
-    df["is_holiday_neighbor_2"] = 0
-    df["is_holiday_neighbor_3"] = 0
-    df["holiday_count_total"] = 0
-    df["school_holiday_count_total"] = 0
-    df["neighbor_school_holiday_count"] = 0
-    df["is_school_holiday_any"] = 0
-
-    if not holidays_df.empty:
-        # FULLY VECTORIZED: Build lookup keys without loops
-        # Map park metadata to DataFrame columns
-        df["park_country"] = df["parkId"].map(
-            lambda pid: park_country_map.get(pid, {}).get("country", "")
-        )
-        # Normalize region codes (e.g. "DE-NW" -> "NW") to match training feature logic
-        df["park_region"] = df["parkId"].map(
-            lambda pid: (
-                normalize_region_code(
-                    park_country_map.get(pid, {}).get("region_code", "") or None
-                )
-                or ""
-            )
-        )
-        df["date_str"] = df["local_date"].astype(str)
-
-        # Primary key: country|region|date or country||date (if no region).
-        # Pure string concatenation — done with vector ops instead of a
-        # row-wise apply.
-        df["primary_key"] = np.where(
-            df["park_region"].astype(bool),
-            df["park_country"] + "|" + df["park_region"] + "|" + df["date_str"],
-            df["park_country"] + "||" + df["date_str"],
-        )
-
-        # Neighbor keys: Extract from park_influences_map (region codes normalized)
-        def get_neighbor_key(park_id, date_str, index):
-            influences = park_influences_map.get(park_id, [])
-            if index < len(influences):
-                inf = influences[index]
-                country = inf.get("countryCode", "")
-                region = normalize_region_code(inf.get("regionCode", "") or None) or ""
-                if region:
-                    return f"{country}|{region}|{date_str}"
-                else:
-                    return f"{country}||{date_str}"
-            return ""
-
-        # All neighbor columns depend only on (parkId, local_date), so they are
-        # built once per unique pair and mapped back — a daily forecast frame is
-        # (attractions × dates) rows but only (dates) distinct pairs per park.
-        # Mirrors the same per-pair evaluation in features.py so the training
-        # and inference feature paths stay byte-identical.
-        _pair_keys = list(zip(df["parkId"], df["date_str"]))
-        _unique_pairs = list(dict.fromkeys(_pair_keys))
-
-        for _slot in range(3):
-            _slot_lookup = {
-                pair: get_neighbor_key(pair[0], pair[1], _slot)
-                for pair in _unique_pairs
-            }
-            df[f"neighbor_{_slot + 1}_key"] = [
-                _slot_lookup[pair] for pair in _pair_keys
-            ]
-
-        # Map to holiday types
-        df["primary_type"] = df["primary_key"].map(holiday_type_lookup)
-        df["neighbor_1_type"] = df["neighbor_1_key"].map(holiday_type_lookup)
-        df["neighbor_2_type"] = df["neighbor_2_key"].map(holiday_type_lookup)
-        df["neighbor_3_type"] = df["neighbor_3_key"].map(holiday_type_lookup)
-
-        # Fallback: If regional lookup failed, try national
-        mask_no_primary = df["primary_type"].isna()
-        if mask_no_primary.any():
-            # Extract country from primary_key and try national lookup
-            df.loc[mask_no_primary, "primary_fallback_key"] = df.loc[
-                mask_no_primary, "primary_key"
-            ].str.replace(r"\|.*?\|", "||", regex=True)
-            df.loc[mask_no_primary, "primary_type"] = df.loc[
-                mask_no_primary, "primary_fallback_key"
-            ].map(holiday_type_lookup)
-
-        # Convert to binary flags (vectorized)
-        df["is_holiday_primary"] = (df["primary_type"] == "public").astype(int)
-        df["is_school_holiday_primary"] = (df["primary_type"] == "school").astype(int)
-        df["is_holiday_neighbor_1"] = (df["neighbor_1_type"] == "public").astype(int)
-        df["is_holiday_neighbor_2"] = (df["neighbor_2_type"] == "public").astype(int)
-        df["is_holiday_neighbor_3"] = (df["neighbor_3_type"] == "public").astype(int)
-
-        # Full aggregate over ALL influencing regions (fixes the 3-slot cap; null-region entry
-        # → country-wide 'any region' check). Mirrors features.py check_neighbor_holidays.
-        def _neighbor_counts(park_id, date_str, local_date):
-            school = 0
-            public = 0
-            seen = set()
-            for inf in park_influences_map.get(park_id, []):
-                if not isinstance(inf, dict):
-                    continue
-                country = inf.get("countryCode", "")
-                region = normalize_region_code(inf.get("regionCode", "") or None) or ""
-                key = (country, region)
-                if key in seen:
-                    continue
-                seen.add(key)
-                if region:
-                    t = holiday_type_lookup.get(
-                        f"{country}|{region}|{date_str}"
-                    ) or holiday_type_lookup.get(f"{country}||{date_str}")
-                    school += int(t == "school")
-                    public += int(t in ("public", "bank", "bridge"))
-                else:
-                    school += int((country, local_date) in country_any_school)
-                    public += int((country, local_date) in country_any_public)
-            return school, public
-
-        # Same per-pair evaluation as the neighbor keys above: `local_date` is
-        # what `date_str` was built from, so (parkId, date_str) is the full key.
-        _date_by_str = dict(zip(df["date_str"], df["local_date"]))
-        _counts_lookup = {
-            pair: _neighbor_counts(pair[0], pair[1], _date_by_str[pair[1]])
-            for pair in _unique_pairs
-        }
-        _counts = [_counts_lookup[pair] for pair in _pair_keys]
-        df["neighbor_school_holiday_count"] = [c[0] for c in _counts]
-        _neighbor_public = pd.Series([c[1] for c in _counts], index=df.index)
-
-        # Totals — full influencing-region aggregate (not just the 3 legacy slots).
-        df["holiday_count_total"] = df["is_holiday_primary"] + _neighbor_public
-        df["school_holiday_count_total"] = (
-            df["is_school_holiday_primary"] + df["neighbor_school_holiday_count"]
-        )
-        df["is_school_holiday_any"] = (df["school_holiday_count_total"] > 0).astype(int)
-
-        # Cleanup temporary columns
-        df = df.drop(
-            columns=[
-                "local_date",
-                "primary_key",
-                "neighbor_1_key",
-                "neighbor_2_key",
-                "neighbor_3_key",
-                "primary_type",
-                "neighbor_1_type",
-                "neighbor_2_type",
-                "neighbor_3_type",
-            ],
-            errors="ignore",
-        )
-    else:
-        # No holidays data - keep defaults (all zeros)
-        df = df.drop(columns=["local_date"], errors="ignore")
+    df = assign_holiday_features(
+        df, parks_metadata, holidays_df, park_col="parkId", date_col="local_date"
+    )
+    df = df.drop(columns=["local_date"], errors="ignore")
 
     # Park schedule features (check if park is open at predicted time)
     schedule_query = text(
