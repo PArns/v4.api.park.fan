@@ -74,6 +74,13 @@ WX_COVS = ["temp_max", "precip_sum"]
 EMPTY = pd.DataFrame(columns=["attraction_id", "slot_start_utc", "q50", "q80", "q95"])
 
 _BACKENDS: dict[str, object] = {}
+#: VRAM cap (MODEL-AGENT-RULES: <= 10 GB on the shared 16 GB RTX 5080)
+VRAM_FRACTION = float(os.environ.get("MLBENCH_FM_VRAM_FRACTION", "0.6"))
+
+
+def _cap_vram(torch) -> None:
+    if torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(VRAM_FRACTION)
 
 
 # --------------------------------------------------------------------------- backends
@@ -86,7 +93,7 @@ class _Backend:
     peak_vram_gb = 0.0
 
     def forecast(self, tasks: list[tuple[np.ndarray, np.ndarray | None, np.ndarray | None]],
-                 cov_names: list[str]) -> list[np.ndarray]:
+                 cov_names: list[str], pipe=None) -> list[np.ndarray]:
         raise NotImplementedError
 
 
@@ -95,7 +102,10 @@ class StubBackend(_Backend):
 
     name = "stub"
 
-    def forecast(self, tasks, cov_names):
+    def finetune(self, tasks, cov_names, **kw):
+        return None
+
+    def forecast(self, tasks, cov_names, pipe=None):
         out = []
         for y, _pc, fc in tasks:
             H = fc.shape[1] if fc is not None else 1
@@ -114,13 +124,32 @@ class ChronosBackend(_Backend):
         from chronos import BaseChronosPipeline
 
         self.torch = torch
+        _cap_vram(torch)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.pipe = BaseChronosPipeline.from_pretrained(model_id, device_map=self.device,
                                                         torch_dtype=torch.float32)
         self.batch_size = batch_size
         self.context_length = self.pipe.model_context_length
 
-    def forecast(self, tasks, cov_names):
+    def finetune(self, tasks, cov_names, prediction_length: int, steps: int, context_length: int,
+                 learning_rate: float, batch_size: int):
+        """A fine-tuned COPY of the pipeline (full fine-tune, chronos-forecasting's own
+        trainer) on the context windows of ``tasks`` — truth before the origin only."""
+        inputs = []
+        for y, pc, _fc in tasks:
+            d = {"target": y.astype(np.float32)}
+            if pc is not None and len(cov_names):
+                d["past_covariates"] = {n: pc[i].astype(np.float32) for i, n in enumerate(cov_names)}
+                d["future_covariates"] = {n: None for n in cov_names}
+            inputs.append(d)
+        return self.pipe.fit(inputs, prediction_length=prediction_length, finetune_mode="full",
+                             context_length=context_length, learning_rate=learning_rate,
+                             num_steps=steps, batch_size=batch_size,
+                             output_dir="/tmp/chronos2-ft", remove_printer_callback=True,
+                             report_to="none", save_strategy="no", logging_steps=50)
+
+    def forecast(self, tasks, cov_names, pipe=None):
+        pipe = pipe or self.pipe
         out = []
         for y, pc, fc in tasks:
             H = fc.shape[1]
@@ -130,7 +159,7 @@ class ChronosBackend(_Backend):
                 inp["past_covariates"] = {n: pc[i, -T:].astype(np.float32) for i, n in enumerate(cov_names)}
                 inp["future_covariates"] = {n: fc[i].astype(np.float32) for i, n in enumerate(cov_names)}
             with self.torch.inference_mode():
-                q, _ = self.pipe.predict_quantiles([inp], prediction_length=H,
+                q, _ = pipe.predict_quantiles([inp], prediction_length=H,
                                                    quantile_levels=list(QUANTILES),
                                                    batch_size=self.batch_size)
             out.append(q[0].float().cpu().numpy())  # (n, H, 3)
@@ -142,12 +171,14 @@ class ChronosBackend(_Backend):
 class TimesFMBackend(_Backend):
     name = "timesfm3"
 
-    def __init__(self, model_id: str = "google/timesfm-3.0-pytorch", batch_size: int = 64,
-                 context_length: int = 8192):
+    def __init__(self, model_id: str = "google/timesfm-3.0-pytorch",
+                 batch_size: int = int(os.environ.get("MLBENCH_TFM_BATCH", "8")),
+                 context_length: int = int(os.environ.get("MLBENCH_TFM_CONTEXT", "4096"))):
         import torch
         from timesfm3.torch import TimesFM3Forecaster
 
         self.torch = torch
+        _cap_vram(torch)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.fm = TimesFM3Forecaster.from_pretrained(model_id, device=self.device,
                                                      per_core_batch_size=batch_size)
@@ -155,7 +186,7 @@ class TimesFMBackend(_Backend):
         self.qi = [qs.index(0.5), qs.index(0.8), None]          # no q95 in the head
         self.context_length = context_length
 
-    def forecast(self, tasks, cov_names):
+    def forecast(self, tasks, cov_names, pipe=None):
         ctx, pf, owner = [], [], []
         Hmax = max(fc.shape[1] for _y, _p, fc in tasks)
         for ti, (y, pc, fc) in enumerate(tasks):
@@ -298,7 +329,32 @@ class FoundationModel(Model):
         self.stats[f"{k}_seconds"] += sec
         eng = _BACKENDS.get(os.environ.get("MLBENCH_FM_BACKEND", self.backend))
         print(f"[fm] {self.scored_name()} {origin.date} {origin.kind}@{origin.hour_local} {what} "
-              f"{sec:.1f}s rows={rows} vram_peak={getattr(eng, 'peak_vram_gb', 0):.2f}GB", flush=True)
+              f"{sec:.1f}s (model {getattr(self, '_t_engine', 0):.1f}s) rows={rows} vram_peak={getattr(eng, 'peak_vram_gb', 0):.2f}GB", flush=True)
+
+    #: fine-tuning (Chronos-2 only): None = zero-shot
+    finetune_every_days: ClassVar[int | None] = None
+    finetune_steps: ClassVar[int] = int(os.environ.get("MLBENCH_FT_STEPS", "400"))
+    finetune_context: ClassVar[int] = 2048
+    finetune_horizon: ClassVar[int] = 384      # ~8 operating days of 15-min slots
+    finetune_lr: ClassVar[float] = float(os.environ.get("MLBENCH_FT_LR", "1e-5"))
+
+    def _maybe_finetune(self, origin: Origin, tasks, names):
+        """Fine-tune on the series the model is about to forecast from (truth before
+        this origin only), at the first daily origin and every ``finetune_every_days``;
+        intraday origins reuse the last fine-tuned weights."""
+        if self.finetune_every_days is None:
+            return None
+        last = getattr(self, "_ft_date", None)
+        due = last is None or (origin.date - last).days >= self.finetune_every_days
+        if origin.kind == "daily" and due:
+            t0 = time.monotonic()
+            self._ft_pipe = self._engine().finetune(
+                tasks, names, prediction_length=self.finetune_horizon, steps=self.finetune_steps,
+                context_length=self.finetune_context, learning_rate=self.finetune_lr, batch_size=64)
+            self._ft_date = origin.date
+            print(f"[fm] {self.scored_name()} fine-tuned at {origin.date} in {time.monotonic() - t0:.0f}s",
+                  flush=True)
+        return getattr(self, "_ft_pipe", None)
 
     def _history(self, origin: Origin, days: int) -> pd.DataFrame:
         """Truth before the origin. The days before the origin date are cached per date
@@ -388,7 +444,9 @@ class FoundationModel(Model):
             meta.append((rides, fseq["slot_utc"].to_numpy()))
         if not tasks:
             return EMPTY
-        preds = self._engine().forecast(tasks, names)
+        te = time.monotonic()
+        preds = self._engine().forecast(tasks, names, pipe=self._maybe_finetune(origin, tasks, names))
+        self._t_engine = time.monotonic() - te
         frames = []
         for (rides, fslots), q in zip(meta, preds):
             n, H = len(rides), len(fslots)
@@ -480,7 +538,9 @@ class FoundationModel(Model):
             meta.append(rides)
         if not tasks:
             return None
+        te = time.monotonic()
         preds = self._engine().forecast(tasks, names)
+        self._t_engine = time.monotonic() - te
         frames = []
         for rides, q in zip(meta, preds):
             frames.append(pd.DataFrame({
@@ -538,4 +598,12 @@ class TimesFM3Owx(TimesFM3):
     daily = False
 
 
-VARIANTS = [Chronos2, Chronos2Owx, Chronos2Grid, Chronos2NoCov, TimesFM3, TimesFM3Owx]
+class Chronos2FT(Chronos2):
+    """Chronos-2 fully fine-tuned (time-boxed: 400 steps, lr 1e-5, context 2048) on the
+    benchmark's own history before each origin, refreshed every 28 days."""
+    name = "chronos2_ft"
+    finetune_every_days = 28
+    daily = False
+
+
+VARIANTS = [Chronos2, Chronos2Owx, Chronos2Grid, Chronos2NoCov, TimesFM3, TimesFM3Owx, Chronos2FT]
