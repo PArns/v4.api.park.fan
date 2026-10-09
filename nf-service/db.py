@@ -137,8 +137,17 @@ def fetch_weather(park_ids: list[str]) -> pd.DataFrame:
     return df.drop_duplicates(["park_id", "ds"])
 
 
+# Non-ISO codes geocoding returns -> ISO 3166-2 suffix. Mirrors REGION_ALIASES in
+# src/common/utils/region.util.ts and ml-service/holiday_utils.py.
+_REGION_ALIASES = {"NRW": "NW", "NDS": "NI", "England": "ENG", "Scotland": "SCT", "Wales": "WLS"}
+
+
 def _norm_region(r):
-    return (r or "").split("-")[-1] or None
+    """'DE-NW' / 'NW' / 'NRW' -> 'NW'; None/'' -> None."""
+    if not r or not isinstance(r, str):
+        return None
+    short = r.split("-")[-1]
+    return _REGION_ALIASES.get(short, short) or None
 
 
 def add_calendar_covariates(
@@ -216,7 +225,13 @@ def add_calendar_covariates(
                     influencing = json.loads(influencing)
                 except Exception:
                     influencing = []
-            neigh = {(d.get("countryCode"), d.get("regionCode")) for d in influencing}
+            # Normalise like the holiday side (h["cr"] holds 'NW', influencingRegions
+            # holds 'DE-NW'): compared raw, no regional neighbour ever matched (PAR-816).
+            neigh = {
+                (d.get("countryCode"), _norm_region(d.get("regionCode")))
+                for d in influencing
+                if isinstance(d, dict)
+            }
             countries_wide = {c for (c, r) in neigh if r is None}
             sig = (country, region, frozenset(neigh))
             if sig in cache:

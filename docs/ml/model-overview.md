@@ -96,8 +96,11 @@ Before this fix, UTC-based grouping caused a systematic **1–2 hour shift** in 
 ## Holiday Logic
 
 Holidays are critical for prediction accuracy.
-- **Source**: `holiday_utils.py`
-- **Logic**: Checks school and public holidays for the park's specific region (e.g., NRW for Phantasialand).
+- **Source**: `holiday_features.py` (`assign_holiday_features`) — the **one** implementation that training (`features.py add_holiday_features`) and inference (`predict.py create_prediction_features`) both call. Region codes go through `holiday_utils.normalize_region_code`, whose alias table (`NRW→NW`, `NDS→NI`, `England→ENG`, …) mirrors `src/common/utils/region.util.ts`.
+- **Logic**: Checks school and public holidays for the park's specific region (e.g., NW for Phantasialand), and all its influencing regions.
+- **Duplicates are flags, not a type (PAR-816)**: the `holidays` table holds several rows for one (country, region, date) — CH-ZH 2025-04-21 five times. They are collapsed to two flags combined with OR: `public` (any `public`/`bank`/`bridge` row) and `school`. A day can carry both; `observance` sets neither. A located park reads regional OR national rows; a country-level influencing region (`regionCode: null`) matches if any region of that country has the flag.
+- **Never assign a merge result back by index label**: a merge onto the holidays table gets longer whenever a key is duplicated. The features are evaluated once per (park, local date) and written back by position, with a row-count assertion.
+- **Easter Sunday** counts as a public holiday for parks in `EASTER_COUNTRIES` on both paths (Nager.Date lists it only for DE-BB).
 - **Bridge Days**: Detects bridging days between holidays and weekends.
 
 ## Schedule Status (OPERATING / CLOSED / UNKNOWN)

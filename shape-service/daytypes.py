@@ -15,14 +15,31 @@ DAYTYPES = ("school", "pubhol", "wend", "peak", "reg")
 PEAK_MONTHS = (6, 7, 8, 12)  # summer + Christmas; refined once a full year of data exists
 
 
+# Non-ISO codes geocoding returns -> ISO 3166-2 suffix. Mirrors REGION_ALIASES in
+# src/common/utils/region.util.ts and ml-service/holiday_utils.py.
+REGION_ALIASES = {"NRW": "NW", "NDS": "NI", "England": "ENG", "Scotland": "SCT", "Wales": "WLS"}
+
+
+def normalize_region(code: str | None) -> str | None:
+    """'DE-NW' / 'NW' / 'NRW' -> 'NW'. The holidays table stores 'DE-NW' while
+    parks.regionCode stores 'NW', so the two never compare equal raw (PAR-816)."""
+    if not code or not isinstance(code, str):
+        return None
+    short = code.split("-")[-1]
+    return REGION_ALIASES.get(short, short) or None
+
+
 def build_daytype_fn(holidays: pd.DataFrame, region: str | None):
     """Return a function day -> daytype label, using nationwide + the park's-region holidays."""
     if holidays is None or holidays.empty:
         school = pubbr = set()
     else:
-        reg = holidays[
-            holidays["region"].isna() | (holidays["region"] == "") | (holidays["region"] == region)
-        ]
+        park_region = normalize_region(region)
+        holiday_region = holidays["region"].map(normalize_region)
+        own_region = (
+            holiday_region == park_region if park_region else pd.Series(False, index=holidays.index)
+        )
+        reg = holidays[holiday_region.isna() | own_region]
         school = set(reg.loc[reg["holiday_type"] == "school", "date"])
         pubbr = set(reg.loc[reg["holiday_type"].isin(["public", "bridge"]), "date"])
 
