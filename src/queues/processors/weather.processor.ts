@@ -185,7 +185,7 @@ export class WeatherProcessor {
       );
 
       // Mark this sync type as done. TTL sits under the cron interval (full
-      // every 12h; current at 06:00/18:00, also 12h apart since PAR-822) so the
+      // every 12h; current at 07:00/19:00, also 12h apart since PAR-822) so the
       // next scheduled run always proceeds, but a restart in between skips the
       // redundant re-sync.
       const doneTtl = currentOnly ? 5 * 60 * 60 : 11 * 60 * 60;

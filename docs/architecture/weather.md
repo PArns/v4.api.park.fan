@@ -14,7 +14,7 @@ Weather data is fetched from **Open-Meteo** (free, no API key, global coverage i
 Open-Meteo API (/forecast, /archive)
         ↓
 WeatherProcessor (BullMQ queue: "weather")
-  — two jobs: "weather-full-cron" (00:00 + 12:00) and "weather-current-cron" (06:00 + 18:00)
+  — two jobs: "weather-full-cron" (00:00 + 12:00) and "weather-current-cron" (07:00 + 19:00)
   — filters parks where latitude IS NOT NULL AND longitude IS NOT NULL
 
   Hourly (currentOnly=true):
@@ -129,7 +129,7 @@ The forecast stops after 16 days. For a later travel day the calendar serves the
 
 | Queue | Job ID | Schedule | Action |
 |-------|--------|----------|--------|
-| `weather` | `weather-current-cron` | 06:00 + 18:00 UTC | `forecast_days=1` — saves today + live fields. Was `0 */6 * * *` until PAR-822, which also fired at 00:00/12:00 beside the full run that already saves today. |
+| `weather` | `weather-current-cron` | 07:00 + 19:00 UTC | `forecast_days=1` — saves today + live fields. Was `0 */6 * * *` until PAR-822, which also fired at 00:00/12:00 beside the full run that already saves today. |
 | `weather` | `weather-full-cron` | Every 12h (00:00 + 12:00 UTC) | `forecast_days=16` — saves today + 15 forecast days; 1s delay between parks |
 | `weather-historical` | `weather-historical-cron` | Daily 05:00 UTC | Mark past records as `dataType = historical` |
 

@@ -1,6 +1,9 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
-import { WaitTimesProcessor } from "./wait-times.processor";
+import {
+  WaitTimesPhaseTimer,
+  WaitTimesProcessor,
+} from "./wait-times.processor";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
 import { Park } from "../../parks/entities/park.entity";
@@ -639,6 +642,42 @@ describe("WaitTimesProcessor", () => {
 
       expect(written).toBe(1);
       expect(inserted.map((r) => r.attractionId)).toEqual([ACTIVE]);
+    });
+  });
+});
+
+describe("WaitTimesPhaseTimer (PAR-822 phase log)", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it("marks sequential phases as the time since the previous mark", () => {
+    let now = 1_000;
+    jest.spyOn(Date, "now").mockImplementation(() => now);
+    const timer = new WaitTimesPhaseTimer();
+
+    now = 1_250;
+    timer.mark("prepareMs");
+    now = 4_250;
+    timer.mark("parksMs");
+
+    expect(timer.toJSON(3_250)).toEqual({
+      prepareMs: 250,
+      parksMs: 3_000,
+      totalMs: 3_250,
+    });
+  });
+
+  it("sums overlapping per-park durations under one key", () => {
+    jest.spyOn(Date, "now").mockReturnValue(0);
+    const timer = new WaitTimesPhaseTimer();
+
+    timer.add("fetch.themeparks-wiki.SumMs", 400);
+    timer.add("fetch.themeparks-wiki.SumMs", 600);
+    timer.add("fetch.queue-times.SumMs", 50);
+
+    expect(timer.toJSON(700)).toEqual({
+      "fetch.themeparks-wiki.SumMs": 1_000,
+      "fetch.queue-times.SumMs": 50,
+      totalMs: 700,
     });
   });
 });

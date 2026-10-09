@@ -118,7 +118,10 @@ caches ~68 s, top-1000 attractions ~92 s, occupancy ~43 s — about 125 s of it 
 batches), and because `wait-times` runs one job at a time, a run past five minutes delayed the next
 fetch. The three warmups still run sequentially, in the same order, with the same pacing. When a
 newer warmup request is already waiting, the one about to start returns at once, so a backlog
-collapses to the newest request. Both jobs log a `⏱️ … phases {json}` line with their per-phase wall-clock.
+collapses to the newest request. The park warmup can hit upstream feeds (a park whose schedule reads
+CLOSED is re-checked against queue-times, Wartezeiten or ThemeParks.wiki in
+`buildIntegratedResponse`), so before every park batch it waits until no `wait-times` job is active —
+warmup and sync never fetch at the same time. Both jobs log a `⏱️ … phases {json}` line with their per-phase wall-clock.
 
 | Trigger                                | When                                 | What gets warmed                                                                                                                       |
 | -------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
