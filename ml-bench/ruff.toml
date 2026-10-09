@@ -1,0 +1,6 @@
+# Conservative lint for ml-bench: real bugs only (pyflakes + syntax), not style
+# noise. Mirrors pcn-service / shape-service.
+line-length = 110
+
+[lint]
+select = ["F", "E9"]

@@ -1,0 +1,1565 @@
+{
+  "export_finished_utc": "2026-10-09T17:35:33+00:00",
+  "export_started_utc": "2026-10-09T17:32:23+00:00",
+  "files": {
+    "attractions": {
+      "bytes": 486652,
+      "rows": 7580,
+      "seconds": 0.12
+    },
+    "catboost_daily_forecasts_2026-03": {
+      "bytes": 1822,
+      "rows": 176,
+      "seconds": 1.21
+    },
+    "catboost_daily_forecasts_2026-04": {
+      "bytes": 42460,
+      "rows": 10742,
+      "seconds": 0.62
+    },
+    "catboost_daily_forecasts_2026-05": {
+      "bytes": 945289,
+      "rows": 162349,
+      "seconds": 0.8
+    },
+    "catboost_daily_forecasts_2026-06": {
+      "bytes": 14302284,
+      "rows": 3484015,
+      "seconds": 1.44
+    },
+    "catboost_daily_forecasts_2026-07": {
+      "bytes": 24540713,
+      "rows": 5670526,
+      "seconds": 2.07
+    },
+    "catboost_daily_forecasts_2026-08": {
+      "bytes": 22101521,
+      "rows": 5174382,
+      "seconds": 1.94
+    },
+    "catboost_daily_forecasts_2026-09": {
+      "bytes": 13600075,
+      "rows": 3094949,
+      "seconds": 1.26
+    },
+    "catboost_daily_forecasts_2026-10": {
+      "bytes": 3978831,
+      "rows": 990094,
+      "seconds": 0.96
+    },
+    "holidays": {
+      "bytes": 1123906,
+      "rows": 200502,
+      "seconds": 0.2
+    },
+    "parks": {
+      "bytes": 15091,
+      "rows": 211,
+      "seconds": 0.11
+    },
+    "queue_2025-12-24": {
+      "bytes": 335519,
+      "rows": 31912,
+      "seconds": 0.13
+    },
+    "queue_2025-12-25": {
+      "bytes": 203645,
+      "rows": 23777,
+      "seconds": 0.13
+    },
+    "queue_2025-12-26": {
+      "bytes": 249862,
+      "rows": 28110,
+      "seconds": 0.16
+    },
+    "queue_2025-12-27": {
+      "bytes": 246979,
+      "rows": 27541,
+      "seconds": 0.12
+    },
+    "queue_2025-12-28": {
+      "bytes": 321711,
+      "rows": 36715,
+      "seconds": 0.13
+    },
+    "queue_2025-12-29": {
+      "bytes": 277987,
+      "rows": 24119,
+      "seconds": 0.12
+    },
+    "queue_2025-12-30": {
+      "bytes": 421036,
+      "rows": 42217,
+      "seconds": 0.12
+    },
+    "queue_2025-12-31": {
+      "bytes": 412163,
+      "rows": 41801,
+      "seconds": 0.14
+    },
+    "queue_2026-01-01": {
+      "bytes": 402395,
+      "rows": 40914,
+      "seconds": 0.13
+    },
+    "queue_2026-01-02": {
+      "bytes": 407457,
+      "rows": 40910,
+      "seconds": 0.16
+    },
+    "queue_2026-01-03": {
+      "bytes": 391659,
+      "rows": 39178,
+      "seconds": 0.15
+    },
+    "queue_2026-01-04": {
+      "bytes": 327938,
+      "rows": 30652,
+      "seconds": 0.16
+    },
+    "queue_2026-01-05": {
+      "bytes": 307668,
+      "rows": 28327,
+      "seconds": 0.17
+    },
+    "queue_2026-01-06": {
+      "bytes": 211998,
+      "rows": 16559,
+      "seconds": 0.11
+    },
+    "queue_2026-01-07": {
+      "bytes": 473837,
+      "rows": 52966,
+      "seconds": 0.15
+    },
+    "queue_2026-01-08": {
+      "bytes": 443347,
+      "rows": 48504,
+      "seconds": 0.15
+    },
+    "queue_2026-01-09": {
+      "bytes": 457936,
+      "rows": 50970,
+      "seconds": 0.12
+    },
+    "queue_2026-01-10": {
+      "bytes": 881257,
+      "rows": 107754,
+      "seconds": 0.16
+    },
+    "queue_2026-01-11": {
+      "bytes": 1150163,
+      "rows": 142367,
+      "seconds": 0.19
+    },
+    "queue_2026-01-12": {
+      "bytes": 1152871,
+      "rows": 142763,
+      "seconds": 0.22
+    },
+    "queue_2026-01-13": {
+      "bytes": 1147093,
+      "rows": 142102,
+      "seconds": 0.22
+    },
+    "queue_2026-01-14": {
+      "bytes": 1146201,
+      "rows": 142299,
+      "seconds": 0.2
+    },
+    "queue_2026-01-15": {
+      "bytes": 1127784,
+      "rows": 139796,
+      "seconds": 0.17
+    },
+    "queue_2026-01-16": {
+      "bytes": 1126164,
+      "rows": 140094,
+      "seconds": 0.19
+    },
+    "queue_2026-01-17": {
+      "bytes": 1137209,
+      "rows": 141199,
+      "seconds": 0.2
+    },
+    "queue_2026-01-18": {
+      "bytes": 1145386,
+      "rows": 141485,
+      "seconds": 0.18
+    },
+    "queue_2026-01-19": {
+      "bytes": 1146639,
+      "rows": 142049,
+      "seconds": 0.2
+    },
+    "queue_2026-01-20": {
+      "bytes": 938506,
+      "rows": 112738,
+      "seconds": 0.19
+    },
+    "queue_2026-01-21": {
+      "bytes": 884571,
+      "rows": 103000,
+      "seconds": 0.2
+    },
+    "queue_2026-01-22": {
+      "bytes": 962991,
+      "rows": 116706,
+      "seconds": 0.21
+    },
+    "queue_2026-01-23": {
+      "bytes": 1031656,
+      "rows": 124612,
+      "seconds": 0.16
+    },
+    "queue_2026-01-24": {
+      "bytes": 1154568,
+      "rows": 145256,
+      "seconds": 0.19
+    },
+    "queue_2026-01-25": {
+      "bytes": 1141141,
+      "rows": 142824,
+      "seconds": 0.2
+    },
+    "queue_2026-01-26": {
+      "bytes": 1133143,
+      "rows": 141674,
+      "seconds": 0.2
+    },
+    "queue_2026-01-27": {
+      "bytes": 1131706,
+      "rows": 141401,
+      "seconds": 0.2
+    },
+    "queue_2026-01-28": {
+      "bytes": 1134695,
+      "rows": 141457,
+      "seconds": 0.17
+    },
+    "queue_2026-01-29": {
+      "bytes": 1210706,
+      "rows": 151274,
+      "seconds": 0.19
+    },
+    "queue_2026-01-30": {
+      "bytes": 1193831,
+      "rows": 148859,
+      "seconds": 0.22
+    },
+    "queue_2026-01-31": {
+      "bytes": 1176137,
+      "rows": 146190,
+      "seconds": 0.19
+    },
+    "queue_2026-02-01": {
+      "bytes": 1149370,
+      "rows": 143668,
+      "seconds": 0.18
+    },
+    "queue_2026-02-02": {
+      "bytes": 1156743,
+      "rows": 142027,
+      "seconds": 0.16
+    },
+    "queue_2026-02-03": {
+      "bytes": 1142989,
+      "rows": 141737,
+      "seconds": 0.19
+    },
+    "queue_2026-02-04": {
+      "bytes": 1139487,
+      "rows": 140666,
+      "seconds": 0.19
+    },
+    "queue_2026-02-05": {
+      "bytes": 1165827,
+      "rows": 143460,
+      "seconds": 0.19
+    },
+    "queue_2026-02-06": {
+      "bytes": 1174541,
+      "rows": 144571,
+      "seconds": 0.21
+    },
+    "queue_2026-02-07": {
+      "bytes": 1159845,
+      "rows": 142877,
+      "seconds": 0.2
+    },
+    "queue_2026-02-08": {
+      "bytes": 1138457,
+      "rows": 140646,
+      "seconds": 0.2
+    },
+    "queue_2026-02-09": {
+      "bytes": 1139510,
+      "rows": 141721,
+      "seconds": 0.2
+    },
+    "queue_2026-02-10": {
+      "bytes": 1162321,
+      "rows": 143251,
+      "seconds": 0.2
+    },
+    "queue_2026-02-11": {
+      "bytes": 1120264,
+      "rows": 138145,
+      "seconds": 0.17
+    },
+    "queue_2026-02-12": {
+      "bytes": 1142894,
+      "rows": 140508,
+      "seconds": 0.2
+    },
+    "queue_2026-02-13": {
+      "bytes": 1168013,
+      "rows": 142449,
+      "seconds": 0.2
+    },
+    "queue_2026-02-14": {
+      "bytes": 1169245,
+      "rows": 144443,
+      "seconds": 0.23
+    },
+    "queue_2026-02-15": {
+      "bytes": 1159753,
+      "rows": 143668,
+      "seconds": 0.19
+    },
+    "queue_2026-02-16": {
+      "bytes": 1135728,
+      "rows": 141344,
+      "seconds": 0.18
+    },
+    "queue_2026-02-17": {
+      "bytes": 1152356,
+      "rows": 142686,
+      "seconds": 0.21
+    },
+    "queue_2026-02-18": {
+      "bytes": 1163129,
+      "rows": 143291,
+      "seconds": 0.19
+    },
+    "queue_2026-02-19": {
+      "bytes": 1163584,
+      "rows": 142700,
+      "seconds": 0.17
+    },
+    "queue_2026-02-20": {
+      "bytes": 1182499,
+      "rows": 144309,
+      "seconds": 0.2
+    },
+    "queue_2026-02-21": {
+      "bytes": 1219990,
+      "rows": 150411,
+      "seconds": 0.2
+    },
+    "queue_2026-02-22": {
+      "bytes": 1186691,
+      "rows": 146441,
+      "seconds": 0.24
+    },
+    "queue_2026-02-23": {
+      "bytes": 1009272,
+      "rows": 122374,
+      "seconds": 0.18
+    },
+    "queue_2026-02-24": {
+      "bytes": 1011470,
+      "rows": 121977,
+      "seconds": 0.19
+    },
+    "queue_2026-02-25": {
+      "bytes": 1018313,
+      "rows": 121143,
+      "seconds": 0.18
+    },
+    "queue_2026-02-26": {
+      "bytes": 1016266,
+      "rows": 121877,
+      "seconds": 0.18
+    },
+    "queue_2026-02-27": {
+      "bytes": 1012446,
+      "rows": 120514,
+      "seconds": 0.19
+    },
+    "queue_2026-02-28": {
+      "bytes": 1038414,
+      "rows": 123276,
+      "seconds": 0.19
+    },
+    "queue_2026-03-01": {
+      "bytes": 1034885,
+      "rows": 123678,
+      "seconds": 0.21
+    },
+    "queue_2026-03-02": {
+      "bytes": 995050,
+      "rows": 120748,
+      "seconds": 0.17
+    },
+    "queue_2026-03-03": {
+      "bytes": 980784,
+      "rows": 118841,
+      "seconds": 0.19
+    },
+    "queue_2026-03-04": {
+      "bytes": 993332,
+      "rows": 119335,
+      "seconds": 0.17
+    },
+    "queue_2026-03-05": {
+      "bytes": 993520,
+      "rows": 118913,
+      "seconds": 0.19
+    },
+    "queue_2026-03-06": {
+      "bytes": 1002217,
+      "rows": 118935,
+      "seconds": 0.19
+    },
+    "queue_2026-03-07": {
+      "bytes": 1056977,
+      "rows": 124579,
+      "seconds": 0.17
+    },
+    "queue_2026-03-08": {
+      "bytes": 773322,
+      "rows": 88548,
+      "seconds": 0.16
+    },
+    "queue_2026-03-09": {
+      "bytes": 475499,
+      "rows": 50032,
+      "seconds": 0.14
+    },
+    "queue_2026-03-10": {
+      "bytes": 991700,
+      "rows": 120217,
+      "seconds": 0.19
+    },
+    "queue_2026-03-11": {
+      "bytes": 1009125,
+      "rows": 120861,
+      "seconds": 0.18
+    },
+    "queue_2026-03-12": {
+      "bytes": 1017408,
+      "rows": 121484,
+      "seconds": 0.14
+    },
+    "queue_2026-03-13": {
+      "bytes": 1059362,
+      "rows": 125680,
+      "seconds": 0.25
+    },
+    "queue_2026-03-14": {
+      "bytes": 1119221,
+      "rows": 131946,
+      "seconds": 0.17
+    },
+    "queue_2026-03-15": {
+      "bytes": 1084833,
+      "rows": 127492,
+      "seconds": 0.2
+    },
+    "queue_2026-03-16": {
+      "bytes": 1069928,
+      "rows": 128875,
+      "seconds": 0.19
+    },
+    "queue_2026-03-17": {
+      "bytes": 1036363,
+      "rows": 125166,
+      "seconds": 0.2
+    },
+    "queue_2026-03-18": {
+      "bytes": 1046892,
+      "rows": 125270,
+      "seconds": 0.21
+    },
+    "queue_2026-03-19": {
+      "bytes": 1054646,
+      "rows": 125257,
+      "seconds": 0.22
+    },
+    "queue_2026-03-20": {
+      "bytes": 1093831,
+      "rows": 127187,
+      "seconds": 0.19
+    },
+    "queue_2026-03-21": {
+      "bytes": 1122550,
+      "rows": 130869,
+      "seconds": 0.2
+    },
+    "queue_2026-03-22": {
+      "bytes": 1114366,
+      "rows": 130219,
+      "seconds": 0.2
+    },
+    "queue_2026-03-23": {
+      "bytes": 1059517,
+      "rows": 126505,
+      "seconds": 0.19
+    },
+    "queue_2026-03-24": {
+      "bytes": 1022391,
+      "rows": 122635,
+      "seconds": 0.19
+    },
+    "queue_2026-03-25": {
+      "bytes": 1047436,
+      "rows": 125381,
+      "seconds": 0.19
+    },
+    "queue_2026-03-26": {
+      "bytes": 1059252,
+      "rows": 124668,
+      "seconds": 0.2
+    },
+    "queue_2026-03-27": {
+      "bytes": 1109695,
+      "rows": 130030,
+      "seconds": 0.19
+    },
+    "queue_2026-03-28": {
+      "bytes": 1137702,
+      "rows": 131232,
+      "seconds": 0.19
+    },
+    "queue_2026-03-29": {
+      "bytes": 1152850,
+      "rows": 133039,
+      "seconds": 0.19
+    },
+    "queue_2026-03-30": {
+      "bytes": 1148359,
+      "rows": 134307,
+      "seconds": 0.2
+    },
+    "queue_2026-03-31": {
+      "bytes": 1135911,
+      "rows": 134205,
+      "seconds": 0.22
+    },
+    "queue_2026-04-01": {
+      "bytes": 1143906,
+      "rows": 135619,
+      "seconds": 0.2
+    },
+    "queue_2026-04-02": {
+      "bytes": 1173489,
+      "rows": 136907,
+      "seconds": 0.2
+    },
+    "queue_2026-04-03": {
+      "bytes": 1204830,
+      "rows": 138834,
+      "seconds": 0.2
+    },
+    "queue_2026-04-04": {
+      "bytes": 1205559,
+      "rows": 137950,
+      "seconds": 0.23
+    },
+    "queue_2026-04-05": {
+      "bytes": 1188340,
+      "rows": 135616,
+      "seconds": 0.21
+    },
+    "queue_2026-04-06": {
+      "bytes": 1225894,
+      "rows": 143943,
+      "seconds": 0.22
+    },
+    "queue_2026-04-07": {
+      "bytes": 1181761,
+      "rows": 141431,
+      "seconds": 0.19
+    },
+    "queue_2026-04-08": {
+      "bytes": 1182449,
+      "rows": 142330,
+      "seconds": 0.22
+    },
+    "queue_2026-04-09": {
+      "bytes": 1197204,
+      "rows": 143379,
+      "seconds": 0.18
+    },
+    "queue_2026-04-10": {
+      "bytes": 1197385,
+      "rows": 141658,
+      "seconds": 0.21
+    },
+    "queue_2026-04-11": {
+      "bytes": 1252215,
+      "rows": 145817,
+      "seconds": 0.2
+    },
+    "queue_2026-04-12": {
+      "bytes": 1277887,
+      "rows": 147467,
+      "seconds": 0.19
+    },
+    "queue_2026-04-13": {
+      "bytes": 1231255,
+      "rows": 147809,
+      "seconds": 0.2
+    },
+    "queue_2026-04-14": {
+      "bytes": 1182373,
+      "rows": 143210,
+      "seconds": 0.21
+    },
+    "queue_2026-04-15": {
+      "bytes": 1106605,
+      "rows": 136560,
+      "seconds": 0.21
+    },
+    "queue_2026-04-16": {
+      "bytes": 1116712,
+      "rows": 136130,
+      "seconds": 0.21
+    },
+    "queue_2026-04-17": {
+      "bytes": 1239550,
+      "rows": 148055,
+      "seconds": 0.2
+    },
+    "queue_2026-04-18": {
+      "bytes": 1339797,
+      "rows": 159840,
+      "seconds": 0.22
+    },
+    "queue_2026-04-19": {
+      "bytes": 1324458,
+      "rows": 158112,
+      "seconds": 0.2
+    },
+    "queue_2026-04-20": {
+      "bytes": 1301557,
+      "rows": 158604,
+      "seconds": 0.23
+    },
+    "queue_2026-04-21": {
+      "bytes": 1362009,
+      "rows": 166398,
+      "seconds": 0.2
+    },
+    "queue_2026-04-22": {
+      "bytes": 1355950,
+      "rows": 166249,
+      "seconds": 0.19
+    },
+    "queue_2026-04-23": {
+      "bytes": 1367440,
+      "rows": 168165,
+      "seconds": 0.19
+    },
+    "queue_2026-04-24": {
+      "bytes": 1336530,
+      "rows": 159089,
+      "seconds": 0.23
+    },
+    "queue_2026-04-25": {
+      "bytes": 1430600,
+      "rows": 170069,
+      "seconds": 0.22
+    },
+    "queue_2026-04-26": {
+      "bytes": 1424551,
+      "rows": 168749,
+      "seconds": 0.21
+    },
+    "queue_2026-04-27": {
+      "bytes": 1372869,
+      "rows": 165658,
+      "seconds": 0.19
+    },
+    "queue_2026-04-28": {
+      "bytes": 1351425,
+      "rows": 163944,
+      "seconds": 0.21
+    },
+    "queue_2026-04-29": {
+      "bytes": 1320105,
+      "rows": 159986,
+      "seconds": 0.24
+    },
+    "queue_2026-04-30": {
+      "bytes": 1345853,
+      "rows": 163872,
+      "seconds": 0.24
+    },
+    "queue_2026-05-01": {
+      "bytes": 1387935,
+      "rows": 165905,
+      "seconds": 0.21
+    },
+    "queue_2026-05-02": {
+      "bytes": 1462376,
+      "rows": 173566,
+      "seconds": 0.2
+    },
+    "queue_2026-05-03": {
+      "bytes": 1436890,
+      "rows": 169749,
+      "seconds": 0.21
+    },
+    "queue_2026-05-04": {
+      "bytes": 1401907,
+      "rows": 166916,
+      "seconds": 0.22
+    },
+    "queue_2026-05-05": {
+      "bytes": 1364877,
+      "rows": 162734,
+      "seconds": 0.22
+    },
+    "queue_2026-05-06": {
+      "bytes": 1318536,
+      "rows": 160149,
+      "seconds": 0.21
+    },
+    "queue_2026-05-07": {
+      "bytes": 1356265,
+      "rows": 165613,
+      "seconds": 0.23
+    },
+    "queue_2026-05-08": {
+      "bytes": 1377801,
+      "rows": 166631,
+      "seconds": 0.23
+    },
+    "queue_2026-05-09": {
+      "bytes": 1468346,
+      "rows": 175396,
+      "seconds": 0.23
+    },
+    "queue_2026-05-10": {
+      "bytes": 1432510,
+      "rows": 170371,
+      "seconds": 0.22
+    },
+    "queue_2026-05-11": {
+      "bytes": 1380553,
+      "rows": 166873,
+      "seconds": 0.22
+    },
+    "queue_2026-05-12": {
+      "bytes": 1354722,
+      "rows": 164459,
+      "seconds": 0.19
+    },
+    "queue_2026-05-13": {
+      "bytes": 1338716,
+      "rows": 162308,
+      "seconds": 0.21
+    },
+    "queue_2026-05-14": {
+      "bytes": 1353700,
+      "rows": 164281,
+      "seconds": 0.23
+    },
+    "queue_2026-05-15": {
+      "bytes": 1385368,
+      "rows": 166727,
+      "seconds": 0.2
+    },
+    "queue_2026-05-16": {
+      "bytes": 1435233,
+      "rows": 170846,
+      "seconds": 0.22
+    },
+    "queue_2026-05-17": {
+      "bytes": 1416933,
+      "rows": 165171,
+      "seconds": 0.22
+    },
+    "queue_2026-05-18": {
+      "bytes": 1335927,
+      "rows": 160196,
+      "seconds": 0.21
+    },
+    "queue_2026-05-19": {
+      "bytes": 1316891,
+      "rows": 158732,
+      "seconds": 0.22
+    },
+    "queue_2026-05-20": {
+      "bytes": 1314633,
+      "rows": 158220,
+      "seconds": 0.21
+    },
+    "queue_2026-05-21": {
+      "bytes": 1371465,
+      "rows": 165891,
+      "seconds": 0.22
+    },
+    "queue_2026-05-22": {
+      "bytes": 1376306,
+      "rows": 166289,
+      "seconds": 0.23
+    },
+    "queue_2026-05-23": {
+      "bytes": 1430392,
+      "rows": 170895,
+      "seconds": 0.21
+    },
+    "queue_2026-05-24": {
+      "bytes": 1442341,
+      "rows": 169901,
+      "seconds": 0.23
+    },
+    "queue_2026-05-25": {
+      "bytes": 1445902,
+      "rows": 170798,
+      "seconds": 0.23
+    },
+    "queue_2026-05-26": {
+      "bytes": 1387467,
+      "rows": 164359,
+      "seconds": 0.22
+    },
+    "queue_2026-05-27": {
+      "bytes": 1415206,
+      "rows": 168621,
+      "seconds": 0.22
+    },
+    "queue_2026-05-28": {
+      "bytes": 1079936,
+      "rows": 123852,
+      "seconds": 0.21
+    },
+    "queue_2026-05-29": {
+      "bytes": 1394205,
+      "rows": 168908,
+      "seconds": 0.2
+    },
+    "queue_2026-05-30": {
+      "bytes": 1454326,
+      "rows": 175208,
+      "seconds": 0.23
+    },
+    "queue_2026-05-31": {
+      "bytes": 1425922,
+      "rows": 169489,
+      "seconds": 0.21
+    },
+    "queue_2026-06-01": {
+      "bytes": 1385716,
+      "rows": 165078,
+      "seconds": 0.21
+    },
+    "queue_2026-06-02": {
+      "bytes": 1363325,
+      "rows": 163676,
+      "seconds": 0.22
+    },
+    "queue_2026-06-03": {
+      "bytes": 1360384,
+      "rows": 164305,
+      "seconds": 0.2
+    },
+    "queue_2026-06-04": {
+      "bytes": 1374351,
+      "rows": 166519,
+      "seconds": 0.23
+    },
+    "queue_2026-06-05": {
+      "bytes": 1387782,
+      "rows": 169235,
+      "seconds": 0.22
+    },
+    "queue_2026-06-06": {
+      "bytes": 1423477,
+      "rows": 172789,
+      "seconds": 0.23
+    },
+    "queue_2026-06-07": {
+      "bytes": 1391844,
+      "rows": 167661,
+      "seconds": 0.2
+    },
+    "queue_2026-06-08": {
+      "bytes": 1347368,
+      "rows": 162403,
+      "seconds": 0.19
+    },
+    "queue_2026-06-09": {
+      "bytes": 1385066,
+      "rows": 164070,
+      "seconds": 0.22
+    },
+    "queue_2026-06-10": {
+      "bytes": 1392849,
+      "rows": 166376,
+      "seconds": 0.21
+    },
+    "queue_2026-06-11": {
+      "bytes": 1387107,
+      "rows": 165577,
+      "seconds": 0.21
+    },
+    "queue_2026-06-12": {
+      "bytes": 1404947,
+      "rows": 169270,
+      "seconds": 0.23
+    },
+    "queue_2026-06-13": {
+      "bytes": 1435992,
+      "rows": 173294,
+      "seconds": 0.21
+    },
+    "queue_2026-06-14": {
+      "bytes": 1424227,
+      "rows": 171709,
+      "seconds": 0.21
+    },
+    "queue_2026-06-15": {
+      "bytes": 1374165,
+      "rows": 165931,
+      "seconds": 0.22
+    },
+    "queue_2026-06-16": {
+      "bytes": 1379532,
+      "rows": 166268,
+      "seconds": 0.21
+    },
+    "queue_2026-06-17": {
+      "bytes": 1370788,
+      "rows": 165061,
+      "seconds": 0.22
+    },
+    "queue_2026-06-18": {
+      "bytes": 1396280,
+      "rows": 168150,
+      "seconds": 0.23
+    },
+    "queue_2026-06-19": {
+      "bytes": 1395932,
+      "rows": 167691,
+      "seconds": 0.22
+    },
+    "queue_2026-06-20": {
+      "bytes": 1438543,
+      "rows": 174595,
+      "seconds": 0.21
+    },
+    "queue_2026-06-21": {
+      "bytes": 1412777,
+      "rows": 171872,
+      "seconds": 0.23
+    },
+    "queue_2026-06-22": {
+      "bytes": 1394396,
+      "rows": 168550,
+      "seconds": 0.22
+    },
+    "queue_2026-06-23": {
+      "bytes": 1395338,
+      "rows": 167033,
+      "seconds": 0.24
+    },
+    "queue_2026-06-24": {
+      "bytes": 1417108,
+      "rows": 169330,
+      "seconds": 0.23
+    },
+    "queue_2026-06-25": {
+      "bytes": 1402726,
+      "rows": 168552,
+      "seconds": 0.21
+    },
+    "queue_2026-06-26": {
+      "bytes": 1377553,
+      "rows": 165569,
+      "seconds": 0.2
+    },
+    "queue_2026-06-27": {
+      "bytes": 1404259,
+      "rows": 169619,
+      "seconds": 0.22
+    },
+    "queue_2026-06-28": {
+      "bytes": 1394256,
+      "rows": 168644,
+      "seconds": 0.22
+    },
+    "queue_2026-06-29": {
+      "bytes": 1388127,
+      "rows": 166962,
+      "seconds": 0.23
+    },
+    "queue_2026-06-30": {
+      "bytes": 1390522,
+      "rows": 166746,
+      "seconds": 0.2
+    },
+    "queue_2026-07-01": {
+      "bytes": 1424261,
+      "rows": 169483,
+      "seconds": 0.2
+    },
+    "queue_2026-07-02": {
+      "bytes": 1432702,
+      "rows": 167836,
+      "seconds": 0.21
+    },
+    "queue_2026-07-03": {
+      "bytes": 1421951,
+      "rows": 169191,
+      "seconds": 0.22
+    },
+    "queue_2026-07-04": {
+      "bytes": 1440103,
+      "rows": 171822,
+      "seconds": 0.21
+    },
+    "queue_2026-07-05": {
+      "bytes": 1414081,
+      "rows": 170203,
+      "seconds": 0.22
+    },
+    "queue_2026-07-06": {
+      "bytes": 1403216,
+      "rows": 168763,
+      "seconds": 0.22
+    },
+    "queue_2026-07-07": {
+      "bytes": 1396346,
+      "rows": 166419,
+      "seconds": 0.22
+    },
+    "queue_2026-07-08": {
+      "bytes": 1413214,
+      "rows": 167175,
+      "seconds": 0.22
+    },
+    "queue_2026-07-09": {
+      "bytes": 1424875,
+      "rows": 168427,
+      "seconds": 0.2
+    },
+    "queue_2026-07-10": {
+      "bytes": 1395535,
+      "rows": 166052,
+      "seconds": 0.22
+    },
+    "queue_2026-07-11": {
+      "bytes": 1411348,
+      "rows": 168527,
+      "seconds": 0.21
+    },
+    "queue_2026-07-12": {
+      "bytes": 1406908,
+      "rows": 169342,
+      "seconds": 0.21
+    },
+    "queue_2026-07-13": {
+      "bytes": 1404765,
+      "rows": 169443,
+      "seconds": 0.22
+    },
+    "queue_2026-07-14": {
+      "bytes": 1427741,
+      "rows": 169146,
+      "seconds": 0.21
+    },
+    "queue_2026-07-15": {
+      "bytes": 1432976,
+      "rows": 171098,
+      "seconds": 0.25
+    },
+    "queue_2026-07-16": {
+      "bytes": 1459881,
+      "rows": 172466,
+      "seconds": 0.23
+    },
+    "queue_2026-07-17": {
+      "bytes": 1442662,
+      "rows": 170418,
+      "seconds": 0.22
+    },
+    "queue_2026-07-18": {
+      "bytes": 1463352,
+      "rows": 173902,
+      "seconds": 0.24
+    },
+    "queue_2026-07-19": {
+      "bytes": 1424317,
+      "rows": 170008,
+      "seconds": 0.23
+    },
+    "queue_2026-07-20": {
+      "bytes": 1229380,
+      "rows": 145759,
+      "seconds": 0.2
+    },
+    "queue_2026-07-21": {
+      "bytes": 1013990,
+      "rows": 117278,
+      "seconds": 0.19
+    },
+    "queue_2026-07-22": {
+      "bytes": 1716236,
+      "rows": 202695,
+      "seconds": 0.22
+    },
+    "queue_2026-07-23": {
+      "bytes": 1805390,
+      "rows": 212454,
+      "seconds": 0.22
+    },
+    "queue_2026-07-24": {
+      "bytes": 1791697,
+      "rows": 210814,
+      "seconds": 0.26
+    },
+    "queue_2026-07-25": {
+      "bytes": 1711199,
+      "rows": 200520,
+      "seconds": 0.23
+    },
+    "queue_2026-07-26": {
+      "bytes": 1613410,
+      "rows": 192748,
+      "seconds": 0.22
+    },
+    "queue_2026-07-27": {
+      "bytes": 1587766,
+      "rows": 191175,
+      "seconds": 0.21
+    },
+    "queue_2026-07-28": {
+      "bytes": 1569141,
+      "rows": 187606,
+      "seconds": 0.23
+    },
+    "queue_2026-07-29": {
+      "bytes": 1574471,
+      "rows": 186333,
+      "seconds": 0.23
+    },
+    "queue_2026-07-30": {
+      "bytes": 1595376,
+      "rows": 187787,
+      "seconds": 0.23
+    },
+    "queue_2026-07-31": {
+      "bytes": 1593678,
+      "rows": 187567,
+      "seconds": 0.24
+    },
+    "queue_2026-08-01": {
+      "bytes": 1623505,
+      "rows": 190528,
+      "seconds": 0.22
+    },
+    "queue_2026-08-02": {
+      "bytes": 1597408,
+      "rows": 189018,
+      "seconds": 0.23
+    },
+    "queue_2026-08-03": {
+      "bytes": 1556635,
+      "rows": 186037,
+      "seconds": 0.24
+    },
+    "queue_2026-08-04": {
+      "bytes": 1565027,
+      "rows": 186981,
+      "seconds": 0.23
+    },
+    "queue_2026-08-05": {
+      "bytes": 1595113,
+      "rows": 188587,
+      "seconds": 0.27
+    },
+    "queue_2026-08-06": {
+      "bytes": 1627530,
+      "rows": 189266,
+      "seconds": 0.23
+    },
+    "queue_2026-08-07": {
+      "bytes": 1598003,
+      "rows": 187896,
+      "seconds": 0.23
+    },
+    "queue_2026-08-08": {
+      "bytes": 1616576,
+      "rows": 189551,
+      "seconds": 0.25
+    },
+    "queue_2026-08-09": {
+      "bytes": 1607215,
+      "rows": 189174,
+      "seconds": 0.23
+    },
+    "queue_2026-08-10": {
+      "bytes": 1594342,
+      "rows": 189916,
+      "seconds": 0.21
+    },
+    "queue_2026-08-11": {
+      "bytes": 1581580,
+      "rows": 189495,
+      "seconds": 0.25
+    },
+    "queue_2026-08-12": {
+      "bytes": 1572729,
+      "rows": 187330,
+      "seconds": 0.25
+    },
+    "queue_2026-08-13": {
+      "bytes": 1591877,
+      "rows": 188997,
+      "seconds": 0.23
+    },
+    "queue_2026-08-14": {
+      "bytes": 1598413,
+      "rows": 189839,
+      "seconds": 0.22
+    },
+    "queue_2026-08-15": {
+      "bytes": 1687989,
+      "rows": 196602,
+      "seconds": 0.23
+    },
+    "queue_2026-08-16": {
+      "bytes": 1643803,
+      "rows": 191995,
+      "seconds": 0.22
+    },
+    "queue_2026-08-17": {
+      "bytes": 1592629,
+      "rows": 186968,
+      "seconds": 0.25
+    },
+    "queue_2026-08-18": {
+      "bytes": 1561850,
+      "rows": 187954,
+      "seconds": 0.25
+    },
+    "queue_2026-08-19": {
+      "bytes": 1567967,
+      "rows": 188282,
+      "seconds": 0.21
+    },
+    "queue_2026-08-20": {
+      "bytes": 1578787,
+      "rows": 188407,
+      "seconds": 0.25
+    },
+    "queue_2026-08-21": {
+      "bytes": 1582169,
+      "rows": 187882,
+      "seconds": 0.23
+    },
+    "queue_2026-08-22": {
+      "bytes": 1656355,
+      "rows": 194669,
+      "seconds": 0.25
+    },
+    "queue_2026-08-23": {
+      "bytes": 1671319,
+      "rows": 197244,
+      "seconds": 0.26
+    },
+    "queue_2026-08-24": {
+      "bytes": 1569879,
+      "rows": 187797,
+      "seconds": 0.23
+    },
+    "queue_2026-08-25": {
+      "bytes": 1554066,
+      "rows": 187946,
+      "seconds": 0.22
+    },
+    "queue_2026-08-26": {
+      "bytes": 1541402,
+      "rows": 186851,
+      "seconds": 0.22
+    },
+    "queue_2026-08-27": {
+      "bytes": 1534962,
+      "rows": 185125,
+      "seconds": 0.23
+    },
+    "queue_2026-08-28": {
+      "bytes": 1572167,
+      "rows": 187413,
+      "seconds": 0.26
+    },
+    "queue_2026-08-29": {
+      "bytes": 1655795,
+      "rows": 191834,
+      "seconds": 0.25
+    },
+    "queue_2026-08-30": {
+      "bytes": 1622884,
+      "rows": 191482,
+      "seconds": 0.2
+    },
+    "queue_2026-08-31": {
+      "bytes": 1521833,
+      "rows": 182820,
+      "seconds": 0.19
+    },
+    "queue_2026-09-01": {
+      "bytes": 1474251,
+      "rows": 179539,
+      "seconds": 0.21
+    },
+    "queue_2026-09-02": {
+      "bytes": 1457991,
+      "rows": 178145,
+      "seconds": 0.22
+    },
+    "queue_2026-09-03": {
+      "bytes": 1460829,
+      "rows": 178160,
+      "seconds": 0.2
+    },
+    "queue_2026-09-04": {
+      "bytes": 1508049,
+      "rows": 181414,
+      "seconds": 0.21
+    },
+    "queue_2026-09-05": {
+      "bytes": 1611748,
+      "rows": 190201,
+      "seconds": 0.23
+    },
+    "queue_2026-09-06": {
+      "bytes": 1648862,
+      "rows": 190663,
+      "seconds": 0.21
+    },
+    "queue_2026-09-07": {
+      "bytes": 1555915,
+      "rows": 181502,
+      "seconds": 0.19
+    },
+    "queue_2026-09-08": {
+      "bytes": 1447995,
+      "rows": 172432,
+      "seconds": 0.23
+    },
+    "queue_2026-09-09": {
+      "bytes": 4174676,
+      "rows": 176400,
+      "seconds": 0.32
+    },
+    "queue_2026-09-10": {
+      "bytes": 4166801,
+      "rows": 176091,
+      "seconds": 0.33
+    },
+    "queue_2026-09-11": {
+      "bytes": 4258335,
+      "rows": 179887,
+      "seconds": 0.32
+    },
+    "queue_2026-09-12": {
+      "bytes": 4580021,
+      "rows": 191082,
+      "seconds": 0.32
+    },
+    "queue_2026-09-13": {
+      "bytes": 4481039,
+      "rows": 186673,
+      "seconds": 0.34
+    },
+    "queue_2026-09-14": {
+      "bytes": 4166149,
+      "rows": 175835,
+      "seconds": 0.35
+    },
+    "queue_2026-09-15": {
+      "bytes": 4085081,
+      "rows": 172813,
+      "seconds": 0.35
+    },
+    "queue_2026-09-16": {
+      "bytes": 4113925,
+      "rows": 173967,
+      "seconds": 0.33
+    },
+    "queue_2026-09-17": {
+      "bytes": 4200270,
+      "rows": 177503,
+      "seconds": 0.32
+    },
+    "queue_2026-09-18": {
+      "bytes": 4370888,
+      "rows": 184144,
+      "seconds": 0.33
+    },
+    "queue_2026-09-19": {
+      "bytes": 4666176,
+      "rows": 194333,
+      "seconds": 0.35
+    },
+    "queue_2026-09-20": {
+      "bytes": 4593319,
+      "rows": 191595,
+      "seconds": 0.34
+    },
+    "queue_2026-09-21": {
+      "bytes": 4251768,
+      "rows": 178866,
+      "seconds": 0.31
+    },
+    "queue_2026-09-22": {
+      "bytes": 4227113,
+      "rows": 178165,
+      "seconds": 0.36
+    },
+    "queue_2026-09-23": {
+      "bytes": 4246088,
+      "rows": 179197,
+      "seconds": 0.34
+    },
+    "queue_2026-09-24": {
+      "bytes": 4229963,
+      "rows": 178844,
+      "seconds": 0.35
+    },
+    "queue_2026-09-25": {
+      "bytes": 4424375,
+      "rows": 185525,
+      "seconds": 0.31
+    },
+    "queue_2026-09-26": {
+      "bytes": 4725856,
+      "rows": 195569,
+      "seconds": 0.37
+    },
+    "queue_2026-09-27": {
+      "bytes": 4680942,
+      "rows": 194172,
+      "seconds": 0.4
+    },
+    "queue_2026-09-28": {
+      "bytes": 4163677,
+      "rows": 174229,
+      "seconds": 0.35
+    },
+    "queue_2026-09-29": {
+      "bytes": 4285012,
+      "rows": 179796,
+      "seconds": 0.35
+    },
+    "queue_2026-09-30": {
+      "bytes": 4284253,
+      "rows": 179401,
+      "seconds": 0.35
+    },
+    "queue_2026-10-01": {
+      "bytes": 4420363,
+      "rows": 185065,
+      "seconds": 0.37
+    },
+    "queue_2026-10-02": {
+      "bytes": 4578620,
+      "rows": 190903,
+      "seconds": 0.37
+    },
+    "queue_2026-10-03": {
+      "bytes": 4748723,
+      "rows": 196305,
+      "seconds": 0.34
+    },
+    "queue_2026-10-04": {
+      "bytes": 4723647,
+      "rows": 194638,
+      "seconds": 0.34
+    },
+    "queue_2026-10-05": {
+      "bytes": 4446001,
+      "rows": 185183,
+      "seconds": 0.32
+    },
+    "queue_2026-10-06": {
+      "bytes": 4356800,
+      "rows": 181723,
+      "seconds": 0.33
+    },
+    "queue_2026-10-07": {
+      "bytes": 4299868,
+      "rows": 179695,
+      "seconds": 0.33
+    },
+    "queue_2026-10-08": {
+      "bytes": 4292072,
+      "rows": 179771,
+      "seconds": 0.32
+    },
+    "schedule": {
+      "bytes": 1781346,
+      "rows": 122218,
+      "seconds": 0.23
+    },
+    "tft_forecasts_2026-03": {
+      "bytes": 118,
+      "rows": 0,
+      "seconds": 3.11
+    },
+    "tft_forecasts_2026-04": {
+      "bytes": 118,
+      "rows": 0,
+      "seconds": 0.5
+    },
+    "tft_forecasts_2026-05": {
+      "bytes": 7362179,
+      "rows": 491461,
+      "seconds": 1.24
+    },
+    "tft_forecasts_2026-06": {
+      "bytes": 48569240,
+      "rows": 3365695,
+      "seconds": 2.92
+    },
+    "tft_forecasts_2026-07": {
+      "bytes": 67760241,
+      "rows": 4776138,
+      "seconds": 3.96
+    },
+    "tft_forecasts_2026-08": {
+      "bytes": 77337490,
+      "rows": 5445805,
+      "seconds": 4.43
+    },
+    "tft_forecasts_2026-09": {
+      "bytes": 75225070,
+      "rows": 5251992,
+      "seconds": 4.07
+    },
+    "tft_forecasts_2026-10": {
+      "bytes": 21762830,
+      "rows": 1524008,
+      "seconds": 1.46
+    },
+    "weather": {
+      "bytes": 1001804,
+      "rows": 50489,
+      "seconds": 0.25
+    }
+  },
+  "git_sha": "b70fedf7d48722e79c98516f3168b3cc9dc0b4fb",
+  "notes": {
+    "headliners": "headliner_attractions as of export time (548-day window, not ex-ante)",
+    "queue_data": "STANDBY change log, all statuses; truth built offline (build step)",
+    "schedule": "latest published version per day (no history) -> flagged published_final",
+    "weather": "daily actuals only; no forecast archive exists -> ORACLE"
+  },
+  "queue_from": "2025-12-24",
+  "queue_to": "2026-10-08"
+}

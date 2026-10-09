@@ -1,0 +1,8 @@
+# Per-origin aggregates and DuckDB spill files are large and reproducible from the
+# export; a run's summary.md, tables/ and run-*.json are small and may be committed.
+results/*/parts/
+results/*/work/
+__pycache__/
+.pytest_cache/
+# the repo root ignores *.md; a reference run's summary is meant to be committed
+!results/*/summary.md

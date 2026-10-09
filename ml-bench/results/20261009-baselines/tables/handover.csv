@@ -1,0 +1,218 @@
+uc,segment,lead,metric,reference,winner,winner_value,margin_vs_ref,n_origin_days
+UC2,all,0,MAE,wt_med,h5,7.474169189346302,-0.06847218265430577,231
+UC2,busy,0,MAE,wt_med,lvlh5_tft,13.685569650298477,-0.5568147239412617,231
+UC3,all,1,MAE,wt_med,h5,7.575977897746979,-0.07388380328725042,230
+UC3,busy,1,MAE,wt_med,lvlh5_tft,13.910845355081001,-0.4900101629187734,230
+UC3,all,2,MAE,wt_med,h5,7.612965131263077,-0.07707559652533824,229
+UC3,busy,2,MAE,wt_med,lvlh5_tft,14.05055873715644,-0.4116452289153276,229
+UC3,all,3,MAE,wt_med,h5,7.643061143842506,-0.08020212410011851,228
+UC3,busy,3,MAE,wt_med,lvlh5_tft,14.251893050061163,-0.2671280494920296,228
+UC3,all,4,MAE,wt_med,h5,7.667152605979776,-0.0816787782636732,227
+UC3,busy,4,MAE,wt_med,lvlh5_tft,14.332306697304833,-0.2483333470460689,227
+UC3,all,5,MAE,wt_med,h5,7.698055749103599,-0.08379729189191298,226
+UC3,busy,5,MAE,wt_med,lvlh5_tft,14.501034948868506,-0.12977360396836524,226
+UC3,all,6,MAE,wt_med,h5,7.754556754744548,-0.08696658240068,225
+UC3,busy,6,MAE,wt_med,lvlh5_tft,14.610945892112381,-0.12162892258791125,225
+UC3,all,7,MAE,wt_med,h5,7.859574972065522,-0.09201787348078039,224
+UC3,busy,7,MAE,wt_med,h5,14.991924256922756,-0.23212260966861642,224
+UC3,all,10,MAE,wt_med,h5,7.95617203750833,-0.09774043866240856,221
+UC3,busy,10,MAE,wt_med,h5,15.166554992738751,-0.2447175236742023,221
+UC3,all,14,MAE,wt_med,h5,8.104062096191143,-0.10430508222141555,217
+UC3,busy,14,MAE,wt_med,h5,15.425244244518208,-0.2583067348467303,217
+UC3,all,21,MAE,wt_med,h5,8.26148098270079,-0.11472103235096576,210
+UC3,busy,21,MAE,wt_med,h5,15.679245095423674,-0.2815836217797223,210
+UC3,all,30,MAE,wt_med,h5,8.397062024791389,-0.12530295148467374,201
+UC3,busy,30,MAE,wt_med,h5,15.860070316370631,-0.30987374358497277,201
+UC3,all,45,MAE,wt_med,h5,8.50935307673736,-0.13546929468384938,186
+UC3,busy,45,MAE,wt_med,h5,16.079986473578874,-0.33039730681993973,186
+UC3,all,60,MAE,clim,h5,8.632445741679595,-0.20008142239946736,171
+UC3,busy,60,MAE,clim,h5,16.368003259399654,-0.4971158795397592,171
+UC3,all,90,MAE,wt_med,h5,8.71472053200939,-0.13894534093916633,141
+UC3,busy,90,MAE,wt_med,h5,16.514847988139813,-0.3297249819222188,141
+UC2,all,1,MAE,wt_med,h5,7.575977897746979,-0.07388380328725042,230
+UC2,busy,1,MAE,wt_med,lvlh5_tft,13.910845355081001,-0.4900101629187734,230
+UC1,all,m015,MAE,persistence,persistence,2.457619227286447,0.0,231
+UC1,busy,m015,MAE,persistence,persistence,4.527780849314674,0.0,231
+UC1,all,m030,MAE,persistence,persistence,4.147580253656169,0.0,231
+UC1,busy,m030,MAE,persistence,persistence,7.739047077009895,0.0,231
+UC1,all,m045,MAE,persistence,persistence,5.073036735139406,0.0,231
+UC1,busy,m045,MAE,persistence,persistence,9.449548451992353,0.0,231
+UC1,all,m060,MAE,persistence,persistence,5.697244387832394,0.0,231
+UC1,busy,m060,MAE,persistence,persistence,10.618329301266543,0.0,231
+UC1,all,m075,MAE,persistence,persistence,6.28371155795877,0.0,231
+UC1,busy,m075,MAE,persistence,persistence,11.565865087910062,0.0,231
+UC1,all,m090,MAE,persistence,persistence,6.792126243842919,0.0,231
+UC1,busy,m090,MAE,persistence,persistence,12.51624979232208,0.0,231
+UC1,all,m105,MAE,persistence,persistence,7.163984584740625,0.0,231
+UC1,busy,m105,MAE,persistence,persistence,13.153128630886469,0.0,231
+UC1,all,m120,MAE,persistence,persistence,7.484056345433435,0.0,231
+UC1,busy,m120,MAE,persistence,persistence,13.757528810910172,0.0,231
+UC2-intraday,all,h2-4,MAE,wt_med,h5,7.521470435669347,-0.06786056036802446,231
+UC2-intraday,busy,h2-4,MAE,wt_med,lvlh5_tft,13.79083408438813,-0.5630839352999075,231
+UC2-intraday,all,h4-8,MAE,wt_med,h5,7.791649417220907,-0.08500100852401982,231
+UC2-intraday,busy,h4-8,MAE,wt_med,lvlh5_tft,14.07122705677619,-0.5259770786269264,231
+UC2-intraday,all,h8+,MAE,wt_med,h5,7.478509765347255,-0.10345279081420067,231
+UC2-intraday,busy,h8+,MAE,wt_med,h5,13.55732697737392,-0.23762040751346802,231
+UC2/UC3,all,0,Spearman of slots within ride-day,wt_med,h5,0.46098825504223634,0.029431923405598526,231
+UC2/UC3,all,1,Spearman of slots within ride-day,wt_med,h5,0.4581485389280563,0.02982672273708825,230
+UC2/UC3,all,2,Spearman of slots within ride-day,wt_med,h5,0.45730309700158445,0.0301814168183569,229
+UC2/UC3,all,3,Spearman of slots within ride-day,wt_med,h5,0.4562557751301853,0.030548174558371388,228
+UC2/UC3,all,4,Spearman of slots within ride-day,wt_med,h5,0.4555756658861755,0.030788735577066406,227
+UC2/UC3,all,5,Spearman of slots within ride-day,wt_med,h5,0.4545521234318505,0.03144810344469262,226
+UC2/UC3,all,6,Spearman of slots within ride-day,wt_med,h5,0.45244069550554283,0.03190988998971378,225
+UC2/UC3,all,7,Spearman of slots within ride-day,wt_med,h5,0.44853407374350895,0.0326811926255407,224
+UC2/UC3,all,10,Spearman of slots within ride-day,wt_med,h5,0.44488415563654554,0.03306097332987029,221
+UC2/UC3,all,14,Spearman of slots within ride-day,wt_med,h5,0.43839342934636205,0.03464097461438431,217
+UC2/UC3,all,21,Spearman of slots within ride-day,wt_med,h5,0.4306034647797289,0.03624561110036134,210
+UC2/UC3,all,30,Spearman of slots within ride-day,wt_med,h5,0.4210290773884331,0.03748836638970965,201
+UC2/UC3,all,45,Spearman of slots within ride-day,wt_med,h5,0.40908082621891073,0.038638055891643264,186
+UC2/UC3,all,60,Spearman of slots within ride-day,clim,h5,0.4016479531191017,0.03816750731761509,171
+UC2/UC3,all,90,Spearman of slots within ride-day,wt_med,h5,0.4001174256771237,0.03905429058799442,141
+D3,all,0,best-time hit rate (top-2),wt_med,h5,0.8192795061482704,0.009609081626800853,231
+D3,all,1,best-time hit rate (top-2),wt_med,h5,0.818612899494969,0.01012526263843272,230
+D3,all,2,best-time hit rate (top-2),wt_med,h5,0.8185922397877655,0.010173062610956851,229
+D3,all,3,best-time hit rate (top-2),wt_med,h5,0.8180959591623281,0.010160555242785474,228
+D3,all,4,best-time hit rate (top-2),wt_med,h5,0.8181179472083211,0.010385257079771226,227
+D3,all,5,best-time hit rate (top-2),wt_med,h5,0.8181279878099329,0.010347752116022124,226
+D3,all,6,best-time hit rate (top-2),wt_med,h5,0.8175201321494941,0.010388261794567422,225
+D3,all,7,best-time hit rate (top-2),wt_med,h5,0.8162584320911586,0.01022942567824936,224
+D3,all,10,best-time hit rate (top-2),wt_med,h5,0.815093340933613,0.010079430241686227,221
+D3,all,14,best-time hit rate (top-2),wt_med,h5,0.8135328643383424,0.010422727622223515,217
+D3,all,21,best-time hit rate (top-2),wt_med,h5,0.8119578284597355,0.011813090046153496,210
+D3,all,30,best-time hit rate (top-2),wt_med,h5,0.8105085952042045,0.012749932637870387,201
+D3,all,45,best-time hit rate (top-2),wt_med,h5,0.8061905452218728,0.013464721560760062,186
+D3,all,60,best-time hit rate (top-2),wt_med,h5,0.8049828371435622,0.014447653415517125,171
+D3,all,90,best-time hit rate (top-2),wt_med,h5,0.8022767908639982,0.01144080929283331,141
+D3,all,0,best-time hit rate (±30 min),wt_med,h5,0.8257817851989911,0.009452623679484407,231
+D3,all,1,best-time hit rate (±30 min),wt_med,h5,0.8254134700643818,0.009922667801982143,230
+D3,all,2,best-time hit rate (±30 min),wt_med,h5,0.8254146174969359,0.010041813478102624,229
+D3,all,3,best-time hit rate (±30 min),wt_med,h5,0.8249061404809667,0.009777477382644228,228
+D3,all,4,best-time hit rate (±30 min),wt_med,h5,0.8252889804729664,0.010092814155764684,227
+D3,all,5,best-time hit rate (±30 min),wt_med,h5,0.8250125335049207,0.010178440688645929,226
+D3,all,6,best-time hit rate (±30 min),wt_med,h5,0.8244055655267714,0.010241791489026597,225
+D3,all,7,best-time hit rate (±30 min),wt_med,h5,0.8232001536381023,0.009706727569773865,224
+D3,all,10,best-time hit rate (±30 min),wt_med,h5,0.8224873272123939,0.01047196671217121,221
+D3,all,14,best-time hit rate (±30 min),wt_med,h5,0.820871664654706,0.010658834854883725,217
+D3,all,21,best-time hit rate (±30 min),wt_med,h5,0.8203774335556074,0.012198255716044604,210
+D3,all,30,best-time hit rate (±30 min),wt_med,h5,0.8199204350523742,0.013229092163289602,201
+D3,all,45,best-time hit rate (±30 min),wt_med,h5,0.815093453038536,0.014367825344861362,186
+D3,all,60,best-time hit rate (±30 min),wt_med,h5,0.8137830076503713,0.013873327245404576,171
+D3,all,90,best-time hit rate (±30 min),wt_med,h5,0.8121178913369478,0.011654558553736316,141
+D3,all,0,best-time regret (min),wt_med,h5,2.943408357667446,-0.34045712606429035,231
+D3,all,1,best-time regret (min),wt_med,h5,2.961652338178033,-0.3374149480284845,230
+D3,all,2,best-time regret (min),wt_med,h5,2.962622368400639,-0.33320176331983475,229
+D3,all,3,best-time regret (min),wt_med,h5,2.973149542995855,-0.33588552120144977,228
+D3,all,4,best-time regret (min),wt_med,h5,2.974181140221764,-0.3414888356199328,227
+D3,all,5,best-time regret (min),wt_med,h5,2.980412204278366,-0.3439808252799539,226
+D3,all,6,best-time regret (min),wt_med,h5,2.9953739735383347,-0.3588342691934616,225
+D3,all,7,best-time regret (min),wt_med,h5,3.029039201722027,-0.35267322875737506,224
+D3,all,10,best-time regret (min),wt_med,h5,3.0498035463447404,-0.37143051920159786,221
+D3,all,14,best-time regret (min),wt_med,h5,3.0931648836531656,-0.37190732227429146,217
+D3,all,21,best-time regret (min),wt_med,h5,3.1117251757868245,-0.40722275912831973,210
+D3,all,30,best-time regret (min),wt_med,h5,3.1275183400854045,-0.4398069724529181,201
+D3,all,45,best-time regret (min),wt_med,h5,3.2018525646473077,-0.49668183303971825,186
+D3,all,60,best-time regret (min),wt_med,h5,3.234357122024544,-0.504427872014308,171
+D3,all,90,best-time regret (min),wt_med,h5,3.270568981428077,-0.476794060976264,141
+UC3,all,0,dayPeak Spearman across rides,wt_med,wt_med,0.7685147103251002,0.0,231
+UC3,all,1,dayPeak Spearman across rides,wt_med,wt_med,0.7640851109136131,0.0,230
+UC3,all,2,dayPeak Spearman across rides,wt_med,wt_med,0.7626058515681169,0.0,229
+UC3,all,3,dayPeak Spearman across rides,wt_med,wt_med,0.7618701814974147,0.0,228
+UC3,all,4,dayPeak Spearman across rides,wt_med,wt_med,0.76108314602956,0.0,227
+UC3,all,5,dayPeak Spearman across rides,wt_med,wt_med,0.7604147125668334,0.0,226
+UC3,all,6,dayPeak Spearman across rides,wt_med,wt_med,0.7579344796441948,0.0,225
+UC3,all,7,dayPeak Spearman across rides,wt_med,wt_med,0.7541060459010583,0.0,224
+UC3,all,10,dayPeak Spearman across rides,wt_med,wt_med,0.7502677911746651,0.0,221
+UC3,all,14,dayPeak Spearman across rides,wt_med,wt_med,0.7443740023361605,0.0,217
+UC3,all,21,dayPeak Spearman across rides,wt_med,wt_med,0.7365803716448799,0.0,210
+UC3,all,30,dayPeak Spearman across rides,wt_med,wt_med,0.7305567580188651,0.0,201
+UC3,all,45,dayPeak Spearman across rides,clim,wt_med,0.7243720837465704,0.006281309634938892,186
+UC3,all,60,dayPeak Spearman across rides,clim,prod_served,0.8170003309947276,0.11623422374846615,171
+UC3,all,90,dayPeak Spearman across rides,wt_med,wt_med,0.7182003845437359,0.0,141
+UC3,all,0,dayPeak abs error (min),wt_med,lvlh5_tft,8.748602170460112,-0.18781153260741235,231
+UC3,all,1,dayPeak abs error (min),wt_med,lvlh5_tft,8.968424496977933,-0.08861441452880214,230
+UC3,all,2,dayPeak abs error (min),wt_med,wt_med,9.31432975817466,0.0,229
+UC3,all,3,dayPeak abs error (min),wt_med,prod_served,8.506143964284593,-0.5233158981260821,228
+UC3,all,4,dayPeak abs error (min),wt_med,prod_served,8.568535087163808,-0.5054184411423304,227
+UC3,all,5,dayPeak abs error (min),wt_med,prod_served,8.679338469336962,-0.4290026226026882,226
+UC3,all,6,dayPeak abs error (min),wt_med,prod_served,8.785800530381644,-0.39052558257840175,225
+UC3,all,7,dayPeak abs error (min),wt_med,prod_served,9.123393632281983,-0.18796868455783056,224
+UC3,all,10,dayPeak abs error (min),wt_med,prod_served,9.368970130782353,-0.09644456689619751,221
+UC3,all,14,dayPeak abs error (min),wt_med,wt_med,9.97033238143993,0.0,217
+UC3,all,21,dayPeak abs error (min),clim,clim,10.080536543339873,0.0,210
+UC3,all,30,dayPeak abs error (min),clim,clim,10.168352124891587,0.0,201
+UC3,all,45,dayPeak abs error (min),clim,clim,10.171994952928662,0.0,186
+UC3,all,60,dayPeak abs error (min),clim,clim,10.151437872911023,0.0,171
+UC3,all,90,dayPeak abs error (min),clim,wt_med,10.361601428066,-0.09583904087819484,141
+D4,all,0,dayPeak pairwise ordering (headliners),wt_med,lvlh5_tft,0.7657749500135017,0.036502023793084315,231
+D4,all,1,dayPeak pairwise ordering (headliners),wt_med,lvlh5_tft,0.7626809208007229,0.03624278092028865,230
+D4,all,2,dayPeak pairwise ordering (headliners),wt_med,lvlh5_tft,0.7609081135852507,0.0353441358538924,229
+D4,all,3,dayPeak pairwise ordering (headliners),wt_med,lvlh5_tft,0.7588908549426175,0.03391610574775428,228
+D4,all,4,dayPeak pairwise ordering (headliners),wt_med,lvlh5_naive,0.7579143389199255,0.02815849396550041,227
+D4,all,5,dayPeak pairwise ordering (headliners),wt_med,lvlh5_naive,0.7578642742792507,0.02894073144032472,226
+D4,all,6,dayPeak pairwise ordering (headliners),wt_med,lvlh5_naive,0.7578790800542865,0.03089131033746295,225
+D4,all,7,dayPeak pairwise ordering (headliners),wt_med,lvlh5_tft,0.7486452891021035,0.030754811378744584,224
+D4,all,10,dayPeak pairwise ordering (headliners),wt_med,lvlh5_naive,0.7478435759508735,0.026748622571172387,221
+D4,all,14,dayPeak pairwise ordering (headliners),wt_med,lvlh5_naive,0.7403758831025822,0.02379648570852766,217
+D4,all,21,dayPeak pairwise ordering (headliners),wt_med,lvlh5_naive,0.7348952805032749,0.023539933408819547,210
+D4,all,30,dayPeak pairwise ordering (headliners),wt_med,lvlh5_naive,0.7285741132636636,0.02289675866259877,201
+D4,all,45,dayPeak pairwise ordering (headliners),wt_med,lvlh5_tft,0.7223009116251036,0.03425676314795356,186
+D4,all,60,dayPeak pairwise ordering (headliners),clim,lvlh5_tft,0.7341137123745819,0.06706696208951923,171
+D4,all,90,dayPeak pairwise ordering (headliners),wt_med,lvlh5_naive,0.7135010772136074,0.019139561205878897,141
+D5,all,0,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,3.864588616261614,-0.200133466796534,231
+D5,all,1,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,3.9111000663679825,-0.20910378130119556,230
+D5,all,2,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,3.9319260263981324,-0.21491480502399485,229
+D5,all,3,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,3.9499504258994005,-0.22007990926674426,228
+D5,all,4,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,3.9623634079252694,-0.22776184503162922,227
+D5,all,5,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,3.9773502106619065,-0.23202467058320142,226
+D5,all,6,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,4.009973561588511,-0.23779766572245453,225
+D5,all,7,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,4.059491737133922,-0.2520981405040592,224
+D5,all,10,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,4.116324260845538,-0.2642995884340129,221
+D5,all,14,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,4.20579866646508,-0.2825706736988147,217
+D5,all,21,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,4.324413153561935,-0.305158044572309,210
+D5,all,30,first-hour MAE (opening-aligned),wt_med,lvlh5_tft,4.500660803248254,-0.34718764387341583,201
+D5,all,45,first-hour MAE (opening-aligned),wt_med,lvlh5_cbd,4.534085530550683,-0.2940506182530722,186
+D5,all,60,first-hour MAE (opening-aligned),clim,lvlh5_tft,1.3371019843101062,-0.8150228746594312,171
+D5,all,90,first-hour MAE (opening-aligned),wt_med,h5,4.827354493442977,-0.23037273446160533,141
+D2,all,w0-45,live-window MAE (headliners),persistence,persistence,6.2946828628068365,0.0,231
+D1,all,0-60,next-best precision,snaive7,snaive7,0.36533410962111673,0.0,231
+D1,all,60-120,next-best precision,snaive7,lvlh5_naive,0.5071894131856233,0.03011455795246243,231
+D1,all,0-60,next-best precision (top-3),snaive7,snaive7,0.4290339989206692,0.0,231
+D1,all,60-120,next-best precision (top-3),snaive7,lvlh5_naive,0.5740699112060245,0.012502717055405843,231
+D1,all,0-60,next-best recall,snaive7,snaive7,0.6472078657353947,0.0,231
+D1,all,60-120,next-best recall,snaive7,snaive7,0.6209272008071933,0.0,231
+D4,all,1,optimiser regret (min per park-day),wt_med,lvlh5_tft,27.85080831408776,-0.6815231250724487,230
+D4,all,3,optimiser regret (min per park-day),wt_med,lvlh5_tft,27.857745983347016,-1.2234004948745145,228
+D4,all,7,optimiser regret (min per park-day),wt_med,h5,29.192439862542955,-0.8280105358465732,224
+D4,all,14,optimiser regret (min per park-day),wt_med,h5,29.672548686112766,-1.1833119383825412,217
+D4,all,30,optimiser regret (min per park-day),clim,lvlh5_tft,29.865531023981728,-0.8136200716845856,201
+D5,all,0,rope-drop worth agreement,wt_med,wt_med,0.9118371228201253,0.0,231
+D5,all,1,rope-drop worth agreement,wt_med,wt_med,0.9111791075420906,0.0,230
+D5,all,2,rope-drop worth agreement,wt_med,wt_med,0.9109796967714539,0.0,229
+D5,all,3,rope-drop worth agreement,wt_med,wt_med,0.9109191255000895,0.0,228
+D5,all,4,rope-drop worth agreement,wt_med,wt_med,0.9106971774966177,0.0,227
+D5,all,5,rope-drop worth agreement,wt_med,wt_med,0.9106254872703807,0.0,226
+D5,all,6,rope-drop worth agreement,wt_med,wt_med,0.9102906095397018,0.0,225
+D5,all,7,rope-drop worth agreement,clim,clim,0.9099757691553368,0.0,224
+D5,all,10,rope-drop worth agreement,clim,clim,0.9096318082648458,0.0,221
+D5,all,14,rope-drop worth agreement,clim,clim,0.908934549687909,0.0,217
+D5,all,21,rope-drop worth agreement,clim,clim,0.9083014816992704,0.0,210
+D5,all,30,rope-drop worth agreement,clim,clim,0.9082574443480774,0.0,201
+D5,all,45,rope-drop worth agreement,clim,clim,0.9088527710901194,0.0,186
+D5,all,60,rope-drop worth agreement,clim,clim,0.9088679703741034,0.0,171
+D5,all,90,rope-drop worth agreement,clim,clim,0.9085735223720058,0.0,141
+UC4,all,1,UC4 Spearman within park-month,lvl_snaive7,lvl_snaive7,0.2778020742890394,0.0,231
+UC4,all,2,UC4 Spearman within park-month,lvl_snaive7,lvl_snaive7,0.2684268730339425,0.0,229
+UC4,all,3,UC4 Spearman within park-month,lvl_snaive7,lvl_snaive7,0.26679327698350686,0.0,228
+UC4,all,4,UC4 Spearman within park-month,lvl_snaive7,lvl_snaive7,0.26793194378445434,0.0,227
+UC4,all,5,UC4 Spearman within park-month,lvl_snaive7,lvl_snaive7,0.2697560515167313,0.0,226
+UC4,all,6,UC4 Spearman within park-month,lvl_snaive7,lvl_snaive7,0.269049533085859,0.0,225
+UC4,all,7,UC4 Spearman within park-month,lvl_naive4,lvl_naive4,0.17189985732540192,0.0,224
+UC4,all,10,UC4 Spearman within park-month,lvl_naive4,lvl_naive4,0.17549378461598733,0.0,221
+UC4,all,14,UC4 Spearman within park-month,lvl_naive4,lvl_naive4,0.1449372219773502,0.0,217
+UC4,all,21,UC4 Spearman within park-month,lvl_naive4,lvl_naive4,0.1289618927921825,0.0,210
+UC4,all,30,UC4 Spearman within park-month,lvl_clim,lvl_clim,0.15168988776324824,0.0,201
+UC4,all,45,UC4 Spearman within park-month,lvl_naive4,lvl_naive4,0.15926778496854643,0.0,186
+UC4,all,60,UC4 Spearman within park-month,lvl_naive4,lvl_naive4,0.1643349307096326,0.0,171
+UC4,all,90,UC4 Spearman within park-month,lvl_wt56,lvl_wt56,0.16421814548958008,0.0,141
+UC4,all,120,UC4 Spearman within park-month,lvl_naive4,lvl_naive4,0.20607088093045187,0.0,111
+UC4,all,180,UC4 Spearman within park-month,lvl_naive4,lvl_naive4,0.3287066033724095,0.0,51
