@@ -22,6 +22,7 @@ import {
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
 import { RideOpening } from "../../common/types/ride-opening.type";
 import { formatInParkTimezone } from "../../common/utils/date.util";
+import { logInfrastructureError } from "../../common/utils/file-logger.util";
 import { formatInTimeZone } from "date-fns-tz";
 import {
   PlanDayDto,
@@ -2081,9 +2082,18 @@ export class PlanDayService {
     return this.historicalStatsService
       .getParkHourlyProfile(park, 1, PlanDayService.SHAPE_RIDES, 20)
       .catch((err: Error) => {
-        this.logger.warn(
+        // ERROR, not WARN, and into the infrastructure log as well: without the
+        // profile every composed day of this park has no rides at all, and the
+        // response is still a 200, so nothing else records it. PAR-832 ran for
+        // days as a WARN line that only `docker logs` kept, and that is lost on
+        // every redeploy.
+        this.logger.error(
           `Plan day: hourly profile unavailable for ${park.slug}: ${err.message}`,
+          err.stack,
         );
+        logInfrastructureError("database", "plan-day hourly profile", err, {
+          parkSlug: park.slug,
+        });
         return null;
       });
   }
