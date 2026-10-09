@@ -14,6 +14,8 @@ import { Park } from "../entities/park.entity";
 import { RideOpening } from "../../common/types/ride-opening.type";
 import { logInfrastructureError } from "../../common/utils/file-logger.util";
 import { Logger } from "@nestjs/common";
+import { H5ProfileService } from "./h5-profile.service";
+import type { H5RideProfile } from "../../common/utils/h5-profile.util";
 
 // The failure paths below would otherwise append to ./logs on every run.
 jest.mock("../../common/utils/file-logger.util", () => ({
@@ -85,6 +87,10 @@ describe("PlanDayService", () => {
   }>;
   let scheduledTimes: Map<string, string[]>;
   let patterns: Map<string, unknown>;
+  /** The H5 profiles the composer reads (PAR-834); only read with the flag on. */
+  let h5Profiles: Map<string, H5RideProfile>;
+  let h5Fails: boolean;
+  let h5Mock: jest.Mock;
 
   const build = async () => {
     const moduleRef = await Test.createTestingModule({
@@ -226,6 +232,7 @@ describe("PlanDayService", () => {
               .mockImplementation(async () => accuracyProfile),
           },
         },
+        { provide: H5ProfileService, useValue: { getProfiles: h5Mock } },
         {
           provide: ShowsService,
           useValue: {
@@ -308,6 +315,12 @@ describe("PlanDayService", () => {
     parkShows = [];
     scheduledTimes = new Map();
     patterns = new Map();
+    h5Profiles = new Map();
+    h5Fails = false;
+    h5Mock = jest.fn().mockImplementation(async () => {
+      if (h5Fails) throw new Error("rollup down");
+      return h5Profiles;
+    });
     profileMock = jest.fn().mockImplementation(async () => profile);
     leadMaeMock = jest.fn().mockImplementation(async () => leadMae);
     service = await build();
@@ -3412,6 +3425,254 @@ describe("PlanDayService", () => {
       // A past day is answered from the rollup alone. Neither the hour shape
       // nor the day level was asked for, so neither may be blamed.
       expect(plan.ridesUnavailable?.reason).toBe("feed_stale");
+    });
+  });
+
+  // ── The H5 composer (PAR-834) ─────────────────────────────────────────────
+  // Behind `PLAN_DAY_H5_COMPOSER`. The arithmetic is pinned in
+  // h5-profile.util.spec.ts; these pin what the endpoint does with it: which
+  // level it applies, what reaches `slots` and `hours`, and that the flag off —
+  // or any failure — leaves the response exactly as it was.
+  describe("the H5 composer", () => {
+    /** A 09:00–18:00 ride: ramp in the opening hour, 40 through the day. */
+    const h5 = (): H5RideProfile => ({
+      open: { wd: {}, we: {}, all: { 0: 5, 1: 10, 2: 20, 3: 30 } },
+      close: { wd: {}, we: {}, all: {} },
+      hourly: {
+        wd: {},
+        we: {},
+        all: {
+          9: 20,
+          10: 30,
+          11: 40,
+          12: 40,
+          13: 40,
+          14: 40,
+          15: 40,
+          16: 40,
+          17: 20,
+        },
+      },
+      slot: { wd: {}, we: {}, all: {} },
+      refLevel: 40,
+      days: 42,
+    });
+
+    /** A composed day with a level of 60 from the given model. */
+    const composedDay = (modelVersion: string | null, date = farDate()) => {
+      calendarDay = {
+        ...calendarDay!,
+        date,
+        hours: {
+          openingTime: atParkHour(date, 9),
+          closingTime: atParkHour(date, 18),
+        },
+      };
+      dailyPredictions = [
+        {
+          ...(dailyPredictions[0] as object),
+          predictedTime: `${date}T12:00:00.000Z`,
+          ...(modelVersion ? { modelVersion } : {}),
+        },
+      ];
+      h5Profiles = new Map([["a-taron", h5()]]);
+      return date;
+    };
+
+    beforeEach(() => {
+      process.env.PLAN_DAY_H5_COMPOSER = "true";
+    });
+    afterEach(() => {
+      delete process.env.PLAN_DAY_H5_COMPOSER;
+    });
+
+    it("serves quarter-hours scaled by the TFT level, the ramp unscaled", async () => {
+      const date = composedDay("tft");
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("composed");
+      const taron = plan.rides[0];
+      expect(taron.composer).toBe("h5_tft");
+      const slots = taron.slots!;
+      expect(slots[0]).toEqual({
+        minute: 540,
+        start: atParkHour(date, 9),
+        wait: 5,
+      });
+      expect(slots.slice(0, 4).map((s) => s.wait)).toEqual([5, 10, 20, 30]);
+      // 10:00: hourly 30 leaning 22.5/60 toward 09:00's 20, × 60/40.
+      expect(slots.find((s) => s.minute === 600)!.wait).toBe(
+        Math.round((30 - 0.375 * 10) * 1.5),
+      );
+      // The hour is the mean of its slots, rounded to 5 like every hour.
+      expect(taron.hours[0]).toEqual({ hour: 9, wait: 15 });
+      // A park closing at 18:00 has no 18:00 slot, so no 18:00 hour.
+      expect(taron.hours[taron.hours.length - 1].hour).toBe(17);
+      expect(slots[slots.length - 1].minute).toBe(17 * 60 + 45);
+      // dayPeak stays the day level; sampleDays is the profile's window.
+      expect(taron.dayPeak).toBe(60);
+      expect(taron.sampleDays).toBe(42);
+    });
+
+    it("never scales by a CatBoost level, and serves the plain profile", async () => {
+      const date = composedDay(null);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      const taron = plan.rides[0];
+      expect(taron.composer).toBe("h5");
+      expect(taron.slots!.find((s) => s.minute === 600)!.wait).toBe(26);
+      expect(taron.dayPeak).toBe(60);
+    });
+
+    it("serves exactly what it served before with the flag off", async () => {
+      delete process.env.PLAN_DAY_H5_COMPOSER;
+      const date = composedDay("tft");
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(h5Mock).not.toHaveBeenCalled();
+      expect(plan.rides[0].slots).toBeUndefined();
+      expect(plan.rides[0].composer).toBe("peak_scaled");
+      expect(Math.max(...plan.rides[0].hours.map((h) => h.wait))).toBe(60);
+    });
+
+    it("keeps the old composer for a ride H5 has no profile for", async () => {
+      const date = composedDay("tft");
+      h5Profiles = new Map();
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].composer).toBe("peak_scaled");
+      expect(plan.rides[0].slots).toBeUndefined();
+      expect(plan.rides[0].hours.map((h) => h.hour)).toContain(18);
+    });
+
+    it("falls back to the old composer when the profiles cannot be read", async () => {
+      const date = composedDay("tft");
+      h5Fails = true;
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].composer).toBe("peak_scaled");
+      expect(logInfrastructureError).toHaveBeenCalledWith(
+        "database",
+        "plan-day h5 profile",
+        expect.any(Error),
+        { parkSlug: park.slug },
+      );
+    });
+
+    it("leaves days past ninety to the old composer", async () => {
+      const date = composedDay("tft", dayFromToday(91));
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(h5Mock).not.toHaveBeenCalled();
+      expect(plan.rides[0].composer).toBe("peak_scaled");
+    });
+
+    it("keeps the model's own quarter-hours and composes the rest", async () => {
+      const date = composedDay("tft", today());
+      const quarter = (hour: number, minute: number, wait: number) => ({
+        attractionId: "a-taron",
+        predictedTime: new Date(
+          Date.parse(atParkHour(date, hour)) + minute * 60_000,
+        ).toISOString(),
+        predictedWaitTime: wait,
+        predictionType: "hourly",
+        uncertaintyMinutes: 7,
+      });
+      hourlyPredictions = [
+        quarter(9, 0, 10),
+        quarter(9, 15, 12),
+        quarter(9, 30, 14),
+        quarter(9, 45, 16),
+        quarter(10, 0, 22),
+      ];
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("measured");
+      const taron = plan.rides[0];
+      const slots = taron.slots!;
+      // The model's answer, unrounded and unlabelled: it IS the tier.
+      expect(
+        slots.slice(0, 5).map((s) => [s.minute, s.wait, s.source]),
+      ).toEqual([
+        [540, 10, undefined],
+        [555, 12, undefined],
+        [570, 14, undefined],
+        [585, 16, undefined],
+        [600, 22, undefined],
+      ]);
+      // 10:15 is inside an hour the model answered, so it is not composed.
+      expect(slots.find((s) => s.minute === 615)).toBeUndefined();
+      // From 11:00 the profile, and it says so.
+      const eleven = slots.find((s) => s.minute === 660)!;
+      expect(eleven.source).toBe("composed");
+      expect(taron.hours.find((h) => h.hour === 11)!.source).toBe("composed");
+      expect(taron.composer).toBe("h5_tft");
+    });
+
+    it("runs a day past midnight on into the next morning", async () => {
+      const date = farDate();
+      composedDay("tft", date);
+      calendarDay = {
+        ...calendarDay!,
+        hours: {
+          openingTime: atParkHour(date, 16),
+          closingTime: atParkHour(dayAfter(date), 1),
+        },
+      };
+      const night = h5();
+      night.hourly.all = { 16: 30, 20: 50, 23: 40, 24: 20 };
+      h5Profiles = new Map([["a-taron", night]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      const slots = plan.rides[0].slots!;
+      const midnight = slots.find((s) => s.minute === 1440)!;
+      expect(midnight.start).toBe(atParkHour(dayAfter(date), 0));
+      expect(slots[slots.length - 1].minute).toBe(1485);
+      expect(plan.rides[0].hours.map((h) => h.hour)).toContain(24);
+    });
+
+    it("finds the opening on the clock across a DST switch", () => {
+      // 25 October 2026: Berlin leaves summer time at 03:00, so 10:00 is
+      // 09:00 UTC that day and 08:00 UTC the day before.
+      expect(
+        PlanDayService.minuteWindow(
+          true,
+          "2026-10-25T09:00:00.000Z",
+          "2026-10-25T17:00:00.000Z",
+          "Europe/Berlin",
+          10,
+          18,
+        ),
+      ).toEqual({ openMin: 600, closeMin: 1080, published: true });
+      const instant = PlanDayService["slotInstants"](
+        "2026-10-25",
+        "Europe/Berlin",
+      );
+      expect(instant(600)).toBe("2026-10-25T09:00:00.000Z");
+      expect(
+        PlanDayService["slotInstants"]("2026-10-24", "Europe/Berlin")(600),
+      ).toBe("2026-10-24T08:00:00.000Z");
+    });
+
+    it("aligns nothing to hours the operator did not publish", () => {
+      expect(
+        PlanDayService.minuteWindow(
+          false,
+          undefined,
+          undefined,
+          "Europe/Berlin",
+          10,
+          19,
+        ),
+      ).toEqual({ openMin: 600, closeMin: 1200, published: false });
     });
   });
 });

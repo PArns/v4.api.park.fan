@@ -129,6 +129,142 @@ service at 17:15, tomorrow's plan for Disneyland Paris (open 09:00–22:00) stop
 at 17:00 — the evening, where a headliner peaks, silently absent, and `dayPeak`
 the maximum of what was left.
 
+## 2a. Quarter-hours: `slots[]` and the H5 composer (PAR-834)
+
+**Behind a flag.** `PLAN_DAY_H5_COMPOSER=true` switches it on; unset, the
+response is what it was before, with one addition — `composer` on rides whose
+hours were composed. It ships off so the forward archive (PAR-831) can score the
+old and the new composer on the same board before either is the default.
+
+### What changes with the flag on
+
+1. **Composed hours come from a different profile.** The old composer took the
+   ride's hourly P50 over a year and stretched it so its **maximum** equals the
+   day level. Scored offline on 15-minute truth (ML review benchmark, PR #445),
+   that is worse than a plain weekday-median profile from d3 on (+0.5 … +1.1 min
+   MAE; first-hour bias +2.3 min, because putting a median profile's maximum at a
+   P90-like level lifts every hour under it). It is replaced by **H5**, the only
+   profile the benchmark found better than the weekday median at every lead:
+   - the **first hour after the published opening**: the ride's median at that
+     many quarter-hours after opening (the rope-drop ramp, aligned to the
+     opening, not to the clock);
+   - the **last hour before the published closing**: aligned to the closing;
+   - in between: the hourly median by wall-clock hour, linearly interpolated
+     between hour centres onto the quarter-hours;
+   - every median over the ride's **last 56 days** before today, from the
+     nightly 15-minute rollup (`attraction_hourly_history`), forward-filled
+     inside each day's published window (at most 3 h), wait ≥ 5.
+2. **The level scales by a ratio, and only TFT's.** With a TFT day level (the
+   served daily row with `modelVersion: "tft"`, which the serving read already
+   holds to ≤ 3 days old) the profile is multiplied by **level ÷ the ride's
+   median daily P90 over the same 56 days** — never stretched to put its maximum
+   at the level. The rope-drop hour is **not** scaled. With a level the weekday/
+   weekend split is not used (the benchmark found it adds nothing once the level
+   carries the day); without one it is (weekday or weekend median with ≥ 3 days,
+   else all days with ≥ 4). **CatBoost's daily level is never applied** — it made
+   the benchmark worse (+2.6 min MAE, bias −5.7) — so past TFT's 60 days, or for
+   a ride TFT does not cover, the plain profile is served (`composer: "h5"`).
+3. **`slots[]` appears on every ride with a 15-minute answer.** The model's own
+   15-minute predictions on measured hours, the H5 profile on composed ones.
+4. **`hours[h]` of a composed H5 hour is the mean of its slots**, rounded to 5,
+   so the two series never disagree about an hour. A measured hour is unchanged
+   (the mean of the model's slots, as before).
+
+### What does not change
+
+- **The tier ladder.** A ride is composed only where it has a day level — the
+  same gate as before — so `composed`, `long_range` and `climatology` mean what
+  they meant. H5 is used up to **90 days** out (the farthest lead it was
+  scored at); beyond that, and for a ride with no H5 profile (fewer than four
+  measured days at an hour, a ride new this season), the old composer stays and
+  `composer` says `peak_scaled`. If the profile read fails, every ride falls back
+  the same way and the failure is logged as an infrastructure error.
+- **`dayPeak`** (§3) is still the day-level forecast, P90-like. It is **not** the
+  maximum of an H5 curve: H5 is a median profile, so its top quarter-hour is a
+  typical busy slot and normally sits below `dayPeak` — on the composed tier too
+  now. The
+  rule "on the composed tier the curve's maximum equals `dayPeak` by
+  construction" (§3) holds only for `composer: "peak_scaled"`.
+- **`sampleDays`** stays "the history behind the curve" — which for an H5 ride is
+  the days of its 56-day window that had readings, not the year.
+
+### Opening hours that nobody published
+
+Past the operator's publishing horizon the window comes from the measured hours
+(§4, `hoursSource: "observed"`). There is no published opening to align a
+rope-drop ramp to, so **nothing is edge-aligned on those days**: every slot is
+the interpolated hourly median (scaled by the level where one applies, the first
+hour included). The benchmark's opening-aligned gain was measured where schedules
+were published, and it is inflated where they were not, so it is not claimed
+there. Read `context.hoursSource` to know which you have.
+
+### Known limits
+
+- The rollup drops DOWN readings instead of storing them, so a breakdown inside
+  the 56 days is filled with the last operating wait for up to three hours,
+  where the benchmark's truth leaves a gap. A median over 56 days barely moves.
+- The rollup writes a finished day at 04:30, so a park whose day crosses midnight
+  has yesterday's small hours only from the day after (they sit in today's row).
+  One day of 56.
+- Profiles are cached per park and park-local date for six hours
+  (`plan-day:h5:v1:<parkId>:<date>`); a day's rollup row reaches the profile at
+  the next rebuild.
+
+### The 15-minute contract
+
+```jsonc
+"rides": [{
+  "attractionSlug": "taron",
+  "hours": [{ "hour": 10, "wait": 25 }, { "hour": 11, "wait": 40 }, …],
+  "slots": [
+    { "minute": 600, "start": "2026-10-17T08:00:00.000Z", "wait": 22 },
+    { "minute": 615, "start": "2026-10-17T08:15:00.000Z", "wait": 27 },
+    …
+  ],
+  "composer": "h5_tft",
+  "dayPeak": 55
+}]
+```
+
+- `minute` is the park-local wall-clock minute the slot **starts** at, counted
+  from the planned date's midnight and **unfolded** like `hour` (§5): 1440 is the
+  midnight that ends a late day, 1455 its 00:15. `floor(minute / 60)` is the
+  slot's hour. Always a multiple of 15, ascending, no duplicates.
+- `start` is the same instant in UTC — for anything that crosses a DST switch.
+- `wait` is **whole minutes, not rounded to 5**. The five-minute step is a
+  display convention; rounding a 15-minute series to it before an estimator
+  reads it throws away the resolution the series exists for. Round for display.
+- `source` follows `hours[].source`: present only where the slot did not come
+  from the response's `tier`.
+- **Absent `slots`** means no 15-minute series (flag off, or a ride composed by
+  the hourly fallback, or another tier): read `hours`. **A gap inside a present
+  series** means the same for that minute: read the slot's hour — but only when
+  that hour has **no slot at all**. An hour with some slots and not others is
+  partly outside the ride's window (a 09:30 opening has no 09:00 or 09:15), and
+  its missing quarter-hours have no value.
+- A ride opening later than the park (§9, `opensAt`) starts its slots at that
+  opening's quarter-hour.
+
+### What the frontend has to change (separate task, park.fan)
+
+- `lib/api/types.ts`: add `slots?: PlanDaySlot[]` (`minute`, `start`, `wait`,
+  `source?`) and `composer?` to `PlanDayRide`.
+- `lib/planner/estimate.ts` (`estimateFor`, the "the API is hourly on both tiers"
+  comment): read the slot whose `minute === floor(entry.startMinute / 15) * 15`
+  first; fall back to `hours[floor(startMinute / 60)]` only when the ride has no
+  `slots` or that hour has no slot at all; otherwise `assumed(day)` as today.
+  `tier` per block becomes `slot.source ?? day.tier`. Do NOT interpolate
+  between slots — they are already quarter-hours.
+- `lib/planner/next-best-ride.ts`: the look-ahead and "later" maximum can run on
+  slots (start minute within [now, now + 120]) when present; hours otherwise.
+- `lib/planner/day-grid.ts` / `lib/utils/ride-day-curve-geometry.ts` and the
+  curve cards: draw `slots` when present (the axis is already in minutes past
+  midnight, unfolded the same way), hours otherwise.
+- Totals and the optimiser's per-hour table can probe at the block's own
+  quarter-hour instead of at `:00`.
+- Display: round `wait` to 5 where a single figure is printed; keep the raw
+  minutes for sums.
+
 ## 3. `dayPeak` is the same statistic on every tier
 
 `dayPeak` is the **day's peak wait**: the day-level prediction on a forecast day,
@@ -142,9 +278,10 @@ read 42 five days out, and the whole difference was the statistic. This is the
 same rule as `claude.md` §3 — *past and future days must carry the same statistic
 where they share a response field*.
 
-Consequence for a chart: on the composed tier the curve's maximum equals
-`dayPeak` by construction; on the measured and observed tiers `dayPeak` sits at
-or above the curve, because a peak is not a typical hour.
+Consequence for a chart: on the composed tier with `composer: "peak_scaled"` the
+curve's maximum equals `dayPeak` by construction; with the H5 composer (§2a), and
+on the measured and observed tiers, `dayPeak` normally sits above the curve, because
+a peak is not a typical hour.
 
 ## 4. Opening hours can come from the data
 

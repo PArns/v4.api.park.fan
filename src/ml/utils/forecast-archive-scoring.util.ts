@@ -318,7 +318,8 @@ function segmentsOf(curve: ArchivedCurve): string[] {
 }
 
 /** Sources whose number comes from the day level, not the hourly model. */
-const LEVEL_DERIVED = new Set(["composed", "climatology"]);
+// `composed_h5` is not here: the plain H5 profile uses no day level at all.
+const LEVEL_DERIVED = new Set(["composed", "composed_h5_tft", "climatology"]);
 
 interface Compared {
   slot: number;

@@ -44,6 +44,16 @@ its source in `sources` (`p` = pcn_blend, `c` = catboost); `/plan/day` hours
 record `m` measured (the hour-mean of that same served curve), `k` composed,
 `l` climatology, `o` observed. `-` is a slot the payload did not carry.
 
+**Composer A/B (PAR-834).** With `PLAN_DAY_H5_COMPOSER=true` a planner ride that
+carries `slots` is archived at **15 minutes** (`slot_minutes = 15`), exactly as
+the frontend contract reads it: the slot where there is one, the hour's value for
+an hour with no slot at all. Composed numbers are coded by their composer, so the
+board scores the two side by side under their own source names: `k` composed
+(old: hourly P50 stretched to the level), `h` `composed_h5` (H5, no level), `t`
+`composed_h5_tft` (H5 × TFT level ÷ the ride's 56-day P90). `composed_h5_tft`
+counts as level-derived for the `level_<x>` split; `composed_h5` does not — it
+uses no level. Rides the flag leaves on the old composer stay hourly with `k`.
+
 Per curve row: `waits` (served q50 per slot), `day_peak` and `expected_error`
 (plan_day), `model_version` (CatBoost version without `+pcn`), `ride_q90_56d`
 and `is_headliner`, plus:

@@ -192,6 +192,77 @@ describe("ForecastArchiveService.curvesFromPlanDay", () => {
     expect(rows[0].sources).toBe("kk");
     expect(rows[0].peakBand).toBeNull();
   });
+
+  // PAR-834: the H5 composer serves quarter-hours, and the board has to tell
+  // it from the old composer to compare the two.
+  it("archives a ride with slots at 15 minutes, coded by its composer", () => {
+    const rows = ForecastArchiveService.curvesFromPlanDay(
+      plan("measured", [
+        {
+          attractionSlug: "taron",
+          hours: [
+            { hour: 10, wait: 30 },
+            { hour: 11, wait: 40, source: "composed" },
+          ],
+          slots: [
+            { minute: 600, start: "2026-10-08T08:00:00.000Z", wait: 28 },
+            { minute: 615, start: "2026-10-08T08:15:00.000Z", wait: 31 },
+            {
+              minute: 660,
+              start: "2026-10-08T09:00:00.000Z",
+              wait: 38,
+              source: "composed",
+            },
+            {
+              minute: 675,
+              start: "2026-10-08T09:15:00.000Z",
+              wait: 42,
+              source: "composed",
+            },
+          ],
+          composer: "h5_tft",
+          dayPeak: 55,
+        },
+      ] as unknown as PlanDayDto["rides"]),
+      new Map([["taron", "id-taron"]]),
+      TZ,
+      "2026-10-08",
+      1,
+    );
+    expect(rows[0]).toMatchObject({
+      slotMinutes: 15,
+      // 10:30 and 10:45 have no slot, but hour 10 HAS slots, so they are not
+      // padded with the hour's value.
+      waits: [28, 31, null, null, 38, 42],
+      sources: "mm--tt",
+    });
+    expect(rows[0].slotStart.toISOString()).toBe("2026-10-08T08:00:00.000Z");
+  });
+
+  it("fills an hour without slots from the hour, and codes the plain profile", () => {
+    const rows = ForecastArchiveService.curvesFromPlanDay(
+      plan("composed", [
+        {
+          attractionSlug: "taron",
+          hours: [
+            { hour: 10, wait: 30 },
+            { hour: 11, wait: 40 },
+          ],
+          slots: [{ minute: 660, start: "2026-10-08T09:00:00.000Z", wait: 38 }],
+          composer: "h5",
+          dayPeak: 55,
+        },
+      ] as unknown as PlanDayDto["rides"]),
+      new Map([["taron", "id-taron"]]),
+      TZ,
+      "2026-10-08",
+      5,
+    );
+    expect(rows[0].waits).toEqual([30, 30, 30, 30, 38]);
+    expect(rows[0].sources).toBe("hhhhh");
+    // 10:00 CEST, resolved from the hour because no slot starts there.
+    expect(rows[0].slotStart.toISOString()).toBe("2026-10-08T08:00:00.000Z");
+  });
 });
 
 describe("ForecastArchiveService.nextRideRows (D1)", () => {

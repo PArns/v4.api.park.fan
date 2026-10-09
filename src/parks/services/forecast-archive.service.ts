@@ -19,7 +19,11 @@ import { ForecastArchiveParkDay } from "../../ml/entities/forecast-archive-park-
 import { nextRideLater } from "../../ml/utils/forecast-archive-scoring.util";
 import { PlanDayService } from "./plan-day.service";
 import { CalendarService } from "./calendar.service";
-import { PlanDayDto } from "../dto/plan-day.dto";
+import {
+  PlanDayComposer,
+  PlanDayDto,
+  PlanDayRideDto,
+} from "../dto/plan-day.dto";
 import { addIsoDays, formatInParkTimezone } from "../../common/utils/date.util";
 import { mapWithDbBudget } from "../../common/utils/db-job-budget";
 import {
@@ -594,11 +598,28 @@ export class ForecastArchiveService {
     date: string,
     lead: number,
   ): CurveDraft[] {
-    const tierCode = ForecastArchiveService.planSourceCode(plan.tier);
     const out: CurveDraft[] = [];
     for (const ride of plan.rides ?? []) {
       const attractionId = slugToId.get(ride.attractionSlug);
       if (!attractionId || ride.hours.length === 0) continue;
+      const code = (source: string | undefined) =>
+        ForecastArchiveService.planSourceCode(
+          source ?? plan.tier,
+          ride.composer,
+        );
+      if (ride.slots && ride.slots.length > 0) {
+        out.push(
+          ForecastArchiveService.quarterHourCurve(
+            ride,
+            attractionId,
+            code,
+            timezone,
+            date,
+            lead,
+          ),
+        );
+        continue;
+      }
       const hours = [...ride.hours].sort((a, b) => a.hour - b.hour);
       const firstHour = hours[0].hour;
       const n = hours[hours.length - 1].hour - firstHour + 1;
@@ -607,9 +628,7 @@ export class ForecastArchiveService {
       for (const h of hours) {
         const idx = h.hour - firstHour;
         waits[idx] = Math.round(h.wait);
-        sources[idx] = h.source
-          ? ForecastArchiveService.planSourceCode(h.source)
-          : tierCode;
+        sources[idx] = code(h.source);
       }
       out.push({
         attractionId,
@@ -641,6 +660,83 @@ export class ForecastArchiveService {
   }
 
   /**
+   * A ride that carries `slots` (the H5 composer is on, PAR-834), archived at
+   * the resolution the planner will read: 15-minute steps from its first to
+   * its last served quarter-hour. Each step holds the slot where there is one
+   * and otherwise the HOUR's value, but only for an hour with no slot at all —
+   * the frontend contract (docs/frontend/plan-day-endpoint.md §2a) — so an
+   * hour the 15-minute series answers is never padded with a value from
+   * before the opening. Steps are absolute 15 minutes from the first one,
+   * which only a park open across a DST switch would notice.
+   */
+  static quarterHourCurve(
+    ride: PlanDayRideDto,
+    attractionId: string,
+    code: (source: string | undefined) => string,
+    timezone: string,
+    date: string,
+    lead: number,
+  ): CurveDraft {
+    const slotByMinute = new Map((ride.slots ?? []).map((s) => [s.minute, s]));
+    const slottedHours = new Set(
+      (ride.slots ?? []).map((s) => Math.floor(s.minute / 60)),
+    );
+    const hourByHour = new Map(
+      ride.hours
+        .filter((h) => !slottedHours.has(h.hour))
+        .map((h) => [h.hour, h]),
+    );
+    const minutes = [
+      ...slotByMinute.keys(),
+      ...[...hourByHour.keys()].flatMap((h) => [h * 60, h * 60 + 45]),
+    ];
+    const first = Math.min(...minutes);
+    const last = Math.max(...minutes);
+    const n = (last - first) / 15 + 1;
+    const waits: (number | null)[] = new Array(n).fill(null);
+    const sources = new Array<string>(n).fill("-");
+    for (let i = 0; i < n; i++) {
+      const minute = first + i * 15;
+      const slot = slotByMinute.get(minute);
+      const hour = slot ? undefined : hourByHour.get(Math.floor(minute / 60));
+      const point = slot ?? hour;
+      if (!point) continue;
+      waits[i] = Math.round(point.wait);
+      sources[i] = code(point.source);
+    }
+    const firstSlot = slotByMinute.get(first);
+    const slotStart = firstSlot
+      ? new Date(firstSlot.start)
+      : new Date(
+          ForecastArchiveService.planHourInstant(
+            date,
+            Math.floor(first / 60),
+            timezone,
+          ).getTime() +
+            (first % 60) * 60_000,
+        );
+    return {
+      attractionId,
+      surface: ARCHIVE_SURFACES.plan_day,
+      targetDate: date,
+      leadDays: lead,
+      slotStart,
+      slotMinutes: 15,
+      waits,
+      sources: sources.join(""),
+      bands: null,
+      dayPeak: Number.isFinite(ride.dayPeak) ? Math.round(ride.dayPeak) : null,
+      expectedError:
+        ride.expectedError != null ? Math.round(ride.expectedError) : null,
+      peakBand:
+        ride.uncertaintyMinutes != null
+          ? Math.round(ride.uncertaintyMinutes)
+          : null,
+      modelVersion: null,
+    };
+  }
+
+  /**
    * Today's plan reduced to what the frontend's next-best-ride rule reads
    * (`park.fan/lib/planner/next-best-ride.ts`): per ride, the plan hours whose
    * start lies in [origin, origin + 120 min] before the close hour, and the
@@ -659,7 +755,6 @@ export class ForecastArchiveService {
     const nowMinute =
       Number(formatInTimeZone(originAt, timezone, "H")) * 60 +
       Number(formatInTimeZone(originAt, timezone, "m"));
-    const tierCode = ForecastArchiveService.planSourceCode(plan.tier);
     const out: Array<
       CurveDraft & { laterWait: number | null; laterAt: Date | null }
     > = [];
@@ -692,9 +787,10 @@ export class ForecastArchiveService {
           sources.push("-");
         }
         waits[idx] = Math.round(h.wait);
-        sources[idx] = h.source
-          ? ForecastArchiveService.planSourceCode(h.source)
-          : tierCode;
+        sources[idx] = ForecastArchiveService.planSourceCode(
+          h.source ?? plan.tier,
+          ride.composer,
+        );
       }
       out.push({
         attractionId,
@@ -721,12 +817,21 @@ export class ForecastArchiveService {
     return out;
   }
 
-  private static planSourceCode(source: string | undefined): string {
+  /**
+   * A served hour's or slot's regime as one {@link ARCHIVE_SOURCE_CODES}
+   * character. A composed number also names its composer (PAR-834), so the
+   * board scores the H5 composition apart from the old peak-scaled one —
+   * `composed` is what the visitor is told, the composer is how it was made.
+   */
+  private static planSourceCode(
+    source: string | undefined,
+    composer?: PlanDayComposer,
+  ): string {
     switch (source) {
       case "measured":
         return "m";
       case "composed":
-        return "k";
+        return composer === "h5_tft" ? "t" : composer === "h5" ? "h" : "k";
       case "climatology":
         return "l";
       case "observed":
