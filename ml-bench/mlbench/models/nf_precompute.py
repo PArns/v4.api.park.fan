@@ -124,60 +124,120 @@ def to_dataset(panel: Panel, rows: np.ndarray):
                              y_idx=0, static=panel.static[rows], static_cols=pd.Index(panel.static_cols))
 
 
+def _windows_dataset(panel: Panel, rows: np.ndarray, starts: np.ndarray, fut: np.ndarray):
+    """One NeuralForecast series per (ride, origin): the ``input_size`` steps before the
+    origin's first forecast step plus the ``h`` forecast steps. The forecast steps carry
+    no target (masked) and the covariates as known at the origin (``fut``: [O, P, L+h, F]
+    per origin and park, NaN = keep the panel's value)."""
+    from neuralforecast.tsdataset import TimeSeriesDataset
+
+    L, h = INPUT_DAYS * K, HORIZON_DAYS * K
+    n, nf = len(rows), len(panel.futr_cols)
+    park_ix = {p: i for i, p in enumerate(sorted(set(panel.parks)))}
+    pidx = np.array([park_ix[panel.parks[r]] for r in rows])
+    arr = np.empty((len(starts), n, L + h, len(panel.cols)), dtype=np.float32)
+    for o, st in enumerate(starts):
+        lo = st - L
+        src = panel.temporal[rows, max(lo, 0):st + h]
+        if lo < 0:
+            arr[o, :, :-lo] = 0
+            arr[o, :, -lo:] = src
+        else:
+            arr[o] = src
+        arr[o, :, L:, 0] = 0
+        arr[o, :, L:, -1] = 0
+        f = fut[o][pidx]                                       # [n, L+h, F]
+        sl = arr[o, :, :, 1:1 + nf]
+        np.copyto(sl, f, where=np.isfinite(f))
+    temporal = arr.reshape(-1, len(panel.cols))
+    m = len(starts) * n
+    indptr = np.arange(0, (m + 1) * (L + h), L + h, dtype=np.int64)
+    static = np.tile(panel.static[rows], (len(starts), 1))
+    ds = TimeSeriesDataset(temporal=temporal, temporal_cols=pd.Index(panel.cols), indptr=indptr,
+                           y_idx=0, static=static, static_cols=pd.Index(panel.static_cols))
+    return ds, arr
+
+
 def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_steps: int,
-                   hours: list[int], scale: float = 1.0, log=print) -> dict[int, pd.DataFrame]:
-    """Train on steps < c0, forecast every origin c0..c_last. Returns {origin_hour: rows}."""
+                   hours: list[int], scale: float = 1.0, log=print, con=None,
+                   chunk: int = 4) -> dict[int, pd.DataFrame]:
+    """Train on steps < c0, forecast every origin c0..c_last. Returns {origin_hour: rows}.
+
+    ``con`` provides the schedule as known at each origin (``origin_covariates``); with
+    ``con=None`` the panel's published-final covariates are used (unit tests only)."""
     import torch
 
+    from .nf_panel import hour_features, origin_covariates
+
     spec = SPECS[name]
+    multivariate = bool(spec.get("multivariate"))
     n_win = (c_last - c0).days + 1
     first = panel.idx(c0)
     assert panel.T == first + K * (n_win + HORIZON_DAYS), "panel must end at c_last + 8 days"
-    test_size = panel.T - first                     # every step from c0 on is held back
-    h = HORIZON_DAYS * K
-    groups = (sorted(set(panel.groups)) if spec.get("multivariate") else ["all"])
-    mask = panel.mask
-    csum = np.concatenate([np.zeros((mask.shape[0], 1), np.float32), np.cumsum(mask, axis=1)], axis=1)
-    inwin = panel.temporal[:, :, panel.cols.index("in_win")] > 0
+    L, h = INPUT_DAYS * K, HORIZON_DAYS * K
+    nf = len(panel.futr_cols)
+    parks = sorted(set(panel.parks))
+    p_ix = {p: i for i, p in enumerate(parks)}
+    origins = [c0 + dt.timedelta(days=i) for i in range(n_win)]
+    # covariates as known at each origin for its days c .. c+8 (the window reaches into c+8)
+    fut_days = np.full((n_win, len(parks), HORIZON_DAYS + 1, K, nf), np.nan, dtype=np.float32)
+    if con is not None:
+        oc = origin_covariates(con, origins, HORIZON_DAYS + 1)
+        oc = oc[oc["park_id"].isin(p_ix)]
+        oi = (oc["origin"].to_numpy().astype("datetime64[D]") - np.datetime64(c0, "D")).astype(int)
+        di = (oc["date"].to_numpy().astype("datetime64[D]")
+              - oc["origin"].to_numpy().astype("datetime64[D]")).astype(int)
+        fut_days[oi, oc["park_id"].map(p_ix).to_numpy(), di] = hour_features(oc, panel.futr_cols)
+        if spec["weather"]:     # ORACLE variant: weather stays the actuals of the panel
+            w = [panel.futr_cols.index(c) for c in panel.futr_cols if c.startswith("wx_")]
+            fut_days[..., w] = np.nan
+    fut_days = fut_days.reshape(n_win, len(parks), (HORIZON_DAYS + 1) * K, nf)
+    in_win_i = panel.cols.index("in_win")
+
+    groups = sorted(set(panel.groups)) if multivariate else ["all"]
+    if multivariate:
+        hours = [6]          # one predict call per origin and region: daily origins only
     out: dict[int, list[pd.DataFrame]] = {H: [] for H in hours}
+    aids = np.array(panel.aids)
     for g in groups:
-        rows = (np.arange(len(panel.aids)) if g == "all"
-                else np.flatnonzero(np.array(panel.groups) == g))
+        rows = (np.arange(len(aids)) if g == "all" else np.flatnonzero(np.array(panel.groups) == g))
         if len(rows) == 0:
             continue
         t0 = time.monotonic()
-        ds = to_dataset(panel, rows)
         model = make_model(name, panel, max_steps, len(rows), scale)
-        model.fit(dataset=ds, val_size=0, test_size=test_size)
+        model.fit(dataset=to_dataset(panel, rows), val_size=0, test_size=panel.T - first)
         t_fit = time.monotonic() - t0
+        model.set_test_size(h)
         for H in hours:
             s = max(0, H - HOUR0)                    # first forecast step inside day c
-            model.set_test_size(test_size - s)
-            fc = model.predict(dataset=ds, step_size=K)
-            fc = np.asarray(fc, dtype=np.float32)
-            nw = fc.shape[0] // (len(rows) * h)
-            fc = fc.reshape(len(rows), nw, h, -1)[:, :n_win]
-            fc = np.sort(fc, axis=-1)                # MQLoss may cross: enforce q50 <= q80 <= q95
             keep_steps = h if H == 6 else K - s      # intraday: rest of day c only
-            starts = first + s + K * np.arange(n_win)                     # [W]
-            tt = starts[None, :, None] + np.arange(keep_steps)[None, None, :]   # [1,W,S]
-            ins = csum[rows][:, starts] - csum[rows][:, np.maximum(starts - INPUT_DAYS * K, 0)]
-            ok = inwin[rows][:, tt[0]] & (ins[:, :, None] >= MIN_INSAMPLE_HOURS)
-            si, wi, ki = np.nonzero(ok)
-            t_abs = tt[0][wi, ki]
-            df = pd.DataFrame({
-                "aid": np.array(panel.aids)[rows][si],
-                "origin_date": (np.datetime64(c0, "D") + wi.astype("timedelta64[D]")),
-                "origin_hour": np.int8(H),
-                "date": np.datetime64(panel.day0, "D") + (t_abs // K).astype("timedelta64[D]"),
-                "hr": (HOUR0 + t_abs % K).astype(np.int8),
-                "q50": np.maximum(fc[si, wi, ki, 0], 0), "q80": np.maximum(fc[si, wi, ki, 1], 0),
-                "q95": np.maximum(fc[si, wi, ki, 2], 0)})
-            out[H].append(df)
+            step = 1 if multivariate else chunk
+            for i0 in range(0, n_win, step):
+                oo = np.arange(i0, min(n_win, i0 + step))
+                starts = first + K * oo + s
+                # covariates of the window [start-L, start+h): days >= c come from fut_days
+                fut = np.full((len(oo), len(parks), L + h, nf), np.nan, dtype=np.float32)
+                fut[:, :, L - s:] = fut_days[oo][:, :, :h + s]
+                ds, arr = _windows_dataset(panel, rows, starts, fut)
+                fc = np.asarray(model.predict(dataset=ds, step_size=h), dtype=np.float32)
+                fc = np.sort(fc.reshape(len(oo), len(rows), h, -1), axis=-1)   # no quantile crossing
+                ins = arr[:, :, :L, -1].sum(axis=2)                           # [O, n]
+                ok = (arr[:, :, L:L + keep_steps, in_win_i] > 0) & (ins[:, :, None] >= MIN_INSAMPLE_HOURS)
+                o_i, r_i, k_i = np.nonzero(ok)
+                t_abs = starts[o_i] + k_i
+                out[H].append(pd.DataFrame({
+                    "aid": aids[rows][r_i],
+                    "origin_date": np.datetime64(c0, "D") + oo[o_i].astype("timedelta64[D]"),
+                    "origin_hour": np.int8(H),
+                    "date": np.datetime64(panel.day0, "D") + (t_abs // K).astype("timedelta64[D]"),
+                    "hr": (HOUR0 + t_abs % K).astype(np.int8),
+                    "q50": np.maximum(fc[o_i, r_i, k_i, 0], 0), "q80": np.maximum(fc[o_i, r_i, k_i, 1], 0),
+                    "q95": np.maximum(fc[o_i, r_i, k_i, 2], 0)}))
+                del ds, arr
         vram = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
         log(f"  {name} group={g} series={len(rows)} fit={t_fit:.0f}s "
             f"total={time.monotonic() - t0:.0f}s peak_vram={vram:.2f}GB")
-        del model, ds
+        del model
     return {H: pd.concat(v, ignore_index=True) if v else pd.DataFrame() for H, v in out.items()}
 
 
@@ -236,7 +296,7 @@ def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to
                             SPECS[name]["weather"], parks)
         t_panel = time.monotonic() - tb
         log(f"block {c0}..{c1}: {len(panel.aids)} series x {panel.T} steps ({t_panel:.0f}s panel)")
-        res = forecast_block(name, panel, c0, c1, max_steps, hours, scale, log)
+        res = forecast_block(name, panel, c0, c1, max_steps, hours, scale, log, con=con)
         del panel
         for H, df in res.items():
             df.sort_values(["origin_date", "aid"]).to_parquet(
