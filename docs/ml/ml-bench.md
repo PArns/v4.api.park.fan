@@ -205,6 +205,19 @@ model's numbers are always paired against the same reference on the same rows.
 `--reference` refuses to start without a git SHA and an image id; every run
 records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 
+## Level drivers (PAR-830)
+
+`python -m mlbench drivers --export <export> --out <dir>` builds one row per
+ride-day × lead (1/3/7/14/30/60/90) with the target `log(true P90 / naive level)`
+and every driver known at the origin, fits walk-forward models by origin month
+and writes R², level MAE, UC4 ranking, univariate effects and permutation
+importance (CPU, ~4 min on 1.9 M rows). It reads `parquet/` and
+`raw/schedule.csv.gz` (ticketed events, extra hours and the `updated_us` that
+decides whether a schedule was known at the origin). The plug-in
+`driver_level` (`--model driver_level`) serves the same gradient-boosted model's
+level through `predict_daily`, so the runner scores `driver_level_x_h5` and
+`lvl_driver_level`. Findings: [level-drivers.md](level-drivers.md).
+
 ## Results
 
 Reference run: `ml-bench/results/20261009-baselines-v2/`. Export of 2026-10-09
