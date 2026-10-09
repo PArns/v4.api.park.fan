@@ -288,6 +288,11 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     # unique_id can carry Python UUID objects from the DB → pyarrow/to_parquet can't
     # serialize them. Force str (also what persist_forecast expects).
     out["unique_id"] = out["unique_id"].astype(str)
+    # A chunk whose fit/predict raised is skipped above and the run still
+    # completes — its parks simply have no forecast from this run (serving falls
+    # back to their previous forecast_date, then to CatBoost). Carry the counts
+    # out so the runner can put them in the status file instead of only the log.
+    out.attrs["chunks"] = {"total": len(chunks), "ok": len(parts), "skipped": skipped}
 
     # Rich completion summary (mirrors CatBoost's final metrics block). TFT has no
     # inline val MAE — quality is measured by the headliner backtest — so we report

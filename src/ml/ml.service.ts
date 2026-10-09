@@ -253,6 +253,43 @@ export class MLService {
     maxDays?: number,
     liveStatus?: "OPERATING" | "CLOSED",
   ): Promise<BulkPredictionResponseDto> {
+    const raw = await this.getRawParkPredictions(
+      parkId,
+      predictionType,
+      maxDays,
+      liveStatus,
+    );
+    if (!this.servePcnIntraday || predictionType !== "hourly") return raw;
+
+    // Champion-swap consistency: the park-level hourly curve (park page, plan/day,
+    // calendar today, favorites) must show the SAME served waits as the
+    // per-attraction read paths, which apply the PCN override + persistence blend.
+    // Overridden on COPIES, so neither the Redis entry nor the raw object a caller
+    // may still hold ever carries a PCN number.
+    const predictions = (raw.predictions ?? []).map((p) => ({ ...p }));
+    await this.applyPcnIntradayOverride(
+      predictions,
+      new Date(currentSlotStartMs()),
+    );
+    return { ...raw, predictions };
+  }
+
+  /**
+   * The ml-service answer for a park exactly as CatBoost produced it — Redis-cached,
+   * never touched by the PCN champion-swap override.
+   *
+   * This is the ONLY park-level read `storePredictions` may be fed from:
+   * `wait_time_predictions` and `prediction_accuracy` are the CatBoost side of the
+   * PCN-vs-CatBoost board, so a served (PCN/blended) number written there would make
+   * the board compare PCN against itself. Serving surfaces use
+   * {@link getParkPredictions}, which applies the override on top of this.
+   */
+  async getRawParkPredictions(
+    parkId: string,
+    predictionType: "hourly" | "daily" = "hourly",
+    maxDays?: number,
+    liveStatus?: "OPERATING" | "CLOSED",
+  ): Promise<BulkPredictionResponseDto> {
     // Get park timezone for cache key
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
@@ -283,17 +320,6 @@ export class MLService {
           },
         );
         cachedData.count = cachedData.predictions.length;
-      }
-
-      // Champion-swap consistency: the park-level hourly curve must show the SAME
-      // served waits as the per-attraction read paths (which apply the PCN override).
-      // Applied AFTER the cache read — the cache stays CatBoost-pure so PCN's 15-min
-      // re-inference stays fresh across the 30-min cache TTL.
-      if (this.servePcnIntraday && predictionType === "hourly") {
-        await this.applyPcnIntradayOverride(
-          cachedData.predictions ?? [],
-          new Date(currentSlotStartMs()),
-        );
       }
 
       return cachedData;
@@ -514,15 +540,6 @@ export class MLService {
           return predTime <= cutoffDate;
         });
         response.data.count = response.data.predictions.length;
-      }
-
-      // Champion-swap consistency (see the cached branch above): override AFTER the
-      // cache write, so the cached payload stays CatBoost-pure.
-      if (this.servePcnIntraday && predictionType === "hourly") {
-        await this.applyPcnIntradayOverride(
-          response.data.predictions ?? [],
-          new Date(currentSlotStartMs()),
-        );
       }
 
       return response.data;
@@ -997,6 +1014,23 @@ export class MLService {
    * zone that observes DST would make one day of the year 23 or 25 hours long
    * and round the wrong way.
    */
+  /**
+   * The park-local calendar day a prediction is about (PAR-818).
+   *
+   * CatBoost's `predictedTime` is a UTC instant (`…+00:00`), whose first ten
+   * characters are the UTC date: a 20:00 slot in Los Angeles is 03:00 UTC of
+   * the next day, a 08:00 slot in Tokyo 23:00 UTC of the previous one. TFT's is
+   * an offset-less `YYYY-MM-DDT12:00:00` that already names the park-local day.
+   * An instant is read on the park's clock; anything without an offset is
+   * taken at its word.
+   */
+  static localDateOf(predictedTime: string, timezone: string): string {
+    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(predictedTime)) {
+      return predictedTime.slice(0, 10);
+    }
+    return formatInParkTimezone(new Date(predictedTime), timezone || "UTC");
+  }
+
   private static daysBetween(from: string, to: string): number {
     return Math.round(
       (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
@@ -1048,7 +1082,7 @@ export class MLService {
    * any (attraction, day) TFT doesn't cover. Keeps the calendar and yearly views on
    * the SAME source. NOT used by the prediction-generator writer (which must persist
    * pure CatBoost into wait_time_predictions so the TFT-vs-CatBoost scoreboard stays
-   * fair) — that path keeps calling getParkPredictions("daily") directly.
+   * fair) — that path calls getRawParkPredictions("daily"), never the served read.
    */
   async getServingDailyPredictions(
     parkId: string,
@@ -1068,8 +1102,15 @@ export class MLService {
       }
       if (tft.length === 0) return base;
 
+      // Keyed on the PARK-LOCAL day for both sides (PAR-818): TFT names the
+      // local day, CatBoost an instant whose UTC date can be the day after.
+      const park = await this.parkRepository.findOne({
+        where: { id: parkId },
+        select: ["id", "timezone"],
+      });
+      const tz = park?.timezone || "UTC";
       const key = (p: PredictionDto) =>
-        `${p.attractionId}|${p.predictedTime.slice(0, 10)}`;
+        `${p.attractionId}|${MLService.localDateOf(p.predictedTime, tz)}`;
       const tftKeys = new Set(tft.map(key));
       const farCatboost = base.predictions.filter((p) => !tftKeys.has(key(p)));
       const merged = [...tft, ...farCatboost];
@@ -1293,9 +1334,19 @@ export class MLService {
       }),
     );
 
-    // ONE schedule query for every park/date pair (was: one per park).
+    // ONE schedule query for every park/date pair (was: one per park). The
+    // dates are each park's LOCAL day — the schedule's own key (PAR-818).
     const allScheduleDates = [
-      ...new Set(predictions.map((p) => p.predictedTime.split("T")[0])),
+      ...new Set(
+        [...predictionsByPark].flatMap(([parkId, preds]) =>
+          preds.map((p) =>
+            MLService.localDateOf(
+              p.predictedTime,
+              parkInfoCache.get(parkId)?.timezone || "UTC",
+            ),
+          ),
+        ),
+      ),
     ].map((d) => new Date(d + "T12:00:00Z"));
 
     const allSchedules = allScheduleDates.length
@@ -1335,7 +1386,12 @@ export class MLService {
         schedulesByPark.get(parkId) ?? new Map<string, ScheduleType>();
 
       for (const pred of parkPredictions) {
-        const dateStr = pred.predictedTime.split("T")[0];
+        // The park-local day, not the UTC one: a 20:00 slot in Los Angeles is
+        // 03:00 UTC tomorrow and was gated by TOMORROW's schedule (PAR-818).
+        const dateStr = MLService.localDateOf(
+          pred.predictedTime,
+          info.timezone,
+        );
         const scheduleType = scheduleMap.get(dateStr);
 
         // 1. Skip if explicitly CLOSED
@@ -1594,7 +1650,10 @@ export class MLService {
   }
 
   /** Freshest forward PCN forecast per (attraction, slot) for upcoming slots, keyed by
-   * the slot's UTC ISO string (matching CatBoost's predictedTime). Carries BOTH served
+   * the slot's epoch milliseconds. Never by an ISO string: the DB read paths hand
+   * CatBoost's predictedTime over as `…T12:15:00.000Z` (`Date.toISOString()`), the
+   * park-level path as python's `…T12:15:00+00:00` (`isoformat()`) — the same instant
+   * spelled two ways, and a string key matched only the first (PAR-817). Carries BOTH served
    * quantiles per slot: q0.5 → `display` (the shown wait), q0.8 → `crowd` (the crowd
    * signal) — mirroring the CatBoost per-purpose split
    * (docs/ml/quantile-serving-and-calibration.md). pcn_forecasts stores park-LOCAL naive
@@ -1610,10 +1669,10 @@ export class MLService {
   private async getPcnIntradayWaits(
     attractionIds: string[],
     startTime?: Date,
-  ): Promise<Map<string, Map<string, { display: number; crowd?: number }>>> {
+  ): Promise<Map<string, Map<number, { display: number; crowd?: number }>>> {
     const out = new Map<
       string,
-      Map<string, { display: number; crowd?: number }>
+      Map<number, { display: number; crowd?: number }>
     >();
     if (attractionIds.length === 0) return out;
     try {
@@ -1641,8 +1700,8 @@ export class MLService {
       for (const r of rows) {
         const m =
           out.get(r.aid) ??
-          new Map<string, { display: number; crowd?: number }>();
-        const key = new Date(r.predicted_time).toISOString();
+          new Map<number, { display: number; crowd?: number }>();
+        const key = new Date(r.predicted_time).getTime();
         const entry = m.get(key) ?? { display: NaN };
         if (Math.abs(Number(r.quantile) - 0.8) < 1e-6) {
           entry.crowd = Number(r.wait);
@@ -1684,14 +1743,15 @@ export class MLService {
     const nowMs = (startTime ?? new Date()).getTime();
     let overridden = 0;
     for (const p of hourly) {
-      const q = pcn.get(p.attractionId)?.get(p.predictedTime);
+      // Compare instants, not strings — see getPcnIntradayWaits.
+      const slotMs = Date.parse(p.predictedTime);
+      const q = pcn.get(p.attractionId)?.get(slotMs);
       if (q === undefined) continue;
       // §7.7 anchor-gated persistence blend (validated on the shadow board: busy 1h +2.2..+2.8,
       // aggregate ~neutral): at short lead the wait "L hours from now" is better predicted by
       // "the wait now" than by the model, so blend the served q0.5 toward the current wait —
       // decaying to pure PCN by 3h and only for rides with a real wait (the anchor gate).
-      const leadHours =
-        (new Date(p.predictedTime).getTime() - nowMs) / 3_600_000;
+      const leadHours = (slotMs - nowMs) / 3_600_000;
       const displayWait = persistenceBlendServe(
         q.display,
         anchors.get(p.attractionId),
@@ -1837,6 +1897,128 @@ export class MLService {
       });
 
     return Number(rows?.[0]?.affected ?? 0);
+  }
+
+  /**
+   * Drops whole `wait_time_predictions` chunks older than `retainDays`, without
+   * ever letting the drop queue up the rest of the database behind it.
+   *
+   * This replaces the TimescaleDB retention policy (job 1007), and the reason is
+   * a lock on a table this hypertable does not even contain: `drop_chunks`
+   * begins by taking an ACCESS EXCLUSIVE lock on every table the hypertable has
+   * a foreign key to (TimescaleDB `lock_referenced_tables`, a guard against
+   * deadlocks), and `wait_time_predictions` references `attractions`. It takes
+   * that lock on every run, whether a chunk is due or not. While the request
+   * waits for some long-lived reader of `attractions` to finish, every new
+   * query that touches `attractions` — nearly every API read — queues behind
+   * it. The policy waited for its full five-minute `max_runtime`, 25 times in a
+   * row on 2026-10-07/08, and each time ~30–70 API queries finished in the same
+   * second the attempt gave up (docs/troubleshooting/db-health-runbook.md §0b).
+   *
+   * Three things make this version safe:
+   *
+   * 1. `show_chunks` first. It reads the catalog and locks nothing, so on the
+   *    six days a week when no chunk has aged out, `attractions` is not touched.
+   * 2. `lock_timeout` on the drop itself, local to its transaction. If the lock
+   *    is not free within `lockTimeoutMs`, Postgres gives up the request instead
+   *    of holding the queue, so readers wait that long at most — whoever holds
+   *    the lock and however long they hold it.
+   * 3. A few short retries, `retryDelayMs` apart. The job runs at 03:30 UTC,
+   *    the busiest batch window, where one 2 s attempt is easily unlucky; a
+   *    later attempt usually finds a gap. Each attempt still queues readers
+   *    for at most `lockTimeoutMs`.
+   *
+   * Never throws for a lock timeout — that is the designed outcome when the
+   * table is busy, not a failure. When every attempt timed out, `overdue`
+   * counts the chunks that have been due for more than `overdueAfterDays`
+   * already: the caller's signal that the misses are no longer one-offs.
+   */
+  async dropExpiredPredictionChunks(
+    retainDays: number,
+    options: {
+      lockTimeoutMs?: number;
+      attempts?: number;
+      retryDelayMs?: number;
+      overdueAfterDays?: number;
+    } = {},
+  ): Promise<{
+    due: number;
+    dropped: number;
+    lockTimedOut: boolean;
+    attempts: number;
+    overdue: number;
+  }> {
+    const lockTimeoutMs = options.lockTimeoutMs ?? 2000;
+    const maxAttempts = Math.max(1, options.attempts ?? 4);
+    const retryDelayMs = options.retryDelayMs ?? 30_000;
+    const overdueAfterDays = options.overdueAfterDays ?? 14;
+    const olderThan = `${retainDays} days`;
+
+    const due = await this.countPredictionChunksOlderThan(olderThan);
+    if (due === 0) {
+      return {
+        due: 0,
+        dropped: 0,
+        lockTimedOut: false,
+        attempts: 0,
+        overdue: 0,
+      };
+    }
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1 && retryDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+      try {
+        const dropped: Array<{ chunk: string }> =
+          await this.predictionRepository.manager.transaction(async (em) => {
+            // set_config(..., true) is SET LOCAL: it ends with this transaction
+            // and never leaks onto the pooled connection.
+            await em.query(`SELECT set_config('lock_timeout', $1, true)`, [
+              `${Math.max(1, Math.round(lockTimeoutMs))}ms`,
+            ]);
+            return em.query(
+              `SELECT c::text AS chunk
+                 FROM drop_chunks('wait_time_predictions', older_than => $1::interval) AS c`,
+              [olderThan],
+            );
+          });
+        return {
+          due,
+          dropped: dropped.length,
+          lockTimedOut: false,
+          attempts: attempt,
+          overdue: 0,
+        };
+      } catch (error) {
+        // 55P03 lock_not_available: the lock_timeout above fired — retry.
+        if ((error as { code?: string })?.code !== "55P03") throw error;
+      }
+    }
+
+    const overdue = await this.countPredictionChunksOlderThan(
+      `${retainDays + overdueAfterDays} days`,
+    );
+    return {
+      due,
+      dropped: 0,
+      lockTimedOut: true,
+      attempts: maxAttempts,
+      overdue,
+    };
+  }
+
+  /** `wait_time_predictions` chunks lying entirely before now - `olderThan`. */
+  private async countPredictionChunksOlderThan(
+    olderThan: string,
+  ): Promise<number> {
+    const rows: Array<{ chunk: string }> =
+      await this.predictionRepository.manager.query(
+        `SELECT c::text AS chunk
+           FROM show_chunks('wait_time_predictions', older_than => $1::interval) AS c`,
+        [olderThan],
+      );
+    return rows.length;
   }
 
   /**

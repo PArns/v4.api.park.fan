@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -27,7 +28,19 @@ def get_engine():
         f"postgresql://{settings.DB_USER}:{settings.DB_PASSWORD}"
         f"@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
     )
-    return create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5)
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=5,
+        connect_args={
+            # Name the session (all services share the `parkfan` role) and end a
+            # transaction left idle for 10 min, which would otherwise hold its
+            # locks indefinitely. See docs/troubleshooting/db-health-runbook.md §0b.
+            "application_name": "parkfan-nf-service",
+            "options": "-c idle_in_transaction_session_timeout=600000",
+        },
+    )
 
 
 _engine = get_engine()
@@ -137,8 +150,17 @@ def fetch_weather(park_ids: list[str]) -> pd.DataFrame:
     return df.drop_duplicates(["park_id", "ds"])
 
 
+# Non-ISO codes geocoding returns -> ISO 3166-2 suffix. Mirrors REGION_ALIASES in
+# src/common/utils/region.util.ts and ml-service/holiday_utils.py.
+_REGION_ALIASES = {"NRW": "NW", "NDS": "NI", "England": "ENG", "Scotland": "SCT", "Wales": "WLS"}
+
+
 def _norm_region(r):
-    return (r or "").split("-")[-1] or None
+    """'DE-NW' / 'NW' / 'NRW' -> 'NW'; None/'' -> None."""
+    if not r or not isinstance(r, str):
+        return None
+    short = r.split("-")[-1]
+    return _REGION_ALIASES.get(short, short) or None
 
 
 def add_calendar_covariates(
@@ -216,7 +238,13 @@ def add_calendar_covariates(
                     influencing = json.loads(influencing)
                 except Exception:
                     influencing = []
-            neigh = {(d.get("countryCode"), d.get("regionCode")) for d in influencing}
+            # Normalise like the holiday side (h["cr"] holds 'NW', influencingRegions
+            # holds 'DE-NW'): compared raw, no regional neighbour ever matched (PAR-816).
+            neigh = {
+                (d.get("countryCode"), _norm_region(d.get("regionCode")))
+                for d in influencing
+                if isinstance(d, dict)
+            }
             countries_wide = {c for (c, r) in neigh if r is None}
             sig = (country, region, frozenset(neigh))
             if sig in cache:
@@ -227,7 +255,15 @@ def add_calendar_covariates(
             school = set(local[local["holiday_type"] == "school"]["date"])
             bridge = set(local[local["holiday_type"] == "bridge"]["date"])
             # Neighbor: vectorised — (country,region_norm) in neigh OR country specified region-wide.
-            nmask = h["cr"].isin(neigh) | h["country"].isin(countries_wide)
+            # A regionally specified neighbour also has its country's NATIONAL rows
+            # (NL-LI gets Koningsdag, stored as (NL, None)) — regional OR national,
+            # as ml-service/holiday_features.py does (PAR-816).
+            neigh_countries = {c for (c, _r) in neigh}
+            nmask = (
+                h["cr"].isin(neigh)
+                | h["country"].isin(countries_wide)
+                | (h["region_norm"].isna() & h["country"].isin(neigh_countries))
+            )
             neighbor = set(h[nmask & h_pub_or_school]["date"])
             cache[sig] = (local_public, neighbor, school, bridge)
             return cache[sig]
@@ -331,13 +367,19 @@ FUTR_EXOG = [
 ]
 
 
-def persist_forecast(yhat: pd.DataFrame, version: str, value_col: str) -> int:
+def persist_forecast(
+    yhat: pd.DataFrame, version: str, value_col: str, forecast_date: date
+) -> int:
     """Store the forward daily-peak forecast so it can be scored against actuals
     once each target date passes (the forward-scoreboard vs CatBoost).
 
-    One row per (attraction, target_date, forecast_date=today). Re-running on the
-    same day overwrites that day's forecast; past forecast_dates are immutable, so
-    the genuine forward record (made before the target) is preserved for scoring.
+    One row per (attraction, target_date, forecast_date). `forecast_date` is the
+    day the run that PRODUCED `yhat` made it, passed in by the caller — never the
+    day this function happens to be called. Writing `now()` here is what let a
+    re-persist of yesterday's cached parquet land under today's date (PAR-814):
+    the reader and the scoreboard both take forecast_date as the forecast's age.
+    Re-running for the same forecast_date overwrites that day's rows; past
+    forecast_dates are immutable, so the genuine forward record is preserved.
 
     `value_col` is the MEDIAN/point forecast column. Because the model's target is
     the daily P90 (NF_TARGET_PERCENTILE), the persisted predicted_peak = E[daily-P90]
@@ -367,7 +409,7 @@ def persist_forecast(yhat: pd.DataFrame, version: str, value_col: str) -> int:
         INSERT INTO tft_forecasts
             (attraction_id, target_date, forecast_date, predicted_peak, model_version)
         VALUES
-            (:aid, :td, (now() AT TIME ZONE 'UTC')::date, :pp, :ver)
+            (:aid, :td, :fd, :pp, :ver)
         ON CONFLICT (attraction_id, target_date, forecast_date)
         DO UPDATE SET predicted_peak = EXCLUDED.predicted_peak,
                       model_version  = EXCLUDED.model_version,
@@ -375,7 +417,7 @@ def persist_forecast(yhat: pd.DataFrame, version: str, value_col: str) -> int:
         """
     )
     params = [
-        {"aid": str(r.attraction_id), "td": r.target_date,
+        {"aid": str(r.attraction_id), "td": r.target_date, "fd": forecast_date,
          "pp": float(r.predicted_peak), "ver": version}
         for r in rows.itertuples(index=False)
     ]

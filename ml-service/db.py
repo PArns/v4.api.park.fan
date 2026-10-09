@@ -70,6 +70,13 @@ engine = create_engine(
     pool_size=20,  # Increased from 10
     max_overflow=10,  # Allow 10 extra connections beyond pool_size
     pool_timeout=30,  # Wait max 30s for connection from pool
+    connect_args={
+        # Name the session (all services share the `parkfan` role) and end a
+        # transaction left idle for 10 min, which would otherwise hold its
+        # locks indefinitely. See docs/troubleshooting/db-health-runbook.md §0b.
+        "application_name": "parkfan-ml-service",
+        "options": "-c idle_in_transaction_session_timeout=600000",
+    },
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -211,8 +218,13 @@ def fetch_training_data(
             wd."windSpeedMax" as "windSpeedMax",
             wd."weatherCode"
         FROM hourly_queue hq
+        -- weather_data.date is the PARK-LOCAL calendar day (Open-Meteo is asked
+        -- with timezone:"auto"), so the hour is joined on its park-local date.
+        -- `DATE(hq.timestamp)` read the session (UTC) date and handed a Los
+        -- Angeles evening the next day's weather (PAR-818).
+        JOIN parks hp ON hp.id = hq."parkId"
         LEFT JOIN weather_daily wd ON wd."parkId" = hq."parkId"
-            AND DATE(hq.timestamp) = wd.date
+            AND DATE(hq.timestamp AT TIME ZONE hp.timezone) = wd.date
         -- No ORDER BY: feature engineering re-sorts the DataFrame by its own keys
         -- (sort_values(["attractionId","timestamp"]) etc.), so ordering here is
         -- redundant work. Sorting ~2.1M rows by timestamp spilled ~320MB to disk
@@ -582,11 +594,22 @@ def fetch_historical_park_occupancy(
     if not park_ids:
         return {}
 
+    # Floor end_time to the hour BEFORE it becomes part of the key and the query.
+    # Callers pass the request's base_time (`datetime.now()`, microseconds and
+    # all), so the key was unique per call and this 1-hour cache never hit: every
+    # /predict re-ran the 8-week queue_data scan below (PAR-818). An hour-floored
+    # cut-off moves the profile's window by under an hour of an 8-week lookback.
+    if end_time is not None and hasattr(end_time, "replace"):
+        end_time = end_time.replace(minute=0, second=0, microsecond=0)
+
     cache_key = f"hist_occ:{','.join(sorted(park_ids))}:{lookback_weeks}:{end_time}"
 
     # Check cache
-    if cache_key in _historical_occupancy_cache:
-        cached_data, cache_time = _historical_occupancy_cache[cache_key]
+    # .get(), not `in` + [] — another worker thread may evict the entry between
+    # the two (the eviction below runs on every miss).
+    cached = _historical_occupancy_cache.get(cache_key)
+    if cached is not None:
+        cached_data, cache_time = cached
         import time
 
         if time.time() - cache_time < _historical_occupancy_cache_ttl:
@@ -689,10 +712,18 @@ def fetch_historical_park_occupancy(
                 occupancy_map[park_id] = {}
             occupancy_map[park_id][(dow, hour)] = pct
 
-        # Update cache
+        # Update cache, dropping expired entries: the key carries the hour, so
+        # without this every hour would leave one dead entry per park behind.
         import time
 
-        _historical_occupancy_cache[cache_key] = (occupancy_map, time.time())
+        now = time.time()
+        for stale_key in [
+            k
+            for k, (_, t) in list(_historical_occupancy_cache.items())
+            if now - t >= _historical_occupancy_cache_ttl
+        ]:
+            _historical_occupancy_cache.pop(stale_key, None)
+        _historical_occupancy_cache[cache_key] = (occupancy_map, now)
 
         return occupancy_map
 

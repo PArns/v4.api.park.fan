@@ -12,7 +12,8 @@ from db import (
     fetch_park_schedules,
     fetch_attraction_baselines,
 )
-from holiday_utils import normalize_region_code, calculate_holiday_info
+from holiday_utils import calculate_holiday_info
+from holiday_features import assign_holiday_features
 from config import get_settings
 from percentile_features import add_percentile_features
 from attraction_features import (
@@ -321,28 +322,26 @@ def add_holiday_features(
     For each park, checks holidays in:
     - Primary country/region (park's location)
     - Influencing regions (from influencingRegions JSON)
+
+    The values come from holiday_features.assign_holiday_features — the same
+    function inference calls — so training and serving cannot drift apart.
+    It collapses duplicate holiday rows (one key, several types) to OR-ed
+    flags and assigns by position; the old merge-and-assign-by-label here put
+    other rows' holidays on every row after the first duplicate (PAR-816).
     """
-    # No need for copy - merge operations create new DataFrames
-
-    # Initialize holiday columns
-    df["is_holiday_primary"] = 0
-    df["is_school_holiday_primary"] = 0
-    df["is_holiday_neighbor_1"] = 0
-    df["is_holiday_neighbor_2"] = 0
-    df["is_holiday_neighbor_3"] = 0
-    df["holiday_count_total"] = 0
-    df["school_holiday_count_total"] = 0
-    df["is_school_holiday_any"] = (
-        0  # Consolidated signal (matches Node.js inference feature)
-    )
-
-    # Merge park metadata
+    # Merge park metadata. parks_metadata has one row per park, so this left
+    # merge keeps the row count (validated); it also resets the index to a
+    # RangeIndex, which add_bridge_day_feature's label-aligned assignment
+    # downstream relies on.
+    n_rows = len(df)
     df = df.merge(
         parks_metadata[["park_id", "country", "region_code", "influencingRegions"]],
         left_on="parkId",
         right_on="park_id",
         how="left",
+        validate="many_to_one",
     )
+    assert len(df) == n_rows, "parks_metadata merge changed the row count"
 
     # Use cached holidays if provided, otherwise fetch
     if cached_holidays_df is not None:
@@ -362,29 +361,6 @@ def add_holiday_features(
         # Fetch all holidays
         holidays_df = fetch_holidays(list(all_countries), start_date, end_date)
 
-    # Convert date column to date type (handle both datetime and date types)
-    if not holidays_df.empty:
-        # Convert to datetime first (handles both date and datetime), then extract date
-        holidays_df["date"] = pd.to_datetime(holidays_df["date"]).dt.date
-
-        # Filter to date range (cached may include extra days for bridge day calculations)
-        if cached_holidays_df is not None:
-            holidays_df = holidays_df[
-                (holidays_df["date"] >= start_date.date())
-                & (holidays_df["date"] <= end_date.date())
-            ]
-
-    # Weekend extensions are now handled by the TypeScript API (enrichScheduleWithHolidays)
-    # The API correctly extends ONLY school holidays to weekends, not public holidays
-    # This data is already in the database, so we don't need to calculate it here
-    # This ensures training and prediction use the same holiday logic
-
-    # Create holiday lookup DataFrames for vectorized merge
-    # Regional holidays: (country, region, date) -> holiday_type
-    # National holidays: (country, date) -> holiday_type
-    regional_holidays = holidays_df[holidays_df["region"].notna()].copy()
-    national_holidays = holidays_df[holidays_df["is_nationwide"]].copy()
-
     # Ensure date_local exists in df
     if "date_local" not in df.columns:
         if "local_timestamp" in df.columns:
@@ -392,225 +368,8 @@ def add_holiday_features(
         else:
             df["date_local"] = pd.to_datetime(df["timestamp"]).dt.date
 
-    # Import region normalization utility
-
-    # 1. Primary Location Holiday Check (vectorized)
-    if not regional_holidays.empty:
-        # Normalize region codes in both DataFrames for consistent matching
-        regional_holidays = regional_holidays.copy()
-        regional_holidays["region_normalized"] = regional_holidays["region"].apply(
-            normalize_region_code
-        )
-        df["region_code_normalized"] = df["region_code"].apply(normalize_region_code)
-
-        # Merge regional holidays using normalized region codes
-        regional_holidays["date_only"] = regional_holidays["date"]
-        df_regional = df.merge(
-            regional_holidays[
-                ["country", "region_normalized", "date_only", "holiday_type"]
-            ],
-            left_on=["country", "region_code_normalized", "date_local"],
-            right_on=["country", "region_normalized", "date_only"],
-            how="left",
-            suffixes=("", "_regional"),
-        )
-        df["primary_holiday_type_regional"] = df_regional["holiday_type"]
-        # Clean up temporary column
-        df = df.drop(columns=["region_code_normalized"], errors="ignore")
-    else:
-        df["primary_holiday_type_regional"] = None
-
-    if not national_holidays.empty:
-        # Merge national holidays
-        national_holidays["date_only"] = national_holidays["date"]
-        df_national = df.merge(
-            national_holidays[["country", "date_only", "holiday_type"]],
-            left_on=["country", "date_local"],
-            right_on=["country", "date_only"],
-            how="left",
-            suffixes=("", "_national"),
-        )
-        df["primary_holiday_type_national"] = df_national["holiday_type"]
-    else:
-        df["primary_holiday_type_national"] = None
-
-    # Combine regional and national (prefer regional, fallback to national)
-    df["primary_holiday_type"] = df["primary_holiday_type_regional"].fillna(
-        df["primary_holiday_type_national"]
-    )
-
-    # Assign primary features (vectorized)
-    # Weekend extensions are already included in holidays_df from above
-    # We include 'bridge' and 'bank' as holidays as they typically correlate with high traffic
-    df["is_holiday_primary"] = (
-        df["primary_holiday_type"].isin(["public", "bank", "bridge"]).astype(int)
-    )
-    df["is_school_holiday_primary"] = (df["primary_holiday_type"] == "school").astype(
-        int
-    )
-
-    # Easter Sunday fallback: Nager.Date only returns Easter Sunday as a public holiday
-    # for Brandenburg (DE-BB) — all other German (and European) states don't have it in
-    # the DB. Legally it's not mandated there, but for theme parks it's one of the
-    # highest-traffic days of the year.  Compute Easter Sunday programmatically and
-    # override is_holiday_primary = 1 for parks in Christian-holiday-observing countries.
-    _easter_countries = {"DE", "AT", "CH", "NL", "BE", "FR", "PL", "CZ", "GB", "US"}
-    if "date_local" in df.columns and "country" in df.columns:
-
-        def _easter_sunday_date(year: int):
-            """Anonymous Gregorian algorithm."""
-            a, b, c = year % 19, year // 100, year % 100
-            d, e = b // 4, b % 4
-            f = (b + 8) // 25
-            g = (b - f + 1) // 3
-            h = (19 * a + b - d - g + 15) % 30
-            i, k = c // 4, c % 4
-            ll = (32 + 2 * e + 2 * i - h - k) % 7
-            m = (a + 11 * h + 22 * ll) // 451
-            month = (h + ll - 7 * m + 114) // 31
-            day = ((h + ll - 7 * m + 114) % 31) + 1
-            import datetime as _dt
-
-            return _dt.date(year, month, day)
-
-        # Ensure date_local is datetimelike for .dt accessor
-        _date_local_dt = pd.to_datetime(df["date_local"], errors="coerce")
-        easter_dates = set()
-        for year in _date_local_dt.dt.year.dropna().unique():
-            easter_dates.add(_easter_sunday_date(int(year)))
-
-        easter_mask = _date_local_dt.dt.date.isin(easter_dates) & df["country"].isin(
-            _easter_countries
-        )
-        df.loc[easter_mask, "is_holiday_primary"] = 1
-
-    # 2. Influencing Regions Check (still needs some iteration due to JSON structure)
-    # Create lookup maps for faster access
-    # Import region normalization utility
-
-    holiday_map_regional = {}
-    holiday_map_national = {}
-    # Country-wide "any region" sets: a country-level (null-region) influencing entry — e.g.
-    # Belgium, whose school breaks are REGIONAL (BE-DE/FR/NL), not nationwide — matches if ANY
-    # region of that country has the holiday that day. The national map alone misses it.
-    country_any_school = set()
-    country_any_public = set()
-
-    if not holidays_df.empty:
-        for _, row in holidays_df.iterrows():
-            h_date = row["date"]
-            h_country = row["country"]
-            h_type = row["holiday_type"]
-            h_region = row["region"]
-            is_nationwide = row["is_nationwide"]
-
-            if is_nationwide:
-                holiday_map_national[(h_country, h_date)] = h_type
-            if h_region:
-                # Normalize region code for consistent matching (handles both "DE-NW" and "NW")
-                normalized_region = normalize_region_code(h_region)
-                holiday_map_regional[(h_country, normalized_region, h_date)] = h_type
-            if h_type == "school":
-                country_any_school.add((h_country, h_date))
-            elif h_type in ("public", "bank", "bridge"):
-                country_any_public.add((h_country, h_date))
-
-    def check_neighbor_holidays(row):
-        """Aggregate holiday signals across ALL influencing regions. Fixes the old
-        raw_regions[:3] cap that silently dropped border parks' most important neighbours —
-        e.g. Phantasialand's NL-LI/NL-GE/BE sat in slots 4-6, so the Dutch/Belgian summer
-        break never counted. A country-level (null-region) entry — e.g. Belgium, whose school
-        breaks are REGIONAL not nationwide — falls back to a country-wide 'any region' check.
-        Returns (public_count, school_count, first-3 public flags for the legacy per-slot cols)."""
-        date = row["date_local"]
-        raw_regions = row["influencingRegions"]
-        if pd.isna(date) or not isinstance(raw_regions, list) or not raw_regions:
-            return 0, 0, [0, 0, 0]
-
-        public_count = 0
-        school_count = 0
-        slot_flags = [0, 0, 0]
-        seen = set()  # dedupe overlapping influencing regions
-        for i, region_def in enumerate(raw_regions):
-            if not isinstance(region_def, dict):
-                continue
-            n_country = region_def.get("countryCode")
-            n_region = region_def.get("regionCode")
-            norm = normalize_region_code(n_region) if n_region else None
-            key = (n_country, norm)
-            if key in seen:
-                continue
-            seen.add(key)
-            if norm:
-                n_type = holiday_map_regional.get(
-                    (n_country, norm, date)
-                ) or holiday_map_national.get((n_country, date))
-                is_school = int(n_type == "school")
-                is_public = int(n_type in ("public", "bank", "bridge"))
-            else:
-                # country-wide (null region): ANY region of the country on holiday that day
-                is_school = int((n_country, date) in country_any_school)
-                is_public = int((n_country, date) in country_any_public)
-            school_count += is_school
-            public_count += is_public
-            if i < 3:
-                slot_flags[i] = is_public
-        return public_count, school_count, slot_flags
-
-    # Apply neighbor check (aggregate over ALL influencing regions, not just the first 3).
-    #
-    # Evaluated once per unique (parkId, date_local) pair rather than once per
-    # row: the result depends on nothing else, because `influencingRegions` is
-    # a property of the park. A training frame has millions of rows but only a
-    # few thousand distinct park-days, so the row-wise apply repeated the exact
-    # same dict lookups thousands of times per park-day.
-    # See test_neighbor_holiday_features.py for the invariant this relies on.
-    _pair_cols = ["parkId", "date_local", "influencingRegions"]
-    _pairs = df[_pair_cols].drop_duplicates(subset=["parkId", "date_local"])
-
-    if _pairs.empty:
-        neighbor_results = pd.Series([], index=df.index, dtype=object)
-    else:
-        _pair_results = _pairs.apply(check_neighbor_holidays, axis=1)
-        _lookup = dict(
-            zip(zip(_pairs["parkId"], _pairs["date_local"]), _pair_results)
-        )
-        neighbor_results = pd.Series(
-            [
-                _lookup[key]
-                for key in zip(df["parkId"], df["date_local"])
-            ],
-            index=df.index,
-            dtype=object,
-        )
-    df["_neighbor_public_count"] = neighbor_results.apply(lambda x: x[0])
-    df["neighbor_school_holiday_count"] = neighbor_results.apply(lambda x: x[1])
-    _slot = neighbor_results.apply(lambda x: x[2])
-    df["is_holiday_neighbor_1"] = _slot.apply(lambda x: x[0])
-    df["is_holiday_neighbor_2"] = _slot.apply(lambda x: x[1])
-    df["is_holiday_neighbor_3"] = _slot.apply(lambda x: x[2])
-
-    # Totals — now the FULL influencing-region aggregate, not just the first 3 slots.
-    df["holiday_count_total"] = (
-        df["is_holiday_primary"] + df["_neighbor_public_count"]
-    )
-    df["school_holiday_count_total"] = (
-        df["is_school_holiday_primary"] + df["neighbor_school_holiday_count"]
-    )
-    df["is_school_holiday_any"] = (
-        (df["is_school_holiday_primary"] == 1)
-        | (df["neighbor_school_holiday_count"] > 0)
-    ).astype(int)
-
-    # Clean up temporary columns
-    df = df.drop(
-        columns=[
-            "_neighbor_public_count",
-            "primary_holiday_type_regional",
-            "primary_holiday_type_national",
-            "primary_holiday_type",
-        ],
-        errors="ignore",
+    df = assign_holiday_features(
+        df, parks_metadata, holidays_df, park_col="parkId", date_col="date_local"
     )
 
     # Drop temporary merge columns
@@ -931,6 +690,31 @@ def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _historical_occupancy_values(
+    df: pd.DataFrame, mask: pd.Series, park_hist: Dict, ts_naive_utc: pd.Series
+) -> list:
+    """Look rows up in the historical occupancy profile by the PARK'S wall clock.
+
+    `fetch_historical_park_occupancy` keys the profile on
+    `EXTRACT(DOW/HOUR FROM timestamp AT TIME ZONE p.timezone)` — the park-local
+    weekday (Postgres convention, 0=Sun) and hour. The lookup used to read both
+    off the UTC timestamp, so a 14:00 row in Los Angeles asked for the 21:00
+    (after-close) profile and a 10:00 Tokyo row for 01:00 (PAR-818).
+
+    The naive `local_timestamp` is exactly that wall clock; it is read here as a
+    reading, never compared against an instant. Without it (a caller that never
+    ran `convert_to_local_time`) the UTC reading is the only one there is.
+    """
+    if "local_timestamp" in df.columns:
+        wall = pd.to_datetime(df.loc[mask, "local_timestamp"])
+    else:
+        wall = ts_naive_utc[mask]
+    # pandas dayofweek: Mon=0 … Sun=6 → Postgres DOW: Sun=0, Mon=1 … Sat=6
+    pg_dow = ((wall.dt.dayofweek + 1) % 7).astype(int)
+    hour = wall.dt.hour.astype(int)
+    return [park_hist.get((d, h), 100.0) for d, h in zip(pg_dow, hour)]
+
+
 def add_park_occupancy_feature(
     df: pd.DataFrame, feature_context: Dict = None
 ) -> pd.DataFrame:
@@ -997,15 +781,11 @@ def add_park_occupancy_feature(
                     park_future_mask = (df["parkId"] == park_id) & future_mask
                     if not park_future_mask.any():
                         continue
-                    # Compute Postgres DOW (0=Sun) from UTC timestamp
-                    # pandas dayofweek: Mon=0 … Sun=6 → Postgres DOW: Sun=0, Mon=1 … Sat=6
-                    pandas_dow = ts_naive[park_future_mask].dt.dayofweek
-                    pg_dow = ((pandas_dow + 1) % 7).astype(int)
-                    hour = ts_naive[park_future_mask].dt.hour.astype(int)
-                    hist_vals = [
-                        park_hist.get((d, h), 100.0) for d, h in zip(pg_dow, hour)
-                    ]
-                    df.loc[park_future_mask, "park_occupancy_pct"] = hist_vals
+                    df.loc[park_future_mask, "park_occupancy_pct"] = (
+                        _historical_occupancy_values(
+                            df, park_future_mask, park_hist, ts_naive
+                        )
+                    )
         else:
             # No base_time — fall back to applying real-time value to ALL rows
             for park_id, occupancy_pct in park_occupancy_map.items():
@@ -1029,11 +809,9 @@ def add_park_occupancy_feature(
                 if not park_hist:
                     continue
                 park_mask = df["parkId"] == park_id
-                pandas_dow = ts_naive[park_mask].dt.dayofweek
-                pg_dow = ((pandas_dow + 1) % 7).astype(int)
-                hour = ts_naive[park_mask].dt.hour.astype(int)
-                hist_vals = [park_hist.get((d, h), 100.0) for d, h in zip(pg_dow, hour)]
-                df.loc[park_mask, "park_occupancy_pct"] = hist_vals
+                df.loc[park_mask, "park_occupancy_pct"] = _historical_occupancy_values(
+                    df, park_mask, park_hist, ts_naive
+                )
 
     else:
         # Training Mode: Reconstruct historical occupancy to match inference scale

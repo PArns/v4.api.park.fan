@@ -2,7 +2,14 @@ import { ApiProperty } from "@nestjs/swagger";
 import { QueueDataInfo } from "../../common/types/feature-context.type";
 
 export class WeatherForecastItemDto {
-  @ApiProperty({ description: "Forecast time (ISO 8601)" })
+  /**
+   * The hour as a UTC instant (`2026-07-04T12:00:00.000Z`). Open-Meteo answers
+   * park-local wall-clock strings without an offset; the ML service would read
+   * those as UTC and join each hour's weather two (Europe) to nine (Japan)
+   * hours off, so they are converted in `WeatherService.getHourlyForecast`
+   * before they leave the API (PAR-818).
+   */
+  @ApiProperty({ description: "Forecast hour as a UTC instant (ISO 8601, Z)" })
   time: string;
 
   @ApiProperty({ description: "Temperature in Celsius", nullable: true })
