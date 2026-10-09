@@ -23,6 +23,7 @@ import {
   PlanDayComposer,
   PlanDayDto,
   PlanDayRideDto,
+  PlanDayShadowCurve,
 } from "../dto/plan-day.dto";
 import { addIsoDays, formatInParkTimezone } from "../../common/utils/date.util";
 import { mapWithDbBudget } from "../../common/utils/db-job-budget";
@@ -361,7 +362,20 @@ export class ForecastArchiveService {
         const date = addIsoDays(localToday, lead);
         let plan: PlanDayDto | null = null;
         try {
-          plan = await this.planDayService.buildPlanDay(park, date);
+          // The served plan, plus the composer A/B on the same rides and
+          // quarter-hours (PAR-834), whatever the flag says.
+          const built = await this.planDayService.buildPlanDayWithShadow(
+            park,
+            date,
+          );
+          plan = built.plan;
+          drafts.push(
+            ...ForecastArchiveService.curvesFromShadow(
+              built.shadow,
+              date,
+              lead,
+            ),
+          );
         } catch (err) {
           this.logger.warn(
             `Forward archive: plan/day ${park.slug} ${date} failed: ${(err as Error).message}`,
@@ -653,6 +667,55 @@ export class ForecastArchiveService {
           ride.uncertaintyMinutes != null
             ? Math.round(ride.uncertaintyMinutes)
             : null,
+        modelVersion: null,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * The composer A/B (PAR-834) as archive rows: one row per ride and composer,
+   * 15-minute steps from the first to the last shared quarter-hour, under
+   * the composer's own surface. The three rows of a ride hold values on the
+   * same quarter-hours by construction (`PlanDayService`), so the board
+   * compares the composers on identical slots.
+   */
+  static curvesFromShadow(
+    shadow: ReadonlyArray<PlanDayShadowCurve>,
+    date: string,
+    lead: number,
+  ): CurveDraft[] {
+    const surfaceOf = {
+      peak_scaled: ARCHIVE_SURFACES.plan_day_shadow_peak,
+      h5: ARCHIVE_SURFACES.plan_day_shadow_h5,
+      h5_routed: ARCHIVE_SURFACES.plan_day_shadow_routed,
+    } as const;
+    const out: CurveDraft[] = [];
+    for (const curve of shadow) {
+      if (curve.slots.length === 0) continue;
+      const first = curve.slots[0].minute;
+      const last = curve.slots[curve.slots.length - 1].minute;
+      const n = (last - first) / 15 + 1;
+      const waits: (number | null)[] = new Array(n).fill(null);
+      const sources = new Array<string>(n).fill("-");
+      for (const s of curve.slots) {
+        const i = (s.minute - first) / 15;
+        waits[i] = s.wait;
+        sources[i] = s.code;
+      }
+      out.push({
+        attractionId: curve.attractionId,
+        surface: surfaceOf[curve.composer],
+        targetDate: date,
+        leadDays: lead,
+        slotStart: new Date(curve.slots[0].start),
+        slotMinutes: 15,
+        waits,
+        sources: sources.join(""),
+        bands: null,
+        dayPeak: null,
+        expectedError: null,
+        peakBand: null,
         modelVersion: null,
       });
     }

@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
@@ -32,7 +32,18 @@ const READ_LIMITS: StatementLimits = {
  * tomorrow. Bumping the version prefix invalidates every cached profile.
  */
 const CACHE_TTL_SECONDS = 6 * 3600;
-const CACHE_PREFIX = "plan-day:h5:v1";
+const CACHE_PREFIX = "plan-day:h5:v2";
+
+/**
+ * How long a failed build (an error, a statement timeout) is remembered, in
+ * process. Without it every request for the park re-ran the two statements
+ * while the database was the reason they failed — the single-flight only
+ * collapses requests that arrive DURING a build, not the ones after it.
+ */
+export const H5_NEGATIVE_CACHE_MS = 45_000;
+
+/** The composite index the window read wants; built out of band, see below. */
+const PARK_DATE_INDEX = "idx_attraction_hourly_history_park_date";
 
 /**
  * Every ride's H5 profile for one park, as of today (PAR-834).
@@ -49,11 +60,16 @@ const CACHE_PREFIX = "plan-day:h5:v1";
  * every other one (and the forward archive's d0–d90 walk) reads the cache.
  */
 @Injectable()
-export class H5ProfileService {
+export class H5ProfileService implements OnModuleInit {
   private readonly logger = new Logger(H5ProfileService.name);
   private readonly inFlight = new Map<
     string,
     Promise<Map<string, H5RideProfile>>
+  >();
+  /** key → until when the last failure is replayed instead of retried. */
+  private readonly failedUntil = new Map<
+    string,
+    { until: number; error: Error }
   >();
 
   constructor(
@@ -61,15 +77,72 @@ export class H5ProfileService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
+  onModuleInit(): void {
+    // Fire and forget, like the trigram and ride-profile indexes: the read is
+    // correct without it (the single-column parkId index serves it).
+    void this.ensureParkDateIndex();
+  }
+
+  /**
+   * `(parkId, date)` on `attraction_hourly_history`, built CONCURRENTLY so the
+   * table's nightly writer is never blocked, and declared `synchronize: false`
+   * on the entity so TypeORM neither builds it blocking at boot nor drops it.
+   * A concurrent build that died leaves an INVALID index that `IF NOT EXISTS`
+   * would skip forever, so an invalid one is dropped and rebuilt. Bounded by a
+   * session statement timeout; on failure the read simply keeps using the
+   * single-column index. Manual equivalent:
+   * `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_attraction_hourly_history_park_date
+   *    ON attraction_hourly_history ("parkId", date);`
+   */
+  private async ensureParkDateIndex(): Promise<void> {
+    const runner = this.dataSource.createQueryRunner();
+    try {
+      await runner.connect();
+      await runner.query(`SET statement_timeout = '10min'`);
+      await runner.query(`SET lock_timeout = '30s'`);
+      const state: Array<{ valid: boolean }> = await runner.query(
+        `SELECT i.indisvalid AS valid FROM pg_class c
+           JOIN pg_index i ON i.indexrelid = c.oid
+          WHERE c.relname = $1`,
+        [PARK_DATE_INDEX],
+      );
+      if (state[0]?.valid === true) return;
+      if (state[0]?.valid === false) {
+        await runner.query(
+          `DROP INDEX CONCURRENTLY IF EXISTS ${PARK_DATE_INDEX}`,
+        );
+      }
+      await runner.query(
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${PARK_DATE_INDEX}
+           ON attraction_hourly_history ("parkId", date)`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `${PARK_DATE_INDEX} not built: ${(err as Error).message}`,
+      );
+    } finally {
+      await runner.query(`RESET statement_timeout`).catch(() => undefined);
+      await runner.query(`RESET lock_timeout`).catch(() => undefined);
+      await runner.release();
+    }
+  }
+
   /**
    * @param localToday the park-local date the window ends before
-   * @throws when a read fails — the caller decides what an outage costs
+   * @throws when a read fails — the caller decides what an outage costs. A
+   *         failure is replayed for {@link H5_NEGATIVE_CACHE_MS} rather than
+   *         retried on every request.
    */
   async getProfiles(
     park: Park,
     localToday: string,
   ): Promise<Map<string, H5RideProfile>> {
     const key = `${CACHE_PREFIX}:${park.id}:${localToday}`;
+    const failed = this.failedUntil.get(key);
+    if (failed) {
+      if (failed.until > Date.now()) throw failed.error;
+      this.failedUntil.delete(key);
+    }
     const cached = safeJsonParse<Record<string, H5RideProfile>>(
       await this.redis.get(key).catch(() => null),
     );
@@ -79,6 +152,13 @@ export class H5ProfileService {
     if (pending) return pending;
 
     const build = this.build(park, localToday)
+      .catch((error: Error) => {
+        this.failedUntil.set(key, {
+          until: Date.now() + H5_NEGATIVE_CACHE_MS,
+          error,
+        });
+        throw error;
+      })
       .then(async (profiles) => {
         await this.redis
           .set(

@@ -132,9 +132,11 @@ the maximum of what was left.
 ## 2a. Quarter-hours: `slots[]` and the H5 composer (PAR-834)
 
 **Behind a flag.** `PLAN_DAY_H5_COMPOSER=true` switches it on; unset, the
-response is what it was before, with one addition — `composer` on rides whose
-hours were composed. It ships off so the forward archive (PAR-831) can score the
-old and the new composer on the same board before either is the default.
+response is what it was before, byte for byte (pinned by a spec against the
+pre-change output), with one addition — `composer` on rides whose hours were
+composed. It ships off so the forward archive (PAR-831) can score the old and
+the new composer side by side before either is the default (see *The composer
+A/B* below).
 
 ### What changes with the flag on
 
@@ -154,21 +156,42 @@ old and the new composer on the same board before either is the default.
    - every median over the ride's **last 56 days** before today, from the
      nightly 15-minute rollup (`attraction_hourly_history`), forward-filled
      inside each day's published window (at most 3 h), wait ≥ 5.
-2. **The level scales by a ratio, and only TFT's.** With a TFT day level (the
-   served daily row with `modelVersion: "tft"`, which the serving read already
-   holds to ≤ 3 days old) the profile is multiplied by **level ÷ the ride's
-   median daily P90 over the same 56 days** — never stretched to put its maximum
-   at the level. The rope-drop hour is **not** scaled. With a level the weekday/
-   weekend split is not used (the benchmark found it adds nothing once the level
-   carries the day); without one it is (weekday or weekend median with ≥ 3 days,
-   else all days with ≥ 4). **CatBoost's daily level is never applied** — it made
-   the benchmark worse (+2.6 min MAE, bias −5.7) — so past TFT's 60 days, or for
-   a ride TFT does not cover, the plain profile is served (`composer: "h5"`).
+   Every median is the weekday or weekend one where that split has ≥ 3 days at
+   that index, else the all-days one with ≥ 4 — the benchmark's own rule, and
+   pinned against its output by a golden test (`h5-profile.util.spec.ts`: the
+   bench's DuckDB SQL and this port agree to 1e-6 on every slot of four
+   synthetic scenarios, dense, weekday/weekend split, past-midnight, gaps).
+2. **A level is applied only where the benchmark says it pays.** The routing
+   (`h5LevelFor`, thresholds in `h5-profile.util.ts`): a TFT day level (the
+   served daily row with `modelVersion: "tft"`, held to ≤ 3 days old by the
+   serving read) **and** an ex-ante busy ride (q90 of its 56-day window slots
+   ≥ 45 min, BENCH-SPEC's busy segment) **and** a lead of ≤ 6 days. Then the
+   profile is multiplied by **level ÷ the ride's median daily P90 over the same
+   56 days** (day type first, all days second, like the profile) — never
+   stretched to put its maximum at the level — and the rope-drop hour is **not**
+   scaled (`composer: "h5_tft"`). Everywhere else the plain profile is served
+   (`composer: "h5"`). Why: in the benchmark's horizon table
+   (`ml-bench/results/20261009-baselines/tables/horizon_curve_mae.csv`, UC3
+   against the weekday median) level × H5 over ALL rides is worse at every lead
+   (+0.09 at d1 rising to +0.44 at d30), plain H5 better at every lead (−0.07 …
+   −0.20), and level × H5 wins only on busy rides at d1–d6. **CatBoost's daily
+   level is never applied** — it made the benchmark worse (+2.6 min MAE, bias
+   −5.7).
 3. **`slots[]` appears on every ride with a 15-minute answer.** The model's own
    15-minute predictions on measured hours, the H5 profile on composed ones.
 4. **`hours[h]` of a composed H5 hour is the mean of its slots**, rounded to 5,
    so the two series never disagree about an hour. A measured hour is unchanged
-   (the mean of the model's slots, as before).
+   (the mean of the model's slots, as before). One exception, for curve cards: a
+   park closing ON the hour (18:00) has no slot in its closing hour, so that
+   hour carries the last slot's value — the point the old composer drew there —
+   and no slot.
+5. **More rides are composed.** The old profile needed a ride with 20 measured
+   days and 10 per hour over a year; H5 needs 3–4 days per index in the last
+   56. Rides new this season, or back from a long closure, now get a curve. It
+   cannot start EARLIER in the day than before: the old composer held its first
+   measured value back to the ride's opening hour, so it always covered the
+   whole open window, while H5 has no value before the first quarter-hour that
+   was measured — so `hours[0]` is never earlier, and needs no new guard.
 
 ### What does not change
 
@@ -185,8 +208,10 @@ old and the new composer on the same board before either is the default.
   now. The
   rule "on the composed tier the curve's maximum equals `dayPeak` by
   construction" (§3) holds only for `composer: "peak_scaled"`.
-- **`sampleDays`** stays "the history behind the curve" — which for an H5 ride is
-  the days of its 56-day window that had readings, not the year.
+- **`sampleDays`** stays the year's measured days, whichever composer drew the
+  curve: park.fan's `rideFloor` (`lib/planner/day-grid.ts`) applies its soft
+  floor only at ≥ 30 days, and the H5 window's count would have switched it off
+  silently. The H5 window days are in **`profileDays`**, present on H5 rides.
 
 ### Opening hours that nobody published
 
@@ -198,17 +223,50 @@ hour included). The benchmark's opening-aligned gain was measured where schedule
 were published, and it is inflated where they were not, so it is not claimed
 there. Read `context.hoursSource` to know which you have.
 
-### Known limits
+### Where production differs from the benchmark
 
-- The rollup drops DOWN readings instead of storing them, so a breakdown inside
-  the 56 days is filled with the last operating wait for up to three hours,
-  where the benchmark's truth leaves a gap. A median over 56 days barely moves.
-- The rollup writes a finished day at 04:30, so a park whose day crosses midnight
-  has yesterday's small hours only from the day after (they sit in today's row).
+The arithmetic is the benchmark's (golden test above). The INPUT is not: the
+benchmark builds its truth from `queue_data`, production from the nightly
+rollup `attraction_hourly_history`, because 56 days of `queue_data` per park is
+the compressed hypertable. What that costs, plainly:
+
+- **Breakdowns are filled over.** The bench's truth has no slot while a ride is
+  DOWN, CLOSED or under 5 minutes, and the port's forward fill ENDS at such a
+  reading. But the rollup stores none: it keeps only OPERATING, STANDBY, wait
+  ≥ 5 (`computeParkHourlyHistoryForDate`), and its `downCount` is a count of
+  hours, not their times. So in production a breakdown is filled with the last
+  operating wait for up to three hours. The gap is unknowable from this source.
+- **The value of a quarter-hour is its readings' MEAN, rounded to 5** (the
+  rollup's `avgWait`), where the bench takes the reading in force at the slot's
+  MIDPOINT.
+- **Yesterday's small hours are missing** for a park whose day crosses
+  midnight: they sit in today's rollup row, which is written tomorrow at 04:30.
   One day of 56.
+- **The TFT level is an integer** (`getTftDailyPredictions` rounds
+  `predicted_peak`); the bench scales by the stored float.
 - Profiles are cached per park and park-local date for six hours
-  (`plan-day:h5:v1:<parkId>:<date>`); a day's rollup row reaches the profile at
-  the next rebuild.
+  (`plan-day:h5:v2:<parkId>:<date>`); a day's rollup row reaches the profile at
+  the next rebuild. A failed or timed-out build is replayed for 45 s in process
+  rather than retried per request.
+- The read uses `idx_attraction_hourly_history_park_date` (`("parkId", date)`),
+  built `CONCURRENTLY` in the background at boot by `H5ProfileService` and
+  declared `synchronize: false`, so neither a blocking build nor a drop ever
+  happens on deploy. Manual equivalent:
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_attraction_hourly_history_park_date ON attraction_hourly_history ("parkId", date);`
+
+### The composer A/B in the forward archive
+
+The flag switches what is SERVED. What is MEASURED does not wait for it: every
+06:00 / 07:00 capture of the forward archive calls `buildPlanDayWithShadow`,
+which builds, for every ride that has both an old-composer curve and an H5
+profile, three curves on **the same quarter-hours** (those all three answer,
+from the ride's own opening): the old composer (its hour repeated across the
+four quarters), plain H5, and routed H5. They go to their own surfaces
+(`plan_day_shadow_peak` / `_h5` / `_routed`) and are scored under `UC3S` with
+one source per composer and never pooled — see docs/ml/forward-archive.md. The
+routed row is written only where a level was actually applied (busy rides,
+d0–d6); elsewhere it equals plain H5 and the scorer reads that row under both
+names. The shadow is internal: nothing in the endpoint's response carries it.
 
 ### The 15-minute contract
 
@@ -264,6 +322,11 @@ there. Read `context.hoursSource` to know which you have.
   quarter-hour instead of at `:00`.
 - Display: round `wait` to 5 where a single figure is printed; keep the raw
   minutes for sums.
+- `components/planner/planner-fit-list.tsx` prints "peak X min" from `dayPeak`.
+  With H5 that figure normally sits ABOVE the drawn curve's maximum (a P90-like
+  day level next to a median profile) — label it as the day's peak, or show the
+  curve's own maximum beside it, so the two do not read as a contradiction.
+- `profileDays` is diagnostic; keep reading `sampleDays` for `rideFloor`.
 
 ## 3. `dayPeak` is the same statistic on every tier
 

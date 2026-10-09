@@ -14,6 +14,8 @@ import { Park } from "../entities/park.entity";
 import { RideOpening } from "../../common/types/ride-opening.type";
 import { logInfrastructureError } from "../../common/utils/file-logger.util";
 import { Logger } from "@nestjs/common";
+import { readFileSync, writeFileSync } from "fs";
+import { join } from "path";
 import { H5ProfileService } from "./h5-profile.service";
 import type { H5RideProfile } from "../../common/utils/h5-profile.util";
 
@@ -3454,7 +3456,9 @@ describe("PlanDayService", () => {
         },
       },
       slot: { wd: {}, we: {}, all: {} },
-      refLevel: 40,
+      refLevel: { wd: null, we: null, all: 40 },
+      // Busy ex ante (≥ 45), so a TFT level applies up to d6.
+      q90: 50,
       days: 42,
     });
 
@@ -3486,8 +3490,8 @@ describe("PlanDayService", () => {
       delete process.env.PLAN_DAY_H5_COMPOSER;
     });
 
-    it("serves quarter-hours scaled by the TFT level, the ramp unscaled", async () => {
-      const date = composedDay("tft");
+    it("serves a busy ride quarter-hours scaled by the TFT level, the ramp unscaled", async () => {
+      const date = composedDay("tft", dayFromToday(3));
 
       const plan = await service.buildPlanDay(park, date);
 
@@ -3507,12 +3511,37 @@ describe("PlanDayService", () => {
       );
       // The hour is the mean of its slots, rounded to 5 like every hour.
       expect(taron.hours[0]).toEqual({ hour: 9, wait: 15 });
-      // A park closing at 18:00 has no 18:00 slot, so no 18:00 hour.
-      expect(taron.hours[taron.hours.length - 1].hour).toBe(17);
+      // A park closing at 18:00 has no 18:00 slot; the 18:00 hour carries the
+      // last slot's value so a curve card still ends at the closing time.
       expect(slots[slots.length - 1].minute).toBe(17 * 60 + 45);
-      // dayPeak stays the day level; sampleDays is the profile's window.
+      const lastSlot = slots[slots.length - 1].wait;
+      expect(taron.hours[taron.hours.length - 1]).toEqual({
+        hour: 18,
+        wait: Math.round(lastSlot / 5) * 5,
+      });
+      // dayPeak stays the day level; sampleDays stays the YEAR's count (the
+      // frontend's soft floor reads it); the H5 window is profileDays.
       expect(taron.dayPeak).toBe(60);
-      expect(taron.sampleDays).toBe(42);
+      expect(taron.sampleDays).toBe(141);
+      expect(taron.profileDays).toBe(42);
+    });
+
+    it("serves the plain profile past six days, TFT level or not", async () => {
+      const date = composedDay("tft", dayFromToday(7));
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].composer).toBe("h5");
+      expect(plan.rides[0].slots!.find((s) => s.minute === 600)!.wait).toBe(26);
+    });
+
+    it("serves a quiet ride the plain profile even at d3", async () => {
+      const date = composedDay("tft", dayFromToday(3));
+      h5Profiles = new Map([["a-taron", { ...h5(), q90: 30 }]]);
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.rides[0].composer).toBe("h5");
     });
 
     it("never scales by a CatBoost level, and serves the plain profile", async () => {
@@ -3527,15 +3556,78 @@ describe("PlanDayService", () => {
     });
 
     it("serves exactly what it served before with the flag off", async () => {
+      // Byte for byte against the response the code BEFORE this change gave
+      // for the same fixture (recorded from origin/main 1cb2792c with
+      // WRITE_PLAN_DAY_GOLDEN=1), minus the one documented addition,
+      // `composer`. A composed day and a measured day, on a fixed clock.
       delete process.env.PLAN_DAY_H5_COMPOSER;
-      const date = composedDay("tft");
+      jest.useFakeTimers().setSystemTime(new Date("2026-09-14T06:00:00.000Z"));
+      try {
+        const out: Record<string, unknown> = {};
+        for (const date of ["2026-09-14", "2026-09-24"]) {
+          composedDay("tft", date);
+          hourlyPredictions =
+            date === "2026-09-14"
+              ? [9, 10, 11].map((h) => ({
+                  attractionId: "a-taron",
+                  predictedTime: atParkHour(date, h),
+                  predictedWaitTime: 20 + h,
+                  predictionType: "hourly",
+                  uncertaintyMinutes: 7,
+                }))
+              : [];
+          const plan = await service.buildPlanDay(park, date);
+          for (const ride of plan.rides) {
+            if (ride.composer === "peak_scaled") delete ride.composer;
+          }
+          out[date] = plan;
+        }
+        const file = join(__dirname, "__fixtures__", "plan-day-flag-off.json");
+        const actual = JSON.stringify(out, null, 2);
+        if (process.env.WRITE_PLAN_DAY_GOLDEN === "1") {
+          writeFileSync(file, `${actual}\n`);
+        }
+        expect(actual).toBe(readFileSync(file, "utf8").trimEnd());
+        expect(h5Mock).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
 
-      const plan = await service.buildPlanDay(park, date);
+    it("hands the archive all three composers on the same quarter-hours, flag or not", async () => {
+      delete process.env.PLAN_DAY_H5_COMPOSER;
+      const date = composedDay("tft", dayFromToday(3));
 
-      expect(h5Mock).not.toHaveBeenCalled();
+      const { plan, shadow } = await service.buildPlanDayWithShadow(park, date);
+
+      // Served as before: the flag is off.
       expect(plan.rides[0].slots).toBeUndefined();
-      expect(plan.rides[0].composer).toBe("peak_scaled");
-      expect(Math.max(...plan.rides[0].hours.map((h) => h.wait))).toBe(60);
+      expect(shadow.map((c) => c.composer)).toEqual([
+        "peak_scaled",
+        "h5",
+        "h5_routed",
+      ]);
+      const minutes = shadow.map((c) => c.slots.map((s) => s.minute));
+      expect(minutes[1]).toEqual(minutes[0]);
+      expect(minutes[2]).toEqual(minutes[0]);
+      expect(shadow[0].slots.every((s) => s.code === "k")).toBe(true);
+      expect(shadow[1].slots.every((s) => s.code === "h")).toBe(true);
+      // Busy ride at d3 with a TFT level: the routed curve is scaled.
+      expect(shadow[2].slots.every((s) => s.code === "t")).toBe(true);
+      const at600 = (i: number) =>
+        shadow[i].slots.find((s) => s.minute === 600)!.wait;
+      expect(at600(1)).toBe(26);
+      expect(at600(2)).toBe(Math.round(26.25 * 1.5));
+      // The endpoint itself never carries it.
+      expect(JSON.stringify(plan)).not.toContain("h5_routed");
+
+      // A quiet ride gets no level, so no routed row: it would repeat plain H5.
+      h5Profiles = new Map([["a-taron", { ...h5(), q90: 30 }]]);
+      const quiet = await service.buildPlanDayWithShadow(park, date);
+      expect(quiet.shadow.map((c) => c.composer)).toEqual([
+        "peak_scaled",
+        "h5",
+      ]);
     });
 
     it("keeps the old composer for a ride H5 has no profile for", async () => {

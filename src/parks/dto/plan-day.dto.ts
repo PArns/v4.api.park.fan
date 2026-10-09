@@ -101,6 +101,28 @@ export class PlanDayHourDto {
  */
 export type PlanDayComposer = "peak_scaled" | "h5" | "h5_tft";
 
+/** One quarter-hour of a shadow curve. Internal, never serialised. */
+export interface PlanDaySlotShadow {
+  minute: number;
+  start: string;
+  wait: number;
+  /** `ARCHIVE_SOURCE_CODES`: `k` old composer, `h` plain H5, `t` H5 × TFT. */
+  code: "k" | "h" | "t";
+}
+
+/**
+ * The composer A/B the forward archive writes (PAR-834), computed on every
+ * capture whatever `PLAN_DAY_H5_COMPOSER` says: per ride, the old composer,
+ * plain H5 and routed H5 (`h5LevelFor`) on the same quarter-hours. Internal —
+ * `PlanDayService.buildPlanDayWithShadow` returns it beside the plan, and no
+ * endpoint serialises it.
+ */
+export interface PlanDayShadowCurve {
+  attractionId: string;
+  composer: "peak_scaled" | "h5" | "h5_routed";
+  slots: PlanDaySlotShadow[];
+}
+
 export class PlanDaySlotDto {
   @ApiProperty({
     example: 855,
@@ -296,9 +318,23 @@ export class PlanDayRideDto {
 
   @ApiProperty({
     example: 141,
-    description: "Measured days behind the historical shape.",
+    description:
+      "Measured days behind the ride's year-long hourly shape — the same " +
+      "number whichever composer drew the curve, so a reader's 'is this ride " +
+      "well known' floor means the same thing on every day. The days behind " +
+      "an H5 curve are `profileDays`.",
   })
   sampleDays: number;
+
+  @ApiProperty({
+    required: false,
+    example: 49,
+    description:
+      "Present on an H5-composed ride (`composer` `h5` / `h5_tft`): the days " +
+      "of the 56-day window that had readings for this ride. Diagnostic; not a " +
+      "replacement for `sampleDays`.",
+  })
+  profileDays?: number;
 
   @ApiProperty({
     required: false,

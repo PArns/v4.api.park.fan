@@ -16,6 +16,15 @@ export const ARCHIVE_SURFACES = {
   park_hourly: 1,
   /** `PlanDayService.buildPlanDay` — the planner's hourly curve per ride. */
   plan_day: 2,
+  /**
+   * The composer A/B (PAR-834), NOT served: `buildPlanDayWithShadow`'s three
+   * curves per ride and day, on the same quarter-hours, captured whatever
+   * `PLAN_DAY_H5_COMPOSER` says. One surface per composer, because the key
+   * holds one row per (origin, ride, surface, target date).
+   */
+  plan_day_shadow_peak: 3,
+  plan_day_shadow_h5: 4,
+  plan_day_shadow_routed: 5,
 } as const;
 export type ArchiveSurface = keyof typeof ARCHIVE_SURFACES;
 

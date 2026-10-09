@@ -32,12 +32,16 @@
  * its maximum at the level. Both sides of the ratio are daily P90s, so the
  * ratio says "this day is 20 % busier than the ride's typical day" and the
  * profile's own shape and height survive. The first hour is NOT scaled: the
- * rope-drop ramp is the same on a busy and a quiet morning. With a level the
- * weekday/weekend split is not used, for profile and reference alike: the
- * benchmark found it adds nothing once the level carries the day.
+ * rope-drop ramp is the same on a busy and a quiet morning. Profile AND
+ * reference level both use the weekday/weekend split first and all days
+ * second, exactly as the benchmark's `lvlh5_tft` does (`p15o`/`p60` and `dl`
+ * d1 coalesced to d2) — pinned by `h5-profile.util.spec.ts`' golden test.
  *
- * Only a TFT level is applied. CatBoost's daily level made the benchmark worse
- * (+2.6 min MAE, bias −5.7), so without a TFT level the plain profile is served.
+ * WHEN A LEVEL IS APPLIED is a routing decision, {@link h5LevelFor}: only a TFT
+ * level (CatBoost's made the benchmark worse: +2.6 min MAE, bias −5.7), only
+ * for an ex-ante BUSY ride, and only up to {@link TFT_LEVEL_MAX_LEAD_DAYS}.
+ * Everywhere else the plain profile is served — see that function for the
+ * numbers.
  *
  * MINUTES ARE WALL-CLOCK MINUTES OF THE SERVICE DAY, unfolded past midnight:
  * 600 is 10:00, 1440 the midnight that ends the day, 1500 its 01:00 — the same
@@ -62,6 +66,19 @@ export const MIN_WAIT = 5;
 /** Slots after the opening, and before the closing, that are edge-aligned. */
 export const EDGE_SLOTS = 4;
 export const SLOT_MINUTES = 15;
+/**
+ * Ex-ante busy: the ride's q90 over its window's slots at or above this
+ * (BENCH-SPEC "Busy segment"; `rs.q90 >= busy_q90_min` in `baselines.py`).
+ */
+export const BUSY_Q90_MINUTES = 45;
+/**
+ * The last lead (days from park-local today) at which the TFT level is applied.
+ * `ml-bench/results/20261009-baselines/tables/horizon_curve_mae.csv`, UC3 vs
+ * the weekday median: `lvlh5_tft` over ALL rides is worse at every lead
+ * (+0.09 at d1 rising to +0.44 at d30) while plain `h5` is better at every lead
+ * (−0.07 … −0.20); on busy rides `lvlh5_tft` wins at d1–d6 only.
+ */
+export const TFT_LEVEL_MAX_LEAD_DAYS = 6;
 
 /** Median per index, for weekdays, weekends and all days. Thresholded. */
 export interface H5Split {
@@ -82,8 +99,14 @@ export interface H5RideProfile {
   hourly: H5Split;
   /** Index = wall-clock quarter-hour of the service day (minute / 15). */
   slot: H5Split;
-  /** Median daily P90 over all window days; null below {@link MIN_DAYS_ALL}. */
-  refLevel: number | null;
+  /**
+   * Median daily P90 over the window's days with ≥ {@link MIN_RIDE_DAY_SLOTS}
+   * slots, per day type (≥ {@link MIN_DAYS_DAYTYPE} days) and over all days
+   * (≥ {@link MIN_DAYS_ALL}); null below the floor.
+   */
+  refLevel: { wd: number | null; we: number | null; all: number | null };
+  /** q90 of every window slot — the ex-ante busy input. Null with no slot. */
+  q90: number | null;
   /** Window days that contributed at least one slot. */
   days: number;
 }
@@ -97,8 +120,10 @@ export interface H5HistoryDay {
   /** Published closing, unfolded (> 1440 on a day that crosses midnight). */
   closeMin: number;
   /**
-   * The ride's 15-minute readings on that axis — the slot's mean wait, already
-   * filtered to OPERATING, STANDBY and wait ≥ 5 by the rollup. Unsorted is fine.
+   * The ride's 15-minute readings on that axis, unsorted. A wait ≥ 5 is a
+   * queue; anything else (below 5, or not a number) is a reading that is NOT a
+   * queue — DOWN, CLOSED, a walk-on — and ENDS the forward fill instead of
+   * being filled over, exactly as the benchmark's truth has no slot there.
    */
   readings: ReadonlyArray<{ minute: number; wait: number }>;
 }
@@ -114,24 +139,25 @@ export interface H5HistoryDay {
  * over the stored slots alone would weigh a jittery hour over a calm one. The
  * same rule the forward archive's q90 uses (`ForecastArchiveService.rideQ90`).
  *
- * One known difference from the benchmark's truth: the rollup drops DOWN
- * readings rather than storing them, so a breakdown is filled with the last
- * operating wait for up to three hours instead of leaving a gap. The profile is
- * a median over 56 days, which an occasional outage barely moves.
+ * A reading below {@link MIN_WAIT} ends the fill. **The rollup cannot supply
+ * one**: `computeParkHourlyHistoryForDate` keeps only OPERATING, STANDBY,
+ * wait ≥ 5, and stores no DOWN or CLOSED time at all (`downCount` is a count of
+ * hours, not their times). So in production a breakdown is filled with the
+ * last operating wait for up to three hours, where the benchmark's truth has a
+ * gap — unknowable from this source, and documented in the endpoint doc §2a.
  */
 export function truthSlotsOf(
   day: H5HistoryDay,
 ): Array<{ minute: number; ko: number; kc: number; wait: number }> {
-  const readings = [...day.readings]
-    .filter((r) => Number.isFinite(r.wait) && r.wait >= MIN_WAIT)
-    .sort((a, b) => a.minute - b.minute);
+  const readings = [...day.readings].sort((a, b) => a.minute - b.minute);
   const out: Array<{ minute: number; ko: number; kc: number; wait: number }> =
     [];
   let i = 0;
   let current: { minute: number; wait: number } | null = null;
   for (const minute of gridOf(day.openMin, day.closeMin)) {
     while (i < readings.length && readings[i].minute <= minute) {
-      current = readings[i];
+      const r = readings[i];
+      current = Number.isFinite(r.wait) && r.wait >= MIN_WAIT ? r : null;
       i++;
     }
     if (!current || minute - current.minute > MAX_STALENESS_MINUTES) continue;
@@ -200,7 +226,8 @@ export function buildH5Profile(
   const close = new Accumulator();
   const hourly = new Accumulator();
   const slot = new Accumulator();
-  const dayP90s: number[] = [];
+  const dayP90s = { wd: [] as number[], we: [] as number[] };
+  const allSlots: number[] = [];
   let usable = 0;
 
   for (const day of days) {
@@ -217,9 +244,10 @@ export function buildH5Profile(
       hourly.add(hour, s.wait, day.weekend, !hoursSeen.has(hour));
       hoursSeen.add(hour);
       slot.add(s.minute / SLOT_MINUTES, s.wait, day.weekend, true);
+      allSlots.push(s.wait);
     }
     if (slots.length >= MIN_RIDE_DAY_SLOTS) {
-      dayP90s.push(
+      dayP90s[day.weekend ? "we" : "wd"].push(
         quantile(
           slots.map((s) => s.wait),
           0.9,
@@ -229,14 +257,42 @@ export function buildH5Profile(
   }
   if (usable === 0) return null;
 
+  const all = [...dayP90s.wd, ...dayP90s.we];
+  const median = (list: number[], floor: number) =>
+    list.length >= floor ? quantile(list, 0.5) : null;
   return {
     open: open.medians(),
     close: close.medians(),
     hourly: hourly.medians(),
     slot: slot.medians(),
-    refLevel: dayP90s.length >= MIN_DAYS_ALL ? quantile(dayP90s, 0.5) : null,
+    refLevel: {
+      wd: median(dayP90s.wd, MIN_DAYS_DAYTYPE),
+      we: median(dayP90s.we, MIN_DAYS_DAYTYPE),
+      all: median(all, MIN_DAYS_ALL),
+    },
+    q90: allSlots.length > 0 ? quantile(allSlots, 0.9) : null,
     days: usable,
   };
+}
+
+/**
+ * The level the H5 profile is scaled by for one ride and day, or null for the
+ * plain profile. The routing measured in the benchmark
+ * (`horizon_curve_mae.csv`, UC3 against the weekday median): scaling every
+ * ride by the TFT level LOSES at every lead, plain H5 WINS at every lead, and
+ * the level only pays on busy rides at d1–d6. So: a TFT level, a ride whose
+ * window q90 is ≥ {@link BUSY_Q90_MINUTES}, a lead ≤
+ * {@link TFT_LEVEL_MAX_LEAD_DAYS} — all three, or no level.
+ */
+export function h5LevelFor(
+  profile: H5RideProfile,
+  leadDays: number,
+  tftLevel: number | null,
+): number | null {
+  if (tftLevel === null || !Number.isFinite(tftLevel)) return null;
+  if (leadDays > TFT_LEVEL_MAX_LEAD_DAYS) return null;
+  if (profile.q90 === null || profile.q90 < BUSY_Q90_MINUTES) return null;
+  return tftLevel;
 }
 
 export interface ComposeH5Options {
@@ -256,8 +312,8 @@ export interface ComposeH5Options {
   alignToSchedule: boolean;
   weekend: boolean;
   /**
-   * The TFT day level (a daily P90 forecast), or null for none. CatBoost's
-   * level is never passed here — see the file comment.
+   * The day level to scale by (a daily P90 forecast), or null for the plain
+   * profile. Callers pass {@link h5LevelFor}'s answer, never a raw level.
    */
   level: number | null;
 }
@@ -283,16 +339,19 @@ export interface H5Composition {
 export function composeH5Day(options: ComposeH5Options): H5Composition {
   const { profile, openMin, closeMin, alignToSchedule, weekend, level } =
     options;
-  const refLevel = profile.refLevel;
+  // Day type first, all days second — for the reference exactly as for the
+  // profile (the benchmark's `coalesce(d1.lvl, d2.lvl)`).
+  const refLevel =
+    (weekend ? profile.refLevel.we : profile.refLevel.wd) ??
+    profile.refLevel.all;
   const levelApplied =
     level !== null &&
     Number.isFinite(level) &&
     refLevel !== null &&
     refLevel > 0;
   const ratio = levelApplied ? Math.max(0, level) / refLevel : 1;
-  // With a level the split adds nothing (benchmark), so all days only.
   const read = (split: H5Split, index: number): number | null =>
-    levelApplied ? pick(split.all, index) : resolve(split, index, weekend);
+    resolve(split, index, weekend);
 
   const slots: H5Slot[] = [];
   for (const minute of gridOf(openMin, closeMin)) {

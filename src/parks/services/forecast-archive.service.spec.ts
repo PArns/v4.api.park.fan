@@ -1,6 +1,6 @@
 import { ForecastArchiveService } from "./forecast-archive.service";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
-import { PlanDayDto } from "../dto/plan-day.dto";
+import { PlanDayDto, PlanDayShadowCurve } from "../dto/plan-day.dto";
 import { Park } from "../entities/park.entity";
 
 const TZ = "Europe/Berlin";
@@ -299,7 +299,13 @@ describe("ForecastArchiveService.nextRideRows (D1)", () => {
 });
 
 describe("ForecastArchiveService.capturePark", () => {
-  function build(served: PredictionDto[], opts: { planThrows?: boolean } = {}) {
+  function build(
+    served: PredictionDto[],
+    opts: {
+      planThrows?: boolean;
+      shadow?: (date: string) => PlanDayShadowCurve[];
+    } = {},
+  ) {
     const inserted: unknown[][] = [];
     const qb = {
       insert: () => qb,
@@ -390,7 +396,15 @@ describe("ForecastArchiveService.capturePark", () => {
             ridesUnavailable: has ? undefined : { reason: "no_forecast" },
           };
         }),
+      // The capture path: the same plan, plus the composer A/B.
+      buildPlanDayWithShadow: jest.fn(),
     };
+    planDay.buildPlanDayWithShadow.mockImplementation(
+      async (p: Park, date: string) => ({
+        plan: await planDay.buildPlanDay(p, date),
+        shadow: opts.shadow?.(date) ?? [],
+      }),
+    );
     const calendar = {
       buildCalendarResponse: jest.fn().mockResolvedValue({
         days: [{ date: "2026-10-08", predictedCrowdLevel: "moderate" }],
@@ -496,6 +510,57 @@ describe("ForecastArchiveService.capturePark", () => {
       ridesUnavailable: ForecastArchiveService.CAPTURE_ERROR_REASON,
       tier: null,
     });
+  });
+
+  it("writes the composer A/B under its own surfaces, one row per composer", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T05:05:00Z"));
+    const slot = (minute: number, wait: number, code: "k" | "h" | "t") => ({
+      minute,
+      start: new Date(Date.UTC(2026, 9, 18, 0, minute - 120)).toISOString(),
+      wait,
+      code,
+    });
+    const { service, inserted } = build([], {
+      shadow: (date) =>
+        date === "2026-10-18"
+          ? [
+              {
+                attractionId: "id-taron",
+                composer: "peak_scaled",
+                slots: [slot(600, 30, "k"), slot(630, 30, "k")],
+              },
+              {
+                attractionId: "id-taron",
+                composer: "h5",
+                slots: [slot(600, 22, "h"), slot(630, 27, "h")],
+              },
+              {
+                attractionId: "id-taron",
+                composer: "h5_routed",
+                slots: [slot(600, 22, "h"), slot(630, 27, "h")],
+              },
+            ]
+          : [],
+    });
+    const res = await service.capturePark(park, "long", new Date());
+    // The served planner row plus three shadow rows.
+    expect(res.curves).toBe(4);
+    const rows = inserted[0] as Array<Record<string, unknown>>;
+    const shadow = rows.filter((r) => (r.surface as number) >= 3);
+    expect(shadow.map((r) => r.surface)).toEqual([3, 4, 5]);
+    expect(shadow[1]).toMatchObject({
+      slotMinutes: 15,
+      waits: [22, null, 27],
+      sources: "h-h",
+      leadDays: 10,
+      dayPeak: null,
+      // Level source and the live anchor belong to the served planner row.
+      levelSource: null,
+      liveWait: null,
+    });
+    expect((shadow[0].slotStart as Date).toISOString()).toBe(
+      "2026-10-18T08:00:00.000Z",
+    );
   });
 
   it("the long-lead origin builds only d10 … d90 and no served curve", async () => {

@@ -146,10 +146,25 @@ describe("H5 profiles from the rollup (e2e)", () => {
     // past 1440 reaches. With it the median is 60; without it, 50.
     expect(p.close.all[0]).toBe(60);
     // Daily P90s 40, 40, 60, 60 and the late day's 70.
-    expect(p.refLevel).toBe(60);
+    // All five are weekdays, so the weekday reference is the same.
+    expect(p.refLevel).toEqual({ wd: 60, we: null, all: 60 });
 
     // Cached: a second read does not need the database.
-    const cached = await redis.get(`plan-day:h5:v1:${park.id}:${TODAY}`);
+    const cached = await redis.get(`plan-day:h5:v2:${park.id}:${TODAY}`);
     expect(cached).not.toBeNull();
+  });
+
+  it("builds the (parkId, date) index concurrently at boot, and it is valid", async () => {
+    // onModuleInit fires it and does not wait; give it a moment.
+    let rows: Array<{ valid: boolean }> = [];
+    for (let i = 0; i < 50 && rows.length === 0; i++) {
+      rows = await dataSource.query(
+        `SELECT i.indisvalid AS valid FROM pg_class c
+           JOIN pg_index i ON i.indexrelid = c.oid
+          WHERE c.relname = 'idx_attraction_hourly_history_park_date'`,
+      );
+      if (rows.length === 0) await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(rows).toEqual([{ valid: true }]);
   });
 });

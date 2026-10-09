@@ -572,7 +572,8 @@ export class AdminController {
     summary: "Forward archive scores (served curves vs truth, per lead)",
     description:
       "UC1/UC2 (served 15-min curve, slot leads h0-1 … h24-48 and ride-day " +
-      "leads d0-d2), UC3 (plan/day d0-d7), D6 (crowd bucket per park-day), " +
+      "leads d0-d2), UC3 (plan/day d0-d7), UC3S (composer A/B shadow, PAR-834), " +
+      "D6 (crowd bucket per park-day), " +
       "D9 (coverage). Counters are pooled before dividing. See " +
       "docs/ml/forward-archive.md.",
   })

@@ -490,6 +490,82 @@ describe("level-source split and long leads", () => {
   });
 });
 
+describe("composer A/B shadow surfaces (PAR-834)", () => {
+  it("scores each composer under UC3S, apart from each other and from UC3", () => {
+    const origin = T0 - 135 * MIN;
+    const curve = (
+      surface: ArchivedCurve["surface"],
+      waits: number[],
+      sources: string,
+    ): ArchivedCurve => ({
+      attractionId: "a1",
+      surface,
+      originKind: "daily",
+      originAt: origin,
+      leadDays: 3,
+      slotStart: T0,
+      slotMinutes: 15,
+      waits,
+      sources,
+      bands: null,
+      dayPeak: null,
+      expectedError: null,
+      rideQ90: 60,
+      isHeadliner: false,
+      levelSource: null,
+    });
+    const acc = new ScoreAccumulator();
+    scoreParkDay(
+      {
+        region: "EU",
+        curves: [
+          curve("plan_day_shadow_peak", [40, 40, 40, 40], "kkkk"),
+          curve("plan_day_shadow_h5", [30, 35, 40, 45], "hhhh"),
+          curve("plan_day_shadow_routed", [45, 50, 60, 65], "tttt"),
+        ],
+        parkDays: [],
+        truth: new Map([
+          ["a1", new Map([0, 1, 2, 3].map((i) => [T0 + i * SLOT, 30 + i * 5]))],
+        ]),
+        hadWindows: false,
+        calendarDayValue: null,
+      },
+      acc,
+    );
+    expect(sumsOf(acc, "EU|UC3S|d3|shadow_peak_scaled|all")).toMatchObject({
+      n: 4,
+      sae: 10 + 5 + 0 + 5,
+    });
+    expect(sumsOf(acc, "EU|UC3S|d3|shadow_h5|all")).toMatchObject({
+      n: 4,
+      sae: 0,
+      rd: 1,
+    });
+    expect(sumsOf(acc, "EU|UC3S|d3|shadow_h5_routed|all").n).toBe(4);
+    // Never pooled: the three are the same slots three times.
+    expect(acc.entries().some((e) => e.source === "all")).toBe(false);
+    expect(acc.entries().some((e) => e.useCase === "UC3")).toBe(false);
+
+    // Without a routed row (no level applied) the plain row stands in for it.
+    const acc2 = new ScoreAccumulator();
+    scoreParkDay(
+      {
+        region: "EU",
+        curves: [curve("plan_day_shadow_h5", [30, 35, 40, 45], "hhhh")],
+        parkDays: [],
+        truth: new Map([
+          ["a1", new Map([0, 1, 2, 3].map((i) => [T0 + i * SLOT, 30 + i * 5]))],
+        ]),
+        hadWindows: false,
+        calendarDayValue: null,
+      },
+      acc2,
+    );
+    expect(sumsOf(acc2, "EU|UC3S|d3|shadow_h5_routed|all").n).toBe(4);
+    expect(sumsOf(acc2, "EU|UC3S|d3|shadow_h5|all").n).toBe(4);
+  });
+});
+
 describe("scoreCrossParkCrowd (D6 pairs)", () => {
   it("counts pairs within a region and over all parks, without double counting", () => {
     const acc = new ScoreAccumulator();
@@ -700,6 +776,9 @@ describe("review fixes", () => {
       "plan_day",
       "plan_day_live",
       "fallback",
+      "shadow_peak_scaled",
+      "shadow_h5",
+      "shadow_h5_routed",
     ];
     const leads = [
       "h0-1",
