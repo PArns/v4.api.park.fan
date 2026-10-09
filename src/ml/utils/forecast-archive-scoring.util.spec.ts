@@ -316,6 +316,136 @@ describe("scoreParkDay", () => {
   });
 });
 
+describe("D1 next-best-ride", () => {
+  const origin = T0;
+  const base: ArchivedCurve = {
+    attractionId: "r",
+    surface: "park_hourly",
+    originKind: "intraday",
+    originAt: origin,
+    leadDays: 0,
+    slotStart: origin,
+    slotMinutes: 15,
+    // forecast climbs to 40 at +45 min
+    waits: [20, 25, 28, 40, 40, 40, 40, 40, 40],
+    sources: "cccpcpccc",
+    bands: null,
+    dayPeak: null,
+    expectedError: null,
+    rideQ90: null,
+    isHeadliner: false,
+    liveWait: 20,
+  };
+  const truthOf = (values: number[]) =>
+    new Map<string, Map<number, number>>([
+      ["r", new Map(values.map((v, i) => [origin + (i + 1) * SLOT, v]))],
+    ]);
+  const run = (curve: ArchivedCurve, values: number[]) => {
+    const acc = new ScoreAccumulator();
+    scoreParkDay(
+      {
+        region: "EU",
+        curves: [curve],
+        parkDays: [],
+        truth: truthOf(values),
+        hadWindows: true,
+        headlinerIds: new Set(),
+        typicalDayPeak: 0,
+      },
+      acc,
+    );
+    return acc;
+  };
+
+  it("counts a suggestion that held", () => {
+    const acc = run(base, [20, 25, 35, 40]);
+    expect(sumsOf(acc, "EU|D1|h0-2|all|all")).toEqual({
+      d1Sugg: 1,
+      d1SuggOk: 1,
+    });
+    // Triggered by the +45 min slot (40 ≥ 20 + 10), a PCN slot.
+    expect(sumsOf(acc, "EU|D1|h0-1|pcn_blend|all")).toEqual({
+      d1Sugg: 1,
+      d1SuggOk: 1,
+    });
+  });
+
+  it("counts a suggestion that did not hold", () => {
+    const acc = run(base, [20, 22, 25, 25]);
+    expect(sumsOf(acc, "EU|D1|h0-2|all|all")).toEqual({
+      d1Sugg: 1,
+      d1SuggOk: 0,
+    });
+  });
+
+  it("records the base rate when there is no suggestion", () => {
+    const acc = run({ ...base, liveWait: 35 }, [35, 50]);
+    expect(sumsOf(acc, "EU|D1|h0-2|all|all")).toEqual({
+      d1None: 1,
+      d1NoneWorse: 1,
+    });
+  });
+
+  it("needs a live anchor", () => {
+    const acc = run({ ...base, liveWait: null }, [20, 40]);
+    expect(acc.entries().some((e) => e.useCase === "D1")).toBe(false);
+  });
+});
+
+describe("level-source split and long leads", () => {
+  it("writes UC3 and D9 under the level source too, and scores long-lead ride-days", () => {
+    const origin = T0 - 135 * MIN;
+    const acc = new ScoreAccumulator();
+    scoreParkDay(
+      {
+        region: "EU",
+        curves: [
+          {
+            attractionId: "a1",
+            surface: "plan_day",
+            originKind: "long",
+            originAt: origin,
+            leadDays: 30,
+            slotStart: T0,
+            slotMinutes: 60,
+            waits: [30],
+            sources: "k",
+            bands: null,
+            dayPeak: 40,
+            expectedError: 15,
+            rideQ90: null,
+            isHeadliner: false,
+            levelSource: "catboost",
+          },
+        ],
+        parkDays: [
+          {
+            originAt: origin,
+            leadDays: 30,
+            tier: "composed",
+            crowdLevel: null,
+            predictedCrowdLevel: null,
+            levelSource: "catboost",
+          },
+        ],
+        truth: new Map([
+          ["a1", new Map([0, 1, 2, 3].map((i) => [T0 + i * SLOT, 30 + i * 5]))],
+        ]),
+        hadWindows: true,
+        headlinerIds: new Set(),
+        typicalDayPeak: 0,
+      },
+      acc,
+    );
+    expect(sumsOf(acc, "EU|UC3|d30|level_catboost|all").n).toBe(4);
+    expect(sumsOf(acc, "EU|UC3|d30|level_catboost|all").nStated).toBe(1);
+    expect(sumsOf(acc, "EU|UC3|d30|composed|all").rd).toBe(1);
+    expect(sumsOf(acc, "EU|D9|d30|level_catboost|all").truthRidesOffered).toBe(
+      1,
+    );
+  });
+});
+
 describe("scoreCrossParkCrowd (D6 pairs)", () => {
   it("counts pairs within a region and over all parks, without double counting", () => {
     const acc = new ScoreAccumulator();

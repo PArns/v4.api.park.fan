@@ -226,6 +226,7 @@ export class ForecastArchiveScoringService {
           tier: d.tier,
           crowdLevel: d.crowdLevel,
           predictedCrowdLevel: d.predictedCrowdLevel,
+          levelSource: d.levelSource,
         })),
         truth,
         hadWindows: windows.length > 0,
@@ -252,6 +253,8 @@ export class ForecastArchiveScoringService {
       expectedError: c.expectedError,
       rideQ90: c.rideQ90,
       isHeadliner: c.isHeadliner,
+      liveWait: c.liveWait,
+      levelSource: c.levelSource,
     };
   }
 
@@ -477,6 +480,12 @@ export class ForecastArchiveScoringService {
       busyDayRecall: ratio("busyBoth", "busyTrue"),
       busyDayPrecision: ratio("busyBoth", "busyPred"),
       crossParkOrder: ratio("crossPairsOk", "crossPairs"),
+      nextBestRidePrecision: ratio("d1SuggOk", "d1Sugg"),
+      nextBestRideFalseRate:
+        s.d1Sugg && s.d1SuggOk !== undefined
+          ? Math.round((1 - s.d1SuggOk / s.d1Sugg) * 1000) / 1000
+          : null,
+      nextBestRideBaseRate: ratio("d1NoneWorse", "d1None"),
     };
   }
 }

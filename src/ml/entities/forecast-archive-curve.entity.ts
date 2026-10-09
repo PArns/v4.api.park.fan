@@ -24,6 +24,13 @@ export const ARCHIVE_ORIGIN_KINDS = {
   daily: 1,
   /** The 2-hourly origins during the operating day (UC1, short UC2). */
   intraday: 2,
+  /**
+   * The sparse long leads (d10 … d90) of the 06:00 origin's planner, captured
+   * an hour later (07:00 park-local) so the Europe burst is spread over two
+   * hours. Leads are still counted from the origin's park-local DATE, which
+   * is the same day.
+   */
+  long: 3,
 } as const;
 export type ArchiveOriginKind = keyof typeof ARCHIVE_ORIGIN_KINDS;
 
@@ -60,8 +67,9 @@ export type ArchiveSourceName =
  * ~76 rows per ride per origin, each paying a 24-byte tuple header and a key of
  * 30+ bytes for a 2-byte wait — the array is roughly a tenth of that.
  *
- * NOT A HYPERTABLE. Sized in docs/ml/forward-archive.md at ~20 MB a day with
- * its indexes, kept 35 days (~0.7 GB steady state); a plain DELETE keeps
+ * NOT A HYPERTABLE. Sized in docs/ml/forward-archive.md at ~29 MB a day with
+ * its indexes, kept 14 days past the TARGET date (~0.8 GB steady state, most
+ * of it the d10-d90 rows waiting for their day); a plain DELETE keeps
  * retention free of the `drop_chunks` lock on referenced tables that took the
  * API down in October (db-health-runbook §0b). For the same reason there is NO
  * foreign key: a FK to `attractions` would put this table into that lock path.
@@ -69,6 +77,8 @@ export type ArchiveSourceName =
 @Entity("forecast_archive_curves")
 // Scoring reads one park's rows for one target date.
 @Index("idx_fac_park_target", ["parkId", "targetDate"])
+// Retention is by target date (a d90 row must live until its day is scored).
+@Index("idx_fac_target", ["targetDate"])
 export class ForecastArchiveCurve {
   /** When the served curve was read. Shared by every row of one park capture. */
   @PrimaryColumn({ name: "origin_at", type: "timestamptz" })
@@ -151,6 +161,29 @@ export class ForecastArchiveCurve {
 
   @Column({ name: "is_headliner", type: "boolean", default: false })
   isHeadliner: boolean;
+
+  /**
+   * park_hourly only: the ride's latest STANDBY wait at the origin (OPERATING,
+   * no older than 30 min), NULL when there was none. The anchor of decision
+   * metric D1 (next-best-ride: live at least 10 min below the forecast).
+   */
+  @Column({ name: "live_wait", type: "smallint", nullable: true })
+  liveWait: number | null;
+
+  /**
+   * plan_day only: which model produced the day LEVEL the curve is built on —
+   * `tft` or `catboost` (the row `getServingDailyPredictions` served for that
+   * ride and day, matched the way `PlanDayService.dayLevels` matches it), or
+   * `climatology` on a climatology day. NULL when the ride had no level.
+   * Internal: the planner payload does not expose it.
+   */
+  @Column({
+    name: "level_source",
+    type: "varchar",
+    length: 12,
+    nullable: true,
+  })
+  levelSource: string | null;
 
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;

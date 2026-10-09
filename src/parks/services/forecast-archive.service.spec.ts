@@ -193,12 +193,31 @@ describe("ForecastArchiveService.capturePark", () => {
       createQueryBuilder: () => qb,
       manager: {
         transaction: async (fn: (em: unknown) => unknown) =>
-          fn({ query: async () => [] }),
+          fn({
+            query: async (sql: string) =>
+              sql.includes("DISTINCT ON")
+                ? [{ id: "id-taron", status: "OPERATING", wait: 35 }]
+                : [],
+          }),
       },
     };
     const ml = {
       getParkPredictions: jest.fn().mockResolvedValue({ predictions: served }),
       getRawParkPredictions: jest.fn(),
+      getServingDailyPredictions: jest.fn().mockResolvedValue({
+        predictions: [
+          {
+            attractionId: "id-taron",
+            predictedTime: "2026-10-08T00:00:00.000Z",
+            modelVersion: "tft",
+          },
+          {
+            attractionId: "id-taron",
+            predictedTime: "2026-10-18T00:00:00.000Z",
+            modelVersion: "v20261008",
+          },
+        ],
+      }),
     };
     const planDay = {
       buildPlanDay: jest
@@ -214,7 +233,7 @@ describe("ForecastArchiveService.capturePark", () => {
           accuracy: { basis: "measured", typicalError: 9 },
           leadTimeMae: 12,
           rides:
-            date === "2026-10-08"
+            date === "2026-10-08" || date === "2026-10-18"
               ? [
                   {
                     attractionSlug: "taron",
@@ -271,6 +290,7 @@ describe("ForecastArchiveService.capturePark", () => {
       expect(ml.getRawParkPredictions).not.toHaveBeenCalled();
       expect(planDay.buildPlanDay).toHaveBeenCalledTimes(8);
       expect(res).toEqual({ curves: 2, parkDays: 8 });
+      expect(ml.getServingDailyPredictions).toHaveBeenCalledWith("p1");
 
       const curves = inserted[0] as Array<Record<string, unknown>>;
       expect(curves.map((c) => c.surface).sort()).toEqual([1, 2]);
@@ -288,6 +308,7 @@ describe("ForecastArchiveService.capturePark", () => {
         ridesOffered: 1,
         ridesUnavailable: null,
         typicalError: 9,
+        levelSource: "tft",
       });
       expect(parkDays[1]).toMatchObject({
         ridesOffered: 0,
@@ -300,6 +321,56 @@ describe("ForecastArchiveService.capturePark", () => {
         "EX",
         26 * 3600,
       );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("stores the live anchor on the served curve and the level source on the plan", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T04:05:00Z"));
+    try {
+      const { service, inserted } = build([
+        pred("id-taron", "2026-10-08T08:00:00Z", 20),
+      ]);
+      const park = { id: "p1", slug: "phl", timezone: TZ } as Park;
+      await service.capturePark(park, "daily", new Date());
+      const curves = inserted[0] as Array<Record<string, unknown>>;
+      const served = curves.find((c) => c.surface === 1)!;
+      const planned = curves.find((c) => c.surface === 2)!;
+      expect(served.liveWait).toBe(35);
+      expect(served.levelSource).toBeNull();
+      expect(planned.liveWait).toBeNull();
+      expect(planned.levelSource).toBe("tft");
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("the long-lead origin builds only d10 … d90 and no served curve", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T05:05:00Z"));
+    try {
+      const { service, ml, planDay, inserted } = build([]);
+      const park = { id: "p1", slug: "phl", timezone: TZ } as Park;
+      const res = await service.capturePark(park, "long", new Date());
+      expect(ml.getParkPredictions).not.toHaveBeenCalled();
+      expect(
+        planDay.buildPlanDay.mock.calls.map((c: unknown[]) => c[1]),
+      ).toEqual([
+        "2026-10-18",
+        "2026-10-22",
+        "2026-10-29",
+        "2026-11-07",
+        "2026-11-22",
+        "2026-12-07",
+        "2027-01-06",
+      ]);
+      expect(res).toEqual({ curves: 1, parkDays: 7 });
+      const curve = (inserted[0] as Array<Record<string, unknown>>)[0];
+      expect(curve).toMatchObject({
+        leadDays: 10,
+        originKind: 3,
+        levelSource: "catboost",
+      });
     } finally {
       jest.useRealTimers();
     }
@@ -318,6 +389,14 @@ describe("ForecastArchiveService.capturePark", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe("ForecastArchiveService long leads and live anchor", () => {
+  it("07:00 park-local is the long-lead origin", () => {
+    expect(
+      ForecastArchiveService.originKindAt(new Date("2026-10-08T05:05:00Z"), TZ),
+    ).toBe("long");
   });
 });
 

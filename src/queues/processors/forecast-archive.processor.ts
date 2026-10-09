@@ -8,7 +8,8 @@ import { ForecastArchiveScoringService } from "../../parks/services/forecast-arc
  * The forward archive of served intraday curves (PAR-831).
  *
  * - `capture` runs every hour at :05 and captures each park whose own clock
- *   shows an origin hour (06 daily; 10–18 every two hours intraday). Why it is
+ *   shows an origin hour (06 daily; 07 long leads d10-d90; 10–18 every two
+ *   hours intraday). Why it is
  *   hourly and not one job per timezone: the origin is a park-local time, and
  *   one hourly job reading every park's clock covers all offsets.
  * - `score` runs daily at 12:00 UTC, when yesterday (UTC) is over in every

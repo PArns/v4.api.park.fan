@@ -46,7 +46,14 @@ export interface ArchiveCaptureResult {
 /** A curve row before it is an entity — what the pure builders return. */
 export type CurveDraft = Omit<
   ForecastArchiveCurve,
-  "createdAt" | "parkId" | "originAt" | "originKind" | "rideQ90" | "isHeadliner"
+  | "createdAt"
+  | "parkId"
+  | "originAt"
+  | "originKind"
+  | "rideQ90"
+  | "isHeadliner"
+  | "liveWait"
+  | "levelSource"
 >;
 
 /**
@@ -59,6 +66,10 @@ export type CurveDraft = Omit<
  *   `/plan/day`'s measured hours read) and the planner's hourly curve for
  *   d0…d7 (`PlanDayService.buildPlanDay`, the endpoint's own method), plus one
  *   park-day row per lead with the crowd bucket, tier and coverage.
+ * - **long leads, 07:00 park-local**: the planner curve and park-day row for
+ *   d10, d14, d21, d30, d45, d60 and d90 only (BENCH-SPEC "Horizon"), an hour
+ *   after the 06:00 origin so the Europe burst is spread over two hours. Leads
+ *   count from the same park-local date.
  * - **intraday origins, 10/12/14/16/18 park-local**: the served 15-min curve
  *   for the next 4 h only — UC1 (≤ 2 h) and the short end of UC2. Only for
  *   parks whose daily capture found a curve for today, so a closed park costs
@@ -73,6 +84,11 @@ export class ForecastArchiveService {
   private readonly logger = new Logger(ForecastArchiveService.name);
 
   static readonly DAILY_ORIGIN_HOUR = 6;
+  /** The sparse long leads, captured an hour after the daily origin. */
+  static readonly LONG_ORIGIN_HOUR = 7;
+  static readonly LONG_LEADS: readonly number[] = [10, 14, 21, 30, 45, 60, 90];
+  /** D1's live anchor: the latest STANDBY reading no older than this. */
+  static readonly LIVE_ANCHOR_MAX_AGE_MINUTES = 30;
   static readonly INTRADAY_ORIGIN_HOURS: readonly number[] = [
     10, 12, 14, 16, 18,
   ];
@@ -80,11 +96,16 @@ export class ForecastArchiveService {
   static readonly PLAN_DAY_MAX_LEAD = 7;
   /** How far ahead an intraday origin keeps the served curve. */
   static readonly INTRADAY_WINDOW_MINUTES = 240;
-  /** Curves are scored the day after their target date; 35 days leaves a
-   *  month for re-scoring and bench analysis. Sized in forward-archive.md. */
-  static readonly CURVE_RETENTION_DAYS = 35;
-  /** Park-day rows are a few hundred bytes; a year keeps every season. */
-  static readonly PARK_DAY_RETENTION_DAYS = 400;
+  /**
+   * Curves are kept this many days past their TARGET date — never counted from
+   * the origin, or a d90 row would be gone before its day could be scored.
+   * Two weeks leaves room for re-scoring and the bench runner's per-park-day
+   * CIs. Sized in forward-archive.md.
+   */
+  static readonly CURVE_RETENTION_AFTER_TARGET_DAYS = 14;
+  /** Park-day rows, past their target date: ~3.2 k a day at ~240 B with
+   *  indexes, so half a year is ~140 MB. The scores are kept longer. */
+  static readonly PARK_DAY_RETENTION_DAYS = 180;
 
   constructor(
     @InjectRepository(Park)
@@ -110,6 +131,7 @@ export class ForecastArchiveService {
   static originKindAt(now: Date, timezone: string): ArchiveOriginKind | null {
     const hour = Number(formatInTimeZone(now, timezone, "H"));
     if (hour === ForecastArchiveService.DAILY_ORIGIN_HOUR) return "daily";
+    if (hour === ForecastArchiveService.LONG_ORIGIN_HOUR) return "long";
     if (ForecastArchiveService.INTRADAY_ORIGIN_HOURS.includes(hour)) {
       return "intraday";
     }
@@ -194,16 +216,19 @@ export class ForecastArchiveService {
     ]);
 
     const drafts: CurveDraft[] = [];
+    let live = new Map<string, number>();
 
-    // ---- served 15-min curve ----
-    const served = await this.mlService
-      .getParkPredictions(park.id, "hourly")
-      .catch((err: Error) => {
-        this.logger.debug(
-          `Forward archive: no hourly curve for ${park.slug}: ${err.message}`,
-        );
-        return { predictions: [] as PredictionDto[] };
-      });
+    // ---- served 15-min curve (not on the long-lead origin) ----
+    const served = await (kind === "long"
+      ? Promise.resolve({ predictions: [] as PredictionDto[] })
+      : this.mlService
+          .getParkPredictions(park.id, "hourly")
+          .catch((err: Error) => {
+            this.logger.debug(
+              `Forward archive: no hourly curve for ${park.slug}: ${err.message}`,
+            );
+            return { predictions: [] as PredictionDto[] };
+          }));
     const fromMs = currentSlotStartMs();
     const untilMs =
       kind === "intraday"
@@ -220,20 +245,37 @@ export class ForecastArchiveService {
       ),
     );
 
-    // ---- planner curve d0 … d7 and the park-day rows ----
+    if (drafts.length > 0) {
+      live = await this.liveWaits(
+        [...new Set(drafts.map((d) => d.attractionId))],
+        originAt,
+      );
+    }
+
+    // ---- planner curve and the park-day rows ----
     const parkDays: ForecastArchiveParkDay[] = [];
-    if (kind === "daily") {
-      const [slugToId, calendar] = await Promise.all([
+    const levelOf = new Map<string, string>();
+    if (kind === "daily" || kind === "long") {
+      const leads =
+        kind === "daily"
+          ? Array.from(
+              { length: ForecastArchiveService.PLAN_DAY_MAX_LEAD + 1 },
+              (_, i) => i,
+            )
+          : [...ForecastArchiveService.LONG_LEADS];
+      const lastDate = addIsoDays(localToday, leads[leads.length - 1]);
+      const [slugToId, calendar, levelSources] = await Promise.all([
         this.attractionRepository
           .find({ where: { parkId: park.id }, select: ["id", "slug"] })
           .then((rows) => new Map(rows.map((a) => [a.slug, a.id]))),
-        this.predictedCrowdLevels(park, localToday),
+        this.predictedCrowdLevels(
+          park,
+          addIsoDays(localToday, leads[0]),
+          lastDate,
+        ),
+        this.levelSources(park),
       ]);
-      for (
-        let lead = 0;
-        lead <= ForecastArchiveService.PLAN_DAY_MAX_LEAD;
-        lead++
-      ) {
+      for (const lead of leads) {
         const date = addIsoDays(localToday, lead);
         let plan: PlanDayDto;
         try {
@@ -246,15 +288,25 @@ export class ForecastArchiveService {
           );
           continue;
         }
-        drafts.push(
-          ...ForecastArchiveService.curvesFromPlanDay(
-            plan,
-            slugToId,
-            park.timezone,
-            date,
-            lead,
-          ),
+        const planned = ForecastArchiveService.curvesFromPlanDay(
+          plan,
+          slugToId,
+          park.timezone,
+          date,
+          lead,
         );
+        const sourcesOfDay = new Set<string>();
+        for (const d of planned) {
+          const src =
+            plan.tier === "climatology"
+              ? "climatology"
+              : levelSources.get(`${d.attractionId}|${date}`);
+          if (src) {
+            levelOf.set(`${d.attractionId}|${date}`, src);
+            sourcesOfDay.add(src);
+          }
+        }
+        drafts.push(...planned);
         parkDays.push(
           this.parkDayRepository.create({
             originAt,
@@ -273,6 +325,12 @@ export class ForecastArchiveService {
             accuracyBasis: plan.accuracy?.basis ?? null,
             typicalError: plan.accuracy?.typicalError ?? null,
             leadTimeMae: plan.leadTimeMae ?? null,
+            levelSource:
+              sourcesOfDay.size === 0
+                ? "none"
+                : sourcesOfDay.size === 1
+                  ? [...sourcesOfDay][0]
+                  : "mixed",
           }),
         );
       }
@@ -287,6 +345,14 @@ export class ForecastArchiveService {
         parkId: park.id,
         rideQ90: q90.get(d.attractionId) ?? null,
         isHeadliner: headliners.has(d.attractionId),
+        liveWait:
+          d.surface === ARCHIVE_SURFACES.park_hourly
+            ? (live.get(d.attractionId) ?? null)
+            : null,
+        levelSource:
+          d.surface === ARCHIVE_SURFACES.plan_day
+            ? (levelOf.get(`${d.attractionId}|${d.targetDate}`) ?? null)
+            : null,
       }),
     );
 
@@ -488,14 +554,13 @@ export class ForecastArchiveService {
    */
   private async predictedCrowdLevels(
     park: Park,
-    localToday: string,
+    fromDate: string,
+    toDate: string,
   ): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     try {
-      const from = new Date(`${localToday}T12:00:00Z`);
-      const to = new Date(
-        `${addIsoDays(localToday, ForecastArchiveService.PLAN_DAY_MAX_LEAD)}T12:00:00Z`,
-      );
+      const from = new Date(`${fromDate}T12:00:00Z`);
+      const to = new Date(`${toDate}T12:00:00Z`);
       const cal = await this.calendarService.buildCalendarResponse(
         park,
         from,
@@ -508,6 +573,73 @@ export class ForecastArchiveService {
     } catch (err) {
       this.logger.debug(
         `Forward archive: calendar unavailable for ${park.slug}: ${(err as Error).message}`,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Which model the planner's day level comes from, per `ride|date`:
+   * `getServingDailyPredictions` is the call `PlanDayService.dayLevels` makes,
+   * matched on `predictedTime.slice(0, 10)` exactly as it does (freshest row
+   * wins), and the merged rows carry `modelVersion: "tft"` on the TFT side.
+   * Reconstructed rather than exposed, because the payload has no field for it.
+   */
+  private async levelSources(park: Park): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const serving = await this.mlService
+      .getServingDailyPredictions(park.id)
+      .catch(() => ({ predictions: [] as PredictionDto[] }));
+    for (const p of serving.predictions ?? []) {
+      out.set(
+        `${p.attractionId}|${p.predictedTime.slice(0, 10)}`,
+        p.modelVersion === "tft" ? "tft" : "catboost",
+      );
+    }
+    return out;
+  }
+
+  /**
+   * D1's anchor: each ride's latest STANDBY reading at the origin, when it is
+   * OPERATING with a wait and no older than {@link LIVE_ANCHOR_MAX_AGE_MINUTES}.
+   */
+  private async liveWaits(
+    attractionIds: string[],
+    originAt: Date,
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    try {
+      const rows: Array<{ id: string; status: string; wait: number | null }> =
+        await withStatementLimits(
+          this.curveRepository.manager,
+          { statementTimeoutMs: 20_000, lockTimeoutMs: 2_000 },
+          (em) =>
+            em.query(
+              `SELECT DISTINCT ON ("attractionId") "attractionId" AS id,
+                      status::text AS status, "waitTime" AS wait
+                 FROM queue_data
+                WHERE "attractionId" = ANY($1::uuid[])
+                  AND "queueType" = 'STANDBY'
+                  AND timestamp > $2 AND timestamp <= $3
+                ORDER BY "attractionId", timestamp DESC`,
+              [
+                attractionIds,
+                new Date(
+                  originAt.getTime() -
+                    ForecastArchiveService.LIVE_ANCHOR_MAX_AGE_MINUTES * 60_000,
+                ),
+                originAt,
+              ],
+            ),
+        );
+      for (const r of rows) {
+        if (r.status === "OPERATING" && r.wait !== null) {
+          out.set(r.id, Number(r.wait));
+        }
+      }
+    } catch (err) {
+      this.logger.debug(
+        `Forward archive: live anchor unavailable: ${(err as Error).message}`,
       );
     }
     return out;
@@ -578,21 +710,19 @@ export class ForecastArchiveService {
   async pruneExpired(
     now: Date = new Date(),
   ): Promise<{ curves: number; parkDays: number }> {
+    const today = now.toISOString().slice(0, 10);
     const curves = await this.pruneTable(
       "forecast_archive_curves",
-      "origin_at",
-      new Date(
-        now.getTime() -
-          ForecastArchiveService.CURVE_RETENTION_DAYS * 86_400_000,
+      "target_date",
+      addIsoDays(
+        today,
+        -ForecastArchiveService.CURVE_RETENTION_AFTER_TARGET_DAYS,
       ),
     );
     const parkDays = await this.pruneTable(
       "forecast_archive_park_days",
-      "origin_at",
-      new Date(
-        now.getTime() -
-          ForecastArchiveService.PARK_DAY_RETENTION_DAYS * 86_400_000,
-      ),
+      "target_date",
+      addIsoDays(today, -ForecastArchiveService.PARK_DAY_RETENTION_DAYS),
     );
     return { curves, parkDays };
   }
@@ -600,7 +730,7 @@ export class ForecastArchiveService {
   private async pruneTable(
     table: string,
     column: string,
-    before: Date,
+    before: string,
   ): Promise<number> {
     let total = 0;
     // 50 × 20,000 rows covers a day's backlog several times over; a longer
@@ -613,7 +743,7 @@ export class ForecastArchiveService {
           const res: Array<{ n: string }> = await em.query(
             `WITH gone AS (
                DELETE FROM ${table}
-                WHERE ctid IN (SELECT ctid FROM ${table} WHERE ${column} < $1 LIMIT 20000)
+                WHERE ctid IN (SELECT ctid FROM ${table} WHERE ${column} < $1::date LIMIT 20000)
                 RETURNING 1)
              SELECT count(*)::text AS n FROM gone`,
             [before],

@@ -9,6 +9,10 @@ import { EntityManager } from "typeorm";
  * how the 2026-09-28 and 2026-10-09 lock queues formed
  * (db-health-runbook §0, §0b). A timed-out statement raises 57014 / 55P03,
  * which the caller treats as "try again tomorrow", never as data.
+ *
+ * Shaped to be swapped for `src/common/utils/statement-limits.util.ts` once
+ * PR #442 lands: the `limits` argument is that file's `StatementLimits` (its
+ * two required fields), and every call site goes through this one function.
  */
 export async function withStatementLimits<T>(
   manager: EntityManager,

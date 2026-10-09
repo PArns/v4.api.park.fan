@@ -17,7 +17,8 @@ import {
  * coverage half of decision metric D9. A day with no curves is exactly the row
  * the curve table cannot hold.
  *
- * ~200 parks × 8 leads a day, a few hundred bytes each — kept a year.
+ * ~200 parks × 15 leads a day (d0-d7 and d10-d90), ~240 bytes each with
+ * indexes — kept 180 days past the target date.
  */
 @Entity("forecast_archive_park_days")
 @Index("idx_fapd_target", ["targetDate"])
@@ -96,6 +97,19 @@ export class ForecastArchiveParkDay {
   /** plan_day `leadTimeMae`. */
   @Column({ name: "lead_time_mae", type: "real", nullable: true })
   leadTimeMae: number | null;
+
+  /**
+   * Which model produced the day levels of the plan's rides: `tft`,
+   * `catboost`, `mixed` (both), `climatology` or `none`. Reconstructed the
+   * way the planner picks them (see `ForecastArchiveCurve.levelSource`).
+   */
+  @Column({
+    name: "level_source",
+    type: "varchar",
+    length: 12,
+    nullable: true,
+  })
+  levelSource: string | null;
 
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;

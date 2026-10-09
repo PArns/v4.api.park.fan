@@ -20,7 +20,12 @@
  * | `nStated`, `sStated`, `sStatedAe` | of those, the ones with a served expectedError, Σ stated, Σ realised \|err\| (D8) |
  * | `nRank`, `sRank`, `pairs`, `pairsOk` | park-days with a dayPeak rank Spearman, Σ rho; ride pairs, correctly ordered (D4 ordering) |
  * | `truthRides`, `truthRidesOffered`, `offered`, `offeredNotOperating`, `parkDays`, `parkDaysEmpty` | coverage (D9) |
- * | `n`, `exact`, `within1`, `busyTrue`, `busyPred`, `busyBoth`, `unknownPred`, `pairs`, `pairsOk` | crowd bucket per park-day (D6) |
+ * | `n`, `exact`, `within1`, `busyTrue`, `busyPred`, `busyBoth`, `unknownPred`, `crossPairs`, `crossPairsOk` | crowd bucket per park-day (D6) |
+ * | `d1Sugg`, `d1SuggOk`, `d1None`, `d1NoneWorse` | next-best-ride suggestions and how many held; the base rate among non-suggestions (D1) |
+ *
+ * UC3 and D9 rows are written twice: under the slot / plan source and under
+ * `level_<tft|catboost|climatology|mixed|none>`, the model behind the day
+ * level, so the board can split the horizon by level source.
  */
 import { determineCrowdLevel } from "../../common/utils/crowd-level.util";
 import {
@@ -40,6 +45,12 @@ export const BUSY_Q90_MINUTES = 45;
 export const MIN_RIDE_DAY_SLOTS = 4;
 /** dayPeak pairs closer than this in truth are not an ordering question. */
 export const MIN_PAIR_GAP_MINUTES = 5;
+/** D1 (BENCH-SPEC): suggest when live is this far below the forecast … */
+export const D1_GAP_MINUTES = 10;
+/** … anywhere within this window after the origin. */
+export const D1_WINDOW_MINUTES = 120;
+/** Truth slots the D1 window needs before the outcome is judged. */
+const D1_MIN_TRUTH_SLOTS = 2;
 const THIRTY_MIN_MS = 30 * 60_000;
 
 export interface TruthReading {
@@ -233,6 +244,10 @@ export interface ArchivedCurve {
   expectedError: number | null;
   rideQ90: number | null;
   isHeadliner: boolean;
+  /** park_hourly: live STANDBY wait at the origin (D1 anchor). */
+  liveWait?: number | null;
+  /** plan_day: model behind the day level. */
+  levelSource?: string | null;
 }
 
 export interface ArchivedParkDay {
@@ -241,6 +256,7 @@ export interface ArchivedParkDay {
   tier: string | null;
   crowdLevel: string | null;
   predictedCrowdLevel: string | null;
+  levelSource?: string | null;
 }
 
 export interface ParkDayScoringInput {
@@ -345,6 +361,58 @@ function rideDayTruthP90(
 }
 
 /**
+ * D1, next-best-ride (BENCH-SPEC decision table): the frontend suggests a ride
+ * when its live wait is at least {@link D1_GAP_MINUTES} below its forecast
+ * somewhere in the next {@link D1_WINDOW_MINUTES}. The suggestion was right
+ * when the ride actually got that much worse within the same window.
+ *
+ * Every judged origin lands in `D1|h0-2|all` (suggestions AND the base rate
+ * among non-suggestions, so precision can be read against chance); a
+ * suggestion is also counted under the lead bucket and source of the first
+ * forecast slot that triggered it.
+ */
+export function scoreNextBestRide(
+  curve: ArchivedCurve,
+  live: number,
+  truthSlots: Map<number, number>,
+  segments: string[],
+  region: string,
+  acc: ScoreAccumulator,
+): void {
+  const end = curve.originAt + D1_WINDOW_MINUTES * 60_000;
+  const future = [...truthSlots.entries()].filter(
+    ([slot]) => slot > curve.originAt && slot <= end,
+  );
+  if (future.length < D1_MIN_TRUTH_SLOTS) return;
+  const worse = future.some(([, v]) => v >= live + D1_GAP_MINUTES);
+
+  let trigger: { lead: string; src: string } | null = null;
+  const step = curve.slotMinutes * 60_000;
+  for (let i = 0; i < curve.waits.length; i++) {
+    const slot = curve.slotStart + i * step;
+    if (slot <= curve.originAt || slot > end) continue;
+    const w = curve.waits[i];
+    if (w === null || w === undefined || w < live + D1_GAP_MINUTES) continue;
+    const bucket = slotLeadBucket((slot - curve.originAt) / 60_000);
+    trigger = {
+      lead: bucket?.lead ?? "h0-2",
+      src: sourceName(curve.sources[i]),
+    };
+    break;
+  }
+
+  const counters: Record<string, number> = trigger
+    ? { d1Sugg: 1, d1SuggOk: worse ? 1 : 0 }
+    : { d1None: 1, d1NoneWorse: worse ? 1 : 0 };
+  for (const seg of segments) {
+    acc.add(region, "D1", "h0-2", "all", seg, counters);
+    if (trigger) {
+      acc.add(region, "D1", trigger.lead, trigger.src, seg, counters);
+    }
+  }
+}
+
+/**
  * Scores every archived curve of one park and one target date. Returns the
  * park-day crowd observations for {@link scoreCrossParkCrowd}.
  */
@@ -382,6 +450,10 @@ export function scoreParkDay(
     }
     compared.sort((a, b) => a.slot - b.slot);
     const segments = segmentsOf(curve);
+    const levelKey =
+      curve.surface === "plan_day" && curve.levelSource
+        ? `level_${curve.levelSource}`
+        : null;
 
     // ---- slot metrics: MAE, bias, band coverage ----
     for (const c of compared) {
@@ -409,12 +481,30 @@ export function scoreParkDay(
       for (const seg of segments) {
         acc.add(region, useCase, lead, c.src, seg, counters);
         acc.add(region, useCase, lead, "all", seg, counters);
+        if (levelKey) acc.add(region, useCase, lead, levelKey, seg, counters);
       }
+    }
+
+    // ---- D1: next-best-ride suggestion from the live anchor ----
+    if (
+      curve.surface === "park_hourly" &&
+      curve.liveWait !== null &&
+      curve.liveWait !== undefined &&
+      truthSlots
+    ) {
+      scoreNextBestRide(
+        curve,
+        curve.liveWait,
+        truthSlots,
+        segments,
+        region,
+        acc,
+      );
     }
 
     // ---- ride-day metrics: best time (D3), slot Spearman, dayPeak ----
     // Only a whole day is a ride-day: intraday origins see a few hours of it.
-    if (curve.originKind !== "daily") continue;
+    if (curve.originKind === "intraday") continue;
     const useCase = curve.surface === "park_hourly" ? "UC2" : "UC3";
     const lead = dayLead(curve.leadDays);
     const srcs = new Set(compared.map((c) => c.src));
@@ -464,6 +554,9 @@ export function scoreParkDay(
       for (const seg of segments) {
         acc.add(region, useCase, lead, rideSource, seg, rideCounters);
         acc.add(region, useCase, lead, "all", seg, rideCounters);
+        if (levelKey) {
+          acc.add(region, useCase, lead, levelKey, seg, rideCounters);
+        }
       }
     }
   }
@@ -511,14 +604,25 @@ export function scoreParkDay(
       for (const id of truthRides) if (offered.has(id)) truthOffered++;
       let offeredNotOperating = 0;
       for (const id of offered) if (!truthRides.has(id)) offeredNotOperating++;
-      acc.add(region, "D9", lead, parkDay.tier ?? "none", "all", {
+      const coverage = {
         truthRides: truthRides.size,
         truthRidesOffered: truthOffered,
         offered: offered.size,
         offeredNotOperating,
         parkDays: truthRides.size > 0 ? 1 : 0,
         parkDaysEmpty: truthRides.size > 0 && offered.size === 0 ? 1 : 0,
-      });
+      };
+      acc.add(region, "D9", lead, parkDay.tier ?? "none", "all", coverage);
+      if (parkDay.levelSource) {
+        acc.add(
+          region,
+          "D9",
+          lead,
+          `level_${parkDay.levelSource}`,
+          "all",
+          coverage,
+        );
+      }
     }
   }
 
