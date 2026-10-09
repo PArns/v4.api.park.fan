@@ -253,6 +253,11 @@ def target_tables(con, c: str, leads: list[int], cfg: BenchConfig) -> None:
         FROM tg3 t""")
     prod_profile(con, c, cfg)
     prod_served(con, cfg)
+    # A forecast made at the origin only covers the hours it knows the park is open
+    # (the plug-in grid is that window too): truth slots outside the window known at
+    # the origin get no forecast from anybody, and count against coverage (D9).
+    nulls = ", ".join(f"{m} = NULL" for m in SLOT_MODELS + ORACLES + ["wt_q80", "wt_q95"])
+    x(f"UPDATE tg SET {nulls} WHERE ko < 0 OR kc < 0 OR ko IS NULL OR kc IS NULL")
     for t in ("tg0", "tg1", "tg2", "tg3"):
         x(f"DROP TABLE IF EXISTS {t}")
 
