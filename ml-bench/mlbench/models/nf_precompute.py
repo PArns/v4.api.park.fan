@@ -181,6 +181,15 @@ def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_st
     return {H: pd.concat(v, ignore_index=True) if v else pd.DataFrame() for H, v in out.items()}
 
 
+def in_quiet_window(spec: str | None, now: dt.datetime | None = None) -> bool:
+    """``spec`` = 'HH:MM-HH:MM' UTC (celestrial: no new block from 00:30, nightly jobs 01:00-09:30)."""
+    if not spec:
+        return False
+    a, b = (dt.time.fromisoformat(v) for v in spec.split("-"))
+    t = (now or dt.datetime.now(dt.timezone.utc)).time()
+    return (a <= t < b) if a < b else (t >= a or t < b)
+
+
 def default_origins(con, export: Path, window_days: int = 56) -> tuple[dt.date, dt.date]:
     """The runner's origin range (``Runner.__init__``)."""
     d0, d1 = con.execute("SELECT min(date), max(date) FROM truth").fetchone()
@@ -196,7 +205,7 @@ def default_origins(con, export: Path, window_days: int = 56) -> tuple[dt.date, 
 
 def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to: str | None,
         max_steps: int, parks: list[str] | None = None, intraday: bool = True, scale: float = 1.0,
-        memory: str = "4GB", threads: int = 4, log=print) -> dict:
+        memory: str = "4GB", threads: int = 4, log=print, quiet: str | None = None) -> dict:
     from ..build import connect
     from ..runner import load_tables
 
@@ -215,6 +224,9 @@ def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to
             "horizon_days": HORIZON_DAYS, "K": K, "hour0": HOUR0, "quantiles": QUANTILES,
             "parks": parks, "export": str(export), "blocks": []}
     for c0, c1 in month_blocks(first, last):
+        if in_quiet_window(quiet):
+            log(f"quiet window {quiet} UTC reached: stop before block {c0} (resume later, cached blocks are kept)")
+            break
         tag = c0.strftime("%Y%m%d")
         if all((out_dir / f"b{tag}_h{H:02d}.parquet").exists() for H in hours):
             log(f"block {c0}..{c1}: cached, skip")
@@ -247,9 +259,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-intraday", action="store_true")
     p.add_argument("--memory", default="4GB")
     p.add_argument("--threads", type=int, default=4)
+    p.add_argument("--quiet", default="00:30-09:30", help="UTC window in which no new block starts ('' = off)")
     a = p.parse_args(argv)
     run(Path(a.export), Path(a.cache), a.model, a.origin_from, a.origin_to, a.max_steps,
-        a.parks.split(",") if a.parks else None, not a.no_intraday, memory=a.memory, threads=a.threads,
+        a.parks.split(",") if a.parks else None, not a.no_intraday, memory=a.memory, threads=a.threads, quiet=a.quiet or None,
         log=lambda s: print(f"[{dt.datetime.now(dt.timezone.utc):%H:%M:%S}] {s}", flush=True))
     return 0
 
