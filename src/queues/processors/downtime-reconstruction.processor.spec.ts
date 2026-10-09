@@ -1,7 +1,15 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { Job } from "bull";
 import { DataSource } from "typeorm";
-import { DowntimeReconstructionProcessor } from "./downtime-reconstruction.processor";
+import {
+  DowntimeReconstructionProcessor,
+  LOCK_TIMEOUT_MS,
+  READ_TIMEOUT_FLOOR_MS,
+  READ_TIMEOUT_PER_SCAN_DAY_MS,
+  reconstructionReadLimits,
+  WRITE_LIMITS,
+} from "./downtime-reconstruction.processor";
+import { statementLimitSql } from "../../common/utils/statement-limits.util";
 import { DowntimeProfileService } from "../../analytics/downtime-profile.service";
 import { DowntimeRecoveryService } from "../../analytics/downtime-recovery.service";
 import {
@@ -37,6 +45,8 @@ describe("DowntimeReconstructionProcessor", () => {
     closureGaps?: Array<Record<string, unknown>>;
     /** Make the closure-gap statement throw, the one failure the job swallows. */
     closureGapsFail?: boolean;
+    /** The message it throws with. */
+    closureGapsError?: string;
     scanStart?: Date;
   }
 
@@ -82,15 +92,21 @@ describe("DowntimeReconstructionProcessor", () => {
     wallMinutes: 30,
   });
 
-  /** Every `manager.query` the transaction issued, in order. */
+  /** Every `manager.query` any transaction issued, in order. */
   let writes: Array<{ sql: string; params: unknown[] }>;
+  /** The same statements, grouped by the transaction that issued them. */
+  let transactions: string[][];
   let inserted: Array<{ table: unknown; rows: Array<Record<string, unknown>> }>;
 
-  const run = async (fixture: Fixture): Promise<void> => {
+  const run = async (
+    fixture: Fixture,
+    data: { parkIds?: string[]; windowDays?: number } = {},
+  ): Promise<void> => {
     writes = [];
+    transactions = [];
     inserted = [];
 
-    const query = jest.fn(async (sql: string) => {
+    const route = async (sql: string): Promise<unknown> => {
       if (sql.includes("AS scan_start")) {
         return [{ scan_start: fixture.scanStart ?? SCAN_START }];
       }
@@ -98,19 +114,30 @@ describe("DowntimeReconstructionProcessor", () => {
       if (sql === OUTAGE_EXPOSURE_SQL) return fixture.exposure ?? [];
       if (sql === CLOSURE_GAP_INTERVALS_SQL) {
         if (fixture.closureGapsFail) {
-          throw new Error('relation "attraction_exposure_days" does not exist');
+          throw new Error(
+            fixture.closureGapsError ??
+              'relation "attraction_exposure_days" does not exist',
+          );
         }
         return fixture.closureGaps ?? [];
       }
-      // The retention prune, which runs on the DataSource rather than in the
-      // transaction.
+      // The deletes, the SET LOCALs and the retention prune.
       return [];
+    };
+
+    // Every statement now runs inside a transaction of its own, because that
+    // is the only scope `SET LOCAL` has. A bare `dataSource.query` would run
+    // with no deadline at all, so the stub fails the test if one is issued.
+    const query = jest.fn(async (sql: string) => {
+      throw new Error(`unscoped query outside a transaction: ${sql}`);
     });
 
+    let current: string[] = [];
     const manager = {
       query: jest.fn(async (sql: string, params: unknown[]) => {
         writes.push({ sql, params });
-        return [];
+        current.push(sql);
+        return route(sql);
       }),
       createQueryBuilder: () => {
         const builder = {
@@ -131,11 +158,21 @@ describe("DowntimeReconstructionProcessor", () => {
       },
     };
 
+    // Transactions are run one at a time even where the processor starts two
+    // at once (`Promise.all`), so each statement lands in the list of the
+    // transaction that issued it.
+    let queue: Promise<unknown> = Promise.resolve();
     const dataSource = {
       query,
-      transaction: jest.fn(async (cb: (m: typeof manager) => Promise<void>) =>
-        cb(manager),
-      ),
+      transaction: jest.fn((cb: (m: typeof manager) => Promise<unknown>) => {
+        const next = queue.then(async () => {
+          current = [];
+          transactions.push(current);
+          return cb(manager);
+        });
+        queue = next.catch(() => undefined);
+        return next;
+      }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -149,8 +186,15 @@ describe("DowntimeReconstructionProcessor", () => {
 
     const processor = module.get(DowntimeReconstructionProcessor);
     await processor.handleReconstruct({
-      data: {},
+      data,
     } as Job<{ parkIds?: string[]; windowDays?: number }>);
+  };
+
+  /** The transaction that ran a given statement, SET LOCALs included. */
+  const transactionOf = (sql: string): string[] => {
+    const found = transactions.find((tx) => tx.includes(sql));
+    expect(found).toBeDefined();
+    return found!;
   };
 
   /** The two deletes the transaction opens with, in order. */
@@ -289,5 +333,119 @@ describe("DowntimeReconstructionProcessor", () => {
     const rows = inserted.flatMap((batch) => batch.rows);
     expect(rows.filter((row) => row.signal === "down")).toHaveLength(1);
     expect(rows.filter((row) => row.signal === "closed_gap")).toHaveLength(1);
+  });
+
+  /**
+   * PAR-820: the job ran with no deadline at all. The closure-gap statement's
+   * plan collapsed into stacked nested loops and never finished over the
+   * nightly 60-day scan, so the job held the queue's only slot until a deploy
+   * killed it — and the server kept running the orphaned statement after that.
+   */
+  describe("deadlines and planner settings", () => {
+    const timeoutOf = (tx: string[]): number => {
+      const set = tx.find((sql) =>
+        sql.startsWith("SET LOCAL statement_timeout"),
+      );
+      expect(set).toBeDefined();
+      return Number(set!.split("=")[1]);
+    };
+
+    it("runs every read in its own transaction behind a statement and lock timeout", async () => {
+      await run({ exposure: [exposureDay("ride-a")] });
+
+      for (const sql of [
+        OUTAGE_INTERVALS_SQL,
+        OUTAGE_EXPOSURE_SQL,
+        CLOSURE_GAP_INTERVALS_SQL,
+      ]) {
+        const tx = transactionOf(sql);
+        // The limits come first, so they are in force when the statement runs.
+        expect(tx.indexOf(sql)).toBe(tx.length - 1);
+        expect(timeoutOf(tx)).toBeGreaterThanOrEqual(READ_TIMEOUT_FLOOR_MS);
+        expect(tx).toContain(`SET LOCAL lock_timeout = ${LOCK_TIMEOUT_MS}`);
+      }
+      const scan = transactions.find((tx) =>
+        tx.some((sql) => sql.includes("AS scan_start")),
+      );
+      expect(scan).toBeDefined();
+      expect(timeoutOf(scan!)).toBeGreaterThan(0);
+    });
+
+    it("turns nested loops off for the closure-gap statement and only for it", async () => {
+      await run({ exposure: [exposureDay("ride-a")] });
+
+      expect(transactionOf(CLOSURE_GAP_INTERVALS_SQL)).toContain(
+        "SET LOCAL enable_nestloop = off",
+      );
+      // Statements 1 and 2 have run at ~30 s and ~52 s for months on the
+      // planner's own choice, which includes index nested loops into
+      // queue_data; they keep it.
+      for (const sql of [OUTAGE_INTERVALS_SQL, OUTAGE_EXPOSURE_SQL]) {
+        expect(
+          transactionOf(sql).some((s) => s.includes("enable_nestloop")),
+        ).toBe(false);
+      }
+    });
+
+    it("opens the write transaction with its limits before the first DELETE", async () => {
+      await run({ exposure: [exposureDay("ride-a")] });
+
+      const tx = transactions.find((t) =>
+        t.some((sql) => sql.includes("DELETE FROM attraction_outages")),
+      )!;
+      const firstDelete = tx.findIndex((sql) => sql.includes("DELETE"));
+      expect(tx.slice(0, firstDelete)).toEqual(statementLimitSql(WRITE_LIMITS));
+      expect(tx).toContain(
+        `SET LOCAL idle_in_transaction_session_timeout = ${WRITE_LIMITS.idleInTransactionTimeoutMs}`,
+      );
+    });
+
+    it("keeps the DOWN reconstruction when the closure-gap statement times out", async () => {
+      // A timeout is the failure the deadline is FOR, and it must land in the
+      // swallowed branch: one night without closure gaps, not one night
+      // without the reconstruction.
+      await run({
+        intervals: [interval("ride-a")],
+        exposure: [exposureDay("ride-a")],
+        closureGapsFail: true,
+        closureGapsError: "canceling statement due to statement timeout",
+      });
+
+      const { outages } = deletes();
+      expect(outages.sql).toContain("signal = 'down'");
+      const rows = inserted.flatMap((batch) => batch.rows);
+      expect(rows.filter((row) => row.signal === "down")).toHaveLength(1);
+    });
+  });
+});
+
+describe("reconstructionReadLimits", () => {
+  const AS_OF = new Date("2026-10-09T05:00:00.000Z");
+  const daysBefore = (days: number) =>
+    new Date(AS_OF.getTime() - days * 24 * 60 * 60 * 1000);
+
+  it("gives the nightly 60-day scan the ten-minute floor", () => {
+    // ~11x the slowest statement measured over that scan (52 s).
+    expect(reconstructionReadLimits(daysBefore(60), AS_OF)).toEqual({
+      statementTimeoutMs: 10 * 60 * 1000,
+      lockTimeoutMs: 30 * 1000,
+    });
+  });
+
+  it("never goes below the floor for a short targeted repair", () => {
+    expect(
+      reconstructionReadLimits(daysBefore(1), AS_OF).statementTimeoutMs,
+    ).toBe(READ_TIMEOUT_FLOOR_MS);
+    // A scan start at or after asOf is one day, not zero or negative.
+    expect(reconstructionReadLimits(AS_OF, AS_OF).statementTimeoutMs).toBe(
+      READ_TIMEOUT_FLOOR_MS,
+    );
+  });
+
+  it("grows with the scan for a staged hand-run fill", () => {
+    // windowDays 400 can pin the scan to its 800-day floor.
+    expect(
+      reconstructionReadLimits(daysBefore(800), AS_OF).statementTimeoutMs,
+    ).toBe(800 * READ_TIMEOUT_PER_SCAN_DAY_MS);
   });
 });

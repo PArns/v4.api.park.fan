@@ -425,7 +425,10 @@ export class AdminController {
     await this.downtimeQueue.add(
       "reconstruct-downtime",
       { windowDays: Number(days) || undefined },
-      { priority: 60 },
+      // One attempt. A staged fill's statements get deadlines that grow with
+      // the scan (up to ~2.2 h each, PAR-820); the default three attempts
+      // would turn one fill that hits them into ~6.7 h of retries.
+      { priority: 60, attempts: 1 },
     );
     return { message: "Downtime reconstruction queued", queue: "downtime" };
   }
