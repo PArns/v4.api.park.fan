@@ -35,7 +35,7 @@ def _forecast(con, hours=(6, 12)):
     day0 = con.execute("SELECT min(date) FROM truth").fetchone()[0]
     panel = build_panel(con, day0, C1 + dt.timedelta(days=HORIZON_DAYS + 1), C0, weather=False)
     return panel, forecast_block("nf_tide", panel, C0, C1, max_steps=3, hours=list(hours), scale=0.05,
-                                 log=lambda s: None)
+                                 log=lambda s: None, con=con)
 
 
 def test_panel_grid(con):
@@ -69,6 +69,14 @@ def test_precompute_information_cut(con):
     # intraday origin 12:00: the hours of that day that end after 12:00 too
     con.execute(f"""UPDATE truth SET y = y * 7 + 400
                     WHERE date > DATE '{ORIGIN}' OR (date = DATE '{ORIGIN}' AND ws >= 48)""")
+    # schedules written after the origin: a later opening, a new holiday flag
+    o_utc = f"timezone((SELECT timezone FROM parks WHERE id = w.park_id), TIMESTAMP '{ORIGIN} 06:00')"
+    late = f"FROM windows w WHERE w.date >= DATE '{ORIGIN}' AND w.updated_utc >= {o_utc}"
+    assert con.execute(f"SELECT count(*) {late}").fetchone()[0] > 0
+    con.execute(f"""UPDATE park_day_cov c SET open_local = open_local + INTERVAL 2 HOUR, sched_is_holiday = true
+                    WHERE (c.park_id, c.date) IN (SELECT (w.park_id, w.date) {late})""")
+    con.execute(f"""UPDATE windows w SET open_local = open_local + INTERVAL 2 HOUR,
+                    open_utc = open_utc + INTERVAL 2 HOUR WHERE w.date >= DATE '{ORIGIN}' AND w.updated_utc >= {o_utc}""")
     _, poisoned = _forecast(con, hours=(12,))
     con.execute(f"UPDATE truth SET y = y * 3 + 100 WHERE date = DATE '{ORIGIN}'")
     _, poisoned_d = _forecast(con, hours=(6,))
@@ -134,7 +142,8 @@ def test_series_layout(con, name, monkeypatch):
     monkeypatch.setenv("MLBENCH_NF_CPU", "1")
     day0 = con.execute("SELECT min(date) FROM truth").fetchone()[0]
     panel = build_panel(con, day0, C1 + dt.timedelta(days=HORIZON_DAYS + 1), C0, weather=False)
-    res = forecast_block(name, panel, C0, C1, max_steps=60, hours=[6], scale=0.05, log=lambda s: None)[6]
+    res = forecast_block(name, panel, C0, C1, max_steps=60, hours=[6], scale=0.05, log=lambda s: None,
+                         con=con)[6]
     m = res.groupby("aid")["q50"].median()
     hl = m[m.index.str.endswith(("r0", "r1"))]
     rest = m[m.index.str.endswith(("r2", "r3"))]

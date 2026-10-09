@@ -90,6 +90,94 @@ class Panel:
         return self.temporal[:, :, -1]
 
 
+def hour_features(cov, futr_cols: list[str]) -> np.ndarray:
+    """[rows, K, F] hour features for park-day rows with ``has_published_window, o_m, c_m``
+    (open / close minute from the service day's local midnight), ``dow`` (0 = Sunday),
+    ``is_weekend``, ``date``, the holiday flags and (if asked for) the weather columns."""
+    n = len(cov)
+    dates = cov["date"].to_numpy().astype("datetime64[D]")
+    dow = cov["dow"].to_numpy(dtype=float)
+    doy = (dates - dates.astype("datetime64[Y]")).astype(int).astype(float)
+    has = cov["has_published_window"].fillna(False).to_numpy(dtype=bool)
+    o_m = cov["o_m"].to_numpy(dtype=float)
+    c_m = cov["c_m"].to_numpy(dtype=float)
+    has &= np.isfinite(o_m) & np.isfinite(c_m) & (c_m > o_m)
+    day = {
+        "day_open": has.astype(float),
+        "win_len": np.where(has, (c_m - o_m) / 60.0 / 16.0, 0.0),
+        "dow_sin": np.sin(2 * np.pi * dow / 7), "dow_cos": np.cos(2 * np.pi * dow / 7),
+        "is_weekend": cov["is_weekend"].fillna(False).to_numpy(dtype=float),
+        "doy_sin": np.sin(2 * np.pi * doy / 365.25), "doy_cos": np.cos(2 * np.pi * doy / 365.25),
+    }
+    for c in HOLIDAY_COLS:
+        v = cov[c].astype("float64").fillna(0).to_numpy()
+        day[c] = v / 5.0 if c == "neighbor_school_holiday_count" else v
+    if "wx_ok" in futr_cols:
+        ok = cov["temp_max"].notna().to_numpy()
+        day["wx_temp_max"] = np.where(ok, cov["temp_max"].fillna(0).to_numpy(float) / 30.0, 0)
+        day["wx_precip"] = np.where(ok, cov["precip_sum"].fillna(0).to_numpy(float) / 20.0, 0)
+        day["wx_wind"] = np.where(ok, cov["wind_max"].fillna(0).to_numpy(float) / 50.0, 0)
+        day["wx_ok"] = ok.astype(float)
+    out = np.zeros((n, K, len(futr_cols)), dtype=np.float32)
+    for j in range(K):
+        hr = HOUR0 + j
+        mid = hr * 60 + 30
+        ov = np.clip(np.minimum(c_m, (hr + 1) * 60) - np.maximum(o_m, hr * 60), 0, 60) / 60.0
+        f = dict(day)
+        f["hr_pos"] = np.full(n, j / (K - 1))
+        f["in_win"] = np.where(has, ov, 0.0)
+        f["h_open"] = np.where(has, np.clip((mid - o_m) / 60.0, -3, 16) / 10.0, 0.0)
+        f["h_close"] = np.where(has, np.clip((c_m - mid) / 60.0, -3, 16) / 10.0, 0.0)
+        for fi, name in enumerate(futr_cols):
+            out[:, j, fi] = np.nan_to_num(f[name])
+    return out
+
+
+def origin_covariates(con, origins: list[dt.date], n_days: int, origin_hour: int = 6,
+                      window_days: int = 56):
+    """Park-day covariates for days ``c .. c + n_days - 1`` AS KNOWN AT each origin ``c``
+    — the harness's ``pw`` rule (``baselines.target_tables``): the published window if
+    its schedule row was last written before the origin (06:00 park-local), else the
+    window projected from the last ``window_days`` days (median local opening / closing
+    minute per park and weekday type, >= 3 days, else over all days); the schedule's
+    holiday / bridge flags only where the schedule was known. Columns as
+    ``park_day_cov`` plus ``origin, o_m, c_m, schedule_known``."""
+    olist = ",".join(f"DATE '{c}'" for c in origins)
+    return con.execute(f"""
+        WITH oc AS (SELECT unnest([{olist}]) AS origin),
+        o AS (SELECT oc.origin, p.id AS park_id, p.timezone,
+                     timezone(p.timezone, CAST(oc.origin AS TIMESTAMP) + INTERVAL {int(origin_hour)} HOUR) AS origin_utc
+              FROM oc, parks p),
+        d AS (SELECT o.*, CAST(o.origin + L AS DATE) AS date
+              FROM o, (SELECT CAST(unnest(range(0, {int(n_days)})) AS INTEGER) AS L)),
+        wp AS (SELECT oc.origin, w.park_id,
+                      CASE WHEN grouping(we) = 1 THEN 2 ELSE CAST(we AS INTEGER) END AS wk,
+                      median(date_diff('minute', CAST(w.date AS TIMESTAMP), w.open_local)) AS om,
+                      median(date_diff('minute', CAST(w.date AS TIMESTAMP), w.close_local)) AS cm,
+                      count(*) AS n
+               FROM oc JOIN (SELECT *, dayofweek(date) IN (0, 6) AS we FROM windows) w
+                 ON w.date >= oc.origin - {int(window_days)} AND w.date < oc.origin
+               GROUP BY GROUPING SETS ((oc.origin, w.park_id, we), (oc.origin, w.park_id))),
+        k AS (SELECT d.*, w.open_local, w.close_local,
+                     w.updated_utc IS NOT NULL AND w.updated_utc < d.origin_utc AS known
+              FROM d LEFT JOIN windows w ON w.park_id = d.park_id AND w.date = d.date)
+        SELECT cov.* EXCLUDE (has_published_window, sched_is_holiday, sched_is_bridge_day,
+                              open_local, close_local, open_utc, close_utc),
+               k.origin, k.known AS schedule_known,
+               CASE WHEN k.known THEN date_diff('minute', CAST(k.date AS TIMESTAMP), k.open_local)
+                    ELSE coalesce(p1.om, p2.om) END AS o_m,
+               CASE WHEN k.known THEN date_diff('minute', CAST(k.date AS TIMESTAMP), k.close_local)
+                    ELSE coalesce(p1.cm, p2.cm) END AS c_m,
+               (CASE WHEN k.known THEN k.open_local IS NOT NULL ELSE coalesce(p1.om, p2.om) IS NOT NULL END)
+                   AS has_published_window,
+               CASE WHEN k.known THEN cov.sched_is_holiday ELSE false END AS sched_is_holiday,
+               CASE WHEN k.known THEN cov.sched_is_bridge_day ELSE false END AS sched_is_bridge_day
+        FROM k JOIN park_day_cov cov ON cov.park_id = k.park_id AND cov.date = k.date
+        LEFT JOIN wp p1 ON p1.origin = k.origin AND p1.park_id = k.park_id
+             AND p1.wk = CAST(dayofweek(k.date) IN (0, 6) AS INTEGER) AND p1.n >= 3
+        LEFT JOIN wp p2 ON p2.origin = k.origin AND p2.park_id = k.park_id AND p2.wk = 2""").df()
+
+
 def build_panel(con, day0: dt.date, day_end: dt.date, cutoff: dt.date, weather: bool,
                 parks: list[str] | None = None) -> Panel:
     """Panel over service days [day0, day_end). Truth enters only for days < ``truth_end``
@@ -132,52 +220,21 @@ def build_panel(con, day0: dt.date, day_end: dt.date, cutoff: dt.date, weather: 
         temporal[si, ti, 0] = h["y"].to_numpy(dtype=np.float32)
         temporal[si, ti, C - 1] = 1.0
 
-    # ---- park-day covariates expanded to hours
-    pc = np.zeros((len(park_list), T, len(futr_cols)), dtype=np.float32)
+    # ---- park-day covariates expanded to hours (published FINAL windows: used for the
+    # past — training windows and the input part of a forecast window; the forecast part
+    # is overwritten with the window as known at the origin, see ``origin_covariates``)
     cov = x(f"""
         SELECT c.*, date_diff('minute', CAST(c.date AS TIMESTAMP), c.open_local) AS o_m,
                date_diff('minute', CAST(c.date AS TIMESTAMP), c.close_local) AS c_m
         FROM park_day_cov c
         WHERE c.date >= DATE '{day0}' AND c.date < DATE '{day_end}' {pf.replace('park_id', 'c.park_id')}""").df()
     cov = cov[cov["park_id"].isin(p_ix)]
+    pc = np.zeros((len(park_list), n_days, K, len(futr_cols)), dtype=np.float32)
     if len(cov):
         pi = cov["park_id"].map(p_ix).to_numpy()
         di = (cov["date"].to_numpy().astype("datetime64[D]") - np.datetime64(day0, "D")).astype(int)
-        dates = cov["date"].to_numpy().astype("datetime64[D]")
-        dow = cov["dow"].to_numpy(dtype=float)                       # 0 = Sunday
-        doy = (dates - dates.astype("datetime64[Y]")).astype(int).astype(float)
-        has = cov["has_published_window"].fillna(False).to_numpy(dtype=bool)
-        o_m = cov["o_m"].to_numpy(dtype=float)
-        c_m = cov["c_m"].to_numpy(dtype=float)
-        day_feats = {
-            "day_open": has.astype(float),
-            "win_len": np.where(has, (c_m - o_m) / 60.0 / 16.0, 0.0),
-            "dow_sin": np.sin(2 * np.pi * dow / 7), "dow_cos": np.cos(2 * np.pi * dow / 7),
-            "is_weekend": cov["is_weekend"].fillna(False).to_numpy(dtype=float),
-            "doy_sin": np.sin(2 * np.pi * doy / 365.25), "doy_cos": np.cos(2 * np.pi * doy / 365.25),
-        }
-        for c in HOLIDAY_COLS:
-            v = cov[c].astype("float64").fillna(0).to_numpy()
-            day_feats[c] = v / 5.0 if c == "neighbor_school_holiday_count" else v
-        if weather:
-            ok = cov["temp_max"].notna().to_numpy()
-            day_feats["wx_temp_max"] = np.where(ok, cov["temp_max"].fillna(0).to_numpy(float) / 30.0, 0)
-            day_feats["wx_precip"] = np.where(ok, cov["precip_sum"].fillna(0).to_numpy(float) / 20.0, 0)
-            day_feats["wx_wind"] = np.where(ok, cov["wind_max"].fillna(0).to_numpy(float) / 50.0, 0)
-            day_feats["wx_ok"] = ok.astype(float)
-        for j in range(K):
-            hr = HOUR0 + j
-            ti = di * K + j
-            mid = hr * 60 + 30
-            ov = np.clip(np.minimum(c_m, (hr + 1) * 60) - np.maximum(o_m, hr * 60), 0, 60) / 60.0
-            feats = dict(day_feats)
-            feats["hr_pos"] = np.full(len(cov), j / (K - 1))
-            feats["in_win"] = np.where(has, ov, 0.0)
-            feats["h_open"] = np.where(has, np.clip((mid - o_m) / 60.0, -3, 16) / 10.0, 0.0)
-            feats["h_close"] = np.where(has, np.clip((c_m - mid) / 60.0, -3, 16) / 10.0, 0.0)
-            for f_i, f in enumerate(futr_cols):
-                pc[pi, ti, f_i] = np.nan_to_num(feats[f]).astype(np.float32)
-    temporal[:, :, 1:1 + len(futr_cols)] = pc[rides["park_id"].map(p_ix).to_numpy()]
+        pc[pi, di] = hour_features(cov, futr_cols)
+    temporal[:, :, 1:1 + len(futr_cols)] = pc.reshape(len(park_list), T, -1)[rides["park_id"].map(p_ix).to_numpy()]
     del pc
 
     # ---- static (levels cut at the block's first origin)
