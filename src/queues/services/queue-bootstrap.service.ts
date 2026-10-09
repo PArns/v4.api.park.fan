@@ -30,11 +30,7 @@ export class QueueBootstrapService implements OnModuleInit {
 
   constructor(
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
-    @InjectQueue("park-metadata") private parkMetadataQueue: Queue,
     @InjectQueue("children-metadata") private childrenQueue: Queue, // Phase 6.2: Combined queue
-    @InjectQueue("weather") private weatherQueue: Queue,
-    @InjectQueue("holidays") private holidaysQueue: Queue,
-    @InjectQueue("ml-training") private mlTrainingQueue: Queue,
     @InjectQueue("prediction-accuracy") private predictionAccuracyQueue: Queue,
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 baseline queue
@@ -70,8 +66,11 @@ export class QueueBootstrapService implements OnModuleInit {
   private async bootstrapQueues(): Promise<void> {
     this.logger.log("🚀 Queue bootstrap starting...");
 
-    // Clean up old jobs from all queues
-    await this.cleanupQueues();
+    // No boot-time `queue.clean()` (PAR-821). It used to wipe every completed
+    // AND failed job from six queues on each start, so every deploy erased the
+    // evidence the nightly failing-job sweep reads. Retention is already
+    // bounded by the defaultJobOptions in QueuesModule (removeOnComplete 100,
+    // removeOnFail 500), which is all the wipe was ever for.
 
     // Check if parks exist in database
     const parkCount = await this.parkRepository.count();
@@ -395,51 +394,5 @@ export class QueueBootstrapService implements OnModuleInit {
     const hasWaitingJob = waitingJobs.some((job) => job.name === jobName);
 
     return hasActiveJob || hasWaitingJob;
-  }
-
-  /**
-   * Clean up old completed and failed jobs from all queues.
-   * This prevents job accumulation and keeps Redis memory usage low.
-   */
-  private async cleanupQueues(): Promise<void> {
-    this.logger.log("🧹 Cleaning up old jobs from queues...");
-
-    const queues = [
-      { name: "wait-times", queue: this.waitTimesQueue },
-      { name: "park-metadata", queue: this.parkMetadataQueue },
-      { name: "children-metadata", queue: this.childrenQueue }, // Phase 6.2: Combined
-      { name: "weather", queue: this.weatherQueue },
-      { name: "holidays", queue: this.holidaysQueue },
-      { name: "ml-training", queue: this.mlTrainingQueue },
-    ];
-
-    let totalCleaned = 0;
-
-    for (const { name, queue } of queues) {
-      try {
-        // More aggressive cleanup: Limit increased to 1000
-        const completed = await queue.clean(0, "completed", 1000);
-        const failed = await queue.clean(0, "failed", 1000);
-
-        const cleaned = completed.length + failed.length;
-        totalCleaned += cleaned;
-
-        if (cleaned > 0) {
-          this.logger.debug(
-            `  ✓ Queue [${name}]: cleaned ${completed.length} completed, ${failed.length} failed jobs`,
-          );
-        }
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        this.logger.warn(`Failed to clean queue [${name}]: ${errorMessage}`);
-      }
-    }
-
-    if (totalCleaned > 0) {
-      this.logger.log(`✅ Cleaned ${totalCleaned} old jobs from queues`);
-    } else {
-      this.logger.debug("✅ No old jobs to clean");
-    }
   }
 }

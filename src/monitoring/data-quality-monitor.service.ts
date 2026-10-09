@@ -6,6 +6,8 @@ import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retir
 import { reissueNamesMatch } from "../attractions/utils/attraction-match.util";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
+import { parseExpression } from "cron-parser";
+import { BULL_QUEUE_REGISTRATIONS } from "../queues/queue-registrations";
 
 /**
  * Three detectors for the ways this system went quietly wrong for weeks.
@@ -142,23 +144,116 @@ export interface FailingJob {
   lastFailedAt: string | null;
 }
 
-/** Queues whose failures matter — every queue this app registers. */
-const MONITORED_QUEUES = [
-  "wait-times",
-  "park-metadata",
-  "children-metadata",
-  "manual-metadata",
-  "entity-mappings",
-  "weather",
-  "holidays",
-  "ml-training",
-  "prediction-accuracy",
-  "predictions",
-  "park-enrichment",
-  "analytics",
-  "ml-monitoring",
-  "stats",
-] as const;
+/**
+ * Registered queues whose failures are deliberately NOT reported, each with
+ * the reason. Empty today: every queue the app registers runs work whose
+ * failure somebody needs to hear about. An entry here is the only way to leave
+ * a queue out — the spec fails for a registered queue that is neither
+ * monitored nor named here, and for an entry here that names no registered
+ * queue or gives no reason.
+ */
+export const UNMONITORED_QUEUES: Readonly<Record<string, string>> = {};
+
+/**
+ * Queues whose failures the nightly sweep reports: every registered queue
+ * minus the opt-outs above.
+ *
+ * Derived rather than written out. The hand-written list this replaced
+ * (PAR-821) claimed to be "every queue this app registers" and held fourteen
+ * of thirty-two — downtime, p50-baseline, push-notifications and fifteen
+ * more were never read, and four days of `downtime` failures passed without a
+ * line in the log.
+ */
+export const MONITORED_QUEUES: readonly string[] = BULL_QUEUE_REGISTRATIONS.map(
+  (q) => q.name as string,
+).filter((name) => !(name in UNMONITORED_QUEUES));
+
+/**
+ * How far back a failure counts when its job has no slower schedule and no
+ * previous sweep is on record: the sweep runs once a day (06:45 UTC), so 26 h
+ * covers the gap between two sweeps with slack for a late run. The nightly
+ * sweep normally anchors on its own previous run instead
+ * (`FAILING_JOB_LAST_SWEEP_KEY`), so a failure at 06:00 is not reported on two
+ * nights; this is the fail-safe when that key is missing, and the window the
+ * admin page reads.
+ */
+export const FAILING_JOB_DEFAULT_WINDOW_MS = 26 * 60 * 60 * 1000;
+
+/**
+ * Redis key holding the start time (epoch ms) of the last nightly failing-job
+ * sweep. Not under the Bull prefix: it is not Bull's, and losing it (a cache
+ * flush, eviction — it carries a TTL) only falls back to the 26 h default.
+ */
+export const FAILING_JOB_LAST_SWEEP_KEY =
+  "data-quality:failing-jobs:last-sweep";
+
+/** An anchor older than this is not trusted; the window is capped here. */
+const FAILING_JOB_MAX_ANCHOR_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Slack before a repeatable job's previous fire time — a run can start late. */
+const FAILING_JOB_FIRE_SLACK_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Earliest finish time at which a failure of each repeatable job still counts,
+ * read from Bull's `<prefix>:<queue>:repeat` ZSET.
+ *
+ * A failure counts until the job has had its next scheduled chance to run, so
+ * the window follows the job's own cadence instead of one number for every
+ * queue: a five-minute or daily job is judged on the last 26 h (the sweep's own
+ * cadence), the weekly Six Flags heights sync on its last Monday run, the monthly
+ * holiday sync on its run on the 1st — otherwise a failed monthly run would be
+ * reported for one night and then hidden for a month.
+ *
+ * Members are Bull's repeat keys, `name:jobId:endDate:tz:cron` (bull@4.16.5
+ * lib/repeatable.js; production reads
+ * `calculate-percentiles:percentiles-cron:::0 2 * * *`). Parsed from the
+ * right, because the right-hand fields are the fixed ones: the cron is the
+ * last segment (a cron string has no colon), the tz the one before it, the
+ * endDate the one before that, then the jobId (a fixed `…-cron` id here);
+ * whatever remains on the left is the job name, colons and all. A purely
+ * numeric last segment is an `every` interval in ms. A key that does not parse
+ * gets no entry, so its job falls back to `defaultStart`.
+ */
+export function failureWindowStarts(
+  repeatKeys: string[],
+  now: number,
+  defaultStart = now - FAILING_JOB_DEFAULT_WINDOW_MS,
+): Map<string, number> {
+  const starts = new Map<string, number>();
+  for (const key of repeatKeys) {
+    const parts = key.split(":");
+    if (parts.length < 5) continue;
+    const spec = parts[parts.length - 1];
+    const tz = parts[parts.length - 2] || undefined;
+    const name = parts.slice(0, parts.length - 4).join(":");
+    if (!name || !spec.trim()) continue;
+
+    let previousFire: number;
+    try {
+      if (/^\d+$/.test(spec)) {
+        const every = Number(spec);
+        if (every <= 0) continue;
+        previousFire = Math.floor(now / every) * every;
+      } else {
+        previousFire = parseExpression(spec, {
+          currentDate: new Date(now),
+          tz,
+        })
+          .prev()
+          .getTime();
+      }
+    } catch {
+      continue; // an unparseable entry falls back to the default window
+    }
+
+    const start = Math.min(
+      defaultStart,
+      previousFire - FAILING_JOB_FIRE_SLACK_MS,
+    );
+    starts.set(name, Math.min(starts.get(name) ?? start, start));
+  }
+  return starts;
+}
 
 @Injectable()
 export class DataQualityMonitorService {
@@ -627,29 +722,66 @@ export class DataQualityMonitorService {
    * that stopped being scheduled at all. Neither covers the other, and
    * detect-seasonal was the second kind for 73 days.
    *
-   * Read straight off Bull's Redis keys rather than by injecting fourteen
-   * queues: `<prefix>:<queue>:failed` is a ZSET of job ids (repeatable runs
-   * appear as `repeat:<hash>:<millis>`), and each id resolves to a hash holding
-   * `name`, `failedReason` and `finishedOn`. Verified against production, where
-   * the detect-seasonal corpse still reads
+   * Read straight off Bull's Redis keys rather than by injecting every queue:
+   * `<prefix>:<queue>:failed` is a ZSET of job ids scored by the time the job
+   * failed (repeatable runs appear as `repeat:<hash>:<millis>`), and each id
+   * resolves to a hash holding `name`, `failedReason` and `finishedOn`.
+   * Verified against production, where the detect-seasonal corpse still reads
    * `syntax error at or near "attr_activity"`.
+   *
+   * Only failures inside the job's window count (see `failureWindowStarts`).
+   * Bull keeps the last 500 failures per queue for as long as it takes 500 more
+   * to happen, which for a quiet queue is forever — without the window a bug
+   * fixed in July is reported every night until December, and a report that is
+   * red every night is one people learn to ignore. Until PAR-821 the boot-time
+   * wipe hid that by deleting the evidence on every deploy, for six queues.
+   *
+   * And a job whose latest run succeeded is not failing: a job name drops out
+   * when the same queue's `completed` set holds a run of that name that
+   * finished after its newest failure — a manual rerun of a weekly sync clears
+   * it the same night instead of a week later. The completed set keeps the
+   * last 100 runs per queue, so on a busy queue an old success may have been
+   * trimmed; that errs towards reporting, never towards hiding.
+   *
+   * `since` replaces the 26 h default window (the nightly sweep passes its own
+   * previous run, see `findFailingJobsSinceLastSweep`).
    */
-  async findFailingJobs(perQueueLimit = 100): Promise<FailingJob[]> {
+  async findFailingJobs(
+    perQueueLimit = 100,
+    now = Date.now(),
+    since?: number,
+  ): Promise<FailingJob[]> {
     const client = this.analyticsQueue.client;
     const prefix = process.env.BULL_PREFIX || "parkfan";
     const results: FailingJob[] = [];
 
     for (const queueName of MONITORED_QUEUES) {
       try {
-        const ids: string[] = await client.zrange(
+        const scored: string[] = await client.zrange(
           `${prefix}:${queueName}:failed`,
           -perQueueLimit,
           -1,
+          "WITHSCORES",
         );
-        if (ids.length === 0) continue;
+        if (scored.length === 0) continue;
+
+        const repeatKeys: string[] = await client.zrange(
+          `${prefix}:${queueName}:repeat`,
+          0,
+          -1,
+        );
+        const defaultStart = since ?? now - FAILING_JOB_DEFAULT_WINDOW_MS;
+        const windowStarts = failureWindowStarts(repeatKeys, now, defaultStart);
+        const oldestStart = Math.min(defaultStart, ...windowStarts.values());
 
         const byJobName = new Map<string, FailingJob>();
-        for (const id of ids) {
+        const newestFailure = new Map<string, number>();
+        for (let i = 0; i < scored.length; i += 2) {
+          const id = scored[i];
+          const score = Number(scored[i + 1]);
+          // Cheap pre-filter on the ZSET score before reading the hash.
+          if (!(score >= oldestStart)) continue;
+
           const [name, failedReason, finishedOn] = await client.hmget(
             `${prefix}:${queueName}:${id}`,
             "name",
@@ -657,9 +789,14 @@ export class DataQualityMonitorService {
             "finishedOn",
           );
           const jobName = name ?? "unknown";
-          const failedAt = finishedOn
-            ? new Date(Number(finishedOn)).toISOString()
-            : null;
+          if (score < (windowStarts.get(jobName) ?? defaultStart)) continue;
+
+          const failedAtMs = finishedOn ? Number(finishedOn) : score;
+          const failedAt = new Date(failedAtMs).toISOString();
+          newestFailure.set(
+            jobName,
+            Math.max(newestFailure.get(jobName) ?? 0, failedAtMs),
+          );
           const existing = byJobName.get(jobName);
 
           if (!existing) {
@@ -674,16 +811,42 @@ export class DataQualityMonitorService {
           }
 
           existing.failures++;
-          if (
-            failedAt &&
-            (!existing.lastFailedAt || failedAt > existing.lastFailedAt)
-          ) {
+          if (!existing.lastFailedAt || failedAt > existing.lastFailedAt) {
             existing.lastFailedAt = failedAt;
             existing.lastReason = this.firstLine(failedReason);
           }
         }
 
-        results.push(...byJobName.values());
+        if (byJobName.size === 0) continue;
+
+        // A later success clears the failure. Only completions newer than the
+        // oldest reported failure can matter, so read just those.
+        const earliest = Math.min(...newestFailure.values());
+        const completed: string[] = await client.zrangebyscore(
+          `${prefix}:${queueName}:completed`,
+          `(${earliest}`,
+          "+inf",
+          "WITHSCORES",
+        );
+        const newestSuccess = new Map<string, number>();
+        for (let i = 0; i < completed.length; i += 2) {
+          const doneAt = Number(completed[i + 1]);
+          const [name] = await client.hmget(
+            `${prefix}:${queueName}:${completed[i]}`,
+            "name",
+          );
+          const jobName = name ?? "unknown";
+          newestSuccess.set(
+            jobName,
+            Math.max(newestSuccess.get(jobName) ?? 0, doneAt),
+          );
+        }
+
+        for (const [jobName, job] of byJobName) {
+          const failedAt = newestFailure.get(jobName) ?? 0;
+          if ((newestSuccess.get(jobName) ?? 0) > failedAt) continue;
+          results.push(job);
+        }
       } catch (e) {
         this.logger.debug(
           `Could not read failures for queue ${queueName}: ${(e as Error)?.message ?? e}`,
@@ -692,6 +855,44 @@ export class DataQualityMonitorService {
     }
 
     return results.sort((a, b) => b.failures - a.failures);
+  }
+
+  /**
+   * The nightly sweep's entry point: failures since the previous sweep's run,
+   * so a failure is reported on exactly one night (or, for a slower cron, until
+   * its next run). Records this sweep's start only after the read, so a
+   * missing or unreadable anchor falls back to the 26 h default.
+   */
+  async findFailingJobsSinceLastSweep(now = Date.now()): Promise<FailingJob[]> {
+    const client = this.analyticsQueue.client;
+    let since: number | undefined;
+    try {
+      const raw = await client.get(FAILING_JOB_LAST_SWEEP_KEY);
+      const at = raw === null ? NaN : Number(raw);
+      if (Number.isFinite(at) && at < now) {
+        since = Math.max(at, now - FAILING_JOB_MAX_ANCHOR_AGE_MS);
+      }
+    } catch (e) {
+      this.logger.debug(
+        `Could not read the last failing-job sweep: ${(e as Error)?.message ?? e}`,
+      );
+    }
+
+    const failing = await this.findFailingJobs(100, now, since);
+
+    try {
+      await client.set(
+        FAILING_JOB_LAST_SWEEP_KEY,
+        String(now),
+        "EX",
+        Math.round((2 * FAILING_JOB_MAX_ANCHOR_AGE_MS) / 1000),
+      );
+    } catch (e) {
+      this.logger.debug(
+        `Could not record the failing-job sweep: ${(e as Error)?.message ?? e}`,
+      );
+    }
+    return failing;
   }
 
   /** Bull stores the whole stack in failedReason; the first line is the fact. */

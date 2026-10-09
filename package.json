@@ -58,6 +58,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "compression": "^1.8.2",
+    "cron-parser": "^4.9.0",
     "date-fns": "^4.4.0",
     "date-fns-tz": "^3.2.0",
     "helmet": "^8.3.0",
