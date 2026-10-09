@@ -1,0 +1,10 @@
+# PAR-828 — time-series foundation models as ml-bench plug-ins.
+# torch comes from the cu128 wheel in the Dockerfile; neither package may replace it.
+#
+# Chronos-2 (amazon/chronos-2): Apache-2.0 code and weights.
+chronos-forecasting==2.3.2
+# TimesFM 3.0 (google/timesfm-3.0-pytorch): code Apache-2.0, WEIGHTS under the
+# TimesFM Non-Commercial License v1.0 (non-commercial, non-production use only).
+# park.fan is non-commercial; the benchmark is not production. Serving these weights
+# in production would NOT be covered by that licence.
+timesfm==3.0.2
