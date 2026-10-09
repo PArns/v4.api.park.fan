@@ -931,6 +931,31 @@ def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _historical_occupancy_values(
+    df: pd.DataFrame, mask: pd.Series, park_hist: Dict, ts_naive_utc: pd.Series
+) -> list:
+    """Look rows up in the historical occupancy profile by the PARK'S wall clock.
+
+    `fetch_historical_park_occupancy` keys the profile on
+    `EXTRACT(DOW/HOUR FROM timestamp AT TIME ZONE p.timezone)` — the park-local
+    weekday (Postgres convention, 0=Sun) and hour. The lookup used to read both
+    off the UTC timestamp, so a 14:00 row in Los Angeles asked for the 21:00
+    (after-close) profile and a 10:00 Tokyo row for 01:00 (PAR-818).
+
+    The naive `local_timestamp` is exactly that wall clock; it is read here as a
+    reading, never compared against an instant. Without it (a caller that never
+    ran `convert_to_local_time`) the UTC reading is the only one there is.
+    """
+    if "local_timestamp" in df.columns:
+        wall = pd.to_datetime(df.loc[mask, "local_timestamp"])
+    else:
+        wall = ts_naive_utc[mask]
+    # pandas dayofweek: Mon=0 … Sun=6 → Postgres DOW: Sun=0, Mon=1 … Sat=6
+    pg_dow = ((wall.dt.dayofweek + 1) % 7).astype(int)
+    hour = wall.dt.hour.astype(int)
+    return [park_hist.get((d, h), 100.0) for d, h in zip(pg_dow, hour)]
+
+
 def add_park_occupancy_feature(
     df: pd.DataFrame, feature_context: Dict = None
 ) -> pd.DataFrame:
@@ -997,15 +1022,11 @@ def add_park_occupancy_feature(
                     park_future_mask = (df["parkId"] == park_id) & future_mask
                     if not park_future_mask.any():
                         continue
-                    # Compute Postgres DOW (0=Sun) from UTC timestamp
-                    # pandas dayofweek: Mon=0 … Sun=6 → Postgres DOW: Sun=0, Mon=1 … Sat=6
-                    pandas_dow = ts_naive[park_future_mask].dt.dayofweek
-                    pg_dow = ((pandas_dow + 1) % 7).astype(int)
-                    hour = ts_naive[park_future_mask].dt.hour.astype(int)
-                    hist_vals = [
-                        park_hist.get((d, h), 100.0) for d, h in zip(pg_dow, hour)
-                    ]
-                    df.loc[park_future_mask, "park_occupancy_pct"] = hist_vals
+                    df.loc[park_future_mask, "park_occupancy_pct"] = (
+                        _historical_occupancy_values(
+                            df, park_future_mask, park_hist, ts_naive
+                        )
+                    )
         else:
             # No base_time — fall back to applying real-time value to ALL rows
             for park_id, occupancy_pct in park_occupancy_map.items():
@@ -1029,11 +1050,9 @@ def add_park_occupancy_feature(
                 if not park_hist:
                     continue
                 park_mask = df["parkId"] == park_id
-                pandas_dow = ts_naive[park_mask].dt.dayofweek
-                pg_dow = ((pandas_dow + 1) % 7).astype(int)
-                hour = ts_naive[park_mask].dt.hour.astype(int)
-                hist_vals = [park_hist.get((d, h), 100.0) for d, h in zip(pg_dow, hour)]
-                df.loc[park_mask, "park_occupancy_pct"] = hist_vals
+                df.loc[park_mask, "park_occupancy_pct"] = _historical_occupancy_values(
+                    df, park_mask, park_hist, ts_naive
+                )
 
     else:
         # Training Mode: Reconstruct historical occupancy to match inference scale

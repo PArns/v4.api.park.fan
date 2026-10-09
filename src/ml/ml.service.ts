@@ -997,6 +997,23 @@ export class MLService {
    * zone that observes DST would make one day of the year 23 or 25 hours long
    * and round the wrong way.
    */
+  /**
+   * The park-local calendar day a prediction is about (PAR-818).
+   *
+   * CatBoost's `predictedTime` is a UTC instant (`…+00:00`), whose first ten
+   * characters are the UTC date: a 20:00 slot in Los Angeles is 03:00 UTC of
+   * the next day, a 08:00 slot in Tokyo 23:00 UTC of the previous one. TFT's is
+   * an offset-less `YYYY-MM-DDT12:00:00` that already names the park-local day.
+   * An instant is read on the park's clock; anything without an offset is
+   * taken at its word.
+   */
+  static localDateOf(predictedTime: string, timezone: string): string {
+    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(predictedTime)) {
+      return predictedTime.slice(0, 10);
+    }
+    return formatInParkTimezone(new Date(predictedTime), timezone || "UTC");
+  }
+
   private static daysBetween(from: string, to: string): number {
     return Math.round(
       (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
@@ -1068,8 +1085,15 @@ export class MLService {
       }
       if (tft.length === 0) return base;
 
+      // Keyed on the PARK-LOCAL day for both sides (PAR-818): TFT names the
+      // local day, CatBoost an instant whose UTC date can be the day after.
+      const park = await this.parkRepository.findOne({
+        where: { id: parkId },
+        select: ["id", "timezone"],
+      });
+      const tz = park?.timezone || "UTC";
       const key = (p: PredictionDto) =>
-        `${p.attractionId}|${p.predictedTime.slice(0, 10)}`;
+        `${p.attractionId}|${MLService.localDateOf(p.predictedTime, tz)}`;
       const tftKeys = new Set(tft.map(key));
       const farCatboost = base.predictions.filter((p) => !tftKeys.has(key(p)));
       const merged = [...tft, ...farCatboost];
@@ -1293,9 +1317,19 @@ export class MLService {
       }),
     );
 
-    // ONE schedule query for every park/date pair (was: one per park).
+    // ONE schedule query for every park/date pair (was: one per park). The
+    // dates are each park's LOCAL day — the schedule's own key (PAR-818).
     const allScheduleDates = [
-      ...new Set(predictions.map((p) => p.predictedTime.split("T")[0])),
+      ...new Set(
+        [...predictionsByPark].flatMap(([parkId, preds]) =>
+          preds.map((p) =>
+            MLService.localDateOf(
+              p.predictedTime,
+              parkInfoCache.get(parkId)?.timezone || "UTC",
+            ),
+          ),
+        ),
+      ),
     ].map((d) => new Date(d + "T12:00:00Z"));
 
     const allSchedules = allScheduleDates.length
@@ -1335,7 +1369,12 @@ export class MLService {
         schedulesByPark.get(parkId) ?? new Map<string, ScheduleType>();
 
       for (const pred of parkPredictions) {
-        const dateStr = pred.predictedTime.split("T")[0];
+        // The park-local day, not the UTC one: a 20:00 slot in Los Angeles is
+        // 03:00 UTC tomorrow and was gated by TOMORROW's schedule (PAR-818).
+        const dateStr = MLService.localDateOf(
+          pred.predictedTime,
+          info.timezone,
+        );
         const scheduleType = scheduleMap.get(dateStr);
 
         // 1. Skip if explicitly CLOSED

@@ -486,7 +486,9 @@ export class WeatherService {
    * cached by parkId to reduce API calls
    */
   async getHourlyForecast(parkId: string): Promise<WeatherForecastItemDto[]> {
-    const cacheKey = `weather:hourly:park:${parkId}`;
+    // v2: `time` is a UTC instant since PAR-818 (was park-local naive) — a new
+    // key so no entry in the old shape is ever read as the new one.
+    const cacheKey = `weather:hourly:v2:park:${parkId}`;
 
     // Try cache first
     try {
@@ -502,7 +504,7 @@ export class WeatherService {
     try {
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: ["latitude", "longitude"],
+        select: ["latitude", "longitude", "timezone"],
       });
 
       if (!park || !park.latitude || !park.longitude) {
@@ -517,10 +519,12 @@ export class WeatherService {
         park.longitude,
       );
 
-      // Map to DTO
+      // Map to DTO. Open-Meteo is asked with timezone:"auto", so `h.time` is
+      // the park's wall clock without an offset; it leaves as a UTC instant.
+      const tz = park.timezone || "UTC";
       const mappedForecast: WeatherForecastItemDto[] = forecast.hours.map(
         (h) => ({
-          time: h.time,
+          time: parkLocalHourToUtcIso(h.time, tz),
           temperature: h.temperature,
           precipitation: h.precipitation,
           rain: h.rain,
@@ -592,7 +596,10 @@ export class WeatherService {
                 ) / 10;
 
               synthesizedForecast.push({
-                time: `${dateStr}T${hour.toString().padStart(2, "0")}:00`,
+                time: parkLocalHourToUtcIso(
+                  `${dateStr}T${hour.toString().padStart(2, "0")}:00`,
+                  tz,
+                ),
                 temperature: temp,
                 precipitation: Number(day.precipitationSum || 0) / 24, // Distribute evenly (naive)
                 rain: Number(day.rainSum || 0) / 24,
@@ -962,4 +969,16 @@ export class WeatherService {
       );
     }
   }
+}
+
+/**
+ * A park-local wall-clock hour without an offset (`2026-07-04T14:00`, Open-Meteo
+ * with timezone:"auto") as the UTC instant it names (`2026-07-04T12:00:00.000Z`
+ * in Berlin). A string that already carries an offset or `Z` is an instant and
+ * only normalised (PAR-818).
+ */
+export function parkLocalHourToUtcIso(time: string, timezone: string): string {
+  const hasOffset = /(Z|[+-]\d{2}:?\d{2})$/.test(time);
+  const instant = hasOffset ? new Date(time) : fromZonedTime(time, timezone);
+  return Number.isNaN(instant.getTime()) ? time : instant.toISOString();
 }

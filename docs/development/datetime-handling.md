@@ -220,3 +220,15 @@ two numbers that mean different things. The schedule joins in `features.py` and
 production training rows and `date_local` on 3.1 % — and nothing failed. Training and
 serving were wrong in the same direction, so the model never protested; what broke was
 every lookup keyed on the calendar day. See `ml-service/test_local_time_features.py`.
+
+**Values crossing the API ↔ ML boundary (PAR-818).** Three more places read a
+park's wall clock off a UTC value and were fixed the same way:
+
+| Value | Rule |
+|---|---|
+| `weatherForecast[].time` sent to `/predict` | A UTC instant (`…Z`). Open-Meteo answers park-local hours without an offset; `WeatherService.getHourlyForecast` converts them (`parkLocalHourToUtcIso`). |
+| Historical occupancy profile lookup | Keyed on park-local `(Postgres DOW, hour)`; read with `local_timestamp`, `pg_dow = (pandas_dow + 1) % 7`. |
+| Daily peak hours (`DAILY_PEAK_HOURS`) | Hours on the park's clock, collapsed per park-local date; the daily row is published at park-local **noon** of its day (`daily_anchor_time`), which has the same UTC date for every offset in (−12 h, +12 h). |
+| Any API-side date key for a prediction | `MLService.localDateOf(predictedTime, tz)`, never `predictedTime.slice(0, 10)` on an instant. |
+
+See `ml-service/test_park_local_daily_and_occupancy.py`.
