@@ -32,8 +32,14 @@ trap 'kill $sampler 2>/dev/null; release' EXIT
 
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader
 rc=0
+# Provenance into the cache's meta.json: the image bakes MLBENCH_GIT_SHA from the build
+# arg, the image id can only come from the host. A cache whose git_sha is "unknown" or is
+# not a real commit voids every number later scored from it.
+IMAGE=${IMAGE:-ml-bench:par-829}
+IMAGE_ID=$(docker image inspect -f '{{.Id}}' "$IMAGE")
 docker run --rm --name "par829-$model" --gpus all --cpus 6 --memory 8g --cpu-shares 256 \
-  -v /data/parkfan/ml-bench:/data --entrypoint nice "${IMAGE:-ml-bench:par-829}" -n 10 \
+  -e MLBENCH_IMAGE_ID="$IMAGE_ID" ${GIT_SHA:+-e MLBENCH_GIT_SHA="$GIT_SHA"} \
+  -v /data/parkfan/ml-bench:/data --entrypoint nice "$IMAGE" -n 10 \
   python -m mlbench.models.nf_precompute --export /data/exports/20261009 --cache "$cache" \
   --model "$model" "$@" || rc=$?
 echo "peak device VRAM during this run: $(awk -F, 'NR>1 && $2>m {m=$2} END {print m" MiB"}' "$VLOG") (log $VLOG)"

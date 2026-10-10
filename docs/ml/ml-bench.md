@@ -309,15 +309,28 @@ not folded into them.
 # 1. GPU: precompute into a cache, under the shared lock. Probe first — nothing about
 #    fit time or peak VRAM is measured until a block has run.
 PROBE=1 ml-bench/par829_subset.sh                      # one short block, 3 origins
-MODELS="nf_tide nf_nhits" ml-bench/par829_subset.sh    # May + August, all parks
-# 2. CPU: score the cache through the harness like any other model.
+MODELS="nf_tide" ml-bench/par829_subset.sh             # September + August, all parks
+# 2. CPU: score the cache through the harness like any other model, with the headline
+#    target window so the cells pair against the baselines run.
 docker run --rm --user 1000:1000 -e HOME=/tmp -e MLBENCH_NF_CACHE=/data/par-829/cache/subset \
   -v /data/parkfan/ml-bench:/data -v $PWD/ml-bench/results:/app/results \
-  --cpus 3 --memory 4g --cpu-shares 256 --entrypoint nice ml-bench:par-829 -n 10 \
+  --cpus 3 --memory 2560m --cpu-shares 256 --entrypoint nice ml-bench:par-829 -n 10 \
   python -m mlbench run --export /data/exports/20261009 --out /app/results/<run-id> \
   --model mlbench.models.neuralforecast_models:NFTiDE \
-  --from 2026-05-01 --to 2026-05-31 --shard 0/3 --memory 2.5GB --threads 3
+  --from 2026-08-01 --to 2026-09-30 --shard 0/3 --memory 2.5GB --threads 3
+# ... then: report --run /app/results/<run-id> --target-from 2026-08-15 --target-to 2026-10-07
 ```
+
+The cache carries its own provenance: `meta.json` records `git_sha`, `code_sha256`, the
+image id and the `earlier_passes` of a resumed run, because a cache outlives the container
+that wrote it and a cache whose blocks come from two code versions is incomparable. Before
+any number from a cache is reported, `git cat-file -t <git_sha>` must resolve and
+`git merge-base --is-ancestor <the plug-in coverage-parity fixes> <git_sha>` must hold; a
+`git_sha` of `unknown`, or a `code_sha256` that matches no commit, is the signature of a
+dirty or pre-rebase tree and voids the run. The cheap runtime check for the same hazard is
+to score the `example_level_h5` plug-in alongside and compare its slot count per lead with
+the built-in `lvlh5_naive`: the plug-in path and the built-in path must cover the same
+slots.
 
 `MLBENCH_NF_VRAM_FRACTION` (default 0.6, i.e. 9.8 GB of the 16 GB card) caps torch's
 allocator, so breaching the 10 GB bench budget fails this process instead of squeezing the

@@ -340,7 +340,7 @@ def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to
     import torch
 
     from ..build import connect
-    from ..runner import load_tables
+    from ..runner import code_hash, git_sha, load_tables
 
     # torch defaults to one thread per HOST core: 24 threads in a 4-6 CPU container
     # throttle each other to a crawl (measured: 300 TiDE steps > 20 min on celestrial).
@@ -362,9 +362,32 @@ def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to
     out_dir = cache / name
     out_dir.mkdir(parents=True, exist_ok=True)
     hours = [6] + (INTRADAY_HOURS if intraday else [])
+    # Provenance of the CACHE, not just of the scoring run: a cache built from a dirty or
+    # pre-rebase tree makes every number scored from it incomparable, and the cache
+    # outlives the container that wrote it. `git_sha` must be a real commit that contains
+    # the harness's plug-in coverage-parity fixes - see docs/ml/ml-bench.md.
+    # A resumed run keeps the blocks and the PROVENANCE of the earlier passes: a cache
+    # whose blocks come from two different code versions is exactly the hazard here, and
+    # it must be visible in the file rather than inferred from timestamps.
+    prior = {}
+    mf0 = out_dir / "meta.json"
+    if mf0.exists():
+        try:
+            prior = json.loads(mf0.read_text())
+        except ValueError:
+            prior = {}
     meta = {"model": name, "spec": SPECS[name], "max_steps": max_steps, "input_days": INPUT_DAYS,
             "horizon_days": HORIZON_DAYS, "K": K, "hour0": HOUR0, "quantiles": QUANTILES,
-            "parks": parks, "export": str(export), "blocks": []}
+            "parks": parks, "export": str(export), "git_sha": git_sha(),
+            "code_sha256": code_hash(), "image_id": os.environ.get("MLBENCH_IMAGE_ID", "unknown"),
+            "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+            "blocks": list(prior.get("blocks", [])),
+            "earlier_passes": list(prior.get("earlier_passes", []))
+            + ([{k: prior.get(k) for k in ("git_sha", "code_sha256", "image_id",
+                                           "started_utc", "max_steps")}] if prior else [])}
+    log(f"provenance: git_sha={meta['git_sha']} image={meta['image_id'][:19]} "
+        f"earlier_passes={len(meta['earlier_passes'])}")
+    mf0.write_text(json.dumps(meta, indent=2, default=str))
     est = block_estimate
     for c0, c1 in month_blocks(first, last):
         tag = c0.strftime("%Y%m%d")
