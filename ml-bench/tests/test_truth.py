@@ -92,3 +92,31 @@ def test_window_crossing_midnight_belongs_to_service_day(tmp_path):
     assert len(after) == 4                             # 00:00 .. 00:45 local
     assert after["ws"].min() == 96                     # continues past 95
     assert s["kc"].min() == 0
+
+
+def test_drop_heartbeats_removes_only_carry_forward_slots(tmp_path):
+    """`build --drop-heartbeats` must remove truth slots that exist only because a
+    heartbeat row reset the 3 h staleness clock, and nothing else: every remaining
+    slot keeps its value, and the dropped ones are all stale carry-forward
+    (PAR-827 critic B3).
+    """
+    import synth
+    from mlbench.build import build, connect
+
+    raw = tmp_path / "raw"
+    synth.write(raw)
+    out = {}
+    for tag, drop in (("with", False), ("without", True)):
+        con = connect("1GB", 2)
+        st = build(raw, tmp_path / f"pq-{tag}", con, drop_heartbeats=drop)
+        assert st["drop_heartbeats"] is drop
+        out[tag] = con.execute(
+            "SELECT aid, slot_utc, y, (SELECT max(age_min) FROM slots) m FROM truth").df()
+        out[f"{tag}_n"] = st["truth"]
+        con.close()
+    assert out["with_n"] > out["without_n"] > 0, (out["with_n"], out["without_n"])
+    a = out["with"].set_index(["aid", "slot_utc"])["y"]
+    b = out["without"].set_index(["aid", "slot_utc"])["y"]
+    # strict subset: nothing new appears, and no surviving slot changes value
+    assert set(b.index) < set(a.index)
+    assert (a.reindex(b.index) == b).all()

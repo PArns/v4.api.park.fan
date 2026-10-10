@@ -250,6 +250,43 @@ def test_plugin_example_equals_builtin(synth_export, tmp_path):
     assert abs(s[2] - s[3]) < 1e-6
 
 
+def test_oracle_weather_model_never_wins_a_handover_row(synth_export, tmp_path):
+    """An ORACLE-weather model is an upper bound, not a servable configuration. It may
+    appear in the value tables but must never win a hand-over row or a usable horizon
+    — BENCH-SPEC says oracle weather is "reported separately" and the hand-over table
+    is the serving router's input. PAR-828 measured 34 of 280 full-period hand-over
+    rows going to `chronos2_owx` before this gate existed.
+
+    Depends on S8: if the weather gate reads the instance while `scored_name()` reads
+    the class, an oracle model never gets the `_owx` suffix and this test cannot see
+    it — the two fixes only work together.
+    """
+    from mlbench.report import is_oracle
+
+    class Oracle(LevelH5Example):
+        name = "oracle_wx"
+        uses_oracle_weather = True
+
+    assert is_oracle("oracle_wx_owx") and is_oracle("oracle_wx_owx_x_h5")
+    assert not is_oracle("lvlh5_tft") and not is_oracle("snowx_level")   # no false positives
+
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1, 3, 7])
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "run-0of1.json").write_text(json.dumps({"export": str(synth_export), "git_sha": "test"}))
+    r = Runner(synth_export, out, cfg, [Oracle()], origins=("2026-04-01", "2026-04-20"))
+    assert r.name_of(r.models[0]) == "oracle_wx_owx"
+    r.run()
+    tdir = build_report(out, reps=50)
+    cells = pd.read_csv(tdir / "cells.csv")
+    owx = {m for m in cells["model"].unique() if is_oracle(m) and "owx" in str(m)}
+    assert owx, "the oracle model must still be scored and visible"
+    for name in ("handover", "usable_horizon"):
+        t = pd.read_csv(tdir / f"{name}.csv")
+        col = "winner" if name == "handover" else "model"
+        assert not set(t[col]) & owx, f"{name}.csv awards a row to {owx}"
+
+
 def test_end_to_end_report(synth_export, tmp_path):
     cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1, 3, 7, 14])
     out = tmp_path / "run"

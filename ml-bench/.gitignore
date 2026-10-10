@@ -4,5 +4,8 @@ results/*/parts/
 results/*/work/
 __pycache__/
 .pytest_cache/
-# the repo root ignores *.md; a run's summaries and notes are meant to be committed
-!results/*/*.md
+# the repo root ignores *.md; a run's summaries and the superseded pointer are meant
+# to be committed. Narrow patterns, so a stray notes.md / debug.md from a future
+# model agent does not silently become committable.
+!results/*/summary*.md
+!results/*/SUPERSEDED.md

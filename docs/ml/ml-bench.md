@@ -40,13 +40,15 @@ on celestrial. Every query is one `COPY (SELECT …) TO STDOUT` through
 after another, resumable (finished files are skipped).
 
 - **`queue_data` is exported as the raw STANDBY change log, one UTC day per
-  query** — one day is exactly one hypertable chunk. Measured on 2026-10-09:
-  127–186 k rows per day, **0.2–0.3 s per query**, 290 days in ~2 minutes,
-  ~400 MB gzip. Building the 15-minute slots server-side would have cost
-  production a window function over every ride of a park-month and returned
-  4–10× more rows; client-side it is a chunked DuckDB step.
+  query** — one day is exactly one hypertable chunk. Measured on 2026-10-09
+  (`export-manifest.json`, committed): 16,559–212,454 rows per day (median
+  ~150 k), **0.11–0.40 s per query** (30 of the 289 queries over 0.3 s), 289
+  UTC days in ~3 minutes, 455 MB gzip. Building the 15-minute slots server-side
+  would have cost production a window function over every ride of a park-month
+  and returned 4–10× more rows; client-side it is a chunked DuckDB step.
 - `tft_forecasts` / `catboost_daily_forecasts` by forecast-date month
-  (no index on `forecast_date`; ≤ 5 M rows, ≤ 4.5 s per query), leads 0–120 d.
+  (no index on `forecast_date`; largest file 5,670,526 rows, slowest query
+  4.43 s), leads 0–120 d.
 - `parks` (timezone, regionCode, influencingRegions, lat/lng), `attractions`
   (+ `headliner_attractions`, coordinates, land), park-level `schedule_entries`,
   `holidays`, `weather_data`.
@@ -55,9 +57,11 @@ after another, resumable (finished files are skipped).
   which baselines never read and plug-ins only get by opting in.
 - **Schedule history is partial**: `schedule_entries` keeps the latest version
   of a day, but `updatedAt` says when it was last written. A window last written
-  after an origin was not known at that origin (15 % of the scored slots at d1,
-  ~40 % at d30 in the 2026-10-09 export; the median operator publishing horizon
-  is 39 d), so the runner treats it as unknown — see "Protocol".
+  after an origin was not known at that origin (16.2–17.0 % of the scored slots
+  at d1, 32.5–32.9 % at d30, 44 % at d60 — 14.6–15.4 % at d0 — in the 2026-10-09
+  export; the range is across models because each has its own coverage; the
+  median operator publishing horizon is 39 d), so the runner treats it as
+  unknown — see "Protocol".
 - `headliner_attractions` is the current table (548-day window), not ex-ante.
   It only decides which rides count as headliners (UC4 / D2 / D4 / D6).
 
@@ -90,9 +94,17 @@ P90 of the ride-day's truth slots (≥ 8 slots); park level = mean over headline
   the scores stay on the published one. Scores are also split by schedule
   known / projected at the origin.
 - `tests/test_runner.py::test_information_cut_baselines` and
-  `::test_information_cut_plugins` (run for EVERY registered model) poison truth,
-  ride-day levels, hourly stats, TFT/CatBoost rows written after the origin,
-  windows written after the origin and the weather, and assert no forecast moves.
+  `::test_information_cut_plugins` (run for EVERY registered model, on the daily,
+  the daily-LEVEL and the intraday path) poison truth, ride-day levels, hourly
+  stats, TFT/CatBoost rows written after the origin, **both ends** of a window
+  written after the origin and every covariate column, and assert no forecast
+  moves. An ORACLE-weather model keeps the weather it is entitled to and
+  everything else still has to hold.
+- The two schedule-derived covariates (`sched_is_holiday`, `sched_is_bridge_day`)
+  are built from every schedule row of the day, so they are cut at **their own**
+  publication time, not at the OPERATING rows'. A day whose OPERATING row was
+  published before the origin but whose holiday flag came from a later
+  non-OPERATING row is delivered as NULL.
 - Ex-ante busy = the ride's q90 over the 56 days before the origin ≥ 45 min.
 - Lead grid: d0 (intraday + 06:00), d1–d7, d10, d14, d21, d30, d45, d60, d90 for
   slot curves; UC4 daily levels at every lead 1–90 plus 120/180/270/365.
@@ -140,26 +152,64 @@ filled from the nearest slot of the same ride-day; walking from coordinates, els
 
 ## Horizon outputs
 
-`tables/lead_availability.csv` (origin days per lead, LOW-N < 30, "not measurable
-yet" with the date it becomes measurable), `coverage_horizon.csv` (TFT / CatBoost
-/ weather / operator schedule), `cells.csv` (every metric × use case × lead ×
-segment × region × model: value with park-day CI, paired difference vs the
-reference with park-day AND park-cluster CIs, coverage), `usable_horizon.csv`
-and `handover.csv`.
+`lead_availability.csv` (origin days per lead **for the pass that writes it** —
+in a windowed pass the target day must also be inside the window, LOW-N < 30,
+"not measurable yet" with the date it becomes measurable), `coverage_horizon.csv`
+(TFT / CatBoost / weather / operator schedule), `cells.csv` (every metric × use
+case × lead × segment × region × model: value with park-day CI, paired difference
+vs the SELECTED reference with park-day AND park-cluster CIs, coverage, unit of
+analysis and unit counts), `cells_all_refs.csv` (the same, against **every**
+reference candidate), `ref_choice.csv` (candidates, their values, the selected
+reference and why), `low_coverage_cells.csv`, `usable_horizon.csv` (with
+`leads_tested` and `not_tested_because`) and `handover.csv` (with both CIs and a
+`park_day_unit_agrees` flag).
 
 - **Wins** = the paired difference's **park-cluster** bootstrap CI (all days of
-  a park resampled together) excludes 0. Days of one park are not independent,
-  so the park-day CI is too narrow; both are in `cells.csv`.
-- **Reference per lead** = the best naive candidate (persistence → snaive7 →
-  wt_med → clim) on the metric itself, among candidates covering ≥ 50 % of what
-  the best-covered one covers. Picking the best of several on the same data
-  favours the reference a little (winner's curse), which makes a model's win
-  conservative.
-- **Gates** for the hand-over and the usable horizon: ≥ 30 origin days, and the
-  model's paired rows ≥ 30 % of the reference's own. Winners are ranked by the
-  PAIRED margin. Usable horizon = the largest lead, contiguous from the model's
-  first scored lead, at which it wins; a lead where it is the reference, is
-  untested or fails a gate breaks the run.
+  a park resampled together) excludes 0, over at least **10 distinct bootstrap
+  units** and with a strictly positive CI width. Days of one park are not
+  independent, so the park-day CI is too narrow; both are in `cells.csv`
+  (`diff_lo/hi` park-day, `diff_lo_park/hi_park` park-cluster) and both are
+  printed in the hand-over table, which marks the cells where they disagree.
+  BENCH-SPEC's literal unit is the park-day; the park-cluster deviation and its
+  reason are **recorded in BENCH-SPEC.md** ("Recorded changes" 1–3), as the spec
+  requires. The unit-count and width guards exist because a single-unit paired
+  set makes the resampled ratio weight-independent: the CI collapses to zero
+  width and "excludes 0" for free.
+- **Reference per lead** = BENCH-SPEC's ladder (persistence → snaive7 → wt_med →
+  clim; for daily levels lvl_snaive7 → lvl_naive4 → lvl_wt56 → lvl_clim), among
+  candidates covering ≥ 50 % of what the best-covered one covers. A candidate is
+  moved off the ladder position only when another candidate beats it in a
+  **paired** round robin with the park-cluster CI excluding 0; near-ties are
+  broken by the ladder order, never by the point estimate. `ref_choice.csv`
+  records the candidates, their own-coverage values and the reason for each
+  choice.
+
+  This is deliberately *not* "the best naive on the metric itself". That reading
+  — an argmin over the candidates' own-coverage values — compares MAEs measured
+  on different row sets, re-chosen at every lead, selected on the same data the
+  models are scored against. On the 2026-10-09 run the `wt_med`/`clim` gaps are
+  0.019–0.187 min against a park-cluster half-width of ±0.24, so the reference
+  flipped `wt_med → clim → wt_med` along the lead axis on noise, and at d7 and
+  d60 the harness's own paired test said the rejected candidate was better. The
+  resulting "nothing beats the reference in the d7–d60 band" was a claim about
+  the pointwise minimum of three naives, not about any of them.
+- **Every model is also scored against each candidate individually**
+  (`cells_all_refs.csv`). "No model beats the reference" is a statement about the
+  best-of-N naive envelope; "`h5` beats the weekday median by 0.14 min" is a
+  different statement, and both are published.
+- **Gates** for the hand-over and the usable horizon: enough units for the
+  metric's own unit of analysis — ≥ 30 origin **days** for day-unit metrics,
+  ≥ 30 park-**months** for UC4, whose unit is the park-month — and the model's
+  paired rows ≥ 30 % of the reference's own. Winners are ranked by the PAIRED
+  margin. Usable horizon = the largest lead, contiguous from the model's first
+  scored lead, at which it wins; a lead where it is the reference, is untested or
+  fails a gate breaks the run. `usable_horizon.csv` carries `leads_tested` and
+  `not_tested_because`: **`leads_tested = 0` means nothing was tested, which is
+  not the same as nothing winning** and must never be read as a loss.
+- **`low_coverage_cells.csv`** lists every cell whose paired rows are under half
+  the reference's. Those absolute values are not comparable with the rest of
+  their column — at d60 `lvlh5_tft` reads 1.337 min on the first hour because
+  TFT's horizon ends there and 2 % of the reference's slots remain.
 - **Headline horizon curves come from a common target window**
   (`report --target-from … --target-to …`). On the full period, lead L starts at
   first origin + L and TFT / CatBoost only exist from late May, so lead would be
@@ -175,10 +225,13 @@ and `handover.csv`.
    `--model package.module:Class`. A registered model is automatically covered by
    `test_information_cut_plugins` — run `pytest` before any run you report.
 3. What a plug-in gets (`mlbench/models/base.py`): DataFrames only, never a
-   database connection — `origin.history.df(days)` (truth ending before the
-   origin), `train_panel` in `fit`, the horizon grid of the window known at the
-   origin, and covariates without weather unless `uses_oracle_weather = True`
-   (then it is scored as `<name>_owx`). Rows outside the grid are dropped.
+   database connection and no object from which one is reachable —
+   `origin.history.df(days)` (truth ending before the origin, materialised up
+   front, so `days` is capped at `--history-days`, 56 by default; use `fit` for
+   longer history), `train_panel` in `fit`, the horizon grid of the window known
+   at the origin, and covariates without weather unless the **class** sets
+   `uses_oracle_weather = True` (then it is scored as `<name>_owx`; setting it on
+   the instance buys nothing). Rows outside the grid are dropped.
 4. Run (celestrial):
 
 ```bash
@@ -215,12 +268,58 @@ sha256 `25ed0c3b26d3accd`, image `sha256:a1e54cb8fea6`, 3 shards ×
 common-window, 14 min full period).
 
 **The headline is the common target window 2026-08-15 … 2026-10-07**
-(`summary_tables_2026-08-15_2026-10-07.md`, `tables_2026-08-15_2026-10-07/`):
-every lead is scored on the SAME 54 target days, so the horizon curve is not
-confounded with season. The full period (`summary.md`, `tables/`) is quoted as
-secondary — there, lead L starts at first origin + L and TFT / CatBoost only
-exist from late May, so late leads sit on different months than early ones. The
-two disagree, and where they do the common window is the answer.
+(`summary_tables_2026-08-15_2026-10-07.md`, `tables_2026-08-15_2026-10-07/`). The
+full period (`summary.md`, `tables/`) covers all 231 origins.
+
+**What the common target window does and does not do.** It fixes the *truth
+population*: every lead's cells are measured on the same 54 target days, so two
+leads are compared on the same days' outcomes rather than on different months of
+weather, holidays and crowding. That is a real and necessary improvement over the
+full period, where lead L starts at first origin + L and TFT / CatBoost only exist
+from late May.
+
+It does **not** remove the lead–season confound, and the earlier wording on this
+page, which said it did, was wrong. A lead-L cell inside a fixed target window is
+scored from origins at `target − L`: the d1 cells come from **autumn** origins and
+the d90 cells from **summer** origins. So the apparent decay along the lead axis
+still contains an origin-season gradient. Fixing the target window pins when the
+truth happened; for a horizon curve the confounded axis is when the forecast was
+*made*. PAR-830 measured this independently on a different model — its
+`driver_level` d1 level-gap share flips from +8.5 % on this window to −11.0 % on
+the full period, and the model beats `h5` only in autumn.
+
+**So both passes are confounded, in different ways, and neither alone identifies
+the horizon curve.** The full period mixes lead with target season; the common
+target window mixes lead with *origin* season. The honest statement is that lead
+and season are not separable in 54 days of targets. `report` now takes
+`--origin-from` / `--origin-to` so a future run can fix the origin window instead
+(or as well); doing that properly on this data needs a longer history than the
+289 days we have — a 54-day origin window and a 90-day lead grid need 144 days of
+truth after the warm-up, which exists, but then the target days differ by lead
+again. The resolution is more data, not a better window. Until then: read the
+per-season tables, and treat every lead boundary as a *band*, not a point.
+
+**Where the two passes disagree, neither is "the answer".** Neither is a general
+serving verdict: the common window is 54 days of late summer and early autumn —
+17 summer days and 37 autumn days, no Easter, no Pentecost, no peak summer, no
+Christmas — and the effect that drives the TFT-level recommendations is
+**seasonal inside that window**: see "The season split" below. Every hand-over and
+usable-horizon row below therefore carries both passes, and the rows where they
+disagree are marked.
+
+Two more scope limits a reader needs before the tables:
+
+- **The target itself changes character across the window.** `is_heartbeat` rows
+  (a carried-forward status *and* wait, with a fresh `ts`, which resets the 3 h
+  staleness clock) are not filtered out of the truth. Their share of OPERATING
+  rows goes 0 % (until ~2026-09-06, when the column was not populated) → 20.6 %
+  (09-10) → 33.1 % (10-05), and the share of truth slots that exist *only*
+  because of a heartbeat goes 0.00 % (08-20) → 3.58 % (09-15) → 11.20 % (10-05).
+  That is an unremoved confound of exactly the summer/autumn contrast below, and
+  it is an open owner decision — see "Heartbeat contamination".
+- The reference-selection rule changed after the first publication of these
+  numbers (see "Horizon outputs"), so figures quoted from the first revision of
+  PR #445 or from `20261009-baselines/` do not match this page.
 
 How to read it: every MAE is on the model's own coverage, so a model counts as
 better only through the **paired** difference against the per-lead reference,
@@ -228,9 +327,20 @@ with the **park-cluster** 95 % CI excluding 0 (`*` below). `lvlh5_tft` at d1 on
 the full period reads 7.50 against `wt_med` 7.66, yet paired it is +0.09
 [−0.04, +0.23] — not a win.
 
-No lead in the headline window is LOW-N: every lead d0–d180 has 54 origin days
-(the gate is 30). Leads 270 and 365 are not measurable yet; they become
-measurable on 2026-12-15 and 2027-03-20.
+Lead availability in the headline window: **54 origin days at every lead up to
+d177**, 51 at d180 (a target day needs its origin to exist, and the first origin
+is 2026-02-19, so from d178 the early days of the window drop out). The gate is
+30 origin days, so no *slot* lead is LOW-N. Two caveats that the earlier wording
+("no lead d0–d180 is LOW-N") got wrong:
+
+- **UC4's unit is the park-month, not the park-day.** The headline window spans
+  3 calendar months, so UC4's `n_origin_days` is 3 — it counts month labels, not
+  sample size, and the real sample is ~200 park-months. 130 of the 3,770 cells in
+  `cells.csv` have `n_origin_days ≠ 54` and 79 of those are UC4. UC4 is gated on
+  park-months instead; what remains limited is *calendar* coverage (3 months),
+  which is a generalisability caveat, not LOW-N.
+- Leads 270 and 365 are not measurable yet; they become measurable on
+  2026-12-15 and 2027-03-20.
 
 ### UC2 / UC3 — 15-min MAE from the 06:00 origin (headline window)
 
@@ -370,6 +480,75 @@ at d7 and nothing beats climatology in the d7–d60 band.
   produces a curve for 83 % of the ride-days a ride never operated on in the
   headline window (76 % over the full period), so coverage has to be scored
   separately from the wait error.
+
+### The season split — why the two passes disagree
+
+`mae_by_season.csv` splits the headline window into its **17 summer days**
+(Aug 15–31) and **37 autumn days**, on the same cells. This is the reason the two
+passes reverse, and it is a scope limit on every TFT-level recommendation. MAE in
+minutes, all rides, from the 06:00 origin:
+
+| lead | season | slots | `wt_med` | `clim` | `h5` | `lvlh5_tft` |
+|---|---|---|---|---|---|---|
+| 0 | summer | 1.24 M | 7.752 | 8.495 | **7.719** | 7.892 |
+| 0 | autumn | 1.80 M | 8.176 | 8.076 | 7.983 | **7.629** |
+| 3 | summer | 1.23 M | 7.923 | 8.494 | **7.887** | 8.172 |
+| 3 | autumn | 1.79 M | 8.378 | 8.191 | 8.173 | **7.927** |
+| 7 | summer | 1.23 M | 8.224 | 8.494 | **8.198** | 8.737 |
+| 7 | autumn | 1.78 M | 8.605 | 8.304 | 8.396 | **8.355** |
+| 30 | summer | 1.12 M | 8.661 | 9.241 | **8.622** | 9.115 |
+| 30 | autumn | 1.76 M | 8.946 | **8.244** | 8.751 | 9.442 |
+
+Three things follow, and they are the load-bearing reading of this whole page:
+
+1. **The TFT level's advantage is autumn-only.** `lvlh5_tft` beats `wt_med` by
+   0.45–0.55 min in autumn and is **worse** in summer at every lead shown (+0.14
+   at d0, +0.25 at d3, +0.51 at d7). It is not a coverage artefact: its
+   `paired_share` is 0.98 in this window. So "serve `lvlh5_tft`" is a statement
+   about the autumn shoulder season on this evidence, not a year-round one.
+2. **Climatology's advantage is autumn-only too**, and far larger (−0.70 at d30).
+   That is why the old argmin reference handed the reference to `clim` from d7 in
+   this window and never did so in the full period below d60 — the reference was
+   tracking the season mix, not the lead.
+3. **H5's advantage over the weekday median is the one effect that is NOT
+   seasonal.** `h5` is better than `wt_med` in both halves of this window at
+   every lead (summer −0.02 … −0.04, autumn −0.19 … −0.21) and in spring and
+   summer on the full period. The one exception is **winter** (2 % of the data,
+   256 k slots), where `h5` is 0.02–0.04 min *worse* at d0–d7. That is the
+   difference between a profile-shape improvement, which transfers, and a
+   level-source improvement, which does not.
+
+### Heartbeat contamination of the target — open owner decision
+
+`queue_data` carries `is_heartbeat` rows: when the feed drops a ride, production
+writes the previous status **and wait** forward with a fresh `ts`. The harness
+exports the column but does not filter on it, and because each heartbeat is a new
+`ts` it **resets the 3 h staleness cap** the truth definition depends on — so a
+ride that stopped reporting keeps producing truth with a frozen wait.
+
+Measured on the raw export:
+
+| day | heartbeat share of OPERATING rows | truth slots that exist ONLY because of heartbeats |
+|---|---|---|
+| 2026-08-01 … ~09-06 | 0 % (column not populated yet) | 0.00 % |
+| 2026-09-10 | 20.6 % | — |
+| 2026-09-15 | — | 3.58 % |
+| 2026-10-01 | 23.4 % | — |
+| 2026-10-05 | **33.1 %** | **11.20 %** |
+| 2026-10-07 | 32.4 % | — |
+
+So the target changes character **across the headline window**: clean for its
+summer half, up to ~11 % carried-forward by its autumn end. Those slots are
+systematically flat, and they inflate the ride-day P90 every model is scored
+against — an unremoved confound of exactly the summer/autumn contrast above.
+
+**This is a product decision, not a bug to fix silently.** Scoring against a
+carried-forward wait measures agreement with a stale *display*; scoring without
+it measures agreement with the queue. Both are legitimate targets — "what the app
+showed" is what a user experienced. `build --drop-heartbeats` builds the other
+target so the two can be compared cell for cell; see
+`~/ml-review-2026-10/RESULTS-PAR-827.md` for the measured sensitivity and the
+recommendation, and BENCH-SPEC "Recorded changes" 6 for the deviation record.
 
 ### Sanity check against the 2026-10 review (33 sample parks)
 

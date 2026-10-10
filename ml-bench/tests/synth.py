@@ -76,6 +76,12 @@ def write(raw: Path, seed: int = 7) -> dict:
                 level = (60 if k < 2 else 25) * weekend * rng.lognormal(0, 0.2)
                 levels.append((aid, d, level))
                 down = (i + k) % 6 == 0
+                # on some ride-days the feed DROPS the ride half way through the day and
+                # production keeps writing heartbeats: the same status and wait again with
+                # a fresh ts. That is what resets the 3 h staleness clock, so the truth
+                # runs to closing with a frozen wait. `build --drop-heartbeats` builds the
+                # other target, where it stops 3 h after the last real reading.
+                dropped = (i + k) % 7 == 0
                 t = op - dt.timedelta(minutes=20)
                 last = None
                 while t < cl + dt.timedelta(minutes=30):
@@ -87,7 +93,11 @@ def write(raw: Path, seed: int = 7) -> dict:
                         status, w = "CLOSED", None
                     elif down and 0.4 < frac < 0.5:
                         status, w = "DOWN", None
-                    if (status, w) != last:
+                    if dropped and 0.35 < frac and last is not None:
+                        queue.append({"attraction_id": aid, "ts_us": _us(t), "status": last[0],
+                                      "wait": last[1], "is_heartbeat": True,
+                                      "d": t.astimezone(dt.timezone.utc).date()})
+                    elif (status, w) != last:
                         queue.append({"attraction_id": aid, "ts_us": _us(t), "status": status,
                                       "wait": w, "is_heartbeat": False, "d": t.astimezone(dt.timezone.utc).date()})
                         last = (status, w)

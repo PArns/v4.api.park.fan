@@ -73,8 +73,9 @@ def _ref_base(mae: dict[str, list[float]]) -> "object":
 
 
 def test_reference_is_the_ladder_unless_a_candidate_significantly_beats_it():
-    """B1: a 0.07 min gap inside the CI must NOT move the reference off the ladder;
-    a consistent, significant gap must."""
+    """B1: a 0.07 min gap inside the CI must NOT move the display reference off the
+    ladder; a consistent, significant gap must. And a win is against the whole
+    envelope, so it cannot be bought by the reference moving to a weaker candidate."""
     from mlbench.config import BenchConfig
     from mlbench.report import ALL_REF_ROWS, REF_CHOICES, evaluate
 
@@ -90,6 +91,7 @@ def test_reference_is_the_ladder_unless_a_candidate_significantly_beats_it():
     rows = evaluate(_ref_base(near), cfg, ["snaive7", "wt_med", "clim"], True, keys)
     assert {r["ref"] for r in rows} == {"wt_med"}, "a near-tie must not move the reference"
     assert "ladder order" in REF_CHOICES[0]["reason"]
+    assert next(r for r in rows if r["model"] == "h5")["envelope"] == "wt_med/clim"
     # every (model, candidate) pair is published, not just the selected one
     pairs = {(r["model"], r["ref_candidate"]) for r in ALL_REF_ROWS}
     assert ("h5", "wt_med") in pairs and ("h5", "clim") in pairs
@@ -106,6 +108,15 @@ def test_reference_is_the_ladder_unless_a_candidate_significantly_beats_it():
     rows = evaluate(_ref_base(clear), cfg, ["snaive7", "wt_med", "clim"], True, keys)
     assert {r["ref"] for r in rows} == {"clim"}
     assert "significantly beaten by" in REF_CHOICES[0]["reason"]
+    # h5 is 0.14 better than wt_med but 0.86 WORSE than clim, so it must not win:
+    # the envelope is a conjunction, and the display reference cannot buy a win
+    h5 = next(r for r in rows if r["model"] == "h5")
+    assert h5["envelope"] == "wt_med/clim"
+    assert h5["hardest_naive"] == "clim" and h5["diff_vs_hardest"] > 0
+    assert h5["wins"] is False
+    # clim itself beats the envelope of the OTHER candidates, which is a real finding
+    cl = next(r for r in rows if r["model"] == "clim")
+    assert cl["envelope"] == "wt_med" and cl["wins"] is True
 
 
 def test_export_queries_are_bounded_selects():
