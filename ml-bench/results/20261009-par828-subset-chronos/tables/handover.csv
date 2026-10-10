@@ -1,0 +1,281 @@
+metric,uc,segment,lead,reference,winner,winner_value,paired_margin,significant_models,n_origin_days
+MAE,UC2,all,0,wt_med,chronos2_grid,5.995102103097198,-1.02321783465025,5,33
+MAE,UC2,busy,0,wt_med,chronos2_owx,11.681730342506334,-2.48106200159423,5,33
+MAE,UC3,all,1,wt_med,chronos2_owx,6.47916724995308,-0.6272773242560898,6,33
+MAE,UC3,busy,1,wt_med,chronos2_owx,12.69183704707563,-1.503745882175652,6,33
+MAE,UC3,all,2,wt_med,h5,7.026745726676241,-0.03153048314714013,1,33
+MAE,UC3,busy,2,wt_med,h5,13.655619958730183,-0.12535491063823478,1,33
+MAE,UC3,all,3,wt_med,h5,6.802167460374083,-0.09871312266955101,1,33
+MAE,UC3,busy,3,wt_med,chronos2_owx_x_h5,13.701270763473238,-0.6525628737703464,4,33
+MAE,UC3,all,4,wt_med,chronos2_grid,7.197744224127299,-0.42538174782741756,5,33
+MAE,UC3,busy,4,wt_med,chronos2_owx_x_h5,13.997678777759925,-1.12275594740116,6,33
+MAE,UC3,all,5,wt_med,chronos2_grid,7.138947776674523,-0.4306336460491256,4,33
+MAE,UC3,busy,5,wt_med,chronos2_owx_x_h5,13.888631872077616,-1.051938026290852,4,33
+MAE,UC3,all,6,wt_med,chronos2_grid,6.83054582143577,-0.436978922445002,5,33
+MAE,UC3,busy,6,wt_med,chronos2_grid,13.693059897423698,-1.1673489916915685,7,33
+MAE,UC3,all,7,wt_med,chronos2_grid,7.235429015752644,-0.2297935698460556,4,32
+MAE,UC3,busy,7,wt_med,chronos2_owx_x_h5,14.135239591894177,-0.8485798689981667,4,32
+MAE,UC3,all,10,wt_med,h5,6.956129992828219,-0.11327300509401184,1,32
+MAE,UC3,busy,10,wt_med,lvlh5_naive,13.91070795902563,-0.6489165989869026,4,32
+MAE,UC3,all,14,wt_med,h5,7.687598618285488,-0.07702226353670305,1,31
+MAE,UC3,busy,14,wt_med,chronos2_owx_x_h5,14.963953689826008,-0.6218957795705169,3,31
+MAE,UC3,all,21,wt_med,h5,7.829069122886916,-0.08428847701085829,1,30
+MAE,UC3,busy,21,wt_med,chronos2_owx_x_h5,15.31333462648711,-0.49766248692080417,3,30
+MAE,UC3,all,30,wt_med,wt_med,7.756445481551136,0.0,0,29
+MAE,UC3,busy,30,wt_med,wt_med,14.706438702583837,0.0,0,29
+MAE,UC3,all,45,wt_med,wt_med,7.800987465328827,0.0,0,27
+MAE,UC3,busy,45,wt_med,wt_med,15.952221284658998,0.0,0,27
+MAE,UC3,all,60,wt_med,wt_med,8.339545484597831,0.0,0,25
+MAE,UC3,busy,60,wt_med,wt_med,16.13166222657271,0.0,0,25
+MAE,UC3,all,90,wt_med,wt_med,8.337142498069984,0.0,0,21
+MAE,UC3,busy,90,wt_med,wt_med,16.64809842628382,0.0,0,21
+MAE,UC2,all,1,wt_med,chronos2_owx,6.47916724995308,-0.6272773242560898,6,33
+MAE,UC2,busy,1,wt_med,chronos2_owx,12.69183704707563,-1.503745882175652,6,33
+first-hour MAE (opening-aligned),D5,all,0,wt_med,chronos2_grid,4.177538125770643,-0.5513340585450717,4,33
+first-hour MAE (opening-aligned),D5,all,1,wt_med,lvlh5_tft,4.089679956557745,-0.3523466841398548,6,33
+first-hour MAE (opening-aligned),D5,all,2,wt_med,h5,4.352091645989807,-0.10965468250187183,2,33
+first-hour MAE (opening-aligned),D5,all,3,wt_med,h5,4.5653053965242725,-0.15948900882040018,4,33
+first-hour MAE (opening-aligned),D5,all,4,wt_med,h5,4.759931506849315,-0.1433689328694463,4,33
+first-hour MAE (opening-aligned),D5,all,5,wt_med,chronos2_owx_x_h5,4.865581206870562,-0.12139270832343119,4,33
+first-hour MAE (opening-aligned),D5,all,6,wt_med,h5,4.5430745386651195,-0.1552654635864883,5,33
+first-hour MAE (opening-aligned),D5,all,7,wt_med,lvlh5_tft,4.381333440866546,-0.23578277432667072,6,32
+first-hour MAE (opening-aligned),D5,all,10,wt_med,h5,4.657545484938063,-0.17286609941782327,4,32
+first-hour MAE (opening-aligned),D5,all,14,wt_med,lvlh5_tft,4.553760025788483,-0.26515946487639486,6,31
+first-hour MAE (opening-aligned),D5,all,21,wt_med,lvlh5_tft,4.767918749735927,-0.23207497366122176,6,30
+first-hour MAE (opening-aligned),D5,all,30,wt_med,wt_med,4.76564208480136,0.0,0,29
+first-hour MAE (opening-aligned),D5,all,45,wt_med,wt_med,5.172707199571772,0.0,0,27
+first-hour MAE (opening-aligned),D5,all,60,wt_med,wt_med,5.304705043193406,0.0,0,25
+first-hour MAE (opening-aligned),D5,all,90,clim,clim,5.35772641575309,0.0,0,21
+"MAE, schedule known at origin",UC3,all,0,wt_med,chronos2_owx,6.006556027467482,-1.1383852974097328,5,33
+"MAE, schedule known at origin",UC3,all,1,wt_med,chronos2_owx,6.474389355424293,-0.6764323539121859,6,33
+"MAE, schedule known at origin",UC3,all,2,wt_med,wt_med,7.247082309346588,0.0,0,33
+"MAE, schedule known at origin",UC3,all,3,wt_med,h5,7.046795375423955,-0.09651071151979274,1,33
+"MAE, schedule known at origin",UC3,all,4,wt_med,chronos2_grid,7.223656754697684,-0.4957583275415942,6,33
+"MAE, schedule known at origin",UC3,all,5,wt_med,chronos2_grid,7.1810305570156885,-0.5028017940116012,4,33
+"MAE, schedule known at origin",UC3,all,6,wt_med,chronos2_grid,6.861342605818591,-0.4905812550866102,6,33
+"MAE, schedule known at origin",UC3,all,7,wt_med,chronos2_grid,7.310096445548666,-0.3282860835277095,4,32
+"MAE, schedule known at origin",UC3,all,10,wt_med,h5,7.015814012201422,-0.11810320872943691,1,32
+"MAE, schedule known at origin",UC3,all,14,wt_med,chronos2_owx_x_h5,7.4943522697962965,-0.24527363210333508,3,31
+"MAE, schedule known at origin",UC3,all,21,wt_med,chronos2_owx_x_h5,7.531879294277304,-0.23917982036659513,2,30
+"MAE, schedule known at origin",UC3,all,30,wt_med,wt_med,7.503669600721729,0.0,0,29
+"MAE, schedule known at origin",UC3,all,45,wt_med,wt_med,7.230951394388876,0.0,0,27
+"MAE, schedule known at origin",UC3,all,60,wt_med,wt_med,7.707393422563864,0.0,0,25
+"MAE, schedule known at origin",UC3,all,90,wt_med,wt_med,7.0690910016286646,0.0,0,21
+"first-hour MAE, schedule known at origin",D5,all,0,wt_med,chronos2_grid,4.305454669248575,-0.6387113174391272,4,33
+"first-hour MAE, schedule known at origin",D5,all,1,wt_med,lvlh5_tft,4.25377854903717,-0.44866197183098677,5,33
+"first-hour MAE, schedule known at origin",D5,all,2,wt_med,lvlh5_tft,4.14196001367054,-0.2101528384279474,6,33
+"first-hour MAE, schedule known at origin",D5,all,3,wt_med,lvlh5_tft,4.397529484073256,-0.2183830171635046,6,33
+"first-hour MAE, schedule known at origin",D5,all,4,wt_med,chronos2_owx_x_h5,4.880311469924905,-0.18766367436355846,4,33
+"first-hour MAE, schedule known at origin",D5,all,5,wt_med,chronos2_owx_x_h5,5.049400053075873,-0.14989187905854617,4,33
+"first-hour MAE, schedule known at origin",D5,all,6,wt_med,lvlh5_cbd,4.659591062394604,-0.20624327101889062,5,33
+"first-hour MAE, schedule known at origin",D5,all,7,wt_med,lvlh5_tft,4.6249694836635875,-0.3089951344219033,5,32
+"first-hour MAE, schedule known at origin",D5,all,10,wt_med,lvlh5_cbd,4.483140418853303,-0.29945758625885155,6,32
+"first-hour MAE, schedule known at origin",D5,all,14,wt_med,lvlh5_tft,4.52562958035756,-0.3592350923985528,6,31
+"first-hour MAE, schedule known at origin",D5,all,21,wt_med,lvlh5_tft,4.5850759224709785,-0.32652639163153196,6,30
+"first-hour MAE, schedule known at origin",D5,all,30,wt_med,wt_med,4.608933866185381,0.0,0,29
+"first-hour MAE, schedule known at origin",D5,all,45,wt_med,wt_med,4.985538257212426,0.0,0,27
+"first-hour MAE, schedule known at origin",D5,all,60,wt_med,wt_med,4.688776038967768,0.0,0,25
+"first-hour MAE, schedule known at origin",D5,all,90,wt_med,wt_med,4.420460040063549,0.0,0,21
+"MAE, schedule projected at origin",UC3,all,0,wt_med,chronos2_grid,5.954342158149459,-0.637344875722456,3,33
+"MAE, schedule projected at origin",UC3,all,1,wt_med,chronos2_grid,6.265478282566288,-0.7023057270244752,5,33
+"MAE, schedule projected at origin",UC3,all,2,wt_med,wt_med,6.545541561712846,0.0,0,33
+"MAE, schedule projected at origin",UC3,all,3,wt_med,h5,5.9885208280821605,-0.10600091782382925,1,33
+"MAE, schedule projected at origin",UC3,all,4,wt_med,wt_med,7.30181649390365,0.0,0,33
+"MAE, schedule projected at origin",UC3,all,5,wt_med,wt_med,7.2331767182043825,0.0,0,33
+"MAE, schedule projected at origin",UC3,all,6,wt_med,wt_med,7.001735765674252,0.0,0,33
+"MAE, schedule projected at origin",UC3,all,7,wt_med,wt_med,6.931694298057132,0.0,0,32
+"MAE, schedule projected at origin",UC3,all,10,wt_med,h5,6.784571598401551,-0.09950031118345404,1,32
+"MAE, schedule projected at origin",UC3,all,14,wt_med,wt_med,7.860007899131095,0.0,0,31
+"MAE, schedule projected at origin",UC3,all,21,wt_med,wt_med,8.256571972463448,0.0,0,30
+"MAE, schedule projected at origin",UC3,all,30,wt_med,wt_med,8.139731115032351,0.0,0,29
+"MAE, schedule projected at origin",UC3,all,45,wt_med,wt_med,8.581587396213406,0.0,0,27
+"MAE, schedule projected at origin",UC3,all,60,clim,clim,8.889097003504611,0.0,0,25
+"MAE, schedule projected at origin",UC3,all,90,wt_med,wt_med,9.17146338740884,0.0,0,21
+"first-hour MAE, schedule projected at origin",D5,all,0,wt_med,wt_med,3.9163558628217956,0.0,0,33
+"first-hour MAE, schedule projected at origin",D5,all,1,wt_med,wt_med,4.037786100707449,0.0,0,33
+"first-hour MAE, schedule projected at origin",D5,all,2,wt_med,wt_med,3.7997858672376874,0.0,0,33
+"first-hour MAE, schedule projected at origin",D5,all,3,wt_med,wt_med,3.966340891321345,0.0,0,33
+"first-hour MAE, schedule projected at origin",D5,all,4,clim,wt_med,4.400124165761292,-0.20099164071463704,1,33
+"first-hour MAE, schedule projected at origin",D5,all,5,wt_med,wt_med,4.315028665028665,0.0,0,33
+"first-hour MAE, schedule projected at origin",D5,all,6,wt_med,wt_med,4.27772723513357,0.0,0,33
+"first-hour MAE, schedule projected at origin",D5,all,7,wt_med,wt_med,4.169056738220362,0.0,0,32
+"first-hour MAE, schedule projected at origin",D5,all,10,wt_med,wt_med,4.352788348946135,0.0,0,32
+"first-hour MAE, schedule projected at origin",D5,all,14,wt_med,wt_med,5.017542485707573,0.0,0,31
+"first-hour MAE, schedule projected at origin",D5,all,21,wt_med,wt_med,5.392514323982439,0.0,0,30
+"first-hour MAE, schedule projected at origin",D5,all,30,wt_med,wt_med,5.030504412245342,0.0,0,29
+"first-hour MAE, schedule projected at origin",D5,all,45,clim,clim,5.402521562050791,0.0,0,27
+"first-hour MAE, schedule projected at origin",D5,all,60,wt_med,wt_med,5.94529776340609,0.0,0,25
+"first-hour MAE, schedule projected at origin",D5,all,90,clim,clim,6.111433305716653,0.0,0,21
+MAE,UC1,all,m015,persistence,persistence,2.6414131316813867,0.0,0,33
+MAE,UC1,busy,m015,persistence,persistence,5.178607656760716,0.0,0,33
+MAE,UC1,all,m030,persistence,chronos2,3.859906373731084,-0.4164041326637484,1,33
+MAE,UC1,busy,m030,persistence,chronos2,7.6086531197581415,-0.9165433304947426,1,33
+MAE,UC1,all,m045,persistence,chronos2,4.2436764995208085,-0.9015065380907616,1,33
+MAE,UC1,busy,m045,persistence,chronos2,8.268466441001097,-1.865826310523973,1,33
+MAE,UC1,all,m060,persistence,chronos2,4.490964925995209,-1.2616547334049155,1,33
+MAE,UC1,busy,m060,persistence,chronos2,8.737228688341194,-2.6171434159252094,1,33
+MAE,UC1,all,m075,persistence,chronos2,4.720746552746585,-1.557362600960821,1,33
+MAE,UC1,busy,m075,persistence,chronos2,9.10422688000002,-3.0667252669894083,1,33
+MAE,UC1,all,m090,persistence,chronos2,4.840695947834056,-1.8820171776717691,1,33
+MAE,UC1,busy,m090,persistence,chronos2,9.37003423464797,-3.7550734470922915,1,33
+MAE,UC1,all,m105,persistence,chronos2,4.948368548347559,-2.061690299268255,1,33
+MAE,UC1,busy,m105,persistence,chronos2,9.545071281335943,-4.060528304252944,1,33
+MAE,UC1,all,m120,persistence,chronos2,5.023888204580125,-2.267832062803107,1,33
+MAE,UC1,busy,m120,persistence,chronos2,9.685138450071925,-4.510771633828373,1,33
+MAE,UC2-intraday,all,h2-4,wt_med,chronos2,5.321909961860275,-1.7629098902691487,2,33
+MAE,UC2-intraday,busy,h2-4,wt_med,chronos2,10.219962768787822,-4.094734990816271,2,33
+MAE,UC2-intraday,all,h4-8,wt_med,chronos2,5.802699137677108,-1.300111277287428,2,33
+MAE,UC2-intraday,busy,h4-8,wt_med,chronos2,10.97906747818187,-3.080605136713711,2,33
+MAE,UC2-intraday,all,h8+,wt_med,chronos2,5.976897626455892,-0.5184218917321868,1,33
+MAE,UC2-intraday,busy,h8+,wt_med,chronos2,11.10493752508712,-1.3497268473197028,2,33
+live-window MAE (headliners),D2,headliners,w0-45,persistence,chronos2,6.7693021421574615,-0.644790543306077,1,33
+best-time hit rate (top-2),D3,all,0,wt_med,wt_med,0.8256417652148832,0.0,0,33
+best-time hit rate (top-2),D3,all,1,wt_med,wt_med,0.8213439286212184,0.0,0,33
+best-time hit rate (top-2),D3,all,2,clim,wt_med,0.830042636930141,0.007530364372469567,1,33
+best-time hit rate (top-2),D3,all,3,clim,h5,0.823953371772374,0.009783204195037976,1,33
+best-time hit rate (top-2),D3,all,4,clim,h5,0.8184466019417476,0.010626816106268255,1,33
+best-time hit rate (top-2),D3,all,5,clim,h5,0.82126449354627,0.009314066852367686,1,33
+best-time hit rate (top-2),D3,all,6,wt_med,h5,0.8219883889695211,0.006414662084765155,1,33
+best-time hit rate (top-2),D3,all,7,clim,h5,0.8277104005880191,0.010532837670384154,1,32
+best-time hit rate (top-2),D3,all,10,clim,wt_med,0.8226254002134472,0.005338983050847457,1,32
+best-time hit rate (top-2),D3,all,14,clim,clim,0.8254501352738128,0.0,0,31
+best-time hit rate (top-2),D3,all,21,clim,clim,0.826242189824457,0.0,0,30
+best-time hit rate (top-2),D3,all,30,clim,clim,0.8371465680887201,0.0,0,29
+best-time hit rate (top-2),D3,all,45,clim,clim,0.8250368522508221,0.0,0,27
+best-time hit rate (top-2),D3,all,60,clim,clim,0.8258561189275285,0.0,0,25
+best-time hit rate (top-2),D3,all,90,clim,clim,0.8262541193701941,0.0,0,21
+best-time hit rate (±30 min),D3,all,0,clim,h5,0.8329274232830005,0.01361161524500909,1,33
+best-time hit rate (±30 min),D3,all,1,wt_med,wt_med,0.8251080440540918,0.0,0,33
+best-time hit rate (±30 min),D3,all,2,snaive7,clim,0.8433630412493098,0.01789811840293709,3,33
+best-time hit rate (±30 min),D3,all,3,clim,h5,0.828465780897468,0.009626672927917301,1,33
+best-time hit rate (±30 min),D3,all,4,wt_med,h5,0.8255894590846047,0.006603565925599741,1,33
+best-time hit rate (±30 min),D3,all,5,wt_med,wt_med,0.8238482384823849,0.0,0,33
+best-time hit rate (±30 min),D3,all,6,wt_med,h5,0.8279390420899855,0.008323787705231012,1,33
+best-time hit rate (±30 min),D3,all,7,wt_med,h5,0.8323410510841602,0.007221618263705598,1,32
+best-time hit rate (±30 min),D3,all,10,clim,clim,0.8279054389155233,0.0,0,32
+best-time hit rate (±30 min),D3,all,14,clim,clim,0.8303013340796717,0.0,0,31
+best-time hit rate (±30 min),D3,all,21,clim,clim,0.8289199642963404,0.0,0,30
+best-time hit rate (±30 min),D3,all,30,clim,clim,0.8415426116495154,0.0,0,29
+best-time hit rate (±30 min),D3,all,45,clim,clim,0.8312733870053294,0.0,0,27
+best-time hit rate (±30 min),D3,all,60,clim,clim,0.8251924608441731,0.0,0,25
+best-time hit rate (±30 min),D3,all,90,clim,clim,0.829732698645185,0.0,0,21
+best-time regret (min),D3,all,0,wt_med,h5,2.928675805441514,-0.2652869916354197,1,33
+best-time regret (min),D3,all,1,wt_med,wt_med,3.2273804544820854,0.0,0,33
+best-time regret (min),D3,all,2,clim,clim,3.010726397980913,0.0,0,33
+best-time regret (min),D3,all,3,clim,h5,3.089934820757082,-0.2642247788995853,1,33
+best-time regret (min),D3,all,4,wt_med,h5,3.194382801664355,-0.17763592339863532,1,33
+best-time regret (min),D3,all,5,wt_med,wt_med,3.207820363917925,0.0,0,33
+best-time regret (min),D3,all,6,wt_med,h5,3.13388969521045,-0.2696449026345933,1,33
+best-time regret (min),D3,all,7,wt_med,h5,3.0186696067622196,-0.2350520267122227,1,32
+best-time regret (min),D3,all,10,clim,clim,3.1400231443213755,0.0,0,32
+best-time regret (min),D3,all,14,clim,h5,3.1488570321580784,-0.17785329934862615,1,31
+best-time regret (min),D3,all,21,clim,h5,3.220297434221278,-0.20332326283987934,1,30
+best-time regret (min),D3,all,30,clim,clim,3.098411429713258,0.0,0,29
+best-time regret (min),D3,all,45,clim,clim,3.0478512302982197,0.0,0,27
+best-time regret (min),D3,all,60,clim,clim,3.3305017255110165,0.0,0,25
+best-time regret (min),D3,all,90,clim,clim,3.2903698279018676,0.0,0,21
+Spearman of slots within ride-day,UC2/UC3,all,0,wt_med,chronos2_grid,0.4763308589944462,0.024607053617431485,1,33
+Spearman of slots within ride-day,UC2/UC3,all,1,wt_med,chronos2_grid,0.44684543666958,0.025751895855536944,1,33
+Spearman of slots within ride-day,UC2/UC3,all,2,wt_med,wt_med,0.503421767245544,0.0,0,33
+Spearman of slots within ride-day,UC2/UC3,all,3,wt_med,h5,0.5052333168166332,0.016386296943376788,1,33
+Spearman of slots within ride-day,UC2/UC3,all,4,wt_med,chronos2_grid,0.4594194185018477,0.02242588095873166,5,33
+Spearman of slots within ride-day,UC2/UC3,all,5,wt_med,chronos2_grid,0.4610232839001643,0.019088867102350304,2,33
+Spearman of slots within ride-day,UC2/UC3,all,6,wt_med,chronos2_grid,0.44812507388985545,0.014807966220993118,2,33
+Spearman of slots within ride-day,UC2/UC3,all,7,wt_med,h5,0.4938879034673005,0.011904596847427562,1,32
+Spearman of slots within ride-day,UC2/UC3,all,10,wt_med,h5,0.4978306378377142,0.015841654120911264,1,32
+Spearman of slots within ride-day,UC2/UC3,all,14,wt_med,h5,0.48064550202299255,0.01339531985561404,1,31
+Spearman of slots within ride-day,UC2/UC3,all,21,clim,h5,0.47132998943069065,0.022208387631185045,2,30
+Spearman of slots within ride-day,UC2/UC3,all,30,wt_med,wt_med,0.4762214396629275,0.0,0,29
+Spearman of slots within ride-day,UC2/UC3,all,45,wt_med,wt_med,0.45554736467662016,0.0,0,27
+Spearman of slots within ride-day,UC2/UC3,all,60,clim,clim,0.4513817878998768,0.0,0,25
+Spearman of slots within ride-day,UC2/UC3,all,90,clim,clim,0.4358228300434028,0.0,0,21
+dayPeak abs error (min),UC3,all,0,wt_med,chronos2_grid,7.396590479811063,-0.8412387272923993,3,33
+dayPeak abs error (min),UC3,all,1,wt_med,chronos2_owx_x_h5,7.546768815034906,-0.6227280222358988,2,33
+dayPeak abs error (min),UC3,all,2,snaive7,lvlh5_naive,8.047167692044145,-0.331633812548799,1,33
+dayPeak abs error (min),UC3,all,3,wt_med,wt_med,7.29388099253192,0.0,0,33
+dayPeak abs error (min),UC3,all,4,snaive7,chronos2_owx_x_h5,8.303728537416818,-0.965270122936257,3,33
+dayPeak abs error (min),UC3,all,5,snaive7,chronos2_x_h5,8.093431671061996,-0.8490685382428369,2,33
+dayPeak abs error (min),UC3,all,6,snaive7,chronos2_owx_x_h5,7.767050934606025,-0.7233084994874597,4,33
+dayPeak abs error (min),UC3,all,7,wt_med,chronos2_owx_x_h5,8.306683634224225,-0.3787490707087571,2,32
+dayPeak abs error (min),UC3,all,10,wt_med,wt_med,7.476661155316731,0.0,0,32
+dayPeak abs error (min),UC3,all,14,wt_med,wt_med,8.913726286476766,0.0,0,31
+dayPeak abs error (min),UC3,all,21,clim,clim,8.911309732036662,0.0,0,30
+dayPeak abs error (min),UC3,all,30,clim,clim,8.362177150391684,0.0,0,29
+dayPeak abs error (min),UC3,all,45,wt_med,wt_med,8.48152495846276,0.0,0,27
+dayPeak abs error (min),UC3,all,60,wt_med,wt_med,8.963347141673571,0.0,0,25
+dayPeak abs error (min),UC3,all,90,wt_med,wt_med,8.423940415964024,0.0,0,21
+rope-drop worth agreement,D5,all,0,prod_ropedrop_hist,prod_ropedrop_hist,,0.0,0,33
+rope-drop worth agreement,D5,all,1,prod_ropedrop_hist,prod_ropedrop_hist,,0.0,0,33
+rope-drop worth agreement,D5,all,2,snaive7,snaive7,0.910268756018559,0.0,0,33
+rope-drop worth agreement,D5,all,3,snaive7,wt_med,0.9189592869188148,0.015172287725070843,7,33
+rope-drop worth agreement,D5,all,4,snaive7,chronos2_x_h5,0.9108496986194828,0.009871768776714807,4,33
+rope-drop worth agreement,D5,all,5,snaive7,snaive7,0.9279222814164838,0.0,0,33
+rope-drop worth agreement,D5,all,6,snaive7,snaive7,0.9274898078043099,0.0,0,33
+rope-drop worth agreement,D5,all,7,wt_med,wt_med,0.9135132200445193,0.0,0,32
+rope-drop worth agreement,D5,all,10,wt_med,wt_med,0.920119871861114,0.0,0,32
+rope-drop worth agreement,D5,all,14,wt_med,wt_med,0.9136160584788536,0.0,0,31
+rope-drop worth agreement,D5,all,21,wt_med,wt_med,0.9134692865555073,0.0,0,30
+rope-drop worth agreement,D5,all,30,prod_ropedrop_hist,prod_ropedrop_hist,,0.0,0,29
+rope-drop worth agreement,D5,all,45,clim,clim,0.9114977307110439,0.0,0,27
+rope-drop worth agreement,D5,all,60,wt_med,wt_med,0.9082021541010771,0.0,0,25
+rope-drop worth agreement,D5,all,90,wt_med,wt_med,0.9134345137717819,0.0,0,21
+dayPeak pairwise ordering (headliners),D4,all,0,wt_med,chronos2_owx,0.8414141414141414,0.07444641851193834,6,33
+dayPeak pairwise ordering (headliners),D4,all,1,wt_med,chronos2_owx,0.8266639935846031,0.06609286523216307,8,33
+dayPeak pairwise ordering (headliners),D4,all,2,wt_med,chronos2_owx_x_h5,0.8157864589300035,0.033756882676831856,8,33
+dayPeak pairwise ordering (headliners),D4,all,3,wt_med,chronos2_owx_x_h5,0.8143018867924529,0.03901740020470823,8,33
+dayPeak pairwise ordering (headliners),D4,all,4,wt_med,chronos2_owx,0.8143707788834272,0.05638459476364932,8,33
+dayPeak pairwise ordering (headliners),D4,all,5,wt_med,chronos2_owx,0.8191191817992068,0.05868927290511905,8,33
+dayPeak pairwise ordering (headliners),D4,all,6,wt_med,chronos2_owx,0.8068082266071503,0.056704839305504184,8,33
+dayPeak pairwise ordering (headliners),D4,all,7,wt_med,chronos2_owx,0.805190980986034,0.05256452602274342,8,32
+dayPeak pairwise ordering (headliners),D4,all,10,wt_med,chronos2_owx_x_h5,0.810825782455585,0.044774814167030996,4,32
+dayPeak pairwise ordering (headliners),D4,all,14,wt_med,chronos2_owx_x_h5,0.7983740548100878,0.05070409224080896,4,31
+dayPeak pairwise ordering (headliners),D4,all,21,wt_med,chronos2_owx_x_h5,0.7878145451193659,0.04223075368761364,4,30
+dayPeak pairwise ordering (headliners),D4,all,30,wt_med,wt_med,0.7664558044110105,0.0,0,29
+dayPeak pairwise ordering (headliners),D4,all,45,wt_med,wt_med,0.7549928673323824,0.0,0,27
+dayPeak pairwise ordering (headliners),D4,all,60,wt_med,wt_med,0.7423937809945047,0.0,0,25
+dayPeak pairwise ordering (headliners),D4,all,90,clim,clim,0.7476507232604793,0.0,0,21
+dayPeak Spearman across rides,UC3,all,0,wt_med,wt_med,0.8438453378866443,0.0,0,33
+dayPeak Spearman across rides,UC3,all,1,wt_med,wt_med,0.8438464280451308,0.0,0,33
+dayPeak Spearman across rides,UC3,all,2,wt_med,wt_med,0.8830506098873351,0.0,0,33
+dayPeak Spearman across rides,UC3,all,3,wt_med,wt_med,0.8608255437921689,0.0,0,33
+dayPeak Spearman across rides,UC3,all,4,wt_med,wt_med,0.8430453260230092,0.0,0,33
+dayPeak Spearman across rides,UC3,all,5,wt_med,wt_med,0.8354485501175818,0.0,0,33
+dayPeak Spearman across rides,UC3,all,6,wt_med,wt_med,0.8341941997518,0.0,0,33
+dayPeak Spearman across rides,UC3,all,7,wt_med,wt_med,0.829662403305937,0.0,0,32
+dayPeak Spearman across rides,UC3,all,10,clim,h5,0.8583113331544718,0.010472621439029162,2,32
+dayPeak Spearman across rides,UC3,all,14,wt_med,wt_med,0.8269752646784978,0.0,0,31
+dayPeak Spearman across rides,UC3,all,21,wt_med,wt_med,0.818540468708653,0.0,0,30
+dayPeak Spearman across rides,UC3,all,30,clim,clim,0.8648851963599814,0.0,0,29
+dayPeak Spearman across rides,UC3,all,45,clim,clim,0.8485715838908932,0.0,0,27
+dayPeak Spearman across rides,UC3,all,60,wt_med,wt_med,0.8252836759654739,0.0,0,25
+dayPeak Spearman across rides,UC3,all,90,wt_med,wt_med,0.817655483345487,0.0,0,21
+optimiser regret (min per park-day),D4,all,1,wt_med,wt_med,37.53354134165367,0.0,0,33
+optimiser regret (min per park-day),D4,all,3,wt_med,wt_med,37.84426229508197,0.0,0,33
+optimiser regret (min per park-day),D4,all,7,clim,chronos2_owx_x_h5,36.54718543046358,-2.681739130434785,2,32
+optimiser regret (min per park-day),D4,all,14,clim,clim,39.660714285714285,0.0,0,31
+optimiser regret (min per park-day),D4,all,30,wt_med,wt_med,39.6815834767642,0.0,0,29
+next-best precision,D1,all,0-120,wt_med,lvlh5_tft,0.5371799172537179,0.039203968606166484,2,33
+next-best precision,D1,all,0-60,wt_med,lvlh5_tft,0.4490815944020992,0.028499783074365237,2,33
+next-best precision (top-3),D1,all,0-120,wt_med,chronos2,0.7081835483188835,0.08539353296280805,1,33
+next-best precision (top-3),D1,all,0-60,wt_med,chronos2,0.6451294697903822,0.09883236697953046,1,33
+next-best recall,D1,all,0-120,snaive7,snaive7,0.5907987165033388,0.0,0,33
+next-best recall,D1,all,0-60,snaive7,snaive7,0.5476478346889426,0.0,0,33
+crowd bucket exact,D6,all,1,lvl_snaive7,lvl_chronos2,0.4581218274111675,0.06563706563706562,2,33
+crowd bucket exact,D6,all,2,lvl_naive4,lvl_naive4,0.465,0.0,0,33
+crowd bucket exact,D6,all,3,lvl_naive4,lvl_naive4,0.4469413233458177,0.0,0,33
+crowd bucket exact,D6,all,4,lvl_snaive7,lvl_snaive7,0.4,0.0,0,33
+crowd bucket exact,D6,all,5,lvl_snaive7,lvl_snaive7,0.37753721244925575,0.0,0,33
+crowd bucket exact,D6,all,6,lvl_snaive7,lvl_snaive7,0.4302788844621514,0.0,0,33
+crowd bucket exact,D6,all,7,lvl_wt56,lvl_tft,0.4063157894736842,0.0652631578947368,3,32
+crowd bucket exact,D6,all,10,lvl_naive4,lvl_naive4,0.43320363164721143,0.0,0,32
+crowd bucket exact,D6,all,14,lvl_naive4,lvl_naive4,0.30503597122302156,0.0,0,31
+crowd bucket exact,D6,all,21,lvl_wt56,lvl_wt56,0.3064516129032258,0.0,0,30
+crowd bucket exact,D6,all,30,lvl_naive4,lvl_naive4,0.4008810572687225,0.0,0,29
+crowd bucket exact,D6,all,45,lvl_naive4,lvl_naive4,0.3814102564102564,0.0,0,27
+crowd bucket exact,D6,all,60,lvl_wt56,lvl_wt56,0.29097605893186,0.0,0,25
+crowd bucket exact,D6,all,90,lvl_naive4,lvl_naive4,0.32547169811320753,0.0,0,21
+crowd bucket exact,D6,all,120,lvl_wt56,lvl_wt56,0.27741935483870966,0.0,0,16
+crowd bucket exact,D6,all,180,lvl_naive4,lvl_naive4,0.21428571428571427,0.0,0,8
+day comparison winner accuracy,D7,all,d1-7,lvl_snaive7,lvl_snaive7,0.4412536443148688,0.0,0,33
+day comparison winner accuracy,D7,all,d8-30,lvl_naive4,lvl_naive4,0.30958882602625276,0.0,0,32
+day comparison winner accuracy,D7,all,d31-90,lvl_naive4,lvl_naive4,0.2870576487514182,0.0,0,29

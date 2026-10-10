@@ -135,6 +135,141 @@ VRAM is capped with `torch.cuda.set_per_process_memory_fraction`
 (`MLBENCH_FM_VRAM_FRACTION`, default 0.6 of 16 GB) to respect the 10 GB ceiling
 of the shared RTX 5080; every `[fm]` log line carries the running peak.
 
+## What the first subset run measured — and what of it is reportable
+
+Run `20261009-par828-subset-chronos`: 30 parks (`ml-bench/subsets/par828-30parks.txt`,
+12 EU / 10 NA / 8 Asia), `--shard 0/7` = every 7th origin = 33 origins over
+2026-02-19…2026-10-01, models `chronos2`, `chronos2_grid`, `chronos2_nocov`,
+`chronos2_owx`. 33/33 origins, exit 0, 6 545 s, VRAM peak 1.86 GB.
+
+### Two limits to read first
+
+**The run was executed from a pre-rebase working tree** (`code_sha256`
+`d82b5a17…`, matching no commit) that is missing three PAR-827 harness fixes:
+`689a7b84` (no forecast outside the opening window known at the origin),
+`336b2b62` (projected windows and the plug-in grid on the quarter-hour grid) and
+`a1d20bf8` (floor-divide slot offsets). The first of those nulls
+`SLOT_MODELS + ORACLES + wt_q80/95` — **built-in baseline columns only**, never
+plug-in columns — so the baseline arm covered slots the plug-in arm did not.
+**Every comparison of a Chronos-2 variant against `wt_med` / `h5` / `clim` /
+`snaive7` / `lvlh5_*` from this run is void** and is being re-scored. What survives
+is (a) the comparisons against `persistence`, which is built in `runner.ih_{h}`
+from the raw `slots` table and passes through none of the changed code, and (b)
+the variant-against-variant contrasts, since all four variants are plug-ins on the
+same grid — their covered slot count is identical to the unit in all 18 UC2/UC3
+MAE cells.
+
+**The every-7th-origin sharding, not the park count, is what makes this a weak
+run.** The harness gates a cell at ≥ 30 origin days. Over the full period the
+subset reaches 33 origin days up to d21 and then falls below the gate (29 at d30,
+21 at d90). In the **headline common window** 2026-08-15…2026-10-07 it reaches
+only **7–8** — so every cell of the headline-window report is suppressed and every
+hand-over winner falls back to the reference with margin 0.0. The subset as
+sharded cannot produce a headline-window number at all. Running all 231 origins on
+the same 30 parks costs ~12.7 h and fixes it.
+
+### Layout — the regular grid wins, and costs 2–3× the GPU time
+
+`chronos2_grid` is better than `chronos2` in **all 18** UC2/UC3 slot-MAE cells
+(9 leads × {all, busy}); the paired difference and its park-cluster CI are in
+`ml-bench/results/20261009-par828-subset-chronos/variant-pairs.md`. The mechanism
+shows up in the decision metrics, where the compressed layout fails and the grid
+does not:
+
+| metric (full period, all rides, lead d0) | `chronos2` | `chronos2_grid` |
+|---|---|---|
+| first-hour MAE, opening-aligned (D5) | +0.05 | **−0.55** |
+| best-time regret, min (D3) | +1.09 | **+0.14** |
+| best-time hit rate top-2 (D3) | −0.065 | **−0.013** |
+
+(differences against the per-lead reference, which is why the absolute signs are
+void; the *contrast between the two columns* is not.) Compressing the context to
+operating-window slots only buys a ~170-day context but destroys the opening ramp,
+which is exactly what D5 and D3 score. **Decision: run the grid layout.** Price:
+18.6–23.4 s per daily-origin call against 6.5–11.3 s compressed.
+
+This also sets expectations for TimesFM 3.0, which can only be run compressed —
+it interpolates NaN linearly, which is wrong across nights. TimesFM 3.0 is
+therefore handicapped by construction relative to `chronos2_grid`, and a
+TimesFM-vs-Chronos comparison is not like-for-like on layout.
+
+### Covariates — clearly worth having
+
+`chronos2_nocov` is worse than `chronos2` in all 18 cells, by 0.39–0.82 min slot
+MAE, and the gap is much larger on the decisions: best-time regret +2.45…+7.35 and
+first-hour MAE +0.72…+2.43 against the reference, against +1.09…+3.61 and
++0.05…+1.46 for `chronos2`. **Decision: keep the covariates.** The calendar /
+holiday / minutes-since-opening block is doing real work, not decoration.
+
+### ORACLE weather — an upper bound worth almost nothing
+
+`chronos2_owx` adds the day's weather **actuals** (there is no archived forecast,
+so it is an ORACLE and **not a servable configuration**). It is worth
+**0.04–0.10 min** of slot MAE over `chronos2` across d1…d7. Read the other way:
+perfect weather knowledge would buy under a tenth of a minute, so weather is not
+the missing ingredient for this model family and building a weather-forecast
+archive is not justified by this result.
+
+Note that `report`'s `NON_COMPETING` set is only `oracle_level` / `oracle_shape` /
+`prod_ropedrop_hist`, so `chronos2_owx` and `chronos2_owx_x_h5` currently appear as
+winners in the hand-over table — the table documented as the serving router's
+input. Any `*_owx` scored name should be non-competing there (filed against the
+harness, PAR-827).
+
+### UC1 — the result that survives
+
+Against `persistence`, the only reference untouched by the missing fixes, on
+15-min slots from intraday origins (full period, 33 origin days, paired share
+0.997):
+
+| lead | all rides | ex-ante busy rides |
+|---|---|---|
+| 15 min | **+0.263** [+0.179, +0.356] | **+0.440** [+0.239, +0.654] |
+| 30 min | −0.416 [−0.610, −0.212] | −0.917 [−1.281, −0.490] |
+| 45 min | −0.902 [−1.168, −0.617] | −1.866 [−2.270, −1.401] |
+| 60 min | −1.262 [−1.597, −0.927] | −2.617 [−3.123, −2.103] |
+| 90 min | −1.882 [−2.386, −1.396] | −3.755 [−4.646, −2.896] |
+| 120 min | −2.268 [−2.920, −1.714] | −4.511 [−5.726, −3.541] |
+
+Negative = Chronos-2 better; park-cluster 95 % CI. **Persistence is unbeatable at
+15 minutes and beaten from 30 minutes on**, with a margin that grows monotonically
+to 2 h. The plan-block live-correction window (D2, headliners, 0–45 min) goes the
+same way: −0.645 [−0.937, −0.329] against persistence.
+
+This matters because PAR-827's baselines-v2 finds persistence **unbeaten by every
+naive and profile baseline** across the whole 15–120 min range, the best of them
+(`lvlh5_tft`) still +0.636 [+0.300, +0.958] behind at 2 h. Those two findings do
+not conflict — they are about different model classes. Chronos-2 is the first
+candidate in this benchmark to move the persistence crossover from "beyond 2 h"
+down to roughly 20–30 minutes. It is the single most useful thing the foundation
+models have shown so far, and it is on the surface (live / next-best-ride /
+plan-block correction) where a 2–4 minute error reduction on busy rides is visible
+to a user.
+
+Only `chronos2` has `intraday = True`, so **the layout question is unmeasured on
+UC1** — the grid layout, which wins everywhere it was measured, has never been run
+on intraday origins. The re-score should fix that.
+
+### Runtime and VRAM
+
+| | measured |
+|---|---|
+| VRAM peak, all four variants, inference | **1.86 GB** (cap `MLBENCH_FM_VRAM_FRACTION=0.6` → 9.8 GB; ceiling 10 GB) |
+| weight load | 5.0 s, once per process |
+| per origin, 30 parks, 4 variants | 109 s (February) … 268 s (October), mean **198 s** |
+| of which `chronos2` × 7 intraday origins | 137 s = 51 % of the largest origin |
+| `chronos2` daily-origin slot call | 6.5–11.3 s · `chronos2_grid` 18.6–23.4 s · `chronos2_nocov` 5.7–22.1 s · `chronos2_owx` 7.4–27.3 s |
+| subset total (33 origins) | 6 545 s = 1 h 49 min |
+| report | 250 s (headline window) · 513 s (full period) |
+
+Scaling to the export's 157 parks and 231 daily origins (GPU cost is ~linear in
+the ride count, 157/30 = 5.23×): **66.6 h** for the full grid of four variants,
+~52 h for `chronos2` + `chronos2_grid` only. `--shard i/n` plus `--resume` let that
+be spread over nights, but **not in parallel** — one GPU job at a time across all
+agents, so n nights is n × 15.4 h of serial GPU. The cheap, high-value option is
+all 231 origins on the 30-park subset: **12.7 h, one night**, and it is the one
+that clears the N gate and makes the headline window gradeable.
+
 ## Licences — what is allowed
 
 - **Chronos-2 — Apache-2.0.** Benchmarking, fine-tuning and production serving
