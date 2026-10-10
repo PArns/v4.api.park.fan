@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -77,8 +78,13 @@ class Data:
 
         self.run = run
         self.con = duckdb.connect()
-        self.con.execute("SET threads=4")
-        self.con.execute("SET memory_limit='3GB'")
+        # Defaults reproduce the historical hard-coded settings byte-for-byte; the
+        # two env vars exist because the full-period pass does not fit a 4 GB
+        # container at memory_limit=3GB -- DuckDB plus the bootstrap's numpy
+        # arrays overshoot and the container is OOM-killed (rc=137).
+        self.con.execute(f"SET threads={os.environ.get('MLBENCH_REPORT_THREADS', '4')}")
+        self.con.execute(
+            f"SET memory_limit='{os.environ.get('MLBENCH_REPORT_MEMORY', '3GB')}'")
         tmp = run / "work" / f"report-tmp-{target_from or 'all'}"
         tmp.mkdir(parents=True, exist_ok=True)
         self.con.execute(f"SET temp_directory='{tmp}'")
