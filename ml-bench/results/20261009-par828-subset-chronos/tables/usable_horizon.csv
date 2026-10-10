@@ -1,0 +1,344 @@
+metric,uc,segment,model,leads_tested,usable_horizon,max_significant_lead
+MAE,UC1,all,chronos2,8,,m120
+MAE,UC1,all,clim,8,,
+MAE,UC1,all,h5,8,,
+MAE,UC1,all,lvlh5_naive,8,,
+MAE,UC1,all,lvlh5_tft,8,,
+MAE,UC1,all,persistence,0,,
+MAE,UC1,all,snaive7,8,,
+MAE,UC1,all,wt_med,8,,
+MAE,UC1,busy,chronos2,8,,m120
+MAE,UC1,busy,clim,8,,
+MAE,UC1,busy,h5,8,,
+MAE,UC1,busy,lvlh5_naive,8,,
+MAE,UC1,busy,lvlh5_tft,8,,
+MAE,UC1,busy,persistence,0,,
+MAE,UC1,busy,snaive7,8,,
+MAE,UC1,busy,wt_med,8,,
+MAE,UC2,all,chronos2,2,1,1
+MAE,UC2,all,chronos2_grid,2,1,1
+MAE,UC2,all,chronos2_nocov,2,0,0
+MAE,UC2,all,chronos2_owx,2,1,1
+MAE,UC2,all,chronos2_owx_x_h5,1,1,1
+MAE,UC2,all,chronos2_x_h5,1,1,1
+MAE,UC2,all,clim,2,,
+MAE,UC2,all,h5,2,1,1
+MAE,UC2,all,lvlh5_cbd,2,,
+MAE,UC2,all,lvlh5_naive,2,,
+MAE,UC2,all,lvlh5_tft,2,,
+MAE,UC2,all,snaive7,2,,
+MAE,UC2,all,wt_med,0,,
+MAE,UC2,busy,chronos2,2,1,1
+MAE,UC2,busy,chronos2_grid,2,1,1
+MAE,UC2,busy,chronos2_nocov,2,0,0
+MAE,UC2,busy,chronos2_owx,2,1,1
+MAE,UC2,busy,chronos2_owx_x_h5,1,1,1
+MAE,UC2,busy,chronos2_x_h5,1,1,1
+MAE,UC2,busy,clim,2,,
+MAE,UC2,busy,h5,2,1,1
+MAE,UC2,busy,lvlh5_cbd,2,,
+MAE,UC2,busy,lvlh5_naive,2,,
+MAE,UC2,busy,lvlh5_tft,2,,
+MAE,UC2,busy,snaive7,2,,
+MAE,UC2,busy,wt_med,0,,
+MAE,UC2-intraday,all,chronos2,3,h8+,h8+
+MAE,UC2-intraday,all,clim,3,,
+MAE,UC2-intraday,all,h5,3,h4-8,h4-8
+MAE,UC2-intraday,all,lvlh5_naive,3,,
+MAE,UC2-intraday,all,lvlh5_tft,3,,
+MAE,UC2-intraday,all,persistence,2,,
+MAE,UC2-intraday,all,snaive7,3,,
+MAE,UC2-intraday,all,wt_med,0,,
+MAE,UC2-intraday,busy,chronos2,3,h8+,h8+
+MAE,UC2-intraday,busy,clim,3,,
+MAE,UC2-intraday,busy,h5,3,h8+,h8+
+MAE,UC2-intraday,busy,lvlh5_naive,3,,
+MAE,UC2-intraday,busy,lvlh5_tft,3,,
+MAE,UC2-intraday,busy,persistence,3,,
+MAE,UC2-intraday,busy,snaive7,3,,
+MAE,UC2-intraday,busy,wt_med,0,,
+MAE,UC3,all,chronos2,7,1,1
+MAE,UC3,all,chronos2_grid,7,1,7
+MAE,UC3,all,chronos2_nocov,7,,
+MAE,UC3,all,chronos2_owx,7,1,6
+MAE,UC3,all,chronos2_owx_x_h5,10,1,7
+MAE,UC3,all,chronos2_x_h5,10,1,7
+MAE,UC3,all,clim,10,,
+MAE,UC3,all,h5,10,21,21
+MAE,UC3,all,lvlh5_cbd,10,,
+MAE,UC3,all,lvlh5_naive,10,,
+MAE,UC3,all,lvlh5_tft,10,,
+MAE,UC3,all,prod_served,8,,
+MAE,UC3,all,prod_served_lin,8,,
+MAE,UC3,all,snaive7,6,,
+MAE,UC3,all,wt_med,0,,
+MAE,UC3,busy,chronos2,7,1,6
+MAE,UC3,busy,chronos2_grid,7,1,7
+MAE,UC3,busy,chronos2_nocov,7,,
+MAE,UC3,busy,chronos2_owx,7,1,6
+MAE,UC3,busy,chronos2_owx_x_h5,10,1,21
+MAE,UC3,busy,chronos2_x_h5,10,1,21
+MAE,UC3,busy,clim,10,,
+MAE,UC3,busy,h5,10,21,21
+MAE,UC3,busy,lvlh5_cbd,10,,
+MAE,UC3,busy,lvlh5_naive,10,,10
+MAE,UC3,busy,lvlh5_tft,10,,
+MAE,UC3,busy,prod_served,8,,
+MAE,UC3,busy,prod_served_lin,8,,
+MAE,UC3,busy,snaive7,6,,
+MAE,UC3,busy,wt_med,0,,
+"MAE, schedule known at origin",UC3,all,chronos2,8,1,6
+"MAE, schedule known at origin",UC3,all,chronos2_grid,8,1,7
+"MAE, schedule known at origin",UC3,all,chronos2_nocov,8,0,0
+"MAE, schedule known at origin",UC3,all,chronos2_owx,8,1,6
+"MAE, schedule known at origin",UC3,all,chronos2_owx_x_h5,10,1,21
+"MAE, schedule known at origin",UC3,all,chronos2_x_h5,10,1,14
+"MAE, schedule known at origin",UC3,all,clim,11,,
+"MAE, schedule known at origin",UC3,all,h5,11,1,21
+"MAE, schedule known at origin",UC3,all,lvlh5_cbd,11,,
+"MAE, schedule known at origin",UC3,all,lvlh5_naive,11,,
+"MAE, schedule known at origin",UC3,all,lvlh5_tft,11,,
+"MAE, schedule known at origin",UC3,all,prod_served,8,,
+"MAE, schedule known at origin",UC3,all,prod_served_lin,8,,
+"MAE, schedule known at origin",UC3,all,snaive7,7,,
+"MAE, schedule known at origin",UC3,all,wt_med,0,,
+"MAE, schedule projected at origin",UC3,all,chronos2,8,1,1
+"MAE, schedule projected at origin",UC3,all,chronos2_grid,8,1,1
+"MAE, schedule projected at origin",UC3,all,chronos2_nocov,8,,
+"MAE, schedule projected at origin",UC3,all,chronos2_owx,8,1,1
+"MAE, schedule projected at origin",UC3,all,chronos2_owx_x_h5,10,1,1
+"MAE, schedule projected at origin",UC3,all,chronos2_x_h5,10,1,1
+"MAE, schedule projected at origin",UC3,all,clim,11,,
+"MAE, schedule projected at origin",UC3,all,h5,11,,10
+"MAE, schedule projected at origin",UC3,all,lvlh5_cbd,11,,
+"MAE, schedule projected at origin",UC3,all,lvlh5_naive,11,,
+"MAE, schedule projected at origin",UC3,all,lvlh5_tft,11,,
+"MAE, schedule projected at origin",UC3,all,prod_served,8,,
+"MAE, schedule projected at origin",UC3,all,prod_served_lin,8,,
+"MAE, schedule projected at origin",UC3,all,snaive7,7,,
+"MAE, schedule projected at origin",UC3,all,wt_med,0,,
+Spearman of slots within ride-day,UC2/UC3,all,chronos2,8,,
+Spearman of slots within ride-day,UC2/UC3,all,chronos2_grid,8,1,6
+Spearman of slots within ride-day,UC2/UC3,all,chronos2_nocov,8,,
+Spearman of slots within ride-day,UC2/UC3,all,chronos2_owx,8,,
+Spearman of slots within ride-day,UC2/UC3,all,chronos2_owx_x_h5,10,,4
+Spearman of slots within ride-day,UC2/UC3,all,chronos2_x_h5,10,,4
+Spearman of slots within ride-day,UC2/UC3,all,clim,10,,
+Spearman of slots within ride-day,UC2/UC3,all,h5,11,,21
+Spearman of slots within ride-day,UC2/UC3,all,lvlh5_cbd,0,,
+Spearman of slots within ride-day,UC2/UC3,all,lvlh5_naive,11,,21
+Spearman of slots within ride-day,UC2/UC3,all,lvlh5_tft,0,,
+Spearman of slots within ride-day,UC2/UC3,all,prod_served,0,,
+Spearman of slots within ride-day,UC2/UC3,all,prod_served_lin,0,,
+Spearman of slots within ride-day,UC2/UC3,all,snaive7,7,,
+Spearman of slots within ride-day,UC2/UC3,all,wt_med,1,,
+best-time hit rate (top-2),D3,all,chronos2,8,,
+best-time hit rate (top-2),D3,all,chronos2_grid,8,,
+best-time hit rate (top-2),D3,all,chronos2_nocov,8,,
+best-time hit rate (top-2),D3,all,chronos2_owx,8,,
+best-time hit rate (top-2),D3,all,chronos2_owx_x_h5,10,,
+best-time hit rate (top-2),D3,all,chronos2_x_h5,10,,
+best-time hit rate (top-2),D3,all,clim,3,,
+best-time hit rate (top-2),D3,all,h5,11,,7
+best-time hit rate (top-2),D3,all,lvlh5_cbd,0,,
+best-time hit rate (top-2),D3,all,lvlh5_naive,11,,
+best-time hit rate (top-2),D3,all,lvlh5_tft,0,,
+best-time hit rate (top-2),D3,all,prod_served,0,,
+best-time hit rate (top-2),D3,all,prod_served_lin,0,,
+best-time hit rate (top-2),D3,all,snaive7,7,,
+best-time hit rate (top-2),D3,all,wt_med,8,,10
+best-time hit rate (±30 min),D3,all,chronos2,8,,
+best-time hit rate (±30 min),D3,all,chronos2_grid,8,,
+best-time hit rate (±30 min),D3,all,chronos2_nocov,8,,
+best-time hit rate (±30 min),D3,all,chronos2_owx,8,,
+best-time hit rate (±30 min),D3,all,chronos2_owx_x_h5,10,,
+best-time hit rate (±30 min),D3,all,chronos2_x_h5,10,,
+best-time hit rate (±30 min),D3,all,clim,6,,2
+best-time hit rate (±30 min),D3,all,h5,11,0,7
+best-time hit rate (±30 min),D3,all,lvlh5_cbd,0,,
+best-time hit rate (±30 min),D3,all,lvlh5_naive,11,,
+best-time hit rate (±30 min),D3,all,lvlh5_tft,0,,
+best-time hit rate (±30 min),D3,all,prod_served,0,,
+best-time hit rate (±30 min),D3,all,prod_served_lin,0,,
+best-time hit rate (±30 min),D3,all,snaive7,6,,
+best-time hit rate (±30 min),D3,all,wt_med,6,,2
+best-time regret (min),D3,all,chronos2,8,,
+best-time regret (min),D3,all,chronos2_grid,8,,
+best-time regret (min),D3,all,chronos2_nocov,8,,
+best-time regret (min),D3,all,chronos2_owx,8,,
+best-time regret (min),D3,all,chronos2_owx_x_h5,10,,
+best-time regret (min),D3,all,chronos2_x_h5,10,,
+best-time regret (min),D3,all,clim,6,,
+best-time regret (min),D3,all,h5,11,0,21
+best-time regret (min),D3,all,lvlh5_cbd,0,,
+best-time regret (min),D3,all,lvlh5_naive,11,,
+best-time regret (min),D3,all,lvlh5_tft,0,,
+best-time regret (min),D3,all,prod_served,0,,
+best-time regret (min),D3,all,prod_served_lin,0,,
+best-time regret (min),D3,all,snaive7,7,,
+best-time regret (min),D3,all,wt_med,5,,
+crowd bucket exact,D6,all,lvl_cbd,10,,
+crowd bucket exact,D6,all,lvl_chronos2,10,1,7
+crowd bucket exact,D6,all,lvl_chronos2_owx,10,1,7
+crowd bucket exact,D6,all,lvl_clim,10,,
+crowd bucket exact,D6,all,lvl_naive4,6,,
+crowd bucket exact,D6,all,lvl_snaive7,2,,
+crowd bucket exact,D6,all,lvl_tft,10,,7
+crowd bucket exact,D6,all,lvl_wt56,8,,
+day comparison winner accuracy,D7,all,lvl_cbd,2,,
+day comparison winner accuracy,D7,all,lvl_chronos2,2,,
+day comparison winner accuracy,D7,all,lvl_chronos2_owx,2,,
+day comparison winner accuracy,D7,all,lvl_clim,2,,
+day comparison winner accuracy,D7,all,lvl_naive4,1,,
+day comparison winner accuracy,D7,all,lvl_snaive7,0,,
+day comparison winner accuracy,D7,all,lvl_tft,2,,
+day comparison winner accuracy,D7,all,lvl_wt56,2,,
+dayPeak Spearman across rides,UC3,all,chronos2,8,,
+dayPeak Spearman across rides,UC3,all,chronos2_grid,8,,
+dayPeak Spearman across rides,UC3,all,chronos2_nocov,8,,
+dayPeak Spearman across rides,UC3,all,chronos2_owx,8,,
+dayPeak Spearman across rides,UC3,all,chronos2_owx_x_h5,10,,
+dayPeak Spearman across rides,UC3,all,chronos2_x_h5,10,,
+dayPeak Spearman across rides,UC3,all,clim,10,,
+dayPeak Spearman across rides,UC3,all,h5,11,,10
+dayPeak Spearman across rides,UC3,all,lvlh5_cbd,0,,
+dayPeak Spearman across rides,UC3,all,lvlh5_naive,11,,
+dayPeak Spearman across rides,UC3,all,lvlh5_tft,0,,
+dayPeak Spearman across rides,UC3,all,prod_served,0,,
+dayPeak Spearman across rides,UC3,all,prod_served_lin,0,,
+dayPeak Spearman across rides,UC3,all,snaive7,7,,
+dayPeak Spearman across rides,UC3,all,wt_med,1,,10
+dayPeak abs error (min),UC3,all,chronos2,8,0,0
+dayPeak abs error (min),UC3,all,chronos2_grid,8,0,6
+dayPeak abs error (min),UC3,all,chronos2_nocov,8,,
+dayPeak abs error (min),UC3,all,chronos2_owx,8,0,6
+dayPeak abs error (min),UC3,all,chronos2_owx_x_h5,10,1,7
+dayPeak abs error (min),UC3,all,chronos2_x_h5,10,1,7
+dayPeak abs error (min),UC3,all,clim,10,,
+dayPeak abs error (min),UC3,all,h5,11,,
+dayPeak abs error (min),UC3,all,lvlh5_cbd,0,,
+dayPeak abs error (min),UC3,all,lvlh5_naive,11,,2
+dayPeak abs error (min),UC3,all,lvlh5_tft,0,,
+dayPeak abs error (min),UC3,all,prod_served,0,,
+dayPeak abs error (min),UC3,all,prod_served_lin,0,,
+dayPeak abs error (min),UC3,all,snaive7,3,,
+dayPeak abs error (min),UC3,all,wt_med,5,,
+dayPeak pairwise ordering (headliners),D4,all,chronos2,8,7,7
+dayPeak pairwise ordering (headliners),D4,all,chronos2_grid,8,7,7
+dayPeak pairwise ordering (headliners),D4,all,chronos2_nocov,8,7,7
+dayPeak pairwise ordering (headliners),D4,all,chronos2_owx,8,7,7
+dayPeak pairwise ordering (headliners),D4,all,chronos2_owx_x_h5,10,21,21
+dayPeak pairwise ordering (headliners),D4,all,chronos2_x_h5,10,21,21
+dayPeak pairwise ordering (headliners),D4,all,clim,11,,
+dayPeak pairwise ordering (headliners),D4,all,h5,11,21,21
+dayPeak pairwise ordering (headliners),D4,all,lvlh5_cbd,0,,
+dayPeak pairwise ordering (headliners),D4,all,lvlh5_naive,11,21,21
+dayPeak pairwise ordering (headliners),D4,all,lvlh5_tft,0,,
+dayPeak pairwise ordering (headliners),D4,all,prod_served,0,,
+dayPeak pairwise ordering (headliners),D4,all,prod_served_lin,0,,
+dayPeak pairwise ordering (headliners),D4,all,snaive7,0,,
+dayPeak pairwise ordering (headliners),D4,all,wt_med,0,,
+first-hour MAE (opening-aligned),D5,all,chronos2,8,,
+first-hour MAE (opening-aligned),D5,all,chronos2_grid,8,1,1
+first-hour MAE (opening-aligned),D5,all,chronos2_nocov,8,,
+first-hour MAE (opening-aligned),D5,all,chronos2_owx,8,,
+first-hour MAE (opening-aligned),D5,all,chronos2_owx_x_h5,10,1,21
+first-hour MAE (opening-aligned),D5,all,chronos2_x_h5,10,1,21
+first-hour MAE (opening-aligned),D5,all,clim,11,,
+first-hour MAE (opening-aligned),D5,all,h5,11,21,21
+first-hour MAE (opening-aligned),D5,all,lvlh5_cbd,11,,21
+first-hour MAE (opening-aligned),D5,all,lvlh5_naive,11,21,21
+first-hour MAE (opening-aligned),D5,all,lvlh5_tft,11,1,21
+first-hour MAE (opening-aligned),D5,all,prod_served,8,,
+first-hour MAE (opening-aligned),D5,all,prod_served_lin,8,,
+first-hour MAE (opening-aligned),D5,all,snaive7,7,,
+first-hour MAE (opening-aligned),D5,all,wt_med,0,,
+"first-hour MAE, schedule known at origin",D5,all,chronos2,8,,
+"first-hour MAE, schedule known at origin",D5,all,chronos2_grid,8,0,0
+"first-hour MAE, schedule known at origin",D5,all,chronos2_nocov,8,,
+"first-hour MAE, schedule known at origin",D5,all,chronos2_owx,8,,
+"first-hour MAE, schedule known at origin",D5,all,chronos2_owx_x_h5,10,21,21
+"first-hour MAE, schedule known at origin",D5,all,chronos2_x_h5,10,21,21
+"first-hour MAE, schedule known at origin",D5,all,clim,11,,
+"first-hour MAE, schedule known at origin",D5,all,h5,11,21,21
+"first-hour MAE, schedule known at origin",D5,all,lvlh5_cbd,11,,21
+"first-hour MAE, schedule known at origin",D5,all,lvlh5_naive,11,21,21
+"first-hour MAE, schedule known at origin",D5,all,lvlh5_tft,11,3,21
+"first-hour MAE, schedule known at origin",D5,all,prod_served,8,,
+"first-hour MAE, schedule known at origin",D5,all,prod_served_lin,8,,
+"first-hour MAE, schedule known at origin",D5,all,snaive7,7,,
+"first-hour MAE, schedule known at origin",D5,all,wt_med,0,,
+"first-hour MAE, schedule projected at origin",D5,all,chronos2,8,,
+"first-hour MAE, schedule projected at origin",D5,all,chronos2_grid,8,,
+"first-hour MAE, schedule projected at origin",D5,all,chronos2_nocov,8,,
+"first-hour MAE, schedule projected at origin",D5,all,chronos2_owx,8,,
+"first-hour MAE, schedule projected at origin",D5,all,chronos2_owx_x_h5,10,,
+"first-hour MAE, schedule projected at origin",D5,all,chronos2_x_h5,10,,
+"first-hour MAE, schedule projected at origin",D5,all,clim,10,,
+"first-hour MAE, schedule projected at origin",D5,all,h5,11,,
+"first-hour MAE, schedule projected at origin",D5,all,lvlh5_cbd,11,,
+"first-hour MAE, schedule projected at origin",D5,all,lvlh5_naive,11,,
+"first-hour MAE, schedule projected at origin",D5,all,lvlh5_tft,11,,
+"first-hour MAE, schedule projected at origin",D5,all,prod_served,8,,
+"first-hour MAE, schedule projected at origin",D5,all,prod_served_lin,8,,
+"first-hour MAE, schedule projected at origin",D5,all,snaive7,7,,
+"first-hour MAE, schedule projected at origin",D5,all,wt_med,1,,4
+live-window MAE (headliners),D2,headliners,chronos2,1,w0-45,w0-45
+live-window MAE (headliners),D2,headliners,clim,1,,
+live-window MAE (headliners),D2,headliners,h5,1,,
+live-window MAE (headliners),D2,headliners,lvlh5_naive,1,,
+live-window MAE (headliners),D2,headliners,lvlh5_tft,1,,
+live-window MAE (headliners),D2,headliners,persistence,0,,
+live-window MAE (headliners),D2,headliners,snaive7,1,,
+live-window MAE (headliners),D2,headliners,wt_med,1,,
+next-best precision,D1,all,chronos2,2,,
+next-best precision,D1,all,clim,2,,
+next-best precision,D1,all,h5,2,0-120,0-120
+next-best precision,D1,all,lvlh5_naive,2,,
+next-best precision,D1,all,lvlh5_tft,2,0-120,0-120
+next-best precision,D1,all,snaive7,2,,
+next-best precision,D1,all,wt_med,0,,
+next-best precision (top-3),D1,all,chronos2,2,0-120,0-120
+next-best precision (top-3),D1,all,clim,2,,
+next-best precision (top-3),D1,all,h5,2,,
+next-best precision (top-3),D1,all,lvlh5_naive,2,,
+next-best precision (top-3),D1,all,lvlh5_tft,2,,
+next-best precision (top-3),D1,all,snaive7,2,,
+next-best precision (top-3),D1,all,wt_med,0,,
+next-best recall,D1,all,chronos2,2,,
+next-best recall,D1,all,clim,2,,
+next-best recall,D1,all,h5,2,,
+next-best recall,D1,all,lvlh5_naive,2,,
+next-best recall,D1,all,lvlh5_tft,2,,
+next-best recall,D1,all,snaive7,0,,
+next-best recall,D1,all,wt_med,2,,
+optimiser regret (min per park-day),D4,all,chronos2,3,,
+optimiser regret (min per park-day),D4,all,chronos2_grid,3,,
+optimiser regret (min per park-day),D4,all,chronos2_nocov,3,,
+optimiser regret (min per park-day),D4,all,chronos2_owx,3,,
+optimiser regret (min per park-day),D4,all,chronos2_owx_x_h5,4,,7
+optimiser regret (min per park-day),D4,all,chronos2_x_h5,4,,7
+optimiser regret (min per park-day),D4,all,clim,2,,
+optimiser regret (min per park-day),D4,all,h5,4,,
+optimiser regret (min per park-day),D4,all,lvlh5_cbd,0,,
+optimiser regret (min per park-day),D4,all,lvlh5_naive,4,,
+optimiser regret (min per park-day),D4,all,lvlh5_tft,0,,
+optimiser regret (min per park-day),D4,all,prod_served,0,,
+optimiser regret (min per park-day),D4,all,prod_served_lin,0,,
+optimiser regret (min per park-day),D4,all,snaive7,2,,
+optimiser regret (min per park-day),D4,all,wt_med,2,,
+rope-drop worth agreement,D5,all,chronos2,6,,
+rope-drop worth agreement,D5,all,chronos2_grid,6,,3
+rope-drop worth agreement,D5,all,chronos2_nocov,6,,
+rope-drop worth agreement,D5,all,chronos2_owx,6,,
+rope-drop worth agreement,D5,all,chronos2_owx_x_h5,9,,4
+rope-drop worth agreement,D5,all,chronos2_x_h5,9,,4
+rope-drop worth agreement,D5,all,clim,9,,4
+rope-drop worth agreement,D5,all,h5,9,,3
+rope-drop worth agreement,D5,all,lvlh5_cbd,0,,
+rope-drop worth agreement,D5,all,lvlh5_naive,9,,3
+rope-drop worth agreement,D5,all,lvlh5_tft,0,,
+rope-drop worth agreement,D5,all,prod_served,0,,
+rope-drop worth agreement,D5,all,prod_served_lin,0,,
+rope-drop worth agreement,D5,all,snaive7,0,,
+rope-drop worth agreement,D5,all,wt_med,5,,4
