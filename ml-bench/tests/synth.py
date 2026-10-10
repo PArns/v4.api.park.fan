@@ -62,6 +62,14 @@ def write(raw: Path, seed: int = 7) -> dict:
                           "is_bridge_day": False,
                           # most days are published 20 days ahead, every third only the day before
                           "updated_us": _us(op - dt.timedelta(days=1 if i % 3 == 0 else 20))})
+            if i % 4 == 0:
+                # A non-OPERATING row carrying isHoliday / isBridgeDay, written LATE —
+                # after the day's OPERATING row. `windows` ignores it (no times), so the
+                # OPERATING mask says "schedule known" while the two flags are in fact
+                # from the future. Exercises critic S11.
+                sched.append({"park_id": pid, "date": d.isoformat(), "schedule_type": "SPECIAL_HOURS",
+                              "opening_us": None, "closing_us": None, "is_holiday": True,
+                              "is_bridge_day": True, "updated_us": _us(op + dt.timedelta(hours=12))})
             weekend = 1.5 if d.weekday() >= 5 else 1.0
             for k in range(4):
                 aid = f"{pid}-r{k}"
@@ -84,7 +92,10 @@ def write(raw: Path, seed: int = 7) -> dict:
                                       "wait": w, "is_heartbeat": False, "d": t.astimezone(dt.timezone.utc).date()})
                         last = (status, w)
                     t += dt.timedelta(minutes=int(rng.integers(5, 16)))
-    csv("schedule", pd.DataFrame(sched))
+    # nullable Int64: a non-OPERATING row has no opening/closing, and a float column
+    # would make the export CSV write 1.77e+15 where the real export writes an integer
+    csv("schedule", pd.DataFrame(sched).astype({"opening_us": "Int64", "closing_us": "Int64",
+                                                "updated_us": "Int64"}))
     csv("holidays", pd.DataFrame([{"country": "DE", "date": "2026-04-03", "region": None,
                                    "holiday_type": "public", "is_nationwide": True, "name": "Good Friday"}]))
     csv("weather", pd.DataFrame([{"park_id": "p-eu", "date": "2026-03-01", "data_type": "historical",

@@ -2,8 +2,9 @@
 
 A model is a class with ``fit`` and ``predict``; the runner owns the data split,
 the information cut and all scoring. **A model never receives a database
-connection** — only DataFrames the runner has already cut at the origin — so a
-plug-in cannot read the future even by accident:
+connection**, and no connection is reachable from any object it is handed — only
+DataFrames the runner has already cut at the origin — so a plug-in cannot read
+the future even by accident:
 
     fit(train_panel, cutoff)
     predict(origin, horizon_slots, known_future_covariates)
@@ -21,7 +22,9 @@ scaling as baseline 5), at every slot lead.
 What the runner hands over, and what it guarantees:
 
 * ``origin.history.df(days)`` / ``train_panel``: truth slots that END before the
-  park's origin (``slot_start_utc + 15 min <= origin_utc``), nothing else.
+  park's origin (``slot_start_utc + 15 min <= origin_utc``), nothing else. The
+  history frame is materialised up front, so ``days`` is capped at
+  ``BenchConfig.history_days`` (56); ask ``fit`` for longer history.
 * ``horizon_slots``: every 15-min slot of each target day's opening window AS
   KNOWN AT THE ORIGIN — the published window if its schedule row was written
   before the origin, else the window projected from the last 56 days
@@ -44,7 +47,6 @@ Register a model in ``mlbench/models/__init__.py`` (``REGISTRY``) or pass
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -56,14 +58,42 @@ class HistoryView:
 
     ``df(days=56)``: ``attraction_id, park_id, date, slot_start_utc, slot_local, ws,
     ko, kc, y`` for the last ``days`` service days; every slot ends before its
-    park's origin. Fetched by the runner; the model never sees the connection.
+    park's origin.
+
+    The frame is **materialised by the runner before the model is called**. It used
+    to be a lazy closure over the DuckDB connection, which meant the live connection
+    — and through it every table at every date — was reachable as
+    ``origin.history._fetch.__closure__[0].cell_contents``. Any closure or bound
+    method leaks the same way, so the view holds data and nothing else; the
+    guarantee in this module's docstring is now enforceable and
+    ``test_plugins_get_no_connection`` walks the object graph to check it.
+
+    ``days`` beyond what the runner materialised (``BenchConfig.history_days``, 56 by
+    default — BENCH-SPEC's profile window) raises instead of silently returning a
+    short frame. For long training history use ``fit(train_panel, cutoff)``, which
+    gets ``train_days`` of truth.
     """
 
-    def __init__(self, fetch: Callable[[int], pd.DataFrame]):
-        self._fetch = fetch
+    def __init__(self, frame: pd.DataFrame, origin_date: Any = None, max_days: int = 56):
+        self._frame = frame.reset_index(drop=True)
+        self._origin_date = origin_date
+        self._max_days = int(max_days)
+
+    @property
+    def max_days(self) -> int:
+        return self._max_days
 
     def df(self, days: int = 56) -> pd.DataFrame:
-        return self._fetch(int(days))
+        days = int(days)
+        if days > self._max_days:
+            raise ValueError(
+                f"HistoryView holds {self._max_days} days (BenchConfig.history_days); asked for "
+                f"{days}. Raise --history-days, or use fit(train_panel, cutoff) for long history.")
+        f = self._frame
+        if self._origin_date is None or f.empty:
+            return f.copy()
+        lo = pd.Timestamp(self._origin_date).date() - pd.Timedelta(days=days)
+        return f[pd.to_datetime(f["date"]).dt.date >= lo].reset_index(drop=True)
 
 
 @dataclass

@@ -63,6 +63,16 @@ class BenchConfig:
     bootstrap_reps: int = 1000
     bootstrap_seed: int = 827
     low_n_origin_days: int = 30
+    # LOW-N for metrics whose unit is the park-MONTH (UC4): a 3-month target window
+    # has 3 distinct month labels but ~200 park-months, so the day-unit threshold
+    # cannot be applied to it (PAR-827 critic B4).
+    low_n_park_months: int = 30
+    # a percentile bootstrap over ONE unit gives a zero-width CI that "excludes 0"
+    # for free; a win needs at least this many distinct units (critic S5)
+    min_bootstrap_units: int = 10
+    # days of truth the plug-in HistoryView materialises (no DB connection is
+    # handed to a model, so the frame has to be fetched up front; critic S9)
+    history_days: int = 56
     # resources
     memory_limit: str = "6GB"
     threads: int = 6

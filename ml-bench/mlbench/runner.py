@@ -323,12 +323,63 @@ class Runner:
         self._snap_month = None
         self._last_fit: dict[str, dt.date] = {}
         self.resume = False
+        self._hv_cache: dict = {}
+        # Freeze the scored name and the weather entitlement per model instance, from
+        # the CLASS attribute, once. Both have to come from the same place or a model
+        # can be given ORACLE weather and still be scored under its honest name: the
+        # gate used to read `m.uses_oracle_weather` (the INSTANCE) while
+        # `scored_name()` is a classmethod reading `cls.uses_oracle_weather`, so
+        # `self.uses_oracle_weather = True` in `__init__` got the weather and kept the
+        # name. Freezing at construction also closes the variant where a model flips
+        # the class attribute inside `fit()`, after the daily column name is fixed but
+        # before the intraday path recomputes it (critic S8).
+        self.set_models(models)
+
+    def set_models(self, models: list[Model]) -> None:
+        self.models = models
+        self._frozen = {id(m): (type(m).scored_name(), bool(type(m).uses_oracle_weather))
+                        for m in models}
+
+    def clear_caches(self) -> None:
+        """Drop the per-origin history view. The runner never needs this (truth cannot
+        change inside an origin); tests that rewrite the tables do."""
+        self._hv_cache = {}
+
+    def name_of(self, m: Model) -> str:
+        return self._frozen[id(m)][0]
+
+    def oracle_weather(self, m: Model) -> bool:
+        return self._frozen[id(m)][1]
 
     # ------------------------------------------------------------------ helpers
     def write(self, table: str, sql: str, c: dt.date, suffix: str = "") -> None:
         d = self.parts / table
         d.mkdir(parents=True, exist_ok=True)
         self.con.execute(f"COPY ({sql}) TO '{d}/{c.isoformat()}{suffix}.parquet' (FORMAT parquet)")
+
+    # ------------------------------------------------------------------ --resume
+    # `--resume` must key on something written AFTER the last COPY, not on one of the
+    # COPYs. `intraday` is not last: Runner.intraday() writes `intraday`, then builds
+    # the `nb` UNION over the memory-heavy `ih` table and writes `nextbest` — which is
+    # exactly where an OOM lands. A shard killed between the two COPYs then looked
+    # "complete" with `parts/nextbest/<date>.parquet` missing for good, and the report
+    # would score D1 on fewer origins silently (critic S1).
+    def done_marker(self, c: dt.date) -> Path:
+        return self.parts / "_done" / f"{c.isoformat()}"
+
+    def mark_done(self, c: dt.date) -> None:
+        self.done_marker(c).parent.mkdir(parents=True, exist_ok=True)
+        self.done_marker(c).write_text(dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
+
+    def is_done(self, c: dt.date) -> bool:
+        if self.done_marker(c).exists():
+            return True
+        # runs made before the sentinel existed: every table an origin can write must
+        # be there, `nextbest` included (it is the genuinely last one)
+        d = c.isoformat() + ".parquet"
+        req = [t for t in ("slot", "rideday", "pairs", "openness", "levels", "d8tft",
+                           "intraday", "nextbest") if (self.parts / t).is_dir()]
+        return bool(req) and all((self.parts / t / d).exists() for t in req)
 
     def slot_leads(self, c: dt.date) -> list[int]:
         return [L for L in self.cfg.slot_leads if c + dt.timedelta(days=L) <= self.last_date]
@@ -362,18 +413,29 @@ class Runner:
         ORDER BY g.attraction_id, g.slot_start_utc"""
 
     def history_view(self, c: dt.date, origin_table: str) -> HistoryView:
-        con = self.con
+        """Truth before the origin, MATERIALISED.
 
-        def fetch(days: int) -> pd.DataFrame:
-            return con.execute(f"""
+        This used to hand ``HistoryView`` a closure over ``self.con``, which made the
+        live connection reachable from a plug-in as
+        ``origin.history._fetch.__closure__[0].cell_contents`` — and from there the
+        whole ``truth`` / ``slots`` / ``ride_day`` tables at every date. Three
+        documents promised the opposite. Any closure or bound method leaks the same
+        way, so the only real fix is to fetch the frame up front and hand over data
+        (critic S9). Cached per (origin, origin table) because the intraday path asks
+        for the same view once per hour per model.
+        """
+        key = (c, origin_table)
+        if self._hv_cache.get("key") != key:
+            days = int(self.cfg.history_days)
+            df = self.con.execute(f"""
                 SELECT t.aid AS attraction_id, t.park_id, t.date, t.slot_utc AS slot_start_utc,
                        t.slot_local, t.ws, t.ko, t.kc, t.y
                 FROM truth t JOIN {origin_table} o ON o.park_id = t.park_id
-                WHERE t.date >= DATE '{c}' - {int(days)} AND t.date <= DATE '{c}'
+                WHERE t.date >= DATE '{c}' - {days} AND t.date <= DATE '{c}'
                   AND t.slot_utc + INTERVAL 15 MINUTE <= o.origin_utc
                 ORDER BY t.aid, t.slot_utc""").df()
-
-        return HistoryView(fetch)
+            self._hv_cache = {"key": key, "view": HistoryView(df, c, days)}
+        return self._hv_cache["view"]
 
     def covariates(self, c: dt.date, max_lead: int, oracle_weather: bool) -> pd.DataFrame:
         """Known-future covariates: holidays and weekday as built; the window as known at
@@ -381,14 +443,24 @@ class Runner:
         only for models that opt in to the oracle."""
         weather = ("cov.temp_max, cov.temp_min, cov.precip_sum, cov.wind_max, cov.weather_code, "
                    "cov.weather_source" if oracle_weather else "NULL AS weather_source")
+        # The two schedule-derived flags are built from EVERY schedule row of the day,
+        # so they must be masked with their own publication time, not with the
+        # OPERATING rows' (critic S11). Exports built before that column existed fall
+        # back to the OPERATING mask, which is the conservative direction only when
+        # the OPERATING row is the later one — so the fallback is flagged.
+        has_fu = "sched_flags_updated_utc" in {c[0] for c in
+                                               self.con.execute("DESCRIBE park_day_cov").fetchall()}
+        flag_mask = ("cov.sched_flags_updated_utc < o.origin_utc" if has_fu else "pw.sched_known")
+        extra_excl = ", sched_flags_updated_utc" if has_fu else ""
         return self.con.execute(f"""
             SELECT cov.* EXCLUDE (open_local, close_local, open_utc, close_utc, has_published_window,
                                   sched_is_holiday, sched_is_bridge_day, temp_max, temp_min, precip_sum,
-                                  wind_max, weather_code, weather_source),
+                                  wind_max, weather_code, weather_source{extra_excl}),
                    pw.sched_known AS schedule_known_at_origin, pw.open_p AS open_utc, pw.close_p AS close_utc,
                    timezone(o.timezone, pw.open_p) AS open_local, timezone(o.timezone, pw.close_p) AS close_local,
-                   CASE WHEN pw.sched_known THEN cov.sched_is_holiday END AS sched_is_holiday,
-                   CASE WHEN pw.sched_known THEN cov.sched_is_bridge_day END AS sched_is_bridge_day,
+                   CASE WHEN {flag_mask} THEN cov.sched_is_holiday END AS sched_is_holiday,
+                   CASE WHEN {flag_mask} THEN cov.sched_is_bridge_day END AS sched_is_bridge_day,
+                   {'TRUE' if has_fu else 'FALSE'} AS holiday_flags_cut_at_their_own_publish_time,
                    {weather}
             FROM park_day_cov cov JOIN o ON o.park_id = cov.park_id
             LEFT JOIN pw ON pw.park_id = cov.park_id AND pw.date = cov.date
@@ -421,7 +493,7 @@ class Runner:
         grid = x(self.grid_sql(c, leads, origin_table=origin_table, max_lead=m.max_lead_days)).df()
         if grid.empty:
             return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
-        cov = self.covariates(c, max(leads), m.uses_oracle_weather)
+        cov = self.covariates(c, max(leads), self.oracle_weather(m))
         pred = m.predict(origin, grid, cov)
         if pred is None or len(pred) == 0:
             return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
@@ -442,14 +514,14 @@ class Runner:
         days = x(f"""SELECT r.aid AS attraction_id, r.park_id, DATE '{c}' + L AS date, L AS lead_days
                      FROM rides r, (SELECT unnest([{','.join(map(str, leads))}]) L)
                      WHERE r.aid IN (SELECT aid FROM rs) ORDER BY 1, 3""").df()
-        return m.predict_daily(origin, days, self.covariates(c, max(leads), m.uses_oracle_weather))
+        return m.predict_daily(origin, days, self.covariates(c, max(leads), self.oracle_weather(m)))
 
     def run_plugins_daily(self, c: dt.date, leads: list[int]) -> tuple[list[str], list[str], list[str]]:
         """Adds plug-in columns to tg and lv. Returns (slot cols, quantile models, level cols)."""
         x = self.con.execute
         slot_cols, qmodels, lvl_cols = [], [], []
         for m in self.models:
-            name = m.scored_name()
+            name = self.name_of(m)
             self.maybe_fit(m, c)
             p = self.plugin_predict(m, c, leads)
             self.con.register("pm", p)
@@ -488,8 +560,8 @@ class Runner:
         cfg = self.cfg
         x = self.con.execute
         for i, c in enumerate(self.origins):
-            if self.resume and (self.parts / "intraday" / f"{c.isoformat()}.parquet").exists():
-                continue                      # the last table an origin writes: it is complete
+            if self.resume and self.is_done(c):
+                continue
             t0 = time.monotonic()
             self._t = t0
             self._stages: list[str] = []
@@ -534,6 +606,7 @@ class Runner:
             self._tick('optim')
             self.intraday(c)
             self._tick('intraday')
+            self.mark_done(c)
             print(f"[shard {self.shard[0]}] origin {c} ({i + 1}/{len(self.origins)}) "
                   f"{time.monotonic() - t0:.1f}s" + (f" | {' '.join(self._stages)}" if PROFILE else ""),
                   flush=True)
@@ -634,7 +707,7 @@ class Runner:
             x(f"CREATE OR REPLACE TEMP TABLE oh AS {B.origin_sql(c.isoformat(), h)}")
             pcols, pjoins = "", ""
             for m in plug:
-                name = m.scored_name()
+                name = self.name_of(m)
                 p = self.plugin_predict(m, c, [0, 1], kind="intraday", hour=h, origin_table="oh")
                 self.con.register(f"pi_{name}", p)
                 pcols += f", pi_{name}.q50 AS {name}"
@@ -652,7 +725,7 @@ class Runner:
                 {pjoins}
                 WHERE t.L = 0 AND t.slot_utc >= oh.origin_utc""")
             for m in plug:
-                self.con.unregister(f"pi_{m.scored_name()}")
+                self.con.unregister(f"pi_{self.name_of(m)}")
             frames.append(f"SELECT * FROM ih_{h}")
         x(f"CREATE OR REPLACE TEMP TABLE ih AS {' UNION ALL BY NAME '.join(frames)}")
         for h in cfg.intraday_hours_local:
@@ -661,7 +734,7 @@ class Runner:
                CASE WHEN lead_min <= 120 THEN 'm' || lpad(CAST(lead_min AS VARCHAR), 3, '0')
                     WHEN lead_min <= 240 THEN 'h2-4' WHEN lead_min <= 480 THEN 'h4-8' ELSE 'h8+' END AS lead_key
              FROM ih""")
-        models = B.INTRADAY_MODELS + [m.scored_name() for m in plug]
+        models = B.INTRADAY_MODELS + [self.name_of(m) for m in plug]
         self.write("intraday", slot_agg_sql(models, B.INTRADAY_REFS, [], "ih",
                                             ["lead_key", "park_id", "date", "busy", "hl"]), c)
         # D1 next-best-ride (lib/planner/next-best-ride.ts): suggest a ride when the
@@ -706,6 +779,8 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--memory", default=None)
     p.add_argument("--threads", type=int, default=None)
     p.add_argument("--leads", default=None, help="override slot leads, e.g. 0,1,3,7")
+    p.add_argument("--history-days", type=int, default=None,
+                   help="days of truth the plug-in HistoryView materialises (default 56)")
     p.add_argument("--resume", action="store_true",
                    help="skip origins whose outputs are complete (after an interrupted shard)")
     p.add_argument("--reference", action="store_true",
@@ -720,6 +795,8 @@ def main(args: argparse.Namespace) -> int:
         cfg.threads = args.threads
     if args.leads:
         cfg.slot_leads = [int(v) for v in args.leads.split(",")]
+    if getattr(args, "history_days", None):
+        cfg.history_days = args.history_days
     run_id = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%MZ")
     out = Path(args.out or Path(__file__).resolve().parents[1] / "results" / run_id)
     out.mkdir(parents=True, exist_ok=True)
@@ -730,7 +807,7 @@ def main(args: argparse.Namespace) -> int:
     if args.reference and ("unknown" in (sha, image) or sha.endswith("-dirty")):
         raise SystemExit("--reference needs a known git SHA (--build-arg GIT_SHA) and MLBENCH_IMAGE_ID "
                          f"(-e MLBENCH_IMAGE_ID=$(docker image inspect -f '{{{{.Id}}}}' <tag>)); got {sha}, {image}")
-    meta = {"config": json.loads(cfg.to_json()), "models": [m.scored_name() for m in models],
+    meta = {"config": json.loads(cfg.to_json()), "models": [type(m).scored_name() for m in models],
             "git_sha": sha, "code_sha256": code_hash(), "image_id": image, "reference": args.reference,
             "export": str(args.export),
             "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
