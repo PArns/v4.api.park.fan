@@ -4,5 +4,5 @@ results/*/parts/
 results/*/work/
 __pycache__/
 .pytest_cache/
-# the repo root ignores *.md; a reference run's summary is meant to be committed
-!results/*/summary.md
+# the repo root ignores *.md; a run's summaries and notes are meant to be committed
+!results/*/*.md

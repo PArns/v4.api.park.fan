@@ -1,5 +1,0 @@
-input,horizon_days,note
-TFT daily level,60,last run 2026-10-08 00:00:00; beyond: no forecast -> composed level falls back
-CatBoost daily level,45,last run 2026-10-09 00:00:00; beyond: no forecast -> composed level falls back
-weather forecast (Open-Meteo),16,forecast rows 2026-10-10 00:00:00..2026-10-24 00:00:00; NO archive -> backtest uses actuals (ORACLE)
-published operator schedule (per park),39,"p10 -32 d, median 39 d, p90 155 d past the last truth day; latest version only (no history) -> flagged published_final"
