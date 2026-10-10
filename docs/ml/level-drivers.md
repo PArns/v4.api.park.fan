@@ -501,6 +501,19 @@ the d1 level gap on all rides and a sixth on busy rides.** The remaining ~85 %
 is what §2 measured as noise at this resolution plus what a better level model
 (TFT with the covariates of §5, foundation models) would have to find.
 
+**The same figure over the full period, which also reverses** (`tables/cells.csv`,
+same cell):
+
+| segment | `h5` | `driver_level × h5` | `oracle_level` | gap closed |
+|---|---|---|---|---|
+| all rides | 7.586 | 7.824 | 5.424 | **−11.0 %** (unpaired) / −12.5 % (paired) |
+| ex-ante busy rides | 14.551 | 14.527 | 9.682 | **+0.5 %** (unpaired) / −1.3 % (paired) |
+
+Over all 231 origins the drivers **widen** the d1 level gap on all rides by
+roughly a ninth and do nothing measurable on busy rides. The 8.5 % / 15–17 %
+above is an **autumn-window** figure, like the rest of §6.1–§6.5, and §6.7 is
+where the model's year-round behaviour is.
+
 ### 6.6 LOW-N marking, and one harness defect that affects this page
 
 BENCH-SPEC marks a lead LOW-N below **30 origin days**. In the headline window

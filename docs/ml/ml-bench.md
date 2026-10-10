@@ -220,16 +220,28 @@ accumulated across origins; no weather, no event flags): `driver_level` = the
 naive level × H5 curve scaled by exp(ŷ), `lvl_driver_level` / `driver_level_x_h5`
 from `predict_daily`. Findings: [level-drivers.md](level-drivers.md).
 
-Scored over all 231 origins (run `20261009-par830-drivers`), `driver_level`
-has the lowest slot MAE of every competing model at every lead d1–d60 on both
-segments — as a paired margin against each named baseline individually, so the
-result does not depend on which naive the per-lead reference picks — and it
-extends the busy-ride usable horizon from d7 to d60. It is nevertheless
-**shadow-only**: it regresses `bestVisitTimes` (D3) against both climatology
-and H5 under both bootstrap units, and it is worse than H5 in summer at every
-lead. Its UC4 is **not measurable** in the 8-week headline window (the unit is
-the park-month, so every cell rests on 3 origin days and `usable_horizon.csv`
-reports `leads_tested = 0` — an untested metric, not a naive win).
+Scored over all 231 origins (run `20261009-par830-drivers`), the result splits
+by what is measured. **The day *ranking* improves, over the whole backtest
+period**: `lvl_driver_level` beats every other level source on the day
+comparison (D7 +0.068 at d8–30, +0.094 at d31–90) and the crowd bucket (D6
++0.032 at d30, +0.024 at d90), and it carries the dayPeak ordering to d90 and
+the optimiser to d30 — further than any other model. **The 15-min slot MAE does
+not**: the win measured on the 8-week late-summer/autumn window (usable horizon
+d10 all rides, d60 busy) **reverses over the full period**, where `driver_level`
+has no usable horizon on either segment and is worse than H5 at every lead
+(+0.273 … +0.935 all rides). By season it beats H5 only in autumn and loses in
+spring, summer and winter. It is therefore **shadow-only, scoped to the ranking
+surfaces**, and it also regresses `bestVisitTimes` (D3) against both climatology
+and H5 under both bootstrap units in both passes. Its UC4 is **not measurable**
+in either pass (park-month unit: 3 origin days windowed, 6–9 full period, against
+a 30-origin-day gate) — the empty `usable_horizon.csv` there means untested, not
+unbeaten.
+
+A caveat that applies to **every** model reported on the common-target window,
+not just this one: at fixed target dates lead `L`'s origins are `target − L`, so
+the lead axis moves with the origin season (d1 = autumn origins, d90 = summer
+origins for the 2026-08-15…10-07 window). The window removes the *target*
+season confound, not the *origin* one.
 
 ## Results
 
