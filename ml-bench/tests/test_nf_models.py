@@ -57,6 +57,23 @@ def test_panel_grid(con):
     assert (p.mask.reshape(len(p.aids), p.n_days, K)[:, :, 0] == 0).all()   # 08:00, park opens 10:00
 
 
+def test_schedule_holiday_flags_are_not_consumed():
+    """S11 (baseline review): ``sched_is_holiday`` / ``sched_is_bridge_day`` are built in
+    ``build.py`` with no ``updated_us`` filter but masked by the OPERATING row's
+    ``updated_utc``, so an operator annotation written after the origin can pass through
+    unmasked. The export carries no ``schedule`` table, so the exposure is not even
+    measurable here -- the flags are therefore kept out of the model's inputs entirely.
+    This test is the lock: re-adding them must be a deliberate, visible change."""
+    from mlbench.models.nf_panel import BASE_FUTR, WEATHER_FUTR
+
+    leaky = {"sched_is_holiday", "sched_is_bridge_day"}
+    assert not leaky & set(BASE_FUTR + WEATHER_FUTR), (
+        "schedule-derived holiday flags are back in the futr exog; S11 says they are "
+        "only safe once build.py filters them by updated_us")
+    # the holiday signal is still present, from the genuine calendar
+    assert "is_holiday_primary" in BASE_FUTR and "is_school_holiday_any" in BASE_FUTR
+
+
 def test_precompute_information_cut(con):
     """Poison every truth slot after the origin: the origin's forecasts must not move."""
     _, base = _forecast(con)

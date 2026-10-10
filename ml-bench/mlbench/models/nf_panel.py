@@ -55,8 +55,22 @@ BASE_FUTR = [
     "dow_sin", "dow_cos", "is_weekend", "doy_sin", "doy_cos",
     "is_holiday_primary", "is_school_holiday_primary", "is_holiday_neighbor_1",
     "is_holiday_neighbor_2", "is_holiday_neighbor_3", "neighbor_school_holiday_count",
-    "is_school_holiday_any", "sched_is_holiday", "sched_is_bridge_day",
+    "is_school_holiday_any",
 ]
+# ``sched_is_holiday`` / ``sched_is_bridge_day`` are deliberately NOT in BASE_FUTR.
+# The baseline review's finding S11: ``build.py`` derives them with ``bool_or`` over
+# EVERY schedule row of the day and no ``updated_us`` filter, while the only
+# publication timestamp the export carries (``windows.updated_utc``) comes from the
+# day's OPERATING rows. ``origin_covariates`` below masks them to false where that
+# OPERATING row was not yet published, which covers the common case (and
+# ``test_precompute_information_cut`` poisons exactly that path) -- but NOT the
+# complementary one: an OPERATING row published before the origin whose
+# ``isHoliday`` came from a non-OPERATING row written after it passes through
+# unmasked. The export has no ``schedule`` table, so that exposure cannot even be
+# measured here. The seven holiday-CALENDAR features above carry the same
+# underlying fact and are legitimately known arbitrarily far ahead, so the two
+# schedule-derived flags are dropped rather than shipped as an unquantifiable leak
+# in the headline model. Restore them once build.py filters them by updated_us.
 WEATHER_FUTR = ["wx_temp_max", "wx_precip", "wx_wind", "wx_ok"]
 STATIC = ["is_headliner", "reg_eu", "reg_na", "reg_asia", "lat", "lng", "lvl_ride", "lvl_park"]
 HOLIDAY_COLS = BASE_FUTR[11:]
