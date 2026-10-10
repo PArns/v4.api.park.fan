@@ -33,7 +33,7 @@ import duckdb
 import pandas as pd
 
 sys.path.insert(0, "/app")
-from mlbench.stats import Bootstrapper, significant  # noqa: E402
+from mlbench.stats import Bootstrapper, significant_diff  # noqa: E402
 
 REPS, SEED = 1000, 827
 
@@ -104,8 +104,13 @@ def main(argv: list[str] | None = None) -> int:
                     keys_pd = p["park_id"].astype(str) + "|" + p["date"].astype(str)
                     nm, dm = p["psm"].to_numpy(), p["pn"].to_numpy()
                     nr, dr = p["psr"].to_numpy(), p["pn"].to_numpy()
-                    diff, lo_pd, hi_pd = boot_pd.diff(keys_pd, nm, dm, nr, dr)
-                    _, lo_pk, hi_pk = boot_park.diff(p["park_id"].astype(str), nm, dm, nr, dr)
+                    # stats.Bootstrapper.diff returns (point, lo, hi, n_units) since
+                    # PAR-827's paired-round-robin change; n_units is the number of
+                    # distinct bootstrap units carrying the difference and is worth
+                    # reporting, because a park-cluster CI over very few parks is exactly
+                    # where the two intervals disagree (review finding B5).
+                    diff, lo_pd, hi_pd, u_pd = boot_pd.diff(keys_pd, nm, dm, nr, dr)
+                    _, lo_pk, hi_pk, u_pk = boot_park.diff(p["park_id"].astype(str), nm, dm, nr, dr)
                     n_m, n_r = d["n_m"].sum(), d["n_r"].sum()
                     rows.append(dict(
                         segment=seg, lead=int(L), model=m, ref=r,
@@ -115,9 +120,13 @@ def main(argv: list[str] | None = None) -> int:
                         ref_mae_paired=nr.sum() / dr.sum(),
                         diff=diff, lo_park_day=lo_pd, hi_park_day=hi_pd,
                         lo_park=lo_pk, hi_park=hi_pk,
-                        wins_park=significant(lo_pk, hi_pk, True),
-                        wins_park_day=significant(lo_pd, hi_pd, True),
+                        # PAR-827's current win definition: the CI must exclude 0 AND
+                        # at least MIN_BOOTSTRAP_UNITS units must carry the difference,
+                        # so a near-degenerate zero-width interval cannot win for free.
+                        wins_park=significant_diff(lo_pk, hi_pk, True, u_pk),
+                        wins_park_day=significant_diff(lo_pd, hi_pd, True, u_pd),
                         n_model=int(n_m), n_ref=int(n_r), n_paired=int(dm.sum()),
+                        units_park=u_pk, units_park_day=u_pd,
                         # share of the BASELINE's covered slots that the pair retains:
                         # the candidate's coverage loss (MIN_INSAMPLE_HOURS) shows up here
                         paired_share_of_ref=float(dm.sum()) / float(n_r) if n_r else float("nan"),
@@ -132,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     pd.set_option("display.width", 220)
     show = ["segment", "lead", "model", "ref", "model_mae_paired", "ref_mae_paired", "diff",
             "lo_park", "hi_park", "wins_park", "lo_park_day", "hi_park_day", "wins_park_day",
-            "paired_share_of_ref", "coverage_vs_ref", "n_origin_days"]
+            "units_park", "paired_share_of_ref", "coverage_vs_ref", "n_origin_days"]
     print(df[show].to_string(index=False, float_format=lambda v: f"{v:.4f}"))
     print("\ndiff < 0 means the CANDIDATE is better. A win requires the PARK-CLUSTER "
           "interval to exclude 0.\nStaleness asymmetry: the candidate's weights are up to "
