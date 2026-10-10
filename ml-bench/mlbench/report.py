@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -77,8 +78,12 @@ class Data:
 
         self.run = run
         self.con = duckdb.connect()
-        self.con.execute("SET threads=4")
-        self.con.execute("SET memory_limit='3GB'")
+        # The report runs on the production host, so its DuckDB limits are overridable
+        # (``MLBENCH_REPORT_MEMORY`` / ``MLBENCH_REPORT_THREADS``); the previous fixed
+        # values are the defaults. A 3 GB limit inside a 3 GB container gets OOM-killed.
+        self.con.execute(f"SET threads={int(os.environ.get('MLBENCH_REPORT_THREADS', 4))}")
+        self.con.execute(
+            f"SET memory_limit='{os.environ.get('MLBENCH_REPORT_MEMORY', '3GB')}'")
         tmp = run / "work" / f"report-tmp-{target_from or 'all'}"
         tmp.mkdir(parents=True, exist_ok=True)
         self.con.execute(f"SET temp_directory='{tmp}'")
@@ -612,7 +617,8 @@ def wide(cells: pd.DataFrame, order: dict, kind: str = "value", models: list[str
 # --------------------------------------------------------------------------- main
 
 def build_report(run: Path, export: Path | None = None, target_from: str | None = None,
-                 target_to: str | None = None, reps: int | None = None) -> Path:
+                 target_to: str | None = None, reps: int | None = None,
+                 vs: list[str] | None = None) -> Path:
     cfg = BenchConfig()
     if reps:
         cfg.bootstrap_reps = reps
@@ -728,6 +734,35 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
         cov_lvl = pd.DataFrame()
     C = pd.concat([c for c in cells if c is not None and not c.empty], ignore_index=True)
     C.to_csv(tdir / "cells.csv", index=False)
+
+    # --vs <model>: the same paired engine with ONE forced comparator instead of the
+    # per-lead reference, so a model can be compared against another model (layout
+    # against layout, with against without covariates, candidate against H5). It needs
+    # the paired sums `--pair-with` wrote at run time; a comparator without them is
+    # reported as missing rather than silently dropped.
+    vs_cells: dict[str, pd.DataFrame] = {}
+    for cmp_model in vs or []:
+        rows = []
+
+        def paired(table: str) -> bool:
+            return table in d.tables and any(
+                c.startswith("pn__") and c.endswith(f"__{cmp_model}") for c in d.cols(table))
+
+        if paired("slot"):
+            _log(f"paired vs {cmp_model}")
+            rows.append(run_cells(d, cfg, "slot", "L", daily_keys, [cmp_model],
+                                  lambda L: "UC2" if L == 0 else "UC3"))
+        if paired("intraday"):
+            rows.append(run_cells(d, cfg, "intraday", "lead_key", UC1_KEYS + UC2_INTRADAY_KEYS,
+                                  [cmp_model], lambda k: "UC1" if k.startswith("m") else "UC2-intraday"))
+        frames = [r for r in rows if r is not None and not r.empty]
+        if frames:
+            t = pd.concat(frames, ignore_index=True)
+            t = t[t["model"] != cmp_model]
+            vs_cells[cmp_model] = t
+            t.to_csv(tdir / f"cells_vs_{cmp_model}.csv", index=False)
+        else:
+            vs_cells[cmp_model] = pd.DataFrame()
 
     _log("D8 / D9")
     d8q = pd.DataFrame()
@@ -845,6 +880,21 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
         w("Decision metrics:\n")
         w(md(ho[ho["metric"] != "MAE"], ["metric", "uc", "lead", "reference", "winner", "winner_value",
                                          "paired_margin", "significant_models"]))
+    for cmp_model, t in vs_cells.items():
+        w(f"### Paired against `{cmp_model}` (not the per-lead reference)\n")
+        if t.empty:
+            w(f"_no paired sums against `{cmp_model}` in this run — re-run with "
+              f"`--pair-with {cmp_model}` (the per-slot forecasts are not kept, so this cannot be "
+              "recovered from the stored aggregates)._\n")
+            continue
+        w(f"MAE difference model − `{cmp_model}` on the slots BOTH cover, park-cluster CI, "
+          "`*` = the model wins:\n")
+        for seg in ("all", "busy"):
+            g = t[(t["metric"] == "MAE") & (t["region"] == "all") & (t["segment"] == seg)]
+            if g.empty:
+                continue
+            w(f"segment `{seg}`:\n")
+            w(md(wide(g, order, kind="diff")))
     mae = C[(C["metric"] == "MAE") & (C["region"] == "all")]
     w("### Level vs shape by lead (MAE, all rides)\n")
     w(md(wide(mae[(mae["uc"] == "UC3") & (mae["segment"] == "all")], order,
@@ -986,10 +1036,14 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--target-from", default=None)
     p.add_argument("--target-to", default=None)
     p.add_argument("--reps", type=int, default=None, help="bootstrap reps (default 1000)")
+    p.add_argument("--vs", default=None,
+                   help="also compare every model PAIRED against these models (comma-separated) "
+                        "instead of the per-lead reference; needs `run --pair-with <same models>`")
 
 
 def main(args: argparse.Namespace) -> int:
     t = build_report(Path(args.run), Path(args.export) if args.export else None, args.target_from,
-                     args.target_to, args.reps)
+                     args.target_to, args.reps,
+                     [v.strip() for v in (args.vs or "").split(",") if v.strip()])
     print(f"tables in {t}")
     return 0
