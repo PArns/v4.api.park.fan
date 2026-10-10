@@ -268,12 +268,20 @@ def covariates(con, ml_service_dir: Path | None) -> None:
                w.open_utc IS NOT NULL AS has_published_window,
                h.* EXCLUDE (park_id, date),
                s.is_holiday AS sched_is_holiday, s.is_bridge_day AS sched_is_bridge_day,
+               -- the last write of ANY schedule row of the day, which is where the two
+               -- flags above come from. The runner masks them with THIS, not with the
+               -- OPERATING rows' updated_utc: a day whose OPERATING row was published
+               -- before the origin but whose isHoliday/isBridgeDay came from a
+               -- non-OPERATING row written after it used to be delivered unmasked
+               -- (critic S11).
+               s.flags_updated_utc AS sched_flags_updated_utc,
                wx.temp_max, wx.temp_min, wx.precip_sum, wx.wind_max, wx.weather_code,
                CASE WHEN wx.temp_max IS NOT NULL THEN 'ORACLE_actuals' END AS weather_source
         FROM hdf h
         LEFT JOIN windows w ON w.park_id = h.park_id AND w.date = CAST(h.date AS DATE)
         LEFT JOIN (SELECT park_id, CAST(date AS DATE) date, bool_or(is_holiday) is_holiday,
-                          bool_or(is_bridge_day) is_bridge_day
+                          bool_or(is_bridge_day) is_bridge_day,
+                          make_timestamptz(max(updated_us)) flags_updated_utc
                    FROM schedule GROUP BY ALL) s
                ON s.park_id = h.park_id AND s.date = CAST(h.date AS DATE)
         LEFT JOIN (SELECT park_id, CAST(date AS DATE) date, any_value(temp_max) temp_max,
