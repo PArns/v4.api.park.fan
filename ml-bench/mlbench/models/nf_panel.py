@@ -139,7 +139,8 @@ def origin_covariates(con, origins: list[dt.date], n_days: int, origin_hour: int
     — the harness's ``pw`` rule (``baselines.target_tables``): the published window if
     its schedule row was last written before the origin (06:00 park-local), else the
     window projected from the last ``window_days`` days (median local opening / closing
-    minute per park and weekday type, >= 3 days, else over all days); the schedule's
+    minute per park and weekday type, rounded to the quarter hour, >= 3 days, else over
+    all days — byte for byte the harness's ``wproj``); the schedule's
     holiday / bridge flags only where the schedule was known. Columns as
     ``park_day_cov`` plus ``origin, o_m, c_m, schedule_known``."""
     olist = ",".join(f"DATE '{c}'" for c in origins)
@@ -152,8 +153,11 @@ def origin_covariates(con, origins: list[dt.date], n_days: int, origin_hour: int
               FROM o, (SELECT CAST(unnest(range(0, {int(n_days)})) AS INTEGER) AS L)),
         wp AS (SELECT oc.origin, w.park_id,
                       CASE WHEN grouping(we) = 1 THEN 2 ELSE CAST(we AS INTEGER) END AS wk,
-                      median(date_diff('minute', CAST(w.date AS TIMESTAMP), w.open_local)) AS om,
-                      median(date_diff('minute', CAST(w.date AS TIMESTAMP), w.close_local)) AS cm,
+                      -- rounded to the quarter hour exactly like the harness's wproj
+                      -- (baselines.py): an unrounded median lands between two openings
+                      -- and would put in_win / h_open half a slot off the harness grid
+                      round(median(date_diff('minute', CAST(w.date AS TIMESTAMP), w.open_local)) / 15) * 15 AS om,
+                      round(median(date_diff('minute', CAST(w.date AS TIMESTAMP), w.close_local)) / 15) * 15 AS cm,
                       count(*) AS n
                FROM oc JOIN (SELECT *, dayofweek(date) IN (0, 6) AS we FROM windows) w
                  ON w.date >= oc.origin - {int(window_days)} AND w.date < oc.origin

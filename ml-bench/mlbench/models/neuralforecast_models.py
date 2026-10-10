@@ -128,6 +128,12 @@ class NFCached(Model):
 
     def predict(self, origin: Origin, horizon_slots: pd.DataFrame,
                 known_future_covariates: pd.DataFrame) -> pd.DataFrame:
+        if origin.kind == "daily":
+            # drop the previous origin's curve FIRST: predict_daily reads it, and the
+            # day windows of two consecutive origins overlap in d1..d6, so keeping it
+            # after a miss (origin outside a cached block) would label a forecast made
+            # a day earlier as this origin's d1 — a wrong lead, not a leak.
+            self._last = None
         if horizon_slots.empty:
             return pd.DataFrame(columns=OUT_COLS)
         hour = 6 if origin.kind == "daily" else int(origin.hour_local)
@@ -170,4 +176,9 @@ class NFNHITS(NFCached):
 
 
 class NFTSMixerx(NFCached):
+    """Multivariate (every ride of a region is a channel). The precompute only writes
+    the daily 06:00 origin for it (one predict call per origin and region), so it
+    declares itself out of the intraday origins instead of answering them empty."""
+
     name = "nf_tsmixerx"
+    intraday = False

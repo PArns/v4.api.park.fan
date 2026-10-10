@@ -32,7 +32,18 @@ Output: ``<cache>/<model>/b<block>_h<HH>.parquet`` — one row per (ride, origin
 service-day hour inside the published window): ``aid, origin_date, origin_hour,
 date, hr, q50, q80, q95``. ``origin_hour`` 6 = the daily origin (all of d0–d7);
 8…20 = the intraday origins (rest of d0 only). Plus ``<model>/meta.json`` (config,
-timings, peak VRAM per block).
+per-block timings, panel size and torch's peak VRAM per fitted group).
+
+Host safety (celestrial is the production host, see MODEL-AGENT-RULES)
+----------------------------------------------------------------------
+* ``--quiet`` refuses to START a new block when the block's PROJECTED FINISH would
+  reach into the nightly window, not just when the window has already begun — see
+  ``quiet_block_reason``. Blocks are cached, so stopping is cheap.
+* The predict window array is sized from the number of series (``window_chunk``)
+  so the same settings hold for a 20-park subset and for all 157 parks.
+* ``MLBENCH_NF_VRAM_FRACTION`` (default 0.6 = 9.8 GB of the 16 GB card) caps torch's
+  allocator, so breaching the 10 GB bench budget OOMs this process instead of
+  squeezing pcn-service, which shares the GPU.
 """
 
 from __future__ import annotations
@@ -54,6 +65,16 @@ INPUT_DAYS = 28            # input window: 4 weeks (the naive level uses the las
 HORIZON_DAYS = 8           # d0 … d7
 MIN_INSAMPLE_HOURS = 12    # fewer measured hours in the input window -> no forecast
 INTRADAY_HOURS = [8, 10, 12, 14, 16, 18, 20]
+# Target size of the predict window array (see forecast_block/_windows_dataset). The
+# container cap is 8 GB and the block already holds the panel (3601 series x ~4700
+# steps x 22 cols float32 = 1.5 GB on all parks) plus DuckDB's buffers, and
+# NeuralForecast copies the array into a torch tensor — so keep one chunk small.
+WINDOW_ARRAY_BUDGET = 400 * 1024 ** 2
+DEFAULT_BLOCK_ESTIMATE = 5400.0   # s; conservative until a block has been measured
+# The GPU is shared with pcn-service and MODEL-AGENT-RULES caps a bench job at 10 GB
+# of the 16 GB card. A fraction turns a breach into an OOM in THIS process instead of
+# a squeeze on production; 0.6 x 16 GB = 9.8 GB. Override with MLBENCH_NF_VRAM_FRACTION.
+VRAM_FRACTION = 0.6
 
 # Model specs. Sizes were set on the subset run (see docs/ml/ml-bench.md, PAR-829).
 SPECS: dict[str, dict] = {
@@ -73,6 +94,12 @@ SPECS: dict[str, dict] = {
         n_block=2, ff_dim=64, dropout=0.1, revin=False, learning_rate=1e-3,
         batch_size=1, windows_batch_size=16, inference_windows_batch_size=16)),
 }
+
+
+def window_chunk(n_series: int, n_cols: int, budget: int = WINDOW_ARRAY_BUDGET) -> int:
+    """Origins per predict call so [chunk, n_series, L+h, n_cols] float32 fits ``budget``."""
+    per_origin = n_series * (INPUT_DAYS + HORIZON_DAYS) * K * n_cols * 4
+    return max(1, budget // per_origin)
 
 
 def month_blocks(first: dt.date, last: dt.date) -> list[tuple[dt.date, dt.date]]:
@@ -160,11 +187,17 @@ def _windows_dataset(panel: Panel, rows: np.ndarray, starts: np.ndarray, fut: np
 
 def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_steps: int,
                    hours: list[int], scale: float = 1.0, log=print, con=None,
-                   chunk: int = 4) -> dict[int, pd.DataFrame]:
+                   chunk: int | None = None, stats: dict | None = None) -> dict[int, pd.DataFrame]:
     """Train on steps < c0, forecast every origin c0..c_last. Returns {origin_hour: rows}.
 
     ``con`` provides the schedule as known at each origin (``origin_covariates``); with
-    ``con=None`` the panel's published-final covariates are used (unit tests only)."""
+    ``con=None`` the panel's published-final covariates are used (unit tests only).
+
+    ``chunk`` = origins per predict call. ``None`` sizes it from the number of series so
+    the window array stays near ``WINDOW_ARRAY_BUDGET``: it is [chunk, series, L+h, cols]
+    float32, so a fixed chunk that fits a 20-park subset (737 series) is 5x bigger on all
+    157 parks (3601 series) and pushes the container past its 8 GB cap.
+    ``stats`` is filled with fit seconds and peak VRAM per group."""
     import torch
 
     from .nf_panel import hour_features, origin_covariates
@@ -199,6 +232,8 @@ def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_st
         hours = [6]          # one predict call per origin and region: daily origins only
     out: dict[int, list[pd.DataFrame]] = {H: [] for H in hours}
     aids = np.array(panel.aids)
+    if stats is not None:
+        stats.setdefault("groups", [])
     for g in groups:
         rows = (np.arange(len(aids)) if g == "all" else np.flatnonzero(np.array(panel.groups) == g))
         if len(rows) == 0:
@@ -211,7 +246,7 @@ def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_st
         for H in hours:
             s = max(0, H - HOUR0)                    # first forecast step inside day c
             keep_steps = h if H == 6 else K - s      # intraday: rest of day c only
-            step = 1 if multivariate else chunk
+            step = 1 if multivariate else (chunk or window_chunk(len(rows), len(panel.cols)))
             for i0 in range(0, n_win, step):
                 oo = np.arange(i0, min(n_win, i0 + step))
                 starts = first + K * oo + s
@@ -235,8 +270,16 @@ def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_st
                     "q95": np.maximum(fc[o_i, r_i, k_i, 2], 0)}))
                 del ds, arr
         vram = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+        t_total = time.monotonic() - t0
         log(f"  {name} group={g} series={len(rows)} fit={t_fit:.0f}s "
-            f"total={time.monotonic() - t0:.0f}s peak_vram={vram:.2f}GB")
+            f"total={t_total:.0f}s peak_vram={vram:.2f}GB chunk={step}")
+        if stats is not None:
+            # NOTE: max_memory_allocated() is torch's allocator only — it excludes the
+            # CUDA context (~0.3-0.5 GB) and every other process on the shared GPU.
+            # run_nf_precompute.sh samples nvidia-smi for the device-level peak.
+            stats["groups"].append({"group": g, "series": len(rows), "chunk": int(step),
+                                    "fit_seconds": round(t_fit, 1), "seconds": round(t_total, 1),
+                                    "peak_vram_gb_torch": round(vram, 2)})
         del model
     return {H: pd.concat(v, ignore_index=True) if v else pd.DataFrame() for H, v in out.items()}
 
@@ -248,6 +291,33 @@ def in_quiet_window(spec: str | None, now: dt.datetime | None = None) -> bool:
     a, b = (dt.time.fromisoformat(v) for v in spec.split("-"))
     t = (now or dt.datetime.now(dt.timezone.utc)).time()
     return (a <= t < b) if a < b else (t >= a or t < b)
+
+
+def quiet_block_reason(spec: str | None, est_seconds: float,
+                       now: dt.datetime | None = None) -> str | None:
+    """Why a new block must not start now, or ``None`` if it may.
+
+    Checking only the START time is not enough: a block that starts at 00:29 with
+    the window at 00:30-09:30 passes the check and then runs for hours straight
+    through the nightly jobs (generate-daily 01:00, TFT 03:00, CatBoost 06:00) on
+    the production host. So a block is also refused when its PROJECTED FINISH
+    reaches into the window. ``est_seconds`` is the expected block duration — the
+    longest block measured so far in this run, or ``--block-estimate`` before the
+    first one is done.
+    """
+    if not spec:
+        return None
+    now = now or dt.datetime.now(dt.timezone.utc)
+    if in_quiet_window(spec, now):
+        return f"inside the quiet window {spec} UTC"
+    a = dt.time.fromisoformat(spec.split("-")[0])
+    start = dt.datetime.combine(now.date(), a, tzinfo=dt.timezone.utc)
+    if start <= now:
+        start += dt.timedelta(days=1)
+    if now + dt.timedelta(seconds=est_seconds) >= start:
+        return (f"a block takes ~{est_seconds / 60:.0f} min, which would run past "
+                f"{start:%H:%M} UTC into the quiet window {spec}")
+    return None
 
 
 def default_origins(con, export: Path, window_days: int = 56) -> tuple[dt.date, dt.date]:
@@ -265,7 +335,8 @@ def default_origins(con, export: Path, window_days: int = 56) -> tuple[dt.date, 
 
 def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to: str | None,
         max_steps: int, parks: list[str] | None = None, intraday: bool = True, scale: float = 1.0,
-        memory: str = "4GB", threads: int = 4, log=print, quiet: str | None = None) -> dict:
+        memory: str = "3GB", threads: int = 4, log=print, quiet: str | None = None,
+        block_estimate: float = DEFAULT_BLOCK_ESTIMATE) -> dict:
     import torch
 
     from ..build import connect
@@ -274,6 +345,12 @@ def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to
     # torch defaults to one thread per HOST core: 24 threads in a 4-6 CPU container
     # throttle each other to a crawl (measured: 300 TiDE steps > 20 min on celestrial).
     torch.set_num_threads(threads)
+    frac = float(os.environ.get("MLBENCH_NF_VRAM_FRACTION", VRAM_FRACTION))
+    if torch.cuda.is_available() and 0 < frac < 1:
+        # hard cap instead of a convention: the other process on this GPU is production
+        torch.cuda.set_per_process_memory_fraction(frac)
+        total = torch.cuda.get_device_properties(0).total_memory / 1e9
+        log(f"VRAM cap {frac:.2f} x {total:.1f}GB = {frac * total:.1f}GB")
     con = connect(memory, threads)
     load_tables(con, export)
     first, last = default_origins(con, export)
@@ -288,27 +365,38 @@ def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to
     meta = {"model": name, "spec": SPECS[name], "max_steps": max_steps, "input_days": INPUT_DAYS,
             "horizon_days": HORIZON_DAYS, "K": K, "hour0": HOUR0, "quantiles": QUANTILES,
             "parks": parks, "export": str(export), "blocks": []}
+    est = block_estimate
     for c0, c1 in month_blocks(first, last):
-        if in_quiet_window(quiet):
-            log(f"quiet window {quiet} UTC reached: stop before block {c0} (resume later, cached blocks are kept)")
-            break
         tag = c0.strftime("%Y%m%d")
         if all((out_dir / f"b{tag}_h{H:02d}.parquet").exists() for H in hours):
             log(f"block {c0}..{c1}: cached, skip")
             continue
+        # checked per block, not once at startup: the run is resumable, so stopping
+        # here only costs the blocks that are left (cached blocks are kept).
+        reason = quiet_block_reason(quiet, est, None)
+        if reason:
+            log(f"stop before block {c0}: {reason} (resume after the window, cached blocks are kept)")
+            meta["stopped_for_quiet_window"] = {"before_block": str(c0), "reason": reason}
+            break
         tb = time.monotonic()
         panel = build_panel(con, day0, c1 + dt.timedelta(days=HORIZON_DAYS + 1), c0,
                             SPECS[name]["weather"], parks)
         t_panel = time.monotonic() - tb
         log(f"block {c0}..{c1}: {len(panel.aids)} series x {panel.T} steps ({t_panel:.0f}s panel)")
-        res = forecast_block(name, panel, c0, c1, max_steps, hours, scale, log, con=con)
+        stats: dict = {}
+        panel_mb = round(panel.temporal.nbytes / 1024 ** 2, 1)
+        res = forecast_block(name, panel, c0, c1, max_steps, hours, scale, log, con=con, stats=stats)
         del panel
         for H, df in res.items():
             df.sort_values(["origin_date", "aid"]).to_parquet(
                 out_dir / f"b{tag}_h{H:02d}.parquet", index=False, row_group_size=200_000)
-        meta["blocks"].append({"from": str(c0), "to": str(c1), "seconds": round(time.monotonic() - tb, 1),
-                               "rows": {H: len(df) for H, df in res.items()}})
+        meta["blocks"].append({"from": str(c0), "to": str(c1),
+                               "seconds": round(time.monotonic() - tb, 1),
+                               "panel_seconds": round(t_panel, 1), "panel_mb": panel_mb,
+                               "rows": {H: len(df) for H, df in res.items()}, **stats})
         (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, default=str))
+        # the quiet guard projects the next block from the longest one measured here
+        est = max(b["seconds"] for b in meta["blocks"]) * 1.25
     return meta
 
 
@@ -322,12 +410,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-steps", type=int, default=2000)
     p.add_argument("--parks", default=None, help="comma-separated park ids (subset run)")
     p.add_argument("--no-intraday", action="store_true")
-    p.add_argument("--memory", default="4GB")
+    p.add_argument("--memory", default="3GB", help="DuckDB memory limit; the panel and the "
+                   "predict windows live on top of it inside the 8 GB container cap")
     p.add_argument("--threads", type=int, default=4)
     p.add_argument("--quiet", default="00:30-09:30", help="UTC window in which no new block starts ('' = off)")
+    p.add_argument("--block-estimate", type=float, default=DEFAULT_BLOCK_ESTIMATE,
+                   help="seconds a block is assumed to take before one has been measured; "
+                        "the quiet guard refuses a block whose projected finish falls in the window")
     a = p.parse_args(argv)
     run(Path(a.export), Path(a.cache), a.model, a.origin_from, a.origin_to, a.max_steps,
-        a.parks.split(",") if a.parks else None, not a.no_intraday, memory=a.memory, threads=a.threads, quiet=a.quiet or None,
+        a.parks.split(",") if a.parks else None, not a.no_intraday, memory=a.memory, threads=a.threads,
+        quiet=a.quiet or None, block_estimate=a.block_estimate,
         log=lambda s: print(f"[{dt.datetime.now(dt.timezone.utc):%H:%M:%S}] {s}", flush=True))
     return 0
 

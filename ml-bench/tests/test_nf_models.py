@@ -149,3 +149,99 @@ def test_series_layout(con, name, monkeypatch):
     rest = m[m.index.str.endswith(("r2", "r3"))]
     assert len(hl) == 4 and len(rest) == 4 and hl.min() > rest.max()
     assert (res["q50"] <= res["q80"]).all() and (res["q80"] <= res["q95"]).all()
+
+
+def test_quiet_window_guard():
+    """The guard protects celestrial's nightly jobs, so test the gap that matters:
+    a block that STARTS before the window but would finish inside it."""
+    from mlbench.models.nf_precompute import in_quiet_window, quiet_block_reason
+
+    def at(h, m):
+        return dt.datetime(2026, 10, 9, h, m, tzinfo=dt.timezone.utc)
+
+    q = "00:30-09:30"
+    # the window itself (wraps midnight)
+    assert in_quiet_window(q, at(0, 30)) and in_quiet_window(q, at(3, 0))
+    assert in_quiet_window(q, at(9, 29)) and not in_quiet_window(q, at(9, 30))
+    assert not in_quiet_window(q, at(23, 0)) and not in_quiet_window(q, at(0, 29))
+    assert not in_quiet_window("", at(3, 0))                      # disabled
+
+    # a 30-min block: fine at 23:00, refused at 00:29 because it would run to 00:59
+    assert quiet_block_reason(q, 1800, at(23, 0)) is None
+    assert quiet_block_reason(q, 1800, at(0, 29)) is not None
+    assert quiet_block_reason(q, 1800, at(0, 10)) is not None
+    # inside the window nothing starts, whatever the estimate
+    assert quiet_block_reason(q, 60, at(3, 0)) is not None
+    # right after the window there is a whole day of headroom
+    assert quiet_block_reason(q, 3 * 3600, at(9, 30)) is None
+    # ... but a 20-hour block is refused even then: it would cross the next window
+    assert quiet_block_reason(q, 20 * 3600, at(9, 30)) is not None
+    assert quiet_block_reason("", 20 * 3600, at(3, 0)) is None    # disabled
+
+
+def test_window_chunk_scales_with_series():
+    """The predict array is [chunk, series, L+h, cols] float32: more series -> fewer
+    origins per call, so the same settings hold for a subset and for all parks."""
+    from mlbench.models.nf_precompute import (
+        HORIZON_DAYS,
+        INPUT_DAYS,
+        K,
+        WINDOW_ARRAY_BUDGET,
+        window_chunk,
+    )
+
+    cols, steps = 22, (INPUT_DAYS + HORIZON_DAYS) * K
+    for n_series in (268, 737, 3601):
+        c = window_chunk(n_series, cols)
+        assert c >= 1
+        assert c * n_series * steps * cols * 4 <= max(WINDOW_ARRAY_BUDGET,
+                                                      n_series * steps * cols * 4)
+    assert window_chunk(268, cols) > window_chunk(3601, cols)
+    assert window_chunk(10 ** 7, cols) == 1                       # never zero
+
+
+def test_predict_daily_never_serves_a_previous_origin(tmp_path, monkeypatch):
+    """``predict_daily`` reads the curve ``predict`` built for the SAME origin.
+
+    Two consecutive daily origins overlap in d1..d6, so if the cache has no rows for
+    an origin (outside a precomputed block) and the previous origin's curve survived,
+    the runner would score a forecast made a day earlier as this origin's d1 — an
+    honest-looking but wrongly labelled lead. The curve is therefore dropped at the
+    start of every daily ``predict``.
+    """
+    from mlbench.models.base import HistoryView, Origin
+    from mlbench.models.neuralforecast_models import NFTiDE
+
+    d0, d1 = dt.date(2026, 5, 10), dt.date(2026, 5, 11)
+    cache = tmp_path / "c" / "nf_tide"
+    cache.mkdir(parents=True)
+    hrs = range(10, 19)
+    pd.DataFrame({"aid": "a", "origin_date": pd.Timestamp(d0), "origin_hour": np.int8(6),
+                  "date": pd.Timestamp(d0 + dt.timedelta(days=1)), "hr": list(hrs),
+                  "q50": 20.0, "q80": 30.0, "q95": 40.0}).to_parquet(cache / "b20260501_h06.parquet")
+    monkeypatch.setenv("MLBENCH_NF_CACHE", str(tmp_path / "c"))
+    m = NFTiDE()
+
+    def grid(day):
+        n = 4 * len(hrs)
+        return pd.DataFrame({
+            "attraction_id": "a", "park_id": "p", "date": day,
+            "slot_start_utc": pd.date_range(f"{day} 10:00", periods=n, freq="15min", tz="UTC"),
+            "ws": np.arange(40, 40 + n), "ko": np.arange(n), "kc": np.arange(n)[::-1],
+            "lead_days": 1})
+
+    hist = pd.DataFrame({"attraction_id": "a", "date": [d0] * 4, "ws": [40, 41, 42, 43],
+                         "ko": [0, 1, 2, 3], "kc": [3, 2, 1, 0], "y": [10.0, 20.0, 30.0, 40.0]})
+    days = pd.DataFrame({"attraction_id": ["a"], "park_id": ["p"],
+                         "date": [d0 + dt.timedelta(days=1)], "lead_days": [1]})
+
+    def origin(d):
+        return Origin(date=d, kind="daily", hour_local=6, origin_utc=pd.DataFrame(),
+                      history=HistoryView(lambda _n: hist))
+
+    # origin d0 is in the cache: a curve and a daily level
+    assert not m.predict(origin(d0), grid(d0 + dt.timedelta(days=1)), pd.DataFrame()).empty
+    assert m.predict_daily(origin(d0), days, pd.DataFrame()) is not None
+    # origin d1 is not: no curve, and no daily level inherited from d0
+    assert m.predict(origin(d1), grid(d1 + dt.timedelta(days=1)), pd.DataFrame()).empty
+    assert m.predict_daily(origin(d1), days, pd.DataFrame()) is None
