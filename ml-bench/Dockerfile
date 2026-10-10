@@ -38,6 +38,10 @@ COPY . .
 # (`run --reference`) refuses to start without it.
 ARG GIT_SHA=unknown
 ENV MLBENCH_GIT_SHA=${GIT_SHA}
+# Also as a file: the env var is easy to lose (an entrypoint override, a shell that
+# re-execs) and the image has neither a git binary nor a repository to fall back on.
+# PAR-828's first subset run recorded `git_sha: "unknown"` for exactly that reason.
+RUN printf '%s' "${GIT_SHA}" > /app/GIT_SHA
 
 ENTRYPOINT ["python", "-m", "mlbench"]
 CMD ["--help"]
