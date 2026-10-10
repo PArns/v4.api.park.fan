@@ -320,6 +320,11 @@ class Runner:
         self._last_fit: dict[str, dt.date] = {}
         self.resume = False
         self._hv_cache: dict = {}
+        #: extra models every model is additionally PAIRED against (``--pair-with``).
+        #: The reference the report picks is unchanged — these only add the paired
+        #: sums a model-vs-model comparison needs, which cannot be recovered later
+        #: because the per-slot forecasts are not kept.
+        self.pair_with: list[str] = []
         # Freeze the scored name and the weather entitlement per model instance, from
         # the CLASS attribute, once. Both have to come from the same place or a model
         # can be given ORACLE weather and still be scored under its honest name: the
@@ -580,7 +585,7 @@ class Runner:
             self._tick('plugins')
             models = B.SLOT_MODELS + plug_cols
             scored = models + B.ORACLES
-            self.write("slot", slot_agg_sql(scored, B.REF_CANDIDATES, ["wt_med"] + qmodels, "tg",
+            self.write("slot", slot_agg_sql(scored, self.refs_for(scored), ["wt_med"] + qmodels, "tg",
                                             ["L", "park_id", "date", "busy", "fh", "sk"]), c)
             self._tick('slot')
             # one lead at a time: the window functions over (slots x models) are the
@@ -608,6 +613,11 @@ class Runner:
             print(f"[shard {self.shard[0]}] origin {c} ({i + 1}/{len(self.origins)}) "
                   f"{time.monotonic() - t0:.1f}s" + (f" | {' '.join(self._stages)}" if PROFILE else ""),
                   flush=True)
+
+    def refs_for(self, scored: list[str], refs: list[str] | None = None) -> list[str]:
+        """The reference candidates plus ``--pair-with`` models that this table has."""
+        base = list(B.REF_CANDIDATES if refs is None else refs)
+        return base + [m for m in self.pair_with if m in scored and m not in base]
 
     def _tick(self, label: str) -> None:
         now = time.monotonic()
@@ -733,7 +743,7 @@ class Runner:
                     WHEN lead_min <= 240 THEN 'h2-4' WHEN lead_min <= 480 THEN 'h4-8' ELSE 'h8+' END AS lead_key
              FROM ih""")
         models = B.INTRADAY_MODELS + [self.name_of(m) for m in plug]
-        self.write("intraday", slot_agg_sql(models, B.INTRADAY_REFS, [], "ih",
+        self.write("intraday", slot_agg_sql(models, self.refs_for(models, B.INTRADAY_REFS), [], "ih",
                                             ["lead_key", "park_id", "date", "busy", "hl"]), c)
         # D1 next-best-ride (lib/planner/next-best-ride.ts): suggest a ride when the
         # forecast maximum inside the lookahead is >= live + 10. The candidate set is
@@ -797,6 +807,10 @@ def add_args(p: argparse.ArgumentParser) -> None:
                    help="skip origins whose outputs are complete (after an interrupted shard)")
     p.add_argument("--parks", default=None,
                    help="restrict to these park ids: comma-separated, or @file with one id per line")
+    p.add_argument("--pair-with", default=None,
+                   help="additionally pair every model against these models (comma-separated), so "
+                        "`report --vs <model>` can compare model against model; the reference the "
+                        "report picks is not affected")
     p.add_argument("--reference", action="store_true",
                    help="a run others compare against: refuse to start without git SHA and image id")
 
@@ -821,12 +835,13 @@ def main(args: argparse.Namespace) -> int:
     if args.reference and ("unknown" in (sha, image) or sha.endswith("-dirty")):
         raise SystemExit("--reference needs a known git SHA (--build-arg GIT_SHA) and MLBENCH_IMAGE_ID "
                          f"(-e MLBENCH_IMAGE_ID=$(docker image inspect -f '{{{{.Id}}}}' <tag>)); got {sha}, {image}")
+    pair_with = [v.strip() for v in (args.pair_with or "").split(",") if v.strip()]
     meta = {"config": json.loads(cfg.to_json()), "models": [type(m).scored_name() for m in models],
             # `git_sha` is whatever the launcher asserted; `code_sha256` is measured from
             # the sources in this process and is the one to trust (see provenance.py).
             "git_sha": sha, "git_sha_source": git_sha_source(),
             "code_sha256": code_hash(), "image_id": image, "reference": args.reference,
-            "export": str(args.export),
+            "export": str(args.export), "pair_with": pair_with,
             "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "argv": sys.argv}
     (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
@@ -839,6 +854,7 @@ def main(args: argparse.Namespace) -> int:
         (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
     r = Runner(Path(args.export), out, cfg, models, (i, n), origins, park_ids=park_ids)
     r.resume = args.resume
+    r.pair_with = pair_with
     t0 = time.monotonic()
     r.run()
     meta["finished_utc"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")

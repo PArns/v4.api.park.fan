@@ -129,3 +129,35 @@ def test_unknown_park_id_is_refused(synth_export, tmp_path):
     with pytest.raises(SystemExit, match="in no export"):
         load_tables(connect("1GB", 2), synth_export, materialize=True,
                     park_ids=[real, "not-a-park"])
+
+
+def test_pair_with_enables_a_model_against_model_comparison(synth_export, tmp_path):
+    """`run --pair-with h5` + `report --vs h5` compares the plug-in against H5 PAIRED.
+
+    Without it only the three reference candidates have paired sums, and the per-slot
+    forecasts are gone by report time — "is the compressed layout better than the grid"
+    would have no CI at all."""
+    import json
+
+    from mlbench.report import build_report
+
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1, 3])
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "run-0of1.json").write_text(json.dumps({"export": str(synth_export), "git_sha": "test"}))
+    r = Runner(synth_export, out, cfg, [Recorder()], origins=("2026-04-10", "2026-04-14"))
+    r.pair_with = ["h5"]
+    r.run()
+    cols = duckdb.connect().execute(
+        f"DESCRIBE SELECT * FROM '{out}/parts/slot/*.parquet'").df()["column_name"].tolist()
+    assert "pn__fm_stub__h5" in cols and "psr__fm_stub__h5" in cols
+    tdir = build_report(out, reps=50, vs=["h5", "lvlh5_tft"])
+    vs = pd.read_csv(tdir / "cells_vs_h5.csv")
+    row = vs[(vs["model"] == "fm_stub") & (vs["metric"] == "MAE") & (vs["segment"] == "all")
+             & (vs["region"] == "all")]
+    assert len(row) and row["ref"].eq("h5").all()
+    assert row["diff_vs_ref"].notna().any() and row["diff_lo_park"].notna().any()
+    assert "Paired against `h5`" in (out / "summary.md").read_text()
+    # a comparator nobody paired against says so rather than disappearing
+    assert not (tdir / "cells_vs_lvlh5_tft.csv").exists()
+    assert "re-run with `--pair-with lvlh5_tft`" in (out / "summary.md").read_text()
