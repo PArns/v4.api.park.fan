@@ -3,6 +3,7 @@
 export     read-only export from production (stdlib only; run on the DB host)
 build      raw CSV export -> typed Parquet + 15-min truth + covariates
 run        rolling-origin backtest (baselines + plug-in models)
+drivers    level-driver analysis (PAR-830): what explains the daily level
 report     bootstrap CIs, horizon curves, hand-over table, decision metrics, summary.md
 gpu-check  print torch / CUDA / arch list (sm_120 needed for the RTX 5080)
 """
@@ -46,6 +47,10 @@ def main(argv: list[str] | None = None) -> int:
     from .report import add_args as report_args
 
     report_args(sp)
+    sp = sub.add_parser("drivers", help="level-driver analysis (PAR-830)")
+    from .driver_analysis import add_args as drivers_args
+
+    drivers_args(sp)
     sub.add_parser("gpu-check", help="verify torch sees the GPU with sm_120 kernels")
     args = p.parse_args(argv)
     if args.cmd == "export":
@@ -63,6 +68,10 @@ def main(argv: list[str] | None = None) -> int:
         from .report import main as report_main
 
         return report_main(args)
+    if args.cmd == "drivers":
+        from .driver_analysis import main as drivers_main
+
+        return drivers_main(args)
     if args.cmd == "gpu-check":
         return gpu_check()
     return 2

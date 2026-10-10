@@ -205,6 +205,32 @@ model's numbers are always paired against the same reference on the same rows.
 `--reference` refuses to start without a git SHA and an image id; every run
 records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 
+## Level drivers (PAR-830)
+
+`python -m mlbench drivers --export <export> --out <dir>` builds one row per
+ride-day × lead (1/3/7/14/30/60/90) with the target `log(true P90 / naive level)`
+and every driver known at the origin, fits walk-forward models by origin month
+and writes R², level MAE, UC4 ranking, univariate effects and permutation
+importance (CPU, ~4 min on 1.9 M rows). It reads `parquet/` and
+`raw/schedule.csv.gz` (ticketed events, extra hours and the `updated_us` that
+decides whether a schedule was known at the origin). The plug-in
+`driver_level` (`--model driver_level`) is the same gradient-boosted model built
+from nothing but the runner's DataFrames (history + known-future covariates,
+accumulated across origins; no weather, no event flags): `driver_level` = the
+naive level × H5 curve scaled by exp(ŷ), `lvl_driver_level` / `driver_level_x_h5`
+from `predict_daily`. Findings: [level-drivers.md](level-drivers.md).
+
+Scored over all 231 origins (run `20261009-par830-drivers`), `driver_level`
+has the lowest slot MAE of every competing model at every lead d1–d60 on both
+segments — as a paired margin against each named baseline individually, so the
+result does not depend on which naive the per-lead reference picks — and it
+extends the busy-ride usable horizon from d7 to d60. It is nevertheless
+**shadow-only**: it regresses `bestVisitTimes` (D3) against both climatology
+and H5 under both bootstrap units, and it is worse than H5 in summer at every
+lead. Its UC4 is **not measurable** in the 8-week headline window (the unit is
+the park-month, so every cell rests on 3 origin days and `usable_horizon.csv`
+reports `leads_tested = 0` — an untested metric, not a naive win).
+
 ## Results
 
 Reference run: `ml-bench/results/20261009-baselines-v2/`. Export of 2026-10-09
