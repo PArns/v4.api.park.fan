@@ -65,9 +65,9 @@ Consequences, applied throughout the reports in this directory:
 
 | Comparison | Status |
 |---|---|
-| any Chronos-2 variant vs `wt_med`, `h5`, `clim`, `snaive7`, `lvlh5_*`, `prod_served` | **VOID** — 925 of 942 `chronos2*` cells |
-| Chronos-2 vs `persistence` (UC1 slot MAE, D2 live window) | **valid** — `persistence` is built in `runner.ih_{h}` from the raw `slots` table, appears in no `SLOT_MODELS` list and never passes through `UPDATE tg`; 17 cells |
-| variant vs variant (`chronos2` / `_grid` / `_nocov` / `_owx`) | **valid** — all four are plug-ins on the same grid; `n__<variant>` is identical to the unit in all 18 UC2/UC3 MAE cells |
+| any Chronos-2 variant vs `wt_med`, `h5`, `clim`, `snaive7`, `lvlh5_*`, `prod_served` | **VOID** — **946 of the 963** region-wide `chronos2*` cells |
+| Chronos-2 vs `persistence` (UC1 slot MAE, D2 live window) | **valid** — `persistence` is built in `runner.ih_{h}` from the raw `slots` table, appears in no `SLOT_MODELS` list and never passes through `UPDATE tg`; **17** cells (UC1 MAE, 8 leads x {all, busy}, plus D2 w0-45 headliners) |
+| variant vs variant (`chronos2` / `_grid` / `_nocov` / `_owx`) | **valid** — all four are plug-ins on the same grid; `n__<variant>` is identical to the unit in all 16 distinct UC2/UC3 MAE cells (d0-d7 x {all, busy}) |
 
 Nothing in this directory may be compared with
 `ml-bench/results/20261009-baselines-v2/`, which was scored on the fixed harness.

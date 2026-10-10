@@ -148,7 +148,9 @@ Run `20261009-par828-subset-chronos`: 30 parks (`ml-bench/subsets/par828-30parks
 `d82b5a17…`, matching no commit) that is missing three PAR-827 harness fixes:
 `689a7b84` (no forecast outside the opening window known at the origin),
 `336b2b62` (projected windows and the plug-in grid on the quarter-hour grid) and
-`a1d20bf8` (floor-divide slot offsets). The first of those nulls
+`a1d20bf8` (floor-divide slot offsets); the full diagnosis and the cell-by-cell
+ledger are in `ml-bench/results/20261009-par828-subset-chronos/PROVENANCE.md`.
+The first of those nulls
 `SLOT_MODELS + ORACLES + wt_q80/95` — **built-in baseline columns only**, never
 plug-in columns — so the baseline arm covered slots the plug-in arm did not.
 **Every comparison of a Chronos-2 variant against `wt_med` / `h5` / `clim` /
@@ -156,8 +158,8 @@ plug-in columns — so the baseline arm covered slots the plug-in arm did not.
 is (a) the comparisons against `persistence`, which is built in `runner.ih_{h}`
 from the raw `slots` table and passes through none of the changed code, and (b)
 the variant-against-variant contrasts, since all four variants are plug-ins on the
-same grid — their covered slot count is identical to the unit in all 18 UC2/UC3
-MAE cells.
+same grid — their covered slot count is identical to the unit in all 16 distinct
+UC2/UC3 MAE cells.
 
 **The every-7th-origin sharding, not the park count, is what makes this a weak
 run.** The harness gates a cell at ≥ 30 origin days. Over the full period the
@@ -170,7 +172,7 @@ the same 30 parks costs ~12.7 h and fixes it.
 
 ### Layout — the regular grid wins, and costs 2–3× the GPU time
 
-`chronos2_grid` is better than `chronos2` in **all 18** UC2/UC3 slot-MAE cells
+`chronos2_grid` is better than `chronos2` in **all 16** distinct UC2/UC3 slot-MAE cells
 (9 leads × {all, busy}); the paired difference and its park-cluster CI are in
 `ml-bench/results/20261009-par828-subset-chronos/variant-pairs.md`. The mechanism
 shows up in the decision metrics, where the compressed layout fails and the grid
@@ -195,7 +197,7 @@ TimesFM-vs-Chronos comparison is not like-for-like on layout.
 
 ### Covariates — clearly worth having
 
-`chronos2_nocov` is worse than `chronos2` in all 18 cells, by 0.39–0.82 min slot
+`chronos2_nocov` is worse than `chronos2` in all 16 cells, by 0.39–0.82 min slot
 MAE, and the gap is much larger on the decisions: best-time regret +2.45…+7.35 and
 first-hour MAE +0.72…+2.43 against the reference, against +1.09…+3.61 and
 +0.05…+1.46 for `chronos2`. **Decision: keep the covariates.** The calendar /
