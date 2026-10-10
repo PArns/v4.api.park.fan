@@ -1,0 +1,20 @@
+lead,origin_days,status,measurable_from
+0,231,ok,
+1,230,ok,
+2,229,ok,
+3,228,ok,
+4,227,ok,
+5,226,ok,
+6,225,ok,
+7,224,ok,
+10,221,ok,
+14,217,ok,
+21,210,ok,
+30,201,ok,
+45,186,ok,
+60,171,ok,
+90,141,ok,
+120,111,ok,
+180,51,ok,
+270,0,not measurable yet,2026-12-15
+365,0,not measurable yet,2027-03-20
