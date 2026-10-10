@@ -172,11 +172,14 @@ the same 30 parks costs ~12.7 h and fixes it.
 
 ### Layout — the regular grid wins, and costs 2–3× the GPU time
 
-`chronos2_grid` is better than `chronos2` in **all 16** distinct UC2/UC3 slot-MAE cells
-(9 leads × {all, busy}); the paired difference and its park-cluster CI are in
-`ml-bench/results/20261009-par828-subset-chronos/variant-pairs.md`. The mechanism
-shows up in the decision metrics, where the compressed layout fails and the grid
-does not:
+`chronos2_grid` is better than `chronos2` in **all 16** distinct UC2/UC3 slot-MAE
+cells — eight leads (d0–d7) × {all, busy}, unanimous. Treating the eight leads as the
+independent units (the two segments of a lead are not independent), a two-sided sign
+test on 8/8 gives p ≈ 0.008. A paired interval on the difference itself needs
+`run --pair-with chronos2` and so has to wait for the re-score; the per-slot forecasts
+are not kept, so it cannot be recovered from this run's aggregates. The mechanism
+shows up in the decision metrics, where the compressed layout fails and the grid does
+not:
 
 | metric (full period, all rides, lead d0) | `chronos2` | `chronos2_grid` |
 |---|---|---|
@@ -197,8 +200,8 @@ TimesFM-vs-Chronos comparison is not like-for-like on layout.
 
 ### Covariates — clearly worth having
 
-`chronos2_nocov` is worse than `chronos2` in all 16 cells, by 0.39–0.82 min slot
-MAE, and the gap is much larger on the decisions: best-time regret +2.45…+7.35 and
+`chronos2_nocov` is worse than `chronos2` in all 16 cells (8/8 leads, sign test
+p ≈ 0.008), by 0.39–0.82 min slot MAE, and the gap is much larger on the decisions: best-time regret +2.45…+7.35 and
 first-hour MAE +0.72…+2.43 against the reference, against +1.09…+3.61 and
 +0.05…+1.46 for `chronos2`. **Decision: keep the covariates.** The calendar /
 holiday / minutes-since-opening block is doing real work, not decoration.
