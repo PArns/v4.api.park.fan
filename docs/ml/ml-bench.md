@@ -258,6 +258,193 @@ model's numbers are always paired against the same reference on the same rows.
 `--reference` refuses to start without a git SHA and an image id; every run
 records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 
+## NeuralForecast candidates — TiDE, NHITS, TSMixerx (PAR-829)
+
+Three supervised global deep models with known-future covariates, as a counter-weight
+to the zero-shot foundation models (PAR-828) and to the profile baselines. They are the
+same family as the production TFT (`neuralforecast==3.1.8`, the nf-service version, so a
+result transfers), but they forecast the planner's shape directly instead of a daily level.
+
+### The panel, and why it is hourly
+
+`mlbench/models/nf_panel.py` builds one series per ride on a **service-day hour** grid:
+K = 18 steps per day, hours 08–25 park-local (99.99 % of the 13.5 M truth slots fall in
+them; a window crossing midnight continues at 24, 25). 15-minute steps would make a
+d0–d7 window 8 × 96 = 768 steps, three quarters of them night. The benchmark's own
+level/shape decomposition says the d1–d7 error is mostly the daily LEVEL and the
+sub-hour detail is real only at the day edges, so the split is: the model owns the level
+and the hourly shape, H5 owns the 15-minute shape inside the hour
+(`neuralforecast_models.hourly_to_slots`, `slot = model_hour × H5(slot) / mean(H5 over the hour)`).
+
+**Closed hours, closed days and missing readings stay on the grid** with
+`available_mask = 0`. The TFT review found the daily panel drops closed days, which
+silently changes what "7 steps back" means; here a week is always 7 × K steps for every
+ride and the masked steps carry no loss.
+
+Known-future covariates: opening-relative position, weekday, day of year and the
+ml-service holiday flags (own region and neighbours, OR semantics). The schedule's own
+`isHoliday` / `isBridgeDay` annotations are deliberately **not** used: the baseline
+review's finding S11 shows they are built from every schedule row with no `updated_us`
+filter while the only publication timestamp the export carries comes from the day's
+OPERATING rows, so an annotation written after an origin can reach a forecast for that
+origin, and the export ships no `schedule` table to measure how often that happens. The
+holiday-calendar flags carry the same underlying fact and are known arbitrarily far
+ahead.
+Statics: headliner flag, region, coordinates, and the ride's and park's median daily P90
+over the 56 days before the block's cutoff. Weather (daily actuals) only for the `_wx`
+variant, which is **ORACLE and therefore an upper bound**, reported separately.
+
+### Information cut
+
+GPU work and scoring are split on purpose: `nf_precompute` trains and forecasts into a
+parquet cache under the shared GPU lock, and the harness then scores that cache on CPU
+through the ordinary plug-in path, sharded like any other run.
+
+- Origins are grouped into **month blocks**. For a block whose first origin is c0 the
+  model is trained once on the panel steps before service day c0 (`fit(test_size=…)`
+  holds back everything from c0 on). One model per block, not per origin: ~9 fits
+  instead of ~230, and a model up to a month stale at the end of its block — which is
+  what a monthly retrain in production would be.
+- Every origin of the block is forecast with that model from the `input_size` steps just
+  before it. `tests/test_nf_models.py::test_precompute_information_cut` poisons every
+  truth slot *and* every schedule row written after an origin and asserts that origin's
+  forecast does not move, with a positive control that poisoning *before* the origin does.
+- **Train/serve mismatch, and its direction:** the training windows use the published
+  (final) schedule, while every forecast is made with the schedule **as known at the
+  origin** (`origin_covariates`, the harness's `pw` rule). So the model is trained on
+  slightly cleaner opening hours than it is served. That flatters nothing at serving
+  time — the served covariates are the degraded ones — but it does mean a model that
+  leans hard on opening hours is trained to trust them more than it should. The harness's
+  `sk` split (schedule known vs projected at the origin) separates the two cases.
+
+### Sizing — the caps are 10 GB VRAM and 8 GB container RAM
+
+The numbers that drive the knobs, for the 2026-10-09 export (3,601 rides with truth,
+157 parks; L + h = (28 + 8) × 18 = 648 steps, 22 panel columns):
+
+| | 20-park subset | all parks |
+|---|---|---|
+| series | 737 | 3,601 |
+| panel `temporal` (float32) | 0.30 GB | 1.49 GB |
+| predict array per origin | 42 MB | 205 MB |
+
+The predict array is `[chunk, series, L+h, cols]` float32 and NeuralForecast copies it
+into a torch tensor, so a `chunk` that fits a subset is 5× bigger on all parks.
+`window_chunk()` therefore sizes `chunk` from the series count against
+`WINDOW_ARRAY_BUDGET`; pass `--memory 2500MB` so DuckDB's buffers plus the panel plus
+the windows stay inside the 8 GB container cap (the default `3GB` suits a subset).
+
+`max_steps` drives fit cost and is independent of the series count — a step is
+`windows_batch_size = 512` windows sampled from the panel, so 2,000 steps cost the same
+on 737 series as on 3,601. What scales with the park set is the panel build and the
+predict passes (one per origin chunk × 8 origin hours).
+
+**TSMixerx is the exception.** It is multivariate: one model per region with every ride
+of the region as a channel (1,177–1,234 rides per region on all parks, 228–268 on the
+subset), and its mixing layers scale with the channel count. One window batch alone is
+16 × 1,234 × 648 × 22 × 4 B = 1.1 GB, before activations, so at all-parks scale it is
+the candidate most likely to breach the 10 GB VRAM cap. It also covers **daily origins
+only** (one predict call per origin and region), so it has no UC1/intraday numbers.
+
+### Park subsets and the coverage gate
+
+A park subset is cheap on the GPU and expensive in the report: `report.py` gates a cell
+out of `usable_horizon` and `handover` below `MIN_COVERAGE = 0.3` paired share, and the
+20 parks with the most truth slots are only **39.9 % of May and 31.8 % of August** truth
+slots. Scored against an all-park reference, an August cell is gated out and the GPU time
+is wasted — and `mlbench run` has no park filter, so the baselines cannot be restricted to
+match. `nf_precompute --parks` therefore stays unused: the bounded run covers **all parks
+over fewer origins** (two month blocks), not fewer parks, so the model and the baselines
+sit on the same rows. Picking the "busiest" parks by truth-row count would also pick parks
+with many rides and long history rather than long waits.
+
+`MIN_INSAMPLE_HOURS = 12` drops a (ride, origin) whose 28-day input window holds fewer
+than 12 measured hours. That is a deliberate coverage-for-accuracy trade and it lowers
+D9 coverage; the share it drops has to be quantified per lead next to the error numbers,
+not folded into them.
+
+### Running it (celestrial)
+
+```bash
+# 1. GPU: precompute into a cache, under the shared lock. Probe first — nothing about
+#    fit time or peak VRAM is measured until a block has run.
+PROBE=1 ml-bench/par829_subset.sh                      # one short block, 3 origins
+MODELS="nf_tide" ml-bench/par829_subset.sh             # September + August, all parks
+# 2. CPU: score the cache through the harness like any other model, with the headline
+#    target window so the cells pair against the baselines run.
+docker run --rm --user 1000:1000 -e HOME=/tmp -e MLBENCH_NF_CACHE=/data/par-829/cache/subset \
+  -v /data/parkfan/ml-bench:/data -v $PWD/ml-bench/results:/app/results \
+  --cpus 3 --memory 2560m --cpu-shares 256 --entrypoint nice ml-bench:par-829 -n 10 \
+  python -m mlbench run --export /data/exports/20261009 --out /app/results/<run-id> \
+  --model mlbench.models.neuralforecast_models:NFTiDE \
+  --from 2026-08-01 --to 2026-09-30 --shard 0/3 --memory 2.5GB --threads 3
+# ... then: report --run /app/results/<run-id> --target-from 2026-08-15 --target-to 2026-10-07
+```
+
+The cache carries its own provenance: `meta.json` records `git_sha`, `code_sha256`, the
+image id and the `earlier_passes` of a resumed run, because a cache outlives the container
+that wrote it and a cache whose blocks come from two code versions is incomparable. Before
+any number from a cache is reported, `git cat-file -t <git_sha>` must resolve and
+`git merge-base --is-ancestor <the plug-in coverage-parity fixes> <git_sha>` must hold; a
+`git_sha` of `unknown`, or a `code_sha256` that matches no commit, is the signature of a
+dirty or pre-rebase tree and voids the run. The cheap runtime check for the same hazard is
+to score the `example_level_h5` plug-in alongside and compare its slot count per lead with
+the built-in `lvlh5_naive`: the plug-in path and the built-in path must cover the same
+slots.
+
+`MLBENCH_NF_VRAM_FRACTION` (default 0.6, i.e. 9.8 GB of the 16 GB card) caps torch's
+allocator, so breaching the 10 GB bench budget fails this process instead of squeezing the
+production service that shares the GPU. The knobs, in the order to turn them: `max_steps`
+(time only), `windows_batch_size`, `inference_windows_batch_size`, `batch_size`.
+
+`run_nf_precompute.sh` takes `/data/parkfan/ml-bench/gpu.lock` atomically (`noclobber`),
+releases it on exit **only if the lock is still ours**, and samples `nvidia-smi` every
+15 s into a csv — `torch.cuda.max_memory_allocated()`, which `meta.json` records per
+fitted group, counts only torch's allocator and misses the CUDA context and
+pcn-service, which shares this GPU.
+
+`--quiet` (default `00:30-09:30` UTC) refuses to start a new block when the block's
+**projected finish** would reach into the nightly window, not merely when the window has
+already started: checking only the start time lets a block begin at 00:29 and run through
+generate-daily (01:00), TFT (03:00) and CatBoost (06:00) on the production host. The
+projection uses the longest block measured so far in the run, or `--block-estimate`
+before the first one finishes. Blocks are cached and skipped on resume, so stopping early
+only costs the blocks that are left.
+
+### Results — not measured yet (PAR-829)
+
+> **Not measured yet.** No PAR-829 model has been scored through the harness. The GPU was
+> held by PAR-828 through the evening of 2026-10-09 and the one smoke run that did start
+> was CPU-only and made no fit progress. There is therefore **no** fit time, no measured
+> peak VRAM and no error number for TiDE, NHITS or TSMixerx — the sizing table above is
+> arithmetic on array shapes, not measurement.
+
+The models produce **d0–d7 only** (horizon = 8 service days): at longer leads they do not
+appear in the hand-over table because they produce nothing, not because they lost. An
+origin late in a month block is served weights up to 31 days old while its input window is
+always the 28 days before the origin; the profile baselines are recomputed at every origin
+and are never stale. That is a **staleness asymmetry whose sign is not established** — it
+is tempting to call a result here a lower bound on a daily-retrained model, but staleness
+can also flatter the comparison (when the weeks just before an origin are anomalous, a
+refit and the trailing-window baselines both inherit the anomaly and stale weights do
+not), and a refit is a fresh seed, so "fresher is at least as good" does not hold per
+origin. The asymmetry is therefore reported as a caveat and measured where possible, by
+reading MAE against `origin − block_start`, rather than asserted as a direction.
+
+What a full precompute would cost, so the budget decision is explicit: all parks, all
+origins 2026-02-19 → 2026-10-07 is **9 month blocks × 4 model variants = 36 blocks**, each
+a fit plus ~8 predict passes over every origin of the month, on top of a panel of up to
+1.7 GB rebuilt per block, with scoring on 231 daily origins afterwards — on the order of
+30 h of exclusive GPU.
+
+The bounded alternative is **two blocks, August and September**, chosen so the result
+pairs against the committed headline window 2026-08-15 … 2026-10-07: September origins
+target 09-01…10-07 (30 origin days inside the window at every lead d0–d7, exactly
+`low_n_origin_days`), August origins add 08-15…09-07, and together they cover all 54 days
+of the window. A May block would be cheaper on the panel but contributes **zero** origin
+days to that window, so it only pairs against the full-period table. Every lead cell is
+then reportable, but no seasonal or regional split is: peak summer and early autumn only.
+
 ## Results
 
 Reference run: `ml-bench/results/20261009-baselines-v2/`. Export of 2026-10-09
