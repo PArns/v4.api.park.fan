@@ -46,7 +46,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--target-from", default=None)
     ap.add_argument("--target-to", default=None)
     ap.add_argument("--segment", action="append", default=None,
-                    help="all | busy | headliners (default: all and busy)")
+                    help="all | busy | fh | sk | <raw SQL> (default: all and busy). The slot "
+                         "table is keyed by L, park_id, date, busy, fh, sk -- there is no "
+                         "headliner flag at slot level, so 'headliners' is not available here.")
     ap.add_argument("--memory", default="2000MB")
     ap.add_argument("--threads", type=int, default=2)
     ap.add_argument("--out", default=None, help="write the rows to this CSV as well")
@@ -77,7 +79,11 @@ def main(argv: list[str] | None = None) -> int:
     leads = [r[0] for r in con.execute("SELECT DISTINCT L FROM slot ORDER BY L").fetchall()]
 
     for seg in segments:
-        seg_sql = {"all": "TRUE", "busy": "busy", "headliners": "hl"}.get(seg, seg)
+        if seg == "headliners":
+            raise SystemExit("--segment headliners is not available: the slot table carries "
+                             "no headliner flag (keys are L, park_id, date, busy, fh, sk). "
+                             "Use the harness report for headliner cells.")
+        seg_sql = {"all": "TRUE", "busy": "busy", "fh": "fh", "sk": "sk"}.get(seg, seg)
         for m in a.model:
             if f"n__{m}" not in cols:
                 print(f"SKIP: the run has no column n__{m} (model not scored)")

@@ -254,7 +254,7 @@ def test_predict_daily_never_serves_a_previous_origin(tmp_path, monkeypatch):
 
     def origin(d):
         return Origin(date=d, kind="daily", hour_local=6, origin_utc=pd.DataFrame(),
-                      history=HistoryView(lambda _n: hist))
+                      history=HistoryView(hist, None, 56))
 
     # origin d0 is in the cache: a curve and a daily level
     assert not m.predict(origin(d0), grid(d0 + dt.timedelta(days=1)), pd.DataFrame()).empty
