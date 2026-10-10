@@ -571,9 +571,14 @@ flip it only once the online A/B has seen a spring and a summer.
 
 **The larger pay-off is inside the models, not in a new composer.** Validate or
 refute this expectation: the two top-ranked covariates of §5 are **absent from
-TFT's `FUTR_EXOG`** (nf-service `db.py` carries holidays, calendar and weather
-but **no schedule information at all**), and the offline analysis says they are
-worth more than a separate level composer is:
+TFT's `FUTR_EXOG`**, and the offline analysis says they are worth more than a
+separate level composer is. Verified against `nf-service/db.py`: `FUTR_EXOG`
+carries `is_holiday_primary`, `is_holiday_neighbor`, `is_school_holiday`,
+`is_bridge_day`, `days_until/since_holiday`, day-of-week one-hots, `season_code`,
+`is_peak_season` and daily weather — and **no schedule, opening-hours or
+operating-window column of any kind** (`grep -n 'schedule\|opening\|operating'
+nf-service/db.py` is empty). The school-break *state* is there; the *change*
+against the reference window is not.
 
 1. **Published opening hours relative to the recent same-weekday days** —
    length, closing hour, ratio and difference against the last four same
@@ -586,14 +591,23 @@ worth more than a separate level composer is:
 2. **Change of school-break state against the reference window** (`d_school`,
    own and neighbour regions) — both models carry the *state*, neither the
    *change*, and it is the change that moves the level against a recent-history
-   baseline (**−20 %** when a break ended, **+19 %** when one started, growing to
-   **±32 %** by d30).
+   baseline (**−20 %** when a break ended, **+19 %** when one started at d7,
+   growing to **−23.5 % / +23.8 %** by d30). The holiday *state* reaches +31.6 %
+   at d30, but both models already carry the state — the change is the gap.
 
 Then, in order: **first day after a closure** of ≥ 2 days (**−18 %**), **late
 close / evening event** (**+14 %**), and the archived weather forecast once
-PAR-831 has one (ORACLE upper bound +0.02–0.03 park R², §2). **Ticketed events:
-no effect detected** (0 % [−5, +6]) over the single synced Halloween season —
-not worth wiring.
+PAR-831 has one (ORACLE upper bound +0.02–0.03 park R², §2).
+
+**Ticketed events: not worth wiring, and the one significant cell is a
+confound.** At d7 the effect is **+0.3 % [−5.2, +5.8], not significant**
+(5 663 rows). At d30 it is **−15.2 % [−24.3, −8.0]**, i.e. *significantly
+negative* — the opposite sign from a crowd-drawing event, on 5 576 rows from a
+single synced Halloween season, and ticketed-event days usually also carry a
+shorter regular schedule, which the opening-hours driver already captures. Read
+it as collinearity with the schedule, not as a driver, and do not wire the flag
+until a second season exists. `EXTRA_HOURS` behaves the same way (−7.2 % n.s. at
+d7, −15.8 % at d30).
 
 **What success looks like**, so the expectation is falsifiable: adding the two
 covariates to the TFT should move `lvlh5_tft`'s all-rides slot MAE at d7–d30 by
