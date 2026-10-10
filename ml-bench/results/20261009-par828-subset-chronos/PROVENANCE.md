@@ -79,5 +79,9 @@ Nothing in this directory may be compared with
 header, split on commas before the `#` was cut. They match no park and were dropped
 silently (the refusal and the per-line comment cut landed later, in
 `PAR-828: cut an @file's comment per line, and refuse a park id that is in no
-export`). 30 real parks took part, as intended; see `variant-pairs.md` for the
-count read back out of `parts/slot`.
+export`). **30 real parks took part, as intended**, which the scored rows confirm:
+at lead 0 the run has 823 park-days over 33 origins, and the regional split
+327 EU / 282 NA / 214 Asia sums to exactly the 823 of the `all` row — so no id
+landed in an `other` region bucket. Per intended park that is 27.3 / 28.2 / 26.8
+park-days for 12 / 10 / 8 parks, i.e. the same ~25 of 30 parks open on an average
+date (February and March origins fall in the EU off-season).
