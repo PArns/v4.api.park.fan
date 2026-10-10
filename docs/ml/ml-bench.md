@@ -228,8 +228,15 @@ and the hourly shape, H5 owns the 15-minute shape inside the hour
 silently changes what "7 steps back" means; here a week is always 7 × K steps for every
 ride and the masked steps carry no loss.
 
-Known-future covariates: opening-relative position, weekday, day of year, the ml-service
-holiday flags (own region and neighbours, OR semantics), schedule holiday / bridge day.
+Known-future covariates: opening-relative position, weekday, day of year and the
+ml-service holiday flags (own region and neighbours, OR semantics). The schedule's own
+`isHoliday` / `isBridgeDay` annotations are deliberately **not** used: the baseline
+review's finding S11 shows they are built from every schedule row with no `updated_us`
+filter while the only publication timestamp the export carries comes from the day's
+OPERATING rows, so an annotation written after an origin can reach a forecast for that
+origin, and the export ships no `schedule` table to measure how often that happens. The
+holiday-calendar flags carry the same underlying fact and are known arbitrarily far
+ahead.
 Statics: headliner flag, region, coordinates, and the ride's and park's median daily P90
 over the 56 days before the block's cutoff. Weather (daily actuals) only for the `_wx`
 variant, which is **ORACLE and therefore an upper bound**, reported separately.
@@ -362,9 +369,14 @@ only costs the blocks that are left.
 The models produce **d0–d7 only** (horizon = 8 service days): at longer leads they do not
 appear in the hand-over table because they produce nothing, not because they lost. An
 origin late in a month block is served weights up to 31 days old while its input window is
-always the 28 days before the origin, so a result here is a lower bound on a
-daily-retrained model; the profile baselines are recomputed at every origin and are never
-stale.
+always the 28 days before the origin; the profile baselines are recomputed at every origin
+and are never stale. That is a **staleness asymmetry whose sign is not established** — it
+is tempting to call a result here a lower bound on a daily-retrained model, but staleness
+can also flatter the comparison (when the weeks just before an origin are anomalous, a
+refit and the trailing-window baselines both inherit the anomaly and stale weights do
+not), and a refit is a fresh seed, so "fresher is at least as good" does not hold per
+origin. The asymmetry is therefore reported as a caveat and measured where possible, by
+reading MAE against `origin − block_start`, rather than asserted as a direction.
 
 What a full precompute would cost, so the budget decision is explicit: all parks, all
 origins 2026-02-19 → 2026-10-07 is **9 month blocks × 4 model variants = 36 blocks**, each
