@@ -526,21 +526,36 @@ exports the column but does not filter on it, and because each heartbeat is a ne
 `ts` it **resets the 3 h staleness cap** the truth definition depends on — so a
 ride that stopped reporting keeps producing truth with a frozen wait.
 
-Measured on the raw export:
+Measured by rebuilding the truth from the **same, untouched** raw export with the
+filter on (`/data/parkfan/ml-bench/exports/20261010-nohb`, whose `raw/` is a
+read-only symlink to `20261009/raw`):
 
-| day | heartbeat share of OPERATING rows | truth slots that exist ONLY because of heartbeats |
-|---|---|---|
-| 2026-08-01 … ~09-06 | 0 % (column not populated yet) | 0.00 % |
-| 2026-09-10 | 20.6 % | — |
-| 2026-09-15 | — | 3.58 % |
-| 2026-10-01 | 23.4 % | — |
-| 2026-10-05 | **33.1 %** | **11.20 %** |
-| 2026-10-07 | 32.4 % | — |
+| period | truth slots with heartbeats | without | dropped |
+|---|---|---|---|
+| 2025-12 … 2026-08 | 11.6 M | 11.6 M | **0.000 %** (the column was not populated) |
+| 2026-09 | 1,383,904 | 1,344,445 | **2.851 %** |
+| 2026-10 (1–9) | 463,637 | 432,999 | **6.608 %** |
+| whole export | 13,455,954 | 13,385,859 | 0.521 % |
+| **headline window, summer half** (Aug 15–31) | 1,239,702 | 1,239,703 | **0.000 %** |
+| **headline window, autumn half** (Sep 1 – Oct 7) | 1,805,151 | 1,735,059 | **3.883 %** |
+| 2026-10-05 alone | 55,866 | 48,724 | **12.78 %** |
 
-So the target changes character **across the headline window**: clean for its
-summer half, up to ~11 % carried-forward by its autumn end. Those slots are
-systematically flat, and they inflate the ride-day P90 every model is scored
-against — an unremoved confound of exactly the summer/autumn contrast above.
+So the target changes character **across the headline window**: its summer half is
+completely clean and its autumn half is up to ~13 % carried-forward by the end.
+Those slots are systematically flat. That is an unremoved confound of exactly the
+summer/autumn contrast above — and it is *asymmetric in the same direction*, so
+it cannot be waved away.
+
+What it does **not** do, measured rather than assumed, is move the level: on the
+56,324 ride-days both builds share in 2026-09-01 … 10-07 the mean ride-day P90 is
+**24.7096 with heartbeats and 24.7340 without** — a 0.024 min difference, 0.1 %.
+The carried-forward slots are flat but they sit near the day's own typical wait,
+so they neither inflate nor deflate a P90 materially.
+
+(Removing heartbeats is a near-subset operation, not an exact one: deleting a row
+lengthens the *preceding* real row's forward fill, so 2 slots out of 13.5 M
+survive under a different parent row. No slot's value changes, because a
+heartbeat carries the same wait as the row before it.)
 
 **This is a product decision, not a bug to fix silently.** Scoring against a
 carried-forward wait measures agreement with a stale *display*; scoring without
@@ -565,3 +580,11 @@ Everything reproduces to within 0.03 except TFT×H5 at d7 (−0.11): the rope-dr
 hour is left unscaled here, as BENCH-SPEC says, and the review scaled it. The
 all-park population reads ~0.9 higher (8.11 vs 7.04 at d1) because it adds US
 and Asian parks with longer queues, not because the method differs.
+
+The query is committed as
+`ml-bench/results/20261009-baselines-v2/sanity_33parks.sql` (self-contained, the
+33 park ids inlined, the container command in its header) and its output as
+`sanity_33parks.csv` in both `tables_*/`. This is the only evidence on this page
+that the harness agrees with an independent implementation, so it has to be
+reproducible from the repository — it previously came from an ad-hoc query over
+the git-ignored `parts/` directory.

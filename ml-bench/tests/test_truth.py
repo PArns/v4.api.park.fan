@@ -117,6 +117,13 @@ def test_drop_heartbeats_removes_only_carry_forward_slots(tmp_path):
     assert out["with_n"] > out["without_n"] > 0, (out["with_n"], out["without_n"])
     a = out["with"].set_index(["aid", "slot_utc"])["y"]
     b = out["without"].set_index(["aid", "slot_utc"])["y"]
-    # strict subset: nothing new appears, and no surviving slot changes value
-    assert set(b.index) < set(a.index)
-    assert (a.reindex(b.index) == b).all()
+    removed, added = set(a.index) - set(b.index), set(b.index) - set(a.index)
+    assert removed, "dropping heartbeats must remove the carried-forward slots"
+    # It is a near-subset, not a strict one: removing a row LENGTHENS the preceding
+    # real row's forward fill (its `m_end` is the next row's ts, capped at 3 h), so a
+    # midpoint can survive under a different parent row. On the 2026-10-09 export this
+    # is 2 slots out of 13.5 M. The value never changes either way, because a heartbeat
+    # carries the SAME wait as the row before it.
+    assert len(added) <= max(1, len(removed) // 100), (len(added), len(removed))
+    both = a.index.intersection(b.index)
+    assert (a.loc[both].to_numpy() == b.loc[both].to_numpy()).all()

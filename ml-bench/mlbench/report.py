@@ -396,7 +396,7 @@ def evaluate(base: pd.DataFrame, cfg: BenchConfig, refs: list[str], lower: bool,
                                            g["num_m"].to_numpy(), g["den_m"].to_numpy())
         row = dict(keys, model=m, value=v, lo=lo, hi=hi, n=float(vals[m][1]), lower=lower,
                    n_park_days=int((g["den_m"] > 0).sum()), n_origin_days=int(g["date"].nunique()),
-                   unit=unit, ref=ref)
+                   unit=unit, ref=ref, is_candidate=(m in cands))
         env = []
         for c in cands:
             st = get(m, c)
@@ -531,6 +531,8 @@ def usable_horizon(cells: pd.DataFrame, order: dict, cfg: BenchConfig) -> pd.Dat
             else:
                 broken = True
         out.append({"metric": metric, "uc": uc, "segment": seg, "model": model,
+                    "is_reference_candidate": bool(g["is_candidate"].fillna(False).any())
+                    if "is_candidate" in g else False,
                     "unit": _str(g.iloc[0], "unit", "park-day"), "leads_scored": len(g),
                     "leads_tested": n_tested,
                     "usable_horizon": "" if contiguous is None else str(contiguous),
@@ -546,7 +548,16 @@ def handover(cells: pd.DataFrame, cfg: BenchConfig) -> pd.DataFrame:
         ref = g["ref"].dropna().iloc[0] if g["ref"].notna().any() else None
         gate = g.apply(lambda r: tested(r, cfg, r["model"])[0], axis=1)
         wins = g["wins"].fillna(False).astype(bool) if "wins" in g else pd.Series(False, index=g.index)
-        ok = g[wins & gate]
+        # A naive candidate may beat the envelope of the OTHER candidates — "climatology
+        # is the best naive here" is a real finding and `usable_horizon.csv` keeps it.
+        # But it must not be ranked against a model in the hand-over table: the two
+        # margins are measured against different (and for a candidate, weaker) pools, so
+        # "wt_med beats clim by 0.347" would outrank "lvlh5_tft beats wt_med by 0.308"
+        # and the serving router would be told to keep the naive. The reference pool is
+        # the FALLBACK here, not a contender.
+        cand = (g["is_candidate"].fillna(False).astype(bool) if "is_candidate" in g
+                else pd.Series(False, index=g.index))
+        ok = g[wins & gate & ~cand]
         lower = bool(g["lower"].iloc[0])
         extra: dict = {}
         if len(ok):
@@ -1305,9 +1316,12 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
         sel = rc[(rc["region"] == "all") & rc["metric"].isin(["MAE", "first-hour MAE (opening-aligned)"])]
         w(md(sel, ["metric", "uc", "segment", "lead", "candidates", "selected", "reason"]))
     w("### Hand-over table (input for the serving router)\n")
-    w("Per use case × lead: among models that win against the reference (and pass the gates), the largest "
-      "PAIRED margin; otherwise the reference itself. `park_day_unit_agrees = False` marks a row whose "
-      "verdict changes if BENCH-SPEC's literal park-day bootstrap is used instead of the park-cluster one.\n")
+    w("Per use case × lead: among the models that beat EVERY naive candidate (and pass the gates), the "
+      "largest margin against the hardest candidate; otherwise the reference itself. The naive candidates "
+      "themselves are excluded from the winner column even when one of them beats the others, because "
+      "their margin is measured against a different and weaker pool — `usable_horizon.csv` keeps those "
+      "rows, flagged `is_reference_candidate`. `park_day_unit_agrees = False` marks a row whose verdict "
+      "changes under BENCH-SPEC's literal park-day bootstrap.\n")
     if not ho.empty:
         w(md(ho[ho["metric"] == "MAE"],
              ["uc", "segment", "lead", "reference", "winner", "winner_value", "paired_margin",

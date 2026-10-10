@@ -321,3 +321,22 @@ def test_reference_run_refuses_unknown_provenance(synth_export, tmp_path, monkey
     monkeypatch.setattr("mlbench.runner.git_sha", lambda: "unknown")
     with pytest.raises(SystemExit):
         main(p.parse_args(["--export", str(synth_export), "--out", str(tmp_path / "r"), "--reference"]))
+
+
+def test_handover_never_names_a_naive_candidate_as_the_winner(synth_export, tmp_path):
+    """`usable_horizon.csv` may record that a naive beats the other naives, but the
+    hand-over table must not rank that against a model: the two margins are measured
+    against different pools, so the serving router would be told to keep the naive."""
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1, 3, 7])
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "run-0of1.json").write_text(json.dumps({"export": str(synth_export), "git_sha": "test"}))
+    Runner(synth_export, out, cfg, [], origins=("2026-04-01", "2026-04-20")).run()
+    tdir = build_report(out, reps=50)
+    ho = pd.read_csv(tdir / "handover.csv")
+    cells = pd.read_csv(tdir / "cells.csv")
+    cands = set(cells.loc[cells["is_candidate"].fillna(False).astype(bool), "model"])
+    assert cands, "the fixture must have reference candidates"
+    # a candidate may only appear as the winner when it IS the fallback reference
+    bad = ho[ho["winner"].isin(cands) & (ho["significant_models"] > 0)]
+    assert bad.empty, bad[["metric", "uc", "lead", "reference", "winner"]].to_string()
