@@ -31,7 +31,8 @@ columns **only** — plug-in columns are never in that list. So the baseline arm
 credited with slots the plug-in arm never covered.
 
 **Every comparison of a Chronos-2 variant against `wt_med` / `h5` / `clim` /
-`snaive7` / `lvlh5_*` in this run is void** (925 of 942 cells) and is being re-scored
+`snaive7` / `lvlh5_*` in this run is void** (946 of the 963 region-wide cells; 17
+survive) and is being re-scored
 on the fixed harness. `results/20261009-par828-subset-chronos/PROVENANCE.md` records
 the full diagnosis, what code actually ran, and the cell-by-cell ledger. Two things
 survive, and both are mechanical rather than judgement calls:
@@ -39,7 +40,7 @@ survive, and both are mechanical rather than judgement calls:
 - **vs `persistence`** — built in `runner.ih_{h}` from the raw `slots` table, in no
   `SLOT_MODELS` list, never passes through `UPDATE tg`.
 - **variant vs variant** — all four variants are plug-ins on the same grid, and
-  `n__<variant>` is identical **to the unit** in all 18 UC2/UC3 MAE cells.
+  `n__<variant>` is identical **to the unit** in all 16 distinct UC2/UC3 MAE cells (d0-d7 x {all, busy}).
 
 Separately: the run used `--shard 0/7`, so the headline common window
 (2026-08-15…2026-10-07) holds only 7–8 origin days against the harness's ≥ 30 gate.
@@ -72,7 +73,7 @@ Note `chronos2` is the only variant with `intraday = True`, so the layout questi
 
 ## Design decision 1 — the regular grid layout wins
 
-`chronos2_grid` beats `chronos2` in **all 18** UC2/UC3 slot-MAE cells. The mechanism
+`chronos2_grid` beats `chronos2` in **all 16** distinct UC2/UC3 slot-MAE cells. The mechanism
 is visible in the decisions, where the compressed layout destroys the opening ramp:
 first-hour MAE (D5) at d0 **−0.55 vs +0.05**, best-time regret (D3) **+0.14 vs +1.09**.
 Price: 2–3× the GPU time (18.6–23.4 s per daily-origin call against 6.5–11.3 s).
@@ -82,7 +83,7 @@ nights), so it is handicapped by construction against `chronos2_grid`.
 
 ## Design decision 2 — covariates help
 
-`chronos2_nocov` is worse in all 18 cells by 0.39–0.82 min MAE, and much worse on the
+`chronos2_nocov` is worse in all 16 cells by 0.39–0.82 min MAE, and much worse on the
 decisions (D3 regret +2.45…+7.35 against the reference, D5 +0.72…+2.43). Without
 covariates the model fails to win at d1 at all.
 
@@ -124,7 +125,7 @@ is ~3× low) are in `docs/ml/foundation-models.md`.
 
 ## Test plan
 
-- `python -m pytest ml-bench/tests` — 26 tests, including
+- `python -m pytest ml-bench/tests` — green, including
   `test_pair_with_enables_a_model_against_model_comparison` (asserts the paired sums
   appear in the slot aggregate and that `report --vs` picks them up) and
   `test_unknown_park_id_is_refused`.
