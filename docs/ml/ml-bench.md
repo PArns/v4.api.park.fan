@@ -220,6 +220,17 @@ accumulated across origins; no weather, no event flags): `driver_level` = the
 naive level × H5 curve scaled by exp(ŷ), `lvl_driver_level` / `driver_level_x_h5`
 from `predict_daily`. Findings: [level-drivers.md](level-drivers.md).
 
+Scored over all 231 origins (run `20261009-par830-drivers`), `driver_level`
+has the lowest slot MAE of every competing model at every lead d1–d60 on both
+segments — as a paired margin against each named baseline individually, so the
+result does not depend on which naive the per-lead reference picks — and it
+extends the busy-ride usable horizon from d7 to d60. It is nevertheless
+**shadow-only**: it regresses `bestVisitTimes` (D3) against both climatology
+and H5 under both bootstrap units, and it is worse than H5 in summer at every
+lead. Its UC4 is **not measurable** in the 8-week headline window (the unit is
+the park-month, so every cell rests on 3 origin days and `usable_horizon.csv`
+reports `leads_tested = 0` — an untested metric, not a naive win).
+
 ## Results
 
 Reference run: `ml-bench/results/20261009-baselines-v2/`. Export of 2026-10-09
