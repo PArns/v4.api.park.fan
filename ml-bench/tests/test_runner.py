@@ -282,6 +282,12 @@ def test_oracle_weather_model_never_wins_a_handover_row(synth_export, tmp_path):
     cells = pd.read_csv(tdir / "cells.csv")
     owx = {m for m in cells["model"].unique() if is_oracle(m) and "owx" in str(m)}
     assert owx, "the oracle model must still be scored and visible"
+    # `usable_horizon.csv` is filtered by `is_oracle` before the groupby, so an owx
+    # model is absent from it outright — that half is a real check of the filter.
+    # The `handover.winner` half is **weak on this fixture**: with two parks nothing
+    # reaches `wins = True`, so the winner is always the fallback reference and an
+    # owx model could not have been named anyway. The observable version of that
+    # assertion is `test_handover_excludes_naive_candidates_and_oracles_from_the_winner_column`.
     for name in ("handover", "usable_horizon"):
         t = pd.read_csv(tdir / f"{name}.csv")
         col = "winner" if name == "handover" else "model"
@@ -477,10 +483,97 @@ def test_reference_run_refuses_unknown_provenance(synth_export, tmp_path, monkey
         main(p.parse_args(["--export", str(synth_export), "--out", str(tmp_path / "r"), "--reference"]))
 
 
+def _cells_frame(rows):
+    """A minimal `cells.csv`-shaped frame for unit-testing `handover()` directly.
+
+    The synthetic export has **two** parks, so `n_units_park <= 2` and the
+    `min_bootstrap_units = 10` guard makes `wins = True` unreachable end-to-end.
+    Every assertion about a *winner* on that fixture is therefore vacuous. Two
+    tests in this file were: the naive-exclusion test below (its `bad` frame
+    filters on `significant_models > 0`, which is never true there) and the
+    hand-over half of the ORACLE-weather test. `handover()` is a pure function of
+    a DataFrame, so the honest fix is to hand it a frame that *does* contain a
+    win and assert on the mechanism, rather than hope the fixture produces one.
+    """
+    base = dict(metric="MAE", uc="UC3", segment="all", region="all", lead=1, unit="park-day",
+                lower=True, ref="wt_med", value=8.0, wins=False, wins_park_day=False,
+                is_candidate=False, n_env=3, env_min_share=0.9, env_min_units_park_day=100,
+                env_min_units_park=40, n_origin_days=54, envelope="snaive7/wt_med/clim",
+                hardest_naive="wt_med", diff_vs_ref=0.0, diff_vs_hardest=0.0,
+                diff_lo_park=-1.0, diff_hi_park=-0.5, diff_lo=-1.0, diff_hi=-0.5,
+                hardest_lo_park=-1.0, hardest_hi_park=-0.5, paired_share=0.9)
+    return pd.DataFrame([{**base, **r} for r in rows])
+
+
+def test_handover_excludes_naive_candidates_and_oracles_from_the_winner_column():
+    """The 1313bc61 fix and the `_owx` suffix gate, asserted where they can be seen.
+
+    A candidate that beats the envelope of the OTHER candidates is a real finding
+    and `usable_horizon.csv` keeps it — but the hand-over table must not rank it
+    against a model, because the two margins are measured against different (and
+    for a candidate, weaker) pools. An ORACLE-weather model must never win a row
+    at all. Both are checked here against a frame that actually contains wins.
+    """
+    from mlbench.report import handover
+
+    cfg = BenchConfig()
+    cells = _cells_frame([
+        # a naive candidate with the BIGGEST margin ...
+        dict(model="wt_med", is_candidate=True, wins=True, diff_vs_hardest=-0.90,
+             hardest_naive="clim", envelope="snaive7/clim", n_env=2),
+        # ... an ORACLE-weather model with the second biggest ...
+        dict(model="chronos2_owx", wins=True, diff_vs_hardest=-0.60),
+        dict(model="chronos2_owx_x_h5", wins=True, diff_vs_hardest=-0.55),
+        # ... and a servable model with the smallest. The servable one must win.
+        dict(model="lvlh5_tft", wins=True, diff_vs_hardest=-0.30),
+    ])
+    ho = handover(cells, cfg)
+    assert len(ho) == 1
+    row = ho.iloc[0]
+    assert row["winner"] == "lvlh5_tft", (
+        f"winner is {row['winner']!r} — a naive candidate or an oracle took the row")
+    assert row["significant_models"] == 1, "only the servable model may be counted"
+    assert row["reference"] == "wt_med"
+
+    # with no servable winner the row falls back to the reference, and says so
+    only_naive = _cells_frame([
+        dict(model="wt_med", is_candidate=True, wins=True, diff_vs_hardest=-0.90),
+        dict(model="lvlh5_tft", wins=False),
+    ])
+    ho2 = handover(only_naive, cfg)
+    assert ho2.iloc[0]["winner"] == "wt_med"
+    assert ho2.iloc[0]["significant_models"] == 0
+    assert float(ho2.iloc[0]["paired_margin"]) == 0.0
+
+
+def test_handover_respects_the_coverage_gate_even_when_a_model_wins():
+    """A win on 21 % of the reference's paired rows must not reach the serving
+    router. This is the real cell behind the one apparent violation of the naive
+    invariant: `lvlh5_cbd` wins D5 first-hour at d45 with `env_min_share = 0.212`
+    and is correctly suppressed, appearing in `low_coverage_cells.csv` instead.
+    """
+    from mlbench.report import handover
+
+    cfg = BenchConfig()
+    cells = _cells_frame([
+        dict(model="lvlh5_cbd", wins=True, diff_vs_hardest=-0.46, env_min_share=0.212,
+             paired_share=0.212),
+        dict(model="wt_med", is_candidate=True, wins=False),
+    ])
+    ho = handover(cells, cfg)
+    assert ho.iloc[0]["significant_models"] == 0, "a 21 %-coverage win must not be counted"
+    assert ho.iloc[0]["winner"] == "wt_med"
+
+
 def test_handover_never_names_a_naive_candidate_as_the_winner(synth_export, tmp_path):
-    """`usable_horizon.csv` may record that a naive beats the other naives, but the
-    hand-over table must not rank that against a model: the two margins are measured
-    against different pools, so the serving router would be told to keep the naive."""
+    """End-to-end companion to `test_handover_excludes_naive_candidates_...`.
+
+    NOTE this one is **weak by construction**: the fixture has two parks, so no cell
+    can reach `wins = True` and the `bad` frame below is empty for that reason
+    rather than because the exclusion works. It is kept because it would still
+    catch a crash or a schema change in the real pipeline; the assertion that the
+    exclusion itself works lives in the unit test above, which hands `handover()`
+    a frame that does contain wins."""
     cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1, 3, 7])
     out = tmp_path / "run"
     out.mkdir()
