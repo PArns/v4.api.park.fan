@@ -123,8 +123,15 @@ class NFCached(Model):
         if not files:
             return pd.DataFrame(columns=["aid", "date", "hr", "q50", "q80", "q95"])
         f = max(files)       # the block that contains the origin: the latest block start <= origin
-        return pd.read_parquet(f, filters=[("origin_date", "==", d)],
-                               columns=["aid", "date", "hr", "q50", "q80", "q95"])
+        out = pd.read_parquet(f, filters=[("origin_date", "==", d)],
+                              columns=["aid", "date", "hr", "q50", "q80", "q95"])
+        # `aid` is a parquet dictionary column (see nf_precompute: as a '<U36' string
+        # array it cost ~800 MB per block and OOM-killed the precompute), so pandas hands
+        # it back as a Categorical. Cast to str so every downstream merge against
+        # `attraction_id` behaves exactly as it did when the column was written as strings.
+        if isinstance(out["aid"].dtype, pd.CategoricalDtype):
+            out["aid"] = out["aid"].astype(str)
+        return out
 
     def predict(self, origin: Origin, horizon_slots: pd.DataFrame,
                 known_future_covariates: pd.DataFrame) -> pd.DataFrame:

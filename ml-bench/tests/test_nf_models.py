@@ -417,3 +417,36 @@ def test_a_lone_available_step_cannot_form_a_training_window():
         assert usable({p, p + L + h - 1}, span)
     # and the guard is at least 2, so the degenerate case cannot reach the fit
     assert MIN_TRAIN_STEPS >= 2
+
+
+def test_cached_aid_is_dictionary_encoded_and_reads_back_as_str(synth_export, tmp_path,
+                                                                monkeypatch):
+    """`aid` is written as a parquet dictionary column for memory reasons, so the plug-in
+    must still hand downstream merges plain strings.
+
+    As a numpy '<U36' array the column costs 144 bytes per row -- ~800 MB for one late
+    block's 06:00 file, doubled by the block's final concat -- which is what OOM-killed
+    the 2026-06 block at the 8 GiB container cap. The encoding is therefore load-bearing,
+    and so is the cast back: `attraction_id` is an object column everywhere else.
+    """
+    import pyarrow.parquet as pq
+
+    monkeypatch.setenv("MLBENCH_NF_CPU", "1")
+    from mlbench.models.nf_precompute import run
+
+    cache = tmp_path / "cache"
+    run(export=synth_export, cache=cache, name="nf_tide", origin_from="2026-04-01",
+        origin_to="2026-04-02", max_steps=2, scale=0.05, memory="1GB", threads=2,
+        log=lambda s: None)
+
+    f = cache / "nf_tide" / "b20260401_h06.parquet"
+    field = pq.ParquetFile(f).schema_arrow.field("aid")
+    assert str(field.type).startswith("dictionary"), field.type
+
+    monkeypatch.setenv("MLBENCH_NF_CACHE", str(cache))
+    from mlbench.models.neuralforecast_models import NFTiDE
+
+    got = NFTiDE()._hourly(dt.date(2026, 4, 1), 6)
+    assert not got.empty
+    assert got["aid"].dtype == object, got["aid"].dtype
+    assert all(isinstance(v, str) for v in got["aid"].head(20))

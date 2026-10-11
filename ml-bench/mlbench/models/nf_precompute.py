@@ -347,7 +347,15 @@ def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_st
                 o_i, r_i, k_i = np.nonzero(ok)
                 t_abs = starts[o_i] + k_i
                 out[H].append(pd.DataFrame({
-                    "aid": aids[rows][r_i],
+                    # Dictionary-encoded, NOT a string array. `aids` is numpy '<U36', i.e.
+                    # 144 bytes per element, so one late block's h06 column alone is
+                    # ~800 MB -- doubled by the pd.concat at the end of the block. That is
+                    # what OOM-killed the 2026-06 block at the 8 GiB container cap
+                    # (rc=137), and later blocks are bigger still. As codes it is 4 bytes
+                    # per row, and parquet stores it as a dictionary column, so the cache
+                    # files shrink too. The plug-in casts back to str on read.
+                    "aid": pd.Categorical.from_codes(rows[r_i].astype(np.int32),
+                                                     categories=list(panel.aids)),
                     "origin_date": np.datetime64(c0, "D") + oo[o_i].astype("timedelta64[D]"),
                     "origin_hour": np.int8(H),
                     "date": np.datetime64(panel.day0, "D") + (t_abs // K).astype("timedelta64[D]"),
