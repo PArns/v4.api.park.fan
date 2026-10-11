@@ -304,6 +304,10 @@ class FoundationModel(Model):
     context_slots: ClassVar[int] = int(os.environ.get("MLBENCH_FM_CONTEXT", "8192"))
     daily_context_days: ClassVar[int] = 400
     covariate_history_days = 400
+    #: `predict()` walks back `context_slots // 24 + 2` days (compressed) and
+    #: `predict_daily()` `daily_context_days`; the runner has to materialise the larger
+    #: of the two or `HistoryView.df()` raises (critic S9 capped it at 56).
+    truth_history_days: ClassVar[int] = max(400, context_slots // 24 + 2)
 
     def __init__(self):
         self.stats = {"slot_calls": 0, "slot_seconds": 0.0, "daily_calls": 0, "daily_seconds": 0.0}

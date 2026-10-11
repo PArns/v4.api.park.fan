@@ -11,7 +11,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from mlbench import baselines as B
 from mlbench.config import BenchConfig
+from mlbench.models.base import Model
 from mlbench.models.foundation import Chronos2, Chronos2Grid, FoundationModel
 from mlbench.runner import Runner
 
@@ -161,3 +163,55 @@ def test_pair_with_enables_a_model_against_model_comparison(synth_export, tmp_pa
     # a comparator nobody paired against says so rather than disappearing
     assert not (tdir / "cells_vs_lvlh5_tft.csv").exists()
     assert "re-run with `--pair-with lvlh5_tft`" in (out / "summary.md").read_text()
+
+
+def test_runner_materialises_the_history_a_plugin_declares(synth_export, tmp_path):
+    """`HistoryView` raises above what the runner materialised (critic S9), and the
+    foundation plug-ins ask for ~343 days of compressed context and 400 for the daily
+    head — far beyond `BenchConfig.history_days` (56, the profile window). So the
+    runner must widen the materialised frame to the largest `truth_history_days` of
+    its registered models; otherwise every Chronos-2 origin is a `ValueError`, and a
+    cap that truncated instead would silently shorten the scored context."""
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1])
+    c = dt.date(2026, 4, 20)
+    fm = Chronos2()
+    r = Runner(synth_export, tmp_path, cfg, [fm], materialize=True, origins=(str(c), str(c)))
+    r.con.execute(f"CREATE OR REPLACE TEMP TABLE o AS {B.origin_sql(c.isoformat(), 6)}")
+
+    assert Chronos2.truth_history_days >= 400
+    assert r.history_days_needed() == Chronos2.truth_history_days
+    hv = r.history_view(c, "o")
+    assert hv.max_days == Chronos2.truth_history_days
+    hv.df(400)                                     # the daily head's ask must not raise
+    hv.df(FoundationModel.context_slots // 24 + 2)  # the compressed context's ask
+
+    # a model that declares nothing still gets exactly the config window, and the cap
+    # is read off the CLASS, so an instance attribute cannot widen it (same reasoning as
+    # critic S8's oracle-weather gate)
+    narrow = _Narrow()
+    narrow.truth_history_days = 400
+    r.set_models([narrow])
+    assert r.history_days_needed() == cfg.history_days
+    with pytest.raises(ValueError):
+        r.history_view(c, "o").df(cfg.history_days + 1)
+
+
+class _Narrow(Model):
+    name = "narrow"
+
+
+def test_history_view_cache_follows_the_origin_hour(synth_export, tmp_path):
+    """The intraday path reuses the table name `oh` for every origin hour, so a history
+    cache keyed on `(date, table name)` hands hour 8's context to hours 10…20 and every
+    intraday origin forecasts from a context frozen at the first hour of the day. The key
+    has to follow the information CUT, not the label."""
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0])
+    c = dt.date(2026, 4, 20)
+    r = Runner(synth_export, tmp_path, cfg, [Recorder()], materialize=True,
+               origins=(str(c), str(c)))
+    seen = {}
+    for h in (8, 20):
+        r.con.execute(f"CREATE OR REPLACE TEMP TABLE oh AS {B.origin_sql(c.isoformat(), h)}")
+        d = r.history_view(c, "oh").df(7)
+        seen[h] = len(d[pd.to_datetime(d["date"]).dt.date == c])
+    assert seen[8] < seen[20], f"origin-day slots did not grow with the hour: {seen}"

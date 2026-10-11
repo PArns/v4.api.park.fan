@@ -132,6 +132,13 @@ class Model:
     #: the origin, for models that read covariates alongside their context window.
     #: Past rows carry no window (open_utc/close_utc NULL) — use the history for that.
     covariate_history_days: ClassVar[int] = 0
+    #: days of truth the runner must MATERIALISE into ``origin.history`` for this model
+    #: (0 = ``BenchConfig.history_days``, 56). ``HistoryView.df(days)`` raises above what
+    #: was materialised rather than silently returning a short frame (critic S9), so a
+    #: model whose context window is longer than the profile window has to say so here —
+    #: otherwise it either crashes or, worse, gets quietly truncated context. A
+    #: foundation model with an 8192-slot compressed context needs ~343 days.
+    truth_history_days: ClassVar[int] = 0
 
     @classmethod
     def scored_name(cls) -> str:

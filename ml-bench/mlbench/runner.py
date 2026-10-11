@@ -346,6 +346,20 @@ class Runner:
         change inside an origin); tests that rewrite the tables do."""
         self._hv_cache = {}
 
+    def history_days_needed(self) -> int:
+        """How much truth ``origin.history`` must hold: the config window, widened to the
+        largest any registered plug-in declares.
+
+        ``HistoryView`` is materialised and raises above its cap (critic S9), while
+        PAR-828's foundation plug-ins ask for ``context_slots // 24 + 2`` (~343) days of
+        compressed context and 400 days for the daily head. Capping at
+        ``BenchConfig.history_days`` alone turns every Chronos-2 origin into a
+        ``ValueError`` — and a cap that merely truncated would be worse, because it would
+        silently shorten the context the published numbers were scored with.
+        """
+        return max([int(self.cfg.history_days)]
+                   + [int(type(m).truth_history_days) for m in self.models])
+
     def name_of(self, m: Model) -> str:
         return self._frozen[id(m)][0]
 
@@ -424,10 +438,19 @@ class Runner:
         way, so the only real fix is to fetch the frame up front and hand over data
         (critic S9). Cached per (origin, origin table) because the intraday path asks
         for the same view once per hour per model.
+
+        The key includes the table's LATEST ORIGIN, not just its name: the intraday path
+        reuses the name ``oh`` for every origin hour (``CREATE OR REPLACE TEMP TABLE oh``),
+        so keying on ``(date, table name)`` alone served hour 8's context at hours
+        10…20 — every intraday origin then forecast from a context frozen at the first
+        hour of the day, which is the opposite of UC1's premise and is invisible in the
+        output (`test_intraday_sees_origin_day`). Keying on the cut itself is also robust
+        to any future origin table whose contents change under a stable name.
         """
-        key = (c, origin_table)
+        days = self.history_days_needed()
+        cut = self.con.execute(f"SELECT max(origin_utc) FROM {origin_table}").fetchone()[0]
+        key = (c, origin_table, cut, days)
         if self._hv_cache.get("key") != key:
-            days = int(self.cfg.history_days)
             df = self.con.execute(f"""
                 SELECT t.aid AS attraction_id, t.park_id, t.date, t.slot_utc AS slot_start_utc,
                        t.slot_local, t.ws, t.ko, t.kc, t.y
