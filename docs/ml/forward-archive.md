@@ -446,3 +446,157 @@ shadow rows appear once its context is cached (usually the same day). Day *D* is
 scored at 12:00 UTC on *D + 1*, so the first `chronos2` (UC1/UC2) and
 `chronos2_grid` `d0` scores appear at the first 12:00 UTC scoring after a full
 day of captures; `dN` after *N* + 1 days. The verdict needs 14 scored days.
+
+## 9. Model comparison for the admin (PAR-855)
+
+**What it answers:** for every question the app answers, does any model beat
+**what is served today** for that question? One matrix, every model, live from
+this archive plus the offline verdicts of the ml-bench runs — the owner's
+switch rule made visible: (O) offline better over the whole year, (L) live
+≥ 14 days and ≥ 10 parks with the CI below zero, (S) visible in the app.
+
+Code: `src/ml/utils/forecast-archive-scoring.util.ts` (`scorePairedModels`),
+`src/ml/utils/weekday-average.util.ts`, `src/ml/utils/model-comparison.util.ts`
+(questions, state rule, notes, dates),
+`src/parks/services/model-comparison.service.ts`, the contract in
+`src/ml/dto/model-comparison.dto.ts`, the offline verdicts in
+`src/ml/data/offline-model-verdicts.json`. Frontend: park.fan PAR-856.
+
+### 9.1 Generalised paired scoring
+
+`scorePairedModels` runs inside the existing 12:00 UTC scoring next to
+`scorePairedShadows` and writes into the same `forecast_archive_paired`. Every
+row pairs one model with **`reference = served`** on identical truth slots (or
+ride-days) of the **same origin instant**. No key it writes is one
+`scorePairedShadows` writes (a spec asserts it), so PAR-852's Chronos rows are
+unchanged; the Chronos board section now reads its two models only.
+
+| model | served reference | use case × lead | origins |
+| --- | --- | --- | --- |
+| `persistence` (live wait at the origin, held flat) | `park_hourly` | UC1/UC2 slot leads | all |
+| `shadow_h5`, `shadow_h5_routed`, `shadow_peak_scaled`, `chronos2_grid` | `park_hourly` | UC1/UC2 slot leads | 06:00 |
+| `shadow_h5`, `shadow_h5_routed`, `shadow_peak_scaled`, `weekday_avg` | `plan_day` | UC3 dN | 06:00 / 07:00 |
+| the same four + `chronos2_grid` | `plan_day` | `D3` dN: best-time regret per ride-day, both judged on the same slots (`n` = ride-days, Σ\|e\| = Σ regret) | 06:00 / 07:00 |
+| `weekday_avg` | `plan_day` `dayPeak` | `PEAK` dN: \|day peak − truth P90\| per ride-day, `all` and `headliner` | 06:00 / 07:00 |
+| `chronos2` | `park_hourly` | UC1/UC2 — PAR-852's row, read as is | intraday |
+
+Segment `all` only (plus `headliner` for PEAK): the matrix shows nothing else.
+The routed H5 curve falls back to plain H5 where it was not archived, as in the
+scores.
+
+**Weekday average (`weekday_avg`).** The ex-ante yardstick: per ride and
+park-local quarter-hour, the mean over the **8 most recent same-weekday dates
+strictly before the origin's park-local date** of that date's wait — nothing
+at or after the origin's date, not even the morning the 06:00 origin has not
+seen yet (the util applies the guard itself; a spec pins it). It needs ≥ 2
+dates per quarter-hour. It is computed **at scoring time** from the
+`attraction_hourly_history` rollup — the per-quarter-hour mean of OPERATING
+STANDBY readings ≥ 5, i.e. a `queue_data` aggregate — forward-filled ≤ 3 h per
+day like the truth. The read is bounded: exactly the dates D − 7k for
+k = 1 … ⌊max lead / 7⌋ + 8 (≤ 20 dates for d90), one indexed query per park
+and scoring date, measured **15 ms** on production for Europa-Park (~95 rides ×
+8 dates). Its day peak is the P90 of its values over the served curve's span.
+
+**Size.** ~165 rows per park-day (segment `all`), ~21 k a day over ~126 parks,
+~2.5 M rows / ~330 MB at the 120-day retention (estimate, not measured). The
+hourly capture is untouched: everything here happens in the scoring job.
+
+### 9.2 Questions
+
+| id | group | label | served | use case × leads | metric |
+| --- | --- | --- | --- | --- | --- |
+| `live_h0_1` | live | Wartezeit in der nächsten Stunde | `pcn` | UC1 h0-1 | slot MAE |
+| `live_h1_2` | live | Wartezeit in 1 bis 2 Stunden | `pcn` | UC1 h1-2 | slot MAE |
+| `today_h2_6` | today | Heute, 2 bis 6 Stunden später | `pcn` | UC2 h2-6 | slot MAE |
+| `today_h6_12` | today | Heute, 6 bis 12 Stunden später | `pcn` | UC2 h6-12 | slot MAE |
+| `plan_d0_1` | planner | Geplanter Tag ist heute oder morgen | `served` | UC3 d0, d1 | slot MAE |
+| `plan_d2_5` | planner | Geplanter Tag ist in 2 bis 5 Tagen | `served` | UC3 d2–d5 | slot MAE |
+| `plan_d6_60` | planner | Geplanter Tag ist in 6 Tagen bis 2 Monaten | `served` | UC3 d6, d7, d10, d14, d21, d30, d45, d60 | slot MAE |
+| `plan_besttime` | planner | Beste Besuchszeit (bis 6 Wochen) | `served` | D3 d0–d7, d10, d14, d21, d30 | best-time regret |
+| `cal_busier` | calendar | Welcher Tag ist voller? | `tft` | PEAK d0–d7, d10, d14, d21 (headliners) | day-peak error |
+| `cal_far` | calendar | Kalendertage 1 bis 3 Monate voraus vergleichen | `tft` | PEAK d30, d45, d60, d90 (headliners) | day-peak error |
+
+Every question also carries `leadLabel`, the forecast distance in plain German
+("Prognose 2–5 Tage vorher, morgens um 06:05 gespeichert"). Every live metric
+is minutes, lower is better (`metric.unit = "min"`). The calendar questions
+read the planner's per-ride `dayPeak` — built on the same daily level the
+calendar reads (TFT ≤ 60 days, CatBoost beyond) — against the truth P90; the
+calendar's crowd level itself is not archived per model. **CatBoost** and
+**Toto 2.0 / TiRex** have no archived curve, so their cells are offline only
+(`checks.live = "open"`). Offline evidence for `cal_far` is a hit rate (+0.026
+for TFT); it stays in the note, never in `offline.diff`, which would then be in
+another unit than the live figure.
+
+### 9.3 Cells
+
+Per cell the question's leads × the column's archived model names are pooled
+per park (Σ minutes, then divide once) and PAR-852's park-cluster bootstrap
+(1,000 reps, per-cell seed) draws the 95 % CI of `diff = modelMae −
+referenceMae`, **negative = better than served**.
+
+State rule: the served model is `today`. A live comparison that meets the gate
+(14 days, 10 parks) decides — CI entirely < 0 `better`, entirely > 0 `worse`,
+else `unclear`. Below the gate the offline verdict speaks: offline `better` or
+a run in progress → `pending` (waiting for live confirmation), offline `worse`
+→ `worse`, otherwise `unclear`.
+
+`checks`: `offline` yes / no / running / open from the verdict file; `live`
+yes / no once the gate is met, `running` before, `open` when not archived;
+`visible` = the served model, or a confirmed live win of ≥ 1 minute.
+`expectedBy` (Europe/Berlin dates): for a live gate not met, lastDate + the
+missing days + 1 (a date is scored at 12:00 UTC the next day) — or, when only
+parks are missing, the next scoring; for an offline run in progress the file's
+`expectedBy`; the earlier of the two. `live.since` is the first scored date of
+that model × question over the whole table (cached per scoring run). `live` is
+null with fewer than two parks (no CI). `note` is generated from the numbers
+("1,3 Minuten besser als heute, sicher. 18 Tage, 34 Parks."); below the gate it
+is the offline note plus the live figures so far.
+
+**Offline verdicts** (`offline-model-verdicts.json`): per question × model
+`{ state, diff?, ciLow?, ciHigh?, source, period?, note, expectedBy? }`, and
+`servedNotes` for the `today` cells. Seeded from the approved mockup (ml-bench
+PR #445 full period, #447 driver_level, #450 Chronos-2). Only numbers a run
+reported against the served reference are filled in — no CI was reported, so
+none is in the file. Update it when a run lands; the service reads it at
+start-up.
+
+**The Chronos cells were filled on 2026-10-11** from the **mixed-weekday re-run**
+of #450 (`--shard 0/5`, 47 origins spread over all seven weekdays). The run it
+replaces used `--shard 0/7`, and a 7-day stride puts every origin on the same
+weekday — which locks every *lead* to one *target weekday* (origin Thursday → d2
+is always a Saturday). Its per-lead curve was therefore a per-weekday curve read
+as a per-lead one, and the d2/d3 loss against the H5 profile it reported does not
+survive mixed weekdays. Result: `plan_d0_1` `better`, `plan_d2_5` `unclear` (only
+d2 is a win, d3–d5 a tie), `plan_besttime` `worse` (best-time regret never gets
+under climatology), `live_h1_2` `better` and `live_h0_1` `worse` confirmed
+unchanged, `today_h2_6` / `today_h6_12` `pending` — Chronos beats the H5 profile
+there, but PCN is what is served and PCN is not in the offline benchmark, so only
+the live archive can decide those two. `plan_d6_60` has no Chronos cell at all:
+the archived `chronos_grid` surface stops at d7. Toto 2.0 / TiRex (`fm`) stay
+`pending` until PAR-853 reports.
+
+### 9.4 Endpoints
+
+All admin-auth, read-only, every query under statement limits.
+
+- `GET /v1/admin/model-comparison?days=28&region=ALL|EU|NA|ASIA|OTHER` —
+  `ModelComparisonResponseDto`. Cached 2 h under the scoring run's board
+  version (`forecast-archive:board:version`), so each scoring run retires every
+  variant. One aggregate over the window's paired rows (`GROUP BY` use case,
+  lead, model, segment, park).
+- `GET /v1/admin/model-comparison/day/options?date=YYYY-MM-DD` — target dates
+  with archived 06:00 curves (newest first, ≤ 30: 30 index probes, < 1 ms), and
+  the parks and rides with a `park_hourly` or `plan_day` curve that day (34 ms
+  on production for 2026-10-10). Origins `morning` / `d1` / `d3` / `d7` = the
+  06:00 capture of the day itself, one, three or seven days before.
+- `GET /v1/admin/model-comparison/day?parkId&date&attractionId&origin=morning`
+  — `slots` are park-local "HH:MM" quarter-hours from the first published
+  opening (floored) to the last closing; `truth` is the BENCH truth per slot
+  (null = not operating / no reading); `series` every archived surface of that
+  origin (`pcn` = park_hourly as served, `served`, `peak`, `h5`, `tfth5` only
+  where the routed curve was archived, `chronos`, `wkd` computed as above,
+  `persist` when the origin had a live wait), hourly surfaces read as a step;
+  `scores` the MAE of each over the slots with truth and a value, ascending.
+  `origin.at` (instant) and `origin.localLabel` ("10.10. 06:05 Uhr",
+  park-local; "keine Prognose gespeichert" without a capture), `openingHours`
+  park-local or null. Cached 15 min.

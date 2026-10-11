@@ -284,14 +284,31 @@ describe("ForecastArchiveScoringService.scoreDue", () => {
       saeRef: 50,
     });
     expect(paired("h5")).toMatchObject({ n: 8, saeRef: 60 });
-    expect(insertedPaired.map((r) => r.segment).sort()).toEqual([
-      "all",
-      "all",
-      "busy",
-      "busy",
-      "headliner",
-      "headliner",
-    ]);
+    expect(
+      insertedPaired
+        .filter((r) => r.model === "chronos2_grid" && r.useCase === "UC3")
+        .map((r) => r.segment)
+        .sort(),
+    ).toEqual(["all", "all", "busy", "busy", "headliner", "headliner"]);
+    // PAR-855: the H5 shadow against the served plan on the same slots, and
+    // both shadows' best-time regret against the plan's, segment `all` only.
+    expect(
+      insertedPaired.find(
+        (r) =>
+          r.model === "shadow_h5" && r.useCase === "UC3" && r.lead === "d1",
+      ),
+    ).toMatchObject({ reference: "served", segment: "all", n: 8, saeRef: 50 });
+    expect(
+      insertedPaired
+        .filter((r) => r.useCase === "D3")
+        .map((r) => r.model)
+        .sort(),
+    ).toEqual(["chronos2_grid", "shadow_h5", "shadow_h5_routed"]);
+    expect(
+      insertedPaired
+        .filter((r) => r.model !== "chronos2_grid" || r.useCase !== "UC3")
+        .every((r) => r.segment === "all" && r.reference === "served"),
+    ).toBe(true);
   });
 
   it("does nothing when every date is scored", async () => {

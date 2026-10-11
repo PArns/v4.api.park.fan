@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Redis } from "ioredis";
-import { fromZonedTime } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { Park } from "../entities/park.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
@@ -32,8 +32,14 @@ import {
   regionOf,
   scoreCrossParkCrowd,
   scoreParkDay,
+  scorePairedModels,
   scorePairedShadows,
 } from "../../ml/utils/forecast-archive-scoring.util";
+import {
+  DaySlots,
+  forwardFillDay,
+  weekdayHistoryDates,
+} from "../../ml/utils/weekday-average.util";
 import { ChronosShadowService } from "./chronos-shadow.service";
 import {
   ChronosBoard,
@@ -55,7 +61,7 @@ const READ_LIMITS: StatementLimits = {
 
 /** Bumped by every scoring run; the board cache is keyed on it, so one
  *  INCR retires every cached `days` × region variant at once. */
-const BOARD_VERSION_KEY = "forecast-archive:board:version";
+export const BOARD_VERSION_KEY = "forecast-archive:board:version";
 
 /** Parks scored side by side. */
 const BATCH_SIZE = 4;
@@ -292,6 +298,44 @@ export class ForecastArchiveScoringService {
     // only once this park's day scored, so a failure leaves no half a park.
     const paired = new PairedAccumulator();
     scorePairedShadows(curves, truth, paired);
+    // Every other model against what is served (PAR-855), including the
+    // ex-ante weekday average built from the rollup before each origin.
+    const planLeads = curves
+      .filter((c) => c.surface === "plan_day" && c.originKind !== "intraday")
+      .map((c) => c.leadDays);
+    const history =
+      planLeads.length > 0 && attractionIds.length > 0
+        ? await this.weekdayHistory(
+            park.id,
+            weekdayHistoryDates(targetDate, Math.max(...planLeads)),
+          ).catch((err: Error) => {
+            // The weekday average is a yardstick; without it the rest scores.
+            this.logger.warn(
+              `Forward archive scoring: weekday history for ${park.slug} ${targetDate} unavailable: ${err.message}`,
+            );
+            return null;
+          })
+        : null;
+    const clockCache = new Map<number, string>();
+    scorePairedModels(
+      curves,
+      truth,
+      paired,
+      history
+        ? {
+            targetDate,
+            history,
+            clock: (ms) => {
+              let v = clockCache.get(ms);
+              if (v === undefined) {
+                v = formatInTimeZone(new Date(ms), park.timezone, "HH:mm");
+                clockCache.set(ms, v);
+              }
+              return v;
+            },
+          }
+        : null,
+    );
 
     const observations = scoreParkDay(
       {
@@ -345,6 +389,42 @@ export class ForecastArchiveScoringService {
       laterAt: c.laterAt ? new Date(c.laterAt).getTime() : null,
       levelSource: c.levelSource,
     };
+  }
+
+  /**
+   * The weekday average's input (PAR-855): the `attraction_hourly_history`
+   * rows of exactly the given park-local dates (the same-weekday dates before
+   * the target, at most 20), forward-filled per ride-day. One indexed read of
+   * ≤ ~40 rides × 20 rows of jsonb per park and scoring date.
+   */
+  private async weekdayHistory(
+    parkId: string,
+    dates: string[],
+  ): Promise<Map<string, Map<string, DaySlots>>> {
+    const out = new Map<string, Map<string, DaySlots>>();
+    if (dates.length === 0) return out;
+    const rows = await queryWithLimits<
+      Array<{
+        id: string;
+        d: string;
+        slots: Array<{ time_slot: string; avgWait: number }> | null;
+      }>
+    >(
+      this.curveRepository.manager.connection,
+      `SELECT "attractionId" AS id, date::text AS d, slots
+         FROM attraction_hourly_history
+        WHERE "parkId" = $1 AND date = ANY($2::date[])`,
+      [parkId, dates],
+      READ_LIMITS,
+    );
+    for (const r of rows) {
+      const day = forwardFillDay(r.slots ?? []);
+      if (day.size === 0) continue;
+      const m = out.get(r.id) ?? new Map<string, DaySlots>();
+      m.set(r.d, day);
+      out.set(r.id, m);
+    }
+    return out;
   }
 
   /** The park's published OPERATING windows for the date (park-wide rows). */
@@ -504,6 +584,11 @@ export class ForecastArchiveScoringService {
             })
             .andWhere(region === "ALL" ? "TRUE" : "p.region = :region", {
               region,
+            })
+            // The model comparison's rows (PAR-855) share the table; the
+            // Chronos section reads its own two models only.
+            .andWhere("p.model IN (:...chronosModels)", {
+              chronosModels: ["chronos2", "chronos2_grid"],
             })
             .getMany()
             .catch((err: Error) => {
