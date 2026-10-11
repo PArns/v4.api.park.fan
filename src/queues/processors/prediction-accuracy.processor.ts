@@ -134,11 +134,20 @@ export class PredictionAccuracyProcessor {
       // stats row would keep whatever an earlier run wrote — before PAR-854, a
       // CatBoost badge. Nothing measured it; nothing should be shown for it.
       const kept = statsRows.map((r) => r.attractionId);
-      await this.statsRepository.query(
-        `DELETE FROM attraction_accuracy_stats
-          WHERE NOT (attraction_id::text = ANY($1::text[]))`,
-        [kept],
-      );
+      // An empty result means the comparison job produced nothing in the whole
+      // window (it was down), not that every ride stopped being measured — so
+      // the sweep is skipped instead of emptying the table.
+      if (kept.length > 0) {
+        await this.statsRepository.query(
+          `DELETE FROM attraction_accuracy_stats
+            WHERE NOT (attraction_id::text = ANY($1::text[]))`,
+          [kept],
+        );
+      } else {
+        this.logger.warn(
+          "aggregate-stats: no completed comparison in the window — stale-row sweep skipped",
+        );
+      }
 
       await this.redis.set(
         "ml:accuracy:last_aggregation",

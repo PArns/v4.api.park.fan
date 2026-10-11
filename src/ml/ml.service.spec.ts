@@ -491,7 +491,7 @@ describe("MLService", () => {
       // At 30 minutes the blend serves the anchor — the wait read now — and the
       // comparison job would score it against the reading nearest the slot,
       // largely itself. Null leaves the row's served columns untouched, so the
-      // value kept is the last one shown at least an hour ahead.
+      // value kept is the last one shown at least two hours ahead.
       process.env.SERVE_PCN_INTRADAY = "true";
       mockPredictionRepository.manager.query.mockResolvedValue(
         pcnRows([nearSlot]),
@@ -499,6 +499,22 @@ describe("MLService", () => {
 
       const served = await service.servedIntradayValues(
         [row(nearSlot), row(farSlot)],
+        currentSlotStartMs(),
+      );
+
+      expect(served[0]).toBeNull();
+      expect(served[1]).not.toBeNull();
+    });
+
+    it("records nothing between one and two hours ahead either", async () => {
+      // 60–120 minutes is still the blend's pure-anchor stretch at its near
+      // end: scoring it would grade persistence (review of PR #452).
+      process.env.SERVE_PCN_INTRADAY = "true";
+      const slot = currentSlotStartMs() + 1.5 * HOUR;
+      mockPredictionRepository.manager.query.mockResolvedValue(pcnRows([slot]));
+
+      const served = await service.servedIntradayValues(
+        [row(slot), row(farSlot)],
         currentSlotStartMs(),
       );
 
@@ -1027,7 +1043,7 @@ describe("MLService", () => {
           new Date(currentSlotStartMs() + h * 3_600_000).toISOString();
         try {
           await service.storePredictions([
-            { ...hourly("10", "OPERATING"), predictedTime: inHours(2) },
+            { ...hourly("10", "OPERATING"), predictedTime: inHours(2.5) },
             {
               ...hourly("11", "OPERATING"),
               predictedTime: inHours(3),

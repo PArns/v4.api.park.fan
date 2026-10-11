@@ -304,7 +304,7 @@ alleiniger Level-Lieferant bleibt.
 
 > **Update (PAR-854, 2026-10-11, English):** the reader-facing figures now follow
 > the served model — the attraction accuracy badge scores the served PCN + blend
-> value (`prediction_accuracy.served_*`, captured one hour ahead) and
+> value (`prediction_accuracy.served_*`, captured two hours ahead) and
 > `/plan/day` `leadTimeMae` the served TFT/CatBoost daily level. The admin KPIs
 > above still score raw CatBoost by design. See
 > [Reader-facing accuracy figures](reader-facing-accuracy.md).

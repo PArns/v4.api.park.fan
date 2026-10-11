@@ -26,12 +26,13 @@ export const PCN_MAX_FORECAST_AGE_H = 3;
  *
  * So the served columns are written only while the slot is still at least this
  * far away; the latest such write wins, which pins the scored lead to between
- * one hour and one generation cycle more. One hour is the near end of what a
- * reader plans with ("what will it be when I get there"), and at that lead the
- * blend is still the anchor — persistence an hour ahead, which is a forecast,
- * not a reading.
+ * two hours and one generation cycle more. Not one hour: the blend is the pure
+ * anchor up to 1 h (alpha = 1) and only hands over to PCN by 3 h, so a badge
+ * scored at 60–75 min would grade persistence and read "excellent" on every
+ * steady busy ride. At 2 h the served value is half anchor, half PCN — the
+ * forecast a reader actually plans with ("what will it be when I get there").
  */
-export const SERVED_ACCURACY_MIN_LEAD_MS = 60 * 60 * 1000;
+export const SERVED_ACCURACY_MIN_LEAD_MS = 2 * 60 * 60 * 1000;
 
 /** Champion-swap flag: serve PCN's intraday 15-min forecast in place of CatBoost's
  * `hourly` predictions. Read per call so tests/env toggles apply without restart. */

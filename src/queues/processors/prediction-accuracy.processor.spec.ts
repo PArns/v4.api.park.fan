@@ -281,6 +281,19 @@ describe("PredictionAccuracyProcessor", () => {
     });
   });
 
+  describe("aggregate-stats with nothing compared", () => {
+    it("skips the stale-row sweep instead of emptying the table", async () => {
+      accuracyRepo.query.mockResolvedValueOnce([]);
+
+      await processor.handleAggregateStats({} as Job);
+
+      const deletes = statsRepo.query.mock.calls.filter(([sql]) =>
+        /DELETE FROM attraction_accuracy_stats/.test(String(sql)),
+      );
+      expect(deletes).toHaveLength(0);
+    });
+  });
+
   describe("cleanup-old (retention windows)", () => {
     it("applies 7-day cutoff for MISSED + PENDING and 90-day cutoff for COMPLETED", async () => {
       accuracyRepo.delete

@@ -72,12 +72,16 @@ the comparison scores it against the reading nearest the slot — largely itself
 Every busy ride would read "excellent" by construction.
 
 So the served columns are written only while the slot is at least
-`SERVED_ACCURACY_MIN_LEAD_MS` (60 min) away. Closer writes leave them alone —
+`SERVED_ACCURACY_MIN_LEAD_MS` (2 h) away. Closer writes leave them alone —
 they go in a separate upsert statement, because TypeORM overwrites a column for
 every row of a statement once one row carries it. The value kept is the last
-one shown 60–75 minutes ahead. At that lead the blend still serves the anchor:
-persistence an hour ahead, which is a forecast. The raw columns keep their old
-(latest-write) semantics; the admin boards are unchanged.
+one shown 120–135 minutes ahead. Not one hour: the blend is the pure anchor up
+to 1 h and hands over to PCN only by 3 h, so a badge scored at 60–75 minutes
+would grade persistence and call every steady busy ride "excellent" (review of
+PR #452). At 2 h the served value is half anchor, half PCN. The badge therefore
+reads "accuracy of the forecast about two hours ahead", never a whole-day figure.
+The raw columns keep their old (latest-write) semantics; the admin boards are
+unchanged.
 
 ### The day-curve band stays CatBoost's
 

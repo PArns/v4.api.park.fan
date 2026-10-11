@@ -529,7 +529,7 @@ export class AttractionResponseDto {
     description:
       "Prediction accuracy of the SERVED intraday forecast — the wait this " +
       "endpoint's `hourlyForecast` shows (PCN + persistence blend where it " +
-      "serves, CatBoost otherwise), scored about one hour ahead of each slot. " +
+      "serves, CatBoost otherwise), scored about two hours ahead of each slot (not a whole-day figure). " +
       "`insufficient_data` below 10 compared slots; render no badge then.",
     required: false,
     nullable: true,
