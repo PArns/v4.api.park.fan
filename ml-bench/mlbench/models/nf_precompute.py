@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import gc
 import math
 import json
 import os
@@ -363,6 +364,17 @@ def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_st
                     "q50": np.maximum(fc[o_i, r_i, k_i, 0], 0), "q80": np.maximum(fc[o_i, r_i, k_i, 1], 0),
                     "q95": np.maximum(fc[o_i, r_i, k_i, 2], 0)}))
                 del ds, arr
+                # Reclaim the chunk DETERMINISTICALLY. `del` alone is not enough:
+                # pytorch-lightning's predict path builds reference CYCLES
+                # (trainer <-> model <-> datamodule), so each call's dataset -- the
+                # [chunk, series, L+h, cols] window array, ~0.4 GB -- is only freed when
+                # the cyclic collector happens to run. Measured on the 2026-07 block:
+                # memory sawtoothed 4.1 -> 7.8 GiB across ~10 predict calls and then
+                # collapsed back, i.e. ten chunks' arrays were alive at once. That peak
+                # is what OOM-killed the block at the 8 GiB cap, and it is why lowering
+                # DuckDB's share or the chunk size only moved the cliff. One collect per
+                # chunk costs milliseconds against a ~3 s chunk.
+                gc.collect()
         vram = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
         t_total = time.monotonic() - t0
         log(f"  {name} group={g} series={len(rows)} fit={t_fit:.0f}s "
@@ -375,6 +387,7 @@ def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_st
                                     "fit_seconds": round(t_fit, 1), "seconds": round(t_total, 1),
                                     "peak_vram_gb_torch": round(vram, 2), **sizing})
         del model
+        gc.collect()
     return {H: pd.concat(v, ignore_index=True) if v else pd.DataFrame() for H, v in out.items()}
 
 
