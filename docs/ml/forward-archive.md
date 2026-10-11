@@ -554,7 +554,11 @@ is the offline note plus the live figures so far.
 
 **Offline verdicts** (`offline-model-verdicts.json`): per question × model
 `{ state, diff?, ciLow?, ciHigh?, source, period?, note, expectedBy? }`, and
-`servedNotes` for the `today` cells. Seeded from the approved mockup (ml-bench
+`servedNotes` for the `today` cells. A cell's state is always against the
+**served** model of the question; a figure against `wt_med`, climatology or
+persistence is quoted in the note, never in `diff`, and a split across the
+question's leads (e.g. Chronos-2 worse at 15 min, better at 30 and 60) is
+`pending` when the majority is a win, with the split spelled out. Seeded from the approved mockup (ml-bench
 PR #445 full period, #447 driver_level, #450 Chronos-2). Only numbers a run
 reported against the served reference are filled in — no CI was reported, so
 none is in the file. Update it when a run lands; the service reads it at
@@ -575,6 +579,27 @@ the live archive can decide those two. `plan_d6_60` has no Chronos cell at all:
 the archived `chronos_grid` surface stops at d7. Toto 2.0 / TiRex (`fm`) stay
 `pending` until PAR-853 reports.
 
+**Corrections of 2026-10-11 (PAR-855 follow-up), checked against
+[foundation-models.md](foundation-models.md), [ml-bench.md](ml-bench.md) and
+[level-drivers.md](level-drivers.md):** `live_h0_1` × Chronos `worse` →
+`pending` (vs persistence +0.26 [+0.18, +0.36] at 15 min, −0.42 [−0.61, −0.21]
+at 30, −1.26 [−1.60, −0.93] at 60; #450 full period, 33 origins, 30 parks);
+`live_h0_1` × persistence `better` → `unclear` (the served PCN is blended to
+this very value in the first hour, and no run compares the two); `plan_d6_60` ×
+TFT×H5 `worse` → `unclear` (the +0.42 was against `wt_med`; against served it
+is ahead by point estimate); the `plan_d0_1` × TFT×H5 `diff` (−0.3, against
+`wt_med`, headline window only) removed. Notes that quoted the headline window
+as the full period, or a lead outside the question (the 15-min figures in
+`live_h1_2`), were corrected: `live_h1_2` × persistence / H5 / TFT×H5,
+`today_h6_12` × persistence / TFT×H5, `plan_d0_1` × TFT×H5, `plan_d2_5` × H5,
+`plan_d6_60` × H5, `plan_besttime` × H5, `cal_busier` × weekday average and its
+served note. **Left for the owner:** `plan_besttime` × Chronos and `cal_far` ×
+weekday average are judged against climatology / a hit rate rather than the
+served model on the question's own metric (against served, both point
+estimates favour the challenger, without a CI), and `plan_d0_1` × TFT×H5 keeps
+`better` although the full-period all-ride figure is +0.09 (n.s.) — the routed
+curve is not what the bench measured.
+
 ### 9.4 Endpoints
 
 All admin-auth, read-only, every query under statement limits.
@@ -584,15 +609,38 @@ All admin-auth, read-only, every query under statement limits.
   version (`forecast-archive:board:version`), so each scoring run retires every
   variant. One aggregate over the window's paired rows (`GROUP BY` use case,
   lead, model, segment, park).
-- `GET /v1/admin/model-comparison/day/options?date=YYYY-MM-DD` — target dates
-  with archived 06:00 curves (newest first, ≤ 30: 30 index probes, < 1 ms), and
-  the parks and rides with a `park_hourly` or `plan_day` curve that day (34 ms
-  on production for 2026-10-10). Origins `morning` / `d1` / `d3` / `d7` = the
-  06:00 capture of the day itself, one, three or seven days before.
+- `GET /v1/admin/model-comparison/day/options?date=YYYY-MM-DD` — **complete**
+  target dates with archived 06:00 curves (newest first, ≤ 30): a date is
+  listed once it is over in the timezone of every park (`lastCompleteDate`, so
+  the US west coast holds a date back until ~09:00 Berlin). `parks` / `rides`
+  are the rides with a `park_hourly` or `plan_day` curve on `date` **and
+  OPERATING truth that day** — a ride without any is left out, not flagged.
+  Truth coverage per ride is the share of the operating window (published
+  hours, else the park-local day) in which an OPERATING STANDBY reading ≥ 5 min
+  was in force (≤ 3 h old): the truth rule, time-weighted. One pass over that
+  day's change log of all archived rides, 0.6 s on production for 2026-10-10
+  (5,645 rides, 356 k rows); cached 15 min. `parks` are ordered by data
+  richness (rides with coverage ≥ 0.5, then rides with any truth, then name),
+  `rides` headliners first, then by coverage. `suggested` (`{ date, parkId,
+  attractionId }` or null) is the first ride in that order with coverage ≥ 0.5
+  and curves from as many archived surfaces (morning origin) as any such ride.
+  Without a `date`, the newest of the first three complete dates that has a
+  suggestion is described; an explicit `date` is described as asked, even an
+  incomplete one. Validated on 2026-10-10: Alton Towers / Spinball Whizzer
+  (headliner, 99 % coverage, 5 surfaces; 40 of 42 rides with coverage ≥ 0.5);
+  2,406 of 5,645 archived rides had any truth that day. The previous default,
+  Adventureland Resort / Draken Falls (no OPERATING row, schedule `UNKNOWN`), is
+  no longer listed. Origins `morning` / `d1` / `d3` / `d7` = the 06:00 capture
+  of the day itself, one, three or seven days before.
 - `GET /v1/admin/model-comparison/day?parkId&date&attractionId&origin=morning`
-  — `slots` are park-local "HH:MM" quarter-hours from the first published
-  opening (floored) to the last closing; `truth` is the BENCH truth per slot
-  (null = not operating / no reading); `series` every archived surface of that
+  — `slots` are park-local "HH:MM" quarter-hours of the operating window only
+  (`dayViewSlots`): the first published opening (floored) to the last closing;
+  without published hours the first to the last slot with OPERATING truth,
+  padded by one hour (truth is then read over the park-local day); without
+  truth either, the span where the served curve (`plan_day`, else
+  `park_hourly`) has values. Never a fixed clock window. `truth` is the BENCH
+  truth per slot (null = not operating / no reading), `truthCoverage` the
+  share of slots with a truth value (0 = no measurements that day); `series` every archived surface of that
   origin (`pcn` = park_hourly as served, `served`, `peak`, `h5`, `tfth5` only
   where the routed curve was archived, `chronos`, `wkd` computed as above,
   `persist` when the origin had a live wait), hourly surfaces read as a step;
