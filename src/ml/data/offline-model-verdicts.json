@@ -12,7 +12,7 @@
         "state": "pending",
         "source": "ml-bench PR #450 (Chronos-2, ganzer Zeitraum)",
         "period": "2026-02-19..2026-10-07",
-        "note": "Offline besser als die aktuelle Wartezeit, wartet auf das Live-Archiv: nur auf 15 Minuten schlechter (+0,26 [+0,18; +0,36]), auf 30 Minuten besser (−0,42 [−0,61; −0,21]) und auf 60 Minuten besser (−1,26 [−1,60; −0,93]), sicher (ganzer Zeitraum, 33 Zeitpunkte, 30 Parks). Gegen PCN misst das erst das Live-Archiv."
+        "note": "Offline besser als die aktuelle Wartezeit, wartet auf das Live-Archiv: nur auf 15 Minuten schlechter (+0,27 [+0,19; +0,37]), auf 30 Minuten besser (−0,41 [−0,60; −0,20]) und auf 60 Minuten besser (−1,27 [−1,62; −0,91]), sicher (ganzer Zeitraum, 47 Zeitpunkte über alle Wochentage, 30 Parks). Gegen PCN misst das erst das Live-Archiv."
       },
       "h5": {
         "state": "worse",
@@ -53,7 +53,7 @@
         "state": "worse",
         "source": "ml-bench PR #450 (Chronos-2, ganzer Zeitraum)",
         "period": "2026-02-19..2026-10-07",
-        "note": "Liegt bei 1 bis 2 Stunden 1,9 bis 2,3 Minuten hinter Chronos-2."
+        "note": "Liegt bei 1 bis 2 Stunden 1,9 bis 2,4 Minuten hinter Chronos-2."
       },
       "fm": {
         "state": "pending",
