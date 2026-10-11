@@ -1,4 +1,9 @@
-import { Injectable, Inject, Logger } from "@nestjs/common";
+import {
+  Injectable,
+  Inject,
+  Logger,
+  ServiceUnavailableException,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { subDays, subYears } from "date-fns";
@@ -329,23 +334,26 @@ export class ParkHistoricalStatsService {
     // next callers fail fast instead of each paying for another attempt.
     const failureKey = `${cacheKey}:failed`;
     return this.hourlyProfileFlight.run(cacheKey, async () => {
+      // A caller that read the cache just before the previous build wrote it
+      // arrives here after that flight has ended; read again rather than
+      // start a second build.
+      const warmed = safeJsonParse<ParkHourlyProfileDto>(
+        await this.redis.get(cacheKey),
+      );
+      if (warmed) return warmed;
       if (await this.redis.get(failureKey)) {
-        throw new Error("hourly profile build failed recently");
+        throw new ServiceUnavailableException(
+          "Hourly profile build failed recently",
+        );
       }
+      let result: ParkHourlyProfileDto;
       try {
-        const result = await this.computeHourlyProfile(
+        result = await this.computeHourlyProfile(
           park,
           years,
           topN,
           minAttractionDays,
         );
-        await this.redis.set(
-          cacheKey,
-          JSON.stringify(result),
-          "EX",
-          this.CACHE_TTL,
-        );
-        return result;
       } catch (err) {
         try {
           await this.redis.set(
@@ -359,6 +367,19 @@ export class ParkHistoricalStatsService {
         }
         throw err;
       }
+      try {
+        await this.redis.set(
+          cacheKey,
+          JSON.stringify(result),
+          "EX",
+          this.CACHE_TTL,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Hourly profile cache write failed for ${park.slug}: ${(err as Error).message}`,
+        );
+      }
+      return result;
     });
   }
 

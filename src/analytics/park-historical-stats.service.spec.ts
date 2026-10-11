@@ -743,7 +743,7 @@ describe("ParkHistoricalStatsService", () => {
           Promise.resolve(key.endsWith(":failed") ? "1" : null),
         );
         await expect(service.getParkHourlyProfile(park, 1, 8)).rejects.toThrow(
-          "recently",
+          "failed recently",
         );
         expect(aggregateQuery.mock.calls.length).toBe(queriesAfterFailure);
       });
