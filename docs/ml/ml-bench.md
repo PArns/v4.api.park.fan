@@ -679,6 +679,56 @@ candidate that breaks it is `snaive7` (−0.36 [−0.74, +0.00]) — not climato
 `h5`'s own margin against the weekday median is −0.14 at every lead from d0 to
 d60; what it cannot do is separate from climatology between d7 and d60.
 
+### The origin-constant pass: the busy band is season-CONDITIONAL, not undecidable
+
+The third view is in (`tables_o2026-08-15_2026-10-07/`, `report-tables_o2026-08-15_2026-10-07.json`, git `53165b5f`, 699 s). It holds the **origin** window at 2026-08-15 … 10-07 and lets the targets drift, which is the only one of the three views that takes the origin-season gradient off the lead axis.
+
+**First, its honest validity range.** The origin window is fixed, but a lead-L origin needs its target inside the truth, so the late — autumn — origins drop out as the lead grows:
+
+| lead | origins scored | summer / autumn | headline window's mix, for comparison |
+|---|---|---|---|
+| d0 | 54 | 31 % / **69 %** | 31 % / 69 % |
+| d3 | 51 | 33 % / **67 %** | 37 % / 63 % |
+| d7 | 47 | 36 % / **64 %** | 44 % / 56 % |
+| d10 | 44 | 39 % / **61 %** | 50 % / 50 % |
+| d14 | 40 | 42 % / 58 % | 57 % / 43 % |
+| d30 | 24 | 71 % / 29 % | 87 % / 13 % |
+| d45 | 9 | 100 % / 0 % | 100 % / 0 % |
+
+So it is a **good control over d0–d10** — the mix moves only 69 % → 61 % autumn, against the headline window's 69 % → 50 % — and it **degenerates past d14**, where it is majority summer on 24–40 origins. It cannot speak to long leads, and I am not using it there.
+
+**Inside that range it answers the question.** `lvlh5_tft`, ex-ante busy, paired margins with both CIs:
+
+| lead | vs `wt_med` (park-cluster) | (park-day) | vs `clim` (park-cluster) | beats envelope? |
+|---|---|---|---|---|
+| 0 | −1.361 [−1.908, −0.814] | [−1.594, −1.126] | −2.363 [−2.800, −1.835] | **yes** |
+| 2 | −1.269 [−1.876, −0.678] | [−1.508, −1.016] | −1.967 [−2.427, −1.426] | **yes** |
+| 3 | −1.151 [−1.735, −0.550] | [−1.390, −0.900] | −1.718 [−2.163, −1.224] | **yes** |
+| 6 | −1.058 [−1.752, −0.430] | [−1.309, −0.802] | −1.388 [−1.866, −0.874] | **yes** |
+| 7 | −0.897 [−1.494, −0.324] | [−1.150, −0.641] | −0.974 [−1.461, −0.452] | **yes** |
+| **10** | **−0.988 [−1.640, −0.376]** | [−1.257, −0.705] | **−0.632 [−1.175, −0.036]** | **yes** |
+| 14 | −0.708 [−1.479, **+0.045**] | [−1.011, −0.428] | **+0.201** [−0.439, +0.906] | no |
+
+`paired_share` is 0.973–0.980 throughout, so this is not a coverage effect. The band ends **cleanly at d10** and the candidate that ends it is climatology.
+
+**The three views side by side, ex-ante busy:**
+
+| view | what it fixes | origin season | band |
+|---|---|---|---|
+| headline window | the target days | drifts 69 % → 50 % autumn over d1–d10 | **d0–d10** |
+| full period | nothing | year-round, ~16 % autumn in the d3–d6 cells | **d0–d2** |
+| **origin-constant** | the origin days | drifts 69 % → 61 % autumn over d0–d10 | **d0–d10** |
+
+**What it decides.** The d10 boundary is **not** an artefact of origin-season drift along the lead axis: remove most of that drift and d10 reproduces, with every CI excluding 0 against both binding naives. So the full period's d0–d2 is not a correction of the headline window — **it is a year-round average that weights the season where the TFT level helps at about one sixth.** Both numbers are right about different populations, and the answer to "d0–d2 or ≤ d6?" is neither: **the band is d0–d10 for late-summer/autumn-shoulder origins and d0–d2 as a year-round floor.** It is season-conditional, not undecidable.
+
+**Consequence for PR #446, which is the decision this was run for.** The shipped ≤ d6 scope is neither right nor wrong — it is **unconditioned**: too wide for a year-round rule, too narrow for the autumn shoulder. My earlier ask was "narrow to d0–d2 **or** gate it seasonally"; this pass promotes the second branch from an option to the recommendation. **Gate the routing on season: d10 for origins in the late-summer/autumn shoulder, d2 otherwise.** A flat ≤ d6 is the one choice the evidence does not support, because it is wrong in both directions at once.
+
+**`h5` shows the mirror, which is what makes the mechanism credible.** Its band is d0–d5 in *both* autumn-heavy views and **d0–d45 on the full period** — wider year-round, narrower in autumn. The reason is not `h5`: its own margin over the weekday median is season-neutral and significant in both halves (−0.199 autumn, −0.030 summer at d1). What moves is the naive it has to beat — **climatology beats the weekday median only in autumn**, so in autumn-heavy data `clim` is a stronger blocker and caps `h5` at d5. So the "d6–d60 dead band" is an autumn phenomenon, not a horizon limit, and the same seasonal fact explains both the TFT level's autumn gain and `h5`'s autumn cap.
+
+**Reconciled with the heartbeat result, in one sentence.** Both independent perturbations of this boundary push it the same way — dropping the carried-forward truth slots extends the band (all six hand-over flips gain significance, none loses; `h5` all-rides d0–d5 → d0–d6) and removing the origin-season drift extends the busy band from d2 to d10 — so **d0–d2 is a floor that nothing tested so far moves inward, the open heartbeat decision and the season question can only widen the band from it, and the risk of acting on d0–d2 is therefore one-sided in both dimensions at once.**
+
+**Residual limit, stated because all three views share it:** every one of them is either ≥ 58 % autumn or a year-round average weighted toward summer. None is a holiday-rich or peak-summer window. "The autumn shoulder" is the only season for which this review has a measured band, and the year-round floor is an average, not a measurement of any other season.
+
 ### Which results survive BOTH passes — read this before acting on anything
 
 This is the section critic B2 asked for, and it changes the recommendation. Of the
