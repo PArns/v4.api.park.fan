@@ -130,10 +130,46 @@ export function dueNotifications(
   return out.sort((a, b) => a.inMinutes - b.inMinutes);
 }
 
+/** A park with something planned for its own today. */
+export interface PlannedParkToday {
+  slug: string;
+  /** The geographic path, which a bare slug cannot replace: slugs repeat across destinations. */
+  geo: { continent: string; country: string; city: string };
+}
+
+/**
+ * The parks in a plan that have at least one block on the park's own today.
+ *
+ * Day and zone are the park's, for the reason `dueNotifications` gives. A park
+ * without a geographic path is left out: its slug alone can name two different
+ * parks, and warning about rain at the wrong one is worse than no warning. A
+ * ticked-off block still counts, since the visitor's day is not over for having
+ * done the first ride.
+ */
+export function parksPlannedToday(
+  payload: unknown,
+  nowMs: number,
+): PlannedParkToday[] {
+  const out: PlannedParkToday[] = [];
+  for (const park of readParks(payload)) {
+    if (!park.timezone || !park.geo) continue;
+    let today: string;
+    try {
+      today = formatInTimeZone(new Date(nowMs), park.timezone, "yyyy-MM-dd");
+    } catch {
+      continue;
+    }
+    if ((park.days[today]?.entries.length ?? 0) === 0) continue;
+    out.push({ slug: park.slug, geo: park.geo });
+  }
+  return out;
+}
+
 interface PlanPark {
   slug: string;
   name: string;
   timezone: string | null;
+  geo: { continent: string; country: string; city: string } | null;
   days: Record<string, { entries: PlanEntry[] }>;
 }
 
@@ -168,10 +204,27 @@ function readParks(payload: unknown): PlanPark[] {
       slug,
       name: typeof raw.name === "string" ? raw.name : slug,
       timezone: typeof raw.timezone === "string" ? raw.timezone : null,
+      geo: readGeo(raw.geo),
       days,
     });
   }
   return out;
+}
+
+function readGeo(value: unknown): PlanPark["geo"] {
+  if (!isObject(value)) return null;
+  const { continent, country, city } = value;
+  if (
+    typeof continent !== "string" ||
+    typeof country !== "string" ||
+    typeof city !== "string" ||
+    !continent ||
+    !country ||
+    !city
+  ) {
+    return null;
+  }
+  return { continent, country, city };
 }
 
 function isPlanEntry(value: unknown): value is PlanEntry {

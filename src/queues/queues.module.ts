@@ -31,6 +31,7 @@ import { P50BaselineProcessor } from "./processors/p50-baseline.processor";
 import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly-history.processor";
 import { DowntimeReconstructionProcessor } from "./processors/downtime-reconstruction.processor";
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
+import { RainSoonPushService } from "./services/rain-soon-push.service";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
 import {
   ForecastArchiveProcessor,
@@ -188,6 +189,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     ParkDayOperationProcessor, // Measured-operation verdict per park-day (daily)
     DowntimeReconstructionProcessor, // Outage intervals + exposure + profiles
     PushNotificationProcessor, // The five-minute tick that sends "next up"
+    RainSoonPushService, // …and its `rain-soon` half
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans
     ForecastArchiveProcessor, // Forward archive of served curves (PAR-831)
     ForecastArchiveScoreProcessor, // …and its daily scoring, on its own queue

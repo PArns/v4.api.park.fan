@@ -183,3 +183,82 @@ export function writeRideReopenMessage(
 ): PushMessage {
   return writeFromTable(RIDE_REOPEN_WRITERS, notification, locale);
 }
+
+/** What a `rain-soon` notification needs. */
+export interface RainSoonCopy {
+  dedupeKey: string;
+  parkName: string;
+  /** Park-local `HH:mm` the rain is forecast to start. */
+  atTime: string;
+  /** Open covered rides, best first. Empty: the park is not ready to name any. */
+  rides: Array<{ name: string; waitTime: number | null }>;
+  url: string;
+}
+
+interface RainSoonWords {
+  title: (atTime: string) => string;
+  covered: string;
+  min: string;
+}
+
+const RAIN_SOON_WORDS: Record<string, RainSoonWords> = {
+  de: {
+    title: (t) => `Regen ab etwa ${t} Uhr`,
+    covered: "Überdacht und offen",
+    min: "Min.",
+  },
+  en: {
+    title: (t) => `Rain from about ${t}`,
+    covered: "Covered and open",
+    min: "min",
+  },
+  nl: {
+    title: (t) => `Regen vanaf ongeveer ${t}`,
+    covered: "Overdekt en open",
+    min: "min.",
+  },
+  fr: {
+    title: (t) => `Pluie vers ${t}`,
+    covered: "Couvert et ouvert",
+    min: "min",
+  },
+  es: {
+    title: (t) => `Lluvia hacia las ${t}`,
+    covered: "Cubiertas y abiertas",
+    min: "min",
+  },
+  it: {
+    title: (t) => `Pioggia verso le ${t}`,
+    covered: "Coperte e aperte",
+    min: "min",
+  },
+};
+
+/**
+ * One rain warning, written for one subscriber.
+ *
+ * The body names the park and, when the park passed the covered-ride gate, up to
+ * three open covered rides with their current wait. No wait posted means the
+ * name alone, never "0 min". Names and numbers only, like the other messages
+ * here: nothing says what the visitor should do.
+ */
+export function writeRainSoonMessage(
+  notification: RainSoonCopy,
+  locale: string,
+): PushMessage {
+  const base = locale.split("-")[0]?.toLowerCase() ?? "en";
+  const words = RAIN_SOON_WORDS[base] ?? RAIN_SOON_WORDS.en;
+  const rides = notification.rides
+    .map((r) =>
+      r.waitTime === null ? r.name : `${r.name} (${r.waitTime} ${words.min})`,
+    )
+    .join(", ");
+  return {
+    title: words.title(notification.atTime),
+    body: rides
+      ? `${notification.parkName}. ${words.covered}: ${rides}`
+      : notification.parkName,
+    url: notification.url,
+    tag: notification.dedupeKey,
+  };
+}

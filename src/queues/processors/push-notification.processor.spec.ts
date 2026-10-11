@@ -6,6 +6,7 @@ import { TripsService } from "../../trips/trips.service";
 import { ShowFollowsService } from "../../show-follows/show-follows.service";
 import { ShowsService } from "../../shows/shows.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { RainSoonPushService } from "../services/rain-soon-push.service";
 
 /**
  * The two halves of `handleDue` are unrelated (a trip topic vs. a followed
@@ -77,6 +78,7 @@ describe("PushNotificationProcessor", () => {
     findBatchCurrentStatusByShows: jest.Mock;
     getShowtimeInstantsOnDate: jest.Mock;
   };
+  let rainSoon: { run: jest.Mock };
   let redisStore: Map<string, string>;
   let redis: { exists: jest.Mock; set: jest.Mock };
 
@@ -109,6 +111,8 @@ describe("PushNotificationProcessor", () => {
       getShowtimeInstantsOnDate: jest.fn().mockResolvedValue(new Map()),
     };
 
+    rainSoon = { run: jest.fn().mockResolvedValue(0) };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         PushNotificationProcessor,
@@ -116,6 +120,7 @@ describe("PushNotificationProcessor", () => {
         { provide: TripsService, useValue: tripsService },
         { provide: ShowFollowsService, useValue: showFollowsService },
         { provide: ShowsService, useValue: showsService },
+        { provide: RainSoonPushService, useValue: rainSoon },
         { provide: REDIS_CLIENT, useValue: redis },
       ],
     }).compile();
@@ -135,6 +140,43 @@ describe("PushNotificationProcessor", () => {
     await processor.handleDue({} as never);
     expect(pushService.subscriptionsWithTrip).not.toHaveBeenCalled();
     expect(showFollowsService.allFollows).not.toHaveBeenCalled();
+  });
+
+  it("runs the rain-soon half every tick, and a throw there silences nothing else", async () => {
+    await withVapid(async () => {
+      pushService.subscriptionsWithTrip.mockResolvedValueOnce([
+        tripSubscription,
+      ]);
+      tripsService.find.mockResolvedValueOnce({
+        payload: {
+          version: 2,
+          parks: {
+            phantasialand: {
+              slug: "phantasialand",
+              name: "Phantasialand",
+              timezone: "Europe/Berlin",
+              days: {
+                "2026-10-17": {
+                  entries: [
+                    {
+                      id: "taron-1",
+                      attractionName: "Taron",
+                      startMinute: 20 * 60 + 15,
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      });
+      rainSoon.run.mockRejectedValueOnce(new Error("nowcast down"));
+
+      await processor.handleDue({} as never);
+
+      expect(rainSoon.run).toHaveBeenCalledWith(NOW);
+      expect(pushService.send).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("sends a due trip notification to a subscribed topic", async () => {

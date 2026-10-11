@@ -364,3 +364,48 @@ trip block's `startMinute` it needs no separate date component.
 - [Attraction status and seasonality](../architecture/attraction-status-and-seasonality.md) — the `isCurrentlyInSeason` rule §4's check reuses
 - [Live wait-times availability](./live-wait-times-availability.md) — `getNoLiveWaitTimesReason`, the gate §4 checks per park
 - `.env.example` — `VAPID_*` and `PUSH_ENDPOINT_HOSTS`
+
+## 6. Rain warnings (`rain-soon`, PAR-848)
+
+A third, independent branch of the same five-minute job, owned by
+`RainSoonPushService` (`queues/services/rain-soon-push.service.ts`). The topic is
+in `PUSH_TOPICS`, so a browser may ask for it on `POST /v1/push/subscriptions`
+(`topics: ["rain-soon"]`, with or without a `tripId`).
+
+**Who is warned.** Subscribers holding the topic who, for a park, either have a
+plan with at least one block on the park's own today, or a ride alert on a ride
+of that park. A plan names its parks by slug plus `geo` (continent, country,
+city), and the geographic path is what resolves it, because a slug repeats across
+destinations. A park in a plan without `geo` or `timezone` is skipped.
+
+**When.** `decideRainSoon` (`push/rain-soon.ts`) reads the park's nowcast
+(`WeatherService.getNowcast`) and sends when rain starts at most 30 minutes ahead
+(`RAIN_LEAD_MIN`, the frontend's `SHELTER_LEAD_MINUTES`). Rain that is already
+falling is not "soon": nothing is sent and the park is marked as raining.
+
+**Once per front.** The state is per park in Redis (`push:rain-soon:<parkId>`):
+`warned` (3 h), then `raining` (6 h), deleted once the rain has stopped, which
+re-arms the park for a second front the same day. The write is an atomic
+`SET NX` before the first send. A forecast that stops showing rain after a
+warning does not re-arm, so a flickering forecast cannot send twice. A Redis
+error skips the park, since a rain warning would otherwise repeat every tick.
+A subscriber in quiet hours (`quiet-hours.ts`) misses the push; nothing is
+queued for later.
+
+**What it says.** `Regen ab etwa 14:20 Uhr` with the park and, when the park
+passes the gate, up to three open covered rides with their standby wait, in the
+subscriber's language (six). The gate and the ranking are the frontend's
+(`lib/utils/covered-rides.ts`: `coveredOfferReady`, `COVERED_MIN_KNOWN_SHARE`
+0.5, `rankCoveredRides`) written once more in `push/rain-soon.ts` and pinned by
+`rain-soon.spec.ts`; a change to the rule is a change in both repositories. The
+one difference: there is no walking distance, because a push does not know where
+the visitor stands, which is what the frontend's ranking also does when a ride
+lacks one. A ride counts as open only with a genuine (non-heartbeat) `OPERATING`
+standby reading from the last 15 minutes, as for ride alerts. A park with no
+readable wait-time source names no rides.
+
+```json
+{ "title": "Regen ab etwa 14:20 Uhr", "body": "Phantasialand. Überdacht und offen: Maus au Chocolat (15 Min.), Fly (20 Min.)", "url": "/parks/europe/germany/bruehl/phantasialand", "tag": "rain-soon:<parkId>:2026-10-17:<startMs>" }
+```
+
+The frontend switch for the topic is a separate ticket (PAR-849).
