@@ -217,15 +217,29 @@ reference and why), `low_coverage_cells.csv`, `usable_horizon.csv` (with
   envelope is strictly the harder test. **If you are reading one column, read
   `wins`.**
 - **`hardest_naive` is the worst point estimate, not necessarily the blocker, and
-  the two coincide less often than is comfortable.** On non-winning cells with at
-  least two candidates, `hardest_naive` is *among* the candidates that deny the win
-  **97.9 %** of the time (headline) / **98.7 %** (full period) — but it is the
-  **sole** blocker only **20.6 % / 25.2 %** of the time. Usually several candidates
-  deny the win at once. So "the hardest candidate is the one that decides" is a
-  useful heuristic and a bad inference: read `cells_all_refs.csv` per candidate
-  before naming a blocker. PAR-830 reported this mechanism holding on its own
-  plug-in; **it does not transfer to these baselines at anything like 100 %**, and
-  this PR does not claim it does.
+  the two coincide less often than is comfortable.** These shares are
+  **scope-sensitive**, so the population is stated rather than implied:
+  `cells.csv` rows with `region == "all"`, `wins == False`,
+  `is_candidate == False`, the model neither an oracle nor `_owx`, the cell passing
+  `tested()`, and `n_env >= 2`; blockers are the candidates in
+  `cells_all_refs.csv` for that cell whose own comparison is not a win.
+
+  | pass | N | `hardest_naive` is **among** the blockers | `hardest_naive` is the **sole** blocker |
+  |---|---|---|---|
+  | headline window | 1,077 | 97.8 % | **17.4 %** |
+  | full period | 996 | 98.8 % | **18.8 %** |
+
+  Widening the population to include reference candidates and cells that fail the
+  gate moves the sole-blocker share to ~21–25 %, which is why the scope matters;
+  the among-blockers share is stable either way. So the old reference is almost
+  always *a* blocker and the sole blocker only about one time in five — which is
+  the real proof that the envelope criterion does work, because a conjunction that
+  were usually decided by one member would be the selected-reference rule under
+  another name. "The hardest candidate is the one that decides" is a useful
+  heuristic and a bad inference: read `cells_all_refs.csv` per candidate before
+  naming a blocker. PAR-830 reported this mechanism holding on its own plug-in;
+  **it does not transfer to these baselines at anything like 100 %**, and this PR
+  does not claim it does.
 - **Gates** for the hand-over and the usable horizon: enough units for the
   metric's own unit of analysis — ≥ 30 origin **days** for day-unit metrics,
   ≥ 30 park-**months** for UC4, whose unit is the park-month — and the model's
@@ -981,7 +995,9 @@ The six winner flips, and every one gains significance when the carried-forward 
 
 (The `sens-hb` arm reproduces the published headline hand-over exactly at both leads, so the arms are comparable and the published table is the heartbeats-kept one.)
 
-**The consequence, and it is the most important caveat in this review: the serving recommendation is conditional on a truth definition the owner has not chosen yet.** The two leads that move are precisely the two the recommendation turns on — **d2**, where the narrowed PR #446 ask terminates, and **d6**, whose boundary this page already admits rests on `snaive7`'s upper bound landing on +0.0038. Under the heartbeats-dropped target the all-rides band *extends*: `lvlh5_tft` wins d2 outright and `h5` wins d6, so the dead band starts later than d6. BENCH-SPEC #6 records the heartbeat question as an **open owner decision**. So: **do not read "narrow #446 to d0–d2" as settled. The d2 boundary itself moves under the other truth definition, in the direction of giving the models more, and the choice between the two targets has to be made before that boundary is treated as a number.** Nothing here tells the owner which target is right; it tells them the answer depends on it.
+**The consequence, and it is the most important caveat in this review: the serving recommendation is conditional on a truth definition the owner has not chosen yet.** The two leads that move are precisely the two the recommendation turns on — **d2**, where the narrowed PR #446 ask terminates, and **d6**, whose boundary this page already admits rests on `snaive7`'s upper bound landing on +0.0038. Under the heartbeats-dropped target the all-rides band *extends*: `lvlh5_tft` wins d2 outright and `h5` wins d6, so the dead band starts later than d6. BENCH-SPEC #6 records the heartbeat question as an **open owner decision**. So: **do not read "narrow #446 to d0–d2" as settled. The d2 boundary itself moves under the other truth definition, in the direction of giving the models more, and the choice between the two targets has to be made before that boundary is treated as a number.**
+
+**And the risk is ONE-SIDED, which is more useful than "it is conditional".** All six flips go the same way — every one *gains* significance when the carried-forward slots are dropped (sig 1→2, 0→1, 1→2, 0→4, 0→4, 0→4); **not one loses it.** The UC3 all-rides served band is **d0–d5 with heartbeats kept and d0–d6 with them dropped** (`h5` −0.383984, sig 1 at d6), and `lvlh5_tft` at d2 goes from no-win to a win. So **the open heartbeat decision can only extend the served band, never narrow it.** The published recommendation is therefore the **conservative end**: if the owner later chooses the queue-based truth, every band in it widens and none shrinks. That tells the owner which way they can be wrong, and it means acting on the published bands is safe against the decision while *widening* on them is not. Nothing here tells the owner which target is right; it tells them the answer depends on it.
 
 **This is a product decision, not a bug to fix silently.** Scoring against a
 carried-forward wait measures agreement with a stale *display*; scoring without

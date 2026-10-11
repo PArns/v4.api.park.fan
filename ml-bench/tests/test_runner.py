@@ -396,6 +396,48 @@ def test_cells_all_refs_is_always_emitted(synth_export, tmp_path):
         assert ar.groupby(["metric", "uc", "segment", "region", "lead", "model"]).size().max() >= 2
 
 
+def test_origin_window_filter_actually_runs(synth_export, tmp_path):
+    """`--origin-from/--origin-to` must EXECUTE, not merely exist.
+
+    This flag shipped, was reviewed, was cited in the docs as the answer to the
+    lead-season confound, and then raised `Binder Error: No function matches
+    '-(TIMESTAMP_NS, INTEGER)'` the first time it was pointed at a real run:
+    `date` is a timestamp in the parquet, so `(date - L)` has no overload. Nothing
+    in the suite called it, so "the code path is there" was mistaken for "it
+    works". That is the same failure mode as a test that cannot observe what it
+    guards, one level up.
+    """
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1, 3])
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "run-0of1.json").write_text(json.dumps({"export": str(synth_export), "git_sha": "test"}))
+    Runner(synth_export, out, cfg, [], origins=("2026-04-01", "2026-04-20")).run()
+
+    full = build_report(out, reps=50)
+    n_full = len(pd.read_csv(full / "cells.csv"))
+
+    tdir = build_report(out, origin_from="2026-04-05", origin_to="2026-04-12", reps=50)
+    assert tdir.name == "tables_o2026-04-05_2026-04-12"
+    cells = pd.read_csv(tdir / "cells.csv")
+    assert len(cells) > 0, "the origin window filtered everything out"
+    assert len(cells) < n_full, "the origin window changed nothing — is the filter wired up?"
+
+    rec = json.loads((out / f"report-{tdir.name}.json").read_text())
+    assert (rec["origin_from"], rec["origin_to"]) == ("2026-04-05", "2026-04-12")
+    assert rec["target_from"] is None
+
+    # every origin-bearing table must respect it: the widest lead still scored
+    # cannot imply an origin outside the window
+    summary = (out / f"summary_{tdir.name}.md").read_text()
+    assert "Origin window 2026-04-05 … 2026-04-12" in summary
+
+    # and it composes with a target window
+    both = build_report(out, target_from="2026-04-06", target_to="2026-04-14",
+                        origin_from="2026-04-05", origin_to="2026-04-12", reps=50)
+    assert both.name == "tables_2026-04-06_2026-04-14_o2026-04-05_2026-04-12"
+    assert len(pd.read_csv(both / "cells.csv")) > 0
+
+
 def test_report_records_its_own_code_identity(synth_export, tmp_path):
     """A `tables_*/` dir must carry the identity of the code that WROTE it.
 

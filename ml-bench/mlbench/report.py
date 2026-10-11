@@ -186,12 +186,21 @@ class Data:
     # passes), so the harness needs to be able to fix the origin window too.
     @staticmethod
     def origin_expr(cols: set[str]) -> str | None:
+        """The DATE on which a row's forecast was made.
+
+        Every branch casts to DATE explicitly. `date` is `TIMESTAMP_NS` in the
+        parquet, not `DATE`, so the obvious `(date - L)` raises
+        `No function matches '-(TIMESTAMP_NS, INTEGER)'` — which is exactly what
+        happened the first time this filter was actually exercised, after it had
+        been shipped and reviewed on the strength of the code path existing.
+        `test_origin_window_filter_actually_runs` now runs it end to end.
+        """
         if "origin" in cols:
-            return "origin"                       # levels, d8tft carry it directly
-        if {"L", "date"} <= cols:
-            return "(date - L)"                   # slot, rideday, pairs, optim, openness
+            return "CAST(origin AS DATE)"         # levels, d8tft carry it directly
+        if {"L", "date"} <= cols:                  # slot, rideday, pairs, optim, openness
+            return "(CAST(date AS DATE) - CAST(L AS INTEGER))"
         if "date" in cols:
-            return "date"                         # intraday / nextbest: origin day = target day
+            return "CAST(date AS DATE)"           # intraday / nextbest: origin day = target day
         return None
 
     def __init__(self, run: Path, export: Path | None, target_from: str | None, target_to: str | None,
@@ -1509,7 +1518,11 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
       "whenever their profile exists — so `P(fc|not operated)` only shows how often a ride that never "
       "opened still got a curve; it is the bar a model with an open/closed decision has to beat:\n")
     w(md(opn))
-    name = "summary.md" if not windowed else f"summary_{tdir.name}.md"
+    # Key the summary filename on the tables dir, NOT on `windowed`: an
+    # origin-only pass has `windowed == False` but writes `tables_o…/`, and under
+    # the old rule it wrote `summary.md` and silently clobbered the committed
+    # full-period summary with an origin-windowed one.
+    name = "summary.md" if tdir.name == "tables" else f"summary_{tdir.name}.md"
     (run / name).write_text("\n".join(out))
     # Provenance of THIS pass. A results dir accumulates one of these per window, so
     # `tables_*/` can never again be a set of CSVs whose only identity is an mtime.
