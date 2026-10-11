@@ -301,7 +301,7 @@ describe("buildModelComparison", () => {
     expect(total).toBe(cells);
   });
 
-  it("never invents an offline CI and marks Chronos planner rows and Toto/TiRex pending", () => {
+  it("never invents an offline CI, carries the Chronos planner verdicts and keeps Toto/TiRex pending", () => {
     const res = build([]);
     for (const question of res.questions) {
       for (const cell of Object.values(question.cells)) {
@@ -310,11 +310,40 @@ describe("buildModelComparison", () => {
         }
       }
     }
-    for (const id of ["plan_d0_1", "plan_d2_5", "plan_besttime"]) {
+    // The mixed-weekday re-run of ml-bench #450 (`--shard 0/5`) landed on
+    // 2026-10-11 and decided the three planner cells, which carried
+    // "offline noch nicht ausgewertet" while only the weekday-aliased
+    // `--shard 0/7` run existed. The three offline verdicts differ on purpose
+    // (Chronos-2's grid curve wins the near leads, wins only d2 inside d2-d5,
+    // and never gets under climatology on the best-time regret), and with NO
+    // live rows the gate rule maps them to three different CELL states: offline
+    // `better` becomes `pending` because live confirmation is still owed,
+    // offline `unclear` stays `unclear`, offline `worse` is `worse` straight
+    // away. A single state across all three would mean the file was seeded
+    // rather than measured.
+    const planner: Record<string, string> = {
+      plan_d0_1: "pending",
+      plan_d2_5: "unclear",
+      plan_besttime: "worse",
+    };
+    for (const [id, state] of Object.entries(planner)) {
+      const cell = res.questions.find((x) => x.id === id)!.cells.chronos;
+      expect(cell.state).toBe(state);
+      expect(cell.offline!.source).toContain("Wochentagen");
+      expect(cell.offline!.diff).toBeUndefined();
+    }
+    // the two `today` questions stay pending: Chronos beats the H5 profile there,
+    // but PCN is what is served and PCN is not in the offline benchmark
+    for (const id of ["today_h2_6", "today_h6_12"]) {
       expect(res.questions.find((x) => x.id === id)!.cells.chronos.state).toBe(
         "pending",
       );
     }
+    // the archived chronos_grid surface stops at d7, so the long planner band has
+    // no Chronos column at all rather than an empty-looking one
+    expect(
+      res.questions.find((x) => x.id === "plan_d6_60")!.cells.chronos,
+    ).toBeUndefined();
     const fm = res.questions.find((x) => x.id === "live_h0_1")!.cells.fm;
     expect(fm.state).toBe("pending");
     expect(fm.live).toBeNull();

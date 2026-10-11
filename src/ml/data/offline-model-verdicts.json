@@ -1,5 +1,5 @@
 {
-  "_about": "Offline verdicts per question x model for the admin model comparison (PAR-855). Seeded from the approved mockup's matrix, whose notes summarise ml-bench PR #445 (full period), #447 (driver_level, H5 + TFT level) and #450 (Chronos-2). state: better|worse|unclear|pending, always against what is served today for that question. diff/ciLow/ciHigh only where the run reported them against that reference; never filled in otherwise. expectedBy only for runs still in progress. note: one German sentence, shown when live data does not decide the cell. servedNotes: the note of each question's served (today) cell.",
+  "_about": "Offline verdicts per question x model for the admin model comparison (PAR-855). Seeded from the approved mockup's matrix, whose notes summarise ml-bench PR #445 (full period), #447 (driver_level, H5 + TFT level) and #450 (Chronos-2). state: better|worse|unclear|pending, always against what is served today for that question. diff/ciLow/ciHigh only where the run reported them against that reference; never filled in otherwise. expectedBy only for runs still in progress. note: one German sentence, shown when live data does not decide the cell. servedNotes: the note of each question's served (today) cell. 2026-10-11: the Chronos cells come from the mixed-weekday re-run of #450 (--shard 0/5, 47 origins over all seven weekdays; the earlier --shard 0/7 run put every origin on a Thursday, which locked every lead to one target weekday). Toto/TiRex are still pending.",
   "questions": {
     "live_h0_1": {
       "persist": {
@@ -10,9 +10,9 @@
       },
       "chronos": {
         "state": "worse",
-        "source": "ml-bench PR #450 (Chronos-2)",
+        "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
-        "note": "0,26 Minuten schlechter als die aktuelle Wartezeit (sicher), gemessen an 33 Tagen Februar bis Oktober in 30 Parks."
+        "note": "In der ersten Viertelstunde 0,27 Minuten schlechter als die aktuelle Wartezeit (sicher), ab einer halben Stunde besser (30 Minuten: −0,41). Der Lauf mit allen Wochentagen bestätigt die Donnerstags-Messung fast auf die Stelle."
       },
       "h5": {
         "state": "worse",
@@ -39,9 +39,9 @@
       },
       "chronos": {
         "state": "better",
-        "source": "ml-bench PR #450 (Chronos-2)",
+        "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
-        "note": "Offline besser als die aktuelle Wartezeit (60 Minuten: −1,26, 120 Minuten: −2,27 Minuten Fehler, sicher); gegen PCN misst das erst das Live-Archiv."
+        "note": "Offline klar besser als die aktuelle Wartezeit (60 Minuten: −1,27, 120 Minuten: −2,25 Minuten Fehler, sicher; volle Fahrgeschäfte −2,63 und −4,48). Gegen PCN misst das erst das Live-Archiv."
       },
       "h5": {
         "state": "worse",
@@ -80,9 +80,13 @@
       },
       "chronos": {
         "state": "pending",
-        "source": "ml-bench PR #450 (Chronos-2)",
+        "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
-        "note": "Für diesen Abstand offline noch nicht ausgewertet; das Live-Archiv misst ihn."
+        "note": "Gegen das Stundenprofil 1,58 Minuten besser in 2 bis 4 Stunden und 1,09 Minuten in 4 bis 8 Stunden (sicher, 30 Parks, Februar bis Oktober). PCN selbst ist offline nicht gemessen — das entscheidet das Live-Archiv.",
+        "expectedBy": {
+          "date": "2026-10-26",
+          "label": "Live-Bestätigung, frühestens 26.10. (14 Tage Archiv nötig)"
+        }
       },
       "fm": {
         "state": "pending",
@@ -109,9 +113,13 @@
       },
       "chronos": {
         "state": "pending",
-        "source": "ml-bench PR #450 (Chronos-2)",
+        "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
-        "note": "Für diesen Abstand offline noch nicht ausgewertet; das Live-Archiv misst ihn."
+        "note": "Gegen das Stundenprofil 0,45 Minuten besser ab 8 Stunden (sicher). PCN selbst ist offline nicht gemessen — das entscheidet das Live-Archiv.",
+        "expectedBy": {
+          "date": "2026-10-26",
+          "label": "Live-Bestätigung, frühestens 26.10. (14 Tage Archiv nötig)"
+        }
       },
       "fm": {
         "state": "pending",
@@ -138,13 +146,10 @@
         "note": "Besser: −0,3 Minuten über alle Fahrgeschäfte, bei vollen Fahrgeschäften −1,4 Minuten (sicher, hält übers ganze Jahr)."
       },
       "chronos": {
-        "state": "pending",
+        "state": "better",
         "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
-        "note": "Der erste Lauf hatte nur Donnerstage als Starttag; der Lauf mit allen Wochentagen läuft.",
-        "expectedBy": {
-          "date": "2026-10-11",
-          "label": "Offline-Lauf, erwartet 11.10. gegen 19:00 Uhr"
-        }
+        "note": "Mit allen Wochentagen gemessen: heute 0,68 und morgen 0,27 Minuten besser als das Stundenprofil und 0,76 bzw. 0,66 Minuten besser als TFT×H5 (sicher, beide Prüfzeiträume). Auf vollen Fahrgeschäften 1,63 und 0,74 Minuten. Verliert an keiner Vorlaufzeit.",
+        "period": "2026-02-19..2026-10-07"
       },
       "wkd": {
         "state": "unclear",
@@ -176,13 +181,10 @@
         "note": "Nur bei vollen Fahrgeschäften und nur bis 2 Tage sicher besser, ab 3 Tagen nicht mehr."
       },
       "chronos": {
-        "state": "pending",
+        "state": "unclear",
         "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
-        "note": "Der Lauf mit allen Wochentagen läuft.",
-        "expectedBy": {
-          "date": "2026-10-11",
-          "label": "Offline-Lauf, erwartet 11.10. gegen 19:00 Uhr"
-        }
+        "note": "Nur Tag 2 ist ein sicherer Gewinn (0,24 Minuten gegen das Stundenprofil, 0,66 auf vollen Fahrgeschäften); Tag 3 bis 5 ist Gleichstand. Gegen TFT×H5 gewinnt es in diesem Band an jeder Vorlaufzeit. Der frühere Verlust bei Tag 2 und 3 war ein Donnerstags-Artefakt.",
+        "period": "2026-02-19..2026-10-07"
       },
       "wkd": {
         "state": "better",
@@ -228,13 +230,10 @@
         "note": "Weniger verschenkte Wartezeit: −0,35 bis −0,42 Minuten gegenüber dem Wochentag-Durchschnitt, sicher."
       },
       "chronos": {
-        "state": "pending",
+        "state": "worse",
         "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
-        "note": "Wird mit dem Lauf mit allen Wochentagen ausgewertet.",
-        "expectedBy": {
-          "date": "2026-10-11",
-          "label": "Offline-Lauf, erwartet 11.10. gegen 19:00 Uhr"
-        }
+        "note": "Für die beste Besuchszeit nicht brauchbar: die komprimierte Variante liegt 1,1 bis 3,8 Minuten über der Klimatologie, die Gitter-Variante kommt an keiner Vorlaufzeit darunter und ist an Tag 4, 6 und 7 messbar schlechter. Das Stundenprofil bleibt vorn.",
+        "period": "2026-02-19..2026-10-07"
       }
     },
     "cal_busier": {

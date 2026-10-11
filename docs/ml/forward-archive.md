@@ -555,10 +555,25 @@ is the offline note plus the live figures so far.
 **Offline verdicts** (`offline-model-verdicts.json`): per question × model
 `{ state, diff?, ciLow?, ciHigh?, source, period?, note, expectedBy? }`, and
 `servedNotes` for the `today` cells. Seeded from the approved mockup (ml-bench
-PR #445 full period, #447 driver_level, #450 Chronos-2); Chronos planner cells
-and Toto/TiRex are `pending`. Only numbers a run reported against the served
-reference are filled in — no CI was reported, so none is in the file. Update it
-when a run lands; the service reads it at start-up.
+PR #445 full period, #447 driver_level, #450 Chronos-2). Only numbers a run
+reported against the served reference are filled in — no CI was reported, so
+none is in the file. Update it when a run lands; the service reads it at
+start-up.
+
+**The Chronos cells were filled on 2026-10-11** from the **mixed-weekday re-run**
+of #450 (`--shard 0/5`, 47 origins spread over all seven weekdays). The run it
+replaces used `--shard 0/7`, and a 7-day stride puts every origin on the same
+weekday — which locks every *lead* to one *target weekday* (origin Thursday → d2
+is always a Saturday). Its per-lead curve was therefore a per-weekday curve read
+as a per-lead one, and the d2/d3 loss against the H5 profile it reported does not
+survive mixed weekdays. Result: `plan_d0_1` `better`, `plan_d2_5` `unclear` (only
+d2 is a win, d3–d5 a tie), `plan_besttime` `worse` (best-time regret never gets
+under climatology), `live_h1_2` `better` and `live_h0_1` `worse` confirmed
+unchanged, `today_h2_6` / `today_h6_12` `pending` — Chronos beats the H5 profile
+there, but PCN is what is served and PCN is not in the offline benchmark, so only
+the live archive can decide those two. `plan_d6_60` has no Chronos cell at all:
+the archived `chronos_grid` surface stops at d7. Toto 2.0 / TiRex (`fm`) stay
+`pending` until PAR-853 reports.
 
 ### 9.4 Endpoints
 
