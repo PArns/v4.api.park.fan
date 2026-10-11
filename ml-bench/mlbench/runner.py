@@ -431,7 +431,8 @@ class Runner:
         WHERE g.slot_start_utc >= o.origin_utc
         ORDER BY g.attraction_id, g.slot_start_utc"""
 
-    def history_view(self, c: dt.date, origin_table: str) -> HistoryView:
+    def history_view(self, c: dt.date, origin_table: str,
+                     hour: int | None = None) -> HistoryView:
         """Truth before the origin, MATERIALISED.
 
         This used to hand ``HistoryView`` a closure over ``self.con``, which made the
@@ -440,10 +441,20 @@ class Runner:
         whole ``truth`` / ``slots`` / ``ride_day`` tables at every date. Three
         documents promised the opposite. Any closure or bound method leaks the same
         way, so the only real fix is to fetch the frame up front and hand over data
-        (critic S9). Cached per (origin, origin table) because the intraday path asks
-        for the same view once per hour per model.
+        (critic S9).
+
+        Cached per (origin date, origin table, ORIGIN HOUR). The hour is part of the key
+        and must be: the intraday path rebuilds ``oh`` for every hour of the date and
+        then calls this with the same TABLE NAME ``"oh"`` each time, while
+        ``oh.origin_utc`` moves. Keying on the name alone returned the frame built at the
+        FIRST intraday hour for every later hour of that date, so a 20:00 origin was
+        handed an 08:00 information cut. The direction was conservative -- less history,
+        never more, so it could not leak -- but it silently degraded every intraday origin
+        after the first, and ``test_information_cut_plugins`` passed *because* of it:
+        poisoning post-origin truth cannot move a frame that was built even earlier.
+        Found by PAR-828 on PAR-827's head.
         """
-        key = (c, origin_table)
+        key = (c, origin_table, hour)
         if self._hv_cache.get("key") != key:
             days = int(self.cfg.history_days)
             df = self.con.execute(f"""
@@ -508,7 +519,7 @@ class Runner:
         x = self.con.execute
         hour = self.cfg.origin_hour_local if hour is None else hour
         origin = Origin(c, kind, hour, x(f"SELECT * FROM {origin_table}").df(),
-                        self.history_view(c, origin_table))
+                        self.history_view(c, origin_table, hour))
         grid = x(self.grid_sql(c, leads, origin_table=origin_table, max_lead=m.max_lead_days)).df()
         if grid.empty:
             return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
