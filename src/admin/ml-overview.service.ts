@@ -285,7 +285,7 @@ export class MlOverviewService {
         delivers: "Live-Wartezeiten bis 12 Stunden",
         role: pcnServed ? "served" : "shadow",
         lastRunAt: iso(pcnAt),
-        expected: "alle 15 Min.",
+        expected: "alle 15 Min. (rund um die Uhr)",
         status: status(pcnAt, LATE_AFTER_MS.pcn),
         note: pcnServed
           ? versionNote(pcn?.[0]?.version)
@@ -321,8 +321,7 @@ export class MlOverviewService {
         delivers: "Live 30–120 Min., Tagesplaner 0–7 Tage (nur Schatten)",
         role: "shadow",
         lastRunAt: iso(chronosAt),
-        expected:
-          "stündlich (live alle 2 Std. je offenem Park, Tagesplaner 06:00 Ortszeit)",
+        expected: "stündlich zur Minute :05 UTC (je offenem Park alle 2 Std.)",
         status: status(chronosAt, LATE_AFTER_MS.chronos, chronos.override),
         note: chronos.note,
       },
@@ -332,7 +331,7 @@ export class MlOverviewService {
         delivers: "15-Minuten-Verlauf für den Tagesplaner (nur Schatten)",
         role: "shadow",
         lastRunAt: iso(surfaceAt(ARCHIVE_SURFACES.plan_day_shadow_h5)),
-        expected: "täglich 06:05 Ortszeit je Park",
+        expected: "stündlich zur Minute :05 UTC (je Park einmal am Tag)",
         status: status(
           surfaceAt(ARCHIVE_SURFACES.plan_day_shadow_h5),
           LATE_AFTER_MS.h5,
@@ -355,7 +354,7 @@ export class MlOverviewService {
         delivers: "speichert alle Prognosen für den Vergleich",
         role: "measurement",
         lastRunAt: iso(archiveAt),
-        expected: "stündlich :05",
+        expected: "stündlich zur Minute :05 UTC",
         status: status(archiveAt, LATE_AFTER_MS.archive),
         note: null,
       },

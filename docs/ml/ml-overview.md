@@ -50,13 +50,13 @@ room for one slow run, never tighter than the gaps measured on production.
 
 | id | source of `lastRunAt` | expected | late after | timing on prod (2026-10-11) |
 | --- | --- | --- | --- | --- |
-| `pcn` | `pcn_forecasts` newest `created_at`, last 2 days (`idx_pcn_forecasts_created_at`, backward) | alle 15 Min. | 45 min | 5.7 ms |
+| `pcn` | `pcn_forecasts` newest `created_at`, last 2 days (`idx_pcn_forecasts_created_at`, backward) | alle 15 Min. (rund um die Uhr) | 45 min | 5.7 ms |
 | `tft` | `tft_forecasts`: per ride, its newest forecast for the day after tomorrow (PK lookup, see below) + nf `/train/status` | täglich 03:00 UTC | 30 h | 20–28 ms warm, 372–728 ms cold |
 | `catboost` | `ml_models` active `trainedAt` + ml-service `/train/status` | täglich 06:00 UTC | 30 h | 0.6 ms |
-| `chronos` | archive surfaces 6/7 + the archive's last Chronos run summary + nf `/chronos/status` | stündlich | 4 h | (shared with archive) |
-| `h5` | archive surface 4 | täglich 06:05 Ortszeit je Park | 8 h | (shared) |
+| `chronos` | archive surfaces 6/7 + the archive's last Chronos run summary + nf `/chronos/status` | stündlich zur Minute :05 UTC (je offenem Park alle 2 Std.) | 4 h | (shared with archive) |
+| `h5` | archive surface 4 | stündlich zur Minute :05 UTC (je Park einmal am Tag) | 8 h | (shared) |
 | `shape` | `shape_forecasts` newest `created_at`, last 5 days | täglich 09:00 UTC | 30 h | 1.2 ms |
-| `archive` | newest `origin_at` of any surface (one `GROUP BY surface` over 2 days, index-only on the PK) | stündlich :05 | 3 h | 34–46 ms |
+| `archive` | newest `origin_at` of any surface (one `GROUP BY surface` over 2 days, index-only on the PK) | stündlich zur Minute :05 UTC | 3 h | 34–46 ms |
 | `scoring` | `forecast_archive_scores` newest `scored_at`, last 30 target dates | täglich 12:00 UTC | 26 h | 0.6 ms |
 
 Measured gaps behind the thresholds (prod, last 2–3 days): PCN 15 min max;
@@ -76,6 +76,11 @@ Chronos anything. A summary younger than the 4 h threshold with `warming > 0`
 reads `warming` ("lädt Historie (12 von 70 Parks liefern schon)"); with calls
 but no answer and failures, `failed`. `CHRONOS_SHADOW_ENABLED=false` or nf
 `enabled: false` is said in the note.
+
+Every `expected` string names its clock in UTC (the frontend labels the
+column "Zeiten in UTC"); per-park local origins are described as the UTC hourly
+run that captures them. `lastRunAt` is always a full ISO instant — for the
+scoring row the run's `scored_at`, with the scored target day in `note`.
 
 PCN is `served` only when `SERVE_PCN_INTRADAY=true`, else `shadow` with a note.
 
