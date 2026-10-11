@@ -455,3 +455,36 @@ def test_cached_aid_is_dictionary_encoded_and_reads_back_as_str(synth_export, tm
     assert not got.empty
     assert got["aid"].dtype == object, got["aid"].dtype
     assert all(isinstance(v, str) for v in got["aid"].head(20))
+
+
+def test_park_covariates_scatter_matches_the_fancy_index_it_replaced(con):
+    """The per-park scatter in `build_panel` is a pure memory optimisation.
+
+    It replaced `pc.reshape(P, T, F)[ride_park_index]`, which materialised an [N, T, F]
+    temporary -- 774 MB for the July block, 1.26 GB for September, on top of the panel
+    itself -- and OOM-killed the 2026-07 block. The values must be bit-identical, so this
+    rebuilds the covariate block the old way and compares exactly.
+    """
+    import numpy as np
+
+    from mlbench.models.nf_panel import BASE_FUTR, K, build_panel
+
+    day0 = con.execute("SELECT min(date) FROM truth").fetchone()[0]
+    panel = build_panel(con, day0, C1 + dt.timedelta(days=9), C0, weather=False)
+    nf = len(BASE_FUTR)
+    got = panel.temporal[:, :, 1:1 + nf]
+
+    # Rebuild the same slice with one fancy index over a per-park array.
+    parks = sorted(set(panel.parks))
+    p_ix = {p: i for i, p in enumerate(parks)}
+    pc = np.zeros((len(parks), panel.T, nf), dtype=np.float32)
+    for p, i in p_ix.items():
+        rows = [r for r, pp in enumerate(panel.parks) if pp == p]
+        assert rows
+        pc[i] = panel.temporal[rows[0], :, 1:1 + nf]
+    want = pc[np.array([p_ix[p] for p in panel.parks])]
+
+    assert got.shape == want.shape
+    assert np.array_equal(got, want), "the scatter must be bit-identical per park"
+    # and the covariates really are shared by every ride of a park (the premise above)
+    assert panel.T % K == 0

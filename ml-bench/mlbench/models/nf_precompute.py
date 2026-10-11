@@ -513,6 +513,7 @@ def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to
         # surface hours later, inside the scoring pass. os.replace within one directory
         # is atomic, so no final path is ever observed partially written; a kill between
         # renames leaves an incomplete SET, which the resume check correctly redoes.
+        res_rows = {H: len(df) for H, df in res.items()}
         tmps = []
         for H, df in res.items():
             tmp = out_dir / f".b{tag}_h{H:02d}.parquet.tmp"
@@ -524,11 +525,17 @@ def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to
             tmps.append((tmp, out_dir / f"b{tag}_h{H:02d}.parquet"))
         for tmp, final in tmps:
             os.replace(tmp, final)
+        # Free the block's rows BEFORE the next block's panel is built: `res` would
+        # otherwise stay referenced across build_panel, holding a late block's ~300 MB
+        # of forecasts while the next panel allocates its own.
+        res.clear()
+        del res
         meta["blocks"].append({"from": str(c0), "to": str(c1),
                                "seconds": round(time.monotonic() - tb, 1),
                                "panel_seconds": round(t_panel, 1), "panel_mb": panel_mb,
-                               "rows": {H: len(df) for H, df in res.items()}, **stats})
+                               "rows": res_rows, **stats})
         (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, default=str))
+        del res_rows
         # the quiet guard projects the next block from the longest one measured here
         est = max(b["seconds"] for b in meta["blocks"]) * 1.25
     return meta

@@ -237,6 +237,8 @@ def build_panel(con, day0: dt.date, day_end: dt.date, cutoff: dt.date, weather: 
         ti = di * K + (h["hr"].to_numpy() - HOUR0)
         temporal[si, ti, 0] = h["y"].to_numpy(dtype=np.float32)
         temporal[si, ti, C - 1] = 1.0
+        del si, ti
+    del h
 
     # ---- park-day covariates expanded to hours (published FINAL windows: used for the
     # past — training windows and the input part of a forecast window; the forecast part
@@ -252,8 +254,19 @@ def build_panel(con, day0: dt.date, day_end: dt.date, cutoff: dt.date, weather: 
         pi = cov["park_id"].map(p_ix).to_numpy()
         di = (cov["date"].to_numpy().astype("datetime64[D]") - np.datetime64(day0, "D")).astype(int)
         pc[pi, di] = hour_features(cov, futr_cols)
-    temporal[:, :, 1:1 + len(futr_cols)] = pc.reshape(len(park_list), T, -1)[rides["park_id"].map(p_ix).to_numpy()]
-    del pc
+    # Scatter the park-hour covariates per PARK, not with one fancy index over rides.
+    # `pc.reshape(P, T, F)[ride_park_index]` would materialise an [N, T, F] temporary --
+    # 774 MB for the July block and 1.26 GB for September, i.e. almost as large as the
+    # panel itself and growing with every later block, on top of it. That temporary is
+    # what OOM-killed the 2026-07 block at the 8 GiB container cap. Writing park by park
+    # broadcasts a [T, F] slice (a few hundred KB) into the rows of that park instead.
+    pcf = pc.reshape(len(park_list), T, -1)
+    park_of = rides["park_id"].map(p_ix).to_numpy()
+    for pi in range(len(park_list)):
+        sel = np.flatnonzero(park_of == pi)
+        if len(sel):
+            temporal[sel, :, 1:1 + len(futr_cols)] = pcf[pi]
+    del pc, pcf
 
     # ---- static (levels cut at the block's first origin)
     lv = x(f"""
