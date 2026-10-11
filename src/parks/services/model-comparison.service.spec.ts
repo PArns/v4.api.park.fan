@@ -1,5 +1,6 @@
 import { NotFoundException } from "@nestjs/common";
 import { ModelComparisonService } from "./model-comparison.service";
+import { DayOptionRow } from "../../ml/utils/model-comparison-day.util";
 
 const T = (iso: string) => new Date(iso);
 const PARK = "11111111-1111-4111-8111-111111111111";
@@ -9,9 +10,25 @@ const RIDE = "22222222-2222-4222-8222-222222222222";
  * A non-UTC park: New York, 2026-10-10 (EDT, UTC−4). Published window
  * 10:00–12:00 local = 14:00–16:00 UTC; the 06:05 origin is 10:05 UTC.
  */
-function build(opts: { rideInPark?: boolean; history?: unknown[] } = {}) {
+function build(
+  opts: {
+    rideInPark?: boolean;
+    history?: unknown[];
+    schedule?: unknown[];
+    readings?: unknown[];
+    planWaits?: (number | null)[];
+    timezones?: string[];
+    dates?: string[];
+    optionRows?: Record<string, Partial<DayOptionRow>[]>;
+  } = {},
+) {
   const sql: string[] = [];
-  const curve = (surface: number, slotMinutes: number, waits: number[]) => ({
+  const params: unknown[][] = [];
+  const curve = (
+    surface: number,
+    slotMinutes: number,
+    waits: (number | null)[],
+  ) => ({
     originAt: T("2026-10-10T10:05:00Z"),
     attractionId: RIDE,
     surface,
@@ -32,8 +49,29 @@ function build(opts: { rideInPark?: boolean; history?: unknown[] } = {}) {
     peakBand: null,
     levelSource: "tft",
   });
-  const route = (q: string): unknown[] => {
+  const route = (q: string, p: unknown[] = []): unknown[] => {
     sql.push(q);
+    params.push(p);
+    if (q.includes("SELECT DISTINCT timezone FROM parks")) {
+      return (opts.timezones ?? ["Europe/Berlin"]).map((timezone) => ({
+        timezone,
+      }));
+    }
+    if (q.includes("generate_series")) {
+      return (opts.dates ?? []).map((d) => ({ d }));
+    }
+    if (q.includes("WITH rides AS")) {
+      return (opts.optionRows?.[p[0] as string] ?? []).map((r) => ({
+        parkId: PARK,
+        parkName: "Test Park",
+        timezone: "America/New_York",
+        name: "Ride",
+        isHeadliner: false,
+        models: "6",
+        coverage: "0",
+        ...r,
+      }));
+    }
     if (q.includes("FROM parks WHERE id = $1")) {
       return [{ id: PARK, name: "Test Park", timezone: "America/New_York" }];
     }
@@ -42,31 +80,35 @@ function build(opts: { rideInPark?: boolean; history?: unknown[] } = {}) {
     }
     if (q.includes("FROM forecast_archive_curves")) {
       return [
-        curve(2, 60, [20, 40]), // plan_day, hourly
+        curve(2, 60, opts.planWaits ?? [20, 40]), // plan_day, hourly
         curve(1, 15, [25, 25, 25, 30, 30, 35, 35, 35]), // park_hourly
       ];
     }
     if (q.includes("schedule_entries")) {
-      return [
-        {
-          open: T("2026-10-10T14:00:00Z"),
-          close: T("2026-10-10T16:00:00Z"),
-        },
-      ];
+      return (
+        opts.schedule ?? [
+          {
+            open: T("2026-10-10T14:00:00Z"),
+            close: T("2026-10-10T16:00:00Z"),
+          },
+        ]
+      );
     }
     if (q.includes("FROM queue_data")) {
-      return [
-        { ts: T("2026-10-10T13:50:00Z"), status: "OPERATING", wait: 25 },
-        { ts: T("2026-10-10T14:40:00Z"), status: "DOWN", wait: null },
-        { ts: T("2026-10-10T15:10:00Z"), status: "OPERATING", wait: 35 },
-      ];
+      return (
+        opts.readings ?? [
+          { ts: T("2026-10-10T13:50:00Z"), status: "OPERATING", wait: 25 },
+          { ts: T("2026-10-10T14:40:00Z"), status: "DOWN", wait: null },
+          { ts: T("2026-10-10T15:10:00Z"), status: "OPERATING", wait: 35 },
+        ]
+      );
     }
     if (q.includes("attraction_hourly_history")) return opts.history ?? [];
     return [];
   };
   const connection = {
     transaction: async (fn: (em: unknown) => unknown) =>
-      fn({ query: async (q: string) => route(q) }),
+      fn({ query: async (q: string, p?: unknown[]) => route(q, p) }),
   };
   const redis = {
     get: jest.fn().mockResolvedValue(null),
@@ -76,7 +118,7 @@ function build(opts: { rideInPark?: boolean; history?: unknown[] } = {}) {
     { manager: { connection } } as never,
     redis as never,
   );
-  return { service, sql, redis };
+  return { service, sql, params, redis };
 }
 
 describe("ModelComparisonService.getDay", () => {
@@ -148,16 +190,172 @@ describe("ModelComparisonService.getDay", () => {
   });
 });
 
-describe("ModelComparisonService.daySlots", () => {
-  it("floors the opening to the quarter-hour and stops before the close", () => {
-    const open = Date.parse("2026-10-10T14:05:00Z");
-    const close = Date.parse("2026-10-10T14:40:00Z");
-    expect(
-      ModelComparisonService.daySlots([{ open, close }], []).map((s) =>
-        new Date(s).toISOString().slice(11, 16),
-      ),
-    ).toEqual(["14:00", "14:15", "14:30"]);
-    expect(ModelComparisonService.daySlots([], [])).toEqual([]);
+describe("ModelComparisonService.getDay — time axis", () => {
+  it("reports the share of slots with truth", async () => {
+    const { service } = build();
+    const day = await service.getDay(PARK, "2026-10-10", RIDE, "morning");
+    // 6 of 8 slots of the published window carry truth.
+    expect(day.truthCoverage).toBe(0.75);
+  });
+
+  it("without published hours, spans the truth padded by an hour", async () => {
+    const { service } = build({
+      schedule: [],
+      readings: [
+        { ts: T("2026-10-10T14:10:00Z"), status: "OPERATING", wait: 25 },
+        { ts: T("2026-10-10T15:20:00Z"), status: "DOWN", wait: null },
+      ],
+    });
+    const day = await service.getDay(PARK, "2026-10-10", RIDE, "morning");
+    expect(day.openingHours).toBeNull();
+    // Truth 10:15–11:00 EDT (14:15–15:00 UTC) → 09:15 … 12:00, not 06:00–03:00.
+    expect(day.slots[0]).toBe("09:15");
+    expect(day.slots[day.slots.length - 1]).toBe("12:00");
+    expect(day.slots).toHaveLength(12);
+    expect(day.truth.filter((t) => t !== null)).toEqual([25, 25, 25, 25]);
+    expect(day.truthCoverage).toBe(0.333);
+  });
+
+  it("without hours or truth, spans the served curve where it has values", async () => {
+    const { service } = build({
+      schedule: [],
+      readings: [],
+      planWaits: [20, 40, null],
+    });
+    const day = await service.getDay(PARK, "2026-10-10", RIDE, "morning");
+    expect(day.openingHours).toBeNull();
+    expect(day.slots).toEqual([
+      "10:00",
+      "10:15",
+      "10:30",
+      "10:45",
+      "11:00",
+      "11:15",
+      "11:30",
+      "11:45",
+    ]);
+    expect(day.truthCoverage).toBe(0);
+    expect(day.scores).toEqual([]);
+  });
+});
+
+describe("ModelComparisonService.getDayOptions", () => {
+  const CHICAGO_PARK = "33333333-3333-4333-8333-333333333333";
+  const EP = "44444444-4444-4444-8444-444444444444";
+  const row = (r: Partial<DayOptionRow>): Partial<DayOptionRow> => r;
+
+  it("lists only days that are over in every park and suggests a ride with truth", async () => {
+    // 03:00 UTC on 11.10.: Berlin is on the 11th, Chicago still on the 10th
+    // (22:00) — so the 10th is not complete, the 9th is the newest that is.
+    const { service, sql, params } = build({
+      timezones: ["Europe/Berlin", "America/Chicago"],
+      dates: ["2026-10-09", "2026-10-08"],
+      optionRows: {
+        "2026-10-09": [
+          // Sorts first by name, but no OPERATING reading that day.
+          row({
+            parkId: CHICAGO_PARK,
+            parkName: "Adventureland Resort",
+            timezone: "America/Chicago",
+            attractionId: "a1",
+            name: "Draken Falls",
+            coverage: 0,
+          }),
+          row({
+            parkId: EP,
+            parkName: "Europa-Park",
+            timezone: "Europe/Berlin",
+            attractionId: "e2",
+            name: "Alpenexpress",
+            coverage: 0.95,
+          }),
+          row({
+            parkId: EP,
+            parkName: "Europa-Park",
+            timezone: "Europe/Berlin",
+            attractionId: "e1",
+            name: "Blue Fire",
+            isHeadliner: true,
+            coverage: 0.9,
+          }),
+          row({
+            parkId: EP,
+            parkName: "Europa-Park",
+            timezone: "Europe/Berlin",
+            attractionId: "e3",
+            name: "Voltron",
+            isHeadliner: true,
+            coverage: 0.2,
+          }),
+          // Fewer models: never the suggestion, however well covered.
+          row({
+            parkId: PARK,
+            parkName: "Aaa Park",
+            attractionId: "t1",
+            name: "Coaster",
+            isHeadliner: true,
+            models: 3,
+            coverage: 1,
+          }),
+        ],
+      },
+    });
+    const opts = await service.getDayOptions(
+      undefined,
+      T("2026-10-11T03:00:00Z"),
+    );
+    const dateQuery = sql.findIndex((q) => q.includes("generate_series"));
+    expect(params[dateQuery][0]).toBe("2026-10-09");
+    expect(opts.date).toBe("2026-10-09");
+    expect(opts.dates).toEqual(["2026-10-09", "2026-10-08"]);
+    expect(opts.suggested).toEqual({
+      date: "2026-10-09",
+      parkId: EP,
+      attractionId: "e1",
+    });
+    // Richest park first; the ride without truth (and its park) is gone.
+    expect(opts.parks.map((p) => p.name)).toEqual(["Europa-Park", "Aaa Park"]);
+    expect(opts.parks[0].rides.map((r) => r.name)).toEqual([
+      "Blue Fire",
+      "Voltron",
+      "Alpenexpress",
+    ]);
+  });
+
+  it("moves on to the next complete day when the newest has no ride with truth", async () => {
+    const { service } = build({
+      timezones: ["America/Chicago"],
+      dates: ["2026-10-10", "2026-10-09"],
+      optionRows: {
+        "2026-10-10": [row({ attractionId: "x", coverage: 0.1 })],
+        "2026-10-09": [row({ attractionId: "y", coverage: 0.8 })],
+      },
+    });
+    const opts = await service.getDayOptions(
+      undefined,
+      T("2026-10-11T12:00:00Z"),
+    );
+    expect(opts.date).toBe("2026-10-09");
+    expect(opts.suggested).toEqual({
+      date: "2026-10-09",
+      parkId: PARK,
+      attractionId: "y",
+    });
+  });
+
+  it("describes an explicitly requested date, even an incomplete one", async () => {
+    const { service } = build({
+      timezones: ["America/Chicago"],
+      dates: ["2026-10-09"],
+      optionRows: { "2026-10-11": [row({ attractionId: "z", coverage: 0.3 })] },
+    });
+    const opts = await service.getDayOptions(
+      "2026-10-11",
+      T("2026-10-11T12:00:00Z"),
+    );
+    expect(opts.date).toBe("2026-10-11");
+    expect(opts.parks[0].rides.map((r) => r.id)).toEqual(["z"]);
+    expect(opts.suggested).toBeNull();
   });
 });
 

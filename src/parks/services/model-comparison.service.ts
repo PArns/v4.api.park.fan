@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { DataSource, Repository } from "typeorm";
 import { Redis } from "ioredis";
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
   ARCHIVE_ORIGIN_KINDS,
@@ -13,7 +13,6 @@ import {
 import {
   ArchivedCurve,
   OperatingWindow,
-  TRUTH_SLOT_MS,
   TruthReading,
   buildTruthSlots,
   valueAt,
@@ -38,6 +37,13 @@ import {
 } from "../../ml/dto/model-comparison.dto";
 import verdictsJson from "../../ml/data/offline-model-verdicts.json";
 import {
+  DayOptionRow,
+  dayViewSlots,
+  lastCompleteDate,
+  rankDayOptions,
+  truthCoverage,
+} from "../../ml/utils/model-comparison-day.util";
+import {
   BOARD_VERSION_KEY,
   ForecastArchiveScoringService,
 } from "./forecast-archive-scoring.service";
@@ -60,6 +66,8 @@ const DAY_TTL_SECONDS = 15 * 60;
 /** Admin dates ("expected by") are read on the owner's calendar. */
 const ADMIN_TZ = "Europe/Berlin";
 const MAX_DATES = 30;
+/** Without a date, the newest complete dates tried for a suggestion. */
+const SUGGESTION_DATE_TRIES = 3;
 
 export const DAY_ORIGINS: Array<{
   id: ModelComparisonOriginId;
@@ -252,85 +260,144 @@ export class ModelComparisonService {
     );
   }
 
-  /** Dates, parks and rides the day view can show. */
-  async getDayOptions(date?: string): Promise<ModelComparisonDayOptionsDto> {
-    const today = getCurrentDateInTimezone(ADMIN_TZ);
+  /**
+   * Dates, parks and rides the day view can show, and the ride-day to open
+   * first. Only complete dates are listed (over in every park's timezone);
+   * without a `date`, the newest of them that has a suggestion is described.
+   */
+  async getDayOptions(
+    date?: string,
+    now: Date = new Date(),
+  ): Promise<ModelComparisonDayOptionsDto> {
+    const tzRows = await this.q<Array<{ timezone: string }>>(
+      `SELECT DISTINCT timezone FROM parks WHERE timezone IS NOT NULL`,
+      [],
+    );
+    const cutoff = lastCompleteDate(
+      tzRows.map((r) => r.timezone),
+      now,
+    );
     const v = await this.version();
     return this.cached(
-      `model-comparison:day-options:v${v}:${today}:${date ?? "-"}`,
+      `model-comparison:day-options:v${v}:${cutoff}:${date ?? "-"}`,
       DAY_TTL_SECONDS,
       async () => {
-        // Archive rows live 14 days past their target date; a target date
-        // after today has no truth. 30 index probes, newest first.
+        // Archive rows live 14 days past their target date. 30 index probes,
+        // newest first, ending at the last date that is over everywhere.
         const dateRows = await this.q<Array<{ d: string }>>(
           `SELECT d::date::text AS d
              FROM generate_series($1::date - ${MAX_DATES - 1}, $1::date, interval '1 day') d
             WHERE EXISTS (SELECT 1 FROM forecast_archive_curves c
                            WHERE c.target_date = d::date AND c.origin_kind = $2)
             ORDER BY d DESC`,
-          [today, ARCHIVE_ORIGIN_KINDS.daily],
+          [cutoff, ARCHIVE_ORIGIN_KINDS.daily],
         );
         const dates = dateRows.map((r) => r.d);
-        const chosen = date ?? dates[0] ?? today;
-        const rides = await this.q<
-          Array<{ parkId: string; id: string; hl: boolean }>
-        >(
-          `SELECT park_id AS "parkId", attraction_id AS id, bool_or(is_headliner) AS hl
-             FROM forecast_archive_curves
-            WHERE target_date = $1::date AND origin_kind = $2 AND surface IN ($3, $4)
-            GROUP BY 1, 2`,
-          [
-            chosen,
-            ARCHIVE_ORIGIN_KINDS.daily,
-            ARCHIVE_SURFACES.park_hourly,
-            ARCHIVE_SURFACES.plan_day,
-          ],
-        );
-        const parkIds = [...new Set(rides.map((r) => r.parkId))];
-        const parks =
-          parkIds.length === 0
-            ? []
-            : await this.q<
-                Array<{ id: string; name: string; timezone: string }>
-              >(
-                `SELECT id, name, timezone FROM parks WHERE id = ANY($1::uuid[])`,
-                [parkIds],
-              );
-        const names =
-          rides.length === 0
-            ? []
-            : await this.q<Array<{ id: string; name: string }>>(
-                `SELECT id, name FROM attractions WHERE id = ANY($1::uuid[])`,
-                [rides.map((r) => r.id)],
-              );
-        const nameOf = new Map(names.map((n) => [n.id, n.name]));
+        const newest = dates.slice(0, SUGGESTION_DATE_TRIES);
+        const tries = date ? [date] : newest.length ? newest : [cutoff];
+        let chosen = tries[0];
+        let ranked = rankDayOptions(chosen, []);
+        for (const d of tries) {
+          const r = rankDayOptions(d, await this.dayOptionRows(d));
+          if (d === tries[0]) ranked = r;
+          if (r.suggested) {
+            chosen = d;
+            ranked = r;
+            break;
+          }
+        }
         return {
           date: chosen,
           dates,
-          parks: parks
-            .map((p) => ({
-              id: p.id,
-              name: p.name,
-              timezone: p.timezone,
-              rides: rides
-                .filter((r) => r.parkId === p.id && nameOf.has(r.id))
-                .map((r) => ({
-                  id: r.id,
-                  name: nameOf.get(r.id)!,
-                  isHeadliner: Boolean(r.hl),
-                }))
-                .sort(
-                  (a, b) =>
-                    Number(b.isHeadliner) - Number(a.isHeadliner) ||
-                    a.name.localeCompare(b.name, "de"),
-                ),
-            }))
-            .filter((p) => p.rides.length > 0)
-            .sort((a, b) => a.name.localeCompare(b.name, "de")),
+          parks: ranked.parks,
           origins: DAY_ORIGINS.map(({ id, label }) => ({ id, label })),
+          suggested: ranked.suggested,
         };
       },
     );
+  }
+
+  /**
+   * Every ride with a `park_hourly` or `plan_day` curve on `date`, with its
+   * model count at the morning origin and its truth coverage: the share of the
+   * operating window (published hours, else the park-local day) in which an
+   * OPERATING STANDBY reading ≥ 5 min was in force (≤ 3 h old — the truth's
+   * own rule, time-weighted instead of per slot midpoint). One pass over that
+   * day's change log of the archived rides: 0.6 s on production for
+   * 2026-10-10 (5,645 rides, 356 k rows).
+   */
+  private async dayOptionRows(date: string): Promise<DayOptionRow[]> {
+    const day = new Date(`${date}T00:00:00Z`).getTime();
+    const rows = await this.q<
+      Array<
+        Omit<DayOptionRow, "coverage" | "models"> & {
+          models: string | number;
+          coverage: string | number | null;
+        }
+      >
+    >(
+      `WITH rides AS (
+         SELECT park_id, attraction_id, bool_or(is_headliner) AS hl,
+                count(DISTINCT surface) FILTER (
+                  WHERE lead_days = 0 AND surface = ANY($5::smallint[])) AS models
+           FROM forecast_archive_curves
+          WHERE target_date = $1::date AND origin_kind = $2
+          GROUP BY 1, 2
+         HAVING bool_or(surface IN ($3, $4))
+       ), win AS (
+         SELECT "parkId" AS park_id, min("openingTime") AS open, max("closingTime") AS close
+           FROM schedule_entries
+          WHERE date = $1::date AND "scheduleType" = 'OPERATING' AND "attractionId" IS NULL
+            AND "openingTime" IS NOT NULL AND "closingTime" > "openingTime"
+          GROUP BY 1
+       ), dw AS (
+         SELECT p.id AS park_id, p.name, p.timezone,
+                coalesce(w.open, $1::date::timestamp AT TIME ZONE p.timezone) AS open,
+                coalesce(w.close, ($1::date + 1)::timestamp AT TIME ZONE p.timezone) AS close
+           FROM parks p LEFT JOIN win w ON w.park_id = p.id
+          WHERE p.id IN (SELECT park_id FROM rides)
+       ), q AS (
+         SELECT qd."attractionId" AS id, qd.timestamp AS ts, qd.status::text AS status,
+                qd."waitTime" AS wait,
+                lead(qd.timestamp) OVER (PARTITION BY qd."attractionId" ORDER BY qd.timestamp) AS nxt
+           FROM queue_data qd
+          WHERE qd."attractionId" = ANY(ARRAY(SELECT attraction_id FROM rides))
+            AND qd."queueType" = 'STANDBY'
+            AND qd.timestamp >= $6 AND qd.timestamp < $7
+       )
+       SELECT r.park_id AS "parkId", dw.name AS "parkName", dw.timezone,
+              r.attraction_id AS "attractionId", a.name, r.hl AS "isHeadliner",
+              r.models,
+              coalesce(sum(GREATEST(0, EXTRACT(EPOCH FROM
+                  LEAST(coalesce(q.nxt, dw.close), q.ts + interval '3 hours', dw.close)
+                  - GREATEST(q.ts, dw.open))))
+                FILTER (WHERE q.status = 'OPERATING' AND q.wait >= 5), 0)
+                / NULLIF(EXTRACT(EPOCH FROM dw.close - dw.open), 0) AS coverage
+         FROM rides r
+         JOIN dw ON dw.park_id = r.park_id
+         JOIN attractions a ON a.id = r.attraction_id
+         LEFT JOIN q ON q.id = r.attraction_id AND q.ts < dw.close
+        GROUP BY r.park_id, dw.name, dw.timezone, r.attraction_id, a.name, r.hl,
+                 r.models, dw.open, dw.close`,
+      [
+        date,
+        ARCHIVE_ORIGIN_KINDS.daily,
+        ARCHIVE_SURFACES.park_hourly,
+        ARCHIVE_SURFACES.plan_day,
+        SERIES_BY_SURFACE.map(([surface]) => ARCHIVE_SURFACES[surface]),
+        // Covers the park-local day of every timezone in use (Asia to the
+        // US west coast), the 3 h a reading stays in force before the
+        // opening, and closings past midnight.
+        new Date(day - 24 * 3_600_000),
+        new Date(day + 36 * 3_600_000),
+      ],
+    );
+    return rows.map((r) => ({
+      ...r,
+      isHeadliner: Boolean(r.isHeadliner),
+      models: Number(r.models),
+      coverage: Math.min(1, Number(r.coverage ?? 0)),
+    }));
   }
 
   /** One ride, one day, one origin: every archived curve against the truth. */
@@ -396,33 +463,43 @@ export class ModelComparisonService {
       : null;
     const atOrigin = curves.filter((c) => c.originAt === originAt);
 
-    const windows = await this.operatingWindows(parkId, date);
-    const slotTimes = ModelComparisonService.daySlots(windows, atOrigin);
     const tz = park.timezone;
+    const windows = await this.operatingWindows(parkId, date);
+    // Without published hours the truth is read over the park-local day, and
+    // the slots then follow it (dayViewSlots).
+    const truthWindows =
+      windows.length > 0
+        ? windows
+        : [ModelComparisonService.localDay(date, tz)];
 
-    let truthSlots = new Map<number, number>();
-    if (windows.length > 0 && slotTimes.length > 0) {
-      const readings = await this.q<
-        Array<{ ts: Date; status: string; wait: number | null }>
-      >(
-        `SELECT timestamp AS ts, status::text AS status, "waitTime" AS wait
-           FROM queue_data
-          WHERE "attractionId" = $1::uuid AND "queueType" = 'STANDBY'
-            AND timestamp >= $2 AND timestamp < $3
-          ORDER BY timestamp`,
-        [
-          attractionId,
-          new Date(Math.min(...windows.map((w) => w.open)) - 3 * 3_600_000),
-          new Date(Math.max(...windows.map((w) => w.close))),
-        ],
-      );
-      const list: TruthReading[] = readings.map((r) => ({
-        timestamp: new Date(r.ts).getTime(),
-        status: r.status,
-        waitTime: r.wait === null ? null : Number(r.wait),
-      }));
-      truthSlots = buildTruthSlots(list, windows);
-    }
+    const readings = await this.q<
+      Array<{ ts: Date; status: string; wait: number | null }>
+    >(
+      `SELECT timestamp AS ts, status::text AS status, "waitTime" AS wait
+         FROM queue_data
+        WHERE "attractionId" = $1::uuid AND "queueType" = 'STANDBY'
+          AND timestamp >= $2 AND timestamp < $3
+        ORDER BY timestamp`,
+      [
+        attractionId,
+        new Date(Math.min(...truthWindows.map((w) => w.open)) - 3 * 3_600_000),
+        new Date(Math.max(...truthWindows.map((w) => w.close))),
+      ],
+    );
+    const list: TruthReading[] = readings.map((r) => ({
+      timestamp: new Date(r.ts).getTime(),
+      status: r.status,
+      waitTime: r.wait === null ? null : Number(r.wait),
+    }));
+    const truthSlots = buildTruthSlots(list, truthWindows);
+    const slotTimes = dayViewSlots({
+      windows,
+      truthSlots: [...truthSlots.keys()],
+      served:
+        atOrigin.find((c) => c.surface === "plan_day") ??
+        atOrigin.find((c) => c.surface === "park_hourly") ??
+        null,
+    });
 
     const seriesCurves: Array<{ model: string; curve: ArchivedCurve }> = [];
     for (const [surface, model] of SERIES_BY_SURFACE) {
@@ -490,45 +567,23 @@ export class ModelComparisonService {
             },
       slots: slotTimes.map((s) => formatInTimeZone(new Date(s), tz, "HH:mm")),
       truth,
+      truthCoverage: truthCoverage(truth),
       series,
       scores,
     };
   }
 
-  /**
-   * The day's 15-min slot instants: the published window(s) from the first
-   * opening (floored to the quarter-hour) to the last closing. Without a
-   * published window, the span the archived curves cover — truth is then null
-   * throughout, as the scorer would have it.
-   */
-  static daySlots(
-    windows: OperatingWindow[],
-    curves: ArchivedCurve[],
-  ): number[] {
-    let from: number;
-    let to: number;
-    if (windows.length > 0) {
-      from = Math.min(...windows.map((w) => w.open));
-      to = Math.max(...windows.map((w) => w.close));
-    } else if (curves.length > 0) {
-      from = Math.min(...curves.map((c) => c.slotStart));
-      to = Math.max(
-        ...curves.map(
-          (c) => c.slotStart + c.waits.length * c.slotMinutes * 60_000,
-        ),
-      );
-    } else {
-      return [];
-    }
-    const out: number[] = [];
-    for (
-      let s = Math.floor(from / TRUTH_SLOT_MS) * TRUTH_SLOT_MS;
-      s < to;
-      s += TRUTH_SLOT_MS
-    ) {
-      out.push(s);
-    }
-    return out;
+  /** The park-local calendar day `date` as an instant window. */
+  static localDay(date: string, timezone: string): OperatingWindow {
+    const next = new Date(`${date}T12:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    return {
+      open: fromZonedTime(`${date}T00:00:00`, timezone).getTime(),
+      close: fromZonedTime(
+        `${next.toISOString().slice(0, 10)}T00:00:00`,
+        timezone,
+      ).getTime(),
+    };
   }
 
   /** MAE per series over the slots where both truth and the series have a value. */

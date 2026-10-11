@@ -106,10 +106,29 @@ export interface ModelComparisonResponseDto {
 
 export type ModelComparisonOriginId = "morning" | "d1" | "d3" | "d7";
 
-export interface ModelComparisonDayOptionsDto {
+/** A ride-day worth opening the day view on (PAR-855 follow-up). */
+export interface ModelComparisonDaySuggestionDto {
+  /** YYYY-MM-DD, park-local; equal to the options' `date`. */
   date: string;
-  /** Target dates with archived curves and truth, newest first, at most 30. */
+  parkId: string;
+  attractionId: string;
+}
+
+export interface ModelComparisonDayOptionsDto {
+  /** The date `parks` describe: the requested one, else the newest of `dates`. */
+  date: string;
+  /**
+   * COMPLETE target dates with archived 06:00 curves, newest first, at most 30:
+   * a date is listed only once it is over in the timezone of every park, so
+   * every ride listed for it can have its whole day of truth.
+   */
   dates: string[];
+  /**
+   * Parks ordered by data richness (rides with OPERATING truth in at least
+   * half of the operating window, then rides with any truth), not by name.
+   * `rides`: headliners first, then by truth coverage; a ride with no
+   * OPERATING truth that day is left out (and a park left without rides).
+   */
   parks: {
     id: string;
     name: string;
@@ -117,6 +136,12 @@ export interface ModelComparisonDayOptionsDto {
     rides: { id: string; name: string; isHeadliner: boolean }[];
   }[];
   origins: { id: ModelComparisonOriginId; label: string }[];
+  /**
+   * The ride-day to open first, on `date`: a ride with truth in at least half
+   * of its operating window and curves from as many models as any such ride,
+   * taken in the order of `parks` / `rides`. Null when no ride qualifies.
+   */
+  suggested: ModelComparisonDaySuggestionDto | null;
 }
 
 export interface ModelComparisonDayDto {
@@ -133,10 +158,16 @@ export interface ModelComparisonDayDto {
   };
   /** The published park-wide OPERATING window of that day, park-local; null when none was published. */
   openingHours: { open: string; close: string } | null;
-  /** Park-local "HH:MM", 15-min steps across the operating window of that day. */
+  /**
+   * Park-local "HH:MM", 15-min steps across the operating window only: the
+   * published hours; without them the first to the last slot with truth,
+   * padded by one hour; without truth either, the span of the served curve.
+   */
   slots: string[];
   /** Truth per slot: the STANDBY reading in force, OPERATING and ≥ 5 min; null = not operating / no reading. */
   truth: (number | null)[];
+  /** Share of `slots` with a truth value, 0..1 (3 decimals); 0 = no measurements for this ride on this day. */
+  truthCoverage: number;
   /** Hourly surfaces expanded to 15-min steps; null where the model had no value. */
   series: { model: string; label: string; values: (number | null)[] }[];
   /** MAE per model over the slots with truth and a value; ascending. */
