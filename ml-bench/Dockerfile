@@ -10,7 +10,10 @@
 # exactly the ones the production models are trained on.
 #   docker build -t ml-bench --build-arg GIT_SHA=$(git rev-parse HEAD) \
 #     --build-context mlsvc=ml-service ml-bench
-FROM python:3.11-slim
+# PAR-853: Toto 2.0 (`toto-2`) needs Python >= 3.12, so its image is built with
+#   --build-arg PYTHON_IMAGE=python:3.12-slim
+ARG PYTHON_IMAGE=python:3.11-slim
+FROM ${PYTHON_IMAGE}
 
 WORKDIR /app
 
