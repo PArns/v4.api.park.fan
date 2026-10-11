@@ -24,7 +24,8 @@ What the runner hands over, and what it guarantees:
 * ``origin.history.df(days)`` / ``train_panel``: truth slots that END before the
   park's origin (``slot_start_utc + 15 min <= origin_utc``), nothing else. The
   history frame is materialised up front, so ``days`` is capped at
-  ``BenchConfig.history_days`` (56); ask ``fit`` for longer history.
+  ``BenchConfig.history_days`` (56) widened to the largest ``truth_history_days``
+  any registered model declares; declare it, or ask ``fit`` for longer history.
 * ``horizon_slots``: every 15-min slot of each target day's opening window AS
   KNOWN AT THE ORIGIN — the published window if its schedule row was written
   before the origin, else the window projected from the last 56 days
@@ -128,6 +129,13 @@ class Model:
     train_days: ClassVar[int | None] = 365
     #: opt in to ORACLE weather (actuals); the model is then scored as <name>_owx
     uses_oracle_weather: ClassVar[bool] = False
+    #: days of truth the runner must MATERIALISE into ``origin.history`` for this model
+    #: (0 = ``BenchConfig.history_days``, 56). ``HistoryView.df(days)`` raises above what
+    #: was materialised rather than silently returning a short frame, so a model that
+    #: accumulates more history than the profile window has to say so here -- otherwise it
+    #: either crashes or, worse, is scored on quietly truncated history. ``driver_level``
+    #: primes its ride-day cache with 400 days at the first origin.
+    truth_history_days: ClassVar[int] = 0
 
     @classmethod
     def scored_name(cls) -> str:

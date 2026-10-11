@@ -352,6 +352,57 @@ model's numbers are always paired against the same reference on the same rows.
 `--reference` refuses to start without a git SHA and an image id; every run
 records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 
+## Level drivers (PAR-830)
+
+`python -m mlbench drivers --export <export> --out <dir>` builds one row per
+ride-day × lead (1/3/7/14/30/60/90) with the target `log(true P90 / naive level)`
+and every driver known at the origin, fits walk-forward models by origin month
+and writes R², level MAE, UC4 ranking, univariate effects and permutation
+importance (CPU, ~4 min on 1.9 M rows). It reads `parquet/` and
+`raw/schedule.csv.gz` (ticketed events, extra hours and the `updated_us` that
+decides whether a schedule was known at the origin). The plug-in
+`driver_level` (`--model driver_level`) is the same gradient-boosted model built
+from nothing but the runner's DataFrames (history + known-future covariates,
+accumulated across origins; no weather, no event flags): `driver_level` = the
+naive level × H5 curve scaled by exp(ŷ), `lvl_driver_level` / `driver_level_x_h5`
+from `predict_daily`. Findings: [level-drivers.md](level-drivers.md).
+
+Scored over all 231 origins (run `20261009-par830-drivers`), the result splits
+by what is measured. **The day *ranking* improves, over the whole backtest
+period**: `lvl_driver_level` beats every other level source on the day
+comparison (D7 +0.068 at d8–30, +0.094 at d31–90) and the crowd bucket (D6
++0.032 at d30, +0.024 at d90), it wins the **within-park-month day ranking
+(UC4)** at d1–d60 (+0.065 … +0.109, on 349–607 park-months) and it carries the
+**optimiser regret** to d30 with the largest margin of any model (−1.17 … −1.52
+against H5's −0.76 … −1.14). **The 15-min slot MAE does not**: the win measured
+on the 8-week late-summer/autumn window (usable horizon d10 all rides, d60 busy)
+**reverses over the full period**, where `driver_level` has no usable horizon on
+either segment and is worse than H5 at every lead (+0.273 … +0.935 all rides).
+By season it beats H5 only in autumn, and the deficit outside autumn is
+**seasonal rather than a cold start** (the cold start is winter, 1.9 % of slots;
+excluding winter and spring still leaves +0.14 … +0.24 vs H5). It is therefore
+**shadow-only, scoped to four ranking surfaces** (D6, D7, D4 optimiser regret,
+UC4), and it also regresses `bestVisitTimes` (D3) against both climatology and
+H5 under both bootstrap units in both passes.
+
+Two things it is **not** good at, which the first version of this section got
+wrong in the model's favour: **`dayPeak` ordering** — `driver_level` is
+significant to d90 but wins at no lead (`lvlh5_tft` d0–d45, `lvlh5_naive`
+d60–d90) and its margin is below H5's at every scored lead d7–d90 except d10,
+so `dayPeak` must
+not be routed to it; and **anything beyond d90** — UC4 is a measured *loss* at
+d120 (−0.029 [−0.052, −0.007]) and **D6 a significant loss at the same d120**
+(−0.034 [−0.050, −0.017]; the d180 loss is park-day-only). UC4 **is** measurable, contrary
+to the earlier text here: its unit is the park-month (BENCH-SPEC recorded change
+**#3**), and the `3` / `6–9` quoted before were counts of month *labels*. See
+`level-drivers.md` §6.6a, §6.7b, §6.7c.
+
+A caveat that applies to **every** model reported on the common-target window,
+not just this one: at fixed target dates lead `L`'s origins are `target − L`, so
+the lead axis moves with the origin season (d1 = autumn origins, d90 = summer
+origins for the 2026-08-15…10-07 window). The window removes the *target*
+season confound, not the *origin* one.
+
 ## Results
 
 Reference run: `ml-bench/results/20261009-baselines-v2/`. Export of 2026-10-09
@@ -696,6 +747,10 @@ lead clears the 30-unit gate, and the answer is now a real one — `lvl_tft` los
 to the best naive daily ranking at every lead and is significantly worse at d30
 (−0.081 [−0.144, −0.011]). "Tested and lost" is a much stronger basis for
 "the crowd calendar stays naive" than "never tested" was.
+
+PAR-830's `driver_level` run measured UC4 independently under the same corrected
+gate — 62–607 park-months per lead, headline window and full period — and reports
+its result in [level-drivers.md](level-drivers.md) §6.6a and §6.7b.
 
 A usable horizon shorter than the max significant lead means a lead in between
 breaks the run. For `h5` on UC3 MAE all rides that lead is **d6**, and the

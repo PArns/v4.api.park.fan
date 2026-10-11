@@ -210,6 +210,11 @@ class Data:
 
         self.run = run
         self.con = duckdb.connect()
+        # The two env vars (read into REPORT_MEMORY / REPORT_THREADS above and
+        # passed through the CLI's --memory / --threads) exist because the
+        # full-period pass does not fit a 4 GB container at memory_limit=3GB --
+        # DuckDB plus the bootstrap's numpy arrays overshoot and the container is
+        # OOM-killed (rc=137).
         self.con.execute(f"SET threads={int(threads)}")
         self.con.execute(f"SET memory_limit='{memory}'")
         tmp = run / "work" / f"report-tmp-{target_from or 'all'}"

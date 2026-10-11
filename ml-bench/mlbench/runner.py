@@ -376,6 +376,22 @@ class Runner:
         change inside an origin); tests that rewrite the tables do."""
         self._hv_cache = {}
 
+    def history_days_needed(self) -> int:
+        """How much truth ``origin.history`` must hold: the config window, widened to the
+        largest any registered plug-in declares.
+
+        ``HistoryView`` is materialised and raises above its cap, while a plug-in that
+        accumulates its own long history asks for more than the 56-day profile window --
+        ``driver_level`` primes its ride-day cache with 400 days at the first origin.
+        Capping at ``BenchConfig.history_days`` alone turns that into a ``ValueError``,
+        and a cap that merely truncated would be worse, because it would silently shorten
+        the history the published numbers were scored with. The need is read off the
+        CLASS, like the oracle-weather gate, so an instance attribute cannot widen an
+        information budget.
+        """
+        return max([int(self.cfg.history_days)]
+                   + [int(type(m).truth_history_days) for m in self.models])
+
     def name_of(self, m: Model) -> str:
         return self._frozen[id(m)][0]
 
@@ -455,9 +471,9 @@ class Runner:
         (critic S9). Cached per (origin, origin table) because the intraday path asks
         for the same view once per hour per model.
         """
-        key = (c, origin_table)
+        days = self.history_days_needed()
+        key = (c, origin_table, days)
         if self._hv_cache.get("key") != key:
-            days = int(self.cfg.history_days)
             df = self.con.execute(f"""
                 SELECT t.aid AS attraction_id, t.park_id, t.date, t.slot_utc AS slot_start_utc,
                        t.slot_local, t.ws, t.ko, t.kc, t.y
