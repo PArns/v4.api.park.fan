@@ -377,15 +377,20 @@ def test_cache_write_is_atomic_and_the_block_resume_is_honest(synth_export, tmp_
     (out / ".b20260401_h06.parquet.tmp").write_bytes(b"truncated garbage")
     (out / "b20260401_h20.parquet").unlink()
     meta2 = run(**kw)
-    assert len(meta2["blocks"]) == 1, "the block must be recomputed, not skipped"
+    # `meta["blocks"]` is deliberately SEEDED from the previous pass (so a resumed cache
+    # keeps the provenance of every pass that built it), so a recomputed block APPENDS:
+    # two entries means pass 2 really redid the block, one would mean it was skipped.
+    assert len(meta2["blocks"]) == 2, "the block must be recomputed, not skipped"
+    assert meta2["blocks"][-1]["from"] == "2026-04-01"
     assert (out / "b20260401_h20.parquet").exists()
+    assert not list(out.glob(".*tmp")), "the stale temp file must not survive"
     assert meta2["earlier_passes"], "a resumed pass must record the earlier pass's provenance"
 
     # Every file the run calls final must be a readable parquet with the rows it claims.
     import pyarrow.parquet as pq
     for h in hours:
         f = out / f"b20260401_h{h:02d}.parquet"
-        assert pq.ParquetFile(f).metadata.num_rows == meta2["blocks"][0]["rows"][h]
+        assert pq.ParquetFile(f).metadata.num_rows == meta2["blocks"][-1]["rows"][h]
 
 
 def test_a_lone_available_step_cannot_form_a_training_window():
