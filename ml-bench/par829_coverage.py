@@ -80,6 +80,30 @@ def main() -> int:
     else:
         print(f"GATE SKIPPED -- {gm}/{gb} not both in this run\n")
 
+    # ---- 1b. WEEKDAY CENSUS per lead. No table in the harness carries a weekday
+    # column, which is how a sibling workstream's strided subset went two days with
+    # every origin on a Thursday -- so d2 was always a Saturday and its "d2 hole" was a
+    # weekday effect read as a lead effect. Any lead-indexed routing claim needs this
+    # beside it. `date` in the slot parts is the TARGET date and the origin is
+    # `date - L`, so both are derivable from the run's own output rather than from a
+    # claim about how the origins were chosen.
+    if "L" in cols:
+        print("\nWEEKDAY CENSUS (origin = target date - L). max_share near 1.0 means the "
+              "lead axis is aliased with day-of-week.")
+        print(f"{'L':>4}{'origins':>9}  " + "".join(f"{d:>6}" for d in
+              ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")) + f"{'max_share':>11}")
+        wd = con.execute(f"""
+            WITH o AS (SELECT DISTINCT L, date - CAST(L AS INTEGER) AS origin
+                       FROM read_parquet($1, union_by_name=true) WHERE L <= {a.max_lead})
+            SELECT L, isodow(origin) AS dow, count(*) n FROM o GROUP BY 1, 2 ORDER BY 1, 2
+            """, [files]).df()
+        for L in sorted(wd["L"].unique()):
+            g = wd[wd["L"] == L]
+            by = {int(r.dow): int(r.n) for r in g.itertuples()}
+            tot = sum(by.values())
+            cells = "".join(f"{by.get(i, 0):>6}" for i in range(1, 8))
+            print(f"{int(L):>4}{tot:>9}  {cells}{(max(by.values()) / tot if tot else 0):>11.3f}")
+
     # ---- 2. the D9 census: exact asymmetric gap per (model, ref, lead)
     print("EXACT ASYMMETRIC COVERAGE  (ref_only = slots the reference covers and the "
           "model does NOT = n__ref - pn__model__ref)")
