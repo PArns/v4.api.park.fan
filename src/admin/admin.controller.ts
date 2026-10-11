@@ -53,6 +53,8 @@ import {
   ModelComparisonResponseDto,
 } from "../ml/dto/model-comparison.dto";
 import { DowntimeMeasurementService } from "./downtime-measurement.service";
+import { MlOverviewService } from "./ml-overview.service";
+import { MlOverviewDto } from "../ml/dto/ml-overview.dto";
 import { AdminAuthGuard } from "./auth/admin-auth.guard";
 import { AdminMinRole } from "./auth/admin-auth.decorators";
 import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
@@ -177,6 +179,7 @@ export class AdminController {
     private readonly reviewService: AttractionReviewService,
     private readonly forecastArchiveScoring: ForecastArchiveScoringService,
     private readonly modelComparison: ModelComparisonService,
+    private readonly mlOverview: MlOverviewService,
   ) {}
 
   /**
@@ -643,6 +646,25 @@ export class AdminController {
       );
     }
     return this.modelComparison.getMatrix(n, r);
+  }
+
+  /**
+   * The ML overview (PAR-861): what is up for decision (derived from the
+   * model comparison matrix and src/ml/data/ml-decisions.json), the matrix
+   * summary, and whether every ML component ran when it should have.
+   * Read-only, bounded index lookups, cached 5 min.
+   */
+  @Get("ml-overview")
+  @ApiOperation({
+    summary: "ML overview: open decisions, matrix summary, component status",
+    description:
+      "decisions: ready | waiting_live | open | later | owner, with the live " +
+      "progress of their least-measured matrix cell and the earliest date the " +
+      "gate can be met. components: last run, expected cadence and " +
+      "ok | late | failed | warming | unknown. See docs/ml/ml-overview.md.",
+  })
+  async getMlOverview(): Promise<MlOverviewDto> {
+    return this.mlOverview.getOverview();
   }
 
   /** Dates, parks and rides the day comparison can show (PAR-855). */
