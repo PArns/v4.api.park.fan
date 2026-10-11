@@ -590,6 +590,22 @@ This regression is **not** in the code that scored this run (`cdbc95a3` predates
 `5c216ffa`), so no number here is affected; it would corrupt any UC1 re-score on the
 merged tree, which is why it was routed upstream immediately.
 
+## A third harness note: an information budget must be read off the class
+
+`covariate_history_days` and `truth_history_days` are both per-model *information budgets*,
+and both are now read off `type(m)` rather than the instance. The reason is critic S8's:
+`scored_name()` is a classmethod, so a model that set the attribute in `__init__` would
+receive the wider window and still be scored under its honest name. `covariate_history_days`
+was read off the instance at both call sites until this was noticed.
+
+The guard for it was **mutation-tested**, because the section above argues that a test needs
+a case in which it is capable of failing — and the first version of this one was not. It
+called `covariates()` with `type(m).covariate_history_days` already resolved, so it passed
+with the fix reverted. It now drives `plugin_predict` / `plugin_predict_daily` and inspects
+the covariate frame the model is actually handed; reverting `type(m).` to `m.` makes it fail
+with the real symptom — covariates reaching back to 2026-02-01 under a class budget of 0
+days, a ~78-day over-reach of pre-origin covariates.
+
 ## Licences — what is allowed
 
 - **Chronos-2 — Apache-2.0.** Benchmarking, fine-tuning and production serving are all
