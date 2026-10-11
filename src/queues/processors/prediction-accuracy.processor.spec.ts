@@ -30,6 +30,8 @@ describe("PredictionAccuracyProcessor", () => {
   };
   const statsRepo = {
     upsert: jest.fn().mockResolvedValue({ identifiers: [] }),
+    // The sweep that removes stats rows nothing measured any more (PAR-854).
+    query: jest.fn().mockResolvedValue([]),
   };
   const accuracyRepo = {
     query: jest.fn().mockResolvedValue([]),
@@ -181,6 +183,114 @@ describe("PredictionAccuracyProcessor", () => {
       for (const [chunk] of statsRepo.upsert.mock.calls) {
         expect((chunk as unknown[]).length).toBeLessThanOrEqual(1000);
       }
+    });
+  });
+
+  // PAR-854: the badge scores the SERVED forecast (PCN + blend where it
+  // serves), and only rows that recorded one. Rows from before then measured
+  // CatBoost while readers saw PCN; they must not keep a badge alive.
+  describe("aggregate-stats (served basis, PAR-854)", () => {
+    it("aggregates the served error and gates every served figure on served_source", async () => {
+      accuracyRepo.query.mockResolvedValueOnce([]);
+
+      await processor.handleAggregateStats({} as Job);
+
+      const [sql] = accuracyRepo.query.mock.calls[0] as [string];
+      expect(sql).toMatch(
+        /AVG\(served_absolute_error\) FILTER \(WHERE served_source IS NOT NULL/,
+      );
+      expect(sql).toMatch(
+        /COUNT\(\*\) FILTER \(WHERE served_source IS NOT NULL AND actual_wait_time >= 5/,
+      );
+      // The raw figure is kept for the ride day curve, which draws CatBoost.
+      expect(sql).toMatch(/AVG\(absolute_error\) FILTER/);
+    });
+
+    it("rewrites a ride with only pre-PAR-854 rows as insufficient_data, not its old CatBoost badge", async () => {
+      // The GROUP BY still sees the ride (it has COMPLETED rows), but none of
+      // them carry a served value: zero served comparisons, NULL served mae.
+      accuracyRepo.query.mockResolvedValueOnce([
+        {
+          attraction_id: "legacy",
+          total_predictions: "0",
+          compared_predictions: "0",
+          mae: null,
+          raw_compared_predictions: "400",
+          raw_mae: "6.2",
+        },
+      ]);
+
+      await processor.handleAggregateStats({} as Job);
+
+      const [rows] = statsRepo.upsert.mock.calls[0];
+      expect((rows as Record<string, unknown>[])[0]).toEqual(
+        expect.objectContaining({
+          attractionId: "legacy",
+          badge: "insufficient_data",
+          mae: null,
+          comparedPredictions: 0,
+          // CatBoost's own error survives for the surface that draws CatBoost.
+          rawMae: 6.2,
+        }),
+      );
+    });
+
+    it("withholds the raw figure below the badge's sample floor", async () => {
+      accuracyRepo.query.mockResolvedValueOnce([
+        {
+          attraction_id: "thin",
+          total_predictions: "3",
+          compared_predictions: "3",
+          mae: "4",
+          raw_compared_predictions: "3",
+          raw_mae: "4",
+        },
+      ]);
+
+      await processor.handleAggregateStats({} as Job);
+
+      const [rows] = statsRepo.upsert.mock.calls[0];
+      expect((rows as Record<string, unknown>[])[0]).toEqual(
+        expect.objectContaining({ badge: "insufficient_data", rawMae: null }),
+      );
+    });
+
+    it("deletes stats rows for rides the window no longer measures", async () => {
+      accuracyRepo.query.mockResolvedValueOnce([
+        {
+          attraction_id: "a-1",
+          total_predictions: "50",
+          compared_predictions: "50",
+          mae: "7",
+        },
+      ]);
+
+      await processor.handleAggregateStats({} as Job);
+
+      const [sql, params] = statsRepo.query.mock.calls[0] as [
+        string,
+        unknown[],
+      ];
+      expect(sql).toMatch(/DELETE FROM attraction_accuracy_stats/);
+      expect(params).toEqual([["a-1"]]);
+      // After the upsert: deleting first would blank every badge for the
+      // length of the write.
+      expect(statsRepo.query.mock.invocationCallOrder[0]).toBeGreaterThan(
+        statsRepo.upsert.mock.invocationCallOrder[0],
+      );
+    });
+  });
+
+  describe("aggregate-stats with nothing compared", () => {
+    it("skips the stale-row sweep instead of emptying the table", async () => {
+      accuracyRepo.query.mockResolvedValueOnce([]);
+
+      await processor.handleAggregateStats({} as Job);
+
+      const deletes = statsRepo.query.mock.calls.filter(([sql]) =>
+        /DELETE FROM attraction_accuracy_stats/.test(String(sql)),
+      );
+      expect(deletes).toHaveLength(0);
     });
   });
 

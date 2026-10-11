@@ -30,6 +30,9 @@ describe("PredictionGeneratorProcessor", () => {
     // The served (PCN-overridden) read. The cron must never call it — see the
     // "stores raw CatBoost" spec below.
     getParkPredictions: jest.fn(),
+    // The served DAILY read (TFT over CatBoost). Stores never see it; the lead
+    // snapshot is taken from it (PAR-854).
+    getServingDailyPredictions: jest.fn(),
     deduplicatePredictions: jest.fn().mockResolvedValue(0),
     storePredictions: jest.fn().mockResolvedValue(undefined),
     deleteOldPredictions: jest.fn().mockResolvedValue(0),
@@ -346,17 +349,28 @@ describe("PredictionGeneratorProcessor", () => {
       );
     });
 
-    it("snapshots the lead buckets after storing, with one instant for the run", async () => {
-      const predictions = [{ attractionId: "a1", predictionType: "daily" }];
+    it("snapshots the SERVED daily answer, not the raw one it stores (PAR-854)", async () => {
+      const predictions = [
+        { attractionId: "a1", predictionType: "daily", modelVersion: "v1" },
+      ];
+      const served = [
+        { attractionId: "a1", predictionType: "daily", modelVersion: "tft" },
+      ];
       mlService.getRawParkPredictions.mockResolvedValue({ predictions });
+      mlService.getServingDailyPredictions.mockResolvedValue({
+        predictions: served,
+      });
 
       await processor.handleGenerateDaily({} as Job);
 
+      // The store path keeps raw CatBoost — the TFT-vs-CatBoost board needs it.
+      expect(mlService.storePredictions).toHaveBeenCalledWith(predictions);
+      expect(mlService.getServingDailyPredictions).toHaveBeenCalledWith("p1");
       expect(leadSnapshotService.snapshotPark).toHaveBeenCalledTimes(1);
       const [park, passed, now] =
         leadSnapshotService.snapshotPark.mock.calls[0];
       expect(park).toBe(openPark);
-      expect(passed).toBe(predictions);
+      expect(passed).toBe(served);
       // A Date, not undefined: the lead distance is computed against it, and
       // reading the clock per park would label a batch crossing midnight with
       // two different distances for the same night's work.
@@ -384,6 +398,9 @@ describe("PredictionGeneratorProcessor", () => {
       mlService.getRawParkPredictions.mockResolvedValue({
         predictions: [{ attractionId: "a1", predictionType: "daily" }],
       });
+      mlService.getServingDailyPredictions.mockResolvedValue({
+        predictions: [{ attractionId: "a1", predictionType: "daily" }],
+      });
       leadSnapshotService.snapshotPark.mockRejectedValueOnce(
         new Error("snapshot table missing"),
       );
@@ -396,6 +413,24 @@ describe("PredictionGeneratorProcessor", () => {
       // second one with it, and did not roll back the first one's rows.
       expect(mlService.storePredictions).toHaveBeenCalledTimes(2);
       expect(leadSnapshotService.snapshotPark).toHaveBeenCalledTimes(2);
+    });
+
+    it("records nothing when the served read fails, rather than the raw answer", async () => {
+      // Falling back to the raw response would file CatBoost's number under a
+      // served label — exactly the mix PAR-854 removes.
+      mlService.getRawParkPredictions.mockResolvedValue({
+        predictions: [{ attractionId: "a1", predictionType: "daily" }],
+      });
+      mlService.getServingDailyPredictions.mockRejectedValue(
+        new Error("redis down"),
+      );
+
+      await expect(
+        processor.handleGenerateDaily({} as Job),
+      ).resolves.toBeUndefined();
+
+      expect(mlService.storePredictions).toHaveBeenCalledTimes(1);
+      expect(leadSnapshotService.snapshotPark).not.toHaveBeenCalled();
     });
 
     it("does not snapshot when there is nothing to store", async () => {

@@ -3,11 +3,15 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, IsNull, LessThan } from "typeorm";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
-import { PredictionLeadSnapshot } from "../entities/prediction-lead-snapshot.entity";
+import {
+  PredictionLeadSnapshot,
+  LeadSnapshotSource,
+} from "../entities/prediction-lead-snapshot.entity";
 import { PredictionDto } from "../dto/prediction-response.dto";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { Park } from "../../parks/entities/park.entity";
 import { formatInParkTimezone } from "../../common/utils/date.util";
+import { predictionLocalDate } from "../utils/prediction-local-date.util";
 
 /** Rows scored per run. The backlog drains over a few nights rather than
  *  holding one transaction open across the whole catalogue. */
@@ -82,12 +86,18 @@ export class PredictionLeadSnapshotService {
    * Null when that bucket has fewer than {@link MIN_SCORED} scored rows, which
    * is the normal state for the far buckets until the archive has been running
    * that many days. Null is the answer the DTO promises there.
+   *
+   * Counts SERVED snapshots only (`source IS NOT NULL`, PAR-854): the error of
+   * what a reader was shown at that distance, whichever model produced it.
    */
   async getLeadTimeMae(leadDays: number): Promise<number | null> {
     const bucket = PredictionLeadSnapshotService.bucketFor(leadDays);
     if (bucket === null) return null;
 
-    const cacheKey = `ml:lead-mae:${bucket}`;
+    // `v2`: the figure changed meaning in PAR-854 (served model, not raw
+    // CatBoost). The old key would otherwise go on answering for up to six hours
+    // after a deploy with a number this method no longer computes.
+    const cacheKey = `ml:lead-mae:v2:${bucket}`;
     const cached = await this.redis.get(cacheKey).catch(() => null);
     if (cached !== null) {
       // "none" rather than an absent key: a bucket with too little data is a
@@ -104,6 +114,10 @@ export class PredictionLeadSnapshotService {
       .addSelect("COUNT(*)", "scored")
       .where("s.leadDays = :bucket", { bucket })
       .andWhere("s.absoluteError IS NOT NULL")
+      // Served rows only (PAR-854). A row without a source snapshotted the raw
+      // CatBoost answer while readers were shown TFT; averaging it in would
+      // publish a blend of two models as the error of the one being served.
+      .andWhere("s.source IS NOT NULL")
       .getRawOne<{ mae: string | null; scored: string }>();
 
     const scored = Number(row?.scored ?? 0);
@@ -127,6 +141,15 @@ export class PredictionLeadSnapshotService {
     return answer;
   }
 
+  /**
+   * Which model a served daily row came from. `getTftDailyPredictions` stamps
+   * its rows `modelVersion: "tft"`; everything else in the served merge is
+   * CatBoost's own answer passed through.
+   */
+  static sourceOf(p: PredictionDto): LeadSnapshotSource {
+    return p.modelVersion === "tft" ? "tft" : "catboost";
+  }
+
   /** The largest sampled lead distance at or below `leadDays`. */
   private static bucketFor(leadDays: number): number | null {
     const eligible = PredictionLeadSnapshotService.LEAD_BUCKETS.filter(
@@ -139,8 +162,11 @@ export class PredictionLeadSnapshotService {
   /**
    * Record this run's predictions for the bucket distances.
    *
-   * Called once per park per nightly run, with the predictions that were just
-   * stored. `now` is passed in rather than read here so a whole batch shares one
+   * Called once per park per nightly run, with the SERVED daily answer — what
+   * `MLService.getServingDailyPredictions` hands the calendar and `/plan/day`,
+   * i.e. TFT where it covers the ride and day and CatBoost elsewhere. Not the
+   * raw CatBoost response the run stores: before PAR-854 it was, and the
+   * published error described a model the reader never saw. `now` is passed in rather than read here so a whole batch shares one
    * reference point — a run that straddles midnight would otherwise put two
    * different lead distances on the same night's work.
    */
@@ -170,10 +196,10 @@ export class PredictionLeadSnapshotService {
       if (p.predictionType !== "daily") continue;
       if (!headlinerIds.has(p.attractionId)) continue;
 
-      const targetDate = formatInParkTimezone(
-        new Date(p.predictedTime),
-        park.timezone,
-      );
+      // predictionLocalDate, not `formatInParkTimezone(new Date(…))`: TFT names
+      // the park-local day without an offset, and `new Date` would read that on
+      // the server's clock — a day off for a park twelve hours from UTC.
+      const targetDate = predictionLocalDate(p.predictedTime, park.timezone);
       const lead = wanted.get(targetDate);
       if (lead === undefined) continue;
 
@@ -187,6 +213,7 @@ export class PredictionLeadSnapshotService {
       row.absoluteError = null;
       row.scoredAt = null;
       row.modelVersion = p.modelVersion;
+      row.source = PredictionLeadSnapshotService.sourceOf(p);
       rows.push(row);
     }
 

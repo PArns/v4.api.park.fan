@@ -731,6 +731,13 @@ export class ParkHistoricalStatsService {
    * The ride's own mean absolute error, for a caller drawing the forecast as a
    * band. Per ride rather than the model-wide figure: the band belongs to this
    * curve, and a headliner and a carousel are not predicted equally well.
+   *
+   * `raw_mae`, not `mae` (PAR-854). The curve this band surrounds is read from
+   * `wait_time_predictions`, which holds CatBoost's RAW answer — the PCN
+   * override is applied on the way out of the per-ride and park read paths,
+   * never written there. `mae` now scores the served (PCN) forecast, and a PCN
+   * error drawn around a CatBoost line describes neither. Null below the
+   * badge's sample floor, which `servedAttractionStatsRow` applies.
    */
   private async queryAttractionMae(
     attractionSlug: string,
@@ -738,7 +745,7 @@ export class ParkHistoricalStatsService {
   ): Promise<number | null> {
     const rows: Array<{ mae: number | null }> =
       await this.aggregateRepo.manager.query(
-        `SELECT s.mae
+        `SELECT s.raw_mae AS mae
          FROM attraction_accuracy_stats s
          JOIN attractions a ON a.id::text = s.attraction_id::text
          WHERE a.slug = $1 AND a."parkId" = $2::uuid
