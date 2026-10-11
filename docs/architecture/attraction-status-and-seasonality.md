@@ -1814,6 +1814,11 @@ None of the three is enough. The name is not, because `Haunted Mansion` and
 slide inventory is seasonal and stops in September — 258 production rows are
 seasonal with an autumn last-operating month and not one of them is a maze.
 
+**And all three together are circumstantial**, which is what the rubric path
+below (PAR-835) is for: a scare zone carries the same name tokens and the same
+autumn season as the maze beside it, and the three marks cannot separate them.
+Where a park's own event rubric is in the name, it decides instead of them.
+
 The rule runs as the last attraction step of `detect-seasonal`, which is also
 where it has to run: it reads `is_seasonal` and `season_months`, and the steps
 above it have just rewritten both. On its own cron it would read a season up to
@@ -1852,8 +1857,13 @@ findings shaped it, and both are the kind that only shows up against real data:
   page. A word that names a theme rather than an event does not belong in the
   list, however Halloween it sounds.
 
-Anchored and without `voodoo`, the first run selects **9 rows in 2 parks**, all
-9 genuine mazes. Matched freely it selected 11, two of them wrong.
+Anchored and without `voodoo`, the first run selects **9 rows in 2 parks**.
+Matched freely it selected 11, two of them wrong by name. **Two of the nine are
+wrong by category**, and no token list could have caught it: the Fiesta Texas
+event page lists `Cirkus Bezerkus: Big Top Terror` and `Fear Acres` under
+"Scare Zones" rather than "Haunted Mazes" (PAR-835). Both still read `MAZE` in
+production — neither name carries a rubric, so the rubric path below does not
+reach them, and clearing the field only hands them back to the rule.
 
 ```
 Six Flags Fiesta Texas      | Carnival of Terrors         | {9,10,11} | terror
@@ -1866,6 +1876,42 @@ Universal Studios Hollywood | Evil Dead Burn - Express    | {9}       | evil
 Universal Studios Hollywood | Kill-Ceanera - Express      | {9}       | kill
 Universal Studios Hollywood | Killer Klowns - Express     | {9}       | kill
 ```
+
+### The park's own rubric overrides all three (PAR-835)
+
+Every Halloween event page lists "Haunted Mazes" and "Scare Zones" under
+separate headings, and a few feeds write that heading into the published name.
+Where one does, it is the park's statement about the thing rather than our
+inference from its name, so it decides alone — `mazeNameLabel` in
+`attractions/utils/maze-rule.ts`:
+
+| rubric in the name | effect | rows (2026-10-11) |
+|---|---|---|
+| `… \| Scare Zone`, `Scare Zone: …` | refused, whatever the season says | 8 (Thorpe Park 4, Universal Studios Beijing 4) |
+| `… \| Scare Maze`, `HAUNTED HOUSE: …`, `… \| Haunted Maze` | written, **without the season gate** | 10 (Thorpe Park 5, Six Flags Great America 5) |
+
+Dropping the season gate for a maze label is the point of it and not a
+loosening: the gate is a proxy for "runs only during the event", and
+`detect-seasonal` misses exactly the attraction that runs twelve evenings in
+October. Two of Great America's five `HAUNTED HOUSE:` rows sat unjudged for
+that reason alone.
+
+**The rubric is matched as a delimited segment** — the prefix before the first
+colon (`HAUNTED HOUSE: SAW: Legacy of Terror` has two), or the suffix after the
+last pipe — and never anywhere in the name. All 16 production rows carrying a
+`|` use it that way. Searched loosely, `haunted house` also claims LEGOLAND
+Billund's `Ghost – The Haunted House`, LEGOLAND Windsor's `Haunted House
+Monster Party` and Lotte World's `Haunted House`: three year-round
+walk-throughs, which is the other error class entirely. A scare-zone label
+beats a maze label, because a row labelled both ways is evidence of neither.
+
+Measured by running the rule and its pre-PAR-835 version over the same export
+of all 7,580 production rows: **+2 written** (the two Great America rows),
+**−8 refused as soon as the detector reaches them** — 0 today, because none of
+the eight scare zones is flagged seasonal yet, while four of them already clear
+`MIN_EVER_OPERATING` with 216 observed OPERATING rows each. No verdict already
+on a row is contradicted: of 114 judged rows the rule would write 17 if their
+field were blank, and all 17 read `MAZE`.
 
 ### Season evidence is read in two steps, because the months are nearly empty
 
