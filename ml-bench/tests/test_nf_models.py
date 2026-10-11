@@ -316,8 +316,9 @@ def test_make_model_thins_training_windows_but_not_the_forecast():
     """``step_size`` must reach the model as a TRAIN-only knob: predict() uses
     ``predict_step_size``, which forecast_block sets via predict(step_size=h), so a
     thinned training pool cannot change the forecast layout."""
+    import inspect
+
     from mlbench.models.nf_precompute import HORIZON_DAYS, K, make_model
-    from mlbench.models.nf_panel import build_panel  # noqa: F401  (import shape only)
 
     class _P:
         futr_cols = ["f0"]
@@ -325,7 +326,21 @@ def test_make_model_thins_training_windows_but_not_the_forecast():
         cols = ["y"] + [f"c{i}" for i in range(18)] + ["available_mask"]
 
     m = make_model("nf_tide", _P(), max_steps=1, n_series=None, scale=0.05, t_train=4536)
-    assert m.step_size > 1                       # training pool was thinned
-    assert m.predict_step_size == 1              # untouched by the constructor
+    assert m.step_size > 1, "the training pool must be thinned"
+
+    # The forecast side is untouched, and the reason is stronger than "it is set to 1":
+    # the constructor never creates `predict_step_size` at all. It comes into existence
+    # only inside predict(), assigned from predict()'s own argument -- which is what
+    # forecast_block passes as step_size=h. So no constructor value can reach it.
+    assert not hasattr(m, "predict_step_size")
     m.set_test_size(HORIZON_DAYS * K)
-    assert m.predict_step_size == 1              # and by set_test_size
+    assert not hasattr(m, "predict_step_size")
+    sig = inspect.signature(type(m).predict).parameters["step_size"]
+    assert sig.default == 1
+    src = inspect.getsource(type(m).predict)
+    assert "self.predict_step_size = step_size" in src, src
+
+    # And the unthinned model still differs only in that one knob.
+    plain = make_model("nf_tide", _P(), max_steps=1, n_series=None, scale=0.05)
+    assert plain.step_size == 1
+    assert plain.input_size == m.input_size and plain.h == m.h
