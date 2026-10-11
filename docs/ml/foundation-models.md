@@ -1,4 +1,4 @@
-# Foundation models in ml-bench — Chronos-2 and TimesFM 3.0 (PAR-828)
+# Foundation models in ml-bench — Chronos-2, TimesFM 3.0 (PAR-828), TiRex-2 and Toto 2.0 (PAR-853)
 
 Two pretrained time-series foundation models, plugged into the PAR-827 benchmark
 (`docs/ml/ml-bench.md`) through the same restricted plug-in interface as every
@@ -614,3 +614,89 @@ days, a ~78-day over-reach of pre-origin covariates.
   package is Apache-2.0). park.fan is non-commercial, so the offline benchmark here is
   covered. **Serving these weights in production is an explicit owner decision** and
   needs the licence text re-read against the actual deployment before it happens.
+
+
+---
+
+# TiRex-2 and Toto 2.0 (PAR-853)
+
+Two more pretrained foundation models, on the **same inputs** as `chronos2` wherever the
+model takes them, and scored **inside the same run** as `chronos2` / `chronos2_nocov` —
+the harness pairs models within one run, never across run directories, so a cross-run
+comparison would have no paired CI.
+
+## The two models
+
+| | TiRex-2 | Toto 2.0 |
+|---|---|---|
+| Weights | `NX-AI/TiRex-2`, revision `05e5b26d` | `Datadog/Toto-2.0-313m`, revision `a7bab288` |
+| Package | `tirex-2==0.2.1` | `toto-2==2.0.0` |
+| Licence | **Apache-2.0**, code and weights (model card + LICENSE, checked 2026-10-11) | **Apache-2.0**, code and weights |
+| Covariates | **native** past + known-future | a `known_dynamic` hook exists, but exogenous input is **not a trained feature of 2.0** — hence `toto2_nocov` as the honest variant |
+| Multivariate | one park = one multivariate task | one park = one multivariate task, `series_ids` shared |
+| Quantiles | fixed head 0.1 … 0.9 — **no q95** (returned as NaN, D8 reports it missing) | 9 knots on the output head, q50 / q80 read off |
+| Horizon | 320-step head, rolled forward by feeding the median back | single `forecast(horizon=…)` call |
+| Context | 2048 steps (`MLBENCH_TIREX2_CONTEXT`) | 4096 steps (`MLBENCH_TOTO2_CONTEXT`), left-padded to whole patches |
+
+**Why TiRex-2 and not TiRex.** The original (`NX-AI/TiRex`, package `tirex-ts`) is under the
+NXAI Community License — free below EUR 100 M revenue — and is univariate without
+covariates. TiRex-2 supersedes it with native past/known-future covariates **and** an
+Apache-2.0 licence, so it is TiRex-2 that is benchmarked. Both PAR-853 models are therefore
+licence-clean for a production decision, unlike TimesFM 3.0, whose weights are
+non-commercial.
+
+## Variants registered
+
+| name | context | covariates | origins |
+|---|---|---|---|
+| `tirex2` | compressed, 2048 | yes | daily + intraday |
+| `tirex2_grid` | regular 15-min grid, 2048 steps = 21 days | yes | daily slots only |
+| `toto2` | compressed, 4096 | through `known_dynamic` | daily + intraday |
+| `toto2_nocov` | compressed, 4096 | **none** — the official Toto 2.0 | daily slots only |
+| `toto2_grid` | regular grid, 4096 steps = 42 days | through `known_dynamic` | daily slots only |
+
+`chronos2` and `chronos2_nocov` are re-scored in the same run as the comparators.
+
+## Two traps this cost, both at construction time
+
+**1. `CUDA_HOME` is required to IMPORT TiRex-2, on a box with no CUDA toolkit.**
+`import tirex2` pulls in `xlstm`, whose sLSTM module resolves that kernel's include and lib
+paths at import time via `torch.utils.cpp_extension.include_paths("cuda")`, which raises
+`OSError: CUDA_HOME environment variable is not set`. torch here comes from the cu128 wheel
+and the image is `python:3.12-slim`, so there is no toolkit. The exception leaves
+`FoundationModel._engine()` and **the whole run aborts at the first origin with nothing
+written** — not a degraded result, no result. `TiRex2Backend.__init__` now
+`os.environ.setdefault("CUDA_HOME", "/usr/local")` before the import: TiRex-2 is a BiXLSTM
+(mLSTM) model, never instantiates the sLSTM cell, and its recurrent path is the pure-PyTorch
+one `device="cpu"` selects, so the value is only string arithmetic for a kernel that is never
+built. `setdefault` leaves a real toolkit root alone. If a future `xlstm` actually tries to
+compile, it fails loudly on the missing nvcc — a visible error, never silently different
+numbers.
+
+**2. `torch.compile` has no compiler either.** `tirex2` wraps blocks in `@torch.compile`;
+inductor needs a C/C++ compiler at runtime. `torch._dynamo.config.disable = True` runs it
+eagerly, which gives the same numbers.
+
+A third, non-trap: an early CPU smoke measured `toto2` at **568 s per origin-task**
+(`vram_peak=0.00GB`). That was a CPU run, not a device-placement bug — on the GPU the same
+task takes 24.7 s.
+
+## Runtime and VRAM (GPU smoke, RTX 5080, 30 parks, one origin)
+
+| model | daily slots | daily level | intraday slot task | VRAM peak |
+|---|---|---|---|---|
+| `tirex2` | 16.7 s | 9.7 s | 6.0–7.3 s | 0.54 GB |
+| `toto2` | 24.7 s | 5.3 s | 11.7–12.8 s | 2.29 GB |
+| `toto2_nocov` | 11.5 s | — | — | 2.29 GB |
+| `tirex2_grid` | 19.1 s | — | — | 2.29 GB |
+| `toto2_grid` | 14.5 s | — | — | 2.39 GB |
+| `chronos2` | 28.2 s | 4.7 s | 14.0–14.7 s | 3.29 GB |
+| `chronos2_nocov` | 13.7 s | — | — | 3.29 GB |
+
+All seven models in one origin: **431.4 s**, peak VRAM 3.29 GB — well inside the 10 GB cap
+the resource rules set for a shared GPU. Model load: TiRex-2 3.7 s, Toto 2.0 ~8 s,
+Chronos-2 10.5 s.
+
+## Result
+
+<!-- filled from the scoring run; see RESULTS-PAR-853.md -->

@@ -353,7 +353,8 @@ model's numbers are always paired against the same reference on the same rows.
 records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 
 Model families benchmarked so far get their own document: the foundation models
-Chronos-2 and TimesFM 3.0 in `docs/ml/foundation-models.md` (PAR-828).
+Chronos-2 and TimesFM 3.0 (PAR-828) plus TiRex-2 and Toto 2.0 (PAR-853) in
+`docs/ml/foundation-models.md`.
 
 ## Results
 
