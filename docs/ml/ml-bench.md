@@ -164,15 +164,23 @@ reference and why), `low_coverage_cells.csv`, `usable_horizon.csv` (with
 `leads_tested` and `not_tested_because`) and `handover.csv` (with both CIs and a
 `park_day_unit_agrees` flag).
 
-- **Wins** = the paired difference's **park-cluster** bootstrap CI (all days of
-  a park resampled together) excludes 0, over at least **10 distinct bootstrap
-  units** and with a strictly positive CI width. Days of one park are not
-  independent, so the park-day CI is too narrow; both are in `cells.csv`
-  (`diff_lo/hi` park-day, `diff_lo_park/hi_park` park-cluster) and both are
-  printed in the hand-over table, which marks the cells where they disagree.
-  BENCH-SPEC's literal unit is the park-day; the park-cluster deviation and its
-  reason are **recorded in BENCH-SPEC.md** ("Recorded changes" 1–3), as the spec
-  requires. The unit-count and width guards exist because a single-unit paired
+- **A win = beating the whole naive ENVELOPE.** The model must be better than
+  **every** reference candidate at that lead, each comparison paired on its own
+  shared rows, and each with its **park-cluster** bootstrap CI (all days of a
+  park resampled together) excluding 0, over at least **10 distinct bootstrap
+  units** and with a strictly positive CI width. This replaces "beats the
+  selected reference": a single selected reference is a choice made on the data,
+  and every rule for making it errs in one direction — an argmin over
+  own-coverage values picks on noise and understates models, a ladder tie-break
+  picks the *simplest* candidate and overstates them. A conjunction over a FIXED
+  candidate set is neither, and it is strictly harder than beating any one
+  member, so **no verdict depends on which candidate is displayed as `ref`**.
+  Days of one park are not independent, so the park-day CI is too narrow; both
+  are in `cells.csv` (`diff_lo/hi` park-day, `diff_lo_park/hi_park` park-cluster)
+  and both are printed in the hand-over table, which marks the cells where they
+  disagree. BENCH-SPEC's literal unit is the park-day; the park-cluster deviation
+  and its reason are **recorded in BENCH-SPEC.md** (change #1; the unit-count and
+  width guards are change #2, the envelope is #5), as the spec requires. The unit-count and width guards exist because a single-unit paired
   set makes the resampled ratio weight-independent: the CI collapses to zero
   width and "excludes 0" for free.
 - **Reference per lead** = BENCH-SPEC's ladder (persistence → snaive7 → wt_med →
@@ -211,9 +219,16 @@ reference and why), `low_coverage_cells.csv`, `usable_horizon.csv` (with
   their column — at d60 `lvlh5_tft` reads 1.337 min on the first hour because
   TFT's horizon ends there and 2 % of the reference's slots remain.
 - **Headline horizon curves come from a common target window**
-  (`report --target-from … --target-to …`). On the full period, lead L starts at
-  first origin + L and TFT / CatBoost only exist from late May, so lead would be
-  confounded with season.
+  (`report --target-from … --target-to …`), which fixes the *truth population* so
+  two leads are compared on the same days' outcomes. It does **not** remove the
+  lead–season confound, and an earlier version of this page wrongly said it did:
+  inside a fixed target window lead L's origins are `target − L`, so the d1 cells
+  come from autumn origins and the d90 cells from summer ones. The full period
+  has the mirror problem (lead L starts at first origin + L, and TFT / CatBoost
+  only exist from late May, so lead mixes with *target* season). **Both passes are
+  confounded and neither alone identifies the horizon curve** — use
+  `--origin-from/--origin-to` to pin the origin window instead, and read the
+  per-season tables before reading a lead boundary as a number.
 
 ## Adding a model
 
@@ -224,6 +239,14 @@ reference and why), `low_coverage_cells.csv`, `usable_horizon.csv` (with
 2. Register it in `mlbench/models/__init__.py` (`REGISTRY`), or pass
    `--model package.module:Class`. A registered model is automatically covered by
    `test_information_cut_plugins` — run `pytest` before any run you report.
+
+   **What the test fixture cannot check.** `tests/synth.py` builds **two** parks,
+   so `n_units_park ≤ 2` and the `min_bootstrap_units = 10` guard makes
+   `wins = True` unreachable in the suite. Any assertion about *winners* on that
+   fixture is vacuous unless it lowers the floor, so prefer data-independent
+   invariants — `test_handover_and_usable_horizon_share_one_gate` checks that
+   `handover.n_tested` equals the count the same gate admits in `cells.csv`,
+   which is what would have caught critic B4 in both tables at once.
 3. What a plug-in gets (`mlbench/models/base.py`): DataFrames only, never a
    database connection and no object from which one is reachable —
    `origin.history.df(days)` (truth ending before the origin, materialised up
@@ -273,11 +296,22 @@ records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 ## Results
 
 Reference run: `ml-bench/results/20261009-baselines-v2/`. Export of 2026-10-09
-(289 UTC days, 44.2 M change-log rows → 13.5 M truth slots, 3,601 rides, 157
-parks), 231 daily origins 2026-02-19 → 2026-10-07, git `ea9a8438`, sources
-sha256 `25ed0c3b26d3accd`, image `sha256:a1e54cb8fea6`, 3 shards ×
-(`--cpus 3 --memory 2560m`), 54.4 shard-minutes, two report passes (7 min
-common-window, 14 min full period).
+(289 UTC days, 44.2 M change-log rows → 13,455,954 truth slots, 403,317
+ride-days, 3,601 rides, 157 parks), 231 daily origins 2026-02-19 → 2026-10-07,
+3 shards × (`--cpus 3 --memory 2560m`), 54.4 shard-minutes.
+
+**Two provenance records, because two different commits are involved.** The
+scoring sums in `parts/` come from git `ea9a8438`, sources sha256
+`25ed0c3b26d3accd`, image `sha256:a1e54cb8fea6` — that is what `run-*.json`
+describes. Every *verdict* on top of them (the reference choice, the envelope
+win, the LOW-N gate, the hand-over winner) is recomputed by `report`, and the
+published tables were produced by git `ca29858b`, sources sha256
+`efd8088545a5852a`, image `sha256:8fb8722a15eb` — that is what
+`report-<tables-dir>.json` describes (recorded change #7). `code_sha256` is
+**measured** inside the writing process and is the field to trust; `git_sha` and
+`image_id` are **asserted** by whoever launched the container and have both been
+recorded wrong in this repository. Read the two lines at the top of a `summary*.md`
+rather than assuming one SHA covers a table.
 
 **The headline is the common target window 2026-08-15 … 2026-10-07**
 (`summary_tables_2026-08-15_2026-10-07.md`, `tables_2026-08-15_2026-10-07/`). The
@@ -359,44 +393,167 @@ is 2026-02-19, so from d178 the early days of the window drop out). The gate is
 All rides, then ex-ante busy rides. `ref` is the per-lead reference; the paired
 differences and their park-cluster CIs are the numbers that decide.
 
-| lead | `snaive7` | `wt_med` | `clim` | `h5` | `lvlh5_naive` | `lvlh5_tft` | `lvlh5_cbd` | `prod_served` | `oracle_level` | `oracle_shape` | ref |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | 8.44 | 8.00 | 8.24 | 7.88* | 8.12 | 7.74* | 10.17 | – | – | – | `wt_med` |
-| 1 | 8.44 | 8.11 | 8.28 | 7.98* | 8.15 | 7.86* | 10.21 | – | 5.34* | 6.96* | `wt_med` |
-| 3 | 8.44 | 8.19 | 8.31 | 8.06* | 8.18 | 8.03 | 10.25 | 8.52 | 5.35* | 6.96* | `wt_med` |
-| 6 | 8.44 | 8.33 | 8.35 | 8.20* | 8.22 | 8.27 | 10.77 | 8.73 | 5.39* | 6.96* | `wt_med` |
-| 7 | – | 8.45 | 8.38 | 8.32 | 8.65 | 8.51 | 10.92 | 9.01 | 5.43* | 7.59* | `clim` |
-| 14 | – | 8.73 | 8.37 | 8.60 | 8.99 | 8.97 | 11.20 | 9.55 | 5.49* | 8.00* | `clim` |
-| 30 | – | 8.84 | 8.62 | 8.70 | 9.24 | 9.31 | 11.14 | 10.19 | 5.51* | 8.29 | `clim` |
-| 60 | – | 8.73 | 8.54 | 8.63 | 9.08 | (4.26) | – | (4.30) | 5.59* | 8.15 | `clim` |
-| 90 | – | 8.42 | 8.58 | 8.33* | 8.93 | – | – | – | 5.46* | 7.90* | `wt_med` |
+| lead | `snaive7` | `wt_med` | `clim` | `h5` | `lvlh5_naive` | `lvlh5_tft` | `lvlh5_cbd` | `prod_served` | `oracle_level` | `oracle_shape` | ref | binding naive |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | 8.44 | 8.00* | 8.24 | 7.88* | 8.12 | 7.74* | 10.17 | – | 5.32* | 6.96* | `wt_med` | `wt_med` |
+| 1 | 8.44 | 8.11* | 8.28 | 7.98* | 8.15 | 7.86* | 10.21 | – | 5.34* | 6.96* | `wt_med` | `wt_med` |
+| 2 | 8.44 | 8.15* | 8.30 | 8.02* | 8.16 | 7.94 | 10.24 | – | 5.35* | 6.96* | `wt_med` | `wt_med` |
+| 3 | 8.44 | 8.19* | 8.31 | 8.06* | 8.18 | 8.03 | 10.25 | 8.52 | 5.35* | 6.96* | `wt_med` | `wt_med` |
+| 4 | 8.44 | 8.23 | 8.32 | 8.09* | 8.18 | 8.11 | 10.23 | 8.61 | 5.35* | 6.96* | `snaive7` | `wt_med` |
+| 5 | 8.44 | 8.26 | 8.33 | 8.12* | 8.19 | 8.13 | 10.29 | 8.62 | 5.36* | 6.96* | `snaive7` | `wt_med` |
+| 6 | 8.44 | 8.33 | 8.35 | 8.20 | 8.22 | 8.27 | 10.77 | 8.73 | 5.39* | 6.96* | `snaive7` | `wt_med` |
+| 7 | – | 8.45 | 8.38 | 8.32 | 8.65 | 8.51 | 10.92 | 9.01 | 5.43* | 7.59* | `wt_med` | `wt_med` |
+| 10 | – | 8.57 | 8.37 | 8.44 | 8.70 | 8.67 | 11.03 | 9.22 | 5.45* | 7.59* | `wt_med` | `clim` |
+| 14 | – | 8.73 | 8.37 | 8.60 | 8.99 | 8.97 | 11.20 | 9.55 | 5.49* | 8.00* | `wt_med` | `clim` |
+| 21 | – | 8.84 | 8.48 | 8.71 | 9.17 | 9.09 | 11.19 | 9.80 | 5.52* | 8.22 | `wt_med` | `clim` |
+| 30 | – | 8.84 | 8.62 | 8.70 | 9.24 | 9.31 | 11.14 | 10.19 | 5.51* | 8.29 | `wt_med` | `clim` |
+| 45 | – | 8.82 | 8.55 | 8.69 | 9.23 | 9.30 | (10.93) | 10.09 | 5.57* | 8.31 | `wt_med` | `clim` |
+| 60 | – | 8.73 | 8.54 | 8.63 | 9.08 | (4.26) | – | (4.30) | 5.59* | 8.15 | `wt_med` | `clim` |
+| 90 | – | 8.42* | 8.58 | 8.33* | 8.93 | – | – | – | 5.46* | 7.90* | `wt_med` | `wt_med` |
 
 Ex-ante busy rides:
 
-| lead | `wt_med` | `clim` | `h5` | `lvlh5_naive` | `lvlh5_tft` | `prod_served` | ref |
-|---|---|---|---|---|---|---|---|
-| 0 | 15.21 | 16.03 | 14.90* | 15.11 | 13.90* | – | `wt_med` |
-| 1 | 15.42 | 16.10 | 15.10* | 15.12* | 14.11* | – | `wt_med` |
-| 3 | 15.59 | 16.10 | 15.25* | 15.15* | 14.50* | 15.68 | `wt_med` |
-| 6 | 15.89 | 16.17 | 15.55* | 15.23* | 15.03* | 16.17 | `wt_med` |
-| 7 | 16.12 | 16.22 | 15.78* | 16.22 | 15.48* | 16.73 | `wt_med` |
-| 10 | 16.39 | 16.18 | 16.04 | 16.30 | 15.84* | 17.31 | `clim` |
-| 14 | 16.76 | 16.16 | 16.42 | 17.02 | 16.51 | 18.03 | `clim` |
-| 30 | 17.21 | 16.65 | 16.86 | 17.69 | 17.54 | 19.64 | `clim` |
-| 90 | 16.72 | 17.13 | 16.55* | 17.46 | – | – | `wt_med` |
+| lead | `wt_med` | `clim` | `h5` | `lvlh5_naive` | `lvlh5_tft` | `prod_served` | ref | binding naive |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 15.21 | 16.03 | 14.90* | 15.11 | 13.90* | – | `snaive7` | `wt_med` |
+| 1 | 15.42 | 16.10 | 15.10* | 15.12* | 14.11* | – | `snaive7` | `wt_med` |
+| 2 | 15.50 | 16.11 | 15.17 | 15.14* | 14.30* | – | `snaive7` | `wt_med` |
+| 3 | 15.59 | 16.10 | 15.25 | 15.15* | 14.50* | 15.68 | `snaive7` | `wt_med` |
+| 4 | 15.67 | 16.11 | 15.33 | 15.17* | 14.69* | 15.85 | `snaive7` | `wt_med` |
+| 5 | 15.74 | 16.13 | 15.40 | 15.17* | 14.79* | 16.01 | `snaive7` | `wt_med` |
+| 6 | 15.89 | 16.17 | 15.55 | 15.23* | 15.03* | 16.17 | `snaive7` | `wt_med` |
+| 7 | 16.12 | 16.22 | 15.78 | 16.22 | 15.48* | 16.73 | `wt_med` | `wt_med` |
+| 10 | 16.39 | 16.18 | 16.04 | 16.30 | 15.84* | 17.31 | `wt_med` | `clim` |
+| 14 | 16.76 | 16.16 | 16.42 | 17.02 | 16.51 | 18.03 | `wt_med` | `clim` |
+| 21 | 17.09 | 16.34 | 16.73 | 17.47 | 16.89 | 18.70 | `wt_med` | `clim` |
+| 30 | 17.21 | 16.65 | 16.86 | 17.69 | 17.54 | 19.64 | `wt_med` | `clim` |
+| 45 | 17.28 | 16.82 | 16.97 | 17.75 | 17.61 | 19.67 | `wt_med` | `clim` |
+| 60 | 17.37 | 17.21 | 17.17 | 17.77 | (19.64) | (20.74) | `wt_med` | `wt_med` |
+| 90 | 16.72 | 17.13 | 16.55* | 17.46 | – | – | `wt_med` | `wt_med` |
 
-Paired differences vs the reference, park-cluster 95 %:
+`ref` is the per-lead reference (BENCH-SPEC change #4: the ladder, moved off it
+only by a significant *paired* loss). **`ref` is not the comparator a win is
+measured against** — change #4 fixed the selection rule, and change #5 then made
+the selection almost irrelevant: `*` means the model beats **every** naive
+candidate at that lead, each paired on its own shared rows, with the park-cluster
+CI excluding 0. Values in brackets rest on < 30 % of the reference's paired rows
+and the gates keep them out of the hand-over.
 
-| lead | `h5`, all | `lvlh5_tft`, all | `h5`, busy | `lvlh5_tft`, busy | `prod_served`, all |
-|---|---|---|---|---|---|
-| 0 | −0.13 [−0.16, −0.10] | −0.31 [−0.54, −0.08] | −0.30 [−0.37, −0.23] | −1.36 [−1.88, −0.85] | – |
-| 1 | −0.14 [−0.17, −0.11] | −0.28 [−0.52, −0.05] | −0.31 [−0.38, −0.24] | −1.34 [−1.86, −0.82] | – |
-| 3 | −0.14 [−0.17, −0.11] | −0.19 [−0.42, +0.04] | −0.32 [−0.39, −0.25] | −1.09 [−1.64, −0.58] | +0.41 [+0.13, +0.70] |
-| 7 | −0.22 [−0.45, +0.01] | −0.15 [−0.35, +0.06] | −0.33 [−0.40, −0.25] | −0.65 [−1.18, −0.15] | +0.58 [+0.37, +0.79] |
-| 10 | −0.10 [−0.33, +0.15] | +0.02 [−0.15, +0.21] | −0.13 [−0.71, +0.47] | −0.59 [−1.00, −0.15] | +0.83 [+0.60, +1.07] |
-| 14 | +0.07 [−0.17, +0.34] | +0.35 [+0.15, +0.56] | +0.21 [−0.41, +0.90] | +0.09 [−0.38, +0.60] | +1.19 [+0.91, +1.49] |
-| 30 | +0.05 [−0.19, +0.32] | +0.64 [+0.36, +0.94] | +0.22 [−0.44, +0.93] | +0.83 [+0.12, +1.70] | +1.60 [+1.22, +2.01] |
-| 90 | −0.06 [−0.08, −0.04] | – | −0.14 [−0.20, −0.09] | – | – |
+"binding naive" is `hardest_naive` from the CSVs: the candidate against which the
+model's **point estimate** is worst. It is *not* necessarily the candidate that
+denies the win — that is whichever comparison's CI includes 0, and a candidate
+with a larger point-estimate margin can have a much wider CI. `h5` in the 2–4 h
+intraday band is the example: its worst point estimate is against `wt_med`
+(−0.129 [−0.158, −0.102], significant), yet it does not win the band, because
+against `persistence` it is −0.385 **[−0.823, +0.023]**. Read
+`cells_all_refs.csv` per candidate before quoting a blocker.
+
+Note what the reference column does **not** say any more: under the paired rule
+`clim` is **never** the per-lead reference on this metric, at any lead. The
+earlier "the reference switches to climatology at d7" was an artefact of the
+unpaired argmin, and so was everything derived from it.
+
+#### What each model does against each individual naive (BENCH-SPEC change #5)
+
+"nothing beats the reference" and "nothing beats the weekday median" are
+different statements, and conflating them is what misled the first revision of
+PR #445. Both are published, per lead, in `cells_all_refs.csv`. `h5`, all rides:
+
+| lead | vs `snaive7` | vs `wt_med` | vs `clim` | beats every naive? |
+|---|---|---|---|---|
+| 0 | -0.69 [-1.05, -0.36]\* | -0.13 [-0.16, -0.10]\* | -0.48 [-0.67, -0.30]\* | **yes** |
+| 1 | -0.59 [-0.95, -0.24]\* | -0.14 [-0.17, -0.10]\* | -0.43 [-0.63, -0.25]\* | **yes** |
+| 2 | -0.55 [-0.91, -0.19]\* | -0.14 [-0.17, -0.11]\* | -0.41 [-0.62, -0.22]\* | **yes** |
+| 3 | -0.51 [-0.88, -0.16]\* | -0.14 [-0.17, -0.11]\* | -0.38 [-0.59, -0.19]\* | **yes** |
+| 4 | -0.47 [-0.85, -0.12]\* | -0.14 [-0.17, -0.11]\* | -0.36 [-0.57, -0.16]\* | **yes** |
+| 5 | -0.44 [-0.82, -0.08]\* | -0.14 [-0.17, -0.11]\* | -0.34 [-0.56, -0.14]\* | **yes** |
+| 6 | -0.36 [-0.74, +0.00] | -0.14 [-0.17, -0.11]\* | -0.30 [-0.53, -0.09]\* | no |
+| 7 | – | -0.14 [-0.17, -0.11]\* | -0.22 [-0.46, +0.00] | no |
+| 10 | – | -0.14 [-0.17, -0.10]\* | -0.10 [-0.34, +0.14] | no |
+| 14 | – | -0.14 [-0.17, -0.10]\* | +0.07 [-0.18, +0.34] | no |
+| 21 | – | -0.14 [-0.18, -0.10]\* | +0.12 [-0.14, +0.39] | no |
+| 30 | – | -0.13 [-0.16, -0.09]\* | +0.05 [-0.20, +0.33] | no |
+| 45 | – | -0.10 [-0.13, -0.08]\* | +0.01 [-0.22, +0.25] | no |
+| 60 | – | -0.07 [-0.10, -0.05]\* | -0.02 [-0.30, +0.25] | no |
+| 90 | – | -0.06 [-0.08, -0.04]\* | -0.35 [-0.63, -0.09]\* | **yes** |
+
+`h5`, ex-ante busy rides:
+
+| lead | vs `snaive7` | vs `wt_med` | vs `clim` | beats every naive? |
+|---|---|---|---|---|
+| 0 | -1.13 [-1.97, -0.29]\* | -0.30 [-0.37, -0.24]\* | -0.97 [-1.38, -0.54]\* | **yes** |
+| 1 | -0.92 [-1.78, -0.07]\* | -0.31 [-0.38, -0.25]\* | -0.87 [-1.31, -0.43]\* | **yes** |
+| 2 | -0.84 [-1.71, +0.03] | -0.32 [-0.39, -0.25]\* | -0.81 [-1.26, -0.35]\* | no |
+| 3 | -0.76 [-1.65, +0.13] | -0.32 [-0.39, -0.25]\* | -0.73 [-1.19, -0.27]\* | no |
+| 4 | -0.69 [-1.57, +0.22] | -0.32 [-0.39, -0.26]\* | -0.67 [-1.16, -0.19]\* | no |
+| 5 | -0.61 [-1.51, +0.30] | -0.32 [-0.39, -0.26]\* | -0.64 [-1.15, -0.13]\* | no |
+| 6 | -0.45 [-1.38, +0.47] | -0.33 [-0.39, -0.26]\* | -0.56 [-1.10, -0.03]\* | no |
+| 7 | – | -0.33 [-0.40, -0.25]\* | -0.41 [-0.97, +0.14] | no |
+| 10 | – | -0.33 [-0.40, -0.26]\* | -0.13 [-0.72, +0.48] | no |
+| 14 | – | -0.32 [-0.40, -0.25]\* | +0.21 [-0.42, +0.90] | no |
+| 21 | – | -0.34 [-0.42, -0.26]\* | +0.33 [-0.35, +1.07] | no |
+| 30 | – | -0.32 [-0.39, -0.25]\* | +0.22 [-0.46, +0.95] | no |
+| 45 | – | -0.27 [-0.32, -0.22]\* | +0.06 [-0.58, +0.79] | no |
+| 60 | – | -0.19 [-0.26, -0.13]\* | -0.22 [-0.91, +0.58] | no |
+| 90 | – | -0.14 [-0.20, -0.09]\* | -0.78 [-1.54, -0.09]\* | **yes** |
+
+`lvlh5_tft`, all rides:
+
+| lead | vs `snaive7` | vs `wt_med` | vs `clim` | beats every naive? |
+|---|---|---|---|---|
+| 0 | -0.91 [-1.15, -0.66]\* | -0.31 [-0.54, -0.06]\* | -0.80 [-1.03, -0.56]\* | **yes** |
+| 1 | -0.77 [-1.01, -0.53]\* | -0.28 [-0.53, -0.04]\* | -0.69 [-0.92, -0.47]\* | **yes** |
+| 2 | -0.69 [-0.93, -0.45]\* | -0.24 [-0.48, +0.01] | -0.62 [-0.85, -0.40]\* | no |
+| 3 | -0.59 [-0.83, -0.33]\* | -0.19 [-0.41, +0.06] | -0.54 [-0.74, -0.34]\* | no |
+| 4 | -0.50 [-0.73, -0.28]\* | -0.14 [-0.38, +0.11] | -0.47 [-0.69, -0.26]\* | no |
+| 5 | -0.47 [-0.71, -0.25]\* | -0.14 [-0.38, +0.09] | -0.48 [-0.69, -0.27]\* | no |
+| 6 | -0.32 [-0.56, -0.09]\* | -0.08 [-0.34, +0.18] | -0.38 [-0.59, -0.18]\* | no |
+| 7 | – | +0.04 [-0.20, +0.29] | -0.15 [-0.35, +0.04] | no |
+| 10 | – | +0.08 [-0.15, +0.32] | +0.02 [-0.16, +0.21] | no |
+| 14 | – | +0.22 [-0.04, +0.48] | +0.35 [+0.14, +0.57] | no |
+| 21 | – | +0.25 [+0.05, +0.45] | +0.45 [+0.24, +0.70] | no |
+| 30 | – | +0.48 [+0.27, +0.71] | +0.64 [+0.35, +0.92] | no |
+| 45 | – | +0.51 [+0.30, +0.71] | +0.61 [+0.31, +0.92] | no |
+| 60 | – | +0.05 [-1.15, +1.50] | +0.46 [-0.30, +2.11] | no |
+
+`lvlh5_tft`, ex-ante busy rides:
+
+| lead | vs `snaive7` | vs `wt_med` | vs `clim` | beats every naive? |
+|---|---|---|---|---|
+| 0 | -2.27 [-2.73, -1.80]\* | -1.36 [-1.91, -0.81]\* | -2.36 [-2.80, -1.84]\* | **yes** |
+| 1 | -2.02 [-2.46, -1.56]\* | -1.34 [-1.89, -0.80]\* | -2.15 [-2.57, -1.67]\* | **yes** |
+| 2 | -1.82 [-2.31, -1.31]\* | -1.22 [-1.81, -0.66]\* | -1.96 [-2.39, -1.44]\* | **yes** |
+| 3 | -1.58 [-2.09, -1.03]\* | -1.09 [-1.64, -0.54]\* | -1.75 [-2.15, -1.30]\* | **yes** |
+| 4 | -1.39 [-1.84, -0.91]\* | -0.99 [-1.55, -0.44]\* | -1.59 [-2.05, -1.07]\* | **yes** |
+| 5 | -1.28 [-1.77, -0.78]\* | -0.95 [-1.52, -0.41]\* | -1.57 [-2.01, -1.06]\* | **yes** |
+| 6 | -1.01 [-1.52, -0.45]\* | -0.86 [-1.49, -0.28]\* | -1.43 [-1.87, -0.97]\* | **yes** |
+| 7 | – | -0.65 [-1.20, -0.12]\* | -1.00 [-1.40, -0.54]\* | **yes** |
+| 10 | – | -0.56 [-1.11, -0.05]\* | -0.59 [-1.01, -0.15]\* | **yes** |
+| 14 | – | -0.26 [-0.91, +0.33] | +0.09 [-0.37, +0.62] | no |
+| 21 | – | -0.20 [-0.66, +0.25] | +0.35 [-0.19, +0.94] | no |
+| 30 | – | +0.35 [-0.11, +0.83] | +0.83 [+0.12, +1.60] | no |
+| 45 | – | +0.39 [-0.07, +0.86] | +0.69 [-0.06, +1.54] | no |
+| 60 | – | +2.03 [-1.27, +5.85] | +6.88 [+5.48, +10.77] | no |
+
+Read across those four tables rather than down one column:
+
+- **`h5` beats the weekday median at EVERY lead d0–d90**, all rides (−0.14 …
+  −0.06) and busy (−0.34 … −0.14), every CI excluding 0. The first revision's
+  claim was right; it was never refuted, only re-referenced.
+- **`h5` fails the envelope at d6 because of `snaive7`** (−0.36 [−0.74, +0.00] —
+  the upper bound lands on zero), not because of climatology. From d7 the
+  blocker is climatology: n.s. at d7 (−0.22 [−0.46, +0.00]) and d10 (−0.10
+  [−0.34, +0.14]), then genuinely *worse* at d14–d45 (+0.07, +0.12, +0.05,
+  +0.01, none significant), then better again at d90 (−0.35 [−0.63, −0.09]).
+- **`lvlh5_tft` on busy rides beats all three naives at every lead d0–d10 in this
+  window** — at d10 still −0.56 [−1.11, −0.05] against `wt_med` and −0.59
+  [−1.01, −0.15] against `clim`. **But only d0–d2 reproduces on the full period**
+  (there the `wt_med` comparison is already n.s. at d3, −0.267 [−0.553, +0.002]),
+  so d0–d2 is what PAR-834's routing should rest on and d3–d10 is an autumn
+  extension.
+- **`lvlh5_tft` on all rides only survives d0–d1.** From d14 it is significantly
+  worse than climatology (+0.35 … +0.61) and from d21 worse than the weekday
+  median too.
 
 At d60 `lvlh5_tft` and `prod_served` sit on 1.5 % of the slots (TFT's horizon
 ends at 60 days and only a few parks still have a level) — the values in
@@ -404,94 +561,249 @@ brackets are not comparable and the gates drop them from the hand-over.
 
 ### Hand-over (input for the serving router)
 
-| Use case / segment | Leads | Winner | Margin vs reference |
+**This table is the HEADLINE WINDOW only.** It is the per-lead detail; it is not
+the serving decision. Read it together with "Which results survive BOTH passes"
+below — 107 of these 296 rows name a different winner on the full period, and the
+busy-ride band in particular is d0–d10 here and **d0–d2** there.
+
+| Use case / segment | Leads | Winner | Margin vs the BINDING naive |
 |---|---|---|---|
-| UC1 live, 15–120 min | all | `persistence` | nothing beats it; +0.64 [+0.30, +0.96] for the best profile even at 120 min |
-| UC2 intraday, 2–4 h | — | `h5` / `lvlh5_tft` | −0.13 / −0.31 vs `wt_med`; `persistence` is already only +0.22 [−0.20, +0.67] |
-| UC2 intraday, 4 h+ | — | `h5` (busy: `lvlh5_tft`) | `persistence` collapses to +3.02 [+2.43, +3.70] |
-| UC2 / UC3, all rides | d0–d2 | **`lvlh5_tft`** | −0.31 … −0.24 |
-| UC2 / UC3, all rides | d3–d6 | **`h5`** | −0.14 |
-| UC2 / UC3, all rides | d7–d60 | `clim` (no model wins) | — |
+| UC1 live, 15–120 min (all and busy) | m015–m120 | `persistence` | nothing beats it at any lead; the best profile (`lvlh5_tft`) is still +0.64 [+0.30, +0.96] behind at 120 min, and +0.86 [+0.26, +1.47] on busy rides |
+| UC2 intraday, 2–4 h | — | `lvlh5_tft` (all and busy) | −0.31 [−0.55, −0.06] (all) / −1.03 [−1.59, −0.46] (busy) |
+| UC2 intraday, 4–8 h | — | **`lvlh5_tft`** (all and busy) | −0.30 [−0.53, −0.05] (all) / −1.34 [−1.89, −0.76] (busy) |
+| UC2 intraday, 8 h+ | — | `h5` (all), `lvlh5_tft` (busy) | −0.18 [−0.23, −0.14] (all) / −0.70 [−1.11, −0.27] (busy) |
+| UC2 / UC3, all rides | d0–d1 | **`lvlh5_tft`** | −0.31 … −0.28 |
+| UC2 / UC3, all rides | d2–d5 | **`h5`** | −0.14 |
+| UC2 / UC3, all rides | d6–d60 | nothing wins | `h5` is −0.14 vs `wt_med` throughout but n.s. vs `snaive7` (d6) / `clim` (d7–d60) |
 | UC2 / UC3, all rides | d90 | `h5` | −0.06 |
-| UC2 / UC3, busy rides | d0–d10 | **`lvlh5_tft`** | −1.36 at d0 … −0.59 at d10 |
-| UC2 / UC3, busy rides | d14–d60 | `clim` (no model wins) | — |
-| UC2 / UC3, busy rides | d90 | `h5` | −0.14 |
-| D3 best time (regret, hit rate) | d0–d45 | `h5` | −0.54 … −0.32 min regret, +0.017 … +0.010 hit rate |
-| D4 optimiser regret | d1 / d3–d7 | `h5` / `lvlh5_tft` | −1.3 / −2.0 … −1.3 min per park-day; nothing wins from d14 |
-| D4 dayPeak ordering | d0–d45 | `lvlh5_tft` | +0.048 … +0.029 (`h5` wins d0–d90) |
-| D5 first hour | d0–d7 | `lvlh5_tft` | −0.48 … −0.32 min; nothing wins d10–d60 |
-| D5 rope-drop worth | all | `clim` (no model wins) | — |
-| D6 crowd bucket | d1–d6 / d7–d21 | `lvl_snaive7` / `lvl_tft` | — / +0.034 … +0.030 |
-| D7 day comparison | d1–7 / d8–90 | `lvl_snaive7` / `lvl_tft` | — / +0.071, +0.058 |
-| UC4 daily ranking | all | `lvl_snaive7` (d1–6), `lvl_naive4` (d7–10), `lvl_clim` (d14–60) | no level source wins at any lead |
-| D1 next-best ride | 0–120 min | `snaive7` | nothing wins; every forecast is −0.04 … −0.08 precision |
-| D2 live window 0–45 min | — | `persistence` | 6.05 vs ≥ 11.90 for any forecast |
+| UC2 / UC3, ex-ante busy | d0–d10 | **`lvlh5_tft`** | −1.36 (d0) … −0.56 (d10) |
+| UC2 / UC3, ex-ante busy | d14–d60 | nothing wins | — |
+| UC2 / UC3, ex-ante busy | d90 | `h5` | −0.14 |
+| UC2/UC3 within-ride-day Spearman | d0–d14 / d21–d45 / d90 | `h5` / **`prod_served_lin`** / `h5` | +0.016 … +0.012 / +0.015 … +0.026 / +0.015 |
+| UC3 dayPeak abs error | d0–d2 / d3 | `lvlh5_tft` / `prod_served_lin` | −0.67 … −0.38 / −0.35; nothing wins from d4 |
+| D3 best time (regret, top-2 hit) | d0–d45 | `h5` | −0.42 … −0.35 min regret, +0.012 … +0.013 hit rate |
+| D4 optimiser regret | d1 / d3 | `h5` / `lvlh5_tft` | −1.35 / −1.96 min per park-day; **nothing wins from d7** |
+| D4 dayPeak ordering | d0–d45 / d60–d90 | `lvlh5_tft` / `h5` | +0.048 … +0.029 / +0.021 … +0.022 |
+| D5 first hour | d0–d7 / d90 | `lvlh5_tft` / `h5` | −0.44 … −0.32 / −0.08; nothing wins d10–d60 |
+| D5 rope-drop worth | all | nothing wins | agreements 0.917–0.925 for every candidate and every model |
+| D6 crowd bucket | d1–d6 / d7–d21 / d30+ | `lvl_snaive7` / `lvl_tft` / nothing | — / +0.023 … +0.037 / — |
+| D7 day comparison | d1–7 / d8–30, d31–90 | `lvl_snaive7` / `lvl_tft` | — / +0.071, +0.058 |
+| UC4 daily ranking | d1–d180 | **nothing wins — and this is now a measurement** | `lvl_tft` loses at every lead and is significantly *worse* at d30 (−0.081 [−0.144, −0.011]) |
+| D1 next-best ride (0–60, 0–120 min) | — | `snaive7` | nothing wins; every forecast is −0.04 … −0.08 precision |
+| D2 live window 0–45 min | w0-45 | `persistence` | 6.05 vs ≥ 11.90 for any forecast |
+
+Naive candidates are excluded from the winner column. A candidate *can* beat the
+envelope of the others — `wt_med` does on all rides at d1–d3 — and
+`usable_horizon.csv` keeps that, because "climatology is the best naive here" is
+a real finding. But it must not be ranked against a model: the two margins are
+measured against different (and for a candidate, weaker) pools, so `wt_med`
+beating `clim` by 0.35 would outrank `lvlh5_tft` beating `wt_med` by 0.31 and the
+serving router would be told to keep the naive. The reference pool is the
+fallback, not a contender.
 
 ### Usable horizon
 
-| metric | model | usable horizon | max significant lead |
-|---|---|---|---|
-| UC3 MAE, all | `h5` | d6 | d90 |
-| UC3 MAE, all | `lvlh5_tft` | d2 | d2 |
-| UC3 MAE, busy | `h5` | d7 | d90 |
-| UC3 MAE, busy | `lvlh5_tft` | **d10** | d10 |
-| UC2 intraday MAE, all / busy | `h5` | h8+ | h8+ |
-| UC2 intraday MAE, all / busy | `lvlh5_tft` | h4–8 / h8+ | — |
-| D5 first-hour MAE | `h5` / `lvlh5_naive` / `lvlh5_tft` | d7 | d90 / d7 / d7 |
-| D3 best-time regret / hit rate | `h5` | d45 | d90 / d45 |
-| D4 optimiser regret | `h5` | d7 | d7 |
-| D4 dayPeak ordering | `h5` / `lvlh5_tft` | d90 / d45 | d90 / d45 |
-| UC2/UC3 within-ride-day Spearman | `h5` | d45 | d90 |
-| D6 crowd bucket | `lvl_tft` | — (loses d1–d6) | d21 |
-| D7 day comparison | `lvl_tft` | — (loses d1–7) | d31–90 |
-| UC4 Spearman | every level source | — | — |
+Largest lead up to which a model beats the whole naive envelope, contiguous from
+its first scored lead. `tested` is the number of leads that were a real test
+(`leads_tested = 0` means **nothing was tested**, not "nothing won" — and
+`not_tested_because` in the CSV says which gate fired).
+
+| metric | model | unit | tested | usable horizon | max significant lead |
+|---|---|---|---|---|---|
+| UC3 MAE, all | `h5` | park-day | 14/14 | **d5** | d90 |
+| UC3 MAE, all | `lvlh5_tft` | park-day | 12/13 | **d1** | d1 |
+| UC3 MAE, all | `lvlh5_naive` / `lvlh5_cbd` / `prod_served` | park-day | 14 / 11 / 10 | — | — |
+| UC3 MAE, busy | `lvlh5_tft` | park-day | 12/13 | **d10** | d10 |
+| UC3 MAE, busy | `lvlh5_naive` | park-day | 14/14 | d6 | d6 |
+| UC3 MAE, busy | `h5` | park-day | 14/14 | d1 | d90 |
+| UC2 intraday MAE, all | `lvlh5_tft` / `h5` | park-day | 3/3 | h4–8 / — | h4–8 / h8+ |
+| UC2 intraday MAE, busy | `lvlh5_tft` / `h5` | park-day | 3/3 | h8+ / — | h8+ / h8+ |
+| D5 first-hour MAE | `h5` / `lvlh5_naive` / `lvlh5_tft` / `lvlh5_cbd` | park-day | 15 / 15 / 13 / 12 | d7 / d7 / d7 / d6 | d90 / d7 / d7 / d6 |
+| D3 best-time regret / top-2 hit | `h5` | park-day | 15/15 | d45 | d90 / d45 |
+| D4 optimiser regret | `h5` / `lvlh5_tft` | park-day | 5/5 | **d3** / — | d3 / d3 |
+| D4 dayPeak ordering | `h5` / `lvlh5_tft` / `lvlh5_naive` / `prod_served_lin` | park-day | 15 / 13 / 15 / 10 | d90 / d45 / d30 / d45 | d90 / d45 / d90 / d45 |
+| UC2/UC3 within-ride-day Spearman | `h5` | park-day | 15/15 | d45 | d90 |
+| D6 crowd bucket | `lvl_tft` | park-day | 12/13 | — (loses d1–d6) | d21 |
+| D7 day comparison | `lvl_tft` | park-origin | 3/3 | — (loses d1–7) | d31–90 |
+| **UC4 Spearman** | `lvl_tft` | **park-month** | **12/13** | — | — |
+| UC4 Spearman | `lvl_snaive7` / `lvl_naive4` / `lvl_clim` | park-month | 6 / 16 / 16 | d6 / — / — | d6 / d120 / d14 |
+
+**UC4 is tested now, and that is a change of kind, not of degree.** Before
+BENCH-SPEC change #3 every UC4 cell was gated out on `n_origin_days = 3` (three
+month *labels*), `usable_horizon.csv` read `leads_tested = 0` for all six level
+sources, and the PR quoted that emptiness as "no level source wins". The unit is
+the park-**month**: there are **175–189 park-months per lead** at d1–d45, every
+lead clears the 30-unit gate, and the answer is now a real one — `lvl_tft` loses
+to the best naive daily ranking at every lead and is significantly worse at d30
+(−0.081 [−0.144, −0.011]). "Tested and lost" is a much stronger basis for
+"the crowd calendar stays naive" than "never tested" was.
 
 A usable horizon shorter than the max significant lead means a lead in between
-breaks the run — usually because the reference switches from `wt_med` to `clim`
-at d7 and nothing beats climatology in the d7–d60 band.
+breaks the run. For `h5` on UC3 MAE all rides that lead is **d6**, and the
+candidate that breaks it is `snaive7` (−0.36 [−0.74, +0.00]) — not climatology.
+`h5`'s own margin against the weekday median is −0.14 at every lead from d0 to
+d60; what it cannot do is separate from climatology between d7 and d60.
+
+### Which results survive BOTH passes — read this before acting on anything
+
+This is the section critic B2 asked for, and it changes the recommendation. Of the
+296 hand-over rows present in both passes, **189 (64 %) name the same winner** and
+**103 name the same non-naive model**. Those 103 are the only rows a year-round
+serving change should rest on. Everything else is a one-pass result Of the 229 usable-horizon rows present in both passes, **53 report a different horizon** (32 of them for non-naive models)., and on this
+data "one pass" almost always means "the autumn shoulder season".
+
+| surface | robust in BOTH passes | headline only (autumn) | full period only |
+|---|---|---|---|
+| UC3 slot MAE, all rides | `h5` **d2–d5** and d90 | `lvlh5_tft` d0–d1 | `h5` to **d45** |
+| UC3 slot MAE, ex-ante busy | `lvlh5_tft` **d0–d2**; `h5` d90 | `lvlh5_tft` **d3–d10** | `h5` to **d45** |
+| UC2 intraday | `lvlh5_tft` busy h2–4 and h4–8; `h5` all h8+ | `lvlh5_tft` all h2–8, busy h8+ | `h5` all/busy h8+ |
+| D5 first hour | **`lvlh5_tft` d0–d7** | — | to d14–d45 |
+| D4 dayPeak ordering | **`lvlh5_tft` d0–d45** | — | — |
+| D4 optimiser regret | `h5` d1, `lvlh5_tft` d3 | — | `h5` to d30 |
+| D3 best time (regret + both hit rates) | **`h5` d0–d45** | — | to d60 |
+| within-ride-day Spearman | `h5` d0–d14 and d90; **`prod_served_lin` d21–d45** | — | `h5` to d90 |
+| UC3 dayPeak abs error | `lvlh5_tft` d0; `prod_served_lin` d3 | `lvlh5_tft` d1–d2 | to d5 |
+| D6 crowd bucket | **nothing** | `lvl_tft` d7–d21 (+0.023 … +0.037) | — |
+| D7 day comparison | **`lvl_tft` d31–90** (+0.026 [+0.007, +0.045]) | `lvl_tft` d8–30 (+0.071) | — |
+| UC4 daily ranking | **nothing wins in either pass** | — | — |
+
+**The load-bearing correction.** The busy-ride band is **d0–d2**, not d0–d10. On
+the full period `lvlh5_tft` beats the weekday median on busy rides only to d2
+(d3 −0.267 **[−0.553, +0.002]**, d7 +0.033, and significantly *worse* from d30 at
++0.420 [+0.116, +0.708]), while it stays ahead of climatology to d10. The d10
+figure in the headline window is real for that window and **autumn-specific**;
+widening PAR-834's routing to d10 would be a year-round change justified by 37
+autumn days, which is exactly what critic B2 warned against.
+
+**The mirror correction, in the models' favour.** `h5` is *stronger* on the full
+period than in the window: it beats the whole envelope at **every lead d0–d45 and
+again at d90**, on all rides and on busy rides, failing only at d60 (against
+climatology, −0.165 [−0.394, +0.023]). Combined with "it beats the weekday median
+at every lead in both passes", `h5` is the one profile result that is not
+seasonal — and it is therefore the one to serve.
+
+**The TFT *level* is autumn-specific almost everywhere it wins.** Its full-period
+wins are confined to the opening hour (D5 d0–d7), dayPeak ordering (d0–d45), busy
+slots to d2, and the d31–90 day comparison. D6's crowd-bucket win disappears
+entirely (full period d7 +0.005 [−0.007, +0.018], d14 +0.007, d21 +0.006 — none
+significant), and D7's d8–30 win collapses to **−0.0004 [−0.015, +0.015]**. Where
+the level helps robustly is where the *ramp* matters, not the whole day.
+
+**One UC4 nuance, stated so it is not over-read.** `lvl_tft` fails to beat the
+best naive daily ranking in **both** passes, which is the robust finding. The
+headline window additionally shows a *significant* loss at d30
+(−0.081 [−0.144, −0.011]); the full period does not confirm it
+(−0.036 [−0.077, +0.007]) on 264 park-months. So "the TFT level does not win UC4"
+is robust; "it is significantly worse at d30" is a headline-window result only.
 
 ### What the numbers say
 
-- **UC1 / D2 stay with production's live replacement.** `persistence` wins every
-  lead to 2 h (2.46 at 15 min, 7.58 at 120 min) and the live window 0–45 min on
-  headliners (6.05 vs 11.90 for the best forecast). The hand-over happens in the
-  2–4 h band, where `persistence` is already only +0.22 [−0.20, +0.67] against
-  the weekday median and is +3.02 [+2.43, +3.70] by 4–8 h.
-- **The TFT level pays for itself on busy rides, out to d10.** `lvlh5_tft` is
-  −1.36 [−1.88, −0.85] at d0 and still −0.59 [−1.00, −0.15] at d10 on ex-ante
-  busy rides; on all rides it only wins d0–d2 and H5 alone is better from d3.
-- **H5 beats the weekday median wherever the weekday median is the reference**
-  — d0–d6 (−0.13 … −0.14 all rides, −0.30 … −0.33 busy) and d90 (−0.06 / −0.14).
-  But from d7 the best naive reference becomes **climatology**, and H5 does not
-  beat *that* in the d7–d60 band (d7 −0.22 [−0.45, +0.01], d14 +0.07
-  [−0.17, +0.34]), even though its raw MAE stays below the weekday median's at
-  every lead. The planner's long leads are not yet beaten by anything we have.
+- **UC1 / D2 stay with production's live replacement.** `persistence` beats every
+  naive and every profile at every lead to 2 h (2.46 min at 15 min, 7.58 at
+  120 min) and owns the live window 0–45 min on headliners (6.05 vs ≥ 11.90). The
+  best profile is still +0.64 [+0.30, +0.96] behind at 120 min on all rides and
+  +0.86 [+0.26, +1.47] on busy ones.
+- **The hand-over out of persistence happens inside the 2–4 h band, and it is
+  now significant.** At 2–4 h `lvlh5_tft` beats `persistence` by −0.43
+  [−0.77, −0.12] on all rides and −1.03 [−1.59, −0.46] on busy ones, while
+  `persistence` is still level with the weekday median there (+0.22
+  [−0.20, +0.67]). By 4–8 h `persistence` has collapsed to +3.02 [+2.37, +3.75].
+  So the crossover is earlier than "either model is fine to 4 h": a level-scaled
+  profile is already measurably better at 2–4 h.
+- **The TFT level pays for itself on busy rides — robustly to d2, and to d10 in
+  the autumn window only.** `lvlh5_tft` is −1.36 [−1.91, −0.81] at d0 and still
+  −0.56 [−1.11, −0.05] vs `wt_med` and −0.59 [−1.01, −0.15] vs `clim` at d10 *in
+  the headline window*. On the full period the `wt_med` comparison stops being
+  significant at d3 (−0.267 **[−0.553, +0.002]**) and reverses by d30
+  (+0.420 [+0.116, +0.708]), so **only d0–d2 survives both passes** — PAR-834's
+  routing should rest on d0–d2, not d10. See "Which results survive BOTH passes".
+  On *all* rides the model only survives d0–d1 even in the window, the full
+  period gives it nothing, and from d14 it is significantly worse than
+  climatology.
+- **H5 beats the weekday median at every lead d0–d90 — that claim was never
+  refuted.** −0.13 … −0.06 on all rides, −0.34 … −0.14 on busy, every CI
+  excluding 0. What it cannot do is beat the *whole* envelope past d5: at d6 the
+  blocker is `snaive7` (−0.36 [−0.74, +0.00]) and from d7 to d60 it is
+  climatology — n.s. at d7 (−0.22 [−0.46, +0.00]) and d10 (−0.10 [−0.34, +0.14]),
+  genuinely worse at d14–d45 (+0.07, +0.12, +0.05, +0.01, none significant),
+  better again at d90 (−0.35 [−0.63, −0.09]). The previous wording — "the
+  reference switches to climatology at d7" — described the discarded argmin rule,
+  not this result.
+- **So the honest statement of the long-lead gap** is not "nothing beats
+  climatology". It is: *between d6 and d60 no model separates from the best naive
+  at 95 % park-cluster confidence, and the naive that blocks it is `snaive7` at
+  d6 and climatology from d7; climatology itself is only better than H5 by
+  +0.01 … +0.12 min and never significantly.* That is the gap PAR-828 / 829 / 830
+  are measuring against, and it is a narrower gap than the first revision said.
 - **Level, not shape, is the error.** At d1 a perfect level takes H5 from 7.98 to
-  **5.34**; a perfect shape on the naive level gives 6.96. That holds at every
-  lead (d30: 5.51 vs 8.70).
-- **The production composed tier (`prod_served`) is worse than the reference at
-  every lead from d3** (+0.41 [+0.13, +0.70] at d3 … +1.60 [+1.22, +2.01] at
-  d30), worst in the opening hour (6.21 vs 4.33 for `lvlh5_tft`, +1.45
-  [+1.17, +1.73]) and on the optimiser (+5.0 [+3.2, +6.6] min per park-day at
-  d3): the hourly max-normalised step curve loses the rope-drop ramp. It has no
-  interval at all (D8).
+  **5.34**; a perfect shape on the naive level gives 6.96. It holds at every lead
+  (d30: 5.51 vs 8.70). Nothing in the benchmark closes it.
+- **The production composed tier (`prod_served`) loses at every lead from d3.**
+  Against the per-lead reference: +0.41 [+0.14, +0.71] at d3, +0.70
+  [+0.42, +1.01] at d7, +1.00 [+0.65, +1.36] at d14, +1.41 [+1.07, +1.76] at d30
+  — and against the *hardest* naive it is worse still (+1.19 at d14, +1.60 at
+  d30). Worst in the opening hour (6.21 against `h5` 4.32 and `lvlh5_tft` 4.33,
+  +1.45 [+1.18, +1.73] vs the hardest naive) and on the optimiser. It never wins
+  a slot-MAE row at any lead.
+- **…with one genuine exception that the first revision missed.**
+  `prod_served_lin` — the linearly interpolated variant — **wins the
+  within-ride-day Spearman at d21–d45** (+0.015 … +0.026 vs climatology) and the
+  dayPeak absolute error at d3, where no profile does. Production's composed
+  curve is bad at *levels* and competitive at long-lead *ordering*. That does not
+  change the replacement recommendation (the surfaces it loses are the ones users
+  see) but "it never wins anything, at any lead, on any metric" was wrong.
 - **The CatBoost-daily level makes things worse than no level.** `lvlh5_cbd`
-  10.21 at d1 against `h5` 7.98, +2.12 [+1.65, +2.63] against the reference — a
-  P50-like level against a P90 target.
-- **UC4 / D6 / D7: nothing beats the naive level in the first week.** The
-  seasonal-naive level (`lvl_snaive7`) is the reference and unbeaten at d1–d6
-  (UC4 Spearman 0.33, crowd bucket exact 0.434, day comparison 0.519). TFT's
-  level only wins beyond that: crowd bucket +0.034 at d7 … +0.030 at d21, day
-  comparison +0.071 (d8–30) and +0.058 (d31–90). Within-month ranking is weak
-  everywhere (Spearman ≤ 0.33 at d1, 0.15–0.26 from d14).
-- **D8 is calibrated at short leads.** Production's published `typicalError`
-  (TFT peak MAE by band × lead bucket) lands at realised ÷ stated 1.00–1.04 for
-  d1–d30 and goes unstable at d60 (1.20 busy, 0.78 quiet). `wt_med`'s empirical
-  q80 covers 0.846 and q95 0.920 at d1 — q80 is conservative, q95 is short.
+  10.21 at d1 against `h5` 7.98, +2.12 [+1.62, +2.68] against `wt_med` — a
+  P50-like level against a P90 target, on 84 % of the reference's rows.
+- **UC4 / D6 / D7: nothing beats the naive level in the first week, and UC4 is
+  now a measurement rather than an empty gate.** `lvl_snaive7` beats the other
+  naives at d1–d6 (UC4 Spearman 0.33, crowd bucket exact 0.434, day comparison
+  0.519). `lvl_tft` loses UC4 at **every** lead in **both** passes — on 175–189
+  park-months in the window and 264–410 on the full period. In the window it wins
+  the crowd bucket at d7–d21 (+0.023 … +0.037) and the day comparison at d8–30
+  (+0.071) and d31–90 (+0.058), but **on the full period only the d31–90 day
+  comparison survives** (+0.026 [+0.007, +0.045]): the crowd-bucket win vanishes
+  (d7 +0.005 [−0.007, +0.018], d14 +0.007, d21 +0.006) and d8–30 collapses to
+  −0.0004 [−0.015, +0.015]. The window's *significant* UC4 loss at d30
+  (−0.081 [−0.144, −0.011]) is also not confirmed on the full period
+  (−0.036 [−0.077, +0.007]), so "does not win UC4" is the robust claim and
+  "significantly worse" is window-only. Within-month ranking is weak everywhere: the best source
+  reaches Spearman 0.33 at d1 and only 0.20–0.24 from d14 (0.28 at d90, where
+  `lvl_wt56` takes over), against 0.13–0.17 for `lvl_tft` over the same band.
+- **D8 — and this number changed, because the table used to be the wrong
+  window.** Until critic S13 the `d8tft` parquet was loaded with no window
+  filter, so the "headline" production-calibration table was a byte-identical
+  copy of the 231-origin one. On the real 54-day window production's published
+  `expectedError` is **not** flat at 1.00–1.04: realised ÷ stated runs 1.03–1.08
+  at d1 and then splits by band — busy 1.09 (d3), 1.11 (d7), 1.15 (d14),
+  **1.18 (d30)**, 1.13 (d60), while quiet falls 1.02 (d3) → 0.95 (d14) → 0.88
+  (d30) → **0.79 (d60)**. Production under-states the error it will make on busy
+  rides and over-states it on quiet ones, and the spread widens with lead.
+  `wt_med`'s empirical q80 covers 0.846 and q95 0.920 at d1 — q80 conservative,
+  q95 short. `prod_served` has no interval at all.
 - **D9: "has a forecast" is not an open/closed decision.** The weekday median
   produces a curve for 83 % of the ride-days a ride never operated on in the
   headline window (76 % over the full period), so coverage has to be scored
   separately from the wait error.
+
+#### One reproducibility limit, measured
+
+Two report passes over the same `parts/` that differ **only** in DuckDB thread
+count (4 vs 2) agree on every published verdict: `usable_horizon.csv` is
+byte-identical, `handover.csv` has no change of reference, winner or margin
+beyond 1.8 × 10⁻¹⁵, and no cell changes `wins`. They do **not** agree bit for bit
+on UC4's park-month metrics: the Spearman point estimate moves by ≤ 0.0019
+(≈ 1 % relative), its park-cluster bounds by ≤ 0.0021 (≤ 0.020 on the single
+gated one-park-month d60 cell), and the busy-day predicted set by ≤ 9 park-days
+out of ~1,400. The park-month counts are identical and `iqr_true` differs only at
+7 × 10⁻¹⁵, so the inputs are the same values in a different **row order**: the
+`levels` query carries no `ORDER BY`, and two UC4 computations are tie-order
+sensitive — `rank(method="first")` for the true top quartile, and the `p >= q75`
+boundary when predictions tie. No slot-MAE, hand-over or usable-horizon number is
+affected. **Follow-up:** make those two tie-breaks deterministic. It was not
+landed with this pass on purpose — changing the UC4 computation after the pass
+was produced would reintroduce exactly the code-vs-tables divergence that
+recorded change #7 exists to prevent.
 
 ### The season split — why the two passes disagree
 
@@ -523,14 +835,23 @@ Three things follow, and they are the load-bearing reading of this whole page:
    this window and never did so in the full period below d60 — the reference was
    tracking the season mix, not the lead.
 3. **H5's advantage over the weekday median is the one effect that is NOT
-   seasonal.** `h5` is better than `wt_med` in both halves of this window at
-   every lead (summer −0.02 … −0.04, autumn −0.19 … −0.21) and in spring and
-   summer on the full period. The one exception is **winter** (2 % of the data,
-   256 k slots), where `h5` is 0.02–0.04 min *worse* at d0–d7. That is the
-   difference between a profile-shape improvement, which transfers, and a
-   level-source improvement, which does not.
+   seasonal, and it is why `h5` is the thing to serve.** `h5` is better than
+   `wt_med` in both halves of this window at every lead (summer −0.02 … −0.04,
+   autumn −0.19 … −0.21) and in **autumn, spring and summer** on the full period
+   (d1 −0.199 / −0.084 / −0.030; d7 −0.209 / −0.106 / −0.047; d30 −0.195 /
+   −0.137 / −0.107). The one exception is **winter** (2 % of the data, 256 k
+   slots at d0), where `h5` is **+0.036 min worse at d0, +0.029 at d1, +0.020 at
+   d3 and +0.007 at d7** — a deficit that shrinks with lead and is an order of
+   magnitude below the autumn gain.
 
-### Heartbeat contamination of the target — open owner decision
+   The contrast with the TFT *level* on the same table is the whole story: on the
+   full period `lvlh5_tft` beats `wt_med` by −0.50 in autumn at d1 but is
+   **+0.23 worse in summer**, and at d7 it is +0.62 worse in spring and +0.48
+   worse in summer. That is the difference between a profile-shape improvement,
+   which transfers across seasons, and a level-source improvement, which does
+   not.
+
+### Heartbeat contamination of the target — measured, owner decision open
 
 `queue_data` carries `is_heartbeat` rows: when the feed drops a ride, production
 writes the previous status **and wait** forward with a fresh `ts`. The harness
@@ -569,13 +890,72 @@ lengthens the *preceding* real row's forward fill, so 2 slots out of 13.5 M
 survive under a different parent row. No slot's value changes, because a
 heartbeat carries the same wait as the row before it.)
 
+#### The scoring sensitivity, measured on a matched run pair
+
+`build --drop-heartbeats` builds the other target, and two runs that differ in
+**nothing else** score it: `results/20261010-sens-hb` (export `20261009`) and
+`results/20261010-sens-nohb` (export `20261010-nohb`), both 68 daily origins
+2026-08-01 … 10-07, leads 0–14, reported on the headline target window. Same raw
+export, same runner, same report code — the `report-*.json` in each dir pins it.
+The comparison is a committed script,
+`results/20261009-baselines-v2/heartbeat_sensitivity.py`, so every number below
+can be re-derived from the committed tables alone.
+
+**1. How much of the target it is.** 2.23–2.29 % of the headline window's truth
+slots exist only because of a heartbeat (64–68 k of ~2.9 M per lead).
+
+**2. All of it is in the autumn half.** The column was not populated before
+~2026-09-06, so the window's 17 summer days are **bit-identical** between the two
+arms and its 37 autumn days carry 3.81–3.86 %:
+
+| lead | season | share dropped | `wt_med` | `h5` | `lvlh5_tft` |
+|---|---|---|---|---|---|
+| d0 | summer | 0.00 % | 7.752 → 7.752 | 7.719 → 7.719 | 7.892 → 7.892 |
+| d0 | autumn | 3.86 % | 8.176 → 8.364 (**+0.188**) | 7.983 → 8.165 (**+0.182**) | 7.629 → 7.760 (**+0.131**) |
+| d3 | autumn | 3.84 % | 8.378 → 8.559 (+0.182) | 8.173 → 8.350 (+0.177) | 7.927 → 8.063 (+0.136) |
+| d7 | autumn | 3.82 % | 8.605 → 8.787 (+0.182) | 8.396 → 8.574 (+0.178) | 8.355 → 8.495 (+0.140) |
+| d14 | autumn | 3.81 % | 8.861 → 9.041 (+0.180) | 8.652 → 8.828 (+0.176) | 8.831 → 8.984 (+0.153) |
+
+Every autumn MAE on this page is therefore **0.13–0.19 min optimistic**, and
+every summer one is exact. The contamination sits on precisely the half of the
+window that drives the season reversal above — the two confounds are stacked.
+
+**3. It does not explain the season reversal.** That was the obvious worry and it
+is false: `lvlh5_tft`'s advantage over `wt_med` in autumn *grows* slightly when
+the slots are removed (−0.547 → −0.604 at d0) while its summer deficit is
+unchanged (+0.140). The reversal is seasonal, not an artefact of carried-forward
+truth.
+
+**4. The bias has a direction: it flatters `persistence`.** A heartbeat slot
+carries a *frozen* wait, which is exactly what `persistence` predicts — so the
+contamination helps it, and the longer the horizon the more a real queue would
+have moved while the frozen one did not. Dropping the slots costs `persistence`
++0.061 min at 15 min but **+0.275 min at 120 min**, against +0.101 → +0.108 for
+`h5`. Its lead at 2 h shrinks by 0.111 min (17 %) against the best profile
+`lvlh5_tft` (+0.636 → +0.525) and by 0.077 min (10 %) against `h5`
+(+0.763 → +0.686), and two regional UC1 wins at m120 (EU all rides, Asia busy)
+stop being wins. PAR-828 predicted
+this sign from its Chronos-2 run before it was measured here; it means UC1
+results on this target are **conservative for any model that is not persistence**.
+
+**5. Nothing load-bearing flips.** Of 2,886 comparable cells, 32 (1.1 %) change
+their win verdict and 26 of those go *from no-win to win* — the target gets
+harder, but models gain more than they lose because the slots removed were the
+flat ones the naives handle best. The flips are near-boundary (CIs touching 0)
+except one group: **UC3 dayPeak absolute error at d0–d6**, where 16 cells turn
+into wins with shifts of up to −0.48 min (`lvlh5_naive` d6 +0.121 → −0.355).
+Carried-forward slots distort a ride-day's P90 shape more than its mean, so the
+dayPeak surfaces (D4, the planner's headliner drop) are the ones a heartbeat
+decision would actually move. No hand-over band in the tables above changes.
+
 **This is a product decision, not a bug to fix silently.** Scoring against a
 carried-forward wait measures agreement with a stale *display*; scoring without
 it measures agreement with the queue. Both are legitimate targets — "what the app
-showed" is what a user experienced. `build --drop-heartbeats` builds the other
-target so the two can be compared cell for cell; see
-`~/ml-review-2026-10/RESULTS-PAR-827.md` for the measured sensitivity and the
-recommendation, and BENCH-SPEC "Recorded changes" 6 for the deviation record.
+showed" is what a user experienced. The published headline keeps them (the
+deviation is recorded as BENCH-SPEC change #6); the alternative target is
+published beside it, and on this evidence the choice changes no serving band and
+moves absolute autumn MAEs by ~0.18 min. See
+`~/ml-review-2026-10/RESULTS-PAR-827.md` for the recommendation.
 
 ### Sanity check against the 2026-10 review (33 sample parks)
 
@@ -595,8 +975,9 @@ and Asian parks with longer queues, not because the method differs.
 
 The query is committed as
 `ml-bench/results/20261009-baselines-v2/sanity_33parks.sql` (self-contained, the
-33 park ids inlined, the container command in its header) and its output as
-`sanity_33parks.csv` in both `tables_*/`. This is the only evidence on this page
-that the harness agrees with an independent implementation, so it has to be
-reproducible from the repository — it previously came from an ad-hoc query over
-the git-ignored `parts/` directory.
+33 park ids inlined, the container command in its header) and **its output beside
+it as `sanity_33parks.csv`**. It is not produced by `report`, so it is not in the
+`tables_*/` dirs — an earlier version of this page said it was, which was wrong.
+This is the only evidence on this page that the harness agrees with an
+independent implementation, so it has to be reproducible from the repository: it
+previously came from an ad-hoc query over the git-ignored `parts/` directory.

@@ -288,6 +288,108 @@ def test_oracle_weather_model_never_wins_a_handover_row(synth_export, tmp_path):
         assert not set(t[col]) & owx, f"{name}.csv awards a row to {owx}"
 
 
+def test_handover_and_usable_horizon_share_one_gate(synth_export, tmp_path):
+    """`cells.csv`, `handover.csv` and `usable_horizon.csv` must apply ONE gate.
+
+    Critic B4's tautology was a gate that only some tables used: UC4's unit is the
+    park-MONTH, and gating it on origin days made every UC4 cell untested while the
+    PR quoted the resulting emptiness as "no level source wins". A sibling later
+    reported the same shape in `handover.csv`. The invariant below is what would
+    have caught both halves at once, and it is deliberately **data-independent** —
+    it does not need any cell to win.
+
+    Note what this fixture cannot do: `synth.py` builds **two** parks, so
+    `n_units_park <= 2` and `min_bootstrap_units = 10` makes `wins = True`
+    unreachable here. Any test that asserts something about winners on this
+    fixture is vacuous unless it lowers that floor, which is why the win-side
+    check below is reported rather than required.
+    """
+    from mlbench.report import is_oracle, tested
+
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1, 3, 7])
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "run-0of1.json").write_text(json.dumps({"export": str(synth_export), "git_sha": "test"}))
+    Runner(synth_export, out, cfg, [], origins=("2026-04-01", "2026-04-20")).run()
+    tdir = build_report(out, reps=50)
+
+    cells = pd.read_csv(tdir / "cells.csv")
+    hand = pd.read_csv(tdir / "handover.csv")
+    uh = pd.read_csv(tdir / "usable_horizon.csv")
+    assert len(cells) and len(hand) and len(uh)
+
+    key = ["metric", "uc", "segment", "lead"]
+    scored = cells[(cells["region"] == "all") & ~cells["model"].map(lambda m: is_oracle(str(m)))]
+
+    # 1. THE invariant: `handover.n_tested` must equal the number of rows the same
+    #    gate admits in `cells.csv`. If either table used a different gate — a
+    #    day-unit threshold on a park-month metric, say — these would diverge.
+    checked = 0
+    for k, g in scored.groupby(key):
+        row = hand[(hand["metric"] == k[0]) & (hand["uc"] == k[1])
+                   & (hand["segment"] == k[2]) & (hand["lead"].astype(str) == str(k[3]))]
+        if row.empty:
+            continue
+        expect = int(sum(tested(r, cfg, str(r["model"]))[0] for _, r in g.iterrows()))
+        assert int(row.iloc[0]["n_tested"]) == expect, (
+            f"{k}: handover says n_tested={int(row.iloc[0]['n_tested'])}, recomputing the "
+            f"same gate over cells.csv gives {expect} — the two tables are not sharing a gate")
+        checked += 1
+    assert checked > 10, f"only {checked} hand-over rows cross-checked"
+
+    # 2. the unit a metric is gated on must be identical in both summary tables
+    hu = {(str(r["metric"]), str(r["uc"]), str(r["segment"])): r["unit"] for _, r in hand.iterrows()}
+    for _, r in uh.iterrows():
+        k = (str(r["metric"]), str(r["uc"]), str(r["segment"]))
+        if k in hu:
+            assert hu[k] == r["unit"], f"{k}: handover unit {hu[k]} != usable_horizon unit {r['unit']}"
+
+    # 3. `leads_tested = 0` must always carry its reason, so it can never again be
+    #    read as "nothing won"
+    empty = uh[uh["leads_tested"] == 0]
+    assert empty["not_tested_because"].fillna("").str.len().gt(0).all()
+
+    # 4. the win side, where it is reachable: a non-candidate, non-oracle model that
+    #    wins AND passes the gate must be counted. Vacuous on this fixture (two
+    #    parks), so it is not asserted to be non-empty.
+    for k, g in scored.groupby(key):
+        row = hand[(hand["metric"] == k[0]) & (hand["uc"] == k[1])
+                   & (hand["segment"] == k[2]) & (hand["lead"].astype(str) == str(k[3]))]
+        if row.empty:
+            continue
+        elig = [r for _, r in g.iterrows()
+                if bool(r.get("wins")) and not bool(r.get("is_candidate"))
+                and tested(r, cfg, str(r["model"]))[0]]
+        if elig:
+            assert int(row.iloc[0]["significant_models"]) > 0, (
+                f"{k}: {[r['model'] for r in elig]} win and pass the gate but "
+                f"significant_models = 0")
+
+
+def test_cells_all_refs_is_always_emitted(synth_export, tmp_path):
+    """BENCH-SPEC change #5 makes `cells_all_refs.csv` the artefact every
+    per-baseline claim rests on, and three PRs cite it. A sibling workstream
+    reported it missing, so assert it is emitted for a windowed pass as well as a
+    full one, and that it really carries one row per (model, candidate) pair.
+    """
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1, 3])
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "run-0of1.json").write_text(json.dumps({"export": str(synth_export), "git_sha": "test"}))
+    Runner(synth_export, out, cfg, [], origins=("2026-04-01", "2026-04-20")).run()
+
+    for kwargs in ({}, {"target_from": "2026-04-02", "target_to": "2026-04-18"}):
+        tdir = build_report(out, reps=50, **kwargs)
+        p = tdir / "cells_all_refs.csv"
+        assert p.exists(), f"cells_all_refs.csv missing for {kwargs or 'full period'}"
+        ar = pd.read_csv(p)
+        assert len(ar) and {"model", "ref_candidate", "is_selected_ref"} <= set(ar.columns)
+        # strictly more rows than cells.csv: every model against every candidate
+        assert len(ar) > len(pd.read_csv(tdir / "cells.csv")) * 0.5
+        assert ar["is_selected_ref"].any(), "no row is marked as the selected reference"
+        assert ar.groupby(["metric", "uc", "segment", "region", "lead", "model"]).size().max() >= 2
+
+
 def test_report_records_its_own_code_identity(synth_export, tmp_path):
     """A `tables_*/` dir must carry the identity of the code that WROTE it.
 
