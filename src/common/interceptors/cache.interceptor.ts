@@ -34,6 +34,8 @@ import { Response } from "express";
  *     → browser & CDN both cache 15 min
  *   @UseInterceptors(new HttpCacheInterceptor(60, 900))
  *     → browser caches 1 min, CDN caches 15 min
+ *   @UseInterceptors(new HttpCacheInterceptor(900, undefined, isDegraded))
+ *     → a body `isDegraded` flags is sent `no-store` instead
  */
 @Injectable()
 export class HttpCacheInterceptor implements NestInterceptor {
@@ -46,13 +48,19 @@ export class HttpCacheInterceptor implements NestInterceptor {
      * while keeping browsers on a shorter TTL.
      */
     private readonly sMaxAge?: number,
+    /**
+     * Flags a response body that says "try again shortly". Such a body is sent
+     * `no-store`: the TTL would otherwise keep a transient failure at the edge
+     * for up to `maxAge + stale-while-revalidate`, long after the fault ended.
+     */
+    private readonly isDegraded?: (body: unknown) => boolean,
   ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const response = context.switchToHttp().getResponse<Response>();
 
     return next.handle().pipe(
-      tap(() => {
+      tap((body) => {
         // A slow route whose client gave up mid-flight has already had its
         // headers flushed by Express. Setting one now throws
         // ERR_HTTP_HEADERS_SENT, and NestJS hands that to the exception
@@ -60,6 +68,11 @@ export class HttpCacheInterceptor implements NestInterceptor {
         // (48-178 a day, all on the heaviest park-detail routes). Nothing is
         // left to cache once the response is on the wire, so we skip it.
         if (response.headersSent) return;
+
+        if (this.isDegraded?.(body)) {
+          response.setHeader("Cache-Control", "no-store");
+          return;
+        }
 
         const cdnMaxAge = this.sMaxAge ?? this.maxAge;
         // stale-while-revalidate doubles the TTL for forecast-like

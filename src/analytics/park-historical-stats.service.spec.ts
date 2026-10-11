@@ -712,6 +712,42 @@ describe("ParkHistoricalStatsService", () => {
       expect(result).toEqual(cached);
       expect(aggregateQuery).not.toHaveBeenCalled();
     });
+
+    describe("concurrent and failing builds (PAR-833)", () => {
+      const buildCalls = () =>
+        aggregateQuery.mock.calls.filter((c) =>
+          String(c[0]).includes("hour_of_day"),
+        ).length;
+
+      it("runs one build for two parallel calls", async () => {
+        const [a, b] = await Promise.all([
+          service.getParkHourlyProfile(park, 1, 8),
+          service.getParkHourlyProfile(park, 1, 8),
+        ]);
+        expect(buildCalls()).toBe(1);
+        expect(b).toBe(a);
+      });
+
+      it("remembers a failure for 90 s and fails the next caller without a query", async () => {
+        aggregateQuery.mockRejectedValueOnce(new Error("no tlist entry"));
+        await expect(service.getParkHourlyProfile(park, 1, 8)).rejects.toThrow(
+          "no tlist entry",
+        );
+        const failureWrite = redis.set.mock.calls.find((c) =>
+          String(c[0]).endsWith(":failed"),
+        );
+        expect(failureWrite?.slice(2)).toEqual(["EX", 90]);
+
+        const queriesAfterFailure = aggregateQuery.mock.calls.length;
+        redis.get.mockImplementation((key: string) =>
+          Promise.resolve(key.endsWith(":failed") ? "1" : null),
+        );
+        await expect(service.getParkHourlyProfile(park, 1, 8)).rejects.toThrow(
+          "recently",
+        );
+        expect(aggregateQuery.mock.calls.length).toBe(queriesAfterFailure);
+      });
+    });
   });
   it("draws the day-curve band from CatBoost's raw error, the model the curve plots (PAR-854)", async () => {
     // The day curve reads `wait_time_predictions` — raw CatBoost. Since PAR-854

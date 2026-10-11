@@ -174,4 +174,34 @@ describe("HttpCacheInterceptor", () => {
       expect(headers["Vary"]).toBeUndefined();
     });
   });
+
+  describe("degraded bodies", () => {
+    const isDegraded = (body: unknown) =>
+      (body as { degraded?: boolean })?.degraded === true;
+
+    it("sends no-store for a body the predicate flags", async () => {
+      const interceptor = new HttpCacheInterceptor(900, undefined, isDegraded);
+      const { ctx, headers } = buildMockContext();
+
+      await firstValueFrom(
+        interceptor.intercept(ctx, handlerOf({ degraded: true })),
+      );
+
+      expect(headers["Cache-Control"]).toBe("no-store");
+      expect(headers["CDN-Cache-Control"]).toBeUndefined();
+    });
+
+    it("keeps the full TTL for a body it does not flag", async () => {
+      const interceptor = new HttpCacheInterceptor(900, undefined, isDegraded);
+      const { ctx, headers } = buildMockContext();
+
+      await firstValueFrom(
+        interceptor.intercept(ctx, handlerOf({ degraded: false })),
+      );
+
+      expect(headers["Cache-Control"]).toBe(
+        "public, max-age=900, s-maxage=900, stale-while-revalidate=1800",
+      );
+    });
+  });
 });
