@@ -292,19 +292,35 @@ and a slot at a projected closing time read as inside the window. This run has
 them, so the cross-baseline comparison below is sound — **a run without them is
 not comparable to it**.
 
-**`code_sha256` at the branch head (corrected, critic S1).** `915dc784…` holds
-at `e0a4547a` *and* at `312eaf56^`, so the rebase onto the PAR-827 head really
-did change no benchmark code. The **branch head hashes to `c7f95e4a…`**, because
-commit `312eaf56` adds two `os.environ` reads to `report.py` — an earlier version
-of this paragraph claimed the head still hashed to `915dc784…`, which would make
-a reviewer re-deriving provenance from the head conclude the run is stale. The
-substantive claim is unaffected and in fact stronger than it was stated: against
-the run commit `e0a4547a`, **`report.py` is the only `mlbench` file that differs
-at the head** (`git diff --name-only e0a4547a HEAD -- ml-bench/mlbench/`), and
-the two patched f-strings evaluate to the previous literals (`SET threads=4`,
-`SET memory_limit='3GB'`) when the env vars are unset, so **no scored number can
-move**. The committed `tables/` were also produced by a container that started
-before that commit.
+**`code_sha256` is per COMMIT, not "the head" (corrected twice — critic S1, then
+again after the round-2 pass).** Do not pin a hash to "the head" in a file that
+ships in the same commit: the first correction here did exactly that and was
+invalidated by its own commit, which touched `mlbench/drivers.py`. Index it by
+commit instead, and re-derive with the command in the row below:
+
+| commit | `code_sha256` | what changed vs the run |
+|---|---|---|
+| **`e0a4547a`** (the run) | **`915dc784…`** | — (this is what `run-*.json` records) |
+| `312eaf56^` | `915dc784…` | the rebase onto the PAR-827 head changed **no** benchmark code |
+| `312eaf56`, `318bb417` | `c7f95e4a…` | `report.py`: two `os.environ` reads |
+| `aeafa05b` and later | `8c11caf8…` | + `drivers.py`: docstring only |
+
+Re-derive for any revision with `runner.py:85-95`'s own algorithm (sha256 over
+path + bytes of every `mlbench/**/*.py`, sorted). **Any commit touching any
+`mlbench` source moves this hash**, so a mismatch against `915dc784…` is expected
+at every revision after the run and is *not* evidence that the run is stale.
+
+**Why no scored number can move** — this rests on the patch being inert, not on
+timing: the two patched f-strings in `report.py` evaluate to the **previous
+literals** (`SET threads=4`, `SET memory_limit='3GB'`) whenever
+`MLBENCH_REPORT_MEMORY` / `MLBENCH_REPORT_THREADS` are unset, which is how both
+committed passes were run, and `drivers.py`'s change is a docstring. So the code
+that wrote these tables is byte-equivalent in behaviour to `915dc784…` whether or
+not a report container was given mounted sources. (An earlier version of this
+paragraph argued from container start times instead; that argument does not hold
+— the full pass's own stamp is 09:58, *after* `312eaf56` at 09:51 — and
+`remote_run.sh` records only the scoring run, not the report invocation, so it
+cannot establish what the report container mounted.)
 
 **One commit message is superseded** (critic S2). `312eaf56`'s message says the
 full-period pass "does not fit a 4 GB container … OOM-killed with rc=137". That
@@ -316,11 +332,12 @@ literals) and is kept as headroom, not as a fix. The message is corrected here
 rather than by amending the commit, because rewriting it would change this
 branch's SHAs and the review's provenance checks are pinned to them.
 
-**Tests.** `pytest -q ml-bench/tests` at this head: **19 passed** (21.9 s), run
-inside this run's own image `sha256:7b5e872f614f` with the head's `mlbench/` and
-`tests/` mounted over the image's baked copy — i.e. the reference environment
-with the current code. This closes the gap the earlier revision disclosed (the
-suite had not been re-run after `312eaf56`).
+**Tests.** `pytest -q ml-bench/tests` at `aeafa05b`: **20 passed** (24.3 s), run
+inside this run's own image `sha256:7b5e872f614f` with that commit's `mlbench/`
+and `tests/` mounted over the image's baked copy — i.e. the reference
+environment with the current code. This closes the gap an earlier revision
+disclosed (the suite had not been re-run after `312eaf56`). The 20th test is new
+and covers the multi-origin cache accumulation (critic N8).
 
 The plug-in's baselines reproduce the PAR-827 `20261009-baselines-v2` run on
 **every slot and decision cell**: of 3 770 shared `cells.csv` keys, 3 688 agree
@@ -347,11 +364,13 @@ conclusion on this page rests on "beats / loses to the reference". The primary
 evidence is the **paired margin against each named baseline individually**,
 which does not move when the reference choice does.
 
-> **This grid is a stand-in for `cells_all_refs.csv`, which does not exist yet.**
-> BENCH-SPEC recorded change **#5** requires every model to be reported against
-> each individual naive candidate in a `cells_all_refs.csv`; neither pass of this
-> run has that file (PAR-827 owes it, and it landed on its branch after this run
-> was scored). The per-baseline margins below are hand-computed as a
+> **This grid is a stand-in for `cells_all_refs.csv`, which these tables do not
+> contain.** BENCH-SPEC recorded change **#5** requires every model to be
+> reported against each individual naive candidate in a `cells_all_refs.csv`.
+> Neither pass of **this run** has that file, because it was scored at
+> `e0a4547a`; the harness **does** emit it at PAR-827's head
+> (`report.py:1161`), so this is a gap in these tables and not an outstanding
+> item. The per-baseline margins below are hand-computed as a
 > difference-in-differences through each lead's common reference, which is
 > disclosed rather than presented as the spec's table. A DiD through a shared
 > reference equals a direct paired comparison only where the two models' coverage
@@ -482,7 +501,7 @@ recomputed from the same `cells.csv` columns.
 | D5 first-hour MAE (opening-aligned) | d7 / d90 | d7 / d14 | d7 / d90 |
 | D3 best-time hit rate (top-2) | **d45 / d45** | — / — | **— / —** |
 | D3 best-time regret | **d45 / d90** | — / d0 | **— / —** |
-| D6 crowd bucket (level only) | n/a | d14 (`lvl_tft`) | significant d7–d90, loses at d180 |
+| D6 crowd bucket (level only) | n/a | d14 (`lvl_tft`) | significant d7–d90, **significant loss at d120** (park-day-only loss at d180) |
 
 Two things to take from this table:
 
@@ -550,10 +569,23 @@ critic found. Nothing about the rope drop is claimed here.
   The model has no month/day-of-year features (deliberately, §1) and the
   training rows that far out are the fewest.
 
-- **At d180 the level ranks days *worse* than naive**: D6 crowd bucket exact
-  0.238 vs `lvl_naive4` 0.262, −0.024 [−0.050, +0.004] cluster /
-  [−0.043, −0.005]\* park-day, 51 origin days. The far-horizon claim in §6.4a
-  therefore stops at d90.
+- **Beyond d90 the level ranks days *worse* than naive — and the significant
+  loss is at d120, not d180** (corrected: the earlier text led with d180, which
+  fails this page's own binding criterion). D6 crowd bucket exact vs
+  `lvl_naive4`:
+
+  | lead | full period | window | verdict under the park-cluster rule |
+  |---|---|---|---|
+  | **d120** | **−0.034 [−0.050, −0.017]\*** cluster, [−0.047, −0.021]\* park-day, 111 origin days | **−0.045 [−0.069, −0.020]\***, [−0.063, −0.027]\*, 54 | **significant loss, both passes, both units** |
+  | d180 | −0.024 [−0.051, +0.005] cluster, [−0.042, −0.008]\* park-day, 51 | −0.024 [−0.050, +0.004], [−0.043, −0.005]\*, 51 | **park-day only** — the cluster CI includes 0, so not a win-rule loss |
+
+  BENCH-SPEC recorded change **#1** makes the park-cluster CI the deciding one,
+  so **d120 is the D6 result to quote** and d180 is a weaker, unit-dependent
+  version of the same direction. This matters next to the recommendation: the D6
+  shadow scope stops at **d90**, and the first lead past it is a measured loss
+  under the binding rule — the same lead at which UC4 also turns into a measured
+  loss (§6.7b). The far-horizon claim in §6.4a therefore stops at d90, and
+  §6.7d shows the d120 loss is against `lvl_naive4` specifically.
 
 - **UC3 dayPeak absolute error** is no better than the reference at d1/d7
   (−0.274 [−0.563, +0.041], −0.356 [−0.720, +0.031] cluster) and worse at
@@ -604,7 +636,7 @@ A vs B) the review found weak everywhere. At **d180 the advantage is gone**.
   carries a daily level for 96.5 % of ride-days at d90, 92.6 % at d120 and
   78.5 % at d180, matching `lvl_naive4`; `lvl_tft` stops after d60 and `lvl_cbd`
   earlier still. **Reach is not the same as skill**: it ranks days better than
-  naive to d90 and no better at d180 (§6.3), so the useful far-horizon band is
+  naive to d90 and **significantly worse at d120** (§6.3), so the useful far-horizon band is
   d60 … d90.
 
 ### 6.5 Share of the d1 level gap closed
@@ -700,18 +732,21 @@ Every lead clears the gate by 2–20×, in **both** passes, with
 park-months" is, to within four, this window's 196. **So UC4 is measured here,
 not deferred.** The results are in §6.7b.
 
-**Harness defect (belongs to PAR-827, not fixed in this run's code).**
-`usable_horizon()` (`report.py:234-236`) applies `n_origin_days >=
-cfg.low_n_origin_days` to *every* metric, including the park-month-unit UC4, so
-it prints `leads_tested = 0` for all six level sources even though `cells.csv`
-has `wins = True` at thirteen leads. `handover.csv` carries the same defect and
-is worse: at every UC4 lead it names **the reference itself** as the winner with
-`significant_models = 0`, which reads exactly like "a naive baseline won" — the
-tautology B4 was raised to kill. BENCH-SPEC #3 was *recorded* but **not
-implemented**; PAR-827 has the fix on its branch. Until it lands, read UC4 off
-`cells.csv` (`n_park_days`, `wins`, `diff_lo_park/hi_park`) and ignore
-`usable_horizon.csv` and `handover.csv` for UC4. PAR-828 and PAR-829 will hit
-the identical vacuous answer.
+**Why this run's own tables say otherwise — a defect in the code THIS run was
+scored with, since fixed.** At `e0a4547a`, `usable_horizon()`
+(`report.py:234-236`) applied `n_origin_days >= cfg.low_n_origin_days` to *every*
+metric, including the park-month-unit UC4, so **this run's**
+`usable_horizon.csv` prints `leads_tested = 0` for all six level sources even
+though its `cells.csv` has `wins = True` at thirteen leads. **This run's**
+`handover.csv` carries the same gate and is worse: at every UC4 lead it names
+**the reference itself** as the winner with `significant_models = 0`, which reads
+exactly like "a naive baseline won" — the tautology B4 was raised to kill.
+
+So BENCH-SPEC #3 was recorded *after* this run was scored and **is implemented
+at PAR-827's head** — this is a statement about the two CSVs committed here, not
+about the harness today. Reading UC4 off `cells.csv` (`n_park_days`, `wins`,
+`diff_lo_park/hi_park`) is therefore the right move **for this run's tables**;
+a pass scored on PAR-827's current head needs no such workaround.
 
 ### 6.7 Full-period pass — the slot-MAE win does NOT survive it
 
@@ -873,8 +908,9 @@ one for a serving decision.**
 | D6 crowd bucket d7 | +0.052\* both units | +0.010, cluster [−0.005, +0.023] **n.s.**, park-day [+0.002, +0.018]\* | **weakens to unit-dependent** |
 | D6 d1 vs `lvl_snaive7` | −0.014, tie | **−0.020 [−0.035, −0.007]\* — significantly worse** | **turns into a loss** |
 | D7 d1–7 vs `lvl_snaive7` | −0.013, cluster n.s. | −0.007, cluster n.s. / park-day [−0.012, −0.002]\* | no change (still ≤ naive) |
-| D6 d180 | −0.024, park-day \* worse | −0.024, park-day \* worse | **yes** |
-| D4 dayPeak pairwise ordering | d30 / d90 | d90 / d90 | **NOT evidence for this model** — the d90 is a four-way tie (`h5`, `lvlh5_naive`, `driver_level_x_h5` all reach d90) and `driver_level`'s margin is below `h5`'s at every lead d7–d90; the winner is `lvlh5_tft` (d0–d45) / `lvlh5_naive` (d60–d90). See §6.7c |
+| **D6 d120** | **−0.045 [−0.069, −0.020]\* worse** | **−0.034 [−0.050, −0.017]\* worse** | **yes — significant loss, both units, both passes** |
+| D6 d180 | −0.024, park-day \* only (cluster includes 0) | −0.024, park-day \* only (cluster includes 0) | same direction, but **not** a loss under the binding park-cluster rule |
+| D4 dayPeak pairwise ordering | d30 / d90 | d90 / d90 | **NOT evidence for this model** — the d90 is a four-way tie (`h5`, `lvlh5_naive`, `driver_level_x_h5` all reach d90) and `driver_level`'s margin is below `h5`'s at every scored lead d7–d90 **except d10**; the winner is `lvlh5_tft` (d0–d45) / `lvlh5_naive` (d60–d90). See §6.7c |
 | D4 optimiser regret | d14 | **d30** | **yes, stronger** — largest margin of any model, same horizon as `h5` |
 | **UC2/UC3 slot MAE win** | d10 all / d60 busy | **no horizon on either segment** | **NO — this is the reversal** |
 
@@ -911,9 +947,10 @@ agrees where it can: significant at d3 and d5–d60, not significant at d1/d2/d4
 and the **same loss at d120 (−0.066 [−0.094, −0.039]\*, 112 park-months)**.
 
 **Read the d120 loss as seriously as the wins.** It is significant under both
-units in both passes and it is the only place on this page where the level
-ranking is measurably *worse* than a naive beyond d90. Together with the D6
-d180 loss (§6.3) it fixes the useful far-horizon band at **d60 … d90** and no
+units in both passes. Together with the **D6 d120** loss (§6.3) — the two
+ranking metrics turn at the *same* lead, which is why the bound is a bound and
+not a quirk of one metric — it fixes the useful far-horizon band at
+**d60 … d90** and no
 further — which is exactly where the crowd calendar would want it to go on. For
 context, every level source loses to `lvl_naive4` at d120 (`lvl_clim` −0.066,
 `lvl_wt56` −0.066, `lvl_driver_level` −0.029); the drivers lose by the least,
@@ -963,12 +1000,19 @@ would have routed `dayPeak` to the measurably **worst** of the three candidates.
 
 And the paired margin vs the per-lead reference, full period, `all`:
 
-| lead | d1 | d7 | d14 | d30 | d45 | d60 | d90 |
-|---|---|---|---|---|---|---|---|
-| `driver_level` | +0.0232 | +0.0212 | +0.0209 | +0.0270 | +0.0224 | +0.0234 | +0.0265 |
-| `h5` | +0.0227 | **+0.0226** | **+0.0230** | **+0.0286** | **+0.0253** | **+0.0247** | **+0.0282** |
+| lead | d1 | d7 | **d10** | d14 | **d21** | d30 | d45 | d60 | d90 |
+|---|---|---|---|---|---|---|---|---|---|
+| `driver_level` | +0.0232 | +0.0212 | **+0.0239** | +0.0209 | +0.0212 | +0.0270 | +0.0224 | +0.0234 | +0.0265 |
+| `h5` | +0.0227 | **+0.0226** | +0.0225 | **+0.0230** | **+0.0227** | **+0.0286** | **+0.0253** | **+0.0247** | **+0.0282** |
 
-`h5` is ahead at **every lead d7–d90** (paired shares 0.955–0.979 for
+**All scored leads in the band are shown, including the two (d10, d21) that the
+first correction's table omitted** — which is how "below `h5`'s at *every* lead
+d7–d90" survived into five places when **d10 is an exception** (+0.0239 against
++0.0225, a 0.0014 margin, i.e. noise-sized and in `driver_level`'s favour). Say
+"at every scored lead d7–d90 except d10"; d1–d6 are `driver_level`'s on margin
+as well (see below).
+
+`h5` is ahead at **every scored lead from d7 to d90 except d10** (paired shares 0.955–0.979 for
 `driver_level`, 0.98–1.00 for `h5` — both far above the 0.3 gate, so the
 difference of differences is meaningful). `usable_horizon.csv` gives `h5`,
 `driver_level`, `driver_level_x_h5` **and** `lvlh5_naive` the same d90 horizon,
@@ -1001,6 +1045,73 @@ five** scored leads, with roughly **1.3–1.9× `h5`'s margin**. But `h5` is als
 significant at all five and `usable_horizon.csv` gives **both** a d30 horizon,
 so the honest claim is: **largest paired margin of any model at d1–d30, on the
 same horizon as `h5`** — not a longer horizon than anyone else's.
+
+### 6.7d Per-baseline margins on the ranking surfaces (UC4, D6, D7)
+
+§6.1 sets the rule for this page — *"the primary evidence is the paired margin
+against each named baseline individually"* — and the round-2 review was right
+that UC4, D6 and D7 were the three surfaces still quoted only against the
+selected reference. They are not exempt, so here they are. Each cell is a
+difference of two paired differences through that lead's common reference,
+**positive = `driver_level` better** (all three metrics are higher-is-better).
+Full period, region `all`.
+
+**UC4 Spearman within park-month** (unit: park-month):
+
+| vs | d1 | d7 | d30 | d60 | d90 | d120 |
+|---|---|---|---|---|---|---|
+| `lvl_naive4` | +0.089 | +0.100 ᵃ | +0.115 | +0.086 ᵃ | +0.040 | **−0.029** ᵃ |
+| `lvl_snaive7` | +0.065 ᵃ | — | — | — | — | — |
+| `lvl_clim` | +0.172 | +0.137 | +0.109 ᵃ | +0.086 | +0.042 | +0.037 |
+| `lvl_wt56` | +0.209 | +0.194 | +0.211 | +0.128 | +0.029 ᵃ | +0.037 |
+| `lvl_tft` | +0.069 ᵇ | +0.111 ᵇ | +0.139 ᵇ | gated ᶜ | — | — |
+| `lvl_cbd` | +0.162 ᵇ | +0.196 ᵇ | +0.192 ᵇ | — | — | — |
+
+**D6 crowd bucket exact** (unit: park-day):
+
+| vs | d14 | d30 | d60 | d90 | d120 |
+|---|---|---|---|---|---|
+| `lvl_naive4` | +0.019 ᵃ | +0.032 ᵃ | +0.037 ᵃ | +0.024 ᵃ | **−0.034** ᵃ |
+| `lvl_clim` | +0.066 | +0.061 | +0.069 | +0.072 | +0.022 |
+| `lvl_wt56` | +0.042 | +0.047 | +0.043 | +0.041 | **−0.007** |
+| `lvl_tft` | +0.011 ᵇ | +0.029 ᵇ | gated ᶜ | — | — |
+| `lvl_cbd` | +0.144 ᵇ | +0.134 ᵇ | — | — | — |
+
+**D7 day-comparison winner accuracy** (unit: day pair):
+
+| vs | d8–30 | d31–90 |
+|---|---|---|
+| `lvl_naive4` | +0.068 ᵃ | +0.094 ᵃ |
+| `lvl_clim` | +0.191 | +0.189 |
+| `lvl_wt56` | +0.203 | +0.213 |
+| `lvl_tft` | +0.069 ᵇ | +0.068 ᵇ ᶜ |
+| `lvl_cbd` | +0.246 ᵇ | +0.267 ᵇ ᶜ |
+
+ᵃ This baseline *is* that lead's selected reference, so the cell is the margin
+already tabulated in §6.4 / §6.7b **with its park-cluster CI**. The round-2
+review additionally established that at every lead claimed on this page the
+selected reference is also the **hardest** naive candidate (UC4 13/13, D6 6/6,
+D7 2/2, D4 regret 5/5), so these are the envelope-binding comparisons and no
+verdict here moves under PAR-827's reference redefinition.
+ᵇ **Point estimate only.** A CI for a non-reference pair needs
+`cells_all_refs.csv` (BENCH-SPEC change #5), which this run does not have
+(§6.1). Read these as an ordering, not as significance.
+ᶜ Below `MIN_COVERAGE = 0.3`: `lvl_tft` holds 0.003 of the reference's
+park-months at UC4 d60 and 0.01 of the park-days at D6 d60 (both gated out
+here), and 0.19 / 0.09 of the day-pairs at D7 d31–90 (shown, but not comparable
+— §6.8's success criterion says the same).
+
+**What the grid adds beyond "it beats the reference".** `driver_level` is ahead
+of **every** level source at **every** lead on UC4 d1–d90, D6 d14–d90 and both
+D7 bands, so the win is not an artefact of which naive was selected. It also
+makes the d120 turn precise: the loss there is against **`lvl_naive4`
+specifically** (−0.029 UC4, −0.034 D6, plus −0.007 against `lvl_wt56` on D6),
+while against `lvl_clim` and `lvl_wt56` it is still ahead on UC4. "Nothing
+beyond d90" therefore holds because the *strongest* naive — the median of the
+last four same-weekday P90s — overtakes it there, not because the model
+collapses.
+
+### 6.8 Recommendation
 
 **Shadow only — do not serve.** Three measured facts bound this, before any win
 is weighed:
@@ -1045,7 +1156,9 @@ surfaces.
 - **D6 crowd bucket**: +0.032 [+0.013, +0.050]\* at d30 and +0.024
   [+0.004, +0.043]\* at d90 over the full period. At d7 it weakens to
   unit-dependent (+0.010) and at d1 it is **significantly worse** than seasonal
-  naive (−0.020\*); at d180 it is worse than naive.
+  naive (−0.020\*); at **d120** it is **significantly worse** than naive under
+  both units in both passes (−0.034 [−0.050, −0.017] full period, −0.045 in the
+  window), and at d180 worse on the park-day unit only.
 - **D4 optimiser regret**: usable to **d30** over the full period (d14 in the
   window), and the **largest paired margin of any model** at every scored lead
   — −1.23 (d1) / −1.52 (d3) / −1.17 (d7) / −1.47 (d14) / −1.44 (d30) against
@@ -1054,8 +1167,9 @@ surfaces.
   horizon, not a longer one.
 - **D4 dayPeak ordering is NOT in this list.** `driver_level` is significant to
   d90 but wins at **no lead** in either pass (`lvlh5_tft` d0–d45,
-  `lvlh5_naive` d60–d90) and its margin is below `h5`'s at every lead d7–d90;
-  the d90 horizon is a four-way tie. It is not evidence for this model and
+  `lvlh5_naive` d60–d90) and its margin is below `h5`'s at every scored lead
+  d7–d90 except d10; the d90 horizon is a four-way tie. It is not evidence for
+  this model and
   `dayPeak` must not be routed to it (§6.7c).
 - **UC4 within-park-month day ranking** (the crowd calendar's own metric):
   **+0.065** (d1), **+0.100** (d7), **+0.109** (d30), **+0.086** (d60), all CIs
@@ -1063,7 +1177,8 @@ surfaces.
   level source that beats the reference at any lead, with a corrected usable
   horizon of **d60**. Against that, a **measured loss at d120** (−0.029
   [−0.052, −0.007], 178 park-months; −0.066 in the window pass), which with the
-  D6 d180 loss caps the useful band at d60 … d90 (§6.7b).
+  D6 **d120** loss — both metrics turn at the same lead — caps the useful band
+  at d60 … d90 (§6.7b).
 - It needs **no GPU and no new service** (197 shard-minutes of CPU for 231
   origins) and it publishes 21 points fewer forecasts for ride-days that never
   operate (§6.4a).
@@ -1075,7 +1190,8 @@ comparison consume — and they do not reliably improve the absolute minutes on 
 the deviation moves a rank much further than it moves a minute.
 
 Against it, beyond the three facts above: **Asia gains nothing**, the
-far-horizon ranking advantage stops at d90 (worse at d120 and d180), and the
+far-horizon ranking advantage stops at d90 (**significantly** worse at d120 on
+both D6 and UC4, and worse at d180 on the park-day unit only), and the
 headline window's all-rides d14–d45 band is win-or-not depending on the
 bootstrap unit. The run spans one year of history, so the model has no
 month/day-of-year features at all; from **2026-12-23** it can learn them, which

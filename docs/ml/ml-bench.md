@@ -241,9 +241,11 @@ H5 under both bootstrap units in both passes.
 Two things it is **not** good at, which the first version of this section got
 wrong in the model's favour: **`dayPeak` ordering** — `driver_level` is
 significant to d90 but wins at no lead (`lvlh5_tft` d0–d45, `lvlh5_naive`
-d60–d90) and its margin is below H5's at every lead d7–d90, so `dayPeak` must
+d60–d90) and its margin is below H5's at every scored lead d7–d90 except d10,
+so `dayPeak` must
 not be routed to it; and **anything beyond d90** — UC4 is a measured *loss* at
-d120 (−0.029 [−0.052, −0.007]) and D6 at d180. UC4 **is** measurable, contrary
+d120 (−0.029 [−0.052, −0.007]) and **D6 a significant loss at the same d120**
+(−0.034 [−0.050, −0.017]; the d180 loss is park-day-only). UC4 **is** measurable, contrary
 to the earlier text here: its unit is the park-month (BENCH-SPEC recorded change
 **#3**), and the `3` / `6–9` quoted before were counts of month *labels*. See
 `level-drivers.md` §6.6a, §6.7b, §6.7c.
@@ -377,17 +379,18 @@ A usable horizon shorter than the max significant lead means a lead in between
 breaks the run — usually because the reference switches from `wt_med` to `clim`
 at d7 and nothing beats climatology in the d7–d60 band.
 
-‡ **The empty UC4 rows above are a gate artefact, not a measurement** —
-`usable_horizon()` applies the ≥ 30-**origin-day** LOW-N gate to UC4, whose unit
-is the park-**month**, so nothing is ever tested there and `handover.csv`
-additionally names the reference itself the winner with zero significant models.
-**BENCH-SPEC recorded change #3** fixes the rule (gate UC4 on ≥ 30 park-months)
-but the code change is still outstanding; read UC4 off `cells.csv`
-(`n_park_days`, `wins`, `diff_lo_park/hi_park`) until it lands. The PAR-830 run
-has 62–607 park-months per lead and a measured UC4 result under that gate
-(`level-drivers.md` §6.6a). "No level source wins at any lead" in the hand-over
-table above should be read as "untested", exactly as the PR #445 critic (B4)
-required.
+‡ **The empty UC4 rows above are a gate artefact, not a measurement** — in the
+code these tables were built with, `usable_horizon()` applied the ≥
+30-**origin-day** LOW-N gate to UC4, whose unit is the park-**month**, so nothing
+was ever tested there, and `handover.csv` additionally names the reference itself
+the winner with zero significant models. **BENCH-SPEC recorded change #3** fixes
+the rule (gate UC4 on ≥ 30 park-months) and is implemented at the PAR-827 head,
+so this caveat applies to the committed tables above, not to new passes. For
+these tables, read UC4 off `cells.csv` (`n_park_days`, `wins`,
+`diff_lo_park/hi_park`): the PAR-830 run has 62–607 park-months per lead and a
+measured UC4 result under the correct gate (`level-drivers.md` §6.6a). "No level
+source wins at any lead" above should be read as "untested", exactly as the PR
+#445 critic (B4) required.
 
 ### What the numbers say
 
