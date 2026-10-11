@@ -1,7 +1,7 @@
 {
-  "git_sha": "ab8102bcb568c796bf1cdc350ef5d132e4b22f38",
+  "git_sha": "3107d7c9728aa1d54615208d6fb69638c3d34d3e",
   "git_sha_source": "env",
-  "code_sha256": "6de411d2b11da8f127b6693a08240e99ae70ef73c0cc31b0b319f1e0441ba19f",
+  "code_sha256": "4b2a41ce3dccbc883ba172e4980de59993eb3b426c17ad5c1427bbe367f21689",
   "image_id": "unknown",
   "kind": "report",
   "run": "/app/results/20261010-par828-subset-chronos-v2",
@@ -16,9 +16,9 @@
   "min_bootstrap_units": 10,
   "low_n_origin_days": 30,
   "low_n_park_months": 30,
-  "started_utc": "2026-10-11T10:53:53+00:00",
-  "finished_utc": "2026-10-11T11:14:59+00:00",
-  "seconds": 1265.9,
+  "started_utc": "2026-10-11T11:46:39+00:00",
+  "finished_utc": "2026-10-11T12:07:23+00:00",
+  "seconds": 1244.3,
   "argv": [
     "/app/mlbench/__main__.py",
     "report",
