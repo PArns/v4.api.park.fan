@@ -31,7 +31,9 @@ import {
 import { addIsoDays, formatInParkTimezone } from "../../common/utils/date.util";
 import { mapWithDbBudget } from "../../common/utils/db-job-budget";
 import {
+  CHRONOS_LAST_RUN_KEY,
   ChronosResponse,
+  ChronosRunSummary,
   ChronosShadowService,
 } from "./chronos-shadow.service";
 import {
@@ -260,7 +262,18 @@ export class ForecastArchiveService {
         result.parkDays += d.parkDays;
       }
     }
-    this.chronos.endRun();
+    const chronosRun = this.chronos.endRun();
+    // The admin ML overview's "is Chronos warming up?" (PAR-861). Only runs that
+    // asked Chronos anything, so an hour without intraday origins keeps the last.
+    if (chronosRun.calls > 0) {
+      const summary: ChronosRunSummary = {
+        at: clock().toISOString(),
+        ...chronosRun,
+      };
+      await this.redis
+        .set(CHRONOS_LAST_RUN_KEY, JSON.stringify(summary), "EX", 2 * 86400)
+        .catch(() => undefined);
+    }
     return result;
   }
 

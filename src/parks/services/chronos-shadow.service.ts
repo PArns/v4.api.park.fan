@@ -20,6 +20,26 @@ export interface ChronosCurve {
   q95: (number | null)[];
 }
 
+/**
+ * Redis key of the last archive run's Chronos summary (PAR-861): the admin ML
+ * overview reads it to say whether the shadow is still warming up.
+ */
+export const CHRONOS_LAST_RUN_KEY = "forecast-archive:chronos:last-run";
+
+/** One archive run's Chronos calls, as {@link CHRONOS_LAST_RUN_KEY} holds them. */
+export interface ChronosRunSummary {
+  /** ISO instant the run ended. */
+  at: string;
+  /** Parks asked (one call per park and origin). */
+  calls: number;
+  /** Calls that came back with curves. */
+  ok: number;
+  /** Calls answered "warming" (context backfill still running). */
+  warming: number;
+  failures: number;
+  skipped: number;
+}
+
 export interface ChronosResponse {
   status: "ok" | "warming" | "no_data";
   revision?: string;
@@ -52,6 +72,8 @@ export class ChronosShadowService {
   static readonly MAX_FAILURES_PER_RUN = 3;
 
   private failures = 0;
+  private calls = 0;
+  private ok = 0;
   private warming = 0;
   private skipped = 0;
   private loggedThisRun = false;
@@ -65,14 +87,24 @@ export class ChronosShadowService {
   /** Starts a run: resets the breaker and the once-per-run log. */
   beginRun(): void {
     this.failures = 0;
+    this.calls = 0;
+    this.ok = 0;
     this.warming = 0;
     this.skipped = 0;
     this.loggedThisRun = false;
   }
 
   /** Ends a run; logs one summary line when anything went wrong. */
-  endRun(): { failures: number; warming: number; skipped: number } {
+  endRun(): {
+    calls: number;
+    ok: number;
+    failures: number;
+    warming: number;
+    skipped: number;
+  } {
     const out = {
+      calls: this.calls,
+      ok: this.ok,
       failures: this.failures,
       warming: this.warming,
       skipped: this.skipped,
@@ -100,6 +132,7 @@ export class ChronosShadowService {
       this.skipped++;
       return null;
     }
+    this.calls++;
     try {
       const res = await axios.post<ChronosResponse>(
         `${getNfServiceUrl()}/chronos/forecast`,
@@ -114,6 +147,7 @@ export class ChronosShadowService {
       const body = res.data;
       if (!body || !Array.isArray(body.curves)) return null;
       if (body.status === "warming") this.warming++;
+      if (body.status === "ok") this.ok++;
       return body.status === "ok" ? body : null;
     } catch (err) {
       // 503 = switched off in nf-service or a TFT training run holds the GPU:

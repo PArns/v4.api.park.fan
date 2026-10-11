@@ -462,6 +462,9 @@ Code: `src/ml/utils/forecast-archive-scoring.util.ts` (`scorePairedModels`),
 `src/ml/dto/model-comparison.dto.ts`, the offline verdicts in
 `src/ml/data/offline-model-verdicts.json`. Frontend: park.fan PAR-856.
 
+The admin ML overview ([ml-overview.md](ml-overview.md), PAR-861) reads this
+matrix's summary and derives its open decisions from named cells of it.
+
 ### 9.1 Generalised paired scoring
 
 `scorePairedModels` runs inside the existing 12:00 UTC scoring next to
