@@ -305,6 +305,50 @@ describe("PredictionAccuracyService", () => {
         conflictPaths: ["attractionId", "targetTime"],
       });
     });
+
+    it("stores the served value and its source beside the raw one (PAR-854)", async () => {
+      const at = (h: number) =>
+        ({
+          attractionId: `a-${h}`,
+          createdAt: new Date(),
+          predictedTime: new Date(`2026-07-01T${h}:00:00Z`),
+          predictedWaitTime: 30,
+          modelVersion: "v1",
+          predictionType: "hourly",
+          features: {},
+        }) as unknown as WaitTimePrediction;
+
+      await service.recordPredictions(
+        [at(10), at(11), at(12)],
+        [{ wait: 55, source: "pcn" }, { wait: 30, source: "catboost" }, null],
+      );
+
+      // Two statements: TypeORM overwrites a column for EVERY row of an upsert
+      // once one row carries it, so a mixed batch would write NULL over the
+      // served value an earlier, longer-lead run recorded for the third slot.
+      expect(accuracyRepo.upsert).toHaveBeenCalledTimes(2);
+      const [withServed] = accuracyRepo.upsert.mock.calls[0] as [
+        Array<Record<string, unknown>>,
+      ];
+      const [withoutServed] = accuracyRepo.upsert.mock.calls[1] as [
+        Array<Record<string, unknown>>,
+      ];
+      expect(
+        withServed.map((r) => [
+          r.attractionId,
+          r.predictedWaitTime,
+          r.servedWaitTime,
+          r.servedSource,
+        ]),
+      ).toEqual([
+        ["a-10", 30, 55, "pcn"],
+        ["a-11", 30, 30, "catboost"],
+      ]);
+      expect(withoutServed.map((r) => r.attractionId)).toEqual(["a-12"]);
+      // Undefined, not null: the column stays out of the statement entirely.
+      expect(withoutServed[0].servedWaitTime).toBeUndefined();
+      expect(withoutServed[0].servedSource).toBeUndefined();
+    });
   });
 
   describe("getAttractionAccuracyWithBadge — cache layers", () => {
@@ -319,7 +363,7 @@ describe("PredictionAccuracyService", () => {
           totalPredictions: 250,
         },
       };
-      redisStore.set("accuracy:badge:a-1:30d", JSON.stringify(cached));
+      redisStore.set("accuracy:badge:v2:a-1:30d", JSON.stringify(cached));
 
       const result = await service.getAttractionAccuracyWithBadge("a-1");
 
@@ -344,7 +388,7 @@ describe("PredictionAccuracyService", () => {
       expect(result.last30Days.mae).toBe(12);
       expect(result.last30Days.comparedPredictions).toBe(50);
       // Cache primed for the next call.
-      expect(redisStore.get("accuracy:badge:a-1:30d")).toBeDefined();
+      expect(redisStore.get("accuracy:badge:v2:a-1:30d")).toBeDefined();
     });
 
     it("layer 3: falls through to raw SQL aggregation when nothing else has data", async () => {
@@ -364,8 +408,12 @@ describe("PredictionAccuracyService", () => {
 
       // Badge derived from MAE=8.5 and compared=40 → "good"
       expect(result.badge).toBe("good");
+      // On the served basis (PAR-854): served error, served rows only.
+      const [sql] = accuracyRepo.query.mock.calls[0] as [string];
+      expect(sql).toContain("AVG(served_absolute_error)");
+      expect(sql).toContain("AND served_source IS NOT NULL");
       // Layer 3 also primes the Redis cache so the next hit is L1.
-      expect(redisStore.get("accuracy:badge:a-1:30d")).toBeDefined();
+      expect(redisStore.get("accuracy:badge:v2:a-1:30d")).toBeDefined();
     });
   });
   describe("cleanupOldRecords — retention windows", () => {
@@ -615,7 +663,53 @@ describe("PredictionAccuracyService", () => {
         [10],
         [expect.closeTo(33.333, 2)],
         [false],
+        // No served value recorded (a pre-PAR-854 row) → no served error.
+        [null],
       ]);
+    });
+
+    // PAR-854: the served value is scored beside the raw one, against the same
+    // actual, so the badge can measure what the reader saw.
+    it("scores the served value against the same actual as the raw one", async () => {
+      const row = pending({
+        id: "both",
+        predictedWaitTime: 20, // CatBoost
+        servedWaitTime: 35, // PCN + blend, what the reader saw
+      });
+      arrange([row], [actual("a-1", row.targetTime, "OPERATING", 30)]);
+
+      await service.compareWithActuals();
+
+      expect(row.absoluteError).toBe(10);
+      expect((row as Record<string, unknown>).servedAbsoluteError).toBe(5);
+      const [sql, args] = accuracyRepo.query.mock.calls[0];
+      expect(sql).toContain("served_absolute_error = u.served_absolute_error");
+      expect(args[5]).toEqual([5]);
+    });
+
+    it("charges an unplanned closure the full served wait, as it does the raw one", async () => {
+      const row = pending({
+        id: "shut",
+        predictedWaitTime: 20,
+        servedWaitTime: 45,
+      });
+      arrange([row], [actual("a-1", row.targetTime, "CLOSED", null)]);
+
+      await service.compareWithActuals();
+
+      expect(row.wasUnplannedClosure).toBe(true);
+      expect(row.absoluteError).toBe(20);
+      expect((row as Record<string, unknown>).servedAbsoluteError).toBe(45);
+    });
+
+    it("asks the database for the served value with the pending batch", async () => {
+      arrange([], []);
+      await service.compareWithActuals();
+
+      const [options] = accuracyRepo.find.mock.calls[0];
+      expect((options as { select: string[] }).select).toContain(
+        "servedWaitTime",
+      );
     });
   });
 

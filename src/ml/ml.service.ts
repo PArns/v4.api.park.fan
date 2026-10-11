@@ -28,6 +28,7 @@ import {
 import { WaitTimePrediction } from "./entities/wait-time-prediction.entity";
 import {
   PCN_MAX_FORECAST_AGE_H,
+  SERVED_ACCURACY_MIN_LEAD_MS,
   roundServedWait,
   servePcnIntraday as servePcnIntradayFlag,
 } from "./pcn-serving.constants";
@@ -38,10 +39,14 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { ScheduleType } from "../parks/entities/schedule-entry.entity";
 import { dayStatusRank } from "../common/utils/schedule.util";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
-import { PredictionAccuracyService } from "./services/prediction-accuracy.service";
+import {
+  PredictionAccuracyService,
+  ServedIntradayValue,
+} from "./services/prediction-accuracy.service";
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.entity";
 import { persistenceBlendServe } from "./utils/persistence-blend.util";
+import { predictionLocalDate } from "./utils/prediction-local-date.util";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { HolidaysService } from "../holidays/holidays.service";
@@ -1014,21 +1019,9 @@ export class MLService {
    * zone that observes DST would make one day of the year 23 or 25 hours long
    * and round the wrong way.
    */
-  /**
-   * The park-local calendar day a prediction is about (PAR-818).
-   *
-   * CatBoost's `predictedTime` is a UTC instant (`…+00:00`), whose first ten
-   * characters are the UTC date: a 20:00 slot in Los Angeles is 03:00 UTC of
-   * the next day, a 08:00 slot in Tokyo 23:00 UTC of the previous one. TFT's is
-   * an offset-less `YYYY-MM-DDT12:00:00` that already names the park-local day.
-   * An instant is read on the park's clock; anything without an offset is
-   * taken at its word.
-   */
+  /** The park-local calendar day a prediction is about — see {@link predictionLocalDate}. */
   static localDateOf(predictedTime: string, timezone: string): string {
-    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(predictedTime)) {
-      return predictedTime.slice(0, 10);
-    }
-    return formatInParkTimezone(new Date(predictedTime), timezone || "UTC");
+    return predictionLocalDate(predictedTime, timezone);
   }
 
   private static daysBetween(from: string, to: string): number {
@@ -1534,8 +1527,15 @@ export class MLService {
       // Batched upsert (few multi-row statements, synchronous_commit=off) instead
       // of one round-trip per prediction — avoids the multi-second lock waits the
       // per-row loop produced under the concurrent comparison job.
+      // The served value beside the raw one (PAR-854): the per-ride badge reads
+      // it, the admin boards and the ride day curve keep reading the raw
+      // CatBoost column.
+      const served = await this.servedIntradayValues(
+        validPredictionsForFeedback,
+      );
       recordedCount = await this.predictionAccuracyService.recordPredictions(
         validPredictionsForFeedback,
+        served,
       );
     } catch (error) {
       const errorMessage =
@@ -1725,16 +1725,85 @@ export class MLService {
     return out;
   }
 
+  /**
+   * What a reader is served RIGHT NOW for each of these freshly generated hourly
+   * rows, and which model it came from (PAR-854).
+   *
+   * Computed exactly as {@link getParkPredictions} computes it for the park
+   * page, `/plan/day` and the ride page — copies of the CatBoost rows, the PCN
+   * override and the §7.7 persistence blend applied from the current slot — so
+   * the number scored later is the number shown at the time, with the blend at
+   * the lead it had then. It is never re-derived after the fact: the blend's
+   * anchor is "the wait now", and recomputing it once the slot has happened
+   * would hand the forecast the answer.
+   *
+   * `catboost` wherever CatBoost is what was served: the flag off, no PCN
+   * forecast for that ride and slot, a producer older than the staleness guard,
+   * or the PCN read failing (the override swallows that and falls back too).
+   *
+   * `null` for a slot less than {@link SERVED_ACCURACY_MIN_LEAD_MS} away: what
+   * is served that close is mostly the reading of the moment, and scoring it
+   * would grade the queue against itself. `null` tells the recorder to leave
+   * the row's served columns as they are, so the value kept is the last one
+   * shown at least that far ahead.
+   */
+  async servedIntradayValues(
+    rows: Array<
+      Pick<
+        WaitTimePrediction,
+        | "attractionId"
+        | "predictedTime"
+        | "predictedWaitTime"
+        | "predictionType"
+        | "baseline"
+        | "crowdLevel"
+        | "modelVersion"
+        | "confidence"
+      >
+    >,
+    now: number = Date.now(),
+  ): Promise<Array<ServedIntradayValue | null>> {
+    if (rows.length === 0) return [];
+    const copies: PredictionDto[] = rows.map((r) => ({
+      attractionId: r.attractionId,
+      predictedTime: r.predictedTime.toISOString(),
+      predictedWaitTime: r.predictedWaitTime,
+      predictionType: r.predictionType,
+      confidence: r.confidence,
+      crowdLevel: r.crowdLevel,
+      baseline: r.baseline,
+      modelVersion: r.modelVersion,
+    }));
+    const overridden = this.servePcnIntraday
+      ? await this.applyPcnIntradayOverride(
+          copies,
+          new Date(currentSlotStartMs()),
+        )
+      : new Set<PredictionDto>();
+    return copies.map((c, i) =>
+      rows[i].predictedTime.getTime() - now < SERVED_ACCURACY_MIN_LEAD_MS
+        ? null
+        : {
+            wait: c.predictedWaitTime,
+            source: overridden.has(c) ? "pcn" : "catboost",
+          },
+    );
+  }
+
   /** Override matched hourly predictions in place with PCN's q0.5 wait, recomputing
    * crowdLevel from PCN's q0.8 against the carried baseline (the same per-purpose
    * quantile split CatBoost serves: median display, upper-quantile crowd signal).
-   * Unmatched slots/attractions keep CatBoost (the fallback). Mutates `preds`. */
+   * Unmatched slots/attractions keep CatBoost (the fallback). Mutates `preds`, and
+   * returns the rows it overrode — the caller that records which model was served
+   * needs that, and reading it back off the `+pcn` suffix would tie the accuracy
+   * label to a display string. */
   private async applyPcnIntradayOverride(
     preds: PredictionDto[],
     startTime?: Date,
-  ): Promise<void> {
+  ): Promise<Set<PredictionDto>> {
+    const done = new Set<PredictionDto>();
     const hourly = preds.filter((p) => p.predictionType === "hourly");
-    if (hourly.length === 0) return;
+    if (hourly.length === 0) return done;
     const ids = [...new Set(hourly.map((p) => p.attractionId))];
     const [pcn, anchors] = await Promise.all([
       this.getPcnIntradayWaits(ids, startTime),
@@ -1774,6 +1843,7 @@ export class MLService {
         ) as PredictionDto["crowdLevel"];
       }
       p.modelVersion = `${p.modelVersion ?? "catboost"}+pcn`;
+      done.add(p);
       overridden++;
     }
     if (overridden > 0) {
@@ -1781,6 +1851,7 @@ export class MLService {
         `PCN intraday override: ${overridden}/${hourly.length} slots`,
       );
     }
+    return done;
   }
 
   /**

@@ -59,7 +59,13 @@ interface RideDayCurve {
   horizon.** Drawing the forecast as `± forecastError` is honest because that is
   what the number means. Fanning the band out with distance would be an
   uncertainty model nothing here has measured. Null means the ride has not been
-  scored; draw the forecast as a line and no band.
+  scored (fewer than 10 compared slots); draw the forecast as a line and no band.
+- **`forecastError` is CatBoost's error, because the curve is CatBoost's.**
+  `forecast` and `predicted` come from `wait_time_predictions`, which holds the
+  raw CatBoost answer; the PCN override the ride page serves is never written
+  there. Since PAR-854 `attraction_accuracy_stats.mae` (the badge) scores the
+  served PCN value, so this field reads `raw_mae` instead — see
+  [Reader-facing accuracy figures](../ml/reader-facing-accuracy.md).
 - **`measuredToday: false` is a real state**, not an error: the park has not
   opened yet, the ride is closed, or it is out of season. A caller choosing what
   to display should prefer a curve where it is true — which is what the
