@@ -268,6 +268,40 @@ describe("RainSoonPushService", () => {
     expect(pushService.send.mock.calls.map(([s]) => s.id)).toEqual(["day"]);
   });
 
+  it("leaves the front unclaimed while every recipient is in quiet hours", async () => {
+    pushService.subscriptionsWithTopic.mockResolvedValue([
+      subscription({ id: "night", timezone: "America/Chicago" }),
+    ]);
+    const chicagoNight = Date.parse("2026-10-17T08:00:00.000Z");
+    weatherService.getNowcast.mockResolvedValue(
+      nowcast({
+        rainStartsAt: new Date(chicagoNight + 20 * 60_000).toISOString(),
+      }),
+    );
+
+    expect(await service.run(chicagoNight)).toBe(0);
+    expect(store.has("push:rain-soon:park-1")).toBe(false);
+  });
+
+  it("still sends the warning when the covered-ride lookup fails", async () => {
+    attractionRepository.find.mockRejectedValue(new Error("db down"));
+    weatherService.getNowcast.mockResolvedValue(
+      nowcast({ rainStartsAt: at(20) }),
+    );
+
+    expect(await service.run(NOW)).toBe(1);
+    expect(pushService.send.mock.calls[0][1].body).toBe("Phantasialand");
+  });
+
+  it("treats an unknown stored state as none", async () => {
+    store.set("push:rain-soon:park-1", "garbage");
+    weatherService.getNowcast.mockResolvedValue(
+      nowcast({ rainStartsAt: at(20) }),
+    );
+    // NX cannot claim over the junk value, so nothing is sent, but no throw.
+    expect(await service.run(NOW)).toBe(0);
+  });
+
   it("reaches a subscriber who has only a ride alert in the park", async () => {
     pushService.subscriptionsWithTopic.mockResolvedValue([
       subscription({ id: "alerts-only", tripId: null }),

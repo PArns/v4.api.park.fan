@@ -251,7 +251,9 @@ export class PushService {
   async subscriptionsWithTopic(topic: PushTopic): Promise<PushSubscription[]> {
     return this.repository
       .createQueryBuilder("s")
-      .where("s.topics @> :topics::jsonb", { topics: JSON.stringify([topic]) })
+      .where("s.topics @> CAST(:topics AS jsonb)", {
+        topics: JSON.stringify([topic]),
+      })
       .getMany();
   }
 

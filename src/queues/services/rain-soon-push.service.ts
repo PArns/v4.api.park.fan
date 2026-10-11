@@ -188,7 +188,9 @@ export class RainSoonPushService {
     const stateKey = `push:rain-soon:${park.id}`;
     let phase: RainPhase | null;
     try {
-      phase = (await this.redis.get(stateKey)) as RainPhase | null;
+      const stored = await this.redis.get(stateKey);
+      // An unknown value is read as no state, so it cannot wedge the park.
+      phase = stored === "warned" || stored === "raining" ? stored : null;
     } catch (error) {
       this.logger.warn(
         `rain-soon state unreadable: ${(error as Error)?.message ?? error}`,
@@ -197,6 +199,10 @@ export class RainSoonPushService {
     }
 
     const decision = decideRainSoon(nowcast, phase, nowMs);
+    const recipients = subscribers.filter(
+      (s) => !isWithinQuietHours(s.timezone, nowMs),
+    );
+
     try {
       if (decision.action === "rearm") {
         await this.redis.del(stateKey);
@@ -212,6 +218,10 @@ export class RainSoonPushService {
         return 0;
       }
       if (decision.action !== "send") return 0;
+
+      // Nobody to tell right now (all in quiet hours): leave the front
+      // unclaimed, so a later tick inside the lead window can still send.
+      if (recipients.length === 0) return 0;
 
       const claimed = await this.redis.set(
         stateKey,
@@ -235,7 +245,16 @@ export class RainSoonPushService {
       park.timezone,
       "yyyy-MM-dd",
     );
-    const rides = await this.coveredRides(park, nowMs);
+    // The warning alone is the documented fallback; the front is already
+    // claimed, so a failed lookup must not turn into no push at all.
+    const rides = await this.coveredRides(park, nowMs).catch(
+      (error: unknown) => {
+        this.logger.warn(
+          `rain-soon covered rides failed for ${park.name}: ${(error as Error)?.message ?? error}`,
+        );
+        return [] as CoveredRideLine[];
+      },
+    );
     const copy = {
       dedupeKey: `rain-soon:${park.id}:${localDate}:${decision.startsAtMs}`,
       parkName: park.name,
@@ -244,9 +263,6 @@ export class RainSoonPushService {
       url: frontendParkPath(park) ?? "/",
     };
 
-    const recipients = subscribers.filter(
-      (s) => !isWithinQuietHours(s.timezone, nowMs),
-    );
     let sent = 0;
     for (
       let i = 0;
