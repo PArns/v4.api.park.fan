@@ -39,6 +39,19 @@ def fnum(v, nd=3):
         return "—"
 
 
+def cov_model(r):
+    """Paired rows as a share of the CANDIDATE's own covered rows (BENCH-SPEC #8).
+
+    Not in the CSV as a column, so it is derived here from two columns that are; it is
+    the side `paired_share_of_ref` cannot see. Marked when it is below the gate.
+    """
+    try:
+        v = float(r["n_paired"]) / float(r["n_model"])
+    except (TypeError, ValueError, ZeroDivisionError, KeyError):
+        return "—"
+    return f"{v:.4f}" + (" **NOT TESTED**" if v < 0.30 else "")
+
+
 def win(r):
     pk, pd_ = r.get("wins_park", ""), r.get("wins_park_day", "")
     t = {"True": "Y", "False": "n", "": "?"}
@@ -67,12 +80,18 @@ def main(argv):
             print(f"{PASS_LABEL[lbl]}. Source: `{f.name}`. "
                   "`margin < 0` means the candidate is better; a win requires the "
                   "**park-cluster** interval to exclude 0.\n")
+            print("`cov_ref` = paired rows / the baseline's own covered rows; `cov_model` "
+                  "= paired rows / the candidate's own covered rows. **BENCH-SPEC #8**: the "
+                  "publication gate needs BOTH \u2265 0.30, and a cell below it is *not "
+                  "tested*, not lost. `cov_ref` alone cannot see this \u2014 a thin "
+                  "baseline has a small denominator and scores near 1.00 while the pairing "
+                  "covers a sliver of the candidate.\n")
             for seg in sorted({r["segment"] for r in rows}):
                 print(f"\n**segment = {seg}** ({ORIGIN_LABEL})\n")
                 print("| lead | model | baseline | model MAE | baseline MAE | margin "
                       "| park-cluster CI | park-day CI | win pk/pd | units pk "
-                      "| paired_share | n_origin_days |")
-                print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+                      "| cov_ref | cov_model | n_origin_days |")
+                print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
                 sel = [r for r in rows if r["segment"] == seg]
 
                 def key(r):
@@ -90,6 +109,7 @@ def main(argv):
                           f"[{fnum(r['lo_park_day'])}, {fnum(r['hi_park_day'])}] | "
                           f"{win(r)} | {r.get('units_park', '')} | "
                           f"{fnum(r.get('paired_share_of_ref', ''), 4).lstrip('+')} | "
+                          f"{cov_model(r)} | "
                           f"{r.get('n_origin_days', '')} |")
 
     st = run / "staleness.csv"

@@ -26,6 +26,19 @@ import sys
 
 INCUMBENT = {"slot": ["lvlh5_tft", "h5"], "intraday": ["lvlh5_tft", "h5", "persistence"]}
 MIN_UNITS, MIN_SHARE, MIN_ORIGIN_DAYS = 10, 0.9, 30
+# BENCH-SPEC recorded change #8. `wins == True` is only the statistical verdict; the
+# publication gate is report.tested(), which lives in another function and is applied ONLY
+# when handover.csv / usable_horizon.csv are built. It rejects a cell whose paired rows
+# fall below MIN_COVERAGE = 0.30 of EITHER arm's own covered rows (`env_min_share` is the
+# min over candidates), or that is LOW-N on the metric's own unit.
+#
+# Translating that into the paired-margin world catches a hole the ref-side share alone
+# cannot see: `paired_share_of_ref` = n_paired / n_ref, so a reference with THIN coverage
+# has a small denominator and scores near 1.0 while the pairing still covers only a sliver
+# of the model's own cells. `lvlh5_tft` is exactly such a reference at long leads --
+# production stores long-lead TFT rows only where a fresh run wrote them. So the model-side
+# share is gated too, at the harness's own threshold.
+MIN_COVERAGE = 0.30
 # The run cannot satisfy the cross-season sign clause, so no cell may print SERVE.
 SERVE_CLAUSE_TESTABLE = False
 
@@ -80,6 +93,8 @@ def main(paths):
             d, lo, hi = f(r["diff"]), f(r["lo_park"]), f(r["hi_park"])
             u = int(r["units_park"] or 0)
             share = f(r.get("paired_share_of_ref", "nan"))
+            n_paired, n_model = f(r.get("n_paired", "nan")), f(r.get("n_model", "nan"))
+            share_model = n_paired / n_model if n_model and n_model == n_model else float("nan")
             nod = int(r.get("n_origin_days") or 0)
             wins_pk = str(r["wins_park"]) == "True"
             wins_pd = str(r["wins_park_day"]) == "True"
@@ -89,15 +104,23 @@ def main(paths):
             if not (hi - lo) > 0:
                 gate.append("zero-width CI")
             if share < MIN_SHARE:
-                gate.append(f"share {share:.3f}<{MIN_SHARE}")
+                gate.append(f"ref-share {share:.3f}<{MIN_SHARE}")
+            if not (share_model >= MIN_COVERAGE):
+                # BENCH-SPEC #8: report this as NOT TESTED with its coverage, never as a
+                # loss. "we did not look" and "we looked and it lost" are different
+                # findings and this review has twice published the former as the latter.
+                gate.append(f"NOT TESTED: model-side coverage {share_model:.3f}"
+                            f"<{MIN_COVERAGE}")
             if nod < MIN_ORIGIN_DAYS:
                 gate.append(f"LOW-N {nod}<{MIN_ORIGIN_DAYS}")
             if gate:
                 states.append("gated")
-                notes.append(f"{i}: {d:+.3f} GATED [{'; '.join(gate)}]")
+                notes.append(f"{i}: {d:+.3f} GATED [{'; '.join(gate)}] "
+                             f"(cov ref {share:.3f} / model {share_model:.3f})")
             elif wins_pk:
                 states.append("win")
-                notes.append(f"{i}: {d:+.3f} beats pk[{lo:+.3f},{hi:+.3f}]")
+                notes.append(f"{i}: {d:+.3f} beats pk[{lo:+.3f},{hi:+.3f}] "
+                             f"(cov ref {share:.3f} / model {share_model:.3f})")
             elif wins_pd:
                 states.append("pd-only")
                 notes.append(f"{i}: {d:+.3f} park-day only (park-cluster CI spans 0)")
