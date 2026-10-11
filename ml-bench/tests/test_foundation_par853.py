@@ -4,6 +4,7 @@ What can break without the weights is our side of the contract: the context wind
 the patch padding, the covariate layout, the rollout past TiRex-2's 320-step head,
 dropping all-NaN variates, and the q50/q80/q95 output (no q95 head -> NaN)."""
 
+import os
 import sys
 import types
 
@@ -147,3 +148,56 @@ def test_toto2_nocov_has_no_known_dynamic():
     y = np.arange(8, dtype=np.float32)[None]
     b.forecast([(y, None, np.zeros((0, 3), np.float32))], [])
     assert "known_dynamic" not in b.model.inputs
+
+
+def test_tirex2_sets_cuda_home_before_importing_tirex2(monkeypatch):
+    """`import tirex2` pulls in xlstm, whose sLSTM module resolves the CUDA kernel's
+    include/lib paths AT IMPORT TIME and raises `OSError: CUDA_HOME environment variable
+    is not set` on a GPU box without a CUDA toolkit. That killed the first GPU run before
+    a single forecast, in the constructor, so no origin was scored and no partial result
+    was written. The constructor therefore has to set CUDA_HOME before it touches
+    `tirex2` — this test fails the way the run did if that line moves or goes away."""
+    monkeypatch.delenv("CUDA_HOME", raising=False)
+    seen = {}
+
+    class Stub(types.ModuleType):
+        def __getattr__(self, name):
+            # what xlstm does at import time, reduced to its one precondition
+            if os.environ.get("CUDA_HOME") in (None, ""):
+                raise OSError("CUDA_HOME environment variable is not set.")
+            seen["cuda_home"] = os.environ["CUDA_HOME"]
+            if name == "load_model":
+                return lambda model_id, device, hf_kwargs: FakeLoaded()
+            raise AttributeError(name)
+
+    class FakeLoaded:
+        class model:
+            quantiles = QS
+            future_len = 4
+            context_len = 512
+
+            @staticmethod
+            def to(_dev):
+                return None
+
+    fake_torch = types.ModuleType("torch")
+    fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    fake_dynamo = types.ModuleType("torch._dynamo")
+    fake_dynamo.config = types.SimpleNamespace(disable=False)
+    fake_torch._dynamo = fake_dynamo
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "torch._dynamo", fake_dynamo)
+    monkeypatch.setitem(sys.modules, "tirex2", Stub("tirex2"))
+
+    b = TiRex2Backend()
+
+    assert seen["cuda_home"], "tirex2 was imported before CUDA_HOME was set"
+    assert os.environ["CUDA_HOME"] == "/usr/local"
+    assert fake_dynamo.config.disable is True, "inductor must stay off (no compiler in the image)"
+    assert b.device == "cpu" and b.qi == (QS.index(0.5), QS.index(0.8))
+
+    # an environment that already names a CUDA root keeps it: the default must not
+    # overwrite a real toolkit on a box that has one
+    monkeypatch.setenv("CUDA_HOME", "/opt/cuda-12.8")
+    TiRex2Backend()
+    assert os.environ["CUDA_HOME"] == "/opt/cuda-12.8"

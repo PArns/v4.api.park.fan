@@ -261,6 +261,18 @@ class TiRex2Backend(_Backend):
         # tirex2 wraps blocks in @torch.compile; inductor needs a C/C++ compiler at
         # runtime that this slim image does not ship. Eager mode gives the same numbers.
         torch._dynamo.config.disable = True
+
+        # `import tirex2` pulls in xlstm, whose sLSTM module computes the CUDA kernel's
+        # include/lib paths AT IMPORT TIME (`xlstm/blocks/slstm/src/cuda_init.py`) through
+        # `torch.utils.cpp_extension.include_paths("cuda")`, which raises when CUDA_HOME is
+        # unset. On a GPU box with no CUDA toolkit that killed the whole run before the
+        # first forecast. The value is only string arithmetic for a kernel TiRex-2 never
+        # instantiates -- it is a BiXLSTM (mLSTM) model and the recurrent path is the pure
+        # PyTorch one selected by `device="cpu"` below -- so any existing root gets the
+        # import through. Should a future xlstm actually try to COMPILE that kernel, the
+        # build fails loudly on the missing nvcc, which is the outcome we want: a visible
+        # error, never silently different numbers.
+        os.environ.setdefault("CUDA_HOME", "/usr/local")
         from tirex2 import load_model
 
         self.torch = torch
