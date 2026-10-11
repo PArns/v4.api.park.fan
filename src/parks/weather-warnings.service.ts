@@ -66,10 +66,11 @@ export class WeatherWarningsService {
     const byCountry = new Map<string, ParkPoint[]>();
     for (const p of parks) {
       const cc = p.countryCode;
+      // Number(null) is 0 and passes isFinite, so null coordinates are rejected first.
+      if (!cc || p.latitude == null || p.longitude == null) continue;
       const lat = Number(p.latitude);
       const lon = Number(p.longitude);
       if (
-        !cc ||
         !Number.isFinite(lat) ||
         !Number.isFinite(lon) ||
         !this.warningSource.supportsCountry(cc)
