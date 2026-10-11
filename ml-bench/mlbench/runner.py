@@ -759,9 +759,19 @@ class Runner:
                CASE WHEN lead_min <= 120 THEN 'm' || lpad(CAST(lead_min AS VARCHAR), 3, '0')
                     WHEN lead_min <= 240 THEN 'h2-4' WHEN lead_min <= 480 THEN 'h4-8' ELSE 'h8+' END AS lead_key
              FROM ih""")
-        models = B.INTRADAY_MODELS + [self.name_of(m) for m in plug]
+        plug_cols = [self.name_of(m) for m in plug]
+        models = B.INTRADAY_MODELS + plug_cols
+        # Same reason as the daily slot write above: INTRADAY_REFS is
+        # persistence/snaive7/wt_med/clim, so without this the run stores no paired
+        # intersection against `h5` or `lvlh5_tft` on the INTRADAY path either -- and on
+        # busy rides `lvlh5_tft` is the incumbent at short leads. A paired margin cannot
+        # be reconstructed after the run (the intersection is not a function of the
+        # per-model counts), so the columns have to be written at scoring time. Additive
+        # and inert by default: with MLBENCH_EXTRA_PAIR_REFS unset the SQL is unchanged.
+        extra_pairs = [(m, r) for m in plug_cols for r in EXTRA_PAIR_REFS]
         self.write("intraday", slot_agg_sql(models, B.INTRADAY_REFS, [], "ih",
-                                            ["lead_key", "park_id", "date", "busy", "hl"]), c)
+                                            ["lead_key", "park_id", "date", "busy", "hl"],
+                                            extra_pairs), c)
         # D1 next-best-ride (lib/planner/next-best-ride.ts): suggest a ride when the
         # forecast maximum inside the lookahead is >= live + 10. The candidate set is
         # the same for every model — every (origin, ride) with a live OPERATING wait —

@@ -488,3 +488,29 @@ def test_park_covariates_scatter_matches_the_fancy_index_it_replaced(con):
     assert np.array_equal(got, want), "the scatter must be bit-identical per park"
     # and the covariates really are shared by every ride of a park (the premise above)
     assert panel.T % K == 0
+
+
+def test_intraday_pairs_against_named_non_reference_baselines_when_asked():
+    """UC1's paired columns must be obtainable against `h5` / `lvlh5_tft` too.
+
+    `INTRADAY_REFS` is persistence/snaive7/wt_med/clim, so by default the intraday part
+    stores no paired intersection against `h5` or `lvlh5_tft` -- and on busy rides
+    `lvlh5_tft` is the incumbent at short leads. The intersection is not a function of
+    the per-model counts, so it cannot be reconstructed after the run. Default-off must
+    stay byte-identical, because this is PAR-827's SQL.
+    """
+    from mlbench.baselines import INTRADAY_MODELS, INTRADAY_REFS
+    from mlbench.runner import slot_agg_sql
+
+    keys = ["lead_key", "park_id", "date", "busy", "hl"]
+    models = [*INTRADAY_MODELS, "nf_tide"]
+    plain = slot_agg_sql(models, INTRADAY_REFS, [], "ih", keys)
+    withx = slot_agg_sql(models, INTRADAY_REFS, [], "ih", keys,
+                         [("nf_tide", "h5"), ("nf_tide", "lvlh5_tft")])
+    assert slot_agg_sql(models, INTRADAY_REFS, [], "ih", keys, []) == plain
+    for r in ("h5", "lvlh5_tft"):
+        assert f"pn__nf_tide__{r}" not in plain
+        for pre in ("pn", "psm", "psr"):
+            assert f"{pre}__nf_tide__{r}" in withx
+    # persistence is already a reference, so it must NOT be duplicated
+    assert withx.count("pn__nf_tide__persistence") == 1
