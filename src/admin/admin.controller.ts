@@ -574,8 +574,10 @@ export class AdminController {
       "UC1/UC2 (served 15-min curve, slot leads h0-1 … h24-48 and ride-day " +
       "leads d0-d2), UC3 (plan/day d0-d7), UC3S (composer A/B shadow, PAR-834), " +
       "D6 (crowd bucket per park-day), " +
-      "D9 (coverage). Counters are pooled before dividing. See " +
-      "docs/ml/forward-archive.md.",
+      "D9 (coverage). Counters are pooled before dividing. `chronos`: the " +
+      "Chronos-2 shadow (PAR-852, never served) per use case × lead — own " +
+      "MAE plus the paired difference vs served / persistence / H5 with a " +
+      "95 % park-cluster bootstrap CI. See docs/ml/forward-archive.md.",
   })
   @ApiQuery({ name: "days", required: false, description: "1-90, default 14" })
   @ApiQuery({

@@ -210,6 +210,10 @@ def train(req: TrainRequest):
                 "error": error,
             })
 
+    # The training runner wants the GPU and the container's memory: the resident
+    # Chronos-2 shadow (PAR-852) lets go of its weights first and refuses calls
+    # until the run is over.
+    _chronos_engine().unload()
     threading.Thread(target=_launch, daemon=True).start()
     return {"status": "training_started", "version": version}
 
@@ -287,3 +291,85 @@ def latest_forecast(unique_id: str | None = None):
     if unique_id:
         df = df[df["unique_id"] == unique_id]
     return json.loads(df.to_json(orient="records", date_format="iso"))
+
+
+# --------------------------------------------------------------------------- Chronos-2 shadow (PAR-852)
+
+_CHRONOS = None
+_CHRONOS_INIT = threading.Lock()
+
+
+def _chronos_engine():
+    """The one resident engine; built on first use (the model itself loads on
+    the first forecast, inside the engine's lock)."""
+    global _CHRONOS
+    with _CHRONOS_INIT:
+        if _CHRONOS is None:
+            import chronos_shadow
+
+            _CHRONOS = chronos_shadow.ChronosEngine(
+                settings.CHRONOS_MODEL_ID, settings.CHRONOS_REVISION,
+                settings.CHRONOS_CACHE_DIR, settings.CHRONOS_VRAM_FRACTION,
+            )
+        return _CHRONOS
+
+
+class ChronosRequest(BaseModel):
+    park_id: str
+    origin_at: datetime
+    variant: str = "live"
+    keep_minutes: int | None = None
+
+
+@app.post("/chronos/forecast")
+def chronos_forecast(req: ChronosRequest):
+    """Chronos-2 SHADOW forecast for one park at one origin (PAR-852).
+
+    Read only by the API's forward-archive capture; nothing serves it to users.
+    ``variant``: ``live`` (bench ``chronos2``, today + tomorrow, compressed
+    context) or ``grid`` (bench ``chronos2_grid``, d0 … d7, 15-min grid).
+    Inputs are read as of ``origin_at``. 503 when switched off
+    (``CHRONOS_ENABLED=false``) or while a TFT training run holds the GPU;
+    ``status: "warming"`` while the park's context is still being backfilled.
+    """
+    import pandas as pd
+
+    import chronos_data
+    import chronos_shadow
+
+    if not settings.CHRONOS_ENABLED:
+        raise HTTPException(status_code=503, detail="Chronos shadow disabled (CHRONOS_ENABLED=false)")
+    if _read_status().get("is_training"):
+        raise HTTPException(status_code=503, detail="TFT training in progress — shadow skipped")
+    if req.variant not in chronos_shadow.VARIANTS:
+        raise HTTPException(status_code=400, detail="variant must be live or grid")
+    origin = pd.Timestamp(req.origin_at)
+    if origin.tzinfo is None:
+        raise HTTPException(status_code=400, detail="origin_at needs a timezone (UTC instant)")
+    try:
+        return chronos_data.run(
+            req.park_id, origin, req.variant, req.keep_minutes,
+            _chronos_engine(), chronos_data.TruthCache(settings.CHRONOS_TRUTH_CACHE_DIR),
+        )
+    except chronos_data.Warming as w:
+        return {"status": "warming", "parkId": req.park_id, "variant": req.variant,
+                "reason": str(w), "curves": []}
+    except Exception as e:  # noqa: BLE001
+        import traceback
+
+        logger.error("Chronos forecast failed for %s: %s\n%s", req.park_id, e, traceback.format_exc())
+        raise HTTPException(status_code=500, detail="Chronos forecast failed")
+
+
+@app.get("/chronos/status")
+def chronos_status():
+    eng = _CHRONOS
+    return {
+        "enabled": settings.CHRONOS_ENABLED,
+        "model": settings.CHRONOS_MODEL_ID,
+        "revision": settings.CHRONOS_REVISION,
+        "loaded": bool(eng and eng.loaded),
+        "device": eng.device if eng else None,
+        "loadSeconds": eng.load_seconds if eng else None,
+        "peakVramGb": round(eng.peak_vram_gb, 2) if eng else None,
+    }
