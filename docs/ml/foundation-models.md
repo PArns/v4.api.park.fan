@@ -371,11 +371,19 @@ weekday profile at d1 at all. **Decision: keep the covariates.**
 `chronos2_owx` − `chronos2`, UC3 all rides: −0.086 [−0.153, −0.034] at d1, −0.095 at
 d2, −0.061 at d3, −0.075 at d4, **+0.000** at d5, −0.040 at d6 and d7. Significant, and
 worth **under 0.12 min** — with *perfect foreknowledge* of the day's temperature and
-precipitation. There is no archived weather forecast in the export, so `_owx` is an
-**ORACLE upper bound and not a servable configuration**; every `_owx` number in this
-document is labelled that way. Read the useful direction: weather is not the missing
-ingredient for this model family, and **building a weather-forecast archive is not
-justified by this result.**
+precipitation, an upper bound no forecast can reach.
+
+**Stated plainly, because it cancels a planned piece of work: building an archive of
+weather forecasts is not justified by this result.** It was on the review's follow-up
+list. The ceiling on what a perfect weather feed could buy this model family is roughly a
+tenth of a minute of slot MAE — two orders of magnitude below the margins that decide the
+routing here (−0.4…−4.5 min on UC1). A weather archive may still be justified by
+PAR-830's level work; that is a different question on different evidence and this result
+does not speak to it.
+
+There is no archived weather forecast in the export, so `_owx` is an **ORACLE upper bound
+and not a servable configuration**; every `_owx` number in this document is labelled that
+way.
 
 `chronos2_x_h5` (the H5 profile *shape* rescaled by Chronos-2's forecast daily *level*)
 **is** servable — Apache-2.0, no oracle input. `chronos2_owx_x_h5` is **not**, because
@@ -517,8 +525,22 @@ after the 06:00 cut and then asserted the intraday frames unchanged, but an orig
 own cut those frames *must* move. It now runs one pass per cut: under the 06:00 poison
 the intraday paths must move and the daily paths must not, and under a poison from the
 last intraday cut all three must hold — which is what actually covers an intraday leak.
+**The part that deserves the emphasis is that the test meant to guard this passed
+*because* of the bug.** `test_information_cut_plugins` poisons everything after the 06:00
+cut and asserted the intraday frames unchanged — but an origin at 08:00 is *entitled* to
+the origin day's truth up to its own cut, which the poison has already rewritten, so that
+assertion could only hold while the intraday context was stale.
+
+This is the **third instance in this review of a test that could not observe the thing it
+guarded**: a two-park fixture that made `wins = True` unreachable, `--origin-from`
+reviewed as working while never once executed, and now an information-cut assertion
+carried by a staleness bug. Three independent instances is a pattern rather than bad luck.
+The transferable lesson for anyone adding a guard to this harness: it needs a case in
+which it is *capable of failing*, or it records an intention rather than a property.
+
 This regression is **not** in the code that scored this run (`cdbc95a3` predates
-`5c216ffa`), so no number here is affected.
+`5c216ffa`), so no number here is affected; it would corrupt any UC1 re-score on the
+merged tree, which is why it was routed upstream immediately.
 
 ## Licences — what is allowed
 
