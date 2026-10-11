@@ -133,7 +133,9 @@ def test_toto2_padding_mask_and_known_dynamic():
     assert np.isfinite(i["target"].numpy()).all()
     assert float(i["target"][0, 0, 5]) == 2.0            # forward-filled, masked
     assert tuple(i["known_dynamic"].shape) == (1, 2, 13)  # pad + context + horizon
-    assert not i["known_dynamic_mask"][0, 1].any()        # an all-NaN covariate is unobserved
+    kdm = i["known_dynamic_mask"][0].numpy()
+    assert not kdm[0, :2].any() and kdm[0, 2:].all()     # the left pad is unobserved
+    assert not kdm[1, :8].any() and kdm[1, 8:].all()     # NaN in the past -> unobserved there only
     assert b.model.kw["decode_block_size"] is None
     assert q.shape == (3, 5, 3) and np.isnan(q[1]).all() and np.isnan(q[:, :, 2]).all()
     np.testing.assert_allclose(q[0, :, 0], 4)             # variate 0, knot 0.5
