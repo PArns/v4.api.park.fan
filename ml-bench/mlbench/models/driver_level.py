@@ -54,6 +54,11 @@ class DriverLevel(LevelH5Example):
     max_lead_days = 90
     refit_every_days = 28
 
+    # `_advance` primes the ride-day / window / covariate caches with 400 days of truth
+    # at the first origin (then only the gap since the previous one), which is well past
+    # the 56-day profile window `BenchConfig.history_days` materialises by default.
+    truth_history_days = 400
+
     window_days = 56
     min_ride_day_slots = 8
     min_train_rows = 500             # below this, no model (and no forecast) yet

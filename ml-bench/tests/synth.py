@@ -62,12 +62,26 @@ def write(raw: Path, seed: int = 7) -> dict:
                           "is_bridge_day": False,
                           # most days are published 20 days ahead, every third only the day before
                           "updated_us": _us(op - dt.timedelta(days=1 if i % 3 == 0 else 20))})
+            if i % 4 == 0:
+                # A non-OPERATING row carrying isHoliday / isBridgeDay, written LATE —
+                # after the day's OPERATING row. `windows` ignores it (no times), so the
+                # OPERATING mask says "schedule known" while the two flags are in fact
+                # from the future. Exercises critic S11.
+                sched.append({"park_id": pid, "date": d.isoformat(), "schedule_type": "SPECIAL_HOURS",
+                              "opening_us": None, "closing_us": None, "is_holiday": True,
+                              "is_bridge_day": True, "updated_us": _us(op + dt.timedelta(hours=12))})
             weekend = 1.5 if d.weekday() >= 5 else 1.0
             for k in range(4):
                 aid = f"{pid}-r{k}"
                 level = (60 if k < 2 else 25) * weekend * rng.lognormal(0, 0.2)
                 levels.append((aid, d, level))
                 down = (i + k) % 6 == 0
+                # on some ride-days the feed DROPS the ride half way through the day and
+                # production keeps writing heartbeats: the same status and wait again with
+                # a fresh ts. That is what resets the 3 h staleness clock, so the truth
+                # runs to closing with a frozen wait. `build --drop-heartbeats` builds the
+                # other target, where it stops 3 h after the last real reading.
+                dropped = (i + k) % 7 == 0
                 t = op - dt.timedelta(minutes=20)
                 last = None
                 while t < cl + dt.timedelta(minutes=30):
@@ -79,12 +93,19 @@ def write(raw: Path, seed: int = 7) -> dict:
                         status, w = "CLOSED", None
                     elif down and 0.4 < frac < 0.5:
                         status, w = "DOWN", None
-                    if (status, w) != last:
+                    if dropped and 0.35 < frac and last is not None:
+                        queue.append({"attraction_id": aid, "ts_us": _us(t), "status": last[0],
+                                      "wait": last[1], "is_heartbeat": True,
+                                      "d": t.astimezone(dt.timezone.utc).date()})
+                    elif (status, w) != last:
                         queue.append({"attraction_id": aid, "ts_us": _us(t), "status": status,
                                       "wait": w, "is_heartbeat": False, "d": t.astimezone(dt.timezone.utc).date()})
                         last = (status, w)
                     t += dt.timedelta(minutes=int(rng.integers(5, 16)))
-    csv("schedule", pd.DataFrame(sched))
+    # nullable Int64: a non-OPERATING row has no opening/closing, and a float column
+    # would make the export CSV write 1.77e+15 where the real export writes an integer
+    csv("schedule", pd.DataFrame(sched).astype({"opening_us": "Int64", "closing_us": "Int64",
+                                                "updated_us": "Int64"}))
     csv("holidays", pd.DataFrame([{"country": "DE", "date": "2026-04-03", "region": None,
                                    "holiday_type": "public", "is_nationwide": True, "name": "Good Friday"}]))
     csv("weather", pd.DataFrame([{"park_id": "p-eu", "date": "2026-03-01", "data_type": "historical",

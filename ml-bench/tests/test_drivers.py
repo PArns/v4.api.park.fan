@@ -7,10 +7,14 @@ import duckdb
 import numpy as np
 import pandas as pd
 
+import pytest
+
+from mlbench import baselines as B
 from mlbench import driver_analysis as A
 from mlbench import drivers as D
 from mlbench.config import BenchConfig
 from mlbench.models import DriverLevel
+from mlbench.models.base import Model
 from mlbench.runner import Runner
 
 
@@ -105,3 +109,37 @@ def test_plugin_caches_accumulate_across_origins_without_leaking(synth_export, t
     # park_day_cov.sched_is_holiday / sched_is_bridge_day without an as-of filter)
     for col in ("sched_is_holiday", "sched_is_bridge_day"):
         assert col not in model._cov.columns
+
+
+def test_runner_materialises_the_history_the_plugin_declares(synth_export, tmp_path):
+    """``origin.history`` is materialised and ``df(days)`` raises above the cap rather
+    than returning a short frame, while ``_advance`` primes its caches with 400 days at
+    the first origin -- ten times ``BenchConfig.history_days``. The runner must therefore
+    widen the frame to the largest ``truth_history_days`` of its registered models;
+    without that every driver_level origin is a ``ValueError``, and a cap that truncated
+    instead would score the published levels on a quietly shortened history."""
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1])
+    c = dt.date(2026, 4, 20)
+    r = Runner(synth_export, tmp_path / "run", cfg, [_SmallDriverLevel()], materialize=True,
+               origins=(str(c), str(c)))
+    r.con.execute(f"CREATE OR REPLACE TEMP TABLE o AS {B.origin_sql(c.isoformat(), 6)}")
+
+    assert DriverLevel.truth_history_days >= 400
+    assert r.history_days_needed() == DriverLevel.truth_history_days
+    hv = r.history_view(c, "o")
+    assert hv.max_days == DriverLevel.truth_history_days
+    hv.df(400)                                   # the first origin's priming ask must not raise
+
+    # a model that declares nothing still gets exactly the config window, and the need is
+    # read off the CLASS, so an instance attribute cannot widen an information budget
+    narrow = _Narrow()
+    narrow.truth_history_days = 400
+    r.set_models([narrow])
+    r.clear_caches()
+    assert r.history_days_needed() == cfg.history_days
+    with pytest.raises(ValueError):
+        r.history_view(c, "o").df(cfg.history_days + 1)
+
+
+class _Narrow(Model):
+    name = "narrow"

@@ -16,16 +16,29 @@ Writes into the run directory (``tables[_<from>_<to>]/*.csv`` and
   in full), ride pairs for the dayPeak ordering, park-days for the optimiser,
   day pairs for the day comparison.
 
-Reference per lead (BENCH-SPEC "Horizon"): the best naive candidate at that lead
-(persistence → seasonal-naive → weekday-median → climatology), chosen on the
-metric itself among candidates covering ≥ 50 % of what the best-covered
-candidate covers. Choosing the best of several candidates on the same data
-favours the reference slightly (winner's curse), which makes a model's win
-conservative, not optimistic.
+Reference per lead (BENCH-SPEC "Horizon"): the candidate naives are compared to
+each other in a PAIRED round robin (every ordered pair on the rows both cover,
+park-cluster CI). A candidate is dropped only when another candidate beats it
+significantly; among the survivors the reference is the one that comes first in
+BENCH-SPEC's ladder (persistence → seasonal-naive → weekday-median →
+climatology). So the reference is pre-specified unless the data significantly
+says otherwise — it is never the argmin of several unpaired values measured on
+different row sets, which is selection on noise and biases "nothing beats X"
+claims (PAR-827 critic B1).
 
-Gating (hand-over and usable horizon): a cell counts only with ≥ 30 origin days
-and when the model's paired rows are ≥ 30 % of the reference's own rows;
-winners are ranked by their PAIRED margin, never by the unpaired value.
+Every (model, reference-candidate) pair is published in ``cells_all_refs.csv``
+and the choice itself, with its reason, in ``ref_choice.csv``; ``cells.csv``
+keeps one row per model, against the selected reference.
+
+Gating (hand-over and usable horizon): a cell counts only with enough units for
+its own unit of analysis — ≥ 30 origin days for day-unit metrics, ≥ 30
+park-months for UC4, whose unit is the park-MONTH (a 3-month window has 3
+distinct month labels but ~200 park-months, so gating it on "origin days" is a
+category error that silently disables the use case) — and when the model's
+paired rows are ≥ 30 % of the reference's own rows. A win additionally needs
+≥ 10 distinct bootstrap units and a strictly positive CI width, because a
+one-unit paired set yields a zero-width CI that "excludes 0" trivially.
+Winners are ranked by their PAIRED margin, never by the unpaired value.
 """
 
 from __future__ import annotations
@@ -34,6 +47,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -43,15 +57,106 @@ import pandas as pd
 
 from . import baselines as B
 from .config import UC4_LEADS, BenchConfig
-from .stats import Bootstrapper, ratio_ci, significant
+from .provenance import stamp
+from .stats import Bootstrapper, ratio_ci, significant_diff
 
 UC1_KEYS = ["m015", "m030", "m045", "m060", "m075", "m090", "m105", "m120"]
 UC2_INTRADAY_KEYS = ["h2-4", "h4-8", "h8+"]
 NON_COMPETING = set(B.ORACLES) | {"prod_ropedrop_hist"}
+# A model that opts into ORACLE weather is scored as `<name>_owx` (and its composed
+# level curve as `<name>_owx_x_h5`). BENCH-SPEC says oracle weather is "reported
+# separately"; the hand-over table is the serving router's INPUT, so an oracle
+# configuration must never be able to win a row in it. This is a suffix test rather
+# than an enumerated list so it also holds for models that do not exist yet.
+# (Latent in `20261009-baselines-v2` — no baseline reads weather — but PAR-828
+# measured 34 of 280 full-period hand-over rows going to `chronos2_owx` /
+# `chronos2_owx_x_h5`, including all of D4's dayPeak ordering at d0–d21.)
+_OWX = re.compile(r"(?:^|_)owx(?:$|_)")
+
+
+def is_oracle(model: str) -> bool:
+    """Not servable, so it may appear in the tables but never win a hand-over row."""
+    return model in NON_COMPETING or bool(_OWX.search(str(model)))
 NAIVE_LEVELS = ["lvl_naive4", "lvl_wt56", "lvl_snaive7", "lvl_clim"]
 MIN_COVERAGE = 0.3
+# DuckDB caps for the report. They used to be hard-coded at 3 GB / 4 threads, which
+# does not fit in a 3 GB container and was the sole cause of a sibling workstream's
+# rc=137 OOM. Defaults are the old literals, so nothing changes unless asked.
+REPORT_MEMORY = os.environ.get("MLBENCH_REPORT_MEMORY", "3GB")
+REPORT_THREADS = int(os.environ.get("MLBENCH_REPORT_THREADS", "4"))
+# model columns of the "vs each naive candidate" tables (keeps summary.md readable)
+CANDIDATE_TABLE_MODELS = ["persistence", "snaive7", "wt_med", "clim", "h5", "lvlh5_naive",
+                          "lvlh5_tft", "lvlh5_cbd", "prod_served", "prod_served_lin"]
+# BENCH-SPEC's reference ladder, in order: persistence -> seasonal-naive ->
+# weekday-median -> climatology, for slot models and for the daily level sources.
+# Ties between candidates are broken by THIS order, never by the point estimate.
+# `prod_ropedrop_hist` is only a candidate for the rope-drop decision and is not
+# part of the ladder, so it sorts last.
+REF_LADDER = ["persistence", "snaive7", "wt_med", "clim",
+              "lvl_snaive7", "lvl_naive4", "lvl_wt56", "lvl_clim",
+              "prod_ropedrop_hist"]
+# metrics whose bootstrap unit is the park-MONTH, not the park-day
+PARK_MONTH_UNIT = "park-month"
 # one weight column per unit for the whole report (see stats.Bootstrapper)
 BOOT: dict[str, Bootstrapper] = {}
+# every (model, reference-candidate) pair, and the per-cell reference choice;
+# filled by `evaluate`, written as cells_all_refs.csv / ref_choice.csv
+ALL_REF_ROWS: list[dict] = []
+REF_CHOICES: list[dict] = []
+
+
+def _ladder_rank(name: str, refs: list[str]) -> int:
+    if name in REF_LADDER:
+        return REF_LADDER.index(name)
+    return len(REF_LADDER) + (refs.index(name) if name in refs else len(refs))
+
+
+def min_units(unit: str, cfg: BenchConfig) -> int:
+    """LOW-N threshold for the unit the metric actually lives on."""
+    return cfg.low_n_park_months if unit == PARK_MONTH_UNIT else cfg.low_n_origin_days
+
+
+def _num(row, key: str) -> float:
+    """``row[key]`` as a float, with missing / None / NaN all becoming nan."""
+    v = row.get(key)
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return np.nan
+    return f
+
+
+def _str(row, key: str, default: str) -> str:
+    v = row.get(key)
+    return v if isinstance(v, str) and v else default
+
+
+def unit_count(row, unit: str) -> int:
+    """The count the LOW-N gate must look at: origin days for day-unit metrics,
+    park-months for UC4 (where ``n_origin_days`` counts month LABELS, not sample size)."""
+    v = _num(row, "env_min_units_park_day" if unit == PARK_MONTH_UNIT else "n_origin_days")
+    return 0 if not np.isfinite(v) else int(v)
+
+
+def tested(row, cfg: BenchConfig, model: str | None = None) -> tuple[bool, str]:
+    """Was this cell a real test of the model against the whole naive envelope?
+
+    ``model`` is accepted for call-site symmetry and is not used: a naive
+    candidate is allowed to beat the envelope of the OTHER candidates, which is
+    a real finding ("climatology beats every other naive here").
+    """
+    unit = _str(row, "unit", "park-day")
+    n_env = _num(row, "n_env")
+    if not np.isfinite(n_env) or n_env < 1:
+        return False, "no naive candidate to compare against"
+    n, need = unit_count(row, unit), min_units(unit, cfg)
+    if n < need:
+        return False, f"LOW-N: {n} {unit}s < {need}"
+    share = _num(row, "env_min_share")
+    share = 0.0 if not np.isfinite(share) else share
+    if share < MIN_COVERAGE:
+        return False, f"coverage {share:.2f} < {MIN_COVERAGE:.2f} against one of the candidates"
+    return True, "ok"
 
 
 def _boot(kind: str, cfg: BenchConfig) -> Bootstrapper:
@@ -73,18 +178,45 @@ def _log(msg: str) -> None:
 class Data:
     TABLES = ("slot", "rideday", "pairs", "optim", "intraday", "nextbest", "levels", "openness", "d8tft")
 
-    def __init__(self, run: Path, export: Path | None, target_from: str | None, target_to: str | None):
+    # Which expression is the ORIGIN of a row, per parts table. A target-window filter
+    # pins when the truth happened; it does NOT pin when the forecast was made, and for
+    # a horizon curve the origin season is the confounded axis: inside a fixed 54-day
+    # target window the d1 cells come from autumn origins and the d90 cells from summer
+    # ones. PAR-830 measured that (its `driver_level` gap flips sign between the two
+    # passes), so the harness needs to be able to fix the origin window too.
+    @staticmethod
+    def origin_expr(cols: set[str]) -> str | None:
+        """The DATE on which a row's forecast was made.
+
+        Every branch casts to DATE explicitly. `date` is `TIMESTAMP_NS` in the
+        parquet, not `DATE`, so the obvious `(date - L)` raises
+        `No function matches '-(TIMESTAMP_NS, INTEGER)'` — which is exactly what
+        happened the first time this filter was actually exercised, after it had
+        been shipped and reviewed on the strength of the code path existing.
+        `test_origin_window_filter_actually_runs` now runs it end to end.
+        """
+        if "origin" in cols:
+            return "CAST(origin AS DATE)"         # levels, d8tft carry it directly
+        if {"L", "date"} <= cols:                  # slot, rideday, pairs, optim, openness
+            return "(CAST(date AS DATE) - CAST(L AS INTEGER))"
+        if "date" in cols:
+            return "CAST(date AS DATE)"           # intraday / nextbest: origin day = target day
+        return None
+
+    def __init__(self, run: Path, export: Path | None, target_from: str | None, target_to: str | None,
+                 memory: str = "3GB", threads: int = 4, origin_from: str | None = None,
+                 origin_to: str | None = None):
         import duckdb
 
         self.run = run
         self.con = duckdb.connect()
-        # Defaults reproduce the historical hard-coded settings byte-for-byte; the
-        # two env vars exist because the full-period pass does not fit a 4 GB
-        # container at memory_limit=3GB -- DuckDB plus the bootstrap's numpy
-        # arrays overshoot and the container is OOM-killed (rc=137).
-        self.con.execute(f"SET threads={os.environ.get('MLBENCH_REPORT_THREADS', '4')}")
-        self.con.execute(
-            f"SET memory_limit='{os.environ.get('MLBENCH_REPORT_MEMORY', '3GB')}'")
+        # The two env vars (read into REPORT_MEMORY / REPORT_THREADS above and
+        # passed through the CLI's --memory / --threads) exist because the
+        # full-period pass does not fit a 4 GB container at memory_limit=3GB --
+        # DuckDB plus the bootstrap's numpy arrays overshoot and the container is
+        # OOM-killed (rc=137).
+        self.con.execute(f"SET threads={int(threads)}")
+        self.con.execute(f"SET memory_limit='{memory}'")
         tmp = run / "work" / f"report-tmp-{target_from or 'all'}"
         tmp.mkdir(parents=True, exist_ok=True)
         self.con.execute(f"SET temp_directory='{tmp}'")
@@ -98,23 +230,41 @@ class Data:
         self.con.execute("""CREATE TABLE region AS SELECT id park_id, CASE split_part(timezone, '/', 1)
               WHEN 'Europe' THEN 'EU' WHEN 'America' THEN 'NA' WHEN 'Asia' THEN 'Asia'
               WHEN 'Australia' THEN 'Asia' WHEN 'Pacific' THEN 'Asia' ELSE 'other' END region FROM parks""")
-        flt = []
-        if target_from:
-            flt.append(f"date >= DATE '{target_from}'")
-        if target_to:
-            flt.append(f"date <= DATE '{target_to}'")
-        where = (" WHERE " + " AND ".join(flt)) if flt else ""
+        self.target_from, self.target_to = target_from, target_to
+        self.origin_from, self.origin_to = origin_from, origin_to
         self.tables = set()
         for t in self.TABLES:
-            if list((run / "parts" / t).glob("*.parquet")):
-                if t == "d8tft":
-                    self.con.execute(f"""CREATE TABLE d8tft AS SELECT * FROM read_parquet(
-                        '{run}/parts/d8tft/*.parquet', union_by_name=true)""")
-                else:
-                    self.con.execute(f"""CREATE TABLE {t} AS SELECT x.*, r.region FROM read_parquet(
-                        '{run}/parts/{t}/*.parquet', union_by_name=true) x
-                        LEFT JOIN region r USING (park_id) {where}""")
-                self.tables.add(t)
+            if not list((run / "parts" / t).glob("*.parquet")):
+                continue
+            src = f"read_parquet('{run}/parts/{t}/*.parquet', union_by_name=true)"
+            cols = {c[0] for c in self.con.execute(f"DESCRIBE SELECT * FROM {src} LIMIT 0").fetchall()}
+            flt = []
+            # d8tft has no `date`, only `origin` (its "stated" rows look 45 days BACK
+            # from the origin, its "realised" rows up to 60 days forward), so the
+            # target-day filter cannot apply to it. Without this the windowed pass was a
+            # byte-identical copy of the full-period table and the headline D8 claim was
+            # a 231-origin result presented as a 54-origin one (critic S13).
+            tcol = "date" if "date" in cols else ("origin" if t == "d8tft" else None)
+            if tcol:
+                if target_from:
+                    flt.append(f"{tcol} >= DATE '{target_from}'")
+                if target_to:
+                    flt.append(f"{tcol} <= DATE '{target_to}'")
+            ocol = self.origin_expr(cols)
+            if ocol and (origin_from or origin_to):
+                if origin_from:
+                    flt.append(f"{ocol} >= DATE '{origin_from}'")
+                if origin_to:
+                    flt.append(f"{ocol} <= DATE '{origin_to}'")
+            elif (origin_from or origin_to) and not ocol:
+                _log(f"WARNING: {t} has no origin column — origin window not applied to it")
+            where = (" WHERE " + " AND ".join(flt)) if flt else ""
+            if t == "d8tft":
+                self.con.execute(f"CREATE TABLE d8tft AS SELECT * FROM {src}{where}")
+            else:
+                self.con.execute(f"""CREATE TABLE {t} AS SELECT x.*, r.region FROM {src} x
+                    LEFT JOIN region r USING (park_id) {where}""")
+            self.tables.add(t)
 
     def df(self, sql: str) -> pd.DataFrame:
         return self.con.execute(sql).df()
@@ -125,42 +275,190 @@ class Data:
 
 # --------------------------------------------------------------------------- paired engine
 
-def evaluate(base: pd.DataFrame, cfg: BenchConfig, refs: list[str], lower: bool, keys: dict) -> list[dict]:
+def _paired_stats(base: pd.DataFrame, m: str, r: str, cfg: BenchConfig, lower: bool,
+                  own_den: dict) -> dict | None:
+    """Paired difference of ``m`` against ``r`` on the rows BOTH cover, with the
+    park-day and the park-cluster CI and the unit counts behind each."""
+    p = base[(base["model"] == m) & (base["ref"] == r)]
+    p = p[(p["den_m"] > 0) & (p["den_r"] > 0)]
+    if not len(p):
+        return None
+    cols = [p[c].to_numpy() for c in ("num_m", "den_m", "num_r", "den_r")]
+    pd_key = p["park_id"].astype(str) + "|" + p["date"].astype(str)
+    d_, dlo, dhi, n_pd = _boot("pd", cfg).diff(pd_key, *cols)
+    _, plo, phi, n_pk = _boot("park", cfg).diff(p["park_id"].astype(str), *cols)
+    den_m, den_r = float(p["den_m"].sum()), float(p["den_r"].sum())
+    share = den_r / own_den[r] if own_den.get(r) else np.nan
+    return dict(diff_vs_ref=d_, diff_lo=dlo, diff_hi=dhi, diff_lo_park=plo, diff_hi_park=phi,
+                n_paired=den_m, n_paired_ref=den_r, paired_share=share,
+                n_units_park_day=n_pd, n_units_park=n_pk,
+                n_paired_origin_days=int(p["date"].nunique()),
+                wins=significant_diff(plo, phi, lower, n_pk, cfg.min_bootstrap_units),
+                wins_park_day=significant_diff(dlo, dhi, lower, n_pd, cfg.min_bootstrap_units))
+
+
+def choose_reference(refs: list[str], vals: dict, pair: dict) -> tuple[str | None, list[str], str]:
+    """The DISPLAY reference: BENCH-SPEC's ladder, overridden only by a significant
+    paired loss to another candidate.
+
+    The old rule took ``min`` over the candidates' own-coverage values, i.e. an
+    argmin of three MAEs measured on three different slot sets, re-chosen at
+    every lead. On this data the gaps between `wt_med` and `clim` are 0.02–0.19
+    min against a park-cluster half-width of ±0.24, so the reference flipped
+    `wt_med -> clim -> wt_med` across the lead axis on noise, and the "nothing
+    beats the reference in d7–d60" headline was a statement about the pointwise
+    minimum of three naives rather than about any one of them.
+
+    Note what this function is NOT: it is not the win criterion. A ladder
+    tie-break necessarily prefers the *simpler* candidate, which on this data
+    hands the reference to `snaive7` at d4–d6 (8.44 against `wt_med`'s 8.33, a
+    gap the paired CI cannot resolve) — and scoring models against the weakest
+    naive would inflate every win, which is B1's error with the sign flipped.
+    So wins are decided by ``beats_envelope`` below, against EVERY candidate;
+    this reference only fixes which single column `cells.csv` shows.
+
+    Among the candidates with the fewest significant losses the ladder order
+    decides. Returns (ref, candidates, why).
+    """
+    cover_max = max((vals[r][1] for r in refs if r in vals), default=0)
+    cands = [r for r in refs if r in vals and vals[r][1] >= 0.5 * cover_max]
+    cands.sort(key=lambda r: _ladder_rank(r, refs))
+    if len(cands) > 1:
+        # a candidate with no paired sums against any other candidate cannot be
+        # compared to anything, so it is not a candidate
+        cands = [a for a in cands if any(pair.get((a, b)) for b in cands if b != a)]
+    if not cands:
+        return None, [], "no candidate covers >= 50 % of the best-covered one"
+    losses = {r: 0 for r in cands}
+    beaten_by: dict[str, list[str]] = {r: [] for r in cands}
+    for a in cands:
+        for b in cands:
+            if a == b:
+                continue
+            st = pair.get((a, b))
+            if st and st["wins"]:
+                losses[b] += 1
+                beaten_by[b].append(a)
+    ref = min(cands, key=lambda r: (losses[r], _ladder_rank(r, refs)))
+    first = cands[0]
+    if ref == first:
+        why = (f"ladder order ({first} first of {'/'.join(cands)}); no candidate beats it significantly"
+               if len(cands) > 1 else "only candidate")
+    else:
+        why = (f"{first} is the ladder-first candidate but is significantly beaten by "
+               f"{'/'.join(beaten_by[first])}; {ref} has {losses[ref]} significant loss(es)")
+    return ref, cands, why
+
+
+def evaluate(base: pd.DataFrame, cfg: BenchConfig, refs: list[str], lower: bool, keys: dict,
+             unit: str = "park-day") -> list[dict]:
     """``base``: rows park_id, date, model, ref, num_m, den_m, num_r, den_r — one cell
-    (one lead, one segment). ``ref == model`` rows carry the model's own figure."""
+    (one lead, one segment). ``ref == model`` rows carry the model's own figure.
+
+    Returns one row per model, paired against the SELECTED reference (``cells.csv``).
+    Every (model, candidate) pair is also appended to ``ALL_REF_ROWS`` and the
+    reference choice to ``REF_CHOICES``, so a reader can see what the result is
+    against each individual naive and not only against the chosen one.
+    """
     if base.empty:
         return []
     own = base[base["model"] == base["ref"]]
-    vals = {}
+    vals, own_rows = {}, {}
     for m, g in own.groupby("model"):
         if g["den_m"].sum() > 0:
             vals[m] = (g["num_m"].sum() / g["den_m"].sum(), g["den_m"].sum())
-    cover_max = max((vals[r][1] for r in refs if r in vals), default=0)
-    cands = [(vals[r][0] if lower else -vals[r][0], r) for r in refs
-             if r in vals and vals[r][1] >= 0.5 * cover_max]
-    ref = min(cands)[1] if cands else None
+            own_rows[m] = g
+    own_den = {m: v[1] for m, v in vals.items()}
+    # every pair we might need: candidate-vs-candidate for the choice, model-vs-candidate
+    # for the published table. diff(b, a) = -diff(a, b) on the same rows, so compute once.
+    pair: dict[tuple[str, str], dict] = {}
+
+    def get(m: str, r: str) -> dict | None:
+        if m == r or m not in vals or r not in vals:
+            return None
+        if (m, r) in pair:
+            return pair[(m, r)]
+        st = _paired_stats(base, m, r, cfg, lower, own_den)
+        pair[(m, r)] = st
+        if st is not None and (r, m) not in pair:
+            # the mirrored pair is the SAME row set with the two arms swapped, so every
+            # bootstrap replicate is exactly negated: point and CI mirror, only the
+            # row counts and the coverage share belong to the other arm.
+            pair[(r, m)] = dict(
+                st, diff_vs_ref=-st["diff_vs_ref"], diff_lo=-st["diff_hi"], diff_hi=-st["diff_lo"],
+                diff_lo_park=-st["diff_hi_park"], diff_hi_park=-st["diff_lo_park"],
+                n_paired=st["n_paired_ref"], n_paired_ref=st["n_paired"],
+                paired_share=(st["n_paired"] / own_den[m]) if own_den.get(m) else np.nan,
+                wins=significant_diff(-st["diff_hi_park"], -st["diff_lo_park"], lower,
+                                      st["n_units_park"], cfg.min_bootstrap_units),
+                wins_park_day=significant_diff(-st["diff_hi"], -st["diff_lo"], lower,
+                                               st["n_units_park_day"], cfg.min_bootstrap_units))
+        return pair[(m, r)]
+
+    for a in refs:
+        for b in refs:
+            get(a, b)
+    ref, cands, why = choose_reference(refs, vals, pair)
+    if cands:
+        REF_CHOICES.append(dict(keys, unit=unit, selected=ref, candidates="/".join(cands),
+                                reason=why, lower=lower,
+                                **{f"value_{c}": vals[c][0] for c in cands},
+                                **{f"n_{c}": float(vals[c][1]) for c in cands}))
     out = []
-    for m, g in own.groupby("model"):
-        if m not in vals:
-            continue
+    for m in sorted(vals):
+        g = own_rows[m]
         v, lo, hi = _boot("pd", cfg).ratio(g["park_id"].astype(str) + "|" + g["date"].astype(str),
                                            g["num_m"].to_numpy(), g["den_m"].to_numpy())
         row = dict(keys, model=m, value=v, lo=lo, hi=hi, n=float(vals[m][1]), lower=lower,
-                   n_park_days=int((g["den_m"] > 0).sum()), n_origin_days=int(g["date"].nunique()), ref=ref)
-        if ref and m != ref:
-            p = base[(base["model"] == m) & (base["ref"] == ref)]
-            p = p[(p["den_m"] > 0) & (p["den_r"] > 0)]
-            if len(p):
-                cols = ["num_m", "den_m", "num_r", "den_r"]
-                d_, dlo, dhi = _boot("pd", cfg).diff(p["park_id"].astype(str) + "|" + p["date"].astype(str),
-                                                     *(p[c].to_numpy() for c in cols))
-                _, plo, phi = _boot("park", cfg).diff(p["park_id"].astype(str), *(p[c].to_numpy() for c in cols))
-                row.update(diff_vs_ref=d_, diff_lo=dlo, diff_hi=dhi, diff_lo_park=plo, diff_hi_park=phi,
-                           n_paired=float(p["den_m"].sum()),
-                           paired_share=float(p["den_r"].sum()) / vals[ref][1] if ref in vals else np.nan,
-                           wins=significant(plo, phi, lower))
+                   n_park_days=int((g["den_m"] > 0).sum()), n_origin_days=int(g["date"].nunique()),
+                   unit=unit, ref=ref, is_candidate=(m in cands))
+        env = []
+        for c in cands:
+            st = get(m, c)
+            if st is None:
+                continue
+            ALL_REF_ROWS.append(dict(keys, model=m, ref_candidate=c, unit=unit, lower=lower,
+                                     value=vals[m][0], value_ref=vals[c][0],
+                                     is_selected_ref=(c == ref), **st))
+            env.append((c, st))
+        st = get(m, ref) if ref else None
+        if st is not None:
+            row.update(dict(st, wins_vs_ref=st["wins"]))
+        row.update(envelope_verdict(env, lower))
         out.append(row)
     return out
+
+
+def envelope_verdict(env: list[tuple[str, dict]], lower: bool) -> dict:
+    """"Beats the naive envelope": better than EVERY candidate naive, each paired on
+    its own shared rows with the park-cluster CI excluding 0.
+
+    This replaces "beats the selected reference" as the win criterion, and it is the
+    part of critic B1 that matters most. A single selected reference is a choice, and
+    any rule for making it is wrong in one direction or the other: an argmin over
+    own-coverage values picks on noise and understates models (B1 as filed), a ladder
+    tie-break picks the *simplest* candidate and overstates them (`snaive7` would be
+    the reference at d4–d6 here at 8.44 against `wt_med`'s 8.33). A conjunction over
+    a FIXED candidate set is neither — nothing is selected on the data, and it is
+    strictly harder than beating any one member, so "usable horizon" now means
+    "better than every naive we have", which is the claim a serving decision needs.
+    """
+    if not env:
+        return {"n_env": 0, "wins": False, "envelope": ""}
+    worst = max(env, key=lambda cs: cs[1]["diff_vs_ref"] if lower else -cs[1]["diff_vs_ref"])
+    return {
+        "n_env": len(env),
+        "envelope": "/".join(c for c, _ in env),
+        "wins": all(st["wins"] for _, st in env),
+        "wins_park_day": all(st["wins_park_day"] for _, st in env),
+        "hardest_naive": worst[0],
+        "diff_vs_hardest": worst[1]["diff_vs_ref"],
+        "hardest_lo_park": worst[1]["diff_lo_park"], "hardest_hi_park": worst[1]["diff_hi_park"],
+        "env_min_share": min(st["paired_share"] if np.isfinite(st["paired_share"]) else 0.0
+                             for _, st in env),
+        "env_min_units_park": min(st["n_units_park"] for _, st in env),
+        "env_min_units_park_day": min(st["n_units_park_day"] for _, st in env),
+    }
 
 
 def slot_base(d: Data, table: str, where: str, refs: list[str], group: str = "park_id, date") -> pd.DataFrame:
@@ -224,51 +522,110 @@ def decision_cells(d: Data, cfg: BenchConfig, sql: str, lead_col: str, metric: s
 def usable_horizon(cells: pd.DataFrame, order: dict, cfg: BenchConfig) -> pd.DataFrame:
     """Largest lead up to which the model wins (park-cluster CI excludes 0), contiguous
     from its first scored lead; a lead where it is the reference, is untested or fails
-    the coverage gate breaks the run."""
+    the coverage gate breaks the run.
+
+    ``leads_tested = 0`` is NOT "nothing won": it means nothing was ever tested, so
+    the reason the gate fired is reported alongside it (critic B4).
+    """
     out = []
-    c = cells[(cells["region"] == "all") & ~cells["model"].isin(NON_COMPETING)]
+    c = cells[(cells["region"] == "all") & ~cells["model"].map(is_oracle)]
     for (metric, uc, seg, model), g in c.groupby(["metric", "uc", "segment", "model"]):
         g = g.assign(o=g["lead"].map(order)).sort_values("o")
-        contiguous, any_sig, tested, broken = None, None, 0, False
+        contiguous, any_sig, n_tested, broken, reasons = None, None, 0, False, []
         for _, r in g.iterrows():
-            ok = (r.get("ref") != model and pd.notna(r.get("diff_lo_park", np.nan))
-                  and r.get("n_origin_days", 0) >= cfg.low_n_origin_days
-                  and (r.get("paired_share") or 0) >= MIN_COVERAGE)
+            ok, why = tested(r, cfg, model)
             if not ok:
                 broken = True
+                reasons.append(f"{r['lead']}: {why}")
                 continue
-            tested += 1
+            n_tested += 1
             if bool(r.get("wins")):
                 any_sig = r["lead"]
                 if not broken:
                     contiguous = r["lead"]
             else:
                 broken = True
-        out.append({"metric": metric, "uc": uc, "segment": seg, "model": model, "leads_tested": tested,
+        out.append({"metric": metric, "uc": uc, "segment": seg, "model": model,
+                    "is_reference_candidate": bool(g["is_candidate"].fillna(False).any())
+                    if "is_candidate" in g else False,
+                    "unit": _str(g.iloc[0], "unit", "park-day"), "leads_scored": len(g),
+                    "leads_tested": n_tested,
                     "usable_horizon": "" if contiguous is None else str(contiguous),
-                    "max_significant_lead": "" if any_sig is None else str(any_sig)})
+                    "max_significant_lead": "" if any_sig is None else str(any_sig),
+                    "not_tested_because": "; ".join(reasons[:6]) if n_tested == 0 else ""})
     return pd.DataFrame(out)
 
 
 def handover(cells: pd.DataFrame, cfg: BenchConfig) -> pd.DataFrame:
     out = []
-    c = cells[(cells["region"] == "all") & ~cells["model"].isin(NON_COMPETING)]
+    c = cells[(cells["region"] == "all") & ~cells["model"].map(is_oracle)]
     for (metric, uc, seg, lead), g in c.groupby(["metric", "uc", "segment", "lead"], sort=False):
         ref = g["ref"].dropna().iloc[0] if g["ref"].notna().any() else None
+        gate = g.apply(lambda r: tested(r, cfg, r["model"])[0], axis=1)
         wins = g["wins"].fillna(False).astype(bool) if "wins" in g else pd.Series(False, index=g.index)
-        share = g["paired_share"].fillna(0) if "paired_share" in g else pd.Series(0.0, index=g.index)
-        ok = g[wins & (g["n_origin_days"] >= cfg.low_n_origin_days) & (share >= MIN_COVERAGE)]
+        # A naive candidate may beat the envelope of the OTHER candidates — "climatology
+        # is the best naive here" is a real finding and `usable_horizon.csv` keeps it.
+        # But it must not be ranked against a model in the hand-over table: the two
+        # margins are measured against different (and for a candidate, weaker) pools, so
+        # "wt_med beats clim by 0.347" would outrank "lvlh5_tft beats wt_med by 0.308"
+        # and the serving router would be told to keep the naive. The reference pool is
+        # the FALLBACK here, not a contender.
+        cand = (g["is_candidate"].fillna(False).astype(bool) if "is_candidate" in g
+                else pd.Series(False, index=g.index))
+        ok = g[wins & gate & ~cand]
         lower = bool(g["lower"].iloc[0])
+        extra: dict = {}
         if len(ok):
-            best = ok.sort_values("diff_vs_ref", ascending=lower).iloc[0]
+            # rank by the margin against the HARDEST naive, not against the displayed
+            # reference: that is the margin a serving decision can rely on
+            best = ok.sort_values("diff_vs_hardest", ascending=lower).iloc[0]
             winner, val, margin, n_win = best["model"], best["value"], best["diff_vs_ref"], len(ok)
+            share = float(best.get("env_min_share", np.nan))
+            cis = {k: float(best.get(k, np.nan)) for k in
+                   ("diff_lo_park", "diff_hi_park", "diff_lo", "diff_hi")}
+            # does BENCH-SPEC's literal unit (park-DAY) agree with the park-cluster call?
+            agree = bool(best.get("wins_park_day", False))
+            extra = {"hardest_naive": best.get("hardest_naive"),
+                     "margin_vs_hardest": best.get("diff_vs_hardest"),
+                     "hardest_lo_park": best.get("hardest_lo_park"),
+                     "hardest_hi_park": best.get("hardest_hi_park")}
         else:
-            winner, margin, n_win = ref, 0.0, 0
+            winner, margin, n_win, share = ref, 0.0, 0, np.nan
             val = g.loc[g["model"] == ref, "value"].iloc[0] if ref in set(g["model"]) else np.nan
+            cis = dict.fromkeys(("diff_lo_park", "diff_hi_park", "diff_lo", "diff_hi"), np.nan)
+            pdw = g["wins_park_day"].fillna(False).astype(bool) if "wins_park_day" in g else None
+            agree = not bool((pdw & gate).any()) if pdw is not None else True
+            extra = dict.fromkeys(("hardest_naive", "margin_vs_hardest", "hardest_lo_park",
+                                   "hardest_hi_park"), np.nan)
         out.append({"metric": metric, "uc": uc, "segment": seg, "lead": lead, "reference": ref,
+                    "envelope": _str(g.iloc[0], "envelope", ""),
                     "winner": winner, "winner_value": val, "paired_margin": margin,
-                    "significant_models": n_win, "n_origin_days": int(g["n_origin_days"].max())})
+                    "margin_lo_park": cis["diff_lo_park"], "margin_hi_park": cis["diff_hi_park"],
+                    "margin_lo_park_day": cis["diff_lo"], "margin_hi_park_day": cis["diff_hi"],
+                    **extra, "park_day_unit_agrees": agree,
+                    "winner_paired_share": share, "significant_models": n_win,
+                    "n_tested": int(gate.sum()), "unit": _str(g.iloc[0], "unit", "park-day"),
+                    "n_origin_days": int(g["n_origin_days"].max())})
     return pd.DataFrame(out)
+
+
+def low_coverage_cells(cells: pd.DataFrame, thresh: float = 0.5) -> pd.DataFrame:
+    """Every published cell whose paired rows are below ``thresh`` of the reference's.
+
+    These values are not comparable with the rest of the column — `lvlh5_tft` reads
+    1.337 min on D5 at d60 because TFT's horizon ends there and only 2 % of the
+    reference's slots remain. The gates keep most of them out of the hand-over;
+    this table is so a reader of `cells.csv` can see all of them at once (critic S4).
+    """
+    if cells.empty or "paired_share" not in cells:
+        return pd.DataFrame()
+    c = cells[(cells["region"] == "all") & cells["paired_share"].notna()
+              & (cells["paired_share"] < thresh)]
+    cols = ["metric", "uc", "segment", "lead", "model", "ref", "value", "diff_vs_ref",
+            "diff_lo_park", "diff_hi_park", "paired_share", "n_paired", "n_units_park",
+            "n_origin_days", "wins"]
+    c = c[[x for x in cols if x in c.columns]].sort_values(["metric", "uc", "segment", "model"])
+    return c.assign(reaches_handover=c["paired_share"] >= MIN_COVERAGE)
 
 
 # --------------------------------------------------------------------------- crowd levels (UC4 / D6 / D7)
@@ -307,7 +664,8 @@ def bucket_np(pct: np.ndarray) -> np.ndarray:
 
 
 def _paired_from_units(units: pd.DataFrame, srcs: list[str], refs: list[str], lower: bool, keys: dict,
-                       cfg: BenchConfig, unit_cols=("park_id", "date")) -> list[dict]:
+                       cfg: BenchConfig, unit_cols=("park_id", "date"),
+                       unit: str = "park-day") -> list[dict]:
     """units: one row per unit with num_<s>, den_<s> per source and paired columns
     pnum_<m>__<r>/pden_<m>__<r> prepared by the caller."""
     base = []
@@ -328,7 +686,7 @@ def _paired_from_units(units: pd.DataFrame, srcs: list[str], refs: list[str], lo
             base.append(b)
     if not base:
         return []
-    return evaluate(pd.concat(base), cfg, refs, lower, keys)
+    return evaluate(pd.concat(base), cfg, refs, lower, keys, unit=unit)
 
 
 def uc4(d: Data, cfg: BenchConfig, srcs: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -378,7 +736,8 @@ def uc4(d: Data, cfg: BenchConfig, srcs: list[str]) -> tuple[pd.DataFrame, pd.Da
         U = pd.DataFrame(units).fillna(0.0)
         rows += _paired_from_units(U, srcs, NAIVE_LEVELS, False,
                                    {"uc": "UC4", "lead": L, "segment": "all", "region": "all",
-                                    "metric": "UC4 Spearman within park-month"}, cfg)
+                                    "metric": "UC4 Spearman within park-month"}, cfg,
+                                   unit=PARK_MONTH_UNIT)
     e = pd.DataFrame(extra)
     if not e.empty:
         e = e.groupby(["lead", "model"]).agg(hit=("hit", "sum"), k=("k", "sum"), prec_hit=("prec_hit", "sum"),
@@ -503,7 +862,8 @@ def d6_d7(d: Data, cfg: BenchConfig, srcs: list[str]) -> tuple[pd.DataFrame, pd.
         U = pd.DataFrame(us).fillna(0.0)
         d7_rows += _paired_from_units(U, srcs, NAIVE_LEVELS, False,
                                       {"uc": "D7", "lead": lb, "segment": "all", "region": "all",
-                                       "metric": "day comparison winner accuracy"}, cfg)
+                                       "metric": "day comparison winner accuracy"}, cfg,
+                                      unit="park-origin")
         for s in srcs:
             if f"den_{s}" in U and U[f"den_{s}"].sum() > 0:
                 ties.append({"lead": lb, "model": s, "tie_rate": U[f"tie_{s}"].sum() / U[f"den_{s}"].sum()})
@@ -551,14 +911,32 @@ def coverage_horizon(d: Data) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def lead_availability(cfg: BenchConfig, first_truth: dt.date, last_truth: dt.date) -> pd.DataFrame:
+def lead_availability(cfg: BenchConfig, first_truth: dt.date, last_truth: dt.date,
+                      target_from: str | None = None, target_to: str | None = None,
+                      origin_from: str | None = None, origin_to: str | None = None) -> pd.DataFrame:
+    """Origin days per lead FOR THIS PASS.
+
+    A target day ``d`` is scored at lead ``L`` only if its origin ``d − L`` exists,
+    i.e. ``d ≥ first_origin + L``. In a windowed pass ``d`` is additionally confined
+    to the target window, which is why the windowed table must not be a copy of the
+    full-period one: the headline window gives 54 origin days at every lead up to
+    d177 and fewer beyond (critic B4).
+    """
     rows = []
     first_origin = first_truth + dt.timedelta(days=cfg.window_days)
+    lo = max(first_origin, dt.date.fromisoformat(target_from)) if target_from else first_origin
+    hi = min(last_truth, dt.date.fromisoformat(target_to)) if target_to else last_truth
+    o0 = max(first_origin, dt.date.fromisoformat(origin_from)) if origin_from else first_origin
+    o1 = min(last_truth, dt.date.fromisoformat(origin_to)) if origin_to else last_truth
     for L in sorted(set(cfg.slot_leads) | set(UC4_LEADS)):
-        n = max((last_truth - first_origin).days - L + 1, 0)
+        dL = dt.timedelta(days=L)
+        d0 = max(lo, first_origin + dL, o0 + dL)
+        n = max((min(hi, o1 + dL) - d0).days + 1, 0)
         status = "ok" if n >= cfg.low_n_origin_days else ("LOW-N" if n > 0 else "not measurable yet")
         when = first_origin + dt.timedelta(days=L + cfg.low_n_origin_days - 1)
         rows.append({"lead": L, "origin_days": n, "status": status,
+                     "first_target_day": d0.isoformat() if n else "",
+                     "last_target_day": hi.isoformat() if n else "",
                      "measurable_from": when.isoformat() if n < cfg.low_n_origin_days else ""})
     return pd.DataFrame(rows)
 
@@ -615,18 +993,66 @@ def wide(cells: pd.DataFrame, order: dict, kind: str = "value", models: list[str
     return w
 
 
+def ci_both(v, plo, phi, lo, hi, win: bool, win_pd: bool) -> str:
+    """``diff [park-cluster] / [park-day]`` with ``*`` per unit, and ``!`` when the two
+    bootstrap units disagree about the win (BENCH-SPEC says park-day, the harness
+    decides on park-cluster — critic B5)."""
+    if v is None or not np.isfinite(v):
+        return ""
+    s = f"{v:.3f} [{plo:.3f}, {phi:.3f}]{'*' if win else ''}" if np.isfinite(plo) else f"{v:.3f}"
+    if np.isfinite(lo):
+        s += f" / [{lo:.3f}, {hi:.3f}]{'*' if win_pd else ''}"
+    return s + ("  !" if bool(win) != bool(win_pd) else "")
+
+
+def wide_vs(ar: pd.DataFrame, order: dict, metric: str, uc: str, seg: str, candidate: str,
+            models: list[str] | None = None, region: str = "all") -> pd.DataFrame:
+    """lead x model table of the paired difference against ONE named naive candidate,
+    with both CIs. This is what makes "no model beats the best-of-N envelope" and
+    "against `wt_med` the result is …" separable statements (critic B1c, B5)."""
+    if ar is None or ar.empty:
+        return pd.DataFrame()
+    c = ar[(ar["metric"] == metric) & (ar["uc"] == uc) & (ar["segment"] == seg)
+           & (ar["region"] == region) & (ar["ref_candidate"] == candidate)]
+    if c.empty:
+        return pd.DataFrame()
+    c = c.copy()
+    c["cell"] = [ci_both(a, b, d_, e, f_, w, wp) for a, b, d_, e, f_, w, wp in
+                 zip(c["diff_vs_ref"], c["diff_lo_park"], c["diff_hi_park"], c["diff_lo"],
+                     c["diff_hi"], c["wins"].fillna(False), c["wins_park_day"].fillna(False))]
+    w = c.pivot_table(index="lead", columns="model", values="cell", aggfunc="first")
+    if models:
+        w = w[[m for m in models if m in w.columns]]
+    w = w.reset_index()
+    w["o"] = w["lead"].map(order)
+    return w.sort_values("o").drop(columns="o")
+
+
 # --------------------------------------------------------------------------- main
 
 def build_report(run: Path, export: Path | None = None, target_from: str | None = None,
-                 target_to: str | None = None, reps: int | None = None) -> Path:
+                 target_to: str | None = None, reps: int | None = None,
+                 memory: str | None = None, threads: int | None = None,
+                 origin_from: str | None = None, origin_to: str | None = None) -> Path:
     cfg = BenchConfig()
     if reps:
         cfg.bootstrap_reps = reps
     BOOT.clear()
-    d = Data(run, export, target_from, target_to)
+    ALL_REF_ROWS.clear()
+    REF_CHOICES.clear()
+    d = Data(run, export, target_from, target_to, memory=memory or REPORT_MEMORY,
+             threads=threads or REPORT_THREADS, origin_from=origin_from, origin_to=origin_to)
     windowed = bool(target_from or target_to)
-    tdir = run / (f"tables_{target_from}_{target_to}" if windowed else "tables")
+    name_parts = []
+    if windowed:
+        name_parts.append(f"{target_from}_{target_to}")
+    if origin_from or origin_to:
+        name_parts.append(f"o{origin_from or 'start'}_{origin_to or 'end'}")
+    tdir = run / ("tables_" + "_".join(name_parts) if name_parts else "tables")
     tdir.mkdir(parents=True, exist_ok=True)
+    prov = stamp()
+    report_json = run / f"report-{tdir.name}.json"
+    t_start = dt.datetime.now(dt.timezone.utc)
     out: list[str] = []
     w = out.append
     stats_p = d.export / "parquet" / "build_stats.json"
@@ -645,7 +1071,8 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
              **{k: 200 + i for i, k in enumerate(UC2_INTRADAY_KEYS)},
              **{k: 300 + i for i, k in enumerate(UC4_LEADS)},
              "0-60": 400, "0-120": 401, "w0-45": 500, "d1-7": 600, "d8-30": 601, "d31-90": 602}
-    lead_av = lead_availability(cfg, first_truth, last_truth)
+    lead_av = lead_availability(cfg, first_truth, last_truth, target_from, target_to,
+                                origin_from, origin_to)
     cov = coverage_horizon(d)
 
     _log("slot MAE")
@@ -684,7 +1111,15 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
                  ("UC3", "dayPeak abs error (min)", "dp_m", "dp_n", "dp_r", "dp_n", True),
                  ("D5", "rope-drop worth agreement", "w_m", "w_n", "w_r", "w_n", False)]
         for uc, metric, nm, dm, nr, dr, lower in specs:
-            refs = B.REF_CANDIDATES + (["prod_ropedrop_hist"] if "worth" in metric else [])
+            # `prod_ropedrop_hist` (the production rule on the window medians) used to be
+            # listed as a reference candidate for the worth decision, but the runner
+            # materialises paired sums only for B.REF_CANDIDATES, so no model has a
+            # PAIRED comparison against it and it can never be part of the envelope.
+            # Listing it as a candidate therefore only made `ref_choice.csv` disagree
+            # with `envelope`. Its own value is still reported as a model. Scoring
+            # models against it properly needs it in `rideday_pair_sql`'s ref list,
+            # which is a re-run — tracked as a follow-up, not done here.
+            refs = B.REF_CANDIDATES
             cells.append(decision_cells(d, cfg, f"""
                 SELECT L, park_id, date, model, ref, sum({nm}) num_m, sum({dm}) den_m,
                        sum(coalesce({nr}, 0)) num_r, sum({dr}) den_r
@@ -734,6 +1169,12 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
         cov_lvl = pd.DataFrame()
     C = pd.concat([c for c in cells if c is not None and not c.empty], ignore_index=True)
     C.to_csv(tdir / "cells.csv", index=False)
+    # the same cells against EVERY reference candidate, not only the selected one,
+    # plus the per-cell choice and its reason (critic B1)
+    AR = pd.DataFrame(ALL_REF_ROWS)
+    AR.to_csv(tdir / "cells_all_refs.csv", index=False)
+    pd.DataFrame(REF_CHOICES).to_csv(tdir / "ref_choice.csv", index=False)
+    low_coverage_cells(C).to_csv(tdir / "low_coverage_cells.csv", index=False)
 
     _log("D8 / D9")
     d8q = pd.DataFrame()
@@ -804,17 +1245,39 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
     w("# ml-bench results\n")
     w(f"Run: `{run.name}` · generated {dt.datetime.now(dt.timezone.utc).isoformat(timespec='minutes')}")
     if windowed:
-        w(f"\n**Target window {target_from} … {target_to}: every lead below is scored on the SAME target days**, "
-          "so the horizon curves are not confounded with season (with the full period, lead L starts at "
-          "first origin + L, and TFT/CatBoost only exist from late May).\n")
+        w(f"\n**Target window {target_from} … {target_to}: every lead below is scored on the SAME target "
+          "days**, so two leads are compared on the same days' outcomes (with the full period, lead L "
+          "starts at first origin + L, and TFT/CatBoost only exist from late May).\n")
+        w("**This does NOT remove the lead–season confound.** A lead-L cell inside a fixed target window "
+          "is scored from origins at `target − L`, so the short leads come from the END of the window and "
+          "the long leads from before it: the decay along the lead axis still contains an origin-season "
+          "gradient. Fixing the target window pins when the truth happened, not when the forecast was "
+          "made. Use `--origin-from/--origin-to` to fix the origin window instead, and read the "
+          "per-season tables before reading a lead boundary as a number.\n")
     else:
         w("\nFull evaluation period. Leads start at different target days here (first origin + L), so the "
-          "curves mix lead with season — the headline horizon curves come from the common-window report.\n")
+          "curves mix lead with TARGET season. The common-window pass mixes lead with ORIGIN season "
+          "instead. Both are confounded; neither alone identifies the horizon curve.\n")
+    if origin_from or origin_to:
+        w(f"\n**Origin window {origin_from or 'start'} … {origin_to or 'end'}**: only forecasts made in "
+          "this window are scored.\n")
     shas = sorted({m.get("git_sha", "?") for m in d.meta})
-    w(f"- code: git `{', '.join(shas)}`, sources sha256 "
+    w(f"- code that produced `parts/` (the scoring): git `{', '.join(shas)}`, sources sha256 "
       f"`{', '.join(sorted({str(m.get('code_sha256', '?'))[:16] for m in d.meta}))}`, image "
       f"`{', '.join(sorted({str(m.get('image_id', '?'))[:19] for m in d.meta}))}`; plug-ins "
       f"{sorted({x for m in d.meta for x in m.get('models', [])}) or 'none'}")
+    # The tables are written by the REPORT, which is routinely a later commit than the
+    # run: scoring sums live in `parts/`, every verdict on top of them is recomputed
+    # here. Before this line the only evidence of which code wrote a table was its
+    # mtime, and the headline tables of this very run were regenerated after the last
+    # commit of the day. `code_sha256` is measured; `git_sha` is asserted by the
+    # launcher and has been wrong in this repository (see provenance.py).
+    w(f"- code that produced THESE tables (the report): git `{prov['git_sha']}` "
+      f"(from {prov['git_sha_source']}), sources sha256 `{prov['code_sha256'][:16]}`, image "
+      f"`{str(prov['image_id'])[:19]}` — recorded in `{report_json.name}`")
+    if any(m.get("code_sha256") != d.meta[0].get("code_sha256") for m in d.meta):
+        w("- **WARNING: the shards of this run do not share one `code_sha256`** — the "
+          "scoring sums were not all produced by the same code.")
     w(f"- export: `{d.export}` (finished {manifest.get('export_finished_utc', '?')}); truth "
       f"{build_stats.get('truth_dates')}, {build_stats.get('truth_rides')} rides, {build_stats.get('truth_parks')} "
       f"parks, {build_stats.get('truth')} truth slots")
@@ -824,31 +1287,89 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
     w(f"- Values: point [95 % park-day bootstrap, {cfg.bootstrap_reps} reps]. Paired difference vs the per-lead "
       "reference: point [95 % **park-cluster** bootstrap] — `*` = the model wins (that CI excludes 0 in its "
       "favour). Park-day CIs of the differences are in `cells.csv`.")
+    w("- **The win criterion is the park-CLUSTER bootstrap, not BENCH-SPEC's literal park-day unit.** Days of "
+      "one park are not independent, so the park-day CI is too narrow; the deviation is recorded in "
+      "BENCH-SPEC.md. Both CIs are in `cells.csv` (`diff_lo/hi` = park-day, `diff_lo_park/hi_park` = "
+      "park-cluster) and in the `… vs each naive` tables below, where `!` marks a cell on which the two "
+      "units disagree about the win.")
+    w(f"- **A win also needs ≥ {cfg.min_bootstrap_units} distinct bootstrap units and a strictly positive CI "
+      "width.** With one unit the resampled ratio is weight-independent, so the CI collapses to zero width "
+      "and excludes 0 for free.")
+    w("- **A win means the model beats EVERY naive candidate at that lead** (the \"naive envelope\"), each "
+      "paired on its own shared rows. Not \"beats the selected reference\": a single selected reference is "
+      "a choice made on the data, and every rule for making it errs in one direction — an argmin over the "
+      "candidates' own-coverage values picks on noise and understates models (their gaps here are an order "
+      "of magnitude inside the CI, so the reference flipped along the lead axis), a ladder tie-break picks "
+      "the simplest candidate and overstates them. A conjunction over a FIXED candidate set selects "
+      "nothing and is strictly harder than beating any single member. `handover.csv` reports the margin "
+      "against the hardest candidate (`hardest_naive`), and winners are ranked by it.")
+    w("- **The `ref` column is a DISPLAY reference only**: BENCH-SPEC's ladder (persistence → "
+      "seasonal-naive → weekday-median → climatology), overridden only when another candidate beats it in "
+      "a paired comparison with the park-cluster CI excluding 0. `ref_choice.csv` records the candidates, "
+      "their values and why each one was chosen. `cells.csv` keeps `wins_vs_ref` for that single column.")
+    w("- `cells_all_refs.csv` has every (model, reference-candidate) pair, so \"no model beats the best of "
+      "the naives\" and \"against `wt_med` the model is X better\" can be read separately. "
+      "`low_coverage_cells.csv` lists every cell whose paired rows are < 50 % of the reference's.")
+    w("- **A model scored `<name>_owx` used ORACLE weather** (the target day's actuals; no forecast "
+      "archive exists). It appears in the value and difference tables as an upper bound and is marked "
+      "NOT SERVABLE, but it is excluded from the hand-over table and the usable horizon — those are the "
+      "serving router's input.")
     w("- MAE is in minutes on 15-min slots, each model on its own coverage — compare models through the "
       "paired difference, never through two unpaired values.")
     w("- Opening-aligned forecasts use the window KNOWN at the origin: the published one if its schedule row "
       "was last written before the origin, else a projection from the last 56 days. Weather: no forecast "
       "archive exists; baselines use none, plug-ins only by opting in (scored as `<name>_owx`).\n")
     w("## Horizon — the headline\n")
-    w("### Lead availability (full period)\n")
+    w("### Lead availability (this pass)\n")
     w(md(lead_av))
     w("### Coverage horizon of the inputs\n")
     w(md(cov))
-    w(f"### Usable horizon\n\nLargest lead, contiguous from the model's first scored lead, at which it wins "
-      f"(park-cluster CI); cells need ≥ {cfg.low_n_origin_days} origin days and paired rows ≥ "
-      f"{int(MIN_COVERAGE * 100)} % of the reference's. Empty = never.\n")
+    w(f"### Usable horizon\n\nLargest lead, contiguous from the model's first scored lead, at which the "
+      f"model beats EVERY naive candidate (park-cluster CI, ≥ {cfg.min_bootstrap_units} bootstrap units); "
+      f"cells need ≥ {cfg.low_n_origin_days} origin days (≥ {cfg.low_n_park_months} park-months for UC4) "
+      f"and paired rows ≥ {int(MIN_COVERAGE * 100)} % of each candidate's. Empty = never.\n")
     if not uh.empty:
         w(md(uh[(uh["usable_horizon"] != "") | (uh["max_significant_lead"] != "")]
              .sort_values(["metric", "uc", "segment", "model"])))
+        nt = uh[uh["leads_tested"] == 0]
+        if not nt.empty:
+            w("\n**Never tested** — `leads_tested = 0` means no lead passed the gates, which is NOT "
+              "\"nothing won\". The reason per metric × model:\n")
+            w(md(nt.sort_values(["metric", "uc", "model"]),
+                 ["metric", "uc", "segment", "model", "unit", "leads_scored", "not_tested_because"]))
+    w("### Reference choice per cell\n")
+    w("Candidates (coverage ≥ 50 % of the best-covered), their own-coverage values, and why the reference "
+      "is the one it is. `reason` says `ladder order` when no candidate significantly beats the "
+      "ladder-first one — i.e. the choice was NOT made on the point estimates.\n")
+    rc = pd.DataFrame(REF_CHOICES)
+    if not rc.empty:
+        sel = rc[(rc["region"] == "all") & rc["metric"].isin(["MAE", "first-hour MAE (opening-aligned)"])]
+        w(md(sel, ["metric", "uc", "segment", "lead", "candidates", "selected", "reason"]))
     w("### Hand-over table (input for the serving router)\n")
-    w("Per use case × lead: among models that win against the reference (and pass the gates), the largest "
-      "PAIRED margin; otherwise the reference itself.\n")
+    w("Per use case × lead: among the models that beat EVERY naive candidate (and pass the gates), the "
+      "largest margin against the hardest candidate; otherwise the reference itself. The naive candidates "
+      "themselves are excluded from the winner column even when one of them beats the others, because "
+      "their margin is measured against a different and weaker pool — `usable_horizon.csv` keeps those "
+      "rows, flagged `is_reference_candidate`. `park_day_unit_agrees = False` marks a row whose verdict "
+      "changes under BENCH-SPEC's literal park-day bootstrap.\n")
     if not ho.empty:
-        w(md(ho[ho["metric"] == "MAE"], ["uc", "segment", "lead", "reference", "winner", "winner_value",
-                                         "paired_margin", "significant_models", "n_origin_days"]))
+        w(md(ho[ho["metric"] == "MAE"],
+             ["uc", "segment", "lead", "reference", "winner", "winner_value", "paired_margin",
+              "margin_lo_park", "margin_hi_park", "margin_lo_park_day", "margin_hi_park_day",
+              "park_day_unit_agrees", "winner_paired_share", "significant_models", "n_tested",
+              "n_origin_days"], floatfmt="{:.3f}"))
         w("Decision metrics:\n")
-        w(md(ho[ho["metric"] != "MAE"], ["metric", "uc", "lead", "reference", "winner", "winner_value",
-                                         "paired_margin", "significant_models"]))
+        w(md(ho[ho["metric"] != "MAE"],
+             ["metric", "uc", "lead", "reference", "winner", "winner_value", "paired_margin",
+              "margin_lo_park", "margin_hi_park", "margin_lo_park_day", "margin_hi_park_day",
+              "park_day_unit_agrees", "winner_paired_share", "significant_models", "n_tested"],
+             floatfmt="{:.3f}"))
+    lc = low_coverage_cells(C)
+    if not lc.empty:
+        w("### Low-coverage cells (paired rows < 50 % of the reference's)\n")
+        w("These absolute values are not comparable with the rest of their column. "
+          "`reaches_handover` = the cell still passes the 30 % gate and CAN appear as a winner.\n")
+        w(md(lc, floatfmt="{:.3f}", max_rows=200))
     mae = C[(C["metric"] == "MAE") & (C["region"] == "all")]
     w("### Level vs shape by lead (MAE, all rides)\n")
     w(md(wide(mae[(mae["uc"] == "UC3") & (mae["segment"] == "all")], order,
@@ -866,8 +1387,19 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
                 continue
             w(f"**MAE, {seg}** (busy = ex-ante ride q90 over the 56 days before the origin ≥ 45 min)\n")
             w(md(wide(c, order)))
-            w(f"**Paired difference vs the reference, {seg}** (park-cluster CI; `*` = wins)\n")
+            w(f"**Paired difference vs the DISPLAY reference, {seg}** (park-cluster CI). `*` means "
+              "the model beats the whole naive envelope, not just this one column — see the "
+              "per-candidate tables below for the individual verdicts.\n")
             w(md(wide(c, order, "diff")))
+            w(f"**Paired difference vs EACH naive candidate, {seg}** — park-cluster CI / park-day CI, "
+              "`*` per unit, `!` = the two units disagree. \"Nothing beats the reference\" is a statement "
+              "about the best-of-N envelope; these tables are the statement about each individual naive.\n")
+            for cand in sorted({x for x in AR["ref_candidate"]} if not AR.empty else set(),
+                               key=lambda r: _ladder_rank(r, B.INTRADAY_REFS)):
+                t = wide_vs(AR, order, "MAE", uc, seg, cand, models=CANDIDATE_TABLE_MODELS)
+                if not t.empty:
+                    w(f"vs `{cand}`:\n")
+                    w(md(t))
         reg = C[(C["metric"] == "MAE") & (C["uc"] == uc) & (C["segment"] == "all") & (C["region"] != "all")]
         if not reg.empty:
             sel = reg[reg["lead"].isin([0, 1, 3, 7, 14, 30, "m015", "m060", "m120"])]
@@ -937,6 +1469,18 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
         "fixed blocks, opensAt floors, early entry, live corrections; waits are read per 15-min slot (the frontend "
         "reads the hourly point today). Ordering: headliner pairs with a true dayPeak gap ≥ 1 min, paired on "
         "the same pairs.")
+    d5_head = False
+    for cand in sorted({x for x in AR["ref_candidate"]} if not AR.empty else set(),
+                       key=lambda r: _ladder_rank(r, B.INTRADAY_REFS)):
+        t = wide_vs(AR, order, "first-hour MAE (opening-aligned)", "D5", "all", cand,
+                    models=CANDIDATE_TABLE_MODELS)
+        if t.empty:
+            continue
+        if not d5_head:
+            w("## D5 first-hour MAE vs EACH naive candidate\n")
+            d5_head = True
+        w(f"vs `{cand}`:\n")
+        w(md(t))
     dec("D5 — rope drop", ["first-hour MAE (opening-aligned)", "first-hour MAE, schedule known at origin",
                           "first-hour MAE, schedule projected at origin", "rope-drop worth agreement"],
         "First hour = the first 4 slots of the PUBLISHED window, paired slot by slot. worth = day peak ≥ 60 ∧ "
@@ -979,8 +1523,37 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
       "whenever their profile exists — so `P(fc|not operated)` only shows how often a ride that never "
       "opened still got a curve; it is the bar a model with an open/closed decision has to beat:\n")
     w(md(opn))
-    name = "summary.md" if not windowed else f"summary_{tdir.name}.md"
+    # Key the summary filename on the tables dir, NOT on `windowed`: an
+    # origin-only pass has `windowed == False` but writes `tables_o…/`, and under
+    # the old rule it wrote `summary.md` and silently clobbered the committed
+    # full-period summary with an origin-windowed one.
+    name = "summary.md" if tdir.name == "tables" else f"summary_{tdir.name}.md"
     (run / name).write_text("\n".join(out))
+    # Provenance of THIS pass. A results dir accumulates one of these per window, so
+    # `tables_*/` can never again be a set of CSVs whose only identity is an mtime.
+    report_json.write_text(json.dumps({
+        **prov,
+        "kind": "report",
+        "run": str(run),
+        "export": str(d.export),
+        "tables_dir": tdir.name,
+        "summary": name,
+        "target_from": target_from, "target_to": target_to,
+        "origin_from": origin_from, "origin_to": origin_to,
+        "bootstrap_reps": cfg.bootstrap_reps,
+        "min_bootstrap_units": cfg.min_bootstrap_units,
+        "low_n_origin_days": cfg.low_n_origin_days,
+        "low_n_park_months": cfg.low_n_park_months,
+        "started_utc": t_start.isoformat(timespec="seconds"),
+        "finished_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "seconds": round((dt.datetime.now(dt.timezone.utc) - t_start).total_seconds(), 1),
+        "argv": sys.argv,
+        # the identity of the code that produced the scoring sums, for comparison
+        "run_shards": [{k: m.get(k) for k in
+                        ("git_sha", "git_sha_source", "code_sha256", "image_id", "export")}
+                       for m in d.meta],
+        "tables": sorted(x.name for x in tdir.glob("*.csv")),
+    }, indent=2, default=str))
     return tdir
 
 
@@ -990,10 +1563,21 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--target-from", default=None)
     p.add_argument("--target-to", default=None)
     p.add_argument("--reps", type=int, default=None, help="bootstrap reps (default 1000)")
+    p.add_argument("--memory", default=REPORT_MEMORY,
+                   help=f"DuckDB memory_limit, keep below the container cap (env "
+                        f"MLBENCH_REPORT_MEMORY, default {REPORT_MEMORY})")
+    p.add_argument("--threads", type=int, default=REPORT_THREADS,
+                   help=f"env MLBENCH_REPORT_THREADS, default {REPORT_THREADS}")
+    p.add_argument("--origin-from", default=None,
+                   help="restrict the ORIGINS as well as the target days: a target window "
+                        "pins when the truth happened, not when the forecast was made, so a "
+                        "horizon curve over a short target window still mixes origin seasons")
+    p.add_argument("--origin-to", default=None)
 
 
 def main(args: argparse.Namespace) -> int:
     t = build_report(Path(args.run), Path(args.export) if args.export else None, args.target_from,
-                     args.target_to, args.reps)
+                     args.target_to, args.reps, args.memory, args.threads,
+                     args.origin_from, args.origin_to)
     print(f"tables in {t}")
     return 0

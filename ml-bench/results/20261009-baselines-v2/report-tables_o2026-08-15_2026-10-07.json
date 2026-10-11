@@ -1,0 +1,78 @@
+{
+  "git_sha": "53165b5f",
+  "git_sha_source": "env",
+  "code_sha256": "37fbe1738389a8c909d42a9ace4d6140933489fa874c67b9ce724f818e37d3d3",
+  "image_id": "sha256:e0c59b5f6f6da6931078a48c4fd34b1943e7df2a21fae26a11e49cc6ebb9b11a",
+  "kind": "report",
+  "run": "/app/results/20261009-baselines-v2",
+  "export": "/data/exports/20261009",
+  "tables_dir": "tables_o2026-08-15_2026-10-07",
+  "summary": "summary_tables_o2026-08-15_2026-10-07.md",
+  "target_from": null,
+  "target_to": null,
+  "origin_from": "2026-08-15",
+  "origin_to": "2026-10-07",
+  "bootstrap_reps": 1000,
+  "min_bootstrap_units": 10,
+  "low_n_origin_days": 30,
+  "low_n_park_months": 30,
+  "started_utc": "2026-10-11T11:32:24+00:00",
+  "finished_utc": "2026-10-11T11:44:04+00:00",
+  "seconds": 699.6,
+  "argv": [
+    "/app/mlbench/__main__.py",
+    "report",
+    "--run",
+    "/app/results/20261009-baselines-v2",
+    "--origin-from",
+    "2026-08-15",
+    "--origin-to",
+    "2026-10-07"
+  ],
+  "run_shards": [
+    {
+      "git_sha": "ea9a8438",
+      "git_sha_source": null,
+      "code_sha256": "25ed0c3b26d3accdc3e0c59f1ace2b2f00fcc1bade3700d89e2f6efc23aac59c",
+      "image_id": "sha256:a1e54cb8fea689596a6177a47c6ca069d2e1777eb5e244379fe10d423be0c627",
+      "export": "/data/exports/20261009"
+    },
+    {
+      "git_sha": "ea9a8438",
+      "git_sha_source": null,
+      "code_sha256": "25ed0c3b26d3accdc3e0c59f1ace2b2f00fcc1bade3700d89e2f6efc23aac59c",
+      "image_id": "sha256:a1e54cb8fea689596a6177a47c6ca069d2e1777eb5e244379fe10d423be0c627",
+      "export": "/data/exports/20261009"
+    },
+    {
+      "git_sha": "ea9a8438",
+      "git_sha_source": null,
+      "code_sha256": "25ed0c3b26d3accdc3e0c59f1ace2b2f00fcc1bade3700d89e2f6efc23aac59c",
+      "image_id": "sha256:a1e54cb8fea689596a6177a47c6ca069d2e1777eb5e244379fe10d423be0c627",
+      "export": "/data/exports/20261009"
+    }
+  ],
+  "tables": [
+    "cells.csv",
+    "cells_all_refs.csv",
+    "coverage_horizon.csv",
+    "d6_cross_park_ordering.csv",
+    "d6_extra.csv",
+    "d7_star.csv",
+    "d7_tie_rate.csv",
+    "d8_production_expected_error.csv",
+    "d8_quantile_coverage.csv",
+    "d8_trailing28.csv",
+    "d9_level_coverage.csv",
+    "d9_openness.csv",
+    "decision_metrics.csv",
+    "handover.csv",
+    "horizon_curve_mae.csv",
+    "lead_availability.csv",
+    "low_coverage_cells.csv",
+    "mae_by_season.csv",
+    "ref_choice.csv",
+    "uc4_busy_days.csv",
+    "usable_horizon.csv"
+  ]
+}
