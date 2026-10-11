@@ -14,6 +14,7 @@ ruling -- it is a per-table label and a subtitle, not a caveats-section line.
 
     python3 par829_tables.py <run-dir>
 """
+import argparse
 import csv
 import sys
 from pathlib import Path
@@ -60,10 +61,21 @@ def win(r):
 
 
 def main(argv):
-    if len(argv) != 1:
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("run")
+    # The full margin set is ~1 700 cells, which is a committed artefact but far too
+    # large for a PR body or a RESULTS section. --ref restricts the published table to
+    # the baselines a verdict actually rests on (the real incumbents), so the focused
+    # table is still GENERATED from the CSVs rather than transcribed by hand.
+    ap.add_argument("--ref", action="append", default=[])
+    ap.add_argument("--model", action="append", default=[])
+    ap.add_argument("--no-staleness", action="store_true")
+    if not argv:
         print(__doc__)
         return 2
-    run = Path(argv[0])
+    a = ap.parse_args(argv)
+    run = Path(a.run)
+    keep_ref, keep_model = set(a.ref), set(a.model)
     found, absent = 0, []
     for part in ("slot", "intraday"):
         for lbl in ("window", "alltargets"):
@@ -72,6 +84,10 @@ def main(argv):
                 absent.append(f.name)
                 continue
             rows = read(f)
+            if keep_ref:
+                rows = [r for r in rows if r["ref"] in keep_ref]
+            if keep_model:
+                rows = [r for r in rows if r["model"] in keep_model]
             if not rows:
                 absent.append(f.name + " (empty)")
                 continue
@@ -80,6 +96,11 @@ def main(argv):
             print(f"{PASS_LABEL[lbl]}. Source: `{f.name}`. "
                   "`margin < 0` means the candidate is better; a win requires the "
                   "**park-cluster** interval to exclude 0.\n")
+            if keep_ref or keep_model:
+                shown = ", ".join(f"`{x}`" for x in sorted(keep_ref | keep_model))
+                print(f"**Filtered view** \u2014 only {shown} shown. The run paired "
+                      "against every named baseline; the full set is in the CSV beside "
+                      "this file. Nothing is excluded on the strength of its result.\n")
             print("`cov_ref` = paired rows / the baseline's own covered rows; `cov_model` "
                   "= paired rows / the candidate's own covered rows. **BENCH-SPEC #8**: the "
                   "publication gate needs BOTH \u2265 0.30, and a cell below it is *not "
@@ -113,7 +134,9 @@ def main(argv):
                           f"{r.get('n_origin_days', '')} |")
 
     st = run / "staleness.csv"
-    if st.exists():
+    if a.no_staleness:
+        pass
+    elif st.exists():
         rows = read(st)
         if rows:
             found += 1
