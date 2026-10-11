@@ -224,18 +224,29 @@ Scored over all 231 origins (run `20261009-par830-drivers`), the result splits
 by what is measured. **The day *ranking* improves, over the whole backtest
 period**: `lvl_driver_level` beats every other level source on the day
 comparison (D7 +0.068 at d8–30, +0.094 at d31–90) and the crowd bucket (D6
-+0.032 at d30, +0.024 at d90), and it carries the dayPeak ordering to d90 and
-the optimiser to d30 — further than any other model. **The 15-min slot MAE does
-not**: the win measured on the 8-week late-summer/autumn window (usable horizon
-d10 all rides, d60 busy) **reverses over the full period**, where `driver_level`
-has no usable horizon on either segment and is worse than H5 at every lead
-(+0.273 … +0.935 all rides). By season it beats H5 only in autumn and loses in
-spring, summer and winter. It is therefore **shadow-only, scoped to the ranking
-surfaces**, and it also regresses `bestVisitTimes` (D3) against both climatology
-and H5 under both bootstrap units in both passes. Its UC4 is **not measurable**
-in either pass (park-month unit: 3 origin days windowed, 6–9 full period, against
-a 30-origin-day gate) — the empty `usable_horizon.csv` there means untested, not
-unbeaten.
++0.032 at d30, +0.024 at d90), it wins the **within-park-month day ranking
+(UC4)** at d1–d60 (+0.065 … +0.109, on 349–607 park-months) and it carries the
+**optimiser regret** to d30 with the largest margin of any model (−1.17 … −1.52
+against H5's −0.76 … −1.14). **The 15-min slot MAE does not**: the win measured
+on the 8-week late-summer/autumn window (usable horizon d10 all rides, d60 busy)
+**reverses over the full period**, where `driver_level` has no usable horizon on
+either segment and is worse than H5 at every lead (+0.273 … +0.935 all rides).
+By season it beats H5 only in autumn, and the deficit outside autumn is
+**seasonal rather than a cold start** (the cold start is winter, 1.9 % of slots;
+excluding winter and spring still leaves +0.14 … +0.24 vs H5). It is therefore
+**shadow-only, scoped to four ranking surfaces** (D6, D7, D4 optimiser regret,
+UC4), and it also regresses `bestVisitTimes` (D3) against both climatology and
+H5 under both bootstrap units in both passes.
+
+Two things it is **not** good at, which the first version of this section got
+wrong in the model's favour: **`dayPeak` ordering** — `driver_level` is
+significant to d90 but wins at no lead (`lvlh5_tft` d0–d45, `lvlh5_naive`
+d60–d90) and its margin is below H5's at every lead d7–d90, so `dayPeak` must
+not be routed to it; and **anything beyond d90** — UC4 is a measured *loss* at
+d120 (−0.029 [−0.052, −0.007]) and D6 at d180. UC4 **is** measurable, contrary
+to the earlier text here: its unit is the park-month (BENCH-SPEC recorded change
+**#3**), and the `3` / `6–9` quoted before were counts of month *labels*. See
+`level-drivers.md` §6.6a, §6.7b, §6.7c.
 
 A caveat that applies to **every** model reported on the common-target window,
 not just this one: at fixed target dates lead `L`'s origins are `target − L`, so
@@ -360,11 +371,23 @@ brackets are not comparable and the gates drop them from the hand-over.
 | UC2/UC3 within-ride-day Spearman | `h5` | d45 | d90 |
 | D6 crowd bucket | `lvl_tft` | — (loses d1–d6) | d21 |
 | D7 day comparison | `lvl_tft` | — (loses d1–7) | d31–90 |
-| UC4 Spearman | every level source | — | — |
+| UC4 Spearman | every level source | — ‡ | — ‡ |
 
 A usable horizon shorter than the max significant lead means a lead in between
 breaks the run — usually because the reference switches from `wt_med` to `clim`
 at d7 and nothing beats climatology in the d7–d60 band.
+
+‡ **The empty UC4 rows above are a gate artefact, not a measurement** —
+`usable_horizon()` applies the ≥ 30-**origin-day** LOW-N gate to UC4, whose unit
+is the park-**month**, so nothing is ever tested there and `handover.csv`
+additionally names the reference itself the winner with zero significant models.
+**BENCH-SPEC recorded change #3** fixes the rule (gate UC4 on ≥ 30 park-months)
+but the code change is still outstanding; read UC4 off `cells.csv`
+(`n_park_days`, `wins`, `diff_lo_park/hi_park`) until it lands. The PAR-830 run
+has 62–607 park-months per lead and a measured UC4 result under that gate
+(`level-drivers.md` §6.6a). "No level source wins at any lead" in the hand-over
+table above should be read as "untested", exactly as the PR #445 critic (B4)
+required.
 
 ### What the numbers say
 

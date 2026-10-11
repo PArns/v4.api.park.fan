@@ -7,7 +7,13 @@
 > **12–16 % of the squared log deviation of a ride-day and 19–28 % of a park-day**
 > is explainable out of sample; the rest is noise at this resolution. That cuts
 > the level MAE by 4–8 % per ride and 7–12 % per park, and lifts the within-month
-> day ranking (UC4) from 0.27 → 0.34 at d1 and 0.11 → 0.25 at d60.
+> day ranking (UC4) from 0.27 → 0.34 at d1 and 0.11 → 0.25 at d60 — all four
+> figures from the **offline** analysis (§2). Scored through the **harness**, the
+> plug-in wins UC4 at d1–d60 (+0.065 … +0.109, 349–607 park-months) and loses at
+> d120, but has **no usable horizon on 15-min slot MAE** over the full backtest
+> period: the drivers move a day *ranking* much further than they move a
+> *minute* (§6.7, §6.8). Verdict: **shadow on four ranking surfaces, serve
+> nothing.**
 
 Code: `ml-bench/mlbench/drivers.py` (the driver table, shared),
 `ml-bench/mlbench/driver_analysis.py` (`python -m mlbench drivers`),
@@ -79,8 +85,10 @@ Level MAE (minutes), naive → main model, all CIs exclude 0:
 
 - **The unexplained rest is noise at this resolution**: a ride-day's log
   deviation has SD 0.56 (d1) – 0.66 (d60); even the oracle-weather model leaves
-  86 % of it (ride) and 78 % (park). Averaging over headliners removes ride noise,
-  which is why the park level is roughly twice as explainable.
+  **86 % of it (ride) and 78 % (park) at d1**. Averaging over headliners removes
+  ride noise, which is why the park level is roughly twice as explainable. Quote
+  the share with its lead attached: the headline model leaves **88 % / 80 % at
+  d1** and **84 % / 72 % at d60** (critic N3).
 - **The gain grows with the lead** to d60: the naive reference gets staler (it is
   a different season) and the drivers carry the calendar change. d90 is lower,
   because fewer origins have training rows that far out.
@@ -89,11 +97,15 @@ Level MAE (minutes), naive → main model, all CIs exclude 0:
   interact (a school break matters only where the park is open long hours).
 - **Weather (ORACLE)** adds +0.02–0.03 park R² on top — an upper bound, since a
   forecast is worse than the actual; and only ≤ 16 days exist at all.
-- **Where:** EU ride-day R² 0.15–0.21, NA 0.05–0.14, Asia 0.01–0.09 (holiday
-  data is richest for EU). By season the model wins most in autumn (R² 0.22–0.31,
-  school breaks ending, Halloween hours) and spring; in **summer it is slightly
-  worse than naive at d1–d14** (+0.06–0.10 min): the regime is stable for weeks,
-  the reference is already right, and the model adds variance.
+- **Where:** EU ride-day R² 0.15–0.21, NA 0.05–0.14, Asia 0.01–0.09 **at
+  d1–d60** (holiday data is richest for EU; d90 is lower at 0.126 EU and falls
+  outside every range on this page unless the lead band is stated — critic N4).
+  By season the model wins most in autumn (R² **0.22–0.31 at d1–d60**, 0.163 at
+  d90; school breaks ending, Halloween hours) and spring; in **summer it is
+  slightly worse than naive at d1–d14** (+0.06–0.10 min, every CI excluding 0):
+  the regime is stable for weeks, the reference is already right, and the model
+  adds variance. At d30 summer is n.s. (−0.009) and at d60/d90 it turns into a
+  win (−0.644 / −0.185).
 
 ## 3. Which drivers (univariate, `tables/univariate_effects.csv`)
 
@@ -120,11 +132,18 @@ Mean deviation from naive with vs without the driver (park-cluster 95 % CI), d7:
 Effects grow with the lead for the slow drivers (school breaks +21 % at d7 →
 +32 % at d30) — the naive reference has not seen the break yet.
 
-Permutation importance of the main model (`tables/permutation_importance.csv`):
-the reference level (mean reversion — high references come down), weekday,
-headliner, then **opening hours relative to the reference** (`r_hours`,
-`close_h`, `hours`), the **change in school-break state** (`d_school`), then
-weather (ORACLE). Group ablation (common window, park R², d7): `cal+hol` 0.152,
+Permutation importance (`tables/permutation_importance.csv`) — note this table
+is **not** the headline `cal+hol+sched` model: `driver_analysis.py:429` ranks
+`cal+hol+sched+wx`, i.e. the **ORACLE-weather** fit, on a single fold (the
+second-to-last origin month) pooled over `L ∈ {1, 7, 30}`, which is why the file
+has `wx` features in it and **no `lead` column** (critic N2). Order, exactly:
+the reference level `log_ref` (+0.0734 — mean reversion, high references come
+down), `dow` (+0.0119), `is_headliner` (+0.0092), **`r_hours_a`** (+0.0088,
+opening hours relative to the reference days), the **change in school-break
+state `d_school`** (+0.0067), then `close_h_a` (+0.0047) and `hours_a` (+0.0046),
+then weather (ORACLE, `d_precip` +0.0028). So `d_school` sits *between* the
+opening-hours features, not after all three. Group ablation
+(common window, park R², d7): `cal+hol` 0.152,
 `cal+sched` 0.190, both 0.222 — schedules carry more than holidays and the two
 add up.
 
@@ -142,6 +161,24 @@ add up.
   the first season in the data starts where our recording starts and is masked.
 - **No previous year** — month / day-of-year effects cannot be learnt yet; from
   2026-12-23 every month has one year of history.
+- **Three offline `sched` drivers are only partly as-of** (critic S5, disclosed
+  rather than fixed). `since_season_start`, `to_season_end` and
+  `since_prev_open` are built with window functions over the whole `windows`
+  table (`max(date) OVER (PARTITION BY park_id)`, `max(date) OVER (park_id,
+  season_id)`, `date − lag(date)`), while `add_asof` NULLs a driver only when the
+  **target day's own** `win_upd_us >= origin_us`. A target day published early
+  can therefore carry a value derived from neighbour rows published *after* the
+  origin, so the offline headline R² (0.117–0.161 ride / 0.195–0.282 park)
+  carries a small, undisclosed-until-now impurity. Blast radius, stated plainly:
+  season start/end are **n.s. anyway** and none of the three is in the offline
+  top-16 of 37 by permutation importance, but `since_prev_open` is the #3
+  **actionable** covariate of §5 ("first day after a closure, −18 %"), so that
+  recommendation rests on a driver with this caveat.
+  **The harness plug-in is clean of it**: `driver_level` excludes
+  `since_season_start_a` / `to_season_end_a` entirely (§5a), and the
+  `since_prev_open_a` it does use is computed from windows rebuilt out of
+  *observed past truth* plus as-of covariates, so no post-origin information can
+  enter. Nothing in §6 is affected; §2–§5 are.
 
 ## 5. Ranked covariates worth adding to TFT / CatBoost
 
@@ -158,8 +195,11 @@ TFT `FUTR_EXOG` (nf-service `db.py`) has holidays, calendar and weather but
    neighbour regions) — both models have the state, not the change; the change is
    what moves the level against a recent-history baseline (−20 % / +19 %).
 3. **First day after a closure** (`since_prev_open`, parks closed Mon/Tue) — −18 %.
-4. **Evening event / late close** (close hour vs reference) — +14 %; ticketed
-   event flags add nothing measurable yet (one season).
+4. **Evening event / late close** (close hour vs reference) — +14 %. The
+   **ticketed-event flags are not usable yet**: n.s. at d7 (+0.3 %) and
+   significant at d30 but with the **wrong sign** (−15.2 %), which §6.8 shows is
+   a confound with the flags' own sync window rather than an event effect of
+   either sign. Do not wire them until a second season exists.
 5. **Weather forecast** (rain ≥ 10 mm −12 %) — both models have it; the gain is
    ≤ +0.03 R² even as ORACLE and limited to 16 d. Archive the forecasts (PAR-831)
    before claiming more.
@@ -167,8 +207,31 @@ TFT `FUTR_EXOG` (nf-service `db.py`) has holidays, calendar and weather but
    `is_bridge_day` and `days_until/since_holiday`.
 
 **Achievable gain:** about 4–8 % level MAE per ride and 7–12 % per park at
-d1–d60, ranking +0.06–0.15 Spearman within month. Section 6 shows what that
-buys on the 15-min slots.
+d1–d60, ranking +0.06–0.15 Spearman within month — measured by the offline
+analysis, on the offline feature set. Section 6 shows what a **reduced** version
+of it buys on the 15-min slots; §5a says how much was taken out.
+
+### 5a What the harness plug-in actually scores (it is not the §2 model)
+
+`drivers.py` builds the training and prediction rows with the same SQL for both
+bodies of evidence, so the *drivers* are the same — but the **model is not the
+same**. `models/driver_level.py:41-43` drops six features from the offline set:
+
+- `is_headliner` — the offline model's **#3 feature** by permutation importance
+  (`mae_increase` +0.0092, behind only `log_ref` +0.0734 and `dow` +0.0119). The
+  plug-in cannot have it: the runner exposes no headliner flag to plug-ins, so
+  `driver_level.py:120` sets `is_headliner = False` for every ride.
+- `since_season_start_a` / `to_season_end_a` — reported n.s. offline anyway, and
+  deliberately excluded here (see the as-of caveat in §4).
+- `ticketed_a` / `extra_a` / `ref_ticketed` — the event flags, which §6.8 shows
+  are confounded with their own sync window.
+
+**§6 is therefore a lower bound on what §2–§5 priced, not a realisation of it**,
+and part of why §6's slot MAE under-delivers against §2's "achievable gain" is
+that the scored model is weaker than the analysed one. An earlier version of
+this page said *"what the analysis measures is what the harness scores"*; that
+is true of the SQL and false of the model, and it is corrected here and in
+`drivers.py`'s docstring (PR #447 critic, S4).
 
 ## 6. Scored through the harness (`driver_level`)
 
@@ -180,7 +243,7 @@ buys on the 15-min slots.
 > | Command | `python -m mlbench drivers` | `python -m mlbench run --model driver_level` + `report` |
 > | Unit | ride-day / park-day log deviation from the naive level | 15-min slot, ride-day, park-day, park-month |
 > | Tables | `results/20261009-par830-drivers/drivers/tables/` | `.../tables_2026-08-15_2026-10-07/`, `.../tables/` |
-> | Numbers | R² vs naive, level MAE in minutes, UC4 Spearman over 385 park-months | slot MAE, D3–D9 decision metrics, hand-over |
+> | Numbers | R² vs naive, level MAE in minutes, UC4 Spearman over 385 park-months | slot MAE, D3–D9 decision metrics, UC4 Spearman over 62–607 park-months, hand-over |
 >
 > The R² figures (0.12–0.16 ride-day, 0.19–0.28 park-day), the level-MAE cuts
 > (−4…−8 % ride, −7…−12 % park) and the UC4 Spearman 0.27 → 0.34 at d1 /
@@ -202,6 +265,13 @@ every lead is scored on the same 54 target days.
 > window also does *not* remove the season confound the way it was meant to:
 > at fixed target dates, lead `L`'s origins are `target − L`, so the lead axis
 > and the origin season move together (§6.7, point 3).
+>
+> **Two claims were corrected after the PR #447 critic pass, both in the
+> favourable direction.** (a) `driver_level` is **not** the dayPeak winner at any
+> lead and must not feed `dayPeak` — §6.7c. (b) UC4 **is** measurable under
+> BENCH-SPEC #3 (park-months, not month labels) and is a measured win at d1–d60
+> with a measured loss at d120 — §6.6a and §6.7b. The season-vs-cold-start
+> question this page used to leave open is **resolved** in §6.7, point 2.
 
 Tables:
 `ml-bench/results/20261009-par830-drivers/tables_2026-08-15_2026-10-07/`
@@ -213,20 +283,57 @@ Tables:
 `sha256:7b5e872f614f`, `--reference` (the run refuses to start without a known
 SHA and image id). `e0a4547a` has PAR-827's `ea9a8438`, `a1d20bf8`, `336b2b62`
 and `689a7b84` as ancestors, and `mlbench/baselines.py`, `mlbench/runner.py` and
-`mlbench/build.py` are **byte-identical to `ea9a8438`**. Those commits are the
+`mlbench/build.py` are **byte-identical to `ea9a8438`** (as are `decisions.py`,
+`stats.py`, `config.py` and `export.py`). Those commits are the
 **plug-in ↔ built-in coverage-parity fixes**: before them a plug-in forecast only
 the origin-known window while the built-in baselines forecast the whole
 published one, the plug-in grid could emit slot starts matching no truth slot,
 and a slot at a projected closing time read as inside the window. This run has
 them, so the cross-baseline comparison below is sound — **a run without them is
-not comparable to it**. The `mlbench` sources of this branch still hash to that
-same `code_sha256`, so rebasing onto the PAR-827 head changed no benchmark code
-and the run needs no repeat.
+not comparable to it**.
 
-The plug-in's baselines reproduce the PAR-827 `20261009-baselines-v2` run
-**bit-identically** (`wt_med`, `clim`, `h5`, `lvlh5_tft`, `oracle_level`,
-`oracle_shape`, `prod_served` agree to 1e-15 at every lead checked), so the
-comparison below is against exactly the published baselines.
+**`code_sha256` at the branch head (corrected, critic S1).** `915dc784…` holds
+at `e0a4547a` *and* at `312eaf56^`, so the rebase onto the PAR-827 head really
+did change no benchmark code. The **branch head hashes to `c7f95e4a…`**, because
+commit `312eaf56` adds two `os.environ` reads to `report.py` — an earlier version
+of this paragraph claimed the head still hashed to `915dc784…`, which would make
+a reviewer re-deriving provenance from the head conclude the run is stale. The
+substantive claim is unaffected and in fact stronger than it was stated: against
+the run commit `e0a4547a`, **`report.py` is the only `mlbench` file that differs
+at the head** (`git diff --name-only e0a4547a HEAD -- ml-bench/mlbench/`), and
+the two patched f-strings evaluate to the previous literals (`SET threads=4`,
+`SET memory_limit='3GB'`) when the env vars are unset, so **no scored number can
+move**. The committed `tables/` were also produced by a container that started
+before that commit.
+
+**One commit message is superseded** (critic S2). `312eaf56`'s message says the
+full-period pass "does not fit a 4 GB container … OOM-killed with rc=137". That
+rationale is wrong: the pass finished **rc=0 in 1 356 s in a 2 CPU / 4 GB
+container at the unpatched `memory_limit='3GB'`** — the earlier rc=137 was
+purely the 3 GB *container*, and the disproof was already running when the
+message was written. The patch is harmless (the defaults are the previous
+literals) and is kept as headroom, not as a fix. The message is corrected here
+rather than by amending the commit, because rewriting it would change this
+branch's SHAs and the review's provenance checks are pinned to them.
+
+**Tests.** `pytest -q ml-bench/tests` at this head: **19 passed** (21.9 s), run
+inside this run's own image `sha256:7b5e872f614f` with the head's `mlbench/` and
+`tests/` mounted over the image's baked copy — i.e. the reference environment
+with the current code. This closes the gap the earlier revision disclosed (the
+suite had not been re-run after `312eaf56`).
+
+The plug-in's baselines reproduce the PAR-827 `20261009-baselines-v2` run on
+**every slot and decision cell**: of 3 770 shared `cells.csv` keys, 3 688 agree
+to < 1e-12 and 82 differ. The agreeing set includes `wt_med`, `clim`, `h5`,
+`lvlh5_tft`, `oracle_level`, `oracle_shape`, `prod_served` and **every**
+UC1/UC2/UC3/D1–D6/D8/D9 cell, so the comparison below is against exactly the
+published baselines. The 82 that differ are 78 UC4 Spearman and 4 D7 winner-
+accuracy cells on the `lvl_*` family (`lvl_clim` max 7.2e-3, `lvl_wt56` 2.3e-3,
+`lvl_naive4` 6.3e-4, `lvl_snaive7` 2.0e-4, `lvl_cbd`, `lvl_tft`) at **identical
+`n`** — tie-breaking non-determinism in the Spearman, not a coverage change; the
+D7 references for the surviving claims move by ≤ 2.2e-6 and no quoted margin
+changes. (An earlier revision said "bit-identically" without this split, which
+was broader than the evidence — critic S8.)
 
 ### 6.1 Hand-over — UC2/UC3 slot MAE (15-min slots, minutes)
 
@@ -238,7 +345,18 @@ test calls worse — on gaps of 0.02–0.19 min against a park-cluster CI half-w
 of ≈ 0.24. PAR-827 is re-reporting under a paired reference selection. So no
 conclusion on this page rests on "beats / loses to the reference". The primary
 evidence is the **paired margin against each named baseline individually**,
-which does not move when the reference choice does:
+which does not move when the reference choice does.
+
+> **This grid is a stand-in for `cells_all_refs.csv`, which does not exist yet.**
+> BENCH-SPEC recorded change **#5** requires every model to be reported against
+> each individual naive candidate in a `cells_all_refs.csv`; neither pass of this
+> run has that file (PAR-827 owes it, and it landed on its branch after this run
+> was scored). The per-baseline margins below are hand-computed as a
+> difference-in-differences through each lead's common reference, which is
+> disclosed rather than presented as the spec's table. A DiD through a shared
+> reference equals a direct paired comparison only where the two models' coverage
+> coincides; at 92–96 % (full period) it very nearly does, but not exactly
+> (critic N6).
 
 Paired margin of `driver_level` against each named baseline — UC2/UC3 slot MAE,
 **all rides** (minutes per slot, negative = `driver_level` better). Each column
@@ -371,9 +489,11 @@ Two things to take from this table:
 1. **In this window** `driver_level` extends the slot-forecast horizon on busy
    rides from d7 to d60 (d90 under the park-day unit) and the optimiser's from
    d7 to d14, under either unit. **Over the full period the slot-MAE horizon is
-   empty on both segments** while the optimiser's grows to d30 and the dayPeak
-   ordering to d90 (§6.7a) — so of these three, only the two *ranking* horizons
-   are properties of the model rather than of the window.
+   empty on both segments** while the optimiser's grows to d30 (§6.7a) — so of
+   these two, only the *ranking* horizon is a property of the model rather than
+   of the window. **The dayPeak row is not evidence for this model**: the d90 in
+   it is a four-way tie that `h5` and `lvlh5_naive` also reach, and
+   `driver_level`'s margin there is the smaller one (§6.7c).
 2. **D3 is the only row where `driver_level` has no horizon at all under either
    unit** while `h5` reaches d45. That is the regression, not a borderline
    reading (§6.3).
@@ -394,8 +514,15 @@ critic found. Nothing about the rope drop is claimed here.
   | hit rate (top-2) | d1 | 0.790 | 0.818 | 0.819 | −0.018 [−0.026, −0.009]\* | **−0.034** |
   | hit rate (top-2) | d7 | 0.786 | 0.820 | 0.819 | −0.026 [−0.034, −0.016]\* | **−0.038** |
   | hit rate (top-2) | d30 | 0.771 | 0.820 | 0.820 | −0.042 [−0.054, −0.031]\* | **−0.054** |
-  | regret (min) | d1 | 3.369 | 3.145 | 2.932 | −0.015 [−0.263, +0.197] | **+0.44 min** |
-  | regret (min) | d30 | 3.783 | 3.100 | 3.005 | +0.533 [+0.230, +0.820]\* | **+0.78 min** |
+  | regret (min) | d1 | 3.369 | 3.145 | 2.932 | −0.015 [−0.263, +0.197] | **+0.51 min** |
+  | regret (min) | d30 | 3.783 | 3.100 | 3.005 | +0.533 [+0.230, +0.820]\* | **+0.86 min** |
+
+  The last column is a **paired** margin throughout (a difference of two paired
+  differences through that lead's common reference). An earlier revision printed
+  the regret rows as raw value differences (+0.44 / +0.78) in a column headed
+  "paired margin", mixing two quantities in one column — corrected here to the
+  paired values +0.508 / +0.857 (critic S12). The raw differences are +0.437 and
+  +0.779 if you want them; both readings say the same thing.
 
   Cause: the first hour is deliberately *not* scaled (BENCH-SPEC baseline 5), so
   scaling the rest of the day shifts the rope-drop ramp against it and the
@@ -404,7 +531,10 @@ critic found. Nothing about the rope drop is claimed here.
   therefore be wired so it cannot feed `bestVisitTimes`.** On its own this bounds
   the recommendation to shadow.
 
-- **Summer is worse than `h5` at every lead.** `mae_by_season.csv` is
+- **Summer is worse than `h5` at d1/d3/d7/d30 in this window, and at every
+  scored lead over the full period.** (In the window pass d14 is the one
+  exception, at −0.081; over the full period summer is +0.291 … +0.433 at every
+  lead.) `mae_by_season.csv` is
   `Σ|error| / Σn` per model, **each model on its own coverage — unpaired**, so
   read the direction, not the decimals (`driver_level` covers 82 % of operated
   ride-days against `h5`'s 92 %, §6.4a). Against `h5`: autumn −0.47 (d1) /
@@ -521,7 +651,7 @@ BENCH-SPEC marks a lead LOW-N below **30 origin days**. In the headline window
 
 | cells | origin days | affected |
 |---|---|---|
-| 88 | **3** | **UC4 Spearman within park-month, every lead — LOW-N** |
+| 88 | **3** | UC4 Spearman within park-month, every lead — **3 month LABELS, not a sample size; the unit is the park-month and there are 62–196 of them, so these are NOT LOW-N** (BENCH-SPEC #3, §6.6a) |
 | 3 | **26–27** | **D4 dayPeak pairwise ordering, d60 — LOW-N** |
 | 3 | 37 | UC3 dayPeak Spearman, d60 |
 | 18 | 48 | D3 (×3), D5 rope-drop, UC2/UC3 slot Spearman, UC3 dayPeak abs err — all d60 |
@@ -529,24 +659,59 @@ BENCH-SPEC marks a lead LOW-N below **30 origin days**. In the headline window
 | 8 | 53 | the same metrics at d45 |
 | 19 | 58 / 75 / 112 | D7 day comparison (its unit is the day *pair*) |
 
-Only UC4 and D4-dayPeak-ordering-at-d60 fall below the gate; both are marked at
-every use. **Harness defect, same as PR #445's B4:** the windowed pass's
+Only **D4-dayPeak-ordering-at-d60** falls below the gate, and it is marked at
+every use. UC4's `3` is a count of month labels, not of units — under
+BENCH-SPEC #3 its 62–196 park-months clear the gate comfortably (§6.6a).
+**Harness defect, same as PR #445's B4:** the windowed pass's
 `lead_availability.csv` is a verbatim copy of the full-period table (231, 230,
 … 51 origin days) rather than the windowed counts — it is **not** the source of
 the 54, which comes from `cells.csv`'s per-cell `n_origin_days`. Do not read
 `lead_availability.csv` out of a windowed pass. (Fix belongs to PAR-827; it does
 not change any number here.)
 
-### 6.6a UC4 is not measurable in the headline window at all
+### 6.6a UC4 *is* measurable — the gate the harness applies to it is the wrong one
+
+**Corrected after the PR #447 critic (A2).** An earlier version of this page
+declared UC4 "not measurable in this window" because every UC4 cell shows
+`n_origin_days = 3`. That was a misreading of the gate, and it threw away this
+run's strongest long-horizon evidence.
 
 The UC4 unit is the park-**month** (`report.py:342` sets
-`u = {"park_id": park, "date": mon}`) and the 8-week headline window spans three
-months, so **every** UC4 cell at every lead rests on **3 origin days** — one
-tenth of the gate. `usable_horizon.csv` consequently reports `leads_tested = 0`
-for all six level sources. That is an **empty result because nothing was
-tested**, and it is explicitly *not* evidence that a naive baseline won. The
-headline UC4 row reads **"not measurable in this window"**. §6.7b reports the
-full-period UC4, which is larger but still LOW-N.
+`u = {"park_id": park, "date": mon}`), and **BENCH-SPEC recorded change #3**
+(binding, owner PAR-827, added after PR #445's critic finding B4) says so
+explicitly:
+
+> **LOW-N is per unit of analysis.** … UC4's unit is the park-**month**, so it is
+> gated on **≥ 30 park-months**, not on the number of distinct month labels. *A
+> 3-month target window has 3 distinct month labels but ~200 park-months.*
+
+The `3` is the count of distinct month **labels** the 8-week window spans
+(Aug/Sep/Oct), not a sample size. The sample size is `n_park_days`, which for
+UC4 *is* the park-month count:
+
+| lead | d1 | d7 | d30 | d60 | d90 | d120 | d180 |
+|---|---|---|---|---|---|---|---|
+| park-months, headline window | **196** | 190 | 177 | 167 | 146 | 112 | 62 |
+| park-months, full period | **607** | 522 | 446 | 349 | 260 | 178 | 62 |
+| gate ≥ 30 | pass | pass | pass | pass | pass | pass | pass |
+
+Every lead clears the gate by 2–20×, in **both** passes, with
+`paired_share = 1.000` at every lead — the spec's own illustrative "~200
+park-months" is, to within four, this window's 196. **So UC4 is measured here,
+not deferred.** The results are in §6.7b.
+
+**Harness defect (belongs to PAR-827, not fixed in this run's code).**
+`usable_horizon()` (`report.py:234-236`) applies `n_origin_days >=
+cfg.low_n_origin_days` to *every* metric, including the park-month-unit UC4, so
+it prints `leads_tested = 0` for all six level sources even though `cells.csv`
+has `wins = True` at thirteen leads. `handover.csv` carries the same defect and
+is worse: at every UC4 lead it names **the reference itself** as the winner with
+`significant_models = 0`, which reads exactly like "a naive baseline won" — the
+tautology B4 was raised to kill. BENCH-SPEC #3 was *recorded* but **not
+implemented**; PAR-827 has the fix on its branch. Until it lands, read UC4 off
+`cells.csv` (`n_park_days`, `wins`, `diff_lo_park/hi_park`) and ignore
+`usable_horizon.csv` and `handover.csv` for UC4. PAR-828 and PAR-829 will hit
+the identical vacuous answer.
 
 ### 6.7 Full-period pass — the slot-MAE win does NOT survive it
 
@@ -562,6 +727,7 @@ favourable pass stand alone.
 |---|---|---|---|---|---|---|---|
 | d1 | **+0.206** | [+0.093, +0.327] | [+0.164, +0.246] | −0.112 | [−0.414, +0.167] | [−0.214, −0.018] | 230 |
 | d3 | **+0.176** | [+0.056, +0.303] | [+0.133, +0.218] | −0.169 | [−0.485, +0.122] | [−0.274, −0.069] | 228 |
+| d6 | +0.110 | [−0.023, +0.248] | [+0.064, +0.155] | −0.304 | [−0.655, +0.010] | [−0.419, −0.199] | 225 |
 | d7 | **+0.270** | [+0.127, +0.422] | [+0.225, +0.313] | +0.032 | [−0.342, +0.396] | [−0.075, +0.140] | 224 |
 | d14 | **+0.260** | [+0.109, +0.413] | [+0.216, +0.303] | −0.010 | [−0.411, +0.360] | [−0.121, +0.093] | 217 |
 | d30 | **+0.280** | [+0.117, +0.442] | [+0.228, +0.330] | −0.023 | [−0.439, +0.382] | [−0.151, +0.100] | 201 |
@@ -575,12 +741,35 @@ Paired margin vs each named baseline over the full period (negative = better):
 | `h5` | all | +0.273 | +0.248 | +0.350 | +0.300 | +0.348 | +0.379 | +0.500 | +0.494 | +0.935 |
 | `wt_med` | all | +0.206 | +0.176 | +0.270 | +0.215 | +0.260 | +0.280 | +0.396 | +0.401 | +0.839 |
 | `clim` | all | −0.316 | −0.314 | −0.102 | −0.108 | +0.004 | +0.124 | +0.262 | +0.329 | +0.644 |
+| `lvlh5_tft` | all | +0.118 | −0.002 | −0.054 | −0.160 | −0.186 | −0.181 | −0.090 | gated | — |
 | `h5` | busy | +0.063 | +0.019 | +0.238 | +0.139 | +0.209 | +0.220 | +0.391 | +0.326 | +1.110 |
 | `wt_med` | busy | −0.112 | −0.169 | +0.032 | −0.075 | −0.010 | −0.023 | +0.140 | +0.106 | +0.890 |
 | `clim` | busy | −1.118 | −1.089 | −0.652 | −0.668 | −0.475 | −0.314 | −0.157 | −0.091 | +0.552 |
+| `lvlh5_tft` | busy | +0.383 | +0.098 | −0.000 | −0.251 | −0.351 | −0.442 | −0.270 | gated | — |
+
+**The `lvlh5_tft` rows are the ones that favour `driver_level`, and they were
+missing from an earlier revision of this table** (critic S10) even though the
+headline-window twin carries them. Over the full period `driver_level` still
+beats TFT×H5 on slot MAE at **d3–d45 on all rides and d7–d45 on busy rides**
+(−0.002 … −0.186 and −0.000 … −0.442), while losing to it at d1 (+0.118 /
++0.383). Caveat on these two rows specifically: `lvlh5_tft`'s paired share of
+the reference's rows is **0.51–0.69** at d1–d30 and **0.38** at d45 — above the
+0.3 gate but well below the other baselines' — and **0.01 at d60**, which is why
+d60 is marked `gated` here rather than quoting the −0.136 the raw cells give.
+
+**Coverage footnote for this table** (not the ≥ 97 % of the window table, which
+was carried over in error): over the full period `driver_level`'s paired share
+of the reference's rows is **0.916–0.966** (0.916 at d90, 0.934 at d30, 0.938 at
+d14) — i.e. **92–96 %**, not ≥ 97 %.
 
 `tables/usable_horizon.csv` consequently gives `driver_level` **no usable
 horizon at all** on UC3 slot MAE, on either segment, while `h5` keeps **d45**.
+
+**d6 is the one exception to "every lead", and it is shown above rather than
+dropped** (critic S9): of the fifteen scored leads it is the only one where the
+all-rides park-cluster CI includes 0 (+0.110 [−0.023, +0.248]; the park-day CI
+still excludes it). The direction is unchanged at every lead. Say "worse at
+every lead, significant under both units except d6" and not "every lead" flat.
 
 **Why the two passes disagree — and why the full-period pass is the more honest
 one for a serving decision.**
@@ -590,20 +779,69 @@ one for a serving decision.**
 
    | lead | autumn | spring | summer | winter |
    |---|---|---|---|---|
+   | d0 | −0.388 | +0.532 | +0.384 | +0.651 |
    | d1 | **−0.467** | +0.424 | +0.320 | +1.150 |
+   | d3 | **−0.523** | +0.425 | +0.291 | +1.432 |
    | d7 | **−0.433** | +0.525 | +0.347 | +2.372 |
-   | d30 | **−0.392** | +0.666 | +0.433 | — |
+   | d14 | −0.426 | +0.506 | +0.369 | — |
+   | d30 | −0.392 | +0.666 | +0.433 | — |
+
+   (All six scored leads are shown, so the ranges quoted elsewhere can be
+   checked against them: autumn is **−0.388 … −0.523**, not "−0.39 … −0.47", and
+   winter is **+0.651 … +2.372**, not "+1.15 … +2.37" — the earlier ranges
+   silently dropped d0 and d3, conservatively for autumn and generously for
+   winter, critic N1.)
 
    The headline window is **8 weeks of late summer and autumn**. The full period
    is February to October. Averaged over the year the autumn gain does not pay
    for spring, summer and especially winter.
 
-2. **The winter cells are the plug-in's cold start.** The first origins are
-   2026-02-19 onward, and the plug-in trains only on rows the runner has
-   accumulated, so the earliest origins have almost no training history — §1
-   records that the offline analysis deliberately **dropped February and March
-   for having < 20 000 training rows**, a cut the harness plug-in does not make.
-   `+2.372` at d7 in winter is that, not a seasonal effect of winter as such.
+2. **Season or cold start? RESOLVED: the deficit outside autumn is seasonal.**
+   This page previously listed this as an open question ("both readings fit the
+   data and they imply different decisions") and proposed a ~200 shard-minute
+   re-score with the early origins dropped. **That re-score is not needed and is
+   not commissioned** — the committed tables already separate the two readings
+   three ways (PR #447 critic, S3):
+
+   - **Two fully-warm origin seasons with opposite signs.** At d1 the origin is
+     the target minus one day, so the d1 row of `mae_by_season.csv` *is* an
+     origin-season split. Summer origins carry 4–6 months of accumulated history
+     — far above `DriverLevel.settled_rows = 20 000` — and **lose +0.320** vs
+     `h5`; autumn origins **win −0.467**. No monotone-in-history-length effect
+     can produce opposite signs in the two seasons with the *most* history.
+   - **The offline analysis, which has no cold start, still finds summer worse
+     at the short leads.** `breakdown_region_season.csv`, main model, origins
+     April–October only (Feb/Mar dropped for < 20 000 rows): summer level MAE
+     Δ = **+0.061 / +0.088 / +0.063 / +0.099 min at d1/d3/d7/d14, every CI
+     excluding 0** — a measured loss with the cold start removed by
+     construction. (At d30 offline summer is n.s. at −0.009 and at d60/d90 it
+     becomes a significant win, −0.644 / −0.185; the short-lead loss is the part
+     that matters here, because that is where the harness reversal is largest
+     relative to the naive.)
+   - **"Winter" *is* the cold start, and it is 1.9 % of the data.** The first
+     origin is 2026-02-19 and `report.py:786` defines winter as months 12/1/2,
+     so winter targets can only be 2026-02-19 … 02-28 — exactly the < 20 k-row
+     regime. That is **230 254 of 12 050 778 d1 slots = 1.91 %**. Excluding it
+     moves `driver_level − h5` from +0.251 to **+0.234** at d1 and +0.297 to
+     **+0.284** at d7 (d14/d30 have no winter rows at all). Excluding winter
+     **and all of spring** — the maximal cold-start allowance — still leaves
+     **+0.143 (d1), +0.108 (d3), +0.171 (d7), +0.189 (d14), +0.242 (d30)**.
+
+   So the reversal survives every cold-start exclusion, and `+2.372` at d7 in
+   winter is a 0.65 %-of-slots cell that changes nothing. **Where the cold start
+   does show is spring**, and only there: offline (no cold start) spring is a
+   significant *win* (−0.364 at d1, −1.183 at d30) while the harness (with cold
+   start) makes it a *loss* (+0.424 / +0.666). Measured against autumn's pure
+   lead effect (−0.467 → −0.392, i.e. +0.075 from d1 to d30), spring's d1→d30
+   drift of +0.242 leaves ≈ **+0.17 min at d30 attributable to cold-start
+   origins in spring**, and ≈ 0 in summer and autumn. That attribution is an
+   estimate; the seasonal conclusion is a measurement.
+
+   These exclusions are **unpaired** (each model on its own coverage, §6.3).
+   Cross-check on scale: the unpaired full-period `driver_level − wt_med` at d1
+   all rides is +0.180 against the paired `diff_vs_ref` of +0.206, so the season
+   table is not materially biased, and the autumn-vs-summer sign swing (0.79
+   min) is an order of magnitude larger than any plausible coverage artefact.
 
 3. **In the common-target-window pass the lead axis is itself confounded with
    origin season.** With targets fixed to 2026-08-15 … 2026-10-07, lead `L`'s
@@ -629,15 +867,15 @@ one for a serving decision.**
 |---|---|---|---|
 | **D3 best time regresses** (hit rate top-2 vs `clim`) | −0.018 (d1) / −0.026 (d7) / −0.042 (d30) | −0.021 / −0.028 / −0.038, all \* under both units; vs `h5` −0.035 / −0.040 / −0.047 | **yes, and it is larger** |
 | D3 usable horizon | none (`h5` d45) | none (`h5` d60) | **yes** |
-| **Summer / spring worse than `h5`** | +0.13 / +0.08 / +0.12 | +0.32…+0.43 summer, +0.42…+0.67 spring, +1.15…+2.37 winter | **yes, and much larger** |
+| **Summer / spring worse than `h5`** | +0.13 / +0.08 / +0.12 (d14 −0.08) | +0.29…+0.43 summer, +0.42…+0.67 spring, +0.65…+2.37 winter | **yes, and much larger** |
 | **D7 day comparison d8–30 / d31–90** | +0.148\* / +0.117\* | **+0.068 [+0.053, +0.082]\* / +0.094 [+0.075, +0.113]\*** | **yes, smaller** |
 | **D6 crowd bucket d30 / d90** | +0.071\* / +0.058\* | **+0.032 [+0.013, +0.050]\* / +0.024 [+0.004, +0.043]\*** | **yes, smaller** |
 | D6 crowd bucket d7 | +0.052\* both units | +0.010, cluster [−0.005, +0.023] **n.s.**, park-day [+0.002, +0.018]\* | **weakens to unit-dependent** |
 | D6 d1 vs `lvl_snaive7` | −0.014, tie | **−0.020 [−0.035, −0.007]\* — significantly worse** | **turns into a loss** |
 | D7 d1–7 vs `lvl_snaive7` | −0.013, cluster n.s. | −0.007, cluster n.s. / park-day [−0.012, −0.002]\* | no change (still ≤ naive) |
 | D6 d180 | −0.024, park-day \* worse | −0.024, park-day \* worse | **yes** |
-| D4 dayPeak pairwise ordering | d30 / d90 | **d90 / d90** | **yes, stronger** |
-| D4 optimiser regret | d14 | **d30** | **yes, stronger** |
+| D4 dayPeak pairwise ordering | d30 / d90 | d90 / d90 | **NOT evidence for this model** — the d90 is a four-way tie (`h5`, `lvlh5_naive`, `driver_level_x_h5` all reach d90) and `driver_level`'s margin is below `h5`'s at every lead d7–d90; the winner is `lvlh5_tft` (d0–d45) / `lvlh5_naive` (d60–d90). See §6.7c |
+| D4 optimiser regret | d14 | **d30** | **yes, stronger** — largest margin of any model, same horizon as `h5` |
 | **UC2/UC3 slot MAE win** | d10 all / d60 busy | **no horizon on either segment** | **NO — this is the reversal** |
 
 So the *ranking* surfaces (D6, D7, D4) survive the full period and the *slot
@@ -646,37 +884,123 @@ of days**, which is what a ranking metric measures and what the crowd calendar
 needs, while the **absolute minutes** only improve when the naive reference is
 stale — i.e. at a season transition.
 
-### 6.7b UC4 from the full period — still LOW-N, so point estimates only
+### 6.7b UC4 from the full period — measured, and the strongest long-horizon result on this page
 
-The full period raises UC4 from 3 origin days to **9 (d1, d7) / 8 (d30) / 7
-(d60) / 6 (d90) / 5 (d120) / 3 (d180)** — better, but still far below
-BENCH-SPEC's 30, so `tables/usable_horizon.csv` *again* reports
-`leads_tested = 0` for every level source. **That is still "not tested", not
-"nothing won".** The point estimates, marked **LOW-N** and not to be used as a
-hand-over decision:
+Unit = park-month, gate = ≥ 30 park-months (BENCH-SPEC #3, §6.6a). The full
+period has **607 park-months at d1** down to **62 at d180**, every lead above
+the gate, `paired_share = 1.000` everywhere. These are **measured results under
+the binding spec**, not point estimates — park-cluster CI first, BENCH-SPEC's
+park-day CI second, `*` = excludes 0:
 
-| lead | ref | `lvl_naive4` | `lvl_snaive7` | `lvl_clim` | `lvl_tft` | `lvl_cbd` | **`lvl_driver_level`** | margin vs ref (cluster / park-day) | park-month origin days |
-|---|---|---|---|---|---|---|---|---|---|
-| d1 | `lvl_snaive7` 0.278 | 0.252 | 0.278 | 0.175 | 0.299 | 0.184 | **0.339** | +0.065 [+0.041, +0.088]\* / [+0.042, +0.086]\* | 9 — LOW-N |
-| d7 | `lvl_naive4` 0.172 | 0.172 | — | 0.131 | 0.194 | 0.081 | **0.272** | +0.100 [+0.077, +0.122]\* / [+0.079, +0.121]\* | 9 — LOW-N |
-| d30 | `lvl_clim` 0.150 | 0.145 | — | 0.150 | 0.105 | 0.011 | **0.257** | +0.109 [+0.072, +0.146]\* / [+0.077, +0.143]\* | 8 — LOW-N |
-| d60 | `lvl_naive4` 0.164 | 0.164 | — | 0.162 | 0.139 | — | **0.249** | +0.086 [+0.052, +0.119]\* / [+0.059, +0.112]\* | 7 — LOW-N |
-| d90 | `lvl_wt56` 0.164 | 0.150 | — | 0.154 | — | — | 0.187 | +0.029 [−0.011, +0.070] / [−0.010, +0.066] — n.s. | 6 — LOW-N |
-| d120 | `lvl_naive4` 0.206 | 0.206 | — | 0.133 | — | — | 0.172 | **−0.029 [−0.052, −0.007]\* — worse** | 5 — LOW-N |
-| d180 | `lvl_naive4` 0.328 | 0.328 | — | 0.250 | — | — | 0.328 | +0.013 [−0.019, +0.048] — n.s. | 3 — LOW-N |
+| lead | ref | `lvl_naive4` | `lvl_snaive7` | `lvl_clim` | `lvl_tft` | `lvl_cbd` | **`lvl_driver_level`** | margin vs ref (cluster / park-day) | park-months | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| d1 | `lvl_snaive7` 0.278 | 0.252 | 0.278 | 0.175 | 0.299 | 0.184 | **0.339** | **+0.065** [+0.041, +0.088]\* / [+0.042, +0.086]\* | 607 | **win** |
+| d7 | `lvl_naive4` 0.172 | 0.172 | — | 0.131 | 0.194 | 0.081 | **0.272** | **+0.100** [+0.077, +0.122]\* / [+0.079, +0.121]\* | 522 | **win** |
+| d30 | `lvl_clim` 0.150 | 0.145 | — | 0.150 | 0.105 | 0.011 | **0.257** | **+0.109** [+0.072, +0.146]\* / [+0.077, +0.143]\* | 446 | **win** |
+| d60 | `lvl_naive4` 0.164 | 0.164 | — | 0.162 | 0.139 ‡ | — | **0.249** | **+0.086** [+0.052, +0.119]\* / [+0.059, +0.112]\* | 349 | **win** |
+| d90 | `lvl_wt56` 0.164 | 0.150 | — | 0.154 | — | — | 0.187 | +0.029 [−0.011, +0.070] / [−0.010, +0.066] | 260 | n.s. |
+| d120 | `lvl_naive4` 0.206 | 0.206 | — | 0.133 | — | — | 0.172 | **−0.029 [−0.052, −0.007]\* / [−0.050, −0.010]\*** | 178 | **LOSS** |
+| d180 | `lvl_naive4` 0.328 | 0.328 | — | 0.250 | — | — | 0.328 | +0.013 [−0.019, +0.048] / [−0.017, +0.047] | 62 | n.s. |
 
-Read as a **weak, consistent** signal in the same direction as the offline
-analysis: on the park-month ranking `lvl_driver_level` is the best of the six
-level sources at d1–d60 and the only one above every naive there, it is a tie at
-d90/d180, and it is **worse than naive at d120**. Nothing here is a hand-over
-decision; UC4 becomes decidable once ~30 park-months per lead exist, which needs
-roughly another six months of history (≈ **2027-04**) for the short leads.
+The wins are **contiguous from d1 to d60** — all thirteen scored leads in that
+band win under both bootstrap units — so the **corrected UC4 usable horizon is
+d60**. (`usable_horizon.csv` prints an empty horizon for every level source
+because of the gate defect in §6.6a; d60 is recomputed here from `cells.csv` by
+the same rule the harness applies to every other metric.) The headline window
+agrees where it can: significant at d3 and d5–d60, not significant at d1/d2/d4,
+and the **same loss at d120 (−0.066 [−0.094, −0.039]\*, 112 park-months)**.
 
-**The quotable UC4 numbers remain the offline ones** (§2: 0.27 → 0.34 at d1,
-0.11 → 0.25 at d60 over 385 park-months) because they rest on 385 park-months
-rather than 6–9 origin days.
+**Read the d120 loss as seriously as the wins.** It is significant under both
+units in both passes and it is the only place on this page where the level
+ranking is measurably *worse* than a naive beyond d90. Together with the D6
+d180 loss (§6.3) it fixes the useful far-horizon band at **d60 … d90** and no
+further — which is exactly where the crowd calendar would want it to go on. For
+context, every level source loses to `lvl_naive4` at d120 (`lvl_clim` −0.066,
+`lvl_wt56` −0.066, `lvl_driver_level` −0.029); the drivers lose by the least,
+but losing by the least is still losing, and nothing beyond d90 should be
+served from this model.
 
-### 6.8 Recommendation
+`lvl_driver_level` is the **only** level source that beats the reference at any
+lead on UC4, and it has the highest point value of all six at every lead d1–d90.
+
+‡ `lvl_tft` at d60 rests on **1 park-month** (`paired_share = 0.003`) with a
+zero-width CI `[+0.4512, +0.4512]` and `wins = True`. That cell is exactly the
+degenerate case **BENCH-SPEC recorded change #2** was added to forbid (≥ 10
+bootstrap units and strictly positive CI width), and it is still printed because
+`evaluate()` implements neither rule. Do not quote it; a full census of #2
+violations belongs to PAR-827.
+
+**Offline vs harness UC4 — which to quote.** Both now exist and they agree in
+direction. The **harness** numbers above are the broader measurement (607
+park-months at d1, the full lead grid to d180, paired against five named level
+sources); the **offline** §2 figures (0.27 → 0.34 at d1, 0.11 → 0.25 at d60)
+rest on **385** park-months and a richer feature set (§5a). An earlier version
+of this page preferred the offline figures "because they rest on 385
+park-months rather than 6–9 origin days" — that justification was **inverted**
+(it compared offline park-months against harness month labels) and is withdrawn.
+Quote the harness numbers for the harness question (does the plug-in rank
+park-months better than the baselines it is scored against) and the offline
+numbers for the offline question (what the full driver set is worth); never mix
+them in one sentence.
+
+### 6.7c D4 split in two: the optimiser survives, dayPeak is not ours
+
+**Corrected after the PR #447 critic (A1).** An earlier version of this page
+claimed `driver_level` carried "dayPeak pairwise ordering usable to **d90**,
+longer than any other model's" and called D4 "all the best of any level source".
+Both halves are false for dayPeak, and the run's own `handover.csv` says so.
+This matters operationally: the planner optimiser drops the headliner with the
+lowest `dayPeak` (`lib/planner/optimize.ts`), so acting on the old sentence
+would have routed `dayPeak` to the measurably **worst** of the three candidates.
+
+**dayPeak pairwise ordering — `driver_level` wins at no lead, in either pass.**
+`handover.csv`, D4 dayPeak, segment `all`:
+
+| pass | winner d0–d45 | winner d60–d90 |
+|---|---|---|
+| full period | `lvlh5_tft` (+0.038 … +0.031) | `lvlh5_naive` (+0.026 / +0.030) |
+| headline window | `lvlh5_tft` (+0.048 … +0.029) | `h5` (+0.022 / +0.022) |
+
+And the paired margin vs the per-lead reference, full period, `all`:
+
+| lead | d1 | d7 | d14 | d30 | d45 | d60 | d90 |
+|---|---|---|---|---|---|---|---|
+| `driver_level` | +0.0232 | +0.0212 | +0.0209 | +0.0270 | +0.0224 | +0.0234 | +0.0265 |
+| `h5` | +0.0227 | **+0.0226** | **+0.0230** | **+0.0286** | **+0.0253** | **+0.0247** | **+0.0282** |
+
+`h5` is ahead at **every lead d7–d90** (paired shares 0.955–0.979 for
+`driver_level`, 0.98–1.00 for `h5` — both far above the 0.3 gate, so the
+difference of differences is meaningful). `usable_horizon.csv` gives `h5`,
+`driver_level`, `driver_level_x_h5` **and** `lvlh5_naive` the same d90 horizon,
+so d90 is a **four-way tie on horizon and a loss on margin**, not an advantage.
+`lvlh5_tft` shows d45 only because its coverage breaks after that, which is why
+it wins every lead it is scored at but carries the shorter horizon.
+
+One nuance in the other direction, for completeness: in the **headline window**
+`driver_level`'s dayPeak margin *is* above `h5`'s at d1–d30 (+0.034 vs +0.025 at
+d1) and below it at d45–d90. It is still not the winner at any lead in that pass
+either — `lvlh5_tft` is — and the full period is the pass that governs a serving
+decision (§6.7). **Conclusion: dayPeak is not evidence for this model. If a
+dayPeak source were chosen on this run it would be `lvlh5_tft` up to d45.**
+
+**What does survive on D4: optimiser regret**, which is a different decision
+(ride order and which headliner to drop, scored as regret in minutes per
+park-day against the truth-optimal plan). Full period, margin vs the per-lead
+reference, park-cluster CI, negative = better:
+
+| lead | `driver_level` | `driver_level_x_h5` | `h5` | `lvlh5_tft` | `lvlh5_naive` |
+|---|---|---|---|---|---|
+| d1 | **−1.232** [−1.93, −0.55]\* | **−1.234**\* | −0.663\* | −0.584 n.s. | −0.475 n.s. |
+| d3 | **−1.524**\* | −1.524\* | −0.804\* | −1.121\* | −0.917\* |
+| d7 | −1.166\* | **−1.174**\* | −0.755\* | −0.336 n.s. | −0.460 n.s. |
+| d14 | **−1.467**\* | −1.461\* | −0.987\* | −0.231 n.s. | −0.584 n.s. |
+| d30 | −1.418\* | **−1.442**\* | −1.138\* | −0.461 n.s. | −0.406 n.s. |
+
+`handover.csv` names `driver_level` or `driver_level_x_h5` the winner at **all
+five** scored leads, with roughly **1.3–1.9× `h5`'s margin**. But `h5` is also
+significant at all five and `usable_horizon.csv` gives **both** a d30 horizon,
+so the honest claim is: **largest paired margin of any model at d1–d30, on the
+same horizon as `h5`** — not a longer horizon than anyone else's.
 
 **Shadow only — do not serve.** Three measured facts bound this, before any win
 is weighed:
@@ -692,10 +1016,16 @@ is weighed:
    `h5` in the headline window, −0.021 … −0.038 / −0.035 … −0.047 over the full
    period, significant under both units in both passes, and with **no usable
    horizon at all** while `h5` reaches d45/d60 (§6.3, §6.7a).
-3. **It is worse than `h5` outside autumn**: +0.08 … +0.13 in summer in the
-   headline window; over the full period +0.32 … +0.43 in summer, +0.42 … +0.67
-   in spring and +1.15 … +2.37 in winter (partly the plug-in's cold start). We
-   have observed exactly **one** autumn, which is the one regime it suits.
+3. **It is worse than `h5` outside autumn, and that is seasonal rather than a
+   cold start** (§6.7, point 2 — resolved, no re-score needed): +0.08 … +0.13 in
+   summer in the headline window; over the full period +0.29 … +0.43 in summer,
+   +0.42 … +0.67 in spring, +0.65 … +2.37 in winter. Summer origins are fully
+   warm (4–6 months of history, far above `settled_rows = 20 000`) and still
+   lose +0.320 at d1 while autumn origins win −0.467 — opposite signs no
+   history-length effect can produce; the cold start is confined to winter
+   (**1.9 %** of d1 slots) and part of spring (≈ +0.17 min at d30), and
+   excluding both still leaves **+0.14 … +0.24** vs `h5`. We have observed
+   exactly **one** autumn, which is the one regime it suits.
 
 A surface regression on a shipped product, plus a slot-MAE advantage that exists
 only in the window it was measured in, is more than enough to keep this out of
@@ -707,15 +1037,33 @@ surfaces.
 
 - **D7 day comparison**: +0.068 [+0.053, +0.082]\* at d8–30 and +0.094
   [+0.075, +0.113]\* at d31–90 over the full period, under both units, on 223 /
-  200 origin days — the best of every level source, with `lvl_tft` at +0.000 /
-  +0.026 and `lvl_cbd` deeply negative.
+  200 origin days at `paired_share = 1.0` — the highest point value of every
+  level source, with `lvl_tft` at +0.000 (share 0.68) and `lvl_cbd` deeply
+  negative. The margin against `lvl_naive4`/`lvl_snaive7` is CI-backed; the one
+  against `lvl_tft` is a point comparison at 68 % coverage at d8–30 and is **not
+  quotable at d31–90**, where `lvl_tft` holds only 19 % (below the 0.3 gate).
 - **D6 crowd bucket**: +0.032 [+0.013, +0.050]\* at d30 and +0.024
   [+0.004, +0.043]\* at d90 over the full period. At d7 it weakens to
   unit-dependent (+0.010) and at d1 it is **significantly worse** than seasonal
   naive (−0.020\*); at d180 it is worse than naive.
-- **D4**: dayPeak pairwise ordering usable to **d90** and optimiser regret to
-  **d30** over the full period — both *longer* than in the headline window and
-  longer than any other model's.
+- **D4 optimiser regret**: usable to **d30** over the full period (d14 in the
+  window), and the **largest paired margin of any model** at every scored lead
+  — −1.23 (d1) / −1.52 (d3) / −1.17 (d7) / −1.47 (d14) / −1.44 (d30) against
+  `h5`'s −0.66 / −0.80 / −0.76 / −0.99 / −1.14, `handover.csv` winner at all
+  five. `h5` reaches d30 too, so this is a **margin** advantage on the **same**
+  horizon, not a longer one.
+- **D4 dayPeak ordering is NOT in this list.** `driver_level` is significant to
+  d90 but wins at **no lead** in either pass (`lvlh5_tft` d0–d45,
+  `lvlh5_naive` d60–d90) and its margin is below `h5`'s at every lead d7–d90;
+  the d90 horizon is a four-way tie. It is not evidence for this model and
+  `dayPeak` must not be routed to it (§6.7c).
+- **UC4 within-park-month day ranking** (the crowd calendar's own metric):
+  **+0.065** (d1), **+0.100** (d7), **+0.109** (d30), **+0.086** (d60), all CIs
+  excluding 0 under both units on 607 / 522 / 446 / 349 park-months — the only
+  level source that beats the reference at any lead, with a corrected usable
+  horizon of **d60**. Against that, a **measured loss at d120** (−0.029
+  [−0.052, −0.007], 178 park-months; −0.066 in the window pass), which with the
+  D6 d180 loss caps the useful band at d60 … d90 (§6.7b).
 - It needs **no GPU and no new service** (197 shard-minutes of CPU for 231
   origins) and it publishes 21 points fewer forecasts for ride-days that never
   operate (§6.4a).
@@ -736,9 +1084,20 @@ spring/summer deficit.
 
 **Concretely:** register `driver_level` as a **shadow** surface in the forward
 archive (PAR-831, the same UC3S mechanism PAR-834 uses for `h5` / `h5_routed`),
-**scoped to the daily-ranking surfaces** (`lvl_driver_level` feeding D6/D7-style
-comparisons at d8–d90) rather than to the slot forecast, with `bestVisitTimes`
-**explicitly excluded** and the slot curve not served at all. Flip nothing until
+**scoped to exactly four ranking surfaces** and to nothing else:
+
+| surface | what it may feed | evidence |
+|---|---|---|
+| **D6** crowd bucket / `predictedCrowdLevel` | d14–d90 | +0.032 (d30), +0.024 (d90)\*, both units |
+| **D7** day comparison / "Empfohlen" star | d8–30, d31–90 | +0.068\*, +0.094\*, both units |
+| **D4 optimiser regret** (ride order) | d1–d30 | largest margin of any model, −1.17 … −1.52\* |
+| **UC4** within-park-month ranking / crowd calendar | d1–d60 | +0.065 … +0.109\*, 349–607 park-months |
+
+**Explicitly excluded, each for a measured reason:** the 15-min slot curve (no
+usable horizon over the full period), `bestVisitTimes` / D3 (a significant
+regression on a shipped surface), **`dayPeak` (it loses to `h5` and to
+`lvlh5_tft` — §6.7c)**, and anything beyond **d90** (UC4 loses at d120, D6 at
+d180). Flip nothing until
 the archive has covered a **spring and a summer** — those are the seasons where
 the full-period pass says it loses, and they are exactly what the headline
 window could not see.
@@ -773,23 +1132,41 @@ Then, in order: **first day after a closure** of ≥ 2 days (**−18 %**), **lat
 close / evening event** (**+14 %**), and the archived weather forecast once
 PAR-831 has one (ORACLE upper bound +0.02–0.03 park R², §2).
 
-**Ticketed events: not worth wiring, and the one significant cell is a
-confound.** At d7 the effect is **+0.3 % [−5.2, +5.8], not significant**
-(5 663 rows). At d30 it is **−15.2 % [−24.3, −8.0]**, i.e. *significantly
-negative* — the opposite sign from a crowd-drawing event, on 5 576 rows from a
-single synced Halloween season, and ticketed-event days usually also carry a
-shorter regular schedule, which the opening-hours driver already captures. Read
-it as collinearity with the schedule, not as a driver, and do not wire the flag
-until a second season exists. `EXTRA_HOURS` behaves the same way (−7.2 % n.s. at
-d7, −15.8 % at d30).
+**Ticketed events: not worth wiring, and the one significant cell is an
+artefact of flag availability.** At d7 the effect is **+0.3 % [−5.2, +5.8], not
+significant** (5 663 rows). At d30 it is **−15.2 % [−24.3, −8.0]**, i.e.
+*significantly negative* — the opposite sign from a crowd-drawing event, on
+5 576 rows from a single synced Halloween season.
+
+The explanation is the **sync window, not schedule length**. Both event flags
+exist only from September 2026 (§4: ticketed on 33 parks / 2.0 % of rows,
+extra hours on 25 parks / 2.2 %), so the "without" group is essentially the
+whole Feb–Aug period and the "with" group is one synced Halloween — a
+period-and-park-subset confound. The decisive cell is the next one:
+`EXTRA_HOURS`, which **by definition means longer hours**, comes out at
+**−15.8 % [−28.3, −2.2], significant** — same sign and same magnitude as
+ticketed. Schedule length cannot be the common cause of both, so the sign is an
+artefact of when the flags started being stored.
+
+(An earlier version of this page explained the d30 cell as "collinearity with a
+shorter regular schedule, which the opening-hours driver already captures". The
+conclusion — do not wire the flags until a second season exists — is unchanged,
+but that mechanism was wrong and the adjacent `EXTRA_HOURS` cell refutes it;
+corrected per PR #447 critic S6.)
 
 **What success looks like**, so the expectation is falsifiable. Measure it on
 the **full period**, not the headline window — that is the lesson of §6.7:
 
-- **D7 day comparison, d8–30 and d31–90**: `lvl_tft` is at +0.000 and +0.026 over
-  `lvl_naive4` today, `lvl_driver_level` at **+0.068** and **+0.094**. Adding the
-  two covariates should close most of that gap. This is the primary target,
-  because it is the finding that survives both passes.
+- **D7 day comparison, d8–30**: `lvl_tft` is at **+0.000** over `lvl_naive4`
+  today (paired share 0.68 — above the gate), `lvl_driver_level` at **+0.068**.
+  Adding the two covariates should close most of that gap. This is the primary
+  target, because it is the finding that survives both passes.
+  At **d31–90** the target cannot be set this way: `lvl_tft`'s +0.026 there
+  rests on a paired share of **0.1895**, *below* the `MIN_COVERAGE = 0.3` gate —
+  the same gate this page uses to void `lvlh5_tft` at d45–d60 — so it is not
+  comparable to `lvl_driver_level`'s +0.094 on 100 % of the day-pairs. State the
+  d31–90 TFT target as **"not measurable at current TFT coverage (19 %)"**
+  (critic S7).
 - **D6 crowd bucket, d30 and d90**: `lvl_tft` +0.003 / n.a., `lvl_driver_level`
   **+0.032** / **+0.024**.
 - **Slot MAE**: expect *nothing* on the full period — `driver_level` itself is

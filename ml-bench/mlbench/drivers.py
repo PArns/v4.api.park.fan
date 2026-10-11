@@ -11,8 +11,23 @@ and every driver is something a forecaster knows at ``c``. This module builds th
 table (one row per ride-day × lead) in DuckDB SQL and is shared by the offline
 analysis (``python -m mlbench drivers``) and by the harness plug-in
 ``models/driver_level.py`` — the plug-in builds its training rows and its
-prediction rows with exactly the same SQL, so what the analysis measures is what
-the harness scores.
+prediction rows with exactly the same SQL.
+
+The SQL is shared; the MODEL is not. ``driver_level.py`` scores a REDUCED feature
+set: it drops ``is_headliner`` (the offline model's #3 feature by permutation
+importance — the runner exposes no headliner flag to plug-ins),
+``since_season_start_a``/``to_season_end_a`` and the event flags
+``ticketed_a``/``extra_a``/``ref_ticketed``. So the harness result is a LOWER
+BOUND on what the offline analysis prices, not a realisation of it — see
+``docs/ml/level-drivers.md`` §5a.
+
+Caveat on three ``sched`` drivers used by the OFFLINE analysis only:
+``since_season_start``, ``to_season_end`` and ``since_prev_open`` are computed
+with window functions over the whole ``windows`` table, while ``add_asof`` masks
+on the TARGET day's own ``win_upd_us``. A target day published before the origin
+can therefore carry a value derived from neighbour rows published after it. The
+plug-in is clean of this (it excludes the first two, and rebuilds ``windows``
+from observed past truth plus as-of covariates for the third).
 
 Inputs (DuckDB tables/views on ``con``):
 
