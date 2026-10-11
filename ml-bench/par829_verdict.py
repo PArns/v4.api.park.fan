@@ -43,6 +43,13 @@ MIN_COVERAGE = 0.30
 SERVE_CLAUSE_TESTABLE = False
 
 
+def is_oracle(model):
+    """`_owx` marks an arm fed the target day's weather ACTUALS (PAR-827's S8 fix freezes
+    the suffix from `type(m)` at runner init, so the name is earned rather than asserted).
+    Matches the harness's own suffix test, including the composed `_owx_x_h5` form."""
+    return "_owx" in model
+
+
 def f(v):
     try:
         return float(v)
@@ -78,6 +85,10 @@ def main(paths):
           "full-period figure.")
     print(f"serve clause testable on this run: {SERVE_CLAUSE_TESTABLE} "
           "(no non-autumn origin -> SHADOW is the ceiling)\n")
+    print("ORACLE arms (the _owx suffix) are listed for their headroom value and are "
+          "NEVER\ngiven a recommendation: the pre-registered rule forbids an _owx row from "
+          "producing\nSERVE or SHADOW, because it consumes the target day's weather "
+          "ACTUALS.\n")
     print(f"{'source':38}{'seg':6}{'model':24}{'lead':>5}  verdict / why")
     print("-" * 124)
     tally = collections.Counter()
@@ -136,7 +147,17 @@ def main(paths):
                 # Calling this a regression would turn noise into a DROP recommendation.
                 states.append("ns")
                 notes.append(f"{i}: {d:+.3f} worse, not significant")
-        if any(s == "regression" for s in states):
+        # The pre-registered rule: "An ORACLE (`_owx`) row can never produce a SERVE or
+        # SHADOW recommendation; it bounds the headroom a real weather forecast could buy
+        # and nothing else." That was stated in the docstring but not enforced in the
+        # classification, so an _owx row could print SHADOW -- which is a recommendation
+        # word. It is enforced here instead, AFTER the states are computed, so the
+        # underlying comparison is still reported.
+        if is_oracle(model):
+            n_win = sum(1 for s in states if s == "win")
+            v = (f"ORACLE -- no recommendation (headroom only; beats {n_win}/{len(inc)} "
+                 "incumbents)")
+        elif any(s == "regression" for s in states):
             v = "DROP on this cell (significant regression vs an incumbent)"
         elif all(s == "win" for s in states):
             v = ("SHADOW (beats every incumbent; SERVE withheld -- cross-season sign "

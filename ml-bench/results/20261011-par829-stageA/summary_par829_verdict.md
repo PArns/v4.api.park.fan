@@ -2,6 +2,10 @@ PAR-829 pre-registered decision rule, applied to 1668 margin cells from 4 file(s
 AUTUMN-SHOULDER ORIGINS 2026-08-08..2026-10-07 -- not comparable with any full-period figure.
 serve clause testable on this run: False (no non-autumn origin -> SHADOW is the ceiling)
 
+ORACLE arms (the _owx suffix) are listed for their headroom value and are NEVER
+given a recommendation: the pre-registered rule forbids an _owx row from producing
+SERVE or SHADOW, because it consumes the target day's weather ACTUALS.
+
 source                                seg   model                    lead  verdict / why
 ----------------------------------------------------------------------------------------------------------------------------
 paired_margin_alltargets_intraday.csv all   nf_nhits                 h2-4  DROP on this cell (significant regression vs an incumbent)
@@ -92,47 +96,47 @@ paired_margin_alltargets_intraday.csv all   nf_tide                  m120  SHADO
                                                                          lvlh5_tft: -1.135 beats pk[-1.337,-0.939] (cov ref 0.984 / model 0.970)
                                                                          h5: -1.295 beats pk[-1.541,-1.047] (cov ref 0.984 / model 0.992)
                                                                          persistence: -1.194 beats pk[-1.533,-0.866] (cov ref 0.968 / model 0.771)
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           h2-4  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           h2-4  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -0.781 beats pk[-0.959,-0.604] (cov ref 0.984 / model 0.970)
                                                                          h5: -0.916 beats pk[-1.136,-0.700] (cov ref 0.983 / model 0.992)
                                                                          persistence: -1.840 beats pk[-2.242,-1.454] (cov ref 0.965 / model 0.631)
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           h4-8  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           h4-8  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -0.364 beats pk[-0.516,-0.219] (cov ref 0.981 / model 0.969)
                                                                          h5: -0.483 beats pk[-0.666,-0.292] (cov ref 0.980 / model 0.991)
                                                                          persistence: -3.547 beats pk[-4.228,-2.940] (cov ref 0.953 / model 0.436)
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx            h8+  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx            h8+  ORACLE -- no recommendation (headroom only; beats 0/3 incumbents)
                                                                          lvlh5_tft: +0.085 worse, not significant
                                                                          h5: +0.292 REGRESSION pk[+0.074,+0.542]
                                                                          persistence: -6.676 GATED [NOT TESTED: model-side coverage 0.197<0.3] (cov ref 0.932 / model 0.197)
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m015  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m015  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -3.003 beats pk[-3.365,-2.649] (cov ref 0.985 / model 0.971)
                                                                          h5: -3.161 beats pk[-3.556,-2.753] (cov ref 0.984 / model 0.992)
                                                                          persistence: +2.149 REGRESSION pk[+1.929,+2.375]
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m030  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m030  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -2.617 beats pk[-2.942,-2.292] (cov ref 0.985 / model 0.971)
                                                                          h5: -2.732 beats pk[-3.097,-2.355] (cov ref 0.984 / model 0.992)
                                                                          persistence: +0.932 REGRESSION pk[+0.742,+1.124]
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m045  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m045  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -2.338 beats pk[-2.621,-2.044] (cov ref 0.985 / model 0.971)
                                                                          h5: -2.449 beats pk[-2.781,-2.114] (cov ref 0.984 / model 0.992)
                                                                          persistence: +0.254 REGRESSION pk[+0.063,+0.455]
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m060  SHADOW (beats some but not all incumbents)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m060  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -2.066 beats pk[-2.341,-1.793] (cov ref 0.985 / model 0.971)
                                                                          h5: -2.202 beats pk[-2.519,-1.878] (cov ref 0.984 / model 0.992)
                                                                          persistence: -0.188 park-day only (park-cluster CI spans 0)
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m075  SHADOW (beats some but not all incumbents)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m075  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -1.475 beats pk[-1.704,-1.257] (cov ref 0.985 / model 0.972)
                                                                          h5: -1.624 beats pk[-1.891,-1.363] (cov ref 0.985 / model 0.992)
                                                                          persistence: +0.019 worse, not significant
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m090  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m090  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -1.497 beats pk[-1.728,-1.272] (cov ref 0.985 / model 0.972)
                                                                          h5: -1.607 beats pk[-1.874,-1.349] (cov ref 0.984 / model 0.992)
                                                                          persistence: -0.546 beats pk[-0.814,-0.271] (cov ref 0.969 / model 0.793)
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m105  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m105  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -1.425 beats pk[-1.648,-1.201] (cov ref 0.984 / model 0.971)
                                                                          h5: -1.541 beats pk[-1.809,-1.264] (cov ref 0.984 / model 0.992)
                                                                          persistence: -0.949 beats pk[-1.256,-0.641] (cov ref 0.969 / model 0.779)
-paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m120  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv all   nf_tide_wx_owx           m120  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -1.245 beats pk[-1.453,-1.033] (cov ref 0.984 / model 0.970)
                                                                          h5: -1.405 beats pk[-1.662,-1.148] (cov ref 0.984 / model 0.992)
                                                                          persistence: -1.245 beats pk[-1.584,-0.915] (cov ref 0.968 / model 0.771)
@@ -224,47 +228,47 @@ paired_margin_alltargets_intraday.csv busy  nf_tide                  m120  SHADO
                                                                          lvlh5_tft: -2.039 beats pk[-2.448,-1.657] (cov ref 0.984 / model 0.972)
                                                                          h5: -3.048 beats pk[-3.546,-2.545] (cov ref 0.983 / model 0.992)
                                                                          persistence: -2.516 beats pk[-3.082,-1.991] (cov ref 0.973 / model 0.786)
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           h2-4  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           h2-4  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -1.395 beats pk[-1.768,-1.034] (cov ref 0.983 / model 0.973)
                                                                          h5: -2.364 beats pk[-2.786,-1.905] (cov ref 0.982 / model 0.993)
                                                                          persistence: -3.544 beats pk[-4.128,-2.936] (cov ref 0.971 / model 0.669)
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           h4-8  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           h4-8  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -0.408 beats pk[-0.735,-0.106] (cov ref 0.980 / model 0.973)
                                                                          h5: -1.338 beats pk[-1.735,-0.912] (cov ref 0.979 / model 0.993)
                                                                          persistence: -6.208 beats pk[-7.178,-5.302] (cov ref 0.964 / model 0.498)
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx            h8+  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx            h8+  ORACLE -- no recommendation (headroom only; beats 0/3 incumbents)
                                                                          lvlh5_tft: +0.560 REGRESSION pk[+0.075,+1.074]
                                                                          h5: +0.274 worse, not significant
                                                                          persistence: -11.399 GATED [NOT TESTED: model-side coverage 0.247<0.3] (cov ref 0.954 / model 0.247)
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m015  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m015  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -5.609 beats pk[-6.194,-5.035] (cov ref 0.984 / model 0.974)
                                                                          h5: -6.574 beats pk[-7.228,-5.873] (cov ref 0.983 / model 0.994)
                                                                          persistence: +3.677 REGRESSION pk[+3.322,+4.069]
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m030  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m030  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -4.952 beats pk[-5.525,-4.398] (cov ref 0.984 / model 0.974)
                                                                          h5: -5.856 beats pk[-6.474,-5.212] (cov ref 0.983 / model 0.994)
                                                                          persistence: +1.410 REGRESSION pk[+1.042,+1.790]
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m045  SHADOW (beats some but not all incumbents)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m045  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -4.436 beats pk[-4.948,-3.913] (cov ref 0.984 / model 0.974)
                                                                          h5: -5.313 beats pk[-5.924,-4.683] (cov ref 0.983 / model 0.994)
                                                                          persistence: +0.157 worse, not significant
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m060  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m060  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -3.947 beats pk[-4.454,-3.433] (cov ref 0.983 / model 0.973)
                                                                          h5: -4.842 beats pk[-5.442,-4.245] (cov ref 0.983 / model 0.993)
                                                                          persistence: -0.714 beats pk[-1.104,-0.295] (cov ref 0.975 / model 0.870)
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m075  SHADOW (beats some but not all incumbents)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m075  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -2.639 beats pk[-3.122,-2.192] (cov ref 0.984 / model 0.975)
                                                                          h5: -3.626 beats pk[-4.168,-3.094] (cov ref 0.984 / model 0.994)
                                                                          persistence: -0.176 park-day only (park-cluster CI spans 0)
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m090  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m090  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -2.717 beats pk[-3.184,-2.287] (cov ref 0.984 / model 0.974)
                                                                          h5: -3.647 beats pk[-4.187,-3.133] (cov ref 0.983 / model 0.994)
                                                                          persistence: -1.239 beats pk[-1.688,-0.783] (cov ref 0.974 / model 0.810)
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m105  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m105  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -2.584 beats pk[-3.043,-2.141] (cov ref 0.984 / model 0.973)
                                                                          h5: -3.540 beats pk[-4.073,-3.007] (cov ref 0.983 / model 0.993)
                                                                          persistence: -1.989 beats pk[-2.489,-1.504] (cov ref 0.974 / model 0.795)
-paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m120  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_alltargets_intraday.csv busy  nf_tide_wx_owx           m120  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -2.268 beats pk[-2.701,-1.866] (cov ref 0.984 / model 0.972)
                                                                          h5: -3.275 beats pk[-3.781,-2.760] (cov ref 0.983 / model 0.992)
                                                                          persistence: -2.621 beats pk[-3.185,-2.089] (cov ref 0.973 / model 0.786)
@@ -337,49 +341,49 @@ paired_margin_alltargets_slot.csv     all   nf_tide                     6  DROP 
 paired_margin_alltargets_slot.csv     all   nf_tide                     7  DROP on this cell (significant regression vs an incumbent)
                                                                          lvlh5_tft: +0.475 REGRESSION pk[+0.267,+0.695]
                                                                          h5: +0.653 REGRESSION pk[+0.505,+0.801]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              0  SHADOW (beats some but not all incumbents)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              0  ORACLE -- no recommendation (headroom only; beats 1/2 incumbents)
                                                                          lvlh5_tft: -0.044 better, not significant
                                                                          h5: -0.179 beats pk[-0.344,-0.002] (cov ref 0.983 / model 0.992)
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              1  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              1  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.232 REGRESSION pk[+0.110,+0.365]
                                                                          h5: +0.129 worse, not significant
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              2  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              2  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.409 REGRESSION pk[+0.241,+0.586]
                                                                          h5: +0.328 REGRESSION pk[+0.182,+0.486]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              3  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              3  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.316 REGRESSION pk[+0.164,+0.475]
                                                                          h5: +0.297 REGRESSION pk[+0.146,+0.456]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              4  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              4  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.390 REGRESSION pk[+0.209,+0.587]
                                                                          h5: +0.426 REGRESSION pk[+0.291,+0.568]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              5  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              5  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.349 REGRESSION pk[+0.179,+0.524]
                                                                          h5: +0.379 REGRESSION pk[+0.240,+0.525]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              6  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              6  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.257 REGRESSION pk[+0.066,+0.449]
                                                                          h5: +0.324 REGRESSION pk[+0.177,+0.483]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              7  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx              7  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.277 REGRESSION pk[+0.073,+0.478]
                                                                          h5: +0.455 REGRESSION pk[+0.319,+0.592]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         1  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         1  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.269 REGRESSION pk[+0.149,+0.389]
                                                                          h5: +0.165 worse, not significant
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         2  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         2  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.310 REGRESSION pk[+0.160,+0.459]
                                                                          h5: +0.233 REGRESSION pk[+0.064,+0.415]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         3  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         3  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.270 REGRESSION pk[+0.121,+0.416]
                                                                          h5: +0.255 REGRESSION pk[+0.073,+0.446]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         4  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         4  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.242 REGRESSION pk[+0.073,+0.402]
                                                                          h5: +0.272 REGRESSION pk[+0.106,+0.450]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         5  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         5  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.174 REGRESSION pk[+0.023,+0.311]
                                                                          h5: +0.200 REGRESSION pk[+0.023,+0.377]
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         6  no win
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         6  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.111 worse, not significant
                                                                          h5: +0.173 worse, not significant
-paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         7  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     all   nf_tide_wx_owx_x_h5         7  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.048 worse, not significant
                                                                          h5: +0.223 REGRESSION pk[+0.048,+0.394]
 paired_margin_alltargets_slot.csv     all   nf_tide_x_h5                1  DROP on this cell (significant regression vs an incumbent)
@@ -472,49 +476,49 @@ paired_margin_alltargets_slot.csv     busy  nf_tide                     6  DROP 
 paired_margin_alltargets_slot.csv     busy  nf_tide                     7  DROP on this cell (significant regression vs an incumbent)
                                                                          lvlh5_tft: +1.382 REGRESSION pk[+0.918,+1.859]
                                                                          h5: +1.051 REGRESSION pk[+0.714,+1.337]
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              0  SHADOW (beats some but not all incumbents)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              0  ORACLE -- no recommendation (headroom only; beats 1/2 incumbents)
                                                                          lvlh5_tft: +0.167 worse, not significant
                                                                          h5: -0.785 beats pk[-1.166,-0.382] (cov ref 0.981 / model 0.993)
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              1  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              1  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.798 REGRESSION pk[+0.535,+1.083]
                                                                          h5: -0.101 better, not significant
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              2  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              2  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +1.189 REGRESSION pk[+0.841,+1.547]
                                                                          h5: +0.350 REGRESSION pk[+0.010,+0.701]
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              3  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              3  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.981 REGRESSION pk[+0.648,+1.329]
                                                                          h5: +0.293 worse, not significant
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              4  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              4  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +1.159 REGRESSION pk[+0.754,+1.574]
                                                                          h5: +0.556 REGRESSION pk[+0.229,+0.875]
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              5  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              5  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +1.032 REGRESSION pk[+0.630,+1.438]
                                                                          h5: +0.459 REGRESSION pk[+0.119,+0.788]
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              6  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              6  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.921 REGRESSION pk[+0.486,+1.356]
                                                                          h5: +0.386 REGRESSION pk[+0.036,+0.750]
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              7  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx              7  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.998 REGRESSION pk[+0.557,+1.445]
                                                                          h5: +0.661 REGRESSION pk[+0.339,+0.939]
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         1  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         1  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.454 REGRESSION pk[+0.199,+0.739]
                                                                          h5: -0.443 park-day only (park-cluster CI spans 0)
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         2  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         2  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.548 REGRESSION pk[+0.237,+0.880]
                                                                          h5: -0.281 park-day only (park-cluster CI spans 0)
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         3  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         3  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.445 REGRESSION pk[+0.138,+0.780]
                                                                          h5: -0.238 park-day only (park-cluster CI spans 0)
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         4  DROP on this cell (significant regression vs an incumbent)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         4  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.408 REGRESSION pk[+0.072,+0.795]
                                                                          h5: -0.209 park-day only (park-cluster CI spans 0)
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         5  SHADOW (beats some but not all incumbents)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         5  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.200 worse, not significant
                                                                          h5: -0.382 park-day only (park-cluster CI spans 0)
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         6  SHADOW (beats some but not all incumbents)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         6  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.152 worse, not significant
                                                                          h5: -0.390 park-day only (park-cluster CI spans 0)
-paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         7  SHADOW (beats some but not all incumbents)
+paired_margin_alltargets_slot.csv     busy  nf_tide_wx_owx_x_h5         7  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: -0.002 better, not significant
                                                                          h5: -0.342 park-day only (park-cluster CI spans 0)
 paired_margin_alltargets_slot.csv     busy  nf_tide_x_h5                1  DROP on this cell (significant regression vs an incumbent)
@@ -626,47 +630,47 @@ paired_margin_window_intraday.csv     all   nf_tide                  m120  SHADO
                                                                          lvlh5_tft: -1.104 beats pk[-1.309,-0.918] (cov ref 0.983 / model 0.970)
                                                                          h5: -1.327 beats pk[-1.602,-1.056] (cov ref 0.982 / model 0.992)
                                                                          persistence: -1.091 beats pk[-1.422,-0.763] (cov ref 0.968 / model 0.769)
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx           h2-4  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx           h2-4  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -0.761 beats pk[-0.951,-0.590] (cov ref 0.983 / model 0.970)
                                                                          h5: -0.952 beats pk[-1.200,-0.728] (cov ref 0.982 / model 0.993)
                                                                          persistence: -1.711 beats pk[-2.103,-1.323] (cov ref 0.964 / model 0.627)
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx           h4-8  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx           h4-8  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -0.313 beats pk[-0.457,-0.173] (cov ref 0.979 / model 0.969)
                                                                          h5: -0.494 beats pk[-0.709,-0.294] (cov ref 0.979 / model 0.992)
                                                                          persistence: -3.372 beats pk[-4.016,-2.774] (cov ref 0.953 / model 0.431)
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx            h8+  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx            h8+  ORACLE -- no recommendation (headroom only; beats 0/3 incumbents)
                                                                          lvlh5_tft: +0.141 worse, not significant
                                                                          h5: +0.307 REGRESSION pk[+0.061,+0.576]
                                                                          persistence: -6.430 GATED [NOT TESTED: model-side coverage 0.197<0.3] (cov ref 0.933 / model 0.197)
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m015  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m015  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -3.000 beats pk[-3.365,-2.662] (cov ref 0.983 / model 0.971)
                                                                          h5: -3.208 beats pk[-3.637,-2.790] (cov ref 0.983 / model 0.993)
                                                                          persistence: +2.131 REGRESSION pk[+1.910,+2.357]
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m030  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m030  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -2.627 beats pk[-2.967,-2.325] (cov ref 0.984 / model 0.971)
                                                                          h5: -2.791 beats pk[-3.192,-2.392] (cov ref 0.983 / model 0.993)
                                                                          persistence: +0.939 REGRESSION pk[+0.746,+1.142]
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m045  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m045  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -2.361 beats pk[-2.663,-2.088] (cov ref 0.984 / model 0.971)
                                                                          h5: -2.523 beats pk[-2.886,-2.163] (cov ref 0.983 / model 0.993)
                                                                          persistence: +0.278 REGRESSION pk[+0.079,+0.482]
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m060  SHADOW (beats some but not all incumbents)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m060  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -2.095 beats pk[-2.386,-1.837] (cov ref 0.984 / model 0.971)
                                                                          h5: -2.278 beats pk[-2.635,-1.947] (cov ref 0.983 / model 0.992)
                                                                          persistence: -0.153 park-day only (park-cluster CI spans 0)
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m075  SHADOW (beats some but not all incumbents)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m075  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -1.474 beats pk[-1.697,-1.253] (cov ref 0.984 / model 0.972)
                                                                          h5: -1.675 beats pk[-1.965,-1.391] (cov ref 0.983 / model 0.993)
                                                                          persistence: +0.102 worse, not significant
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m090  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m090  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -1.493 beats pk[-1.722,-1.273] (cov ref 0.984 / model 0.971)
                                                                          h5: -1.660 beats pk[-1.953,-1.369] (cov ref 0.983 / model 0.993)
                                                                          persistence: -0.465 beats pk[-0.755,-0.194] (cov ref 0.969 / model 0.791)
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m105  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m105  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -1.413 beats pk[-1.643,-1.200] (cov ref 0.983 / model 0.971)
                                                                          h5: -1.597 beats pk[-1.899,-1.297] (cov ref 0.982 / model 0.993)
                                                                          persistence: -0.864 beats pk[-1.176,-0.557] (cov ref 0.968 / model 0.777)
-paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m120  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_window_intraday.csv     all   nf_tide_wx_owx           m120  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -1.234 beats pk[-1.449,-1.032] (cov ref 0.983 / model 0.970)
                                                                          h5: -1.456 beats pk[-1.747,-1.168] (cov ref 0.982 / model 0.992)
                                                                          persistence: -1.156 beats pk[-1.485,-0.819] (cov ref 0.968 / model 0.769)
@@ -758,47 +762,47 @@ paired_margin_window_intraday.csv     busy  nf_tide                  m120  SHADO
                                                                          lvlh5_tft: -1.990 beats pk[-2.382,-1.576] (cov ref 0.982 / model 0.973)
                                                                          h5: -3.148 beats pk[-3.732,-2.571] (cov ref 0.981 / model 0.993)
                                                                          persistence: -2.332 beats pk[-2.867,-1.769] (cov ref 0.972 / model 0.785)
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           h2-4  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           h2-4  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -1.356 beats pk[-1.716,-0.969] (cov ref 0.981 / model 0.973)
                                                                          h5: -2.468 beats pk[-2.966,-1.998] (cov ref 0.981 / model 0.994)
                                                                          persistence: -3.324 beats pk[-3.877,-2.704] (cov ref 0.970 / model 0.666)
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           h4-8  SHADOW (beats some but not all incumbents)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           h4-8  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -0.311 park-day only (park-cluster CI spans 0)
                                                                          h5: -1.389 beats pk[-1.860,-0.915] (cov ref 0.977 / model 0.993)
                                                                          persistence: -5.899 beats pk[-6.785,-5.057] (cov ref 0.963 / model 0.494)
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx            h8+  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx            h8+  ORACLE -- no recommendation (headroom only; beats 0/3 incumbents)
                                                                          lvlh5_tft: +0.650 REGRESSION pk[+0.123,+1.184]
                                                                          h5: +0.284 worse, not significant
                                                                          persistence: -11.017 GATED [NOT TESTED: model-side coverage 0.246<0.3] (cov ref 0.952 / model 0.246)
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m015  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m015  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -5.607 beats pk[-6.178,-5.014] (cov ref 0.982 / model 0.975)
                                                                          h5: -6.701 beats pk[-7.399,-6.019] (cov ref 0.982 / model 0.995)
                                                                          persistence: +3.625 REGRESSION pk[+3.258,+3.986]
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m030  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m030  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -4.966 beats pk[-5.519,-4.416] (cov ref 0.982 / model 0.975)
                                                                          h5: -6.003 beats pk[-6.667,-5.308] (cov ref 0.982 / model 0.995)
                                                                          persistence: +1.409 REGRESSION pk[+1.025,+1.793]
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m045  SHADOW (beats some but not all incumbents)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m045  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -4.488 beats pk[-4.995,-3.976] (cov ref 0.982 / model 0.974)
                                                                          h5: -5.499 beats pk[-6.153,-4.861] (cov ref 0.982 / model 0.994)
                                                                          persistence: +0.186 worse, not significant
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m060  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m060  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -4.007 beats pk[-4.504,-3.506] (cov ref 0.982 / model 0.974)
                                                                          h5: -5.028 beats pk[-5.654,-4.397] (cov ref 0.981 / model 0.993)
                                                                          persistence: -0.665 beats pk[-1.065,-0.236] (cov ref 0.973 / model 0.870)
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m075  SHADOW (beats some but not all incumbents)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m075  ORACLE -- no recommendation (headroom only; beats 2/3 incumbents)
                                                                          lvlh5_tft: -2.640 beats pk[-3.113,-2.170] (cov ref 0.983 / model 0.975)
                                                                          h5: -3.762 beats pk[-4.358,-3.182] (cov ref 0.982 / model 0.994)
                                                                          persistence: -0.041 better, not significant
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m090  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m090  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -2.718 beats pk[-3.158,-2.257] (cov ref 0.983 / model 0.974)
                                                                          h5: -3.793 beats pk[-4.366,-3.249] (cov ref 0.982 / model 0.994)
                                                                          persistence: -1.106 beats pk[-1.581,-0.646] (cov ref 0.973 / model 0.809)
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m105  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m105  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -2.569 beats pk[-2.990,-2.130] (cov ref 0.983 / model 0.974)
                                                                          h5: -3.690 beats pk[-4.273,-3.104] (cov ref 0.982 / model 0.994)
                                                                          persistence: -1.846 beats pk[-2.329,-1.353] (cov ref 0.972 / model 0.794)
-paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m120  SHADOW (beats every incumbent; SERVE withheld -- cross-season sign clause untestable on autumn-only origins)
+paired_margin_window_intraday.csv     busy  nf_tide_wx_owx           m120  ORACLE -- no recommendation (headroom only; beats 3/3 incumbents)
                                                                          lvlh5_tft: -2.255 beats pk[-2.665,-1.849] (cov ref 0.982 / model 0.973)
                                                                          h5: -3.410 beats pk[-4.009,-2.808] (cov ref 0.981 / model 0.993)
                                                                          persistence: -2.459 beats pk[-3.005,-1.892] (cov ref 0.972 / model 0.785)
@@ -871,49 +875,49 @@ paired_margin_window_slot.csv         all   nf_tide                     6  DROP 
 paired_margin_window_slot.csv         all   nf_tide                     7  DROP on this cell (significant regression vs an incumbent)
                                                                          lvlh5_tft: +0.475 REGRESSION pk[+0.269,+0.691]
                                                                          h5: +0.653 REGRESSION pk[+0.518,+0.795]
-paired_margin_window_slot.csv         all   nf_tide_wx_owx              0  SHADOW (beats some but not all incumbents)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx              0  ORACLE -- no recommendation (headroom only; beats 1/2 incumbents)
                                                                          lvlh5_tft: +0.004 worse, not significant
                                                                          h5: -0.190 beats pk[-0.379,-0.005] (cov ref 0.981 / model 0.993)
-paired_margin_window_slot.csv         all   nf_tide_wx_owx              1  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx              1  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.291 REGRESSION pk[+0.158,+0.423]
                                                                          h5: +0.120 worse, not significant
-paired_margin_window_slot.csv         all   nf_tide_wx_owx              2  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx              2  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.473 REGRESSION pk[+0.296,+0.647]
                                                                          h5: +0.338 REGRESSION pk[+0.190,+0.494]
-paired_margin_window_slot.csv         all   nf_tide_wx_owx              3  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx              3  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.380 REGRESSION pk[+0.219,+0.530]
                                                                          h5: +0.303 REGRESSION pk[+0.151,+0.462]
-paired_margin_window_slot.csv         all   nf_tide_wx_owx              4  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx              4  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.433 REGRESSION pk[+0.229,+0.615]
                                                                          h5: +0.415 REGRESSION pk[+0.276,+0.568]
-paired_margin_window_slot.csv         all   nf_tide_wx_owx              5  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx              5  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.384 REGRESSION pk[+0.202,+0.553]
                                                                          h5: +0.363 REGRESSION pk[+0.222,+0.521]
-paired_margin_window_slot.csv         all   nf_tide_wx_owx              6  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx              6  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.275 REGRESSION pk[+0.079,+0.475]
                                                                          h5: +0.317 REGRESSION pk[+0.165,+0.486]
-paired_margin_window_slot.csv         all   nf_tide_wx_owx              7  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx              7  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.277 REGRESSION pk[+0.082,+0.475]
                                                                          h5: +0.455 REGRESSION pk[+0.326,+0.593]
-paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         1  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         1  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.284 REGRESSION pk[+0.156,+0.407]
                                                                          h5: +0.115 worse, not significant
-paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         2  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         2  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.328 REGRESSION pk[+0.185,+0.480]
                                                                          h5: +0.197 worse, not significant
-paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         3  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         3  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.311 REGRESSION pk[+0.163,+0.453]
                                                                          h5: +0.235 REGRESSION pk[+0.024,+0.424]
-paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         4  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         4  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.277 REGRESSION pk[+0.107,+0.442]
                                                                          h5: +0.251 REGRESSION pk[+0.060,+0.427]
-paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         5  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         5  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.210 REGRESSION pk[+0.062,+0.355]
                                                                          h5: +0.185 worse, not significant
-paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         6  no win
+paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         6  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.127 worse, not significant
                                                                          h5: +0.164 worse, not significant
-paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         7  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         all   nf_tide_wx_owx_x_h5         7  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.048 worse, not significant
                                                                          h5: +0.223 REGRESSION pk[+0.045,+0.387]
 paired_margin_window_slot.csv         all   nf_tide_x_h5                1  DROP on this cell (significant regression vs an incumbent)
@@ -1006,49 +1010,49 @@ paired_margin_window_slot.csv         busy  nf_tide                     6  DROP 
 paired_margin_window_slot.csv         busy  nf_tide                     7  DROP on this cell (significant regression vs an incumbent)
                                                                          lvlh5_tft: +1.382 REGRESSION pk[+0.919,+1.833]
                                                                          h5: +1.051 REGRESSION pk[+0.760,+1.349]
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx              0  SHADOW (beats some but not all incumbents)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx              0  ORACLE -- no recommendation (headroom only; beats 1/2 incumbents)
                                                                          lvlh5_tft: +0.254 worse, not significant
                                                                          h5: -0.842 beats pk[-1.288,-0.423] (cov ref 0.980 / model 0.994)
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx              1  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx              1  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.924 REGRESSION pk[+0.633,+1.213]
                                                                          h5: -0.145 better, not significant
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx              2  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx              2  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +1.299 REGRESSION pk[+0.920,+1.659]
                                                                          h5: +0.327 worse, not significant
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx              3  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx              3  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +1.099 REGRESSION pk[+0.736,+1.433]
                                                                          h5: +0.270 worse, not significant
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx              4  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx              4  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +1.233 REGRESSION pk[+0.803,+1.636]
                                                                          h5: +0.523 REGRESSION pk[+0.200,+0.872]
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx              5  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx              5  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +1.097 REGRESSION pk[+0.681,+1.484]
                                                                          h5: +0.432 REGRESSION pk[+0.110,+0.785]
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx              6  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx              6  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.954 REGRESSION pk[+0.519,+1.370]
                                                                          h5: +0.374 REGRESSION pk[+0.039,+0.763]
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx              7  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx              7  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.998 REGRESSION pk[+0.560,+1.425]
                                                                          h5: +0.661 REGRESSION pk[+0.380,+0.951]
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         1  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         1  ORACLE -- no recommendation (headroom only; beats 1/2 incumbents)
                                                                          lvlh5_tft: +0.474 REGRESSION pk[+0.188,+0.752]
                                                                          h5: -0.589 beats pk[-1.079,-0.151] (cov ref 0.977 / model 1.000)
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         2  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         2  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.558 REGRESSION pk[+0.226,+0.887]
                                                                          h5: -0.402 park-day only (park-cluster CI spans 0)
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         3  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         3  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.510 REGRESSION pk[+0.171,+0.831]
                                                                          h5: -0.314 park-day only (park-cluster CI spans 0)
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         4  DROP on this cell (significant regression vs an incumbent)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         4  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.451 REGRESSION pk[+0.086,+0.814]
                                                                          h5: -0.275 park-day only (park-cluster CI spans 0)
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         5  SHADOW (beats some but not all incumbents)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         5  ORACLE -- no recommendation (headroom only; beats 1/2 incumbents)
                                                                          lvlh5_tft: +0.250 worse, not significant
                                                                          h5: -0.422 beats pk[-0.843,-0.040] (cov ref 0.973 / model 1.000)
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         6  SHADOW (beats some but not all incumbents)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         6  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: +0.173 worse, not significant
                                                                          h5: -0.417 park-day only (park-cluster CI spans 0)
-paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         7  SHADOW (beats some but not all incumbents)
+paired_margin_window_slot.csv         busy  nf_tide_wx_owx_x_h5         7  ORACLE -- no recommendation (headroom only; beats 0/2 incumbents)
                                                                          lvlh5_tft: -0.002 better, not significant
                                                                          h5: -0.342 park-day only (park-cluster CI spans 0)
 paired_margin_window_slot.csv         busy  nf_tide_x_h5                1  DROP on this cell (significant regression vs an incumbent)
@@ -1073,4 +1077,4 @@ paired_margin_window_slot.csv         busy  nf_tide_x_h5                7  no wi
                                                                          lvlh5_tft: +0.348 worse, not significant
                                                                          h5: +0.011 worse, not significant
 
-tally: DROP on this cell=223, SHADOW=84, no win=5
+tally: DROP on this cell=161, ORACLE -- no recommendation=104, SHADOW=44, no win=3
