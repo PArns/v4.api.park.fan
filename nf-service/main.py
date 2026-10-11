@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import threading
+import uuid
 import warnings
 from datetime import datetime, timezone
 
@@ -31,7 +32,7 @@ warnings.filterwarnings("ignore", message=r".*removed from hparams because it ca
 warnings.filterwarnings("ignore", message=r".*isinstance\(treespec, LeafSpec\) is deprecated.*")
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from config import get_settings
 
@@ -320,6 +321,12 @@ class ChronosRequest(BaseModel):
     variant: str = "live"
     keep_minutes: int | None = None
 
+    @field_validator("park_id")
+    @classmethod
+    def _park_id_is_uuid(cls, v: str) -> str:
+        # It names the truth-cache file and goes into SQL as a parameter: a UUID or nothing.
+        return str(uuid.UUID(v))
+
 
 @app.post("/chronos/forecast")
 def chronos_forecast(req: ChronosRequest):
@@ -352,8 +359,9 @@ def chronos_forecast(req: ChronosRequest):
             _chronos_engine(), chronos_data.TruthCache(settings.CHRONOS_TRUTH_CACHE_DIR),
         )
     except chronos_data.Warming as w:
+        logger.info("Chronos context warming for %s: %s", req.park_id, w)
         return {"status": "warming", "parkId": req.park_id, "variant": req.variant,
-                "reason": str(w), "curves": []}
+                "reason": "context backfill in progress", "curves": []}
     except Exception as e:  # noqa: BLE001
         import traceback
 

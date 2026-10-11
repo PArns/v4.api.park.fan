@@ -17,6 +17,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from collections import defaultdict
 
 import pandas as pd
@@ -133,8 +134,15 @@ class TruthCache:
         self.root = root
 
     def _paths(self, park_id: str) -> tuple[str, str]:
-        return (os.path.join(self.root, f"{park_id}.parquet"),
-                os.path.join(self.root, f"{park_id}.json"))
+        # The id names a file: accept only a canonical UUID, so no request value can
+        # steer the path outside the cache directory.
+        name = str(uuid.UUID(str(park_id)))
+        root = os.path.realpath(self.root)
+        data = os.path.realpath(os.path.join(root, f"{name}.parquet"))
+        meta = os.path.realpath(os.path.join(root, f"{name}.json"))
+        if os.path.dirname(data) != root or os.path.dirname(meta) != root:
+            raise ValueError("park cache path escapes the cache directory")
+        return data, meta
 
     def load(self, park_id: str) -> tuple[pd.DataFrame, dict]:
         data, meta = self._paths(park_id)

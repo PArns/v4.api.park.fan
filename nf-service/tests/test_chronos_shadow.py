@@ -25,6 +25,8 @@ os.environ.setdefault("MODEL_DIR", tempfile.mkdtemp(prefix="nf-chronos-test-"))
 sys.path.insert(0, _SERVICE)
 
 import chronos_data
+
+PID = "8355a0b7-26e9-4a90-af47-246ec143e99a"
 import chronos_shadow as cs
 
 TZ = "Europe/Berlin"
@@ -64,7 +66,7 @@ def _holidays(rows):
 
 
 META = cs.ParkMeta(
-    park_id="p1", timezone=TZ, country="DE", region="DE-NW",
+    park_id=PID, timezone=TZ, country="DE", region="DE-NW",
     influencing=[{"countryCode": "NL", "regionCode": None}],
 )
 
@@ -299,11 +301,11 @@ def test_run_reads_today_only_up_to_the_origin(monkeypatch, tmp_path):
     cache = chronos_data.TruthCache(str(tmp_path))
     # Cold cache: the request does not wait for the backfill, it queues it.
     with pytest.raises(chronos_data.Warming):
-        chronos_data.run("p1", origin, "live", 240, eng, cache)
+        chronos_data.run(PID, origin, "live", 240, eng, cache)
     assert eng.calls == 0
     assert chronos_data.process_pending() == 1
     reads.clear()
-    out = chronos_data.run("p1", origin, "live", 240, eng, cache)
+    out = chronos_data.run(PID, origin, "live", 240, eng, cache)
     assert out["status"] == "ok" and eng.calls == 1
     assert out["benchName"] == "chronos2"
     assert out["covariateNames"] == cs.cov_names("compressed")
@@ -318,7 +320,7 @@ def test_run_reads_today_only_up_to_the_origin(monkeypatch, tmp_path):
 
     # The grid variant's off-window context steps reach back 85 days, before
     # any truth: their day covariates must still be there, never NaN.
-    grid = chronos_data.run("p1", origin, "grid", None, eng, cache)
+    grid = chronos_data.run(PID, origin, "grid", None, eng, cache)
     assert grid["status"] == "ok" and grid["benchName"] == "chronos2_grid"
     names = eng.last_task.names
     day_rows = [names.index(c) for c in cs.DAY_COVS]
@@ -328,10 +330,10 @@ def test_run_reads_today_only_up_to_the_origin(monkeypatch, tmp_path):
 
     # Next day: one day of increment is read inline, plus today's rows.
     reads.clear()
-    out = chronos_data.run("p1", origin + pd.Timedelta(days=1), "live", 240, eng, cache)
+    out = chronos_data.run(PID, origin + pd.Timedelta(days=1), "live", 240, eng, cache)
     assert out["status"] == "ok" and len(reads) == 2
     reads.clear()
-    chronos_data.run("p1", origin + pd.Timedelta(hours=2), "live", 240, eng, cache)
+    chronos_data.run(PID, origin + pd.Timedelta(hours=2), "live", 240, eng, cache)
     assert len(reads) == 1
 
 
@@ -349,7 +351,7 @@ def test_a_failed_backfill_is_dropped_from_the_queue(monkeypatch, tmp_path):
     monkeypatch.setattr(chronos_data, "fetch_holidays", lambda c: (_holidays([]), {}))
     monkeypatch.setattr(chronos_data, "_start_worker", lambda: None)
     with pytest.raises(chronos_data.Warming):
-        chronos_data.run("p1", origin, "grid", None, StubEngine(), chronos_data.TruthCache(str(tmp_path)))
+        chronos_data.run(PID, origin, "grid", None, StubEngine(), chronos_data.TruthCache(str(tmp_path)))
     assert chronos_data.process_pending() == 0
     assert chronos_data._pending == {}
 
@@ -368,7 +370,7 @@ def client(monkeypatch):
 
 def test_endpoint_kill_switch_and_training_guard(client, monkeypatch):
     tc, main = client
-    body = {"park_id": "p1", "origin_at": "2026-10-09T10:05:00Z", "variant": "live"}
+    body = {"park_id": PID, "origin_at": "2026-10-09T10:05:00Z", "variant": "live"}
     monkeypatch.setattr(main.settings, "CHRONOS_ENABLED", False)
     assert tc.post("/chronos/forecast", json=body).status_code == 503
     monkeypatch.setattr(main.settings, "CHRONOS_ENABLED", True)
@@ -381,7 +383,7 @@ def test_endpoint_kill_switch_and_training_guard(client, monkeypatch):
 
 def test_endpoint_answers_warming_and_hides_errors(client, monkeypatch):
     tc, main = client
-    body = {"park_id": "p1", "origin_at": "2026-10-09T10:05:00Z", "variant": "grid"}
+    body = {"park_id": PID, "origin_at": "2026-10-09T10:05:00Z", "variant": "grid"}
     monkeypatch.setattr(main, "_read_status", lambda: {"is_training": False})
 
     def warming(*a, **k):
@@ -462,3 +464,18 @@ def test_smoke_real_model():
     q = eng.forecast(task)
     assert q.shape == (2, task.future_cov.shape[1], 3)
     assert np.isfinite(q).all()
+
+
+def test_truth_cache_rejects_a_park_id_that_is_not_a_uuid(tmp_path):
+    cache = chronos_data.TruthCache(str(tmp_path))
+    for bad in ["../../etc/passwd", "p1", "", "a/b"]:
+        with pytest.raises(ValueError):
+            cache._paths(bad)
+    data, meta = cache._paths(PID.upper())
+    assert data.endswith(f"{PID}.parquet") and meta.endswith(f"{PID}.json")
+
+
+def test_endpoint_rejects_a_park_id_that_is_not_a_uuid(client):
+    tc, _ = client
+    r = tc.post("/chronos/forecast", json={"park_id": "../x", "origin_at": "2026-10-09T10:05:00Z"})
+    assert r.status_code == 422
