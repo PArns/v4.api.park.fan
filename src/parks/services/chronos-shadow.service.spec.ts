@@ -49,7 +49,13 @@ describe("ChronosShadowService", () => {
   it("answers null while warming, without counting a failure", async () => {
     post.mockResolvedValue({ data: { status: "warming", curves: [] } });
     expect(await service.forecast("p1", origin, "grid")).toBeNull();
-    expect(service.endRun()).toEqual({ failures: 0, warming: 1, skipped: 0 });
+    expect(service.endRun()).toEqual({
+      calls: 1,
+      ok: 0,
+      failures: 0,
+      warming: 1,
+      skipped: 0,
+    });
   });
 
   it("opens the breaker after three failures and logs once per run", async () => {
@@ -59,7 +65,13 @@ describe("ChronosShadowService", () => {
     }
     expect(post).toHaveBeenCalledTimes(3);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(service.endRun()).toEqual({ failures: 3, warming: 0, skipped: 3 });
+    expect(service.endRun()).toEqual({
+      calls: 3,
+      ok: 0,
+      failures: 3,
+      warming: 0,
+      skipped: 3,
+    });
     // A new run closes the breaker again.
     service.beginRun();
     post.mockResolvedValue({ data: { status: "ok", curves: [] } });

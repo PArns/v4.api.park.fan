@@ -2,7 +2,10 @@ import { ForecastArchiveService } from "./forecast-archive.service";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { PlanDayDto, PlanDayShadowCurve } from "../dto/plan-day.dto";
 import { Park } from "../entities/park.entity";
-import { ChronosResponse } from "./chronos-shadow.service";
+import {
+  CHRONOS_LAST_RUN_KEY,
+  ChronosResponse,
+} from "./chronos-shadow.service";
 
 const TZ = "Europe/Berlin";
 
@@ -813,7 +816,16 @@ describe("ForecastArchiveService.captureDue", () => {
       get: jest.fn().mockResolvedValue(null),
       set: jest.fn().mockResolvedValue("OK"),
     };
-    const chronos = { beginRun: jest.fn(), endRun: jest.fn() };
+    const chronos = {
+      beginRun: jest.fn(),
+      endRun: jest.fn().mockReturnValue({
+        calls: 2,
+        ok: 1,
+        failures: 0,
+        warming: 1,
+        skipped: 0,
+      }),
+    };
     Object.assign(service, {
       parkRepository: { find: jest.fn().mockResolvedValue(parks) },
       redis,
@@ -833,11 +845,18 @@ describe("ForecastArchiveService.captureDue", () => {
     expect(capture).toHaveBeenCalledTimes(2);
     expect(new Set(origins).size).toBe(2);
     expect(res).toMatchObject({ parks: 1, failed: 1 });
-    // Only the park that succeeded is marked done for this origin hour.
-    expect(redis.set).toHaveBeenCalledTimes(1);
+    // Only the park that succeeded is marked done for this origin hour; the
+    // second write is the run's Chronos summary for the admin overview.
+    expect(redis.set).toHaveBeenCalledTimes(2);
     expect(redis.set.mock.calls[0][0]).toBe(
       "forecast-archive:origin:a:2026-10-08:06",
     );
+    expect(redis.set.mock.calls[1][0]).toBe(CHRONOS_LAST_RUN_KEY);
+    expect(JSON.parse(redis.set.mock.calls[1][1])).toMatchObject({
+      calls: 2,
+      ok: 1,
+      warming: 1,
+    });
     // One breaker / one log line per run for the Chronos shadow.
     expect(chronos.beginRun).toHaveBeenCalledTimes(1);
     expect(chronos.endRun).toHaveBeenCalledTimes(1);
