@@ -205,6 +205,27 @@ reference and why), `low_coverage_cells.csv`, `usable_horizon.csv` (with
   (`cells_all_refs.csv`). "No model beats the reference" is a statement about the
   best-of-N naive envelope; "`h5` beats the weekday median by 0.14 min" is a
   different statement, and both are published.
+- **`cells.csv` has two win columns and they disagree. That is deliberate, and the
+  disagreement is one-directional.** `wins` is the published criterion — beats
+  **every** candidate. `wins_vs_ref` is the older, weaker question — beats the
+  *displayed* `ref` only — and it is kept because BENCH-SPEC change #5 requires the
+  per-reference statement to stay separable from the envelope one. They disagree on
+  **233 cells over the two passes (154 in the headline window, 79 on the full
+  period)**, and in **all 233** it is `wins_vs_ref = True` with `wins = False`: a
+  cell can beat the candidate it is displayed against and still fail the
+  conjunction, never the reverse. That one-directionality is the proof that the
+  envelope is strictly the harder test. **If you are reading one column, read
+  `wins`.**
+- **`hardest_naive` is the worst point estimate, not necessarily the blocker, and
+  the two coincide less often than is comfortable.** On non-winning cells with at
+  least two candidates, `hardest_naive` is *among* the candidates that deny the win
+  **97.9 %** of the time (headline) / **98.7 %** (full period) — but it is the
+  **sole** blocker only **20.6 % / 25.2 %** of the time. Usually several candidates
+  deny the win at once. So "the hardest candidate is the one that decides" is a
+  useful heuristic and a bad inference: read `cells_all_refs.csv` per candidate
+  before naming a blocker. PAR-830 reported this mechanism holding on its own
+  plug-in; **it does not transfer to these baselines at anything like 100 %**, and
+  this PR does not claim it does.
 - **Gates** for the hand-over and the usable horizon: enough units for the
   metric's own unit of analysis — ≥ 30 origin **days** for day-unit metrics,
   ≥ 30 park-**months** for UC4, whose unit is the park-month — and the model's
@@ -938,23 +959,39 @@ stop being wins. PAR-828 predicted
 this sign from its Chronos-2 run before it was measured here; it means UC1
 results on this target are **conservative for any model that is not persistence**.
 
-**5. Nothing load-bearing flips.** Of 2,886 comparable cells, 32 (1.1 %) change
-their win verdict and 26 of those go *from no-win to win* — the target gets
-harder, but models gain more than they lose because the slots removed were the
-flat ones the naives handle best. The flips are near-boundary (CIs touching 0)
-except one group: **UC3 dayPeak absolute error at d0–d6**, where 16 cells turn
-into wins with shifts of up to −0.48 min (`lvlh5_naive` d6 +0.121 → −0.355).
-Carried-forward slots distort a ride-day's P90 shape more than its mean, so the
-dayPeak surfaces (D4, the planner's headliner drop) are the ones a heartbeat
-decision would actually move. No hand-over band in the tables above changes.
+**5. The hand-over bands DO change, and one of them is the band this PR asks the owner to act on.** My earlier "nothing load-bearing flips" was **false** and is withdrawn. Comparing the two arms' own `handover.csv` — both re-reported today on one report build, so this is not a provenance artefact — over the 213 rows present in both:
+
+| quantity | differs between the arms |
+|---|---|
+| winners | **6 of 213** |
+| references | 9 |
+| envelope sets | 14 |
+| largest `paired_margin` move | **0.912 min** (UC2 busy d0) |
+
+The six winner flips, and every one gains significance when the carried-forward slots go:
+
+| metric | seg | lead | heartbeats KEPT | heartbeats DROPPED |
+|---|---|---|---|---|
+| UC3 MAE | all | **d2** | `h5` −0.136963 (sig 1) | **`lvlh5_tft` −0.260504 (sig 2)** |
+| UC3 MAE | all | **d6** | `snaive7`, nothing wins (sig 0) | **`h5` −0.383984 (sig 1)** |
+| UC3 MAE, schedule known | all | d2 | `h5` (sig 1) | `lvlh5_tft` (sig 2) |
+| UC3 dayPeak abs error | all | d4 | `snaive7`, nothing wins | `prod_served_lin` (sig 4) |
+| UC3 dayPeak abs error | all | d5 | `snaive7`, nothing wins | `prod_served_lin` (sig 4) |
+| UC3 dayPeak abs error | all | d6 | `snaive7`, nothing wins | `prod_served_lin` (sig 4) |
+
+(The `sens-hb` arm reproduces the published headline hand-over exactly at both leads, so the arms are comparable and the published table is the heartbeats-kept one.)
+
+**The consequence, and it is the most important caveat in this review: the serving recommendation is conditional on a truth definition the owner has not chosen yet.** The two leads that move are precisely the two the recommendation turns on — **d2**, where the narrowed PR #446 ask terminates, and **d6**, whose boundary this page already admits rests on `snaive7`'s upper bound landing on +0.0038. Under the heartbeats-dropped target the all-rides band *extends*: `lvlh5_tft` wins d2 outright and `h5` wins d6, so the dead band starts later than d6. BENCH-SPEC #6 records the heartbeat question as an **open owner decision**. So: **do not read "narrow #446 to d0–d2" as settled. The d2 boundary itself moves under the other truth definition, in the direction of giving the models more, and the choice between the two targets has to be made before that boundary is treated as a number.** Nothing here tells the owner which target is right; it tells them the answer depends on it.
 
 **This is a product decision, not a bug to fix silently.** Scoring against a
 carried-forward wait measures agreement with a stale *display*; scoring without
 it measures agreement with the queue. Both are legitimate targets — "what the app
 showed" is what a user experienced. The published headline keeps them (the
 deviation is recorded as BENCH-SPEC change #6); the alternative target is
-published beside it, and on this evidence the choice changes no serving band and
-moves absolute autumn MAEs by ~0.18 min. See
+published beside it. **The choice is not cosmetic**: it moves 6 of 213 hand-over
+winners — including d2 and d6, the two leads the serving recommendation turns on —
+and absolute autumn MAEs by ~0.18 min. Make the decision before acting on a lead
+boundary. See
 `~/ml-review-2026-10/RESULTS-PAR-827.md` for the recommendation.
 
 ### Sanity check against the 2026-10 review (33 sample parks)
