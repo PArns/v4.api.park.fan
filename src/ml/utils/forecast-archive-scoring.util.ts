@@ -27,6 +27,13 @@
  * | `d1None`, `d1NoneWorse` | rides with a qualifying plan hour but a gap under 10 min, and how many got 10 min worse anyway — the base rate (D1) |
  * | `d1NoHour`, `d1NoHourWorse` | rides with no qualifying plan hour at all (closing soon, no curve), counted apart so they do not dilute the base rate (D1) |
  *
+ * The Chronos-2 shadow (PAR-852) is scored like the surface it shadows — the
+ * live variant on the slot leads of UC1/UC2, the grid variant on UC3's day
+ * leads — under its own source (`chronos2`, `chronos2_grid`) and never into
+ * `all`, `level_*`, D1, D9 or the dayPeak ordering, which judge what is served.
+ * {@link scorePairedShadows} adds the paired per-park comparison against the
+ * served curve, persistence and H5 that the board's bootstrap reads.
+ *
  * UC3 and D9 rows are also written under `level_<tft|catboost|climatology|
  * mixed|none>`, the model behind the day level, so the board can split the
  * horizon by level source — but only for numbers that come from the level:
@@ -330,6 +337,16 @@ const SHADOW_SOURCES: Partial<Record<ArchiveSurface, string>> = {
   plan_day_shadow_routed: "shadow_h5_routed",
 };
 
+/**
+ * The Chronos-2 shadow surfaces (PAR-852) and the source each is scored under.
+ * Unlike the composer A/B they keep the served use case and lead (so the board
+ * reads them next to the served rows), but like it they never enter `all`.
+ */
+export const CHRONOS_SOURCES: Partial<Record<ArchiveSurface, string>> = {
+  chronos_live: "chronos2",
+  chronos_grid: "chronos2_grid",
+};
+
 // `composed_h5` is not here: the plain H5 profile uses no day level at all.
 const LEVEL_DERIVED = new Set(["composed", "composed_h5_tft", "climatology"]);
 
@@ -613,25 +630,34 @@ export function scoreParkDay(
         : null;
     // A composer A/B row (PAR-834): scored under its own use case and one
     // source per composer, and never into "all" — the three are the same
-    // slots three times, and pooling them would triple-count the day.
-    const shadowSource = SHADOW_SOURCES[curve.surface] ?? null;
+    // slots three times, and pooling them would triple-count the day. A
+    // Chronos row (PAR-852) keeps the served use case but, likewise, its own
+    // source and never "all".
+    const composerShadow = SHADOW_SOURCES[curve.surface] ?? null;
+    const shadowSource =
+      composerShadow ?? CHRONOS_SOURCES[curve.surface] ?? null;
     if (shadowSource) {
       for (const c of compared) {
         c.src = shadowSource;
       }
     }
+    // Scored on slot leads after the origin (UC1/UC2), not on day leads.
+    const slotLeads =
+      curve.surface === "park_hourly" || curve.surface === "chronos_live";
+    // Surfaces whose `bands` hold a per-slot q95 − q50.
+    const slotBand = slotLeads || curve.surface === "chronos_grid";
 
     // ---- slot metrics: MAE, bias, band coverage ----
     for (const c of compared) {
       let useCase: string;
       let lead: string;
-      if (curve.surface === "park_hourly") {
+      if (slotLeads) {
         const bucket = slotLeadBucket((c.slot - curve.originAt) / 60_000);
         if (!bucket) continue;
         useCase = bucket.useCase;
         lead = bucket.lead;
       } else {
-        useCase = shadowSource ? SHADOW_USE_CASE : "UC3";
+        useCase = composerShadow ? SHADOW_USE_CASE : "UC3";
         lead = dayLead(curve.leadDays);
       }
       const err = c.pred - c.truth;
@@ -640,8 +666,8 @@ export function scoreParkDay(
         sae: Math.abs(err),
         se: err,
       };
-      // One-sided q95 − q50 band, park_hourly only (plan_day has none per hour).
-      if (c.band !== null && curve.surface === "park_hourly") {
+      // One-sided q95 − q50 band, per slot (plan_day has none per hour).
+      if (c.band !== null && slotBand) {
         counters.nBand = 1;
         counters.nBandCov = c.truth <= c.pred + c.band ? 1 : 0;
       }
@@ -658,12 +684,11 @@ export function scoreParkDay(
     // ---- ride-day metrics: best time (D3), slot Spearman, dayPeak ----
     // Only a whole day is a ride-day: intraday origins see a few hours of it.
     if (curve.originKind === "intraday") continue;
-    const useCase =
-      curve.surface === "park_hourly"
-        ? "UC2"
-        : shadowSource
-          ? SHADOW_USE_CASE
-          : "UC3";
+    const useCase = slotLeads
+      ? "UC2"
+      : composerShadow
+        ? SHADOW_USE_CASE
+        : "UC3";
     const lead = dayLead(curve.leadDays);
     const srcs = new Set(compared.map((c) => c.src));
     const rideSource = srcs.size === 1 ? [...srcs][0] : "mixed";
@@ -691,13 +716,16 @@ export function scoreParkDay(
     }
 
     const peakCounters: Record<string, number> = {};
-    if (curve.surface === "plan_day") {
+    // The Chronos grid shadow carries a dayPeak too (its curve's P90), scored
+    // under its own source; only the served plan feeds the ordering and D9.
+    if (curve.surface === "plan_day" || curve.surface === "chronos_grid") {
+      const served = curve.surface === "plan_day";
       const plan = planByOrigin.get(curve.originAt) ?? {
         leadDays: curve.leadDays,
         peaks: [],
         rides: new Set<string>(),
       };
-      plan.rides.add(curve.attractionId);
+      if (served) plan.rides.add(curve.attractionId);
       const p90 = rideDayTruthP90(truthSlots);
       if (curve.dayPeak !== null && p90 !== null) {
         const e = curve.dayPeak - p90;
@@ -715,9 +743,9 @@ export function scoreParkDay(
           // (dayPeak above the truth) is always inside it.
           peakCounters.nPeakBandCov = -e <= curve.peakBand ? 1 : 0;
         }
-        plan.peaks.push({ pred: curve.dayPeak, truth: p90 });
+        if (served) plan.peaks.push({ pred: curve.dayPeak, truth: p90 });
       }
-      planByOrigin.set(curve.originAt, plan);
+      if (served) planByOrigin.set(curve.originAt, plan);
     }
 
     const rideCounters = { ...shapeCounters, ...peakCounters };
@@ -852,6 +880,140 @@ export function scoreParkDay(
     }
   }
   return observations;
+}
+
+/** Additive paired counters of one shadow vs one reference. */
+export interface PairedSums {
+  n: number;
+  saeModel: number;
+  saeRef: number;
+  seModel: number;
+  seRef: number;
+}
+
+/**
+ * Paired errors of a shadow and a reference on the same truth slots, keyed by
+ * use case × lead × model × reference × segment, for ONE park and day — the
+ * unit the board's park-cluster bootstrap resamples (PAR-852).
+ */
+export class PairedAccumulator {
+  private readonly rows = new Map<string, PairedSums>();
+
+  add(
+    useCase: string,
+    lead: string,
+    model: string,
+    reference: string,
+    segment: string,
+    pred: number,
+    ref: number,
+    truth: number,
+  ): void {
+    const key = [useCase, lead, model, reference, segment].join("|");
+    const row = this.rows.get(key) ?? {
+      n: 0,
+      saeModel: 0,
+      saeRef: 0,
+      seModel: 0,
+      seRef: 0,
+    };
+    row.n += 1;
+    row.saeModel += Math.abs(pred - truth);
+    row.saeRef += Math.abs(ref - truth);
+    row.seModel += pred - truth;
+    row.seRef += ref - truth;
+    this.rows.set(key, row);
+  }
+
+  entries(): Array<
+    {
+      useCase: string;
+      lead: string;
+      model: string;
+      reference: string;
+      segment: string;
+    } & PairedSums
+  > {
+    return [...this.rows.entries()].map(([key, sums]) => {
+      const [useCase, lead, model, reference, segment] = key.split("|");
+      return { useCase, lead, model, reference, segment, ...sums };
+    });
+  }
+}
+
+/**
+ * The paired comparison of the Chronos-2 shadow (PAR-852) for one park-day:
+ * on every truth slot where the shadow AND the reference have a value —
+ *
+ * - `chronos2` (live, intraday origins) vs `served` (park_hourly of the SAME
+ *   origin instant: CatBoost/PCN as served) and vs `persistence` (the live
+ *   STANDBY wait in force at the origin, held flat), on UC1/UC2 slot leads;
+ * - `chronos2_grid` (06:00 origin) vs `served` (plan_day of the same origin,
+ *   its hour value on each quarter-hour, as the D-scores read it) and vs `h5`
+ *   (the composer shadow's plain H5 curve, surface 4), on UC3 day leads.
+ *
+ * Pairing on identical slots is what makes a difference of two MAEs mean
+ * anything: each surface on its own coverage would compare different slots.
+ */
+export function scorePairedShadows(
+  curves: ArchivedCurve[],
+  truth: Map<string, Map<number, number>>,
+  acc: PairedAccumulator,
+): void {
+  const byKey = new Map<string, ArchivedCurve>();
+  for (const c of curves) {
+    byKey.set(`${c.originAt}|${c.attractionId}|${c.surface}`, c);
+  }
+  for (const curve of curves) {
+    const model = CHRONOS_SOURCES[curve.surface];
+    if (!model) continue;
+    const truthSlots = truth.get(curve.attractionId);
+    if (!truthSlots) continue;
+    const segments = segmentsOf(curve);
+    const ref = (surface: ArchiveSurface) =>
+      byKey.get(`${curve.originAt}|${curve.attractionId}|${surface}`);
+    const live = curve.surface === "chronos_live";
+    const refs: Array<{ name: string; curve: ArchivedCurve | undefined }> = live
+      ? [{ name: "served", curve: ref("park_hourly") }]
+      : [
+          { name: "served", curve: ref("plan_day") },
+          { name: "h5", curve: ref("plan_day_shadow_h5") },
+        ];
+    const anchor = live ? curve.liveWait : null;
+    for (const [slot, value] of truthSlots) {
+      const m = valueAt(curve, slot);
+      if (!m) continue;
+      let useCase = "UC3";
+      let lead = dayLead(curve.leadDays);
+      if (live) {
+        const bucket = slotLeadBucket((slot - curve.originAt) / 60_000);
+        if (!bucket) continue;
+        useCase = bucket.useCase;
+        lead = bucket.lead;
+      }
+      for (const r of refs) {
+        const rv = r.curve ? valueAt(r.curve, slot) : null;
+        if (!rv) continue;
+        for (const seg of segments) {
+          acc.add(useCase, lead, model, r.name, seg, m.wait, rv.wait, value);
+        }
+      }
+      if (anchor !== null && anchor !== undefined) {
+        for (const seg of segments) {
+          acc.add(
+            useCase,
+            lead,
+            model,
+            "persistence",
+            seg,
+            m.wait,
+            anchor,
+            value,
+          );
+        }
+      }
+    }
+  }
 }
 
 /**

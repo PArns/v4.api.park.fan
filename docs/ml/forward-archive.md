@@ -35,6 +35,9 @@ it drifted the board would score a product nobody is shown.
 | 10, 12, 14, 16, 18 | `park_hourly` | same as above | 15 min | next 4 h only (UC1 + short UC2), with the live anchor |
 | 10, 12, 14, 16, 18 | `plan_day` (D1 row) | `buildPlanDay(park, today)` | 60 min | per planned ride: the plan hours of the 2-h look-ahead, the frontend's next-best-ride "later" value and the live anchor — feeds D1 only |
 
+| 06:00 daily | `chronos_grid` (surface 7, **shadow**) | nf-service `POST /chronos/forecast` `variant=grid` | 15 min | d0 … d7, Chronos-2 never served — see §8 |
+| 10, 12, 14, 16, 18 | `chronos_live` (surface 6, **shadow**) | nf-service `POST /chronos/forecast` `variant=live` | 15 min | next 4 h, Chronos-2 never served, with the live anchor — see §8 |
+
 Intraday origins run only for parks whose 06:00 capture found a curve for today,
 so a closed park costs nothing all day.
 
@@ -258,8 +261,8 @@ however large. The two are different statistics and are never pooled.
 cached 2 h). The cache key carries a version that every scoring run increments,
 so all `days` × region variants are retired at once. Returns the pooled counters
 and derived metrics per use case × lead × source × segment over the last `days`
-scored dates, plus the last 24 h of archive rows per surface and origin kind and
-the first origin.
+scored dates, plus the last 24 h of archive rows per surface (`surfaceName`) and
+origin kind and the first origin, plus the `chronos` section described in §8.4.
 
 ## 6. When the first scores appear
 
@@ -290,3 +293,156 @@ is scored at 12:00 UTC on *D + 1*:
 - Park merges: `forecast_archive_curves` rows move with a merged ride
   (`merge-dependencies.ts`); `park_id` is not reparented on a park merge — the
   rows age out 14 days after their target date.
+
+## 8. Chronos-2 shadow (PAR-852)
+
+**What it answers:** does the zero-shot foundation model that won parts of the
+PAR-828 offline benchmark also win on live, leakage-free forecasts? The owner's
+rule for replacing a model needs (1) an offline win, (2) a live confirmation in
+this archive — ≥ 14 days and ≥ 10 parks per lead — and (3) a visible effect on a
+user surface. This section is (2). **Nothing here is served to a user**: the
+only reader of nf-service `/chronos/forecast` is the archive capture.
+
+### 8.1 Model and variants
+
+`amazon/chronos-2`, **Apache-2.0** for code and weights (model card
+`license: apache-2.0`; `chronos-forecasting==2.3.2`, the version the bench
+scored; HF revision pinned in `nf-service/config.py`). Zero-shot, no training.
+The two bench variants that won (`ml-bench/mlbench/models/foundation.py` on the
+PAR-828 branch), ported without the bench harness to
+`nf-service/chronos_shadow.py`:
+
+| surface | bench name | origin | context | horizon asked | archived |
+| --- | --- | --- | --- | --- | --- |
+| 6 `chronos_live` | `chronos2` | 10, 12, 14, 16, 18 (intraday) | the park's last 8192 15-min slots inside PUBLISHED windows (~170 operating days), nights left out | every window slot of today + tomorrow (as the bench's intraday origins asked) | next 4 h |
+| 7 `chronos_grid` | `chronos2_grid` | 06:00 (daily) | regular 15-min UTC grid, last 8192 steps (~85 days), NaN off-window | grid steps to the last window close of d7 (≤ 1024) | d0 … d7 |
+
+A park is one multivariate task (every ride a target variate, covariates
+shared). Rides forecast: those with a truth slot in the 14 days before the
+origin (the bench forecast the rides it was asked about; this is the ex-ante
+equivalent). Quantiles 0.5 / 0.8 / 0.95, clipped at 0 and made monotone; only
+future slots inside a published window are returned — a closed hour gets no
+value. `waits` = q50, `bands` = q95 − q50 (one-sided, like the served band);
+the grid row's `dayPeak` is the P90 of its in-window q50 (the truth's ride-day
+statistic), so `dayPeakMae` compares with the planner's.
+
+### 8.2 Covariates and where each comes from
+
+The bench's, unchanged — `chronos2_nocov` lost 0.39–0.82 min. No weather: it
+was oracle-only (actuals) in the bench and worth < 0.12 min.
+
+| covariate | production source |
+| --- | --- |
+| `ko_min`, `kc_min` | minutes since the published opening / until the published closing: `schedule_entries`, park-wide `OPERATING` rows, per service day earliest opening and latest closing (future days: as published at the origin) |
+| `in_win` (grid only) | 1 inside such a window, else 0 |
+| `tod` | park-local hour + minute / 60 (`parks.timezone`) |
+| `is_weekend`, `dow_sin`, `dow_cos` | park-local date, pandas `dayofweek` (0 = Monday — not Postgres' 0 = Sunday) |
+| `is_holiday_primary`, `is_school_holiday_primary`, `holiday_count_total`, `school_holiday_count_total`, `is_school_holiday_any` | `holidays` table via `holiday_features.park_day_holiday_features` — THE ml-service implementation (OR semantics, neighbour regions from `parks.influencingRegions`, Easter Sunday). Vendored into nf-service byte-identical; `tests/test_chronos_shadow.py` compares the files |
+| `is_bridge_day` | derived from `is_holiday_primary` of the neighbouring calendar days (Mon before a Tue holiday, Fri after a Thu holiday, never the holiday itself) — the bench's definition |
+
+**A missing covariate is recorded, not zero.** Each curve says whether its
+day's holiday flags rested on data: `none` (no `holidays` row for the park's
+country — every flag reads 0), `short` (the country's last row is before the
+day), `full`. The archive keeps it in `model_version`
+(`chronos-2@29ec376;hol=short`). Schedule covariates cannot be missing: a day
+without a published window is not forecast at all.
+
+### 8.3 Information cut and data reads
+
+Truth (the context) is BENCH truth — the STANDBY reading in force at each slot
+midpoint, OPERATING, ≥ 5, inside the published window — and enters only for
+slots that **ended by the origin**; today's readings are read up to the origin
+instant. Schedule and holidays are known-future inputs read at the origin.
+
+nf-service caches each park's truth slots of complete past days as parquet on
+the nf-models volume (`/app/models/chronos-truth`), so a warm capture reads one
+new day of `queue_data` once a day plus today's rows. A gap of more than
+`CHRONOS_INLINE_FILL_DAYS` (3) goes to ONE background thread that backfills park
+after park in 30-day reads (`statement_timeout` 120 s, `lock_timeout` 5 s), and
+the request answers `status: "warming"` at once. Cold start after deploy: the
+context reaches ~343 days back (compressed) — one-off, then incremental.
+
+### 8.4 Scoring and the board
+
+The scorer treats surface 6 like `park_hourly` (UC1/UC2 slot leads, band
+coverage) and surface 7 like `plan_day` slots (UC3 `d0` … `d7`, D3, Spearman,
+dayPeak) under the sources `chronos2` / `chronos2_grid` — **never into `all`,
+`level_*`, D1, D9 or the dayPeak ordering**, which judge what is served.
+
+`scorePairedShadows` pairs each shadow slot with a reference **from the same
+origin instant** where truth, shadow and reference all have a value:
+
+| shadow | reference | what |
+| --- | --- | --- |
+| `chronos2` | `served` | `park_hourly` (CatBoost / PCN blend as served) |
+| `chronos2` | `persistence` | the live wait in force at the origin, held flat |
+| `chronos2_grid` | `served` | `plan_day` (its hour value on each quarter-hour) |
+| `chronos2_grid` | `h5` | the composer shadow's plain H5 curve (surface 4) |
+
+The sums go per **park and day** to `forecast_archive_paired` (key: target date,
+park, use case, lead, model, reference, segment; `n`, Σ|e| and Σe of both;
+~8 k rows a day, 120 days, replaced with the date like the scores).
+
+`GET /v1/admin/forecast-archive` returns `chronos`:
+
+```jsonc
+{
+  "captureEnabled": true,                 // the API's CHRONOS_SHADOW_ENABLED
+  "method": { "diff": "model MAE − reference MAE on identical slots, minutes; negative = Chronos better",
+              "ci": 0.95, "bootstrap": "park-cluster (parks resampled with replacement)",
+              "reps": 1000, "seed": 852, "minDays": 14, "minParks": 10 },
+  "rows": [{
+    "useCase": "UC1", "lead": "h0-1", "model": "chronos2", "surface": "chronos_live", "segment": "all",
+    "mae": 9.1, "bias": -1.2, "n": 41234, "days": 14,   // own coverage, from the pooled scores
+    "bandCoverage": 0.82, "dayPeakMae": null,
+    "comparisons": [{
+      "reference": "served", "n": 40110, "days": 14, "parks": 61,
+      "modelMae": 9.0, "referenceMae": 10.4, "modelBias": -1.1, "referenceBias": -3.0,
+      "diff": -1.4, "ciLow": -2.1, "ciHigh": -0.8,
+      "enoughData": true, "verdict": "chronos_better"   // | reference_better | no_significant_difference | insufficient_data
+    }]
+  }]
+}
+```
+
+The CI resamples **parks**, not park-days: days of one park are not
+independent, and the bench (PAR-828) found the park-day interval too narrow.
+`diff` pools first ((Σ|e_model| − Σ|e_ref|) / Σn), as the scores do. With
+fewer than 2 parks there is no CI; below 14 days or 10 parks the verdict is
+`insufficient_data` whatever the interval says. `rows` (§5) carry the same
+shadow sources for every other metric (D3 regret, Spearman, …), unpaired.
+
+### 8.5 Safety, cost and switches
+
+- **Kill switches:** `CHRONOS_SHADOW_ENABLED=false` on the API (no call at all);
+  `CHRONOS_ENABLED=false` on nf-service (503). Both default on.
+- **Isolation:** the call starts first in each park's capture and overlaps the
+  served reads; any error or timeout (45 s) returns nothing and the other
+  surfaces are written as before. After 3 failures in one hourly run the
+  remaining parks skip the call (a hung service costs a run ≤ 3 timeouts, well
+  inside the 15-minute lock). A 503 is a skip, not a failure. One warning per
+  run, never one per park.
+- **TFT training:** `/train` unloads the weights first and the endpoint answers
+  503 while a run is in progress — the GPU and the container's 14 GB are the
+  training's. Origins at 03:00 UTC (06:00 in UTC+3) lose their shadow on those
+  ~11 minutes.
+- **Footprint:** weights 0.48 GB on the volume (downloaded at first use to
+  `/app/models/hf-cache`); ~1.8 GB VRAM at peak on a 30-ride park (bench), capped
+  at 25 % of the GPU per process (`CHRONOS_VRAM_FRACTION`); the image grows by
+  ~18 MB of wheels (transformers, tokenizers, accelerate, safetensors, …, ~80 MB
+  installed). One forward pass per park and origin: measured 2.9 s (live, 96
+  steps) and 3.2 s (grid, 744 steps) for a 40-ride park with the full 8192-step
+  context on a laptop CPU (Apple silicon, model resident); the bench saw ~5 s
+  per 30-park batch on the RTX 5080. ~50 European parks at 06:00 add one pass
+  each, overlapping the served reads of the same capture.
+- **Archive size:** at most ~4 k rides × (1 grid row × 8 leads + 5 live rows) a
+  day ≈ 50 k rows / ~18 MB (15-min rows, ~0.35 KB with index), living 14 days
+  past their target ≈ +0.35 GB steady state.
+
+### 8.6 When the first scores appear
+
+The first capture hour after deploy starts the backfill; each park's first
+shadow rows appear once its context is cached (usually the same day). Day *D* is
+scored at 12:00 UTC on *D + 1*, so the first `chronos2` (UC1/UC2) and
+`chronos2_grid` `d0` scores appear at the first 12:00 UTC scoring after a full
+day of captures; `dN` after *N* + 1 days. The verdict needs 14 scored days.

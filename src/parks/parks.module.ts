@@ -17,6 +17,8 @@ import { ForecastArchiveScoringService } from "./services/forecast-archive-scori
 import { ForecastArchiveCurve } from "../ml/entities/forecast-archive-curve.entity";
 import { ForecastArchiveParkDay } from "../ml/entities/forecast-archive-park-day.entity";
 import { ForecastArchiveScore } from "../ml/entities/forecast-archive-score.entity";
+import { ForecastArchivePaired } from "../ml/entities/forecast-archive-paired.entity";
+import { ChronosShadowService } from "./services/chronos-shadow.service";
 import { ParkDayOperation } from "./entities/park-day-operation.entity";
 import { ParkDayOperationService } from "./services/park-day-operation.service";
 import { BestDaysService } from "./services/best-days.service";
@@ -67,6 +69,7 @@ import { PopularityModule } from "../popularity/popularity.module";
       ForecastArchiveCurve,
       ForecastArchiveParkDay,
       ForecastArchiveScore,
+      ForecastArchivePaired,
     ]),
     ThemeParksModule,
     DestinationsModule,
@@ -99,6 +102,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     PlanDayCoverageService,
     ForecastArchiveService,
     ForecastArchiveScoringService,
+    ChronosShadowService,
     ParkDayOperationService,
     BestDaysService,
     ParkValidatorService,
@@ -117,6 +121,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     PlanDayCoverageService,
     ForecastArchiveService,
     ForecastArchiveScoringService,
+    ChronosShadowService,
     ParkDayOperationService,
     BestDaysService,
     ParkValidatorService,

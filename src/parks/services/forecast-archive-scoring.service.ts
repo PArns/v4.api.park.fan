@@ -17,9 +17,14 @@ import {
 import { ForecastArchiveParkDay } from "../../ml/entities/forecast-archive-park-day.entity";
 import { ForecastArchiveScore } from "../../ml/entities/forecast-archive-score.entity";
 import {
+  ForecastArchivePaired,
+  PAIRED_RETENTION_DAYS,
+} from "../../ml/entities/forecast-archive-paired.entity";
+import {
   ArchivedCurve,
   CrowdObservation,
   OperatingWindow,
+  PairedAccumulator,
   ScoreAccumulator,
   TruthReading,
   buildTruthSlots,
@@ -27,7 +32,13 @@ import {
   regionOf,
   scoreCrossParkCrowd,
   scoreParkDay,
+  scorePairedShadows,
 } from "../../ml/utils/forecast-archive-scoring.util";
+import { ChronosShadowService } from "./chronos-shadow.service";
+import {
+  ChronosBoard,
+  buildChronosBoard,
+} from "../../ml/utils/forecast-archive-paired.util";
 import { mapWithDbBudget } from "../../common/utils/db-job-budget";
 import { addIsoDays, formatInParkTimezone } from "../../common/utils/date.util";
 import {
@@ -101,6 +112,8 @@ export class ForecastArchiveScoringService {
     private readonly parkDayRepository: Repository<ForecastArchiveParkDay>,
     @InjectRepository(ForecastArchiveScore)
     private readonly scoreRepository: Repository<ForecastArchiveScore>,
+    @InjectRepository(ForecastArchivePaired)
+    private readonly pairedRepository: Repository<ForecastArchivePaired>,
     private readonly analyticsService: AnalyticsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
@@ -139,6 +152,16 @@ export class ForecastArchiveScoringService {
           `Forward archive: score retention failed: ${err.message}`,
         ),
       );
+    await this.pairedRepository.manager
+      .query(
+        `DELETE FROM forecast_archive_paired WHERE target_date < $1::date`,
+        [addIsoDays(latest, -PAIRED_RETENTION_DAYS)],
+      )
+      .catch((err: Error) =>
+        this.logger.warn(
+          `Forward archive: paired retention failed: ${err.message}`,
+        ),
+      );
     if (dates.length > 0) {
       await this.redis.incr(BOARD_VERSION_KEY).catch(() => undefined);
     }
@@ -152,12 +175,25 @@ export class ForecastArchiveScoringService {
     });
     const acc = new ScoreAccumulator();
     const observations: CrowdObservation[] = [];
+    const pairedRows: ForecastArchivePaired[] = [];
     let parksScored = 0;
 
     for (let i = 0; i < parks.length; i += BATCH_SIZE) {
       const batch = parks.slice(i, i + BATCH_SIZE);
       const results = await mapWithDbBudget(batch, (park) =>
-        this.scorePark(park, targetDate, acc).catch((err: Error) => {
+        this.scorePark(park, targetDate, acc, (paired) => {
+          for (const e of paired.entries()) {
+            pairedRows.push(
+              this.pairedRepository.create({
+                targetDate,
+                parkId: park.id,
+                region: regionOf(park.continentSlug),
+                ...e,
+                scoredAt: now,
+              }),
+            );
+          }
+        }).catch((err: Error) => {
           // Unscored, not zero: this park's day is simply absent tonight.
           this.logger.warn(
             `Forward archive scoring: ${park.slug} ${targetDate} failed: ${err.message}`,
@@ -183,6 +219,11 @@ export class ForecastArchiveScoringService {
       for (let i = 0; i < rows.length; i += 500) {
         await em.insert(ForecastArchiveScore, rows.slice(i, i + 500));
       }
+      // The shadow's paired per-park rows (PAR-852), replaced with the date.
+      await em.delete(ForecastArchivePaired, { targetDate });
+      for (let i = 0; i < pairedRows.length; i += 1000) {
+        await em.insert(ForecastArchivePaired, pairedRows.slice(i, i + 1000));
+      }
     });
     this.logger.log(
       `📐 Forward archive ${targetDate}: ${parksScored} parks, ${rows.length} score rows`,
@@ -195,6 +236,7 @@ export class ForecastArchiveScoringService {
     park: Park,
     targetDate: string,
     acc: ScoreAccumulator,
+    onPaired: (paired: PairedAccumulator) => void = () => undefined,
   ): Promise<CrowdObservation[] | null> {
     const curveRows = await this.curveRepository.find({
       where: { parkId: park.id, targetDate },
@@ -243,12 +285,18 @@ export class ForecastArchiveScoringService {
       .then((h) => new Set(h.map((x) => x.attractionId)))
       .catch(() => new Set<string>());
 
-    return scoreParkDay(
+    const curves = curveRows.map((c) =>
+      ForecastArchiveScoringService.toArchived(c),
+    );
+    // Paired per-park comparison of the Chronos shadow (PAR-852). Handed over
+    // only once this park's day scored, so a failure leaves no half a park.
+    const paired = new PairedAccumulator();
+    scorePairedShadows(curves, truth, paired);
+
+    const observations = scoreParkDay(
       {
         region: regionOf(park.continentSlug),
-        curves: curveRows.map((c) =>
-          ForecastArchiveScoringService.toArchived(c),
-        ),
+        curves,
         parkDays: parkDayRows.map((d) => ({
           originAt: new Date(d.originAt).getTime(),
           leadDays: d.leadDays,
@@ -271,6 +319,8 @@ export class ForecastArchiveScoringService {
       },
       acc,
     );
+    onPaired(paired);
+    return observations;
   }
 
   static toArchived(c: ForecastArchiveCurve): ArchivedCurve {
@@ -366,6 +416,7 @@ export class ForecastArchiveScoringService {
     targetDates: { first: string | null; last: string | null; count: number };
     archive: Array<Record<string, unknown>>;
     rows: ForecastArchiveBoardRow[];
+    chronos: ChronosBoard;
   }> {
     const version = await this.redis.get(BOARD_VERSION_KEY).catch(() => null);
     const cacheKey = `forecast-archive:board:v${version ?? 0}:${region}:${days}`;
@@ -439,6 +490,47 @@ export class ForecastArchiveScoringService {
       READ_LIMITS,
     ).catch(() => []);
 
+    // The Chronos-2 shadow (PAR-852): paired per-park rows over the same
+    // scored dates, with the park-cluster bootstrap.
+    const scoredDates = [...allDates].sort();
+    const pairedRows: ForecastArchivePaired[] =
+      scoredDates.length === 0
+        ? []
+        : await this.pairedRepository
+            .createQueryBuilder("p")
+            .where("p.targetDate >= :first AND p.targetDate <= :last", {
+              first: scoredDates[0],
+              last: scoredDates[scoredDates.length - 1],
+            })
+            .andWhere(region === "ALL" ? "TRUE" : "p.region = :region", {
+              region,
+            })
+            .getMany()
+            .catch((err: Error) => {
+              this.logger.warn(
+                `Forward archive board: paired rows unavailable: ${err.message}`,
+              );
+              return [];
+            });
+    const chronos = buildChronosBoard(
+      pairedRows.map((r) => ({
+        targetDate: String(r.targetDate),
+        parkId: r.parkId,
+        useCase: r.useCase,
+        lead: r.lead,
+        model: r.model,
+        reference: r.reference,
+        segment: r.segment,
+        n: Number(r.n),
+        saeModel: Number(r.saeModel),
+        saeRef: Number(r.saeRef),
+        seModel: Number(r.seModel),
+        seRef: Number(r.seRef),
+      })),
+      rows,
+      ChronosShadowService.enabled(),
+    );
+
     const sortedDates = [...allDates].sort();
     const board = {
       region,
@@ -448,8 +540,12 @@ export class ForecastArchiveScoringService {
         last: sortedDates[sortedDates.length - 1] ?? null,
         count: sortedDates.length,
       },
-      archive,
+      archive: archive.map((a) => ({
+        ...a,
+        surfaceName: SURFACE_BY_ID.get(Number(a.surface)) ?? null,
+      })),
       rows,
+      chronos,
     };
     await this.redis
       .set(cacheKey, JSON.stringify(board), "EX", BOARD_TTL_SECONDS)

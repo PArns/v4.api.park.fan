@@ -1,5 +1,6 @@
 import {
   ArchivedCurve,
+  PairedAccumulator,
   ScoreAccumulator,
   bestTimeOutcome,
   buildTruthSlots,
@@ -11,6 +12,7 @@ import {
   regionOf,
   scoreCrossParkCrowd,
   scoreParkDay,
+  scorePairedShadows,
   slotLeadBucket,
   spearman,
 } from "./forecast-archive-scoring.util";
@@ -563,6 +565,111 @@ describe("composer A/B shadow surfaces (PAR-834)", () => {
     );
     expect(sumsOf(acc2, "EU|UC3S|d3|shadow_h5_routed|all").n).toBe(4);
     expect(sumsOf(acc2, "EU|UC3S|d3|shadow_h5|all").n).toBe(4);
+  });
+});
+
+describe("Chronos-2 shadow surfaces (PAR-852)", () => {
+  // Intraday origin 08:05; truth 08:15 … 09:00 = 30, 35, 40, 45.
+  const origin = T0 + 5 * MIN;
+  const truth = new Map([
+    ["a1", new Map([1, 2, 3, 4].map((i) => [T0 + i * SLOT, 25 + i * 5]))],
+  ]);
+  const curve = (
+    surface: ArchivedCurve["surface"],
+    waits: (number | null)[],
+    sources: string,
+    extra: Partial<ArchivedCurve> = {},
+  ): ArchivedCurve => ({
+    attractionId: "a1",
+    surface,
+    originKind: "intraday",
+    originAt: origin,
+    leadDays: 0,
+    slotStart: T0,
+    slotMinutes: 15,
+    waits,
+    sources,
+    bands: null,
+    dayPeak: null,
+    expectedError: null,
+    rideQ90: 20,
+    isHeadliner: false,
+    levelSource: null,
+    ...extra,
+  });
+
+  it("scores the live shadow on the served slot leads under its own source, never into all", () => {
+    const acc = new ScoreAccumulator();
+    scoreParkDay(
+      {
+        region: "EU",
+        curves: [
+          curve("park_hourly", [20, 20, 20, 20, 20], "ccccc"),
+          curve("chronos_live", [null, 30, 35, 40, 45], "-xxxx", {
+            bands: [null, 5, 5, 5, 5],
+            liveWait: 25,
+          }),
+        ],
+        parkDays: [],
+        truth,
+        hadWindows: false,
+        calendarDayValue: null,
+      },
+      acc,
+    );
+    expect(sumsOf(acc, "EU|UC1|h0-1|chronos2|all")).toMatchObject({
+      n: 4,
+      sae: 0,
+      nBand: 4,
+      nBandCov: 4,
+    });
+    // `all` is the served curve alone: 20 vs 30/35/40/45.
+    expect(sumsOf(acc, "EU|UC1|h0-1|all|all")).toMatchObject({
+      n: 4,
+      sae: 10 + 15 + 20 + 25,
+    });
+  });
+
+  it("pairs live with the served curve and persistence on identical slots", () => {
+    const paired = new PairedAccumulator();
+    scorePairedShadows(
+      [
+        // The served curve lacks 08:30: that slot is paired with persistence only.
+        curve("park_hourly", [20, 20, null, 20, 20], "cc-cc"),
+        curve("chronos_live", [null, 30, 35, 40, 45], "-xxxx", {
+          liveWait: 25,
+        }),
+        // Another origin's served row must not be paired.
+        curve("park_hourly", [0, 0, 0, 0, 0], "ccccc", {
+          originAt: origin + 2 * 60 * MIN,
+        }),
+      ],
+      truth,
+      paired,
+    );
+    const row = (ref: string) =>
+      paired
+        .entries()
+        .find(
+          (e) =>
+            e.reference === ref &&
+            e.segment === "all" &&
+            e.lead === "h0-1" &&
+            e.model === "chronos2",
+        );
+    expect(row("served")).toMatchObject({
+      useCase: "UC1",
+      n: 3,
+      saeModel: 0,
+      saeRef: 10 + 20 + 25,
+    });
+    expect(row("persistence")).toMatchObject({
+      n: 4,
+      saeRef: 5 + 10 + 15 + 20,
+      seRef: -(5 + 10 + 15 + 20),
+    });
+    // rideQ90 20 < 45: no busy segment, not a headliner.
+    expect(paired.entries().map((e) => e.segment)).not.toContain("busy");
   });
 });
 

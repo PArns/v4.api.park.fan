@@ -85,6 +85,31 @@ class Settings(BaseSettings):
     NF_LOSS: str = "studentt"
     NF_QUANTILE: float = 0.8
 
+    # --- Chronos-2 shadow forecast (PAR-852) ---
+    # Zero-shot amazon/chronos-2 (Apache-2.0), served ONLY to the forward archive
+    # (POST /chronos/forecast) — never to users. Kill switch: false → 503, and the
+    # API's own CHRONOS_SHADOW_ENABLED stops it calling at all.
+    CHRONOS_ENABLED: bool = True
+    CHRONOS_MODEL_ID: str = "amazon/chronos-2"
+    # Pinned Hugging Face revision, so a re-upload of the weights cannot change
+    # the shadow under a running comparison.
+    CHRONOS_REVISION: str = "29ec3766d36d6f73f0696f85560a422f50e8498c"
+    # Weights download here at first use (the persistent nf-models volume).
+    CHRONOS_CACHE_DIR: str = "/app/models/hf-cache"
+    # Per-park truth-slot cache (parquet) so a capture reads one new day of
+    # queue_data, not the whole context, after the first fill.
+    CHRONOS_TRUTH_CACHE_DIR: str = "/app/models/chronos-truth"
+    # Context: the bench's 8192 steps (operating slots for `live`, grid steps for
+    # `grid`). A request reads at most this many missing days inline (the daily
+    # increment); a larger gap goes to the background backfill and the request
+    # answers "warming".
+    CHRONOS_CONTEXT_SLOTS: int = 8192
+    CHRONOS_INLINE_FILL_DAYS: int = 3
+    # Share of the GPU this process may take (Chronos-2 peaks at ~1.8 GB on a
+    # 30-ride park; the RTX 5080 is shared with pcn-service and TFT training).
+    CHRONOS_VRAM_FRACTION: float = 0.25
+    CHRONOS_STATEMENT_TIMEOUT_MS: int = 120_000
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
