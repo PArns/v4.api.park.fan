@@ -344,3 +344,76 @@ def test_make_model_thins_training_windows_but_not_the_forecast():
     plain = make_model("nf_tide", _P(), max_steps=1, n_series=None, scale=0.05)
     assert plain.step_size == 1
     assert plain.input_size == m.input_size and plain.h == m.h
+
+
+def test_cache_write_is_atomic_and_the_block_resume_is_honest(synth_export, tmp_path,
+                                                              monkeypatch):
+    """A killed precompute must never leave a block that LOOKS complete.
+
+    `run()` treats a block as finished when all of its hour files exist, so the write has
+    to be temp-then-rename: otherwise a kill during the last file leaves all paths present
+    with one truncated and a later pass accepts it. Checks the contract from both ends --
+    nothing partial survives a success, and a missing hour file really does re-run the
+    block rather than being skipped.
+    """
+    monkeypatch.setenv("MLBENCH_NF_CPU", "1")
+    from mlbench.models.nf_precompute import run
+
+    cache = tmp_path / "cache"
+    kw = dict(export=synth_export, cache=cache, name="nf_tide", origin_from="2026-04-01",
+              origin_to="2026-04-02", max_steps=2, scale=0.05, memory="1GB", threads=2,
+              log=lambda s: None)
+    meta = run(**kw)
+    out = cache / "nf_tide"
+    hours = [6, 8, 10, 12, 14, 16, 18, 20]
+    assert len(meta["blocks"]) == 1
+    assert not list(out.glob("*.tmp")), "no partial file may survive a successful block"
+    assert not list(out.glob(".*tmp")), "no hidden partial file either"
+    for h in hours:
+        assert (out / f"b20260401_h{h:02d}.parquet").exists()
+
+    # A stale temp file from an earlier kill must NOT make the block look cached, and
+    # must not be mistaken for output.
+    (out / ".b20260401_h06.parquet.tmp").write_bytes(b"truncated garbage")
+    (out / "b20260401_h20.parquet").unlink()
+    meta2 = run(**kw)
+    assert len(meta2["blocks"]) == 1, "the block must be recomputed, not skipped"
+    assert (out / "b20260401_h20.parquet").exists()
+    assert meta2["earlier_passes"], "a resumed pass must record the earlier pass's provenance"
+
+    # Every file the run calls final must be a readable parquet with the rows it claims.
+    import pyarrow.parquet as pq
+    for h in hours:
+        f = out / f"b20260401_h{h:02d}.parquet"
+        assert pq.ParquetFile(f).metadata.num_rows == meta2["blocks"][0]["rows"][h]
+
+
+def test_a_lone_available_step_cannot_form_a_training_window():
+    """Why MIN_TRAIN_STEPS exists, as arithmetic rather than a comment.
+
+    neuralforecast keeps a training window only if it has at least one available step in
+    the insample AND at least one in the horizon (both minima are 1 because
+    `training_data_availability_threshold` defaults to 0.0). A series with a single
+    available step therefore yields NO usable window -- the one point cannot be in both
+    halves of the same window -- and if a whole batch is that sparse the library raises
+    "No windows available for training" and the block dies. Two points far enough apart
+    are sufficient, which is why the threshold is a count and not a span.
+    """
+    from mlbench.models.nf_precompute import HORIZON_DAYS, INPUT_DAYS, K, MIN_TRAIN_STEPS
+
+    L, h = INPUT_DAYS * K, HORIZON_DAYS * K
+
+    def usable(points: set[int], span: int) -> bool:
+        return any(any(k <= r < k + L for r in points) and any(k + L <= q < k + L + h
+                                                               for q in points)
+                   for k in range(0, span))
+
+    span = 3000
+    for p in range(0, span, 137):                     # a lone point: never usable
+        assert not usable({p}, span)
+    # two points separated by at least L and less than L + h: always usable
+    for p in range(0, span - L - h, 211):
+        assert usable({p, p + L}, span)
+        assert usable({p, p + L + h - 1}, span)
+    # and the guard is at least 2, so the degenerate case cannot reach the fit
+    assert MIN_TRAIN_STEPS >= 2

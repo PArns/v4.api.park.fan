@@ -58,6 +58,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from .nf_panel import HOUR0, K, Panel, build_panel
 
@@ -65,6 +66,17 @@ QUANTILES = [0.5, 0.8, 0.95]
 INPUT_DAYS = 28            # input window: 4 weeks (the naive level uses the last 4 same weekdays)
 HORIZON_DAYS = 8           # d0 … d7
 MIN_INSAMPLE_HOURS = 12    # fewer measured hours in the input window -> no forecast
+# Minimum measured hours a ride needs in the TRAINING region to be fitted on. A ride with
+# a single available step cannot produce one valid training window at all: the library
+# keeps a window only if it has >=1 available step in the insample AND >=1 in the horizon
+# (``training_data_availability_threshold`` defaults to 0.0, so both minima are 1), and a
+# lone point cannot be in both halves of the same window. If a whole batch of
+# ``batch_size`` series is that sparse, neuralforecast raises "No windows available for
+# training" and the block dies -- which is what killed the 2026-06 block on the first
+# full pass, because June is the first block whose panel admits rides that only started
+# reporting in May. These rides are dropped from the FIT only; they stay in the predict
+# set, since a ride with one slot before 06-01 may be well measured by a 06-20 origin.
+MIN_TRAIN_STEPS = 18       # = K: one day of measured hours
 INTRADAY_HOURS = [8, 10, 12, 14, 16, 18, 20]
 # Target size of the predict window array (see forecast_block/_windows_dataset). The
 # container cap is 8 GB and the block already holds the panel (3601 series x ~4700
@@ -293,12 +305,28 @@ def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_st
             continue
         t0 = time.monotonic()
         sizing: dict = {}
-        model = make_model(name, panel, max_steps, len(rows), scale, t_train=first, sizing=sizing)
-        log(f"  group {g}: {len(rows)} series, train steps {first}, unfold step "
+        # Univariate models are fitted per series, so a too-sparse series is dead weight
+        # that can also kill the block (see MIN_TRAIN_STEPS). Multivariate models sum the
+        # availability over ALL series of the group, so one sparse ride cannot empty a
+        # batch there and the group is left intact.
+        fit_rows = rows
+        if not multivariate:
+            avail = panel.temporal[rows, :first, -1].sum(axis=1)
+            fit_rows = rows[avail >= MIN_TRAIN_STEPS]
+            if len(fit_rows) == 0:
+                log(f"  group {g}: no series with >= {MIN_TRAIN_STEPS} measured training "
+                    f"steps, skipping")
+                continue
+            sizing["fit_series"] = int(len(fit_rows))
+            sizing["fit_series_dropped_sparse"] = int(len(rows) - len(fit_rows))
+        model = make_model(name, panel, max_steps, len(fit_rows), scale, t_train=first,
+                           sizing=sizing)
+        log(f"  group {g}: {len(rows)} series ({len(fit_rows)} fitted, "
+            f"{len(rows) - len(fit_rows)} too sparse), train steps {first}, unfold step "
             f"{sizing.get('step_size')} -> {sizing.get('pool_windows_per_series')} windows/series, "
             f"pool {sizing.get('pool_bytes', 0) / 1024 ** 3:.2f} GiB, "
             f"sample {sizing.get('sample_bytes', 0) / 1024 ** 2:.0f} MiB")
-        model.fit(dataset=to_dataset(panel, rows), val_size=0, test_size=panel.T - first)
+        model.fit(dataset=to_dataset(panel, fit_rows), val_size=0, test_size=panel.T - first)
         t_fit = time.monotonic() - t0
         model.set_test_size(h)
         for H in hours:
@@ -468,9 +496,26 @@ def run(export: Path, cache: Path, name: str, origin_from: str | None, origin_to
         panel_mb = round(panel.temporal.nbytes / 1024 ** 2, 1)
         res = forecast_block(name, panel, c0, c1, max_steps, hours, scale, log, con=con, stats=stats)
         del panel
+        # Write to temp names and rename on success. The resume check above treats a
+        # block as finished when ALL of its hour files exist, so writing straight to the
+        # final paths has a narrow but real hole: a kill DURING the last file leaves all
+        # eight paths present with one of them truncated, and a later pass would accept
+        # that block as complete. A truncated parquet usually fails to read (the footer
+        # is written last), but "usually" is not a guarantee and the failure would only
+        # surface hours later, inside the scoring pass. os.replace within one directory
+        # is atomic, so no final path is ever observed partially written; a kill between
+        # renames leaves an incomplete SET, which the resume check correctly redoes.
+        tmps = []
         for H, df in res.items():
+            tmp = out_dir / f".b{tag}_h{H:02d}.parquet.tmp"
             df.sort_values(["origin_date", "aid"]).to_parquet(
-                out_dir / f"b{tag}_h{H:02d}.parquet", index=False, row_group_size=200_000)
+                tmp, index=False, row_group_size=200_000)
+            # Verify the writer's own output before it can become the real file.
+            got = pq.ParquetFile(tmp).metadata.num_rows
+            assert got == len(df), f"{tmp}: wrote {got} rows, expected {len(df)}"
+            tmps.append((tmp, out_dir / f"b{tag}_h{H:02d}.parquet"))
+        for tmp, final in tmps:
+            os.replace(tmp, final)
         meta["blocks"].append({"from": str(c0), "to": str(c1),
                                "seconds": round(time.monotonic() - tb, 1),
                                "panel_seconds": round(t_panel, 1), "panel_mb": panel_mb,
