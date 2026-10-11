@@ -346,6 +346,12 @@ class Runner:
         change inside an origin); tests that rewrite the tables do."""
         self._hv_cache = {}
 
+    # Every per-model INFORMATION BUDGET is read off `type(m)`, never off the instance:
+    # `scored_name()` is a classmethod, so a model that sets the attribute in `__init__`
+    # would get the wider budget and keep its honest name (critic S8). That applies to
+    # `uses_oracle_weather` (frozen in `set_models`), to `truth_history_days` below and to
+    # `covariate_history_days` at its two call sites. `max_lead_days` and `train_days` are
+    # not budgets in this sense — they only ever narrow what the runner asks for.
     def history_days_needed(self) -> int:
         """How much truth ``origin.history`` must hold: the config window, widened to the
         largest any registered plug-in declares.
@@ -518,7 +524,8 @@ class Runner:
         grid = x(self.grid_sql(c, leads, origin_table=origin_table, max_lead=m.max_lead_days)).df()
         if grid.empty:
             return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
-        cov = self.covariates(c, max(leads), self.oracle_weather(m), m.covariate_history_days)
+        cov = self.covariates(c, max(leads), self.oracle_weather(m),
+                              type(m).covariate_history_days)
         pred = m.predict(origin, grid, cov)
         if pred is None or len(pred) == 0:
             return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
@@ -540,7 +547,7 @@ class Runner:
                      FROM rides r, (SELECT unnest([{','.join(map(str, leads))}]) L)
                      WHERE r.aid IN (SELECT aid FROM rs) ORDER BY 1, 3""").df()
         return m.predict_daily(origin, days, self.covariates(
-            c, max(leads), self.oracle_weather(m), m.covariate_history_days))
+            c, max(leads), self.oracle_weather(m), type(m).covariate_history_days))
 
     def run_plugins_daily(self, c: dt.date, leads: list[int]) -> tuple[list[str], list[str], list[str]]:
         """Adds plug-in columns to tg and lv. Returns (slot cols, quantile models, level cols)."""

@@ -152,10 +152,17 @@ void-vs-fixed adjudication below — see its `SUPERSEDED.md`.
 A published table has to identify the code that wrote *that table*, not just the code
 that wrote `parts/` (BENCH-SPEC change #7). This run has two:
 
-| | git SHA | measured `code_sha256` |
+| | git SHA recorded | measured `code_sha256` |
 |---|---|---|
 | scored `parts/` (the sums) | `cdbc95a3` | `d5acedf6…` |
-| wrote `tables/` (the verdicts) | `ab8102bc` | `6de411d2…` |
+| wrote `tables/` (the verdicts) | `3107d7c9` | `4b2a41ce…` |
+
+(An earlier revision of this table published `ab8102bc` / `6de411d2…`. That was the
+**first, discarded** report pass — the one re-run in `d2dcee63` when PAR-827's `53165b5f`
+moved `report.py`. The numbers were unaffected, since `4b2a41ce` equals
+`code_hash(HEAD)`, but the table described a pass whose output is not what ships. That is
+the second false record this mechanism has produced in two days, which is the argument for
+reading it out of `report-tables.json` rather than transcribing it by hand.)
 
 Both `code_sha256` values were recomputed from `git archive <sha> ml-bench/mlbench`
 and reproduce exactly, and **the measured hash is the field to check** — not the
@@ -326,9 +333,46 @@ On ex-ante busy rides against `lvlh5_tft` — the incumbent the busy routing act
 uses — `chronos2_grid` wins d1 (−1.047 [−1.605, −0.568]), d6 (−0.735) and d7 (−0.673),
 and is not significant at d2–d5.
 
-**d2 is a real and reproducible hole**: every variant loses to `h5` at d2 by +0.58…+1.53
-min, in both segments, in both passes. It is the one lead where a profile beats the
-foundation model outright, and it has no explanation in this run.
+#### Read these as WEEKDAY-conditional, not lead-indexed — the two axes are aliased
+
+**On this shard the planner lead axis is perfectly confounded with day of week, and the
+confound is exact rather than approximate.** `--shard 0/7` starts at **2026-02-19, a
+Thursday**, and spans **224 days = 32 × 7**, so every one of the 33 origins is a Thursday
+and each lead is one fixed weekday:
+
+| lead | d0 | d1 | d2 | d3 | d4 | d5 | d6 | d7 |
+|---|---|---|---|---|---|---|---|---|
+| target weekday | Thu | Fri | **Sat** | **Sun** | Mon | Tue | Wed | Thu |
+
+So **the "d2 hole" is the Saturday cell** and the other non-win, d3, is **Sunday** —
+adjacent, in order, exactly how a weekend effect would present itself. The mechanism is in
+this run's own `cells.csv`, on ex-ante busy rides across d0–d7: every flat profile reaches
+its **minimum** MAE at d2 (`h5` 13.679, `wt_med` 13.802, `clim` 14.323) while both
+Chronos-2 variants reach their **maximum** (`chronos2` 15.141, `chronos2_grid` 14.966), and
+the other level-driven model degrades the same way (`lvlh5_tft` 14.271) while the flat
+profiles do not. Saturday is the most predictable crowd day there is, so a fixed profile is
+at its best and a model that forecasts the day's *level* is at its worst — a weekday story,
+not a horizon story.
+
+**The lead-indexed routing rule is therefore withdrawn.** In production d2 is every
+weekday, so "do not route d2" would assign to *lead* what is measured on *Saturday*. The
+honest statement is: **on Thursday origins, Chronos-2 loses to `h5` on the Saturday target
+and is marginal on Sunday.** Whether that is a lead effect or a weekend effect is
+**irreducible on this shard** and needs the dense-origin run to separate.
+
+One contrast *is* weekday-controlled, and it shows a genuine lead effect underneath:
+**d0 and d7 are both Thursday.** Against `h5`, all rides, `chronos2` goes −0.826
+[−1.116, −0.561] at d0 to +0.013 [−0.321, +0.291] at d7, and `chronos2_grid` −0.983 to
+−0.165 — about **+0.82…+0.84 min of degradation over seven days at constant weekday**.
+Against `lvlh5_tft` the same pair degrades by +0.39…+0.46 min and is still a win at d7. So
+there is a real horizon effect; what cannot be separated is how much of the d2/d3 shape
+belongs to it.
+
+**Why this was not caught earlier: no table the harness emits carries a weekday column** —
+not `cells.csv`, not `mae_by_season.csv`, not `lead_availability.csv`. The only split
+offered is by season. A `mae_by_weekday` split, or simply recording the origin weekday
+distribution in `run-*.json`, would have made the aliasing visible at a glance, and a
+shard stride that is a multiple of 7 should arguably be refused outright.
 
 ### Layout — the regular grid wins, now on an interval
 
@@ -353,10 +397,14 @@ mechanism is unchanged — the compressed layout buys ~170 days of context and d
 the opening ramp, which is what D5 and D3 score. It costs 2–3× the GPU time
 (18.6–23.4 s per daily-origin call against 6.5–11.3 s). **Decision: the grid layout.**
 
-Still unmeasured: only `chronos2` sets `intraday = True`, so **the layout question has
-never been tested on UC1**, which is where the surviving signal is. The UC1 table above
-is the compressed layout — i.e. the *losing* layout on every lead where the two were
-compared, which makes those UC1 numbers a lower bound on what the grid would do.
+**The grid claim does not extend to the live surface, and must not be read as doing so.**
+Only `chronos2` sets `intraday = True`, so `chronos2_grid` has **zero** UC1, UC2-intraday,
+D1 and D2 cells in either pass — it was never scored on a live surface at all. Everything
+in the UC1 section above is `chronos2`, the compressed layout, and **`chronos2` is the
+variant the live recommendation names.** Reading the daily-origin grid gain across to UC1
+would be extrapolation, and a weak one: the largest measured grid gain is 0.157 min against
+UC1 margins of 0.26–4.5 min, i.e. immaterial at that scale even if it transferred. Running
+`chronos2_grid` on intraday origins is the cheapest open item in this workstream.
 
 ### Covariates — decisive
 

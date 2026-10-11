@@ -14,7 +14,7 @@ import pytest
 from mlbench import baselines as B
 from mlbench.config import BenchConfig
 from mlbench.models.base import Model
-from mlbench.models.foundation import Chronos2, Chronos2Grid, FoundationModel
+from mlbench.models.foundation import EMPTY, Chronos2, Chronos2Grid, FoundationModel
 from mlbench.runner import Runner
 
 
@@ -215,3 +215,57 @@ def test_history_view_cache_follows_the_origin_hour(synth_export, tmp_path):
         d = r.history_view(c, "oh").df(7)
         seen[h] = len(d[pd.to_datetime(d["date"]).dt.date == c])
     assert seen[8] < seen[20], f"origin-day slots did not grow with the hour: {seen}"
+
+
+def test_an_instance_attribute_cannot_widen_an_information_budget(synth_export, tmp_path):
+    """Both per-model history budgets are read off the CLASS, at the CALL SITES.
+
+    `scored_name()` is a classmethod, so a model that sets a budget in `__init__` would get
+    the wider window and keep its honest name — critic S8's hole, which this harness closed
+    for `uses_oracle_weather` and must close for every budget of the same shape.
+    `covariate_history_days` was read off the instance when `truth_history_days` was added
+    beside it, which is the bug this test exists to make impossible.
+
+    It therefore drives `plugin_predict` / `plugin_predict_daily` and inspects the frame the
+    MODEL is actually handed. An earlier version of this test called `covariates()` directly
+    with `type(m).covariate_history_days` already resolved, so it passed with the fix
+    reverted — a guard that cannot fail. Mutating `type(m).covariate_history_days` back to
+    `m.covariate_history_days` in `runner.py` must make this test fail.
+    """
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1])
+    c = dt.date(2026, 4, 20)
+
+    class _Greedy(Model):
+        name = "greedy"
+        seen: list
+
+        def __init__(self):
+            self.seen = []
+            self.truth_history_days = 400          # instance only — must be ignored
+            self.covariate_history_days = 400      # instance only — must be ignored
+
+        def predict(self, origin, horizon_slots, known_future_covariates):
+            self.seen.append(known_future_covariates)
+            return EMPTY
+
+        def predict_daily(self, origin, horizon_days, known_future_covariates):
+            self.seen.append(known_future_covariates)
+            return None
+
+    m = _Greedy()
+    r = Runner(synth_export, tmp_path, cfg, [m], materialize=True, origins=(str(c), str(c)))
+    B.snapshot_tables(r.con, c.replace(day=1).isoformat(), cfg)
+    B.window_tables(r.con, c.isoformat(), cfg)
+    B.target_tables(r.con, c.isoformat(), r.slot_leads(c), cfg)
+
+    assert r.history_days_needed() == cfg.history_days, "truth budget widened by an instance"
+
+    r.plugin_predict(m, c, [0, 1])
+    r.plugin_predict_daily(m, c)
+    assert m.seen, "the model was never called, so this test proves nothing"
+    for cov in m.seen:
+        earliest = pd.to_datetime(cov["date"]).dt.date.min()
+        assert earliest >= c, (
+            f"covariates reach back to {earliest}; the CLASS budget is "
+            f"{_Greedy.covariate_history_days} days, so no row before {c} may be handed "
+            f"over — the call site read the instance")
