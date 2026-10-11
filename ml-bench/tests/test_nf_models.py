@@ -262,3 +262,70 @@ def test_predict_daily_never_serves_a_previous_origin(tmp_path, monkeypatch):
     # origin d1 is not: no curve, and no daily level inherited from d0
     assert m.predict(origin(d1), grid(d1 + dt.timedelta(days=1)), pd.DataFrame()).empty
     assert m.predict_daily(origin(d1), days, pd.DataFrame()) is None
+
+
+def test_train_step_size_reproduces_the_measured_oom_allocation():
+    """Calibration lock for the fix to the 2026-10-10 OOM.
+
+    NeuralForecast materialises the WHOLE unfolded training window pool before
+    ``windows_batch_size`` samples from it, so the peak is independent of
+    ``windows_batch_size``.  With the probe's settings the formula must reproduce the
+    allocation the OOM actually reported (14.02 GiB), which is what makes the budget
+    below a measurement rather than a guess.
+    """
+    import math
+
+    from mlbench.models.nf_precompute import (
+        HORIZON_DAYS,
+        INPUT_DAYS,
+        K,
+        SPECS,
+        train_step_size,
+    )
+
+    lh = (INPUT_DAYS + HORIZON_DAYS) * K
+    t_train, cols = 4536, 20                      # the 2026-09-01..09-03 probe block
+    batch = SPECS["nf_tide"]["kw"]["batch_size"]
+    unthinned = batch * t_train * lh * cols * 4
+    assert round(unthinned / 1024 ** 3, 2) == 14.02, unthinned
+
+    budget = 1024 ** 3
+    step, facts = train_step_size("nf_tide", 3364, cols, t_train, budget)
+    assert facts["pool_bytes"] <= budget                      # the pool now fits
+    assert facts["pool_bytes"] * step >= unthinned / 2        # and is not absurdly small
+    assert math.gcd(step, K) == 1, "window starts must cycle through every hour phase"
+    assert facts["pool_windows_per_series"] == math.ceil(t_train / step)
+
+    # Monotone in the budget, and never degenerate.
+    assert train_step_size("nf_tide", 3364, cols, t_train, budget * 8)[0] <= step
+    assert train_step_size("nf_tide", 3364, cols, t_train, 1)[0] >= 1
+    assert train_step_size("nf_tide", 3364, cols, 1, budget)[0] == 1
+
+
+def test_train_step_size_scales_the_multivariate_pool_by_series():
+    """TSMixerx is multivariate: the pool keeps every ride of the group as a channel,
+    so its budget scales with the group's series count, not with batch_size."""
+    from mlbench.models.nf_precompute import train_step_size
+
+    small = train_step_size("nf_tsmixerx", 200, 20, 4536)[0]
+    large = train_step_size("nf_tsmixerx", 2000, 20, 4536)[0]
+    assert large > small
+
+
+def test_make_model_thins_training_windows_but_not_the_forecast():
+    """``step_size`` must reach the model as a TRAIN-only knob: predict() uses
+    ``predict_step_size``, which forecast_block sets via predict(step_size=h), so a
+    thinned training pool cannot change the forecast layout."""
+    from mlbench.models.nf_precompute import HORIZON_DAYS, K, make_model
+    from mlbench.models.nf_panel import build_panel  # noqa: F401  (import shape only)
+
+    class _P:
+        futr_cols = ["f0"]
+        static_cols = ["s0"]
+        cols = ["y"] + [f"c{i}" for i in range(18)] + ["available_mask"]
+
+    m = make_model("nf_tide", _P(), max_steps=1, n_series=None, scale=0.05, t_train=4536)
+    assert m.step_size > 1                       # training pool was thinned
+    assert m.predict_step_size == 1              # untouched by the constructor
+    m.set_test_size(HORIZON_DAYS * K)
+    assert m.predict_step_size == 1              # and by set_test_size

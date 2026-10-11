@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import math
 import json
 import os
 import time
@@ -75,6 +76,52 @@ DEFAULT_BLOCK_ESTIMATE = 5400.0   # s; conservative until a block has been measu
 # of the 16 GB card. A fraction turns a breach into an OOM in THIS process instead of
 # a squeeze on production; 0.6 x 16 GB = 9.8 GB. Override with MLBENCH_NF_VRAM_FRACTION.
 VRAM_FRACTION = 0.6
+# VRAM budget for the TRAINING WINDOW POOL. NeuralForecast materialises the whole
+# unfolded pool BEFORE ``windows_batch_size`` samples from it, so the peak does not
+# depend on windows_batch_size at all. In _base_model._create_windows(step="train"):
+#     windows = temporal.unfold(-1, L+h, self.step_size)      # a view
+#     windows = windows.permute(0, 2, 3, 1).flatten(0, 1)     # <- COPY (univariate)
+# i.e. batch_size x ceil(T_train/step_size) x (L+h) x n_cols x 4 bytes. On the
+# 2026-10-10 probe (batch_size=64, T_train=4536, L+h=648, 20 cols) that is exactly
+# 14.016 GiB, which is the allocation the OOM reported inside a 9.28 GiB budget --
+# the formula below reproduces that number, so it is calibrated, not guessed.
+# ``step_size`` thins the pool. It is a TRAIN-ONLY knob here: predict() uses
+# ``self.predict_step_size``, which forecast_block sets explicitly through
+# ``model.predict(..., step_size=h)`` (_base_model.py:824), so thinning the training
+# pool cannot change the shape or the layout of a forecast.
+WINDOW_POOL_BUDGET = int(os.environ.get("MLBENCH_NF_POOL_BUDGET", 1024 ** 3))
+
+
+def train_step_size(name: str, n_series: int, n_cols: int, t_train: int,
+                    budget: int = WINDOW_POOL_BUDGET) -> tuple[int, dict]:
+    """Smallest unfold step whose training window pool fits ``budget``.
+
+    Kept coprime with ``K`` so the retained window starts still cycle through every
+    hour-of-day phase (step 18 would pin every window to one hour of the day).
+    Returns the step and the sizing facts, which go into the cache meta.json so the
+    thinning is recorded with the forecasts rather than only in a log.
+    """
+    spec = SPECS[name]
+    lh = (INPUT_DAYS + HORIZON_DAYS) * K
+    if spec.get("multivariate"):
+        # The multivariate pool stays a view ([Ws, L+h, C, n_series]); what gets
+        # materialised per window is the availability filter's [Ws, L+h, n_series]
+        # (one mask column, hence no n_cols factor).
+        per_window = lh * n_series * 4
+    else:
+        per_window = int(spec["kw"]["batch_size"]) * lh * n_cols * 4
+    env = os.environ.get("MLBENCH_NF_STEP_SIZE")
+    s = int(env) if env else max(1, math.ceil(per_window * t_train / budget))
+    while s < t_train and math.gcd(s, K) != 1:
+        s += 1
+    n_win = max(1, math.ceil(t_train / s))
+    facts = {"step_size": s, "pool_windows_per_series": n_win,
+             "pool_bytes": per_window * n_win, "t_train": t_train,
+             "window_starts_possible": t_train, "forced": bool(env)}
+    # The step-independent term: the SAMPLED batch is windows_batch_size windows wide.
+    wbs = int(spec["kw"]["windows_batch_size"])
+    facts["sample_bytes"] = wbs * lh * n_cols * (n_series if spec.get("multivariate") else 1) * 4
+    return s, facts
 
 # Model specs. Sizes were set on the subset run (see docs/ml/ml-bench.md, PAR-829).
 SPECS: dict[str, dict] = {
@@ -112,7 +159,7 @@ def month_blocks(first: dt.date, last: dt.date) -> list[tuple[dt.date, dt.date]]
 
 
 def make_model(name: str, panel: Panel, max_steps: int, n_series: int | None, scale: float = 1.0,
-               seed: int = 829):
+               seed: int = 829, t_train: int | None = None, sizing: dict | None = None):
     import torch
     from neuralforecast import models as M
     from neuralforecast.losses.pytorch import MQLoss
@@ -138,6 +185,12 @@ def make_model(name: str, panel: Panel, max_steps: int, n_series: int | None, sc
     if spec.get("multivariate"):
         common["n_series"] = n_series
         common["valid_batch_size"] = n_series
+    # Thin the training window pool to fit the shared card (see train_step_size).
+    if t_train:
+        step, facts = train_step_size(name, n_series or 1, len(panel.cols), t_train)
+        common["step_size"] = step
+        if sizing is not None:
+            sizing.update(facts)
     return getattr(M, spec["cls"])(**common, **kw)
 
 
@@ -239,7 +292,12 @@ def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_st
         if len(rows) == 0:
             continue
         t0 = time.monotonic()
-        model = make_model(name, panel, max_steps, len(rows), scale)
+        sizing: dict = {}
+        model = make_model(name, panel, max_steps, len(rows), scale, t_train=first, sizing=sizing)
+        log(f"  group {g}: {len(rows)} series, train steps {first}, unfold step "
+            f"{sizing.get('step_size')} -> {sizing.get('pool_windows_per_series')} windows/series, "
+            f"pool {sizing.get('pool_bytes', 0) / 1024 ** 3:.2f} GiB, "
+            f"sample {sizing.get('sample_bytes', 0) / 1024 ** 2:.0f} MiB")
         model.fit(dataset=to_dataset(panel, rows), val_size=0, test_size=panel.T - first)
         t_fit = time.monotonic() - t0
         model.set_test_size(h)
@@ -279,7 +337,7 @@ def forecast_block(name: str, panel: Panel, c0: dt.date, c_last: dt.date, max_st
             # run_nf_precompute.sh samples nvidia-smi for the device-level peak.
             stats["groups"].append({"group": g, "series": len(rows), "chunk": int(step),
                                     "fit_seconds": round(t_fit, 1), "seconds": round(t_total, 1),
-                                    "peak_vram_gb_torch": round(vram, 2)})
+                                    "peak_vram_gb_torch": round(vram, 2), **sizing})
         del model
     return {H: pd.concat(v, ignore_index=True) if v else pd.DataFrame() for H, v in out.items()}
 
