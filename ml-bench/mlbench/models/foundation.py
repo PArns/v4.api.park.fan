@@ -256,6 +256,11 @@ class TiRex2Backend(_Backend):
     def __init__(self, model_id: str = "NX-AI/TiRex-2",
                  context_length: int = int(os.environ.get("MLBENCH_TIREX2_CONTEXT", "2048"))):
         import torch
+        import torch._dynamo
+
+        # tirex2 wraps blocks in @torch.compile; inductor needs a C/C++ compiler at
+        # runtime that this slim image does not ship. Eager mode gives the same numbers.
+        torch._dynamo.config.disable = True
         from tirex2 import load_model
 
         self.torch = torch
