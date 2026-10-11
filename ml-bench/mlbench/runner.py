@@ -75,6 +75,59 @@ def load_tables(con, export: Path, materialize: bool = False) -> None:
 
 
 
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def origin_weekday_census(origins: list) -> dict:
+    """Counts of origin days by weekday, Monday first.
+
+    Recorded in `run-*.json` because the aliasing it exposes was invisible for two
+    days across four workstreams and three critic passes: no table in the harness
+    carries a weekday column, so "every planner lead is a fixed weekday" could not
+    be seen from any artefact a reviewer reads. A seven-element count costs nothing
+    and makes it a one-line check.
+    """
+    counts = dict.fromkeys(WEEKDAYS, 0)
+    for c in origins:
+        counts[WEEKDAYS[c.weekday()]] += 1
+    return counts
+
+
+def check_weekday_aliasing(origins: list, n_shards: int, allow: bool) -> dict:
+    """Refuse an origin set whose lead axis is aliased with day-of-week.
+
+    With a 7-day week a stride that is a multiple of 7 does not *risk* aliasing,
+    it **guarantees** it: every origin lands on one weekday, so lead L is a fixed
+    weekday for every L and a per-lead result is a per-weekday result wearing a
+    lead's name. PAR-828 took every 7th origin from a Thursday and spent two days
+    on an "unexplained d2 hole" that was the Saturday cell.
+
+    `--shard i/7` is also how one would legitimately run seven parallel shards
+    whose UNION is complete, and a single shard cannot know whether its siblings
+    will run — so this refuses by default and takes `--allow-weekday-alias` as the
+    explicit statement that the union will be complete. The second condition
+    catches the same pathology arrived at another way (a `--from/--to` window that
+    happens to select one or two weekdays).
+    """
+    census = origin_weekday_census(origins)
+    distinct = sum(1 for v in census.values() if v)
+    reasons = []
+    if n_shards % 7 == 0:
+        reasons.append(f"--shard i/{n_shards}: a stride that is a multiple of 7 puts every "
+                       f"origin on one weekday")
+    if len(origins) > 7 and distinct <= 2:
+        reasons.append(f"the selected origins fall on only {distinct} distinct weekday(s): "
+                       f"{ {k: v for k, v in census.items() if v} }")
+    if reasons and not allow:
+        raise SystemExit(
+            "refusing to run: the lead axis would be aliased with day-of-week, so every "
+            "per-lead result would be a per-weekday result.\n  - " + "\n  - ".join(reasons)
+            + "\nIf these origins are one of several shards whose union is complete, pass "
+              "--allow-weekday-alias to say so; the weekday census is recorded in run-*.json "
+              "either way.")
+    return census
+
+
 def load_model(spec: str) -> Model:
     from .models import REGISTRY
 
@@ -754,6 +807,11 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--from", dest="origin_from", default=None)
     p.add_argument("--to", dest="origin_to", default=None)
     p.add_argument("--shard", default="0/1", help="i/n — run every n-th origin starting at i")
+    p.add_argument("--allow-weekday-alias", action="store_true",
+                   help="permit an origin set whose lead axis is aliased with day-of-week "
+                        "(e.g. --shard i/7). Only correct when this is one of several shards "
+                        "whose union is complete; a lone aliased shard makes every per-lead "
+                        "result a per-weekday result.")
     p.add_argument("--memory", default=None)
     p.add_argument("--threads", type=int, default=None)
     p.add_argument("--leads", default=None, help="override slot leads, e.g. 0,1,3,7")
@@ -797,6 +855,11 @@ def main(args: argparse.Namespace) -> int:
     origins = (args.origin_from or "1900-01-01", args.origin_to or "2999-12-31")
     r = Runner(Path(args.export), out, cfg, models, (i, n), origins)
     r.resume = args.resume
+    # Refuse a weekday-aliased origin set, and record the census either way.
+    meta["origin_weekdays"] = check_weekday_aliasing(
+        r.origins, n, getattr(args, "allow_weekday_alias", False))
+    meta["origin_weekday_distinct"] = sum(1 for v in meta["origin_weekdays"].values() if v)
+    (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
     t0 = time.monotonic()
     r.run()
     meta["finished_utc"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")

@@ -249,6 +249,30 @@ reference and why), `low_coverage_cells.csv`, `usable_horizon.csv` (with
   fails a gate breaks the run. `usable_horizon.csv` carries `leads_tested` and
   `not_tested_because`: **`leads_tested = 0` means nothing was tested, which is
   not the same as nothing winning** and must never be read as a loss.
+- **KNOWN GAP: no table carries a weekday column, and that is why a two-day blind
+  spot was possible.** PAR-828's subset took every 7th origin from a Thursday, so
+  all 33 of its origins were Thursdays and **every planner lead was one fixed
+  weekday** — d2 = Saturday, d3 = Sunday. Its "unexplained d2 hole" was the
+  Saturday cell, and it withdrew a lead-indexed routing rule because of it. Four
+  workstreams and three critic passes missed it for two days: `grep` for
+  `dow|weekday|weekend` across all 26 output CSVs returns **zero hits**, so the
+  aliasing was invisible in every artefact a reviewer reads first.
+
+  Two guards now exist at run time: `run-*.json` records an `origin_weekdays`
+  census (seven counts, Monday first) plus `origin_weekday_distinct`, and the
+  runner **refuses** an origin set whose lead axis is aliased with day-of-week —
+  any `--shard i/n` with `n` a multiple of 7, or any set of more than 7 origins
+  landing on ≤ 2 distinct weekdays — unless `--allow-weekday-alias` is passed to
+  state that this is one of several shards whose union is complete.
+  `test_weekday_aliasing_is_refused_and_the_census_is_recorded` mutation-checks
+  the refusal in both directions.
+
+  **A `mae_by_weekday` split is the right fix and is NOT here.** It would mean
+  regenerating tables that a critic has verified cell by cell and that three PRs
+  now cite, and the verification is worth more than the split is today — so it is
+  recorded as an owner follow-up rather than silently skipped. The run-time guards
+  above stop the *aliased* case being constructed; they do not let you read a
+  weekday effect out of these tables, and nothing in this review does.
 - **`low_coverage_cells.csv`** lists every cell whose paired rows are under half
   the reference's. Those absolute values are not comparable with the rest of
   their column — at d60 `lvlh5_tft` reads 1.337 min on the first hour because

@@ -396,6 +396,62 @@ def test_cells_all_refs_is_always_emitted(synth_export, tmp_path):
         assert ar.groupby(["metric", "uc", "segment", "region", "lead", "model"]).size().max() >= 2
 
 
+def test_weekday_aliasing_is_refused_and_the_census_is_recorded():
+    """PAR-828's subset took every 7th origin from a Thursday, so all 33 origins
+    were Thursdays and every planner lead was one fixed weekday — d2 = Saturday,
+    d3 = Sunday. Its "unexplained d2 hole" was the Saturday cell. Four workstreams
+    and three critic passes missed it for two days because **no table in the
+    harness carries a weekday column**, so the aliasing was invisible in every
+    artefact a reviewer reads.
+
+    Mutation-checked in both directions: the refusal must fire on a stride of 7
+    and on a one-weekday window arrived at another way, and must NOT fire on a
+    stride of 3 or on consecutive origins.
+    """
+    import datetime as dt
+
+    from mlbench.runner import check_weekday_aliasing, origin_weekday_census
+
+    consecutive = [dt.date(2026, 2, 19) + dt.timedelta(days=i) for i in range(231)]
+    census = origin_weekday_census(consecutive)
+    assert sum(census.values()) == 231
+    assert all(v > 0 for v in census.values()), "231 consecutive days must hit every weekday"
+
+    # every 7th origin from a Thursday — PAR-828's exact construction
+    every7 = consecutive[0::7]
+    assert all(c.weekday() == 3 for c in every7), "fixture must reproduce the all-Thursday subset"
+    c7 = origin_weekday_census(every7)
+    assert c7["Thu"] == len(every7) and sum(1 for v in c7.values() if v) == 1
+
+    # 1. a stride that is a multiple of 7 is refused
+    for n in (7, 14, 21):
+        try:
+            check_weekday_aliasing(consecutive[0::n], n, allow=False)
+        except SystemExit as e:
+            assert "aliased with day-of-week" in str(e)
+            assert "multiple of 7" in str(e)
+        else:
+            raise AssertionError(f"--shard i/{n} must be refused")
+
+    # 2. the same pathology reached another way: a window of one weekday
+    mondays = [dt.date(2026, 3, 2) + dt.timedelta(weeks=i) for i in range(20)]
+    try:
+        check_weekday_aliasing(mondays, 1, allow=False)
+    except SystemExit as e:
+        assert "distinct weekday" in str(e)
+    else:
+        raise AssertionError("a one-weekday origin set must be refused even at stride 1")
+
+    # 3. the escape hatch works, and still returns the census
+    got = check_weekday_aliasing(every7, 7, allow=True)
+    assert got["Thu"] == len(every7)
+
+    # 4. it must NOT fire on legitimate sharding or on consecutive origins
+    for n in (1, 2, 3, 4, 5, 6, 8):
+        out = check_weekday_aliasing(consecutive[0::n], n, allow=False)
+        assert sum(out.values()) == len(consecutive[0::n])
+
+
 def test_origin_window_filter_actually_runs(synth_export, tmp_path):
     """`--origin-from/--origin-to` must EXECUTE, not merely exist.
 
