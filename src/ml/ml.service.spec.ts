@@ -19,6 +19,7 @@ import { ParksService } from "../parks/parks.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
 import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
+import { PCN_MAX_FORECAST_AGE_H } from "./pcn-serving.constants";
 
 describe("MLService", () => {
   let service: MLService;
@@ -398,6 +399,174 @@ describe("MLService", () => {
       expect(JSON.parse(written![1] as string)).toEqual(
         JSON.parse(catboostPayload),
       );
+    });
+  });
+
+  // PAR-854: the accuracy row records what the reader was SERVED at generation
+  // time, beside CatBoost's raw answer. These pin that the value is the served
+  // path's own (override + blend, at the lead it had then) and that every
+  // fallback lands on CatBoost with a `catboost` label.
+  describe("servedIntradayValues (the served value the badge scores)", () => {
+    const HOUR = 3_600_000;
+    const prevFlag = process.env.SERVE_PCN_INTRADAY;
+    let farSlot: number;
+    let midSlot: number;
+    let nearSlot: number;
+
+    const row = (ms: number, wait = 20) =>
+      ({
+        attractionId: "attr-1",
+        predictedTime: new Date(ms),
+        predictedWaitTime: wait,
+        predictionType: "hourly" as const,
+        confidence: 80,
+        crowdLevel: "low" as const,
+        baseline: 40,
+        modelVersion: "v1",
+      }) as never;
+
+    const pcnRows = (slots: number[]) =>
+      slots.flatMap((ms) => [
+        {
+          aid: "attr-1",
+          predicted_time: new Date(ms),
+          quantile: 0.5,
+          wait: "60",
+        },
+        {
+          aid: "attr-1",
+          predicted_time: new Date(ms),
+          quantile: 0.8,
+          wait: "70",
+        },
+      ]);
+
+    beforeEach(() => {
+      const slot0 = currentSlotStartMs();
+      farSlot = slot0 + 4 * HOUR; // past the blend horizon → pure PCN
+      midSlot = slot0 + 2 * HOUR; // inside the blend: α = 0.5
+      nearSlot = slot0 + 0.5 * HOUR; // closer than the scoring lead
+      mockQueueDataRepository.createQueryBuilder.mockImplementation(() => ({
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        distinctOn: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([]),
+        getMany: jest
+          .fn()
+          .mockResolvedValue([{ attractionId: "attr-1", waitTime: 100 }]),
+      }));
+    });
+
+    afterEach(() => {
+      if (prevFlag === undefined) delete process.env.SERVE_PCN_INTRADAY;
+      else process.env.SERVE_PCN_INTRADAY = prevFlag;
+      mockPredictionRepository.manager.query.mockResolvedValue([]);
+    });
+
+    it("records PCN with the blend at the lead it had at generation time", async () => {
+      process.env.SERVE_PCN_INTRADAY = "true";
+      mockPredictionRepository.manager.query.mockResolvedValue(
+        pcnRows([farSlot, midSlot]),
+      );
+      const slot0 = currentSlotStartMs();
+
+      const served = await service.servedIntradayValues(
+        [row(farSlot), row(midSlot)],
+        slot0,
+      );
+
+      expect(served).toEqual([
+        { wait: 60, source: "pcn" }, // 4 h out: pure PCN q0.5
+        // 2 h out: α = 0.5 between the anchor (100) and PCN (60) → 80, exactly
+        // what the park page showed at that moment.
+        { wait: 80, source: "pcn" },
+      ]);
+    });
+
+    it("records nothing for a slot closer than the scoring lead", async () => {
+      // At 30 minutes the blend serves the anchor — the wait read now — and the
+      // comparison job would score it against the reading nearest the slot,
+      // largely itself. Null leaves the row's served columns untouched, so the
+      // value kept is the last one shown at least an hour ahead.
+      process.env.SERVE_PCN_INTRADAY = "true";
+      mockPredictionRepository.manager.query.mockResolvedValue(
+        pcnRows([nearSlot]),
+      );
+
+      const served = await service.servedIntradayValues(
+        [row(nearSlot), row(farSlot)],
+        currentSlotStartMs(),
+      );
+
+      expect(served[0]).toBeNull();
+      expect(served[1]).not.toBeNull();
+    });
+
+    it("records CatBoost when the flag is off, without reading PCN at all", async () => {
+      delete process.env.SERVE_PCN_INTRADAY;
+      mockPredictionRepository.manager.query.mockResolvedValue(
+        pcnRows([farSlot]),
+      );
+
+      const served = await service.servedIntradayValues([row(farSlot, 25)]);
+
+      expect(served).toEqual([{ wait: 25, source: "catboost" }]);
+      expect(mockPredictionRepository.manager.query).not.toHaveBeenCalled();
+    });
+
+    it("records CatBoost where PCN is stale or has no forecast for the slot", async () => {
+      // The staleness guard lives in the SQL (created_at within
+      // PCN_MAX_FORECAST_AGE_H): a frozen producer returns no rows, which is
+      // what this simulates — and only the far slot has a fresh forecast.
+      process.env.SERVE_PCN_INTRADAY = "true";
+      mockPredictionRepository.manager.query.mockResolvedValue(
+        pcnRows([farSlot]),
+      );
+
+      const served = await service.servedIntradayValues(
+        [row(farSlot), row(nearSlot, 35)],
+        currentSlotStartMs(),
+      );
+
+      expect(served).toEqual([
+        { wait: 60, source: "pcn" },
+        null, // too close to score
+      ]);
+      const [sql, params] = mockPredictionRepository.manager.query.mock
+        .calls[0] as [string, unknown[]];
+      expect(sql).toContain("f.created_at >= now() - ($3 || ' hours')");
+      expect(params[2]).toBe(PCN_MAX_FORECAST_AGE_H);
+    });
+
+    it("records CatBoost when the PCN read fails", async () => {
+      process.env.SERVE_PCN_INTRADAY = "true";
+      mockPredictionRepository.manager.query.mockRejectedValue(
+        new Error("relation pcn_forecasts does not exist"),
+      );
+
+      const served = await service.servedIntradayValues([row(farSlot, 25)]);
+
+      expect(served).toEqual([{ wait: 25, source: "catboost" }]);
+    });
+
+    it("never mutates the rows it is given (they are what gets stored raw)", async () => {
+      process.env.SERVE_PCN_INTRADAY = "true";
+      mockPredictionRepository.manager.query.mockResolvedValue(
+        pcnRows([farSlot]),
+      );
+      const input = row(farSlot) as unknown as {
+        predictedWaitTime: number;
+        modelVersion: string;
+      };
+
+      await service.servedIntradayValues([input as never]);
+
+      expect(input.predictedWaitTime).toBe(20);
+      expect(input.modelVersion).toBe("v1");
     });
   });
 
@@ -849,6 +1018,37 @@ describe("MLService", () => {
         expect(recorded[0].predictedTime).toEqual(
           new Date(`${today}T10:00:00Z`),
         );
+      });
+
+      it("hands the served values over aligned with the raw rows (PAR-854)", async () => {
+        const prev = process.env.SERVE_PCN_INTRADAY;
+        delete process.env.SERVE_PCN_INTRADAY;
+        const inHours = (h: number) =>
+          new Date(currentSlotStartMs() + h * 3_600_000).toISOString();
+        try {
+          await service.storePredictions([
+            { ...hourly("10", "OPERATING"), predictedTime: inHours(2) },
+            {
+              ...hourly("11", "OPERATING"),
+              predictedTime: inHours(3),
+              predictedWaitTime: 45,
+            },
+            // Already under way: too close to score as served.
+            hourly("12", "OPERATING"),
+          ]);
+        } finally {
+          if (prev !== undefined) process.env.SERVE_PCN_INTRADAY = prev;
+        }
+
+        const [raw, served] =
+          mockPredictionAccuracyService.recordPredictions.mock.calls[0];
+        expect(raw).toHaveLength(3);
+        // Flag off: CatBoost IS what was served, and it says so.
+        expect(served).toEqual([
+          { wait: 30, source: "catboost" },
+          { wait: 45, source: "catboost" },
+          null,
+        ]);
       });
     });
 

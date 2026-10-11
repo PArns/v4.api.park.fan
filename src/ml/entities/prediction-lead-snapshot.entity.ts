@@ -6,6 +6,9 @@ import {
   CreateDateColumn,
 } from "typeorm";
 
+/** The model behind a served daily number. See {@link PredictionLeadSnapshot.source}. */
+export type LeadSnapshotSource = "tft" | "catboost";
+
 /**
  * PredictionLeadSnapshot Entity
  *
@@ -113,6 +116,21 @@ export class PredictionLeadSnapshot {
 
   @Column({ name: "model_version" })
   modelVersion: string;
+
+  /**
+   * Which model produced the number a reader was SERVED for this ride and day
+   * (PAR-854): `tft` where the TFT override covered it (headliners, days 1-60),
+   * `catboost` where it fell through to CatBoost (no TFT forecast, a stale one,
+   * or nf-service down).
+   *
+   * NULL marks a row written before PAR-854. Those snapshotted the RAW CatBoost
+   * daily answer while the calendar and `/plan/day` were serving TFT, so they
+   * measure a model nobody saw. They are kept — the TFT-vs-CatBoost question is
+   * still worth having — but `getLeadTimeMae` reads only rows with a source, so
+   * a published figure is never a blend of the two populations.
+   */
+  @Column({ name: "source", type: "varchar", length: 16, nullable: true })
+  source: LeadSnapshotSource | null;
 
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;

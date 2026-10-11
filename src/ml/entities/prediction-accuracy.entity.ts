@@ -20,6 +20,10 @@ import { Attraction } from "../../attractions/entities/attraction.entity";
  *
  * Note: API now reads from attraction_accuracy_stats for display,
  * this table is only used by background jobs.
+ *
+ * Two predictions per row since PAR-854: `predictedWaitTime` (raw CatBoost,
+ * for the model boards and the ride day curve) and `servedWaitTime` (what the
+ * reader saw, for the per-ride badge). Both are scored against the same actual.
  */
 @Entity("prediction_accuracy")
 @Unique("uq_pa_attraction_target", ["attractionId", "targetTime"])
@@ -67,6 +71,39 @@ export class PredictionAccuracy {
 
   @Column()
   modelVersion: string;
+
+  /**
+   * The wait a reader was SERVED for this slot when the row was written
+   * (PAR-854) — `predictedWaitTime` after the PCN champion-swap override and
+   * the §7.7 persistence blend, captured at generation time with the lead it
+   * had then. `predictedWaitTime` stays the raw CatBoost answer, because the
+   * admin boards compare CatBoost against PCN and must not see PCN on both
+   * sides.
+   *
+   * NULL on every row written before PAR-854. Those scored CatBoost while users
+   * were shown PCN, so the per-ride badge reads only rows that carry this
+   * column. (The ride day-curve band reads `absoluteError` — that curve draws
+   * CatBoost's own stored forecast; see `AttractionAccuracyStats.rawMae`.)
+   */
+  @Column({ name: "served_wait_time", type: "int", nullable: true })
+  servedWaitTime: number | null;
+
+  /** Which model produced {@link servedWaitTime}: `pcn` (override + blend) or
+   *  `catboost` (flag off, no PCN forecast for the slot, or PCN stale). NULL
+   *  exactly when `servedWaitTime` is. */
+  @Column({
+    name: "served_source",
+    type: "varchar",
+    length: 16,
+    nullable: true,
+  })
+  servedSource: "pcn" | "catboost" | null;
+
+  /** |servedWaitTime − actualWaitTime|, filled by the comparison job beside
+   *  `absoluteError`. An unplanned closure charges the full served wait, as it
+   *  does the raw one. */
+  @Column({ name: "served_absolute_error", type: "int", nullable: true })
+  servedAbsoluteError: number | null;
 
   @Column({
     type: "enum",

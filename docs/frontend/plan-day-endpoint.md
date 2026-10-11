@@ -677,6 +677,16 @@ one.
 Absent on a `climatology` day: the figure measures the model, and nothing on
 that day came from it.
 
+**It measures the served number (PAR-854).** The archive snapshots what the
+calendar and this endpoint serve — TFT for headliners over days 1–60, CatBoost
+where TFT has nothing — and records which (`source`). Until 2026-10-11 it
+snapshotted CatBoost's raw daily answer, so the figure was CatBoost's error
+next to a TFT number. Those rows are no longer counted, which empties every
+bucket at the deploy: `leadTimeMae` is absent again until a bucket has 100
+scored served rows — roughly lead + 2 nights (d1 ≈ 3 days, d7 ≈ 9, d14 ≈ 16,
+d30 ≈ 32, d60 ≈ 62). See
+[Reader-facing accuracy figures](../ml/reader-facing-accuracy.md).
+
 ## 8. Shows
 
 `shows` carries the day's programme, and `source` says who it came from.

@@ -4,7 +4,10 @@ import { Job } from "bull";
 import { Redis } from "ioredis";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, LessThan } from "typeorm";
-import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
+import {
+  PredictionAccuracyService,
+  servedAttractionStatsRow,
+} from "../../ml/services/prediction-accuracy.service";
 import { AttractionAccuracyStats } from "../../ml/entities/attraction-accuracy-stats.entity";
 import { PredictionAccuracy } from "../../ml/entities/prediction-accuracy.entity";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
@@ -84,13 +87,24 @@ export class PredictionAccuracyProcessor {
       // We additionally filter out unplanned closures, low wait times (< 5 min)
       // and implausible data-source sentinels (> MAX_PLAUSIBLE_WAIT_TIME) to
       // align with the ML training set and remove noise.
+      //
+      // SERVED basis (PAR-854): the error is `served_absolute_error` — what the
+      // reader was shown, PCN + blend where it served — and only rows that
+      // recorded a served value count. The GROUP BY still runs over every
+      // completed row, so a ride with only pre-PAR-854 (CatBoost) rows comes
+      // back with zero compared predictions and is rewritten as
+      // `insufficient_data` instead of keeping its CatBoost badge.
       const results = await this.accuracyRepository.query(
         `
         SELECT
           attraction_id,
-          COUNT(*) as total_predictions,
-          COUNT(CASE WHEN actual_wait_time >= 5 AND actual_wait_time <= $2 AND "wasUnplannedClosure" = false THEN 1 END) as compared_predictions,
-          AVG(absolute_error) FILTER (WHERE actual_wait_time >= 5 AND actual_wait_time <= $2 AND "wasUnplannedClosure" = false) as mae
+          COUNT(*) FILTER (WHERE served_source IS NOT NULL) as total_predictions,
+          COUNT(*) FILTER (WHERE served_source IS NOT NULL AND actual_wait_time >= 5 AND actual_wait_time <= $2 AND "wasUnplannedClosure" = false) as compared_predictions,
+          AVG(served_absolute_error) FILTER (WHERE served_source IS NOT NULL AND actual_wait_time >= 5 AND actual_wait_time <= $2 AND "wasUnplannedClosure" = false) as mae,
+          -- Raw CatBoost error over every compared row, for the ride day curve,
+          -- which draws CatBoost's own forecast (see AttractionAccuracyStats.rawMae).
+          COUNT(*) FILTER (WHERE actual_wait_time >= 5 AND actual_wait_time <= $2 AND "wasUnplannedClosure" = false) as raw_compared_predictions,
+          AVG(absolute_error) FILTER (WHERE actual_wait_time >= 5 AND actual_wait_time <= $2 AND "wasUnplannedClosure" = false) as raw_mae
         FROM prediction_accuracy
         WHERE comparison_status = 'COMPLETED'
           AND target_time >= $1
@@ -102,54 +116,12 @@ export class PredictionAccuracyProcessor {
       // Build every row first, then write them in chunks. The per-attraction
       // upsert this replaces issued one statement per attraction — thousands of
       // round-trips for a job whose input is a single GROUP BY.
-      const statsRows = results.map(
-        (row: {
-          attraction_id: string;
-          mae: string;
-          compared_predictions: string;
-          total_predictions: string;
-        }) => {
-          const mae = parseFloat(row.mae) || 0;
-          const comparedPredictions = parseInt(row.compared_predictions) || 0;
-          const totalPredictions = parseInt(row.total_predictions) || 0;
-
-          // Calculate badge
-          let badge:
-            "excellent" | "good" | "fair" | "poor" | "insufficient_data";
-          let message: string | null = null;
-
-          if (comparedPredictions < 10) {
-            badge = "insufficient_data";
-            message = `Need at least 10 compared predictions (currently ${comparedPredictions})`;
-          } else if (mae < 5) {
-            badge = "excellent";
-            message = "Predictions are highly accurate (±5 min average error)";
-          } else if (mae < 10) {
-            badge = "good";
-            message =
-              "Predictions are reliable for planning (±10 min average error)";
-          } else if (mae < 15) {
-            badge = "fair";
-            message =
-              "Predictions provide general guidance (±15 min average error)";
-          } else {
-            badge = "poor";
-            message = `Predictions need improvement (${Math.round(mae)} min average error)`;
-          }
-
-          return {
-            attractionId: row.attraction_id,
-            mae: Math.round(mae * 10) / 10,
-            comparedPredictions,
-            totalPredictions,
-            badge,
-            message,
-          };
-        },
-      );
+      const statsRows = (
+        results as Parameters<typeof servedAttractionStatsRow>[0][]
+      ).map(servedAttractionStatsRow);
 
       // Keep each statement well under Postgres' 65535-parameter limit
-      // (6 columns per row → 1000 rows leaves ample headroom).
+      // (7 columns per row → 1000 rows leaves ample headroom).
       const CHUNK = 1000;
       for (let i = 0; i < statsRows.length; i += CHUNK) {
         await this.statsRepository.upsert(statsRows.slice(i, i + CHUNK), [
@@ -157,6 +129,16 @@ export class PredictionAccuracyProcessor {
         ]);
       }
       const upsertCount = statsRows.length;
+
+      // A ride with no completed row in the window got no row above, so its
+      // stats row would keep whatever an earlier run wrote — before PAR-854, a
+      // CatBoost badge. Nothing measured it; nothing should be shown for it.
+      const kept = statsRows.map((r) => r.attractionId);
+      await this.statsRepository.query(
+        `DELETE FROM attraction_accuracy_stats
+          WHERE NOT (attraction_id::text = ANY($1::text[]))`,
+        [kept],
+      );
 
       await this.redis.set(
         "ml:accuracy:last_aggregation",

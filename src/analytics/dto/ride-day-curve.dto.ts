@@ -94,7 +94,9 @@ export class RideDayCurveDto {
     example: 6.8,
     nullable: true,
     description:
-      "The model's current mean absolute error in minutes, for a caller that " +
+      "The ride's mean absolute error in minutes for the model this curve " +
+      "plots (raw CatBoost hourly — the same model as `forecast` and " +
+      "`predicted`), for a caller that " +
       "wants to draw the forecast as a band rather than a line. Null when the " +
       "model has not been scored yet. It is a published, measured figure — do " +
       "NOT widen it with the forecast horizon, which nothing here measures.",

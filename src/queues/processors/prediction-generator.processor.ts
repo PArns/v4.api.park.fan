@@ -336,8 +336,24 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
                 // generate daily predictions" and counted against that park,
                 // sending the next person to look at the model rather than at
                 // this table — while the predictions themselves were stored fine.
-                await this.leadSnapshotService
-                  .snapshotPark(park, response.predictions, runStartedAt)
+                //
+                // What is recorded is the SERVED answer (PAR-854), not the raw
+                // CatBoost response stored above: the calendar and `/plan/day`
+                // show TFT for headliners over days 1-60, so the error published
+                // as `leadTimeMae` has to be TFT's there. The served read hits the
+                // daily cache this run just filled (its key carries no live
+                // status) plus one TFT query, so it costs no second model call.
+                // If it fails nothing is recorded: snapshotting the raw answer
+                // instead would put CatBoost's number under a served label.
+                await this.mlService
+                  .getServingDailyPredictions(park.id)
+                  .then((served) =>
+                    this.leadSnapshotService.snapshotPark(
+                      park,
+                      served.predictions,
+                      runStartedAt,
+                    ),
+                  )
                   .catch((error: Error) => {
                     this.logger.warn(
                       `Lead snapshot failed for park ${park.name}: ${error.message}`,

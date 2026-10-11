@@ -57,6 +57,144 @@ export type ServedIntradayAccuracy = {
   days: number;
 };
 
+/**
+ * The served value recorded beside a raw CatBoost row (PAR-854). See
+ * `MLService.servedIntradayValues` for how it is computed and
+ * `PredictionAccuracy.servedWaitTime` for why it is stored.
+ */
+export type ServedIntradayValue = {
+  wait: number;
+  source: "pcn" | "catboost";
+};
+
+/**
+ * Which prediction a per-ride accuracy figure scores.
+ *
+ * - `served` — what the reader was shown (`served_absolute_error`), and only on
+ *   rows that recorded it. Every reader-facing surface uses this: the badge and
+ *   the ride day-curve band.
+ * - `raw` — the CatBoost answer (`absolute_error`). The admin endpoints keep it,
+ *   because they are about the model rather than the product.
+ */
+export type AccuracyBasis = "served" | "raw";
+
+/**
+ * The column a basis scores, plus the row filter that keeps the transition
+ * honest: under `served`, a row written before PAR-854 has no served value and
+ * is left out entirely rather than counted as CatBoost.
+ */
+export function accuracyBasisSql(basis: AccuracyBasis): {
+  error: string;
+  rowFilter: string;
+} {
+  return basis === "served"
+    ? {
+        error: "served_absolute_error",
+        rowFilter: "served_source IS NOT NULL",
+      }
+    : { error: "absolute_error", rowFilter: "TRUE" };
+}
+
+export type AccuracyBadge =
+  "excellent" | "good" | "fair" | "poor" | "insufficient_data";
+
+/** Compared predictions a ride needs before it gets a badge (and a band). */
+export const MIN_BADGE_COMPARISONS = 10;
+
+/**
+ * The badge for a mean absolute error over `comparedPredictions` slots.
+ * Module-level so the hourly aggregation and the live fallback cannot drift
+ * apart — they used to carry two copies of these thresholds.
+ */
+export function accuracyBadgeFor(
+  mae: number,
+  comparedPredictions: number,
+): { badge: AccuracyBadge; message?: string } {
+  // Need MIN_BADGE_COMPARISONS comparisons for a meaningful badge
+  if (comparedPredictions < MIN_BADGE_COMPARISONS) {
+    return {
+      badge: "insufficient_data",
+      message: `Need at least 10 compared predictions (currently ${comparedPredictions})`,
+    };
+  }
+
+  if (mae < 5) {
+    return {
+      badge: "excellent",
+      message: "Predictions are highly accurate (±5 min average error)",
+    };
+  } else if (mae < 10) {
+    return {
+      badge: "good",
+      message: "Predictions are reliable for planning (±10 min average error)",
+    };
+  } else if (mae < 15) {
+    return {
+      badge: "fair",
+      message: "Predictions provide general guidance (±15 min average error)",
+    };
+  } else {
+    return {
+      badge: "poor",
+      message: `Predictions need improvement (${Math.round(mae)} min average error)`,
+    };
+  }
+}
+
+/**
+ * One `attraction_accuracy_stats` row from the aggregation's GROUP BY (PAR-854).
+ *
+ * `mae`, the counts and the badge are the SERVED rows' — the query filters them
+ * on `served_source` — so a ride that only has rows from before PAR-854 arrives
+ * with zero compared predictions and is written as `insufficient_data` with a
+ * NULL `mae`, replacing the CatBoost badge it had rather than keeping it.
+ *
+ * `rawMae` is CatBoost's own error over every compared row, for the one
+ * surface that draws CatBoost's curve (the ride day curve), and is NULL below
+ * the same sample floor.
+ */
+export function servedAttractionStatsRow(row: {
+  attraction_id: string;
+  mae: string | null;
+  compared_predictions: string;
+  total_predictions: string;
+  raw_mae?: string | null;
+  raw_compared_predictions?: string;
+}): {
+  attractionId: string;
+  mae: number | null;
+  rawMae: number | null;
+  comparedPredictions: number;
+  totalPredictions: number;
+  badge: AccuracyBadge;
+  message: string | null;
+} {
+  const round1 = (v: string | null | undefined, n: number): number | null => {
+    const parsed = v == null ? NaN : parseFloat(v);
+    return n > 0 && Number.isFinite(parsed)
+      ? Math.round(parsed * 10) / 10
+      : null;
+  };
+  const comparedPredictions = parseInt(row.compared_predictions) || 0;
+  const totalPredictions = parseInt(row.total_predictions) || 0;
+  const rawCompared = parseInt(row.raw_compared_predictions ?? "0") || 0;
+  const mae = round1(row.mae, comparedPredictions);
+  const rawMae =
+    rawCompared >= MIN_BADGE_COMPARISONS
+      ? round1(row.raw_mae, rawCompared)
+      : null;
+  const { badge, message } = accuracyBadgeFor(mae ?? 0, comparedPredictions);
+  return {
+    attractionId: row.attraction_id,
+    mae,
+    rawMae,
+    comparedPredictions,
+    totalPredictions,
+    badge,
+    message: message ?? null,
+  };
+}
+
 /** Best/worst-predicted attractions board (shared by the CatBoost hourly and TFT
  *  daily performer endpoints). */
 export type TopBottomPerformers = {
@@ -172,12 +310,27 @@ export class PredictionAccuracyService {
    * fsync. Safe here because accuracy rows are regenerable telemetry — losing
    * the last few hundred ms of them on a crash has no correctness impact.
    *
+   * `served` runs parallel to `predictions` (same index) and carries what the
+   * reader was shown for that slot at this moment (PAR-854), or `null` for a
+   * slot too close to score (see `SERVED_ACCURACY_MIN_LEAD_MS`). Rows with a
+   * served value are upserted WITH the served columns; the others WITHOUT them,
+   * in their own statements — TypeORM's upsert overwrites a column for every
+   * row of a statement as soon as one row carries it, so mixing the two would
+   * write NULL over the served value an earlier, longer-lead run recorded. The
+   * raw columns keep the latest write either way, as before. A row that never
+   * got a served value stays NULL there and does not count towards the badge.
+   *
    * @returns the number of predictions written
    */
-  async recordPredictions(predictions: WaitTimePrediction[]): Promise<number> {
+  async recordPredictions(
+    predictions: WaitTimePrediction[],
+    served?: Array<ServedIntradayValue | null>,
+  ): Promise<number> {
     if (!predictions || predictions.length === 0) return 0;
 
-    const rows = predictions.map((prediction) => {
+    const withServed: PredictionAccuracy[] = [];
+    const withoutServed: PredictionAccuracy[] = [];
+    predictions.forEach((prediction, i) => {
       const accuracy = new PredictionAccuracy();
       accuracy.attractionId = prediction.attractionId;
       accuracy.predictionTime = prediction.createdAt;
@@ -186,7 +339,16 @@ export class PredictionAccuracyService {
       accuracy.modelVersion = prediction.modelVersion;
       accuracy.predictionType = prediction.predictionType;
       accuracy.features = prediction.features;
-      return accuracy;
+      const s = served?.[i];
+      if (s) {
+        accuracy.servedWaitTime = s.wait;
+        accuracy.servedSource = s.source;
+        withServed.push(accuracy);
+      } else {
+        // Left undefined, not null: undefined keeps the column out of the
+        // statement, null would overwrite what is there.
+        withoutServed.push(accuracy);
+      }
     });
 
     // Keep each statement well under Postgres' 65535-parameter limit
@@ -196,15 +358,17 @@ export class PredictionAccuracyService {
     await this.accuracyRepository.manager.transaction(async (em) => {
       await em.query("SET LOCAL synchronous_commit = off");
       const repo = em.getRepository(PredictionAccuracy);
-      for (let i = 0; i < rows.length; i += CHUNK) {
-        await repo.upsert(rows.slice(i, i + CHUNK) as any, {
-          conflictPaths: ["attractionId", "targetTime"],
-          skipUpdateIfNoValuesChanged: false,
-        });
+      for (const group of [withServed, withoutServed]) {
+        for (let i = 0; i < group.length; i += CHUNK) {
+          await repo.upsert(group.slice(i, i + CHUNK) as any, {
+            conflictPaths: ["attractionId", "targetTime"],
+            skipUpdateIfNoValuesChanged: false,
+          });
+        }
       }
     });
 
-    return rows.length;
+    return withServed.length + withoutServed.length;
   }
 
   /**
@@ -278,6 +442,7 @@ export class PredictionAccuracyService {
         "attractionId",
         "targetTime",
         "predictedWaitTime",
+        "servedWaitTime",
         "predictionType",
         "features",
       ], // Select only needed fields
@@ -388,6 +553,10 @@ export class PredictionAccuracyService {
           prediction.absoluteError = Math.abs(
             prediction.predictedWaitTime - bestMatch.waitTime,
           );
+          prediction.servedAbsoluteError =
+            prediction.servedWaitTime == null
+              ? null
+              : Math.abs(prediction.servedWaitTime - bestMatch.waitTime);
           if (bestMatch.waitTime > 0) {
             prediction.percentageError =
               (prediction.absoluteError / bestMatch.waitTime) * 100;
@@ -417,6 +586,7 @@ export class PredictionAccuracyService {
           prediction.wasUnplannedClosure = true;
           prediction.actualWaitTime = 0; // Effectively 0 wait time, but not "free"
           prediction.absoluteError = prediction.predictedWaitTime; // Full error
+          prediction.servedAbsoluteError = prediction.servedWaitTime; // Same rule, served side
           prediction.percentageError = null;
           unplannedClosures++;
           completed++;
@@ -462,14 +632,16 @@ export class PredictionAccuracyService {
              actual_wait_time     = u.actual_wait_time::int,
              absolute_error       = u.absolute_error::int,
              percentage_error     = u.percentage_error::float,
-             "wasUnplannedClosure" = u.was_unplanned_closure::boolean
+             "wasUnplannedClosure" = u.was_unplanned_closure::boolean,
+             served_absolute_error = u.served_absolute_error::int
            FROM unnest(
              $1::uuid[],
              $2::int[],
              $3::int[],
              $4::float[],
-             $5::boolean[]
-           ) AS u(id, actual_wait_time, absolute_error, percentage_error, was_unplanned_closure)
+             $5::boolean[],
+             $6::int[]
+           ) AS u(id, actual_wait_time, absolute_error, percentage_error, was_unplanned_closure, served_absolute_error)
            WHERE pa.id = u.id`,
           [
             completed.map((u) => u.id),
@@ -477,6 +649,7 @@ export class PredictionAccuracyService {
             completed.map((u) => u.absoluteError ?? 0),
             completed.map((u) => u.percentageError ?? null),
             completed.map((u) => u.wasUnplannedClosure ?? false),
+            completed.map((u) => u.servedAbsoluteError ?? null),
           ],
         );
       }
@@ -526,6 +699,7 @@ export class PredictionAccuracyService {
   async getAttractionAccuracyStats(
     attractionId: string,
     days: number = 30,
+    basis: AccuracyBasis = "raw",
   ): Promise<{
     totalPredictions: number;
     comparedPredictions: number;
@@ -534,6 +708,7 @@ export class PredictionAccuracyService {
     rmse: number;
   }> {
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const col = accuracyBasisSql(basis);
 
     const [result] = await this.accuracyRepository.query(
       `
@@ -543,18 +718,21 @@ export class PredictionAccuracyService {
                     AND actual_wait_time >= 5
                     AND actual_wait_time <= $3
                     AND "wasUnplannedClosure" = false THEN 1 END) AS compared_predictions,
-        AVG(absolute_error)
+        AVG(${col.error})
           FILTER (WHERE comparison_status = 'COMPLETED'
                     AND actual_wait_time >= 5
                     AND actual_wait_time <= $3
                     AND "wasUnplannedClosure" = false) AS mae,
+        -- MAPE has no served counterpart column; it stays a raw-basis figure
+        -- and is reported as 0 on the served basis rather than as CatBoost's.
         AVG(percentage_error)
           FILTER (WHERE comparison_status = 'COMPLETED'
                     AND actual_wait_time >= 5
                     AND actual_wait_time <= $3
                     AND "wasUnplannedClosure" = false
-                    AND percentage_error IS NOT NULL) AS mape,
-        SQRT(AVG(absolute_error * absolute_error)
+                    AND percentage_error IS NOT NULL
+                    AND ${basis === "raw" ? "TRUE" : "FALSE"}) AS mape,
+        SQRT(AVG(${col.error} * ${col.error})
           FILTER (WHERE comparison_status = 'COMPLETED'
                     AND actual_wait_time >= 5
                     AND actual_wait_time <= $3
@@ -562,6 +740,7 @@ export class PredictionAccuracyService {
       FROM prediction_accuracy
       WHERE attraction_id = $1
         AND target_time >= $2
+        AND ${col.rowFilter}
       `,
       [attractionId, startDate, MAX_PLAUSIBLE_WAIT_TIME],
     );
@@ -641,39 +820,10 @@ export class PredictionAccuracyService {
     mae: number,
     comparedPredictions: number,
   ): {
-    badge: "excellent" | "good" | "fair" | "poor" | "insufficient_data";
+    badge: AccuracyBadge;
     message?: string;
   } {
-    // Need at least 10 comparisons for meaningful badge
-    if (comparedPredictions < 10) {
-      return {
-        badge: "insufficient_data",
-        message: `Need at least 10 compared predictions (currently ${comparedPredictions})`,
-      };
-    }
-
-    if (mae < 5) {
-      return {
-        badge: "excellent",
-        message: "Predictions are highly accurate (±5 min average error)",
-      };
-    } else if (mae < 10) {
-      return {
-        badge: "good",
-        message:
-          "Predictions are reliable for planning (±10 min average error)",
-      };
-    } else if (mae < 15) {
-      return {
-        badge: "fair",
-        message: "Predictions provide general guidance (±15 min average error)",
-      };
-    } else {
-      return {
-        badge: "poor",
-        message: `Predictions need improvement (${Math.round(mae)} min average error)`,
-      };
-    }
+    return accuracyBadgeFor(mae, comparedPredictions);
   }
 
   /**
@@ -816,13 +966,19 @@ export class PredictionAccuracyService {
    *   L1 — Redis (30min TTL): avoids DB on repeated requests
    *   L2 — attraction_accuracy_stats: pre-aggregated by hourly cron, single PK lookup
    *   L3 — prediction_accuracy (aggregate SQL): fallback for new rides not yet aggregated
+   *
+   * Every tier scores the SERVED prediction (PAR-854), and only rows that
+   * recorded one: a ride whose served rows have not reached the badge's sample
+   * floor reads `insufficient_data` — never a CatBoost figure standing in.
    */
   async getAttractionAccuracyWithBadge(
     attractionId: string,
     days: number = 30,
   ): Promise<AccuracyBadgeResult> {
     // L1: Redis cache (safeJsonParse: corrupt entry = miss, fall to L2)
-    const cacheKey = `accuracy:badge:${attractionId}:${days}d`;
+    // `v2` since PAR-854 changed what the badge measures; the old key would
+    // keep serving a CatBoost badge for its TTL after a deploy.
+    const cacheKey = `accuracy:badge:v2:${attractionId}:${days}d`;
     const cached = safeJsonParse<AccuracyBadgeResult>(
       await this.redis.get(cacheKey),
     );
@@ -859,7 +1015,11 @@ export class PredictionAccuracyService {
       };
     } else {
       // L3: raw aggregate SQL fallback for rides not yet in attraction_accuracy_stats
-      const stats = await this.getAttractionAccuracyStats(attractionId, days);
+      const stats = await this.getAttractionAccuracyStats(
+        attractionId,
+        days,
+        "served",
+      );
       const badgeInfo = this.calculateAccuracyBadge(
         stats.averageAbsoluteError,
         stats.comparedPredictions,
@@ -938,10 +1098,13 @@ export class PredictionAccuracyService {
           attraction_id as "attractionId",
           COUNT(*) as "totalPredictions",
           COUNT(CASE WHEN actual_wait_time >= 5 AND actual_wait_time <= $3 AND "wasUnplannedClosure" = false THEN 1 END) as "comparedPredictions",
-          COALESCE(AVG(absolute_error) FILTER (WHERE actual_wait_time >= 5 AND actual_wait_time <= $3 AND "wasUnplannedClosure" = false), 0) as "mae"
+          COALESCE(AVG(served_absolute_error) FILTER (WHERE actual_wait_time >= 5 AND actual_wait_time <= $3 AND "wasUnplannedClosure" = false), 0) as "mae"
         FROM prediction_accuracy
         WHERE attraction_id = ANY($1)
           AND target_time >= $2
+          -- Served basis (PAR-854): rows from before the served column count
+          -- for nothing, so the badge cannot be a CatBoost figure.
+          AND served_source IS NOT NULL
         GROUP BY attraction_id
         `,
         [attractionIds, startDate, MAX_PLAUSIBLE_WAIT_TIME],
