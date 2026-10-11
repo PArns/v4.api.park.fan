@@ -1,8 +1,11 @@
 import {
+  MAZE_NAME_LABELS,
   MAZE_NAME_TOKENS,
   MAZE_SEASON_MONTHS,
+  SCARE_ZONE_NAME_LABELS,
   isMazeByRule,
   isMazeName,
+  mazeNameLabel,
   mazeNamePatternSql,
   mazeSeasonEvidenceMonths,
   type MazeRuleRow,
@@ -72,6 +75,80 @@ describe("isMazeName", () => {
   it("builds the SQL pattern from the same tokens", () => {
     const pattern = mazeNamePatternSql();
     expect(pattern).toBe(`(^|[^[:alnum:]])(${MAZE_NAME_TOKENS.join("|")})`);
+  });
+});
+
+/**
+ * The rubric a feed writes into the name. Every fixture is a production row as
+ * of 2026-10-11, and the three LEGOLAND/Lotte World rows at the bottom are the
+ * reason the match is anchored to a delimited segment: a loose search for
+ * `haunted house` files three year-round walk-throughs as Halloween mazes.
+ */
+describe("mazeNameLabel", () => {
+  it.each([
+    ["Purgatory Town | Scare Zone", "Thorpe Park, rubric after the pipe"],
+    ["Creature Campus | Scare Zone", "same"],
+    ["Lucifer's Lair | Scare Zone", "same"],
+    ["Scare Zone: M3GAN", "Universal Studios Beijing, rubric before the colon"],
+    ["Scare Zone: Mel's Die In", "same"],
+    ["SCARE ZONE: shouting it", "the comparison drops case"],
+    ["Zone | Scare-Zone", "and punctuation"],
+  ])("reads %s as a scare zone (%s)", (name) => {
+    expect(mazeNameLabel(name)).toBe("SCARE_ZONE");
+  });
+
+  it.each([
+    ["DeadBeat | Scare Maze", "Thorpe Park"],
+    ["The Tenement | Scare Maze", "same"],
+    ["HAUNTED HOUSE: Big Top Terror", "Six Flags Great America"],
+    [
+      "HAUNTED HOUSE: SAW: Legacy of Terror",
+      "the prefix stops at the first colon",
+    ],
+    [
+      "Tartaros | Haunted Maze",
+      "the event pages' own heading, not yet in a feed",
+    ],
+  ])("reads %s as a maze (%s)", (name) => {
+    expect(mazeNameLabel(name)).toBe("MAZE");
+  });
+
+  it.each([
+    [
+      "Ghost – The Haunted House",
+      "LEGOLAND Billund, a year-round walk-through",
+    ],
+    ["Haunted House Monster Party", "LEGOLAND Windsor, same"],
+    ["Haunted House", "Lotte World Adventure, same"],
+    [
+      "The Catacombs Haunted House",
+      "Parc Asterix, the rubric is not a segment",
+    ],
+    ["Cirkus Bezerkus: Big Top Terror", "a prefix that is not a rubric"],
+    ["Creature Campus | Reunion Reckoning", "a suffix that is not a rubric"],
+    ["Fire Show | Lucifer's Lair", "the zone's name, not the rubric"],
+    ["IT: The 4D Experience® | Ages 15+", "an age rating"],
+    ["Fear Acres", "no delimiter at all"],
+  ])("reads no rubric in %s (%s)", (name) => {
+    expect(mazeNameLabel(name)).toBeNull();
+  });
+
+  /**
+   * A row labelled both ways is not evidence of either. `NULL` means "not
+   * decided yet" and costs a reader nothing; a wrong `MAZE` is a claim.
+   */
+  it("lets the scare zone win when a name carries both rubrics", () => {
+    expect(mazeNameLabel("Scare Zone: Something | Scare Maze")).toBe(
+      "SCARE_ZONE",
+    );
+  });
+
+  it("keeps both vocabularies normalised the way the match expects", () => {
+    // The segment is compared by equality after its punctuation and case come
+    // off, so an entry carrying either would never match anything.
+    for (const label of [...MAZE_NAME_LABELS, ...SCARE_ZONE_NAME_LABELS]) {
+      expect(label).toMatch(/^[a-z0-9]+$/);
+    }
   });
 });
 
@@ -211,6 +288,83 @@ describe("isMazeByRule", () => {
   it("holds the autumn window at September to November", () => {
     expect([...MAZE_SEASON_MONTHS]).toEqual([9, 10, 11]);
   });
+
+  /**
+   * The error PAR-835 is about. `Purgatory Town | Scare Zone` is an open-air
+   * area with scare actors at Thorpe Park's Fright Nights: the name matches
+   * `scare`, the season is the same Halloween season as the mazes beside it,
+   * and the row is still not a walk-through horror attraction.
+   */
+  it("refuses a scare zone even though name, season and window all hold", () => {
+    const scareZone = { ...maze, name: "Purgatory Town | Scare Zone" };
+    expect(isMazeName(scareZone.name)).toBe(true);
+    expect(mazeSeasonEvidenceMonths(scareZone)).toEqual([9, 10, 11]);
+    expect(isMazeByRule(scareZone)).toBe(false);
+  });
+
+  it("refuses a scare zone the park's own Halloween months would have taken", () => {
+    expect(
+      isMazeByRule(
+        {
+          ...maze,
+          name: "Scare Zone: M3GAN",
+          seasonMonths: null,
+          seasonOutSince: "2026-08-20",
+        },
+        [8, 9],
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * The other half of the change: a park that files a row under its own
+   * haunted-house heading has said what the season gate was guessing at. Both
+   * of these are production rows that sat unjudged because `detect-seasonal`
+   * never flagged them.
+   */
+  it("takes a maze label without any season evidence", () => {
+    const unflagged = {
+      name: "HAUNTED HOUSE: Big Top Terror",
+      isSeasonal: false,
+      seasonMonths: null,
+      seasonOutSince: null,
+    };
+    expect(mazeSeasonEvidenceMonths(unflagged)).toBeNull();
+    expect(isMazeByRule(unflagged)).toBe(true);
+    expect(isMazeByRule({ ...unflagged, name: "DeadBeat | Scare Maze" })).toBe(
+      true,
+    );
+  });
+
+  /**
+   * The label drops the season gate, not the whole rule — without a label the
+   * same row stays out, which is what makes the test above a statement about
+   * the label rather than about the fixture.
+   */
+  it("keeps an unflagged row out when it carries no label", () => {
+    expect(
+      isMazeByRule({
+        name: "Big Top Terror",
+        isSeasonal: false,
+        seasonMonths: null,
+        seasonOutSince: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not let a maze label reach past a summer season it never needed", () => {
+    // The label answers the season question outright, so a summer month is
+    // not a counter-argument any more. Stated here so the next reader does
+    // not take the summer case above as a general guarantee.
+    expect(
+      isMazeByRule({
+        name: "Tartaros | Haunted Maze",
+        isSeasonal: true,
+        seasonMonths: [6, 7],
+        seasonOutSince: null,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("selectMazeRows", () => {
@@ -304,6 +458,59 @@ describe("selectMazeRows", () => {
       }),
     ];
     expect(select(rows, [["park-1", [8, 9]]])).toEqual(["a"]);
+  });
+
+  /**
+   * The guarantee of the whole change, at the level the processor calls: a
+   * labelled scare zone stays out and a labelled maze comes in, and the
+   * editor's verdict still wins over both.
+   */
+  it("reads the rubric a feed wrote into the name", () => {
+    expect(
+      select([
+        row({ id: "zone", name: "Purgatory Town | Scare Zone" }),
+        row({
+          id: "house",
+          name: "HAUNTED HOUSE: Big Top Terror",
+          isSeasonal: false,
+          seasonMonths: null,
+        }),
+      ]),
+    ).toEqual(["house"]);
+  });
+
+  it("leaves a labelled row alone once somebody has judged it", () => {
+    expect(
+      select([
+        row({
+          name: "HAUNTED HOUSE: Big Top Terror",
+          attractionKind: "WALKTHROUGH",
+          isSeasonal: false,
+          seasonMonths: null,
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("reads the rubric off the curated name when there is one", () => {
+    // The curated name is the one a visitor sees, so it is also the one whose
+    // rubric counts — in both directions.
+    expect(
+      select([
+        row({
+          name: "Purgatory Town | Scare Zone",
+          curatedName: "Purgatory Town | Scare Maze",
+        }),
+      ]),
+    ).toEqual(["row-1"]);
+    expect(
+      select([
+        row({
+          name: "DeadBeat | Scare Maze",
+          curatedName: "DeadBeat | Scare Zone",
+        }),
+      ]),
+    ).toEqual([]);
   });
 
   it("keeps the water park out", () => {

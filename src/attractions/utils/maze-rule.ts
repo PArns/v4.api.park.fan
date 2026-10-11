@@ -15,6 +15,17 @@ import {
  * `Geisterbahn` run all year; the season is not, because a water park's whole
  * slide inventory is seasonal and stops in September.
  *
+ * ## Unless the park wrote its own rubric into the name
+ *
+ * The three conditions above are circumstantial evidence, and they cannot tell
+ * a walk-through maze from a **scare zone** — an open-air area with scare
+ * actors and no house, which carries the same tokens and the same autumn
+ * season. Every Halloween event page lists the two under separate headings,
+ * and a handful of feeds write that heading into the name they publish. Where
+ * they do, it is the park's own statement about the thing, so it decides on its
+ * own: a scare-zone label refuses the row whatever the season says, and a maze
+ * label files it without the season gate. See `mazeNameLabel`.
+ *
  * ## It only ever fills a blank
  *
  * The rule writes where `attraction_kind IS NULL` and nowhere else. An editor's
@@ -33,6 +44,20 @@ import {
  * twelve evenings in October and then loses its wiki id reaches neither. The
  * remainder is hand work (PAR-727), and a pattern that keeps turning up there
  * belongs in the token list below rather than in another round of writes.
+ *
+ * The rubric changed both ends of that, measured against all 7,580 production
+ * rows on 2026-10-11 by running this file and its `origin/main` version over
+ * the same export:
+ *
+ * - **It writes 2 rows the season gate had locked out**, both of Six Flags
+ *   Great America's unjudged `HAUNTED HOUSE:` rows.
+ * - **It refuses 8 rows, as soon as the detector reaches them.** None of the
+ *   eight scare zones is flagged seasonal today, so the old rule missed them
+ *   by accident rather than by judgement; four of them (Universal Studios
+ *   Beijing) already clear `MIN_EVER_OPERATING` with 216 observed OPERATING
+ *   rows and become candidates once their event ends.
+ * - It contradicts no verdict already on a row: of the 114 judged rows it
+ *   would write 17 if their field were blank, and all 17 read `MAZE`.
  */
 
 /** Months a Halloween season can fall in, when no park season says otherwise. */
@@ -114,6 +139,81 @@ export function isMazeName(name: string): boolean {
 }
 
 /**
+ * Event rubrics that mean "walk-through maze", normalised (see `labelOf`).
+ *
+ * `scaremaze` is Thorpe Park's Fright Nights heading and `hauntedhouse` is Six
+ * Flags Great America's; both write it into the published name. `hauntedmaze`
+ * is the heading the event pages themselves use ("Haunted Mazes" next to
+ * "Scare Zones") and no production row carries it yet — it is here because a
+ * feed adopting its own park's wording is the likely next shape, and the
+ * segment match below makes an unused entry free.
+ */
+export const MAZE_NAME_LABELS: readonly string[] = [
+  "scaremaze",
+  "hauntedhouse",
+  "hauntedmaze",
+];
+
+/** Event rubrics that mean "open-air scare zone", normalised. */
+export const SCARE_ZONE_NAME_LABELS: readonly string[] = ["scarezone"];
+
+/**
+ * A label segment reduced to its letters and digits, lowercased.
+ *
+ * `HAUNTED HOUSE`, `Haunted House` and `Haunted-House` are one rubric written
+ * three ways, and the comparison below is an equality rather than a search, so
+ * the spelling has to come off before it.
+ */
+function labelOf(segment: string): string {
+  return segment.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/**
+ * The two places a feed puts the rubric, and nowhere else.
+ *
+ * Measured against all 7,580 production names on 2026-10-11: 16 rows carry a
+ * `|` and all of them use it as `<name> | <rubric>` (Thorpe Park: `Scare
+ * Maze`, `Scare Zone`, `Lucifer's Lair`, `Reunion Reckoning`, `Ages 15+`), and
+ * the rubric before a colon is Six Flags Great America's `HAUNTED HOUSE: …`.
+ *
+ * **The delimiter is what makes this safe**, and it is the whole reason the
+ * rubric is matched as a segment rather than anywhere in the name: `haunted
+ * house` searched loosely also claims `Ghost – The Haunted House` (LEGOLAND
+ * Billund), `Haunted House Monster Party` (LEGOLAND Windsor) and Lotte World's
+ * `Haunted House` — three year-round walk-throughs with no Halloween event
+ * behind them, which is the second error class of PAR-835 rather than the
+ * first. Anchored to a segment, all three fall away.
+ *
+ * The prefix stops at the FIRST colon, because `HAUNTED HOUSE: SAW: Legacy of
+ * Terror` has two.
+ */
+function labelSegments(name: string): string[] {
+  const segments: string[] = [];
+  const colon = name.indexOf(":");
+  if (colon > 0) segments.push(name.slice(0, colon));
+  const pipe = name.lastIndexOf("|");
+  if (pipe >= 0) segments.push(name.slice(pipe + 1));
+  return segments;
+}
+
+/**
+ * The rubric the park wrote into the name, when it wrote one.
+ *
+ * `"SCARE_ZONE"` wins over `"MAZE"` when a name somehow carries both. A row
+ * labelled two contradictory ways is not evidence of either, and refusing it
+ * is the cheap outcome: `attraction_kind IS NULL` means "not decided yet" and
+ * costs a reader nothing, while a wrong `MAZE` is a visible claim.
+ */
+export function mazeNameLabel(name: string): "MAZE" | "SCARE_ZONE" | null {
+  const labels = labelSegments(name).map(labelOf);
+  if (labels.some((label) => SCARE_ZONE_NAME_LABELS.includes(label))) {
+    return "SCARE_ZONE";
+  }
+  if (labels.some((label) => MAZE_NAME_LABELS.includes(label))) return "MAZE";
+  return null;
+}
+
+/**
  * Which months this attraction's season is known to touch, or null.
  *
  * Two sources, in this order, because only 18 of 1,098 seasonal rows in
@@ -147,8 +247,17 @@ export function mazeSeasonEvidenceMonths(
 /**
  * Whether the rule files this row as `MAZE`.
  *
- * All three conditions, and the caller has already established that
- * `attraction_kind` is null.
+ * The park's own rubric decides alone where there is one (`mazeNameLabel`);
+ * otherwise all three circumstantial conditions have to hold. Either way the
+ * caller has already established that `attraction_kind` is null.
+ *
+ * **The maze label drops the season gate**, and that is the point of it: the
+ * gate is a proxy for "runs only during the event", and `detect-seasonal`
+ * misses exactly the attractions that run twelve evenings in October — it
+ * wants ≥ 20 observed OPERATING rows and a current CLOSED from the feed. Two
+ * of Six Flags Great America's five `HAUNTED HOUSE:` rows sat unjudged for
+ * that reason alone. A park that files a row under its own haunted-house
+ * heading has already said the thing the gate was guessing at.
  *
  * @param facts - Resolved curated facts for the row (curated before detected).
  * @param halloweenMonths - Months any non-cancelled `halloween` park season of
@@ -165,6 +274,9 @@ export function isMazeByRule(
   >,
   halloweenMonths: readonly number[] = [],
 ): boolean {
+  const label = mazeNameLabel(facts.name);
+  if (label === "SCARE_ZONE") return false;
+  if (label === "MAZE") return true;
   if (!isMazeName(facts.name)) return false;
   const evidence = mazeSeasonEvidenceMonths(facts);
   if (!evidence) return false;
