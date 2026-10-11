@@ -1,0 +1,281 @@
+{
+  "_about": "Offline verdicts per question x model for the admin model comparison (PAR-855). Seeded from the approved mockup's matrix, whose notes summarise ml-bench PR #445 (full period), #447 (driver_level, H5 + TFT level) and #450 (Chronos-2). state: better|worse|unclear|pending, always against what is served today for that question. diff/ciLow/ciHigh only where the run reported them against that reference; never filled in otherwise. expectedBy only for runs still in progress. note: one German sentence, shown when live data does not decide the cell. servedNotes: the note of each question's served (today) cell.",
+  "questions": {
+    "live_h0_1": {
+      "persist": {
+        "state": "better",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Auf 15 Minuten nicht zu schlagen; PCN zeigt in der ersten Stunde ohnehin fast genau diesen Wert."
+      },
+      "chronos": {
+        "state": "worse",
+        "source": "ml-bench PR #450 (Chronos-2)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "0,26 Minuten schlechter als die aktuelle Wartezeit (sicher), gemessen an 33 Tagen Februar bis Oktober in 30 Parks."
+      },
+      "h5": {
+        "state": "worse",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Ein Tagesprofil kennt die Lage von jetzt nicht und liegt kurzfristig klar hinten."
+      },
+      "fm": {
+        "state": "pending",
+        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
+        "note": "Messung läuft.",
+        "expectedBy": {
+          "date": "2026-10-12",
+          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
+        }
+      }
+    },
+    "live_h1_2": {
+      "persist": {
+        "state": "unclear",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Bei 30 Minuten noch knapp brauchbar, danach fällt die aktuelle Wartezeit zurück."
+      },
+      "chronos": {
+        "state": "better",
+        "source": "ml-bench PR #450 (Chronos-2)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Offline besser als die aktuelle Wartezeit (60 Minuten: −1,26, 120 Minuten: −2,27 Minuten Fehler, sicher); gegen PCN misst das erst das Live-Archiv."
+      },
+      "h5": {
+        "state": "worse",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Liegt hier 2 bis 4 Minuten hinter Chronos-2."
+      },
+      "tfth5": {
+        "state": "worse",
+        "source": "ml-bench PR #447 (driver_level)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Liegt hier 1,9 bis 3,8 Minuten hinter Chronos-2."
+      },
+      "fm": {
+        "state": "pending",
+        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
+        "note": "Messung läuft.",
+        "expectedBy": {
+          "date": "2026-10-12",
+          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
+        }
+      }
+    },
+    "today_h2_6": {
+      "persist": {
+        "state": "worse",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Ab 4 Stunden um 3 Minuten schlechter."
+      },
+      "tfth5": {
+        "state": "unclear",
+        "source": "ml-bench PR #447 (driver_level)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Im Herbst besser als die einfachen Werte (−0,3 Minuten), über das ganze Jahr noch nicht bestätigt."
+      },
+      "chronos": {
+        "state": "pending",
+        "source": "ml-bench PR #450 (Chronos-2)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Für diesen Abstand offline noch nicht ausgewertet; das Live-Archiv misst ihn."
+      },
+      "fm": {
+        "state": "pending",
+        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
+        "note": "Messung läuft.",
+        "expectedBy": {
+          "date": "2026-10-12",
+          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
+        }
+      }
+    },
+    "today_h6_12": {
+      "persist": {
+        "state": "worse",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Ab 4 Stunden um 3 Minuten schlechter."
+      },
+      "tfth5": {
+        "state": "unclear",
+        "source": "ml-bench PR #447 (driver_level)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Im Herbst besser als die einfachen Werte (−0,3 Minuten), über das ganze Jahr noch nicht bestätigt."
+      },
+      "chronos": {
+        "state": "pending",
+        "source": "ml-bench PR #450 (Chronos-2)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Für diesen Abstand offline noch nicht ausgewertet; das Live-Archiv misst ihn."
+      },
+      "fm": {
+        "state": "pending",
+        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
+        "note": "Messung läuft.",
+        "expectedBy": {
+          "date": "2026-10-12",
+          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
+        }
+      }
+    },
+    "plan_d0_1": {
+      "h5": {
+        "state": "unclear",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Etwa gleichauf mit dem, was wir heute zeigen."
+      },
+      "tfth5": {
+        "state": "better",
+        "diff": -0.3,
+        "source": "ml-bench PR #447 (driver_level)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Besser: −0,3 Minuten über alle Fahrgeschäfte, bei vollen Fahrgeschäften −1,4 Minuten (sicher, hält übers ganze Jahr)."
+      },
+      "chronos": {
+        "state": "pending",
+        "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
+        "note": "Der erste Lauf hatte nur Donnerstage als Starttag; der Lauf mit allen Wochentagen läuft.",
+        "expectedBy": {
+          "date": "2026-10-11",
+          "label": "Offline-Lauf, erwartet 11.10. gegen 19:00 Uhr"
+        }
+      },
+      "wkd": {
+        "state": "unclear",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Die Messlatte: etwa gleichauf mit dem, was wir heute zeigen."
+      },
+      "fm": {
+        "state": "pending",
+        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
+        "note": "Messung läuft.",
+        "expectedBy": {
+          "date": "2026-10-12",
+          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
+        }
+      }
+    },
+    "plan_d2_5": {
+      "h5": {
+        "state": "better",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Besser als heute und besser als der Wochentag-Durchschnitt (−0,14 Minuten, bei jedem Abstand sicher)."
+      },
+      "tfth5": {
+        "state": "unclear",
+        "source": "ml-bench PR #447 (driver_level)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Nur bei vollen Fahrgeschäften und nur bis 2 Tage sicher besser, ab 3 Tagen nicht mehr."
+      },
+      "chronos": {
+        "state": "pending",
+        "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
+        "note": "Der Lauf mit allen Wochentagen läuft.",
+        "expectedBy": {
+          "date": "2026-10-11",
+          "label": "Offline-Lauf, erwartet 11.10. gegen 19:00 Uhr"
+        }
+      },
+      "wkd": {
+        "state": "better",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Schon dieser einfache Wert ist ab 3 Tagen besser als das, was wir heute zeigen."
+      },
+      "fm": {
+        "state": "pending",
+        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
+        "note": "Messung läuft.",
+        "expectedBy": {
+          "date": "2026-10-12",
+          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
+        }
+      }
+    },
+    "plan_d6_60": {
+      "h5": {
+        "state": "better",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Besser als heute, aber kein Modell ist hier sicher besser als einfache Durchschnittswerte."
+      },
+      "tfth5": {
+        "state": "worse",
+        "source": "ml-bench PR #447 (driver_level)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Bei 30 Tagen sogar schlechter (+0,42 Minuten bei vollen Fahrgeschäften)."
+      },
+      "wkd": {
+        "state": "better",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Besser als das, was wir heute zeigen."
+      }
+    },
+    "plan_besttime": {
+      "h5": {
+        "state": "better",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Weniger verschenkte Wartezeit: −0,35 bis −0,42 Minuten gegenüber dem Wochentag-Durchschnitt, sicher."
+      },
+      "chronos": {
+        "state": "pending",
+        "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
+        "note": "Wird mit dem Lauf mit allen Wochentagen ausgewertet.",
+        "expectedBy": {
+          "date": "2026-10-11",
+          "label": "Offline-Lauf, erwartet 11.10. gegen 19:00 Uhr"
+        }
+      }
+    },
+    "cal_busier": {
+      "catboost": {
+        "state": "worse",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Als Tagesniveau macht CatBoost die Prognose schlechter."
+      },
+      "wkd": {
+        "state": "unclear",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Leicht besser als TFT, aber nicht sicher."
+      }
+    },
+    "cal_far": {
+      "catboost": {
+        "state": "worse",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Schlechter als TFT."
+      },
+      "wkd": {
+        "state": "worse",
+        "source": "ml-bench PR #445 (full period)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Offline schlechter als TFT in der Trefferquote."
+      }
+    }
+  },
+  "servedNotes": {
+    "live_h0_1": "Heute in der App, in der ersten Stunde stark zur aktuellen Wartezeit hin gemischt.",
+    "live_h1_2": "Heute in der App.",
+    "today_h2_6": "Heute in der App (bis 12 Stunden).",
+    "today_h6_12": "Heute in der App (bis 12 Stunden).",
+    "plan_d0_1": "Heute in der App: Stundenwerte, kein 15-Minuten-Verlauf.",
+    "plan_d2_5": "Heute in der App; ab 3 Tagen schlechter als der einfache Wochentag-Durchschnitt.",
+    "plan_d6_60": "Heute in der App, schlechter als der Wochentag-Durchschnitt.",
+    "plan_besttime": "Heute in der App.",
+    "cal_busier": "Heute im Kalender bis 60 Tage; verliert offline leicht gegen den Wochentag-Durchschnitt, nicht sicher.",
+    "cal_far": "Heute im Kalender; offline hier sicher besser als einfache Werte (+0,026 Trefferquote), der einzige Kalender-Gewinn."
+  }
+}
