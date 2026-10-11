@@ -57,6 +57,7 @@ import pandas as pd
 
 from . import baselines as B
 from .config import UC4_LEADS, BenchConfig
+from .provenance import stamp
 from .stats import Bootstrapper, ratio_ci, significant_diff
 
 UC1_KEYS = ["m015", "m030", "m045", "m060", "m075", "m090", "m105", "m120"]
@@ -1035,6 +1036,9 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
         name_parts.append(f"o{origin_from or 'start'}_{origin_to or 'end'}")
     tdir = run / ("tables_" + "_".join(name_parts) if name_parts else "tables")
     tdir.mkdir(parents=True, exist_ok=True)
+    prov = stamp()
+    report_json = run / f"report-{tdir.name}.json"
+    t_start = dt.datetime.now(dt.timezone.utc)
     out: list[str] = []
     w = out.append
     stats_p = d.export / "parquet" / "build_stats.json"
@@ -1244,10 +1248,22 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
         w(f"\n**Origin window {origin_from or 'start'} … {origin_to or 'end'}**: only forecasts made in "
           "this window are scored.\n")
     shas = sorted({m.get("git_sha", "?") for m in d.meta})
-    w(f"- code: git `{', '.join(shas)}`, sources sha256 "
+    w(f"- code that produced `parts/` (the scoring): git `{', '.join(shas)}`, sources sha256 "
       f"`{', '.join(sorted({str(m.get('code_sha256', '?'))[:16] for m in d.meta}))}`, image "
       f"`{', '.join(sorted({str(m.get('image_id', '?'))[:19] for m in d.meta}))}`; plug-ins "
       f"{sorted({x for m in d.meta for x in m.get('models', [])}) or 'none'}")
+    # The tables are written by the REPORT, which is routinely a later commit than the
+    # run: scoring sums live in `parts/`, every verdict on top of them is recomputed
+    # here. Before this line the only evidence of which code wrote a table was its
+    # mtime, and the headline tables of this very run were regenerated after the last
+    # commit of the day. `code_sha256` is measured; `git_sha` is asserted by the
+    # launcher and has been wrong in this repository (see provenance.py).
+    w(f"- code that produced THESE tables (the report): git `{prov['git_sha']}` "
+      f"(from {prov['git_sha_source']}), sources sha256 `{prov['code_sha256'][:16]}`, image "
+      f"`{str(prov['image_id'])[:19]}` — recorded in `{report_json.name}`")
+    if any(m.get("code_sha256") != d.meta[0].get("code_sha256") for m in d.meta):
+        w("- **WARNING: the shards of this run do not share one `code_sha256`** — the "
+          "scoring sums were not all produced by the same code.")
     w(f"- export: `{d.export}` (finished {manifest.get('export_finished_utc', '?')}); truth "
       f"{build_stats.get('truth_dates')}, {build_stats.get('truth_rides')} rides, {build_stats.get('truth_parks')} "
       f"parks, {build_stats.get('truth')} truth slots")
@@ -1495,6 +1511,31 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
     w(md(opn))
     name = "summary.md" if not windowed else f"summary_{tdir.name}.md"
     (run / name).write_text("\n".join(out))
+    # Provenance of THIS pass. A results dir accumulates one of these per window, so
+    # `tables_*/` can never again be a set of CSVs whose only identity is an mtime.
+    report_json.write_text(json.dumps({
+        **prov,
+        "kind": "report",
+        "run": str(run),
+        "export": str(d.export),
+        "tables_dir": tdir.name,
+        "summary": name,
+        "target_from": target_from, "target_to": target_to,
+        "origin_from": origin_from, "origin_to": origin_to,
+        "bootstrap_reps": cfg.bootstrap_reps,
+        "min_bootstrap_units": cfg.min_bootstrap_units,
+        "low_n_origin_days": cfg.low_n_origin_days,
+        "low_n_park_months": cfg.low_n_park_months,
+        "started_utc": t_start.isoformat(timespec="seconds"),
+        "finished_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "seconds": round((dt.datetime.now(dt.timezone.utc) - t_start).total_seconds(), 1),
+        "argv": sys.argv,
+        # the identity of the code that produced the scoring sums, for comparison
+        "run_shards": [{k: m.get(k) for k in
+                        ("git_sha", "git_sha_source", "code_sha256", "image_id", "export")}
+                       for m in d.meta],
+        "tables": sorted(x.name for x in tdir.glob("*.csv")),
+    }, indent=2, default=str))
     return tdir
 
 

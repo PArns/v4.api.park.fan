@@ -31,7 +31,6 @@ import importlib
 import json
 import math
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -43,6 +42,7 @@ from . import baselines as B
 from .config import BenchConfig
 from .decisions import execute, optimise, transfer_ceiling
 from .models.base import HistoryView, Model, Origin
+from .provenance import code_hash, git_sha, git_sha_source
 
 PROFILE = os.environ.get("MLBENCH_PROFILE") == "1"
 
@@ -73,28 +73,6 @@ def load_tables(con, export: Path, materialize: bool = False) -> None:
         FROM attractions a JOIN parks p ON p.id = a.park_id""")
 
 
-def git_sha() -> str:
-    env = os.environ.get("MLBENCH_GIT_SHA")
-    if env and env != "unknown":
-        return env
-    try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True,
-                                       cwd=Path(__file__).parent, stderr=subprocess.DEVNULL).strip()
-    except Exception:
-        return "unknown"
-
-
-def code_hash() -> str:
-    """sha256 over the mlbench sources (path + bytes), so a run can be tied to code
-    even when the SHA is a working tree."""
-    import hashlib
-
-    h = hashlib.sha256()
-    root = Path(__file__).resolve().parent
-    for p in sorted(root.rglob("*.py")):
-        h.update(str(p.relative_to(root)).encode())
-        h.update(p.read_bytes())
-    return h.hexdigest()
 
 
 def load_model(spec: str) -> Model:
@@ -808,7 +786,10 @@ def main(args: argparse.Namespace) -> int:
         raise SystemExit("--reference needs a known git SHA (--build-arg GIT_SHA) and MLBENCH_IMAGE_ID "
                          f"(-e MLBENCH_IMAGE_ID=$(docker image inspect -f '{{{{.Id}}}}' <tag>)); got {sha}, {image}")
     meta = {"config": json.loads(cfg.to_json()), "models": [type(m).scored_name() for m in models],
-            "git_sha": sha, "code_sha256": code_hash(), "image_id": image, "reference": args.reference,
+            # `git_sha` is whatever the launcher asserted; `code_sha256` is measured from
+            # the sources in this process and is the one to trust (see provenance.py).
+            "git_sha": sha, "git_sha_source": git_sha_source(),
+            "code_sha256": code_hash(), "image_id": image, "reference": args.reference,
             "export": str(args.export),
             "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "argv": sys.argv}

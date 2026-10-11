@@ -232,6 +232,18 @@ reference and why), `low_coverage_cells.csv`, `usable_horizon.csv` (with
    at the origin, and covariates without weather unless the **class** sets
    `uses_oracle_weather = True` (then it is scored as `<name>_owx`; setting it on
    the instance buys nothing). Rows outside the grid are dropped.
+
+   **The history cap is part of the plug-in contract, not an implementation
+   detail.** `df(days)` **raises** above `--history-days`; it does not return a
+   short frame. A foundation model that wants a 343- or 400-day context therefore
+   fails loudly at the first origin and has to be given the budget explicitly
+   (`--history-days`, or a `fit(train_panel, cutoff)` that takes `train_days` of
+   truth) instead of silently publishing numbers from a truncated context with
+   nothing in the output to show it. PAR-828's Chronos-2 plug-ins hit this on the
+   merged tree and PAR-829's `df(56)` passes only because it sits exactly on the
+   inclusive boundary — so read the cap before reporting a long-context model, and
+   widen it deliberately. Like `uses_oracle_weather`, an information budget is read
+   off the **class**: an instance attribute must never be able to widen it.
 4. Run (celestrial):
 
 ```bash

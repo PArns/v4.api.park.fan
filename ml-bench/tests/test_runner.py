@@ -4,6 +4,7 @@ built-in path, provenance, report end to end."""
 import argparse
 import datetime as dt
 import json
+from pathlib import Path
 
 import duckdb
 import numpy as np
@@ -285,6 +286,57 @@ def test_oracle_weather_model_never_wins_a_handover_row(synth_export, tmp_path):
         t = pd.read_csv(tdir / f"{name}.csv")
         col = "winner" if name == "handover" else "model"
         assert not set(t[col]) & owx, f"{name}.csv awards a row to {owx}"
+
+
+def test_report_records_its_own_code_identity(synth_export, tmp_path):
+    """A `tables_*/` dir must carry the identity of the code that WROTE it.
+
+    `run-*.json` describes the code that produced `parts/` (the scoring sums); every
+    verdict on top of them — reference choice, envelope win, LOW-N gate, hand-over
+    winner — is recomputed by the report, routinely at a later commit. On
+    `20261009-baselines-v2` the `parts/` are from `ea9a8438` and the published tables
+    from three fix commits later, and the only evidence of that was a file mtime.
+
+    `code_sha256` must be MEASURED (recomputable from the sources), not asserted:
+    `git_sha` comes from the launcher's environment and has been stale in this repo.
+    """
+    import hashlib
+
+    import mlbench
+    from mlbench.provenance import code_hash
+
+    cfg = BenchConfig(memory_limit="1GB", threads=2, slot_leads=[0, 1, 3])
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "run-0of1.json").write_text(json.dumps(
+        {"export": str(synth_export), "git_sha": "deadbeef", "git_sha_source": "env",
+         "code_sha256": "not-the-report-hash"}))
+    Runner(synth_export, out, cfg, [], origins=("2026-04-01", "2026-04-12")).run()
+
+    tdir = build_report(out, target_from="2026-04-02", target_to="2026-04-12", reps=50)
+    rec = json.loads((out / f"report-{tdir.name}.json").read_text())
+
+    # recompute the hash the way a reviewer would, independently of the module
+    h = hashlib.sha256()
+    root = Path(mlbench.__file__).resolve().parent
+    for f in sorted(root.rglob("*.py")):
+        h.update(str(f.relative_to(root)).encode())
+        h.update(f.read_bytes())
+    assert rec["code_sha256"] == h.hexdigest() == code_hash()
+
+    assert rec["kind"] == "report"
+    assert rec["tables_dir"] == tdir.name == "tables_2026-04-02_2026-04-12"
+    assert (rec["target_from"], rec["target_to"]) == ("2026-04-02", "2026-04-12")
+    assert "cells.csv" in rec["tables"] and "handover.csv" in rec["tables"]
+    # the report's identity must be kept SEPARATE from the run's, not overwritten by it
+    assert rec["run_shards"][0]["code_sha256"] == "not-the-report-hash"
+    assert rec["run_shards"][0]["git_sha"] == "deadbeef"
+    assert rec["code_sha256"] != rec["run_shards"][0]["code_sha256"]
+    # and the summary must say which code wrote the tables, flagging an asserted SHA
+    summary = (out / f"summary_{tdir.name}.md").read_text()
+    assert "code that produced THESE tables (the report)" in summary
+    assert rec["code_sha256"][:16] in summary
+    assert "code that produced `parts/` (the scoring)" in summary
 
 
 def test_end_to_end_report(synth_export, tmp_path):
