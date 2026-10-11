@@ -73,13 +73,21 @@ def _csv(raw: Path, pattern: str) -> str:
 # can only be in force inside the chunk if ts >= lo - 3 h, and a row whose next
 # row lies beyond hi + 3 h is capped by the 3 h staleness limit anyway — so the
 # rows in [lo - 3 h, hi + 3 h) decide every midpoint in [lo, hi).
+# ``{hb}`` is either empty or ``AND NOT coalesce(is_heartbeat, false)``. A heartbeat
+# row carries the previous status AND wait forward with a fresh ``ts``, so it resets
+# the 3 h staleness clock this expansion relies on and a ride that stopped reporting
+# keeps producing "truth" with a frozen wait. Dropping them is NOT the default,
+# because whether the target is "what the queue did" or "what the app showed" is a
+# product decision; `--drop-heartbeats` builds the other target so the two can be
+# compared cell for cell (PAR-827 critic B3, BENCH-SPEC "Recorded changes" 6).
 EXPAND_CHUNK_SQL = """
 WITH q AS (
   SELECT attraction_id AS aid, ts_us, status, wait,
          lead(ts_us) OVER (PARTITION BY attraction_id ORDER BY ts_us) AS nts
-  FROM read_csv({files}, header=true,
+  FROM (SELECT * FROM read_csv({files}, header=true,
        columns={{'attraction_id':'VARCHAR','ts_us':'BIGINT','status':'VARCHAR',
                  'wait':'INTEGER','is_heartbeat':'BOOLEAN'}})
+        WHERE TRUE {hb})
   WHERE ts_us >= {lo} - {stale} - 1 AND ts_us < {hi} + {stale} + 1
 ),
 r AS (
@@ -97,7 +105,8 @@ SELECT aid, status, wait, ts_us, mid_us FROM m WHERE mid_us >= {lo} AND mid_us <
 CHUNK_DAYS = 7
 
 
-def build(raw: Path, out: Path, con, ml_service_dir: Path | None = None) -> dict:
+def build(raw: Path, out: Path, con, ml_service_dir: Path | None = None,
+          drop_heartbeats: bool = False) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     x = con.execute
     stats: dict[str, object] = {}
@@ -141,6 +150,8 @@ def build(raw: Path, out: Path, con, ml_service_dir: Path | None = None) -> dict
         FROM windows w JOIN parks p ON p.id = w.park_id""")
     stats["windows"] = x("SELECT count(*) FROM windows").fetchone()[0]
 
+    hb_filter = "AND NOT coalesce(is_heartbeat, false)" if drop_heartbeats else ""
+    stats["drop_heartbeats"] = bool(drop_heartbeats)
     qfiles = sorted(raw.glob("queue_*.csv.gz"))
     days = [dt.date.fromisoformat(p.name[len("queue_"):-len(".csv.gz")]) for p in qfiles]
     by_day = dict(zip(days, qfiles))
@@ -162,7 +173,7 @@ def build(raw: Path, out: Path, con, ml_service_dir: Path | None = None) -> dict
             continue
         files = "[" + ", ".join(f"'{p}'" for p in need) + "]"
         mids = EXPAND_CHUNK_SQL.format(half=HALF_US, slot=SLOT_US, stale=STALE_US, lo=start, hi=end,
-                                       files=files)
+                                       files=files, hb=hb_filter)
         # attach park, local time and the service day: the slot's own local date, or the
         # day before for windows that cross midnight
         x(f"""INSERT INTO slots
@@ -314,12 +325,17 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--memory", default="6GB")
     p.add_argument("--threads", type=int, default=8)
     p.add_argument("--ml-service-dir", default=None)
+    p.add_argument("--drop-heartbeats", action="store_true",
+                   help="exclude is_heartbeat change-log rows from the truth expansion "
+                        "(a heartbeat carries status AND wait forward and resets the 3 h "
+                        "staleness clock) — recorded in build_stats.json")
 
 
 def main(args: argparse.Namespace) -> int:
     exp = Path(args.export)
     con = connect(args.memory, args.threads, temp_dir=str(exp / "tmp"))
     stats = build(exp / "raw", exp / "parquet", con,
-                  Path(args.ml_service_dir) if args.ml_service_dir else None)
+                  Path(args.ml_service_dir) if args.ml_service_dir else None,
+                  drop_heartbeats=args.drop_heartbeats)
     print(json.dumps(stats, indent=2, default=str))
     return 0

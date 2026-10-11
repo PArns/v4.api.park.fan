@@ -34,10 +34,9 @@ def main(argv: list[str] | None = None) -> int:
 
     export.add_args(sub.add_parser("export", help="read-only production export"))
     sp = sub.add_parser("build", help="raw export -> parquet + truth")
-    sp.add_argument("--export", required=True)
-    sp.add_argument("--memory", default="6GB")
-    sp.add_argument("--threads", type=int, default=8)
-    sp.add_argument("--ml-service-dir", default=None)
+    from .build import add_args as build_args
+
+    build_args(sp)
     sp = sub.add_parser("run", help="rolling-origin backtest")
     from .runner import add_args as run_args
 
