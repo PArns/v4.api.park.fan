@@ -1033,7 +1033,8 @@ def wide_vs(ar: pd.DataFrame, order: dict, metric: str, uc: str, seg: str, candi
 def build_report(run: Path, export: Path | None = None, target_from: str | None = None,
                  target_to: str | None = None, reps: int | None = None,
                  memory: str | None = None, threads: int | None = None,
-                 origin_from: str | None = None, origin_to: str | None = None) -> Path:
+                 origin_from: str | None = None, origin_to: str | None = None,
+                 vs: list[str] | None = None) -> Path:
     cfg = BenchConfig()
     if reps:
         cfg.bootstrap_reps = reps
@@ -1176,13 +1177,44 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
     pd.DataFrame(REF_CHOICES).to_csv(tdir / "ref_choice.csv", index=False)
     low_coverage_cells(C).to_csv(tdir / "low_coverage_cells.csv", index=False)
 
+    # --vs <model>: the same paired engine with ONE forced comparator instead of the
+    # per-lead reference, so a model can be compared against another model (layout
+    # against layout, with against without covariates, candidate against H5). It needs
+    # the paired sums `--pair-with` wrote at run time; a comparator without them is
+    # reported as missing rather than silently dropped.
+    vs_cells: dict[str, pd.DataFrame] = {}
+    for cmp_model in vs or []:
+        rows = []
+
+        def paired(table: str) -> bool:
+            return table in d.tables and any(
+                c.startswith("pn__") and c.endswith(f"__{cmp_model}") for c in d.cols(table))
+
+        if paired("slot"):
+            _log(f"paired vs {cmp_model}")
+            rows.append(run_cells(d, cfg, "slot", "L", daily_keys, [cmp_model],
+                                  lambda L: "UC2" if L == 0 else "UC3"))
+        if paired("intraday"):
+            rows.append(run_cells(d, cfg, "intraday", "lead_key", UC1_KEYS + UC2_INTRADAY_KEYS,
+                                  [cmp_model], lambda k: "UC1" if k.startswith("m") else "UC2-intraday"))
+        frames = [r for r in rows if r is not None and not r.empty]
+        if frames:
+            t = pd.concat(frames, ignore_index=True)
+            t = t[t["model"] != cmp_model]
+            vs_cells[cmp_model] = t
+            t.to_csv(tdir / f"cells_vs_{cmp_model}.csv", index=False)
+        else:
+            vs_cells[cmp_model] = pd.DataFrame()
+
     _log("D8 / D9")
     d8q = pd.DataFrame()
     if "slot" in d.tables:
         qm = [c[len("qn__"):] for c in d.cols("slot") if c.startswith("qn__")]
+        # a model may provide q80 but not q95 (TimesFM 3.0's head stops at 0.9)
+        n95 = {m: (f"qn95__{m}" if f"qn95__{m}" in d.cols("slot") else f"qn__{m}") for m in qm}
         if qm:
             d8q = d.df(f"""SELECT L, {', '.join(f'sum(q80__{m}) / nullif(sum(qn__{m}), 0) AS "{m} cov_q80", '
-                                                f'sum(q95__{m}) / nullif(sum(qn__{m}), 0) AS "{m} cov_q95", '
+                                                f'sum(q95__{m}) / nullif(sum({n95[m]}), 0) AS "{m} cov_q95", '
                                                 f'sum(qn__{m}) / nullif(sum(n_truth), 0) AS "{m} field_coverage"'
                                                 for m in qm)} FROM slot GROUP BY L ORDER BY L""")
     d8p = pd.DataFrame()
@@ -1364,6 +1396,21 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
               "margin_lo_park", "margin_hi_park", "margin_lo_park_day", "margin_hi_park_day",
               "park_day_unit_agrees", "winner_paired_share", "significant_models", "n_tested"],
              floatfmt="{:.3f}"))
+    for cmp_model, t in vs_cells.items():
+        w(f"### Paired against `{cmp_model}` (not the per-lead reference)\n")
+        if t.empty:
+            w(f"_no paired sums against `{cmp_model}` in this run — re-run with "
+              f"`--pair-with {cmp_model}` (the per-slot forecasts are not kept, so this cannot be "
+              "recovered from the stored aggregates)._\n")
+            continue
+        w(f"MAE difference model − `{cmp_model}` on the slots BOTH cover, park-cluster CI, "
+          "`*` = the model wins:\n")
+        for seg in ("all", "busy"):
+            g = t[(t["metric"] == "MAE") & (t["region"] == "all") & (t["segment"] == seg)]
+            if g.empty:
+                continue
+            w(f"segment `{seg}`:\n")
+            w(md(wide(g, order, kind="diff")))
     lc = low_coverage_cells(C)
     if not lc.empty:
         w("### Low-coverage cells (paired rows < 50 % of the reference's)\n")
@@ -1573,11 +1620,15 @@ def add_args(p: argparse.ArgumentParser) -> None:
                         "pins when the truth happened, not when the forecast was made, so a "
                         "horizon curve over a short target window still mixes origin seasons")
     p.add_argument("--origin-to", default=None)
+    p.add_argument("--vs", default=None,
+                   help="also compare every model PAIRED against these models (comma-separated) "
+                        "instead of the per-lead reference; needs `run --pair-with <same models>`")
 
 
 def main(args: argparse.Namespace) -> int:
     t = build_report(Path(args.run), Path(args.export) if args.export else None, args.target_from,
                      args.target_to, args.reps, args.memory, args.threads,
-                     args.origin_from, args.origin_to)
+                     args.origin_from, args.origin_to,
+                     [v.strip() for v in (args.vs or "").split(",") if v.strip()])
     print(f"tables in {t}")
     return 0

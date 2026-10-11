@@ -352,6 +352,9 @@ model's numbers are always paired against the same reference on the same rows.
 `--reference` refuses to start without a git SHA and an image id; every run
 records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 
+Model families benchmarked so far get their own document: the foundation models
+Chronos-2 and TimesFM 3.0 in `docs/ml/foundation-models.md` (PAR-828).
+
 ## Level drivers (PAR-830)
 
 `python -m mlbench drivers --export <export> --out <dir>` builds one row per

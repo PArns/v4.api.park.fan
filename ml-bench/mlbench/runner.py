@@ -49,9 +49,14 @@ PROFILE = os.environ.get("MLBENCH_PROFILE") == "1"
 
 # --------------------------------------------------------------------------- setup
 
-def load_tables(con, export: Path, materialize: bool = False) -> None:
+def load_tables(con, export: Path, materialize: bool = False,
+                park_ids: list[str] | None = None) -> None:
     """Attach the export's ``bench.duckdb`` read-only (shared by all shards; blocks are
-    paged in on demand) or, with ``materialize``, copy the Parquet tables into memory."""
+    paged in on demand) or, with ``materialize``, copy the Parquet tables into memory.
+
+    ``park_ids`` restricts the run to a subset of parks (``--parks``): every origin,
+    target and ride set is built from ``parks``, so filtering it filters everything —
+    the baselines are re-scored on exactly the same subset."""
     x = con.execute
     names = ("parks", "attractions", "windows", "slots", "ride_day", "hour_stats", "tft", "cbd",
              "park_day_cov", "truth")
@@ -67,6 +72,18 @@ def load_tables(con, export: Path, materialize: bool = False) -> None:
         x(f"""CREATE OR REPLACE TABLE truth AS
             SELECT t.*, CAST(dayofweek(t.date) IN (0, 6) AS INTEGER) AS we, dayofweek(t.date) AS dow
             FROM read_parquet('{pq}/truth.parquet') t""")
+    if park_ids:
+        ids = ", ".join("'" + p.replace("'", "") + "'" for p in park_ids)
+        if db.exists() and not materialize:
+            x(f"CREATE OR REPLACE VIEW parks AS SELECT * FROM b.parks WHERE id IN ({ids})")
+        else:
+            x(f"DELETE FROM parks WHERE id NOT IN ({ids})")
+        # An id that matches no park would otherwise silently shrink the subset: the
+        # run looks fine and every table is simply built over fewer parks.
+        kept = {r[0] for r in x("SELECT id FROM parks").fetchall()}
+        missing = sorted(set(park_ids) - kept)
+        if missing:
+            raise SystemExit(f"--parks: {len(missing)} id(s) are in no export: {missing[:5]}")
     x("""CREATE OR REPLACE TABLE rides AS
         SELECT a.id AS aid, a.park_id, coalesce(a.is_headliner, false) AS is_headliner,
                a.latitude AS lat, a.longitude AS lng, a.land, p.timezone
@@ -155,6 +172,7 @@ def slot_agg_sql(models: list[str], refs: list[str], quantile_models: list[str],
     for m in quantile_models:
         q80, q95 = ("wt_q80", "wt_q95") if m == "wt_med" else (f"{m}__q80", f"{m}__q95")
         cols += [f"count({q80}) FILTER (WHERE y IS NOT NULL) AS qn__{m}",
+                 f"count({q95}) FILTER (WHERE y IS NOT NULL) AS qn95__{m}",
                  f"sum(CAST(y <= {q80} AS INTEGER)) AS q80__{m}",
                  f"sum(CAST(y <= {q95} AS INTEGER)) AS q95__{m}"]
     k = ", ".join(keys)
@@ -318,7 +336,7 @@ SELECT DATE '{c}' AS origin, * FROM stated UNION ALL SELECT DATE '{c}', * FROM r
 class Runner:
     def __init__(self, export: Path, out: Path, cfg: BenchConfig, models: list[Model],
                  shard: tuple[int, int] = (0, 1), origins: tuple[str, str] | None = None,
-                 materialize: bool = False):
+                 materialize: bool = False, park_ids: list[str] | None = None):
         from .build import connect
 
         self.cfg = cfg
@@ -330,7 +348,7 @@ class Runner:
         work = out / "work"
         work.mkdir(parents=True, exist_ok=True)
         self.con = connect(cfg.memory_limit, cfg.threads, temp_dir=str(work / f"tmp{shard[0]}"))
-        load_tables(self.con, export, materialize)
+        load_tables(self.con, export, materialize, park_ids)
         d0, d1 = self.con.execute("SELECT min(date), max(date) FROM truth").fetchone()
         # The last export day is UTC; a park-local day west of UTC is only complete one
         # day earlier, so the last scored day is queue_to - 1 (same for the first day).
@@ -355,6 +373,11 @@ class Runner:
         self._last_fit: dict[str, dt.date] = {}
         self.resume = False
         self._hv_cache: dict = {}
+        #: extra models every model is additionally PAIRED against (``--pair-with``).
+        #: The reference the report picks is unchanged — these only add the paired
+        #: sums a model-vs-model comparison needs, which cannot be recovered later
+        #: because the per-slot forecasts are not kept.
+        self.pair_with: list[str] = []
         # Freeze the scored name and the weather entitlement per model instance, from
         # the CLASS attribute, once. Both have to come from the same place or a model
         # can be given ORACLE weather and still be scored under its honest name: the
@@ -376,18 +399,25 @@ class Runner:
         change inside an origin); tests that rewrite the tables do."""
         self._hv_cache = {}
 
+    # Every per-model INFORMATION BUDGET is read off `type(m)`, never off the instance:
+    # `scored_name()` is a classmethod, so a model that sets the attribute in `__init__`
+    # would get the wider budget and keep its honest name (critic S8). That applies to
+    # `uses_oracle_weather` (frozen in `set_models`), to `truth_history_days` below and to
+    # `covariate_history_days` at its two call sites. `max_lead_days` and `train_days` are
+    # not budgets in this sense — they only ever narrow what the runner asks for.
     def history_days_needed(self) -> int:
         """How much truth ``origin.history`` must hold: the config window, widened to the
         largest any registered plug-in declares.
 
-        ``HistoryView`` is materialised and raises above its cap, while a plug-in that
-        accumulates its own long history asks for more than the 56-day profile window --
-        ``driver_level`` primes its ride-day cache with 400 days at the first origin.
-        Capping at ``BenchConfig.history_days`` alone turns that into a ``ValueError``,
-        and a cap that merely truncated would be worse, because it would silently shorten
-        the history the published numbers were scored with. The need is read off the
-        CLASS, like the oracle-weather gate, so an instance attribute cannot widen an
-        information budget.
+        ``HistoryView`` is materialised and raises above its cap (critic S9), while
+        PAR-828's foundation plug-ins ask for ``context_slots // 24 + 2`` (~343) days of
+        compressed context and 400 days for the daily head. Capping at
+        ``BenchConfig.history_days`` alone turns every Chronos-2 origin into a
+        ``ValueError`` — and a cap that merely truncated would be worse, because it would
+        silently shorten the context the published numbers were scored with.
+        ``driver_level`` (PAR-830) primes its ride-day cache with 400 days at the first
+        origin the same way. The need is read off the CLASS, so an instance attribute
+        cannot widen an information budget.
         """
         return max([int(self.cfg.history_days)]
                    + [int(type(m).truth_history_days) for m in self.models])
@@ -470,9 +500,18 @@ class Runner:
         way, so the only real fix is to fetch the frame up front and hand over data
         (critic S9). Cached per (origin, origin table) because the intraday path asks
         for the same view once per hour per model.
+
+        The key includes the table's LATEST ORIGIN, not just its name: the intraday path
+        reuses the name ``oh`` for every origin hour (``CREATE OR REPLACE TEMP TABLE oh``),
+        so keying on ``(date, table name)`` alone served hour 8's context at hours
+        10…20 — every intraday origin then forecast from a context frozen at the first
+        hour of the day, which is the opposite of UC1's premise and is invisible in the
+        output (`test_intraday_sees_origin_day`). Keying on the cut itself is also robust
+        to any future origin table whose contents change under a stable name.
         """
         days = self.history_days_needed()
-        key = (c, origin_table, days)
+        cut = self.con.execute(f"SELECT max(origin_utc) FROM {origin_table}").fetchone()[0]
+        key = (c, origin_table, cut, days)
         if self._hv_cache.get("key") != key:
             df = self.con.execute(f"""
                 SELECT t.aid AS attraction_id, t.park_id, t.date, t.slot_utc AS slot_start_utc,
@@ -484,7 +523,8 @@ class Runner:
             self._hv_cache = {"key": key, "view": HistoryView(df, c, days)}
         return self._hv_cache["view"]
 
-    def covariates(self, c: dt.date, max_lead: int, oracle_weather: bool) -> pd.DataFrame:
+    def covariates(self, c: dt.date, max_lead: int, oracle_weather: bool,
+                   history_days: int = 0) -> pd.DataFrame:
         """Known-future covariates: holidays and weekday as built; the window as known at
         the origin; schedule-derived flags only where the schedule was known; weather
         only for models that opt in to the oracle."""
@@ -511,7 +551,7 @@ class Runner:
                    {weather}
             FROM park_day_cov cov JOIN o ON o.park_id = cov.park_id
             LEFT JOIN pw ON pw.park_id = cov.park_id AND pw.date = cov.date
-            WHERE cov.date >= DATE '{c}' AND cov.date <= DATE '{c}' + {int(max_lead)}
+            WHERE cov.date >= DATE '{c}' - {int(history_days)} AND cov.date <= DATE '{c}' + {int(max_lead)}
             ORDER BY cov.park_id, cov.date""").df()
 
     def maybe_fit(self, m: Model, c: dt.date) -> None:
@@ -540,7 +580,8 @@ class Runner:
         grid = x(self.grid_sql(c, leads, origin_table=origin_table, max_lead=m.max_lead_days)).df()
         if grid.empty:
             return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
-        cov = self.covariates(c, max(leads), self.oracle_weather(m))
+        cov = self.covariates(c, max(leads), self.oracle_weather(m),
+                              type(m).covariate_history_days)
         pred = m.predict(origin, grid, cov)
         if pred is None or len(pred) == 0:
             return pd.DataFrame(columns=["aid", "slot_utc", "q50", "q80", "q95"])
@@ -561,7 +602,8 @@ class Runner:
         days = x(f"""SELECT r.aid AS attraction_id, r.park_id, DATE '{c}' + L AS date, L AS lead_days
                      FROM rides r, (SELECT unnest([{','.join(map(str, leads))}]) L)
                      WHERE r.aid IN (SELECT aid FROM rs) ORDER BY 1, 3""").df()
-        return m.predict_daily(origin, days, self.covariates(c, max(leads), self.oracle_weather(m)))
+        return m.predict_daily(origin, days, self.covariates(
+            c, max(leads), self.oracle_weather(m), type(m).covariate_history_days))
 
     def run_plugins_daily(self, c: dt.date, leads: list[int]) -> tuple[list[str], list[str], list[str]]:
         """Adds plug-in columns to tg and lv. Returns (slot cols, quantile models, level cols)."""
@@ -629,7 +671,7 @@ class Runner:
             self._tick('plugins')
             models = B.SLOT_MODELS + plug_cols
             scored = models + B.ORACLES
-            self.write("slot", slot_agg_sql(scored, B.REF_CANDIDATES, ["wt_med"] + qmodels, "tg",
+            self.write("slot", slot_agg_sql(scored, self.refs_for(scored), ["wt_med"] + qmodels, "tg",
                                             ["L", "park_id", "date", "busy", "fh", "sk"]), c)
             self._tick('slot')
             # one lead at a time: the window functions over (slots x models) are the
@@ -657,6 +699,11 @@ class Runner:
             print(f"[shard {self.shard[0]}] origin {c} ({i + 1}/{len(self.origins)}) "
                   f"{time.monotonic() - t0:.1f}s" + (f" | {' '.join(self._stages)}" if PROFILE else ""),
                   flush=True)
+
+    def refs_for(self, scored: list[str], refs: list[str] | None = None) -> list[str]:
+        """The reference candidates plus ``--pair-with`` models that this table has."""
+        base = list(B.REF_CANDIDATES if refs is None else refs)
+        return base + [m for m in self.pair_with if m in scored and m not in base]
 
     def _tick(self, label: str) -> None:
         now = time.monotonic()
@@ -782,7 +829,7 @@ class Runner:
                     WHEN lead_min <= 240 THEN 'h2-4' WHEN lead_min <= 480 THEN 'h4-8' ELSE 'h8+' END AS lead_key
              FROM ih""")
         models = B.INTRADAY_MODELS + [self.name_of(m) for m in plug]
-        self.write("intraday", slot_agg_sql(models, B.INTRADAY_REFS, [], "ih",
+        self.write("intraday", slot_agg_sql(models, self.refs_for(models, B.INTRADAY_REFS), [], "ih",
                                             ["lead_key", "park_id", "date", "busy", "hl"]), c)
         # D1 next-best-ride (lib/planner/next-best-ride.ts): suggest a ride when the
         # forecast maximum inside the lookahead is >= live + 10. The candidate set is
@@ -815,6 +862,20 @@ class Runner:
 
 # --------------------------------------------------------------------------- CLI
 
+def parse_park_ids(raw: str) -> list[str]:
+    """``--parks`` as ids: comma-separated, or the contents of an ``@file``.
+
+    The comment is cut per LINE and before the commas are split, because a header
+    like ``# 12 EU, 10 NA, 8 Asia`` otherwise contributes " 10 NA" and " 8 Asia" as
+    ids — which `load_tables` now refuses, but which used to pass silently."""
+    out: list[str] = []
+    for line in raw.splitlines():
+        for v in line.split("#", 1)[0].split(","):
+            if v.strip():
+                out.append(v.strip())
+    return out
+
+
 def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--export", required=True, help="export dir (with parquet/)")
     p.add_argument("--out", default=None, help="results/<run-id> (default: ml-bench/results/<utc stamp>)")
@@ -835,6 +896,12 @@ def add_args(p: argparse.ArgumentParser) -> None:
                    help="days of truth the plug-in HistoryView materialises (default 56)")
     p.add_argument("--resume", action="store_true",
                    help="skip origins whose outputs are complete (after an interrupted shard)")
+    p.add_argument("--parks", default=None,
+                   help="restrict to these park ids: comma-separated, or @file with one id per line")
+    p.add_argument("--pair-with", default=None,
+                   help="additionally pair every model against these models (comma-separated), so "
+                        "`report --vs <model>` can compare model against model; the reference the "
+                        "report picks is not affected")
     p.add_argument("--reference", action="store_true",
                    help="a run others compare against: refuse to start without git SHA and image id")
 
@@ -859,18 +926,26 @@ def main(args: argparse.Namespace) -> int:
     if args.reference and ("unknown" in (sha, image) or sha.endswith("-dirty")):
         raise SystemExit("--reference needs a known git SHA (--build-arg GIT_SHA) and MLBENCH_IMAGE_ID "
                          f"(-e MLBENCH_IMAGE_ID=$(docker image inspect -f '{{{{.Id}}}}' <tag>)); got {sha}, {image}")
+    pair_with = [v.strip() for v in (args.pair_with or "").split(",") if v.strip()]
     meta = {"config": json.loads(cfg.to_json()), "models": [type(m).scored_name() for m in models],
             # `git_sha` is whatever the launcher asserted; `code_sha256` is measured from
             # the sources in this process and is the one to trust (see provenance.py).
             "git_sha": sha, "git_sha_source": git_sha_source(),
             "code_sha256": code_hash(), "image_id": image, "reference": args.reference,
-            "export": str(args.export),
+            "export": str(args.export), "pair_with": pair_with,
             "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "argv": sys.argv}
     (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
     origins = (args.origin_from or "1900-01-01", args.origin_to or "2999-12-31")
-    r = Runner(Path(args.export), out, cfg, models, (i, n), origins)
+    park_ids = None
+    if args.parks:
+        raw = Path(args.parks[1:]).read_text() if args.parks.startswith("@") else args.parks
+        park_ids = parse_park_ids(raw)
+        meta["parks"] = park_ids
+        (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
+    r = Runner(Path(args.export), out, cfg, models, (i, n), origins, park_ids=park_ids)
     r.resume = args.resume
+    r.pair_with = pair_with
     # Refuse a weekday-aliased origin set, and record the census either way.
     meta["origin_weekdays"] = check_weekday_aliasing(
         r.origins, n, getattr(args, "allow_weekday_alias", False))

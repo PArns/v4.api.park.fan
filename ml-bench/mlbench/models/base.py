@@ -129,12 +129,17 @@ class Model:
     train_days: ClassVar[int | None] = 365
     #: opt in to ORACLE weather (actuals); the model is then scored as <name>_owx
     uses_oracle_weather: ClassVar[bool] = False
+    #: also hand over the known covariates (holidays, weekday) of this many days BEFORE
+    #: the origin, for models that read covariates alongside their context window.
+    #: Past rows carry no window (open_utc/close_utc NULL) — use the history for that.
+    covariate_history_days: ClassVar[int] = 0
     #: days of truth the runner must MATERIALISE into ``origin.history`` for this model
     #: (0 = ``BenchConfig.history_days``, 56). ``HistoryView.df(days)`` raises above what
-    #: was materialised rather than silently returning a short frame, so a model that
-    #: accumulates more history than the profile window has to say so here -- otherwise it
-    #: either crashes or, worse, is scored on quietly truncated history. ``driver_level``
-    #: primes its ride-day cache with 400 days at the first origin.
+    #: was materialised rather than silently returning a short frame (critic S9), so a
+    #: model whose context window is longer than the profile window has to say so here —
+    #: otherwise it either crashes or, worse, gets quietly truncated context. A
+    #: foundation model with an 8192-slot compressed context needs ~343 days;
+    #: ``driver_level`` primes its ride-day cache with 400 days at the first origin.
     truth_history_days: ClassVar[int] = 0
 
     @classmethod

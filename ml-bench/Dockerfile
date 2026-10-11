@@ -20,6 +20,14 @@ RUN pip install --no-cache-dir --index-url ${TORCH_INDEX} "torch>=2.7.0"
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Optional model dependencies, one requirements file per model family, e.g.
+#   docker build --build-arg EXTRA_REQUIREMENTS=requirements-foundation.txt ...
+# (PAR-828: Chronos-2 + TimesFM-3). Installed before the code is copied, so a code
+# change does not reinstall them.
+ARG EXTRA_REQUIREMENTS=
+COPY requirements*.txt ./
+RUN if [ -n "$EXTRA_REQUIREMENTS" ]; then pip install --no-cache-dir -r "$EXTRA_REQUIREMENTS"; fi
+
 COPY --from=mlsvc holiday_features.py holiday_utils.py /opt/ml-service/
 ENV MLBENCH_ML_SERVICE_DIR=/opt/ml-service
 
@@ -30,6 +38,10 @@ COPY . .
 # (`run --reference`) refuses to start without it.
 ARG GIT_SHA=unknown
 ENV MLBENCH_GIT_SHA=${GIT_SHA}
+# Also as a file: the env var is easy to lose (an entrypoint override, a shell that
+# re-execs) and the image has neither a git binary nor a repository to fall back on.
+# PAR-828's first subset run recorded `git_sha: "unknown"` for exactly that reason.
+RUN printf '%s' "${GIT_SHA}" > /app/GIT_SHA
 
 ENTRYPOINT ["python", "-m", "mlbench"]
 CMD ["--help"]

@@ -118,21 +118,49 @@ def test_information_cut_plugins(name, synth_export, tmp_path):
     _setup(r, C)
     r.maybe_fit(m, C)
     before = _predict_all(r, m)
-    _poison(r, C, weather=not r.oracle_weather(m))
-    _setup(r, C)
-    # the history view is cached per (origin, origin table) — correct in production,
-    # where truth cannot change inside one origin, but it has to be dropped here or
-    # the poisoned truth would never be read back
-    r.clear_caches()
-    r.set_models([REGISTRY[name]()])
-    m2 = r.models[0]
-    r._last_fit.clear()
-    r.maybe_fit(m2, C)
-    after = _predict_all(r, m2)
+
+    # Poisoning from the 06:00 cut proves nothing about the intraday paths: an origin at
+    # 08:00 or 16:00 is ENTITLED to the origin day's truth up to its own cut, which is
+    # poisoned ground. Asserting those two frames unchanged passed only while the history
+    # view was cached per (date, table name) and so served 08:00's context at 16:00 — i.e.
+    # the assertion was carried by a staleness bug, and the honest version of it is that
+    # the intraday paths MUST move. Each cut therefore gets its own pass.
+    daily_paths = [p for p in before if p in ("daily", "level")]
+    intraday_paths = [p for p in before if p.startswith("intraday")]
+    assert daily_paths and intraday_paths
+    after = _repredict(synth_export, tmp_path / "p06", name, r, 6)
+    for path in daily_paths:
+        pd.testing.assert_frame_equal(before[path], after[path], obj=f"{name} / {path} / cut 06")
     assert len(before["daily"]) > 0
     assert set(before) == set(after)
-    for path, b in before.items():
-        pd.testing.assert_frame_equal(b, after[path], obj=f"{name} / {path}")
+    moved = [p for p in intraday_paths
+             if not before[p]["q50"].equals(after[p]["q50"])]
+    assert moved, (f"{name}: no intraday path moved when the origin day's truth was "
+                   "poisoned — the intraday context is not following its own cut")
+
+    # Second pass: poison from the LAST intraday cut, so every path's own history is
+    # clean and all three must hold. This is what actually covers the intraday leak.
+    late = max(int(p.removeprefix("intraday")) for p in intraday_paths)
+    after = _repredict(synth_export, tmp_path / "plate", name, r, late)
+    for path in before:
+        pd.testing.assert_frame_equal(before[path], after[path], obj=f"{name} / {path} / cut {late}")
+
+
+def _repredict(export, tmp, name: str, ref: Runner, poison_hour: int) -> dict[str, pd.DataFrame]:
+    """`_predict_all` again on a fresh runner whose future is poisoned from the
+    park-local `poison_hour` cut. A fresh runner rather than a re-`_setup` of the first
+    one: the poison is cumulative, so two cuts cannot share a connection."""
+    r = Runner(export, tmp, _cfg(), [REGISTRY[name]()], materialize=True)
+    m = r.models[0]
+    _setup(r, C)
+    if poison_hour != r.cfg.origin_hour_local:
+        r.con.execute(f"CREATE OR REPLACE TEMP TABLE o AS {B.origin_sql(C.isoformat(), poison_hour)}")
+    _poison(r, C, weather=not r.oracle_weather(m))
+    _setup(r, C)
+    r.clear_caches()
+    r._last_fit.clear()
+    r.maybe_fit(m, C)
+    return _predict_all(r, m)
 
 
 def _reachable_connection(obj, depth: int = 4) -> str | None:

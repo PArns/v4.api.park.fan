@@ -18,3 +18,13 @@ def synth_export(tmp_path_factory):
     con = connect("1GB", 2)
     build(root / "raw", root / "parquet", con)
     return root
+
+
+@pytest.fixture(autouse=True)
+def _foundation_stub(monkeypatch):
+    """The foundation-model plug-ins (PAR-828) need GPU weights; the suite runs their
+    series construction against a deterministic stub backend instead."""
+    import os
+
+    if not os.environ.get("MLBENCH_FM_REAL"):
+        monkeypatch.setenv("MLBENCH_FM_BACKEND", "stub")
