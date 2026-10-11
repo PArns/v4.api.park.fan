@@ -157,12 +157,22 @@ that wrote `parts/` (BENCH-SPEC change #7). This run has two:
 | scored `parts/` (the sums) | `cdbc95a3` | `d5acedf6…` |
 | wrote `tables/` (the verdicts) | `ab8102bc` | `6de411d2…` |
 
-Both resolve to real commits; both `code_sha256` values were recomputed from
-`git archive <sha> ml-bench/mlbench` and reproduce exactly. `cdbc95a3` contains all
-three coverage-parity fixes. It is no longer an ancestor of this branch — a later
-rebase rewrote it to `82130382` — but it is still a real commit and is preserved on
-`origin/parns123/par-828-…-mit-REBASED`. The rebase onto `f91efb43` did not change
-`code_sha256`, so the identity recorded in `report-tables.json` still resolves.
+Both `code_sha256` values were recomputed from `git archive <sha> ml-bench/mlbench`
+and reproduce exactly, and **the measured hash is the field to check** — not the
+`git_sha` beside it. This branch is rebased onto the PAR-827 branch several times a day,
+which rewrites every SHA while leaving the tree identical, so a `git_sha` recorded by a
+launcher ages out within hours while the measured hash does not. That asymmetry is
+exactly why BENCH-SPEC #7 requires the hash to be measured rather than asserted. The
+report hash reproduces from the current branch HEAD with
+`git archive HEAD ml-bench/mlbench`; `cdbc95a3`, which scored `parts/`, contains all
+three coverage-parity fixes and is preserved on
+`origin/parns123/par-828-…-mit-REBASED`.
+
+When PAR-827's `53165b5f` moved `report.py` and so the report hash, **both passes were
+re-run on the final code** rather than published against a hash describing code on no
+remote. All six spot-checked UC1 margins reproduced to the last digit, which is the
+expected result: their change only touches the `--origin-from`/`--origin-to` path, which
+these passes do not use.
 
 **The scoring code predates PAR-827's `5c216ffa`**, so critic fixes S8, S9 and S11 were
 not in it. All three are immaterial here, and the reasoning is stated so it can be
