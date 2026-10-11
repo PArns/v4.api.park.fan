@@ -53,6 +53,7 @@ describe("ParkHistoricalStatsService", () => {
         dow: s.dow,
         day_value_p90: s.p90,
         day_value_p50: s.p50,
+        hours: 10,
       })),
     );
 
@@ -153,12 +154,13 @@ describe("ParkHistoricalStatsService", () => {
   });
 
   describe("busiestDays / quietestDays", () => {
-    const day = (date: string, p90: number, p50 = p90 / 2) => ({
+    const day = (date: string, p90: number, p50 = p90 / 2, hours = 10) => ({
       day_text: date,
       month: Number(date.slice(5, 7)),
       dow: 1,
       day_value_p90: p90,
       day_value_p50: p50,
+      hours,
     });
     // 12 operating days, peaks 10..120 in steps of 10.
     const twelveDays = Array.from({ length: 12 }, (_, i) =>
@@ -199,6 +201,19 @@ describe("ParkHistoricalStatsService", () => {
         avgWaitP50: 60,
       });
       expect(result.quietestDays[0].avgCrowdLevel).toBe("very_low");
+    });
+
+    it("does not rank a day measured for fewer than 6 hours", async () => {
+      aggregateQuery.mockImplementation(
+        route([day("2026-05-30", 1, 1, 2), ...twelveDays], [], []),
+      );
+
+      const result = await service.getParkHistoricalStats(park, 2);
+
+      expect(result.quietestDays.map((d) => d.date)).not.toContain(
+        "2026-05-30",
+      );
+      expect(result.quietestDays[0].date).toBe("2026-05-01");
     });
 
     it("returns empty lists below 10 measured days", async () => {
