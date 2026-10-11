@@ -44,8 +44,11 @@ describe("ParkHistoricalStatsService", () => {
       n: number;
     }>,
   ) =>
-    specs.flatMap((s) =>
-      Array.from({ length: s.n }, () => ({
+    specs.flatMap((s, si) =>
+      Array.from({ length: s.n }, (_, i) => ({
+        day_text: `2026-${String(s.month).padStart(2, "0")}-${String(
+          si * 15 + i + 1,
+        ).padStart(3, "0")}`,
         month: s.month,
         dow: s.dow,
         day_value_p90: s.p90,
@@ -149,6 +152,102 @@ describe("ParkHistoricalStatsService", () => {
     expect(result.meta.displayable).toBe(false);
   });
 
+  describe("busiestDays / quietestDays", () => {
+    const day = (date: string, p90: number, p50 = p90 / 2) => ({
+      day_text: date,
+      month: Number(date.slice(5, 7)),
+      dow: 1,
+      day_value_p90: p90,
+      day_value_p50: p50,
+    });
+    // 12 operating days, peaks 10..120 in steps of 10.
+    const twelveDays = Array.from({ length: 12 }, (_, i) =>
+      day(`2026-05-${String(i + 1).padStart(2, "0")}`, (i + 1) * 10),
+    );
+
+    it("lists the five fullest and the five quietest days, extremes first", async () => {
+      aggregateQuery.mockImplementation(route(twelveDays, [], []));
+
+      const result = await service.getParkHistoricalStats(park, 2);
+
+      expect(result.busiestDays.map((d) => d.date)).toEqual([
+        "2026-05-12",
+        "2026-05-11",
+        "2026-05-10",
+        "2026-05-09",
+        "2026-05-08",
+      ]);
+      expect(result.quietestDays.map((d) => d.date)).toEqual([
+        "2026-05-01",
+        "2026-05-02",
+        "2026-05-03",
+        "2026-05-04",
+        "2026-05-05",
+      ]);
+    });
+
+    it("reads each day on the byDayOfWeek scale (level against the typical-day-peak)", async () => {
+      aggregateQuery.mockImplementation(route(twelveDays, [], []));
+
+      const result = await service.getParkHistoricalStats(park, 2);
+
+      // median of 10..120 = 65; the 120 day is 185 % of it, the 10 day 15 %.
+      expect(result.busiestDays[0]).toMatchObject({
+        date: "2026-05-12",
+        avgCrowdLevel: "very_high",
+        avgWaitP90: 120,
+        avgWaitP50: 60,
+      });
+      expect(result.quietestDays[0].avgCrowdLevel).toBe("very_low");
+    });
+
+    it("returns empty lists below 10 measured days", async () => {
+      aggregateQuery.mockImplementation(route(twelveDays.slice(0, 9), [], []));
+
+      const result = await service.getParkHistoricalStats(park, 2);
+
+      expect(result.busiestDays).toEqual([]);
+      expect(result.quietestDays).toEqual([]);
+    });
+
+    it("returns empty lists for a park with no measured day", async () => {
+      aggregateQuery.mockImplementation(route([], [], []));
+
+      const result = await service.getParkHistoricalStats(park, 2);
+
+      expect(result.busiestDays).toEqual([]);
+      expect(result.quietestDays).toEqual([]);
+    });
+
+    it("breaks a tie on the daily peak by the earlier date, in both lists", async () => {
+      const tied = [
+        ...twelveDays.slice(0, 10),
+        day("2026-06-20", 130),
+        day("2026-06-10", 130),
+      ];
+      aggregateQuery.mockImplementation(route(tied, [], []));
+
+      const result = await service.getParkHistoricalStats(park, 2);
+
+      expect(result.busiestDays.slice(0, 2).map((d) => d.date)).toEqual([
+        "2026-06-10",
+        "2026-06-20",
+      ]);
+    });
+
+    it("never lists a day the schedule calls CLOSED: the day query drops it before ranking", async () => {
+      aggregateQuery.mockImplementation(route(twelveDays, [], []));
+
+      await service.getParkHistoricalStats(park, 2);
+
+      const dayQuery = aggregateQuery.mock.calls
+        .map(([sql]) => sql as string)
+        .find((sql) => sql.includes("per_attraction_day"))!;
+      expect(dayQuery).toContain("closed_park_days");
+      expect(dayQuery).toContain("to_char(day, 'YYYY-MM-DD')");
+    });
+  });
+
   it("assigns a 1-based rank to top attractions", async () => {
     const result = await service.getParkHistoricalStats(park, 2);
     expect(result.topAttractions.map((a) => a.rank)).toEqual([1, 2]);
@@ -158,7 +257,7 @@ describe("ParkHistoricalStatsService", () => {
   it("populates meta (totalSampleDays = operating-day count)", async () => {
     const result = await service.getParkHistoricalStats(park, 3);
     expect(result.meta.windowYears).toBe(3);
-    expect(result.meta.schemaVersion).toBe(3);
+    expect(result.meta.schemaVersion).toBe(4);
     expect(result.meta.totalSampleDays).toBe(45);
     expect(result.meta.displayable).toBe(true); // 45 >= 30 (default)
     expect(() => new Date(result.meta.generatedAt).toISOString()).not.toThrow();

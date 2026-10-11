@@ -13,6 +13,7 @@ import {
   ParkHistoricalStatsDto,
   MonthStatDto,
   DayOfWeekStatDto,
+  DayStatDto,
   TopAttractionStatDto,
 } from "./dto/park-historical-stats.dto";
 import {
@@ -26,9 +27,20 @@ import { HISTORICAL_STATS_CACHE_VERSION } from "../common/cache/cache-keys";
 import { closedParkDaysCte, isNotAClosedParkDay } from "./closed-park-days.sql";
 
 /** Response schema version — bump when the contract changes (see DTO). */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 /** Default minimum sample days before the section is considered displayable. */
 const DEFAULT_MIN_SAMPLE_DAYS = 30;
+/**
+ * Longest `busiestDays` / `quietestDays` list. With the floor below, the two
+ * lists can never share a day.
+ */
+const EXTREME_DAYS_LIMIT = 5;
+/**
+ * Operating days a park needs before the two lists are filled. Twice
+ * {@link EXTREME_DAYS_LIMIT}, so "busiest five" and "quietest five" are
+ * disjoint sets rather than the same days read from both ends.
+ */
+const MIN_EXTREME_DAYS = 10;
 /** Drop noisy single-sample hours from the aggregate scan. */
 const MIN_SAMPLES_PER_HOUR = 2;
 
@@ -87,6 +99,8 @@ const MIN_HOUR_RIDE_RATIO = 0.5;
 
 /** One operating day's headliner-only values (peak + typical wait). */
 interface DayValue {
+  /** Park-local calendar day, `yyyy-MM-dd`. */
+  date: string;
   month: number;
   dow: number;
   dayValueP90: number;
@@ -273,10 +287,16 @@ export class ParkHistoricalStatsService {
     }));
 
     const totalSampleDays = dayValues.length;
+    const { busiestDays, quietestDays } = this.rankExtremeDays(
+      dayValues,
+      typicalDayPeak,
+    );
 
     return {
       byMonth,
       byDayOfWeek,
+      busiestDays,
+      quietestDays,
       topAttractions,
       meta: {
         parkSlug: park.slug,
@@ -922,6 +942,7 @@ export class ParkHistoricalStatsService {
            GROUP BY day, aid
          )
          SELECT
+           to_char(day, 'YYYY-MM-DD')   AS day_text,
            EXTRACT(MONTH FROM day)::int AS month,
            EXTRACT(DOW FROM day)::int   AS dow,
            AVG(day_peak)                AS day_value_p90,
@@ -941,6 +962,7 @@ export class ParkHistoricalStatsService {
       );
 
     return rows.map((r) => ({
+      date: String(r.day_text),
       month: Number(r.month),
       dow: Number(r.dow),
       dayValueP90: Number(r.day_value_p90),
@@ -1010,6 +1032,41 @@ export class ParkHistoricalStatsService {
        LIMIT $5`,
       [parkId, timezone, startDate, endDate, topN, minAttractionDays],
     );
+  }
+
+  /**
+   * The park's fullest and quietest measured days, from the same per-day
+   * headliner rows `byDayOfWeek` averages, so a day's level reads on the same
+   * scale as a weekday's. A shut day is not a row (see
+   * `queryHeadlinerDayValues`), which is why it cannot be a quietest day.
+   * Ties on the daily peak resolve to the earlier date, so the lists are stable
+   * between two computations. Below {@link MIN_EXTREME_DAYS} both are empty.
+   */
+  private rankExtremeDays(
+    dayValues: DayValue[],
+    typicalDayPeak: number,
+  ): { busiestDays: DayStatDto[]; quietestDays: DayStatDto[] } {
+    if (dayValues.length < MIN_EXTREME_DAYS) {
+      return { busiestDays: [], quietestDays: [] };
+    }
+    const toDto = (d: DayValue): DayStatDto => ({
+      date: d.date,
+      avgCrowdScore: this.toCrowdScore(d.dayValueP50),
+      avgCrowdLevel: this.toCrowdLevel(d.dayValueP90, typicalDayPeak),
+      avgWaitP50: roundToNearest5Minutes(d.dayValueP50),
+      avgWaitP90: roundToNearest5Minutes(d.dayValueP90),
+    });
+    const byDate = (a: DayValue, b: DayValue) => a.date.localeCompare(b.date);
+    const busiest = [...dayValues].sort(
+      (a, b) => b.dayValueP90 - a.dayValueP90 || byDate(a, b),
+    );
+    const quietest = [...dayValues].sort(
+      (a, b) => a.dayValueP90 - b.dayValueP90 || byDate(a, b),
+    );
+    return {
+      busiestDays: busiest.slice(0, EXTREME_DAYS_LIMIT).map(toDto),
+      quietestDays: quietest.slice(0, EXTREME_DAYS_LIMIT).map(toDto),
+    };
   }
 
   /** Linear-interpolation median over an array (0 when empty). */
