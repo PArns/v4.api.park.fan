@@ -49,6 +49,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="all | busy | fh | sk | <raw SQL> (default: all and busy). The slot "
                          "table is keyed by L, park_id, date, busy, fh, sk -- there is no "
                          "headliner flag at slot level, so 'headliners' is not available here.")
+    ap.add_argument("--part", default="slot", choices=["slot", "intraday"],
+                    help="slot = daily-origin leads (key L, UC2/UC3/D*); intraday = "
+                         "UC1/UC2-intraday lead buckets (key lead_key). They are separate "
+                         "aggregations with DIFFERENT reference candidates, so the "
+                         "available baselines differ: snaive7/wt_med/clim on slot, "
+                         "persistence/snaive7/wt_med/clim on intraday, plus whatever "
+                         "MLBENCH_EXTRA_PAIR_REFS added at scoring time.")
     ap.add_argument("--memory", default="2000MB")
     ap.add_argument("--threads", type=int, default=2)
     ap.add_argument("--out", default=None, help="write the rows to this CSV as well")
@@ -68,22 +75,32 @@ def main(argv: list[str] | None = None) -> int:
         flt.append(f"date >= DATE '{a.target_from}'")
     if a.target_to:
         flt.append(f"date <= DATE '{a.target_to}'")
+    lead_col = "L" if a.part == "slot" else "lead_key"
     con.execute(f"""CREATE TABLE slot AS SELECT * FROM
-        read_parquet('{run}/parts/slot/*.parquet', union_by_name=true)
+        read_parquet('{run}/parts/{a.part}/*.parquet', union_by_name=true)
         WHERE {' AND '.join(flt)}""")
     cols = {r[0] for r in con.execute("DESCRIBE slot").fetchall()}
+    if lead_col not in cols:
+        raise SystemExit(f"{a.part} part has no {lead_col} column (found {sorted(cols)[:8]}...)")
 
     boot_pd = Bootstrapper(REPS, SEED)
     boot_park = Bootstrapper(REPS, SEED + 1)
     rows: list[dict] = []
-    leads = [r[0] for r in con.execute("SELECT DISTINCT L FROM slot ORDER BY L").fetchall()]
+    leads = [r[0] for r in con.execute(
+        f"SELECT DISTINCT {lead_col} FROM slot ORDER BY {lead_col}").fetchall()]
 
     for seg in segments:
-        if seg == "headliners":
-            raise SystemExit("--segment headliners is not available: the slot table carries "
-                             "no headliner flag (keys are L, park_id, date, busy, fh, sk). "
-                             "Use the harness report for headliner cells.")
-        seg_sql = {"all": "TRUE", "busy": "busy", "fh": "fh", "sk": "sk"}.get(seg, seg)
+        if seg == "headliners" and a.part == "slot":
+            raise SystemExit("--segment headliners is not available on the slot part: it "
+                             "carries no headliner flag (keys are L, park_id, date, busy, "
+                             "fh, sk). The intraday part does have `hl` (--part intraday); "
+                             "otherwise use the harness report for headliner cells.")
+        seg_sql = {"all": "TRUE", "busy": "busy", "fh": "fh", "sk": "sk",
+                   "headliners": "hl"}.get(seg, seg)
+        if seg_sql not in ("TRUE",) and seg_sql not in cols and seg in (
+                "busy", "fh", "sk", "headliners"):
+            print(f"SKIP segment {seg}: the {a.part} part has no `{seg_sql}` key")
+            continue
         for m in a.model:
             if f"n__{m}" not in cols:
                 print(f"SKIP: the run has no column n__{m} (model not scored)")
@@ -96,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
                           f"(re-score with MLBENCH_EXTRA_PAIR_REFS={r})")
                     continue
                 g = con.execute(f"""
-                    SELECT L, park_id, date,
+                    SELECT {lead_col} AS L, park_id, date,
                            sum(pn__{m}__{r}) AS pn, sum(psm__{m}__{r}) AS psm,
                            sum(psr__{m}__{r}) AS psr,
                            sum(n__{m}) AS n_m, sum(sae__{m}) AS sae_m,
@@ -119,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                     _, lo_pk, hi_pk, u_pk = boot_park.diff(p["park_id"].astype(str), nm, dm, nr, dr)
                     n_m, n_r = d["n_m"].sum(), d["n_r"].sum()
                     rows.append(dict(
-                        segment=seg, lead=int(L), model=m, ref=r,
+                        part=a.part, segment=seg, lead=L, model=m, ref=r,
                         model_mae_own=d["sae_m"].sum() / n_m if n_m else float("nan"),
                         ref_mae_own=d["sae_r"].sum() / n_r if n_r else float("nan"),
                         model_mae_paired=nm.sum() / dm.sum(),
