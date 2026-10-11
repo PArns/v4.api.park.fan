@@ -319,8 +319,58 @@ through the ordinary plug-in path, sharded like any other run.
 
 ### Sizing — the caps are 10 GB VRAM and 8 GB container RAM
 
+Four of these numbers were wrong until the 2026-10-11 run measured them, and each error
+cost a failed block, so they are given as measurements with the failure they explain.
+
+**The training window pool, not `windows_batch_size`, sets peak VRAM.**
+NeuralForecast's `_create_windows(step="train")` unfolds the panel into a *view* and then
+does `windows.permute(0, 2, 3, 1).flatten(0, 1)` — on a non-contiguous view that flatten
+is a **copy**, and it happens *before* `windows_batch_size` samples from it. So the peak is
+
+    batch_size × ceil(T_train / step_size) × (input_size + h) × n_cols × 4 bytes
+
+and does **not** depend on `windows_batch_size` or `inference_windows_batch_size` at all.
+At the default `step_size = 1`, with `batch_size = 64`, a September block's
+`T_train = 4,536`, `L + h = 648` and 20 columns, that is **14.016 GiB** — which is exactly
+the allocation the 2026-10-10 `torch.OutOfMemoryError` reported inside a 9.28 GiB budget,
+while peak *device* VRAM was only 350 MiB. `train_step_size()` therefore derives the
+unfold step from a VRAM budget (`MLBENCH_NF_POOL_BUDGET`, default 1 GiB) and nudges it
+until it is **coprime with `K`**, because a step of 18 would pin every training window to
+one hour of the day. Measured result on all parks: step 5–17 depending on the block, pool
+0.65–0.83 GiB, **peak device VRAM 1.7–2.8 GB** against the 10 GB cap.
+
+It is a **training-only** knob and that was verified rather than assumed: `predict()` uses
+`self.predict_step_size`, which is assigned from `predict()`'s own argument, and
+`forecast_block` passes `step_size=h` explicitly — so the constructor value cannot reach a
+forecast. The constructor never even creates the attribute.
+
+**Rides with under a day of measured history must leave the fit.** A window is kept only
+if it has an available step in the insample **and** one in the horizon
+(`training_data_availability_threshold` defaults to 0.0, so both minima are 1), so a ride
+with a single available step yields no usable window — a lone point cannot be in both
+halves of one window — and a whole batch of such rides raises
+`No windows available for training` and kills the block. `build_panel` keeps any ride with
+one truth slot before the cutoff, so every later block admits more of them: the 2026-06
+block was the first to die this way, and 117–167 series per block are below
+`MIN_TRAIN_STEPS`. They are dropped from the **fit** and kept in the **forecasts**,
+because a ride too sparse to train on at the block cutoff may be well measured by an
+origin three weeks later.
+
+**Two container-RAM terms, both of which OOM-killed a block before being found.** The
+cached `attraction_id` was a numpy `'<U36'` array — UTF-32, 144 bytes per element, so
+~800 MB for one late block's 06:00 file and double that at the block's final `concat`; it
+is now a parquet dictionary column (4 bytes per row), which also shrinks the cache files.
+And `build_panel` wrote its park-hour covariates with
+`pc.reshape(P, T, F)[rides.park_id.map(p_ix)]`, whose fancy index materialises an
+`[N, T, F]` temporary — 774 MB for July, 1.26 GB for September, nearly as large as the
+panel it is written *into* and allocated on top of it. Covariates are shared by every ride
+of a park, so they are now scattered park by park, broadcasting a `[T, F]` slice; a test
+asserts the result is bit-identical. Measured peak after both fixes: **3.2–4.0 GiB** of
+the 8 GiB cap.
+
 The numbers that drive the knobs, for the 2026-10-09 export (3,601 rides with truth,
-157 parks; L + h = (28 + 8) × 18 = 648 steps, 22 panel columns):
+157 parks; L + h = (28 + 8) × 18 = 648 steps, **20** panel columns — the two schedule
+holiday flags were dropped, see S11 below):
 
 | | 20-park subset | all parks |
 |---|---|---|
