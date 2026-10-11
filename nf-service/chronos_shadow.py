@@ -50,6 +50,7 @@ hour gets no value, never a 0.
 from __future__ import annotations
 
 import datetime as dt
+import gc
 import logging
 import os
 import threading
@@ -404,6 +405,10 @@ def to_curves(rows: pd.DataFrame, coverage_of) -> list[dict]:
 # --------------------------------------------------------------------------- engine
 
 
+#: how long unload() refuses new work (the TFT runner sets is_training well before)
+UNLOAD_BLOCK_SECONDS = 600
+
+
 class ChronosEngine:
     """The resident Chronos-2 pipeline: loaded lazily ONCE, inference under one
     lock (a single GPU, a single uvicorn worker — two concurrent captures must
@@ -419,6 +424,10 @@ class ChronosEngine:
         self.peak_vram_gb = 0.0
         self.load_seconds = None
         self.lock = threading.Lock()
+        # Set by unload(): a TFT run writes is_training only once its subprocess
+        # has imported torch, tens of seconds later; this latch covers that gap
+        # so no request reloads the weights into the GPU the training needs.
+        self._blocked_until = 0.0
 
     def _load(self):
         import torch
@@ -437,11 +446,14 @@ class ChronosEngine:
         logger.info("Chronos-2 loaded on %s in %.1fs", self.device, self.load_seconds)
 
     def unload(self) -> None:
-        """Frees the weights (before a TFT training run needs the GPU)."""
+        """Frees the weights (before a TFT training run needs the GPU) and refuses
+        new work for UNLOAD_BLOCK_SECONDS, until is_training has taken over."""
         with self.lock:
+            self._blocked_until = time.monotonic() + UNLOAD_BLOCK_SECONDS
             if self.pipe is None:
                 return
             self.pipe = None
+            gc.collect()  # accelerate hooks form cycles; free them before empty_cache
             try:
                 import torch
 
@@ -453,6 +465,10 @@ class ChronosEngine:
     @property
     def loaded(self) -> bool:
         return self.pipe is not None
+
+    @property
+    def blocked(self) -> bool:
+        return time.monotonic() < self._blocked_until
 
     def forecast(self, task: Task) -> np.ndarray:
         """(n_rides, H, 3) quantiles — the bench's ``ChronosBackend.forecast``."""

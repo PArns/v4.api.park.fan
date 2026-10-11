@@ -346,7 +346,7 @@ def chronos_forecast(req: ChronosRequest):
 
     if not settings.CHRONOS_ENABLED:
         raise HTTPException(status_code=503, detail="Chronos shadow disabled (CHRONOS_ENABLED=false)")
-    if _read_status().get("is_training"):
+    if _read_status().get("is_training") or _chronos_engine().blocked:
         raise HTTPException(status_code=503, detail="TFT training in progress — shadow skipped")
     if req.variant not in chronos_shadow.VARIANTS:
         raise HTTPException(status_code=400, detail="variant must be live or grid")

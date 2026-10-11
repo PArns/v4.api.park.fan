@@ -14,6 +14,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 
 import numpy as np
 import pandas as pd
@@ -479,3 +480,29 @@ def test_endpoint_rejects_a_park_id_that_is_not_a_uuid(client):
     tc, _ = client
     r = tc.post("/chronos/forecast", json={"park_id": "../x", "origin_at": "2026-10-09T10:05:00Z"})
     assert r.status_code == 422
+
+
+def test_unload_refuses_new_work_until_training_has_taken_over(monkeypatch):
+    import chronos_shadow
+
+    eng = chronos_shadow.ChronosEngine("m", "r", "/tmp", 0.25)
+    assert not eng.blocked
+    eng.unload()
+    assert eng.blocked
+    monkeypatch.setattr(chronos_shadow.time, "monotonic", lambda: 10**12)
+    assert not eng.blocked
+
+
+def test_a_capture_does_not_wait_behind_a_running_backfill(tmp_path):
+    # The park lock is held (as by a backfill): the capture answers "warming"
+    # after the short acquire timeout instead of blocking until NestJS gives up.
+    lock = chronos_data._park_locks[PID]
+    assert lock.acquire()
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(chronos_data.Warming):
+            chronos_data.past_truth(PID, ["a"], dt.date(2026, 10, 10), 30,
+                                    chronos_data.TruthCache(str(tmp_path)), pd.DataFrame())
+        assert time.monotonic() - t0 < 10
+    finally:
+        lock.release()

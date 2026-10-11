@@ -269,7 +269,12 @@ def past_truth(park_id: str, rides: list[str], local_today: dt.date, need_days: 
     one goes to the background worker and :class:`Warming` is raised."""
     need_from = local_today - dt.timedelta(days=need_days)
     yesterday = local_today - dt.timedelta(days=1)
-    with _park_locks[park_id]:
+    lock = _park_locks[park_id]
+    # A backfill of this park may hold the lock for many chunks; a capture must
+    # not sit behind it until NestJS times out — it answers "warming" instead.
+    if not lock.acquire(timeout=5):
+        raise Warming("park context is being backfilled")
+    try:
         df, meta = cache.load(park_id)
         missing = sum((b - a).days + 1 for a, b in _missing_chunks(meta, need_from, yesterday))
         if missing > settings.CHRONOS_INLINE_FILL_DAYS:
@@ -277,6 +282,8 @@ def past_truth(park_id: str, rides: list[str], local_today: dt.date, need_days: 
             raise Warming(f"{missing} days of context queued for backfill")
         if missing:
             df = _fill(park_id, rides, need_from, yesterday, cache, windows)
+    finally:
+        lock.release()
     return df[(df["date"] >= need_from) & (df["date"] <= yesterday)]
 
 
