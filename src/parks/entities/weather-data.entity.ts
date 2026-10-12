@@ -26,7 +26,10 @@ import { Park } from "./park.entity";
  * - Forecast: 16 days ahead, updated every 12 hours
  */
 @Entity("weather_data")
-@Index("idx_weather_1", ["parkId", "date"])
+// No ("parkId", date) index: the composite primary key below is exactly that
+// btree. `idx_weather_1` duplicated it and was removed in PAR-872 — drop it by
+// hand before a deploy that carries this change (see the runbook §2a), or
+// `synchronize` drops it at boot with a blocking DROP INDEX.
 @Index("weather_data_date_idx", ["date"])
 export class WeatherData {
   @ManyToOne(() => Park, { onDelete: "CASCADE" })

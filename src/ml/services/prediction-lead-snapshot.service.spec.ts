@@ -1,6 +1,10 @@
 import { Test } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
-import { PredictionLeadSnapshotService } from "./prediction-lead-snapshot.service";
+import {
+  PredictionLeadSnapshotService,
+  SCORING_UPDATE_CHUNK,
+  buildLeadSnapshotScoreUpdate,
+} from "./prediction-lead-snapshot.service";
 import { PredictionLeadSnapshot } from "../entities/prediction-lead-snapshot.entity";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { PredictionDto } from "../dto/prediction-response.dto";
@@ -30,6 +34,9 @@ describe("PredictionLeadSnapshotService", () => {
   let redis: { store: Map<string, string> };
   /** Every condition the read path added, so a test can pin the filter. */
   let conditions: string[];
+  /** The repository fake, so the scoring tests can feed `find` and read `query`. */
+  let repo: { find: jest.Mock; save: jest.Mock; query: jest.Mock };
+  let peaks: Map<string, { attractionId: string; peak: number }[]>;
 
   const makeService = async () => {
     inserted = [];
@@ -47,6 +54,12 @@ describe("PredictionLeadSnapshotService", () => {
     aggregate = { mae: null, scored: "0" };
     redis = { store: new Map<string, string>() };
     conditions = [];
+    peaks = new Map();
+    repo = {
+      find: jest.fn().mockResolvedValue([]),
+      save: jest.fn().mockResolvedValue([]),
+      query: jest.fn().mockResolvedValue([]),
+    };
 
     // The read path chains select/addSelect/where/andWhere and ends in
     // getRawOne; the write path chains insert/into/values/orIgnore/execute.
@@ -73,8 +86,9 @@ describe("PredictionLeadSnapshotService", () => {
           provide: getRepositoryToken(PredictionLeadSnapshot),
           useValue: {
             createQueryBuilder: () => insertBuilder,
-            find: jest.fn().mockResolvedValue([]),
-            save: jest.fn().mockResolvedValue([]),
+            find: (...a: unknown[]) => repo.find(...a),
+            save: (...a: unknown[]) => repo.save(...a),
+            query: (...a: unknown[]) => repo.query(...a),
           },
         },
         {
@@ -93,7 +107,9 @@ describe("PredictionLeadSnapshotService", () => {
             getHeadlinerAttractions: jest
               .fn()
               .mockImplementation(async () => headliners),
-            getHeadlinerDailyPeaks: jest.fn().mockResolvedValue(new Map()),
+            getHeadlinerDailyPeaks: jest
+              .fn()
+              .mockImplementation(async () => peaks),
           },
         },
       ],
@@ -337,6 +353,127 @@ describe("PredictionLeadSnapshotService", () => {
 
       aggregate = { mae: "5.0", scored: enough };
       await expect(service.getLeadTimeMae(7)).resolves.toBeNull();
+    });
+  });
+
+  // ── Scoring ────────────────────────────────────────────────────────────────
+  // `save()` on loaded entities was one UPDATE per row: ~340 of them at 03:00,
+  // all queueing for the pool at once (PAR-872). The write is now one
+  // `UPDATE … FROM (VALUES …)` per chunk, with exactly the values save() wrote.
+  describe("scoreDueSnapshots", () => {
+    const row = (
+      attractionId: string,
+      targetDate: string,
+      leadDays: number,
+      predictedWaitTime = 40,
+    ) =>
+      ({
+        attractionId,
+        targetDate,
+        leadDays,
+        predictedWaitTime,
+        actualWaitTime: null,
+        absoluteError: null,
+        scoredAt: null,
+      }) as unknown as PredictionLeadSnapshot;
+
+    const now = new Date("2026-10-12T03:00:00Z");
+
+    it("writes every scored row in one set-based UPDATE, never through save()", async () => {
+      repo.find.mockResolvedValue([
+        row("taron", "2026-10-09", 1, 40),
+        row("fly", "2026-10-09", 7, 30),
+        row("gone", "2026-10-09", 1),
+      ]);
+      peaks.set("2026-10-09", [{ attractionId: "taron", peak: 52.4 }]);
+
+      await expect(service.scoreDueSnapshots([park], now)).resolves.toEqual({
+        scored: 2,
+        withActual: 1,
+      });
+
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(repo.query).toHaveBeenCalledTimes(1);
+      const [sql, params] = repo.query.mock.calls[0];
+      expect(sql).toMatch(/^UPDATE prediction_lead_snapshots AS s/);
+      expect(sql).toContain("FROM (VALUES");
+      // scoredAt once, then five per row: taron scored, fly without an actual,
+      // and the orphan (no longer a headliner) marked seen with nothing else.
+      expect(params).toEqual([
+        now,
+        "taron",
+        "2026-10-09",
+        1,
+        52,
+        12,
+        "fly",
+        "2026-10-09",
+        7,
+        null,
+        null,
+        "gone",
+        "2026-10-09",
+        1,
+        null,
+        null,
+      ]);
+    });
+
+    it("leaves a park unscored when its peaks query failed", async () => {
+      repo.find.mockResolvedValue([row("taron", "2026-10-09", 1)]);
+      const analytics = (
+        service as unknown as {
+          analyticsService: { getHeadlinerDailyPeaks: jest.Mock };
+        }
+      ).analyticsService;
+      analytics.getHeadlinerDailyPeaks.mockRejectedValueOnce(new Error("boom"));
+
+      await service.scoreDueSnapshots([park], now);
+      expect(repo.query).not.toHaveBeenCalled();
+    });
+
+    it("chunks the update so no statement carries more than one chunk", async () => {
+      const many = Array.from({ length: SCORING_UPDATE_CHUNK + 1 }, (_, i) =>
+        row("taron", `2026-09-${String((i % 28) + 1).padStart(2, "0")}`, i),
+      );
+      repo.find.mockResolvedValue(many);
+
+      await service.scoreDueSnapshots([park], now);
+      expect(repo.query).toHaveBeenCalledTimes(2);
+      expect(repo.query.mock.calls[0][1]).toHaveLength(
+        1 + 5 * SCORING_UPDATE_CHUNK,
+      );
+      expect(repo.query.mock.calls[1][1]).toHaveLength(1 + 5);
+    });
+  });
+
+  describe("buildLeadSnapshotScoreUpdate", () => {
+    it("casts every value so a NULL first row still types the column", () => {
+      const { sql, params } = buildLeadSnapshotScoreUpdate(
+        [
+          {
+            attractionId: "a",
+            targetDate: "2026-10-01",
+            leadDays: 3,
+            actualWaitTime: null,
+            absoluteError: null,
+          },
+          {
+            attractionId: "b",
+            targetDate: "2026-10-02",
+            leadDays: 7,
+            actualWaitTime: 45,
+            absoluteError: 5,
+          },
+        ],
+        new Date(0),
+      );
+      expect(sql).toContain(
+        "($2::uuid, $3::date, $4::smallint, $5::int, $6::int), ($7::uuid, $8::date, $9::smallint, $10::int, $11::int)",
+      );
+      expect(sql).toContain("scored_at = $1");
+      expect(sql).toContain("s.lead_days = v.lead_days");
+      expect(params).toHaveLength(11);
     });
   });
 });

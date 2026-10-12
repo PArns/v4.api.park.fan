@@ -175,6 +175,8 @@ export const OPEN_ATTRACTIONS_COUNT_SQL = `
 const NEGATIVE_BASELINE_TTL = 6 * 60 * 60;
 /** Sentinel value marking a negatively-cached P90 baseline (read path skips it). */
 const P90_NEGATIVE_SENTINEL = "-1";
+/** TTL (seconds) of the global `queue_data` row total (PAR-872). */
+export const QUEUE_DATA_TOTAL_COUNT_TTL_SECONDS = 6 * 60 * 60;
 
 @Injectable()
 export class AnalyticsService {
@@ -3195,7 +3197,17 @@ export class AnalyticsService {
       this.getCachedCount(this.attractionRepository, "count:attractions"),
       this.getCachedCount(this.showRepository, "count:shows"),
       this.getCachedCount(this.restaurantRepository, "count:restaurants"),
-      this.getCachedCount(this.queueDataRepository, "count:queue_data"),
+      // Exact, but recounted only every six hours (PAR-872). The full count
+      // reads all 293 chunks (~0.5 s, hourly before) to show a total that
+      // grows ~0.4 % a day, so six hours of staleness is under 0.1 %.
+      // `approximate_row_count('queue_data')` was measured as the cheap
+      // alternative and rejected: on 2026-10-12 it answered 1 346 100 431
+      // against an exact 48 365 912 — 28× too high on the compressed chunks.
+      this.getCachedCount(
+        this.queueDataRepository,
+        "count:queue_data",
+        QUEUE_DATA_TOTAL_COUNT_TTL_SECONDS,
+      ),
     ]);
 
     const openParksCount = openParks.length;

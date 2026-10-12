@@ -5,7 +5,6 @@ import {
   OneToMany,
   CreateDateColumn,
   UpdateDateColumn,
-  Index,
 } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
 
@@ -25,15 +24,19 @@ export class Destination {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
+  // No @Index() here: `unique: true` already creates a UNIQUE constraint on
+  // this column, and a second, non-unique btree beside it was a pure duplicate
+  // (PAR-872).
   @Column({ unique: true })
-  @Index()
   externalId: string; // ThemeParks.wiki ID
 
   @Column()
   name: string;
 
+  // No @Index() here: `unique: true` already creates a UNIQUE constraint on
+  // this column, and a second, non-unique btree beside it was a pure duplicate
+  // (PAR-872).
   @Column({ unique: true })
-  @Index()
   slug: string;
 
   @OneToMany(() => Park, (park) => park.destination)

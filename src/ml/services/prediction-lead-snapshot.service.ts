@@ -18,6 +18,61 @@ import { predictionLocalDate } from "../utils/prediction-local-date.util";
 const SCORING_BATCH = 5000;
 
 /**
+ * Rows per set-based scoring UPDATE. Five bind parameters each, so 500 rows is
+ * 2 501 parameters — far below Postgres' 65 535 — and one statement per chunk.
+ */
+export const SCORING_UPDATE_CHUNK = 500;
+
+/** One scored row, as the set-based UPDATE writes it. */
+export interface LeadSnapshotScore {
+  attractionId: string;
+  targetDate: string;
+  leadDays: number;
+  actualWaitTime: number | null;
+  absoluteError: number | null;
+}
+
+/**
+ * One `UPDATE … FROM (VALUES …)` for a chunk of scored rows (PAR-872).
+ *
+ * `Repository.save()` on loaded entities issues one SELECT and one UPDATE per
+ * row. At 03:00 that was ~340 single-row UPDATEs fired at once, and they were
+ * the largest cluster in the slow-query log (2026-10-11 03:00:02: 341 entries,
+ * 340 of them this table) — not because any one was slow, but because they
+ * queued for the pool together. Every value is cast in place, so a chunk whose
+ * first row has a NULL actual still types the column as int.
+ *
+ * `scoredAt` is the same instant for every row of a run, so it is one
+ * parameter ($1), not one per row.
+ */
+export function buildLeadSnapshotScoreUpdate(
+  rows: LeadSnapshotScore[],
+  scoredAt: Date,
+): { sql: string; params: unknown[] } {
+  const params: unknown[] = [scoredAt];
+  const tuples = rows.map((r) => {
+    const base = params.length;
+    params.push(
+      r.attractionId,
+      r.targetDate,
+      r.leadDays,
+      r.actualWaitTime,
+      r.absoluteError,
+    );
+    return `($${base + 1}::uuid, $${base + 2}::date, $${base + 3}::smallint, $${base + 4}::int, $${base + 5}::int)`;
+  });
+  const sql = `UPDATE prediction_lead_snapshots AS s
+SET actual_wait_time = v.actual_wait_time,
+    absolute_error = v.absolute_error,
+    scored_at = $1
+FROM (VALUES ${tuples.join(", ")}) AS v(attraction_id, target_date, lead_days, actual_wait_time, absolute_error)
+WHERE s.attraction_id = v.attraction_id
+  AND s.target_date = v.target_date
+  AND s.lead_days = v.lead_days`;
+  return { sql, params };
+}
+
+/**
  * The lead-time error curve, built forward.
  *
  * See {@link PredictionLeadSnapshot} for why this cannot be answered from the data
@@ -336,9 +391,21 @@ export class PredictionLeadSnapshotService {
 
     // Includes the orphan rows marked above, which are scored in the sense that
     // they will not be looked at again.
+    // Set-based, one statement per chunk, instead of `save()`'s one UPDATE per
+    // row (see buildLeadSnapshotScoreUpdate).
     const touched = due.filter((r) => r.scoredAt !== null);
-    if (touched.length > 0) {
-      await this.snapshotRepository.save(touched, { chunk: 500 });
+    for (let i = 0; i < touched.length; i += SCORING_UPDATE_CHUNK) {
+      const { sql, params } = buildLeadSnapshotScoreUpdate(
+        touched.slice(i, i + SCORING_UPDATE_CHUNK).map((r) => ({
+          attractionId: r.attractionId,
+          targetDate: r.targetDate,
+          leadDays: r.leadDays,
+          actualWaitTime: r.actualWaitTime ?? null,
+          absoluteError: r.absoluteError ?? null,
+        })),
+        now,
+      );
+      await this.snapshotRepository.query(sql, params);
     }
 
     return { scored, withActual };

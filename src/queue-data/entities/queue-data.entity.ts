@@ -34,8 +34,12 @@ import {
  * For Phase 2, we only fetch metadata (parks/attractions), not live data.
  */
 @Entity("queue_data")
-// Base index for attractionId + timestamp queries (used by findCurrentStatusByAttraction without status filter)
-@Index(["attractionId", "timestamp"])
+// No plain ("attractionId", "timestamp") index: `idx_queue_data_covering` below
+// leads with exactly those two columns and answers every query the plain one
+// did. The plain one (IDX_aa19b21038bdfe8d295a5f2f2c, 297 MB over 293 chunks)
+// was removed in PAR-872 — drop it by hand, chunk by chunk, before a deploy that
+// carries this change (runbook §2a); otherwise `synchronize` drops it at boot
+// with one DROP INDEX holding ACCESS EXCLUSIVE on every chunk at once.
 // Composite index for DISTINCT ON queries: attractionId + queueType + timestamp
 // Used by: findCurrentStatusByPark, findCurrentStatusByAttraction, findAllWithFilters
 @Index(["attractionId", "queueType", "timestamp"])

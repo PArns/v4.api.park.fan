@@ -255,6 +255,62 @@ ORDER BY pg_relation_size(indexrelid) DESC;
 
 **Stats reset date:** `SELECT pg_stat_reset();` — only run if you need fresh counters (resets all stats).
 
+
+### 2a. Dropping a redundant index without blocking (PAR-872)
+
+Production runs TypeORM `synchronize`, so **an `@Index` removed from an entity is
+dropped at the next boot with a plain, blocking `DROP INDEX`**. On a hypertable that
+one statement takes `ACCESS EXCLUSIVE` on the parent and on every chunk at once, and
+holds them all until it commits — measured on TimescaleDB 2.24 / PG 18: 21 chunks gave
+42 `AccessExclusiveLock`s in one transaction. The order is therefore always:
+
+1. drop the index by hand, without blocking, **before** the deploy;
+2. deploy the entity change in the same release, so `synchronize` finds nothing left.
+
+`DROP INDEX CONCURRENTLY` on the hypertable's own index fails while chunk indexes exist
+(`DROP INDEX CONCURRENTLY does not support dropping multiple objects`), but it works on
+each **chunk** index, compressed chunks included, and once those are gone it works on
+the parent too. Verified on `timescale/timescaledb:2.24.0-pg18`; new chunks created
+afterwards do not get the index back, and `decompress_chunk` still works.
+
+Each `CONCURRENTLY` statement runs in its own transaction, waits for transactions
+already using the table, and is bounded by `lock_timeout`. Run outside 01:00–09:30 UTC,
+outside :00–:12 of the hour, and away from the compression policy on that table
+(`SELECT job_id, next_start FROM timescaledb_information.job_stats WHERE hypertable_name = '…';`).
+
+```bash
+# On the host, from the repository. lock_timeout 2 s: a statement that cannot get its
+# lock gives up instead of queueing readers behind it; just run the same command again.
+PARKFAN_PSQL_LOCK_TIMEOUT=2s scripts/prod-psql.sh <<'SQL'
+-- one chunk index at a time, generated from the catalogue
+SELECT format('DROP INDEX CONCURRENTLY IF EXISTS %I.%I;', n.nspname, c.relname)
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE c.relkind = 'i' AND n.nspname = '_timescaledb_internal'
+   AND c.relname LIKE '%chunk_IDX_aa19b21038bdfe8d295a5f2f2c'
+\gexec
+-- then the parent; if a chunk was created in between this fails with the
+-- "multiple objects" error — run the whole block again
+DROP INDEX CONCURRENTLY IF EXISTS public."IDX_aa19b21038bdfe8d295a5f2f2c";
+SQL
+```
+
+Same block with `idx_weather_1` for `weather_data`. On plain tables a single
+`DROP INDEX CONCURRENTLY IF EXISTS public."<name>";` is enough.
+
+**Dropped this way in PAR-872** (all verified read-only first — identical key columns,
+no predicate, and the one kept is the constraint-backed or the covering one):
+
+| table | dropped | kept | size | why it was redundant |
+| --- | --- | --- | --- | --- |
+| `queue_data` (hypertable, 293 chunks) | `IDX_aa19b21038bdfe8d295a5f2f2c` `(attractionId, timestamp)` | `idx_queue_data_covering` `(attractionId, timestamp, status, queueType)` | 297 MB | a leading prefix of the covering index |
+| `weather_data` (hypertable, 45 chunks) | `idx_weather_1` `(parkId, date)` | `weather_data_pkey` | 1.5 MB | the primary key, column for column |
+| `destinations` | `IDX_30864aeaf404f4a6d3f816bd8c` `(slug)`, `IDX_97c24ff3f37564f943658aba19` `(externalId)` | `UQ_30864aeaf404f4a6d3f816bd8c5`, `UQ_97c24ff3f37564f943658aba19e` | 48 kB | non-unique twin of a `UNIQUE` constraint |
+| `restaurants` | `IDX_728d45b746ca82dca8f04cfd9b` `(externalId)` | `UQ_728d45b746ca82dca8f04cfd9be` | 304 kB | same |
+| `shows` | `IDX_a97b856e5ea567f8127754ff14` `(externalId)` | `UQ_a97b856e5ea567f8127754ff140` | 312 kB | same |
+
+The E2E spec `test/e2e/db-cleanup-writes.e2e-spec.ts` fails if `synchronize` would
+build any of them again.
+
 ---
 
 ## 3. Seq Scan Analysis
@@ -342,10 +398,30 @@ Run `SET maintenance_work_mem = '256MB';` first, and never between 05:50 and 07:
 training (`ml-training/train-model`, cron 06:00 UTC, 35–70 min, an ml-service
 subprocess at 6.4 GB RSS when killed and ~13 GB at peak) on the shared 29 GB host.
 Trivial queries took 40 s in the seconds before. No new model was registered;
-`v20261011_0600` stayed active. A large autovacuum at 06:15 cannot be proven — the
-Postgres log went with a deploy — but the configuration allowed one: ten autovacuum
-workers, each inheriting `maintenance_work_mem` = 2 GB, so up to 20 GB of vacuum
-memory beside `shared_buffers` = 7 GB.
+`v20261011_0600` stayed active.
+
+**What caused it — corrected (PAR-872).** This section first blamed memory pressure
+with autovacuum as a likely part of it. The kernel's OOM dump (`journalctl -k`,
+`global_oom`) says otherwise:
+
+| process group | count | anonymous RSS |
+| --- | --- | --- |
+| `postgres` (all backends, autovacuum included) | 75 | **0.51 GB** |
+| Node.js, uid `arns` — the local Linear runner | 28 | **15.29 GB** (~550 MB each) |
+| `python3.13` — the CatBoost subprocess, the victim | 1 | 6.12 GB |
+
+The 28 Node processes were the local Linear runner's 06:00 run
+(`park-worker-local.timer`, a user unit on the host): its log shows `pnpm test` at
+06:14:21 — jest, one worker per core at ~550 MB each, load average 66 — and then
+`pnpm test:e2e`. The OOM came 94 s after `pnpm test` started, at the training's peak.
+Postgres' private memory was half a gigabyte; autovacuum is not needed to explain
+the kill. The VACUUM window and the autovacuum memory cap below stay, as hygiene,
+but they would not have prevented it.
+
+**Changed on the host on 2026-10-12, evening (not in this repository):** the runner
+timer moved out of the training window to 09:45, 13:45, 17:45 and 21:45 UTC, and the
+unit runs under `MemoryMax=18G`. Check with
+`systemctl --user list-timers park-worker-local.timer` on the host.
 
 **Changed on 2026-10-12 (ALTER SYSTEM + reload, no restart):**
 `autovacuum_work_mem = 256MB`. Check with
@@ -391,12 +467,32 @@ no guarantee.
   2026-10-12. The daily `cleanup-old` job at 04:00 applies the same windows; the
   per-tick copy is gone.
 
-**Recommended, not applied** (both need a decision, the first a restart):
-- `autovacuum_max_workers` 10 → 4 at the next planned Postgres restart. Ten workers
-  only help while many tables need vacuuming at once; with the churn tables done at
-  04:50 four are enough, and it caps autovacuum memory at 4 × 256 MB.
-- `log_autovacuum_min_duration = '30s'` (reload is enough). Today it is the default
-  10 min, which is why the 06:15 question cannot be answered from the log.
+**Applied on 2026-10-12, evening** (ALTER SYSTEM + `pg_reload_conf()`; on PG18 all of
+these take effect on reload, `autovacuum_max_workers` included because it stays under
+`autovacuum_worker_slots` = 16):
+
+| setting | before | now | why |
+| --- | --- | --- | --- |
+| `max_wal_size` | 1 GB | 4 GB | half of all checkpoints were *requested* (forced by WAL volume), 28 536 against 28 667 timed |
+| `autovacuum_max_workers` | 10 | 4 | with the churn tables done at 04:50 four are enough; caps autovacuum memory at 4 × 256 MB |
+| `log_autovacuum_min_duration` | 10 min | 30 s | the 06:15 question could not be answered from the log |
+| `log_temp_files` | off | 100 MB | 1.9 TB of temp files since May with no trace of who wrote them |
+| `track_io_timing` | off | on | I/O time per statement in `pg_stat_statements` |
+
+Check with
+`SELECT name, setting, source FROM pg_settings WHERE name IN ('max_wal_size','autovacuum_max_workers','log_autovacuum_min_duration','log_temp_files','track_io_timing');`
+— all `configuration file`, none `pending_restart`.
+
+**Anti-wraparound vacuum pre-empted, same evening.** The database's
+`age(datfrozenxid)` stood at 197.0 M against `autovacuum_freeze_max_age` = 200 M, held
+by never-vacuumed old hypertable chunks, compressed chunks and their TOAST tables. At
+~1.4 M XIDs a day the forced "to prevent wraparound" autovacuums would have started
+around 2026-10-14 across hundreds of relations at once — they ignore the 04:50 window
+and cannot be cancelled by a lock conflict. A targeted `VACUUM (FREEZE, ANALYZE)` of the
+51 relations with `age(relfrozenxid)` > 150 M, run by hand in a quiet window, took the
+database to **148.8 M**. Watch it with
+`SELECT age(datfrozenxid) FROM pg_database WHERE datname = current_database();`
+and repeat the same targeted freeze before it nears 200 M again (about five weeks).
 
 **Is the window holding?** After 06:00, nothing large should be autovacuuming:
 

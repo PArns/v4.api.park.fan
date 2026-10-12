@@ -72,6 +72,8 @@ Heavy analytical queries are cached with varying TTLs based on data volatility.
 
 - **Keys**:
   - `park:statistics:{parkId}` (TTL: 5 min) — Aggregated wait times, active attraction counts.
+  - `health:count:queue_data_24h`, `health:count:wait_time_predictions_24h` (TTL: 10 min) — The two 24 h row counts on `/health`, shared across instances (PAR-872). Informational; liveness is `/health/ready`. A failed count is never cached.
+  - `count:queue_data` (TTL: 6 h, the other `count:*` totals 1 h) — The global row total on the stats endpoint. Exact; `approximate_row_count` overstated it 28× on the compressed chunks.
   - `park:occupancy:{parkId}` (TTL: 5 min) — Current crowd level % calculation (ratio-vs-P50).
   - `analytics:crowdlevel:park:{parkId}:{date}` (TTL: 30 min for today, 6 h for past) — Daily crowd level and peak load.
   - `park:p50:{parkId}` (TTL: 24 h) — Park P50 baseline from headliners (table: `park_p50_baselines`). JSON `{p50, confidence}`. **Primary** baseline for live occupancy (ratio-vs-P50).

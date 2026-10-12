@@ -63,6 +63,23 @@ interface HealthStatus {
 /** How long one /health answer is served before it is built again. */
 const HEALTH_MEMO_TTL_MS = 60 * 1000;
 
+/**
+ * How long the two 24-hour row counts are shared through Redis (PAR-872).
+ *
+ * The in-process memo above is per instance and lasts a minute, and the probes
+ * arrive faster than that: production ran `COUNT(*) FROM wait_time_predictions`
+ * 2 620 times a day at 106 ms (≈280 s of database time a day, counting 1.6 M
+ * rows each time) and the queue_data 24 h count as often at 13 ms. Both are
+ * informational figures on a status page, not a liveness signal — the probe
+ * that decides "up" is /health/ready — so ten minutes of staleness costs
+ * nothing, and Redis makes the one count serve every instance.
+ */
+const HEALTH_COUNT_TTL_SECONDS = 10 * 60;
+export const HEALTH_COUNT_KEYS = {
+  waitTimes24h: "health:count:queue_data_24h",
+  predictions24h: "health:count:wait_time_predictions_24h",
+} as const;
+
 @ApiTags("health")
 @Controller("health")
 @SkipThrottle() // monitoring/uptime probes must never be rate limited
@@ -109,8 +126,9 @@ export class HealthController {
   @ApiResponse({ status: 503, description: "System is unhealthy" })
   getHealth(): Promise<HealthStatus> {
     // Ten reads per call — two of them count a day of queue_data and of
-    // wait_time_predictions, two more are HTTP calls to nf-service — about
-    // 70 ms each. It used to back the container healthcheck every 30 s; that
+    // wait_time_predictions (those two are shared through Redis for ten
+    // minutes, see HEALTH_COUNT_TTL_SECONDS), two more are HTTP calls to
+    // nf-service. It used to back the container healthcheck every 30 s; that
     // now hits /health/ready. The memo keeps an external monitor from paying
     // for the same answer more than once a minute, and shares one in-flight
     // build between concurrent callers. A failed build is not kept.
@@ -248,19 +266,48 @@ export class HealthController {
     };
   }
 
-  private async getWaitTimesCount24h(): Promise<number> {
+  /**
+   * Read-through over Redis for a count that does not need to be exact to the
+   * minute. A failed count is never cached (it answers 0, as before), and an
+   * unreachable Redis falls through to the database rather than failing.
+   */
+  private async cachedCount(
+    key: string,
+    count: () => Promise<number | null>,
+  ): Promise<number> {
     try {
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const count = await this.queueDataRepository.count({
-        where: {
-          timestamp: MoreThanOrEqual(yesterday),
-        },
-      });
-      return count;
-    } catch (error) {
-      this.logger.error("Error fetching wait times count:", error);
-      return 0;
+      const hit = await this.redis.get(key);
+      if (hit !== null) {
+        const n = Number.parseInt(hit, 10);
+        if (Number.isFinite(n)) return n;
+      }
+    } catch {
+      // Redis down: count from the database below.
     }
+    const n = await count();
+    if (n === null) return 0;
+    try {
+      await this.redis.set(key, String(n), "EX", HEALTH_COUNT_TTL_SECONDS);
+    } catch {
+      // Not cached this time; the next probe counts again.
+    }
+    return n;
+  }
+
+  private getWaitTimesCount24h(): Promise<number> {
+    return this.cachedCount(HEALTH_COUNT_KEYS.waitTimes24h, async () => {
+      try {
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        return await this.queueDataRepository.count({
+          where: {
+            timestamp: MoreThanOrEqual(yesterday),
+          },
+        });
+      } catch (error) {
+        this.logger.error("Error fetching wait times count:", error);
+        return null;
+      }
+    });
   }
 
   private async getLatestWaitTime(): Promise<Date | null> {
@@ -310,24 +357,30 @@ export class HealthController {
     }
   }
 
-  private async getPredictionsCount24h(): Promise<number> {
-    try {
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      // Query WaitTimePrediction table for predictions generated in last 24h
-      const count = await this.connection.query(
-        `SELECT COUNT(*) as count FROM wait_time_predictions 
-         WHERE "createdAt" >= $1`,
-        [yesterday],
-      );
-      return parseInt(count[0]?.count || "0", 10);
-    } catch (error) {
-      // If table doesn't exist yet (first deployment), return 0
-      if (error instanceof Error && error.message?.includes("does not exist")) {
-        return 0;
+  private getPredictionsCount24h(): Promise<number> {
+    return this.cachedCount(HEALTH_COUNT_KEYS.predictions24h, async () => {
+      try {
+        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        // Served index-only by IDX_daef (predictionType, createdAt) through
+        // PG18 skip-scan, ~90 ms for 1.6 M rows — cheap once, not per probe.
+        const count = await this.connection.query(
+          `SELECT COUNT(*) as count FROM wait_time_predictions 
+           WHERE "createdAt" >= $1`,
+          [yesterday],
+        );
+        return parseInt(count[0]?.count || "0", 10);
+      } catch (error) {
+        // If table doesn't exist yet (first deployment), return 0
+        if (
+          error instanceof Error &&
+          error.message?.includes("does not exist")
+        ) {
+          return null;
+        }
+        this.logger.error("Error fetching predictions count:", error);
+        return null;
       }
-      this.logger.error("Error fetching predictions count:", error);
-      return 0;
-    }
+    });
   }
 
   private async checkRedisConnection(): Promise<boolean> {
