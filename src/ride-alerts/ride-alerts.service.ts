@@ -106,6 +106,38 @@ export class RideAlertsService {
     return { attraction, park: attraction.park };
   }
 
+  /**
+   * The parks each of these subscriptions has a ride alert in, as park ids.
+   *
+   * For the `rain-soon` push, which treats "has an alert on a ride of this park"
+   * as the same signal as "has a plan for it today". Retired rides are left
+   * out: an alert on one can never fire, so it says nothing about a visit.
+   */
+  async parkIdsBySubscription(
+    subscriptionIds: string[],
+  ): Promise<Map<string, Set<string>>> {
+    const result = new Map<string, Set<string>>();
+    if (subscriptionIds.length === 0) return result;
+    const rows = await this.repository
+      .createQueryBuilder("alert")
+      .innerJoin("alert.attraction", "attraction")
+      .select("alert.subscriptionId", "subscriptionId")
+      .addSelect("attraction.parkId", "parkId")
+      .where("alert.subscriptionId IN (:...subscriptionIds)", {
+        subscriptionIds,
+      })
+      .andWhere("attraction.retiredAt IS NULL")
+      .groupBy("alert.subscriptionId")
+      .addGroupBy("attraction.parkId")
+      .getRawMany<{ subscriptionId: string; parkId: string }>();
+    for (const row of rows) {
+      const parks = result.get(row.subscriptionId) ?? new Set<string>();
+      parks.add(row.parkId);
+      result.set(row.subscriptionId, parks);
+    }
+    return result;
+  }
+
   async countForSubscription(subscriptionId: string): Promise<number> {
     return this.repository.count({ where: { subscriptionId } });
   }

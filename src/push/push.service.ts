@@ -241,6 +241,23 @@ export class PushService {
   }
 
   /**
+   * Every subscription holding `topic`, whether or not it carries a trip.
+   *
+   * A `rain-soon` subscriber may have only ride alerts, so this cannot go
+   * through `subscriptionsWithTrip`. The `@>` containment test is what the
+   * jsonb column is for; the table is one row per opted-in browser, so no
+   * index is needed (see `subscriptionsWithTrip`).
+   */
+  async subscriptionsWithTopic(topic: PushTopic): Promise<PushSubscription[]> {
+    return this.repository
+      .createQueryBuilder("s")
+      .where("s.topics @> CAST(:topics AS jsonb)", {
+        topics: JSON.stringify([topic]),
+      })
+      .getMany();
+  }
+
+  /**
    * Send one message to one browser.
    *
    * Returns whether it landed. The two failure kinds are handled differently and

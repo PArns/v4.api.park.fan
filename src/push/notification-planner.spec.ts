@@ -2,6 +2,7 @@ import {
   LEAD_MAX_MIN,
   LEAD_MIN,
   dueNotifications,
+  parksPlannedToday,
 } from "./notification-planner";
 
 /**
@@ -268,5 +269,85 @@ describe("dueNotifications", () => {
       BERLIN_0945,
     );
     expect(due.map((d) => d.what)).toEqual(["Sooner", "Later"]);
+  });
+});
+
+describe("parksPlannedToday", () => {
+  /** 2026-10-17, 09:45 in Berlin (UTC+2). */
+  const NOW = Date.parse("2026-10-17T07:45:00.000Z");
+  const geo = { continent: "europe", country: "germany", city: "bruehl" };
+  const park = (over: Record<string, unknown> = {}) => ({
+    slug: "phantasialand",
+    name: "Phantasialand",
+    timezone: "Europe/Berlin",
+    geo,
+    days: {
+      "2026-10-17": {
+        date: "2026-10-17",
+        entries: [{ id: "a", startMinute: 600 }],
+      },
+    },
+    ...over,
+  });
+  const payload = (p: unknown) => ({ version: 2, parks: { phantasialand: p } });
+
+  it("returns a park with a block on its own today, with its geographic path", () => {
+    expect(parksPlannedToday(payload(park()), NOW)).toEqual([
+      { slug: "phantasialand", geo },
+    ]);
+  });
+
+  it("counts a ticked-off block: the day is not over for having done one ride", () => {
+    const done = park({
+      days: {
+        "2026-10-17": {
+          date: "2026-10-17",
+          entries: [{ id: "a", startMinute: 600, done: true }],
+        },
+      },
+    });
+    expect(parksPlannedToday(payload(done), NOW)).toHaveLength(1);
+  });
+
+  it("leaves out a park planned for another day or with an empty day", () => {
+    const other = park({
+      days: {
+        "2026-10-18": {
+          date: "2026-10-18",
+          entries: [{ id: "a", startMinute: 600 }],
+        },
+      },
+    });
+    const empty = park({
+      days: { "2026-10-17": { date: "2026-10-17", entries: [] } },
+    });
+    expect(parksPlannedToday(payload(other), NOW)).toEqual([]);
+    expect(parksPlannedToday(payload(empty), NOW)).toEqual([]);
+  });
+
+  it("reckons today in the park's zone, not the server's", () => {
+    // 23:30 UTC on the 16th is already the 17th in Berlin.
+    const lateUtc = Date.parse("2026-10-16T23:30:00.000Z");
+    expect(parksPlannedToday(payload(park()), lateUtc)).toHaveLength(1);
+  });
+
+  it("skips a park with no zone, no geographic path or an unknown zone", () => {
+    expect(parksPlannedToday(payload(park({ timezone: null })), NOW)).toEqual(
+      [],
+    );
+    expect(parksPlannedToday(payload(park({ geo: undefined })), NOW)).toEqual(
+      [],
+    );
+    expect(
+      parksPlannedToday(payload(park({ geo: { continent: "europe" } })), NOW),
+    ).toEqual([]);
+    expect(
+      parksPlannedToday(payload(park({ timezone: "Not/AZone" })), NOW),
+    ).toEqual([]);
+  });
+
+  it("survives a malformed payload", () => {
+    expect(parksPlannedToday(null, NOW)).toEqual([]);
+    expect(parksPlannedToday({ parks: "x" }, NOW)).toEqual([]);
   });
 });

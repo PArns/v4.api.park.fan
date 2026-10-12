@@ -25,11 +25,14 @@ import {
   getTomorrowDateInTimezoneAt,
 } from "../../common/utils/date.util";
 import { PushSubscription } from "../../push/entities/push-subscription.entity";
+import { RainSoonPushService } from "../services/rain-soon-push.service";
 
 /**
  * The job that decides whose phone buzzes.
  *
- * Every five minutes, two unrelated things starting soon: for each trip
+ * Every five minutes, three unrelated things. The third is rain about to reach
+ * a park a subscriber is visiting; `RainSoonPushService` owns it, with its own
+ * once-per-front state. The other two are things starting soon: for each trip
  * someone subscribed to, what `dueNotifications` says the plan and the clock
  * mean is starting soon; and for each show someone follows, what
  * `dueShowNotifications` says about its next showtime. Both deciding
@@ -82,6 +85,7 @@ export class PushNotificationProcessor {
     private readonly tripsService: TripsService,
     private readonly showFollowsService: ShowFollowsService,
     private readonly showsService: ShowsService,
+    private readonly rainSoon: RainSoonPushService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -123,17 +127,18 @@ export class PushNotificationProcessor {
     // halves touch unrelated tables and neither result depends on the
     // other, so awaiting them one after another only ever cost wall-clock
     // time on a five-minute cron with no other reason to serialize them.
-    const [tripSent, showSent] = await Promise.all([
+    const [tripSent, showSent, rainSent] = await Promise.all([
       this.runHalf("trip", () => this.handleTripNotifications(started)),
       this.runHalf("show-follow", () =>
         this.handleShowFollowNotifications(started),
       ),
+      this.runHalf("rain-soon", () => this.rainSoon.run(started)),
     ]);
 
-    const sent = tripSent + showSent;
+    const sent = tripSent + showSent + rainSent;
     if (sent > 0) {
       this.logger.log(
-        `Sent ${sent} push notification(s) (${tripSent} trip, ${showSent} show-follow) in ${Date.now() - started}ms`,
+        `Sent ${sent} push notification(s) (${tripSent} trip, ${showSent} show-follow, ${rainSent} rain-soon) in ${Date.now() - started}ms`,
       );
     }
   }

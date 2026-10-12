@@ -1,6 +1,7 @@
 import {
   writeMessage,
   writeRideAlertMessage,
+  writeRainSoonMessage,
   writeRideReopenMessage,
 } from "./push-messages";
 
@@ -100,5 +101,56 @@ describe("writeRideReopenMessage", () => {
     expect(message.title).toBe(title);
     expect(message.body).toBe("Phantasialand");
     expect(message.tag).toBe(notification.dedupeKey);
+  });
+});
+
+describe("writeRainSoonMessage", () => {
+  const base = {
+    dedupeKey: "rain-soon:park-1:2026-10-17:1",
+    parkName: "Phantasialand",
+    atTime: "14:20",
+    url: "/parks/europe/germany/bruehl/phantasialand",
+  };
+  const rides = [
+    { name: "Taron", waitTime: 15 },
+    { name: "Maus au Chocolat", waitTime: 20 },
+  ];
+
+  it("names the park, the time and the covered rides with their wait", () => {
+    const message = writeRainSoonMessage({ ...base, rides }, "de");
+    expect(message.title).toBe("Regen ab etwa 14:20 Uhr");
+    expect(message.body).toBe(
+      "Phantasialand. Überdacht und offen: Taron (15 Min.), Maus au Chocolat (20 Min.)",
+    );
+    expect(message.tag).toBe(base.dedupeKey);
+    expect(message.url).toBe(base.url);
+  });
+
+  it("is only the warning when no ride is named", () => {
+    const message = writeRainSoonMessage({ ...base, rides: [] }, "en");
+    expect(message.title).toBe("Rain from about 14:20");
+    expect(message.body).toBe("Phantasialand");
+  });
+
+  it("writes a ride without a posted wait as its name alone", () => {
+    const message = writeRainSoonMessage(
+      { ...base, rides: [{ name: "Taron", waitTime: null }] },
+      "en",
+    );
+    expect(message.body).toBe("Phantasialand. Covered and open: Taron");
+  });
+
+  it("is written in all six languages and falls back to English", () => {
+    const titles = ["de", "en", "nl", "fr", "es", "it"].map(
+      (l) => writeRainSoonMessage({ ...base, rides }, l).title,
+    );
+    expect(new Set(titles).size).toBe(6);
+    for (const title of titles) expect(title).toContain("14:20");
+    expect(writeRainSoonMessage({ ...base, rides }, "pt").title).toBe(
+      "Rain from about 14:20",
+    );
+    expect(writeRainSoonMessage({ ...base, rides }, "nl-BE").title).toBe(
+      "Regen vanaf ongeveer 14:20",
+    );
   });
 });
