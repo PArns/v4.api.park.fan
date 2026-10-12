@@ -1,5 +1,5 @@
 {
-  "_about": "Offline verdicts per question x model for the admin model comparison (PAR-855). Seeded from the approved mockup's matrix, whose notes summarise ml-bench PR #445 (full period), #447 (driver_level, H5 + TFT level) and #450 (Chronos-2). state: better|worse|unclear|pending, always against what is served today for that question. diff/ciLow/ciHigh only where the run reported them against that reference; never filled in otherwise. expectedBy only for runs still in progress. note: one German sentence, shown when live data does not decide the cell. servedNotes: the note of each question's served (today) cell. 2026-10-11: the Chronos cells come from the mixed-weekday re-run of #450 (--shard 0/5, 47 origins over all seven weekdays; the earlier --shard 0/7 run put every origin on a Thursday, which locked every lead to one target weekday). Toto/TiRex are still pending. 2026-10-11 (PAR-855 follow-up): live_h0_1 x chronos is pending (offline worse only at 15 min, better at 30 and 60 min); notes that quoted the headline window or a lead outside the question as the full period were corrected, plan_d6_60 x tfth5 was judged against wt_med instead of served (now unclear), and the plan_d0_1 x tfth5 diff was against wt_med, not served (removed).",
+  "_about": "Offline verdicts per question x model for the admin model comparison (PAR-855). Seeded from the approved mockup's matrix, whose notes summarise ml-bench PR #445 (full period), #447 (driver_level, H5 + TFT level) and #450 (Chronos-2). state: better|worse|unclear|pending, always against what is served today for that question. diff/ciLow/ciHigh only where the run reported them against that reference; never filled in otherwise. expectedBy only for runs still in progress. note: one German sentence, shown when live data does not decide the cell. servedNotes: the note of each question's served (today) cell. 2026-10-11: the Chronos cells come from the mixed-weekday re-run of #450 (--shard 0/5, 47 origins over all seven weekdays; the earlier --shard 0/7 run put every origin on a Thursday, which locked every lead to one target weekday). 2026-10-12: the Toto 2.0 / TiRex-2 cells (fm) come from PR #457's run 20261011-par853-toto-tirex-shard5 (47 origins over all seven weekdays, 30 parks, same origin set as the Chronos run). Neither model beats Chronos-2 except at a 15-minute horizon; both beat the hourly profile in the live bands and lose to it in the planner from two days out. They have no live source and are not archived, so the live columns stay empty for them by design, not pending. 2026-10-11 (PAR-855 follow-up): live_h0_1 x chronos is pending (offline worse only at 15 min, better at 30 and 60 min); notes that quoted the headline window or a lead outside the question as the full period were corrected, plan_d6_60 x tfth5 was judged against wt_med instead of served (now unclear), and the plan_d0_1 x tfth5 diff was against wt_med, not served (removed).",
   "questions": {
     "live_h0_1": {
       "persist": {
@@ -12,7 +12,7 @@
         "state": "pending",
         "source": "ml-bench PR #450 (Chronos-2, ganzer Zeitraum)",
         "period": "2026-02-19..2026-10-07",
-        "note": "Offline besser als die aktuelle Wartezeit, wartet auf das Live-Archiv: nur auf 15 Minuten schlechter (+0,26 [+0,18; +0,36]), auf 30 Minuten besser (−0,42 [−0,61; −0,21]) und auf 60 Minuten besser (−1,26 [−1,60; −0,93]), sicher (ganzer Zeitraum, 33 Zeitpunkte, 30 Parks). Gegen PCN misst das erst das Live-Archiv."
+        "note": "Offline besser als die aktuelle Wartezeit, wartet auf das Live-Archiv: nur auf 15 Minuten schlechter (+0,27 [+0,19; +0,37]), auf 30 Minuten besser (−0,41 [−0,60; −0,20]) und auf 60 Minuten besser (−1,27 [−1,62; −0,91]), sicher (ganzer Zeitraum, 47 Zeitpunkte über alle Wochentage, 30 Parks). Gegen PCN misst das erst das Live-Archiv."
       },
       "h5": {
         "state": "worse",
@@ -21,13 +21,10 @@
         "note": "Ein Tagesprofil kennt die Lage von jetzt nicht und liegt kurzfristig klar hinten."
       },
       "fm": {
-        "state": "pending",
-        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
-        "note": "Messung läuft.",
-        "expectedBy": {
-          "date": "2026-10-12",
-          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
-        }
+        "state": "unclear",
+        "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Gemessen und entschieden: beide schlagen das Stundenprofil klar (Toto −4,19 bis −2,34, TiRex −4,08 bis −2,07 Minuten über 15 bis 60 Minuten, sicher), aber Chronos-2 ist ab 30 Minuten besser als beide. Nur auf 15 Minuten liegen sie vor Chronos-2 (Toto −0,18, TiRex −0,07). Gegen PCN selbst sind sie offline nicht gemessen, und sie werden auch nicht archiviert — das bleibt offen."
       }
     },
     "live_h1_2": {
@@ -53,16 +50,13 @@
         "state": "worse",
         "source": "ml-bench PR #450 (Chronos-2, ganzer Zeitraum)",
         "period": "2026-02-19..2026-10-07",
-        "note": "Liegt bei 1 bis 2 Stunden 1,9 bis 2,3 Minuten hinter Chronos-2."
+        "note": "Liegt bei 1 bis 2 Stunden 1,9 bis 2,4 Minuten hinter Chronos-2."
       },
       "fm": {
-        "state": "pending",
-        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
-        "note": "Messung läuft.",
-        "expectedBy": {
-          "date": "2026-10-12",
-          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
-        }
+        "state": "unclear",
+        "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Dasselbe Bild wie in der ersten Stunde: besser als das Stundenprofil (Toto −2,34 bis −1,65, TiRex −2,07 bis −1,36 Minuten), aber 0,15 bis 0,58 Minuten hinter Chronos-2 an jeder Vorlaufzeit. Gegen PCN nicht gemessen und nicht archiviert."
       }
     },
     "today_h2_6": {
@@ -89,13 +83,10 @@
         }
       },
       "fm": {
-        "state": "pending",
-        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
-        "note": "Messung läuft.",
-        "expectedBy": {
-          "date": "2026-10-12",
-          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
-        }
+        "state": "unclear",
+        "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Besser als das Stundenprofil (Toto −1,27 in 2 bis 4 Stunden und −0,79 in 4 bis 8 Stunden, TiRex −1,00 und −0,57, sicher), aber hinter Chronos-2 (+0,31 bis +0,58). PCN ist offline nicht gemessen."
       }
     },
     "today_h6_12": {
@@ -122,13 +113,10 @@
         }
       },
       "fm": {
-        "state": "pending",
-        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
-        "note": "Messung läuft.",
-        "expectedBy": {
-          "date": "2026-10-12",
-          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
-        }
+        "state": "unclear",
+        "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Ab 8 Stunden nur noch Gleichstand mit dem Stundenprofil (Toto −0,13, TiRex −0,01, beide CIs schließen 0 ein) und 0,32 bis 0,44 Minuten hinter Chronos-2. Hier bringen sie nichts mehr."
       }
     },
     "plan_d0_1": {
@@ -157,13 +145,10 @@
         "note": "Die Messlatte: etwa gleichauf mit dem, was wir heute zeigen."
       },
       "fm": {
-        "state": "pending",
-        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
-        "note": "Messung läuft.",
-        "expectedBy": {
-          "date": "2026-10-12",
-          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
-        }
+        "state": "unclear",
+        "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Heute Gleichstand mit dem Stundenprofil (Toto −0,05, TiRex −0,04), morgen schlechter (+0,38 bzw. +0,32, sicher). Nur die Gitter-Variante von TiRex ist heute besser (−0,485) und morgen gleichauf. Gegen Chronos-2 gewinnt keine Variante."
       }
     },
     "plan_d2_5": {
@@ -192,13 +177,10 @@
         "note": "Schon dieser einfache Wert ist ab 3 Tagen besser als das, was wir heute zeigen."
       },
       "fm": {
-        "state": "pending",
-        "source": "ml-bench (Toto 2.0 / TiRex, Lauf läuft)",
-        "note": "Messung läuft.",
-        "expectedBy": {
-          "date": "2026-10-12",
-          "label": "Offline-Lauf, erwartet 12.10. gegen 01:00 Uhr"
-        }
+        "state": "worse",
+        "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Ab 2 Tagen klar schlechter als das Stundenprofil (Toto +0,52 bis +0,92, TiRex +0,38 bis +0,69 Minuten, sicher). Die Niveau-auf-H5-Form-Verbindung hält mit (Gleichstand), aber Chronos-2s Variante davon ist besser. Für den Planer ist das kein Kandidat."
       }
     },
     "plan_d6_60": {
