@@ -119,6 +119,22 @@ def i(row: dict, key: str):
     return None if v is None else int(v)
 
 
+ROWS: list[dict] = []
+
+
+def record(kind: str, pass_tag: str, uc: str, metric: str, lead: str, seg: str, model: str,
+           comparator: str, c: "Cell") -> None:
+    if c.row is None:
+        return
+    ROWS.append({"kind": kind, "pass": pass_tag, "uc": uc, "metric": metric, "lead": lead,
+                 "segment": seg, "model": model, "comparator": comparator,
+                 "lower_is_better": c.lower, "diff": c.diff, "diff_lo_park": c.lo,
+                 "diff_hi_park": c.hi, "diff_lo_park_day": c.lo_pd, "diff_hi_park_day": c.hi_pd,
+                 "n_paired": c.n, "n_units_park": c.units,
+                 "n_paired_origin_days": c.origin_days, "paired_share": c.share,
+                 "verdict": c.verdict, "why": c.why})
+
+
 class Cell:
     """One paired comparison, with its verdict and the reason it has none."""
 
@@ -209,6 +225,8 @@ def indirect_table(passes: dict, models: list[str], q: tuple, seg: str,
                 for cand in candidates:
                     src = passes[tag].get("_all_refs", {}).get(cand, {})
                     c = pair(src, cand, uc, metric, lead, seg, m)
+                    record("indirect-vs-candidate", "full" if tag == "full" else "window",
+                           uc, metric, lead, seg, m, cand, c)
                     if c.row is not None:
                         got = True
                     cols.append(c.fmt())
@@ -234,6 +252,8 @@ def h2h_table(passes: dict, a: str, b: str, q: tuple, seg: str) -> list[str]:
     for lead in leads:
         c_full = pair(passes["full"].get(b, {}), b, uc, metric, lead, seg, a)
         c_win = pair(passes["win"].get(b, {}), b, uc, metric, lead, seg, a)
+        record("head-to-head", "full", uc, metric, lead, seg, a, b, c_full)
+        record("head-to-head", "window", uc, metric, lead, seg, a, b, c_win)
         if c_full.row is None and c_win.row is None:
             continue
         any_row = True
@@ -256,6 +276,7 @@ def incumbent_table(passes: dict, model: str, q: tuple, seg: str, incumbents: li
             if src is None:
                 src = passes["full"].get("_all_refs", {}).get(inc, {})
             c = pair(src or {}, inc, uc, metric, lead, seg, model)
+            record("vs-incumbent", "full", uc, metric, lead, seg, model, inc, c)
             if c.row is not None:
                 got = True
             cols.append(c.fmt())
@@ -281,7 +302,10 @@ def family_verdict(passes: dict, tide: list[str], chronos: list[str], q: tuple, 
             for inc in incumbents:
                 for tag, p in (("full", passes["full"]), ("win", passes["win"])):
                     src = p.get(inc) or p.get("_all_refs", {}).get(inc, {})
-                    rec["inc"][(m, inc, tag)] = pair(src, inc, uc, metric, lead, seg, m)
+                    c = pair(src, inc, uc, metric, lead, seg, m)
+                    rec["inc"][(m, inc, tag)] = c
+                    record("vs-incumbent", "full" if tag == "full" else "window",
+                           uc, metric, lead, seg, m, inc, c)
         out.append(rec)
     return out
 
@@ -337,7 +361,7 @@ def decide(rec: dict, tide: list[str], chronos: list[str], incumbents: list[str]
         h2h = "Gleichstand"
     ready, why = {}, []
     for m in tide + chronos:
-        ok, miss = beats_all_incumbents(rec, m, incumbents, both=both)
+        ok, miss = beats_all_incumbents(rec, m, incumbents, both=both)  # noqa: E501
         ready[m] = ok
         if not ok:
             why.append(f"{m}: " + ", ".join(miss))
@@ -378,6 +402,9 @@ def main() -> int:
     ap.add_argument("--tide", default="nf_tide,nf_tide_x_h5")
     ap.add_argument("--chronos", default="chronos2,chronos2_grid,chronos2_x_h5")
     ap.add_argument("--incumbents", default="persistence,h5,lvlh5_tft")
+    ap.add_argument("--nf-cache", default=None,
+                    help="the nf_precompute cache the TiDE plug-in read, so the forecasts' own "
+                         "provenance (which is NOT in run-*.json) is printed with the run's")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
 
@@ -418,6 +445,25 @@ def main() -> int:
           f"git `{str(d.get('git_sha'))[:8]}`, window "
           f"{d.get('target_from')}…{d.get('target_to')}")
     w("")
+    if a.nf_cache:
+        used = {m.replace("_x_h5", "") for m in tide}
+        for meta in sorted(pathlib.Path(a.nf_cache).glob("*/meta.json")):
+            if meta.parent.name not in used:
+                continue
+            m = json.loads(meta.read_text())
+            blocks = m.get("blocks") or []
+            w(f"* TiDE forecast cache `{meta.parent}`: model `{m.get('model')}`, "
+              f"{m.get('spec', {}).get('cls')}, max_steps {m.get('max_steps')}, "
+              f"input {m.get('input_days')} d, horizon {m.get('horizon_days')} d, "
+              f"export `{m.get('export')}`, git `{str(m.get('git_sha'))[:8]}`, "
+              f"code_sha256 `{str(m.get('code_sha256'))[:16]}`, "
+              f"image `{str(m.get('image_id'))[:19]}`, {len(blocks)} month blocks "
+              f"{(blocks[0].get('from') if blocks else '?')} \u2026 "
+              f"{(blocks[-1].get('to') if blocks else '?')}")
+        w("  * the plug-in only READS this cache (pandas + pyarrow), so the TiDE forecasts "
+          "scored here are the ones PAR-829 produced on the GPU, under PAR-829's provenance; "
+          "the scoring code above is this run's.")
+        w("")
     w("## Sample (recomputed from the run, not from its own census)")
     w("")
     rep = {}
@@ -582,7 +628,20 @@ def main() -> int:
 
     out = Path(a.out) if a.out else run / "summary_tide_vs_chronos.md"
     out.write_text("\n".join(o) + "\n")
-    print(f"wrote {out} ({len(o)} lines)")
+    seen, uniq = set(), []
+    for r in ROWS:
+        k = (r["kind"], r["pass"], r["uc"], r["metric"], r["lead"], r["segment"], r["model"],
+             r["comparator"])
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(r)
+    csv_out = out.with_name(out.stem + "_cells.csv")
+    with csv_out.open("w", newline="") as fh:
+        wr = csv.DictWriter(fh, fieldnames=list(uniq[0].keys()))
+        wr.writeheader()
+        wr.writerows(uniq)
+    print(f"wrote {out} ({len(o)} lines) and {csv_out} ({len(uniq)} rows)")
     return 0
 
 
