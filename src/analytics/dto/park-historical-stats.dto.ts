@@ -200,7 +200,7 @@ export class ParkHistoricalStatsMetaDto {
   generatedAt: string;
 
   @ApiProperty({
-    example: 3,
+    example: 4,
     description: "Response schema version, for smooth frontend migration.",
   })
   schemaVersion: number;

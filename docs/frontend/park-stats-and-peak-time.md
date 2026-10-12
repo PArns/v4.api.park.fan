@@ -55,7 +55,7 @@ them anywhere.
 
 ## 2. `GET /v1/parks/{continent}/{country}/{city}/{parkSlug}/stats`
 
-Historical aggregates. **`schemaVersion: 3`.**
+Historical aggregates. **`schemaVersion: 4`** (4 added `busiestDays` / `quietestDays`, PAR-825).
 
 ### Query parameters
 
@@ -86,6 +86,16 @@ Historical aggregates. **`schemaVersion: 3`.**
     avgWaitP90: number;
     sampleDays: number;
   }[];
+  busiestDays: {              // NEW in 4 — up to 5 fullest measured days, fullest first
+    date: string;             // "YYYY-MM-DD", park timezone
+    avgCrowdScore: number;
+    avgCrowdLevel: CrowdLevel;
+    avgWaitP50: number;
+    avgWaitP90: number;
+  }[];                        // empty while the park has < 10 measured days
+  quietestDays: { /* same shape */ }[]; // NEW in 4 — up to 5 quietest, quietest first;
+                              // a day the schedule calls CLOSED is never a measured day.
+                              // Both lists cover the measurement window, not all time.
   topAttractions: {
     attractionSlug: string;
     attractionName: string;   // canonical name (frontend does not translate)
@@ -108,7 +118,7 @@ Historical aggregates. **`schemaVersion: 3`.**
     windowYears: number;      // NEW — use for the "Last X years" subtitle
     displayable: boolean;     // NEW — render gate (totalSampleDays >= minSampleDays)
     generatedAt: string;      // NEW — ISO 8601 UTC, when the aggregate was computed
-    schemaVersion: 3;         // NEW
+    schemaVersion: 4;         // 3 → 4 with busiestDays / quietestDays
     minAttractionDays: number; // NEW in 3 — echoes the query parameter
   };
 }
