@@ -28,8 +28,26 @@ export class AttractionAccuracyStats {
   @JoinColumn({ name: "attraction_id" })
   attraction: Attraction;
 
+  /**
+   * Mean absolute error of the SERVED intraday forecast (minutes) — PCN plus
+   * the persistence blend where it serves, CatBoost where it does not
+   * (PAR-854). Drives `badge`. Counted only over rows that recorded a served
+   * value, so it is NULL for a ride with none yet.
+   */
   @Column({ type: "real", nullable: true })
-  mae: number | null; // Mean Absolute Error (minutes)
+  mae: number | null;
+
+  /**
+   * Mean absolute error of the RAW CatBoost hourly answer (minutes), over every
+   * compared row in the window; NULL below the badge's sample floor.
+   *
+   * Kept beside `mae` for the one surface that draws CatBoost's own curve: the
+   * ride day curve (`/stats/day`) plots `wait_time_predictions`, which is raw
+   * CatBoost, so its `forecastError` band must be CatBoost's error — a PCN
+   * error drawn around a CatBoost line would describe a different forecast.
+   */
+  @Column({ name: "raw_mae", type: "real", nullable: true })
+  rawMae: number | null;
 
   @Column({ name: "compared_predictions", type: "int", default: 0 })
   comparedPredictions: number;

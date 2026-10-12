@@ -16,7 +16,10 @@ import {
   ForecastArchiveCurve,
 } from "../../ml/entities/forecast-archive-curve.entity";
 import { ForecastArchiveParkDay } from "../../ml/entities/forecast-archive-park-day.entity";
-import { nextRideLater } from "../../ml/utils/forecast-archive-scoring.util";
+import {
+  nextRideLater,
+  percentileCont,
+} from "../../ml/utils/forecast-archive-scoring.util";
 import { PlanDayService } from "./plan-day.service";
 import { CalendarService } from "./calendar.service";
 import {
@@ -27,6 +30,12 @@ import {
 } from "../dto/plan-day.dto";
 import { addIsoDays, formatInParkTimezone } from "../../common/utils/date.util";
 import { mapWithDbBudget } from "../../common/utils/db-job-budget";
+import {
+  CHRONOS_LAST_RUN_KEY,
+  ChronosResponse,
+  ChronosRunSummary,
+  ChronosShadowService,
+} from "./chronos-shadow.service";
 import {
   StatementLimits,
   queryWithLimits,
@@ -165,6 +174,7 @@ export class ForecastArchiveService {
     private readonly calendarService: CalendarService,
     private readonly analyticsService: AnalyticsService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly chronos: ChronosShadowService,
   ) {}
 
   /**
@@ -218,6 +228,8 @@ export class ForecastArchiveService {
       parkDays: 0,
       failed: 0,
     };
+    // The Chronos-2 shadow's breaker and its once-per-run log (PAR-852).
+    this.chronos.beginRun();
     for (let i = 0; i < due.length; i += BATCH_SIZE) {
       const batch = due.slice(i, i + BATCH_SIZE);
       const done = await mapWithDbBudget(
@@ -250,6 +262,18 @@ export class ForecastArchiveService {
         result.parkDays += d.parkDays;
       }
     }
+    const chronosRun = this.chronos.endRun();
+    // The admin ML overview's "is Chronos warming up?" (PAR-861). Only runs that
+    // asked Chronos anything, so an hour without intraday origins keeps the last.
+    if (chronosRun.calls > 0) {
+      const summary: ChronosRunSummary = {
+        at: clock().toISOString(),
+        ...chronosRun,
+      };
+      await this.redis
+        .set(CHRONOS_LAST_RUN_KEY, JSON.stringify(summary), "EX", 2 * 86400)
+        .catch(() => undefined);
+    }
     return result;
   }
 
@@ -260,6 +284,21 @@ export class ForecastArchiveService {
     originAt: Date,
   ): Promise<{ curves: number; parkDays: number }> {
     const localToday = formatInParkTimezone(originAt, park.timezone);
+
+    // Chronos-2 SHADOW (PAR-852), started first so the GPU pass overlaps the
+    // served reads. Same origin instant as every other row of this capture, so
+    // the scorer pairs it slot for slot. Never throws; null = nothing to add.
+    const chronosPending: Promise<ChronosResponse | null> =
+      kind === "intraday"
+        ? this.chronos.forecast(
+            park.id,
+            originAt,
+            "live",
+            ForecastArchiveService.INTRADAY_WINDOW_MINUTES,
+          )
+        : kind === "daily"
+          ? this.chronos.forecast(park.id, originAt, "grid")
+          : Promise.resolve(null);
 
     const [headliners, q90, attractions] = await Promise.all([
       this.analyticsService
@@ -439,11 +478,33 @@ export class ForecastArchiveService {
       }
     }
 
+    // ---- Chronos-2 shadow curves (never served) ----
+    const chronos = await chronosPending;
+    if (chronos) {
+      drafts.push(
+        ...ForecastArchiveService.curvesFromChronos(
+          chronos,
+          kind === "intraday"
+            ? ARCHIVE_SURFACES.chronos_live
+            : ARCHIVE_SURFACES.chronos_grid,
+          localToday,
+          new Set(attractions.map((a) => a.id)),
+          kind === "daily" ? ForecastArchiveService.PLAN_DAY_MAX_LEAD : 1,
+        ),
+      );
+    }
+
     const originKind = ARCHIVE_ORIGIN_KINDS[kind];
     const rows = drafts.map((d) => {
       const anchor = live.get(d.attractionId);
       const isNextRide =
         d.surface === ARCHIVE_SURFACES.plan_day && kind === "intraday";
+      // The live anchor is also persistence's forecast, which the Chronos live
+      // shadow is paired against.
+      const hasAnchor =
+        d.surface === ARCHIVE_SURFACES.park_hourly ||
+        d.surface === ARCHIVE_SURFACES.chronos_live ||
+        isNextRide;
       return this.curveRepository.create({
         ...d,
         originAt,
@@ -451,14 +512,8 @@ export class ForecastArchiveService {
         parkId: park.id,
         rideQ90: q90.get(d.attractionId) ?? null,
         isHeadliner: headliners.has(d.attractionId),
-        liveWait:
-          d.surface === ARCHIVE_SURFACES.park_hourly || isNextRide
-            ? (anchor?.wait ?? null)
-            : null,
-        liveAgeMin:
-          d.surface === ARCHIVE_SURFACES.park_hourly || isNextRide
-            ? (anchor?.ageMin ?? null)
-            : null,
+        liveWait: hasAnchor ? (anchor?.wait ?? null) : null,
+        liveAgeMin: hasAnchor ? (anchor?.ageMin ?? null) : null,
         laterWait: isNextRide ? (d.laterWait ?? null) : null,
         laterAt: isNextRide ? (d.laterAt ?? null) : null,
         levelSource:
@@ -575,6 +630,67 @@ export class ForecastArchiveService {
         expectedError: null,
         peakBand: null,
         modelVersion,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * The Chronos-2 shadow's curves (PAR-852) as archive rows: one per ride and
+   * service day, 15-minute steps, `waits` = q50 and `bands` = q95 − q50 (the
+   * same one-sided upper half-width the served park_hourly band is, so D8 reads
+   * both alike). Closed slots are null — nf-service returns window slots only.
+   * The grid variant also gets a `dayPeak`: the P90 of its in-window q50, the
+   * statistic the truth's ride-day level is. `modelVersion` records the weights
+   * revision and whether the day's holiday covariates rested on data.
+   */
+  static curvesFromChronos(
+    res: ChronosResponse,
+    surface: number,
+    localToday: string,
+    knownRides: ReadonlySet<string>,
+    maxLead: number,
+  ): CurveDraft[] {
+    const code = surface === ARCHIVE_SURFACES.chronos_live ? "x" : "g";
+    const rev = (res.revision ?? "").slice(0, 7) || "unknown";
+    const out: CurveDraft[] = [];
+    for (const c of res.curves ?? []) {
+      if (!knownRides.has(c.attractionId)) continue;
+      const lead = ForecastArchiveService.daysBetween(localToday, c.date);
+      if (lead < 0 || lead > maxLead) continue;
+      const waits = c.q50.map((v) =>
+        v === null || !Number.isFinite(v) ? null : Math.round(v),
+      );
+      if (waits.every((w) => w === null)) continue;
+      const bands = c.q50.map((v, i) => {
+        const hi = c.q95?.[i];
+        return v === null || hi === null || hi === undefined
+          ? null
+          : Math.max(0, Math.round(hi - v));
+      });
+      const values = waits.filter((w): w is number => w !== null);
+      const p90 =
+        surface === ARCHIVE_SURFACES.chronos_grid && values.length >= 4
+          ? percentileCont(values, 0.9)
+          : null;
+      out.push({
+        attractionId: c.attractionId,
+        surface,
+        targetDate: c.date,
+        leadDays: lead,
+        slotStart: new Date(c.slotStart),
+        slotMinutes: 15,
+        waits,
+        sources: waits.map((w) => (w === null ? "-" : code)).join(""),
+        bands: bands.some((b) => b !== null) ? bands : null,
+        dayPeak: p90 === null ? null : Math.round(p90),
+        expectedError: null,
+        peakBand: null,
+        modelVersion:
+          `chronos-2@${rev};hol=${c.covariates?.holidays ?? "none"}`.slice(
+            0,
+            64,
+          ),
       });
     }
     return out;
@@ -904,7 +1020,7 @@ export class ForecastArchiveService {
     }
   }
 
-  private static daysBetween(from: string, to: string): number {
+  static daysBetween(from: string, to: string): number {
     return Math.round(
       (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
         86_400_000,

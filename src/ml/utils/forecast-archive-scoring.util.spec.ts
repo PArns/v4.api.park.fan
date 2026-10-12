@@ -1,5 +1,6 @@
 import {
   ArchivedCurve,
+  PairedAccumulator,
   ScoreAccumulator,
   bestTimeOutcome,
   buildTruthSlots,
@@ -11,6 +12,8 @@ import {
   regionOf,
   scoreCrossParkCrowd,
   scoreParkDay,
+  scorePairedModels,
+  scorePairedShadows,
   slotLeadBucket,
   spearman,
 } from "./forecast-archive-scoring.util";
@@ -566,6 +569,111 @@ describe("composer A/B shadow surfaces (PAR-834)", () => {
   });
 });
 
+describe("Chronos-2 shadow surfaces (PAR-852)", () => {
+  // Intraday origin 08:05; truth 08:15 … 09:00 = 30, 35, 40, 45.
+  const origin = T0 + 5 * MIN;
+  const truth = new Map([
+    ["a1", new Map([1, 2, 3, 4].map((i) => [T0 + i * SLOT, 25 + i * 5]))],
+  ]);
+  const curve = (
+    surface: ArchivedCurve["surface"],
+    waits: (number | null)[],
+    sources: string,
+    extra: Partial<ArchivedCurve> = {},
+  ): ArchivedCurve => ({
+    attractionId: "a1",
+    surface,
+    originKind: "intraday",
+    originAt: origin,
+    leadDays: 0,
+    slotStart: T0,
+    slotMinutes: 15,
+    waits,
+    sources,
+    bands: null,
+    dayPeak: null,
+    expectedError: null,
+    rideQ90: 20,
+    isHeadliner: false,
+    levelSource: null,
+    ...extra,
+  });
+
+  it("scores the live shadow on the served slot leads under its own source, never into all", () => {
+    const acc = new ScoreAccumulator();
+    scoreParkDay(
+      {
+        region: "EU",
+        curves: [
+          curve("park_hourly", [20, 20, 20, 20, 20], "ccccc"),
+          curve("chronos_live", [null, 30, 35, 40, 45], "-xxxx", {
+            bands: [null, 5, 5, 5, 5],
+            liveWait: 25,
+          }),
+        ],
+        parkDays: [],
+        truth,
+        hadWindows: false,
+        calendarDayValue: null,
+      },
+      acc,
+    );
+    expect(sumsOf(acc, "EU|UC1|h0-1|chronos2|all")).toMatchObject({
+      n: 4,
+      sae: 0,
+      nBand: 4,
+      nBandCov: 4,
+    });
+    // `all` is the served curve alone: 20 vs 30/35/40/45.
+    expect(sumsOf(acc, "EU|UC1|h0-1|all|all")).toMatchObject({
+      n: 4,
+      sae: 10 + 15 + 20 + 25,
+    });
+  });
+
+  it("pairs live with the served curve and persistence on identical slots", () => {
+    const paired = new PairedAccumulator();
+    scorePairedShadows(
+      [
+        // The served curve lacks 08:30: that slot is paired with persistence only.
+        curve("park_hourly", [20, 20, null, 20, 20], "cc-cc"),
+        curve("chronos_live", [null, 30, 35, 40, 45], "-xxxx", {
+          liveWait: 25,
+        }),
+        // Another origin's served row must not be paired.
+        curve("park_hourly", [0, 0, 0, 0, 0], "ccccc", {
+          originAt: origin + 2 * 60 * MIN,
+        }),
+      ],
+      truth,
+      paired,
+    );
+    const row = (ref: string) =>
+      paired
+        .entries()
+        .find(
+          (e) =>
+            e.reference === ref &&
+            e.segment === "all" &&
+            e.lead === "h0-1" &&
+            e.model === "chronos2",
+        );
+    expect(row("served")).toMatchObject({
+      useCase: "UC1",
+      n: 3,
+      saeModel: 0,
+      saeRef: 10 + 20 + 25,
+    });
+    expect(row("persistence")).toMatchObject({
+      n: 4,
+      saeRef: 5 + 10 + 15 + 20,
+      seRef: -(5 + 10 + 15 + 20),
+    });
+    // rideQ90 20 < 45: no busy segment, not a headliner.
+    expect(paired.entries().map((e) => e.segment)).not.toContain("busy");
+  });
+});
+
 describe("scoreCrossParkCrowd (D6 pairs)", () => {
   it("counts pairs within a region and over all parks, without double counting", () => {
     const acc = new ScoreAccumulator();
@@ -830,5 +938,183 @@ describe("review fixes", () => {
     expect(acc.entries().some((e) => e.source === "level_climatology")).toBe(
       true,
     );
+  });
+});
+
+describe("scorePairedModels (PAR-855)", () => {
+  // Daily origin 05:55 UTC on 2026-10-08; truth 08:00–09:45 UTC (h2-6).
+  const origin = T0 - 125 * MIN;
+  const truthValues = [30, 30, 40, 40, 50, 50, 20, 20];
+  const truth = new Map([
+    ["a1", new Map(truthValues.map((v, i) => [T0 + i * SLOT, v]))],
+  ]);
+  const curve = (
+    surface: ArchivedCurve["surface"],
+    waits: (number | null)[],
+    extra: Partial<ArchivedCurve> = {},
+  ): ArchivedCurve => ({
+    attractionId: "a1",
+    surface,
+    originKind: "daily",
+    originAt: origin,
+    leadDays: 0,
+    slotStart: T0,
+    slotMinutes: 15,
+    waits,
+    sources: "c".repeat(waits.length),
+    bands: null,
+    dayPeak: null,
+    expectedError: null,
+    rideQ90: 50,
+    isHeadliner: true,
+    levelSource: null,
+    ...extra,
+  });
+  const find = (
+    paired: PairedAccumulator,
+    useCase: string,
+    lead: string,
+    model: string,
+    segment = "all",
+  ) =>
+    paired
+      .entries()
+      .find(
+        (e) =>
+          e.useCase === useCase &&
+          e.lead === lead &&
+          e.model === model &&
+          e.segment === segment,
+      );
+
+  it("pairs persistence with the served hourly curve on the same slots", () => {
+    const paired = new PairedAccumulator();
+    scorePairedModels(
+      [
+        curve("park_hourly", [30, 30, 30, 30, 30, 30, 30, 30], {
+          liveWait: 25,
+        }),
+      ],
+      truth,
+      paired,
+    );
+    // Slots 08:00…09:45 are 2–4 h after the 06:00 origin → UC2 h2-6.
+    const row = find(paired, "UC2", "h2-6", "persistence");
+    expect(row).toMatchObject({ reference: "served", n: 8 });
+    expect(row!.saeRef).toBe(0 + 0 + 10 + 10 + 20 + 20 + 10 + 10);
+    expect(row!.saeModel).toBe(5 + 5 + 15 + 15 + 25 + 25 + 5 + 5);
+  });
+
+  it("pairs a daily shadow with park_hourly (slot leads) and plan_day (day lead, best time)", () => {
+    const paired = new PairedAccumulator();
+    scorePairedModels(
+      [
+        curve("park_hourly", [30, 30, 30, 30, 30, 30, 30, 30]),
+        // hourly plan: 30 then 45
+        curve("plan_day", [30, 45], { slotMinutes: 60 }),
+        curve("plan_day_shadow_h5", truthValues),
+      ],
+      truth,
+      paired,
+    );
+    expect(find(paired, "UC2", "h2-6", "shadow_h5")).toMatchObject({
+      n: 8,
+      saeModel: 0,
+    });
+    expect(find(paired, "UC3", "d0", "shadow_h5")).toMatchObject({
+      n: 8,
+      saeModel: 0,
+      saeRef: 0 + 0 + 10 + 10 + 5 + 5 + 25 + 25,
+    });
+    // Routed is not archived → plain H5 stands in under the routed name.
+    expect(find(paired, "UC3", "d0", "shadow_h5_routed")?.n).toBe(8);
+    // Best time: H5 picks 09:30 (truth 20, regret 0); the plan picks 08:00
+    // (truth 30, true minimum 20 → regret 10).
+    expect(find(paired, "D3", "d0", "shadow_h5")).toMatchObject({
+      n: 1,
+      saeModel: 0,
+      saeRef: 10,
+    });
+    // Segment `all` only, reference `served` only.
+    expect(
+      paired
+        .entries()
+        .every((e) => e.segment === "all" && e.reference === "served"),
+    ).toBe(true);
+  });
+
+  it("never writes a key scorePairedShadows writes", () => {
+    const legacy = new PairedAccumulator();
+    const general = new PairedAccumulator();
+    const curves = [
+      curve("park_hourly", [30, 30, 30, 30, 30, 30, 30, 30], { liveWait: 25 }),
+      curve("plan_day", [30, 45], { slotMinutes: 60 }),
+      curve("plan_day_shadow_h5", truthValues),
+      curve("chronos_grid", truthValues),
+    ];
+    scorePairedShadows(curves, truth, legacy);
+    scorePairedModels(curves, truth, general);
+    const key = (e: {
+      useCase: string;
+      lead: string;
+      model: string;
+      reference: string;
+      segment: string;
+    }) => [e.useCase, e.lead, e.model, e.reference, e.segment].join("|");
+    const legacyKeys = new Set(legacy.entries().map(key));
+    expect(legacyKeys.size).toBeGreaterThan(0);
+    expect(general.entries().filter((e) => legacyKeys.has(key(e)))).toEqual([]);
+    // The grid shadow gains a slot-lead comparison and a best-time one.
+    expect(find(general, "UC2", "h2-6", "chronos2_grid")?.n).toBe(8);
+    expect(find(general, "D3", "d0", "chronos2_grid")?.n).toBe(1);
+  });
+
+  it("scores the weekday average from history before the origin only", () => {
+    // UTC clock for the fixture.
+    const clock = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+    const flat = (v: number) =>
+      new Map(Array.from({ length: 8 }, (_, i) => [clock(T0 + i * SLOT), v]));
+    const plan = curve("plan_day", [30, 45], {
+      slotMinutes: 60,
+      dayPeak: 45,
+    });
+    // Same weekday as 2026-10-08 (Thursday): 01.10. and 24.09.; and the
+    // target day itself, which must never count.
+    const history = new Map([
+      [
+        "a1",
+        new Map([
+          ["2026-10-08", flat(999)],
+          ["2026-10-01", flat(30)],
+          ["2026-09-24", flat(40)],
+        ]),
+      ],
+    ]);
+    const paired = new PairedAccumulator();
+    scorePairedModels([plan], truth, paired, {
+      targetDate: "2026-10-08",
+      clock,
+      history,
+    });
+    // Weekday average = 35 on every slot.
+    expect(find(paired, "UC3", "d0", "weekday_avg")).toMatchObject({
+      n: 8,
+      saeModel: 5 + 5 + 5 + 5 + 15 + 15 + 15 + 15,
+    });
+    // PEAK: wkd 35 vs served 45 vs truth P90 50 — on `all` and `headliner`.
+    expect(
+      find(paired, "PEAK", "d0", "weekday_avg", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 15, saeRef: 5 });
+    expect(find(paired, "PEAK", "d0", "weekday_avg", "all")?.n).toBe(1);
+
+    // At lead 7 the origin is 2026-10-01: only 24.09. is before it, fewer
+    // than two dates → no weekday average at all.
+    const later = new PairedAccumulator();
+    scorePairedModels([{ ...plan, leadDays: 7 }], truth, later, {
+      targetDate: "2026-10-08",
+      clock,
+      history,
+    });
+    expect(later.entries()).toEqual([]);
   });
 });

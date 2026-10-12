@@ -1,0 +1,281 @@
+metric,uc,segment,lead,reference,winner,winner_value,paired_margin,significant_models,n_origin_days
+MAE,UC2,all,0,wt_med,wt_med,6.840128981147957,0.0,0,7
+MAE,UC2,busy,0,wt_med,wt_med,14.118734753285091,0.0,0,7
+MAE,UC3,all,1,wt_med,wt_med,6.783491242060416,0.0,0,7
+MAE,UC3,busy,1,wt_med,wt_med,14.156006140463093,0.0,0,7
+MAE,UC3,all,2,wt_med,wt_med,7.2478973633800035,0.0,0,8
+MAE,UC3,busy,2,wt_med,wt_med,13.900957154588962,0.0,0,8
+MAE,UC3,all,3,wt_med,wt_med,6.941305264091928,0.0,0,8
+MAE,UC3,busy,3,wt_med,wt_med,14.391169220066242,0.0,0,8
+MAE,UC3,all,4,wt_med,wt_med,7.953837700629943,0.0,0,8
+MAE,UC3,busy,4,wt_med,wt_med,16.380103556574145,0.0,0,8
+MAE,UC3,all,5,wt_med,wt_med,8.174778451818511,0.0,0,8
+MAE,UC3,busy,5,wt_med,wt_med,16.886131036899076,0.0,0,8
+MAE,UC3,all,6,snaive7,snaive7,7.076378668772509,0.0,0,8
+MAE,UC3,busy,6,snaive7,snaive7,14.83397792281041,0.0,0,8
+MAE,UC3,all,7,wt_med,wt_med,7.36605132682653,0.0,0,7
+MAE,UC3,busy,7,wt_med,wt_med,15.282036327278787,0.0,0,7
+MAE,UC3,all,10,wt_med,wt_med,7.150518814851856,0.0,0,8
+MAE,UC3,busy,10,wt_med,wt_med,14.84889077838757,0.0,0,8
+MAE,UC3,all,14,clim,clim,7.634672572367843,0.0,0,7
+MAE,UC3,busy,14,clim,clim,16.072050613265503,0.0,0,7
+MAE,UC3,all,21,clim,clim,7.7676110917002825,0.0,0,7
+MAE,UC3,busy,21,clim,clim,16.44689856857011,0.0,0,7
+MAE,UC3,all,30,wt_med,wt_med,7.787906636751216,0.0,0,8
+MAE,UC3,busy,30,wt_med,wt_med,14.578156084374857,0.0,0,8
+MAE,UC3,all,45,wt_med,wt_med,7.647312074986216,0.0,0,8
+MAE,UC3,busy,45,wt_med,wt_med,16.040410551368506,0.0,0,8
+MAE,UC3,all,60,wt_med,wt_med,8.349105182051021,0.0,0,8
+MAE,UC3,busy,60,wt_med,wt_med,16.76204495829903,0.0,0,8
+MAE,UC3,all,90,wt_med,wt_med,7.858213383082022,0.0,0,8
+MAE,UC3,busy,90,wt_med,wt_med,16.64114423377531,0.0,0,8
+MAE,UC2,all,1,wt_med,wt_med,6.783491242060416,0.0,0,7
+MAE,UC2,busy,1,wt_med,wt_med,14.156006140463093,0.0,0,7
+first-hour MAE (opening-aligned),D5,all,0,wt_med,wt_med,4.773562717770035,0.0,0,7
+first-hour MAE (opening-aligned),D5,all,1,clim,clim,5.089602221677693,0.0,0,7
+first-hour MAE (opening-aligned),D5,all,2,wt_med,wt_med,4.171400329489291,0.0,0,8
+first-hour MAE (opening-aligned),D5,all,3,wt_med,wt_med,4.264100328616458,0.0,0,8
+first-hour MAE (opening-aligned),D5,all,4,wt_med,wt_med,5.221099930870267,0.0,0,8
+first-hour MAE (opening-aligned),D5,all,5,wt_med,wt_med,5.327851226505256,0.0,0,8
+first-hour MAE (opening-aligned),D5,all,6,snaive7,snaive7,4.896127366609294,0.0,0,8
+first-hour MAE (opening-aligned),D5,all,7,wt_med,wt_med,5.122386223862239,0.0,0,7
+first-hour MAE (opening-aligned),D5,all,10,wt_med,wt_med,4.426835889778743,0.0,0,8
+first-hour MAE (opening-aligned),D5,all,14,clim,clim,5.2322056239015815,0.0,0,7
+first-hour MAE (opening-aligned),D5,all,21,clim,clim,5.383509700176367,0.0,0,7
+first-hour MAE (opening-aligned),D5,all,30,wt_med,wt_med,4.417884079635796,0.0,0,8
+first-hour MAE (opening-aligned),D5,all,45,wt_med,wt_med,4.697427293064877,0.0,0,8
+first-hour MAE (opening-aligned),D5,all,60,wt_med,wt_med,5.440634595701126,0.0,0,8
+first-hour MAE (opening-aligned),D5,all,90,wt_med,wt_med,5.118304089046919,0.0,0,8
+"MAE, schedule known at origin",UC3,all,0,wt_med,wt_med,7.124397800325304,0.0,0,7
+"MAE, schedule known at origin",UC3,all,1,wt_med,wt_med,7.133725624700779,0.0,0,7
+"MAE, schedule known at origin",UC3,all,2,wt_med,wt_med,7.544047209006953,0.0,0,8
+"MAE, schedule known at origin",UC3,all,3,wt_med,wt_med,7.352544410311206,0.0,0,8
+"MAE, schedule known at origin",UC3,all,4,wt_med,wt_med,8.400382798837834,0.0,0,8
+"MAE, schedule known at origin",UC3,all,5,wt_med,wt_med,8.831267971566609,0.0,0,8
+"MAE, schedule known at origin",UC3,all,6,snaive7,snaive7,7.18062882464655,0.0,0,8
+"MAE, schedule known at origin",UC3,all,7,clim,clim,7.737109216402761,0.0,0,7
+"MAE, schedule known at origin",UC3,all,10,wt_med,wt_med,7.218436296909294,0.0,0,8
+"MAE, schedule known at origin",UC3,all,14,clim,clim,7.304592461382167,0.0,0,7
+"MAE, schedule known at origin",UC3,all,21,clim,clim,7.409685662247755,0.0,0,7
+"MAE, schedule known at origin",UC3,all,30,wt_med,wt_med,7.660530058625594,0.0,0,8
+"MAE, schedule known at origin",UC3,all,45,wt_med,wt_med,7.31123004935581,0.0,0,8
+"MAE, schedule known at origin",UC3,all,60,wt_med,wt_med,7.4450095176937365,0.0,0,8
+"MAE, schedule known at origin",UC3,all,90,wt_med,wt_med,5.697691257395838,0.0,0,8
+"first-hour MAE, schedule known at origin",D5,all,0,snaive7,snaive7,5.193473494131304,0.0,0,7
+"first-hour MAE, schedule known at origin",D5,all,1,clim,clim,5.43755178127589,0.0,0,7
+"first-hour MAE, schedule known at origin",D5,all,2,wt_med,wt_med,4.555912433437579,0.0,0,8
+"first-hour MAE, schedule known at origin",D5,all,3,wt_med,wt_med,4.596892921338697,0.0,0,8
+"first-hour MAE, schedule known at origin",D5,all,4,clim,clim,5.8237638748738645,0.0,0,8
+"first-hour MAE, schedule known at origin",D5,all,5,clim,clim,5.984126984126984,0.0,0,8
+"first-hour MAE, schedule known at origin",D5,all,6,clim,clim,5.241453390622081,0.0,0,8
+"first-hour MAE, schedule known at origin",D5,all,7,clim,clim,5.567302299495233,0.0,0,7
+"first-hour MAE, schedule known at origin",D5,all,10,wt_med,wt_med,4.656172213515258,0.0,0,8
+"first-hour MAE, schedule known at origin",D5,all,14,clim,clim,5.364680545585069,0.0,0,7
+"first-hour MAE, schedule known at origin",D5,all,21,clim,clim,5.413064833005894,0.0,0,7
+"first-hour MAE, schedule known at origin",D5,all,30,wt_med,wt_med,4.472377733178409,0.0,0,8
+"first-hour MAE, schedule known at origin",D5,all,45,wt_med,wt_med,4.565103234276167,0.0,0,8
+"first-hour MAE, schedule known at origin",D5,all,60,clim,clim,4.575927734375,0.0,0,8
+"first-hour MAE, schedule known at origin",D5,all,90,wt_med,wt_med,3.4861178762786165,0.0,0,8
+"MAE, schedule projected at origin",UC3,all,0,wt_med,wt_med,5.7095860029571215,0.0,0,7
+"MAE, schedule projected at origin",UC3,all,1,wt_med,wt_med,5.538716477041853,0.0,0,7
+"MAE, schedule projected at origin",UC3,all,2,clim,clim,6.237900061044737,0.0,0,8
+"MAE, schedule projected at origin",UC3,all,3,wt_med,wt_med,5.3246001706521975,0.0,0,8
+"MAE, schedule projected at origin",UC3,all,4,wt_med,wt_med,6.618770712830119,0.0,0,8
+"MAE, schedule projected at origin",UC3,all,5,wt_med,wt_med,6.02447828269548,0.0,0,8
+"MAE, schedule projected at origin",UC3,all,6,wt_med,wt_med,6.104440695739394,0.0,0,8
+"MAE, schedule projected at origin",UC3,all,7,wt_med,wt_med,6.041043545194634,0.0,0,7
+"MAE, schedule projected at origin",UC3,all,10,wt_med,wt_med,6.952564057748104,0.0,0,8
+"MAE, schedule projected at origin",UC3,all,14,wt_med,wt_med,7.846002309625705,0.0,0,7
+"MAE, schedule projected at origin",UC3,all,21,wt_med,wt_med,8.088570699119186,0.0,0,7
+"MAE, schedule projected at origin",UC3,all,30,clim,clim,7.592319984239386,0.0,0,8
+"MAE, schedule projected at origin",UC3,all,45,wt_med,wt_med,8.099157618062737,0.0,0,8
+"MAE, schedule projected at origin",UC3,all,60,clim,clim,9.036715479055845,0.0,0,8
+"MAE, schedule projected at origin",UC3,all,90,wt_med,wt_med,9.38246054449569,0.0,0,8
+"first-hour MAE, schedule projected at origin",D5,all,0,wt_med,wt_med,2.8462409420289854,0.0,0,7
+"first-hour MAE, schedule projected at origin",D5,all,1,snaive7,snaive7,2.7595108695652173,0.0,0,7
+"first-hour MAE, schedule projected at origin",D5,all,2,wt_med,wt_med,2.811004784688995,0.0,0,8
+"first-hour MAE, schedule projected at origin",D5,all,3,clim,clim,3.0267295597484276,0.0,0,8
+"first-hour MAE, schedule projected at origin",D5,all,4,wt_med,wt_med,3.291145332050048,0.0,0,8
+"first-hour MAE, schedule projected at origin",D5,all,5,wt_med,wt_med,3.221433289299868,0.0,0,8
+"first-hour MAE, schedule projected at origin",D5,all,6,wt_med,wt_med,3.1670305676855897,0.0,0,8
+"first-hour MAE, schedule projected at origin",D5,all,7,wt_med,wt_med,3.025816861637757,0.0,0,7
+"first-hour MAE, schedule projected at origin",D5,all,10,clim,clim,3.70483329025588,0.0,0,8
+"first-hour MAE, schedule projected at origin",D5,all,14,wt_med,wt_med,4.707369464639789,0.0,0,7
+"first-hour MAE, schedule projected at origin",D5,all,21,wt_med,wt_med,5.026554201811933,0.0,0,7
+"first-hour MAE, schedule projected at origin",D5,all,30,wt_med,wt_med,4.319619047619048,0.0,0,8
+"first-hour MAE, schedule projected at origin",D5,all,45,wt_med,wt_med,4.884556962025316,0.0,0,8
+"first-hour MAE, schedule projected at origin",D5,all,60,wt_med,wt_med,6.226472838561591,0.0,0,8
+"first-hour MAE, schedule projected at origin",D5,all,90,wt_med,wt_med,6.601431100619652,0.0,0,8
+MAE,UC1,all,m015,persistence,persistence,2.50825210456358,0.0,0,7
+MAE,UC1,busy,m015,persistence,persistence,4.996161579235972,0.0,0,7
+MAE,UC1,all,m030,persistence,persistence,3.8236638243326087,0.0,0,7
+MAE,UC1,busy,m030,persistence,persistence,7.561984984435085,0.0,0,7
+MAE,UC1,all,m045,persistence,persistence,4.552500565738855,0.0,0,7
+MAE,UC1,busy,m045,persistence,persistence,9.039471234407001,0.0,0,7
+MAE,UC1,all,m060,persistence,persistence,5.057426081011793,0.0,0,7
+MAE,UC1,busy,m060,persistence,persistence,10.154266340177058,0.0,0,7
+MAE,UC1,all,m075,persistence,persistence,5.535734174865417,0.0,0,7
+MAE,UC1,busy,m075,persistence,persistence,10.751718560452892,0.0,0,7
+MAE,UC1,all,m090,persistence,persistence,5.957110750405794,0.0,0,7
+MAE,UC1,busy,m090,persistence,persistence,11.59591419816139,0.0,0,7
+MAE,UC1,all,m105,persistence,persistence,6.2534797599284895,0.0,0,7
+MAE,UC1,busy,m105,persistence,persistence,12.099108438731081,0.0,0,7
+MAE,UC1,all,m120,persistence,persistence,6.543081275720165,0.0,0,7
+MAE,UC1,busy,m120,persistence,persistence,12.753900561680883,0.0,0,7
+MAE,UC2-intraday,all,h2-4,wt_med,wt_med,6.9261059177846445,0.0,0,7
+MAE,UC2-intraday,busy,h2-4,wt_med,wt_med,14.281872444629075,0.0,0,7
+MAE,UC2-intraday,all,h4-8,wt_med,wt_med,7.080414202266943,0.0,0,7
+MAE,UC2-intraday,busy,h4-8,wt_med,wt_med,14.308440815080516,0.0,0,7
+MAE,UC2-intraday,all,h8+,wt_med,wt_med,6.893818011883304,0.0,0,7
+MAE,UC2-intraday,busy,h8+,wt_med,wt_med,13.650109287935228,0.0,0,7
+live-window MAE (headliners),D2,headliners,w0-45,persistence,persistence,6.508389174588333,0.0,0,7
+best-time hit rate (top-2),D3,all,0,wt_med,wt_med,0.82296321760055,0.0,0,7
+best-time hit rate (top-2),D3,all,1,wt_med,wt_med,0.8110838946723821,0.0,0,7
+best-time hit rate (top-2),D3,all,2,snaive7,snaive7,0.8305941845764855,0.0,0,8
+best-time hit rate (top-2),D3,all,3,clim,clim,0.8162466356740886,0.0,0,8
+best-time hit rate (top-2),D3,all,4,wt_med,wt_med,0.8095375722543353,0.0,0,8
+best-time hit rate (top-2),D3,all,5,wt_med,wt_med,0.8107416879795396,0.0,0,8
+best-time hit rate (top-2),D3,all,6,wt_med,wt_med,0.8096135721017907,0.0,0,8
+best-time hit rate (top-2),D3,all,7,clim,clim,0.819583931133429,0.0,0,7
+best-time hit rate (top-2),D3,all,10,clim,clim,0.8160377358490566,0.0,0,8
+best-time hit rate (top-2),D3,all,14,clim,clim,0.8212873067241999,0.0,0,7
+best-time hit rate (top-2),D3,all,21,clim,clim,0.8238185255198488,0.0,0,7
+best-time hit rate (top-2),D3,all,30,clim,clim,0.8361400695001336,0.0,0,8
+best-time hit rate (top-2),D3,all,45,clim,clim,0.8153544410198935,0.0,0,8
+best-time hit rate (top-2),D3,all,60,clim,clim,0.8152502519314746,0.0,0,8
+best-time hit rate (top-2),D3,all,90,clim,clim,0.8308168795973674,0.0,0,8
+best-time hit rate (±30 min),D3,all,0,wt_med,wt_med,0.8315572361636301,0.0,0,7
+best-time hit rate (±30 min),D3,all,1,wt_med,wt_med,0.8147581139007961,0.0,0,7
+best-time hit rate (±30 min),D3,all,2,snaive7,snaive7,0.8504003371260008,0.0,0,8
+best-time hit rate (±30 min),D3,all,3,clim,clim,0.8243210178615121,0.0,0,8
+best-time hit rate (±30 min),D3,all,4,wt_med,wt_med,0.8196531791907514,0.0,0,8
+best-time hit rate (±30 min),D3,all,5,wt_med,wt_med,0.8132992327365729,0.0,0,8
+best-time hit rate (±30 min),D3,all,6,clim,clim,0.8130752142177087,0.0,0,8
+best-time hit rate (±30 min),D3,all,7,clim,clim,0.827116212338594,0.0,0,7
+best-time hit rate (±30 min),D3,all,10,clim,clim,0.8217477656405164,0.0,0,8
+best-time hit rate (±30 min),D3,all,14,clim,clim,0.8281193815174398,0.0,0,7
+best-time hit rate (±30 min),D3,all,21,clim,clim,0.8306238185255198,0.0,0,7
+best-time hit rate (±30 min),D3,all,30,clim,clim,0.8409516172146485,0.0,0,8
+best-time hit rate (±30 min),D3,all,45,clim,clim,0.827963014850098,0.0,0,8
+best-time hit rate (±30 min),D3,all,60,clim,clim,0.8202888814242526,0.0,0,8
+best-time hit rate (±30 min),D3,all,90,clim,clim,0.835075493612079,0.0,0,8
+best-time regret (min),D3,all,0,wt_med,wt_med,3.2083190099690615,0.0,0,7
+best-time regret (min),D3,all,1,wt_med,wt_med,3.4011022657685244,0.0,0,7
+best-time regret (min),D3,all,2,clim,clim,3.026112185686654,0.0,0,8
+best-time regret (min),D3,all,3,clim,clim,3.2625397602153168,0.0,0,8
+best-time regret (min),D3,all,4,wt_med,wt_med,3.5783236994219654,0.0,0,8
+best-time regret (min),D3,all,5,wt_med,wt_med,3.34846547314578,0.0,0,8
+best-time regret (min),D3,all,6,clim,clim,3.610599809584259,0.0,0,8
+best-time regret (min),D3,all,7,clim,clim,3.238522238163558,0.0,0,7
+best-time regret (min),D3,all,10,clim,clim,3.297666335650447,0.0,0,8
+best-time regret (min),D3,all,14,clim,clim,3.24487594390507,0.0,0,7
+best-time regret (min),D3,all,21,clim,clim,3.2907372400756145,0.0,0,7
+best-time regret (min),D3,all,30,clim,clim,3.020315423683507,0.0,0,8
+best-time regret (min),D3,all,45,clim,clim,3.2765480526758197,0.0,0,8
+best-time regret (min),D3,all,60,clim,clim,3.4299630500503864,0.0,0,8
+best-time regret (min),D3,all,90,clim,clim,3.2826171118854046,0.0,0,8
+Spearman of slots within ride-day,UC2/UC3,all,0,wt_med,wt_med,0.4666593324302831,0.0,0,7
+Spearman of slots within ride-day,UC2/UC3,all,1,wt_med,wt_med,0.44211973157867307,0.0,0,7
+Spearman of slots within ride-day,UC2/UC3,all,2,clim,clim,0.48903204829044167,0.0,0,8
+Spearman of slots within ride-day,UC2/UC3,all,3,clim,clim,0.460839664931907,0.0,0,8
+Spearman of slots within ride-day,UC2/UC3,all,4,clim,clim,0.4570006592515786,0.0,0,8
+Spearman of slots within ride-day,UC2/UC3,all,5,wt_med,wt_med,0.4539472283146835,0.0,0,8
+Spearman of slots within ride-day,UC2/UC3,all,6,clim,clim,0.44735241422245275,0.0,0,8
+Spearman of slots within ride-day,UC2/UC3,all,7,wt_med,wt_med,0.44471864122571053,0.0,0,7
+Spearman of slots within ride-day,UC2/UC3,all,10,clim,clim,0.461324337676938,0.0,0,8
+Spearman of slots within ride-day,UC2/UC3,all,14,clim,clim,0.44417326842858645,0.0,0,7
+Spearman of slots within ride-day,UC2/UC3,all,21,clim,clim,0.43560496398301174,0.0,0,7
+Spearman of slots within ride-day,UC2/UC3,all,30,clim,clim,0.46906311827605446,0.0,0,8
+Spearman of slots within ride-day,UC2/UC3,all,45,clim,clim,0.4453021046757239,0.0,0,8
+Spearman of slots within ride-day,UC2/UC3,all,60,clim,clim,0.4396121202975922,0.0,0,8
+Spearman of slots within ride-day,UC2/UC3,all,90,clim,clim,0.42504362309344795,0.0,0,8
+dayPeak abs error (min),UC3,all,0,snaive7,snaive7,6.701502430402121,0.0,0,7
+dayPeak abs error (min),UC3,all,1,snaive7,snaive7,6.4741659886086245,0.0,0,7
+dayPeak abs error (min),UC3,all,2,snaive7,snaive7,7.779962605172951,0.0,0,8
+dayPeak abs error (min),UC3,all,3,wt_med,wt_med,7.608598726114651,0.0,0,8
+dayPeak abs error (min),UC3,all,4,clim,clim,9.165828949931813,0.0,0,8
+dayPeak abs error (min),UC3,all,5,snaive7,snaive7,8.347957639939485,0.0,0,8
+dayPeak abs error (min),UC3,all,6,snaive7,snaive7,6.615975422427035,0.0,0,8
+dayPeak abs error (min),UC3,all,7,clim,clim,8.076879566344568,0.0,0,7
+dayPeak abs error (min),UC3,all,10,wt_med,wt_med,7.704684444444444,0.0,0,8
+dayPeak abs error (min),UC3,all,14,clim,clim,8.077633443552196,0.0,0,7
+dayPeak abs error (min),UC3,all,21,clim,clim,8.009446092977251,0.0,0,7
+dayPeak abs error (min),UC3,all,30,clim,clim,8.920675281367236,0.0,0,8
+dayPeak abs error (min),UC3,all,45,clim,clim,8.330298996518533,0.0,0,8
+dayPeak abs error (min),UC3,all,60,clim,clim,8.61169381834412,0.0,0,8
+dayPeak abs error (min),UC3,all,90,wt_med,wt_med,7.43601226993865,0.0,0,8
+rope-drop worth agreement,D5,all,0,clim,clim,0.9366736256089074,0.0,0,7
+rope-drop worth agreement,D5,all,1,clim,clim,0.9315710935834577,0.0,0,7
+rope-drop worth agreement,D5,all,2,snaive7,snaive7,0.9068245559364287,0.0,0,8
+rope-drop worth agreement,D5,all,3,wt_med,wt_med,0.9171974522292994,0.0,0,8
+rope-drop worth agreement,D5,all,4,clim,clim,0.9179816871225405,0.0,0,8
+rope-drop worth agreement,D5,all,5,snaive7,snaive7,0.9357034795763994,0.0,0,8
+rope-drop worth agreement,D5,all,6,snaive7,snaive7,0.9354838709677419,0.0,0,8
+rope-drop worth agreement,D5,all,7,clim,clim,0.9356587320292246,0.0,0,7
+rope-drop worth agreement,D5,all,10,clim,clim,0.9182605557560447,0.0,0,8
+rope-drop worth agreement,D5,all,14,clim,clim,0.9352857817666509,0.0,0,7
+rope-drop worth agreement,D5,all,21,clim,clim,0.9381800197823936,0.0,0,7
+rope-drop worth agreement,D5,all,30,prod_ropedrop_hist,prod_ropedrop_hist,,0.0,0,8
+rope-drop worth agreement,D5,all,45,wt_med,wt_med,0.9141344834346207,0.0,0,8
+rope-drop worth agreement,D5,all,60,wt_med,wt_med,0.9179775280898876,0.0,0,8
+rope-drop worth agreement,D5,all,90,clim,clim,0.9353469795307039,0.0,0,8
+dayPeak pairwise ordering (headliners),D4,all,0,wt_med,wt_med,0.7552273163245732,0.0,0,7
+dayPeak pairwise ordering (headliners),D4,all,1,wt_med,wt_med,0.7481844589687727,0.0,0,7
+dayPeak pairwise ordering (headliners),D4,all,2,wt_med,wt_med,0.777844671884407,0.0,0,8
+dayPeak pairwise ordering (headliners),D4,all,3,wt_med,wt_med,0.7674801617008534,0.0,0,8
+dayPeak pairwise ordering (headliners),D4,all,4,wt_med,wt_med,0.7488606770833334,0.0,0,8
+dayPeak pairwise ordering (headliners),D4,all,5,wt_med,wt_med,0.7524770311655558,0.0,0,8
+dayPeak pairwise ordering (headliners),D4,all,6,clim,clim,0.7496062992125985,0.0,0,8
+dayPeak pairwise ordering (headliners),D4,all,7,wt_med,wt_med,0.7508917954815696,0.0,0,7
+dayPeak pairwise ordering (headliners),D4,all,10,clim,clim,0.7594056275687638,0.0,0,8
+dayPeak pairwise ordering (headliners),D4,all,14,clim,clim,0.7424151095037171,0.0,0,7
+dayPeak pairwise ordering (headliners),D4,all,21,clim,clim,0.7417801047120419,0.0,0,7
+dayPeak pairwise ordering (headliners),D4,all,30,clim,clim,0.7560131195335277,0.0,0,8
+dayPeak pairwise ordering (headliners),D4,all,45,clim,clim,0.7575866403304005,0.0,0,8
+dayPeak pairwise ordering (headliners),D4,all,60,wt_med,wt_med,0.7457378551787351,0.0,0,8
+dayPeak pairwise ordering (headliners),D4,all,90,wt_med,wt_med,0.7568732047599508,0.0,0,8
+dayPeak Spearman across rides,UC3,all,0,snaive7,snaive7,0.8319160432295315,0.0,0,7
+dayPeak Spearman across rides,UC3,all,1,snaive7,snaive7,0.8235323903580231,0.0,0,7
+dayPeak Spearman across rides,UC3,all,2,wt_med,wt_med,0.8752820829664743,0.0,0,8
+dayPeak Spearman across rides,UC3,all,3,wt_med,wt_med,0.8545158494124886,0.0,0,8
+dayPeak Spearman across rides,UC3,all,4,snaive7,snaive7,0.827478929747255,0.0,0,8
+dayPeak Spearman across rides,UC3,all,5,snaive7,snaive7,0.8247396195472998,0.0,0,8
+dayPeak Spearman across rides,UC3,all,6,clim,clim,0.8102518391189384,0.0,0,8
+dayPeak Spearman across rides,UC3,all,7,wt_med,wt_med,0.8000418252147649,0.0,0,7
+dayPeak Spearman across rides,UC3,all,10,clim,clim,0.8508005641092998,0.0,0,8
+dayPeak Spearman across rides,UC3,all,14,clim,clim,0.7987748179908197,0.0,0,7
+dayPeak Spearman across rides,UC3,all,21,clim,clim,0.79472649349998,0.0,0,7
+dayPeak Spearman across rides,UC3,all,30,clim,clim,0.8498740584116287,0.0,0,8
+dayPeak Spearman across rides,UC3,all,45,clim,clim,0.8419475442496593,0.0,0,8
+dayPeak Spearman across rides,UC3,all,60,wt_med,wt_med,0.8064176082369738,0.0,0,8
+dayPeak Spearman across rides,UC3,all,90,wt_med,wt_med,0.8091055248204282,0.0,0,8
+optimiser regret (min per park-day),D4,all,1,wt_med,wt_med,38.63461538461539,0.0,0,7
+optimiser regret (min per park-day),D4,all,3,wt_med,wt_med,34.08806818181818,0.0,0,8
+optimiser regret (min per park-day),D4,all,7,clim,clim,38.89922480620155,0.0,0,7
+optimiser regret (min per park-day),D4,all,14,clim,clim,37.42578125,0.0,0,7
+optimiser regret (min per park-day),D4,all,30,clim,clim,38.55590062111801,0.0,0,8
+next-best precision,D1,all,0-120,snaive7,snaive7,0.4807479004912058,0.0,0,7
+next-best precision,D1,all,0-60,snaive7,snaive7,0.3954761036118205,0.0,0,7
+next-best precision (top-3),D1,all,0-120,snaive7,snaive7,0.5773532152842498,0.0,0,7
+next-best precision (top-3),D1,all,0-60,snaive7,snaive7,0.47676669893514034,0.0,0,7
+next-best recall,D1,all,0-120,snaive7,snaive7,0.6376628835645229,0.0,0,7
+next-best recall,D1,all,0-60,snaive7,snaive7,0.5827956989247312,0.0,0,7
+crowd bucket exact,D6,all,1,lvl_snaive7,lvl_snaive7,0.4444444444444444,0.0,0,7
+crowd bucket exact,D6,all,2,lvl_naive4,lvl_naive4,0.4595744680851064,0.0,0,8
+crowd bucket exact,D6,all,3,lvl_wt56,lvl_wt56,0.4788135593220339,0.0,0,8
+crowd bucket exact,D6,all,4,lvl_snaive7,lvl_snaive7,0.4019138755980861,0.0,0,8
+crowd bucket exact,D6,all,5,lvl_snaive7,lvl_snaive7,0.3869346733668342,0.0,0,8
+crowd bucket exact,D6,all,6,lvl_snaive7,lvl_snaive7,0.4975609756097561,0.0,0,8
+crowd bucket exact,D6,all,7,lvl_naive4,lvl_naive4,0.292817679558011,0.0,0,7
+crowd bucket exact,D6,all,10,lvl_wt56,lvl_wt56,0.4127659574468085,0.0,0,8
+crowd bucket exact,D6,all,14,lvl_naive4,lvl_naive4,0.2430939226519337,0.0,0,7
+crowd bucket exact,D6,all,21,lvl_wt56,lvl_wt56,0.27071823204419887,0.0,0,7
+crowd bucket exact,D6,all,30,lvl_naive4,lvl_naive4,0.4069264069264069,0.0,0,8
+crowd bucket exact,D6,all,45,lvl_wt56,lvl_wt56,0.4025974025974026,0.0,0,8
+crowd bucket exact,D6,all,60,lvl_naive4,lvl_naive4,0.2961165048543689,0.0,0,8
+crowd bucket exact,D6,all,90,lvl_naive4,lvl_naive4,0.2849740932642487,0.0,0,8
+crowd bucket exact,D6,all,120,lvl_wt56,lvl_wt56,0.2641509433962264,0.0,0,7
+crowd bucket exact,D6,all,180,lvl_naive4,lvl_naive4,0.21428571428571427,0.0,0,8
+day comparison winner accuracy,D7,all,d1-7,lvl_snaive7,lvl_snaive7,0.46917982679572084,0.0,0,8
+day comparison winner accuracy,D7,all,d8-30,lvl_naive4,lvl_naive4,0.2764391960940161,0.0,0,10
+day comparison winner accuracy,D7,all,d31-90,lvl_naive4,lvl_naive4,0.2660908574508062,0.0,0,16

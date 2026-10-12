@@ -1,0 +1,9 @@
+# ml-bench — offline forecasting benchmark (not deployed).
+# torch is installed separately in the Dockerfile (cu128 wheel for the RTX 5080, sm_120).
+duckdb==1.4.1
+pandas==2.2.3
+numpy==1.26.4
+pyarrow==23.0.1
+scikit-learn==1.7.2  # PAR-830 level-driver analysis + driver_level plug-in (CPU)
+pytest==9.0.3
+ruff==0.14.1

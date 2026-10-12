@@ -8,7 +8,9 @@ const T = (iso: string) => new Date(iso);
  * One park, one ride, one window (10:00–12:00 CEST = 08:00–10:00 UTC on
  * 2026-10-08), one d1 plan curve archived at 06:00 the day before.
  */
-function build(opts: { alreadyScored?: string[] } = {}) {
+function build(
+  opts: { alreadyScored?: string[]; extraCurves?: object[] } = {},
+) {
   const sql: string[] = [];
   const connection = {
     transaction: async (fn: (em: unknown) => unknown) =>
@@ -51,6 +53,7 @@ function build(opts: { alreadyScored?: string[] } = {}) {
   };
   const deleted: unknown[] = [];
   const insertedScores: Array<Record<string, unknown>> = [];
+  const insertedPaired: Array<Record<string, unknown>> = [];
   const scoreRepository = {
     create: (x: unknown) => x,
     manager: {
@@ -63,12 +66,31 @@ function build(opts: { alreadyScored?: string[] } = {}) {
         ),
       transaction: async (fn: (em: unknown) => unknown) =>
         fn({
-          delete: async (_e: unknown, where: unknown) => deleted.push(where),
-          insert: async (_e: unknown, rows: Array<Record<string, unknown>>) =>
-            insertedScores.push(...rows),
+          delete: async (e: { name: string }, where: object) =>
+            deleted.push({ entity: e.name, ...where }),
+          insert: async (
+            e: { name: string },
+            rows: Array<Record<string, unknown>>,
+          ) =>
+            (e.name === "ForecastArchivePaired"
+              ? insertedPaired
+              : insertedScores
+            ).push(...rows),
         }),
     },
     createQueryBuilder: jest.fn(),
+  };
+  const pairedRepository = {
+    create: (x: unknown) => x,
+    manager: { query: jest.fn().mockResolvedValue([]) },
+    createQueryBuilder: jest.fn().mockImplementation(() => {
+      const qb = {
+        where: () => qb,
+        andWhere: () => qb,
+        getMany: async () => [],
+      };
+      return qb;
+    }),
   };
   const curve = {
     originAt: T("2026-10-07T04:00:00Z"),
@@ -123,11 +145,12 @@ function build(opts: { alreadyScored?: string[] } = {}) {
     } as never,
     { find: jest.fn().mockResolvedValue([{ id: "r1" }]) } as never,
     {
-      find: jest.fn().mockResolvedValue([curve]),
+      find: jest.fn().mockResolvedValue([curve, ...(opts.extraCurves ?? [])]),
       manager: { connection },
     } as never,
     { find: jest.fn().mockResolvedValue([parkDay]) } as never,
     scoreRepository as never,
+    pairedRepository as never,
     {
       getHeadlinerAttractions: jest
         .fn()
@@ -135,7 +158,16 @@ function build(opts: { alreadyScored?: string[] } = {}) {
     } as never,
     redis as never,
   );
-  return { service, sql, deleted, insertedScores, scoreRepository, redis };
+  return {
+    service,
+    sql,
+    deleted,
+    insertedScores,
+    insertedPaired,
+    scoreRepository,
+    pairedRepository,
+    redis,
+  };
 }
 
 describe("ForecastArchiveScoringService.scoreDue", () => {
@@ -145,8 +177,12 @@ describe("ForecastArchiveScoringService.scoreDue", () => {
     });
     const res = await service.scoreDue(T("2026-10-09T12:00:00Z"));
     expect(res.dates).toEqual(["2026-10-08"]);
-    // Delete-then-insert inside one transaction, for that date only.
-    expect(deleted).toEqual([{ targetDate: "2026-10-08" }]);
+    // Delete-then-insert inside one transaction, for that date only — the
+    // scores and the shadow's paired rows alike.
+    expect(deleted).toEqual([
+      { entity: "ForecastArchiveScore", targetDate: "2026-10-08" },
+      { entity: "ForecastArchivePaired", targetDate: "2026-10-08" },
+    ]);
     expect(insertedScores.length).toBeGreaterThan(0);
     expect(redis.incr).toHaveBeenCalledWith("forecast-archive:board:version");
     // Reads carry their limits.
@@ -177,6 +213,102 @@ describe("ForecastArchiveScoringService.scoreDue", () => {
         SCORE_KEY_WIDTHS.source,
       );
     }
+  });
+
+  it("scores the Chronos grid shadow under its own source and pairs it with the served plan and H5", async () => {
+    // Same origin as the served d1 plan (06:00 the day before). Truth over the
+    // eight quarter-hours is 20,20,20,40,40,30,30,30.
+    const shadowRow = (surface: number, waits: number[], code: string) => ({
+      originAt: T("2026-10-07T04:00:00Z"),
+      attractionId: "r1",
+      surface,
+      targetDate: "2026-10-08",
+      parkId: "p1",
+      originKind: 1,
+      leadDays: 1,
+      slotStart: T("2026-10-08T08:00:00Z"),
+      slotMinutes: 15,
+      waits,
+      sources: code.repeat(waits.length),
+      bands: surface === 7 ? waits.map(() => 5) : null,
+      dayPeak: surface === 7 ? 40 : null,
+      expectedError: null,
+      peakBand: null,
+      modelVersion: surface === 7 ? "chronos-2@29ec376;hol=full" : null,
+      rideQ90: 50,
+      isHeadliner: true,
+      liveWait: null,
+      liveAgeMin: null,
+      laterWait: null,
+      laterAt: null,
+      levelSource: null,
+    });
+    const { service, insertedScores, insertedPaired } = build({
+      alreadyScored: ["2026-10-06", "2026-10-07"],
+      extraCurves: [
+        shadowRow(7, [20, 20, 20, 40, 40, 30, 30, 30], "g"),
+        shadowRow(4, [25, 25, 25, 25, 25, 25, 25, 25], "h"),
+      ],
+    });
+    await service.scoreDue(T("2026-10-09T12:00:00Z"));
+    const byKey = new Map(
+      insertedScores.map((r) => [
+        [r.region, r.useCase, r.lead, r.source, r.segment].join("|"),
+        r.sums as Record<string, number>,
+      ]),
+    );
+    expect(byKey.get("EU|UC3|d1|chronos2_grid|all")).toMatchObject({
+      n: 8,
+      sae: 0,
+      nBand: 8,
+      nPeak: 1,
+    });
+    // Never pooled into what the served planner is judged by.
+    expect(byKey.get("EU|UC3|d1|all|all")!.n).toBe(8);
+
+    const paired = (reference: string) =>
+      insertedPaired.find(
+        (r) =>
+          r.reference === reference &&
+          r.segment === "all" &&
+          r.model === "chronos2_grid",
+      );
+    // Served plan: 25 for the first hour, 35 for the second → Σ|e| = 50.
+    expect(paired("served")).toMatchObject({
+      parkId: "p1",
+      region: "EU",
+      useCase: "UC3",
+      lead: "d1",
+      n: 8,
+      saeModel: 0,
+      saeRef: 50,
+    });
+    expect(paired("h5")).toMatchObject({ n: 8, saeRef: 60 });
+    expect(
+      insertedPaired
+        .filter((r) => r.model === "chronos2_grid" && r.useCase === "UC3")
+        .map((r) => r.segment)
+        .sort(),
+    ).toEqual(["all", "all", "busy", "busy", "headliner", "headliner"]);
+    // PAR-855: the H5 shadow against the served plan on the same slots, and
+    // both shadows' best-time regret against the plan's, segment `all` only.
+    expect(
+      insertedPaired.find(
+        (r) =>
+          r.model === "shadow_h5" && r.useCase === "UC3" && r.lead === "d1",
+      ),
+    ).toMatchObject({ reference: "served", segment: "all", n: 8, saeRef: 50 });
+    expect(
+      insertedPaired
+        .filter((r) => r.useCase === "D3")
+        .map((r) => r.model)
+        .sort(),
+    ).toEqual(["chronos2_grid", "shadow_h5", "shadow_h5_routed"]);
+    expect(
+      insertedPaired
+        .filter((r) => r.model !== "chronos2_grid" || r.useCase !== "UC3")
+        .every((r) => r.segment === "all" && r.reference === "served"),
+    ).toBe(true);
   });
 
   it("does nothing when every date is scored", async () => {
@@ -248,5 +380,73 @@ describe("ForecastArchiveScoringService.getBoard", () => {
     expect(uc3.metrics.mae).toBe(2);
     expect(uc3.metrics.bias).toBe(-0.6);
     expect(redis.set.mock.calls[0][0]).toBe("forecast-archive:board:v3:ALL:14");
+  });
+
+  it("returns the Chronos section: own MAE plus paired differences with a park-cluster CI", async () => {
+    const { service, scoreRepository, pairedRepository, redis } = build();
+    redis.get.mockResolvedValue(null);
+    const scoreRows = [
+      {
+        targetDate: "2026-10-08",
+        region: "ALL",
+        useCase: "UC1",
+        lead: "h0-1",
+        source: "chronos2",
+        segment: "all",
+        sums: { n: 10, sae: 50, se: -10, nBand: 10, nBandCov: 9 },
+      },
+    ];
+    const sqb = {
+      where: () => sqb,
+      andWhere: () => sqb,
+      getMany: async () => scoreRows,
+    };
+    scoreRepository.createQueryBuilder.mockReturnValue(sqb);
+    const pairedRows = ["p1", "p2", "p3"].map((parkId, i) => ({
+      targetDate: "2026-10-08",
+      parkId,
+      region: "EU",
+      useCase: "UC1",
+      lead: "h0-1",
+      model: "chronos2",
+      reference: "served",
+      segment: "all",
+      n: 10,
+      saeModel: 40 + i,
+      saeRef: 60 + i,
+      seModel: 0,
+      seRef: 0,
+    }));
+    const pqb = {
+      where: () => pqb,
+      andWhere: () => pqb,
+      getMany: async () => pairedRows,
+    };
+    pairedRepository.createQueryBuilder.mockReturnValue(pqb);
+    const board = await service.getBoard(14, "ALL");
+    expect(board.chronos.method).toMatchObject({ minDays: 14, minParks: 10 });
+    const row = board.chronos.rows[0];
+    expect(row).toMatchObject({
+      useCase: "UC1",
+      lead: "h0-1",
+      model: "chronos2",
+      surface: "chronos_live",
+      mae: 5,
+      bandCoverage: 0.9,
+    });
+    expect(row.comparisons[0]).toMatchObject({
+      reference: "served",
+      n: 30,
+      parks: 3,
+      days: 1,
+      modelMae: 4.1,
+      referenceMae: 6.1,
+      diff: -2,
+      enoughData: false,
+      verdict: "insufficient_data",
+    });
+    // Every park is 2 min better → the bootstrap cannot move off −2.
+    expect(row.comparisons[0].ciLow).toBe(-2);
+    expect(row.comparisons[0].ciHigh).toBe(-2);
   });
 });

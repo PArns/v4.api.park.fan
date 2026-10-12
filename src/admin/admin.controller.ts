@@ -42,7 +42,19 @@ import { ParkMergeService } from "../parks/services/park-merge.service";
 import { determineMergeWinner } from "../parks/utils/park-merge.util";
 import { SystemHealthService } from "./system-health.service";
 import { ForecastArchiveScoringService } from "../parks/services/forecast-archive-scoring.service";
+import {
+  DAY_ORIGINS,
+  ModelComparisonService,
+} from "../parks/services/model-comparison.service";
+import {
+  ModelComparisonDayDto,
+  ModelComparisonDayOptionsDto,
+  ModelComparisonOriginId,
+  ModelComparisonResponseDto,
+} from "../ml/dto/model-comparison.dto";
 import { DowntimeMeasurementService } from "./downtime-measurement.service";
+import { MlOverviewService } from "./ml-overview.service";
+import { MlOverviewDto } from "../ml/dto/ml-overview.dto";
 import { AdminAuthGuard } from "./auth/admin-auth.guard";
 import { AdminMinRole } from "./auth/admin-auth.decorators";
 import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
@@ -166,6 +178,8 @@ export class AdminController {
     private readonly retirementService: AttractionRetirementService,
     private readonly reviewService: AttractionReviewService,
     private readonly forecastArchiveScoring: ForecastArchiveScoringService,
+    private readonly modelComparison: ModelComparisonService,
+    private readonly mlOverview: MlOverviewService,
   ) {}
 
   /**
@@ -574,8 +588,10 @@ export class AdminController {
       "UC1/UC2 (served 15-min curve, slot leads h0-1 … h24-48 and ride-day " +
       "leads d0-d2), UC3 (plan/day d0-d7), UC3S (composer A/B shadow, PAR-834), " +
       "D6 (crowd bucket per park-day), " +
-      "D9 (coverage). Counters are pooled before dividing. See " +
-      "docs/ml/forward-archive.md.",
+      "D9 (coverage). Counters are pooled before dividing. `chronos`: the " +
+      "Chronos-2 shadow (PAR-852, never served) per use case × lead — own " +
+      "MAE plus the paired difference vs served / persistence / H5 with a " +
+      "95 % park-cluster bootstrap CI. See docs/ml/forward-archive.md.",
   })
   @ApiQuery({ name: "days", required: false, description: "1-90, default 14" })
   @ApiQuery({
@@ -595,6 +611,114 @@ export class AdminController {
       );
     }
     return this.forecastArchiveScoring.getBoard(n, r);
+  }
+
+  /**
+   * The model comparison (PAR-855): for every question the app answers, does
+   * each model beat what is served today? Live from the forward archive's
+   * paired rows (park-cluster bootstrap CI, gate 14 days / 10 parks), mixed
+   * with the versioned offline verdicts. Read-only, cached 2 h per scoring run.
+   */
+  @Get("model-comparison")
+  @ApiOperation({
+    summary: "Model comparison matrix (question × model vs served)",
+    description:
+      "Cells: today | better | worse | unclear | pending, with the live " +
+      "paired difference (model − served, minutes, negative = better) and its " +
+      "95 % park-cluster CI, the offline verdict, the three switch checks and " +
+      "when the outstanding one reports. See docs/ml/forward-archive.md §9.",
+  })
+  @ApiQuery({ name: "days", required: false, description: "1-90, default 28" })
+  @ApiQuery({
+    name: "region",
+    required: false,
+    description: "ALL (default), EU, NA, ASIA, OTHER",
+  })
+  async getModelComparison(
+    @Query("days") days?: string,
+    @Query("region") region?: string,
+  ): Promise<ModelComparisonResponseDto> {
+    const n = Math.min(Math.max(parseInt(days ?? "28", 10) || 28, 1), 90);
+    const r = (region ?? "ALL").toUpperCase();
+    if (!["ALL", "EU", "NA", "ASIA", "OTHER"].includes(r)) {
+      throw new BadRequestException(
+        "region must be ALL, EU, NA, ASIA or OTHER",
+      );
+    }
+    return this.modelComparison.getMatrix(n, r);
+  }
+
+  /**
+   * The ML overview (PAR-861): what is up for decision (derived from the
+   * model comparison matrix and src/ml/data/ml-decisions.json), the matrix
+   * summary, and whether every ML component ran when it should have.
+   * Read-only, bounded index lookups, cached 5 min.
+   */
+  @Get("ml-overview")
+  @ApiOperation({
+    summary: "ML overview: open decisions, matrix summary, component status",
+    description:
+      "decisions: ready | waiting_live | open | later | owner, with the live " +
+      "progress of their least-measured matrix cell and the earliest date the " +
+      "gate can be met. components: last run, expected cadence and " +
+      "ok | late | failed | warming | unknown. See docs/ml/ml-overview.md.",
+  })
+  async getMlOverview(): Promise<MlOverviewDto> {
+    return this.mlOverview.getOverview();
+  }
+
+  /** Dates, parks and rides the day comparison can show (PAR-855). */
+  @Get("model-comparison/day/options")
+  @ApiOperation({
+    summary: "Model comparison: days, parks and rides with archived curves",
+  })
+  @ApiQuery({ name: "date", required: false, description: "YYYY-MM-DD" })
+  async getModelComparisonDayOptions(
+    @Query("date") date?: string,
+  ): Promise<ModelComparisonDayOptionsDto> {
+    if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new BadRequestException("date must be YYYY-MM-DD");
+    }
+    return this.modelComparison.getDayOptions(date);
+  }
+
+  /**
+   * One real day (PAR-855): every archived curve of one ride from one origin
+   * against the 15-min truth, park-local, with the MAE of each.
+   */
+  @Get("model-comparison/day")
+  @ApiOperation({
+    summary: "Model comparison: one ride-day, curves vs truth",
+  })
+  @ApiQuery({ name: "parkId", required: true })
+  @ApiQuery({ name: "date", required: true, description: "YYYY-MM-DD" })
+  @ApiQuery({ name: "attractionId", required: true })
+  @ApiQuery({
+    name: "origin",
+    required: false,
+    description: "morning (default), d1, d3, d7",
+  })
+  async getModelComparisonDay(
+    @Query("parkId") parkId?: string,
+    @Query("date") date?: string,
+    @Query("attractionId") attractionId?: string,
+    @Query("origin") origin?: string,
+  ): Promise<ModelComparisonDayDto> {
+    const uuid = /^[0-9a-f-]{36}$/i;
+    if (!parkId || !uuid.test(parkId)) {
+      throw new BadRequestException("parkId must be a UUID");
+    }
+    if (!attractionId || !uuid.test(attractionId)) {
+      throw new BadRequestException("attractionId must be a UUID");
+    }
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new BadRequestException("date must be YYYY-MM-DD");
+    }
+    const o = (origin ?? "morning") as ModelComparisonOriginId;
+    if (!DAY_ORIGINS.some((x) => x.id === o)) {
+      throw new BadRequestException("origin must be morning, d1, d3 or d7");
+    }
+    return this.modelComparison.getDay(parkId, date, attractionId, o);
   }
 
   /**

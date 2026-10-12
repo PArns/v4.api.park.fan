@@ -13,6 +13,17 @@ pydantic-settings==2.11.0
 # so we don't drag in the multi-GB CUDA build.
 neuralforecast==3.1.8
 
+# Chronos-2 zero-shot SHADOW forecast for the forward archive (PAR-852).
+# Apache-2.0 (code: github.com/amazon-science/chronos-forecasting; weights:
+# huggingface.co/amazon/chronos-2, model card "license: apache-2.0", revision
+# pinned in config.py). The same version the PAR-828 offline benchmark scored.
+# Pulls transformers + accelerate; torch stays the cu128 wheel installed above.
+chronos-forecasting==2.3.2
+# Its two heavy transitive deps pinned to releases at least two weeks old, so a
+# rebuild cannot pick up a transformers release nobody has run the shadow on.
+transformers==5.17.0
+accelerate==1.15.0
+
 # Data
 pandas==2.2.3
 numpy==1.26.4

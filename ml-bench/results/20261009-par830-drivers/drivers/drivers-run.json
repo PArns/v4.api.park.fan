@@ -1,0 +1,121 @@
+{
+  "export": "20261009 (local copy of parquet/ + raw/schedule.csv.gz)",
+  "leads": [
+    1,
+    3,
+    7,
+    14,
+    30,
+    60,
+    90
+  ],
+  "common_target_start": "2026-06-30",
+  "feature_sets": {
+    "cal": [
+      "cal"
+    ],
+    "cal+hol": [
+      "cal",
+      "hol"
+    ],
+    "cal+sched": [
+      "cal",
+      "sched"
+    ],
+    "cal+hol+sched": [
+      "cal",
+      "hol",
+      "sched"
+    ],
+    "cal+hol+sched_final(UPPER)": [
+      "cal",
+      "hol",
+      "sched_final"
+    ],
+    "cal+hol+sched+wx(ORACLE)": [
+      "cal",
+      "hol",
+      "sched",
+      "wx"
+    ]
+  },
+  "groups": {
+    "cal": [
+      "L",
+      "dow",
+      "region",
+      "is_headliner",
+      "log_ref",
+      "n_ref",
+      "ref_age"
+    ],
+    "hol": [
+      "hol",
+      "school",
+      "hol_nb",
+      "school_nb_cnt",
+      "school_any",
+      "hol_cnt",
+      "bridge",
+      "hol_prev",
+      "hol_next",
+      "ref_hol",
+      "ref_school",
+      "d_hol",
+      "d_school",
+      "d_school_any"
+    ],
+    "sched": [
+      "hours_a",
+      "open_h_a",
+      "close_h_a",
+      "d_hours_a",
+      "r_hours_a",
+      "d_close_a",
+      "d_open_a",
+      "since_season_start_a",
+      "to_season_end_a",
+      "since_prev_open_a",
+      "ticketed_a",
+      "extra_a",
+      "ref_hours",
+      "ref_ticketed"
+    ],
+    "sched_final": [
+      "hours",
+      "open_h",
+      "close_h",
+      "d_hours",
+      "r_hours",
+      "d_close",
+      "d_open",
+      "since_season_start",
+      "to_season_end",
+      "since_prev_open",
+      "ticketed",
+      "extra",
+      "ref_hours",
+      "ref_ticketed"
+    ],
+    "wx": [
+      "temp_max",
+      "precip",
+      "wind_max",
+      "d_temp",
+      "d_precip"
+    ]
+  },
+  "rows": 1945888,
+  "scored_rows": 1739039,
+  "folds": [
+    "2026-04",
+    "2026-05",
+    "2026-06",
+    "2026-07",
+    "2026-08",
+    "2026-09",
+    "2026-10"
+  ],
+  "seconds": 249.6,
+  "generated_utc": "2026-10-09T19:42:28+00:00"
+}

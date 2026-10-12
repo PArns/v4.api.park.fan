@@ -25,6 +25,18 @@ export const ARCHIVE_SURFACES = {
   plan_day_shadow_peak: 3,
   plan_day_shadow_h5: 4,
   plan_day_shadow_routed: 5,
+  /**
+   * Chronos-2 zero-shot SHADOW (PAR-852), NOT served: nf-service
+   * `/chronos/forecast`, bench variant `chronos2` (compressed operating-slot
+   * context), at the intraday origins, the next four hours — compared with
+   * `park_hourly` from the SAME origin.
+   */
+  chronos_live: 6,
+  /**
+   * Chronos-2 bench variant `chronos2_grid` (15-min grid context) at the 06:00
+   * origin, d0 … d7 — compared with `plan_day` from the same origin.
+   */
+  chronos_grid: 7,
 } as const;
 export type ArchiveSurface = keyof typeof ARCHIVE_SURFACES;
 
@@ -60,6 +72,10 @@ export const ARCHIVE_SOURCE_CODES = {
   t: "composed_h5_tft",
   l: "climatology",
   o: "observed",
+  /** Chronos-2 shadow, bench variant `chronos2` (PAR-852). */
+  x: "chronos2",
+  /** Chronos-2 shadow, bench variant `chronos2_grid` (PAR-852). */
+  g: "chronos2_grid",
 } as const;
 export type ArchiveSourceCode = keyof typeof ARCHIVE_SOURCE_CODES;
 export type ArchiveSourceName =
@@ -158,7 +174,11 @@ export class ForecastArchiveCurve {
 
   /**
    * Model version as served (park_hourly: the CatBoost version, without the
-   * `+pcn` suffix — PCN is recorded per slot in `sources`).
+   * `+pcn` suffix — PCN is recorded per slot in `sources`). Chronos rows
+   * (PAR-852): `chronos-2@<revision 7>;hol=<full|short|none>` — whether the
+   * day's holiday covariates rested on holiday data (`none`: no row for the
+   * park's country, every flag read 0; `short`: the data ends before the day),
+   * so a covariate gap is visible on the board instead of silently zero.
    */
   @Column({
     name: "model_version",

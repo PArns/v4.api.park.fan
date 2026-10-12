@@ -713,6 +713,23 @@ describe("ParkHistoricalStatsService", () => {
       expect(aggregateQuery).not.toHaveBeenCalled();
     });
   });
+  it("draws the day-curve band from CatBoost's raw error, the model the curve plots (PAR-854)", async () => {
+    // The day curve reads `wait_time_predictions` — raw CatBoost. Since PAR-854
+    // `attraction_accuracy_stats.mae` scores the served (PCN) forecast, so the
+    // band around this line must come from `raw_mae` instead.
+    aggregateQuery.mockImplementationOnce((sql: string) => {
+      expect(sql).toContain("SELECT s.raw_mae AS mae");
+      return Promise.resolve([{ mae: 6.4 }]);
+    });
+    const queryAttractionMae = (
+      service as unknown as {
+        queryAttractionMae: (slug: string, parkId: string) => Promise<number>;
+      }
+    ).queryAttractionMae.bind(service);
+
+    await expect(queryAttractionMae("blue-fire", park.id)).resolves.toBe(6.4);
+  });
+
   it("writes a stats key that the invalidation glob matches", async () => {
     // v3 shipped with the glob still searching v2, so eviction after a merge,
     // repair or curation never matched a key and `/stats` stayed stale for up

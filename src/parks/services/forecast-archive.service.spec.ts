@@ -2,6 +2,10 @@ import { ForecastArchiveService } from "./forecast-archive.service";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
 import { PlanDayDto, PlanDayShadowCurve } from "../dto/plan-day.dto";
 import { Park } from "../entities/park.entity";
+import {
+  CHRONOS_LAST_RUN_KEY,
+  ChronosResponse,
+} from "./chronos-shadow.service";
 
 const TZ = "Europe/Berlin";
 
@@ -304,6 +308,7 @@ describe("ForecastArchiveService.capturePark", () => {
     opts: {
       planThrows?: boolean;
       shadow?: (date: string) => PlanDayShadowCurve[];
+      chronos?: ChronosResponse | null;
     } = {},
   ) {
     const inserted: unknown[][] = [];
@@ -423,6 +428,9 @@ describe("ForecastArchiveService.capturePark", () => {
     const attractions = {
       find: jest.fn().mockResolvedValue([{ id: "id-taron", slug: "taron" }]),
     };
+    const chronos = {
+      forecast: jest.fn().mockResolvedValue(opts.chronos ?? null),
+    };
     const service = new ForecastArchiveService(
       {} as never,
       attractions as never,
@@ -433,8 +441,9 @@ describe("ForecastArchiveService.capturePark", () => {
       calendar as never,
       analytics as never,
       redis as never,
+      chronos as never,
     );
-    return { service, ml, planDay, inserted, redis, sql };
+    return { service, ml, planDay, inserted, redis, sql, chronos };
   }
   const park = { id: "p1", slug: "phl", timezone: TZ } as Park;
 
@@ -609,6 +618,191 @@ describe("ForecastArchiveService.capturePark", () => {
   });
 });
 
+describe("ForecastArchiveService — Chronos-2 shadow (PAR-852)", () => {
+  const park = { id: "p1", slug: "phl", timezone: TZ } as Park;
+  const response = (date: string, start: string): ChronosResponse => ({
+    status: "ok",
+    revision: "29ec3766d36d6f73f0696f85560a422f50e8498c",
+    curves: [
+      {
+        attractionId: "id-taron",
+        date,
+        slotStart: start,
+        slotMinutes: 15,
+        covariates: { holidays: "short", schedule: "published" },
+        q50: [10.4, null, 30, 40, 50],
+        q80: [12, null, 33, 44, 55],
+        q95: [20, null, 25, null, 70],
+      },
+      // A ride the park does not know (merged away) is dropped.
+      {
+        attractionId: "ghost",
+        date,
+        slotStart: start,
+        slotMinutes: 15,
+        covariates: { holidays: "full", schedule: "published" },
+        q50: [1],
+        q80: [1],
+        q95: [1],
+      },
+    ],
+  });
+
+  function build(chronos: ChronosResponse | null) {
+    const inserted: unknown[][] = [];
+    const qb = {
+      insert: () => qb,
+      into: () => qb,
+      values: (v: unknown[]) => {
+        inserted.push(v);
+        return qb;
+      },
+      orIgnore: () => qb,
+      execute: async () => ({}),
+    };
+    const em = {
+      query: async (q: string) =>
+        q.includes("DISTINCT ON")
+          ? [
+              {
+                id: "id-taron",
+                status: "OPERATING",
+                wait: 35,
+                ts: new Date(Date.now() - 10 * 60_000),
+              },
+            ]
+          : [],
+    };
+    const repo = {
+      create: (x: unknown) => x,
+      manager: {
+        connection: {
+          transaction: async (fn: (m: unknown) => unknown) => fn(em),
+        },
+        transaction: async (fn: (m: unknown) => unknown) =>
+          fn({ createQueryBuilder: () => qb }),
+      },
+    };
+    const plan = {
+      tier: "measured",
+      context: { openHour: 10, closeHour: 18 },
+      rides: [],
+    };
+    const shadow = {
+      forecast: jest.fn().mockResolvedValue(chronos),
+    };
+    const service = new ForecastArchiveService(
+      {} as never,
+      {
+        find: jest.fn().mockResolvedValue([{ id: "id-taron", slug: "taron" }]),
+      } as never,
+      repo as never,
+      repo as never,
+      {
+        getParkPredictions: jest.fn().mockResolvedValue({ predictions: [] }),
+        getServingDailyPredictions: jest
+          .fn()
+          .mockResolvedValue({ predictions: [] }),
+      } as never,
+      {
+        buildPlanDay: jest.fn().mockResolvedValue(plan),
+        buildPlanDayWithShadow: jest
+          .fn()
+          .mockResolvedValue({ plan, shadow: [] }),
+      } as never,
+      {
+        buildCalendarResponse: jest.fn().mockResolvedValue({ days: [] }),
+      } as never,
+      {
+        getHeadlinerAttractions: jest.fn().mockResolvedValue([]),
+        getTypicalDayPeakFromCache: jest.fn().mockResolvedValue(0),
+      } as never,
+      {
+        get: jest.fn().mockResolvedValue(null),
+        set: jest.fn().mockResolvedValue("OK"),
+      } as never,
+      shadow as never,
+    );
+    return { service, shadow, inserted };
+  }
+
+  afterEach(() => jest.useRealTimers());
+
+  it("captures the grid variant at the 06:00 origin as surface 7, d0 … d7", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T04:05:00Z"));
+    const { service, shadow, inserted } = build(
+      response("2026-10-10", "2026-10-10T08:00:00Z"),
+    );
+    const origin = new Date();
+    await service.capturePark(park, "daily", origin);
+    expect(shadow.forecast).toHaveBeenCalledWith("p1", origin, "grid");
+    const rows = (inserted[0] as Array<Record<string, unknown>>).filter(
+      (r) => r.surface === 7,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      originAt: origin,
+      leadDays: 2,
+      slotMinutes: 15,
+      waits: [10, null, 30, 40, 50],
+      sources: "g-ggg",
+      // q95 − q50, one-sided; never below 0 (30 → 25 is clipped to 0).
+      bands: [10, null, 0, null, 20],
+      dayPeak: 47, // P90 of 10, 30, 40, 50
+      modelVersion: "chronos-2@29ec376;hol=short",
+      liveWait: null,
+    });
+  });
+
+  it("captures the live variant at an intraday origin as surface 6, with the persistence anchor", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T10:05:00Z"));
+    const { service, shadow, inserted } = build(
+      response("2026-10-08", "2026-10-08T10:15:00Z"),
+    );
+    const origin = new Date();
+    await service.capturePark(park, "intraday", origin);
+    expect(shadow.forecast).toHaveBeenCalledWith("p1", origin, "live", 240);
+    const row = (inserted[0] as Array<Record<string, unknown>>).find(
+      (r) => r.surface === 6,
+    )!;
+    expect(row).toMatchObject({
+      sources: "x-xxx",
+      leadDays: 0,
+      dayPeak: null,
+      liveWait: 35,
+      liveAgeMin: 10,
+    });
+  });
+
+  it("a missing shadow costs the capture nothing, and the long-lead origin never asks", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T04:05:00Z"));
+    const off = build(null);
+    const res = await off.service.capturePark(park, "daily", new Date());
+    expect(res.parkDays).toBe(8);
+    expect(
+      (off.inserted[0] ?? []).some(
+        (r) => (r as Record<string, unknown>).surface === 7,
+      ),
+    ).toBe(false);
+
+    jest.setSystemTime(new Date("2026-10-08T05:05:00Z"));
+    const long = build(null);
+    await long.service.capturePark(park, "long", new Date());
+    expect(long.shadow.forecast).not.toHaveBeenCalled();
+  });
+
+  it("drops days outside the variant's leads", () => {
+    const rows = ForecastArchiveService.curvesFromChronos(
+      response("2026-10-11", "2026-10-11T08:00:00Z"),
+      6,
+      "2026-10-08",
+      new Set(["id-taron"]),
+      1,
+    );
+    expect(rows).toEqual([]);
+  });
+});
+
 describe("ForecastArchiveService.captureDue", () => {
   it("takes each park's origin from the clock right before its capture, and claims the hour after", async () => {
     const service = Object.create(
@@ -622,10 +816,21 @@ describe("ForecastArchiveService.captureDue", () => {
       get: jest.fn().mockResolvedValue(null),
       set: jest.fn().mockResolvedValue("OK"),
     };
+    const chronos = {
+      beginRun: jest.fn(),
+      endRun: jest.fn().mockReturnValue({
+        calls: 2,
+        ok: 1,
+        failures: 0,
+        warming: 1,
+        skipped: 0,
+      }),
+    };
     Object.assign(service, {
       parkRepository: { find: jest.fn().mockResolvedValue(parks) },
       redis,
       logger: { warn: jest.fn(), debug: jest.fn() },
+      chronos,
     });
     const origins: number[] = [];
     const capture = jest
@@ -640,10 +845,20 @@ describe("ForecastArchiveService.captureDue", () => {
     expect(capture).toHaveBeenCalledTimes(2);
     expect(new Set(origins).size).toBe(2);
     expect(res).toMatchObject({ parks: 1, failed: 1 });
-    // Only the park that succeeded is marked done for this origin hour.
-    expect(redis.set).toHaveBeenCalledTimes(1);
+    // Only the park that succeeded is marked done for this origin hour; the
+    // second write is the run's Chronos summary for the admin overview.
+    expect(redis.set).toHaveBeenCalledTimes(2);
     expect(redis.set.mock.calls[0][0]).toBe(
       "forecast-archive:origin:a:2026-10-08:06",
     );
+    expect(redis.set.mock.calls[1][0]).toBe(CHRONOS_LAST_RUN_KEY);
+    expect(JSON.parse(redis.set.mock.calls[1][1])).toMatchObject({
+      calls: 2,
+      ok: 1,
+      warming: 1,
+    });
+    // One breaker / one log line per run for the Chronos shadow.
+    expect(chronos.beginRun).toHaveBeenCalledTimes(1);
+    expect(chronos.endRun).toHaveBeenCalledTimes(1);
   });
 });
