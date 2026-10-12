@@ -80,6 +80,43 @@ export class DayOfWeekStatDto {
   sampleDays: number;
 }
 
+export class DayStatDto {
+  @ApiProperty({
+    example: "2026-08-08",
+    description: "Park-local calendar day (yyyy-MM-dd)",
+  })
+  date: string;
+
+  @ApiProperty({
+    example: 4.6,
+    description: "Crowd score of the day (1.0–5.0)",
+  })
+  avgCrowdScore: number;
+
+  @ApiProperty({
+    enum: CROWD_LEVEL_ENUM,
+    enumName: "CrowdLevel",
+    example: "extreme",
+    description:
+      "Crowd level of this day, on the same occupancy-relative scale as " +
+      "`byDayOfWeek` (the day's headliner peak ÷ the park's typical-day-peak " +
+      "baseline). Render this, do not re-classify.",
+  })
+  avgCrowdLevel: CrowdLevel;
+
+  @ApiProperty({
+    example: 35,
+    description: "Typical (P50) wait of the day in minutes",
+  })
+  avgWaitP50: number;
+
+  @ApiProperty({
+    example: 75,
+    description: "Peak (P90) wait of the day in minutes",
+  })
+  avgWaitP90: number;
+}
+
 export class TopAttractionStatDto {
   @ApiProperty({ example: "blue-fire-megacoaster" })
   attractionSlug: string;
@@ -183,6 +220,24 @@ export class ParkHistoricalStatsDto {
 
   @ApiProperty({ type: [DayOfWeekStatDto] })
   byDayOfWeek: DayOfWeekStatDto[];
+
+  @ApiProperty({
+    type: [DayStatDto],
+    description:
+      "The up to 5 fullest measured days in the window, fullest first. Empty " +
+      "while the park has fewer than 10 measured days. Not an all-time " +
+      "ranking: it covers the measurement window only.",
+  })
+  busiestDays: DayStatDto[];
+
+  @ApiProperty({
+    type: [DayStatDto],
+    description:
+      "The up to 5 quietest measured days, quietest first. A day the " +
+      "schedule calls CLOSED is never a measured day. Empty while the park " +
+      "has fewer than 10 measured days.",
+  })
+  quietestDays: DayStatDto[];
 
   @ApiProperty({ type: [TopAttractionStatDto] })
   topAttractions: TopAttractionStatDto[];
