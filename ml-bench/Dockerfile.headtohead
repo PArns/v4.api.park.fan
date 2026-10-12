@@ -1,0 +1,41 @@
+# TiDE vs Chronos-2 head-to-head (one run, so the paired margins exist).
+#
+# Why an overlay instead of `Dockerfile`: the two model families live on two
+# different trees — Chronos-2 (`mlbench/models/foundation.py`, PAR-828) is on
+# `main`, the NeuralForecast plug-ins (`neuralforecast_models.py`, `nf_panel.py`,
+# `nf_precompute.py`, PAR-829) are only on the PAR-829 branch — and the harness
+# pairs models INSIDE a run (`run --pair-with`, `report --vs`), so a head-to-head
+# number cannot be assembled from two runs' parts. The tree this builds is
+# `main` + those three files, byte-identical copies (`git show <par-829>:…`).
+#
+# The base image is the one the owner's mixed-weekday Chronos-2 run used
+# (`ml-bench:par-828-wd`, image sha256:71d88527ccdc, git 00282662): its pip
+# environment carries chronos 2.3.2 / torch 2.11.0+cu128, and
+# `mlbench/models/foundation.py` is IDENTICAL on 00282662 and on main
+# (`git diff 00282662 origin/main -- ml-bench/mlbench/models/foundation.py` is
+# empty), so Chronos-2 runs here with the same code and the same library as in
+# `20261011-chronos-wd-shard5`. `ml-bench:par-829` — the image that produced the
+# TiDE numbers — was deleted from the host overnight and cannot be reused; TiDE
+# does not need it, because `NFCached` only reads the precomputed hourly parquet
+# cache (pandas + pyarrow, no torch, no neuralforecast).
+#
+# Build (context = ml-bench/):
+#   docker build -f Dockerfile.headtohead -t ml-bench:tide-vs-chronos \
+#     --build-arg GIT_SHA=$(git rev-parse HEAD) ml-bench
+FROM ml-bench:par-828-wd
+
+# main's requirements.txt adds scikit-learn for PAR-830; the base image predates it.
+RUN pip install --no-cache-dir scikit-learn==1.7.2
+
+# Replace the base image's sources wholesale, so no file of the older tree survives
+# into a run whose provenance claims this tree (`code_sha256` is measured over
+# /app/mlbench at run time and would not see a stale sibling file otherwise).
+RUN rm -rf /app/mlbench /app/tests /app/subsets /app/scripts-par828
+COPY . /app
+
+ARG GIT_SHA=unknown
+ENV MLBENCH_GIT_SHA=${GIT_SHA}
+RUN printf '%s' "${GIT_SHA}" > /app/GIT_SHA
+
+ENTRYPOINT ["python", "-m", "mlbench"]
+CMD ["--help"]
