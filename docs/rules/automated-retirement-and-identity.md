@@ -111,6 +111,15 @@ change writes it in the same transaction (SQL in [Curation](../admin/curation.md
 - A skip is **never silent**: it carries park, child name, upstream id and the
   error, and is counted per park and per run (`Skipped Children: N`). A listed
   child without a row is a fact someone has to see.
+- **Making a step reachable is a change to that step.** The two
+  reclassification steps retire the row the _other_ table holds for an id
+  whose type changed upstream, and that is only safe because the replacement
+  row was written earlier in the same run. A skipped child has no replacement
+  row, so its id must not reach their candidate lists — otherwise the entity
+  leaves the payload altogether instead of missing one row. The park run
+  carries `skippedExternalIds` for exactly that filter. Before the per-child
+  guard the throw ended the park first, so the case did not exist; it was
+  created by fixing the loop, not found in production.
 
 ## 7. Production one-offs run the deployed code, from a clean checkout
 
