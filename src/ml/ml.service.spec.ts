@@ -32,6 +32,8 @@ describe("MLService", () => {
     ttl: jest.fn(),
     incr: jest.fn(),
     expire: jest.fn(),
+    mget: jest.fn(),
+    pipeline: jest.fn(),
   };
 
   // Mock Config Service
@@ -1096,5 +1098,285 @@ describe("MLService", () => {
 
       expect(allInserted()).toHaveLength(0);
     });
+  });
+
+  // PAR-874: the hourly rows of a park are diff-written — only the slots whose
+  // value changed are rewritten — and freshness moved from each row's
+  // createdAt to a per-ride Redis marker.
+  describe("hourly diff-write and its readers (PAR-874)", () => {
+    const parkId = "11111111-1111-4111-8111-111111111111";
+    const attractionId = "22222222-2222-4222-8222-222222222222";
+    const base = {
+      attractionId,
+      predictedWaitTime: 30,
+      confidence: 68.2,
+      uncertaintyMinutes: 12,
+      crowdLevel: "moderate" as const,
+      baseline: 32.5,
+      modelVersion: "v1",
+      status: "OPERATING",
+      predictionType: "hourly" as const,
+    };
+    const inHours = (h: number) =>
+      new Date(currentSlotStartMs() + h * 3_600_000);
+    const pipelineSet = jest.fn();
+    const pipelineExec = jest.fn().mockResolvedValue([]);
+    let deletes: unknown[][];
+    let storedRows: Record<string, unknown>[];
+
+    beforeEach(() => {
+      insertedValues.length = 0;
+      deletes = [];
+      storedRows = [];
+      mockAttractionRepository.createQueryBuilder.mockReturnValue({
+        innerJoin: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn()
+          .mockResolvedValue([{ id: attractionId, parkId, timezone: "UTC" }]),
+      });
+      mockParksService.getOperatingDateRange.mockResolvedValue({
+        minDate: null,
+        maxDate: null,
+      });
+      mockParksService.isParkSeasonal.mockResolvedValue(false);
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      mockPredictionRepository.manager.query.mockImplementation(
+        (sql: string, params: unknown[]) => {
+          if (sql.includes("DELETE FROM wait_time_predictions w")) {
+            deletes.push(params);
+            return Promise.resolve([
+              { affected: String((params[0] as unknown[]).length) },
+            ]);
+          }
+          if (sql.includes('JOIN attractions a ON a.id = p."attractionId"')) {
+            return Promise.resolve(storedRows);
+          }
+          return Promise.resolve([]);
+        },
+      );
+      pipelineSet.mockClear();
+      mockRedis.pipeline.mockReturnValue({
+        set: pipelineSet,
+        exec: pipelineExec,
+      });
+    });
+
+    afterEach(() => {
+      mockPredictionRepository.manager.query.mockReset();
+      mockPredictionRepository.manager.query.mockResolvedValue([]);
+    });
+
+    it("writes nothing for an unchanged slot and only the changed one otherwise", async () => {
+      storedRows = [
+        {
+          ...base,
+          predictedTime: inHours(2),
+          createdAt: new Date(Date.now() - 15 * 60_000),
+        },
+        {
+          ...base,
+          predictedTime: inHours(3),
+          createdAt: new Date(Date.now() - 15 * 60_000),
+        },
+      ];
+
+      await service.storePredictions(
+        [
+          { ...base, predictedTime: inHours(2).toISOString() },
+          {
+            ...base,
+            predictedTime: inHours(3).toISOString(),
+            predictedWaitTime: 45,
+          },
+        ],
+        { replaceHourlyForPark: parkId },
+      );
+
+      // Only the changed slot is inserted…
+      expect(allInserted()).toHaveLength(1);
+      expect(allInserted()[0]).toMatchObject({
+        predictedTime: inHours(3),
+        predictedWaitTime: 45,
+      });
+      // …and only its superseded row deleted, bounded below this run.
+      expect(deletes).toHaveLength(1);
+      expect(deletes[0][0]).toEqual([attractionId]);
+      expect(deletes[0][1]).toEqual([inHours(3).toISOString()]);
+      // The ride is vouched for, so the unchanged row stays servable.
+      expect(pipelineSet).toHaveBeenCalledWith(
+        `ml:hourly-fresh:${attractionId}`,
+        expect.any(String),
+        "EX",
+        1800,
+      );
+      // Accuracy tracking still sees the whole run, unchanged slots included.
+      expect(
+        mockPredictionAccuracyService.recordPredictions.mock.calls[0][0],
+      ).toHaveLength(2);
+    });
+
+    it("writes nothing at all when the run repeats the stored answer", async () => {
+      storedRows = [
+        {
+          ...base,
+          predictedTime: inHours(2),
+          createdAt: new Date(Date.now() - 15 * 60_000),
+        },
+      ];
+      await service.storePredictions(
+        [{ ...base, predictedTime: inHours(2).toISOString() }],
+        { replaceHourlyForPark: parkId },
+      );
+      expect(insertedValues).toHaveLength(0);
+      expect(deletes).toHaveLength(0);
+    });
+
+    it("still removes every stored future slot when the schedule filter leaves nothing", async () => {
+      // Seasonal park with history but no schedule rows: every slot is a gap.
+      mockParksService.getOperatingDateRange.mockResolvedValue({
+        minDate: "2026-01-01",
+        maxDate: "2099-12-31",
+      });
+      mockParksService.isParkSeasonal.mockResolvedValue(true);
+      storedRows = [
+        {
+          ...base,
+          predictedTime: inHours(2),
+          createdAt: new Date(Date.now() - 15 * 60_000),
+        },
+      ];
+      await service.storePredictions(
+        [{ ...base, predictedTime: inHours(2).toISOString() }],
+        { replaceHourlyForPark: parkId },
+      );
+      expect(allInserted()).toHaveLength(0);
+      expect(deletes).toHaveLength(1);
+      expect(
+        mockPredictionAccuracyService.recordPredictions,
+      ).not.toHaveBeenCalled();
+    });
+
+    describe("readers", () => {
+      const row = (h: number, createdMinAgo: number, wait = 30) =>
+        Object.assign(new WaitTimePrediction(), {
+          ...base,
+          predictedWaitTime: wait,
+          predictedTime: inHours(h),
+          createdAt: new Date(Date.now() - createdMinAgo * 60_000),
+        });
+      const withRows = (rows: WaitTimePrediction[]) => {
+        const qb = {
+          where: jest.fn().mockReturnThis(),
+          andWhere: jest.fn().mockReturnThis(),
+          orderBy: jest.fn().mockReturnThis(),
+          getMany: jest.fn().mockResolvedValue(rows),
+        };
+        mockPredictionRepository.createQueryBuilder.mockReturnValueOnce(
+          qb as never,
+        );
+        return qb;
+      };
+      let prevFlag: string | undefined;
+      beforeEach(() => {
+        prevFlag = process.env.SERVE_PCN_INTRADAY;
+        delete process.env.SERVE_PCN_INTRADAY;
+        mockRedis.mget.mockReset();
+      });
+      afterEach(() => {
+        if (prevFlag !== undefined) process.env.SERVE_PCN_INTRADAY = prevFlag;
+      });
+
+      it("serves an unchanged row hours old when the generator vouched for the ride", async () => {
+        withRows([row(2, 6 * 60)]);
+        mockRedis.mget.mockResolvedValue(["2026-10-12T20:45:00.000Z"]);
+        const out = await service.getBatchStoredPredictions(
+          [attractionId],
+          "hourly",
+          new Date(currentSlotStartMs()),
+        );
+        expect(out.get(attractionId)).toHaveLength(1);
+      });
+
+      it("hides the rows of a ride nobody vouched for — the old 30-minute rule", async () => {
+        withRows([row(2, 6 * 60)]);
+        mockRedis.mget.mockResolvedValue([null]);
+        const out = await service.getBatchStoredPredictions(
+          [attractionId],
+          "hourly",
+          new Date(currentSlotStartMs()),
+        );
+        expect(out.get(attractionId)).toBeUndefined();
+      });
+
+      it("hides them too when Redis cannot be read and nothing is recent", async () => {
+        withRows([row(2, 6 * 60)]);
+        mockRedis.mget.mockRejectedValue(new Error("redis down"));
+        const out = await service.getBatchStoredPredictions(
+          [attractionId],
+          "hourly",
+          new Date(currentSlotStartMs()),
+        );
+        expect(out.get(attractionId)).toBeUndefined();
+      });
+
+      it("treats a row written in the last 30 minutes as proof, without asking Redis", async () => {
+        withRows([row(2, 6 * 60), row(3, 5)]);
+        const out = await service.getBatchStoredPredictions(
+          [attractionId],
+          "hourly",
+          new Date(currentSlotStartMs()),
+        );
+        expect(out.get(attractionId)).toHaveLength(2);
+        expect(mockRedis.mget).not.toHaveBeenCalled();
+      });
+
+      it("serves one row per slot, the newest", async () => {
+        withRows([row(0, 20, 10), row(0, 5, 20), row(1, 5, 30)]);
+        const out = await service.getBatchStoredPredictions(
+          [attractionId],
+          "hourly",
+          new Date(currentSlotStartMs()),
+        );
+        expect(out.get(attractionId)!.map((p) => p.predictedWaitTime)).toEqual([
+          20, 30,
+        ]);
+      });
+
+      it("bounds the scan by the generation horizon, not by the freshness window", async () => {
+        const qb = withRows([]);
+        await service.getStoredPredictions(attractionId, "hourly");
+        const cutoffCall = qb.andWhere.mock.calls.find(([sql]) =>
+          String(sql).includes("createdAt"),
+        );
+        const cutoff = (cutoffCall![1] as { createdAtCutoff: Date })
+          .createdAtCutoff;
+        expect(
+          Math.abs(Date.now() - cutoff.getTime() - 50 * 3_600_000),
+        ).toBeLessThan(60_000);
+        // …and an hourly read without a start begins at the current slot.
+        expect(
+          qb.andWhere.mock.calls.some(([sql]) =>
+            String(sql).includes("predictedTime >="),
+          ),
+        ).toBe(true);
+      });
+
+      it("leaves the daily window at 26 hours", async () => {
+        const qb = withRows([]);
+        await service.getStoredPredictions(attractionId, "daily");
+        const cutoffCall = qb.andWhere.mock.calls.find(([sql]) =>
+          String(sql).includes("createdAt"),
+        );
+        const cutoff = (cutoffCall![1] as { createdAtCutoff: Date })
+          .createdAtCutoff;
+        expect(
+          Math.abs(Date.now() - cutoff.getTime() - 26 * 3_600_000),
+        ).toBeLessThan(60_000);
+      });
+    });
+
   });
 });

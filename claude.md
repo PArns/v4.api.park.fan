@@ -78,7 +78,7 @@
 - [TFT vs CatBoost — daily forecast split](docs/ml/neuralforecast-tft-evaluation.md) - **PRODUCTION SPLIT (2026-05-24)**: TFT (nf-service) serves the near-term daily calendar (≤30d, headliners; ~2× better on busy peaks); CatBoost serves far-daily (31–365) + intraday 15-min slots. Loss=studentt (quantile + weather/holiday-dist/dow covariates measured & rejected). **Re-evaluate every few weeks** (next ~2026-06-14) as history grows. See the doc's "FINAL DECISION" section.
 
 ### 💾 Database
-- [Schema & Entities](docs/database/schema.md) - Postgres schema and TimescaleDB usage.
+- [Schema & Entities](docs/database/schema.md) - Postgres schema and TimescaleDB usage. `wait_time_predictions` hourly rows are **diff-written** (unchanged slots never rewritten; freshness = Redis `ml:hourly-fresh:{attractionId}`, not the row's `createdAt`) — PAR-874.
 
 ### 🔐 Admin
 - [Admin Authentication](docs/admin/authentication.md) - Accounts, opaque Redis sessions, scrypt passwords, TOTP, the two login rate-limit buckets, and the deprecated shared pass (`ADMIN_LEGACY_PASS`) with its switch-off.

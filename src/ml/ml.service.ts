@@ -46,6 +46,14 @@ import {
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.entity";
 import { persistenceBlendServe } from "./utils/persistence-blend.util";
+import {
+  HOURLY_FRESHNESS_MS,
+  HOURLY_LOOKBACK_MS,
+  StoredSlotRow,
+  hourlyPredictionsFreshKey,
+  newestPerSlot,
+  planHourlyPredictionWrite,
+} from "./utils/prediction-diff-write.util";
 import { predictionLocalDate } from "./utils/prediction-local-date.util";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
@@ -61,6 +69,13 @@ import {
  * How far back {@link MLService.deduplicatePredictions} looks for the rows its
  * run supersedes, per prediction type. Down from the flat 13 days it was until
  * 2026-10-12.
+ *
+ * SINCE THE DIFF-WRITE, ONLY `daily` REACHES THIS. The hourly generator used to
+ * call `deduplicatePredictions(parkId, "hourly")` before inserting its horizon
+ * again; it now diff-writes instead (`storePredictions(…, {
+ * replaceHourlyForPark })`), which supersedes rows per slot and never deletes a
+ * slot it is keeping. The `hourly` entry stays because the method still takes
+ * the type, and the margin below `compress_after` has to hold for both.
  *
  * The DELETE needs a `createdAt` predicate at all because `createdAt` is the
  * hypertable's partition key — see the comment at the call site for the
@@ -97,16 +112,36 @@ import {
  * chunk indexes it used to (DB audit 2026-10-12, finding 4a / recommendation 3a).
  *
  * WHAT IT GIVES UP. A row older than its window that still holds a future target
- * is no longer deleted. Nothing serves it: `getStoredPredictions` and
- * `getBatchStoredPredictions` require `createdAt >= now-30min` for hourly and
- * `>= now-26h` for daily, so everything servable is inside these windows by a
- * wide margin and the narrowing cannot leave a duplicate that any reader sees.
- * The nightly `cleanup-old` job and the 90-day chunk drop still remove them.
+ * is no longer deleted. Nothing serves it:
+ * {@link storedPredictionsCreatedAtCutoff} bounds a reader at `now - 50h` for
+ * hourly (the generation horizon plus slack, since PAR-874 moved freshness off
+ * the row onto the per-ride marker) and `now - 26h` for daily — both inside
+ * these windows by a wide margin, so the narrowing cannot leave a duplicate
+ * that any reader sees. The nightly `cleanup-old` job and the 90-day chunk drop
+ * still remove them.
  */
 export const DEDUPE_CREATED_AFTER_HOURS: Record<"hourly" | "daily", number> = {
   hourly: 72,
   daily: 8 * 24,
 };
+
+/**
+ * The oldest `createdAt` a reader of stored predictions looks at.
+ *
+ * Hourly: the generation horizon plus slack (PAR-874). It used to be 30 min,
+ * which doubled as the freshness test; since the diff-write keeps an unchanged
+ * row with the `createdAt` of the run that last changed it, freshness is the
+ * per-ride marker and this bound only keeps the scan on the newest chunks.
+ * Daily: regenerated once a night — 26 h survives one late run.
+ */
+export function storedPredictionsCreatedAtCutoff(
+  predictionType: "hourly" | "daily",
+  now: number = Date.now(),
+): Date {
+  return new Date(
+    now - (predictionType === "hourly" ? HOURLY_LOOKBACK_MS : 26 * 3_600_000),
+  );
+}
 
 @Injectable()
 export class MLService {
@@ -115,7 +150,7 @@ export class MLService {
   private readonly ML_SERVICE_URL: string;
 
   // Cache TTLs based on prediction generation frequency
-  private readonly TTL_HOURLY_PREDICTIONS = 30 * 60; // 30 minutes - matches createdAtCutoff window
+  private readonly TTL_HOURLY_PREDICTIONS = 30 * 60; // 30 minutes - matches HOURLY_FRESHNESS_MS
   // 13h: daily (future-day) forecasts change at most ~2×/day (CatBoost retrains nightly,
   // weather syncs every 12h). A background warmup force-refreshes this every 12h so users
   // never pay the ~15s cold CatBoost daily-inference cost; the 13h TTL (>12h interval) is a
@@ -1277,7 +1312,18 @@ export class MLService {
    * OPTIMIZATION: Filters out predictions for times when park is closed
    * to prevent storing predictions that will never have matching queue_data
    */
-  async storePredictions(predictions: PredictionDto[]): Promise<void> {
+  async storePredictions(
+    predictions: PredictionDto[],
+    options: {
+      /**
+       * Diff-write the hourly rows of this park instead of appending (PAR-874):
+       * the run's answer REPLACES the park's stored future hourly slots, but a
+       * slot whose value did not change is left alone. Takes the place of
+       * `deduplicatePredictions(parkId, "hourly")` + append.
+       */
+      replaceHourlyForPark?: string;
+    } = {},
+  ): Promise<void> {
     if (predictions.length === 0) {
       this.logger.warn("No predictions to store");
       return;
@@ -1491,7 +1537,9 @@ export class MLService {
       }
     }
 
-    if (validPredictions.length === 0) {
+    // In replace mode an empty run still has work to do: every stored future
+    // slot it no longer predicts has to go, as the old delete-first did.
+    if (validPredictions.length === 0 && !options.replaceHourlyForPark) {
       this.logger.verbose(
         "No valid predictions to store (all filtered by schedule/gaps)",
       );
@@ -1514,34 +1562,16 @@ export class MLService {
       return entity;
     });
 
-    // Chunked: a single multi-row INSERT for a big park (e.g. 60 attractions ×
-    // 365 daily rows × 12 columns) exceeds the Postgres wire-protocol limit of
-    // 65535 bind parameters — the driver then fails with "bind message has N
-    // parameter formats but 0 parameters" and the whole park gets no predictions.
-    //
-    // insert() rather than save(): with the natural primary key every key column
-    // is populated up front, so save() could no longer tell a new row from an
-    // existing one and would issue an existence check per chunk. These rows are
-    // always new (deduplicatePredictions clears the range first). orIgnore()
-    // keeps a racing double-generation from failing a whole chunk — the previous
-    // surrogate key would have silently written a duplicate row instead.
-    const CHUNK = 1000;
-    let stored = 0;
-    for (let i = 0; i < entities.length; i += CHUNK) {
-      const result = await this.predictionRepository
-        .createQueryBuilder()
-        .insert()
-        .into(WaitTimePrediction)
-        // Cast: the builder's partial-entity type rejects the jsonb `features`
-        // column; these are fully built entities. Same workaround as the
-        // chunked upsert in prediction-accuracy.service.ts.
-
-        .values(entities.slice(i, i + CHUNK) as any)
-        .orIgnore()
-        .execute();
-      stored += result.identifiers?.length ?? 0;
+    if (options.replaceHourlyForPark) {
+      await this.diffWriteHourlyPredictions(
+        options.replaceHourlyForPark,
+        entities,
+      );
+      if (entities.length === 0) return;
+    } else {
+      const stored = await this.insertPredictionRows(entities);
+      this.logger.debug(`Stored ${stored} predictions in database`);
     }
-    this.logger.debug(`Stored ${stored} predictions in database`);
 
     // Record predictions for accuracy tracking (feedback loop).
     // No sampling — upsert on (attractionId, targetTime) ensures each future slot
@@ -1605,6 +1635,214 @@ export class MLService {
   }
 
   /**
+   * Append rows. Chunked: a single multi-row INSERT for a big park (e.g. 60
+   * attractions × 365 daily rows × 12 columns) exceeds the Postgres
+   * wire-protocol limit of 65535 bind parameters — the driver then fails with
+   * "bind message has N parameter formats but 0 parameters" and the whole park
+   * gets no predictions.
+   *
+   * insert() rather than save(): with the natural primary key every key column
+   * is populated up front, so save() could no longer tell a new row from an
+   * existing one and would issue an existence check per chunk. These rows are
+   * always new (deduplicatePredictions or the diff-write clears the range
+   * first). orIgnore() keeps a racing double-generation from failing a whole
+   * chunk — the previous surrogate key would have silently written a duplicate
+   * row instead.
+   */
+  private async insertPredictionRows(
+    entities: WaitTimePrediction[],
+  ): Promise<number> {
+    const CHUNK = 1000;
+    let stored = 0;
+    for (let i = 0; i < entities.length; i += CHUNK) {
+      const result = await this.predictionRepository
+        .createQueryBuilder()
+        .insert()
+        .into(WaitTimePrediction)
+        // Cast: the builder's partial-entity type rejects the jsonb `features`
+        // column; these are fully built entities. Same workaround as the
+        // chunked upsert in prediction-accuracy.service.ts.
+
+        .values(entities.slice(i, i + CHUNK) as any)
+        .orIgnore()
+        .execute();
+      stored += result.identifiers?.length ?? 0;
+    }
+    return stored;
+  }
+
+  /**
+   * Replace a park's future hourly slots with this run's answer, writing only
+   * what changed (PAR-874). See `prediction-diff-write.util.ts` for why the
+   * comparison happens here rather than in an `ON CONFLICT`.
+   *
+   * Order matters for readers, who never see a hole: the new rows go in first
+   * (for a moment a changed slot holds two rows, and every reader takes the
+   * newest), then the superseded rows are deleted, then the rides are marked
+   * fresh. No transaction is needed for that, and none is held across the
+   * insert of a few thousand rows.
+   */
+  private async diffWriteHourlyPredictions(
+    parkId: string,
+    entities: WaitTimePrediction[],
+  ): Promise<void> {
+    const now = new Date();
+    const runCreatedAt = now;
+    const hourly = entities.filter((e) => e.predictionType === "hourly");
+    const other = entities.filter((e) => e.predictionType !== "hourly");
+    for (const e of hourly) e.createdAt = runCreatedAt;
+
+    const stored: StoredSlotRow[] = await this.predictionRepository.manager
+      .query(
+        `SELECT p."attractionId"::text AS "attractionId",
+                p."predictedTime", p."createdAt",
+                p."predictedWaitTime", p.confidence, p."uncertaintyMinutes",
+                p."crowdLevel"::text AS "crowdLevel", p.status, p.baseline,
+                p."modelVersion"
+           FROM wait_time_predictions p
+           JOIN attractions a ON a.id = p."attractionId"
+          WHERE a."parkId" = $1::uuid
+            AND p."predictionType" = 'hourly'
+            AND p."createdAt" >= $2
+            AND p."predictedTime" >= $3`,
+        [
+          parkId,
+          new Date(now.getTime() - HOURLY_LOOKBACK_MS).toISOString(),
+          now.toISOString(),
+        ],
+      )
+      .then((rows: Array<Record<string, unknown>>) =>
+        rows.map((r) => ({
+          attractionId: String(r.attractionId),
+          predictedTime: new Date(r.predictedTime as string | Date),
+          createdAt: new Date(r.createdAt as string | Date),
+          predictedWaitTime: Number(r.predictedWaitTime),
+          confidence: r.confidence == null ? null : Number(r.confidence),
+          uncertaintyMinutes:
+            r.uncertaintyMinutes == null ? null : Number(r.uncertaintyMinutes),
+          crowdLevel: (r.crowdLevel as string | null) ?? null,
+          status: (r.status as string | null) ?? null,
+          baseline: r.baseline == null ? null : Number(r.baseline),
+          modelVersion: String(r.modelVersion),
+        })),
+      );
+
+    const plan = planHourlyPredictionWrite(stored, hourly, now, runCreatedAt);
+
+    const inserted = await this.insertPredictionRows([
+      ...plan.insert,
+      ...other,
+    ]);
+
+    const DELETE_CHUNK = 2000;
+    let deleted = 0;
+    for (let i = 0; i < plan.delete.length; i += DELETE_CHUNK) {
+      const slice = plan.delete.slice(i, i + DELETE_CHUNK);
+      const rows: Array<{ affected: string }> =
+        await this.predictionRepository.manager.query(
+          `WITH del AS (
+             DELETE FROM wait_time_predictions w
+              USING unnest($1::uuid[], $2::timestamptz[], $3::timestamptz[])
+                    AS d(aid, pt, before)
+              WHERE w."predictionType" = 'hourly'
+                AND w."createdAt" >= $4
+                AND w."attractionId" = d.aid
+                AND w."predictedTime" = d.pt
+                AND w."createdAt" < d.before
+              RETURNING 1
+           ) SELECT count(*)::text AS affected FROM del`,
+          [
+            slice.map((d) => d.attractionId),
+            slice.map((d) => d.predictedTime.toISOString()),
+            slice.map((d) => d.before.toISOString()),
+            new Date(now.getTime() - HOURLY_LOOKBACK_MS).toISOString(),
+          ],
+        );
+      deleted += Number(rows?.[0]?.affected ?? 0);
+    }
+
+    await this.markHourlyPredictionsFresh([
+      ...new Set(hourly.map((e) => e.attractionId)),
+    ]);
+
+    this.logger.debug(
+      `Hourly diff-write park ${parkId}: ${plan.unchanged} unchanged, ` +
+        `${plan.changed} changed, ${plan.added} new, ${plan.dropped} dropped — ` +
+        `inserted ${inserted}, deleted ${deleted}`,
+    );
+  }
+
+  /**
+   * Freshness used to be read off each row's `createdAt` (written in the last
+   * 30 min). Since the diff-write leaves an unchanged row with the `createdAt`
+   * of the run that last CHANGED it, a run now vouches for its rides here
+   * instead. Best effort: on a Redis failure the readers fall back to the old
+   * per-row test, which can only under-report freshness, never invent it.
+   */
+  private async markHourlyPredictionsFresh(
+    attractionIds: string[],
+  ): Promise<void> {
+    if (attractionIds.length === 0) return;
+    try {
+      const pipeline = this.redis.pipeline();
+      const ttlS = Math.round(HOURLY_FRESHNESS_MS / 1000);
+      const stamp = new Date().toISOString();
+      for (const id of attractionIds) {
+        pipeline.set(hourlyPredictionsFreshKey(id), stamp, "EX", ttlS);
+      }
+      await pipeline.exec();
+    } catch (e: unknown) {
+      this.logger.warn(
+        `Could not mark hourly predictions fresh: ${e instanceof Error ? e.message : e}`,
+      );
+    }
+  }
+
+  /**
+   * Which of these rides have an hourly forecast a reader may serve: the
+   * generator vouched for them within {@link HOURLY_FRESHNESS_MS} (Redis
+   * marker), or — the pre-PAR-874 test, kept for the deploy window and for a
+   * Redis outage — one of their rows was written that recently.
+   */
+  private async freshHourlyAttractions(
+    rows: ReadonlyArray<Pick<WaitTimePrediction, "attractionId" | "createdAt">>,
+  ): Promise<Set<string>> {
+    const ids = [...new Set(rows.map((r) => r.attractionId))];
+    const fresh = new Set<string>();
+    if (ids.length === 0) return fresh;
+    const cutoff = Date.now() - HOURLY_FRESHNESS_MS;
+    for (const r of rows) {
+      if (r.createdAt.getTime() >= cutoff) fresh.add(r.attractionId);
+    }
+    const unknown = ids.filter((id) => !fresh.has(id));
+    if (unknown.length === 0) return fresh;
+    try {
+      const marks = await this.redis.mget(
+        ...unknown.map((id) => hourlyPredictionsFreshKey(id)),
+      );
+      unknown.forEach((id, i) => {
+        if (marks[i] != null) fresh.add(id);
+      });
+    } catch (e: unknown) {
+      this.logger.warn(
+        `Hourly freshness markers unreadable, using row age only: ${e instanceof Error ? e.message : e}`,
+      );
+    }
+    return fresh;
+  }
+
+  /**
+   * The rows a reader is served: newest per slot, of the rides with a fresh
+   * forecast. Hourly only — daily rows keep the per-row `createdAt` window.
+   */
+  private async servableHourlyRows(
+    rows: WaitTimePrediction[],
+  ): Promise<WaitTimePrediction[]> {
+    const fresh = await this.freshHourlyAttractions(rows);
+    return newestPerSlot(rows.filter((r) => fresh.has(r.attractionId)));
+  }
+
+  /**
    * Get stored predictions from database (for faster access)
    */
   async getStoredPredictions(
@@ -1619,26 +1857,29 @@ export class MLService {
       .andWhere("p.predictionType = :predictionType", { predictionType })
       .orderBy("p.predictedTime", "ASC");
 
-    if (startTime) {
-      queryBuilder.andWhere("p.predictedTime >= :startTime", { startTime });
+    // Hourly without a start would otherwise return 50 h of past slots now that
+    // the createdAt window is the generation horizon: start at the current slot.
+    const from =
+      startTime ??
+      (predictionType === "hourly"
+        ? new Date(currentSlotStartMs())
+        : undefined);
+    if (from) {
+      queryBuilder.andWhere("p.predictedTime >= :startTime", {
+        startTime: from,
+      });
     }
 
     if (endTime) {
       queryBuilder.andWhere("p.predictedTime <= :endTime", { endTime });
     }
 
-    // Require predictions to have been created recently.
-    // Hourly predictions are regenerated every 15 min — allow 30 min (2 intervals) to survive a delayed run.
-    // Daily predictions are regenerated once per day — allow 26h window.
-    const createdAtCutoff =
-      predictionType === "hourly"
-        ? new Date(Date.now() - 30 * 60 * 1000)
-        : new Date(Date.now() - 26 * 60 * 60 * 1000);
     queryBuilder.andWhere("p.createdAt >= :createdAtCutoff", {
-      createdAtCutoff,
+      createdAtCutoff: storedPredictionsCreatedAtCutoff(predictionType),
     });
 
-    return queryBuilder.getMany();
+    const rows = await queryBuilder.getMany();
+    return predictionType === "hourly" ? this.servableHourlyRows(rows) : rows;
   }
 
   async getBatchStoredPredictions(
@@ -1650,10 +1891,7 @@ export class MLService {
       return new Map();
     }
 
-    const createdAtCutoff =
-      predictionType === "hourly"
-        ? new Date(Date.now() - 30 * 60 * 1000)
-        : new Date(Date.now() - 26 * 60 * 60 * 1000);
+    const createdAtCutoff = storedPredictionsCreatedAtCutoff(predictionType);
 
     const queryBuilder = this.predictionRepository
       .createQueryBuilder("p")
@@ -1662,11 +1900,23 @@ export class MLService {
       .andWhere("p.createdAt >= :createdAtCutoff", { createdAtCutoff })
       .orderBy("p.predictedTime", "ASC");
 
-    if (startTime) {
-      queryBuilder.andWhere("p.predictedTime >= :startTime", { startTime });
+    // Same default as getStoredPredictions: hourly starts at the current slot.
+    const from =
+      startTime ??
+      (predictionType === "hourly"
+        ? new Date(currentSlotStartMs())
+        : undefined);
+    if (from) {
+      queryBuilder.andWhere("p.predictedTime >= :startTime", {
+        startTime: from,
+      });
     }
 
-    const rows = await queryBuilder.getMany();
+    const fetched = await queryBuilder.getMany();
+    const rows =
+      predictionType === "hourly"
+        ? await this.servableHourlyRows(fetched)
+        : fetched;
 
     const result = new Map<string, PredictionDto[]>();
     for (const p of rows) {

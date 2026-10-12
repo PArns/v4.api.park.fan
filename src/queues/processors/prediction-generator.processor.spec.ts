@@ -148,7 +148,35 @@ describe("PredictionGeneratorProcessor", () => {
       await processor.handleGenerateHourly({} as Job);
 
       expect(mlService.getParkPredictions).not.toHaveBeenCalled();
-      expect(mlService.storePredictions).toHaveBeenCalledWith(catboost);
+      expect(mlService.storePredictions).toHaveBeenCalledWith(catboost, {
+        replaceHourlyForPark: "p1",
+      });
+    });
+
+    it("diff-writes hourly rows instead of deleting the park's future first (PAR-874)", async () => {
+      parksService.findAll.mockResolvedValue([{ id: "p1", name: "Open" }]);
+      parksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["p1", "OPERATING"]]),
+      );
+      mlService.getRawParkPredictions.mockResolvedValue({
+        predictions: [
+          {
+            attractionId: "a1",
+            predictedTime: "2026-10-09T12:15:00+00:00",
+            predictedWaitTime: 30,
+            predictionType: "hourly",
+            modelVersion: "v1",
+          },
+        ],
+      });
+
+      await processor.handleGenerateHourly({} as Job);
+
+      expect(mlService.deduplicatePredictions).not.toHaveBeenCalled();
+      expect(mlService.storePredictions).toHaveBeenCalledWith(
+        expect.any(Array),
+        { replaceHourlyForPark: "p1" },
+      );
     });
 
     it("includes UNKNOWN-status parks that are scheduled to operate today", async () => {
