@@ -278,6 +278,8 @@ describe("WeatherWarningsService", () => {
       mockParks.findAll.mockResolvedValue([
         { ...nlPark, id: "no-cc", countryCode: null },
         { ...nlPark, id: "nan-lon", longitude: "abc" },
+        { ...nlPark, id: "null-lat", latitude: null },
+        { ...nlPark, id: "null-lon", longitude: null },
         { ...nlPark, id: "uncovered", countryCode: "US" },
       ]);
       mockSource.supportsCountry.mockImplementation(
