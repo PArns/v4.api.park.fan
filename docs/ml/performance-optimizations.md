@@ -194,6 +194,66 @@ if "rolling_avg_7d" in attraction_data.columns:
 
 ---
 
+### 5. Never cast an indexed uuid column; cast the parameter (PAR-871, 2026-10-12)
+
+**Rule.** A filter on a uuid column compares uuid to uuid. The cast goes on the
+bound value, never on the column:
+
+```sql
+-- WRONG: the column is hidden from its index
+WHERE qd."attractionId"::text = ANY(:attraction_ids)
+WHERE "parkId"::text = :park_id
+
+-- RIGHT
+WHERE qd."attractionId" = ANY(CAST(:attraction_ids AS uuid[]))   -- SQLAlchemy
+WHERE "parkId" = CAST(:park_id AS uuid)
+WHERE a."parkId" = $1::uuid      /  = ANY($1::uuid[])             -- TypeORM / pg
+```
+
+A cast on the column turns the predicate into an expression no index covers. On
+`queue_data` it is worse than a missed index: the compressed chunks are filtered
+on their segment-by column, and with a text expression TimescaleDB decompresses
+every chunk in the time window instead. The two serving reads in `predict.py`
+(`fetch_recent_rolling_stats`, `fetch_recent_wait_times`, ~90 000 calls a day
+each) carried this cast and were ~80 % of all database time on 2026-10-12. An
+expression index does not help (segment-by filtering on compressed chunks does
+not use it); fixing the predicate does.
+
+**The one trap.** Casting the parameter raises `22P02` on a value that is not a
+uuid, which fails the whole query, where the text comparison just matched
+nothing. So ids are filtered before they are bound: `uuid_params.uuid_list` /
+`uuid_or_none` (Python, one identical copy in each of `ml-service`,
+`pcn-service`, `nf-service`) and `isCanonicalUuid` in
+`src/common/utils/uuid-param.util.ts`. Both keep only the lowercase hyphenated
+form, which is exactly what `uuid::text` prints, so they drop only values the
+old comparison could never have matched: same rows, before and after. A dropped
+value is logged once per process. Where an empty id list means "all parks"
+(`fetch_attraction_meta` in pcn/nf), the `WHERE` follows the input list, not the
+filtered one, so a list of bad ids still matches nothing.
+
+Output casts (`SELECT qd."attractionId"::text AS "attractionId"`) are fine:
+they run after the filter. Columns that really are text
+(`queue_data_aggregates."attractionId"`) are compared as text.
+
+**Measured on production, Phantasialand (40 rides), warm cache, same rows:**
+
+| Query | Before (`::text`) | After (`uuid[]`) |
+|---|---|---|
+| rolling stats, 90 d | 264 781 buffers, 289 ms exec + 85 ms plan, 61 seq scans on chunks | 28 195 buffers, 93 ms + 18 ms, 0 seq scans |
+| recent waits, 32 d | 198 643 buffers, 165 ms + 35 ms | 50 520 buffers, 45 ms + 5 ms |
+| historical occupancy (`db.py`) | 42 318 buffers, 62 ms + 459 ms plan | 30 315 buffers, 33 ms + 116 ms plan |
+| `weather_data` averages | 1 611 buffers, 5 ms + 32 ms plan | 121 buffers, 1.5 ms + 2 ms |
+| `schedule_entries` | 698 buffers | 4 buffers |
+
+Old and new SQL return identical rows (`EXCEPT ALL` both ways = 0) for
+Phantasialand, Europa-Park and Magic Kingdom on all five queries.
+
+`ml-service/tests/test_uuid_params.py` (and the copies in `pcn-service` and
+`nf-service/tests`) fail on any `::text =`, `::text IN` or `::text <>` in the
+service's query files.
+
+---
+
 ## 🔧 Technical Details
 
 ### Cache Safety

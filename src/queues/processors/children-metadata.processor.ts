@@ -20,6 +20,7 @@ import { ThemeParksMapper } from "../../external-apis/themeparks/themeparks.mapp
 import { EntityResponse } from "../../external-apis/themeparks/themeparks.types";
 import { generateSlug, generateUniqueSlug } from "../../common/utils/slug.util";
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
+import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
 import {
   findExistingAttraction,
   normalizeName,
@@ -1860,10 +1861,13 @@ export class ChildrenMetadataProcessor {
     const table = CHILD_ENTITY_TABLES[entityType];
 
     // `internal_entity_id` is text and the id columns are uuid, so a row whose
-    // value is not a uuid at all would raise 22P02 on the cast. Compare as
-    // text, exactly as the orphan count in PAR-311 does.
+    // value is not a uuid at all would raise 22P02 on the cast. Such a value
+    // matched nothing under the old `id::text = $1` either, so it is answered
+    // here — and the primary key is compared as uuid, so the lookup is an
+    // index probe instead of a sequential scan (PAR-871).
+    if (!isCanonicalUuid(internalEntityId)) return false;
     const rows = await this.mappingRepository.manager.query(
-      `SELECT 1 FROM ${table} WHERE id::text = $1 LIMIT 1`,
+      `SELECT 1 FROM ${table} WHERE id = $1::uuid LIMIT 1`,
       [internalEntityId],
     );
     return rows.length > 0;

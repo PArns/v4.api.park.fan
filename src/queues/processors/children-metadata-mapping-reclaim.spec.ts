@@ -30,8 +30,10 @@ describe("ChildrenMetadataProcessor — stranded mappings", () => {
 
   let processor: ChildrenMetadataProcessor;
 
-  const liveRide = "row-abyssus";
-  const deadRide = "row-abyssus-ghost";
+  // Real uuids: the existence check answers a non-uuid without asking the
+  // database (it could never match a uuid primary key).
+  const liveRide = "0b5f4c1e-7a3d-4e2b-9c8f-1a2b3c4d5e6f";
+  const deadRide = "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b";
   const qtId = "qt-ride-11281";
 
   const createMapping = (internalEntityId: string) =>
@@ -87,7 +89,7 @@ describe("ChildrenMetadataProcessor — stranded mappings", () => {
       externalSource: "queue-times",
       externalEntityId: qtId,
     });
-    // `SELECT 1 FROM attractions WHERE id::text = $1` finds nothing.
+    // `SELECT 1 FROM attractions WHERE id = $1::uuid` finds nothing.
     mappingRepository.manager.query.mockResolvedValue([]);
 
     await createMapping(liveRide);
@@ -140,9 +142,10 @@ describe("ChildrenMetadataProcessor — stranded mappings", () => {
     expect(mappingRepository.save).not.toHaveBeenCalled();
   });
 
-  it("compares the stranded id as text, because the column is not a uuid", async () => {
-    // `internal_entity_id` is `character varying`. Casting it to uuid would
-    // raise 22P02 on any row whose value is not one, inside the sync.
+  it("answers a stranded id that is not a uuid without casting it", async () => {
+    // `internal_entity_id` is `character varying`. Casting such a value to
+    // uuid would raise 22P02 inside the sync, so it never reaches the query;
+    // it names no entity, exactly as the old `id::text = $1` found none.
     mappingRepository.findOne.mockResolvedValue({
       id: "mapping-1",
       internalEntityId: "not-a-uuid",
@@ -153,9 +156,28 @@ describe("ChildrenMetadataProcessor — stranded mappings", () => {
 
     await createMapping(liveRide);
 
+    expect(mappingRepository.manager.query).not.toHaveBeenCalled();
+    expect(mappingRepository.update).toHaveBeenCalledWith(
+      "mapping-1",
+      expect.objectContaining({ internalEntityId: liveRide }),
+    );
+  });
+
+  it("compares the primary key as uuid, never the column as text (PAR-871)", async () => {
+    mappingRepository.findOne.mockResolvedValue({
+      id: "mapping-1",
+      internalEntityId: deadRide,
+      internalEntityType: "attraction",
+      externalSource: "queue-times",
+      externalEntityId: qtId,
+    });
+    mappingRepository.manager.query.mockResolvedValue([]);
+
+    await createMapping(liveRide);
+
     const [sql] = mappingRepository.manager.query.mock.calls[0];
-    expect(sql).toContain("id::text = $1");
-    expect(sql).not.toContain("::uuid");
+    expect(sql).toContain("id = $1::uuid");
+    expect(sql).not.toContain("::text");
   });
 });
 

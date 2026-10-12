@@ -1733,17 +1733,21 @@ def add_park_has_schedule_feature(
                 # Query DB if no cached data
                 from db import get_db
                 from sqlalchemy import text
+                from uuid_params import uuid_list
 
                 with get_db() as db:
                     query = text(
                         """
                         SELECT DISTINCT "parkId"::text
                         FROM schedule_entries
-                        WHERE "parkId"::text = ANY(:park_ids)
+                        WHERE "parkId" = ANY(CAST(:park_ids AS uuid[]))
                           AND "scheduleType" = 'OPERATING'
                     """
                     )
-                    result = db.execute(query, {"park_ids": park_ids})
+                    result = db.execute(
+                        query,
+                        {"park_ids": uuid_list(park_ids, "park_has_schedule")},
+                    )
                     parks_with_schedule = set(row[0] for row in result.fetchall())
 
             # Set feature: 1 if has schedule, 0 if not

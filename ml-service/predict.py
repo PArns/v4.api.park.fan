@@ -20,6 +20,7 @@ from db import (
     fetch_attraction_ids_for_park,
 )
 from config import get_settings
+from uuid_params import uuid_list
 from holiday_features import (
     assign_holiday_features,
     holiday_fetch_window,
@@ -222,7 +223,7 @@ ROLLING_STATS_DAYS = 90
 # Rows the serving features are built from. Shared by both reads so the lookups
 # and the rolling statistics see the same population.
 _SERVING_QUEUE_FILTER = """
-            qd."attractionId"::text = ANY(:attraction_ids)
+            qd."attractionId" = ANY(CAST(:attraction_ids AS uuid[]))
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 5
                 AND qd.status = 'OPERATING'
@@ -331,7 +332,9 @@ def fetch_recent_wait_times(
             result = db.execute(
                 query,
                 {
-                    "attraction_ids": attraction_ids,
+                    "attraction_ids": uuid_list(
+                        attraction_ids, "fetch_recent_wait_times"
+                    ),
                     "lookback_days": lookback_days,
                     "end_time": query_end_time,
                 },
@@ -414,7 +417,9 @@ def fetch_recent_rolling_stats(
             result = db.execute(
                 query,
                 {
-                    "attraction_ids": attraction_ids,
+                    "attraction_ids": uuid_list(
+                        attraction_ids, "fetch_recent_rolling_stats"
+                    ),
                     "days": ROLLING_STATS_DAYS,
                     "end_time": query_end_time,
                 },
@@ -1071,7 +1076,7 @@ def create_prediction_features(
                     AVG("snowfallSum") as snow_avg,
                     MODE() WITHIN GROUP (ORDER BY "weatherCode") as weather_code_mode
                 FROM weather_data
-                WHERE "parkId"::text = ANY(:park_ids)
+                WHERE "parkId" = ANY(CAST(:park_ids AS uuid[]))
                     AND EXTRACT(MONTH FROM date) = :month
                     AND date >= CURRENT_DATE - INTERVAL '3 years'
                 GROUP BY "parkId"
@@ -1081,7 +1086,12 @@ def create_prediction_features(
                 with get_db() as db:
                     result = db.execute(
                         weather_query,
-                        {"park_ids": list(set(park_ids)), "month": prediction_month},
+                        {
+                            "park_ids": uuid_list(
+                                set(park_ids), "weather historical averages"
+                            ),
+                            "month": prediction_month,
+                        },
                     )
                     weather_db_df = pd.DataFrame(
                         result.fetchall(), columns=result.keys()
@@ -1217,7 +1227,7 @@ def create_prediction_features(
             "openingTime",
             "closingTime"
         FROM schedule_entries
-        WHERE "parkId"::text = ANY(:park_ids)
+        WHERE "parkId" = ANY(CAST(:park_ids AS uuid[]))
             AND date BETWEEN :start_date AND :end_date
             AND (
                 ("openingTime" IS NOT NULL AND "closingTime" IS NOT NULL)
@@ -1249,7 +1259,7 @@ def create_prediction_features(
         result = db.execute(
             schedule_query,
             {
-                "park_ids": list(set(park_ids)),
+                "park_ids": uuid_list(set(park_ids), "schedule features"),
                 "start_date": start_date_local,
                 "end_date": end_date_local,
             },
