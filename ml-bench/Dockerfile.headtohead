@@ -1,20 +1,28 @@
 # TiDE vs Chronos-2 head-to-head (one run, so the paired margins exist).
 #
-# Why an overlay instead of `Dockerfile`: the two model families live on two
-# different trees — Chronos-2 (`mlbench/models/foundation.py`, PAR-828) is on
-# `main`, the NeuralForecast plug-ins (`neuralforecast_models.py`, `nf_panel.py`,
-# `nf_precompute.py`, PAR-829) are only on the PAR-829 branch — and the harness
-# pairs models INSIDE a run (`run --pair-with`, `report --vs`), so a head-to-head
-# number cannot be assembled from two runs' parts. The tree this builds is
-# `main` + those three files, byte-identical copies (`git show <par-829>:…`).
+# Why an overlay instead of `Dockerfile`: at this branch's base (99d5bac9) the two
+# model families lived on two different trees — Chronos-2
+# (`mlbench/models/foundation.py`, PAR-828) was on `main`, the NeuralForecast
+# plug-ins (`neuralforecast_models.py`, `nf_panel.py`, `nf_precompute.py`, PAR-829)
+# only on the PAR-829 branch — and the harness pairs models INSIDE a run
+# (`run --pair-with`, `report --vs`), so a head-to-head number cannot be assembled
+# from two runs' parts. The tree this builds is that base + those three files,
+# byte-identical copies (`git show <par-829>:…`). PR #448 has since landed, so the
+# three files are now on `main` as well, and the copies here are byte-identical to
+# `origin/main`'s versions — this tree is not a private variant of them.
 #
 # The base image is the one the owner's mixed-weekday Chronos-2 run used
 # (`ml-bench:par-828-wd`, image sha256:71d88527ccdc, git 00282662): its pip
 # environment carries chronos 2.3.2 / torch 2.11.0+cu128, and
-# `mlbench/models/foundation.py` is IDENTICAL on 00282662 and on main
-# (`git diff 00282662 origin/main -- ml-bench/mlbench/models/foundation.py` is
-# empty), so Chronos-2 runs here with the same code and the same library as in
-# `20261011-chronos-wd-shard5`. `ml-bench:par-829` — the image that produced the
+# `mlbench/models/foundation.py` is IDENTICAL on 00282662 and on THIS tree
+# (`git diff 00282662 HEAD -- ml-bench/mlbench/models/foundation.py` is empty), so
+# Chronos-2 runs here with the same model code and the same library as in
+# `20261011-chronos-wd-shard5`. Against today's `origin/main` that file is NOT
+# identical: main has since gained PAR-853's TiRex-2 and Toto-2 backends (+221
+# lines), and the single edit inside shared code is `self.backend == "chronos2"`
+# becoming `self.backend in NAN_MASKING_BACKENDS` (chronos2, tirex2, toto2) —
+# the same test for Chronos-2, so its covariate set is unchanged either way.
+# `ml-bench:par-829` — the image that produced the
 # TiDE numbers — was deleted from the host overnight and cannot be reused; TiDE
 # does not need it, because `NFCached` only reads the precomputed hourly parquet
 # cache (pandas + pyarrow, no torch, no neuralforecast).
