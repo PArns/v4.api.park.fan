@@ -103,7 +103,6 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
     @InjectQueue("nf-training") private nfTrainingQueue: Queue,
     @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
-    @InjectQueue("shape-shadow") private shapeShadowQueue: Queue,
     @InjectQueue("manual-metadata") private manualMetadataQueue: Queue,
   ) {}
 
@@ -442,7 +441,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
           // Never retry: training is a ~45min CatBoost job. The global default
           // (attempts:3 + backoff) would re-POST /train and re-run the whole
           // job up to 3× on a transient failure — a retry storm. Matches the
-          // train-nf / score-comparison guards.
+          // train-nf guard.
           attempts: 1,
         },
       );
@@ -487,23 +486,16 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    // Model comparison scoreboard: Daily at 7:00am UTC — after NF (~05:30) and
-    // CatBoost (~06:15) have both completed their forward forecasts.
-    const hasNfScoreCron = await this.hasRepeatableJob(
-      this.nfTrainingQueue,
-      "nf-score-comparison-cron",
+    // The TFT-vs-CatBoost scoreboard (`score-comparison`) was retired in PAR-870.
+    // Its repeatable entry outlives the code in Redis, and with no handler left
+    // on this queue every 07:00 run would fail as "Missing process handler".
+    const retiredNfJobs = await this.nfTrainingQueue.getRepeatableJobs();
+    const retiredScoreCron = retiredNfJobs.find(
+      (j) => j.id === "nf-score-comparison-cron",
     );
-
-    if (!hasNfScoreCron) {
-      await this.nfTrainingQueue.add(
-        "score-comparison",
-        {},
-        {
-          repeat: { cron: "0 7 * * *" }, // Daily at 07:00 UTC
-          jobId: "nf-score-comparison-cron",
-          attempts: 1, // idempotent upsert by (targetDate, model) — no retry needed
-        },
-      );
+    if (retiredScoreCron) {
+      await this.nfTrainingQueue.removeRepeatableByKey(retiredScoreCron.key);
+      this.logger.log('Removed retired "nf-score-comparison-cron" job');
     }
 
     // PCN intraday shadow (design doc §12). Runs in the shadow — writes pcn_forecasts /
@@ -555,55 +547,6 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         {
           repeat: { cron: "0 * * * *" }, // hourly
           jobId: "pcn-score-cron",
-          attempts: 1,
-        },
-      );
-    }
-
-    // Shape day-curve shadow (design §6–8). Runs in the shadow — writes shape_forecasts /
-    // shape_comparisons only; CatBoost stays the served champion. Daily horizon, so the
-    // crons are daily and ordered AFTER the daily forecast (the level source) + a margin.
-    const hasShapeBuildCron = await this.hasRepeatableJob(
-      this.shapeShadowQueue,
-      "shape-build-cron",
-    );
-    if (!hasShapeBuildCron) {
-      await this.shapeShadowQueue.add(
-        "build-shape",
-        {},
-        {
-          repeat: { cron: "0 9 * * *" }, // 09:00 UTC — after the nightly daily forecast
-          jobId: "shape-build-cron",
-          attempts: 1,
-        },
-      );
-    }
-    const hasShapeForecastCron = await this.hasRepeatableJob(
-      this.shapeShadowQueue,
-      "shape-forecast-cron",
-    );
-    if (!hasShapeForecastCron) {
-      await this.shapeShadowQueue.add(
-        "forecast-shape",
-        {},
-        {
-          repeat: { cron: "30 9 * * *" }, // 09:30 UTC — after build
-          jobId: "shape-forecast-cron",
-          attempts: 1,
-        },
-      );
-    }
-    const hasShapeScoreCron = await this.hasRepeatableJob(
-      this.shapeShadowQueue,
-      "shape-score-cron",
-    );
-    if (!hasShapeScoreCron) {
-      await this.shapeShadowQueue.add(
-        "score-shape",
-        {},
-        {
-          repeat: { cron: "0 10 * * *" }, // 10:00 UTC — score matured forecasts
-          jobId: "shape-score-cron",
           attempts: 1,
         },
       );

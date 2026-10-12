@@ -1,5 +1,12 @@
 # TFT vs CatBoost — Clean Comparison & TFT Optimization
 
+> **The daily forward scoreboard described here is RETIRED (2026-10-12, PAR-870).**
+> The `score-comparison` job (nf-training, 07:00 UTC), the
+> `catboost_daily_forecasts` snapshot and the `model_comparisons` board are gone;
+> nobody read them after the admin page moved to the model comparison
+> (PAR-862, [forward-archive.md §9](forward-archive.md)). Both tables are dumped
+> and dropped in production. The measurements below are kept as history.
+
 > Status: **in progress** (started 2026-05-30). Living doc. Goal: compare TFT vs
 > CatBoost **cleanly** wherever CatBoost runs (daily calendar AND the live intraday
 > surface), and optimize TFT the **honest** way — by giving it the right *signal*,

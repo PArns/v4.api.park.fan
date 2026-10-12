@@ -1,7 +1,7 @@
 """Shadow scorer — score matured PCN forecasts vs realised actuals AND vs CatBoost,
 on the matched (attraction, 15-min slot) population (design doc §12).
 
-Mirrors nf-service's score-comparison, at intraday grain: INNER-join PCN's durable
+Mirrors the (since retired, PAR-870) daily score-comparison job, at intraday grain: INNER-join PCN's durable
 forward forecast (q0.5 = the displayed wait) to the realised 15-min median and to
 CatBoost's freshest pred for the same slot, then write segmented MAE/bias (quiet/mid/
 busy × lead bucket) to pcn_intraday_comparisons → surfaced on /v1/admin/system-health.

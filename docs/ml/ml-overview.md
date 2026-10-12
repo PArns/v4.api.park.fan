@@ -55,9 +55,11 @@ room for one slow run, never tighter than the gaps measured on production.
 | `catboost` | `ml_models` active `trainedAt` + ml-service `/train/status` | täglich 06:00 UTC | 30 h | 0.6 ms |
 | `chronos` | archive surfaces 6/7 + the archive's last Chronos run summary + nf `/chronos/status` | stündlich zur Minute :05 UTC (je offenem Park alle 2 Std.) | 4 h | (shared with archive) |
 | `h5` | archive surface 4 | stündlich zur Minute :05 UTC (je Park einmal am Tag) | 8 h | (shared) |
-| `shape` | `shape_forecasts` newest `created_at`, last 5 days | täglich 09:00 UTC | 30 h | 1.2 ms |
 | `archive` | newest `origin_at` of any surface (one `GROUP BY surface` over 2 days, index-only on the PK) | stündlich zur Minute :05 UTC | 3 h | 34–46 ms |
 | `scoring` | `forecast_archive_scores` newest `scored_at`, last 30 target dates | täglich 12:00 UTC | 26 h | 0.6 ms |
+
+The `shape` row (and the decision `shape_service_off`) went with the
+shape-service in PAR-870 (2026-10-12).
 
 Measured gaps behind the thresholds (prod, last 2–3 days): PCN 15 min max;
 archive `park_hourly` 2 h, `plan_day` 1 h, H5 6 h, the routed H5 7 h.

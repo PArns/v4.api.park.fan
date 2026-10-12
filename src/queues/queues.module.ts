@@ -44,7 +44,6 @@ import { TypicalWaitsProcessor } from "./processors/typical-waits.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
 import { NfForecastProcessor } from "./processors/nf-forecast.processor";
 import { PcnShadowProcessor } from "./processors/pcn-shadow.processor";
-import { ShapeShadowProcessor } from "./processors/shape-shadow.processor";
 import { GeoipModule } from "../geoip/geoip.module";
 import { ParksModule } from "../parks/parks.module";
 import { DestinationsModule } from "../destinations/destinations.module";
@@ -80,7 +79,6 @@ import { AttractionAccuracyStats } from "../ml/entities/attraction-accuracy-stat
 import { PredictionAccuracy } from "../ml/entities/prediction-accuracy.entity";
 import { AttractionP50Baseline } from "../analytics/entities/attraction-p50-baseline.entity";
 import { AttractionP90Baseline } from "../analytics/entities/attraction-p90-baseline.entity";
-import { ModelComparison } from "../ml/entities/model-comparison.entity";
 import { PushModule } from "../push/push.module";
 import { TripsModule } from "../trips/trips.module";
 import { RideAlertsModule } from "../ride-alerts/ride-alerts.module";
@@ -101,7 +99,6 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
       PredictionAccuracy,
       AttractionP50Baseline,
       AttractionP90Baseline,
-      ModelComparison,
     ]),
     // Register Bull queues with Redis connection
     BullModule.forRootAsync({
@@ -199,7 +196,6 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     GeoipUpdateProcessor,
     NfForecastProcessor, // TFT train+forecast + TFT-vs-CatBoost scoreboard
     PcnShadowProcessor, // PCN intraday shadow: train + forecast + score
-    ShapeShadowProcessor, // Shape day-curve shadow: build + forecast + score
   ],
   exports: [BullModule], // Export for use in other modules
 })

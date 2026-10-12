@@ -1,9 +1,7 @@
 import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import axios from "axios";
-import { Repository } from "typeorm";
 import { NfForecastProcessor } from "./nf-forecast.processor";
-import { ModelComparison } from "../../ml/entities/model-comparison.entity";
 
 jest.mock("axios");
 const mockedAxios = axios as jest.Mocked<typeof axios>;
@@ -30,9 +28,7 @@ describe("NfForecastProcessor.handleTrainNf", () => {
     warn = jest
       .spyOn(Logger.prototype, "warn")
       .mockImplementation(() => undefined);
-    processor = new NfForecastProcessor(
-      {} as unknown as Repository<ModelComparison>,
-    );
+    processor = new NfForecastProcessor();
     mockedAxios.post.mockImplementation(async (url: string) => {
       if (url.endsWith("/train")) {
         return { data: { status: "training_started", version: VERSION } };

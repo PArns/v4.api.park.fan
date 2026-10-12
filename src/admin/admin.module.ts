@@ -35,7 +35,6 @@ import { MonitoringModule } from "../monitoring/monitoring.module";
     BullModule.registerQueue({ name: "prediction-accuracy" }),
     BullModule.registerQueue({ name: "analytics" }),
     BullModule.registerQueue({ name: "pcn-shadow" }),
-    BullModule.registerQueue({ name: "shape-shadow" }),
     BullModule.registerQueue({ name: "park-day-operation" }),
   ],
   controllers: [AdminController],

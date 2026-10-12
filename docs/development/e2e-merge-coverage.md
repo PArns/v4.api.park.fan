@@ -2,6 +2,12 @@
 
 > **2026-09-10** — why `repairDuplicates` had no end-to-end coverage until now,
 > and the rule that keeps the test schema from drifting away from production.
+>
+> **2026-10-12, PAR-870** — `shape_forecasts` and `catboost_daily_forecasts`
+> were retired together with their writers (the shape-service and the
+> `score-comparison` job), so the entity-less tables are now **two**. The lists
+> have also grown since this page was written: they name **42 tables**, forty of
+> them entities. The history below keeps the September numbers.
 
 ## Why there was no test
 
@@ -39,15 +45,18 @@ real database proves the transaction **commits**.
 
 ## The rule: read the DDL, never copy it
 
-`test/helpers/ml-forecast-tables.ts` creates the four tables by **extracting the
-`CREATE TABLE` statement from the file that issues it**:
+`test/helpers/ml-forecast-tables.ts` creates the entity-less tables by
+**extracting the `CREATE TABLE` statement from the file that issues it**:
 
-| Table                      | Source of truth                                  |
-| -------------------------- | ------------------------------------------------ |
-| `pcn_forecasts`            | `pcn-service/db.py`                              |
-| `shape_forecasts`          | `shape-service/db.py`                            |
-| `tft_forecasts`            | `nf-service/db.py`                               |
-| `catboost_daily_forecasts` | `src/queues/processors/nf-forecast.processor.ts` |
+| Table           | Source of truth     |
+| --------------- | ------------------- |
+| `pcn_forecasts` | `pcn-service/db.py` |
+| `tft_forecasts` | `nf-service/db.py`  |
+
+Until PAR-870 (2026-10-12) the table also listed `shape_forecasts`
+(`shape-service/db.py`) and `catboost_daily_forecasts`
+(`src/queues/processors/nf-forecast.processor.ts`); both writers are gone and
+the tables are dropped in production after a `pg_dump`.
 
 A copied DDL is a second definition of a schema this repo owns no migration
 for, and it drifts the first time a sub-service adds a column: the suite keeps

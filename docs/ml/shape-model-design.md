@@ -1,5 +1,15 @@
 # Shape-Modell — Tageskurven-Expansion (Level × Shape)
 
+> **RETIRED 2026-10-12 (PAR-870).** The shape-service, its `shape-shadow` queue
+> (build 09:00 / forecast 09:30 / score 10:00 UTC), the admin trigger
+> `POST /v1/admin/shape/:action`, the `shapeComparison` board and the ML-overview
+> row are removed; `shape_forecasts` and `shape_comparisons` are dumped and dropped
+> in production. Reason: it delivered nothing to the app and showed no measured
+> advantage — its shadow board compared a 14-day forecast against CatBoost's
+> ≤24-hour one ([long-range-forecasting.md](long-range-forecasting.md)). The
+> design below is kept as history; the code is in the repository history before
+> PAR-870.
+
 > **Status:** Phase 0 (Daten-Fundament) — 2026-06-29.
 > **Kontext:** Das zweite Stück der Zwei-Modell-Architektur aus
 > [custom-intraday-model-design.md §10](custom-intraday-model-design.md). PCN (intraday) ist

@@ -173,7 +173,8 @@ def fetch_cross_ride_panel(
 
 # --------------------------------------------------------------------------
 # Shadow producer + scorer (design doc §12). Mirrors nf-service's durable
-# tft_forecasts snapshot + the score-comparison job, at 15-min intraday grain.
+# tft_forecasts snapshot + the (since retired, PAR-870) score-comparison job, at
+# 15-min intraday grain.
 # --------------------------------------------------------------------------
 
 _DDL_PCN_FORECASTS = text(

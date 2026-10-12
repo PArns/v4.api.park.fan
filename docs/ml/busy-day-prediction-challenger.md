@@ -452,6 +452,8 @@ bewertet werden. Kein Holdout-Leak, kein In-Sample-Vorteil; Zahlen sammeln sich 
   Deliberately well before CatBoost, so the two training spikes never collide on the shared host.
 - **06:00** CatBoost train (existing, `ml-training`).
 - **07:00** `nf-training` job `score-comparison`: scores matured target days.
+  *(Retired 2026-10-12, PAR-870, together with `catboost_daily_forecasts` and
+  `model_comparisons`.)*
 
 ### Vergleichs-Methodik (apples-to-apples)
 - **Kanonisches Ziel = tatsächlicher Tages-P90-Peak je Attraktion** (was der Kalender nutzt).

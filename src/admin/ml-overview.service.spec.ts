@@ -73,7 +73,6 @@ describe("MlOverviewService", () => {
       "catboost",
       "chronos",
       "h5",
-      "shape",
       "archive",
       "scoring",
     ]);
@@ -88,7 +87,7 @@ describe("MlOverviewService", () => {
       unclear: 0,
       worse: 0,
     });
-    expect(out.decisions).toHaveLength(6);
+    expect(out.decisions).toHaveLength(5);
     expect(out.decisions.some((d) => d.state === "ready")).toBe(false);
   });
 
@@ -107,8 +106,6 @@ describe("MlOverviewService", () => {
         { surface: 4, at: "2026-10-11T20:05:14Z" },
         { surface: 6, at: "2026-10-11T20:05:46Z" },
       ],
-      // Shape two days old → late.
-      shape_forecasts: [{ at: "2026-10-09T09:37:55Z", version: "s1" }],
       forecast_archive_scores: [
         { at: "2026-10-11T12:00:00Z", date: "2026-10-10" },
       ],
@@ -134,12 +131,23 @@ describe("MlOverviewService", () => {
       lastRunAt: "2026-10-11T20:05:46.000Z",
     });
     expect(by.h5.status).toBe("ok");
-    expect(by.shape.status).toBe("late");
     expect(by.archive.lastRunAt).toBe("2026-10-11T20:05:46.000Z");
     expect(by.scoring).toMatchObject({
       status: "ok",
       note: "zuletzt bewertet: Tag 10.10.",
     });
+  });
+
+  it("marks a component late once its newest run is older than its bound", async () => {
+    const { service } = make({
+      // Two days old, past TFT's 30-hour bound.
+      tft_forecasts: [
+        { at: "2026-10-09T03:11:32Z", version: "nf20261009_030000" },
+      ],
+    });
+    const out = await service.build(NOW);
+    const tft = out.components.find((c) => c.id === "tft");
+    expect(tft?.status).toBe("late");
   });
 
   it("marks PCN as shadow when it is not served", async () => {

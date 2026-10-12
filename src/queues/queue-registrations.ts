@@ -82,9 +82,8 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
     },
   },
   { name: "geoip-update" }, // GeoLite2-City every 48h
-  { name: "nf-training" }, // TFT train+forecast + TFT-vs-CatBoost scoreboard
+  { name: "nf-training" }, // TFT train (persists tft_forecasts)
   { name: "pcn-shadow" }, // PCN intraday shadow: train + forecast + score
-  { name: "shape-shadow" }, // Shape day-curve shadow: build + forecast + score
   {
     // Rope-drop: one LATERAL query per park over hourly-history slots +
     // pure aggregation. Lighter than p50-baseline (no fresh PERCENTILE

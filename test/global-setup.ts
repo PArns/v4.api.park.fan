@@ -214,7 +214,7 @@ async function createSchema(database: string): Promise<void> {
       }
     }
 
-    // The four merge tables no entity owns, so `synchronize` above never made
+    // The two merge tables no entity owns, so `synchronize` above never made
     // them. Unguarded on purpose, unlike the extensions and the hypertable: a
     // suite that starts without these does not degrade, it reports a missing
     // relation from inside the merge transaction and blames the merge.
