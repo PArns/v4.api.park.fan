@@ -301,7 +301,7 @@ describe("buildModelComparison", () => {
     expect(total).toBe(cells);
   });
 
-  it("never invents an offline CI, carries the Chronos planner verdicts and keeps Toto/TiRex pending", () => {
+  it("never invents an offline CI and carries the Chronos and Toto/TiRex planner verdicts", () => {
     const res = build([]);
     for (const question of res.questions) {
       for (const cell of Object.values(question.cells)) {
@@ -333,22 +333,33 @@ describe("buildModelComparison", () => {
       expect(cell.offline!.diff).toBeUndefined();
     }
     // the two `today` questions stay pending: Chronos beats the H5 profile there,
-    // but PCN is what is served and PCN is not in the offline benchmark
+    // but PCN is what is served and PCN is not in the offline benchmark — and a
+    // pending cell carries the date its live confirmation is expected
     for (const id of ["today_h2_6", "today_h6_12"]) {
-      expect(res.questions.find((x) => x.id === id)!.cells.chronos.state).toBe(
-        "pending",
-      );
+      const cell = res.questions.find((x) => x.id === id)!.cells.chronos;
+      expect(cell.state).toBe("pending");
+      expect(cell.expectedBy?.date).toBe("2026-10-26");
     }
     // the archived chronos_grid surface stops at d7, so the long planner band has
     // no Chronos column at all rather than an empty-looking one
     expect(
       res.questions.find((x) => x.id === "plan_d6_60")!.cells.chronos,
     ).toBeUndefined();
+    // Toto 2.0 / TiRex-2 (PAR-853) are measured but never archived: no live
+    // source, so `live` stays null and the live check stays open for good. Now
+    // that the run has reported, the cell must carry its offline verdict and no
+    // longer dangle an `expectedBy` — a lingering one would promise an arrival
+    // that is not coming.
     const fm = res.questions.find((x) => x.id === "live_h0_1")!.cells.fm;
-    expect(fm.state).toBe("pending");
+    expect(fm.state).toBe("unclear");
     expect(fm.live).toBeNull();
     expect(fm.checks.live).toBe("open");
-    expect(fm.expectedBy?.date).toBe("2026-10-12");
+    expect(fm.expectedBy).toBeNull();
+    expect(fm.offline!.source).toContain("#457");
+    // and the planner band where they lose outright is `worse`, not softened
+    expect(
+      res.questions.find((x) => x.id === "plan_d2_5")!.cells.fm.state,
+    ).toBe("worse");
   });
 
   it("turns a confirmed live win into `better` with its numbers and since", () => {
