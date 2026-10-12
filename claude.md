@@ -36,6 +36,7 @@
 
 - [Unified crowd levels](docs/rules/crowd-levels.md) – Typical-day-peak for daily, ratio-vs-P50 for live, and why they may never meet on one surface.
 - [An absent fact never becomes a confident one](docs/rules/absent-facts.md) – `UNKNOWN` over `CLOSED`, the 330-day season floor, curated columns beside the synced one.
+- [Automated retirement, upstream identity and production one-offs](docs/rules/automated-retirement-and-identity.md) – Absence is out-of-season before it is gone, a destructive job's first run is a mass write, identity is the upstream id (and `externalId` is unique globally while `slug` is per park), and one unwritable child must not cost its park the whole feed.
 
 
 ### 📋 Changelog
