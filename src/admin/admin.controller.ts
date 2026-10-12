@@ -163,7 +163,6 @@ export class AdminController {
     @InjectQueue("prediction-accuracy") private accuracyQueue: Queue,
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
-    @InjectQueue("shape-shadow") private shapeShadowQueue: Queue,
     @InjectQueue("park-day-operation") private parkDayOperationQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly parkValidatorService: ParkValidatorService,
@@ -553,19 +552,20 @@ export class AdminController {
   }
 
   /**
-   * Focused model-comparison board (daily TFT-vs-CatBoost + intraday PCN-vs-CatBoost).
+   * Focused model-comparison board (intraday PCN-vs-CatBoost + the PCN lead curve).
    *
    * Unlike /system-health (host/gpu/postgres/redis + ML-service round-trips), this is
-   * just the two scoreboard SQL reads + a computed PCN−CatBoost verdict per segment, so
-   * a UI can poll it cheaply. `days` bounds the intraday window (default 14).
+   * just the scoreboard SQL reads + a computed PCN−CatBoost verdict per segment, so
+   * a UI can poll it cheaply. `days` bounds the window (default 14). The daily
+   * TFT-vs-CatBoost and Shape sections were retired in PAR-870.
    */
   @Get("ml-comparison")
   @ApiOperation({
-    summary: "Model comparison board (daily + intraday shadow) + verdict",
+    summary: "Intraday comparison board (PCN shadow) + verdict",
     description:
-      "Light, pollable board: model_comparisons (TFT vs CatBoost) + " +
-      "pcn_intraday_comparisons (PCN vs CatBoost, all segments × lead buckets) with a " +
-      "computed PCN−CatBoost MAE delta per segment.",
+      "Light, pollable board: pcn_intraday_comparisons (PCN vs CatBoost, all " +
+      "segments × lead buckets) with a computed PCN−CatBoost MAE delta per " +
+      "segment, plus the PCN lead curve vs persistence.",
   })
   @ApiResponse({ status: 200, description: "Comparison boards + verdict" })
   async getMlComparison(
@@ -935,38 +935,6 @@ export class AdminController {
     }
     const job = await this.pcnShadowQueue.add(jobName, {}, { priority: 10 });
     return { message: `PCN ${action} job queued`, jobId: job.id.toString() };
-  }
-
-  /**
-   * Manually trigger the Shape day-curve shadow jobs (queue → shape-shadow processor →
-   * shape-service). `build` is the bring-up trigger (persist profiles); then `forecast`
-   * writes shape_forecasts and `score` writes the shape_comparisons board.
-   */
-  @Post("shape/:action")
-  @AdminMinRole("editor")
-  @HttpCode(HttpStatus.ACCEPTED)
-  @ApiOperation({
-    summary: "Trigger a Shape shadow job (build | forecast | score)",
-    description:
-      "Enqueues the matching shape-shadow job. 'build' persists the additive+smooth " +
-      "profiles; 'forecast' writes shape_forecasts; 'score' writes the board.",
-  })
-  @ApiResponse({ status: 202, description: "Shape job queued" })
-  async triggerShape(
-    @Param("action") action: string,
-  ): Promise<{ message: string; jobId: string }> {
-    const jobName = {
-      build: "build-shape",
-      forecast: "forecast-shape",
-      score: "score-shape",
-    }[action];
-    if (!jobName) {
-      throw new BadRequestException(
-        `Unknown Shape action '${action}' (expected build | forecast | score)`,
-      );
-    }
-    const job = await this.shapeShadowQueue.add(jobName, {}, { priority: 10 });
-    return { message: `Shape ${action} job queued`, jobId: job.id.toString() };
   }
 
   /**

@@ -1810,7 +1810,7 @@ export class PredictionAccuracyService {
    * CatBoost's getTopBottomPerformers scores hourly predictions out of
    * prediction_accuracy; TFT instead forecasts the daily peak (tft_forecasts)
    * and is scored against the realised daily P90 — the same contract the
-   * nf-forecast `score-comparison` processor uses. We mirror that scoring here
+   * retired nf-forecast `score-comparison` job used (PAR-870). We mirror that scoring here
    * but aggregate PER ATTRACTION, and reuse the same board hygiene as CatBoost:
    * a stddev floor on the realised wait so flat shows/walk-on rides don't flood
    * the "best" list with trivially-perfect 0-MAE non-rides.

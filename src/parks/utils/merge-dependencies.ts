@@ -674,6 +674,7 @@ export async function moveAggregateBuckets(
  *   2. ml_prediction_anomalies — FK NO ACTION → 23503 on the attraction DELETE
  *   3. attraction_hourly_history / rope_drop / typical_waits / p90 → silent CASCADE
  *   4. pcn/shape/tft/catboost forecasts, day_operating, aggregates → orphans
+ *      (shape and catboost_daily forecasts were retired in PAR-870)
  *
  * PAR-149 added four more, found by re-deriving the list from the entities
  * rather than from that run: `ride_alerts`, `schedule_entries` and
@@ -824,19 +825,7 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     conflictColumns: ["target_slot", "origin_slot", "quantile"],
   },
   {
-    table: "shape_forecasts",
-    column: "attraction_id",
-    strategy: "move",
-    conflictColumns: ["target_slot", "origin_date"],
-  },
-  {
     table: "tft_forecasts",
-    column: "attraction_id",
-    strategy: "move",
-    conflictColumns: ["target_date", "forecast_date"],
-  },
-  {
-    table: "catboost_daily_forecasts",
     column: "attraction_id",
     strategy: "move",
     conflictColumns: ["target_date", "forecast_date"],

@@ -157,7 +157,6 @@ export class MlOverviewService {
       tft,
       catboost,
       surfaces,
-      shape,
       scoring,
       chronosRunRaw,
       nfTrain,
@@ -201,13 +200,6 @@ export class MlOverviewService {
            FROM forecast_archive_curves
           WHERE origin_at > now() - interval '2 days'
           GROUP BY surface`,
-      ),
-      this.probe<LatestRow[]>(
-        "shape",
-        `SELECT created_at AS at, model_version AS version
-           FROM shape_forecasts
-          WHERE created_at > now() - interval '5 days'
-          ORDER BY created_at DESC LIMIT 1`,
       ),
       this.probe<Array<{ at: Date | string | null; date: string | null }>>(
         "scoring",
@@ -337,16 +329,6 @@ export class MlOverviewService {
           LATE_AFTER_MS.h5,
         ),
         note: null,
-      },
-      {
-        id: "shape",
-        name: "Shape",
-        delivers: "nichts in der App",
-        role: "shadow",
-        lastRunAt: iso(toDate(shape?.[0]?.at)),
-        expected: "täglich 09:00 UTC",
-        status: status(toDate(shape?.[0]?.at), LATE_AFTER_MS.shape),
-        note: versionNote(shape?.[0]?.version),
       },
       {
         id: "archive",

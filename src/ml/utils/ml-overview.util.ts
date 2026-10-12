@@ -58,8 +58,6 @@ export const LATE_AFTER_MS = {
   chronos: 4 * MS_HOUR,
   /** H5 profiles: 06:00 / 07:00 park-local, max gap measured 6-7 h (no park at 06:00 local). */
   h5: 8 * MS_HOUR,
-  /** Shape: daily ~09:00 UTC. */
-  shape: 30 * MS_HOUR,
   /** Forward archive: hourly :05; max gap of any surface measured 1 h. */
   archive: 3 * MS_HOUR,
   /** Scoring: daily 12:00 UTC. */

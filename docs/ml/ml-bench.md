@@ -48,7 +48,11 @@ after another, resumable (finished files are skipped).
   and returned 4–10× more rows; client-side it is a chunked DuckDB step.
 - `tft_forecasts` / `catboost_daily_forecasts` by forecast-date month
   (no index on `forecast_date`; largest file 5,670,526 rows, slowest query
-  4.43 s), leads 0–120 d.
+  4.43 s), leads 0–120 d. **Since PAR-870 (2026-10-12)** `catboost_daily_forecasts`
+  is no longer written and is dropped in production, so the export no longer
+  reads it; `build` leaves `cbd` empty when an export has no such files, and
+  `lvlh5_cbd` / `lvl_cbd` stay empty on new exports. Exports taken before the
+  drop (and the `pg_dump` on celestrial) still carry it.
 - `parks` (timezone, regionCode, influencingRegions, lat/lng), `attractions`
   (+ `headliner_attractions`, coordinates, land), park-level `schedule_entries`,
   `holidays`, `weather_data`.

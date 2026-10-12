@@ -1,5 +1,8 @@
 # Serving & Shadow-Modelle — Status-Snapshot (2026-06-29)
 
+> **2026-10-12 (PAR-870):** the Shape shadow and the TFT-vs-CatBoost daily
+> scoreboard described below are retired (service, queue, crons, tables).
+
 > **Update 2026-07-02** ([Review](./pcn-intraday-review.md), Fixes im selben PR):
 > Crowd-Level im PCN-Swap kommt jetzt aus **q0.8** (war fälschlich q0.5) + Non-Crossing-
 > Guard; Park-Kurve/Kalender/Deviation folgen dem Override (vorher CatBoost am Swap

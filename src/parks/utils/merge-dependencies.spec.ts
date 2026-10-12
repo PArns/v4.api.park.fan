@@ -67,9 +67,11 @@ describe("merge dependency tables", () => {
    *
    * Derived from the entities rather than from a database, because that is
    * what a cloud run can read — every `*.entity.ts` carrying an attraction id
-   * column, plus the four forecast tables the ML sub-services create in raw SQL
-   * with no entity and no FK (`pcn`/`shape` also create three `*_comparisons`
-   * tables, which are keyed by segment and hold no attraction id).
+   * column, plus the two forecast tables the ML sub-services create in raw SQL
+   * with no entity and no FK (`pcn_forecasts`, `tft_forecasts`; pcn also creates
+   * `*_comparisons` tables, which are keyed by segment and hold no attraction
+   * id). `shape_forecasts` and `catboost_daily_forecasts` were retired with
+   * their writers in PAR-870.
    *
    * `park_seasons` is listed although it has no foreign key to `attractions`:
    * its `attraction_ids` is a jsonb array, so no column-and-key dependency can
@@ -89,7 +91,6 @@ describe("merge dependency tables", () => {
     "attraction_rope_drop",
     "attraction_slug_aliases",
     "attraction_typical_waits",
-    "catboost_daily_forecasts",
     "forecast_archive_curves",
     "forecast_data",
     "headliner_attractions",
@@ -103,7 +104,6 @@ describe("merge dependency tables", () => {
     "queue_data_aggregates",
     "ride_alerts",
     "schedule_entries",
-    "shape_forecasts",
     "tft_forecasts",
     "wait_time_predictions",
   ];
@@ -434,12 +434,7 @@ describe("merge dependency tables", () => {
   });
 
   it("declares conflict columns for every keyed forecast table", () => {
-    const forecastTables = [
-      "pcn_forecasts",
-      "shape_forecasts",
-      "tft_forecasts",
-      "catboost_daily_forecasts",
-    ];
+    const forecastTables = ["pcn_forecasts", "tft_forecasts"];
 
     for (const table of forecastTables) {
       const dependency = ATTRACTION_DEPENDENCIES.find((d) => d.table === table);

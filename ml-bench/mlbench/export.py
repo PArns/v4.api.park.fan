@@ -199,7 +199,9 @@ def run_export(args: argparse.Namespace) -> dict:
         if want(name):
             job(name, sql)
 
-    for table in ("tft_forecasts", "catboost_daily_forecasts"):
+    # catboost_daily_forecasts was retired and dropped (PAR-870); build.py
+    # leaves `cbd` empty when an export carries no such files.
+    for table in ("tft_forecasts",):
         if not want(table):
             continue
         first = dt.date.fromisoformat(args.forecast_from)
@@ -232,7 +234,7 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--max-lead", type=int, default=120)
     p.add_argument("--tables", default=None,
                    help="comma list subset: parks,attractions,schedule,holidays,weather,"
-                        "tft_forecasts,catboost_daily_forecasts,queue")
+                        "tft_forecasts,queue")
     p.add_argument("--pause", type=float, default=0.3, help="seconds between queries")
 
 

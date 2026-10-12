@@ -28,7 +28,8 @@ import { Entity, PrimaryColumn, Column } from "typeorm";
  * WHY THE BAND IS THE **PREDICTED** LEVEL and never the realised one. Grouping by
  * the outcome is the trap that makes any well-calibrated model look badly biased
  * — conditioning on the result reproduces regression to the mean — and it is the
- * reason `shape_comparisons`' bias column cannot be read at face value. The
+ * reason the retired `shape_comparisons` board's bias column could not be read
+ * at face value (PAR-870). The
  * predicted level is also the only one available when the answer is served.
  *
  * WHY THERE IS NO PER-RIDE AXIS. Not a decision about effort — a ceiling.

@@ -1,5 +1,5 @@
 # Conservative lint for ml-bench: real bugs only (pyflakes + syntax), not style
-# noise. Mirrors pcn-service / shape-service.
+# noise. Mirrors pcn-service.
 line-length = 110
 
 [lint]

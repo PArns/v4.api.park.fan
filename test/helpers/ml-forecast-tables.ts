@@ -6,11 +6,12 @@ import * as path from "path";
  * The merge tables that no TypeORM entity owns, and where their DDL lives.
  *
  * `ATTRACTION_DEPENDENCIES`, `PARK_DEPENDENCIES`, `PARK_INLINE_DEPENDENCIES`
- * and `PARK_TABLES_HANDLED_INLINE` name 34 tables between them. Thirty are
+ * and `PARK_TABLES_HANDLED_INLINE` name 42 tables between them. Forty are
  * entities, so `synchronize: true` in `global-setup.ts` creates them. These
- * four are created at runtime by the service that writes them — three Python
- * sub-services and one NestJS processor — and the E2E schema therefore never
- * had them. `applyMergeDependencies` walks its list straight through, so the
+ * two are created at runtime by the Python sub-service that writes them, and
+ * the E2E schema therefore never had them. (There were four until PAR-870
+ * retired `shape_forecasts` and `catboost_daily_forecasts` with their
+ * writers.) `applyMergeDependencies` walks its list straight through, so the
  * first one it reaches aborts the whole merge with 42P01:
  *
  *     QueryFailedError: relation "pcn_forecasts" does not exist
@@ -32,12 +33,7 @@ const ML_FORECAST_TABLE_SOURCES: ReadonlyArray<{
   source: string;
 }> = [
   { table: "pcn_forecasts", source: "pcn-service/db.py" },
-  { table: "shape_forecasts", source: "shape-service/db.py" },
   { table: "tft_forecasts", source: "nf-service/db.py" },
-  {
-    table: "catboost_daily_forecasts",
-    source: "src/queues/processors/nf-forecast.processor.ts",
-  },
 ];
 
 /** Table names only — `setup-e2e.ts` truncates these alongside the entities. */
@@ -104,13 +100,13 @@ function extractCreateTable(table: string, source: string): string {
 }
 
 /**
- * Creates the four entity-less merge tables on an already-migrated test schema.
+ * Creates the two entity-less merge tables on an already-migrated test schema.
  *
  * Called from `global-setup.ts` after `synchronize`, so the tables exist before
  * any suite connects — the same place the hypertable and the extensions are set
  * up, and deliberately not inside a single spec: a spec that creates its own
  * schema is a spec nothing else can rely on, and the next merge test would
- * either duplicate this or silently run against four missing tables.
+ * either duplicate this or silently run against two missing tables.
  *
  * No foreign keys, matching production: these tables are written by services
  * that do not share this schema's entity graph, which is exactly why

@@ -15,7 +15,3 @@ export function getNfServiceUrl(): string {
 export function getPcnServiceUrl(): string {
   return process.env.PCN_SERVICE_URL || "http://pcn-service:8000";
 }
-
-export function getShapeServiceUrl(): string {
-  return process.env.SHAPE_SERVICE_URL || "http://shape-service:8000";
-}

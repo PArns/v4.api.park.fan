@@ -55,13 +55,6 @@
         { "questionId": "cal_busier", "modelId": "catboost" },
         { "questionId": "cal_far", "modelId": "catboost" }
       ]
-    },
-    {
-      "id": "shape_service_off",
-      "title": "Shape-Service abschalten",
-      "detail": "Liefert der App nichts, kein messbarer Vorteil. Abschalten spart nur Rechenzeit, verbessert nichts sichtbar.",
-      "state": "owner",
-      "cells": []
     }
   ]
 }

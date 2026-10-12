@@ -18,7 +18,9 @@ const GB = 1024 ** 3;
 /**
  * Aggregates everything a system-health / ML-monitoring dashboard needs:
  * host (CPU/RAM/disk), Postgres, Redis, and both ML services (CatBoost = ml-service,
- * TFT = nf-service) — their training progress/quality + the TFT-vs-CatBoost scoreboard.
+ * TFT = nf-service) — their training progress/quality + the PCN intraday boards.
+ * The TFT-vs-CatBoost (`comparison`) and Shape (`shapeComparison`) boards were
+ * retired in PAR-870.
  *
  * Every source is fetched independently with its own try/catch so one slow/down
  * component degrades to an {error} field instead of failing the whole endpoint.
@@ -41,9 +43,7 @@ export class SystemHealthService {
       freshness,
       catboost,
       tft,
-      comparison,
       pcnComparison,
-      shapeComparison,
       pcnLeadCurve,
     ] = await Promise.all([
       this.safe("host", () => this.host()),
@@ -53,9 +53,7 @@ export class SystemHealthService {
       this.safe("freshness", () => this.freshness()),
       this.safe("catboost", () => this.catboost()),
       this.safe("tft", () => this.tft()),
-      this.safe("comparison", () => this.comparison()),
       this.safe("pcnComparison", () => this.intradayComparison()),
-      this.safe("shapeComparison", () => this.shapeComparison()),
       this.safe("pcnLeadCurve", () => this.leadCurveComparison()),
     ]);
     return {
@@ -68,9 +66,7 @@ export class SystemHealthService {
       ml: {
         catboost,
         tft,
-        comparison,
         pcnComparison,
-        shapeComparison,
         pcnLeadCurve,
       },
     };
@@ -403,7 +399,8 @@ export class SystemHealthService {
       service: nfServiceUrl(),
       training: status,
       // activeModel mirrors CatBoost shape so dashboards treat both uniformly.
-      // TFT has no MAE in DB (no ml_models row); quality lives in model_comparisons.
+      // TFT has no MAE in DB (no ml_models row); its quality is measured by the
+      // forward archive and the model comparison.
       activeModel:
         modelTrained && version
           ? {
@@ -416,28 +413,6 @@ export class SystemHealthService {
       // health kept for backward-compat with frontend (tft.health.status badge)
       health: health ?? null,
     };
-  }
-
-  /** TFT-vs-CatBoost forward scoreboard (latest scored target days). */
-  private async comparison() {
-    const exists = await this.dataSource.query(
-      `SELECT to_regclass('public.model_comparisons') AS t`,
-    );
-    if (!exists?.[0]?.t) return { rows: [], note: "no scoreboard yet" };
-    // segment column is added by TypeORM synchronize; COALESCE guards the brief window
-    // before it exists / legacy rows (default 'all').
-    const rows = await this.dataSource.query(
-      `SELECT "targetDate", model,
-              COALESCE(segment, 'all') AS segment, n,
-              round(mae::numeric,1) AS mae,
-              round(bias::numeric,1) AS bias, "avgLeadDays"
-         FROM model_comparisons
-         ORDER BY "targetDate" DESC,
-                  CASE COALESCE(segment,'all') WHEN 'all' THEN 0 WHEN 'busy' THEN 1 ELSE 2 END,
-                  model
-         LIMIT 60`,
-    );
-    return { rows, count: rows.length };
   }
 
   /** PCN intraday shadow board (PCN vs CatBoost on matched 15-min slots). Returns the
@@ -508,81 +483,6 @@ export class SystemHealthService {
       });
     }
     // busy first (where the gate lives), then headline ordering.
-    const order: Record<string, number> = { busy: 0, all: 1, mid: 2, quiet: 3 };
-    return out.sort(
-      (a, b) =>
-        (order[a.segment as string] ?? 9) - (order[b.segment as string] ?? 9),
-    );
-  }
-
-  /** Shape day-curve shadow board (Shape vs CatBoost on matched 15-min slots over the daily
-   * horizon). Same shape as the PCN board; verdict = Shape−CatBoost MAE delta per segment at
-   * lead 'all'. Owned by shape-service. */
-  private async shapeComparison(days = 30) {
-    const exists = await this.dataSource.query(
-      `SELECT to_regclass('public.shape_comparisons') AS t`,
-    );
-    if (!exists?.[0]?.t)
-      return { rows: [], verdict: [], note: "no shadow board yet" };
-    const rows = await this.dataSource.query(
-      `SELECT target_date AS "targetDate", model, segment,
-              lead_bucket AS "leadBucket", n,
-              round(mae::numeric, 1) AS mae,
-              round(bias::numeric, 1) AS bias,
-              round(mean_actual::numeric, 1) AS "meanActual",
-              round(mean_pred::numeric, 1) AS "meanPred"
-         FROM shape_comparisons
-        WHERE target_date >= (CURRENT_DATE - ($1)::int)
-        ORDER BY target_date DESC,
-                 CASE segment WHEN 'all' THEN 0 WHEN 'busy' THEN 1
-                              WHEN 'mid' THEN 2 ELSE 3 END,
-                 lead_bucket, model
-        LIMIT $2`,
-      // Same day-proportional bound as the PCN board (32 cells/day max + margin).
-      [days, (days + 1) * 32],
-    );
-    return {
-      rows,
-      verdict: this.challengerVerdict(rows, "shape"),
-      count: rows.length,
-    };
-  }
-
-  /** Generic challenger−CatBoost delta per segment (lead 'all'), n-weighted. */
-  private challengerVerdict(
-    rows: Array<{
-      segment: string;
-      leadBucket: string;
-      model: string;
-      n: number;
-      mae: number;
-    }>,
-    challenger: string,
-  ) {
-    const acc: Record<string, Record<string, { mw: number; n: number }>> = {};
-    for (const r of rows) {
-      if (r.leadBucket !== "all") continue;
-      const seg = (acc[r.segment] ??= {});
-      const m = (seg[r.model] ??= { mw: 0, n: 0 });
-      m.mw += Number(r.mae) * Number(r.n);
-      m.n += Number(r.n);
-    }
-    const out: Array<Record<string, unknown>> = [];
-    for (const [segment, byModel] of Object.entries(acc)) {
-      const ch = byModel[challenger];
-      const cat = byModel["catboost"];
-      if (!ch?.n || !cat?.n) continue;
-      const chMae = ch.mw / ch.n;
-      const catMae = cat.mw / cat.n;
-      out.push({
-        segment,
-        n: Math.min(ch.n, cat.n),
-        challengerMae: Math.round(chMae * 10) / 10,
-        catboostMae: Math.round(catMae * 10) / 10,
-        delta: Math.round((catMae - chMae) * 10) / 10, // >0 ⇒ challenger better
-        challengerWins: catMae - chMae > 0,
-      });
-    }
     const order: Record<string, number> = { busy: 0, all: 1, mid: 2, quiet: 3 };
     return out.sort(
       (a, b) =>
@@ -676,17 +576,13 @@ export class SystemHealthService {
   /** Focused comparison board for a dedicated admin endpoint — all surfaces as plain SQL
    * reads (no host/gpu/service round-trips), so a UI can poll it cheaply. */
   async comparisonBoard(days = 14) {
-    const [daily, intraday, shape, leadCurve] = await Promise.all([
-      this.safe("daily", () => this.comparison()),
+    const [intraday, leadCurve] = await Promise.all([
       this.safe("intraday", () => this.intradayComparison(days)),
-      this.safe("shape", () => this.shapeComparison()),
       this.safe("leadCurve", () => this.leadCurveComparison(days)),
     ]);
     return {
       timestamp: new Date().toISOString(),
-      daily,
       intraday,
-      shape,
       leadCurve,
     };
   }
