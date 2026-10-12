@@ -47,6 +47,27 @@ operator's publishing horizon — an absent schedule never becomes a closed day)
 The runner composes it with H5 as ``<name>_x_h5`` at every slot lead, so long leads
 (d10–d90) and UC4 (to d365) are scored without producing 15-min slots there.
 
+**PAR-853 additions** (same series construction, same covariates):
+
+* **TiRex-2** (``NX-AI/TiRex-2``, Apache-2.0; package ``tirex-2``). Native past and
+  known-future covariates and native multivariate targets, so a park is one task
+  exactly as for Chronos-2 and every covariate above is passed as known-future. Its
+  window is 2048 context steps and 320 forecast steps; longer horizons are rolled
+  out with the median fed back (the rollout is ours, not the package's). The fused
+  FlashRNN kernel needs ``nvcc`` at runtime, so the model is loaded with the
+  pure-PyTorch ("vanilla") recurrent kernels and moved to the GPU.
+* **Toto 2.0** (``Datadog/Toto-2.0-313m``, Apache-2.0; package ``toto-2``). Rides of
+  a park are variates of one task. The release notes say exogenous-variable support
+  is NOT part of 2.0 ("planned for a future 2.0 release"); the model's own forecast
+  entry point nevertheless takes ``known_dynamic`` series (appended as extra
+  variates whose future is observed — the package's GluonTS adapter wires
+  ``feat_dynamic_real`` there). ``toto2`` passes the SAME covariates as ``chronos2``
+  that way — an untrained use of a mechanical hook — and ``toto2_nocov`` is the
+  official covariate-free zero-shot model. Context 4096 (its training context:
+  ``residual_attn_ratio`` = sqrt(S/ln S) with S = 128 patches of 32).
+
+Both heads are 0.1 … 0.9: there is no q95, so both return q95 = NaN like TimesFM.
+
 The information cut is the runner's: truth comes only from ``origin.history``
 (slots that end before the park's origin); covariates and windows are known-future
 inputs by definition (``windows`` is the published schedule, flagged
@@ -71,6 +92,8 @@ DAY_COVS = ["is_weekend", "dow_sin", "dow_cos", "is_holiday_primary", "is_school
             "holiday_count_total", "school_holiday_count_total", "is_school_holiday_any",
             "is_bridge_day"]
 WX_COVS = ["temp_max", "precip_sum"]
+#: backends that treat a NaN covariate as missing (TimesFM interpolates it instead)
+NAN_MASKING_BACKENDS = ("chronos2", "tirex2", "toto2")
 EMPTY = pd.DataFrame(columns=["attraction_id", "slot_start_utc", "q50", "q80", "q95"])
 
 _BACKENDS: dict[str, object] = {}
@@ -215,10 +238,163 @@ class TimesFMBackend(_Backend):
         return out
 
 
+def _ffill_rows(a: np.ndarray) -> np.ndarray:
+    """Forward-fill NaN along the time axis (leading NaN stay NaN)."""
+    idx = np.where(np.isfinite(a), np.arange(a.shape[1])[None, :], 0)
+    np.maximum.accumulate(idx, axis=1, out=idx)
+    return a[np.arange(a.shape[0])[:, None], idx]
+
+
+class TiRex2Backend(_Backend):
+    """TiRex-2: one multivariate task per park, every covariate as known-future."""
+
+    name = "tirex2"
+    #: Hugging Face revision of the weights (2026-07-21; the October commits add an
+    #: ONNX export and re-uploaded files — pinned so a re-upload cannot move the run)
+    REVISION = os.environ.get("MLBENCH_TIREX2_REVISION", "05e5b26db52bfb256f1ae1bdf785589850482de3")
+
+    def __init__(self, model_id: str = "NX-AI/TiRex-2",
+                 context_length: int = int(os.environ.get("MLBENCH_TIREX2_CONTEXT", "2048"))):
+        import torch
+        import torch._dynamo
+
+        # tirex2 wraps blocks in @torch.compile; inductor needs a C/C++ compiler at
+        # runtime that this slim image does not ship. Eager mode gives the same numbers.
+        torch._dynamo.config.disable = True
+
+        # `import tirex2` pulls in xlstm, whose sLSTM module computes the CUDA kernel's
+        # include/lib paths AT IMPORT TIME (`xlstm/blocks/slstm/src/cuda_init.py`) through
+        # `torch.utils.cpp_extension.include_paths("cuda")`, which raises when CUDA_HOME is
+        # unset. On a GPU box with no CUDA toolkit that killed the whole run before the
+        # first forecast. The value is only string arithmetic for a kernel TiRex-2 never
+        # instantiates -- it is a BiXLSTM (mLSTM) model and the recurrent path is the pure
+        # PyTorch one selected by `device="cpu"` below -- so any existing root gets the
+        # import through. Should a future xlstm actually try to COMPILE that kernel, the
+        # build fails loudly on the missing nvcc, which is the outcome we want: a visible
+        # error, never silently different numbers.
+        os.environ.setdefault("CUDA_HOME", "/usr/local")
+        from tirex2 import load_model
+
+        self.torch = torch
+        _cap_vram(torch)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # device="cpu" selects the pure-PyTorch recurrent kernels (no nvcc needed);
+        # the module is then moved to the GPU, where those kernels run unchanged
+        self.fm = load_model(model_id, device="cpu", hf_kwargs={"revision": self.REVISION})
+        self.fm.model.to(self.device)
+        qs = [round(float(q), 6) for q in self.fm.model.quantiles]
+        self.qi = (qs.index(0.5), qs.index(0.8))
+        self.max_h = int(self.fm.model.future_len)
+        self.context_length = min(context_length, int(self.fm.model.context_len))
+
+    def forecast(self, tasks, cov_names, pipe=None):
+        from tirex2 import TimeseriesType
+
+        torch = self.torch
+        C = self.context_length
+        out = []
+        for y, pc, fc in tasks:
+            H = fc.shape[1]
+            res = np.full((y.shape[0], H, 3), np.nan)
+            keep = np.isfinite(y).any(axis=1)        # an all-NaN variate would NaN the park
+            if not keep.any():
+                out.append(res)
+                continue
+            ctx = y[keep][:, -C:].astype(np.float32)
+            T = ctx.shape[1]
+            cov = None
+            if pc is not None and len(cov_names):
+                cov = np.concatenate([pc[:, -T:], fc], axis=1).astype(np.float32)   # (k, T+H)
+            done = 0
+            while done < H:
+                h = min(self.max_h, H - done)
+                L = ctx.shape[1]
+                start = T + done - L
+                c = None if cov is None else torch.from_numpy(np.ascontiguousarray(cov[:, start:T + done + h]))
+                ts = TimeseriesType(target=torch.from_numpy(np.ascontiguousarray(ctx)),
+                                    past_covariates=None, future_covariates=c)
+                with torch.inference_mode():
+                    q = self.fm.forecast([ts], prediction_length=h, output_type="numpy")[0]  # (n, 9, h)
+                res[keep, done:done + h, 0] = q[:, self.qi[0], :]
+                res[keep, done:done + h, 1] = q[:, self.qi[1], :]
+                done += h
+                if done < H:   # roll out: the median becomes context, the window slides
+                    ctx = np.concatenate([ctx, q[:, self.qi[0], :].astype(np.float32)], axis=1)[:, -C:]
+            out.append(res)
+        if self.device == "cuda":
+            self.peak_vram_gb = max(self.peak_vram_gb, torch.cuda.max_memory_allocated() / 1e9)
+        return out
+
+
+class Toto2Backend(_Backend):
+    """Toto 2.0: one multivariate task per park; covariates (if any) as ``known_dynamic``."""
+
+    name = "toto2"
+    REVISION = os.environ.get("MLBENCH_TOTO2_REVISION", "a7bab288f5e95f8606f8306f86659357e1c001ef")
+
+    def __init__(self, model_id: str = os.environ.get("MLBENCH_TOTO2_MODEL", "Datadog/Toto-2.0-313m"),
+                 context_length: int = int(os.environ.get("MLBENCH_TOTO2_CONTEXT", "4096"))):
+        import torch
+        from toto2 import Toto2Model
+
+        self.torch = torch
+        _cap_vram(torch)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = Toto2Model.from_pretrained(model_id, revision=self.REVISION).to(self.device).eval()
+        knots = [round(float(k), 6) for k in self.model.output_head.knots]
+        self.qi = (knots.index(0.5), knots.index(0.8))
+        self.patch = int(self.model.config.patch_size)
+        self.context_length = context_length
+
+    def forecast(self, tasks, cov_names, pipe=None):
+        torch = self.torch
+        P = self.patch
+        out = []
+        for y, pc, fc in tasks:
+            H = fc.shape[1]
+            res = np.full((y.shape[0], H, 3), np.nan)
+            keep = np.isfinite(y).any(axis=1)
+            if not keep.any():
+                out.append(res)
+                continue
+            ctx = y[keep][:, -self.context_length:].astype(np.float32)
+            T = ctx.shape[1]
+            pad = (-T) % P                           # whole patches: left-pad, unobserved
+            obs = np.isfinite(ctx)
+            # the package's own GluonTS adapter forward-fills the values and passes the
+            # observed mask (its forecast() forces the last context patch to "observed")
+            vals = np.nan_to_num(_ffill_rows(ctx), nan=0.0)
+            vals = np.pad(vals, ((0, 0), (pad, 0)))
+            obs = np.pad(obs, ((0, 0), (pad, 0)))
+            dev = self.device
+            inputs = {"target": torch.from_numpy(vals)[None].to(dev),
+                      "target_mask": torch.from_numpy(obs)[None].to(dev),
+                      "series_ids": torch.zeros((1, vals.shape[0]), dtype=torch.long, device=dev)}
+            if pc is not None and len(cov_names):
+                kd = np.concatenate([pc[:, -T:], fc], axis=1).astype(np.float32)
+                kd = np.pad(kd, ((0, 0), (pad, 0)), constant_values=np.nan)
+                kdm = np.isfinite(kd)
+                inputs |= {"known_dynamic": torch.from_numpy(np.nan_to_num(kd, nan=0.0))[None].to(dev),
+                           "known_dynamic_mask": torch.from_numpy(kdm)[None].to(dev),
+                           "known_dynamic_series_ids": torch.zeros((1, kd.shape[0]), dtype=torch.long,
+                                                                   device=dev)}
+            with torch.inference_mode():
+                q = self.model.forecast(inputs, horizon=H, decode_block_size=None, has_missing_values=True,
+                                        scaler_fallback_min_obs=8, quantile_real_cap_k=1e4)  # (9, 1, n, H)
+            q = q[:, 0].float().cpu().numpy()
+            res[keep, :, 0] = q[self.qi[0]]
+            res[keep, :, 1] = q[self.qi[1]]
+            out.append(res)
+        if self.device == "cuda":
+            self.peak_vram_gb = max(self.peak_vram_gb, torch.cuda.max_memory_allocated() / 1e9)
+        return out
+
+
 def get_backend(kind: str) -> _Backend:
     if kind not in _BACKENDS:
         t0 = time.monotonic()
         _BACKENDS[kind] = {"chronos2": ChronosBackend, "timesfm3": TimesFMBackend,
+                           "tirex2": TiRex2Backend, "toto2": Toto2Backend,
                            "stub": StubBackend}[kind]()
         print(f"[foundation] loaded {kind} in {time.monotonic() - t0:.1f}s", flush=True)
     return _BACKENDS[kind]
@@ -322,8 +498,8 @@ class FoundationModel(Model):
             return []
         names = (SLOT_COVS + (["in_win"] if self.context_mode == "grid" else [])) if slot else []
         names = names + DAY_COVS + (WX_COVS if self.uses_oracle_weather else [])
-        if not slot and self.backend == "chronos2":
-            names = names + ["day_len_h"]   # NaN beyond the known schedule: Chronos masks NaN
+        if not slot and self.backend in NAN_MASKING_BACKENDS:
+            names = names + ["day_len_h"]   # NaN beyond the known schedule: these models mask NaN
         return names
 
     def _log(self, origin: Origin, what: str, t0: float, rows: int) -> None:
@@ -610,4 +786,46 @@ class Chronos2FT(Chronos2):
     daily = False
 
 
-VARIANTS = [Chronos2, Chronos2Owx, Chronos2Grid, Chronos2NoCov, TimesFM3, TimesFM3Owx, Chronos2FT]
+# ---- PAR-853: TiRex-2 and Toto 2.0 (same inputs as chronos2 where the model takes them)
+
+class TiRex2(FoundationModel):
+    """TiRex-2 zero-shot, compressed context, the chronos2 covariates as known-future."""
+    name = "tirex2"
+    backend = "tirex2"
+    context_slots = int(os.environ.get("MLBENCH_TIREX2_CONTEXT", "2048"))
+
+
+class TiRex2Grid(TiRex2):
+    """Regular 15-min grid (2048 steps = 21 days), NaN outside the windows."""
+    name = "tirex2_grid"
+    context_mode = "grid"
+    intraday = False
+    daily = False
+
+
+class Toto2(FoundationModel):
+    """Toto 2.0 (313m) zero-shot, compressed context, the chronos2 covariates through the
+    ``known_dynamic`` hook — exogenous inputs are NOT a trained feature of 2.0."""
+    name = "toto2"
+    backend = "toto2"
+    context_slots = int(os.environ.get("MLBENCH_TOTO2_CONTEXT", "4096"))
+
+
+class Toto2NoCov(Toto2):
+    """The official, covariate-free Toto 2.0 (pairs against chronos2_nocov)."""
+    name = "toto2_nocov"
+    use_covariates = False
+    intraday = False
+    daily = False
+
+
+class Toto2Grid(Toto2):
+    """Regular 15-min grid (4096 steps = 42 days), NaN outside the windows."""
+    name = "toto2_grid"
+    context_mode = "grid"
+    intraday = False
+    daily = False
+
+
+VARIANTS = [Chronos2, Chronos2Owx, Chronos2Grid, Chronos2NoCov, TimesFM3, TimesFM3Owx, Chronos2FT,
+            TiRex2, TiRex2Grid, Toto2, Toto2NoCov, Toto2Grid]

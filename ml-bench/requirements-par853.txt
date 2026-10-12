@@ -1,0 +1,34 @@
+# PAR-853 — TiRex-2 and Toto 2.0 as ml-bench plug-ins, beside Chronos-2 (for pairing).
+# Build with --build-arg PYTHON_IMAGE=python:3.12-slim (toto-2 requires Python >= 3.12)
+# and --build-arg EXTRA_REQUIREMENTS=requirements-par853.txt. torch comes from the cu128
+# wheel in the Dockerfile; nothing here may replace it.
+#
+# Every pin is at least two weeks old on 2026-10-11.
+#
+# tirex-2 requires numpy >= 2.1.3, which overrides requirements.txt's 1.26.4 — this is
+# why PAR-853 has its own image tag (ml-bench:par-853) and does not share PAR-828's.
+numpy==2.1.3
+#
+# Chronos-2 (amazon/chronos-2): Apache-2.0. In this image only so chronos2 and
+# chronos2_nocov can be scored in the SAME run — the harness pairs models inside one
+# run, not across run directories.
+chronos-forecasting==2.3.2
+#
+# TiRex-2 (NX-AI/TiRex-2): code and weights Apache-2.0 (model card + LICENSE, checked
+# 2026-10-11; https://huggingface.co/NX-AI/TiRex-2, https://github.com/NX-AI/tirex-2).
+# The ORIGINAL TiRex (NX-AI/TiRex, package tirex-ts) is under the NXAI Community
+# License (free below EUR 100 M revenue) and is univariate without covariates;
+# TiRex-2 supersedes it with native past/known-future covariates, so it is TiRex-2
+# that is benchmarked. 0.3.x is younger than two weeks.
+tirex-2==0.2.1
+xlstm==2.0.5
+flashrnn==1.0.8
+einops==0.8.1
+#
+# Toto 2.0 (Datadog/Toto-2.0-313m): code and weights Apache-2.0
+# (https://huggingface.co/Datadog/Toto-2.0-313m, https://github.com/DataDog/toto).
+toto-2==2.0.0
+dd-unit-scaling==0.1.0
+gluonts==0.16.3
+jaxtyping==0.3.11
+safetensors==0.8.0
