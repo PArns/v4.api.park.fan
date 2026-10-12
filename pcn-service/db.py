@@ -285,50 +285,99 @@ def _mark_pcn_forecasts_schema_ready() -> None:
     _PCN_FORECASTS_SCHEMA_READY = True
 
 
+# The forecast upsert. A conflicting row is rewritten only when its value
+# changed (PAR-873). The producer re-sends an origin it already wrote after every
+# restart — its in-process `_written` memo (forecast.py) is empty then — and with
+# the same checkpoint and the same panel that is the same number. Measured
+# 2026-10-12: the first tick after each deploy rewrote 26k–195k rows of 12–82
+# closed parks (5 deploys in 24 h, ~0.43 M rows, 4.8 % of the day's writes), each
+# one a dead tuple plus three index entries, because `created_at` is indexed
+# twice and so no rewrite is ever HOT.
+#
+# It also kept those parks' forecasts looking fresh: `created_at` is what the
+# serving read's 3-hour staleness guard (`getPcnIntradayWaits`) measures, and the
+# guard is meant to send a park whose origin stopped moving back to CatBoost. A
+# skipped rewrite leaves `created_at` at the time the origin was first forecast,
+# which is the meaning the guard already relies on between restarts.
+#
+# A retrained checkpoint does produce different values for the same origin; that
+# row is rewritten and stamped with the new time, as before. `model_version` is
+# not compared: it is the tick's own timestamp, different on every call.
+_UPSERT_PCN_FORECASTS = text(
+    """
+    INSERT INTO pcn_forecasts
+        (attraction_id, target_slot, origin_slot, quantile, predicted_wait, model_version)
+    VALUES (:aid, :ts, :os, :q, :pw, :ver)
+    ON CONFLICT (attraction_id, target_slot, origin_slot, quantile)
+    DO UPDATE SET predicted_wait = EXCLUDED.predicted_wait,
+                  model_version  = EXCLUDED.model_version,
+                  created_at     = now()
+    WHERE pcn_forecasts.predicted_wait IS DISTINCT FROM EXCLUDED.predicted_wait
+    """
+)
+
+
 def write_pcn_forecasts(rows: list[dict], version: str) -> int:
     """Durable, immutable-per-origin upsert of forward 15-min forecasts. Re-running the
-    same origin overwrites only that origin's rows; past origins are preserved, so the
-    genuine forward record (made before the target) survives for scoring — the same
-    going-forward-shadow contract as tft_forecasts."""
+    same origin rewrites only the rows whose value changed; past origins are preserved,
+    so the genuine forward record (made before the target) survives for scoring — the
+    same going-forward-shadow contract as tft_forecasts. Returns the number of rows
+    handed in (the rowcount of a batched upsert is not reliable across drivers)."""
     if not rows:
         return 0
-    upsert = text(
-        """
-        INSERT INTO pcn_forecasts
-            (attraction_id, target_slot, origin_slot, quantile, predicted_wait, model_version)
-        VALUES (:aid, :ts, :os, :q, :pw, :ver)
-        ON CONFLICT (attraction_id, target_slot, origin_slot, quantile)
-        DO UPDATE SET predicted_wait = EXCLUDED.predicted_wait,
-                      model_version  = EXCLUDED.model_version,
-                      created_at     = now()
-        """
-    )
     for r in rows:
         r["ver"] = version
     with engine().begin() as c:
         _ensure_pcn_forecasts_schema(c)
         for i in range(0, len(rows), 5000):
-            c.execute(upsert, rows[i : i + 5000])
+            c.execute(_UPSERT_PCN_FORECASTS, rows[i : i + 5000])
     _mark_pcn_forecasts_schema_ready()
     return len(rows)
 
 
-def prune_pcn_forecasts(retention_days: int) -> int:
-    """Delete forecast rows past the retention window (by created_at — bumped on
-    rewrite, so rows the producer still refreshes survive). Scoring reads ~2 days of
-    targets and serving the last 3h; everything older is unread bloat at ~10^7
-    rows/day. Called from the hourly score job. Returns deleted row count."""
-    sql = text(
-        """
-        DELETE FROM pcn_forecasts
+# One prune transaction deletes at most this many rows, and one call runs at most
+# PRUNE_MAX_BATCHES of them. Steady state is ~9 M rows a day, ~0.4 M an hour, so
+# the hourly call needs two batches. The cap matters once: when the retention
+# drops from 14 to 4 days (PAR-873) the first call finds ~90 M expired rows, and
+# deleting them in one statement would be one transaction of that size, with the
+# WAL burst and the snapshot held for its whole duration. Capped, the backlog
+# drains over the following hourly runs instead.
+PRUNE_BATCH_ROWS = 200_000
+PRUNE_MAX_BATCHES = 50
+
+_PRUNE_PCN_FORECASTS = text(
+    """
+    DELETE FROM pcn_forecasts
+    WHERE ctid = ANY(ARRAY(
+        SELECT ctid FROM pcn_forecasts
         WHERE created_at < now() - (:d || ' days')::interval
-        """
-    )
-    with engine().begin() as c:
-        _ensure_pcn_forecasts_schema(c)
-        res = c.execute(sql, {"d": str(retention_days)})
-    _mark_pcn_forecasts_schema_ready()
-    return int(res.rowcount or 0)
+        LIMIT :n
+    ))
+    """
+)
+
+
+def prune_pcn_forecasts(
+    retention_days: int,
+    batch_rows: int = PRUNE_BATCH_ROWS,
+    max_batches: int = PRUNE_MAX_BATCHES,
+) -> int:
+    """Delete forecast rows past the retention window, by created_at (the time the
+    row's origin was forecast, or re-forecast with a changed value). Each batch is
+    its own transaction; stops at the first short batch or after `max_batches`.
+    Called from the hourly score job. Returns deleted row count."""
+    deleted = 0
+    for _ in range(max_batches):
+        with engine().begin() as c:
+            _ensure_pcn_forecasts_schema(c)
+            res = c.execute(
+                _PRUNE_PCN_FORECASTS, {"d": str(retention_days), "n": batch_rows})
+        _mark_pcn_forecasts_schema_ready()
+        n = int(res.rowcount or 0)
+        deleted += n
+        if n < batch_rows:
+            break
+    return deleted
 
 
 def upsert_pcn_comparisons(rows: list[dict]) -> int:

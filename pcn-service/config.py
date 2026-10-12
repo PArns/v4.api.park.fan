@@ -75,10 +75,15 @@ class Settings(BaseSettings):
     # target_date — see score._matched_frame. (24h caused the rolling-window overwrite
     # that degraded matured board days to their last hour.)
     PCN_SCORE_LOOKBACK_HOURS: int = 48
-    # Prune pcn_forecasts rows whose created_at is older than this (days). Scoring reads
-    # only the last ~2 days of targets and serving the last 3h, so matured origins are
-    # dead weight at ~10^7 rows/day. 14d keeps enough for ad-hoc lead-curve analysis.
-    PCN_FORECAST_RETENTION_DAYS: int = 14
+    # Prune pcn_forecasts rows whose created_at is older than this (days). The oldest
+    # row any reader needs is the scorer's: targets from yesterday 00:00 park-local
+    # (full_day_window with the 48h lookback), forecast up to PCN_HORIZON (12h) before
+    # that — at most ~60h back. Serving and the deviation check read 3h, the admin
+    # ML overview 2 days. 4 days covers the scorer with a day and a half to spare and
+    # is the floor the owner set (PAR-873; it was 14, "for ad-hoc lead-curve analysis",
+    # at 28 GB). An ad-hoc export over a longer window has to run within 4 days of
+    # its targets now — see docs/ml/pcn-intraday-review.md §9.
+    PCN_FORECAST_RETENTION_DAYS: int = 4
     # Graph WaveNet temporal depth: receptive field = 1 + sum(2^i) over layers (kernel 2)
     # → 2 layers = 4 slots (1h!), 6 = 64 slots (16h), 8 = 256 slots (64h > L). Flipped
     # 2→8 on 2026-07-02 after the bake-off (8 busy parks, input-size=192, quantile): gwn@8
