@@ -37,6 +37,26 @@ The application relies heavily on background processing for data consistency and
 | `LiveCacheWarmupProcessor` (`live-cache-warmup`) | Pre-fills the park/attraction/occupancy Redis caches after each wait-times sync. Enqueued by `WaitTimesProcessor`, not a cron; kept out of the `wait-times` job so the warmup never delays the next fetch (PAR-822). |
 | `EntityMappingsProcessor` | Maps external IDs (e.g., from different APIs) to our internal UUIDs. |
 | `GeoipUpdateProcessor` | Refreshes GeoLite2-City data every 48 hours. |
+| `DbMaintenanceProcessor` (`db-maintenance`) | Daily **04:50 UTC** (`vacuum-churn-tables`, `tz: "UTC"`, one attempt): `VACUUM (ANALYZE)` on `pcn_forecasts`, `prediction_accuracy`, `tft_forecasts`, `holidays`, one at a time on its own connection outside the pool, so autovacuum has nothing large left when the 06:00 UTC CatBoost training needs the host's memory (PAR-868). `lock_timeout` 5 s, `maintenance_work_mem` 256 MB, per-table `statement_timeout` capped to end by 05:58; skips a table already being vacuumed; starts no table at or after 05:50; never fails. Table list and measurements: `src/database/maintenance/vacuum-plan.ts`; runbook: [DB Health §5a](../troubleshooting/db-health-runbook.md). |
+
+### The 06:00–07:30 UTC training window
+
+The CatBoost training (`ml-training/train-model`, 06:00 UTC, 35–70 min, ~13 GB at
+peak) shares the host with Postgres. What else runs in that window, checked for
+PAR-868:
+
+| Job | When (UTC) | Writes / deletes | Verdict |
+| --- | --- | --- | --- |
+| `wartezeiten-schedule/fetch-opening-times` | 06:00 | Schedule rows for the Wartezeiten parks that have no Wiki schedule today (one HTTP call per park) | Light, stays |
+| `manual-metadata/audit-ride-profile-terms` | 06:30 | Reads only (one HTTP call, one query over ~700 rows) | Stays |
+| `analytics/monitor-data-quality` | 06:45 | Reads only (Bull failed sets, feed counts) | Stays |
+| `ml-training/cleanup-models`, `nf-training/score-comparison` | 07:00 | Model rows/files; the TFT-vs-CatBoost board and `catboost_daily_forecasts` snapshot | Daily, small, stays |
+| `weather/fetch-weather` (current) | 07:00 | Upserts current weather | Light, stays |
+| `forecast-archive/capture` | hourly :05 | Inserts into `forecast_archive_*` (insert-only, 546 k rows in total); the heavy daily origin build lands at Europe's 06:00, i.e. 04:05/05:05 UTC | Stays |
+| `stats/update-today-stats`, `prediction-accuracy/aggregate-stats`, `pcn-shadow/score-pcn` | hourly :00 | Upserts `park_daily_stats` / `attraction_accuracy_stats`; pcn-service prunes `pcn_forecasts` (~384 k rows, mean 0.5 s) | Stays — after the 04:50 VACUUM, `pcn_forecasts` gathers ~0.4 M dead rows an hour against an autovacuum trigger of ~24 M, so the prune cannot start a large autovacuum in the window |
+| `predictions/generate-hourly`, `pcn-shadow/forecast-pcn` | every 15 min | Replace the next hours' `wait_time_predictions` rows (deduplicated per attraction, ~1.5 k rows a call); upsert `pcn_forecasts` | Served data, stays |
+| `prediction-accuracy/compare-accuracy` | every 15 min | Updates PENDING → COMPLETED/MISSED | Stays — **its retention DELETEs were removed** (PAR-868): they ran on every tick, 96 times a day, duplicating the daily `cleanup-old` at 04:00 |
+| `wait-times`, `push-notifications`, `weather-warnings` | every 5/15 min | Ingest and send | Stay |
 
 ## Failed Jobs: Retention and Monitoring
 

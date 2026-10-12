@@ -416,55 +416,6 @@ describe("PredictionAccuracyService", () => {
       expect(redisStore.get("accuracy:badge:v2:a-1:30d")).toBeDefined();
     });
   });
-  describe("cleanupOldRecords — retention windows", () => {
-    const deleteBuilder = (affected: number) => {
-      const b = {
-        delete: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        execute: jest.fn().mockResolvedValue({ affected }),
-      };
-      return b;
-    };
-
-    it("deletes MISSED/PENDING after 7 days and COMPLETED after 90 days", async () => {
-      const missed = deleteBuilder(3);
-      const completed = deleteBuilder(2);
-      accuracyRepo.createQueryBuilder
-        .mockReturnValueOnce(missed as never)
-        .mockReturnValueOnce(completed as never);
-      const now = Date.now();
-
-      await service.cleanupOldRecords();
-
-      const day = 24 * 60 * 60 * 1000;
-      const [, missedParams] = missed.where.mock.calls[0];
-      const [, completedParams] = completed.where.mock.calls[0];
-      expect(
-        Math.abs(now - missedParams.sevenDaysAgo.getTime() - 7 * day),
-      ).toBeLessThan(5000);
-      expect(
-        Math.abs(now - completedParams.ninetyDaysAgo.getTime() - 90 * day),
-      ).toBeLessThan(5000);
-      expect(missed.andWhere).toHaveBeenCalledWith(
-        "comparisonStatus IN (:...statuses)",
-        { statuses: ["MISSED", "PENDING"] },
-      );
-      expect(completed.andWhere).toHaveBeenCalledWith(
-        "comparisonStatus = :status",
-        { status: "COMPLETED" },
-      );
-    });
-
-    it("swallows a database error instead of failing the comparison job", async () => {
-      const failing = deleteBuilder(0);
-      failing.execute.mockRejectedValue(new Error("db down"));
-      accuracyRepo.createQueryBuilder.mockReturnValueOnce(failing as never);
-
-      await expect(service.cleanupOldRecords()).resolves.toBeUndefined();
-    });
-  });
-
   describe("compareWithActuals — matching predictions to queue data", () => {
     const MIN = 60 * 1000;
     const target = (minutesAgo: number) =>
@@ -490,20 +441,11 @@ describe("PredictionAccuracyService", () => {
       waitTime: number | null,
     ) => ({ attractionId, timestamp: at, status, waitTime });
 
-    /** Stubs the pending batch, the delete queries and the queue_data fetch. */
+    /** Stubs the pending batch and the queue_data fetch. */
     const arrange = (
       predictions: Array<ReturnType<typeof pending>>,
       records: Array<ReturnType<typeof actual>>,
     ) => {
-      const del = {
-        delete: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        execute: jest.fn().mockResolvedValue({ affected: 0 }),
-      };
-      accuracyRepo.createQueryBuilder
-        .mockReturnValueOnce(del as never)
-        .mockReturnValueOnce(del as never);
       accuracyRepo.find.mockResolvedValueOnce(predictions);
       queueDataRepo.createQueryBuilder.mockReturnValueOnce({
         select: jest.fn().mockReturnThis(),
@@ -518,15 +460,6 @@ describe("PredictionAccuracyService", () => {
       JSON.parse(redisStore.get("ml:last-accuracy-check") ?? "{}");
 
     it("returns 0 and writes the check marker when nothing is ready", async () => {
-      const del = {
-        delete: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        execute: jest.fn().mockResolvedValue({ affected: 0 }),
-      };
-      accuracyRepo.createQueryBuilder
-        .mockReturnValueOnce(del as never)
-        .mockReturnValueOnce(del as never);
       accuracyRepo.find.mockResolvedValueOnce([]);
 
       const res = await service.compareWithActuals();
@@ -534,6 +467,14 @@ describe("PredictionAccuracyService", () => {
       expect(res).toEqual({ newComparisons: 0 });
       expect(accuracyRepo.query).not.toHaveBeenCalled();
       expect(lastCheck().newComparisonsAdded).toBe(0);
+    });
+
+    it("issues no retention DELETE — that is the daily cleanup-old job's (PAR-868)", async () => {
+      accuracyRepo.find.mockResolvedValueOnce([]);
+
+      await service.compareWithActuals();
+
+      expect(accuracyRepo.createQueryBuilder).not.toHaveBeenCalled();
     });
 
     it("computes absolute and percentage error from an operating match", async () => {

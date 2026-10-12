@@ -45,6 +45,8 @@ import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
 import { NfForecastProcessor } from "./processors/nf-forecast.processor";
 import { PcnShadowProcessor } from "./processors/pcn-shadow.processor";
 import { ShapeShadowProcessor } from "./processors/shape-shadow.processor";
+import { DbMaintenanceProcessor } from "./processors/db-maintenance.processor";
+import { DbVacuumService } from "../database/maintenance/db-vacuum.service";
 import { GeoipModule } from "../geoip/geoip.module";
 import { ParksModule } from "../parks/parks.module";
 import { DestinationsModule } from "../destinations/destinations.module";
@@ -200,6 +202,8 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     NfForecastProcessor, // TFT train+forecast + TFT-vs-CatBoost scoreboard
     PcnShadowProcessor, // PCN intraday shadow: train + forecast + score
     ShapeShadowProcessor, // Shape day-curve shadow: build + forecast + score
+    DbMaintenanceProcessor, // Nightly VACUUM before the 06:00 training (PAR-868)
+    DbVacuumService,
   ],
   exports: [BullModule], // Export for use in other modules
 })

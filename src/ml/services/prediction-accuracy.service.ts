@@ -372,48 +372,6 @@ export class PredictionAccuracyService {
   }
 
   /**
-   * Cleanup old accuracy records
-   * Retention Policy:
-   * - MISSED/PENDING: 7 days (short term for debugging)
-   * - COMPLETED: 90 days (long term for trending/stats)
-   */
-  async cleanupOldRecords(): Promise<void> {
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-
-    try {
-      // 1. Delete MISSED and stuck PENDING older than 7 days
-      const resultMissed = await this.accuracyRepository
-        .createQueryBuilder()
-        .delete()
-        .where("targetTime < :sevenDaysAgo", { sevenDaysAgo })
-        .andWhere("comparisonStatus IN (:...statuses)", {
-          statuses: ["MISSED", "PENDING"],
-        })
-        .execute();
-
-      // 2. Delete COMPLETED older than 90 days
-      const resultCompleted = await this.accuracyRepository
-        .createQueryBuilder()
-        .delete()
-        .where("targetTime < :ninetyDaysAgo", { ninetyDaysAgo })
-        .andWhere("comparisonStatus = :status", { status: "COMPLETED" })
-        .execute();
-
-      const deletedMissed = resultMissed.affected || 0;
-      const deletedCompleted = resultCompleted.affected || 0;
-
-      if (deletedMissed > 0 || deletedCompleted > 0) {
-        this.logger.log(
-          `🧹 Cleanup: Deleted ${deletedMissed} MISSED/PENDING (>7d) and ${deletedCompleted} COMPLETED (>90d) records`,
-        );
-      }
-    } catch (error) {
-      this.logger.warn(`Failed to cleanup old records: ${error}`);
-    }
-  }
-
-  /**
    * Compare predictions with actual wait times
    * Optimized with batch processing and smart retries
    *
@@ -426,8 +384,12 @@ export class PredictionAccuracyService {
     const startTime = Date.now();
     this.logger.log("🔄 Comparing predictions with actual wait times...");
 
-    // Run cleanup first
-    await this.cleanupOldRecords();
+    // No retention DELETE here (PAR-868). This tick runs every 15 minutes, so a
+    // cleanup inside it ran 96 times a day — including inside the 06:00 CatBoost
+    // training window, where its 3.4 s DELETE at 06:15 was the last statement
+    // before the OOM. The daily `cleanup-old` job (04:00 UTC,
+    // PredictionAccuracyProcessor) applies the same windows: MISSED/PENDING
+    // after 7 days, COMPLETED after 90.
 
     // Look back 7 days for pending predictions
     const lookbackWindow = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
