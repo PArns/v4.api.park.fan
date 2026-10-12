@@ -1471,7 +1471,17 @@ export class ParksController {
    * further down.
    */
   @Get(":continent/:country/:city/:parkSlug/plan/day")
-  @UseInterceptors(new HttpCacheInterceptor(15 * 60)) // 15 minutes
+  @UseInterceptors(
+    // 15 minutes, except a day that says a dependency failed: its "try again
+    // shortly" must not outlive the fault at the edge.
+    new HttpCacheInterceptor(
+      15 * 60,
+      undefined,
+      (body) =>
+        (body as PlanDayDto | null)?.ridesUnavailable?.reason ===
+        "data_unavailable",
+    ),
+  )
   @ApiOperation({
     summary: "Get one day's per-ride hourly plan",
     description:

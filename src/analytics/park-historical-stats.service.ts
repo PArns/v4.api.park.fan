@@ -1,4 +1,9 @@
-import { Injectable, Inject, Logger } from "@nestjs/common";
+import {
+  Injectable,
+  Inject,
+  Logger,
+  ServiceUnavailableException,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { subDays, subYears } from "date-fns";
@@ -6,6 +11,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { safeJsonParse } from "../common/utils/json.util";
+import { SingleFlight } from "../common/utils/single-flight.util";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
 import { Park } from "../parks/entities/park.entity";
@@ -97,6 +103,9 @@ interface DayValue {
 export class ParkHistoricalStatsService {
   private readonly logger = new Logger(ParkHistoricalStatsService.name);
   private readonly CACHE_TTL = 24 * 60 * 60; // 24 hours
+  /** How long a failed hourly-profile build is remembered (PAR-833). */
+  private readonly HOURLY_PROFILE_FAILURE_TTL = 90;
+  private readonly hourlyProfileFlight = new SingleFlight();
 
   constructor(
     @InjectRepository(QueueDataAggregate)
@@ -319,19 +328,59 @@ export class ParkHistoricalStatsService {
     );
     if (cached) return cached;
 
-    const result = await this.computeHourlyProfile(
-      park,
-      years,
-      topN,
-      minAttractionDays,
-    );
-    await this.redis.set(
-      cacheKey,
-      JSON.stringify(result),
-      "EX",
-      this.CACHE_TTL,
-    );
-    return result;
+    // The build is a 4-6 s query. Without these two guards a cold start or a
+    // failing query ran one copy per concurrent request (PAR-833): concurrent
+    // callers share one build, and a failure is remembered for 90 s so the
+    // next callers fail fast instead of each paying for another attempt.
+    const failureKey = `${cacheKey}:failed`;
+    return this.hourlyProfileFlight.run(cacheKey, async () => {
+      // A caller that read the cache just before the previous build wrote it
+      // arrives here after that flight has ended; read again rather than
+      // start a second build.
+      const warmed = safeJsonParse<ParkHourlyProfileDto>(
+        await this.redis.get(cacheKey),
+      );
+      if (warmed) return warmed;
+      if (await this.redis.get(failureKey)) {
+        throw new ServiceUnavailableException(
+          "Hourly profile build failed recently",
+        );
+      }
+      let result: ParkHourlyProfileDto;
+      try {
+        result = await this.computeHourlyProfile(
+          park,
+          years,
+          topN,
+          minAttractionDays,
+        );
+      } catch (err) {
+        try {
+          await this.redis.set(
+            failureKey,
+            "1",
+            "EX",
+            this.HOURLY_PROFILE_FAILURE_TTL,
+          );
+        } catch {
+          // The marker is an optimisation; the original error is the news.
+        }
+        throw err;
+      }
+      try {
+        await this.redis.set(
+          cacheKey,
+          JSON.stringify(result),
+          "EX",
+          this.CACHE_TTL,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Hourly profile cache write failed for ${park.slug}: ${(err as Error).message}`,
+        );
+      }
+      return result;
+    });
   }
 
   private async computeHourlyProfile(
