@@ -144,11 +144,13 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
               );
 
               if (response.predictions.length > 0) {
-                // OPTIMIZATION: Delete old hourly predictions for this park before storing new ones
-                await this.mlService.deduplicatePredictions(park.id, "hourly");
-
-                // Store predictions in database
-                await this.mlService.storePredictions(response.predictions);
+                // Replace the park's future hourly slots with this run's answer,
+                // writing only the slots whose value changed (PAR-874). The old
+                // delete-everything-then-insert rewrote ~25 M unchanged rows a
+                // day and bloated the chunk indexes 15–25×.
+                await this.mlService.storePredictions(response.predictions, {
+                  replaceHourlyForPark: park.id,
+                });
                 totalPredictions += response.predictions.length;
                 successParks++;
 

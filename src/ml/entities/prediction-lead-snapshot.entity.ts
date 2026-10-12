@@ -26,7 +26,7 @@ export type LeadSnapshotSource = "tft" | "catboost";
  *
  * 2. The predictions themselves do not survive to be scored later.
  *    `MLService.deduplicatePredictions` deletes every daily row with
- *    `predictedTime` in `[now, now+60d]` and `createdAt >= now-72h` before each
+ *    `predictedTime` in `[now, now+60d]` and `createdAt >= now-8d` before each
  *    nightly run. At a daily cadence a prediction for day X is deleted and
  *    rewritten on every run up to X, so when X finally arrives only the last one
  *    is left — lead time about a day. Long-lead rows that do turn up are the
