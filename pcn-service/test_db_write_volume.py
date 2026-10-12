@@ -53,20 +53,28 @@ class _Res:
 
 
 class _BacklogEngine:
-    """Each DELETE removes min(limit, remaining) rows, one transaction each."""
+    """Each DELETE removes min(limit, remaining) rows, one transaction each.
+
+    `statements` records the first word of every statement per transaction, so a
+    test can ask not just how many transactions there were but what was in them.
+    """
 
     def __init__(self, backlog):
         self.backlog = backlog
         self.transactions = 0
+        self.statements: list[list[str]] = []
 
     @contextlib.contextmanager
     def begin(self):
         self.transactions += 1
+        self.statements.append([])
         eng = self
 
         class _C:
             def execute(self, stmt, params=None):
-                if not str(stmt).strip().startswith("DELETE"):
+                text = str(stmt).strip()
+                eng.statements[-1].append(text.split(None, 1)[0].upper() if text else "")
+                if not text.startswith("DELETE"):
                     return _Res(0)
                 n = min(params["n"], eng.backlog)
                 eng.backlog -= n
@@ -75,13 +83,18 @@ class _BacklogEngine:
         yield _C()
 
 
+# Every prune opens one short transaction for the schema DDL before the batch
+# loop (see prune_pcn_forecasts), so the batch count is transactions minus one.
+DDL_TX = 1
+
+
 def test_prune_drains_a_backlog_in_bounded_batches(monkeypatch):
     eng = _BacklogEngine(backlog=1_050)
     monkeypatch.setattr(db, "engine", lambda: eng)
     monkeypatch.setattr(db, "_PCN_FORECASTS_SCHEMA_READY", True)
     assert db.prune_pcn_forecasts(4, batch_rows=100, max_batches=5) == 500
     assert eng.backlog == 550
-    assert eng.transactions == 5
+    assert eng.transactions == DDL_TX + 5
     # The next hourly run carries on, and stops at the first short batch.
     assert db.prune_pcn_forecasts(4, batch_rows=100, max_batches=50) == 550
     assert eng.backlog == 0
@@ -92,7 +105,29 @@ def test_prune_stops_after_one_short_batch(monkeypatch):
     monkeypatch.setattr(db, "engine", lambda: eng)
     monkeypatch.setattr(db, "_PCN_FORECASTS_SCHEMA_READY", True)
     assert db.prune_pcn_forecasts(4) == 0
-    assert eng.transactions == 1
+    assert eng.transactions == DDL_TX + 1
+
+
+def test_prune_never_holds_the_ddl_lock_across_a_delete(monkeypatch):
+    """The DDL and a DELETE must never share a transaction.
+
+    `CREATE INDEX IF NOT EXISTS` takes a SHARE lock on pcn_forecasts before it
+    notices the index exists, and a lock is held until commit. In the same
+    transaction as a 200k-row DELETE that blocked the 15-minute writer for the
+    length of the batch, on the first prune after every restart.
+    """
+    eng = _BacklogEngine(backlog=250)
+    monkeypatch.setattr(db, "engine", lambda: eng)
+    # NOT ready: this is the first prune in a fresh process, the only time the
+    # DDL actually runs.
+    monkeypatch.setattr(db, "_PCN_FORECASTS_SCHEMA_READY", False)
+
+    db.prune_pcn_forecasts(4, batch_rows=100, max_batches=5)
+
+    for tx in eng.statements:
+        assert not ({"CREATE"} & set(tx) and "DELETE" in tx), tx
+    # And it really did run the DDL, rather than the test passing vacuously.
+    assert any("CREATE" in tx for tx in eng.statements)
 
 
 # --- the SQL itself, against Postgres -------------------------------------------

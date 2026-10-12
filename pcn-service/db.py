@@ -353,6 +353,17 @@ def write_pcn_forecasts(rows: list[dict], version: str) -> int:
 PRUNE_BATCH_ROWS = 200_000
 PRUNE_MAX_BATCHES = 50
 
+# The outer DELETE carries no predicate of its own: the inner SELECT already
+# picked the expired rows, and re-stating `created_at <` outside turns the plan
+# from a TID scan into an index scan with a `ctid = ANY(...)` filter over every
+# expired row, per batch.
+#
+# THIS IS ONLY CORRECT WHILE pcn_forecasts IS A PLAIN TABLE. A ctid is unique
+# per table, not per partition: as a hypertable the same ctid exists in every
+# chunk, and the outer DELETE would match rows in chunks the SELECT never looked
+# at. `docs/ml/pcn-intraday-review.md` floats "hypertable + add_retention_policy"
+# as a future option for this table — taking it means rewriting this statement
+# (and then the policy replaces it anyway).
 _PRUNE_PCN_FORECASTS = text(
     """
     DELETE FROM pcn_forecasts
@@ -374,13 +385,21 @@ def prune_pcn_forecasts(
     row's origin was forecast, or re-forecast with a changed value). Each batch is
     its own transaction; stops at the first short batch or after `max_batches`.
     Called from the hourly score job. Returns deleted row count."""
+    # The DDL gets its own transaction, ahead of the loop. Inside a batch it was
+    # the first statement of a transaction that then deleted 200 k rows, and
+    # `CREATE INDEX IF NOT EXISTS` takes a SHARE lock on the table before it
+    # notices the index is already there — held to commit, so the 15-minute
+    # writer blocked behind it on the first prune after every restart. That is
+    # the PAR-868 shape of failure, and it costs one short transaction to avoid.
+    with engine().begin() as c:
+        _ensure_pcn_forecasts_schema(c)
+    _mark_pcn_forecasts_schema_ready()
+
     deleted = 0
     for _ in range(max_batches):
         with engine().begin() as c:
-            _ensure_pcn_forecasts_schema(c)
             res = c.execute(
                 _PRUNE_PCN_FORECASTS, {"d": str(retention_days), "n": batch_rows})
-        _mark_pcn_forecasts_schema_ready()
         n = int(res.rowcount or 0)
         deleted += n
         if n < batch_rows:
