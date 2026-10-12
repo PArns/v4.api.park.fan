@@ -54,40 +54,54 @@ import {
 
 /**
  * How far back {@link MLService.deduplicatePredictions} looks for the rows its
- * run supersedes. 72h, down from the 13 days it was until 2026-10-12.
+ * run supersedes, per prediction type. Down from the flat 13 days it was until
+ * 2026-10-12.
  *
  * The DELETE needs a `createdAt` predicate at all because `createdAt` is the
  * hypertable's partition key — see the comment at the call site for the
  * decompression failure that put it there. The question is only how wide it has
  * to be, and 13 days was never derived from anything.
  *
- * WHY 72h IS ENOUGH. An hourly run writes slots `[T, T+48h]` from its own
- * `createdAt = T` (HOURLY_PREDICTIONS = 48). For such a row to still hold a
- * slot this run wants to overwrite — a `predictedTime >= now` — it needs
- * `T + 48h >= now`, so nothing created before `now - 48h` can hold one. There
- * is simply nothing to delete out there. The remaining 24h is slack: for a late
- * run, and for clock skew between this process and Postgres. Daily rows are
- * rewritten nightly, so 72h covers two missed nights as well.
+ * WHY 72h IS ENOUGH FOR HOURLY. A run writes slots `[T, T+48h]` from its own
+ * `createdAt = T` (HOURLY_PREDICTIONS = 48; `createdAt` is stamped at insert,
+ * after the model call, so it is never earlier than the slot base). For a row to
+ * still hold a slot this run wants to overwrite — a `predictedTime >= now` — it
+ * needs `T + 48h >= now`, so nothing created before `now - 48h` can hold one:
+ * there is nothing to delete out there. Being missed by the window and still
+ * holding a future slot requires the horizon to exceed the window, which at 48h
+ * against 72h is unsatisfiable however late or queued a run is. The extra 24h is
+ * slack for clock skew between this process and Postgres.
  *
- * WHY IT MUST STAY WELL BELOW `compress_after`. The policy on this hypertable
- * (job 1006) compresses at 14 days today. A DELETE that reaches into a
- * compressed chunk is the failure the call site describes, so this window has
- * to keep a margin of days, not hours, below whatever `compress_after` is. The
- * audit's follow-up proposal of `compress_after = 4 days` would leave one day
- * of margin over this 72h and is NOT applied yet (PAR-874).
+ * WHY DAILY GETS MORE. The daily run is skipped for a park that is not
+ * operating and had no ride activity in 24h, so an off-season or weekend-only
+ * park can go 4-5 days between runs — longer than 72h, which would leave the
+ * previous cohort's rows for targets inside `[now, now+60d]` undeleted. 8 days
+ * covers that gap, costs one wider DELETE per night rather than one per 15
+ * minutes, and is still 6 days clear of the compression policy. It does not
+ * cover a park skipped for weeks; nothing short of the horizon would, the rows
+ * are not servable (see below), and the 90-day chunk drop is the backstop.
+ *
+ * WHY BOTH MUST STAY WELL BELOW `compress_after`. The policy on this hypertable
+ * is 14 days (`HYPERTABLES`, job 1006 in production). A DELETE that reaches into
+ * a compressed chunk is the failure the call site describes, so these windows
+ * have to keep a margin of days below it — the spec asserts that against the
+ * configured value rather than against a literal.
  *
  * WHAT THE NARROWING BUYS. 13 days spans three of the 7-day chunks, 72h spans
  * one or two, so each of the ~96 hourly runs a day touches less than half the
  * chunk indexes it used to (DB audit 2026-10-12, finding 4a / recommendation 3a).
  *
- * WHAT IT GIVES UP. A row older than this that still holds a future target is
- * no longer deleted. Nothing serves it: `getStoredPredictions` and
+ * WHAT IT GIVES UP. A row older than its window that still holds a future target
+ * is no longer deleted. Nothing serves it: `getStoredPredictions` and
  * `getBatchStoredPredictions` require `createdAt >= now-30min` for hourly and
- * `>= now-26h` for daily, and the nightly `cleanup-old` job still removes it.
- * In steady state there are none anyway — the run on the following night
- * deleted them while they were younger than this window.
+ * `>= now-26h` for daily, so everything servable is inside these windows by a
+ * wide margin and the narrowing cannot leave a duplicate that any reader sees.
+ * The nightly `cleanup-old` job and the 90-day chunk drop still remove them.
  */
-export const DEDUPE_CREATED_AFTER_HOURS = 72;
+export const DEDUPE_CREATED_AFTER_HOURS: Record<"hourly" | "daily", number> = {
+  hourly: 72,
+  daily: 8 * 24,
+};
 
 @Injectable()
 export class MLService {
@@ -2205,7 +2219,8 @@ export class MLService {
     // than the window are superseded duplicates; readers pick the freshest
     // createdAt and the nightly cleanup-old job removes them.
     const createdAfter = new Date(
-      now.getTime() - DEDUPE_CREATED_AFTER_HOURS * 60 * 60 * 1000,
+      now.getTime() -
+        DEDUPE_CREATED_AFTER_HOURS[predictionType] * 60 * 60 * 1000,
     );
 
     const result = await this.predictionRepository

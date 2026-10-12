@@ -14,6 +14,7 @@ import { AnalyticsService } from "../analytics/analytics.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { HYPERTABLES } from "../database/hypertables";
 
 /**
  * The `createdAt` window of the pre-generation dedupe DELETE.
@@ -25,8 +26,9 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
  * failures are silent, which is why it is pinned here:
  *
  * - too NARROW and a superseded row that still holds a future slot survives
- *   next to the fresh one (at 48h exactly, a run one minute late would start
- *   leaving its predecessor's last slot behind);
+ *   next to the fresh one — which needs the window to fall below the horizon
+ *   that produced the row (48h for hourly), or below the gap between two runs
+ *   (the daily run skips parks that are closed and quiet);
  * - too WIDE and every run reaches across more chunks than it can find
  *   anything in — the 13 days it was until 2026-10-12 spanned three of the
  *   7-day chunks — and eventually into a compressed one, which is the
@@ -100,6 +102,21 @@ describe("MLService — dedupe createdAt window", () => {
     expect(params.createdAfter).toBeInstanceOf(Date);
   });
 
+  it("still scopes the delete to this park and type and to future targets", async () => {
+    await service.deduplicatePredictions("park-1", "hourly");
+
+    // Without these the DELETE would reach other parks' rows, the other
+    // prediction type, or already-past targets — a far worse failure than any
+    // width mistake, and the window tests alone would not notice.
+    const clauses = sql.join(" | ");
+    expect(clauses).toContain("attractionId IN");
+    expect(clauses).toContain("predictionType = :predictionType");
+    expect(clauses).toContain("predictedTime >= :startTime");
+    expect(clauses).toContain("predictedTime <= :endTime");
+    expect(params.attractionIds).toEqual(["a-1", "a-2"]);
+    expect(params.predictionType).toBe("hourly");
+  });
+
   it("covers the full 48h generation horizon, with slack", async () => {
     const before = Date.now();
     await service.deduplicatePredictions("park-1", "hourly");
@@ -110,30 +127,33 @@ describe("MLService — dedupe createdAt window", () => {
 
     // An hourly row created at T holds targets up to T+48h, so anything
     // created before now-48h cannot hold a future slot. Covering exactly 48h
-    // would leave no room for a late run or clock skew.
+    // would leave no slack for clock skew between this process and Postgres.
     expect(ageMs).toBeGreaterThan(48 * HOUR);
     expect(createdAfter.getTime()).toBeLessThanOrEqual(
-      before - DEDUPE_CREATED_AFTER_HOURS * HOUR,
+      before - DEDUPE_CREATED_AFTER_HOURS.hourly * HOUR,
     );
     expect(createdAfter.getTime()).toBeGreaterThan(
-      before - DEDUPE_CREATED_AFTER_HOURS * HOUR - 60_000,
+      before - DEDUPE_CREATED_AFTER_HOURS.hourly * HOUR - 60_000,
     );
   });
 
-  it("stays days below the 14-day compression policy", async () => {
-    await service.deduplicatePredictions("park-1", "daily");
+  it("keeps both windows days below the configured compression policy", () => {
+    const spec = HYPERTABLES.find((h) => h.table === "wait_time_predictions");
+    expect(spec).toBeDefined();
+    const compressAfterHours = spec!.compressAfterDays * 24;
 
-    const createdAfter = params.createdAfter as Date;
-    const ageHours = (Date.now() - createdAfter.getTime()) / HOUR;
-
-    // job 1006 compresses this hypertable at 14 days. A DELETE that reaches a
-    // compressed chunk is the original failure; keep whole days of margin.
-    // The audit's follow-up proposal is compress_after = 4 days, which this
-    // window must still clear — hence the 96h bound rather than 14 × 24.
-    expect(ageHours).toBeLessThanOrEqual(96 - 24);
+    // A DELETE that reaches a compressed chunk is the original failure this
+    // predicate exists to prevent. Asserted against the configured policy, not
+    // against today's 14 days: lowering `compressAfterDays` (the audit proposes
+    // 4) has to fail here rather than in production.
+    for (const type of ["hourly", "daily"] as const) {
+      expect(DEDUPE_CREATED_AFTER_HOURS[type]).toBeLessThanOrEqual(
+        compressAfterHours - 24,
+      );
+    }
   });
 
-  it("uses the same window for both prediction types", async () => {
+  it("gives daily a wider window than hourly", async () => {
     await service.deduplicatePredictions("park-1", "hourly");
     const hourly = params.createdAfter as Date;
 
@@ -141,9 +161,11 @@ describe("MLService — dedupe createdAt window", () => {
     await service.deduplicatePredictions("park-1", "daily");
     const daily = params.createdAfter as Date;
 
-    // Daily rows are rewritten nightly, so the hourly-derived window covers
-    // them with two missed nights to spare. One number, one derivation.
-    expect(Math.abs(daily.getTime() - hourly.getTime())).toBeLessThan(60_000);
+    // The daily run is skipped for parks that are not operating and had no ride
+    // activity, so an off-season park can go 4-5 days between runs — past the
+    // hourly window, which would then leave the previous cohort undeleted.
+    expect(daily.getTime()).toBeLessThan(hourly.getTime());
+    expect(DEDUPE_CREATED_AFTER_HOURS.daily).toBeGreaterThanOrEqual(5 * 24);
   });
 
   it("deletes nothing when the park has no attractions", async () => {
