@@ -65,6 +65,8 @@ QUESTIONS = [
     ("d3reg", "D3", "best-time regret (min)", SLOT_LEADS, "D3 best visit time — regret (min)", False),
 ]
 INDIRECT_CANDIDATES = ["clim", "wt_med"]
+#: label -> metric, so a generated sentence can name the unit without being told
+METRIC_OF_LABEL = {q[4]: q[2] for q in QUESTIONS}
 
 
 def sample_census(run: pathlib.Path, win_from: str | None, win_to: str | None) -> list[str]:
@@ -313,6 +315,7 @@ def family_verdict(passes: dict, tide: list[str], chronos: list[str], q: tuple, 
 def beats_all_incumbents(rec: dict, model: str, incumbents: list[str], both: bool = True) -> tuple[bool, list[str]]:
     missing = []
     ok = True
+    scored_any = False
     for inc in incumbents:
         tags = ("full", "win") if both else ("full",)
         vs = [rec["inc"].get((model, inc, t)) for t in tags]
@@ -320,9 +323,17 @@ def beats_all_incumbents(rec: dict, model: str, incumbents: list[str], both: boo
         if not vs:
             missing.append(f"{inc}: not scored")
             continue
+        scored_any = True
         if not all(v.verdict == "better" for v in vs):
             ok = False
             missing.append(f"{inc}: " + "/".join(v.verdict for v in vs))
+    if not scored_any:
+        # A model with no comparison at all at this lead cannot "clear the incumbents":
+        # the conjunction above is then EMPTY, and an empty conjunction is vacuously
+        # true. That awarded UC1 m015 to `chronos2_grid`, which produces no intraday
+        # forecast at all — it and the `*_x_h5` compositions exist only on the slot
+        # table. Not evaluable is not the same as passing.
+        return False, [f"not scored at this lead ({', '.join(incumbents)} all absent)"]
     return ok, missing
 
 DE = {
@@ -347,14 +358,19 @@ def decide(rec: dict, tide: list[str], chronos: list[str], incumbents: list[str]
             cs = [x for x in cs if x is not None and x.row is not None]
             if len(cs) != len(tags):
                 continue
+            won = {x.verdict for x in cs}
+            if won not in ({"better"}, {"worse"}) or cs[0].diff is None:
+                # a row can exist without a difference (`not tested`, `missing`); it is
+                # not a win either way, and it has no margin to rank
+                continue
             # `advantage` is the margin in the direction of the winner, so the champion is
             # the strongest variant and not merely the first one. `diff` is `t - c` and its
             # good direction depends on the metric (`lower`), which is why the sign is taken
             # from the cell rather than assumed.
             adv = -cs[0].diff if cs[0].lower else cs[0].diff
-            if all(x.verdict == "better" for x in cs):
+            if won == {"better"}:
                 t_wins.append((t, c, adv))
-            elif all(x.verdict == "worse" for x in cs):
+            else:
                 c_wins.append((c, t, -adv))
     if t_wins and not c_wins:
         h2h = "TiDE"
@@ -674,8 +690,9 @@ def main() -> int:
     w("Dieselben Urteile wie Abschnitt 4, nur je Frage und Segment zu Vorlauf-Baendern")
     w("zusammengefasst; `strict`, also beide Report-Paesse. Dahinter der **groesste")
     w("gesicherte** Abstand des Duells in dieser Frage: Gewinner, Verlierer, Vorlauf und")
-    w("der gepaarte Margin mit Park-Cluster-CI (Vollperiode, in der Richtung des Metrums —")
-    w("bei MAE ist negativ besser).")
+    w("der gepaarte Margin mit Park-Cluster-CI (Vollperiode). Der Margin steht als")
+    w("**Vorsprung des Gewinners**, also immer positiv — nicht als vorzeichenbehaftete")
+    w("Differenz wie in Abschnitt 1, damit die Zahl dem Namen davor nicht widerspricht.")
     w("")
     by_qs: dict = {}
     for label, lead, seg, strict_v, loose_v, lown, best, leads, direct in de_rows:
@@ -686,20 +703,26 @@ def main() -> int:
         if best is None:
             continue
         win, lose, cell = best
-        adv = (-cell.diff if cell.lower else cell.diff)
-        if win not in tide:
-            adv = -adv
-        if e["best"] is None or adv > e["best"][0]:
-            e["best"] = (adv, win, lose, lead, cell)
+        # Restate the margin as the WINNER's advantage, so the printed sign cannot
+        # disagree with the name in front of it. `cell.diff` is always `tide - chronos`
+        # and its good direction depends on the metric, so both have to be folded in;
+        # the CI endpoints swap whenever the triple is negated.
+        tri = (cell.lo, cell.diff, cell.hi)
+        if (win in tide) == cell.lower:
+            tri = (-cell.hi, -cell.diff, -cell.lo)
+        if e["best"] is None or tri[1] > e["best"][0][1]:
+            e["best"] = (tri, win, lose, lead, cell)
     for (label, seg), e in by_qs.items():
         bands = "; ".join(f"{v} {collapse(ls, e['leads'])}" for v, ls in e["bands"].items())
         seg_de = "alle Fahrgeschaefte" if seg == "all" else "volle Fahrgeschaefte"
         line = f"* **{DE.get(label, label)}**, {seg_de}: {bands}."
         if e["best"] is not None:
-            _adv, win, lose, lead, cell = e["best"]
-            line += (f" Groesster gesicherter Abstand: `{win}` gegen `{lose}` bei {lead}, "
-                     f"{cell.diff:+.3f} [{cell.lo:+.3f}, {cell.hi:+.3f}]"
-                     f" (n={cell.n:,}, {cell.units} Park-Cluster).")
+            tri, win, lose, lead, cell = e["best"]
+            unit = "" if "hit rate" in METRIC_OF_LABEL.get(label, "") else " min"
+            line += (f" Groesster gesicherter Abstand: `{win}` ist bei {lead} um "
+                     f"{tri[1]:.3f}{unit} besser als `{lose}` "
+                     f"[{tri[0]:.3f}, {tri[2]:.3f}] "
+                     f"(n={cell.n:,}, {cell.units} Park-Cluster).")
         elif e["direct"]:
             line += " Kein Vorlauf trennt die beiden in beiden Paessen."
         else:

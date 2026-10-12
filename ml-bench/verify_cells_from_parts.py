@@ -41,14 +41,23 @@ TABLE_OF = {
 }
 
 
-def load_parts(run: Path, table: str, cols: list[str]) -> pd.DataFrame:
+def load_parts(run: Path, table: str, keys: list[str]) -> pd.DataFrame:
+    """Every per-origin part of one table, with the group keys and all paired-sum
+    columns. The parts do NOT share a schema: a model absent at an origin has no
+    columns there at all (`lvlh5_tft` has none on the February origins, because
+    production stored no TFT level yet), so each file is read against its OWN schema
+    and the frames are aligned on concat. Asking one file for another's column raises
+    instead of returning NaN, which is how the first version of this script died."""
+    import pyarrow.parquet as pq
+
     files = sorted(glob.glob(str(run / "parts" / table / "*.parquet")))
     if not files:
         raise SystemExit(f"no parts under {run}/parts/{table}")
     frames = []
     for fp in files:
-        df = pd.read_parquet(fp, columns=cols)
-        frames.append(df)
+        have = list(pq.ParquetFile(fp).schema_arrow.names)
+        want = [c for c in have if c.startswith(("pn__", "psm__", "psr__")) or c in keys]
+        frames.append(pd.read_parquet(fp, columns=want))
     return pd.concat(frames, ignore_index=True)
 
 
@@ -100,11 +109,7 @@ def main() -> int:
                         f"psm__{r['model']}__{r['comparator']}",
                         f"psr__{r['model']}__{r['comparator']}")
         if table not in cache:
-            probe = pd.read_parquet(sorted(glob.glob(str(run / "parts" / table / "*.parquet")))[0])
-            keep = [c for c in probe.columns
-                    if c.startswith(("pn__", "psm__", "psr__"))
-                    or c in ("park_id", "date", "busy", keycol)]
-            cache[table] = load_parts(run, table, keep)
+            cache[table] = load_parts(run, table, ["park_id", "date", "busy", keycol])
         df = cache[table]
         if pn not in df.columns:
             bad.append((dict(r), "paired columns missing in parts"))
