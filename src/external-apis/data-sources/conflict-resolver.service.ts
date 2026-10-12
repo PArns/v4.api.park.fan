@@ -339,30 +339,6 @@ export class ConflictResolverService {
   }
 
   /**
-   * Simple Dice's Coefficient similarity for strings
-   */
-  private calculateStringSimilarity(str1: string, str2: string): number {
-    const s1 = str1.replace(/\s+/g, "");
-    const s2 = str2.replace(/\s+/g, "");
-    if (s1 === s2) return 1.0;
-    if (s1.length < 2 || s2.length < 2) return 0.0;
-
-    const bigrams1 = new Set();
-    for (let i = 0; i < s1.length - 1; i++)
-      bigrams1.add(s1.substring(i, i + 2));
-    const bigrams2 = new Set();
-    for (let i = 0; i < s2.length - 1; i++)
-      bigrams2.add(s2.substring(i, i + 2));
-
-    let intersect = 0;
-    for (const b of bigrams1) {
-      if (bigrams2.has(b)) intersect++;
-    }
-
-    return (2.0 * intersect) / (bigrams1.size + bigrams2.size);
-  }
-
-  /**
    * Calculate wait time from multiple sources using consensus-based approach
    *
    * Strategy:
