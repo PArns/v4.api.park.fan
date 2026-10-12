@@ -50,7 +50,7 @@ export class DataQualityProcessor {
     const [clusters, silentParks, failing, unreviewed] = await Promise.all([
       guard("Silenced-cluster", this.monitor.findSilencedClusters()),
       guard("Scheduled-but-silent", this.monitor.findScheduledButSilentParks()),
-      guard("Failing-job", this.monitor.findFailingJobs()),
+      guard("Failing-job", this.monitor.findFailingJobsSinceLastSweep()),
       guard(
         "Absence-retired-unreviewed",
         this.monitor.findAbsenceRetiredUnreviewed(),

@@ -4,10 +4,8 @@ import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { exec } from "child_process";
 import { promisify } from "util";
-import * as fs from "fs/promises";
-import * as path from "path";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Not, Repository } from "typeorm";
 import { MLModel } from "../../ml/entities/ml-model.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { MLFeatureDriftService } from "../../ml/services/ml-feature-drift.service";
@@ -15,6 +13,38 @@ import axios from "axios";
 import { logJobFailure } from "../../common/utils/file-logger.util";
 
 const _execAsync = promisify(exec);
+
+/** One saved version on the ml-service's models volume (`GET /models/files`). */
+export interface SavedModelFiles {
+  version: string;
+  files?: string[];
+  bytes?: number;
+  /** Newest file mtime, epoch SECONDS. */
+  mtime: number;
+}
+
+/**
+ * Versions whose files can go: no `ml_models` row, not protected (sentinel,
+ * loaded, in training — as the ml-service reports them), and untouched for at
+ * least `minAgeMs`, so a run that is still training or not yet registered is
+ * never caught.
+ */
+export function selectOrphanVersions(
+  onDisk: SavedModelFiles[],
+  registeredVersions: Iterable<string>,
+  protectedVersions: Iterable<string>,
+  nowMs: number,
+  minAgeMs: number,
+): SavedModelFiles[] {
+  const keep = new Set<string>([...registeredVersions, ...protectedVersions]);
+  return onDisk.filter(
+    (v) =>
+      typeof v.version === "string" &&
+      !keep.has(v.version) &&
+      typeof v.mtime === "number" &&
+      nowMs - v.mtime * 1000 >= minAgeMs,
+  );
+}
 
 /**
  * ML Training Queue Processor
@@ -52,18 +82,23 @@ export class MLTrainingProcessor {
       const mlServiceUrl = getMlServiceUrl();
       this.logger.log(`Triggering training via ${mlServiceUrl}/train`);
 
+      // Configurable timeout via ML_TRAINING_TIMEOUT_MINUTES. Default 90: a
+      // run took 2520 s on 2026-10-07 against the old 45-minute (2700 s) limit.
+      const timeoutMinutes = parseInt(
+        process.env.ML_TRAINING_TIMEOUT_MINUTES || "90",
+        10,
+      );
+
+      // The ml-service skips the optional refit when it would not finish
+      // inside this budget (PAR-815), instead of running into our timeout.
       const response = await axios.post(`${mlServiceUrl}/train`, {
         version,
+        timeBudgetSeconds: timeoutMinutes * 60,
       });
 
       this.logger.log("Training started:", response.data);
 
       // Poll for training completion
-      // Configurable timeout via ML_TRAINING_TIMEOUT_MINUTES (default: 45 minutes)
-      const timeoutMinutes = parseInt(
-        process.env.ML_TRAINING_TIMEOUT_MINUTES || "45",
-        10,
-      );
       const pollIntervalSeconds = 30; // Check every 30 seconds
       const maxAttempts = (timeoutMinutes * 60) / pollIntervalSeconds; // Convert to attempts
 
@@ -93,29 +128,20 @@ export class MLTrainingProcessor {
         } else if (status.status === "failed") {
           throw new Error(`Training failed: ${status.error}`);
         } else if (status.status === "idle" && attempts >= 2) {
-          // "idle" can mean training already finished before our first poll.
-          // Check if the model/info endpoint reports a version matching ours.
+          // "idle" can mean training already finished before our first poll
+          // and the status file was reset. The version's own saved files are
+          // the proof it completed (/model/info would only name the model the
+          // workers serve, which training no longer changes).
           try {
-            const infoRes = await axios.get(`${mlServiceUrl}/model/info`);
-            const activeVersion = infoRes.data?.version;
-            if (activeVersion === version) {
-              isTraining = false;
-              this.logger.log(
-                `✅ Training already completed (detected via model/info: ${activeVersion})`,
-              );
-            } else if (
-              activeVersion &&
-              activeVersion > version &&
-              attempts >= 5
-            ) {
-              // A newer version is active — our training superseded by another run
-              isTraining = false;
-              this.logger.log(
-                `ℹ️  Newer model active (${activeVersion}), stopping poll`,
-              );
-            }
+            await axios.get(
+              `${mlServiceUrl}/model/info/${encodeURIComponent(version)}`,
+            );
+            isTraining = false;
+            this.logger.log(
+              `✅ Training already completed (saved files for ${version} found)`,
+            );
           } catch {
-            // model/info not reachable, keep polling
+            // not saved (yet) or not reachable — keep polling
           }
         }
       }
@@ -131,29 +157,19 @@ export class MLTrainingProcessor {
         (Date.now() - startTime) / 1000,
       );
 
-      // Wait for the new model to be loaded by all workers before reading metrics.
-      // The "completed" status is set before the sentinel file is written; workers
-      // reload lazily on the next request, so /model/info can still return the old
-      // version for a few seconds after training finishes.
-      let modelInfo: Record<string, unknown> = {};
-      for (let i = 0; i < 12; i++) {
-        const res = await axios.get(`${mlServiceUrl}/model/info`);
-        if (res.data?.version === version) {
-          modelInfo = res.data;
-          break;
-        }
-        this.logger.log(
-          `Waiting for workers to load ${version} (current: ${res.data?.version}), retry ${i + 1}/12...`,
+      // Metrics come from THIS version's own saved metadata, never from
+      // /model/info: that describes whatever model the answering worker has
+      // loaded, and a worker only reloads on its next /predict. When workers had
+      // not switched within the old 60 s wait, the previous model's metrics were
+      // registered under the new version and the gate compared the champion with
+      // itself (v20261006 stored v20261003's MAE 5.06; its own pkl said 4.43).
+      const modelInfo = await this.fetchTrainedModelInfo(mlServiceUrl, version);
+      if (!modelInfo) {
+        // Nothing trustworthy to register. Serving is untouched: the training
+        // subprocess never activates a version, only activateModel() below does.
+        throw new Error(
+          `No saved metrics for ${version} — not registering it as a model`,
         );
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-      }
-
-      if (!modelInfo.version) {
-        this.logger.warn(
-          `Workers did not load ${version} within 60s — using last available metrics`,
-        );
-        const fallback = await axios.get(`${mlServiceUrl}/model/info`);
-        modelInfo = fallback.data;
       }
 
       const metricsData = (modelInfo.metrics ?? {}) as Record<string, number>;
@@ -207,9 +223,9 @@ export class MLTrainingProcessor {
       // from auto-replacing a good champion. A freshly trained model has seen newer
       // data and should generally win, so we only reject large regressions — normal
       // day-to-day MAE variance (a few %) is expected and the newer model is kept.
-      // The ml-service writes its own sentinel on training success, so on rejection
-      // we re-load the DB-active champion below to revert that. Validation MAE is
-      // compared apples-to-apples (both from model metadata).
+      // Training never changes what is served; only activateModel() below does,
+      // after this gate. Validation MAE is compared apples-to-apples (both from
+      // the versions' own saved metadata).
       const champion = await this.mlModelRepository.findOne({
         where: { isActive: true },
       });
@@ -229,12 +245,6 @@ export class MLTrainingProcessor {
           `⛔ Challenger ${version} (MAE ${metrics.mae.toFixed(2)}) is worse than ` +
             `champion ${champion!.version} (MAE ${championMae.toFixed(2)}) × ${REGRESSION_TOLERANCE} — ` +
             `keeping champion active, registering challenger as inactive.`,
-        );
-      } else {
-        // Accepted: deactivate the previous champion(s)
-        await this.mlModelRepository.update(
-          { isActive: true },
-          { isActive: false },
         );
       }
 
@@ -278,21 +288,25 @@ export class MLTrainingProcessor {
           : `Trained on ${new Date().toISOString().split("T")[0]}`,
       });
 
-      await this.mlModelRepository.save(model);
-
-      // If rejected, the ml-service already activated the challenger via its own
-      // sentinel during training — revert it to the still-active DB champion.
-      if (rejectChallenger) {
-        try {
-          await axios.post(`${mlServiceUrl}/model/reload`);
-          this.logger.warn(
-            `   Reverted ml-service to champion ${champion!.version}`,
-          );
-        } catch (e) {
-          this.logger.error(
-            `   Failed to revert ml-service to champion: ${e instanceof Error ? e.message : String(e)}`,
+      // One transaction: retire the previous champion(s) and insert the new
+      // row together, so no reader ever sees zero or two active rows.
+      await this.mlModelRepository.manager.transaction(async (em) => {
+        if (!rejectChallenger) {
+          await em.update(
+            MLModel,
+            { isActive: true, version: Not(version) },
+            { isActive: false },
           );
         }
+        await em.save(MLModel, model);
+      });
+
+      if (!rejectChallenger) {
+        // Only now do the workers switch (PAR-815). Before, the training
+        // subprocess wrote the sentinel itself and a rejected or failed run had
+        // to be reverted afterwards — racing threadpool reloads that could flip
+        // the workers back to the unregistered version.
+        await this.activateModel(mlServiceUrl, version, champion);
       }
 
       const duration = ((Date.now() - startTime) / 1000 / 60).toFixed(2);
@@ -307,6 +321,18 @@ export class MLTrainingProcessor {
       this.logger.log(
         `   Features: ${(modelInfo.features as string[] | undefined)?.length || 0}`,
       );
+      // Per-phase durations and row counts the ml-service saved with the model
+      // (PAR-815), so a slow run shows whether fetch, features or fit grew.
+      if (modelInfo.refitSkipped) {
+        this.logger.warn(
+          `   Final refit was SKIPPED (serving the early-stopped model): ${JSON.stringify(modelInfo.refitSkipped)}`,
+        );
+      }
+      if (modelInfo.trainingTimings) {
+        this.logger.log(
+          `   Phase timings: ${JSON.stringify(modelInfo.trainingTimings)}`,
+        );
+      }
 
       // Cleanup old models (keep only active + last 2 backups)
       await this.cleanupOldModels();
@@ -332,6 +358,108 @@ export class MLTrainingProcessor {
 
       throw error;
     }
+  }
+
+  /**
+   * The saved metadata of exactly `version` (`GET /model/info/:version`), or
+   * null when the ml-service has no model file and metadata for it or reports
+   * no MAE. Retries briefly, because the request can land on a worker while the
+   * shared volume is busy; a 404 is final.
+   */
+  private async fetchTrainedModelInfo(
+    mlServiceUrl: string,
+    version: string,
+  ): Promise<Record<string, unknown> | null> {
+    const attempts = 3;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const res = await axios.get(
+          `${mlServiceUrl}/model/info/${encodeURIComponent(version)}`,
+        );
+        const info = res.data as Record<string, unknown> | undefined;
+        const mae = (info?.metrics as Record<string, unknown> | undefined)?.mae;
+        if (info?.version !== version || typeof mae !== "number" || mae <= 0) {
+          this.logger.error(
+            `ml-service returned no usable metrics for ${version} (version ${String(info?.version)}, MAE ${String(mae)})`,
+          );
+          return null;
+        }
+        return info;
+      } catch (e) {
+        const status = (e as { response?: { status?: number } })?.response
+          ?.status;
+        this.logger.warn(
+          `Reading saved metadata for ${version} failed (attempt ${i}/${attempts}): ${e instanceof Error ? e.message : String(e)}`,
+        );
+        if (status === 404 || i === attempts) return null;
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Make the ml-service serve the DB-active model, which is now `version`.
+   * `POST /model/reload` loads the DB-active version in one worker and writes
+   * the sentinel the other workers pick up on their next /predict; the boot path
+   * (`_load_active_model`) reads the same DB row. If the reload does not confirm
+   * `version`, the DB is rolled back to the previous champion, so the DB and what
+   * is served never disagree, and the job fails.
+   */
+  private async activateModel(
+    mlServiceUrl: string,
+    version: string,
+    previousChampion: MLModel | null,
+  ): Promise<void> {
+    const attempts = 3;
+    let lastError = "";
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const res = await axios.post(`${mlServiceUrl}/model/reload`);
+        if (res.data?.version === version) {
+          this.logger.log(`   Activated ${version} on the ml-service`);
+          return;
+        }
+        lastError = `reload reported version ${String(res.data?.version)}`;
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : String(e);
+      }
+      this.logger.warn(
+        `   Activating ${version} failed (attempt ${i}/${attempts}): ${lastError}`,
+      );
+      if (i < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+    }
+
+    await this.mlModelRepository.manager.transaction(async (em) => {
+      await em.update(
+        MLModel,
+        { version },
+        {
+          isActive: false,
+          notes: `Activation failed (${lastError}) ${new Date().toISOString().split("T")[0]}`,
+        },
+      );
+      if (previousChampion) {
+        await em.update(
+          MLModel,
+          { version: previousChampion.version },
+          { isActive: true },
+        );
+      }
+    });
+    // Best effort: point the sentinel back at whatever the DB now says is
+    // active, in case one of the failed attempts got as far as writing it.
+    try {
+      await axios.post(`${mlServiceUrl}/model/reload`);
+    } catch {
+      // Workers keep what they serve; boot reads the DB-active row anyway.
+    }
+    throw new Error(
+      `Could not activate ${version} on the ml-service (${lastError}) — ` +
+        `kept ${previousChampion?.version ?? "no model"} active`,
+    );
   }
 
   /**
@@ -382,8 +510,15 @@ export class MLTrainingProcessor {
    * - Always keeps the active model regardless of position
    *
    * Deletes:
-   * - Models beyond the 30-model window (both files and DB entries)
-   * - Orphaned model files without DB entries
+   * - Models beyond the 30-model window (files and DB entries)
+   * - Orphaned model files: versions on disk with no `ml_models` row, older
+   *   than ORPHAN_MIN_AGE_MS (runs that failed, timed out or were never
+   *   registered, ~60 MB each)
+   *
+   * Files are listed and deleted through the ml-service (`GET/DELETE
+   * /models/files`): the API container does not mount the models volume, so
+   * the `fs.unlink` this used to call never deleted anything (PAR-815). The
+   * ml-service refuses to delete the sentinel, loaded or in-training version.
    */
   @Process("cleanup-models")
   async handleCleanupModels(_job: Job): Promise<void> {
@@ -391,10 +526,17 @@ export class MLTrainingProcessor {
   }
 
   private readonly MODELS_TO_KEEP = 30;
+  private readonly ORPHAN_MIN_AGE_MS = 2 * 24 * 60 * 60 * 1000;
+  // Sanity caps on one orphan sweep. The first run after PAR-815 deletes 196
+  // of 226 versions (86.7%); anything beyond these looks like a broken
+  // registry rather than leftovers, so nothing is deleted.
+  private readonly ORPHAN_MAX_PER_RUN = 250;
+  private readonly ORPHAN_MAX_SHARE = 0.9;
 
   private async cleanupOldModels(): Promise<void> {
     try {
       this.logger.log("🧹 Cleaning up old models...");
+      const mlServiceUrl = getMlServiceUrl();
 
       // Get all models sorted by training date (newest first)
       const allModels = await this.mlModelRepository.find({
@@ -405,25 +547,17 @@ export class MLTrainingProcessor {
       const keepSet = new Set(
         allModels.slice(0, this.MODELS_TO_KEEP).map((m) => m.id),
       );
-      // Ensure the active model is always kept
       allModels.filter((m) => m.isActive).forEach((m) => keepSet.add(m.id));
 
-      const modelsToKeep = allModels.filter((m) => keepSet.has(m.id));
       const modelsToDelete = allModels.filter((m) => !keepSet.has(m.id));
-
-      if (modelsToDelete.length === 0) {
-        this.logger.log(
-          `   Skipping cleanup: All ${allModels.length} model(s) within retention limit (${this.MODELS_TO_KEEP})`,
-        );
-        return;
-      }
-
-      this.logger.log(
-        `   Keeping ${modelsToKeep.length} models (last ${this.MODELS_TO_KEEP}), deleting ${modelsToDelete.length}`,
-      );
-
+      const removedIds = new Set<string>();
       let deletedFiles = 0;
-      let deletedDbEntries = 0;
+
+      if (modelsToDelete.length > 0) {
+        this.logger.log(
+          `   Keeping ${allModels.length - modelsToDelete.length} models (last ${this.MODELS_TO_KEEP}), deleting ${modelsToDelete.length}`,
+        );
+      }
 
       for (const model of modelsToDelete) {
         // SECURITY: Validate version to prevent path traversal
@@ -434,66 +568,68 @@ export class MLTrainingProcessor {
           );
           continue;
         }
-
-        // Delete model file (.cbm)
-        try {
-          // SECURITY: Use path.join to prevent path traversal, validate against MODEL_DIR
-          const modelPath = path.join(
-            process.env.MODEL_DIR || "/app/models",
-            `catboost_${sanitizedVersion}.cbm`,
-          );
-          // SECURITY: Ensure path is within MODEL_DIR to prevent directory traversal
-          if (
-            !this.isPathSafe(modelPath, process.env.MODEL_DIR || "/app/models")
-          ) {
-            this.logger.warn(
-              `   ⚠ Unsafe model path detected, skipping: ${modelPath}`,
-            );
-            continue;
-          }
-          await fs.unlink(modelPath);
-          this.logger.debug(`   ✓ Deleted model file: ${sanitizedVersion}`);
-          deletedFiles++;
-        } catch (fileError) {
-          // File might not exist, that's ok
-          this.logger.debug(
-            `   ⚠ Could not delete model file ${sanitizedVersion}: ${fileError instanceof Error ? fileError.message : String(fileError)}`,
-          );
-        }
-
-        // Delete metadata file (.pkl)
-        try {
-          // SECURITY: Use path.join and validate path
-          const metadataPath = path.join(
-            process.env.MODEL_DIR || "/app/models",
-            `metadata_${sanitizedVersion}.pkl`,
-          );
-          // SECURITY: Ensure path is within MODEL_DIR
-          if (
-            !this.isPathSafe(
-              metadataPath,
-              process.env.MODEL_DIR || "/app/models",
-            )
-          ) {
-            this.logger.warn(
-              `   ⚠ Unsafe metadata path detected, skipping: ${metadataPath}`,
-            );
-            continue;
-          }
-          await fs.unlink(metadataPath);
-          this.logger.debug(`   ✓ Deleted metadata file: ${sanitizedVersion}`);
-        } catch (_metaError) {
-          // Metadata might not exist, that's ok
-        }
-
-        // Delete DB entry
+        const outcome = await this.deleteModelFiles(
+          mlServiceUrl,
+          sanitizedVersion,
+        );
+        // Keep the row when the files could not be dealt with, so the next run
+        // retries instead of leaving them behind as orphans.
+        if (outcome === "failed" || outcome === "protected") continue;
+        if (outcome === "deleted") deletedFiles++;
         await this.mlModelRepository.remove(model);
-        deletedDbEntries++;
-        this.logger.debug(`   ✓ Deleted DB entry: ${model.version}`);
+        removedIds.add(model.id);
+      }
+
+      // Orphans: files on disk whose version has no ml_models row. Versions
+      // retired above count as handled, so they are not asked for twice.
+      if (allModels.length === 0) {
+        // An empty registry is far more likely a wrong database or a failed
+        // read than a world without models — every file would look orphaned.
+        this.logger.error(
+          "❌ Orphan sweep skipped: ml_models returned 0 rows — deleting nothing",
+        );
+        return;
+      }
+      const registered = allModels.map((m) => m.version);
+      const listing = await axios.get(`${mlServiceUrl}/models/files`);
+      const onDisk = (listing.data?.versions ?? []) as SavedModelFiles[];
+      const protectedVersions = Object.values(
+        (listing.data?.protected ?? {}) as Record<string, string | null>,
+      ).filter((v): v is string => typeof v === "string");
+      const orphans = selectOrphanVersions(
+        onDisk,
+        registered,
+        protectedVersions,
+        Date.now(),
+        this.ORPHAN_MIN_AGE_MS,
+      );
+      if (
+        orphans.length > this.ORPHAN_MAX_PER_RUN ||
+        (onDisk.length > 0 &&
+          orphans.length > this.ORPHAN_MAX_SHARE * onDisk.length)
+      ) {
+        this.logger.error(
+          `❌ Orphan sweep skipped: ${orphans.length} of ${onDisk.length} versions on disk look orphaned ` +
+            `(limits: ${this.ORPHAN_MAX_PER_RUN} per run, ${this.ORPHAN_MAX_SHARE * 100}% of disk) — deleting nothing`,
+        );
+        return;
+      }
+      let deletedOrphans = 0;
+      let orphanBytes = 0;
+      for (const orphan of orphans) {
+        const version = this.sanitizeVersion(orphan.version);
+        if (!version) continue;
+        if (
+          (await this.deleteModelFiles(mlServiceUrl, version)) === "deleted"
+        ) {
+          deletedOrphans++;
+          orphanBytes += orphan.bytes ?? 0;
+        }
       }
 
       this.logger.log(
-        `✅ Cleanup complete: Deleted ${deletedFiles} model files and ${deletedDbEntries} DB entries`,
+        `✅ Cleanup complete: ${deletedFiles} retired model(s) and ${removedIds.size} DB entries removed, ` +
+          `${deletedOrphans} orphaned version(s) deleted (${(orphanBytes / 1024 / 1024).toFixed(0)} MB)`,
       );
     } catch (error) {
       const errorMessage =
@@ -503,13 +639,40 @@ export class MLTrainingProcessor {
     }
   }
 
+  /** Delete one version's files through the ml-service. */
+  private async deleteModelFiles(
+    mlServiceUrl: string,
+    version: string,
+  ): Promise<"deleted" | "missing" | "protected" | "failed"> {
+    try {
+      await axios.delete(
+        `${mlServiceUrl}/models/files/${encodeURIComponent(version)}`,
+      );
+      this.logger.debug(`   ✓ Deleted model files: ${version}`);
+      return "deleted";
+    } catch (e) {
+      const status = (e as { response?: { status?: number } })?.response
+        ?.status;
+      if (status === 404) return "missing";
+      if (status === 409) {
+        this.logger.warn(`   ⚠ ${version} is protected by the ml-service`);
+        return "protected";
+      }
+      this.logger.warn(
+        `   ⚠ Could not delete model files ${version}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return "failed";
+    }
+  }
+
   /**
    * SECURITY: Sanitize version string to prevent path traversal
    * Only allows alphanumeric, dash, underscore, and dot characters
    */
   private sanitizeVersion(version: string): string | null {
-    // Allow only safe characters: alphanumeric, dash, underscore, dot
-    if (!/^[a-zA-Z0-9._-]+$/.test(version)) {
+    // Same rule as the ml-service's _SAFE_VERSION: alphanumeric first (so no
+    // leading "." or "-"), then alphanumeric, dash, underscore, dot.
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(version)) {
       return null;
     }
     // Prevent path traversal patterns
@@ -521,20 +684,5 @@ export class MLTrainingProcessor {
       return null;
     }
     return version;
-  }
-
-  /**
-   * SECURITY: Check if file path is safe (within allowed directory)
-   * Prevents directory traversal attacks
-   */
-  private isPathSafe(filePath: string, allowedDir: string): boolean {
-    try {
-      const resolvedPath = path.resolve(filePath);
-      const resolvedDir = path.resolve(allowedDir);
-      // Check if resolved path starts with allowed directory
-      return resolvedPath.startsWith(resolvedDir);
-    } catch {
-      return false;
-    }
   }
 }

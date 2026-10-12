@@ -112,6 +112,34 @@ class Settings(BaseSettings):
 
     # Training Configuration
     TRAIN_LOOKBACK_YEARS: int = 2
+    # Row budget for the training pool (train + validation, after the 30-day
+    # chronological hold-out is split off). History starts 2025-12-24 and the
+    # window only closes at TRAIN_LOOKBACK_YEARS, so until then every day adds
+    # ~25k rows and ~13-25 s of training: 2.49M rows / 1682 s on 2026-09-04,
+    # 3.29M / 2520 s on 2026-10-07 (PAR-815). Above the budget, the newest
+    # TRAIN_FULL_RESOLUTION_DAYS of the pool stay complete — the cap runs after the
+    # 30-day hold-out is split off, so that is days 30-120 before the newest data —
+    # and OLDER rows are thinned by a
+    # uniform random sample — every month keeps its share of rows, so no season
+    # drops out (a rolling window would drop the oldest months, and no ride has a
+    # full year of history yet). OPT-IN, default 0 = off: the model trains on the
+    # full pool (~3.9M rows on 2026-10-08). Enable only after an A/B (full vs
+    # capped) on an out-of-time window shows no accuracy loss; the per-phase
+    # timings in the model metadata say whether the fit is the phase worth capping.
+    TRAIN_MAX_ROWS: int = 0
+    # After the early-stopped fit (train pool + validation weeks) is evaluated on
+    # the 30-day hold-out, refit the served model on ALL rows — pool + hold-out —
+    # with the best iteration count. Otherwise the served model never learns the
+    # newest 30 days (PAR-815). Roughly doubles the fit phase; set False if a run
+    # gets too close to ML_TRAINING_TIMEOUT_MINUTES (see training_timings).
+    TRAIN_REFIT_ON_ALL_ROWS: bool = True
+    # The refit is skipped (logged, flagged as refit_skipped in metadata and
+    # status) when elapsed + estimated refit time would come closer than this
+    # to the caller's time budget (ML_TRAINING_TIMEOUT_MINUTES, passed in by the
+    # training processor). Covers saving, the gap between the processor's clock
+    # and ours, and estimate error.
+    TRAIN_REFIT_SAFETY_MARGIN_SECONDS: int = 600
+    TRAIN_FULL_RESOLUTION_DAYS: int = 90
     TRAIN_TEST_SPLIT: float = 0.85
     VALIDATION_DAYS: int = (
         30  # Used for large datasets (>60 days); smaller datasets use adaptive % split

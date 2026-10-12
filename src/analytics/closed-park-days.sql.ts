@@ -60,6 +60,52 @@
  */
 
 /**
+ * True when a stored verdict says measured ride activity overrules the
+ * operator's `CLOSED` entry for that day.
+ *
+ * This is the one place the readers express the measured-operation rule, so the
+ * calendar and the four statistics callers cannot drift apart on it — which is
+ * the whole point: since PAR-697 a day the operator calls shut may be published
+ * as an operating day, and a calendar that reopens a day while the statistics
+ * still drop it is the split PAR-692 closed.
+ *
+ * **It looks up a verdict, it does not take one.** The rule itself — four
+ * conditions over the day's raw readings — lives in
+ * `src/parks/utils/measured-operation.gate.ts` and runs once per park-local day
+ * in the nightly `park-day-operation` job, which writes
+ * `park_day_operations`. That move is the decision of 2026-10-07: evaluated per
+ * read, the same rule cost the ML-accuracy query a factor of 5.2 (1.4 s →
+ * 7.4 s), because it has to reach raw `queue_data` per candidate day and no
+ * reader has a place to hang a set-based pass. A primary-key probe into a table
+ * of one row per park-day costs nothing in any of the five shapes.
+ *
+ * **A day with no row keeps the operator's entry.** The fill of the past runs
+ * as its own job after the deploy, so for a while most days have no verdict —
+ * and a park added later will always have some. Asking for a row with
+ * `measured_operation` rather than for the absence of a `false` one makes that
+ * the fallback by construction: no row, no override, which is exactly the rule
+ * as it stood before PAR-697.
+ *
+ * @param parkIdExpr SQL yielding the park id. Cast to `uuid`, so a `uuid`
+ *   column and a text placeholder both work.
+ *   A compile-time constant from our own SQL, never user input.
+ * @param parkLocalDayExpr SQL yielding a PARK-LOCAL `date`.
+ *   A compile-time constant from our own SQL, never user input.
+ */
+export function measuredOperationDayExists(
+  parkIdExpr: string,
+  parkLocalDayExpr: string,
+): string {
+  return `EXISTS (
+            SELECT 1
+            FROM park_day_operations mo
+            WHERE mo.park_id = (${parkIdExpr})::text::uuid
+              AND mo.day = (${parkLocalDayExpr})
+              AND mo.measured_operation
+          )`;
+}
+
+/**
  * A CTE named `closed_park_days`, listing the park's shut days.
  *
  * Unbounded by date on purpose: a park carries a few hundred park-level
@@ -94,6 +140,7 @@ export function closedParkDaysCte(parkIdParam: string): string {
                AND operating_day.date = se.date
                AND operating_day."scheduleType" = 'OPERATING'
            )
+       AND NOT ${measuredOperationDayExists(parkIdParam, "se.date")}
    )`;
 }
 
@@ -152,5 +199,6 @@ export function closedParkDayExists(
                       AND operating_day.date = se.date
                       AND operating_day."scheduleType" = 'OPERATING'
                   )
+              AND NOT ${measuredOperationDayExists(parkIdExpr, "se.date")}
           )`;
 }

@@ -15,9 +15,22 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
 
 
+# Non-ISO region codes that geocoding returns, mapped to the ISO 3166-2 suffix the
+# holidays table uses. Mirrors REGION_ALIASES in src/common/utils/region.util.ts —
+# keep the two lists identical, or a park the API matches would miss in the model.
+REGION_ALIASES = {
+    "NRW": "NW",  # Nordrhein-Westfalen
+    "NDS": "NI",  # Niedersachsen
+    "England": "ENG",
+    "Scotland": "SCT",
+    "Wales": "WLS",
+}
+
+
 def normalize_region_code(code: Optional[str]) -> Optional[str]:
     """
-    Normalizes a region code by extracting the region part (after last "-").
+    Normalizes a region code by extracting the region part (after last "-")
+    and mapping known non-ISO aliases (REGION_ALIASES, e.g. "England" -> "ENG").
 
     This ensures consistent comparison between different region code formats:
     - "DE-NW" -> "NW"
@@ -41,7 +54,8 @@ def normalize_region_code(code: Optional[str]) -> Optional[str]:
         return None
     # If code contains "-", extract the part after the last "-" (e.g., "DE-NW" -> "NW")
     # Otherwise use the code as-is (e.g., "NW" -> "NW")
-    return code.split("-")[-1] if "-" in code else code
+    short = code.split("-")[-1] if "-" in code else code
+    return REGION_ALIASES.get(short, short)
 
 
 def calculate_holiday_info(

@@ -26,13 +26,26 @@ describe("PredictionGeneratorProcessor", () => {
   let processor: PredictionGeneratorProcessor;
 
   const mlService = {
+    getRawParkPredictions: jest.fn(),
+    // The served (PCN-overridden) read. The cron must never call it — see the
+    // "stores raw CatBoost" spec below.
     getParkPredictions: jest.fn(),
+    // The served DAILY read (TFT over CatBoost). Stores never see it; the lead
+    // snapshot is taken from it (PAR-854).
+    getServingDailyPredictions: jest.fn(),
     deduplicatePredictions: jest.fn().mockResolvedValue(0),
     storePredictions: jest.fn().mockResolvedValue(undefined),
     deleteOldPredictions: jest.fn().mockResolvedValue(0),
     purgeHourlyPredictionsBefore: jest
       .fn()
       .mockResolvedValue({ deleted: 0, windows: 0, done: true }),
+    dropExpiredPredictionChunks: jest.fn().mockResolvedValue({
+      due: 0,
+      dropped: 0,
+      lockTimedOut: false,
+      attempts: 0,
+      overdue: 0,
+    }),
   };
 
   // Rides along with the daily run to record what was predicted at each lead
@@ -95,18 +108,47 @@ describe("PredictionGeneratorProcessor", () => {
       );
       // For CLOSED parks, both "isOperatingToday" and "hasRecentRideActivity"
       // return false → park is excluded.
-      mlService.getParkPredictions.mockResolvedValue({ predictions: [] });
+      mlService.getRawParkPredictions.mockResolvedValue({ predictions: [] });
 
       await processor.handleGenerateHourly({} as Job);
 
       // ML called only for the OPERATING park.
-      expect(mlService.getParkPredictions).toHaveBeenCalledTimes(1);
-      expect(mlService.getParkPredictions).toHaveBeenCalledWith(
+      expect(mlService.getRawParkPredictions).toHaveBeenCalledTimes(1);
+      expect(mlService.getRawParkPredictions).toHaveBeenCalledWith(
         "p1",
         "hourly",
         undefined,
         "OPERATING",
       );
+    });
+
+    it("stores raw CatBoost, never the served PCN curve (PAR-817)", async () => {
+      // wait_time_predictions + prediction_accuracy are the CatBoost side of the
+      // PCN-vs-CatBoost board. Feeding them the served read would let the board
+      // compare PCN against itself.
+      parksService.findAll.mockResolvedValue([{ id: "p1", name: "Open" }]);
+      parksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["p1", "OPERATING"]]),
+      );
+      const catboost = [
+        {
+          attractionId: "a1",
+          predictedTime: "2026-10-09T12:15:00+00:00",
+          predictedWaitTime: 30,
+          predictionType: "hourly",
+          modelVersion: "v1",
+        },
+      ];
+      mlService.getRawParkPredictions.mockResolvedValue({
+        predictions: catboost,
+        count: 1,
+        modelVersion: "v1",
+      });
+
+      await processor.handleGenerateHourly({} as Job);
+
+      expect(mlService.getParkPredictions).not.toHaveBeenCalled();
+      expect(mlService.storePredictions).toHaveBeenCalledWith(catboost);
     });
 
     it("includes UNKNOWN-status parks that are scheduled to operate today", async () => {
@@ -116,11 +158,11 @@ describe("PredictionGeneratorProcessor", () => {
         new Map([["p1", "UNKNOWN"]]),
       );
       parksService.isParkOperatingToday.mockResolvedValueOnce(true);
-      mlService.getParkPredictions.mockResolvedValue({ predictions: [] });
+      mlService.getRawParkPredictions.mockResolvedValue({ predictions: [] });
 
       await processor.handleGenerateHourly({} as Job);
 
-      expect(mlService.getParkPredictions).toHaveBeenCalled();
+      expect(mlService.getRawParkPredictions).toHaveBeenCalled();
     });
 
     it("includes CLOSED parks with recent ride activity (schedule-is-wrong safety net)", async () => {
@@ -131,11 +173,11 @@ describe("PredictionGeneratorProcessor", () => {
       );
       parksService.isParkOperatingToday.mockResolvedValueOnce(false);
       parksService.hasRecentRideActivity.mockResolvedValueOnce(true);
-      mlService.getParkPredictions.mockResolvedValue({ predictions: [] });
+      mlService.getRawParkPredictions.mockResolvedValue({ predictions: [] });
 
       await processor.handleGenerateHourly({} as Job);
 
-      expect(mlService.getParkPredictions).toHaveBeenCalled();
+      expect(mlService.getRawParkPredictions).toHaveBeenCalled();
     });
 
     describe("a closed park with published hours today", () => {
@@ -152,7 +194,7 @@ describe("PredictionGeneratorProcessor", () => {
         parksService.getBatchParkStatus.mockResolvedValue(
           new Map([["p1", "CLOSED"]]),
         );
-        mlService.getParkPredictions.mockResolvedValue({ predictions: [] });
+        mlService.getRawParkPredictions.mockResolvedValue({ predictions: [] });
       });
 
       it("is predicted from three hours before opening", async () => {
@@ -164,7 +206,7 @@ describe("PredictionGeneratorProcessor", () => {
           "p1",
           "Europe/Berlin",
         );
-        expect(mlService.getParkPredictions).toHaveBeenCalled();
+        expect(mlService.getRawParkPredictions).toHaveBeenCalled();
         // Published hours decide; the any-time-today fallback is not asked.
         expect(parksService.isParkOperatingToday).not.toHaveBeenCalled();
       });
@@ -174,7 +216,7 @@ describe("PredictionGeneratorProcessor", () => {
 
         await processor.handleGenerateHourly({} as Job);
 
-        expect(mlService.getParkPredictions).not.toHaveBeenCalled();
+        expect(mlService.getRawParkPredictions).not.toHaveBeenCalled();
       });
 
       it("is skipped after closing, though it operated today", async () => {
@@ -183,7 +225,7 @@ describe("PredictionGeneratorProcessor", () => {
 
         await processor.handleGenerateHourly({} as Job);
 
-        expect(mlService.getParkPredictions).not.toHaveBeenCalled();
+        expect(mlService.getRawParkPredictions).not.toHaveBeenCalled();
         parksService.isParkOperatingToday.mockResolvedValue(false);
       });
 
@@ -195,7 +237,7 @@ describe("PredictionGeneratorProcessor", () => {
 
         await processor.handleGenerateHourly({} as Job);
 
-        expect(mlService.getParkPredictions).toHaveBeenCalled();
+        expect(mlService.getRawParkPredictions).toHaveBeenCalled();
       });
 
       it("still falls back to recent ride activity after closing", async () => {
@@ -204,7 +246,7 @@ describe("PredictionGeneratorProcessor", () => {
 
         await processor.handleGenerateHourly({} as Job);
 
-        expect(mlService.getParkPredictions).toHaveBeenCalled();
+        expect(mlService.getRawParkPredictions).toHaveBeenCalled();
       });
 
       it("uses the any-time-today rule when today has no usable hours", async () => {
@@ -216,7 +258,7 @@ describe("PredictionGeneratorProcessor", () => {
         await processor.handleGenerateHourly({} as Job);
 
         expect(parksService.isParkOperatingToday).toHaveBeenCalledWith("p1");
-        expect(mlService.getParkPredictions).toHaveBeenCalled();
+        expect(mlService.getRawParkPredictions).toHaveBeenCalled();
       });
     });
 
@@ -231,7 +273,7 @@ describe("PredictionGeneratorProcessor", () => {
           ["p2", "OPERATING"],
         ]),
       );
-      mlService.getParkPredictions
+      mlService.getRawParkPredictions
         .mockRejectedValueOnce(new Error("ML 500 for p1"))
         .mockResolvedValueOnce({
           predictions: [{ attractionId: "a1" } as never],
@@ -251,11 +293,11 @@ describe("PredictionGeneratorProcessor", () => {
       parksService.getBatchParkStatus.mockResolvedValue(
         new Map([["p1", "OPERATING"]]),
       );
-      mlService.getParkPredictions.mockResolvedValue({ predictions: [] });
+      mlService.getRawParkPredictions.mockResolvedValue({ predictions: [] });
 
       await processor.handleGenerateHourly({} as Job);
 
-      expect(mlService.getParkPredictions).toHaveBeenCalledTimes(1);
+      expect(mlService.getRawParkPredictions).toHaveBeenCalledTimes(1);
       // No write side-effects.
       expect(mlService.deduplicatePredictions).not.toHaveBeenCalled();
       expect(mlService.storePredictions).not.toHaveBeenCalled();
@@ -268,7 +310,7 @@ describe("PredictionGeneratorProcessor", () => {
       parksService.getBatchParkStatus.mockResolvedValue(
         new Map([["p1", "OPERATING"]]),
       );
-      mlService.getParkPredictions.mockResolvedValue({
+      mlService.getRawParkPredictions.mockResolvedValue({
         predictions: [{ attractionId: "a1" } as never],
       });
 
@@ -287,13 +329,13 @@ describe("PredictionGeneratorProcessor", () => {
       parksService.getBatchParkStatus.mockResolvedValue(
         new Map(parks.map((p) => [p.id, "OPERATING"])),
       );
-      mlService.getParkPredictions.mockResolvedValue({ predictions: [] });
+      mlService.getRawParkPredictions.mockResolvedValue({ predictions: [] });
 
       await processor.handleGenerateHourly({} as Job);
 
       // ML called for every operating park — batching shape is internal,
       // we just assert the total count matches.
-      expect(mlService.getParkPredictions).toHaveBeenCalledTimes(12);
+      expect(mlService.getRawParkPredictions).toHaveBeenCalledTimes(12);
     });
   });
 
@@ -307,17 +349,28 @@ describe("PredictionGeneratorProcessor", () => {
       );
     });
 
-    it("snapshots the lead buckets after storing, with one instant for the run", async () => {
-      const predictions = [{ attractionId: "a1", predictionType: "daily" }];
-      mlService.getParkPredictions.mockResolvedValue({ predictions });
+    it("snapshots the SERVED daily answer, not the raw one it stores (PAR-854)", async () => {
+      const predictions = [
+        { attractionId: "a1", predictionType: "daily", modelVersion: "v1" },
+      ];
+      const served = [
+        { attractionId: "a1", predictionType: "daily", modelVersion: "tft" },
+      ];
+      mlService.getRawParkPredictions.mockResolvedValue({ predictions });
+      mlService.getServingDailyPredictions.mockResolvedValue({
+        predictions: served,
+      });
 
       await processor.handleGenerateDaily({} as Job);
 
+      // The store path keeps raw CatBoost — the TFT-vs-CatBoost board needs it.
+      expect(mlService.storePredictions).toHaveBeenCalledWith(predictions);
+      expect(mlService.getServingDailyPredictions).toHaveBeenCalledWith("p1");
       expect(leadSnapshotService.snapshotPark).toHaveBeenCalledTimes(1);
       const [park, passed, now] =
         leadSnapshotService.snapshotPark.mock.calls[0];
       expect(park).toBe(openPark);
-      expect(passed).toBe(predictions);
+      expect(passed).toBe(served);
       // A Date, not undefined: the lead distance is computed against it, and
       // reading the clock per park would label a batch crossing midnight with
       // two different distances for the same night's work.
@@ -342,7 +395,10 @@ describe("PredictionGeneratorProcessor", () => {
           ["p2", "OPERATING"],
         ]),
       );
-      mlService.getParkPredictions.mockResolvedValue({
+      mlService.getRawParkPredictions.mockResolvedValue({
+        predictions: [{ attractionId: "a1", predictionType: "daily" }],
+      });
+      mlService.getServingDailyPredictions.mockResolvedValue({
         predictions: [{ attractionId: "a1", predictionType: "daily" }],
       });
       leadSnapshotService.snapshotPark.mockRejectedValueOnce(
@@ -359,8 +415,26 @@ describe("PredictionGeneratorProcessor", () => {
       expect(leadSnapshotService.snapshotPark).toHaveBeenCalledTimes(2);
     });
 
+    it("records nothing when the served read fails, rather than the raw answer", async () => {
+      // Falling back to the raw response would file CatBoost's number under a
+      // served label — exactly the mix PAR-854 removes.
+      mlService.getRawParkPredictions.mockResolvedValue({
+        predictions: [{ attractionId: "a1", predictionType: "daily" }],
+      });
+      mlService.getServingDailyPredictions.mockRejectedValue(
+        new Error("redis down"),
+      );
+
+      await expect(
+        processor.handleGenerateDaily({} as Job),
+      ).resolves.toBeUndefined();
+
+      expect(mlService.storePredictions).toHaveBeenCalledTimes(1);
+      expect(leadSnapshotService.snapshotPark).not.toHaveBeenCalled();
+    });
+
     it("does not snapshot when there is nothing to store", async () => {
-      mlService.getParkPredictions.mockResolvedValue({ predictions: [] });
+      mlService.getRawParkPredictions.mockResolvedValue({ predictions: [] });
 
       await processor.handleGenerateDaily({} as Job);
 
@@ -370,6 +444,87 @@ describe("PredictionGeneratorProcessor", () => {
   });
 
   describe("cleanup-old (daily retention)", () => {
+    it("drops expired chunks at the 90-day backstop before the row cleanup", async () => {
+      await processor.handleCleanupOld({} as Job);
+
+      expect(mlService.dropExpiredPredictionChunks).toHaveBeenCalledWith(90, {
+        overdueAfterDays: 14,
+      });
+      expect(
+        mlService.dropExpiredPredictionChunks.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        mlService.purgeHourlyPredictionsBefore.mock.invocationCallOrder[0],
+      );
+    });
+
+    describe("visibility of missed drops", () => {
+      const logger = () =>
+        (
+          processor as unknown as {
+            logger: { warn: jest.Mock; error: jest.Mock };
+          }
+        ).logger;
+      let warn: jest.SpyInstance;
+      let error: jest.SpyInstance;
+
+      beforeEach(() => {
+        warn = jest.spyOn(logger(), "warn").mockImplementation(() => undefined);
+        error = jest
+          .spyOn(logger(), "error")
+          .mockImplementation(() => undefined);
+      });
+      afterEach(() => {
+        warn.mockRestore();
+        error.mockRestore();
+      });
+
+      it("warns, but does not raise an error, for a recent miss", async () => {
+        mlService.dropExpiredPredictionChunks.mockResolvedValueOnce({
+          due: 1,
+          dropped: 0,
+          lockTimedOut: true,
+          attempts: 4,
+          overdue: 0,
+        });
+
+        await processor.handleCleanupOld({} as Job);
+
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("not dropped"),
+        );
+        expect(error).not.toHaveBeenCalled();
+      });
+
+      it("logs at error level once a chunk is past 90 + 14 days", async () => {
+        mlService.dropExpiredPredictionChunks.mockResolvedValueOnce({
+          due: 3,
+          dropped: 0,
+          lockTimedOut: true,
+          attempts: 4,
+          overdue: 2,
+        });
+
+        await processor.handleCleanupOld({} as Job);
+
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(error.mock.calls[0][0]).toContain(
+          "2 prediction chunk(s) are more than 104 days old",
+        );
+      });
+    });
+
+    it("still runs the row cleanup when the chunk drop fails", async () => {
+      mlService.dropExpiredPredictionChunks.mockRejectedValueOnce(
+        new Error("boom"),
+      );
+
+      await expect(
+        processor.handleCleanupOld({} as Job),
+      ).resolves.toBeUndefined();
+      expect(mlService.purgeHourlyPredictionsBefore).toHaveBeenCalledTimes(1);
+      expect(mlService.deleteOldPredictions).toHaveBeenCalledTimes(1);
+    });
+
     it("purges hourly by createdAt in windows and daily by predictedTime", async () => {
       mlService.purgeHourlyPredictionsBefore.mockResolvedValueOnce({
         deleted: 12_000,

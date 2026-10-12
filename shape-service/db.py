@@ -44,7 +44,19 @@ def get_engine():
         f"postgresql://{settings.DB_USER}:{settings.DB_PASSWORD}"
         f"@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
     )
-    return create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=5)
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=5,
+        connect_args={
+            # Name the session (all services share the `parkfan` role) and end a
+            # transaction left idle for 10 min, which would otherwise hold its
+            # locks indefinitely. See docs/troubleshooting/db-health-runbook.md §0b.
+            "application_name": "parkfan-shape-service",
+            "options": "-c idle_in_transaction_session_timeout=600000",
+        },
+    )
 
 
 def engine():
@@ -192,7 +204,8 @@ _DDL_SHAPE_COMPARISONS = text(
 
 def fetch_daily_levels(park_id: str, tz: str, lo_day, hi_day) -> pd.DataFrame:
     """Freshest DAILY forecast per (attraction, park-local day) in [lo_day, hi_day] — the
-    LEVEL the shape expands. predictionType='daily' is one row/(ride, day) at 12:00 UTC."""
+    LEVEL the shape expands. predictionType='daily' is one row/(ride, day) at park-local noon (PAR-818;
+    it was the winning 12/14/16 UTC slot before)."""
     bin_day = '(wp."predictedTime" AT TIME ZONE :tz)::date'
     sql = text(
         f"""

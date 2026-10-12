@@ -58,10 +58,13 @@ export class TimescaleInitService implements OnModuleInit {
         );
       }
 
+      // Compression must never queue an ACCESS EXCLUSIVE lock (runbook §0b)
+      await this.setupCompressTruncateBehaviour();
+
       // Set up compression policies (preserves hourly data!)
       await this.setupCompressionPolicies();
 
-      // Set up retention policies (auto-drop old chunks)
+      // Retention is the cleanup-old job's, not a policy's (runbook §0b)
       await this.setupRetentionPolicies();
 
       this.logger.log("✅ TimescaleDB hypertables initialized successfully!");
@@ -329,39 +332,105 @@ export class TimescaleInitService implements OnModuleInit {
     }
   }
 
+  /**
+   * Retention is NOT a TimescaleDB policy here, and this removes the one that
+   * older boots added.
+   *
+   * `drop_chunks` locks every table the hypertable has a foreign key to ACCESS
+   * EXCLUSIVE before it even looks for a chunk to drop, and
+   * `wait_time_predictions` references `attractions`. A background policy waits
+   * for that lock for its whole `max_runtime` — five minutes — while every
+   * query on `attractions` queues behind the request. That is what took the API
+   * down in five-minute blocks on 2026-10-07/08. The nightly `cleanup-old` job
+   * now drops the chunks itself, under a lock_timeout
+   * (`MLService.dropExpiredPredictionChunks`).
+   *
+   * Removing a job waits on the job's own lock while a run is in progress, so
+   * the statement gets a lock_timeout too; a busy boot leaves the policy for
+   * the next one rather than stalling here.
+   */
   private async setupRetentionPolicies(): Promise<void> {
-    this.logger.log("🗑️  Setting up retention policies...");
-    await this.addRetentionPolicy("wait_time_predictions", 90);
-    this.logger.log("✅ Retention policies configured");
+    for (const tableName of ["wait_time_predictions"]) {
+      try {
+        const existing: unknown[] = await this.dataSource.query(
+          `SELECT 1 FROM timescaledb_information.jobs
+           WHERE hypertable_name = $1 AND proc_name = 'policy_retention';`,
+          [tableName],
+        );
+        if (existing.length === 0) continue;
+
+        await this.dataSource.transaction(async (em) => {
+          await em.query(`SELECT set_config('lock_timeout', '5s', true)`);
+          await em.query(
+            `SELECT remove_retention_policy($1, if_exists => true);`,
+            [tableName],
+          );
+        });
+        this.logger.log(
+          `  ✓ ${tableName}: removed the TimescaleDB retention policy (the cleanup-old job drops chunks now)`,
+        );
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `  ⚠️  Could not remove the retention policy on ${tableName}: ${errorMessage}`,
+        );
+      }
+    }
   }
 
-  private async addRetentionPolicy(
-    tableName: string,
-    retainDays: number,
-  ): Promise<void> {
+  /**
+   * Lets a compression job give up the final ACCESS EXCLUSIVE lock instead of
+   * queueing for it.
+   *
+   * Compressing a chunk ends by truncating the uncompressed rows, which needs
+   * ACCESS EXCLUSIVE on the chunk. Under the default `truncate_only` the job
+   * waits for that lock with no deadline — the compression policies run with
+   * `max_runtime` 0 — and every reader of the chunk queues behind the waiting
+   * request. One long-lived reader of a 30-day-old `queue_data` chunk was enough
+   * to take the API down: 2026-09-28 (PAR-563) and again 2026-10-09 02:12–07:31,
+   * when the 02:12 run of job 1000 waited five hours.
+   *
+   * `truncate_or_delete` tries the lock without entering the queue (for up to
+   * five seconds) and falls back to deleting the rows, which needs no lock
+   * stronger than the one the job already holds. The fallback leaves dead
+   * tuples for autovacuum; that is the whole cost.
+   *
+   * Set on the database rather than the session because the policies run in
+   * TimescaleDB background workers, which read database-level settings when
+   * they connect. Idempotent: written only when it differs.
+   */
+  private async setupCompressTruncateBehaviour(): Promise<void> {
     try {
-      const existing = await this.dataSource.query(
-        `SELECT * FROM timescaledb_information.jobs
-         WHERE hypertable_name = $1 AND proc_name = 'policy_retention';`,
-        [tableName],
-      );
-      if (existing.length === 0) {
+      const rows: Array<{ setconfig: string[] | null }> =
         await this.dataSource.query(
-          `SELECT add_retention_policy($1, $2::interval);`,
-          [tableName, `${retainDays} days`],
+          `SELECT s.setconfig
+             FROM pg_db_role_setting s
+             JOIN pg_database d ON d.oid = s.setdatabase
+            WHERE d.datname = current_database() AND s.setrole = 0`,
         );
-        this.logger.debug(
-          `  ✓ ${tableName}: Retain ${retainDays} days, drop older chunks automatically`,
-        );
-      } else {
-        this.logger.debug(`  ✓ ${tableName}: Retention policy already exists`);
-      }
+      const current = rows[0]?.setconfig ?? [];
+      if (current.includes(COMPRESS_TRUNCATE_SETTING)) return;
+
+      await this.dataSource.query(
+        `DO $$ BEGIN
+           EXECUTE format('ALTER DATABASE %I SET timescaledb.compress_truncate_behaviour = %L',
+                          current_database(), 'truncate_or_delete');
+         END $$;`,
+      );
+      this.logger.log(
+        "  ✓ timescaledb.compress_truncate_behaviour = truncate_or_delete (database default)",
+      );
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `  ⚠️  Failed to add retention policy on ${tableName}: ${errorMessage}`,
+        `  ⚠️  Could not set compress_truncate_behaviour: ${errorMessage}`,
       );
     }
   }
 }
+
+/** The pg_db_role_setting entry `setupCompressTruncateBehaviour` writes. */
+const COMPRESS_TRUNCATE_SETTING =
+  "timescaledb.compress_truncate_behaviour=truncate_or_delete";

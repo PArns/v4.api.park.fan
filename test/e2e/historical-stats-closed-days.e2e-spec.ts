@@ -18,6 +18,7 @@ import {
   ScheduleType,
 } from "../../src/parks/entities/schedule-entry.entity";
 import { Park } from "../../src/parks/entities/park.entity";
+import { ParkDayOperation } from "../../src/parks/entities/park-day-operation.entity";
 import { seedMinimalTestData, clearTestData } from "../helpers/seed-test-data";
 
 /**
@@ -88,6 +89,18 @@ describe("Park historical stats — days the schedule calls CLOSED (E2E)", () =>
         sampleCount: 6,
       });
     }
+  }
+
+  /** The nightly job's verdict for one park-local day (PAR-697). */
+  async function addVerdict(park: Park, day: string, measured: boolean) {
+    await dataSource.getRepository(ParkDayOperation).insert({
+      parkId: park.id,
+      day,
+      measuredOperation: measured,
+      derivedOpen: null,
+      derivedClose: null,
+      computedAt: new Date(),
+    });
   }
 
   async function addSchedule(park: Park, day: string, type: ScheduleType) {
@@ -209,6 +222,55 @@ describe("Park historical stats — days the schedule calls CLOSED (E2E)", () =>
 
     const result = await stats(park);
     expect(result.meta.totalSampleDays).toBe(1);
+  });
+
+  it("counts a CLOSED day again once a verdict says the park operated", async () => {
+    // PAR-697. The calendar publishes such a day as an estimated operating day,
+    // and this is the other half of that decision: the statistics have to count
+    // it as a measuring day, or the split PAR-692 closed reopens on the other
+    // side.
+    const seeded = await seedMinimalTestData(app);
+    const park = seeded.parks[0];
+    const ride = seeded.attractions.find((a) => a.parkId === park.id)!;
+
+    const day = daysAgo(park, 10);
+    await addDay(park, ride.id, day, 25);
+    await addSchedule(park, day, ScheduleType.CLOSED);
+
+    // Reachable: the CLOSED entry alone drops it.
+    expect((await stats(park)).meta.totalSampleDays).toBe(0);
+
+    await addVerdict(park, day, true);
+
+    expect((await stats(park)).meta.totalSampleDays).toBe(1);
+  });
+
+  it("keeps a CLOSED day dropped when the verdict refused it", async () => {
+    // A row with `measured_operation = false` is a verdict, not a missing one:
+    // the day was judged and the activity did not clear the gate.
+    const seeded = await seedMinimalTestData(app);
+    const park = seeded.parks[0];
+    const ride = seeded.attractions.find((a) => a.parkId === park.id)!;
+
+    const day = daysAgo(park, 10);
+    await addDay(park, ride.id, day, 25);
+    await addSchedule(park, day, ScheduleType.CLOSED);
+    await addVerdict(park, day, false);
+
+    expect((await stats(park)).meta.totalSampleDays).toBe(0);
+  });
+
+  it("does not read another park's verdict for the same day", async () => {
+    const seeded = await seedMinimalTestData(app);
+    const [park, other] = seeded.parks;
+    const ride = seeded.attractions.find((a) => a.parkId === park.id)!;
+
+    const day = daysAgo(park, 10);
+    await addDay(park, ride.id, day, 25);
+    await addSchedule(park, day, ScheduleType.CLOSED);
+    await addVerdict(other, day, true);
+
+    expect((await stats(park)).meta.totalSampleDays).toBe(0);
   });
 
   it("ignores a single ride's CLOSED entry: only the park's own day counts", async () => {

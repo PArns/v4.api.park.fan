@@ -49,7 +49,8 @@ export function materialisedRepeatJobId(entry: {
  * - wait-times: Every 5 minutes (frequent updates)
  * - park-metadata: Daily at 3am (metadata changes rarely)
  * - children-metadata: Daily at 4am (Phase 6.2: Combined Attractions + Shows + Restaurants - 67% fewer requests!)
- * - weather: Every 12 hours (0:00 and 12:00)
+ * - weather: full every 12 hours (0:00 and 12:00), current-only at 7:00 and 19:00
+ * - live-cache-warmup: enqueued by every wait-times run, not on a cron
  * - weather-historical: Daily at 5am (mark past data as historical)
  * - holidays: Monthly on 1st at 2am (holidays change rarely)
  * - ml-predictions: Every 15 minutes (fresh crowd/wait predictions)
@@ -87,11 +88,16 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     @InjectQueue("p50-baseline") private p50BaselineQueue: Queue, // P50 + P90 baseline
     @InjectQueue("attraction-hourly-history")
     private attractionHourlyHistoryQueue: Queue,
+    @InjectQueue("park-day-operation")
+    private parkDayOperationQueue: Queue,
     @InjectQueue("downtime") private downtimeQueue: Queue,
     @InjectQueue("push-notifications")
     private pushNotificationsQueue: Queue,
     @InjectQueue("trips") private tripsQueue: Queue,
     @InjectQueue("show-patterns") private showPatternsQueue: Queue,
+    @InjectQueue("forecast-archive") private forecastArchiveQueue: Queue,
+    @InjectQueue("forecast-archive-score")
+    private forecastArchiveScoreQueue: Queue,
     @InjectQueue("rope-drop") private ropeDropQueue: Queue,
     @InjectQueue("typical-waits") private typicalWaitsQueue: Queue,
     @InjectQueue("geoip-update") private geoipUpdateQueue: Queue,
@@ -328,13 +334,18 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    // Weather current-only sync: Every 6 hours (live conditions for today).
-    // Real-time conditions are served by the nowcast (15-min cache), so the DB
-    // "current" record only needs periodic refresh — this respects the quota.
+    // Weather current-only sync: at 07:00 and 19:00, between the two full runs
+    // (live conditions for today). Real-time conditions are served by the
+    // nowcast (15-min cache), so the DB "current" record only needs periodic
+    // refresh — this respects the quota. It used to be `0 */6 * * *`, which
+    // also fired at 00:00 and 12:00 together with the full sync — the full
+    // run saves the current day as well, so that second run was pure
+    // duplicate Open-Meteo traffic (PAR-822: 265 s + 694 s back to back).
+    const WEATHER_CURRENT_CRON = "0 7,19 * * *";
     const hasWeatherCurrentCron = await this.hasRepeatableJob(
       this.weatherQueue,
       "weather-current-cron",
-      "0 */6 * * *",
+      WEATHER_CURRENT_CRON,
     );
 
     if (!hasWeatherCurrentCron) {
@@ -342,7 +353,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         "fetch-weather",
         { currentOnly: true },
         {
-          repeat: { cron: "0 */6 * * *" },
+          repeat: { cron: WEATHER_CURRENT_CRON },
           jobId: "weather-current-cron",
         },
       );
@@ -1012,6 +1023,31 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    // Measured-operation verdicts: daily at 4:45 AM, between the hourly-history
+    // rollup at 4:30 and the downtime reconstruction at 5:00.
+    //
+    // After 4:30 because the derived hours stored beside each verdict are read
+    // from the rollup that job writes, so judging yesterday any earlier stores
+    // a verdict whose hours are missing. Before 5:00 because both read the same
+    // `queue_data` chunks and overlapping them decompresses each chunk twice at
+    // once.
+    const hasParkDayOperationCron = await this.hasRepeatableJob(
+      this.parkDayOperationQueue,
+      "park-day-operation-cron",
+    );
+    if (!hasParkDayOperationCron) {
+      await this.parkDayOperationQueue.add(
+        "calculate-yesterday-park-day-operation",
+        {},
+        {
+          repeat: {
+            cron: "45 4 * * *", // Daily at 4:45am
+          },
+          jobId: "park-day-operation-cron",
+        },
+      );
+    }
+
     // Downtime reconstruction: daily at 5:00 AM, after the hourly-history
     // rollup at 4:30.
     //
@@ -1107,6 +1143,39 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         {
           repeat: { cron: "45 4 * * *" },
           jobId: "trip-sweep-cron",
+        },
+      );
+    }
+
+    // Forward archive of served curves (PAR-831): capture hourly at :05 —
+    // each park is captured in the hour its OWN clock shows an origin (06
+    // daily, 10–18 intraday), so one hourly job covers every offset — and score
+    // daily at 12:00 UTC, when yesterday is over in every park timezone.
+    const hasArchiveCaptureCron = await this.hasRepeatableJob(
+      this.forecastArchiveQueue,
+      "forecast-archive-capture-cron",
+    );
+    if (!hasArchiveCaptureCron) {
+      await this.forecastArchiveQueue.add(
+        "capture",
+        {},
+        {
+          repeat: { cron: "5 * * * *" },
+          jobId: "forecast-archive-capture-cron",
+        },
+      );
+    }
+    const hasArchiveScoreCron = await this.hasRepeatableJob(
+      this.forecastArchiveScoreQueue,
+      "forecast-archive-score-cron",
+    );
+    if (!hasArchiveScoreCron) {
+      await this.forecastArchiveScoreQueue.add(
+        "score",
+        {},
+        {
+          repeat: { cron: "0 12 * * *" },
+          jobId: "forecast-archive-score-cron",
         },
       );
     }

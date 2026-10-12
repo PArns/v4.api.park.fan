@@ -21,6 +21,8 @@ import {
   getCurrentDateInTimezone,
 } from "../common/utils/date.util";
 import { PARK_OBSERVED_READING_SQL } from "../common/utils/closure-gap.sql";
+import { HEARTBEAT_SOURCE } from "../common/utils/outage-rows.sql";
+import { RECONCILIATION_SOURCE } from "../common/utils/source-absent-status.util";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 
 /** One attraction's already-fetched live payload, as handed to the batch writer. */
@@ -67,6 +69,20 @@ const ORPHAN_TTL_MS = 60 * 60 * 1000;
  * Revives a cached "latest" entry. A corrupt entry counts as a cache MISS
  * (→ DB lookup) rather than throwing.
  */
+/**
+ * Whether a row is our own bookkeeping rather than a feed reading: a carried
+ * heartbeat, or one the reconciliation or heartbeat writer stamped as theirs.
+ * The row-level twin of `observedReadingsSql`, without its NULL fallback — the
+ * lookup it serves reaches back 24 hours, long after `is_heartbeat` existed.
+ */
+function isOwnRow(row: Partial<QueueData>): boolean {
+  return (
+    row.isHeartbeat === true ||
+    row.dataSource === RECONCILIATION_SOURCE ||
+    row.dataSource === HEARTBEAT_SOURCE
+  );
+}
+
 function parseCachedLatest(raw: string | null): Partial<QueueData> | null {
   if (!raw) return null;
   try {
@@ -609,6 +625,18 @@ export class QueueDataService {
   ): boolean {
     // No previous data → save
     if (!latest) {
+      return true;
+    }
+
+    // A feed reading after a row we wrote ourselves → save (PAR-758). The
+    // heartbeat and reverse reconciliation say "no feed reported this", so a
+    // feed that reports it again is news even with the same value. Compared
+    // without this, a ride back in the feed with an unchanged CLOSED stayed on
+    // its reconciliation row (and read UNKNOWN) until the 60-minute rule fired:
+    // 74 times in the week to 2026-10-07. Only in this direction — the
+    // reconciliation itself relies on the comparison to not rewrite a CLOSED
+    // it already wrote on every tick.
+    if (isOwnRow(latest) && !isOwnRow(newData)) {
       return true;
     }
 

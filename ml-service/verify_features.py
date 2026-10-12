@@ -43,6 +43,7 @@ def test_feature_engineering():
         {
             "park_id": ["p1"],
             "country": ["DE"],
+            "region_code": ["NW"],
             "timezone": ["Europe/Berlin"],
             "influencingRegions": [
                 [
@@ -61,6 +62,7 @@ def test_feature_engineering():
         {
             "country": ["DE", "FR"],
             "date": [pd.to_datetime("2025-12-01"), pd.to_datetime("2025-12-01")],
+            "region": [None, None],
             "holiday_type": ["school", "public"],  # DE=school, FR=public
             "is_nationwide": [True, True],
         }
@@ -108,11 +110,13 @@ def test_feature_engineering():
     # We mocked DE (primary) as 'school' and FR (neighbor) as 'public'
     # park p1 is in DE.
     # So is_school_holiday_primary should be 1, is_holiday_primary should be 0.
+    # (The two flags are NOT mutually exclusive since PAR-816 — a public holiday
+    # inside a school break sets both. Here DE has only a school row.)
     # is_holiday_neighbor_1 (FR) should be 1 (public).
 
     row0 = df.iloc[0]
     if row0["is_school_holiday_primary"] == 1 and row0["is_holiday_primary"] == 0:
-        print("   ✅ Primary Holiday split correct (School=1, Public=0)")
+        print("   ✅ Primary Holiday flags correct (School=1, Public=0)")
     else:
         print(
             f"   ❌ Primary Holiday split INCORRECT: School={row0['is_school_holiday_primary']}, Public={row0['is_holiday_primary']}"

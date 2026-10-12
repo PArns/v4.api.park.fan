@@ -467,7 +467,9 @@ export class OpenMeteoClient {
     // caller asking for a longer horizon never gets a shorter cached one.
     const latR = Math.round(latitude * 100) / 100;
     const lonR = Math.round(longitude * 100) / 100;
-    const cacheKey = `weather:hourly:${latR}:${lonR}:${forecastDays}`;
+    // `utc`: the hours are UTC since PAR-818 — a new key so an entry holding
+    // the old offset-shifted strings is never read as UTC.
+    const cacheKey = `weather:hourly:utc:${latR}:${lonR}:${forecastDays}`;
     try {
       const cached = await this.redis.get(cacheKey);
       if (cached) {
@@ -495,7 +497,13 @@ export class OpenMeteoClient {
                 "weathercode",
                 "windspeed_10m",
               ].join(","),
-              timezone: "auto",
+              // GMT, not "auto" (PAR-818). With "auto" Open-Meteo shifts every
+              // hour by ONE utc_offset_seconds — the offset in force at request
+              // time — so the strings are neither UTC nor the park's wall clock:
+              // across a DST change every later hour is an hour off, and on the
+              // spring-forward night it lists 02:00 in Berlin, an hour that does
+              // not exist there. GMT strings are plain UTC instants.
+              timezone: "GMT",
             },
           },
         );
@@ -742,8 +750,10 @@ export class OpenMeteoClient {
       throw new Error("Invalid Open-Meteo response: missing hourly data");
     }
 
+    // The hourly request asks for GMT, so each offset-less string is a UTC
+    // hour; it leaves this client as an explicit instant (`…Z`).
     const hours: HourlyWeather[] = hourly.time.map((time, index) => ({
-      time,
+      time: /(Z|[+-]\d{2}:?\d{2})$/.test(time) ? time : `${time}Z`,
       temperature: hourly.temperature_2m?.[index] ?? null,
       precipitation: hourly.precipitation?.[index] ?? null,
       rain: hourly.rain?.[index] ?? null,
@@ -839,7 +849,7 @@ export interface DailyWeatherResponse {
 }
 
 export interface HourlyWeather {
-  time: string; // ISO 8601
+  time: string; // ISO 8601 UTC instant (`2026-07-04T12:00Z`), PAR-818
   temperature: number | null;
   precipitation: number | null;
   rain: number | null;

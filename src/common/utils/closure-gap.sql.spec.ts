@@ -555,4 +555,15 @@ describe("closure-gap statements", () => {
       );
     });
   });
+
+  it("reads blind_parks' evidence hours in one grouped pass, not once per park", () => {
+    // PAR-820. The statement runs with nested loops off, and under that
+    // setting a correlated `WHERE ea."parkId" = z.park_id` subquery became a
+    // sequential scan of all of attraction_exposure_days per park (loops=192,
+    // ~9 s of 12.7 s). Grouped once and joined, it is one scan.
+    const body = cteBody(CLOSURE_GAP_INTERVALS_SQL, "blind_parks");
+    expect(body).toMatch(/GROUP BY ea\."parkId"/);
+    expect(body).toContain("ev.pid = z.park_id");
+    expect(body).not.toMatch(/ea\."parkId"\s*=\s*z\.park_id/);
+  });
 });

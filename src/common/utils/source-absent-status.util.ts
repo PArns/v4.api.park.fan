@@ -72,15 +72,18 @@ export const RECONCILIATION_SOURCE = "system-reconciliation";
  *    `STANDBY` (the heartbeat explicitly, reconciliation through the
  *    status-only row of `saveLiveDataBatch`), so they compete for the same
  *    slot. Whatever the window, the set holds one or the other.
- * 2. **A heartbeat does not mean the feed went quiet.** `attraction:last-seen`
- *    is touched on every feed sighting, before `saveLiveDataBatch` drops an
- *    unchanged reading. A ride the feed reports every five minutes with the
- *    same CLOSED gets a heartbeat after an hour like a ride the feed dropped.
- *    Reading heartbeats as absence would put every steady ride on UNKNOWN.
+ * 2. **A heartbeat means a short silence, not absence.** Since PAR-720 the
+ *    heartbeat skips any ride a feed delivered in the last 10 minutes, so a
+ *    ride the feed reports steadily gets its hourly row from the feed and no
+ *    heartbeat at all; this reason used to be that the two were
+ *    indistinguishable. A heartbeat now says "no feed for at least 10 minutes",
+ *    which covers a single missed poll as much as a dropped ride. Reading it as
+ *    absence would put a ride on UNKNOWN for a transient gap; that is a product
+ *    decision this function does not take on its own.
  *
  * What stays uncovered is the first 24 h after a feed drops a ride: its newest
- * row is a carried heartbeat, and only the Redis key can tell that apart from a
- * steady report. Closing that window needs `last-seen` on the read path, not a
+ * row is a carried heartbeat, and only the Redis key can tell how long the
+ * silence has lasted. Closing that window needs `last-seen` on the read path, not a
  * change here. Measured 2026-10-02 08:17 UTC: 7 of 6,403 rides had a
  * `last-seen` between 1 h and 24 h old; 5 of them showed a carried heartbeat as
  * their newest row, one of those carrying OPERATING.

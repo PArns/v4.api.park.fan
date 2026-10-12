@@ -127,3 +127,19 @@ The hour bucket is extracted `AT TIME ZONE` the **park's** timezone. Reading it
 in UTC shifts Gardaland's morning by two hours in summer and one in winter —
 i.e. by a different amount inside the same window, which smears the peak instead
 of moving it.
+
+## The query's shape is load-bearing (PAR-832)
+
+`queryHourlyProfile` reads the rows in a `measured` CTE that ends in `OFFSET 0`
+and groups them outside it. Written as one grouped SELECT over
+`queue_data_aggregates`, with the closed-day anti join (PAR-698) beside
+`COUNT(DISTINCT local day)`, PostgreSQL 18.6 + TimescaleDB 2.24.0 failed at
+plan time with `XX000 no tlist entry for key 6` for five parks (Europa-Park,
+Energylandia, Hersheypark, Kennywood, Plopsaland Belgium), and only at the
+60-ride fetch the day planner uses — so `/stats/hourly` at its default `topN=8`
+(a 24-ride fetch) looked healthy while `/plan/day` returned no rides past its
+hourly-model window for those parks. `SET timescaledb.enable_chunk_append = off`
+makes the old statement run, which places the fault in ChunkAppend's handling of
+the sort the aggregate pushes into the chunks. It depends on row estimates and
+does not reproduce on the E2E database; the unit test pins the shape instead.
+Do not inline the fence.

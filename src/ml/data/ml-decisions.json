@@ -1,0 +1,67 @@
+{
+  "_about": "The switch decisions on the admin ML overview (PAR-861), in the order shown. Each rests on cells of the model comparison matrix (PAR-855, docs/ml/forward-archive.md §9): questionId x modelId. Without `state`, the decision's state, progress and earliest date are derived from those cells (src/ml/utils/ml-overview.util.ts); a `state` here overrides that ('later' = waits on `dependsOn`, 'owner' = the owner's call, no measurement decides it). title/detail: plain German, shown as they are. Edit this file when a decision is taken, added or retired.",
+  "decisions": [
+    {
+      "id": "planner_h5_slots",
+      "title": "Tagesplaner auf 15-Minuten-Slots umstellen (H5-Profil)",
+      "detail": "Offline besser als heute bei jedem Abstand. TFT-Niveau nur für volle Fahrgeschäfte bis 2 Tage.",
+      "cells": [
+        { "questionId": "plan_d0_1", "modelId": "h5" },
+        { "questionId": "plan_d0_1", "modelId": "tfth5" },
+        { "questionId": "plan_d2_5", "modelId": "h5" },
+        { "questionId": "plan_d2_5", "modelId": "tfth5" },
+        { "questionId": "plan_d6_60", "modelId": "h5" },
+        { "questionId": "plan_d6_60", "modelId": "tfth5" },
+        { "questionId": "plan_besttime", "modelId": "h5" },
+        { "questionId": "plan_besttime", "modelId": "tfth5" }
+      ]
+    },
+    {
+      "id": "live_chronos",
+      "title": "Live-Wartezeit 30 bis 120 Minuten: Chronos-2 statt PCN",
+      "detail": "Offline 0,4 bis 2,3 Minuten besser als die aktuelle Wartezeit. Gegen PCN entscheidet erst das Live-Archiv.",
+      "cells": [
+        { "questionId": "live_h0_1", "modelId": "chronos" },
+        { "questionId": "live_h1_2", "modelId": "chronos" }
+      ]
+    },
+    {
+      "id": "planner_chronos",
+      "title": "Tagesplaner 1 bis 7 Tage: Chronos-2 zusätzlich prüfen",
+      "detail": "Offline besser als H5 bei 0, 1, 2 und 6 Tagen, nie schlechter. Nicht für „beste Besuchszeit“.",
+      "cells": [
+        { "questionId": "plan_d0_1", "modelId": "chronos" },
+        { "questionId": "plan_d2_5", "modelId": "chronos" }
+      ]
+    },
+    {
+      "id": "calendar_tft_headliners",
+      "title": "Kalender: TFT nur noch für volle Fahrgeschäfte",
+      "detail": "TFT verliert im Kalender leicht gegen den Wochentag-Durchschnitt, nicht sicher.",
+      "cells": [
+        { "questionId": "cal_busier", "modelId": "tft" },
+        { "questionId": "cal_busier", "modelId": "wkd" },
+        { "questionId": "cal_far", "modelId": "tft" },
+        { "questionId": "cal_far", "modelId": "wkd" }
+      ]
+    },
+    {
+      "id": "catboost_daily_off",
+      "title": "CatBoost-Tagesniveau abschalten",
+      "detail": "Macht die Prognose offline schlechter. Erst abschalten, wenn der Ersatz live bestätigt ist.",
+      "state": "later",
+      "dependsOn": ["planner_h5_slots", "live_chronos", "planner_chronos"],
+      "cells": [
+        { "questionId": "cal_busier", "modelId": "catboost" },
+        { "questionId": "cal_far", "modelId": "catboost" }
+      ]
+    },
+    {
+      "id": "shape_service_off",
+      "title": "Shape-Service abschalten",
+      "detail": "Liefert der App nichts, kein messbarer Vorteil. Abschalten spart nur Rechenzeit, verbessert nichts sichtbar.",
+      "state": "owner",
+      "cells": []
+    }
+  ]
+}

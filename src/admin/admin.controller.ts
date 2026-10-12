@@ -41,7 +41,20 @@ import { ParkRenameService } from "../parks/services/park-rename.service";
 import { ParkMergeService } from "../parks/services/park-merge.service";
 import { determineMergeWinner } from "../parks/utils/park-merge.util";
 import { SystemHealthService } from "./system-health.service";
+import { ForecastArchiveScoringService } from "../parks/services/forecast-archive-scoring.service";
+import {
+  DAY_ORIGINS,
+  ModelComparisonService,
+} from "../parks/services/model-comparison.service";
+import {
+  ModelComparisonDayDto,
+  ModelComparisonDayOptionsDto,
+  ModelComparisonOriginId,
+  ModelComparisonResponseDto,
+} from "../ml/dto/model-comparison.dto";
 import { DowntimeMeasurementService } from "./downtime-measurement.service";
+import { MlOverviewService } from "./ml-overview.service";
+import { MlOverviewDto } from "../ml/dto/ml-overview.dto";
 import { AdminAuthGuard } from "./auth/admin-auth.guard";
 import { AdminMinRole } from "./auth/admin-auth.decorators";
 import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
@@ -151,6 +164,7 @@ export class AdminController {
     @InjectQueue("analytics") private analyticsQueue: Queue,
     @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
     @InjectQueue("shape-shadow") private shapeShadowQueue: Queue,
+    @InjectQueue("park-day-operation") private parkDayOperationQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly parkValidatorService: ParkValidatorService,
     private readonly parkRepairService: ParkRepairService,
@@ -163,6 +177,9 @@ export class AdminController {
     private readonly dataQualityMonitor: DataQualityMonitorService,
     private readonly retirementService: AttractionRetirementService,
     private readonly reviewService: AttractionReviewService,
+    private readonly forecastArchiveScoring: ForecastArchiveScoringService,
+    private readonly modelComparison: ModelComparisonService,
+    private readonly mlOverview: MlOverviewService,
   ) {}
 
   /**
@@ -422,7 +439,10 @@ export class AdminController {
     await this.downtimeQueue.add(
       "reconstruct-downtime",
       { windowDays: Number(days) || undefined },
-      { priority: 60 },
+      // One attempt. A staged fill's statements get deadlines that grow with
+      // the scan (up to ~2.2 h each, PAR-820); the default three attempts
+      // would turn one fill that hits them into ~6.7 h of retries.
+      { priority: 60, attempts: 1 },
     );
     return { message: "Downtime reconstruction queued", queue: "downtime" };
   }
@@ -553,6 +573,152 @@ export class AdminController {
   ): Promise<Record<string, unknown>> {
     const n = Math.min(Math.max(parseInt(days ?? "14", 10) || 14, 1), 90);
     return this.systemHealth.comparisonBoard(n);
+  }
+
+  /**
+   * The forward archive's board (PAR-831): how the curves users were SERVED
+   * at each lead turned out, per use case x lead x source x segment, pooled
+   * over the last `days` scored target dates. Read-only and cached for 2 h —
+   * the scores move once a day.
+   */
+  @Get("forecast-archive")
+  @ApiOperation({
+    summary: "Forward archive scores (served curves vs truth, per lead)",
+    description:
+      "UC1/UC2 (served 15-min curve, slot leads h0-1 … h24-48 and ride-day " +
+      "leads d0-d2), UC3 (plan/day d0-d7), UC3S (composer A/B shadow, PAR-834), " +
+      "D6 (crowd bucket per park-day), " +
+      "D9 (coverage). Counters are pooled before dividing. `chronos`: the " +
+      "Chronos-2 shadow (PAR-852, never served) per use case × lead — own " +
+      "MAE plus the paired difference vs served / persistence / H5 with a " +
+      "95 % park-cluster bootstrap CI. See docs/ml/forward-archive.md.",
+  })
+  @ApiQuery({ name: "days", required: false, description: "1-90, default 14" })
+  @ApiQuery({
+    name: "region",
+    required: false,
+    description: "ALL (default), EU, NA, ASIA, OTHER",
+  })
+  async getForecastArchive(
+    @Query("days") days?: string,
+    @Query("region") region?: string,
+  ): Promise<Record<string, unknown>> {
+    const n = Math.min(Math.max(parseInt(days ?? "14", 10) || 14, 1), 90);
+    const r = (region ?? "ALL").toUpperCase();
+    if (!["ALL", "EU", "NA", "ASIA", "OTHER"].includes(r)) {
+      throw new BadRequestException(
+        "region must be ALL, EU, NA, ASIA or OTHER",
+      );
+    }
+    return this.forecastArchiveScoring.getBoard(n, r);
+  }
+
+  /**
+   * The model comparison (PAR-855): for every question the app answers, does
+   * each model beat what is served today? Live from the forward archive's
+   * paired rows (park-cluster bootstrap CI, gate 14 days / 10 parks), mixed
+   * with the versioned offline verdicts. Read-only, cached 2 h per scoring run.
+   */
+  @Get("model-comparison")
+  @ApiOperation({
+    summary: "Model comparison matrix (question × model vs served)",
+    description:
+      "Cells: today | better | worse | unclear | pending, with the live " +
+      "paired difference (model − served, minutes, negative = better) and its " +
+      "95 % park-cluster CI, the offline verdict, the three switch checks and " +
+      "when the outstanding one reports. See docs/ml/forward-archive.md §9.",
+  })
+  @ApiQuery({ name: "days", required: false, description: "1-90, default 28" })
+  @ApiQuery({
+    name: "region",
+    required: false,
+    description: "ALL (default), EU, NA, ASIA, OTHER",
+  })
+  async getModelComparison(
+    @Query("days") days?: string,
+    @Query("region") region?: string,
+  ): Promise<ModelComparisonResponseDto> {
+    const n = Math.min(Math.max(parseInt(days ?? "28", 10) || 28, 1), 90);
+    const r = (region ?? "ALL").toUpperCase();
+    if (!["ALL", "EU", "NA", "ASIA", "OTHER"].includes(r)) {
+      throw new BadRequestException(
+        "region must be ALL, EU, NA, ASIA or OTHER",
+      );
+    }
+    return this.modelComparison.getMatrix(n, r);
+  }
+
+  /**
+   * The ML overview (PAR-861): what is up for decision (derived from the
+   * model comparison matrix and src/ml/data/ml-decisions.json), the matrix
+   * summary, and whether every ML component ran when it should have.
+   * Read-only, bounded index lookups, cached 5 min.
+   */
+  @Get("ml-overview")
+  @ApiOperation({
+    summary: "ML overview: open decisions, matrix summary, component status",
+    description:
+      "decisions: ready | waiting_live | open | later | owner, with the live " +
+      "progress of their least-measured matrix cell and the earliest date the " +
+      "gate can be met. components: last run, expected cadence and " +
+      "ok | late | failed | warming | unknown. See docs/ml/ml-overview.md.",
+  })
+  async getMlOverview(): Promise<MlOverviewDto> {
+    return this.mlOverview.getOverview();
+  }
+
+  /** Dates, parks and rides the day comparison can show (PAR-855). */
+  @Get("model-comparison/day/options")
+  @ApiOperation({
+    summary: "Model comparison: days, parks and rides with archived curves",
+  })
+  @ApiQuery({ name: "date", required: false, description: "YYYY-MM-DD" })
+  async getModelComparisonDayOptions(
+    @Query("date") date?: string,
+  ): Promise<ModelComparisonDayOptionsDto> {
+    if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new BadRequestException("date must be YYYY-MM-DD");
+    }
+    return this.modelComparison.getDayOptions(date);
+  }
+
+  /**
+   * One real day (PAR-855): every archived curve of one ride from one origin
+   * against the 15-min truth, park-local, with the MAE of each.
+   */
+  @Get("model-comparison/day")
+  @ApiOperation({
+    summary: "Model comparison: one ride-day, curves vs truth",
+  })
+  @ApiQuery({ name: "parkId", required: true })
+  @ApiQuery({ name: "date", required: true, description: "YYYY-MM-DD" })
+  @ApiQuery({ name: "attractionId", required: true })
+  @ApiQuery({
+    name: "origin",
+    required: false,
+    description: "morning (default), d1, d3, d7",
+  })
+  async getModelComparisonDay(
+    @Query("parkId") parkId?: string,
+    @Query("date") date?: string,
+    @Query("attractionId") attractionId?: string,
+    @Query("origin") origin?: string,
+  ): Promise<ModelComparisonDayDto> {
+    const uuid = /^[0-9a-f-]{36}$/i;
+    if (!parkId || !uuid.test(parkId)) {
+      throw new BadRequestException("parkId must be a UUID");
+    }
+    if (!attractionId || !uuid.test(attractionId)) {
+      throw new BadRequestException("attractionId must be a UUID");
+    }
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new BadRequestException("date must be YYYY-MM-DD");
+    }
+    const o = (origin ?? "morning") as ModelComparisonOriginId;
+    if (!DAY_ORIGINS.some((x) => x.id === o)) {
+      throw new BadRequestException("origin must be morning, d1, d3 or d7");
+    }
+    return this.modelComparison.getDay(parkId, date, attractionId, o);
   }
 
   /**
@@ -867,6 +1033,52 @@ export class AdminController {
     );
     return {
       message: "Seasonal detection job queued",
+      jobId: job.id.toString(),
+    };
+  }
+
+  /**
+   * Judges a range of past park-local days for measured operation (PAR-697),
+   * the fill the nightly 4:45 job never does for days before its first run.
+   *
+   * One job per call, so the caller chooses the portion: a Coolify deploy
+   * renews Postgres and kills whatever is writing, and the portion is the
+   * damage radius (G-134). Month slices over the `queue_data` retention window
+   * are the intended use; re-running a slice is harmless, the rows upsert.
+   */
+  @Post("backfill-park-day-operation")
+  @AdminMinRole("owner")
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: "Backfill measured-operation verdicts",
+    description:
+      "Queues backfill-park-day-operation for { fromDate, toDate } (YYYY-MM-DD, park-local, inclusive), optionally for one parkId.",
+  })
+  @ApiResponse({ status: 202, description: "Backfill job queued" })
+  async triggerParkDayOperationBackfill(
+    @Body() body: { fromDate?: string; toDate?: string; parkId?: string },
+  ): Promise<{ message: string; jobId: string }> {
+    const isDay = (v: unknown): v is string =>
+      typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    if (!isDay(body?.fromDate) || !isDay(body?.toDate)) {
+      throw new BadRequestException(
+        "fromDate and toDate are required as YYYY-MM-DD",
+      );
+    }
+    if (body.fromDate > body.toDate) {
+      throw new BadRequestException("fromDate must not be after toDate");
+    }
+    const job = await this.parkDayOperationQueue.add(
+      "backfill-park-day-operation",
+      {
+        fromDate: body.fromDate,
+        toDate: body.toDate,
+        ...(body.parkId ? { parkId: body.parkId } : {}),
+      },
+      { priority: 5 },
+    );
+    return {
+      message: `Measured-operation backfill queued for ${body.fromDate} → ${body.toDate}`,
       jobId: job.id.toString(),
     };
   }

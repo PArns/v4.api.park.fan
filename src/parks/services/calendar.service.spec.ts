@@ -2,6 +2,7 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { getQueueToken } from "@nestjs/bull";
 import { CalendarService } from "./calendar.service";
 import { ParksService } from "../parks.service";
+import { ParkDayOperationService } from "./park-day-operation.service";
 import { ScheduleType } from "../entities/schedule-entry.entity";
 import { WeatherService } from "../weather.service";
 import { MLService } from "../../ml/ml.service";
@@ -40,6 +41,10 @@ describe("CalendarService › buildPredictedCrowdLevels (private)", () => {
         {
           provide: ParksService,
           useValue: { getBatchParkStatus: jest.fn() },
+        },
+        {
+          provide: ParkDayOperationService,
+          useValue: { getMeasuredOperationDays: jest.fn() },
         },
         {
           provide: WeatherService,
@@ -210,6 +215,7 @@ describe("CalendarService › headliner forecast & neighbour holidays (private)"
       providers: [
         CalendarService,
         { provide: ParksService, useValue: {} },
+        { provide: ParkDayOperationService, useValue: {} },
         { provide: WeatherService, useValue: {} },
         { provide: MLService, useValue: {} },
         { provide: AnalyticsService, useValue: {} },
@@ -634,6 +640,7 @@ describe("CalendarService › assembleFromMonthCaches (private)", () => {
       providers: [
         CalendarService,
         { provide: ParksService, useValue: {} },
+        { provide: ParkDayOperationService, useValue: {} },
         { provide: WeatherService, useValue: {} },
         { provide: MLService, useValue: {} },
         { provide: AnalyticsService, useValue: {} },
@@ -827,6 +834,10 @@ describe("CalendarService › meta.scheduleCoverage (assembleFromMonthCaches)", 
           provide: ParksService,
           useValue: { getOperatingDateRange: jest.fn() },
         },
+        {
+          provide: ParkDayOperationService,
+          useValue: { getMeasuredOperationDays: jest.fn() },
+        },
         { provide: WeatherService, useValue: {} },
         { provide: MLService, useValue: {} },
         { provide: AnalyticsService, useValue: {} },
@@ -901,6 +912,7 @@ describe("CalendarService › buildDaysBounded (private)", () => {
       providers: [
         CalendarService,
         { provide: ParksService, useValue: {} },
+        { provide: ParkDayOperationService, useValue: {} },
         { provide: WeatherService, useValue: {} },
         { provide: MLService, useValue: {} },
         { provide: AnalyticsService, useValue: {} },
@@ -979,6 +991,14 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
               .mockResolvedValue({ minDate: null, maxDate: null }),
             isParkSeasonal: jest.fn().mockResolvedValue(false),
             getDerivedHistoricalHours: jest.fn().mockResolvedValue(new Map()),
+          },
+        },
+        {
+          provide: ParkDayOperationService,
+          useValue: {
+            getMeasuredOperationDays: jest
+              .fn()
+              .mockResolvedValue(new Set<string>()),
           },
         },
         {
@@ -1157,6 +1177,78 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
         { parkId: "p1" },
         expect.anything(),
       );
+    });
+  });
+
+  describe("a past CLOSED day the measurement calls open (PAR-697)", () => {
+    /** A day that is strictly past whenever the suite runs. */
+    const pastDay = () => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - 10);
+      return d.toISOString().slice(0, 10);
+    };
+
+    const buildDay = async (day: string) => {
+      const { parseDateRange } =
+        await import("../../common/utils/date-parsing.util");
+      const { fromDate, toDate } = parseDateRange(day, day, {
+        timezone: "UTC",
+      });
+      const response = await service.buildCalendarResponse(
+        {
+          id: "p1",
+          slug: "test-park",
+          timezone: "UTC",
+          countryCode: "DE",
+        } as any,
+        fromDate,
+        toDate,
+        "none",
+      );
+      return response.days[0];
+    };
+
+    beforeEach(() => {
+      const day = pastDay();
+      (service as any).parksService.getSchedule.mockResolvedValue([
+        {
+          date: day,
+          scheduleType: ScheduleType.CLOSED,
+          openingTime: null,
+          closingTime: null,
+        },
+      ]);
+      // A park that publishes a schedule: the UNKNOWN recovery branch is
+      // limited to parks without one, so this case can only come from the
+      // measured-operation branch.
+      (service as any).parksService.getOperatingDateRange.mockResolvedValue({
+        minDate: "2026-01-01",
+        maxDate: "2099-12-31",
+      });
+    });
+
+    it("publishes it as an estimated operating day", async () => {
+      const day = pastDay();
+      (
+        service as any
+      ).parkDayOperationService.getMeasuredOperationDays.mockResolvedValue(
+        new Set([day]),
+      );
+
+      const built = await buildDay(day);
+      expect(built.status).toBe("OPERATING");
+      expect(built.isEstimated).toBe(true);
+    });
+
+    it("leaves it CLOSED without a verdict — a missing row keeps the operator's entry", async () => {
+      const day = pastDay();
+      (
+        service as any
+      ).parkDayOperationService.getMeasuredOperationDays.mockResolvedValue(
+        new Set<string>(),
+      );
+
+      expect((await buildDay(day)).status).toBe("CLOSED");
     });
   });
 

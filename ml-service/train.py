@@ -4,6 +4,8 @@ Model training script
 
 import argparse
 from datetime import timedelta
+from typing import Optional
+import numpy as np
 import pandas as pd
 import psutil
 import os
@@ -283,15 +285,167 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
     return df
 
 
-def train_model(version: str = None) -> None:
+def compute_sample_weights(df: pd.DataFrame, accuracy_stats) -> "Optional[np.ndarray]":
+    """Per-row training weights, or None for uniform weights.
+
+    Two independent factors, both applied to every set the model is fitted on
+    (the train pool AND the full refit set), so the refit learns the same
+    objective the early-stopped fit was tuned on:
+
+    - Accuracy feedback (ENABLE_SAMPLE_WEIGHTS): 1 + (MAE / 20) * factor, MAE per
+      attraction from `attraction_accuracy_stats` (10 min when unknown), clipped
+      to 1.0-2.0.
+    - Busyness (CATBOOST_BUSY_WEIGHT): clip(sqrt(wait / 20), 0.4, 2.5), so the
+      ~72% quiet rows do not dominate the loss.
+
+    Does not modify `df`.
+    """
+    import numpy as _np
+
+    weights = None
+    if (
+        settings.ENABLE_SAMPLE_WEIGHTS
+        and accuracy_stats is not None
+        and not accuracy_stats.empty
+    ):
+        mae_by_attraction = accuracy_stats.drop_duplicates(
+            subset=["attraction_id"]
+        ).set_index("attraction_id")["mae"]
+        mae = df["attractionId"].map(mae_by_attraction).astype(float).fillna(10.0)
+        weights = (
+            (1.0 + (mae / 20.0) * settings.SAMPLE_WEIGHT_FACTOR).clip(1.0, 2.0).values
+        )
+        logger.info(
+            f"   Accuracy weights on {len(df):,} rows from {len(mae_by_attraction)} attraction stats: "
+            f"{weights.min():.2f}-{weights.max():.2f} (avg {weights.mean():.2f})"
+        )
+
+    if getattr(settings, "CATBOOST_BUSY_WEIGHT", False):
+        w = df["waitTime"].values.astype(float)
+        busy_factor = _np.clip((w / 20.0) ** 0.5, 0.4, 2.5)
+        weights = busy_factor if weights is None else weights * busy_factor
+        logger.info(
+            "   Busyness weighting ON: factor %.2f-%.2f (quiet↓ busy↑)"
+            % (busy_factor.min(), busy_factor.max())
+        )
+    return weights
+
+
+def holdout_summary(y_true, y_pred, busy_threshold: float = 60.0) -> dict:
+    """Out-of-time metrics persisted in the model metadata: MAE overall and on
+    busy rows (actual >= `busy_threshold` minutes), plus the sample counts."""
+    import numpy as _np
+
+    y_true = _np.asarray(y_true, dtype=float)
+    y_pred = _np.asarray(y_pred, dtype=float)
+    err = _np.abs(y_true - y_pred)
+    busy = y_true >= busy_threshold
+    return {
+        "mae": float(err.mean()) if len(err) else None,
+        "busy_mae": float(err[busy].mean()) if busy.any() else None,
+        "busy_threshold": busy_threshold,
+        "samples": int(len(err)),
+        "busy_samples": int(busy.sum()),
+    }
+
+
+def cap_training_rows(
+    df: pd.DataFrame, max_rows: int, full_resolution_days: int, seed: int
+) -> pd.DataFrame:
+    """Bound the training pool at `max_rows` without dropping any season.
+
+    The newest `full_resolution_days` of `df` (by `timestamp`) are kept whole.
+    train_model calls this on the pool AFTER the 30-day hold-out is split off, so
+    with the default 90 that block is days 30-120 before the newest data. The older
+    rows are thinned by a uniform random sample so that the total fits the budget.
+    A uniform sample keeps every month's share of the older rows, which a rolling
+    window would not. If the recent block alone exceeds the budget, the whole pool
+    is sampled uniformly instead, so older months still stay represented.
+
+    Thinning happens AFTER feature engineering on purpose: the lag and rolling
+    features are computed from each ride's full series, so a row keeps the same
+    feature values it would have had without the cap.
+    """
+    if max_rows <= 0 or len(df) <= max_rows:
+        return df
+
+    recent_cutoff = df["timestamp"].max() - pd.Timedelta(days=full_resolution_days)
+    recent_mask = (df["timestamp"] >= recent_cutoff).to_numpy()
+    n_recent = int(recent_mask.sum())
+    budget_old = max_rows - n_recent
+
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    keep = recent_mask.copy()
+    if budget_old > 0:
+        old_positions = np.flatnonzero(~recent_mask)
+        keep[rng.choice(old_positions, size=budget_old, replace=False)] = True
+    else:
+        keep[:] = False
+        keep[rng.choice(len(df), size=max_rows, replace=False)] = True
+
+    logger.info(
+        f"   Row cap: {len(df):,} rows > TRAIN_MAX_ROWS {max_rows:,} — kept the last "
+        f"{full_resolution_days} days whole ({n_recent:,} rows), thinned older rows "
+        f"to {max(budget_old, 0):,}"
+        + ("" if budget_old > 0 else " (recent block alone over budget: sampled all rows)")
+    )
+    return df[keep].reset_index(drop=True)
+
+
+def estimate_refit(
+    elapsed_seconds: float,
+    fit_seconds: float,
+    rows_all: int,
+    rows_train: int,
+    budget_seconds: Optional[float],
+    margin_seconds: float,
+) -> dict:
+    """Would the final refit finish inside the caller's budget?
+
+    The refit is estimated as the early-stopped fit's duration scaled by the row
+    ratio (refit rows / fit training rows). In production early stopping never
+    fires (tree_count = CATBOOST_ITERATIONS = 2000), so the refit runs as many
+    trees as the fit did, on ~1.25x the rows. No budget means no limit.
+    """
+    estimate = fit_seconds * (rows_all / max(rows_train, 1))
+    if budget_seconds is None:
+        return {"fits": True, "estimated_seconds": round(estimate, 1)}
+    remaining = budget_seconds - margin_seconds - elapsed_seconds
+    return {
+        "fits": estimate <= remaining,
+        "estimated_seconds": round(estimate, 1),
+        "remaining_seconds": round(remaining, 1),
+        "elapsed_seconds": round(elapsed_seconds, 1),
+        "budget_seconds": budget_seconds,
+        "margin_seconds": margin_seconds,
+    }
+
+
+def train_model(
+    version: str = None, time_budget_seconds: Optional[float] = None
+) -> Optional[dict]:
     """
     Train a new model
 
     Args:
         version: Model version string (e.g., 'v1.0.0'). If None, uses config.MODEL_VERSION
+
+        time_budget_seconds: The caller's timeout. The optional final refit is
+            skipped when it would not finish inside it (see estimate_refit).
+
+    Returns:
+        The validation metrics once the model is saved, or None when training
+        stopped early (no data, empty training set) and nothing was saved. Callers
+        must treat None as a failure — `train_standalone.py` does.
     """
     if version is None:
         version = settings.MODEL_VERSION
+
+    import time
+
+    budget_start = time.perf_counter()  # the caller's clock started ~here
 
     logger.info(f"\n{'=' * 60}")
     logger.info("🚀 Training Wait Time Prediction Model")
@@ -350,9 +504,20 @@ def train_model(version: str = None) -> None:
         logger.info(f"   Total rows available: {result.total_rows:,}")
         logger.info("")
 
+    # Per-phase durations and row counts (PAR-815). Saved in the model metadata
+    # and the training status so a slow nightly run shows which phase grew.
+    run_start = time.perf_counter()
+    timings: dict = {}
+
     # 2. Fetch training data
     logger.info("📊 Fetching training data from PostgreSQL...")
+    phase_start = time.perf_counter()
     df = fetch_training_data(start_date, end_date)
+    timings["fetch"] = {
+        "seconds": round(time.perf_counter() - phase_start, 1),
+        "rows": len(df),
+    }
+    logger.info(f"   ⏱️  Fetch: {timings['fetch']['seconds']:.1f}s, {len(df):,} rows")
     after_fetch_memory = get_memory_usage()
     logger.info(f"   Rows fetched: {len(df):,}")
     logger.info(
@@ -372,13 +537,17 @@ def train_model(version: str = None) -> None:
     logger.info("")
 
     # 3. Feature engineering
-    import time
-
     logger.info("🔧 Engineering features...")
     before_features_memory = get_memory_usage()
+    rows_before_features = len(df)
     feature_start = time.time()
     df = engineer_features(df, start_date, end_date)
     feature_time = time.time() - feature_start
+    timings["features"] = {
+        "seconds": round(feature_time, 1),
+        "rows_in": rows_before_features,
+        "rows_out": len(df),
+    }
     after_features_memory = get_memory_usage()
     logger.info(f"   Features: {len(get_feature_columns())}")
     logger.info(
@@ -407,6 +576,20 @@ def train_model(version: str = None) -> None:
         f"   Chronological hold-out: {len(df_holdout):,} rows (last 30 days, >{holdout_cutoff.strftime('%Y-%m-%d')})"
     )
     logger.info(f"   Training pool (excl. hold-out): {len(df):,} rows")
+    rows_before_cap = len(df)
+    df = cap_training_rows(
+        df,
+        settings.TRAIN_MAX_ROWS,
+        settings.TRAIN_FULL_RESOLUTION_DAYS,
+        settings.CATBOOST_RANDOM_SEED,
+    )
+    timings["pool"] = {
+        "holdout_rows": len(df_holdout),
+        "rows_before_cap": rows_before_cap,
+        "rows_after_cap": len(df),
+        "max_rows": settings.TRAIN_MAX_ROWS,
+    }
+    gc.collect()
     logger.info("")
 
     # 4.5 Training Dropout — simulate the inference scenario for future predictions.
@@ -450,79 +633,19 @@ def train_model(version: str = None) -> None:
     # 5. Prepare features and target
     feature_columns = get_feature_columns()
 
-    # 5.5. Calculate sample weights based on attraction-level accuracy (feedback loop)
-    # Attractions with high MAE get higher weights to force the model to focus on them.
-    # NOTE: merge happens before X/y extraction so df stays aligned with sample_weights.
-    sample_weights = None
-
+    # 5.5. Sample weights (attraction-accuracy feedback loop + busyness). The
+    # accuracy stats are fetched once and reused for the full refit set below.
+    accuracy_stats = None
     if settings.ENABLE_SAMPLE_WEIGHTS:
         logger.info("📊 Calculating sample weights from attraction accuracy stats...")
         try:
-            # Fetch pre-calculated MAE per attraction
             accuracy_stats = fetch_attraction_accuracy()
-
-            if not accuracy_stats.empty:
-                # Deduplicate so the left join never inflates row count
-                accuracy_stats = accuracy_stats.drop_duplicates(
-                    subset=["attraction_id"]
-                )
-
-                # Merge accuracy stats with our training data
-                df = df.merge(
-                    accuracy_stats[["attraction_id", "mae"]],
-                    left_on="attractionId",
-                    right_on="attraction_id",
-                    how="left",
-                )
-
-                # Formula: Weight = 1.0 + (MAE / 20) * factor
-                # MAE of 20 mins adds 'factor' to the weight.
-                # We cap the weight at 2.0 to avoid extreme overfitting.
-                weight_factor = settings.SAMPLE_WEIGHT_FACTOR
-
-                # Fill missing MAE with a baseline (e.g., 10 mins)
-                df["mae"] = df["mae"].fillna(10.0)
-
-                # Calculate weights
-                weights = 1.0 + (df["mae"] / 20.0) * weight_factor
-                sample_weights = weights.clip(1.0, 2.0).values
-
-                logger.info(
-                    f"   Applied weights to {len(df):,} samples based on {len(accuracy_stats)} attraction stats"
-                )
-                logger.info(
-                    f"   Weight range: {sample_weights.min():.2f} - {sample_weights.max():.2f} (Avg: {sample_weights.mean():.2f})"
-                )
-
-                # Cleanup
-                df = df.drop(columns=["attraction_id", "mae"], errors="ignore")
-                gc.collect()  # Free memory after dropping temp merge columns
-            else:
-                logger.info(
-                    "   No attraction accuracy stats found (using uniform weights)"
-                )
         except Exception as e:
-            logger.warning(f"   ⚠️ Failed to calculate sample weights: {e}")
-            sample_weights = None
+            logger.warning(f"   ⚠️ Failed to fetch attraction accuracy stats: {e}")
+            accuracy_stats = None
     else:
         logger.info("   Sample weights disabled (ENABLE_SAMPLE_WEIGHTS=False)")
-
-    # Busyness weighting (env-gated, default OFF). The data is ~72% quiet rows
-    # (<20 min) so the loss is dominated by them and the busy tail is under-fit.
-    # Down-weight quiet rows / up-weight busy rows. Local `_np` avoids the
-    # function-local-numpy shadowing trap.
-    if getattr(settings, "CATBOOST_BUSY_WEIGHT", False):
-        import numpy as _np
-
-        w = df["waitTime"].values.astype(float)
-        busy_factor = _np.clip((w / 20.0) ** 0.5, 0.4, 2.5)
-        sample_weights = (
-            busy_factor if sample_weights is None else sample_weights * busy_factor
-        )
-        logger.info(
-            "   Busyness weighting ON: factor %.2f-%.2f (quiet↓ busy↑)"
-            % (busy_factor.min(), busy_factor.max())
-        )
+    sample_weights = compute_sample_weights(df, accuracy_stats)
 
     # Extract features/target AFTER merge so indices are consistent
     df = df.reset_index(drop=True)
@@ -563,9 +686,9 @@ def train_model(version: str = None) -> None:
         else:
             train_weights = None
     else:
-        # Blocked Split: Select 20% of weeks for validation
-        import numpy as np
-
+        # Blocked Split: Select 20% of weeks for validation. (numpy is imported at
+        # module level; a local `import numpy as np` here would make `np` local to
+        # the whole function and unbound on the sparse-split path.)
         # Use a time-based seed so each training run tests different validation weeks.
         # A fixed seed (CATBOOST_RANDOM_SEED) would always produce the same split,
         # preventing detection of weeks the model over-fits to.
@@ -645,7 +768,17 @@ def train_model(version: str = None) -> None:
 
     model = WaitTimeModel(version)
 
+    fit_start = time.perf_counter()
     metrics = model.train(X_train, y_train, X_val, y_val, sample_weights=train_weights)
+    timings["fit"] = {
+        "seconds": round(time.perf_counter() - fit_start, 1),
+        "train_rows": len(X_train),
+        "val_rows": len(X_val),
+    }
+    logger.info(
+        f"   ⏱️  Fit: {timings['fit']['seconds']:.1f}s "
+        f"({len(X_train):,} train / {len(X_val):,} val rows)"
+    )
 
     logger.info("\n" + "=" * 60)
     logger.info("✅ Training Complete!")
@@ -658,7 +791,9 @@ def train_model(version: str = None) -> None:
     logger.info(f"   R²:               {metrics['r2']:.4f}")
     logger.info("")
 
-    # 7.5 Chronological hold-out evaluation (honest out-of-time test)
+    # 7.5 Chronological hold-out evaluation (honest out-of-time test). Evaluated
+    # with the early-stopped model, BEFORE the refit below has seen these rows.
+    holdout_eval = None
     if not df_holdout.empty:
         holdout_available = [c for c in feature_columns if c in df_holdout.columns]
         if len(holdout_available) == len(feature_columns):
@@ -674,6 +809,11 @@ def train_model(version: str = None) -> None:
             # for MultiQuantile and crashes _calculate_metrics (1 != 3).
             h_pred = model.predict(X_holdout)
             holdout_metrics = model._calculate_metrics(y_holdout_arr, h_pred)
+            holdout_eval = holdout_summary(y_holdout_arr, h_pred)
+            holdout_eval.update(
+                {k: holdout_metrics[k] for k in ("rmse", "mape", "r2") if k in holdout_metrics}
+            )
+            del X_holdout
             logger.info("📊 Chronological Hold-out Metrics (last 30 days, unseen):")
             logger.info(f"   MAE:              {holdout_metrics['mae']:.2f} minutes")
             logger.info(f"   RMSE:             {holdout_metrics['rmse']:.2f} minutes")
@@ -682,7 +822,12 @@ def train_model(version: str = None) -> None:
                 f"   MAPE (≥5 min):    {holdout_metrics.get('mape_meaningful', 0):.2f}%"
             )
             logger.info(f"   R²:               {holdout_metrics['r2']:.4f}")
-            logger.info(f"   Samples:          {len(X_holdout):,}")
+            if holdout_eval["busy_mae"] is not None:
+                logger.info(
+                    f"   MAE (busy ≥60):   {holdout_eval['busy_mae']:.2f} minutes "
+                    f"({holdout_eval['busy_samples']:,} rows)"
+                )
+            logger.info(f"   Samples:          {holdout_eval['samples']:,}")
             logger.info("")
         else:
             missing = set(feature_columns) - set(df_holdout.columns)
@@ -690,14 +835,103 @@ def train_model(version: str = None) -> None:
                 f"⚠️  Hold-out eval skipped — missing features: {missing}"
             )
 
-    # 8. Feature importance
-    logger.info("🔍 Top 10 Feature Importances:")
+    model.metadata["holdout_metrics"] = holdout_eval
+
+    # 7.6 Final refit on ALL rows (train pool incl. validation weeks + hold-out).
+    # Without it the served model never learned the newest 30 days, so a season
+    # change (e.g. the start of Halloween) reached it a month late. The tree count
+    # is the early-stopped best iteration, unscaled: the refit set is only ~15-20%
+    # larger, and not scaling is the conservative choice until an out-of-time
+    # comparison says otherwise. Validation metrics (the gate's input) stay those
+    # of the early-stopped fit; the hold-out metrics above are its honest
+    # out-of-time score.
+    refit_plan = None
+    if settings.TRAIN_REFIT_ON_ALL_ROWS and not df_holdout.empty:
+        refit_plan = estimate_refit(
+            elapsed_seconds=time.perf_counter() - budget_start,
+            fit_seconds=timings["fit"]["seconds"],
+            rows_all=len(df) + len(df_holdout),
+            rows_train=timings["fit"]["train_rows"],
+            budget_seconds=time_budget_seconds,
+            margin_seconds=settings.TRAIN_REFIT_SAFETY_MARGIN_SECONDS,
+        )
+        if not refit_plan["fits"]:
+            # Serving the early-stopped model a day longer beats a timed-out
+            # run that registers nothing at all.
+            model.metadata["refit_skipped"] = {"reason": "time_budget", **refit_plan}
+            logger.warning(
+                f"⏭️  Final refit SKIPPED: estimated {refit_plan['estimated_seconds']:.0f}s "
+                f"> {refit_plan['remaining_seconds']:.0f}s left in the budget "
+                f"({refit_plan['budget_seconds']:.0f}s - {refit_plan['margin_seconds']:.0f}s margin "
+                f"- {refit_plan['elapsed_seconds']:.0f}s elapsed). Serving the early-stopped model."
+            )
+    if refit_plan is not None and refit_plan["fits"]:
+        refit_iterations = model.best_iteration_count()
+        logger.info(
+            f"🔁 Refitting on all rows ({len(df):,} pool + {len(df_holdout):,} hold-out) "
+            f"with {refit_iterations} iterations (estimated {refit_plan['estimated_seconds']:.0f}s)..."
+        )
+        # Free everything the refit does not need before building its frames;
+        # otherwise df, df_all and the feature matrix are alive together.
+        del X_train, X_val, y_train, y_val, X, y
+        gc.collect()
+        df_holdout = apply_training_dropout(df_holdout, settings, logger)
+        df_all = pd.concat([df, df_holdout], ignore_index=True)
+        del df, df_holdout
+        gc.collect()
+        # Recomputed on the combined frame rather than concatenated: the sparse
+        # split above re-sorts `df`, so the pool's weight array may no longer be
+        # in df's row order.
+        all_weights = compute_sample_weights(df_all, accuracy_stats)
+        rows_all = len(df_all)
+        X_all = df_all[feature_columns]
+        y_all = df_all["waitTime"]
+        del df_all
+        gc.collect()
+        refit_start = time.perf_counter()
+        model.refit(
+            X_all,
+            y_all,
+            iterations=refit_iterations,
+            sample_weights=all_weights,
+        )
+        del X_all, y_all, all_weights
+        timings["refit"] = {
+            "seconds": round(time.perf_counter() - refit_start, 1),
+            "rows": rows_all,
+            "iterations": refit_iterations,
+            "estimated_seconds": refit_plan["estimated_seconds"],
+        }
+        logger.info(
+            f"   ⏱️  Refit: {timings['refit']['seconds']:.1f}s ({rows_all:,} rows)"
+        )
+        gc.collect()
+    elif not settings.TRAIN_REFIT_ON_ALL_ROWS:
+        logger.info("   Final refit disabled (TRAIN_REFIT_ON_ALL_ROWS=False)")
+
+    # 8. Feature importance — of the SERVED model (the refit one when the refit
+    # ran). metrics["feature_importances"] in the metadata keeps those of the
+    # early-stopped fit, which the validation metrics describe.
+    served = "refit" if "refit" in timings else "early-stopped"
+    logger.info(f"🔍 Top 10 Feature Importances (served model: {served}):")
     importance = model.get_feature_importance().head(10)
     for idx, row in importance.iterrows():
         logger.info(f"   {row['feature']:30s} {row['importance']:>8.2f}")
     logger.info("")
 
     # 9. Save model
+    timings["total_seconds"] = round(time.perf_counter() - run_start, 1)
+    model.metadata["training_timings"] = timings
+    logger.info(
+        "⏱️  Phases: fetch %.0fs · features %.0fs · fit %.0fs · refit %.0fs · total %.0fs (excl. range query and save)"
+        % (
+            timings["fetch"]["seconds"],
+            timings["features"]["seconds"],
+            timings["fit"]["seconds"],
+            timings.get("refit", {}).get("seconds", 0),
+            timings["total_seconds"],
+        )
+    )
     logger.info("💾 Saving model...")
     model.save()
     logger.info("")
@@ -705,6 +939,7 @@ def train_model(version: str = None) -> None:
     logger.info("=" * 60)
     logger.info(f"✅ Model {version} ready for deployment!")
     logger.info("=" * 60)
+    return metrics
 
 
 if __name__ == "__main__":

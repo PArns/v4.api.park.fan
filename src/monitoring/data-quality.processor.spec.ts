@@ -18,7 +18,8 @@ describe("DataQualityProcessor", () => {
         monitor.findSilencedClusters ?? jest.fn(async () => []),
       findScheduledButSilentParks:
         monitor.findScheduledButSilentParks ?? jest.fn(async () => []),
-      findFailingJobs: monitor.findFailingJobs ?? jest.fn(async () => []),
+      findFailingJobsSinceLastSweep:
+        monitor.findFailingJobsSinceLastSweep ?? jest.fn(async () => []),
       findAbsenceRetiredUnreviewed:
         monitor.findAbsenceRetiredUnreviewed ?? jest.fn(async () => []),
       findReissueCandidates:
@@ -72,7 +73,7 @@ describe("DataQualityProcessor", () => {
 
   it("does not call a park with no findings clean when a check never ran", async () => {
     await build({
-      findFailingJobs: jest.fn(async () => {
+      findFailingJobsSinceLastSweep: jest.fn(async () => {
         throw new Error("redis unavailable");
       }),
     }).handleMonitorDataQuality({} as never);

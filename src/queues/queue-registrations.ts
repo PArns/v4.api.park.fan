@@ -15,6 +15,9 @@ export function bullPrefix(): string {
  */
 export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   { name: "wait-times" },
+  // The cache warmup after each wait-times sync, off the fetch's critical
+  // path (PAR-822). See LiveCacheWarmupProcessor.
+  { name: "live-cache-warmup" },
   { name: "park-metadata" },
   { name: "children-metadata" }, // Phase 6.2: Combined Attractions + Shows + Restaurants
   { name: "six-flags-heights" }, // Ride heights the wiki does not carry
@@ -54,6 +57,16 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
     name: "attraction-hourly-history",
     settings: {
       lockDuration: 600000,
+      lockRenewTime: 300000,
+    },
+  },
+  {
+    // Measured-operation verdicts: one aggregate over one day's chunks per
+    // park for the nightly job, but the fill job walks months × 100+ parks —
+    // same stall risk as the hourly-history backfill, same headroom.
+    name: "park-day-operation",
+    settings: {
+      lockDuration: 600000, // 10 min
       lockRenewTime: 300000,
     },
   },
@@ -109,4 +122,25 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
   // Showtime patterns: the nightly rebuild that lets a planned day show a
   // projected programme, since no feed publishes showtimes ahead of today.
   { name: "show-patterns" },
+  {
+    // Forward archive of served intraday curves (PAR-831): an hourly capture
+    // that, in the hour Europe reaches 06:00, builds ~50 parks × 8 plan days.
+    // Same headroom as the other park-wide batch jobs so it is not flagged
+    // stalled halfway through.
+    name: "forecast-archive",
+    settings: {
+      lockDuration: 900000, // 15 min
+      lockRenewTime: 300000,
+    },
+  },
+  {
+    // Its daily scoring run, on a queue of its own: on the capture queue
+    // (concurrency 1) a long 12:00 UTC scoring run delayed the 12:05 capture,
+    // and with it Europe's 14:00 intraday origin.
+    name: "forecast-archive-score",
+    settings: {
+      lockDuration: 900000, // 15 min
+      lockRenewTime: 300000,
+    },
+  },
 ];

@@ -12,7 +12,13 @@ import subprocess
 import sys
 import threading
 
-from model import WaitTimeModel
+from model import (
+    WaitTimeModel,
+    delete_saved_version,
+    is_safe_version,
+    list_saved_versions,
+    load_saved_metadata,
+)
 from predict import predict_wait_times, predict_for_park
 from schedule_filter import filter_predictions_by_schedule
 from config import get_settings
@@ -37,7 +43,9 @@ app = FastAPI(
 model: Optional[WaitTimeModel] = None
 _model_lock = threading.Lock()
 
-# Sentinel file: written after training so all workers detect the new version.
+# Sentinel file: written by /model/reload (called by the NestJS training processor
+# once a new version is registered and passed the gate) and at boot, so all
+# workers detect the active version. Training itself never writes it (PAR-815).
 # Path is on the shared models volume so every worker process sees it.
 _SENTINEL_FILE = os.path.join(
     os.environ.get("MODEL_DIR", "/app/models"), "active_version.txt"
@@ -90,7 +98,7 @@ def _load_active_model() -> None:
 def _get_active_model() -> Optional[WaitTimeModel]:
     """
     Return the current model, reloading first if the sentinel signals a newer
-    version (training writes it on completion). Cheap on the hot path — one file
+    version (/model/reload writes it once a trained version is registered). Cheap on the hot path — one file
     read. The lock serializes the in-place swap against concurrent threadpool
     requests; callers use the returned reference for the whole request so a
     mid-request swap on another thread can't tear out the model they're using.
@@ -258,6 +266,8 @@ class ModelInfoResponse(BaseModel):
     file_size_mb: Optional[float] = None
     hyperparameters: Optional[dict] = None
     featureStats: Optional[List[dict]] = None
+    trainingTimings: Optional[dict] = None
+    refitSkipped: Optional[dict] = None
 
 
 # Endpoints
@@ -307,6 +317,75 @@ async def get_model_info():
     )
 
 
+@app.get("/model/info/{version}", response_model=ModelInfoResponse)
+def get_saved_model_info(version: str):
+    """Information about one saved version, read from that version's own files.
+
+    `/model/info` describes whatever model THIS worker has loaded, which after a
+    training run is still the previous version until the worker's next /predict
+    reloads it. The training processor registers a new version from this endpoint
+    instead, so it can never record the previous model's metrics under the new
+    version's name. 404 when the version has no model file or no metadata.
+    """
+    metadata = load_saved_metadata(version)
+    if metadata is None:
+        raise HTTPException(
+            status_code=404, detail=f"No saved model and metadata for {version}"
+        )
+    model_path = os.path.join(settings.MODEL_DIR, f"catboost_{version}.cbm")
+    return ModelInfoResponse(
+        version=version,
+        trainedAt=metadata.get("trained_at"),
+        metrics=metadata.get("metrics"),
+        features=metadata.get("features_used"),
+        train_samples=metadata.get("train_samples"),
+        val_samples=metadata.get("val_samples"),
+        file_size_mb=round(os.path.getsize(model_path) / (1024 * 1024), 2),
+        hyperparameters=metadata.get("hyperparameters"),
+        featureStats=metadata.get("feature_stats"),
+        trainingTimings=metadata.get("training_timings"),
+        refitSkipped=metadata.get("refit_skipped"),
+    )
+
+
+def _protected_versions() -> Dict[str, Optional[str]]:
+    """Versions whose files must never be deleted: the one the sentinel names
+    (what every worker serves next), the one this worker has loaded, and the one
+    a training run is writing right now."""
+    status = _read_training_status()
+    return {
+        "db_active": fetch_active_model_version(),
+        "sentinel": _read_sentinel(),
+        "loaded": model.version if model is not None else None,
+        "training": status.get("current_version") if status.get("is_training") else None,
+    }
+
+
+@app.get("/models/files")
+def list_model_files():
+    """Saved versions on disk (for the API's cleanup, which has no access to the
+    models volume), plus the versions that are protected from deletion."""
+    return {"versions": list_saved_versions(), "protected": _protected_versions()}
+
+
+@app.delete("/models/files/{version}")
+def delete_model_files(version: str):
+    """Delete one version's .cbm and .pkl. 400 for an unsafe version, 409 for a
+    protected one (sentinel, loaded, or in training), 404 when nothing existed."""
+    if not is_safe_version(version):
+        raise HTTPException(status_code=400, detail="Invalid model version")
+    protected = _protected_versions()
+    if version in protected.values():
+        raise HTTPException(
+            status_code=409, detail=f"{version} is protected: {protected}"
+        )
+    deleted = delete_saved_version(version)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"No files for {version}")
+    logger.info(f"🧹 Deleted model files for {version}: {deleted}")
+    return {"version": version, "deleted": deleted}
+
+
 @app.post("/model/reload")
 async def reload_model():
     """
@@ -333,8 +412,8 @@ async def reload_model():
 
         return {
             "status": "success",
-            "message": f"Model reloaded. Version: {model.version} (sentinel written for all workers)",
-            "version": model.version,
+            "message": f"Model reloaded. Version: {model_version} (sentinel written for all workers)",
+            "version": model_version,
         }
     except Exception as e:
         logger.error(f"❌ Error reloading model: {e}")
@@ -386,6 +465,9 @@ class TrainRequest(BaseModel):
     """Training request"""
 
     version: Optional[str] = None
+    # The caller's timeout in seconds. The training subprocess skips the
+    # optional final refit when it would not finish inside it (PAR-815).
+    timeBudgetSeconds: Optional[float] = None
 
 
 @app.post("/train")
@@ -433,9 +515,13 @@ async def train_model_endpoint(request: TrainRequest):
         try:
             # Subprocess gets a fresh Python interpreter — no module-cache issues,
             # and an OOM kill only tears down this process, not the uvicorn workers.
+            env = dict(os.environ)
+            if request.timeBudgetSeconds:
+                env["TRAIN_TIME_BUDGET_SECONDS"] = str(request.timeBudgetSeconds)
             proc = subprocess.Popen(
-                [sys.executable, _train_standalone, version, _TRAINING_STATUS_FILE, _SENTINEL_FILE],
+                [sys.executable, _train_standalone, version, _TRAINING_STATUS_FILE],
                 cwd=os.path.dirname(_train_standalone),
+                env=env,
             )
             # Record the subprocess PID immediately so a worker recycling between
             # launch and the subprocess's own first status write can still tell the
@@ -491,6 +577,8 @@ async def get_training_status():
         "finished_at": status.get("finished_at"),
         "status": status.get("status", "idle"),
         "error": status.get("error"),
+        "timings": status.get("timings"),
+        "refit_skipped": status.get("refit_skipped"),
     }
 
 
@@ -507,7 +595,7 @@ def predict(request: PredictionRequest):
     """
     # sync def: Starlette runs this in a threadpool, so concurrent /predict calls
     # overlap (notably their many DB queries) instead of serializing on the event
-    # loop. _get_active_model() also reloads if training wrote a new sentinel version.
+    # loop. _get_active_model() also reloads if /model/reload wrote a new sentinel version.
     current_model = _get_active_model()
 
     if current_model is None:

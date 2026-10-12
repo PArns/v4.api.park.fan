@@ -52,6 +52,46 @@ def test_survives_an_entry_that_vanishes_mid_eviction():
     assert "stale" not in cache
 
 
+def test_concurrent_reads_never_see_the_cache_change_size_mid_eviction():
+    """PAR-815: the sync `def predict` handlers run in FastAPI's threadpool, so
+    one thread could insert a bucket while another iterated `cache.items()` to
+    evict, and the request died with "dictionary changed size during iteration"
+    (five HTTP 500s in the logs). Two threads hammer `_cached_read` with fresh
+    keys over a large cache, with the interpreter switching threads as often as
+    it can, so the old code loses that race within a few calls.
+    """
+    import threading
+    import time
+
+    import pandas as pd
+
+    now = time.time()
+    cache = {f"seed-{i}": (None, now) for i in range(20_000)}
+    frame = pd.DataFrame({"x": [1]})
+    errors = []
+
+    def hammer(tag):
+        try:
+            for i in range(60):
+                predict._cached_read(cache, f"{tag}-{i}", lambda: frame)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [threading.Thread(target=hammer, args=(t,)) for t in "abcd"]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        sys.setswitchinterval(old_interval)
+
+    assert errors == [], errors
+    assert all(f"{t}-59" in cache for t in "abcd")
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

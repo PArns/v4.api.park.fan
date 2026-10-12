@@ -23,7 +23,19 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
       logger: new SlowQueryFileLogger(),
       maxQueryExecutionTime: 500, // Triggers logQuerySlow → logs/slow-queries.log
       timezone: "UTC", // Always use UTC
+      // Every service connects as the same `parkfan` role, so without a name
+      // pg_stat_activity cannot say whose session is holding a lock. The
+      // 2026-10-07..09 incidents could not be attributed for exactly that
+      // reason (runbook §0b).
+      applicationName: "parkfan-api",
       extra: {
+        // A session parked between BEGIN and COMMIT keeps its locks and its
+        // snapshot; anything that then needs a strong lock on the same table
+        // (a chunk drop, a compression) queues, and every reader queues behind
+        // that. No transaction in this app waits on anything but its own
+        // statements, so ten idle minutes means a leak — end it. This is
+        // per-connection, so it does not touch ad-hoc or Timescale sessions.
+        idle_in_transaction_session_timeout: 10 * 60 * 1000,
         // Connection pool size. Raised 30 -> 50 after measuring that a third
         // of all logged "slow query" time was queueing for a connection, not
         // executing: bursts of exactly 30 queries finishing within a few ms of

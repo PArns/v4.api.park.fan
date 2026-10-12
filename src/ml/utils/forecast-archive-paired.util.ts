@@ -1,0 +1,334 @@
+/**
+ * The Chronos-2 shadow's section of the forward-archive board (PAR-852): its
+ * own MAE per use case × lead, and the PAIRED difference against each
+ * reference with a 95 % park-cluster bootstrap CI — the PAR-828 bench's win
+ * criterion, computed on live, leakage-free forecasts.
+ *
+ * Pure: the scoring service hands in the paired per-park-day rows of
+ * `forecast_archive_paired` and the pooled board rows; nothing here reads a
+ * database, so the spec pins the arithmetic.
+ */
+
+/** BENCH owner rule (2): live confirmation needs ≥ 14 days and ≥ 10 parks per lead. */
+export const CHRONOS_MIN_DAYS = 14;
+export const CHRONOS_MIN_PARKS = 10;
+export const BOOTSTRAP_REPS = 1000;
+/** Fixed, so the same rows always give the same CI (the board is cached anyway). */
+export const BOOTSTRAP_SEED = 852;
+
+export interface PairedRow {
+  targetDate: string;
+  parkId: string;
+  useCase: string;
+  lead: string;
+  model: string;
+  reference: string;
+  segment: string;
+  n: number;
+  saeModel: number;
+  saeRef: number;
+  seModel: number;
+  seRef: number;
+}
+
+export type ChronosVerdict =
+  | "insufficient_data"
+  | "chronos_better"
+  | "reference_better"
+  | "no_significant_difference";
+
+/** One shadow-vs-reference comparison on identical slots. */
+export interface ChronosComparison {
+  /** `served` (what users get on that surface), `persistence` (live wait held flat; live only), `h5` (plain H5 profile; grid only). */
+  reference: string;
+  /** Paired slots (truth, shadow and reference all present). */
+  n: number;
+  /** Distinct target dates and parks contributing. */
+  days: number;
+  parks: number;
+  /** MAE of each on the paired slots, minutes. */
+  modelMae: number | null;
+  referenceMae: number | null;
+  /** Mean bias (pred − truth) of each on the paired slots. */
+  modelBias: number | null;
+  referenceBias: number | null;
+  /** modelMae − referenceMae, minutes. NEGATIVE = Chronos is better. */
+  diff: number | null;
+  /** 95 % CI of `diff`, park-cluster bootstrap; null with fewer than 2 parks. */
+  ciLow: number | null;
+  ciHigh: number | null;
+  /** days ≥ {@link CHRONOS_MIN_DAYS} and parks ≥ {@link CHRONOS_MIN_PARKS}. */
+  enoughData: boolean;
+  verdict: ChronosVerdict;
+}
+
+export interface ChronosBoardRow {
+  useCase: string;
+  lead: string;
+  /** `chronos2` (live, intraday origins) or `chronos2_grid` (06:00 origin, d0–d7). */
+  model: string;
+  surface: "chronos_live" | "chronos_grid";
+  segment: string;
+  /** The shadow on its OWN coverage (from the pooled scores) — not comparable
+   *  across models; compare through `comparisons`. */
+  mae: number | null;
+  bias: number | null;
+  n: number;
+  days: number;
+  /** Share of slots with truth ≤ q50 + (q95 − q50). */
+  bandCoverage: number | null;
+  /** Grid only: |P90 of the curve − truth P90| per ride-day (the served
+   *  plan's figure is `dayPeakMae` on the UC3 `all` row). */
+  dayPeakMae: number | null;
+  comparisons: ChronosComparison[];
+}
+
+export interface ChronosBoard {
+  /** The API's `CHRONOS_SHADOW_ENABLED` at the time the board was built. */
+  captureEnabled: boolean;
+  method: {
+    diff: string;
+    ci: number;
+    bootstrap: string;
+    reps: number;
+    seed: number;
+    minDays: number;
+    minParks: number;
+  };
+  rows: ChronosBoardRow[];
+}
+
+/** Minimal shape of a pooled board row this needs. */
+interface PooledRow {
+  useCase: string;
+  lead: string;
+  source: string;
+  segment: string;
+  days: number;
+  metrics: Record<string, number | null>;
+  sums: Record<string, number>;
+}
+
+const MODEL_SURFACE: Record<string, "chronos_live" | "chronos_grid"> = {
+  chronos2: "chronos_live",
+  chronos2_grid: "chronos_grid",
+};
+
+/** mulberry32 — small, seedable, good enough for resampling indices. */
+export function seededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function quantile(sorted: number[], p: number): number {
+  const pos = (sorted.length - 1) * p;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+const round = (v: number, d = 2) => Math.round(v * 10 ** d) / 10 ** d;
+
+/**
+ * 95 % CI of the pooled paired difference (ΣA − ΣB) / Σn by resampling PARKS
+ * with replacement — days of one park are not independent, so resampling
+ * park-days would make the interval too narrow (the bench's finding).
+ */
+export function parkClusterBootstrap(
+  parks: Array<{ n: number; a: number; b: number }>,
+  reps = BOOTSTRAP_REPS,
+  seed = BOOTSTRAP_SEED,
+): { low: number; high: number } | null {
+  if (parks.length < 2) return null;
+  const rnd = seededRandom(seed);
+  const stats: number[] = [];
+  for (let r = 0; r < reps; r++) {
+    let n = 0;
+    let d = 0;
+    for (let i = 0; i < parks.length; i++) {
+      const p = parks[Math.floor(rnd() * parks.length)];
+      n += p.n;
+      d += p.a - p.b;
+    }
+    if (n > 0) stats.push(d / n);
+  }
+  if (stats.length === 0) return null;
+  stats.sort((x, y) => x - y);
+  return { low: quantile(stats, 0.025), high: quantile(stats, 0.975) };
+}
+
+export function compare(
+  reference: string,
+  rows: PairedRow[],
+  seed = BOOTSTRAP_SEED,
+): ChronosComparison {
+  const perPark = new Map<string, { n: number; a: number; b: number }>();
+  const dates = new Set<string>();
+  let n = 0;
+  let a = 0;
+  let b = 0;
+  let ea = 0;
+  let eb = 0;
+  for (const r of rows) {
+    if (r.n <= 0) continue;
+    const p = perPark.get(r.parkId) ?? { n: 0, a: 0, b: 0 };
+    p.n += r.n;
+    p.a += r.saeModel;
+    p.b += r.saeRef;
+    perPark.set(r.parkId, p);
+    dates.add(r.targetDate);
+    n += r.n;
+    a += r.saeModel;
+    b += r.saeRef;
+    ea += r.seModel;
+    eb += r.seRef;
+  }
+  const ci = parkClusterBootstrap([...perPark.values()], BOOTSTRAP_REPS, seed);
+  const enoughData =
+    dates.size >= CHRONOS_MIN_DAYS && perPark.size >= CHRONOS_MIN_PARKS;
+  const diff = n > 0 ? (a - b) / n : null;
+  let verdict: ChronosVerdict = "insufficient_data";
+  if (enoughData && ci) {
+    verdict =
+      ci.high < 0
+        ? "chronos_better"
+        : ci.low > 0
+          ? "reference_better"
+          : "no_significant_difference";
+  }
+  return {
+    reference,
+    n,
+    days: dates.size,
+    parks: perPark.size,
+    modelMae: n > 0 ? round(a / n) : null,
+    referenceMae: n > 0 ? round(b / n) : null,
+    modelBias: n > 0 ? round(ea / n) : null,
+    referenceBias: n > 0 ? round(eb / n) : null,
+    diff: diff === null ? null : round(diff),
+    ciLow: ci ? round(ci.low) : null,
+    ciHigh: ci ? round(ci.high) : null,
+    enoughData,
+    verdict,
+  };
+}
+
+/** A stable per-cell seed, so two cells never share one resampling sequence. */
+function cellSeed(key: string): number {
+  let h = BOOTSTRAP_SEED;
+  for (let i = 0; i < key.length; i++)
+    h = Math.imul(h ^ key.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+
+const REFERENCE_ORDER = ["served", "persistence", "h5"];
+
+function leadOrder(lead: string): number {
+  if (lead.startsWith("h")) return Number(lead.slice(1).split("-")[0]);
+  if (lead.startsWith("d")) return 1000 + Number(lead.slice(1));
+  return 9999;
+}
+
+/**
+ * The board section: one row per (use case, lead, model, segment) the shadow
+ * was scored on, each with its comparisons. Ordered use case → lead → model →
+ * segment.
+ */
+export function buildChronosBoard(
+  paired: PairedRow[],
+  pooled: PooledRow[],
+  captureEnabled: boolean,
+): ChronosBoard {
+  const cells = new Map<
+    string,
+    { row: ChronosBoardRow; byRef: Map<string, PairedRow[]> }
+  >();
+  const cellOf = (
+    useCase: string,
+    lead: string,
+    model: string,
+    segment: string,
+  ) => {
+    const key = [useCase, lead, model, segment].join("|");
+    let c = cells.get(key);
+    if (!c) {
+      c = {
+        row: {
+          useCase,
+          lead,
+          model,
+          surface: MODEL_SURFACE[model] ?? "chronos_live",
+          segment,
+          mae: null,
+          bias: null,
+          n: 0,
+          days: 0,
+          bandCoverage: null,
+          dayPeakMae: null,
+          comparisons: [],
+        },
+        byRef: new Map(),
+      };
+      cells.set(key, c);
+    }
+    return c;
+  };
+
+  for (const p of pooled) {
+    if (!MODEL_SURFACE[p.source]) continue;
+    // Slot rows only; the ride-day rows (D3, dayPeak) share the key but carry
+    // other counters — their MAE fields are null.
+    const c = cellOf(p.useCase, p.lead, p.source, p.segment);
+    if (p.metrics.mae !== null && p.metrics.mae !== undefined) {
+      c.row.mae = p.metrics.mae;
+      c.row.bias = p.metrics.bias ?? null;
+      c.row.n = p.sums.n ?? 0;
+      c.row.bandCoverage = p.metrics.bandCoverage ?? null;
+    }
+    if (p.metrics.dayPeakMae !== null && p.metrics.dayPeakMae !== undefined) {
+      c.row.dayPeakMae = p.metrics.dayPeakMae;
+    }
+    c.row.days = Math.max(c.row.days, p.days);
+  }
+  for (const r of paired) {
+    const c = cellOf(r.useCase, r.lead, r.model, r.segment);
+    const list = c.byRef.get(r.reference) ?? [];
+    list.push(r);
+    c.byRef.set(r.reference, list);
+  }
+  for (const [key, c] of cells) {
+    c.row.comparisons = [...c.byRef.entries()]
+      .sort(
+        (x, y) => REFERENCE_ORDER.indexOf(x[0]) - REFERENCE_ORDER.indexOf(y[0]),
+      )
+      .map(([ref, rows]) => compare(ref, rows, cellSeed(`${key}|${ref}`)));
+  }
+  const rows = [...cells.values()]
+    .map((c) => c.row)
+    .sort(
+      (a, b) =>
+        a.useCase.localeCompare(b.useCase) ||
+        leadOrder(a.lead) - leadOrder(b.lead) ||
+        a.model.localeCompare(b.model) ||
+        a.segment.localeCompare(b.segment),
+    );
+  return {
+    captureEnabled,
+    method: {
+      diff: "model MAE − reference MAE on identical slots, minutes; negative = Chronos better",
+      ci: 0.95,
+      bootstrap: "park-cluster (parks resampled with replacement)",
+      reps: BOOTSTRAP_REPS,
+      seed: BOOTSTRAP_SEED,
+      minDays: CHRONOS_MIN_DAYS,
+      minParks: CHRONOS_MIN_PARKS,
+    },
+    rows,
+  };
+}

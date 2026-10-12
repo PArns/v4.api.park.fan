@@ -787,6 +787,19 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     conflictColumns: ["target_date", "lead_days"],
   },
   {
+    // The forward archive of served curves (PAR-831): no FK, same reasoning
+    // as `prediction_lead_snapshots` above — the served curve at a lead cannot
+    // be recomputed later, so a loser's rows move. Its PK is
+    // `(origin_at, attraction_id, surface, target_date)`; a capture that saw
+    // both twins at one origin keeps the winner's row. `park_id` is left on
+    // the loser's park: a park merge reparents nothing here, and the rows
+    // expire 14 days after their target date.
+    table: "forecast_archive_curves",
+    column: "attraction_id",
+    strategy: "move",
+    conflictColumns: ["origin_at", "surface", "target_date"],
+  },
+  {
     // Discarded rather than moved: the profile is an aggregate over a window
     // that the merge has just invalidated, and the survivor is skipped by the
     // reconstruction until `last_merged_at` falls out of range anyway. Carrying
@@ -1205,6 +1218,17 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
   { table: "attraction_exposure_days", column: "parkId", strategy: "move" },
   { table: "attraction_downtime_profiles", column: "parkId", strategy: "move" },
   { table: "park_downtime_coverage", column: "parkId", strategy: "discard" },
+  // `park_id`, snake_case like the curves below. Move, not discard: the nightly
+  // job judges only yesterday, so a dropped verdict for an older day stays gone
+  // until somebody runs the backfill, and the calendar falls back to the
+  // operator's CLOSED for it. The primary key is (park_id, day), so a day both
+  // parks hold keeps the winner's verdict.
+  {
+    table: "park_day_operations",
+    column: "park_id",
+    strategy: "move",
+    conflictColumns: ["day"],
+  },
   // `park_id`, not `parkId`: this table is written by raw SQL and its column is
   // snake_case. Discard rather than move — a curve is an aggregate over the
   // loser's intervals, and those move to the winner and are recomputed the same

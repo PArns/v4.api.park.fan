@@ -140,10 +140,14 @@ export class CacheWarmupService implements OnApplicationBootstrap {
     label: string,
     processFn: (item: T) => Promise<boolean>,
     delayMs: number = 1000,
+    // Awaited before every batch; a throw ends the loop (PAR-822 uses it to
+    // hold upstream-hitting warmups while a wait-times sync is fetching).
+    beforeBatch?: () => Promise<void>,
   ): Promise<number> {
     let successCount = 0;
 
     for (let i = 0; i < items.length; i += batchSize) {
+      if (beforeBatch) await beforeBatch();
       const batch = items.slice(i, i + batchSize);
 
       const results = await Promise.allSettled(
@@ -493,8 +497,15 @@ export class CacheWarmupService implements OnApplicationBootstrap {
    * - CLOSED: Only warm if cache missing/expired (respect TTL)
    *
    * Triggered every 5 minutes by wait-times sync.
+   *
+   * A park that reads CLOSED from its schedule is re-checked against its
+   * upstream live feed inside `buildIntegratedResponse` (queue-times,
+   * Wartezeiten or ThemeParks.wiki). `beforeBatch` lets the caller hold those
+   * fetches while the wait-times sync is using the same upstreams.
    */
-  async warmupOperatingParks(): Promise<number> {
+  async warmupOperatingParks(options?: {
+    beforeBatch?: () => Promise<void>;
+  }): Promise<number> {
     const startTime = Date.now();
     this.logger.verbose("🔥 Starting cache warmup for ALL parks...");
 
@@ -567,6 +578,8 @@ export class CacheWarmupService implements OnApplicationBootstrap {
           const shouldForce = status === "OPERATING";
           return this.warmupParkCache(parkId, shouldForce);
         },
+        1000,
+        options?.beforeBatch,
       );
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       this.logger.log(

@@ -14,6 +14,7 @@ import { RideStatsProcessor } from "./processors/ride-stats.processor";
 import { CuratedDataProcessor } from "./processors/curated-data.processor";
 import { SixFlagsClient } from "../external-apis/six-flags/six-flags.client";
 import { WaitTimesProcessor } from "./processors/wait-times.processor";
+import { LiveCacheWarmupProcessor } from "./processors/live-cache-warmup.processor";
 import { WeatherProcessor } from "./processors/weather.processor";
 import { WeatherWarningsProcessor } from "./processors/weather-warnings.processor";
 import { HolidaysProcessor } from "./processors/holidays.processor";
@@ -31,8 +32,13 @@ import { AttractionHourlyHistoryProcessor } from "./processors/attraction-hourly
 import { DowntimeReconstructionProcessor } from "./processors/downtime-reconstruction.processor";
 import { PushNotificationProcessor } from "./processors/push-notification.processor";
 import { TripsMaintenanceProcessor } from "./processors/trips-maintenance.processor";
+import {
+  ForecastArchiveProcessor,
+  ForecastArchiveScoreProcessor,
+} from "./processors/forecast-archive.processor";
 import { ShowPatternProcessor } from "./processors/show-pattern.processor";
 import { RopeDropProcessor } from "./processors/rope-drop.processor";
+import { ParkDayOperationProcessor } from "./processors/park-day-operation.processor";
 import { TypicalWaitsProcessor } from "./processors/typical-waits.processor";
 import { GeoipUpdateProcessor } from "./processors/geoip-update.processor";
 import { NfForecastProcessor } from "./processors/nf-forecast.processor";
@@ -164,6 +170,7 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     CuratedDataProcessor,
     EntityMappingsProcessor, // Phase 6.6.3: Multi-source mapping processor
     WaitTimesProcessor,
+    LiveCacheWarmupProcessor, // Cache warmup after each sync (PAR-822)
     WeatherProcessor,
     WeatherWarningsProcessor,
     WeatherHistoricalProcessor,
@@ -178,9 +185,12 @@ import { ShowFollowsModule } from "../show-follows/show-follows.module";
     StatsProcessor,
     P50BaselineProcessor, // P50 + P90 baseline processor
     AttractionHourlyHistoryProcessor, // Per-day hourly history rollup
+    ParkDayOperationProcessor, // Measured-operation verdict per park-day (daily)
     DowntimeReconstructionProcessor, // Outage intervals + exposure + profiles
     PushNotificationProcessor, // The five-minute tick that sends "next up"
     TripsMaintenanceProcessor, // Daily sweep of expired stored plans
+    ForecastArchiveProcessor, // Forward archive of served curves (PAR-831)
+    ForecastArchiveScoreProcessor, // …and its daily scoring, on its own queue
     ShowPatternProcessor, // Nightly per-weekday showtime patterns
     RopeDropProcessor, // Rope-drop recommendations (daily)
     TypicalWaitsProcessor, // Typical P50/P90 peak-wait stats (daily)

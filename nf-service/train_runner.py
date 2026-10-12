@@ -18,19 +18,36 @@ import db
 
 
 def run(version: str) -> None:
+    started_at = datetime.now(timezone.utc)
+    # The day this run makes the forecast (UTC, as forecast_date always was),
+    # fixed at START: the panel is read from here on, so a run that crosses
+    # midnight still describes the day it began. Written to the status file next
+    # to the version, so a later /forecast re-persist of this parquet lands on
+    # the same key instead of on whatever day it happens to be called (PAR-814).
+    forecast_date = started_at.date()
     main._write_status({
         "is_training": True, "status": "training", "version": version,
-        "started_at": datetime.now(timezone.utc).isoformat(), "error": None,
+        "started_at": started_at.isoformat(), "error": None,
     })
     try:
         y_hat = forecast.train_and_forecast(version)
+        chunks = dict(y_hat.attrs.get("chunks") or {})
         y_hat.to_parquet(main._FORECAST_FILE)
         tcol = main._tft_column(list(y_hat.columns))
-        persisted = db.persist_forecast(y_hat, version, tcol) if tcol else 0
-        info = {"rows": int(len(y_hat)), "persisted": int(persisted)}
+        persisted = (
+            db.persist_forecast(y_hat, version, tcol, forecast_date) if tcol else 0
+        )
+        info = {"rows": int(len(y_hat)), "persisted": int(persisted), "chunks": chunks}
+        if chunks.get("skipped"):
+            main.logger.warning(
+                "TFT run %s completed with %d of %d chunk(s) skipped — those parks "
+                "keep their previous forecast_date", version, chunks["skipped"],
+                chunks.get("total", 0),
+            )
         main._write_status({
             "is_training": False, "status": "completed", "version": version,
             "finished_at": datetime.now(timezone.utc).isoformat(),
+            "forecast_date": forecast_date.isoformat(),
             "info": info, "error": None,
         })
         main.logger.info("Training + forecast complete: %s", info)

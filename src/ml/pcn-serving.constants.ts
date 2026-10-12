@@ -10,6 +10,30 @@
  */
 export const PCN_MAX_FORECAST_AGE_H = 3;
 
+/**
+ * How far ahead of its slot a served intraday value must have been shown to be
+ * scored for the reader-facing badge (PAR-854).
+ *
+ * `prediction_accuracy` keeps the LATEST write per slot, and the generator runs
+ * every 15 minutes including the slot that has just begun: measured on
+ * production (2026-10-11, 261 419 rows over a day) the scored row's median lead
+ * was −0.6 minutes. For CatBoost that was already a nowcast. For the served
+ * value it would be worse than meaningless: at lead 0 the §7.7 blend serves the
+ * anchor — the wait read at that moment — and the comparison job scores it
+ * against the queue reading nearest the slot, i.e. largely against itself. A
+ * badge built from that would say "excellent" for every busy ride by
+ * construction.
+ *
+ * So the served columns are written only while the slot is still at least this
+ * far away; the latest such write wins, which pins the scored lead to between
+ * two hours and one generation cycle more. Not one hour: the blend is the pure
+ * anchor up to 1 h (alpha = 1) and only hands over to PCN by 3 h, so a badge
+ * scored at 60–75 min would grade persistence and read "excellent" on every
+ * steady busy ride. At 2 h the served value is half anchor, half PCN — the
+ * forecast a reader actually plans with ("what will it be when I get there").
+ */
+export const SERVED_ACCURACY_MIN_LEAD_MS = 2 * 60 * 60 * 1000;
+
 /** Champion-swap flag: serve PCN's intraday 15-min forecast in place of CatBoost's
  * `hourly` predictions. Read per call so tests/env toggles apply without restart. */
 export function servePcnIntraday(): boolean {

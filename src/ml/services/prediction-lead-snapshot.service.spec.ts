@@ -28,6 +28,8 @@ describe("PredictionLeadSnapshotService", () => {
   /** The aggregate the read path runs, so a test can hand back a row. */
   let aggregate: { mae: string | null; scored: string };
   let redis: { store: Map<string, string> };
+  /** Every condition the read path added, so a test can pin the filter. */
+  let conditions: string[];
 
   const makeService = async () => {
     inserted = [];
@@ -44,6 +46,7 @@ describe("PredictionLeadSnapshotService", () => {
 
     aggregate = { mae: null, scored: "0" };
     redis = { store: new Map<string, string>() };
+    conditions = [];
 
     // The read path chains select/addSelect/where/andWhere and ends in
     // getRawOne; the write path chains insert/into/values/orIgnore/execute.
@@ -51,8 +54,14 @@ describe("PredictionLeadSnapshotService", () => {
     const readBuilder = {
       select: () => readBuilder,
       addSelect: () => readBuilder,
-      where: () => readBuilder,
-      andWhere: () => readBuilder,
+      where: (c: string) => {
+        conditions.push(c);
+        return readBuilder;
+      },
+      andWhere: (c: string) => {
+        conditions.push(c);
+        return readBuilder;
+      },
       getRawOne: async () => aggregate,
     };
     Object.assign(insertBuilder, readBuilder);
@@ -215,6 +224,53 @@ describe("PredictionLeadSnapshotService", () => {
     expect(inserted).toHaveLength(0);
   });
 
+  // ── PAR-854: the snapshot records the SERVED number ────────────────────────
+  // The calendar and /plan/day show TFT for headliners over days 1-60; the
+  // archive used to record CatBoost's raw answer there, so `leadTimeMae`
+  // published the error of a model the reader never saw.
+  describe("served source", () => {
+    const tft = (attractionId: string, day: string, wait = 55): PredictionDto =>
+      ({
+        ...daily(attractionId, `${day}T12:00:00`, wait, 14),
+        modelVersion: "tft",
+      }) as PredictionDto;
+
+    it("labels TFT rows tft and everything else catboost", async () => {
+      const now = new Date("2026-03-10T01:00:00Z");
+      await service.snapshotPark(
+        park,
+        [
+          tft("taron", "2026-03-11", 55), // +1, served by TFT
+          daily("fly", "2026-03-11T12:00:00Z", 30), // +1, TFT had nothing → CatBoost
+        ],
+        now,
+      );
+
+      const bySource = Object.fromEntries(
+        inserted.map((r) => [r.attractionId, [r.source, r.predictedWaitTime]]),
+      );
+      expect(bySource).toEqual({
+        taron: ["tft", 55],
+        fly: ["catboost", 30],
+      });
+    });
+
+    it("reads TFT's offset-less day as the park's own day, far from UTC", async () => {
+      // TFT names the park-local day as `YYYY-MM-DDT12:00:00`. Parsed with
+      // `new Date()` that is noon on the SERVER's clock, which in Auckland
+      // (UTC+13 in March) is already the next day — a one-day-off lead label.
+      const auckland = { ...park, timezone: "Pacific/Auckland" } as Park;
+      // 2026-03-10 01:00 UTC is 14:00 on the 10th in Auckland.
+      const now = new Date("2026-03-10T01:00:00Z");
+      await service.snapshotPark(auckland, [tft("taron", "2026-03-11")], now);
+
+      expect(inserted).toHaveLength(1);
+      expect(inserted[0].targetDate).toBe("2026-03-11");
+      expect(inserted[0].leadDays).toBe(1);
+      expect(inserted[0].source).toBe("tft");
+    });
+  });
+
   it("samples out to sixty days", () => {
     // A sampling choice, not a limit: the daily run answers as far ahead as the
     // park has published a schedule (181-362 days across the live parks), so a
@@ -236,7 +292,17 @@ describe("PredictionLeadSnapshotService", () => {
       // 20 days is answered by the 14-day bucket, never by the 30-day one:
       // overstating the distance understates the error.
       await expect(service.getLeadTimeMae(20)).resolves.toBe(7.3);
-      expect([...redis.store.keys()]).toEqual(["ml:lead-mae:14"]);
+      expect([...redis.store.keys()]).toEqual(["ml:lead-mae:v2:14"]);
+    });
+
+    it("averages served snapshots only, never the pre-PAR-854 CatBoost rows", async () => {
+      // A row without a source recorded CatBoost while readers saw TFT. Mixing
+      // it in would publish a blend of two models as the served model's error.
+      aggregate = { mae: "6.0", scored: enough };
+      await service.getLeadTimeMae(7);
+
+      expect(conditions).toContain("s.source IS NOT NULL");
+      expect(conditions).toContain("s.absoluteError IS NOT NULL");
     });
 
     it("answers past the last bucket with the last bucket", async () => {
@@ -245,7 +311,7 @@ describe("PredictionLeadSnapshotService", () => {
       // The furthest thing anybody has measured. "At least this wrong" is
       // honest where interpolating into unmeasured distance is not.
       await expect(service.getLeadTimeMae(300)).resolves.toBe(11);
-      expect([...redis.store.keys()]).toEqual(["ml:lead-mae:60"]);
+      expect([...redis.store.keys()]).toEqual(["ml:lead-mae:v2:60"]);
     });
 
     it("says nothing about today, which no bucket covers", async () => {
@@ -267,7 +333,7 @@ describe("PredictionLeadSnapshotService", () => {
 
       // "none" and not an absent key: /plan/day is a per-request read path, and
       // an unrecorded miss is an aggregate query on every call.
-      expect(redis.store.get("ml:lead-mae:7")).toBe("none");
+      expect(redis.store.get("ml:lead-mae:v2:7")).toBe("none");
 
       aggregate = { mae: "5.0", scored: enough };
       await expect(service.getLeadTimeMae(7)).resolves.toBeNull();
