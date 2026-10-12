@@ -438,8 +438,16 @@ already written with the same checkpoint). Measured on 2026-10-12 over the last
 |---|---|
 | 8.50 M (95.2 %) | 0.43 M (4.8 %) |
 
-Grouped by the tick that wrote them, the rewrites are the **first tick after each
-deploy**: 195 k rows over 82 parks at 20:15 (container started 20:04), 80 k at
+That split is a lower bound: a rewrite within an hour of its origin lands in the
+first column. The exact figure for one deploy comes from `pg_stat_user_tables`
+sampled at 20:36:57 and 21:02:47 UTC, a window with one deploy (20:50) in it:
++131 712 inserts, **+223 872 updates**, 0 of them HOT. The first tick after that
+deploy (21:00) wrote 308 448 rows over 128 parks, and 223 872 of them — the same
+number — carried an origin more than 30 minutes older than their write, over 94
+parks. The ticks without a restart in between (20:30, 20:45) rewrote nothing.
+
+Grouped by the tick that wrote them, the older rewrites are the **first tick after each
+deploy** too: 195 k rows over 82 parks at 20:15 (container started 20:04), 80 k at
 12:30, 65 k at 20:45 the day before, 42 k at 07:30, 26 k at 16:30, plus a few
 thousand around the 09:00 retrain. A restart empties the memo, so every park whose
 origin stopped moving (the closed ones) is re-predicted from the same checkpoint
@@ -455,8 +463,13 @@ ON CONFLICT (attraction_id, target_slot, origin_slot, quantile)
 DO UPDATE SET predicted_wait = EXCLUDED.predicted_wait,
               model_version  = EXCLUDED.model_version,
               created_at     = now()
-WHERE pcn_forecasts.predicted_wait IS DISTINCT FROM EXCLUDED.predicted_wait
+WHERE abs(pcn_forecasts.predicted_wait - EXCLUDED.predicted_wait) > 0.001  -- :tol
 ```
+
+- **"Changed" means more than a thousandth of a minute apart**, not bit-unequal:
+  GPU inference is not guaranteed to be bit-reproducible across processes, and a
+  last-bit difference would turn every restart rewrite back on. Served waits are
+  whole minutes, so nothing anyone reads can move by that much.
 
 - **`created_at` keeps one meaning**: when this origin was forecast with these
   values. A value-identical re-send leaves it alone, so the staleness guard reads
@@ -469,10 +482,17 @@ WHERE pcn_forecasts.predicted_wait IS DISTINCT FROM EXCLUDED.predicted_wait
 - **`model_version` is not compared**: it is the tick's own timestamp and differs
   on every call.
 - Tested against Postgres in `pcn-service/test_db_write_volume.py`: a re-send
-  writes zero row versions and leaves the serving read's output identical, a
+  (also one jittered by 10⁻⁵) writes zero row versions and leaves the serving read's output identical, a
   changed value rewrites exactly the changed rows, and a closed park's rows stay
-  out of the 3-hour window after a re-send. Against the old statement the first
-  three of those fail.
+  out of the 3-hour window after a re-send. Against the old statement those four
+  fail.
+- **Expected effect**: zero updates on the first tick after a deploy, i.e.
+  ~0.2 M fewer dead tuples and ~0.7 M fewer index entries per deploy, and no
+  restart re-freshening a closed park for the guard. Whether the restart
+  re-prediction is value-identical (same checkpoint, same panel for a park whose
+  feed stopped) was not run on production; check it after the deploy with the
+  same `pg_stat_user_tables` sample around the next deploy's first tick:
+  `n_tup_upd` should stay flat while `n_tup_ins` grows.
 
 ### Retention: 14 → 4 days
 

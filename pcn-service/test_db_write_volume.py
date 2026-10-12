@@ -199,6 +199,15 @@ def test_an_unchanged_origin_is_not_rewritten(pg):
 
 
 @needs_pg
+def test_last_bit_jitter_is_not_a_change(pg):
+    """GPU inference need not be bit-reproducible across a restart."""
+    db.write_pcn_forecasts(_rows(ORIGIN, _base), "pcn_tick1")
+    s0 = pg.stats()
+    db.write_pcn_forecasts(_rows(ORIGIN, lambda a, h, q: _base(a, h, q) + 1e-5), "pcn_tick2")
+    assert _delta(s0, pg.stats()) == (0, 0)
+
+
+@needs_pg
 def test_a_changed_value_is_rewritten_and_restamped(pg):
     db.write_pcn_forecasts(_rows(ORIGIN, _base), "pcn_tick1")
     pg.q("UPDATE pcn_forecasts SET created_at = now() - interval '2 hours'")

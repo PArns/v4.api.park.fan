@@ -303,6 +303,13 @@ def _mark_pcn_forecasts_schema_ready() -> None:
 # A retrained checkpoint does produce different values for the same origin; that
 # row is rewritten and stamped with the new time, as before. `model_version` is
 # not compared: it is the tick's own timestamp, different on every call.
+#
+# "Changed" means more than REWRITE_TOLERANCE_MIN minutes apart, not bit-unequal:
+# GPU inference is not guaranteed to be bit-reproducible across processes, and a
+# last-bit difference would otherwise turn every restart rewrite back on. Served
+# waits are rounded to whole minutes, so a thousandth of a minute changes nothing
+# anyone reads.
+REWRITE_TOLERANCE_MIN = 0.001
 _UPSERT_PCN_FORECASTS = text(
     """
     INSERT INTO pcn_forecasts
@@ -312,7 +319,7 @@ _UPSERT_PCN_FORECASTS = text(
     DO UPDATE SET predicted_wait = EXCLUDED.predicted_wait,
                   model_version  = EXCLUDED.model_version,
                   created_at     = now()
-    WHERE pcn_forecasts.predicted_wait IS DISTINCT FROM EXCLUDED.predicted_wait
+    WHERE abs(pcn_forecasts.predicted_wait - EXCLUDED.predicted_wait) > :tol
     """
 )
 
@@ -327,6 +334,7 @@ def write_pcn_forecasts(rows: list[dict], version: str) -> int:
         return 0
     for r in rows:
         r["ver"] = version
+        r["tol"] = REWRITE_TOLERANCE_MIN
     with engine().begin() as c:
         _ensure_pcn_forecasts_schema(c)
         for i in range(0, len(rows), 5000):
