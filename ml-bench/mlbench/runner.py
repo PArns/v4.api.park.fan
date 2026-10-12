@@ -45,6 +45,8 @@ from .models.base import HistoryView, Model, Origin
 from .provenance import code_hash, git_sha, git_sha_source
 
 PROFILE = os.environ.get("MLBENCH_PROFILE") == "1"
+# Extra paired-coverage references for plug-in models; see ``slot_agg_sql``.
+EXTRA_PAIR_REFS = [r for r in os.environ.get("MLBENCH_EXTRA_PAIR_REFS", "").split(",") if r.strip()]
 
 
 # --------------------------------------------------------------------------- setup
@@ -157,7 +159,17 @@ def load_model(spec: str) -> Model:
 # --------------------------------------------------------------------------- scoring SQL
 
 def slot_agg_sql(models: list[str], refs: list[str], quantile_models: list[str],
-                 table: str, keys: list[str]) -> str:
+                 table: str, keys: list[str],
+                 extra_pairs: "list[tuple[str, str]] | tuple[()]" = ()) -> str:
+    """``extra_pairs`` adds paired (model, reference) coverage columns for pairs that are
+    not in ``refs``. Additive and default-off: with the default the SQL is byte-identical
+    to before. It exists because ``REF_CANDIDATES`` is ``snaive7 / wt_med / clim``, so the
+    run stores no paired intersection against ``h5`` or ``lvlh5_tft`` -- and those are the
+    incumbents a candidate actually has to beat. A paired margin cannot be recovered from
+    the per-model aggregates afterwards (the intersection is not a function of ``n__h5``
+    and ``n__nf_tide``), so the columns have to be written at scoring time. Nothing reads
+    them unless asked: ``report.slot_base`` only looks up ``pn__<m>__<r>`` for the refs it
+    is given, and the reference argmin is over those same refs."""
     cols = ["count(y) AS n_truth"]
     for m in models:
         cols += [f"count({m}) FILTER (WHERE y IS NOT NULL) AS n__{m}",
@@ -169,6 +181,13 @@ def slot_agg_sql(models: list[str], refs: list[str], quantile_models: list[str],
             cols += [f"count(*) FILTER (WHERE {both}) AS pn__{m}__{r}",
                      f"sum(abs({m} - y)) FILTER (WHERE {both}) AS psm__{m}__{r}",
                      f"sum(abs({r} - y)) FILTER (WHERE {both}) AS psr__{m}__{r}"]
+    for m, r in extra_pairs:
+        if m == r or m not in models or r not in models or r in refs:
+            continue
+        both = f"y IS NOT NULL AND {m} IS NOT NULL AND {r} IS NOT NULL"
+        cols += [f"count(*) FILTER (WHERE {both}) AS pn__{m}__{r}",
+                 f"sum(abs({m} - y)) FILTER (WHERE {both}) AS psm__{m}__{r}",
+                 f"sum(abs({r} - y)) FILTER (WHERE {both}) AS psr__{m}__{r}"]
     for m in quantile_models:
         q80, q95 = ("wt_q80", "wt_q95") if m == "wt_med" else (f"{m}__q80", f"{m}__q95")
         cols += [f"count({q80}) FILTER (WHERE y IS NOT NULL) AS qn__{m}",
@@ -671,8 +690,13 @@ class Runner:
             self._tick('plugins')
             models = B.SLOT_MODELS + plug_cols
             scored = models + B.ORACLES
+            # opt-in paired coverage of the PLUG-INS against named non-reference baselines
+            # (MLBENCH_EXTRA_PAIR_REFS=h5,lvlh5_tft, PAR-829), on top of the --pair-with refs;
+            # slot_agg_sql skips any pair whose reference is already in the refs.
+            extra_pairs = [(m, r) for m in plug_cols for r in EXTRA_PAIR_REFS]
             self.write("slot", slot_agg_sql(scored, self.refs_for(scored), ["wt_med"] + qmodels, "tg",
-                                            ["L", "park_id", "date", "busy", "fh", "sk"]), c)
+                                            ["L", "park_id", "date", "busy", "fh", "sk"],
+                                            extra_pairs), c)
             self._tick('slot')
             # one lead at a time: the window functions over (slots x models) are the
             # memory peak of an origin, and summer origins exceeded 1.8 GB in one go
@@ -828,9 +852,14 @@ class Runner:
                CASE WHEN lead_min <= 120 THEN 'm' || lpad(CAST(lead_min AS VARCHAR), 3, '0')
                     WHEN lead_min <= 240 THEN 'h2-4' WHEN lead_min <= 480 THEN 'h4-8' ELSE 'h8+' END AS lead_key
              FROM ih""")
-        models = B.INTRADAY_MODELS + [self.name_of(m) for m in plug]
+        plug_cols = [self.name_of(m) for m in plug]
+        models = B.INTRADAY_MODELS + plug_cols
+        # Same as the daily slot write: --pair-with refs plus the opt-in PAR-829 extra pairs
+        # (inert with MLBENCH_EXTRA_PAIR_REFS unset).
+        extra_pairs = [(m, r) for m in plug_cols for r in EXTRA_PAIR_REFS]
         self.write("intraday", slot_agg_sql(models, self.refs_for(models, B.INTRADAY_REFS), [], "ih",
-                                            ["lead_key", "park_id", "date", "busy", "hl"]), c)
+                                            ["lead_key", "park_id", "date", "busy", "hl"],
+                                            extra_pairs), c)
         # D1 next-best-ride (lib/planner/next-best-ride.ts): suggest a ride when the
         # forecast maximum inside the lookahead is >= live + 10. The candidate set is
         # the same for every model — every (origin, ride) with a live OPERATING wait —

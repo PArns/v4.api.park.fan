@@ -1,0 +1,15 @@
+# ml-bench + NeuralForecast (PAR-829: TiDE / TSMixerx / NHITS plug-ins).
+# A layer on top of the base image so the shared Dockerfile stays model-free:
+#   docker build -t ml-bench:base --build-context mlsvc=ml-service ml-bench
+#   docker build -f ml-bench/Dockerfile.neuralforecast --build-arg BASE=ml-bench:base \
+#     -t ml-bench:nf ml-bench
+ARG BASE=ml-bench:base
+FROM ${BASE}
+
+COPY requirements-neuralforecast.txt .
+# Pin the base image's torch: neuralforecast must not pull another torch build.
+RUN pip freeze | grep -E '^(torch|numpy|pandas|pyarrow)==' > /tmp/constraints.txt \
+ && pip install --no-cache-dir -c /tmp/constraints.txt -r requirements-neuralforecast.txt \
+ && python -c "import torch, neuralforecast; print('torch', torch.__version__, 'nf', neuralforecast.__version__)"
+
+COPY . .
