@@ -181,7 +181,7 @@ describe("Park Analytics (e2e)", () => {
   });
 
   describe("GET /v1/parks/:continent/:country/:city/:slug/stats", () => {
-    it("returns the v3 historical-stats contract", () => {
+    it("returns the v4 historical-stats contract", () => {
       return request(app.getHttpServer())
         .get("/v1/parks/europe/germany/bruehl/phantasialand/stats")
         .expect(200)
@@ -195,11 +195,13 @@ describe("Park Analytics (e2e)", () => {
           expect(body.meta).toHaveProperty("windowYears");
           expect(body.meta).toHaveProperty("displayable");
           expect(body.meta).toHaveProperty("generatedAt");
-          expect(body.meta.schemaVersion).toBe(3);
+          expect(body.meta.schemaVersion).toBe(4);
           expect(typeof body.meta.displayable).toBe("boolean");
-          // The v3 additions themselves, so the version literal above is not
-          // the only thing standing between this name and a v2 response.
+          // The v3 and v4 additions themselves, so the version literal above is
+          // not the only thing standing between this name and an older response.
           expect(typeof body.meta.minAttractionDays).toBe("number");
+          expect(Array.isArray(body.busiestDays)).toBe(true);
+          expect(Array.isArray(body.quietestDays)).toBe(true);
 
           const VALID_LEVELS = [
             "very_low",
