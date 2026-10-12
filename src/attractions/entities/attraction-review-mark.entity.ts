@@ -26,9 +26,13 @@ import { Attraction } from "./attraction.entity";
  * Without somewhere to put that, the same 64 questions get re-asked until
  * somebody answers one carelessly and merges two real attractions.
  *
- * This table answers only that one question. It is deliberately NOT consulted
- * by detect-seasonal or reverse-reconciliation — those describe what the feed
- * is doing, and a human's verdict does not change that.
+ * It is deliberately NOT consulted by detect-seasonal or
+ * reverse-reconciliation — those describe what the feed is doing, and a
+ * human's verdict does not change that. The maze rule is the exception, and
+ * the distinction is what the detector's output IS: `is_seasonal` is a
+ * statement about the feed, while `attraction_kind` is a judgement about the
+ * thing. A judgement can be contradicted, so `not_a_maze` is read where
+ * `not_retired` would not be (see `attractions/utils/maze-rule.ts`).
  */
 @Entity("attraction_review_marks")
 @Index(["kind", "attractionId", "otherAttractionId"], { unique: true })
@@ -48,9 +52,19 @@ export class AttractionReviewMark {
    *   two rides do not become one later.
    * - `not_retired`: this attraction still exists despite its feed going quiet.
    *   Often temporary; see `recheckAfter`.
+   * - `not_a_maze`: this is not a walk-through Halloween maze. Almost always a
+   *   scare zone — an open-air area with scare actors, which carries the same
+   *   name tokens and the same autumn season and is listed under its own
+   *   heading on the park's event page. Permanent for a scare zone, so
+   *   `recheckAfter` is normally null; a maze rebuilt as a walk-through would
+   *   be a new row with a new externalId rather than this one changing shape.
+   *
+   * The column is `text` rather than an enum on purpose: a mark kind is added
+   * whenever a detector starts asking a question a human can answer once, and
+   * that should not be a schema change.
    */
   @Column({ name: "kind", type: "text" })
-  kind: "not_a_duplicate" | "not_retired";
+  kind: "not_a_duplicate" | "not_retired" | "not_a_maze";
 
   @ManyToOne(() => Attraction, { onDelete: "CASCADE" })
   @JoinColumn({ name: "attraction_id" })

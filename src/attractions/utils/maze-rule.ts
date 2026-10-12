@@ -34,6 +34,14 @@ import {
  * guess cheap to correct: one admin write, and this rule never comes back to
  * it.
  *
+ * **With one exception, and it is the empty value.** Clearing the field hands
+ * the row straight back to the rule that filled it, so "a human looked and
+ * said no" is the one verdict this shape cannot hold — Six Flags Fiesta Texas'
+ * two scare zones carry a curated autumn season and no rubric in the name, and
+ * would be refiled as `MAZE` on the next nightly run. A `not_a_maze` review
+ * mark is where that verdict lives instead (`AttractionReviewMark`), and
+ * `selectMazeRows` reads it.
+ *
  * ## What it reaches, measured
  *
  * On 2026-10-06 the rule selected 9 rows in 2 parks against production, all 9
@@ -297,15 +305,25 @@ export interface MazeRuleRow extends CuratedFactsSource {
  * Separate from the query so the decision is testable without a database, and
  * so `attraction_kind IS NULL` is asserted here as well as in the SQL — the
  * guarantee is cheap to state twice and expensive to lose once.
+ *
+ * @param notAMazeIds - Attractions carrying an unexpired `not_a_maze` review
+ *   mark. They are refused whatever the name and the season say, because that
+ *   is the whole point of the mark: a blank field means "nobody has decided",
+ *   and without somewhere else to put it, "somebody decided no" is
+ *   indistinguishable from it. Passed in rather than read off the row, so the
+ *   expiry (`recheck_after`) is resolved once, in the query that knows today's
+ *   date, instead of per row here.
  */
 export function selectMazeRows(
   rows: readonly MazeRuleRow[],
   halloweenMonthsByPark: ReadonlyMap<string, readonly number[]>,
+  notAMazeIds: ReadonlySet<string>,
 ): string[] {
   return rows
     .filter(
       (row) =>
         row.attractionKind == null &&
+        !notAMazeIds.has(row.id) &&
         isMazeByRule(
           resolveCuratedFacts(row),
           halloweenMonthsByPark.get(row.parkId) ?? [],

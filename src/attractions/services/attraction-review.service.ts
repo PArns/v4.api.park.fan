@@ -4,7 +4,7 @@ import { Repository, DataSource } from "typeorm";
 import { AttractionReviewMark } from "../entities/attraction-review-mark.entity";
 
 export interface ReviewMarkRequest {
-  kind: "not_a_duplicate" | "not_retired";
+  kind: "not_a_duplicate" | "not_retired" | "not_a_maze";
   attractionId: string;
   /** Only for pair marks; order does not matter, it is canonicalised here. */
   otherAttractionId?: string | null;

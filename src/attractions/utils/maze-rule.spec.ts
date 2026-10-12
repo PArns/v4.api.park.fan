@@ -385,7 +385,8 @@ describe("selectMazeRows", () => {
   const select = (
     rows: MazeRuleRow[],
     halloween: Array<[string, number[]]> = [],
-  ) => selectMazeRows(rows, new Map(halloween));
+    notAMaze: string[] = [],
+  ) => selectMazeRows(rows, new Map(halloween), new Set(notAMaze));
 
   it("selects the row the rule matches", () => {
     expect(select([row()])).toEqual(["row-1"]);
@@ -511,6 +512,59 @@ describe("selectMazeRows", () => {
         }),
       ]),
     ).toEqual([]);
+  });
+
+  /**
+   * The two Six Flags Fiesta Texas rows of PAR-835, and the reason the mark
+   * exists at all. Both carry a CURATED autumn season (`[9, 10, 11]`), their
+   * names carry `fear` and `terror`, and the park writes no rubric into them —
+   * so every circumstantial condition holds and nothing in the row can say
+   * otherwise. Clearing `attraction_kind` on them without the mark hands them
+   * straight back to this rule on the next nightly run.
+   */
+  it("refuses a row a human has ruled out, curated autumn season and all", () => {
+    const rows = [
+      row({
+        id: "fear-acres",
+        name: "Fear Acres",
+        isSeasonal: false,
+        seasonMonths: null,
+        curatedIsSeasonal: true,
+        curatedSeasonMonths: [9, 10, 11],
+      }),
+      row({
+        id: "big-top-terror",
+        name: "Cirkus Bezerkus: Big Top Terror",
+        isSeasonal: false,
+        seasonMonths: null,
+        curatedIsSeasonal: true,
+        curatedSeasonMonths: [9, 10, 11],
+      }),
+    ];
+
+    // Without the mark the rule writes both — this is the counter-check that
+    // keeps the assertion below from passing on a fixture the rule never
+    // reached in the first place.
+    expect(select(rows)).toEqual(["fear-acres", "big-top-terror"]);
+
+    expect(select(rows, [], ["fear-acres", "big-top-terror"])).toEqual([]);
+  });
+
+  it("refuses a marked row even where the park's own rubric says maze", () => {
+    // The rubric decides against the season, not against a human. A row filed
+    // under the park's haunted-house heading and then marked is still refused:
+    // the mark is the later and more specific statement of the two.
+    expect(
+      select([row({ name: "HAUNTED HOUSE: Big Top Terror" })], [], ["row-1"]),
+    ).toEqual([]);
+  });
+
+  it("leaves rows alone that somebody else's mark names", () => {
+    // The set is read by id and nothing else — a mark on one row of a park
+    // says nothing about its neighbours.
+    expect(select([row({ id: "unmarked" })], [], ["some-other-row"])).toEqual([
+      "unmarked",
+    ]);
   });
 
   it("keeps the water park out", () => {
