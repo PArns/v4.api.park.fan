@@ -1,6 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
-import { HolidaysService } from "./holidays.service";
+import { HOLIDAY_UPSERT_OPTIONS, HolidaysService } from "./holidays.service";
 import { Holiday } from "./entities/holiday.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
@@ -19,6 +19,7 @@ describe("HolidaysService", () => {
     find: jest.fn(),
     findOne: jest.fn(),
     save: jest.fn(),
+    upsert: jest.fn(),
     createQueryBuilder: jest.fn(() => mockQueryBuilder),
   };
 
@@ -266,6 +267,41 @@ describe("HolidaysService", () => {
 
       expect(spy).not.toHaveBeenCalled();
       expect(result).toBe(0);
+    });
+  });
+
+  // PAR-872: every sync re-sent the same calendar and rewrote every stored row
+  // (22 M updates on 200 k rows). The upsert now skips a row nothing changed in.
+  describe("saveRawHolidays", () => {
+    const h = {
+      externalId: "x:DE:2026-10-03",
+      date: new Date("2026-10-03T12:00:00Z"),
+      name: "Tag der Deutschen Einheit",
+      localName: null,
+      country: "DE",
+      region: null,
+      holidayType: "public" as const,
+      isNationwide: true,
+    };
+
+    it("upserts on externalId and skips rows whose values did not change", async () => {
+      await service.saveRawHolidays([h as never]);
+      expect(HOLIDAY_UPSERT_OPTIONS).toEqual({
+        conflictPaths: ["externalId"],
+        skipUpdateIfNoValuesChanged: true,
+      });
+      expect(mockHolidayRepository.upsert).toHaveBeenCalledWith(
+        [h],
+        HOLIDAY_UPSERT_OPTIONS,
+      );
+    });
+
+    it("hands TypeORM a copy, so a write-back never reaches the caller's object", async () => {
+      mockHolidayRepository.upsert.mockImplementation(async (rows) => {
+        rows[0].createdAt = new Date();
+      });
+      await service.saveRawHolidays([h as never]);
+      expect(h).not.toHaveProperty("createdAt");
     });
   });
 });

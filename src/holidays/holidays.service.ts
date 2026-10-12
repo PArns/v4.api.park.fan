@@ -63,6 +63,22 @@ const HOLIDAY_YEAR_MEMO_TTL_MS = 10 * 60 * 1000;
  * Manages holiday data for ML predictions.
  * Holidays significantly impact park attendance.
  */
+/**
+ * Upsert on `externalId`, but leave a row alone when nothing in it changed
+ * (PAR-872). TypeORM then appends `WHERE ("date" IS DISTINCT FROM
+ * EXCLUDED."date" OR …)` over the written columns.
+ *
+ * Every sync re-sends the same calendar, so without the guard each run rewrote
+ * every row it had already stored: 22 M updates on 200 k rows (≈110 each) and
+ * 17 % dead tuples by 2026-10-12. The stored values are the same either way;
+ * the one difference is that `updatedAt` now moves only when a holiday actually
+ * changed, which is what the column says. Nothing reads it.
+ */
+export const HOLIDAY_UPSERT_OPTIONS = {
+  conflictPaths: ["externalId"],
+  skipUpdateIfNoValuesChanged: true,
+};
+
 @Injectable()
 export class HolidaysService {
   private readonly logger = new Logger(HolidaysService.name);
@@ -309,7 +325,7 @@ export class HolidaysService {
         holidayType: holiday.holidayType,
         isNationwide: holiday.isNationwide,
       },
-      ["externalId"],
+      HOLIDAY_UPSERT_OPTIONS,
     );
   }
 
@@ -946,13 +962,17 @@ export class HolidaysService {
     // Deduplicate by externalId
     const uniqueHolidays = new Map<string, HolidayInput>();
     for (const h of holidays) {
-      uniqueHolidays.set(h.externalId, h);
+      // A copy, not the caller's object: TypeORM writes the generated id and
+      // timestamps back into what it inserts. A caller that saved the same
+      // object twice then sent a millisecond `createdAt` that differs from the
+      // stored microseconds, and HOLIDAY_UPSERT_OPTIONS read that as a change.
+      uniqueHolidays.set(h.externalId, { ...h });
     }
     const finalHolidays = Array.from(uniqueHolidays.values());
 
     for (let i = 0; i < finalHolidays.length; i += 500) {
       const batch = finalHolidays.slice(i, i + 500);
-      await this.holidayRepository.upsert(batch, ["externalId"]);
+      await this.holidayRepository.upsert(batch, HOLIDAY_UPSERT_OPTIONS);
     }
 
     return finalHolidays.length;
