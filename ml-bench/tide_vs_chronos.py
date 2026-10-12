@@ -347,10 +347,15 @@ def decide(rec: dict, tide: list[str], chronos: list[str], incumbents: list[str]
             cs = [x for x in cs if x is not None and x.row is not None]
             if len(cs) != len(tags):
                 continue
+            # `advantage` is the margin in the direction of the winner, so the champion is
+            # the strongest variant and not merely the first one. `diff` is `t - c` and its
+            # good direction depends on the metric (`lower`), which is why the sign is taken
+            # from the cell rather than assumed.
+            adv = -cs[0].diff if cs[0].lower else cs[0].diff
             if all(x.verdict == "better" for x in cs):
-                t_wins.append((t, c, cs[0].diff))
+                t_wins.append((t, c, adv))
             elif all(x.verdict == "worse" for x in cs):
-                c_wins.append((c, t, cs[0].diff))
+                c_wins.append((c, t, -adv))
     if t_wins and not c_wins:
         h2h = "TiDE"
     elif c_wins and not t_wins:
@@ -361,14 +366,14 @@ def decide(rec: dict, tide: list[str], chronos: list[str], incumbents: list[str]
         h2h = "Gleichstand"
     ready, why = {}, []
     for m in tide + chronos:
-        ok, miss = beats_all_incumbents(rec, m, incumbents, both=both)  # noqa: E501
+        ok, miss = beats_all_incumbents(rec, m, incumbents, both=both)
         ready[m] = ok
         if not ok:
             why.append(f"{m}: " + ", ".join(miss))
     t_ready = [m for m in tide if ready.get(m)]
     c_ready = [m for m in chronos if ready.get(m)]
     if h2h == "TiDE":
-        champ = sorted(t_wins, key=lambda x: x[2])[0][0]
+        champ = max(t_wins, key=lambda x: x[2])[0]
         if ready.get(champ):
             return "TiDE", f" (`{champ}`)", h2h, "beats every scored incumbent"
         if t_ready:
@@ -377,7 +382,7 @@ def decide(rec: dict, tide: list[str], chronos: list[str], incumbents: list[str]
                                                        + t_ready[0] + "`")
         return "keiner", "", h2h, "; ".join(why)
     if h2h == "Chronos-2":
-        champ = sorted(c_wins, key=lambda x: x[2])[0][0]
+        champ = max(c_wins, key=lambda x: x[2])[0]
         if ready.get(champ):
             return "Chronos-2", f" (`{champ}`)", h2h, "beats every scored incumbent"
         if c_ready:
@@ -393,6 +398,41 @@ def decide(rec: dict, tide: list[str], chronos: list[str], incumbents: list[str]
         return "Chronos-2", f" (`{c_ready[0]}`)", h2h, ("duel is a tie, only Chronos-2 clears "
                                                         "the incumbents")
     return "keiner", "", h2h, "; ".join(why) or "no variant clears the incumbents"
+
+
+def best_h2h(rec: dict, tide: list[str], chronos: list[str]) -> tuple[str, str, "Cell"] | None:
+    """The strongest TiDE-vs-Chronos separation at this lead that holds in BOTH passes.
+    Returns (winner, loser, the full-period cell) or None when nothing separates them.
+    The margin is read in the winner's direction, so the number printed is always an
+    advantage; `lower` decides the sign, the metric is never assumed."""
+    best = None
+    for t in tide:
+        for c in chronos:
+            full, win = rec["h2h"].get((t, c, "full")), rec["h2h"].get((t, c, "win"))
+            if full is None or win is None or full.row is None or win.row is None:
+                continue
+            if full.verdict == win.verdict == "better":
+                a, b, adv = t, c, (-full.diff if full.lower else full.diff)
+            elif full.verdict == win.verdict == "worse":
+                a, b, adv = c, t, (full.diff if full.lower else -full.diff)
+            else:
+                continue
+            if best is None or adv > best[3]:
+                best = (a, b, full, adv)
+    return None if best is None else (best[0], best[1], best[2])
+
+
+def collapse(leads: list[str], order: list[str]) -> str:
+    """`m015, m030, m045` -> `m015-m045`, using the question's own lead order."""
+    idx = sorted((order.index(x) for x in leads if x in order))
+    out, i0 = [], 0
+    while i0 < len(idx):
+        j = i0
+        while j + 1 < len(idx) and idx[j + 1] == idx[j] + 1:
+            j += 1
+        out.append(order[idx[i0]] if j == i0 else f"{order[idx[i0]]}-{order[idx[j]]}")
+        i0 = j + 1
+    return ", ".join(out)
 
 
 def main() -> int:
@@ -571,7 +611,8 @@ def main() -> int:
                     strict = decide(rec, tide, chronos, incumbents, both=True)
                     loose = decide(rec, tide, chronos, incumbents, both=False)
                     lown = any(c.low_n for c in scored)
-                    de_rows.append((label, lead, seg, strict[0], loose[0], lown))
+                    de_rows.append((label, lead, seg, strict[0], loose[0], lown,
+                                    best_h2h(rec, tide, chronos), leads, True))
                     w(f"| {label} | {lead} | {seg} | {strict[2]}{' (LOW-N)' if lown else ''} "
                       f"| **{strict[0]}**{strict[1]} | {loose[0]}{loose[1]} | {strict[3]} |")
                 else:
@@ -598,7 +639,7 @@ def main() -> int:
                         v = "Gleichstand"
                     else:
                         v = "keiner"
-                    de_rows.append((label, lead, seg, v, v, True))
+                    de_rows.append((label, lead, seg, v, v, True, None, leads, False))
                     w(f"| {label} | {lead} | {seg} | nicht paarbar | **{v}** | {v} | "
                       f"indirect: beats {INDIRECT_CANDIDATES} in both passes: "
                       f"{', '.join(m for m in ok if ok[m]) or 'none'} |")
@@ -618,12 +659,53 @@ def main() -> int:
     w("| Frage in der App | Vorlauf | alle Fahrgeschaefte | volle Fahrgeschaefte | nur Vollperiode (alle / volle) |")
     w("|---|---|---|---|---|")
     by_q: dict = {}
-    for label, lead, seg, strict_v, loose_v, lown in de_rows:
+    for label, lead, seg, strict_v, loose_v, lown, _best, _leads, _direct in de_rows:
         by_q.setdefault((label, lead), {})[seg] = (strict_v, loose_v)
     for (label, lead), segs in by_q.items():
         a_s, a_l = segs.get("all", ("nicht messbar", "nicht messbar"))
         b_s, b_l = segs.get("busy", ("nicht messbar", "nicht messbar"))
         w(f"| {DE.get(label, label)} | {lead} | {a_s} | {b_s} | {a_l} / {b_l} |")
+    w("")
+
+    # ---- 5. the same answer collapsed to one line per question (what goes on top of
+    #         RESULTS-TIDE-VS-CHRONOS.md, generated so the prose cannot drift from the CSVs)
+    w("## 5. Kurzfassung je Frage (generiert)")
+    w("")
+    w("Dieselben Urteile wie Abschnitt 4, nur je Frage und Segment zu Vorlauf-Baendern")
+    w("zusammengefasst; `strict`, also beide Report-Paesse. Dahinter der **groesste")
+    w("gesicherte** Abstand des Duells in dieser Frage: Gewinner, Verlierer, Vorlauf und")
+    w("der gepaarte Margin mit Park-Cluster-CI (Vollperiode, in der Richtung des Metrums —")
+    w("bei MAE ist negativ besser).")
+    w("")
+    by_qs: dict = {}
+    for label, lead, seg, strict_v, loose_v, lown, best, leads, direct in de_rows:
+        by_qs.setdefault((label, seg), {"bands": {}, "best": None, "leads": leads,
+                                        "direct": direct})
+        e = by_qs[(label, seg)]
+        e["bands"].setdefault(strict_v, []).append(lead)
+        if best is None:
+            continue
+        win, lose, cell = best
+        adv = (-cell.diff if cell.lower else cell.diff)
+        if win not in tide:
+            adv = -adv
+        if e["best"] is None or adv > e["best"][0]:
+            e["best"] = (adv, win, lose, lead, cell)
+    for (label, seg), e in by_qs.items():
+        bands = "; ".join(f"{v} {collapse(ls, e['leads'])}" for v, ls in e["bands"].items())
+        seg_de = "alle Fahrgeschaefte" if seg == "all" else "volle Fahrgeschaefte"
+        line = f"* **{DE.get(label, label)}**, {seg_de}: {bands}."
+        if e["best"] is not None:
+            _adv, win, lose, lead, cell = e["best"]
+            line += (f" Groesster gesicherter Abstand: `{win}` gegen `{lose}` bei {lead}, "
+                     f"{cell.diff:+.3f} [{cell.lo:+.3f}, {cell.hi:+.3f}]"
+                     f" (n={cell.n:,}, {cell.units} Park-Cluster).")
+        elif e["direct"]:
+            line += " Kein Vorlauf trennt die beiden in beiden Paessen."
+        else:
+            line += (" Kein gepaartes Duell moeglich (siehe Abschnitt 1), nur der"
+                     " indirekte Vergleich gegen dieselben Naive-Kandidaten.")
+        w(line)
     w("")
 
     out = Path(a.out) if a.out else run / "summary_tide_vs_chronos.md"
