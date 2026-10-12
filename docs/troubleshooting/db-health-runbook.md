@@ -361,7 +361,7 @@ the training starts:
 | --- | --- | --- | --- | --- |
 | `pcn_forecasts` | 122.1 M | 9.46 M | 143 | 28 GB |
 | `prediction_accuracy` | 16.2 M | 1.11 M | 5 320 | 6.3 GB |
-| `shape_forecasts` | 102.6 M | 2.40 M | 119 | 19 GB |
+| `shape_forecasts` (retired with PAR-870, not in the job) | 102.6 M | 2.40 M | 119 | 19 GB |
 | `tft_forecasts` | 24.4 M | 0.49 M | 37 | 3.4 GB |
 | `holidays` | 0.20 M | 34.8 k | 192 | 164 MB |
 
@@ -403,7 +403,7 @@ no guarantee.
 ```sql
 SELECT relname, last_vacuum, last_autovacuum, n_dead_tup
 FROM pg_stat_user_tables
-WHERE relname IN ('pcn_forecasts','prediction_accuracy','shape_forecasts','tft_forecasts','holidays')
+WHERE relname IN ('pcn_forecasts','prediction_accuracy','tft_forecasts','holidays')
 ORDER BY relname;
 ```
 

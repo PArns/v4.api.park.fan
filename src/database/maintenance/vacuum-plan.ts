@@ -56,7 +56,7 @@ export interface VacuumTarget {
  * |---------------------|---------|--------|-------------|-------|
  * | pcn_forecasts       | 122.1 M | 9.46 M | 143         | 28 GB |
  * | prediction_accuracy | 16.2 M  | 1.11 M | 5 320       | 6.3 GB|
- * | shape_forecasts     | 102.6 M | 2.40 M | 119         | 19 GB |
+ * | shape_forecasts     | 102.6 M | 2.40 M | 119         | 19 GB | (retired with PAR-870, not vacuumed)
  * | tft_forecasts       | 24.4 M  | 0.49 M | 37          | 3.4 GB|
  * | holidays            | 0.20 M  | 34.8 k | 192         | 164 MB|
  *
@@ -81,11 +81,6 @@ export const VACUUM_TARGETS: readonly VacuumTarget[] = [
     table: "prediction_accuracy",
     maxStatementMs: 15 * MINUTE_MS,
     reason: "1.11 M dead, 5 320 autovacuums (2.37 B updates)",
-  },
-  {
-    table: "shape_forecasts",
-    maxStatementMs: 20 * MINUTE_MS,
-    reason: "2.40 M dead / 103 M live, 225 M deletes",
   },
   {
     table: "tft_forecasts",
