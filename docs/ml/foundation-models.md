@@ -699,4 +699,64 @@ Chronos-2 10.5 s.
 
 ## Result
 
-<!-- filled from the scoring run; see RESULTS-PAR-853.md -->
+Run `20261011-par853-toto-tirex-shard5`: 47 origins, `--shard 0/5` over 2026-02-19 … 2026-10-07 on
+the 30-park subset — the same mixed-weekday origin set as the Chronos-2 re-run (the harness' own
+census in `run-0of5.json`: Mon 6, Tue 7, Wed 7, Thu 7, Fri 7, Sat 6, Sun 7, `origin_weekday_distinct`
+7). Paired with `h5`, `lvlh5_tft`, `persistence` and the other six models; both report passes.
+Provenance on the image: `git_sha 474e3932`, `code_sha256 8ee46789…`, `image_id sha256:f48c1197…`.
+5.0 h wall clock, 3.4 GB VRAM peak. Every figure below comes out of
+`ml-bench/scripts-par853/summarise.py` over the run's `cells_vs_*.csv`, never transcribed.
+
+**Neither model beats Chronos-2, with one 15-minute exception.** Full period, all rides, paired
+against `chronos2` with park-cluster CIs:
+
+| band | `tirex2` | `toto2` |
+| --- | --- | --- |
+| m015 | **−0.070** [−0.124; −0.025] | **−0.176** [−0.242; −0.106] |
+| m030 | +0.159 [+0.085; +0.234] | +0.014 [−0.036; +0.071] (tie) |
+| m060 | +0.411 [+0.272; +0.560] | +0.154 [+0.097; +0.212] |
+| m120 | +0.582 [+0.417; +0.777] | +0.300 [+0.209; +0.399] |
+| h2–4 | +0.576 [+0.431; +0.738] | +0.317 [+0.222; +0.430] |
+| h8+ | +0.443 [+0.265; +0.642] | +0.318 [+0.200; +0.459] |
+
+At 15 minutes both are better than Chronos-2; from 30 minutes on Chronos-2 wins everywhere. Against
+the served hourly profile `h5` both are clearly better in the live bands (`toto2` −4.19 … −1.65,
+`tirex2` −4.08 … −1.36 over m015 … m120) and **worse** in the planner from d1 on (+0.32 … +0.88).
+
+**Planner.** `tirex2_grid` is the only variant that keeps up with `chronos2` — on all rides a tie at
+every lead d0–d7 (−0.013 … +0.132, every CI spans 0) and better than `chronos2_nocov` throughout
+(−0.364 … −0.536). On **busy** rides it is worse at d0, d2–d5 and d7 (+0.226 … +0.447), a tie only
+at d1 and d6. The level-on-H5-shape composite is again the strongest route: `tirex2_x_h5` reaches
+**d21** on busy rides and wins the d10 hand-over cell (−0.453 [−0.710; −0.254]) — the one lead in the
+whole run that a PAR-853 model takes off Chronos-2, whose `chronos2_x_h5` wins d1–d7, d14, d21, d30
+and reaches d30. `toto2_x_h5` reaches d3. A paired test *between* the composite arms is not possible
+from this run: they were not in `--pair-with`, so only their margins against a common reference are
+comparable, and those overlap.
+
+**`toto2_grid` is unusable, and it is not the harness.** +4.25 … +4.90 minutes behind `chronos2` on
+all rides and +10.07 … +11.58 on busy rides (full period), with q80 coverage **0.54** against ~0.80
+for every other arm. Three checks place the cause in Toto 2.0 rather than in the grid builder:
+`tirex2_grid` uses the same grid path and ties `chronos2`; the penalty is present in **30 of 30**
+parks (median +2.59 min at L=0, growing with the park's error level, from +0.23 to +19.0), so it is
+not a per-park data gap; and the same weights in the compressed context (`toto2`) are only +0.3 …
++0.8 behind `chronos2`. What `toto2_grid` feeds the model is a regular 15-minute grid over 42 days
+(4096 steps) **including closed hours**, left-padded to whole patches. Toto 2.0 does not cope with
+that; Chronos-2 and TiRex-2 do. The variant stays registered and documented so nobody tries it twice.
+
+**Covariates through Toto's `known_dynamic` hook do nothing**, as the model card implies: `toto2` and
+`toto2_nocov` differ by 0.03–0.04 minutes, and both are a tie against `chronos2_nocov`. The hook is
+not a substitute for trained covariate support.
+
+**Uncertainty.** TiRex-2's q80 coverage is 0.80–0.83 against a 0.80 nominal — at least as good as
+`chronos2`'s 0.79–0.81. Neither PAR-853 model has a q95 head, and D8 leaves the field **empty**
+rather than inventing it (`cov_q95` is blank for all five PAR-853 variants and filled for
+`chronos2` / `wt_med`).
+
+**Recommendation: DROP both for serving; keep TiRex-2 as a plug-in.** Chronos-2 is at least as good
+everywhere and better almost everywhere, already runs in the forward archive's shadow, and has a q95
+head. TiRex-2 is the only PAR-853 candidate that wins anything, is Apache-2.0 in code and weights,
+and is the fastest of the three (16.7 s per origin task) — the first choice if Chronos-2 ever falls
+away for licence or operational reasons. Toto 2.0 adds nothing here that Chronos-2 or TiRex-2 does
+not do better.
+
+Full tables, both passes: `~/ml-review-2026-10/RESULTS-PAR-853.md`.
