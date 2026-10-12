@@ -419,3 +419,129 @@ Rules since then:
   no-op; fixing the keys alone would have written PCN into the CatBoost board.)
 - The blend anchor (`fetchCurrentWaits`, latest STANDBY wait within 3 h) is read
   from `queue_data` per call, so it works identically on every path.
+
+## 10. `pcn_forecasts` write volume and retention (PAR-873, 2026-10-12)
+
+The DB audit of 2026-10-12 found `pcn_forecasts` at 28 GB (122 M rows, 14-day
+retention) with 1.73 B updates against 1.06 B inserts, 0.2 % of them HOT, and the
+lead-curve scorer (`fetch_pcn_leadcurve_window`) reading ~77 M blocks a day because
+it walks every row of a ride over the whole retention.
+
+### What still rewrites rows
+
+Those counters are cumulative since May. Most of the rewriting stopped on
+2026-10-01 with the in-process `_written` memo in `forecast.py` (skip an origin
+already written with the same checkpoint). Measured on 2026-10-12 over the last
+24 h, by comparing each row's `created_at` with its origin instant:
+
+| Rows written ≤ 1 h after their origin (first write) | Written later (rewrites) |
+|---|---|
+| 8.50 M (95.2 %) | 0.43 M (4.8 %) |
+
+That split is a lower bound: a rewrite within an hour of its origin lands in the
+first column. The exact figure for one deploy comes from `pg_stat_user_tables`
+sampled at 20:36:57 and 21:02:47 UTC, a window with one deploy (20:50) in it:
++131 712 inserts, **+223 872 updates**, 0 of them HOT. The first tick after that
+deploy (21:00) wrote 308 448 rows over 128 parks, and 223 872 of them — the same
+number — carried an origin more than 30 minutes older than their write, over 94
+parks. The ticks without a restart in between (20:30, 20:45) rewrote nothing.
+
+Grouped by the tick that wrote them, the older rewrites are the **first tick after each
+deploy** too: 195 k rows over 82 parks at 20:15 (container started 20:04), 80 k at
+12:30, 65 k at 20:45 the day before, 42 k at 07:30, 26 k at 16:30, plus a few
+thousand around the 09:00 retrain. A restart empties the memo, so every park whose
+origin stopped moving (the closed ones) is re-predicted from the same checkpoint
+and the same panel and upserted with the same numbers. Each such upsert is a dead
+tuple and three index entries, and it moves `created_at` to now — which re-arms the
+3-hour staleness guard of `getPcnIntradayWaits` for a park the guard had already
+handed back to CatBoost.
+
+### The conditional upsert
+
+```sql
+ON CONFLICT (attraction_id, target_slot, origin_slot, quantile)
+DO UPDATE SET predicted_wait = EXCLUDED.predicted_wait,
+              model_version  = EXCLUDED.model_version,
+              created_at     = now()
+WHERE abs(pcn_forecasts.predicted_wait - EXCLUDED.predicted_wait) > 0.001  -- :tol
+```
+
+- **"Changed" means more than a thousandth of a minute apart**, not bit-unequal:
+  GPU inference is not guaranteed to be bit-reproducible across processes, and a
+  last-bit difference would turn every restart rewrite back on. Served waits are
+  whole minutes, so nothing anyone reads can move by that much.
+
+- **`created_at` keeps one meaning**: when this origin was forecast with these
+  values. A value-identical re-send leaves it alone, so the staleness guard reads
+  the same thing after a restart as between restarts. No heartbeat column is
+  needed: the guard is meant to trip for a park whose origin stopped moving, and
+  for an open park the origin moves every tick, which writes new rows (inserts,
+  not updates) with a fresh `created_at`.
+- **A retrained checkpoint** that changes the values for an origin still rewrites
+  and restamps those rows, as before.
+- **`model_version` is not compared**: it is the tick's own timestamp and differs
+  on every call.
+- Tested against Postgres in `pcn-service/test_db_write_volume.py`: a re-send
+  (also one jittered by 10⁻⁵) writes zero row versions and leaves the serving read's output identical, a
+  changed value rewrites exactly the changed rows, and a closed park's rows stay
+  out of the 3-hour window after a re-send. Against the old statement those four
+  fail.
+- **Expected effect**: zero updates on the first tick after a deploy, i.e.
+  ~0.2 M fewer dead tuples and ~0.7 M fewer index entries per deploy, and no
+  restart re-freshening a closed park for the guard. Whether the restart
+  re-prediction is value-identical (same checkpoint, same panel for a park whose
+  feed stopped) was not run on production; check it after the deploy with the
+  same `pg_stat_user_tables` sample around the next deploy's first tick:
+  `n_tup_upd` should stay flat while `n_tup_ins` grows.
+
+### Retention: 14 → 4 days
+
+Every reader of `pcn_forecasts`, and the oldest row it needs:
+
+| Reader | Where | Reads |
+|---|---|---|
+| Serving override | `MLService.getPcnIntradayWaits` | `created_at` ≥ now − 3 h |
+| Served value for deviation checks | `PredictionDeviationService.getServedPcnWait` | 3 h |
+| Served-accuracy recorder | `MLService.servedIntradayValues` → the serving path | 3 h |
+| ML overview probe | `MlOverviewService.components` | newest row, last 2 days |
+| Main shadow board | `score.py` → `fetch_pcn_forecasts_window` | targets from yesterday 00:00 park-local, origins up to 12 h (`PCN_HORIZON`) earlier: **≤ 60 h** |
+| Lead-curve board | `score.py` → `fetch_pcn_leadcurve_window` | same window, leads ≤ 6 h: ≤ 60 h |
+| Park merge | `merge-dependencies.ts` | re-points whatever exists |
+| `ml-bench` | — | does not read the table |
+| Ad-hoc exports (`ml-review-2026-10` E6, a 14-day lead sample, run once on 2026-10-09) | — | whatever is kept |
+
+The scorer is the binding reader at ~60 h; a missed scoring run does not need more,
+because the scorer only ever looks back 48 h and the board freezes older days. The
+owner's floor is 4 days, which is also the smallest whole-day value with a full day
+of margin over 60 h, so `PCN_FORECAST_RETENTION_DAYS` is now **4**. An ad-hoc lead
+analysis over a longer window has to export within 4 days of its targets.
+
+`test_db_write_volume.py` pins the invariant (retention ≥ the scorer's oldest row
++ 14 h) so a later change to the lookback or horizon cannot silently outgrow it.
+
+### The prune is batched
+
+Dropping the retention leaves ~87 M expired rows (planner estimate on 2026-10-12)
+for the first prune. One `DELETE` of that size would be one transaction holding a
+snapshot for its whole run with a WAL burst to match, so `prune_pcn_forecasts`
+deletes by `ctid` in batches of 200 k rows, one transaction each, at most 50 per
+call (10 M rows). The hourly score job drains the backlog in about nine runs; in
+steady state (~0.4 M rows an hour) it is two batches.
+
+### Getting the disk back
+
+Deleted rows are reused by later inserts, so the table stops growing at about the
+4-day size (~8 GB with indexes), but the file stays at 28 GB until it is rewritten.
+Nothing in this change does that. Options, after the backlog has drained:
+
+1. **`VACUUM FULL pcn_forecasts`** in a quiet window, with `SERVE_PCN_INTRADAY`
+   off first. It takes an ACCESS EXCLUSIVE lock for the rewrite of ~36 M rows; the
+   serving read would *wait* on that lock rather than fail over to CatBoost, so
+   switching the override off is what keeps the park pages answering. Run it
+   through `scripts/prod-psql.sh` with a raised `PARKFAN_PSQL_STATEMENT_TIMEOUT`
+   and outside 01:00–09:30 UTC (the 04:50 VACUUM and the 06:00 training).
+2. **`pg_repack --table pcn_forecasts`** if the extension is installed in the
+   TimescaleDB image (it is not today): the lock is held only for the swap at the
+   end.
+3. Do nothing: the space is reused by the table itself, and only the other
+   tables' growth would want it back.
