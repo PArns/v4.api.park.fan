@@ -9,6 +9,7 @@ import pandas as pd
 from collections import defaultdict
 
 from db import get_db, fetch_parks_metadata
+from uuid_params import uuid_or_none
 
 
 def _filter_by_active_rides(
@@ -128,22 +129,28 @@ def filter_predictions_by_schedule(
                 "openingTime",
                 "closingTime"
             FROM schedule_entries
-            WHERE "parkId"::text = :park_id
+            WHERE "parkId" = CAST(:park_id AS uuid)
                 AND "attractionId" IS NULL
                 AND date = ANY(CAST(:dates AS DATE[]))
                 AND "scheduleType" IN ('OPERATING', 'CLOSED', 'UNKNOWN')
         """
         )
 
-        with get_db() as db:
-            result = db.execute(
-                query,
-                {
-                    "park_id": park_id,
-                    "dates": [d.isoformat() for d in unique_dates],
-                },
-            )
-            schedules_raw = result.fetchall()
+        # A park id the uuid CAST would reject matched no row under the old
+        # text comparison either: same outcome, the no-schedule fallback.
+        park_uuid = uuid_or_none(park_id, "filter_predictions_by_schedule")
+        if park_uuid is None:
+            schedules_raw = []
+        else:
+            with get_db() as db:
+                result = db.execute(
+                    query,
+                    {
+                        "park_id": park_uuid,
+                        "dates": [d.isoformat() for d in unique_dates],
+                    },
+                )
+                schedules_raw = result.fetchall()
 
         if not schedules_raw:
             # FALLBACK: No schedule data.

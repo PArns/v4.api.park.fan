@@ -6,6 +6,7 @@ Uses only data that is actually available in the database
 import pandas as pd
 from db import get_db
 from sqlalchemy import text
+from uuid_params import uuid_list
 
 
 def add_attraction_type_feature(df: pd.DataFrame) -> pd.DataFrame:
@@ -41,12 +42,15 @@ def add_attraction_type_feature(df: pd.DataFrame) -> pd.DataFrame:
                 id::text as "attractionId",
                 COALESCE("attractionType", 'UNKNOWN') as "attraction_type"
             FROM attractions
-            WHERE id::text = ANY(:attraction_ids)
+            WHERE id = ANY(CAST(:attraction_ids AS uuid[]))
         """
         )
 
         with get_db() as db:
-            result = db.execute(query, {"attraction_ids": attraction_ids})
+            result = db.execute(
+                query,
+                {"attraction_ids": uuid_list(attraction_ids, "attraction types")},
+            )
             type_df = pd.DataFrame(result.fetchall(), columns=result.keys())
 
         if not type_df.empty:
@@ -107,13 +111,15 @@ def add_park_attraction_count_feature(
                 COUNT(DISTINCT a.id) as attraction_count
             FROM parks p
             LEFT JOIN attractions a ON a."parkId" = p.id
-            WHERE p.id::text = ANY(:park_ids)
+            WHERE p.id = ANY(CAST(:park_ids AS uuid[]))
             GROUP BY p.id
         """
         )
 
         with get_db() as db:
-            result = db.execute(query, {"park_ids": park_ids})
+            result = db.execute(
+                query, {"park_ids": uuid_list(park_ids, "park attraction count")}
+            )
             count_df = pd.DataFrame(result.fetchall(), columns=result.keys())
 
         if not count_df.empty:

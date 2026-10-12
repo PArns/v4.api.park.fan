@@ -653,6 +653,19 @@ describe("MLService", () => {
       expect(preds.map((p) => p.uncertaintyMinutes)).toEqual([24, 38, 46]);
     });
 
+    it("filters the park as uuid, never by casting the indexed column (PAR-871)", async () => {
+      mockForecastAccuracyService.getProfile.mockResolvedValue(new Map());
+      arrange([]);
+
+      await service.getTftDailyPredictions(parkId, 60);
+
+      const [sql, params] = mockAttractionRepository.query.mock.calls[0];
+      expect(sql).toContain('a."parkId" = $1::uuid');
+      expect(sql).not.toContain('"parkId"::text');
+      // The id the park lookup returned, so the bound value is the stored one.
+      expect(params[0]).toBe(parkId);
+    });
+
     it("buckets by the forecast's own age, not by how far off the day is", async () => {
       // The staleness guard admits a forecast up to three days old. A forecast
       // made 3 days ago for a day 5 days out was made at a distance of 8, and

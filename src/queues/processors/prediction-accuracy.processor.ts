@@ -140,7 +140,7 @@ export class PredictionAccuracyProcessor {
       if (kept.length > 0) {
         await this.statsRepository.query(
           `DELETE FROM attraction_accuracy_stats
-            WHERE NOT (attraction_id::text = ANY($1::text[]))`,
+            WHERE NOT (attraction_id = ANY($1::uuid[]))`,
           [kept],
         );
       } else {

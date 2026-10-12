@@ -19,6 +19,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from config import get_settings
+from uuid_params import uuid_list
 
 settings = get_settings()
 logger = logging.getLogger("pcn.db")
@@ -80,7 +81,9 @@ def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
     """One row per attraction in scope: park, timezone, country/region, name.
     timezone is needed to bin to park-local slots; name/type help the static
     ride embeddings later."""
-    where = 'WHERE a."parkId"::text = ANY(:pids)' if park_ids else ""
+    # An empty list means "every park"; a non-empty one that filters down to
+    # nothing must still match nothing, so the WHERE follows the input.
+    where = 'WHERE a."parkId" = ANY(CAST(:pids AS uuid[]))' if park_ids else ""
     sql = text(
         f"""
         SELECT a.id::text         AS unique_id,
@@ -96,7 +99,10 @@ def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
         """
     )
     with engine().connect() as c:
-        df = pd.read_sql(sql, c, params={"pids": park_ids} if park_ids else {})
+        params = (
+            {"pids": uuid_list(park_ids, "fetch_attraction_meta")} if park_ids else {}
+        )
+        df = pd.read_sql(sql, c, params=params)
     return df
 
 

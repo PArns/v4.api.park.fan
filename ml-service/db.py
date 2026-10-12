@@ -11,6 +11,7 @@ import pandas as pd
 import decimal
 import uuid
 from config import get_settings
+from uuid_params import uuid_list, uuid_or_none
 
 settings = get_settings()
 
@@ -621,11 +622,11 @@ def fetch_historical_park_occupancy(
         WITH per_ride_p50 AS (
             SELECT
                 a."parkId"::text as park_id,
-                qd."attractionId"::text as attraction_id,
+                qd."attractionId" as attraction_id,
                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as p50
             FROM queue_data qd
             JOIN attractions a ON qd."attractionId" = a.id
-            WHERE a."parkId"::text = ANY(:park_ids)
+            WHERE a."parkId" = ANY(CAST(:park_ids AS uuid[]))
               AND qd.timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
               AND (CAST(:end_time AS timestamptz) IS NULL OR qd.timestamp < :end_time)
               AND qd."waitTime" >= 10
@@ -634,9 +635,11 @@ def fetch_historical_park_occupancy(
             GROUP BY a."parkId", qd."attractionId"
         ),
         headliners AS (
-            SELECT ha."attractionId"::text as attraction_id
+            -- uuid, not text: park_hourly joins it straight onto queue_data,
+            -- and a cast on that side would cost the index (PAR-871).
+            SELECT ha."attractionId" as attraction_id
             FROM headliner_attractions ha
-            WHERE ha."parkId"::text = ANY(:park_ids)
+            WHERE ha."parkId" = ANY(CAST(:park_ids AS uuid[]))
         ),
         park_p50_baseline AS (
             -- Use headliner attractions only to match TypeScript calculateCrowdLevelForDate
@@ -657,15 +660,15 @@ def fetch_historical_park_occupancy(
             FROM (
                 SELECT
                     a."parkId"::text as park_id,
-                    qd."attractionId"::text as attraction_id,
+                    qd."attractionId" as attraction_id,
                     EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone)::int as dow,
                     EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone)::int as hour,
                     AVG(qd."waitTime") as ride_avg
                 FROM queue_data qd
                 JOIN attractions a ON qd."attractionId" = a.id
                 JOIN parks p ON p.id = a."parkId"
-                JOIN headliners hl ON hl.attraction_id = qd."attractionId"::text
-                WHERE a."parkId"::text = ANY(:park_ids)
+                JOIN headliners hl ON hl.attraction_id = qd."attractionId"
+                WHERE a."parkId" = ANY(CAST(:park_ids AS uuid[]))
                   AND qd.timestamp >= NOW() - INTERVAL '1 day' * :lookback_days
                   AND qd."waitTime" >= 10
                   AND qd.status = 'OPERATING'
@@ -694,7 +697,7 @@ def fetch_historical_park_occupancy(
             result = db.execute(
                 query,
                 {
-                    "park_ids": park_ids,
+                    "park_ids": uuid_list(park_ids, "historical park occupancy"),
                     "lookback_days": lookback_days,
                     "end_time": end_time,
                 },
@@ -825,10 +828,14 @@ def fetch_attraction_ids_for_park(park_id: str) -> List[str]:
         """
         SELECT id::text
         FROM attractions
-        WHERE "parkId"::text = :park_id
+        WHERE "parkId" = CAST(:park_id AS uuid)
         ORDER BY name
     """
     )
+
+    park_id = uuid_or_none(park_id, "fetch_attraction_ids_for_park")
+    if park_id is None:
+        return []  # the old text comparison matched nothing for it either
 
     with get_db() as db:
         result = db.execute(query, {"park_id": park_id})

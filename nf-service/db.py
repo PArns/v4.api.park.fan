@@ -18,6 +18,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from config import get_settings
+from uuid_params import uuid_list
 
 settings = get_settings()
 logger = logging.getLogger("nf.db")
@@ -58,7 +59,9 @@ def fetch_park_ids() -> list[str]:
 def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
     """One row per attraction in scope: timezone, country/region, influencing
     regions (JSON). queue_data has no parkId, so attractions carry the link."""
-    where = "WHERE a.\"parkId\"::text = ANY(:pids)" if park_ids else ""
+    # An empty list means "every park"; a non-empty one that filters down to
+    # nothing must still match nothing, so the WHERE follows the input.
+    where = 'WHERE a."parkId" = ANY(CAST(:pids AS uuid[]))' if park_ids else ""
     sql = text(
         f"""
         SELECT a.id::text AS unique_id, a."parkId"::text AS park_id,
@@ -70,7 +73,10 @@ def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
         """
     )
     with _engine.connect() as c:
-        df = pd.read_sql(sql, c, params={"pids": park_ids} if park_ids else {})
+        params = (
+            {"pids": uuid_list(park_ids, "fetch_attraction_meta")} if park_ids else {}
+        )
+        df = pd.read_sql(sql, c, params=params)
     return df
 
 
@@ -81,7 +87,7 @@ def fetch_daily_peak_panel(park_ids: list[str]) -> pd.DataFrame:
     pct = settings.NF_TARGET_PERCENTILE
     minw = settings.NF_MIN_WAIT
     window = settings.NF_WINDOW_DAYS
-    where_park = "AND a.\"parkId\"::text = ANY(:pids)" if park_ids else ""
+    where_park = 'AND a."parkId" = ANY(CAST(:pids AS uuid[]))' if park_ids else ""
     sql = text(
         f"""
         SELECT qd."attractionId"::text AS unique_id,
@@ -102,7 +108,7 @@ def fetch_daily_peak_panel(park_ids: list[str]) -> pd.DataFrame:
     )
     params = {"window": str(window)}
     if park_ids:
-        params["pids"] = park_ids
+        params["pids"] = uuid_list(park_ids, "fetch_daily_peak_panel")
     with _engine.connect() as c:
         df = pd.read_sql(sql, c, params=params)
     df["ds"] = pd.to_datetime(df["ds"])
@@ -130,8 +136,9 @@ def fetch_weather(park_ids: list[str]) -> pd.DataFrame:
     are retained (365d back) and the forecast reaches 16 days, so this covers both the
     training panel and the h=14 future frame. One row per (parkId, date) by PK."""
     # weather_data."parkId" is uuid in the DB; the panel's park key is text (meta
-    # casts ::text). Cast both sides so the join keys line up and ANY() type-matches.
-    where = 'WHERE "parkId"::text = ANY(:pids)' if park_ids else ""
+    # casts ::text). The SELECT casts the column for the join key; the filter casts
+    # the PARAMETER, never the column, so the index stays usable (PAR-871).
+    where = 'WHERE "parkId" = ANY(CAST(:pids AS uuid[]))' if park_ids else ""
     sql = text(
         f"""
         SELECT "parkId"::text AS park_id, date AS ds,
@@ -142,7 +149,8 @@ def fetch_weather(park_ids: list[str]) -> pd.DataFrame:
         """
     )
     with _engine.connect() as c:
-        df = pd.read_sql(sql, c, params={"pids": park_ids} if park_ids else {})
+        params = {"pids": uuid_list(park_ids, "fetch_weather")} if park_ids else {}
+        df = pd.read_sql(sql, c, params=params)
     if df.empty:
         return df
     df["ds"] = pd.to_datetime(df["ds"]).dt.normalize()

@@ -929,7 +929,10 @@ export class MLService {
     if (cachedPredictions) return cachedPredictions;
 
     // Freshest forward forecast per (attraction, target_date); headliners of THIS
-    // park; within the horizon; not stale. ::text casts avoid uuid=text mismatches.
+    // park; within the horizon; not stale. The ::text casts are on the OUTPUT
+    // only. The park filter compares uuid to uuid with the id the lookup above
+    // returned, never `"parkId"::text = $1`, which hides the column from its
+    // index (PAR-871).
     const rows: Array<{
       attractionId: string;
       targetDate: string;
@@ -947,13 +950,13 @@ export class MLService {
           f.predicted_peak::float  AS peak
         FROM tft_forecasts f
         JOIN attractions a
-          ON a.id = f.attraction_id AND a."parkId"::text = $1 AND a.retired_at IS NULL
+          ON a.id = f.attraction_id AND a."parkId" = $1::uuid AND a.retired_at IS NULL
         WHERE f.target_date >= $2::date
           AND f.target_date <  ($2::date + $3::int)
           AND f.forecast_date >= ($2::date - 3)
         ORDER BY f.attraction_id, f.target_date, f.forecast_date DESC
         `,
-      [parkId, today, days],
+      [park.id, today, days],
     );
 
     // The measured error grid, for the band and the confidence below. One read
