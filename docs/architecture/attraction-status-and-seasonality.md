@@ -379,6 +379,7 @@ back tomorrow however carefully it was investigated.
 |---|---|---|
 | `not_a_duplicate` | permanent | Cedar Creek is a lazy river beside Cedar Creek Mine Ride, a coaster |
 | `not_retired` | optional `recheck_after` | Shock Wave has stood unused since March 2026 with no announcement either way |
+| `not_a_maze` | permanent | Fear Acres is a scare zone on Six Flags Fiesta Texas' own event page, not a walk-through maze |
 
 Set `recheck_after` whenever the answer can change. A permanent mark on Shock
 Wave would hide its eventual retirement forever; a permanent mark on Marvel Cave
@@ -390,6 +391,22 @@ no direction, and storing both ways is how the detector once counted 63 rows for
 
 `detect-seasonal` and reverse-reconciliation deliberately do **not** consult
 marks. They describe the feed; a human's verdict does not change that.
+
+**The maze rule does, and the line between the two is what the output is**
+(PAR-835). `is_seasonal` is a statement about the feed, so a human disagreeing
+with it is disagreeing with an observation. `attraction_kind` is a judgement
+about the thing, and a judgement can be contradicted — so `not_a_maze` is read
+where `not_retired` is not.
+
+The reason it has to be is that the maze rule's blank-only write cannot hold
+this one verdict. Clearing `attraction_kind` hands the row straight back to the
+rule, which is harmless where the rule was right and a loop where it was wrong:
+Six Flags Fiesta Texas' two scare zones carry a curated autumn season and no
+rubric in their names, so every circumstantial condition still holds and the
+next nightly run refiles them as `MAZE`. `NULL` means "nobody has decided"; the
+mark is the only place "somebody decided no" can live. Measured on 2026-10-11
+with the rule from `claude/par-835-maze-rule-scare-zone`: both rows reset to
+`NULL`, **2 of 2 selected again**; with the mark, **0 of 2**.
 
 ### What research is worth
 
@@ -1814,6 +1831,11 @@ None of the three is enough. The name is not, because `Haunted Mansion` and
 slide inventory is seasonal and stops in September — 258 production rows are
 seasonal with an autumn last-operating month and not one of them is a maze.
 
+**And all three together are circumstantial**, which is what the rubric path
+below (PAR-835) is for: a scare zone carries the same name tokens and the same
+autumn season as the maze beside it, and the three marks cannot separate them.
+Where a park's own event rubric is in the name, it decides instead of them.
+
 The rule runs as the last attraction step of `detect-seasonal`, which is also
 where it has to run: it reads `is_seasonal` and `season_months`, and the steps
 above it have just rewritten both. On its own cron it would read a season up to
@@ -1828,6 +1850,14 @@ SELECT and in the filter. There is no curated twin column here and no resolver
 to arbitrate: an editor's answer is simply final, including the answer `RIDE` on
 something whose name screams maze. That is also what makes a wrong token cheap
 — one admin write, and the rule never returns to that row.
+
+**Except when the admin write is the empty value**, which is the one correction
+this shape cannot carry: it hands the row back to the rule that filled it. The
+verdict "a human looked and this is not a maze" therefore lives in a
+`not_a_maze` review mark, and `selectMazeRows` takes the marked ids as its
+third argument (§4b has the measurement and why `detect-seasonal` still ignores
+marks). The expiry is resolved in the processor's query rather than in the rule,
+so `CURRENT_DATE` is not an input the rule has to be handed.
 
 The decision runs in TypeScript over loaded rows rather than inside the
 `UPDATE`. The whole unjudged catalogue is 7,531 rows of ten columns
@@ -1852,8 +1882,13 @@ findings shaped it, and both are the kind that only shows up against real data:
   page. A word that names a theme rather than an event does not belong in the
   list, however Halloween it sounds.
 
-Anchored and without `voodoo`, the first run selects **9 rows in 2 parks**, all
-9 genuine mazes. Matched freely it selected 11, two of them wrong.
+Anchored and without `voodoo`, the first run selects **9 rows in 2 parks**.
+Matched freely it selected 11, two of them wrong by name. **Two of the nine are
+wrong by category**, and no token list could have caught it: the Fiesta Texas
+event page lists `Cirkus Bezerkus: Big Top Terror` and `Fear Acres` under
+"Scare Zones" rather than "Haunted Mazes" (PAR-835). Both still read `MAZE` in
+production — neither name carries a rubric, so the rubric path below does not
+reach them, and clearing the field only hands them back to the rule.
 
 ```
 Six Flags Fiesta Texas      | Carnival of Terrors         | {9,10,11} | terror
@@ -1866,6 +1901,42 @@ Universal Studios Hollywood | Evil Dead Burn - Express    | {9}       | evil
 Universal Studios Hollywood | Kill-Ceanera - Express      | {9}       | kill
 Universal Studios Hollywood | Killer Klowns - Express     | {9}       | kill
 ```
+
+### The park's own rubric overrides all three (PAR-835)
+
+Every Halloween event page lists "Haunted Mazes" and "Scare Zones" under
+separate headings, and a few feeds write that heading into the published name.
+Where one does, it is the park's statement about the thing rather than our
+inference from its name, so it decides alone — `mazeNameLabel` in
+`attractions/utils/maze-rule.ts`:
+
+| rubric in the name | effect | rows (2026-10-11) |
+|---|---|---|
+| `… \| Scare Zone`, `Scare Zone: …` | refused, whatever the season says | 8 (Thorpe Park 4, Universal Studios Beijing 4) |
+| `… \| Scare Maze`, `HAUNTED HOUSE: …`, `… \| Haunted Maze` | written, **without the season gate** | 10 (Thorpe Park 5, Six Flags Great America 5) |
+
+Dropping the season gate for a maze label is the point of it and not a
+loosening: the gate is a proxy for "runs only during the event", and
+`detect-seasonal` misses exactly the attraction that runs twelve evenings in
+October. Two of Great America's five `HAUNTED HOUSE:` rows sat unjudged for
+that reason alone.
+
+**The rubric is matched as a delimited segment** — the prefix before the first
+colon (`HAUNTED HOUSE: SAW: Legacy of Terror` has two), or the suffix after the
+last pipe — and never anywhere in the name. All 16 production rows carrying a
+`|` use it that way. Searched loosely, `haunted house` also claims LEGOLAND
+Billund's `Ghost – The Haunted House`, LEGOLAND Windsor's `Haunted House
+Monster Party` and Lotte World's `Haunted House`: three year-round
+walk-throughs, which is the other error class entirely. A scare-zone label
+beats a maze label, because a row labelled both ways is evidence of neither.
+
+Measured by running the rule and its pre-PAR-835 version over the same export
+of all 7,580 production rows: **+2 written** (the two Great America rows),
+**−8 refused as soon as the detector reaches them** — 0 today, because none of
+the eight scare zones is flagged seasonal yet, while four of them already clear
+`MIN_EVER_OPERATING` with 216 observed OPERATING rows each. No verdict already
+on a row is contradicted: of 114 judged rows the rule would write 17 if their
+field were blank, and all 17 read `MAZE`.
 
 ### Season evidence is read in two steps, because the months are nearly empty
 

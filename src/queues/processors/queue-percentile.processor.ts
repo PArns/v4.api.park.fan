@@ -738,8 +738,8 @@ export class QueuePercentileProcessor {
    * File the Halloween mazes nobody has judged yet.
    *
    * The rule itself is in `attractions/utils/maze-rule`, including why each of
-   * its three conditions is there and what it reaches. This method is the two
-   * queries around it.
+   * its three conditions is there and what it reaches. This method is the
+   * three queries around it.
    *
    * The decision runs over loaded rows rather than inside the UPDATE, so there
    * is one implementation of it and no SQL twin to drift from the TypeScript
@@ -752,6 +752,12 @@ export class QueuePercentileProcessor {
    * UPDATE. The nightly job is not the only writer here — an editor can be in
    * the admin while it runs — and the one thing this must never do is take a
    * verdict back.
+   *
+   * The third query is the one verdict a blank field cannot carry: clearing
+   * `attraction_kind` hands the row back to this rule, so "a human looked and
+   * said this is not a maze" lives in `attraction_review_marks` instead. The
+   * expiry is resolved here rather than in the rule, because `CURRENT_DATE` is
+   * the one input the rule should not have to be handed.
    */
   private async classifyHalloweenMazes(): Promise<void> {
     const rows: MazeRuleRow[] = await this.dataSource.query(
@@ -789,9 +795,22 @@ export class QueuePercentileProcessor {
           GROUP BY ps.park_id`,
       );
 
+    // Rows a human has already ruled out, with the verdict still standing. A
+    // scare zone stays a scare zone, so these marks are written without a
+    // recheck date; the clause is here so one written WITH a date behaves the
+    // way `findRetirementCandidates` has it behave.
+    const clearedRows: Array<{ attractionId: string }> =
+      await this.dataSource.query(
+        `SELECT attraction_id AS "attractionId"
+           FROM attraction_review_marks
+          WHERE kind = 'not_a_maze'
+            AND (recheck_after IS NULL OR recheck_after > CURRENT_DATE)`,
+      );
+
     const ids = selectMazeRows(
       rows,
       new Map(halloweenRows.map((r) => [r.parkId, r.months])),
+      new Set(clearedRows.map((r) => r.attractionId)),
     );
     if (ids.length === 0) {
       this.logger.log("   🎃 No unjudged attraction matched the maze rule.");
