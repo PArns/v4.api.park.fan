@@ -258,6 +258,32 @@ _DDL_PCN_LEADCURVE = text(
 )
 
 
+# Whether this process has already run the pcn_forecasts DDL (PAR-868). The DDL
+# used to run inside every write and every prune — and `CREATE INDEX IF NOT
+# EXISTS` takes a SHARE lock on pcn_forecasts BEFORE it finds that the index
+# exists. SHARE conflicts with VACUUM's SHARE UPDATE EXCLUSIVE, so every
+# 15-minute forecast write either cancelled a running autovacuum on the table
+# (autovacuum yields) or, against the nightly manual VACUUM (which does not),
+# queued for its whole duration with every other writer behind it. Once per
+# process is enough: the table and indexes do not disappear while it runs.
+_PCN_FORECASTS_SCHEMA_READY = False
+
+
+def _ensure_pcn_forecasts_schema(c) -> None:
+    """Run the pcn_forecasts DDL on `c` unless this process already has."""
+    if _PCN_FORECASTS_SCHEMA_READY:
+        return
+    c.execute(_DDL_PCN_FORECASTS)
+    c.execute(_DDL_PCN_FORECASTS_SERVING_IDX)
+    c.execute(_DDL_PCN_FORECASTS_IDX)
+
+
+def _mark_pcn_forecasts_schema_ready() -> None:
+    """Called only after the transaction that ran the DDL has committed."""
+    global _PCN_FORECASTS_SCHEMA_READY
+    _PCN_FORECASTS_SCHEMA_READY = True
+
+
 def write_pcn_forecasts(rows: list[dict], version: str) -> int:
     """Durable, immutable-per-origin upsert of forward 15-min forecasts. Re-running the
     same origin overwrites only that origin's rows; past origins are preserved, so the
@@ -279,11 +305,10 @@ def write_pcn_forecasts(rows: list[dict], version: str) -> int:
     for r in rows:
         r["ver"] = version
     with engine().begin() as c:
-        c.execute(_DDL_PCN_FORECASTS)
-        c.execute(_DDL_PCN_FORECASTS_SERVING_IDX)
-        c.execute(_DDL_PCN_FORECASTS_IDX)
+        _ensure_pcn_forecasts_schema(c)
         for i in range(0, len(rows), 5000):
             c.execute(upsert, rows[i : i + 5000])
+    _mark_pcn_forecasts_schema_ready()
     return len(rows)
 
 
@@ -299,10 +324,9 @@ def prune_pcn_forecasts(retention_days: int) -> int:
         """
     )
     with engine().begin() as c:
-        c.execute(_DDL_PCN_FORECASTS)
-        c.execute(_DDL_PCN_FORECASTS_SERVING_IDX)
-        c.execute(_DDL_PCN_FORECASTS_IDX)
+        _ensure_pcn_forecasts_schema(c)
         res = c.execute(sql, {"d": str(retention_days)})
+    _mark_pcn_forecasts_schema_ready()
     return int(res.rowcount or 0)
 
 

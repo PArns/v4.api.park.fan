@@ -134,6 +134,17 @@ export const BULL_QUEUE_REGISTRATIONS: BullModuleOptions[] = [
     },
   },
   {
+    // Nightly VACUUM of the high-churn tables before the 06:00 UTC CatBoost
+    // training (PAR-868). One table at a time for up to an hour — all async
+    // I/O, but the same headroom as the other long batch jobs so a single
+    // 30-minute VACUUM is never flagged stalled and re-run.
+    name: "db-maintenance",
+    settings: {
+      lockDuration: 900000, // 15 min
+      lockRenewTime: 300000,
+    },
+  },
+  {
     // Its daily scoring run, on a queue of its own: on the capture queue
     // (concurrency 1) a long 12:00 UTC scoring run delayed the 12:05 capture,
     // and with it Europe's 14:00 intraday origin.

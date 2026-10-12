@@ -332,6 +332,85 @@ VACUUM ANALYZE wait_time_predictions;
 VACUUM ANALYZE prediction_accuracy;
 ```
 
+A manual VACUUM uses `maintenance_work_mem` (2 GB here), not `autovacuum_work_mem`.
+Run `SET maintenance_work_mem = '256MB';` first, and never between 05:50 and 07:30 UTC
+(§5a).
+
+### 5a. The nightly VACUUM window and the 06:15 OOM (PAR-868, 2026-10-12)
+
+**What happened.** At 06:15:55 UTC on 2026-10-12 the kernel OOM-killed the CatBoost
+training (`ml-training/train-model`, cron 06:00 UTC, 35–70 min, an ml-service
+subprocess at 6.4 GB RSS when killed and ~13 GB at peak) on the shared 29 GB host.
+Trivial queries took 40 s in the seconds before. No new model was registered;
+`v20261011_0600` stayed active. A large autovacuum at 06:15 cannot be proven — the
+Postgres log went with a deploy — but the configuration allowed one: ten autovacuum
+workers, each inheriting `maintenance_work_mem` = 2 GB, so up to 20 GB of vacuum
+memory beside `shared_buffers` = 7 GB.
+
+**Changed on 2026-10-12 (ALTER SYSTEM + reload, no restart):**
+`autovacuum_work_mem = 256MB`. Check with
+`SELECT setting, source FROM pg_settings WHERE name = 'autovacuum_work_mem';`
+(`262144` kB, `configuration file`).
+
+**Changed in code:** the `db-maintenance` queue's `vacuum-churn-tables` job
+(`src/database/maintenance/`) runs `VACUUM (ANALYZE)` at **04:50 UTC** on the
+high-churn tables, one at a time, so autovacuum has nothing large left to do when
+the training starts:
+
+| table | live | dead | autovacuums | size |
+| --- | --- | --- | --- | --- |
+| `pcn_forecasts` | 122.1 M | 9.46 M | 143 | 28 GB |
+| `prediction_accuracy` | 16.2 M | 1.11 M | 5 320 | 6.3 GB |
+| `shape_forecasts` | 102.6 M | 2.40 M | 119 | 19 GB |
+| `tft_forecasts` | 24.4 M | 0.49 M | 37 | 3.4 GB |
+| `holidays` | 0.20 M | 34.8 k | 192 | 164 MB |
+
+(`pg_stat_user_tables` on 2026-10-12; stats never reset.) Rules: its own connection
+outside the pool (`application_name = parkfan-db-maintenance`), `lock_timeout = 5s`,
+`maintenance_work_mem = 256MB`, a per-table `statement_timeout` capped to end by
+05:58, a table with a vacuum already in `pg_stat_progress_vacuum` is skipped, no table
+starts at or after 05:50, no `VACUUM FULL`, and the job never fails. Each table logs
+`🧽 <table>: VACUUM (ANALYZE) in N s — dead tuples X → Y`.
+
+Hypertables are left to autovacuum on purpose: their dead rows sit in a few small
+uncompressed chunks, and a manual VACUUM does not yield to a conflicting lock the
+way autovacuum does — a compression policy landing on a chunk mid-VACUUM would queue
+behind it (§0b). The policies' 12-hour schedules drift, so their current times are
+no guarantee.
+
+**Two lock holders found on the way:**
+- `pcn-service` ran `CREATE INDEX IF NOT EXISTS` on `pcn_forecasts` inside every
+  15-minute write and every hourly prune. That statement takes a SHARE lock before it
+  finds the index exists, which conflicts with VACUUM: it cancelled every
+  autovacuum of the table that ran longer than a forecast tick, and against the
+  manual VACUUM it would have queued every writer for the whole run. The DDL now runs
+  once per process.
+- `prediction-accuracy/compare-accuracy` (every 15 min) ran the retention DELETEs
+  on every tick — 96 times a day, including the `DELETE FROM prediction_accuracy
+  WHERE target_time < $1 AND comparison_status = $2` (3.4 s) logged at 06:15:17 on
+  2026-10-12. The daily `cleanup-old` job at 04:00 applies the same windows; the
+  per-tick copy is gone.
+
+**Recommended, not applied** (both need a decision, the first a restart):
+- `autovacuum_max_workers` 10 → 4 at the next planned Postgres restart. Ten workers
+  only help while many tables need vacuuming at once; with the churn tables done at
+  04:50 four are enough, and it caps autovacuum memory at 4 × 256 MB.
+- `log_autovacuum_min_duration = '30s'` (reload is enough). Today it is the default
+  10 min, which is why the 06:15 question cannot be answered from the log.
+
+**Is the window holding?** After 06:00, nothing large should be autovacuuming:
+
+```sql
+SELECT relname, last_vacuum, last_autovacuum, n_dead_tup
+FROM pg_stat_user_tables
+WHERE relname IN ('pcn_forecasts','prediction_accuracy','shape_forecasts','tft_forecasts','holidays')
+ORDER BY relname;
+```
+
+`last_vacuum` should read today, between 04:50 and 05:58 UTC. A missing table means it
+was skipped — the API log says why (`skipped_in_progress`, `skipped_window_closed`,
+or a `failed` with the error).
+
 ---
 
 ## 6. Slow Query Logging

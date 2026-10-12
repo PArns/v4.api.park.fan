@@ -7,6 +7,7 @@ import {
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { createHash } from "crypto";
+import { DB_VACUUM_CRON } from "../../database/maintenance/vacuum-plan";
 
 /**
  * How often the scheduler re-runs its registration after startup.
@@ -57,6 +58,8 @@ export function materialisedRepeatJobId(entry: {
  * - ml-training: Daily at 6am (retrain model with new data)
  * - prediction-accuracy: Every hour (compare predictions with actuals)
  * - geoip-update: Every 48 hours (GeoLite2-City for nearby endpoint)
+ * - db-maintenance: 04:50 UTC VACUUM of the high-churn tables, done before the
+ *   06:00 UTC training (PAR-868)
  */
 @Injectable()
 export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -105,6 +108,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     @InjectQueue("pcn-shadow") private pcnShadowQueue: Queue,
     @InjectQueue("shape-shadow") private shapeShadowQueue: Queue,
     @InjectQueue("manual-metadata") private manualMetadataQueue: Queue,
+    @InjectQueue("db-maintenance") private dbMaintenanceQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -1238,6 +1242,30 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
             cron: "30 5 * * *", // Daily at 5:30am
           },
           jobId: "typical-waits-cron",
+        },
+      );
+    }
+
+    // Nightly VACUUM of the high-churn tables: 04:50 UTC, so it is done before
+    // the 06:00 UTC CatBoost training (PAR-868 — the training was OOM-killed at
+    // 06:15 on 2026-10-12 on the shared host). `tz` is explicit because the
+    // job's stop rules (no new table after 05:50, nothing running at 05:58) are
+    // UTC. One attempt: a retry would land after the window anyway.
+    const hasDbVacuumCron = await this.hasRepeatableJob(
+      this.dbMaintenanceQueue,
+      "db-vacuum-cron",
+      DB_VACUUM_CRON,
+    );
+    if (!hasDbVacuumCron) {
+      await this.dbMaintenanceQueue.add(
+        "vacuum-churn-tables",
+        {},
+        {
+          repeat: { cron: DB_VACUUM_CRON, tz: "UTC" },
+          jobId: "db-vacuum-cron",
+          attempts: 1,
+          removeOnComplete: 30,
+          removeOnFail: 30,
         },
       );
     }

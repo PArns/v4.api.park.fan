@@ -135,3 +135,59 @@ describe("QueueSchedulerService — repeatable entry whose next run lost its nam
     }
   });
 });
+
+describe("QueueSchedulerService — nightly VACUUM (PAR-868)", () => {
+  function fakeQueue() {
+    return {
+      getRepeatableJobs: jest.fn().mockResolvedValue([]),
+      removeRepeatableByKey: jest.fn().mockResolvedValue(undefined),
+      add: jest.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("registers vacuum-churn-tables at 04:50 UTC on db-maintenance, before the 06:00 training", async () => {
+    // One fake per injected queue; db-maintenance is the last argument.
+    const queues = Array.from({ length: QueueSchedulerService.length }, () =>
+      fakeQueue(),
+    );
+    const service = new (
+      QueueSchedulerService as unknown as new (
+        ...args: unknown[]
+      ) => QueueSchedulerService
+    )(...queues);
+    jest
+      .spyOn(
+        (service as unknown as { logger: { log: () => void } }).logger,
+        "log",
+      )
+      .mockImplementation(() => undefined);
+
+    await (
+      service as unknown as { registerScheduledJobs(): Promise<void> }
+    ).registerScheduledJobs();
+
+    const dbMaintenance = queues[queues.length - 1];
+    expect(dbMaintenance.add).toHaveBeenCalledTimes(1);
+    expect(dbMaintenance.add).toHaveBeenCalledWith(
+      "vacuum-churn-tables",
+      {},
+      expect.objectContaining({
+        repeat: { cron: "50 4 * * *", tz: "UTC" },
+        jobId: "db-vacuum-cron",
+        attempts: 1,
+      }),
+    );
+
+    // The training it has to finish before is still at 06:00.
+    const training = queues.find((q) =>
+      q.add.mock.calls.some((c: unknown[]) => c[0] === "train-model"),
+    );
+    expect(training?.add).toHaveBeenCalledWith(
+      "train-model",
+      expect.anything(),
+      expect.objectContaining({ repeat: { cron: "0 6 * * *" } }),
+    );
+  });
+});
