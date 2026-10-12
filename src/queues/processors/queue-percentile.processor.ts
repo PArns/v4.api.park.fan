@@ -738,8 +738,8 @@ export class QueuePercentileProcessor {
    * File the Halloween mazes nobody has judged yet.
    *
    * The rule itself is in `attractions/utils/maze-rule`, including why each of
-   * its three conditions is there and what it reaches. This method is the two
-   * queries around it.
+   * its three conditions is there and what it reaches. This method is the
+   * three queries around it.
    *
    * The decision runs over loaded rows rather than inside the UPDATE, so there
    * is one implementation of it and no SQL twin to drift from the TypeScript
