@@ -17,8 +17,10 @@ import {
  * Deliberately NOT flushed (state, not cache): popularity:* (ranking),
  * downtime:* (open downtime tracking), prediction:deviation:* (deviation
  * tracking), ratelimit:* (circuit breakers), ml:accuracy:* and
- * ml:last-accuracy-check (job markers), geocoding:* (results of a paid API
- * that do not go stale).
+ * ml:last-accuracy-check (job markers), ml:hourly-fresh:* (PAR-874 — the only
+ * thing that makes a park's unchanged hourly rows servable; flushing it blanks
+ * every intraday forecast until the generator's next run), geocoding:* (results
+ * of a paid API that do not go stale).
  */
 export const PARK_CACHE_FLUSH_PATTERNS: readonly string[] = [
   "schedule:*",

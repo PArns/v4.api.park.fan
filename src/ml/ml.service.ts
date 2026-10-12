@@ -1692,6 +1692,26 @@ export class MLService {
     const other = entities.filter((e) => e.predictionType !== "hourly");
     for (const e of hourly) e.createdAt = runCreatedAt;
 
+    // The park's rides, resolved separately rather than joined into the read
+    // below. `attractions` is the table the nightly `drop_chunks` has to take
+    // ACCESS EXCLUSIVE on (this hypertable references it), and while that lock
+    // queues, every query touching `attractions` queues behind it — see the
+    // comment on the chunk-retention job for the 25 consecutive 5-minute stalls
+    // that taught us. A read running ~96 times a day per park does not belong in
+    // that queue, and the id list also drives the
+    // `(attractionId, predictionType, createdAt)` index prefix directly.
+    // All of the park's rides, not just the ones this run predicts: a slot can
+    // only be recognised as dropped if its ride is in the comparison.
+    const attractions = await this.attractionRepository.find({
+      where: { parkId },
+      select: ["id"],
+    });
+    const attractionIds = attractions.map((a) => a.id);
+    if (attractionIds.length === 0) {
+      await this.insertPredictionRows(entities);
+      return;
+    }
+
     const stored: StoredSlotRow[] = await this.predictionRepository.manager
       .query(
         `SELECT p."attractionId"::text AS "attractionId",
@@ -1700,13 +1720,12 @@ export class MLService {
                 p."crowdLevel"::text AS "crowdLevel", p.status, p.baseline,
                 p."modelVersion"
            FROM wait_time_predictions p
-           JOIN attractions a ON a.id = p."attractionId"
-          WHERE a."parkId" = $1::uuid
+          WHERE p."attractionId" = ANY($1::uuid[])
             AND p."predictionType" = 'hourly'
             AND p."createdAt" >= $2
             AND p."predictedTime" >= $3`,
         [
-          parkId,
+          attractionIds,
           new Date(now.getTime() - HOURLY_LOOKBACK_MS).toISOString(),
           now.toISOString(),
         ],
@@ -1801,8 +1820,18 @@ export class MLService {
   /**
    * Which of these rides have an hourly forecast a reader may serve: the
    * generator vouched for them within {@link HOURLY_FRESHNESS_MS} (Redis
-   * marker), or — the pre-PAR-874 test, kept for the deploy window and for a
-   * Redis outage — one of their rows was written that recently.
+   * marker), or — the pre-PAR-874 test, kept as a second chance — one of their
+   * rows was written that recently.
+   *
+   * How much that second chance is worth: it carries the deploy window (every
+   * row is freshly written by the old path), and after that only a ride that
+   * had at least one CHANGED slot in the last 30 minutes. A ride whose curve
+   * sits unchanged writes no rows at all, so with the marker gone it is not
+   * servable — hourly serving genuinely depends on Redis now. On an `mget`
+   * error this stays fail-closed (the reader falls back to row age, which can
+   * only under-report freshness, never invent it); making it fail open on a
+   * connection error is the follow-up to weigh, not a thing to change in the
+   * same deploy.
    */
   private async freshHourlyAttractions(
     rows: ReadonlyArray<Pick<WaitTimePrediction, "attractionId" | "createdAt">>,

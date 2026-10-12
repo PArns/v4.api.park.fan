@@ -110,8 +110,18 @@ const slotKey = (attractionId: string, predictedTime: Date): string =>
  *   filter.
  * - A slot that is already under way (`predictedTime < now`) is outside the
  *   comparison, as it was outside the old delete: its incoming row is inserted
- *   beside whatever is there. The stats/day curve depends on that — it keeps
- *   the last row written BEFORE the slot began as "what the model said".
+ *   beside whatever is there. In practice this branch almost never fires —
+ *   ml-service rounds its `base_time` UP to the next 15-minute slot, so a run's
+ *   earliest slot is already in the future by the time this executes, and only
+ *   a run whose `base_time` landed in the last seconds before a boundary brings
+ *   one along. Do not read it as "every run writes at least one row per ride":
+ *   a ride whose whole future curve compares equal writes NOTHING, which is the
+ *   point of this file and the reason freshness has to live outside the rows
+ *   (`MLService.markHourlyPredictionsFresh`).
+ *   What keeps the stats/day curve intact is not this append but the delete
+ *   bounds: a superseded row is only ever removed while its slot is still in
+ *   the future, so once a slot has begun, the row that was current when it
+ *   began stays — "what the model said".
  * - `runCreatedAt` is the `createdAt` every inserted row carries; a changed or
  *   dropped slot loses every row older than it.
  */

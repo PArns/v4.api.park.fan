@@ -35,9 +35,12 @@ Stores raw wait time observations. This is a hypertable (TimescaleDB).
 ### 4. Wait Time Predictions (`wait_time_predictions`)
 Stores CatBoost's raw predictions. Hypertable on `createdAt` (7-day chunks,
 compressed after 14 days, segment by `attractionId`).
-- Primary key `(attractionId, createdAt, predictedTime, predictionType)` — the
+- Primary key `(attractionId, predictionType, createdAt, predictedTime)` — the
   natural key plus the partition column, which TimescaleDB requires in every
-  unique index. Physically it leads with `(attractionId, predictionType, createdAt)`.
+  unique index. That is the live column order on production (verified against
+  `pg_index` on 2026-10-12); `timescale-init.service.ts` derives the key from the
+  running schema rather than declaring it, so this is the order queries can rely
+  on for an index prefix.
 - `predictedTime`: the slot being predicted (15-minute slots for `hourly`,
   despite the name; days for `daily`)
 - `predictedWaitTime`, `confidence`, `uncertaintyMinutes`, `crowdLevel`,
@@ -77,7 +80,9 @@ was written, not the time it was last confirmed. Freshness therefore moved off
 the row: every run sets a Redis marker `ml:hourly-fresh:{attractionId}` with a
 30-minute TTL, and `getStoredPredictions` / `getBatchStoredPredictions` serve a
 ride's hourly rows when the marker exists or one of its rows is younger than 30
-minutes (the old rule, which covers the deploy window and a Redis outage). Their
+minutes (the old rule, which carries the deploy window itself, and after that
+any ride with a changed slot in the last 30 minutes — a ride whose curve sits
+unchanged writes no row, so hourly serving does depend on Redis now). Their
 `createdAt` bound is the 50-hour horizon window, and they return one row per
 slot, the newest. The history readers that take the *newest* row per slot
 (`prediction-deviation`, the PCN scorer, the nf-service backtests, and the

@@ -894,6 +894,9 @@ describe("MLService", () => {
     });
 
     it("should store all predictions when park has no schedule history (e.g. Hellendoorn)", async () => {
+      // The park's rides, as the diff-write resolves them before reading the
+      // stored slots (deliberately not a join — see diffWriteHourlyPredictions).
+      mockAttractionRepository.find.mockResolvedValue([{ id: attractionId }]);
       mockParksService.getOperatingDateRange.mockResolvedValue({
         minDate: null,
         maxDate: null,
@@ -1123,11 +1126,13 @@ describe("MLService", () => {
     const pipelineExec = jest.fn().mockResolvedValue([]);
     let deletes: unknown[][];
     let storedRows: Record<string, unknown>[];
+    let storedReads: string[];
 
     beforeEach(() => {
       insertedValues.length = 0;
       deletes = [];
       storedRows = [];
+      storedReads = [];
       mockAttractionRepository.createQueryBuilder.mockReturnValue({
         innerJoin: jest.fn().mockReturnThis(),
         select: jest.fn().mockReturnThis(),
@@ -1151,7 +1156,8 @@ describe("MLService", () => {
               { affected: String((params[0] as unknown[]).length) },
             ]);
           }
-          if (sql.includes('JOIN attractions a ON a.id = p."attractionId"')) {
+          if (sql.includes("FROM wait_time_predictions p")) {
+            storedReads.push(sql);
             return Promise.resolve(storedRows);
           }
           return Promise.resolve([]);
@@ -1216,6 +1222,24 @@ describe("MLService", () => {
       expect(
         mockPredictionAccuracyService.recordPredictions.mock.calls[0][0],
       ).toHaveLength(2);
+    });
+
+    it("reads the stored slots by attraction id, without joining attractions", async () => {
+      // `attractions` is the table the nightly drop_chunks takes ACCESS
+      // EXCLUSIVE on; a read running ~96 times a day per park must not queue
+      // behind it. The park's rides are resolved separately instead.
+      await service.storePredictions(
+        [{ ...base, predictedTime: inHours(2).toISOString() }],
+        { replaceHourlyForPark: parkId },
+      );
+
+      expect(storedReads).toHaveLength(1);
+      expect(storedReads[0]).not.toMatch(/join\s+attractions/i);
+      expect(storedReads[0]).toContain('"attractionId" = ANY($1::uuid[])');
+      expect(mockAttractionRepository.find).toHaveBeenCalledWith({
+        where: { parkId },
+        select: ["id"],
+      });
     });
 
     it("writes nothing at all when the run repeats the stored answer", async () => {
@@ -1377,6 +1401,5 @@ describe("MLService", () => {
         ).toBeLessThan(60_000);
       });
     });
-
   });
 });
