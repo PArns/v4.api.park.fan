@@ -154,6 +154,20 @@ describe("DbVacuumService (PAR-868)", () => {
     expect(client.ended).toBe(true);
   });
 
+  it("listens for connection errors so a dropped idle connection cannot crash the API", async () => {
+    const clock = { now: at("04:50") };
+    const client = fakeClient(clock);
+    let listener: ((err: Error) => void) | undefined;
+    client.on = jest.fn((event: "error", fn: (err: Error) => void) => {
+      if (event === "error") listener = fn;
+      return client;
+    });
+    await serviceWith(client, clock).vacuumChurnTables(targets);
+
+    expect(client.on).toHaveBeenCalledWith("error", expect.any(Function));
+    expect(() => listener!(new Error("terminating connection"))).not.toThrow();
+  });
+
   it("sets lock_timeout, a 256MB work memory and a per-table statement_timeout", async () => {
     const clock = { now: at("04:50") };
     const client = fakeClient(clock);

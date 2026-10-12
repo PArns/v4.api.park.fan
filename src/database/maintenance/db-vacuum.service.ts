@@ -19,6 +19,8 @@ export interface VacuumClient {
     params?: unknown[],
   ): Promise<{ rows: Record<string, unknown>[] }>;
   end(): Promise<unknown>;
+  /** pg.Client is an EventEmitter: a connection lost while idle is emitted, not thrown. */
+  on?(event: "error", listener: (err: Error) => void): unknown;
 }
 
 export type VacuumOutcome =
@@ -106,6 +108,11 @@ export class DbVacuumService {
     let client: VacuumClient;
     try {
       client = this.createClient();
+      // A dropped connection between statements (Postgres restart, terminated backend)
+      // arrives as an 'error' event; unhandled, Node would crash the whole API process.
+      client.on?.("error", (err) =>
+        this.logger.error(`🧽 VACUUM connection error: ${describe(err)}`),
+      );
       await client.connect();
       await client.query(`SET lock_timeout = '${VACUUM_LOCK_TIMEOUT}'`);
       await client.query(
