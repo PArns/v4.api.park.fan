@@ -278,6 +278,78 @@ describe("ChildrenMetadataProcessor — one unwritable child does not cost the p
       );
       expect((listedExternalIds as Set<string>).has(unwritableId)).toBe(true);
     });
+
+    it("keeps a skipped child out of the reclassification candidates", async () => {
+      // The second hazard of running these steps at all. Both of them retire
+      // the row the OTHER table holds for an id: an attraction row when the
+      // feed now lists the id as a show or a restaurant, and the other way
+      // round. The replacement row is what makes that safe — and a skipped
+      // child has no replacement row. Handing its id over anyway would take
+      // the entity out of the payload entirely instead of missing one row.
+      syncAttractionThatThrowsOnce();
+      jest
+        .spyOn(processor as any, "syncRestaurant")
+        .mockResolvedValue(undefined);
+      const childEntities = jest
+        .spyOn(processor as any, "retireReclassifiedChildEntities")
+        .mockResolvedValue(undefined);
+
+      await processor.handleFetchChildren({} as any);
+
+      const candidates = childEntities.mock.calls[0][1] as string[];
+      expect(candidates).not.toContain(unwritableId);
+      expect(candidates.sort()).toEqual(
+        ["7a5d8e3d", "cac2b7a2", "90beb334"].sort(),
+      );
+    });
+
+    it("keeps a skipped restaurant out of the reclassification candidates", async () => {
+      // The same hazard in the other direction: the restaurant at feed index
+      // 4 throws, so the attraction row carrying its id must stay.
+      jest
+        .spyOn(processor as any, "syncAttraction")
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(processor as any, "syncRestaurant")
+        .mockImplementation(async (entity: any) => {
+          if (entity.id === "1acbd120") throw new Error("restaurant write");
+        });
+      const reclassified = jest
+        .spyOn(processor as any, "retireReclassifiedAttractions")
+        .mockResolvedValue(undefined);
+
+      await processor.handleFetchChildren({} as any);
+
+      const candidates = reclassified.mock.calls[0][2] as string[];
+      expect(candidates).not.toContain("1acbd120");
+      expect(candidates).toEqual(["035cbd49"]);
+    });
+
+    it("hands every id over when nothing was skipped", async () => {
+      // The counter-check for both assertions above: without it a green
+      // `not.toContain` could come from a run that passed no ids at all.
+      jest
+        .spyOn(processor as any, "syncAttraction")
+        .mockResolvedValue(undefined);
+      jest
+        .spyOn(processor as any, "syncRestaurant")
+        .mockResolvedValue(undefined);
+      const reclassified = jest
+        .spyOn(processor as any, "retireReclassifiedAttractions")
+        .mockResolvedValue(undefined);
+      const childEntities = jest
+        .spyOn(processor as any, "retireReclassifiedChildEntities")
+        .mockResolvedValue(undefined);
+
+      await processor.handleFetchChildren({} as any);
+
+      expect((childEntities.mock.calls[0][1] as string[]).sort()).toEqual(
+        ["7a5d8e3d", "06eccc72", "cac2b7a2", "90beb334"].sort(),
+      );
+      expect((reclassified.mock.calls[0][2] as string[]).sort()).toEqual(
+        ["1acbd120", "035cbd49"].sort(),
+      );
+    });
   });
 
   describe("shows and restaurants", () => {

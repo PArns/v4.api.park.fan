@@ -306,6 +306,14 @@ export class ChildrenMetadataProcessor {
             // succeed. Skipping the child costs one row; the throw cost the
             // park. Shared by the Queue-Times path below and the wiki path.
             let parkSkipped = 0;
+            // The ids of the children that could not be written. A skipped
+            // child's replacement row does not exist, so the two
+            // reclassification steps below must not retire the row it would
+            // have replaced: that would take the entity out of the payload
+            // altogether instead of missing one row. Before PAR-714 the throw
+            // ended the park before those steps ran, so the case could not
+            // arise.
+            const skippedExternalIds = new Set<string>();
             const skipChild = (
               kind: string,
               name: string,
@@ -313,6 +321,7 @@ export class ChildrenMetadataProcessor {
               e: unknown,
             ): void => {
               parkSkipped++;
+              skippedExternalIds.add(id);
               this.logger.error(
                 `⏭️  ${park.name}: skipped ${kind} ${name} (${id}) ` +
                   `and kept going: ${e}`,
@@ -480,7 +489,11 @@ export class ChildrenMetadataProcessor {
                   park.name,
                   [...shows, ...restaurants]
                     .map((child) => child.id)
-                    .filter((id) => !syncedAsAttraction.has(id)),
+                    .filter(
+                      (id) =>
+                        !syncedAsAttraction.has(id) &&
+                        !skippedExternalIds.has(id),
+                    ),
                 );
               } catch (e) {
                 this.logger.error(
@@ -508,7 +521,11 @@ export class ChildrenMetadataProcessor {
                   park.name,
                   attractions
                     .map((child) => child.id)
-                    .filter((id) => !syncedAsChildEntity.has(id)),
+                    .filter(
+                      (id) =>
+                        !syncedAsChildEntity.has(id) &&
+                        !skippedExternalIds.has(id),
+                    ),
                 );
               } catch (e) {
                 this.logger.error(
