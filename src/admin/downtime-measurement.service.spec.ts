@@ -323,4 +323,11 @@ describe("DowntimeMeasurementService", () => {
     // floor, i.e. 20x its measured 30 s for the same window.
     expect([...timeouts].sort((a, b) => a - b)).toEqual([30_000, 600_000]);
   });
+
+  it("bounds the erasure read by the reconstruction's 10-minute floor (PAR-837)", async () => {
+    const { service, limitSql } = serviceWith([]);
+    await service.measureErasure(30);
+
+    expect(limitSql).toContain("SET LOCAL statement_timeout = 600000");
+  });
 });
