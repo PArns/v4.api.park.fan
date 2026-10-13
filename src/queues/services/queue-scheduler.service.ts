@@ -258,25 +258,18 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    // Phase 6.2: Combined Children Metadata (Attractions + Shows + Restaurants)
-    // Daily at 4am (replaces 3 separate jobs at 4am, 4:30am, 5am)
-    // This reduces API requests by 67% (105 instead of 315)
-    const hasChildrenCron = await this.hasRepeatableJob(
-      this.childrenQueue,
-      "children-metadata-cron",
+    // Children metadata (attractions + shows + restaurants) has no cron of its
+    // own: step 11 of `sync-all-parks` (03:00) queues `fetch-all-children`, so
+    // it always runs after the parks it reads exist. The former 04:00 cron
+    // fired the same job a second time ~31 min later and rewrote every row
+    // again (PAR-875). Its repeatable entry outlives the code in Redis.
+    const retiredChildrenJobs = await this.childrenQueue.getRepeatableJobs();
+    const retiredChildrenCron = retiredChildrenJobs.find(
+      (j) => j.id === "children-metadata-cron",
     );
-
-    if (!hasChildrenCron) {
-      await this.childrenQueue.add(
-        "fetch-all-children",
-        {},
-        {
-          repeat: {
-            cron: "0 4 * * *", // Daily at 4am
-          },
-          jobId: "children-metadata-cron",
-        },
-      );
+    if (retiredChildrenCron) {
+      await this.childrenQueue.removeRepeatableByKey(retiredChildrenCron.key);
+      this.logger.log('Removed retired "children-metadata-cron" job');
     }
 
     // Six Flags ride heights. Weekly: ThemeParks.wiki carries none for these
