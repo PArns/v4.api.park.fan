@@ -331,10 +331,13 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
    * strand a park's rides for good, since nothing else clears `retired_at`.
    */
   describe("the entity becomes an ATTRACTION again", () => {
-    const syncBack = (row: Record<string, unknown>) => {
+    const syncBack = (
+      row: Record<string, unknown>,
+      feedName = "Sesame Street",
+    ) => {
       themeParksMapper.mapAttraction.mockReturnValue({
         externalId: showExternalId,
-        name: "Sesame Street",
+        name: feedName,
         parkId,
       });
       attractionRepo.find.mockResolvedValue([
@@ -357,8 +360,10 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       expect(retirementService.unretire).toHaveBeenCalledWith(
         "row-sesame-street",
       );
-      const [, patch] = attractionRepo.update.mock.calls[0];
-      expect(patch).not.toHaveProperty("retiredAt");
+      // And the row itself is not written at all, because the feed's values
+      // match the stored ones (PAR-739). The case where it IS written is the
+      // test below — this one may not assert over an empty list of calls.
+      expect(attractionRepo.update).not.toHaveBeenCalled();
 
       // The decision reads `retiredReason` off the candidate row, so it has to
       // be selected. Without this the check is silently dead in production
@@ -368,6 +373,30 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
           select: expect.arrayContaining(["retiredReason"]),
         }),
       );
+    });
+
+    it("lifts it through the service even when the feed also renamed the ride", async () => {
+      // The pair to the case above, with a value for the metadata update to
+      // carry. The patch must still be the three synced fields and nothing
+      // else: `retiredAt` belongs to `unretire`, which has the cache eviction
+      // and the revalidation attached to it.
+      await syncBack(
+        {
+          id: "row-sesame-street",
+          externalId: showExternalId,
+          name: "Sesame Street",
+          retiredReason: RECLASSIFIED_UPSTREAM_REASON,
+        },
+        "Sesame Street Spaghetti Space Chase",
+      );
+
+      expect(retirementService.unretire).toHaveBeenCalledWith(
+        "row-sesame-street",
+      );
+      expect(attractionRepo.update).toHaveBeenCalledTimes(1);
+      const [, patch] = attractionRepo.update.mock.calls[0];
+      expect(patch).toEqual({ name: "Sesame Street Spaghetti Space Chase" });
+      expect(patch).not.toHaveProperty("retiredAt");
     });
 
     it("leaves a retirement a human entered alone", async () => {
@@ -382,7 +411,9 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       });
 
       expect(retirementService.unretire).not.toHaveBeenCalled();
-      expect(attractionRepo.update).toHaveBeenCalledTimes(1);
+      // Nothing is written: the sync has no business touching a retirement it
+      // did not write, and the feed moved no value either.
+      expect(attractionRepo.update).not.toHaveBeenCalled();
     });
   });
 

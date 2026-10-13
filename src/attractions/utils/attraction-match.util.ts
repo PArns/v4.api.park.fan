@@ -29,6 +29,15 @@ export interface AttractionMatchCandidate {
   queueTimesEntityId?: string | null;
   /** Carried through so a caller can tell a sync retirement from a human one. */
   retiredReason?: string | null;
+  /**
+   * Carried through so a caller can tell a value the feed moved from one it
+   * did not. The match itself never reads them: `latitude` is a `numeric` and
+   * arrives as a string, which is why the comparison belongs to the caller
+   * that knows the stored scale (`coordinateChanged`).
+   */
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+  attractionType?: string | null;
 }
 
 export interface IncomingAttraction {

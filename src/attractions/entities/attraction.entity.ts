@@ -537,15 +537,22 @@ export class Attraction {
    *
    * **This is a last-seen timestamp, not a notice.** The sync seeds it from
    * the evidence it has that the entity still existed, and which evidence that
-   * is depends on how recently the row was written. Inside
-   * `ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS` the sync itself wrote it, so the
-   * feed listed it that recently and the clock starts now whatever the
-   * readings say. Outside that window the row is back-dated to the earlier of
-   * `updatedAt` and its last real reading, so a row that went quiet long
-   * before anyone looked does not get a fresh clock the first time the column
-   * is filled. Where there is no real reading at all, `updatedAt` is the only
-   * evidence left, and the seed can then only delay a retirement, never cause
-   * one.
+   * is depends on how recently the row was listed. Inside
+   * `ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS` the feed carried the row, so the
+   * clock starts now whatever the readings say. Outside that window the row is
+   * back-dated to the earlier of `last_listed_at` and its last real reading,
+   * so a row that went quiet long before anyone looked does not get a fresh
+   * clock the first time the column is filled. Where there is no real reading
+   * at all, the listing is the only evidence left, and the seed can then only
+   * delay a retirement, never cause one.
+   *
+   * **The evidence is `last_listed_at`, and `updatedAt` only where that column
+   * is still null** (PAR-739). Both windows above used to read `updatedAt`
+   * directly, which put this column back on the signal it was built to
+   * replace: a curation write moved `updatedAt`, the seed read that as "the
+   * feed listed it today", and nine rows in two parks were dated from a
+   * curation charge rather than from their last listing. The fallback is for
+   * the rows the first sync after the deploy has not stamped yet.
    *
    * **One writer, plus one deliberate exception.** The sync sets it when a
    * park syncs successfully without listing the id, and clears it the moment
@@ -556,6 +563,38 @@ export class Attraction {
    */
   @Column({ name: "absent_since", type: "timestamptz", nullable: true })
   absentSince: Date | null;
+
+  /**
+   * When this park's `/children` last carried this row — the one signal that
+   * says "the feed still has it", written by the children sync and by nothing
+   * else.
+   *
+   * `absent_since` needs that signal to date an absence it has only just
+   * noticed, and before this column it took `updatedAt` for it. That worked
+   * only as long as the sync was the dominant writer, and it stopped working
+   * the moment anything else wrote a row: `updatedAt` is an
+   * `@UpdateDateColumn`, so a curation sweep over a park's rides dated their
+   * absence from the sweep (PAR-739, nine rows in Europa-Park and Walibi
+   * Belgium, one of them `VAMPIRE` at 167 days off).
+   *
+   * **Every listed row, one statement per park.** The stamp is a raw batched
+   * `UPDATE … WHERE id = ANY(...)` after the park's children loop, for the
+   * rows the run matched or inserted — the same set the absence step treats as
+   * present, so a row matched under a re-issued id or by name counts as listed
+   * too. Raw for the same reason `absent_since` is written raw: going through
+   * the repository would move `updatedAt`, and a bookkeeping column that
+   * disturbs the column it replaces is worth nothing.
+   *
+   * **Null means "not stamped yet", never "never listed".** Nothing back-fills
+   * it; a row gets its first value from the first successful sync of its park
+   * after the deploy, and a row that is already absent by then keeps null for
+   * good. `seedAbsenceWindow` therefore falls back to `updatedAt`, which is
+   * exactly the old behaviour for exactly those rows. The Queue-Times path
+   * does not write it: a `qt-ride-*` row is outside the absence logic
+   * altogether, because the wiki never issued its id.
+   */
+  @Column({ name: "last_listed_at", type: "timestamptz", nullable: true })
+  lastListedAt: Date | null;
 
   /**
    * When this ride last absorbed another one.

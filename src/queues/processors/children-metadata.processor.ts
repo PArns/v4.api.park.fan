@@ -54,6 +54,17 @@ interface SyncClaimContext {
    * rename (old id still listed). Only the wiki path fills it.
    */
   listedExternalIds?: Set<string>;
+  /**
+   * The rows this run wrote for a listed child — matched or freshly inserted.
+   *
+   * They get `last_listed_at` stamped in one batched statement per park
+   * (`stampListedRows`), which is what dates an absence once the feed drops an
+   * id. It is `claimed` plus the inserts: `claimed` cannot carry them, because
+   * a row in it is also taken out of the name fallback for the rest of the
+   * park, and a row inserted for one child may legitimately be the name match
+   * for the next. Only the wiki path fills it.
+   */
+  listedRowIds?: Set<string>;
 }
 
 /**
@@ -198,6 +209,53 @@ export const ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS = 400;
  * {@link ABSENT_UPSTREAM_RETIRE_DAYS}. It can only delay, never retire early.
  */
 export const ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS = 72;
+
+/**
+ * When the feed last carried a row, as the absence seed reads it.
+ *
+ * `last_listed_at` where the sync has stamped the row, and `updatedAt` where
+ * it has not. The fallback is not a convenience: the column is filled park by
+ * park on each park's first successful sync after the deploy, and a row that
+ * is already absent by then never gets stamped at all. For those rows this is
+ * the behaviour the seed had before PAR-739 — the one a curation write can
+ * disturb, and the only evidence left when nothing ever recorded a listing.
+ */
+export function lastListingOf(row: {
+  lastListedAt?: Date | null;
+  updatedAt: Date;
+}): Date {
+  return row.lastListedAt ?? row.updatedAt;
+}
+
+/** Decimal places `attractions.latitude` and `.longitude` are stored with. */
+export const COORDINATE_SCALE = 7;
+
+/**
+ * Whether the feed's coordinate differs from the one stored on the row.
+ *
+ * The comparison has to be made at the stored scale, and that is the whole
+ * reason this function exists. The wiki publishes full float precision
+ * (`50.80086099999999`), the column is `numeric(10,7)`, and TypeORM hands a
+ * numeric back as a **string** — so `stored !== incoming` is true for every
+ * row on every run, and a value comparison written the obvious way would have
+ * saved not one write.
+ *
+ * `undefined` or `null` from the feed is not a change but an absence of
+ * information: `mapAttraction` leaves the field out when the entity carries no
+ * location, and the update has always let such a column stand rather than
+ * nulling a coordinate we once had.
+ */
+export function coordinateChanged(
+  stored: number | string | null | undefined,
+  incoming: number | null | undefined,
+): boolean {
+  if (incoming == null) return false;
+  if (stored == null) return true;
+  return (
+    Number(stored).toFixed(COORDINATE_SCALE) !==
+    Number(incoming).toFixed(COORDINATE_SCALE)
+  );
+}
 
 /**
  * Whether the absence step leaves a row alone because it is seasonal.
@@ -416,6 +474,7 @@ export class ChildrenMetadataProcessor {
               const attractionCtx: SyncClaimContext = {
                 claimed: new Set(),
                 listedExternalIds,
+                listedRowIds: new Set(),
               };
               for (const attractionEntity of attractions) {
                 try {
@@ -531,6 +590,20 @@ export class ChildrenMetadataProcessor {
               } catch (e) {
                 this.logger.error(
                   `Failed to retire reclassified shows/restaurants for ${park.name}: ${e}`,
+                );
+              }
+
+              // The stamp that dates every absence this step will ever
+              // notice. It runs before the absence step so a row the feed
+              // listed today is on record as listed today even if that step
+              // then fails, and in its own guard for the same reason as the
+              // steps around it: a failed stamp must not cost the park its
+              // mapping job and its cache eviction.
+              try {
+                await this.stampListedRows(attractionCtx.listedRowIds!);
+              } catch (e) {
+                this.logger.error(
+                  `Failed to stamp listed attractions for ${park.name}: ${e}`,
                 );
               }
 
@@ -825,6 +898,12 @@ export class ChildrenMetadataProcessor {
           "name",
           "queueTimesEntityId",
           "retiredReason",
+          // Only so the update below can tell a changed value from an
+          // unchanged one. Without them every listed row is written on every
+          // run whether the feed moved it or not.
+          "latitude",
+          "longitude",
+          "attractionType",
         ],
       });
 
@@ -856,14 +935,46 @@ export class ChildrenMetadataProcessor {
         existing.externalId !== mappedData.externalId &&
         !ctx.listedExternalIds.has(existing.externalId);
 
-      // Update existing attraction (keep existing slug)
-      await this.attractionsService.getRepository().update(existing.id, {
-        name: mappedData.name,
-        latitude: mappedData.latitude,
-        longitude: mappedData.longitude,
-        attractionType: mappedData.attractionType,
-        ...(reissued ? { externalId: mappedData.externalId } : {}),
-      });
+      // The row is in the feed, so it gets today's stamp whether or not any
+      // of its values moved — that is what dates the absence once the id
+      // stops being listed, and it is the one thing an unchanged row still
+      // needs from this run.
+      ctx?.listedRowIds?.add(existing.id);
+
+      // Update existing attraction (keep existing slug), and only the columns
+      // the feed actually moved.
+      //
+      // This used to write `name`, `latitude` and `longitude` on every listed
+      // row of every run, unconditionally. Measured on 2026-10-13: 721,469
+      // such statements since 2026-06-03, 6,706 in the last run alone, and of
+      // 434 rows checked against the live feed across 12 parks, not one had
+      // a value the feed had moved. 97,85 % of all updates to the table were
+      // HOT, which cannot happen on a changed `name` — it sits in six indexes
+      // (PAR-739).
+      const changes: typeof mappedData = {};
+      if (mappedData.name !== undefined && mappedData.name !== existing.name) {
+        changes.name = mappedData.name;
+      }
+      if (coordinateChanged(existing.latitude, mappedData.latitude)) {
+        changes.latitude = mappedData.latitude;
+      }
+      if (coordinateChanged(existing.longitude, mappedData.longitude)) {
+        changes.longitude = mappedData.longitude;
+      }
+      if (
+        mappedData.attractionType !== undefined &&
+        mappedData.attractionType !== existing.attractionType
+      ) {
+        changes.attractionType = mappedData.attractionType;
+      }
+      if (reissued) changes.externalId = mappedData.externalId;
+      // An empty `update()` is an error in TypeORM rather than a no-op, and a
+      // row the feed did not move has nothing to write.
+      if (Object.keys(changes).length > 0) {
+        await this.attractionsService
+          .getRepository()
+          .update(existing.id, changes);
+      }
 
       if (reissued) {
         await this.createMapping(
@@ -900,6 +1011,9 @@ export class ChildrenMetadataProcessor {
       const saved = await this.attractionsService
         .getRepository()
         .save(mappedData);
+
+      // A row that exists because the feed listed it is a listed row.
+      ctx?.listedRowIds?.add(saved.id);
 
       // Create mapping for themeparks-wiki
       await this.createMapping(
@@ -1393,6 +1507,7 @@ export class ChildrenMetadataProcessor {
         "id",
         "name",
         "externalId",
+        "lastListedAt",
         "updatedAt",
         "absentSince",
         "isSeasonal",
@@ -1482,18 +1597,30 @@ export class ChildrenMetadataProcessor {
    * Starts the absence clock on the rows that do not have one yet, and writes
    * the value back onto the objects so this run can already act on it.
    *
-   * A row written inside {@link ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS} is
-   * seeded with `now`: the sync writes what it lists, so the feed had this row
-   * that recently and the absence starts today no matter how old its readings
-   * are. Only a row whose own write is older than that gets back-dated, to the
-   * **earlier** of its `updatedAt` and its last real reading — both are
-   * evidence that the entity still existed, and the older of the two is the
-   * one the newer writer may have overwritten. A row curated last week and
+   * **The evidence is the row's last listing** — `last_listed_at`, written by
+   * `stampListedRows` and by nothing else. A row listed inside
+   * {@link ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS} is seeded with `now`: the
+   * feed had it that recently, so the absence starts today no matter how old
+   * its readings are. Only a row listed longer ago than that gets back-dated,
+   * to the **earlier** of its last listing and its last real reading — both
+   * are evidence that the entity still existed, and the older of the two is
+   * the one the newer writer may have overwritten. A row curated last week and
    * silent since April is absent since April, not since last week; getting
    * that backwards is the bug this column was added for.
    *
+   * **`updatedAt` is the fallback, for rows no sync has stamped yet.** Both
+   * windows read it directly until PAR-739, which put the seed back on the
+   * signal it was built to replace: `updatedAt` is an `@UpdateDateColumn`, a
+   * curation sweep moves it on rows the feed has not listed in months, and
+   * nine rows in two parks were dated from the sweep rather than from their
+   * last listing (`VAMPIRE` at Walibi Belgium by 167 days). After the deploy
+   * the column fills itself — one park's rows at a time, on that park's first
+   * successful sync — and a row already absent by then keeps `null` and the
+   * old behaviour for good. Nothing back-fills it: a back-fill would have to
+   * invent a listing date, and the only honest source for one is `updatedAt`.
+   *
    * Where no real reading is found inside
-   * {@link ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS}, `updatedAt` is all that is
+   * {@link ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS}, the listing is all that is
    * left. The seed is then at worst too late, which only ever delays a
    * retirement: measured on 2026-10-04, that was one row of six (`NEXUS AI`,
    * created 2026-08-20, never once read by a real source).
@@ -1503,21 +1630,27 @@ export class ChildrenMetadataProcessor {
    * was built to replace is worth nothing.
    */
   private async seedAbsenceWindow(
-    absent: { id: string; updatedAt: Date; absentSince: Date | null }[],
+    absent: {
+      id: string;
+      lastListedAt?: Date | null;
+      updatedAt: Date;
+      absentSince: Date | null;
+    }[],
     now: Date,
   ): Promise<void> {
     const unseeded = absent.filter((row) => row.absentSince == null);
     if (unseeded.length === 0) return;
 
-    // A row the sync wrote inside the window was listed inside the window, so
+    // A row the feed listed inside the window was there inside the window, so
     // its absence is new and nothing older may be read into it.
     const freshWrite = new Date(
       now.getTime() - ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS * 3_600_000,
     );
     const backdatable: typeof unseeded = [];
     for (const row of unseeded) {
-      if (row.updatedAt.getTime() < freshWrite.getTime()) backdatable.push(row);
-      else row.absentSince = now;
+      if (lastListingOf(row).getTime() < freshWrite.getTime()) {
+        backdatable.push(row);
+      } else row.absentSince = now;
     }
 
     // Only the back-datable rows are worth the lookback, so a park whose feed
@@ -1546,10 +1679,9 @@ export class ChildrenMetadataProcessor {
 
     for (const row of backdatable) {
       const read = lastRead.get(row.id);
+      const listed = lastListingOf(row);
       row.absentSince =
-        read != null && read.getTime() < row.updatedAt.getTime()
-          ? read
-          : row.updatedAt;
+        read != null && read.getTime() < listed.getTime() ? read : listed;
     }
 
     await this.mappingRepository.manager.query(
@@ -1562,6 +1694,34 @@ export class ChildrenMetadataProcessor {
         unseeded.map((row) => row.id),
         unseeded.map((row) => row.absentSince!.toISOString()),
       ],
+    );
+  }
+
+  /**
+   * Records that the feed carried these rows, in one statement for the park.
+   *
+   * `last_listed_at` is the evidence `seedAbsenceWindow` dates an absence
+   * from, and it has to be written for every listed row — a stamp that is only
+   * written sometimes is not a last-seen timestamp. What it does not have to be
+   * is a statement per row: this is one `UPDATE … WHERE id = ANY(...)`, where
+   * the metadata write it replaces was 6,706 separate statements in the last
+   * run before it (PAR-739).
+   *
+   * Raw SQL on purpose, for the reason `seedAbsenceWindow` gives: going
+   * through the repository would move `updatedAt`, and this column exists
+   * because `updatedAt` was the wrong thing to read.
+   *
+   * @param rowIds Rows this run matched or inserted for a listed child. The
+   * set is wider than "the id was in the response" and deliberately so: a row
+   * reached under a re-issued id or by name is in the feed under another id,
+   * which is exactly how the absence step treats it.
+   */
+  private async stampListedRows(rowIds: Set<string>): Promise<void> {
+    if (rowIds.size === 0) return;
+
+    await this.mappingRepository.manager.query(
+      `UPDATE attractions SET last_listed_at = now() WHERE id = ANY($1::uuid[])`,
+      [[...rowIds]],
     );
   }
 

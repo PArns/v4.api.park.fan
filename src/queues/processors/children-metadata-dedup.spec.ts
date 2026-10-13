@@ -125,7 +125,12 @@ describe("ChildrenMetadataProcessor — cross-source duplicate prevention", () =
       });
       await (processor as any).syncAttraction({}, parkId, ctx);
 
-      expect(attractionRepo.update).toHaveBeenCalledTimes(1);
+      // The first restroom took the existing row and the second did not. Read
+      // off `claimed` rather than off the number of updates: since PAR-739 a
+      // match whose values the feed has not moved writes nothing at all, so
+      // "update was called once" would now be green for the wrong reason.
+      expect([...ctx.claimed]).toEqual(["row-restroom"]);
+      expect(attractionRepo.save).toHaveBeenCalledTimes(1);
       expect(attractionRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({ name: "Restroom", slug: "restroom-2" }),
       );

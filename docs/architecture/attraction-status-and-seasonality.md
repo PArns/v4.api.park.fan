@@ -1533,7 +1533,7 @@ is retired when all of these hold:
 |---|---|
 | the park's `/children` call succeeded and listed at least one attraction | our feed going quiet is not the entity going away |
 | the row's `externalId` is not in the response under any type, and no row of this run claimed it | absent, not reclassified, not matched under another id |
-| `updatedAt` older than `ABSENT_UPSTREAM_RETIRE_DAYS` (60, PO decision) | `syncAttraction` writes every row it matches, so this is "not listed for 60 days" |
+| `absent_since` older than `ABSENT_UPSTREAM_RETIRE_DAYS` (60, PO decision) | the column the sync owns, so this is "not listed for 60 days" and nothing else. It read `updatedAt` until PAR-656, on the grounds that `syncAttraction` writes every row it matches — which was true then, stopped being the whole truth the moment anything else wrote a row, and stopped being true at all with the conditional write of PAR-739. A row absent for the first time is dated from `last_listed_at` (PAR-739), falling back to `updatedAt` where no sync has stamped it yet |
 | no `queue_times_entity_id`, no mapping from another source | same gates as §5.6 |
 | no reading in 7 days other than `system-reconciliation` / `system-heartbeat` / carried heartbeats | 77 of the 515 were still being measured |
 
