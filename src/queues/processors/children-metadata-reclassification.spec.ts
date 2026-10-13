@@ -415,6 +415,29 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       // did not write, and the feed moved no value either.
       expect(attractionRepo.update).not.toHaveBeenCalled();
     });
+
+    it("syncs a row a human retired without reviving it", async () => {
+      // The counter-check for the case above, which can only assert an
+      // absence. Here the feed renamed the ride, so there IS a write — and it
+      // has to be the metadata and nothing else. A patch that carried
+      // `retiredAt` would put the ride back on the park page without the
+      // cache eviction, which is the failure the assertion above cannot see.
+      await syncBack(
+        {
+          id: "row-sesame-street",
+          externalId: showExternalId,
+          name: "Sesame Street",
+          retiredReason:
+            "Demolished in January 2026. Source: https://example.org",
+        },
+        "Sesame Street Studio",
+      );
+
+      expect(retirementService.unretire).not.toHaveBeenCalled();
+      expect(attractionRepo.update).toHaveBeenCalledTimes(1);
+      const [, patch] = attractionRepo.update.mock.calls[0];
+      expect(patch).toEqual({ name: "Sesame Street Studio" });
+    });
   });
 
   /**

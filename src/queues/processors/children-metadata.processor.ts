@@ -163,38 +163,17 @@ export const ABSENT_UPSTREAM_READING_DAYS = 7;
 export const ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS = 400;
 
 /**
- * How recent a row's own write has to be for the seed to treat the absence as
- * new rather than back-dating it.
+ * How recently the feed has to have listed a row for the seed to treat the
+ * absence as new rather than back-dating it.
  *
- * Three runs of the `0 4 * * *` children cron. A row the sync wrote inside
- * that window was listed inside it, so its absence is at most that old
- * whatever its readings say, and back-dating it to an old reading would take
- * away the whole 60-day grace against a feed that drops an id for one run.
- *
- * **The converse does not hold, and this is a heuristic rather than a proof.**
- * Measured on 2026-10-05: of the 2.501 active rows in scope, 106 carry a write
- * older than this window and **23 of those 106 are still listed upstream** — 7
- * of them with every other gate open (Knott's Soak City, a water park with no
- * readings in October). Should the feed drop one of those ids, the seed
- * back-dates it and the row is due the same day instead of 60 days later.
- *
- * Why those 23 exist is **not** that an unchanged row goes unwritten: the sync
- * calls `update()` for every row it matches and the `@UpdateDateColumn` rides
- * along, identical values or not. In Knott's Soak City only `Shore Break` —
- * the feed's first attraction — carries today's `04:00`, while the other eight
- * share one timestamp from 2026-07-26, so the park's run reaches its first row
- * and not the rest. The cause is open; PAR-714 carries the measurement and the
- * options, and takes the Knott's case as its lead.
- *
- * The cost is bounded either way: such a retirement carries
- * {@link ABSENT_UPSTREAM_REASON}, undoes itself the moment the id is listed
- * again, and lands on the "season or gone?" list for a human. What the window
- * cannot be is evidence of absence, and the gate below never treats it as
- * such — absence is decided against the feed.
+ * Three runs of the `0 4 * * *` children cron. A row listed inside that window
+ * was there inside it, so its absence is at most that old whatever its
+ * readings say, and back-dating it to an old reading would take away the whole
+ * 60-day grace against a feed that drops an id for one run.
  *
  * Three rather than two because a park's own run can fail — the error is
  * caught per park and the cron carries no `attempts`, so one bad run leaves a
- * listed row's `updatedAt` at almost exactly two days and the branch would be
+ * listed row's stamp at almost exactly two days and the branch would be
  * decided by batch jitter. The third run is the slack for that.
  *
  * **It is not a corner case.** Measured on 2026-10-04: of 2.393 active rows in
@@ -203,10 +182,38 @@ export const ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS = 400;
  * window every one of those 421 would have been retired on the first run the
  * wiki failed to list it, instead of 60 days later.
  *
- * The cost is in the other direction and is the one this path has always
- * accepted: a curation write inside the window makes a long-absent row look
- * newly absent and delays its retirement by a full
- * {@link ABSENT_UPSTREAM_RETIRE_DAYS}. It can only delay, never retire early.
+ * **What the window is measured on changed with PAR-739, and so did its
+ * failure mode.** It read `updatedAt` until then, which is an
+ * `@UpdateDateColumn` and therefore answers "who last wrote this row": a
+ * curation write inside the window made a long-absent row look newly absent
+ * and delayed its retirement by a full {@link ABSENT_UPSTREAM_RETIRE_DAYS}.
+ * Nine rows in two parks were dated that way on 2026-10-06. It now reads
+ * `last_listed_at`, which only the children sync writes and only for rows a
+ * park's `/children` carried, so no other writer can reach it at all —
+ * `lastListingOf` falls back to `updatedAt` while the column is still null,
+ * and that fallback carries the old behaviour with it for those rows.
+ *
+ * **It is still a heuristic rather than a proof, and the remaining gap is the
+ * sync not reaching a row rather than someone else writing it.** A listed
+ * child that could not be written is skipped (§6 of the retirement rules), and
+ * a failed stamp costs a whole park its stamp for the run; such a row's clock
+ * stands still while the feed still carries it. For as long as the feed does,
+ * nothing comes of it — the id is in `listedExternalIds`, so the absence step
+ * leaves the row alone and never seeds it. It matters only if the feed then
+ * drops the id, and the row is due the same day instead of 60 days later.
+ *
+ * The same gap on the old reading was measured on 2026-10-05: of the 2.501
+ * active rows in scope, 106 carried a write older than this window and **23 of
+ * those 106 were still listed upstream** — 7 with every other gate open, all
+ * at Knott's Soak City, the park whose run reached its first attraction and
+ * none of the rest (PAR-714, fixed since; the figures are from before the
+ * fix).
+ *
+ * The cost is bounded either way: such a retirement carries
+ * {@link ABSENT_UPSTREAM_REASON}, undoes itself the moment the id is listed
+ * again, and lands on the "season or gone?" list for a human. What the window
+ * cannot be is evidence of absence, and the gate below never treats it as
+ * such — absence is decided against the feed.
  */
 export const ABSENT_UPSTREAM_SEED_FRESH_WRITE_HOURS = 72;
 

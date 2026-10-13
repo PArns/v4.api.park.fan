@@ -266,7 +266,7 @@ describe("ChildrenMetadataProcessor — one unwritable child does not cost the p
       jest
         .spyOn(processor as any, "syncRestaurant")
         .mockResolvedValue(undefined);
-      jest
+      const absent = jest
         .spyOn(processor as any, "retireAbsentAttractions")
         .mockResolvedValue(undefined);
       const stamp = jest.spyOn(processor as any, "stampListedRows");
@@ -278,6 +278,12 @@ describe("ChildrenMetadataProcessor — one unwritable child does not cost the p
       // and the statement is skipped — what this asserts is that the step
       // runs at all, with the park's own set, after a child threw.
       expect(stamp.mock.calls[0][0]).toBeInstanceOf(Set);
+      // And it runs BEFORE the absence step, which is the ordering the stamp
+      // is placed for: a row listed today is on record as listed today even
+      // if the step that reads the record then fails.
+      expect(stamp.mock.invocationCallOrder[0]).toBeLessThan(
+        absent.mock.invocationCallOrder[0],
+      );
     });
 
     it("hands the absence step the full listed set, so a skipped child is not treated as gone", async () => {

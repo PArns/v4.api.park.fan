@@ -112,14 +112,19 @@ change writes it in the same transaction (SQL in [Curation](../admin/curation.md
   run, Cedar Point Shores 2 of 17, both to a single unwritable child at feed
   index 1 (§3). Nothing in the run said so — the park-wide handler logs one
   line and returns zeros, which reads like a park with no children.
-- **Locate such a stall at the feed order, not in the code.** Line the feed's
-  order up against each row's `last_listed_at`: the boundary between the rows
-  listed tonight and the rows frozen months ago names the child that throws.
-  It found both parks with one query. **Read the stamp, not `updatedAt`** — the
-  query that found them in 2026-10 used `updatedAt`, which only worked while
-  the sync rewrote every listed row on every run. It no longer does (PAR-739),
-  so on a row the feed did not move `updatedAt` now stands still while
-  `last_listed_at` advances nightly.
+- **Locate such a stall at the row that stands still, not in the code.** Lay
+  the feed's order against each row's `last_listed_at`: a park whose rows were
+  all listed last night except one names the child that throws, and the child
+  after the frozen row is where the loop used to die. It found both parks with
+  one query. **Read the stamp, not `updatedAt`** — the query that found them in
+  2026-10 used `updatedAt`, which worked only while the sync rewrote every
+  listed row on every run. It no longer does (PAR-739): `updatedAt` now stands
+  still on a row the feed did not move, so it says nothing about the listing,
+  while `last_listed_at` advances nightly. And the shape of the answer has
+  changed with it — the stamp is one statement after the loop rather than a
+  write per child, so there is no boundary at a feed index any more. One frozen
+  row among listed ones is a skipped child; a whole park frozen is its sync or
+  its stamp failing, not a child.
 - A skip is **never silent**: it carries park, child name, upstream id and the
   error, and is counted per park and per run (`Skipped Children: N`). A listed
   child without a row is a fact someone has to see.
