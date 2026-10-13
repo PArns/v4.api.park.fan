@@ -103,8 +103,9 @@ export function generateUniqueSlug(
  * ignoring case, symbols, and extra whitespace.
  *
  * Process:
+ * - Remove trademark symbols (®, ™) and a trailing uppercase country code like " (DE)"
  * - Convert to lowercase
- * - Remove trademark symbols (®, ™, &, ', -)
+ * - Remove &, ' and -
  * - Normalize whitespace to single spaces
  * - Trim
  *
@@ -116,15 +117,17 @@ export function generateUniqueSlug(
  * @returns Normalized text for comparison
  */
 export function normalizeForMatching(text: string): string {
+  // ®/™ go before transliterate, which would turn them into "(r)" / "(tm)".
+  const stripped = text.replace(/[®™]/g, "");
   // Transliterate first to handle accents (e.g. Astérix -> Asterix)
-  const transliterated = transliterate(text);
+  const transliterated = transliterate(stripped);
 
   return (
     transliterated
-      .toLowerCase()
-      // Remove country code suffixes like " (FR)", " (US)", etc. before other normalization
+      // Country code suffixes like " (FR)" are uppercase, so this runs before toLowerCase.
       .replace(/\s*\(\s*[A-Z]{2}\s*\)\s*$/g, "")
-      .replace(/[®™&'\-]/g, "")
+      .toLowerCase()
+      .replace(/[&'\-]/g, "")
       .replace(/\s+/g, " ")
       .trim()
   );
