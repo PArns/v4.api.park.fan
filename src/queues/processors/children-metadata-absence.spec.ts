@@ -286,9 +286,16 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
   });
 
   describe("the absence clock", () => {
-    /** The same row before anything had written `absent_since`. */
+    /**
+     * The same row before anything had written `absent_since`.
+     *
+     * `lastListedAt` is null here on purpose: these fixtures are the rows the
+     * first sync after the PAR-739 deploy has not stamped, so they run on the
+     * `updatedAt` fallback. The pair of tests that reads the stamp sets it.
+     */
     const unseeded = {
       ...deadRow,
+      lastListedAt: null,
       updatedAt: daysBefore(4),
       absentSince: null,
     };
@@ -400,6 +407,104 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
 
       const [, updateParams] = seedCalls()[1];
       expect(updateParams[1]).toEqual([daysBefore(200).toISOString()]);
+    });
+
+    /**
+     * The bug PAR-739 closes, in both directions.
+     *
+     * The seed used to date an absence from `updatedAt`, which is an
+     * `@UpdateDateColumn` — so a curation sweep over a park's rides said "the
+     * feed listed this today" about rows the feed had not listed since April.
+     * Nine rows in Europa-Park and Walibi Belgium were dated that way on
+     * 2026-10-06, `VAMPIRE` among them at 167 days off.
+     */
+    describe("what counts as the last listing", () => {
+      const curatedFourDaysAgo = (lastListedAt: Date | null) => ({
+        ...unseeded,
+        lastListedAt,
+        updatedAt: daysBefore(4),
+      });
+
+      it("dates the absence from the stamp, not from a curation write", async () => {
+        attractionRepo.find.mockResolvedValue([
+          curatedFourDaysAgo(daysBefore(164)),
+        ]);
+
+        await retireAbsent();
+
+        // 164 days, because that is when the feed last carried the row. Under
+        // the old reading this was four days — the age of the curation write —
+        // and the row waited another 56 days for a fact already true.
+        const [, updateParams] = seedCalls()[1];
+        expect(updateParams[1]).toEqual([daysBefore(164).toISOString()]);
+        expect(retirementService.retire).toHaveBeenCalledTimes(1);
+      });
+
+      it("falls back to `updatedAt` on a row no sync has stamped yet", async () => {
+        // The transition after the deploy, and the permanent state of a row
+        // that is already absent when its park first syncs: nothing ever
+        // stamps it, so `updatedAt` is the only evidence left and the old
+        // behaviour applies — four days, inside no window, no retirement.
+        attractionRepo.find.mockResolvedValue([curatedFourDaysAgo(null)]);
+
+        await retireAbsent();
+
+        const [, updateParams] = seedCalls()[1];
+        expect(updateParams[1]).toEqual([daysBefore(4).toISOString()]);
+        expect(retirementService.retire).not.toHaveBeenCalled();
+      });
+
+      it("measures the fresh-write window on the stamp", async () => {
+        // A row written months ago and listed yesterday: the clock starts
+        // today, and no lookback is paid for it. `updatedAt` would have
+        // back-dated it to 200 days and retired it on this very run.
+        attractionRepo.find.mockResolvedValue([
+          {
+            ...unseeded,
+            lastListedAt: daysBefore(1),
+            updatedAt: daysBefore(200),
+          },
+        ]);
+
+        await retireAbsent();
+
+        expect(
+          manager.query.mock.calls.filter(([sql]: [string]) =>
+            sql.includes("GROUP BY"),
+          ),
+        ).toHaveLength(0);
+        expect(manager.query.mock.calls[0][1][1]).toEqual([now.toISOString()]);
+        expect(retirementService.retire).not.toHaveBeenCalled();
+      });
+
+      it("keeps the earlier of the stamp and the last real reading", async () => {
+        // Stamped 90 days ago, last read 164 days ago: the reading is the
+        // older evidence and wins, exactly as it does against `updatedAt`.
+        attractionRepo.find.mockResolvedValue([
+          { ...unseeded, lastListedAt: daysBefore(90) },
+        ]);
+        manager.query.mockImplementation(async (sql: string) =>
+          sql.includes("GROUP BY")
+            ? [{ attractionId: deadRow.id, last_read: daysBefore(164) }]
+            : [],
+        );
+
+        await retireAbsent();
+
+        expect(seedCalls()[1][1][1]).toEqual([daysBefore(164).toISOString()]);
+      });
+
+      it("brings the stamp along in the row query", async () => {
+        // Selected or not, the seed falls back to `updatedAt` without a word.
+        // A missing column here is the kind of regression that reads as green.
+        await retireAbsent();
+
+        expect(attractionRepo.find).toHaveBeenCalledWith(
+          expect.objectContaining({
+            select: expect.arrayContaining(["lastListedAt"]),
+          }),
+        );
+      });
     });
 
     it("asks for no reading at all when every row already has a clock", async () => {
@@ -661,9 +766,10 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
      * since PAR-725 one of the writers is a nightly rule whose own gate is the
      * season, which is at its weakest in exactly the weeks after a re-issue.
      * It survives because the row is reused rather than replaced: this update
-     * moves `externalId` and the three synced fields, and touches nothing a
-     * person or that rule wrote. Asserted on the payload, because "the update
-     * does not mention it" is the whole mechanism.
+     * moves `externalId` and whichever of the synced fields the feed moved,
+     * and touches nothing a person or that rule wrote. Asserted on the
+     * payload, because "the update does not mention it" is the whole
+     * mechanism.
      */
     it("leaves attraction_kind alone, so a MAZE verdict survives the new id", async () => {
       attractionRepo.find.mockResolvedValue([
@@ -679,13 +785,10 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
       >;
       expect(payload).toHaveProperty("externalId", newId);
       expect(payload).not.toHaveProperty("attractionKind");
-      expect(Object.keys(payload).sort()).toEqual([
-        "attractionType",
-        "externalId",
-        "latitude",
-        "longitude",
-        "name",
-      ]);
+      // The new id and nothing else. The re-issue kept the name and the
+      // coordinates, so since PAR-739 the three synced fields are not in the
+      // payload either — the id is the only thing that moved.
+      expect(Object.keys(payload).sort()).toEqual(["externalId"]);
     });
 
     it("also takes an active row whose id left the list", async () => {

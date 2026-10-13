@@ -30,7 +30,8 @@ describe("ChildrenMetadataProcessor — one unwritable child does not cost the p
     update: jest.fn(),
     findOne: jest.fn().mockResolvedValue(null),
   };
-  const mappingRepository = { find: jest.fn(), findOne: jest.fn() };
+  const manager = { query: jest.fn() };
+  const mappingRepository = { find: jest.fn(), findOne: jest.fn(), manager };
   const themeParksMapper = { mapAttraction: jest.fn() };
 
   let processor: ChildrenMetadataProcessor;
@@ -77,6 +78,7 @@ describe("ChildrenMetadataProcessor — one unwritable child does not cost the p
     jest.clearAllMocks();
     mappingRepository.find.mockResolvedValue([]);
     mappingRepository.findOne.mockResolvedValue(null);
+    manager.query.mockResolvedValue([]);
     childEntityRepo.find.mockResolvedValue([]);
     childEntityRepo.findOne.mockResolvedValue(null);
     attractionRepo.find.mockResolvedValue([]);
@@ -253,6 +255,35 @@ describe("ChildrenMetadataProcessor — one unwritable child does not cost the p
       expect(absent).toHaveBeenCalledTimes(1);
       expect(entityMappingsQueue.add).toHaveBeenCalledTimes(1);
       expect(redis.del).toHaveBeenCalledTimes(1);
+    });
+
+    it("stamps the rows the feed listed once for the whole park", async () => {
+      // The stamp is what dates an absence (PAR-739), so it has to survive a
+      // skipped child the same way the steps around it do — and it has to be
+      // one statement per park rather than one per child, which is the cost
+      // the conditional metadata write took out of this loop.
+      syncAttractionThatThrowsOnce();
+      jest
+        .spyOn(processor as any, "syncRestaurant")
+        .mockResolvedValue(undefined);
+      const absent = jest
+        .spyOn(processor as any, "retireAbsentAttractions")
+        .mockResolvedValue(undefined);
+      const stamp = jest.spyOn(processor as any, "stampListedRows");
+
+      await processor.handleFetchChildren({} as any);
+
+      expect(stamp).toHaveBeenCalledTimes(1);
+      // The mocked `syncAttraction` writes no row, so the set is empty here
+      // and the statement is skipped — what this asserts is that the step
+      // runs at all, with the park's own set, after a child threw.
+      expect(stamp.mock.calls[0][0]).toBeInstanceOf(Set);
+      // And it runs BEFORE the absence step, which is the ordering the stamp
+      // is placed for: a row listed today is on record as listed today even
+      // if the step that reads the record then fails.
+      expect(stamp.mock.invocationCallOrder[0]).toBeLessThan(
+        absent.mock.invocationCallOrder[0],
+      );
     });
 
     it("hands the absence step the full listed set, so a skipped child is not treated as gone", async () => {

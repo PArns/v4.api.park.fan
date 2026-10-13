@@ -13,6 +13,14 @@ next time. Detail: [Attraction Status & Seasonality §5.9/5.9a](../architecture/
 - A row missing from `/children` is **out of season** before it is **gone**.
   `retireAbsentAttractions` skips a row whose season is known
   (`isSeasonalRow`: `curated_is_seasonal` wins, `false` included).
+- **Only two columns say anything about the feed**, and neither is `updatedAt`:
+  `absent_since` is how long the id has been missing, `last_listed_at` is when
+  it was last there. Both are written by the children sync alone, both raw so
+  the repository cannot move `updatedAt` along with them, and the absence is
+  dated from `last_listed_at` (PAR-739). `updatedAt` is an
+  `@UpdateDateColumn` — it answers "who last wrote this row", which a curation
+  sweep makes a different question. It survives in one place: as the fallback
+  for a row no sync has stamped yet.
 - The detector cannot know a season before `MIN_OBSERVED_DAYS` (330) of
   watching, so **a maze in its first year is protected only by curation**. When a
   seasonal event starts or ends, its attractions get a season window in the
@@ -104,10 +112,19 @@ change writes it in the same transaction (SQL in [Curation](../admin/curation.md
   run, Cedar Point Shores 2 of 17, both to a single unwritable child at feed
   index 1 (§3). Nothing in the run said so — the park-wide handler logs one
   line and returns zeros, which reads like a park with no children.
-- **Locate such a stall at the feed order, not in the code.** Line the feed's
-  order up against each row's `updatedAt`: the boundary between the rows
-  written tonight and the rows frozen months ago names the child that throws.
-  It found both parks with one query.
+- **Locate such a stall at the row that stands still, not in the code.** Lay
+  the feed's order against each row's `last_listed_at`: a park whose rows were
+  all listed last night except one names the child that throws, and the child
+  after the frozen row is where the loop used to die. It found both parks with
+  one query. **Read the stamp, not `updatedAt`** — the query that found them in
+  2026-10 used `updatedAt`, which worked only while the sync rewrote every
+  listed row on every run. It no longer does (PAR-739): `updatedAt` now stands
+  still on a row the feed did not move, so it says nothing about the listing,
+  while `last_listed_at` advances nightly. And the shape of the answer has
+  changed with it — the stamp is one statement after the loop rather than a
+  write per child, so there is no boundary at a feed index any more. One frozen
+  row among listed ones is a skipped child; a whole park frozen is its sync or
+  its stamp failing, not a child.
 - A skip is **never silent**: it carries park, child name, upstream id and the
   error, and is counted per park and per run (`Skipped Children: N`). A listed
   child without a row is a fact someone has to see.
