@@ -1,4 +1,9 @@
-import { Injectable, OnModuleInit, Logger } from "@nestjs/common";
+import {
+  Injectable,
+  OnModuleInit,
+  OnModuleDestroy,
+  Logger,
+} from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -6,6 +11,7 @@ import { Repository } from "typeorm";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { Park } from "../../parks/entities/park.entity";
 import { AttractionP50Baseline } from "../../analytics/entities/attraction-p50-baseline.entity";
+import { AbortableRuns, RunAborted } from "../../common/utils/abortable-runs";
 
 /**
  * Queue Bootstrap Service
@@ -25,8 +31,9 @@ import { AttractionP50Baseline } from "../../analytics/entities/attraction-p50-b
  * implemented in Phase 2 when ThemeParks.wiki integration is ready.
  */
 @Injectable()
-export class QueueBootstrapService implements OnModuleInit {
+export class QueueBootstrapService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(QueueBootstrapService.name);
+  private readonly runs = new AbortableRuns();
 
   constructor(
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
@@ -55,9 +62,20 @@ export class QueueBootstrapService implements OnModuleInit {
     }
 
     // Non-blocking: fire and forget
-    this.bootstrapQueues().catch((err) => {
-      this.logger.error("Queue bootstrap failed", err);
-    });
+    this.runs.start(
+      () => this.bootstrapQueues(),
+      (err) => this.logger.error("Queue bootstrap failed", err),
+    );
+  }
+
+  /**
+   * A shutdown during the first seconds of a boot (a Coolify redeploy replacing
+   * the previous container) stops the chain at its next step and waits for the
+   * step in flight, instead of letting it query a closed DataSource and log the
+   * result as a failure (see `AbortableRuns`).
+   */
+  async onModuleDestroy(): Promise<void> {
+    await this.runs.abortAndDrain();
   }
 
   /**
@@ -73,6 +91,7 @@ export class QueueBootstrapService implements OnModuleInit {
     // removeOnFail 500), which is all the wipe was ever for.
 
     // Check if parks exist in database
+    this.runs.checkpoint();
     const parkCount = await this.parkRepository.count();
     const isEmpty = parkCount === 0;
 
@@ -85,6 +104,7 @@ export class QueueBootstrapService implements OnModuleInit {
 
       // Phase 6.2: Use COMBINED children-metadata job instead of 3 separate jobs
       // This reduces API requests by 67% (105 requests instead of 315)
+      this.runs.checkpoint();
       const childrenJobActive = await this.isJobActiveOrWaiting(
         this.childrenQueue,
         "fetch-all-children",
@@ -92,6 +112,7 @@ export class QueueBootstrapService implements OnModuleInit {
 
       if (!childrenJobActive) {
         // Priority 2: Fetch ALL children (attractions, shows, restaurants) in ONE job
+        this.runs.checkpoint();
         await this.childrenQueue.add(
           "fetch-all-children",
           {},
@@ -114,6 +135,7 @@ export class QueueBootstrapService implements OnModuleInit {
 
       // Optimization: Check if we have recent queue data (last 5 minutes)
       // If so, skip immediate fetch to prevent "double fetch" with cron job
+      this.runs.checkpoint();
       const latestData = await this.queueDataRepository.findOne({
         where: {},
         order: { timestamp: "DESC" },
@@ -132,6 +154,7 @@ export class QueueBootstrapService implements OnModuleInit {
         this.logger.log("Data is stale. Triggering wait times update...");
 
         // Check if wait-times job is already active/waiting
+        this.runs.checkpoint();
         const waitTimesJobActive = await this.isJobActiveOrWaiting(
           this.waitTimesQueue,
           "fetch-wait-times",
@@ -139,6 +162,7 @@ export class QueueBootstrapService implements OnModuleInit {
 
         if (!waitTimesJobActive) {
           // Trigger immediate wait times update
+          this.runs.checkpoint();
           await this.waitTimesQueue.add(
             "fetch-wait-times",
             {},
@@ -165,10 +189,12 @@ export class QueueBootstrapService implements OnModuleInit {
     // so on a warm redeploy (table already populated) the boot trigger is pure redundant
     // load; only seed it on a cold start.
     try {
+      this.runs.checkpoint();
       const accuracyRows = await this.parkRepository.query(
         `SELECT 1 FROM attraction_accuracy_stats LIMIT 1`,
       );
       if (accuracyRows.length === 0) {
+        this.runs.checkpoint();
         await this.predictionAccuracyQueue.add(
           "aggregate-stats",
           {},
@@ -187,11 +213,13 @@ export class QueueBootstrapService implements OnModuleInit {
       // computes P90 alongside P50 (single 548-day scan), so the
       // occupancy-calculation precompute job was pure duplicate work.
     } catch (e) {
+      if (e instanceof RunAborted) throw e;
       this.logger.warn(`Failed to trigger ML/analytics jobs: ${e}`);
     }
 
     // 5. Trigger P50 Baseline Calculation (Optimized: Skip if fresh)
     try {
+      this.runs.checkpoint();
       const latestP50 = await this.p50Repository.findOne({
         where: {},
         order: { updatedAt: "DESC" },
@@ -206,6 +234,7 @@ export class QueueBootstrapService implements OnModuleInit {
       // if P50 is fresh. This handles the rollout of the typical-day-peak
       // column: existing park_p50_baselines rows have it NULL until the first
       // recompute fills it. Raw query avoids injecting the park-P50 repo here.
+      this.runs.checkpoint();
       const typicalRows = await this.parkRepository.query(
         `SELECT 1 FROM park_p50_baselines WHERE "typicalDayPeak" IS NOT NULL LIMIT 1`,
       );
@@ -221,12 +250,14 @@ export class QueueBootstrapService implements OnModuleInit {
             "🔁 typical-day-peak baseline missing — forcing batched park-baseline recompute (post-deploy backfill).",
           );
         }
+        this.runs.checkpoint();
         const p50ParkJobActive = await this.isJobActiveOrWaiting(
           this.p50BaselineQueue,
           "calculate-park-baselines",
         );
 
         if (!p50ParkJobActive) {
+          this.runs.checkpoint();
           await this.p50BaselineQueue.add(
             "calculate-park-baselines",
             {},
@@ -240,12 +271,14 @@ export class QueueBootstrapService implements OnModuleInit {
         }
 
         // Trigger attraction P50 calculation (runs after park baselines)
+        this.runs.checkpoint();
         const p50AttrJobActive = await this.isJobActiveOrWaiting(
           this.p50BaselineQueue,
           "calculate-attraction-baselines",
         );
 
         if (!p50AttrJobActive) {
+          this.runs.checkpoint();
           await this.p50BaselineQueue.add(
             "calculate-attraction-baselines",
             {},
@@ -262,6 +295,7 @@ export class QueueBootstrapService implements OnModuleInit {
         }
       }
     } catch (e) {
+      if (e instanceof RunAborted) throw e;
       this.logger.warn(`Failed to trigger P50 baseline jobs: ${e}`);
     }
 
@@ -271,16 +305,19 @@ export class QueueBootstrapService implements OnModuleInit {
     // empty — true exactly when the table was just created (first deploy of this feature)
     // or wiped — so the one-time backfill still happens, then never again on redeploys.
     try {
+      this.runs.checkpoint();
       const rollupRows = await this.parkRepository.query(
         `SELECT 1 FROM attraction_day_operating LIMIT 1`,
       );
       const rollupEmpty = rollupRows.length === 0;
+      this.runs.checkpoint();
       const seasonalJobActive = await this.isJobActiveOrWaiting(
         this.analyticsQueue,
         "detect-seasonal",
       );
 
       if (rollupEmpty && !seasonalJobActive) {
+        this.runs.checkpoint();
         await this.analyticsQueue.add(
           "detect-seasonal",
           {},
@@ -300,6 +337,7 @@ export class QueueBootstrapService implements OnModuleInit {
         );
       }
     } catch (e) {
+      if (e instanceof RunAborted) throw e;
       this.logger.warn(`Failed to trigger seasonal detection: ${e}`);
     }
 
@@ -309,16 +347,19 @@ export class QueueBootstrapService implements OnModuleInit {
     // of this feature (synchronize just created it) or after a wipe. Delayed so
     // the boot-rush and the hourly-history/p50 jobs clear first.
     try {
+      this.runs.checkpoint();
       const ropeRows = await this.parkRepository.query(
         `SELECT 1 FROM attraction_rope_drop LIMIT 1`,
       );
       const ropeEmpty = ropeRows.length === 0;
+      this.runs.checkpoint();
       const ropeJobActive = await this.isJobActiveOrWaiting(
         this.ropeDropQueue,
         "calculate-rope-drop",
       );
 
       if (ropeEmpty && !ropeJobActive) {
+        this.runs.checkpoint();
         await this.ropeDropQueue.add(
           "calculate-rope-drop",
           {},
@@ -338,6 +379,7 @@ export class QueueBootstrapService implements OnModuleInit {
         );
       }
     } catch (e) {
+      if (e instanceof RunAborted) throw e;
       this.logger.warn(`Failed to trigger rope-drop: ${e}`);
     }
 
@@ -345,16 +387,19 @@ export class QueueBootstrapService implements OnModuleInit {
     // table is empty (first deploy of this feature / after a wipe), else the
     // daily 5:30 cron maintains it.
     try {
+      this.runs.checkpoint();
       const twRows = await this.parkRepository.query(
         `SELECT 1 FROM attraction_typical_waits LIMIT 1`,
       );
       const twEmpty = twRows.length === 0;
+      this.runs.checkpoint();
       const twJobActive = await this.isJobActiveOrWaiting(
         this.typicalWaitsQueue,
         "calculate-typical-waits",
       );
 
       if (twEmpty && !twJobActive) {
+        this.runs.checkpoint();
         await this.typicalWaitsQueue.add(
           "calculate-typical-waits",
           {},
@@ -374,6 +419,7 @@ export class QueueBootstrapService implements OnModuleInit {
         );
       }
     } catch (e) {
+      if (e instanceof RunAborted) throw e;
       this.logger.warn(`Failed to trigger typical-waits: ${e}`);
     }
   }

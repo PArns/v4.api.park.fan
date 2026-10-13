@@ -7,6 +7,7 @@ import {
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { createHash } from "crypto";
+import { AbortableRuns } from "../../common/utils/abortable-runs";
 import { DB_VACUUM_CRON } from "../../database/maintenance/vacuum-plan";
 
 /**
@@ -66,6 +67,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(QueueSchedulerService.name);
   private registerTimer?: NodeJS.Timeout;
   private reRegisterInterval?: NodeJS.Timeout;
+  private readonly runs = new AbortableRuns();
 
   constructor(
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
@@ -120,17 +122,19 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     // Wait a bit to let bootstrap complete first
     this.registerTimer = setTimeout(() => {
       this.registerTimer = undefined;
-      this.registerScheduledJobs().catch((err) => {
-        this.logger.error("Failed to register scheduled jobs", err);
-      });
+      this.runs.start(
+        () => this.registerScheduledJobs(),
+        (err) => this.logger.error("Failed to register scheduled jobs", err),
+      );
     }, 5000); // 5 second delay
 
     // Repair pass: re-checks every repeatable entry so a chain broken by an
     // evicted job hash heals within the hour (see RE_REGISTER_INTERVAL_MS).
     this.reRegisterInterval = setInterval(() => {
-      this.registerScheduledJobs(true).catch((err) => {
-        this.logger.error("Failed to re-check scheduled jobs", err);
-      });
+      this.runs.start(
+        () => this.registerScheduledJobs(true),
+        (err) => this.logger.error("Failed to re-check scheduled jobs", err),
+      );
     }, RE_REGISTER_INTERVAL_MS);
     this.reRegisterInterval.unref();
   }
@@ -140,8 +144,12 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
    * app it was started for. Five seconds is short enough to be invisible in
    * production and long enough for a fast test to shut down first, and the
    * callback then writes repeatable jobs into queues that are already closing.
+   *
+   * A registration that is already running stops at the next entry
+   * (`hasRepeatableJob` opens with a checkpoint) and the entry in flight is
+   * awaited: the queues close after its last Redis call, not under it.
    */
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     if (this.registerTimer) {
       clearTimeout(this.registerTimer);
       this.registerTimer = undefined;
@@ -150,6 +158,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.reRegisterInterval);
       this.reRegisterInterval = undefined;
     }
+    await this.runs.abortAndDrain();
   }
 
   private async registerScheduledJobs(repairPass = false): Promise<void> {
@@ -382,6 +391,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Remove old combined weather cron if still registered
+    this.runs.checkpoint();
     const oldWeatherJobs = await this.weatherQueue.getRepeatableJobs();
     const oldWeatherCron = oldWeatherJobs.find((j) => j.id === "weather-cron");
     if (oldWeatherCron) {
@@ -493,6 +503,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     // The TFT-vs-CatBoost scoreboard (`score-comparison`) was retired in PAR-870.
     // Its repeatable entry outlives the code in Redis, and with no handler left
     // on this queue every 07:00 run would fail as "Missing process handler".
+    this.runs.checkpoint();
     const retiredNfJobs = await this.nfTrainingQueue.getRepeatableJobs();
     const retiredScoreCron = retiredNfJobs.find(
       (j) => j.id === "nf-score-comparison-cron",
@@ -1296,6 +1307,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     jobId: string,
     expectedCron?: string,
   ): Promise<boolean> {
+    this.runs.checkpoint();
     const repeatableJobs = await queue.getRepeatableJobs();
     const existing = repeatableJobs.find((job) => job.id === jobId);
 
