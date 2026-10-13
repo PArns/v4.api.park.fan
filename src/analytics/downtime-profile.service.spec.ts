@@ -66,6 +66,19 @@ describe("decideProfile", () => {
     ).toBe("not_down_capable");
   });
 
+  it("names the ride, not the park, for a free-flow ride in any regime", () => {
+    for (const regime of [
+      "reports",
+      "not_capable",
+      "no_schedule",
+      "never_reports",
+    ] as const) {
+      expect(
+        decideProfile({ ...HEALTHY, freeFlow: true }, regime),
+      ).toMatchObject({ figures: false, reason: "free_flow", downShare: null });
+    }
+  });
+
   it("refuses an unknown park rather than defaulting to publishable", () => {
     expect(decideProfile(HEALTHY, undefined).figures).toBe(false);
   });
@@ -788,6 +801,84 @@ describe("DowntimeProfileService — the rebuild's population", () => {
         publishable: false,
         withheldReason: "no_schedule",
       });
+    });
+  });
+
+  describe("free-flow rides", () => {
+    const FREE_FLOW_RIDE = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+    it("sources them in every park, scoped like ex, and leaves retired ones out", async () => {
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      const sql = flatSql(query.mock.calls[1][0] as string);
+      expect(sql).toContain("flow AS (");
+      expect(sql).toContain("SELECT * FROM flow");
+      const flow = sql.slice(sql.indexOf("flow AS ("), sql.indexOf("pop AS ("));
+      expect(flow).toContain("COALESCE(a.open_with_park, FALSE) = TRUE");
+      expect(flow).toContain("a.retired_at IS NULL");
+      expect(flow).toContain("$1::uuid[] IS NULL");
+    });
+
+    it("keeps them out of ex, so a lingering exposure day cannot duplicate the row", async () => {
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      const sql = flatSql(query.mock.calls[1][0] as string);
+      const ex = sql.slice(
+        sql.indexOf("WITH ex AS ("),
+        sql.indexOf("sched AS ("),
+      );
+      expect(ex).toContain("COALESCE(ea.open_with_park, FALSE) = FALSE");
+    });
+
+    it("writes free_flow, not the park's reason, even in a park that reports", async () => {
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [
+          {
+            ...publishableRow(FREE_FLOW_RIDE, REPORTING_PARK),
+            operatingMinutes: 0,
+            downMinutes: 0,
+            observedDays: 0,
+            freeFlow: true,
+          },
+        ],
+      );
+      await service.rebuild(null);
+
+      expect(saved()[0]).toMatchObject({
+        attractionId: FREE_FLOW_RIDE,
+        publishable: false,
+        withheldReason: "free_flow",
+      });
+    });
+
+    it("deletes a free_flow row once the ride stops being sourced, like no_schedule", async () => {
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [publishableRow(LIVE_RIDE, REPORTING_PARK)],
+      );
+      await service.rebuild(null);
+
+      const [sql, params] = managerQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain("p.withheld_reason = $4::text");
+      expect(params[3]).toBe("free_flow");
+    });
+  });
+
+  describe("retired rides", () => {
+    it("are excluded from ex, so the profile does not outlive the ride by 90 days", async () => {
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      const sql = flatSql(query.mock.calls[1][0] as string);
+      const ex = sql.slice(
+        sql.indexOf("WITH ex AS ("),
+        sql.indexOf("sched AS ("),
+      );
+      expect(ex).toContain('JOIN attractions ea ON ea.id = e."attractionId"');
+      expect(ex).toContain("ea.retired_at IS NULL");
     });
   });
 
