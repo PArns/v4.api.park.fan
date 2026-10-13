@@ -362,11 +362,14 @@ describe("DowntimeProfileService — the rebuild's population", () => {
   let query: jest.Mock;
   let profileUpsert: jest.Mock;
   let managerQuery: jest.Mock;
+  /** Every `SET LOCAL` the reads issue, in order (PAR-837). */
+  let limitSql: string[];
   /** Every write in order, so "delete before upsert" is checkable. */
   let writes: string[];
 
   const build = async (coverageRows: unknown[], profileRows: unknown[]) => {
     writes = [];
+    limitSql = [];
     query = jest
       .fn()
       .mockResolvedValueOnce(coverageRows)
@@ -387,9 +390,20 @@ describe("DowntimeProfileService — the rebuild's population", () => {
           provide: DataSource,
           useValue: {
             query,
-            transaction: (cb: (m: unknown) => Promise<void>) =>
+            transaction: (cb: (m: unknown) => Promise<unknown>) =>
               cb({
-                query: managerQuery,
+                // The two reads run through `queryWithLimits`, which opens a
+                // transaction of its own: its `SET LOCAL`s are recorded, its
+                // statement goes to `query`, and only the DELETE is a write.
+                query: (sql: string, params?: unknown[]) => {
+                  if (/^SET LOCAL/.test(sql)) {
+                    limitSql.push(sql);
+                    return Promise.resolve([]);
+                  }
+                  return /^\s*DELETE/.test(sql)
+                    ? managerQuery(sql, params)
+                    : query(sql, params);
+                },
                 getRepository: () => ({ upsert: profileUpsert }),
               }),
           },
@@ -408,6 +422,23 @@ describe("DowntimeProfileService — the rebuild's population", () => {
     profileUpsert.mock.calls.flatMap(
       (call) => call[0] as Record<string, unknown>[],
     );
+
+  describe("read deadlines (PAR-837)", () => {
+    it("puts a statement_timeout of at least 3x the measured 12.3 s on both reads", async () => {
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [publishableRow(LIVE_RIDE, REPORTING_PARK)],
+      );
+      await service.rebuild(null);
+
+      const timeouts = limitSql.filter((q) => q.includes("statement_timeout"));
+      expect(timeouts).toHaveLength(2);
+      for (const sql of timeouts) {
+        const ms = Number(sql.split("=")[1]);
+        expect(ms).toBeGreaterThanOrEqual(3 * 12_300);
+      }
+    });
+  });
 
   describe("stale rows", () => {
     it("deletes the profiles of rides that dropped out, before writing", async () => {

@@ -9,6 +9,10 @@ import {
 } from "./entities/park-downtime-coverage.entity";
 import type { DowntimeRegime } from "./entities/park-downtime-coverage.entity";
 import { usableOperatingScheduleRowSql } from "../common/utils/park-open-window.sql";
+import {
+  StatementLimits,
+  queryWithLimits,
+} from "../common/utils/statement-limits.util";
 
 /**
  * Thresholds, all of them provisional.
@@ -109,6 +113,18 @@ export const DOWNTIME_GATES = {
 } as const;
 
 /**
+ * The two reads of the nightly rebuild. The slower, the coverage read, took
+ * 12.3 s in the production log of 2026-10-10 and the profile read stayed below
+ * the 10 s threshold of the same listing, so 120 s is about 10x the worst
+ * measured run. It is a ceiling for a plan that flips, not a target.
+ */
+const REBUILD_READ_LIMITS: StatementLimits = {
+  statementTimeoutMs: 120_000,
+  lockTimeoutMs: 10_000,
+  idleInTransactionTimeoutMs: 30_000,
+};
+
+/**
  * Turn intervals and exposure into what may be published, and mostly refuse.
  *
  * The gates live here and nowhere else. A surface that computed its own
@@ -173,7 +189,8 @@ export class DowntimeProfileService {
     // measurement's parksWithSchedule asks the same helper.
     const usableOperatingRow = usableOperatingScheduleRowSql();
 
-    const rows: CoverageRow[] = await this.dataSource.query(
+    const rows = await queryWithLimits<CoverageRow[]>(
+      this.dataSource,
       `
       SELECT p.id                                        AS "parkId",
              (p.wiki_entity_id IS NOT NULL)              AS "downCapable",
@@ -313,6 +330,7 @@ export class DowntimeProfileService {
        GROUP BY p.id, p.wiki_entity_id
       `,
       [parkIds, windowFrom, windowTo],
+      REBUILD_READ_LIMITS,
     );
 
     const regimes = new Map<string, DowntimeRegime>();
@@ -406,7 +424,8 @@ export class DowntimeProfileService {
       )
       .map(([parkId]) => parkId);
 
-    const rows: ProfileRow[] = await this.dataSource.query(
+    const rows = await queryWithLimits<ProfileRow[]>(
+      this.dataSource,
       `
       WITH ex AS (
         SELECT e."attractionId" AS aid, e."parkId" AS pid,
@@ -550,6 +569,7 @@ export class DowntimeProfileService {
         midpoint(windowFrom, windowTo),
         unmeasuredParkIds,
       ],
+      REBUILD_READ_LIMITS,
     );
 
     const toSave: Partial<AttractionDowntimeProfile>[] = [];
