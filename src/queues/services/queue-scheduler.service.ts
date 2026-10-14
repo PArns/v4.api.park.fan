@@ -49,7 +49,7 @@ export function materialisedRepeatJobId(entry: {
  * Schedule:
  * - wait-times: Every 5 minutes (frequent updates)
  * - park-metadata: Daily at 3am (metadata changes rarely)
- * - children-metadata: Daily at 4am (Phase 6.2: Combined Attractions + Shows + Restaurants - 67% fewer requests!)
+ * - children-metadata: chained after sync-all-parks (03:00, step 11), no cron of its own since PAR-875
  * - weather: full every 12 hours (0:00 and 12:00), current-only at 7:00 and 19:00
  * - live-cache-warmup: enqueued by every wait-times run, not on a cron
  * - weather-historical: Daily at 5am (mark past data as historical)
@@ -305,7 +305,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         {},
         {
           repeat: {
-            cron: "30 5 * * 0", // Weekly: Sunday 5:30am, after the 4am children sync
+            cron: "30 5 * * 0", // Weekly: Sunday 5:30am, after the children sync
           },
           jobId: "attraction-details-cron",
         },
