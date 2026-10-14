@@ -20,6 +20,22 @@ import {
   CuratedOutOfServiceSource,
   isCuratedOutOfService,
 } from "../utils/curated-out-of-service.util";
+import {
+  StatementLimits,
+  queryWithLimits,
+} from "../../common/utils/statement-limits.util";
+
+/**
+ * Every read here serves one park to a waiting request. None of them reached
+ * the 10 s mark in the production slow-query log of 2026-10-10 (threshold
+ * 500 ms), so 30 s is at least 3x the worst run. The read fails into the
+ * existing catch and the response goes out without the outage figure.
+ */
+const REQUEST_READ_LIMITS: StatementLimits = {
+  statementTimeoutMs: 30_000,
+  lockTimeoutMs: 2_000,
+  idleInTransactionTimeoutMs: 10_000,
+};
 
 /**
  * One ride's currently running outage, as far as the change log can place it.
@@ -251,9 +267,11 @@ export class AttractionOutageService {
     );
     try {
       const rows: Array<{ opensAt: Date | string; closesAt: Date | string }> =
-        await this.queueDataRepository.manager.query(
+        await queryWithLimits(
+          this.queueDataRepository.manager.connection,
           upcomingOperatingWindowsSql(),
           [[parkId], asOf, until],
+          REQUEST_READ_LIMITS,
         );
       const windows = rows.map((row) => ({
         opensAt: new Date(row.opensAt),
@@ -364,9 +382,11 @@ export class AttractionOutageService {
       }> =
         ids.length === 0
           ? []
-          : await this.queueDataRepository.manager.query(
+          : await queryWithLimits(
+              this.queueDataRepository.manager.connection,
               trailingOutageWithElapsedSql(),
               [[park.id], since, until, ids],
+              REQUEST_READ_LIMITS,
             );
 
       // No early return on an empty result, and that is the point: it used to
@@ -487,12 +507,12 @@ export class AttractionOutageService {
 
     try {
       const rows: Array<{ attractionId: string; lastRunAt: Date | string }> =
-        await this.queueDataRepository.manager.query(NOT_RUN_TODAY_SQL, [
-          ids,
-          park.timezone,
-          asOf,
-          park.id,
-        ]);
+        await queryWithLimits(
+          this.queueDataRepository.manager.connection,
+          NOT_RUN_TODAY_SQL,
+          [ids, park.timezone, asOf, park.id],
+          REQUEST_READ_LIMITS,
+        );
       for (const row of rows) {
         const at = new Date(row.lastRunAt);
         if (!Number.isNaN(at.getTime())) out.set(row.attractionId, at);
@@ -601,9 +621,11 @@ export class AttractionOutageService {
         attractionId: string;
         startedAt: Date;
         elapsedOperatingMinutes: number | string;
-      }> = await this.queueDataRepository.manager.query(
+      }> = await queryWithLimits(
+        this.queueDataRepository.manager.connection,
         CURRENT_CLOSURE_GAP_SQL,
         [ids, park.timezone, asOf, park.id],
+        REQUEST_READ_LIMITS,
       );
       // No `if (rows.length === 0) return` here either. It changed nothing —
       // the loop below already does nothing on an empty array — but it is the
