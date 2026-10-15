@@ -1088,7 +1088,7 @@ export class PlanDayService {
     // the old composer's and stays: a ride the model said nothing about for
     // this date is not composed by either, so the tier ladder below is
     // unchanged. Whether a level scales the profile is `h5LevelFor`'s routing
-    // (TFT only, busy rides only, d0–d6 only — the benchmark's horizon table);
+    // (TFT only, busy rides only, d0–d2 only — the benchmark's horizon table);
     // everywhere else the plain profile is served. A ride without an H5
     // profile keeps the old composer's hours.
     const h5Slots = new Map<string, Map<number, number>>();
@@ -1248,7 +1248,7 @@ export class PlanDayService {
           }
           if (curves.h5.length > 0) {
             // The routed curve only where a level made it differ from plain
-            // H5 (busy rides, d0–d6): elsewhere it is the plain curve, and the
+            // H5 (busy rides, d0–d2): elsewhere it is the plain curve, and the
             // scorer reads the plain row under both names.
             const composers: ReadonlyArray<PlanDayShadowCurve["composer"]> =
               routedCode === "t"

@@ -368,6 +368,41 @@ GROUP BY prediction_type;
 **If ml_prediction_request_log is older than 30 days**, the `ml-monitoring / cleanup` BullMQ job isn't running.
 Check Bull Board: `http://<host>/admin/queues` → ml-monitoring → cleanup.
 
+### 4a. `predictions/cleanup-old` and compressed chunks (PAR-900, 2026-10)
+
+From 2026-10-10 the nightly `predictions/cleanup-old` failed with
+`duplicate key value violates unique constraint "1229_1462_wait_time_predictions_pkey"`.
+Its daily step deleted on `predictedTime < now-90d`, which is not the partition
+key (`createdAt`), so the DELETE planned every chunk and TimescaleDB decompressed
+the matching batches of the compressed ones. Decompression writes the rows back
+through the chunk's primary key, which a compressed chunk never enforced: chunks
+1229 and 1324 (July) held 1051 and 1267 duplicate keys. It failed as soon as the
+cutoff reached a chunk's oldest `predictedTime` (the first `orderby` column, so
+batches carry its min/max) and stopped once the chunk was dropped.
+
+Since PAR-900 the daily step deletes only from chunks after the newest compressed
+one, and each step of the job runs on its own. To check that the DELETE still
+skips compressed chunks (plan only, nothing runs):
+
+```sql
+SELECT max(range_end) FROM timescaledb_information.chunks
+ WHERE hypertable_name = 'wait_time_predictions' AND is_compressed;
+-- put that value in as a literal, as the job does:
+EXPLAIN (COSTS OFF)
+WITH del AS (DELETE FROM wait_time_predictions
+              WHERE "predictionType" = 'daily'
+                AND "predictedTime" < now() - interval '90 days'
+                AND "createdAt" >= '<boundary>'
+              RETURNING 1)
+SELECT count(*) FROM del;
+```
+
+The `Delete on _hyper_16_…_chunk` lines must name only uncompressed chunks. On
+2026-10-15 that was 3 of 14 chunks, against all 14 (with Seq Scans over the 11
+compressed ones) for the old predicate. The duplicates themselves were left
+alone: removing them means decompressing the chunks, and the chunk drop removes
+them anyway.
+
 ---
 
 ## 5. Dead Tuple Cleanup

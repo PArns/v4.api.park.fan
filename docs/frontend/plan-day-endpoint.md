@@ -165,7 +165,7 @@ A/B* below).
    (`h5LevelFor`, thresholds in `h5-profile.util.ts`): a TFT day level (the
    served daily row with `modelVersion: "tft"`, held to ≤ 3 days old by the
    serving read) **and** an ex-ante busy ride (q90 of its 56-day window slots
-   ≥ 45 min, BENCH-SPEC's busy segment) **and** a lead of ≤ 6 days. Then the
+   ≥ 45 min, BENCH-SPEC's busy segment) **and** a lead of ≤ 2 days (`TFT_LEVEL_MAX_LEAD_DAYS`). Then the
    profile is multiplied by **level ÷ the ride's median daily P90 over the same
    56 days** (day type first, all days second, like the profile) — never
    stretched to put its maximum at the level — and the rope-drop hour is **not**
@@ -174,7 +174,12 @@ A/B* below).
    (`ml-bench/results/20261009-baselines/tables/horizon_curve_mae.csv`, UC3
    against the weekday median) level × H5 over ALL rides is worse at every lead
    (+0.09 at d1 rising to +0.44 at d30), plain H5 better at every lead (−0.07 …
-   −0.20), and level × H5 wins only on busy rides at d1–d6. **CatBoost's daily
+   −0.20), and level × H5 wins only on busy rides — at d1–d6 in that first,
+   autumn-only run, but **only at d0–d2** on the full period (PAR-901;
+   `ml-bench/results/20261009-baselines-v2/summary.md`, UC3 busy, `lvlh5_tft`
+   vs the weekday median: d2 −0.415 [−0.699, −0.149], d3 −0.267
+   [−0.553, +0.002], d30 +0.420 [+0.116, +0.708] significantly worse; see
+   docs/ml/ml-bench.md, "The load-bearing correction"). **CatBoost's daily
    level is never applied** — it made the benchmark worse (+2.6 min MAE, bias
    −5.7).
 3. **`slots[]` appears on every ride with a 15-minute answer.** The model's own
@@ -268,7 +273,7 @@ four quarters), plain H5, and routed H5. They go to their own surfaces
 (`plan_day_shadow_peak` / `_h5` / `_routed`) and are scored under `UC3S` with
 one source per composer and never pooled — see docs/ml/forward-archive.md. The
 routed row is written only where a level was actually applied (busy rides,
-d0–d6); elsewhere it equals plain H5 and the scorer reads that row under both
+d0–d2); elsewhere it equals plain H5 and the scorer reads that row under both
 names. The shadow is internal: nothing in the endpoint's response carries it.
 
 ### The 15-minute contract

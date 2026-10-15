@@ -93,19 +93,41 @@ describe("outage grouping (the arithmetic the SQL performs)", () => {
 });
 
 describe("DowntimeMeasurementService", () => {
+  const isCensus = (sql: string) => sql.includes("AS capable");
+
   function serviceWith(rows: unknown[]) {
+    // Answered by statement, not by call order: both reads now open a
+    // transaction first, so which one reaches the mock first is not fixed.
     const query = jest
       .fn()
-      // capabilityCensus runs first
-      .mockResolvedValueOnce([
-        { capable: "197", total: "213", scheduled: "192" },
-      ])
-      .mockResolvedValueOnce(rows);
+      .mockImplementation((sql: string) =>
+        Promise.resolve(
+          isCensus(sql)
+            ? [{ capable: "197", total: "213", scheduled: "192" }]
+            : rows,
+        ),
+      );
+    const limitSql: string[] = [];
+    // The reads go through `queryWithLimits`, which wraps each statement in a
+    // transaction to scope its `SET LOCAL`; those go to `limitSql`, not `query`.
+    const connection = {
+      transaction: (cb: (m: unknown) => Promise<unknown>) =>
+        cb({
+          query: (sql: string, params?: unknown[]) => {
+            if (/^SET LOCAL/.test(sql)) {
+              limitSql.push(sql);
+              return Promise.resolve([]);
+            }
+            return query(sql, params);
+          },
+        }),
+    };
     return {
       service: new DowntimeMeasurementService({
-        manager: { query },
+        manager: { query, connection },
       } as never),
       query,
+      limitSql,
     };
   }
 
@@ -270,7 +292,9 @@ describe("DowntimeMeasurementService", () => {
     // in the measurement that calibrates it, drift apart silently.
     const { service, query } = serviceWith([]);
     return service.measure({}).then(() => {
-      const censusSql = query.mock.calls[0][0] as string;
+      const censusSql = query.mock.calls.find((c) =>
+        isCensus(c[0]),
+      )![0] as string;
       expect(censusSql).toContain(usableOperatingScheduleRowSql());
     });
   });
@@ -279,9 +303,31 @@ describe("DowntimeMeasurementService", () => {
     const { service, query } = serviceWith([]);
     return service.measure({ days: 5000 }).then((result) => {
       expect(result.windowDays).toBe(365);
-      const since = query.mock.calls[1][1][2] as Date;
+      const since = query.mock.calls.find(
+        (c) => !isCensus(c[0]),
+      )![1][2] as Date;
       const spanDays = (Date.now() - since.getTime()) / 86_400_000;
       expect(Math.round(spanDays)).toBe(365);
     });
+  });
+
+  it("gives every read a statement_timeout, the outage scan the reconstruction's per-day ceiling (PAR-837)", async () => {
+    const { service, limitSql } = serviceWith([]);
+    await service.measure({ days: 30 });
+
+    const timeouts = limitSql
+      .filter((q) => q.startsWith("SET LOCAL statement_timeout"))
+      .map((q) => Number(q.split("=")[1]));
+    expect(timeouts).toHaveLength(2);
+    // Census: 30 s. Outage scan over 30 days: the reconstruction's 10-minute
+    // floor, i.e. 20x its measured 30 s for the same window.
+    expect([...timeouts].sort((a, b) => a - b)).toEqual([30_000, 600_000]);
+  });
+
+  it("bounds the erasure read by the reconstruction's 10-minute floor (PAR-837)", async () => {
+    const { service, limitSql } = serviceWith([]);
+    await service.measureErasure(30);
+
+    expect(limitSql).toContain("SET LOCAL statement_timeout = 600000");
   });
 });

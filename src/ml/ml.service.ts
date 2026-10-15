@@ -2270,37 +2270,88 @@ export class MLService {
   }
 
   /**
-   * Delete old predictions to manage database size
+   * Deletes predictions whose `predictedTime` is before `cutoffDate`, from the
+   * UNCOMPRESSED chunks only.
    *
-   * @param predictionType - Type of prediction to delete
-   * @param cutoffDate - Delete predictions older than this date
-   * @returns Number of deleted records
+   * `predictedTime` is not the partition key (`createdAt` is), so an unbounded
+   * DELETE on it plans every chunk, and TimescaleDB has to decompress the
+   * matching batches of every compressed chunk before it can delete from them.
+   * Decompression writes the rows back through the chunk's primary key, and a
+   * compressed chunk never enforced that key: the two July chunks held 1051 and
+   * 1267 duplicate keys, and from 2026-10-10 on the nightly cleanup died on
+   * `duplicate key value violates unique constraint "…_wait_time_predictions_pkey"`
+   * as soon as the cutoff reached them (PAR-900).
+   *
+   * Leaving compressed chunks out loses nothing: they are past the 14-day
+   * compression horizon, and the 90-day chunk drop that runs first in the same
+   * job ({@link dropExpiredPredictionChunks}) removes them whole. On production
+   * a daily row's `predictedTime` is never earlier than its `createdAt` (the
+   * shortest lead is ~11 h), so a row past the 90-day cutoff lives in a chunk
+   * older than 90 days — in practice this deletes nothing and is a guard for
+   * the case where compression is behind or switched off.
+   *
+   * The bound is the end of the newest compressed chunk, so no compressed chunk
+   * can sit above it even when an old one was decompressed by hand. It goes into
+   * the SQL as a constant rather than a parameter on purpose: a constant lets
+   * the planner leave those chunks out of the plan entirely, where a parameter
+   * under a generic plan would only exclude them at executor startup with the
+   * chunks still listed as delete targets. The value comes from our own catalog
+   * read and is rendered by `toISOString()`, so nothing outside reaches the SQL.
+   *
+   * The `createdAt` bound is the safeguard: it keeps the DELETE off every chunk
+   * that was compressed at lookup time. The decompression limit
+   * (`max_tuples_decompressed_per_dml_transaction`, default 100 000) is left at
+   * its default and only caps the damage of the remaining race — a chunk
+   * compressed between the lookup and the DELETE would be unpacked up to that
+   * limit, not refused. In practice nothing matches there: compression takes
+   * chunks older than 14 days, the DELETE only rows predicted > 90 days ago.
    */
   async deleteOldPredictions(
     predictionType: "hourly" | "daily",
     cutoffDate: Date,
-  ): Promise<number> {
-    // wait_time_predictions is a hypertable partitioned on createdAt with
-    // compression after 14 days; rows this old live in compressed chunks, and a
-    // plain DELETE aborts once it decompresses more than
-    // timescaledb.max_tuples_decompressed_per_dml_transaction (100k) tuples.
-    // Lift the limit locally for this one bounded nightly cleanup.
-    const rows: Array<{ affected: string }> =
-      await this.predictionRepository.manager.transaction(async (em) => {
-        await em.query(
-          `SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0`,
-        );
-        return em.query(
-          `WITH del AS (
-             DELETE FROM wait_time_predictions
-             WHERE "predictionType" = $1 AND "predictedTime" < $2
-             RETURNING 1
-           ) SELECT count(*)::text AS affected FROM del`,
-          [predictionType, cutoffDate],
-        );
-      });
+  ): Promise<{ deleted: number; createdFrom: Date | null }> {
+    const createdFrom = await this.getNewestCompressedPredictionChunkEnd();
+    const createdBound = createdFrom
+      ? ` AND "createdAt" >= '${createdFrom.toISOString()}'::timestamptz`
+      : "";
 
-    return Number(rows?.[0]?.affected ?? 0);
+    const rows: Array<{ affected: string }> =
+      await this.predictionRepository.manager.query(
+        `WITH del AS (
+           DELETE FROM wait_time_predictions
+           WHERE "predictionType" = $1 AND "predictedTime" < $2${createdBound}
+           RETURNING 1
+         ) SELECT count(*)::text AS affected FROM del`,
+        [predictionType, cutoffDate],
+      );
+
+    return { deleted: Number(rows?.[0]?.affected ?? 0), createdFrom };
+  }
+
+  /**
+   * End of the newest compressed `wait_time_predictions` chunk, or null when no
+   * chunk is compressed. Everything at or after it is uncompressed. Reads the
+   * catalog only.
+   */
+  private async getNewestCompressedPredictionChunkEnd(): Promise<Date | null> {
+    const rows: Array<{ boundary: Date | string | null }> =
+      await this.predictionRepository.manager.query(
+        `SELECT max(range_end) AS boundary
+           FROM timescaledb_information.chunks
+          WHERE hypertable_schema = 'public'
+            AND hypertable_name = 'wait_time_predictions'
+            AND is_compressed`,
+      );
+    const boundary = rows?.[0]?.boundary ?? null;
+    if (boundary === null) return null;
+    const date = boundary instanceof Date ? boundary : new Date(boundary);
+    // A value that does not parse must not silently drop the bound.
+    if (Number.isNaN(date.getTime())) {
+      throw new Error(
+        `Unreadable compressed-chunk boundary for wait_time_predictions: ${String(boundary)}`,
+      );
+    }
+    return date;
   }
 
   /**

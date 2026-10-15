@@ -92,6 +92,20 @@ def get_db() -> Generator:
         db.close()
 
 
+# The training read took 42.6 s in the production slow-query log of 2026-10-10;
+# 300 s is about 7x that. The Node helpers (`statement-limits.util.ts`) do not
+# reach this process, which owns its own connections, so it sets the deadline
+# itself. `SET LOCAL` ends with the transaction and never leaks into the pool.
+TRAINING_READ_STATEMENT_TIMEOUT_MS = 300_000
+TRAINING_READ_LOCK_TIMEOUT_MS = 10_000
+
+
+def apply_read_limits(db, statement_timeout_ms: int, lock_timeout_ms: int) -> None:
+    """Bound every following statement of the session's current transaction."""
+    db.execute(text(f"SET LOCAL statement_timeout = {int(statement_timeout_ms)}"))
+    db.execute(text(f"SET LOCAL lock_timeout = {int(lock_timeout_ms)}"))
+
+
 def fetch_training_data(
     start_date: datetime.datetime, end_date: datetime.datetime
 ) -> pd.DataFrame:
@@ -238,6 +252,9 @@ def fetch_training_data(
     start_time = time.time()
 
     with get_db() as db:
+        apply_read_limits(
+            db, TRAINING_READ_STATEMENT_TIMEOUT_MS, TRAINING_READ_LOCK_TIMEOUT_MS
+        )
         result = db.execute(query, {"start_date": start_date, "end_date": end_date})
         df = pd.DataFrame(result.fetchall(), columns=result.keys())
         query_time = time.time() - start_time

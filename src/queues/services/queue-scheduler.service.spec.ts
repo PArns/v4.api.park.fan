@@ -237,3 +237,75 @@ describe("QueueSchedulerService — nightly VACUUM (PAR-868)", () => {
     );
   });
 });
+
+describe("QueueSchedulerService — children sync runs once a day (PAR-875)", () => {
+  function fakeQueue() {
+    return {
+      getRepeatableJobs: jest.fn().mockResolvedValue([]),
+      removeRepeatableByKey: jest.fn().mockResolvedValue(undefined),
+      add: jest.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  const RETIRED_ENTRY = {
+    key: "fetch-all-children:children-metadata-cron:::0 4 * * *",
+    name: "fetch-all-children",
+    id: "children-metadata-cron",
+    endDate: null,
+    tz: null,
+    cron: "0 4 * * *",
+    every: null,
+    next: 1791000000000,
+  };
+
+  afterEach(() => jest.restoreAllMocks());
+
+  async function register(childrenQueue: ReturnType<typeof fakeQueue>) {
+    const queues = Array.from({ length: QueueSchedulerService.length }, () =>
+      fakeQueue(),
+    );
+    const service = new (
+      QueueSchedulerService as unknown as new (
+        ...args: unknown[]
+      ) => QueueSchedulerService
+    )(...queues);
+    // The children queue is a distinct fake so its calls can be read back;
+    // swap it into the one slot the service reads it from.
+    (service as unknown as { childrenQueue: unknown }).childrenQueue =
+      childrenQueue;
+    jest
+      .spyOn(
+        (service as unknown as { logger: { log: () => void } }).logger,
+        "log",
+      )
+      .mockImplementation(() => undefined);
+    await (
+      service as unknown as { registerScheduledJobs(): Promise<void> }
+    ).registerScheduledJobs();
+  }
+
+  it("schedules no fetch-all-children cron and removes the retired 04:00 entry", async () => {
+    const children = fakeQueue();
+    children.getRepeatableJobs.mockResolvedValue([RETIRED_ENTRY]);
+
+    await register(children);
+
+    expect(children.add.mock.calls.map((c: unknown[]) => c[0])).not.toContain(
+      "fetch-all-children",
+    );
+    expect(children.removeRepeatableByKey).toHaveBeenCalledWith(
+      RETIRED_ENTRY.key,
+    );
+  });
+
+  it("leaves the queue alone once the entry is gone", async () => {
+    const children = fakeQueue();
+
+    await register(children);
+
+    expect(children.add.mock.calls.map((c: unknown[]) => c[0])).not.toContain(
+      "fetch-all-children",
+    );
+    expect(children.removeRepeatableByKey).not.toHaveBeenCalled();
+  });
+});

@@ -31,17 +31,34 @@ describe("AttractionOutageService — the closure path", () => {
 
   let service: AttractionOutageService;
   let query: jest.Mock;
+  /** Every `SET LOCAL` the reads issue (PAR-837). */
+  let limitSql: string[];
   let curves: { find: jest.Mock };
 
   const build = async () => {
     query = jest.fn().mockResolvedValue([]);
+    limitSql = [];
+    // The reads go through `queryWithLimits`, whose transaction scopes the
+    // `SET LOCAL`s: those are recorded here and never reach `query`.
+    const connection = {
+      transaction: (cb: (m: unknown) => Promise<unknown>) =>
+        cb({
+          query: (sql: string, params?: unknown[]) => {
+            if (/^SET LOCAL/.test(sql)) {
+              limitSql.push(sql);
+              return Promise.resolve([]);
+            }
+            return query(sql, params);
+          },
+        }),
+    };
     curves = { find: jest.fn().mockResolvedValue([]) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AttractionOutageService,
         {
           provide: getRepositoryToken(QueueData),
-          useValue: { manager: { query } },
+          useValue: { manager: { query, connection } },
         },
         {
           provide: getRepositoryToken(DowntimeRecoveryCurve),
@@ -68,6 +85,12 @@ describe("AttractionOutageService — the closure path", () => {
       expect.any(Date),
       PARK.id,
     ]);
+  });
+
+  it("runs the closure statement under a 30 s statement_timeout (PAR-837)", async () => {
+    await service.getCurrentOutages(PARK, [OPEN_RIDE]);
+
+    expect(limitSql).toContain("SET LOCAL statement_timeout = 30000");
   });
 
   it("asks it for EVERY ride the DOWN query did not place, the DOWN one included", async () => {

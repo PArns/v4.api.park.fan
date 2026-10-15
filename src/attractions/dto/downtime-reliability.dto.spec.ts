@@ -86,6 +86,21 @@ describe("toDowntimeBlock", () => {
     });
   });
 
+  it("a free-flow ride keeps its reason however old the row is", () => {
+    const old = new Date(
+      NOW.getTime() - (MAX_PROFILE_AGE_DAYS + 3) * 86_400_000,
+    );
+    const noQueue = {
+      ...publishable(old),
+      publishable: false,
+      withheldReason: "free_flow",
+    } as AttractionDowntimeProfile;
+    expect(toDowntimeBlock(noQueue, NOW)).toMatchObject({
+      kind: "withheld",
+      reason: "free_flow",
+    });
+  });
+
   it("lets staleness outrank the one refusal that ends by itself", () => {
     // outside_window is the counterpart to the test above and the reason
     // PERMANENT_REASONS is a list rather than "every park-level reason": the

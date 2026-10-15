@@ -50,7 +50,7 @@ export function materialisedRepeatJobId(entry: {
  * Schedule:
  * - wait-times: Every 5 minutes (frequent updates)
  * - park-metadata: Daily at 3am (metadata changes rarely)
- * - children-metadata: Daily at 4am (Phase 6.2: Combined Attractions + Shows + Restaurants - 67% fewer requests!)
+ * - children-metadata: chained after sync-all-parks (03:00, step 11), no cron of its own since PAR-875
  * - weather: full every 12 hours (0:00 and 12:00), current-only at 7:00 and 19:00
  * - live-cache-warmup: enqueued by every wait-times run, not on a cron
  * - weather-historical: Daily at 5am (mark past data as historical)
@@ -267,25 +267,18 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    // Phase 6.2: Combined Children Metadata (Attractions + Shows + Restaurants)
-    // Daily at 4am (replaces 3 separate jobs at 4am, 4:30am, 5am)
-    // This reduces API requests by 67% (105 instead of 315)
-    const hasChildrenCron = await this.hasRepeatableJob(
-      this.childrenQueue,
-      "children-metadata-cron",
+    // Children metadata (attractions + shows + restaurants) has no cron of its
+    // own: step 11 of `sync-all-parks` (03:00) queues `fetch-all-children`, so
+    // it always runs after the parks it reads exist. The former 04:00 cron
+    // fired the same job a second time ~31 min later and rewrote every row
+    // again (PAR-875). Its repeatable entry outlives the code in Redis.
+    const retiredChildrenJobs = await this.childrenQueue.getRepeatableJobs();
+    const retiredChildrenCron = retiredChildrenJobs.find(
+      (j) => j.id === "children-metadata-cron",
     );
-
-    if (!hasChildrenCron) {
-      await this.childrenQueue.add(
-        "fetch-all-children",
-        {},
-        {
-          repeat: {
-            cron: "0 4 * * *", // Daily at 4am
-          },
-          jobId: "children-metadata-cron",
-        },
-      );
+    if (retiredChildrenCron) {
+      await this.childrenQueue.removeRepeatableByKey(retiredChildrenCron.key);
+      this.logger.log('Removed retired "children-metadata-cron" job');
     }
 
     // Six Flags ride heights. Weekly: ThemeParks.wiki carries none for these
@@ -321,7 +314,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         {},
         {
           repeat: {
-            cron: "30 5 * * 0", // Weekly: Sunday 5:30am, after the 4am children sync
+            cron: "30 5 * * 0", // Weekly: Sunday 5:30am, after the children sync
           },
           jobId: "attraction-details-cron",
         },

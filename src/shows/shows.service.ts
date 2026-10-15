@@ -31,6 +31,21 @@ import {
 } from "../common/utils/live-data-query.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { normalizedClosingSql } from "../common/utils/park-open-window.sql";
+import {
+  StatementLimits,
+  queryWithLimits,
+} from "../common/utils/statement-limits.util";
+
+/**
+ * The nightly pattern read over 56 days of `show_live_data`. It took 24.5 s in
+ * the production log of 2026-10-10, so 180 s is about 7x the measured run: room
+ * for growth, still a ceiling for a plan that flips.
+ */
+const PATTERN_READ_LIMITS: StatementLimits = {
+  statementTimeoutMs: 180_000,
+  lockTimeoutMs: 10_000,
+  idleInTransactionTimeoutMs: 30_000,
+};
 
 @Injectable()
 export class ShowsService {
@@ -867,7 +882,8 @@ export class ShowsService {
       times: string[];
       observed_days: number;
       last_observed_on: string;
-    }> = await this.showLiveDataRepository.manager.query(
+    }> = await queryWithLimits(
+      this.showLiveDataRepository.manager.connection,
       `WITH times AS (
          SELECT l."showId"        AS show_id,
                 s."parkId"        AS park_id,
@@ -943,6 +959,7 @@ export class ShowsService {
          FROM ranked
         WHERE rn = 1`,
       [windowDays],
+      PATTERN_READ_LIMITS,
     );
 
     const computedAt = new Date();
