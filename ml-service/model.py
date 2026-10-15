@@ -200,13 +200,24 @@ class WaitTimeModel:
         self.model.fit(train_pool, eval_set=val_pool, use_best_model=True)
 
         training_time = time.time() - training_start
-        best_iteration = self.model.get_best_iteration()
-        tree_count = self.model.tree_count_
+        early_stopping = self._early_stopping_report(catboost_params)
         print(
             f"\n   Training completed in {training_time:.2f}s ({training_time / 60:.1f} minutes)"
         )
-        print(f"   Best iteration: {best_iteration}")
-        print(f"   Total trees: {tree_count}")
+        print(f"   Best iteration: {early_stopping['best_iteration']}")
+        print(f"   Total trees: {self.model.tree_count_}")
+        if early_stopping["stopped_early"]:
+            print(
+                f"   Early stopping fired after {early_stopping['trees_built']} of "
+                f"{early_stopping['iterations_cap']} trees"
+            )
+        else:
+            # Not an error, but worth seeing: the validation loss was still
+            # improving when the cap was reached (PAR-902).
+            print(
+                f"   ⚠️  Early stopping did NOT fire: validation loss still improving at "
+                f"the {early_stopping['iterations_cap']}-tree cap"
+            )
 
         # Calculate metrics. Collapse multi-column predict() output to a point
         # prediction (same logic as WaitTimeModel.predict): MultiQuantile → median
@@ -242,9 +253,11 @@ class WaitTimeModel:
             "metrics": metrics,
             "features_used": self.feature_columns,
             "categorical_features": self.categorical_features,
+            "early_stopping": early_stopping,
             "hyperparameters": {
                 "iterations": settings.CATBOOST_ITERATIONS,
                 "learning_rate": settings.CATBOOST_LEARNING_RATE,
+                "early_stopping_rounds": settings.CATBOOST_EARLY_STOPPING_ROUNDS,
                 "depth": settings.CATBOOST_DEPTH,
                 "l2_leaf_reg": settings.CATBOOST_L2_LEAF_REG,
                 "rsm": getattr(settings, "CATBOOST_RSM", 1.0),
@@ -310,7 +323,7 @@ class WaitTimeModel:
             # exclusive synonyms and raises "Only one of [...] should be set" at fit()
             # time (regression f493164, broke the 06:00 cron until it was reverted).
             verbose=100,
-            early_stopping_rounds=100,
+            early_stopping_rounds=settings.CATBOOST_EARLY_STOPPING_ROUNDS,
         )
 
         # rsm (column subsampling) and min_data_in_leaf are CPU-only with our setup:
@@ -354,6 +367,36 @@ class WaitTimeModel:
             )
 
         return catboost_params
+
+    def _early_stopping_report(self, params: dict[str, Any]) -> dict[str, Any]:
+        """What the overfitting detector did in the fit that just ran.
+
+        Read from the fitted model, not from the settings, so the metadata says
+        what actually happened. `trees_built` counts the trees grown before
+        `use_best_model` shrank the model to `best_iteration + 1`, which is the
+        number the fit's duration scales with. Before PAR-902 every nightly run
+        reached the cap with the best iteration on its last tree, and only the
+        log said so — and the log is gone after a redeploy.
+        """
+        cap = int(params["iterations"])
+        best = self.model.get_best_iteration()
+        # One entry per iteration actually run, also after an early stop.
+        validation = self.model.get_evals_result().get("validation") or {}
+        curve = next(iter(validation.values()), None)
+        trees_built = len(curve) if curve else cap
+        best_scores = self.model.get_best_score().get("validation") or {}
+        best_score = next(iter(best_scores.values()), None)
+        return {
+            "best_iteration": None if best is None else int(best),
+            "tree_count": int(self.model.tree_count_),
+            "trees_built": int(trees_built),
+            "iterations_cap": cap,
+            "od_wait": params.get("early_stopping_rounds"),
+            "stopped_early": trees_built < cap,
+            "learning_rate": params.get("learning_rate"),
+            "eval_metric": params.get("eval_metric"),
+            "best_validation_loss": None if best_score is None else float(best_score),
+        }
 
     def best_iteration_count(self) -> int:
         """Trees in the early-stopped model (best iteration + 1)."""
