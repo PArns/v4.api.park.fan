@@ -11,13 +11,16 @@ import { isPushConfigured } from "../../push/push-config";
 import {
   dueNotifications,
   isMorningPlanDue,
+  morningFloorMs,
   morningPlansToday,
+  type MorningPlanPark,
 } from "../../push/notification-planner";
 import { isWithinQuietHours } from "../../push/quiet-hours";
 import {
   writeMessage,
   writeMorningPlanMessage,
 } from "../../push/push-messages";
+import { Park } from "../../parks/entities/park.entity";
 import { ParksService } from "../../parks/parks.service";
 import { ScheduleType } from "../../parks/entities/schedule-entry.entity";
 import { ShowFollowsService } from "../../show-follows/show-follows.service";
@@ -71,6 +74,12 @@ import { RainSoonPushService } from "../services/rain-soon-push.service";
  * not once per subscriber. A family sharing a plan is four subscriptions
  * against one id; a popular show is many subscribers against one show.
  */
+interface MorningParkFacts {
+  park: Park;
+  timezone: string;
+  openingMs: number | null;
+}
+
 @Processor("push-notifications")
 export class PushNotificationProcessor {
   private readonly logger = new Logger(PushNotificationProcessor.name);
@@ -91,6 +100,14 @@ export class PushNotificationProcessor {
    * an hour wide, and a marker that expired inside it would send twice.
    */
   private static readonly MORNING_SENT_TTL_SECONDS = 12 * 60 * 60;
+
+  /** How long a park's opening time is reused across ticks and trips. */
+  private static readonly MORNING_FACTS_TTL_MS = 15 * 60_000;
+
+  private readonly morningFacts = new Map<
+    string,
+    { facts: MorningParkFacts | null; until: number }
+  >();
 
   /**
    * How many show-follow sends to run concurrently — same value and same
@@ -303,27 +320,22 @@ export class PushNotificationProcessor {
         }
         if (pending.length === 0) continue;
 
-        const park = await this.parksService.findByGeographicPath(
-          plan.geo.continent,
-          plan.geo.country,
-          plan.geo.city,
-          plan.slug,
-        );
-        if (!park) continue;
-        const schedule = await this.parksService.getScheduleForDate(
-          park.id,
-          plan.today,
-        );
-        const openings = schedule
-          .filter((e) => e.scheduleType === ScheduleType.OPERATING)
-          .flatMap((e) => (e.openingTime ? [new Date(e.openingTime)] : []))
-          .map((d) => d.getTime())
-          .filter(Number.isFinite);
-        if (openings.length === 0) continue;
-        const openingMs = Math.min(...openings);
-        if (!isMorningPlanDue(openingMs, plan.timezone, plan.today, nowMs)) {
+        // Nothing is due before 07:00 park-local, so nothing is queried.
+        const floorMs = morningFloorMs(plan.timezone, plan.today);
+        if (floorMs === null || nowMs < floorMs) continue;
+        const facts = await this.morningParkFacts(plan, nowMs);
+        // The plan's zone is client input: a zone that is not the park's own
+        // would move the park day and the 07:00 floor, so such a plan is skipped.
+        if (
+          !facts ||
+          facts.timezone !== plan.timezone ||
+          facts.openingMs === null ||
+          !isMorningPlanDue(facts.openingMs, plan.timezone, plan.today, nowMs)
+        ) {
           continue;
         }
+        const openingMs = facts.openingMs;
+        const park = facts.park;
 
         const copy = {
           dedupeKey,
@@ -353,6 +365,52 @@ export class PushNotificationProcessor {
       );
     }
     return sent;
+  }
+
+  /**
+   * The park behind a plan entry and its opening time today, kept for
+   * `MORNING_FACTS_TTL_MS`. Without it every tick would repeat the park and
+   * schedule queries for every trip until the park opens, and again all day
+   * for the subscribers who were never sent one.
+   */
+  private async morningParkFacts(
+    plan: MorningPlanPark,
+    nowMs: number,
+  ): Promise<MorningParkFacts | null> {
+    const key = `${plan.geo.continent}/${plan.geo.country}/${plan.geo.city}/${plan.slug}:${plan.today}`;
+    const cached = this.morningFacts.get(key);
+    if (cached && cached.until > nowMs) return cached.facts;
+
+    const park = await this.parksService.findByGeographicPath(
+      plan.geo.continent,
+      plan.geo.country,
+      plan.geo.city,
+      plan.slug,
+    );
+    let facts: MorningParkFacts | null = null;
+    if (park?.timezone) {
+      const schedule = await this.parksService.getScheduleForDate(
+        park.id,
+        plan.today,
+      );
+      const openings = schedule
+        .filter((e) => e.scheduleType === ScheduleType.OPERATING)
+        .flatMap((e) =>
+          e.openingTime ? [new Date(e.openingTime).getTime()] : [],
+        )
+        .filter(Number.isFinite);
+      facts = {
+        park,
+        timezone: park.timezone,
+        openingMs: openings.length > 0 ? Math.min(...openings) : null,
+      };
+    }
+    if (this.morningFacts.size > 500) this.morningFacts.clear();
+    this.morningFacts.set(key, {
+      facts,
+      until: nowMs + PushNotificationProcessor.MORNING_FACTS_TTL_MS,
+    });
+    return facts;
   }
 
   /**

@@ -415,6 +415,15 @@ describe("morningPlansToday", () => {
     expect(morningPlansToday("junk", NOW)).toEqual([]);
   });
 
+  it("clips names to 60 characters", () => {
+    const [result] = morningPlansToday(
+      plan([{ id: "a", attractionName: "X".repeat(5000), startMinute: 600 }]),
+      NOW,
+    );
+    expect([...result.entries[0].name]).toHaveLength(60);
+    expect(result.entries[0].name.endsWith("…")).toBe(true);
+  });
+
   it("reads the day in the park's zone, not UTC", () => {
     // 22:30 UTC on the 16th is already the 17th in Berlin.
     const late = Date.parse("2026-10-16T22:30:00.000Z");

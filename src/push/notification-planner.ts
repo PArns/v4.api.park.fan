@@ -171,6 +171,9 @@ export const MORNING_LEAD_MIN = 60;
 /** Park-local hour before which `morning-plan` never goes out. */
 export const MORNING_EARLIEST_HOUR = 7;
 
+/** Longest name the morning message carries; payload names are client input. */
+export const MORNING_NAME_MAX_CHARS = 60;
+
 /** How many entries the morning message names. */
 export const MORNING_ENTRY_COUNT = 3;
 
@@ -214,13 +217,15 @@ export function morningPlansToday(
       .flatMap((entry) => {
         const name =
           entry.custom?.label?.trim() || entry.attractionName?.trim();
-        return name ? [{ name, atTime: formatMinute(entry.startMinute) }] : [];
+        return name
+          ? [{ name: clip(name), atTime: formatMinute(entry.startMinute) }]
+          : [];
       })
       .slice(0, MORNING_ENTRY_COUNT);
     if (entries.length === 0) continue;
     out.push({
       slug: park.slug,
-      name: park.name || park.slug,
+      name: clip(park.name || park.slug),
       timezone: park.timezone,
       today,
       geo: park.geo,
@@ -228,6 +233,25 @@ export function morningPlansToday(
     });
   }
   return out;
+}
+
+function clip(text: string): string {
+  const chars = [...text];
+  return chars.length <= MORNING_NAME_MAX_CHARS
+    ? text
+    : `${chars.slice(0, MORNING_NAME_MAX_CHARS - 1).join("")}…`;
+}
+
+/** The earliest instant `morning-plan` may go out on a park day, or null for an unknown zone. */
+export function morningFloorMs(timezone: string, today: string): number | null {
+  try {
+    return fromZonedTime(
+      `${today}T${String(MORNING_EARLIEST_HOUR).padStart(2, "0")}:00:00`,
+      timezone,
+    ).getTime();
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -246,15 +270,8 @@ export function isMorningPlanDue(
   today: string,
   nowMs: number,
 ): boolean {
-  let earliestMs: number;
-  try {
-    earliestMs = fromZonedTime(
-      `${today}T${String(MORNING_EARLIEST_HOUR).padStart(2, "0")}:00:00`,
-      timezone,
-    ).getTime();
-  } catch {
-    return false;
-  }
+  const earliestMs = morningFloorMs(timezone, today);
+  if (earliestMs === null) return false;
   const sendAtMs = Math.max(openingMs - MORNING_LEAD_MIN * 60_000, earliestMs);
   return nowMs >= sendAtMs && nowMs < openingMs;
 }

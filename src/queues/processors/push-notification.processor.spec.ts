@@ -1051,28 +1051,104 @@ describe("PushNotificationProcessor", () => {
       });
     });
 
-    it("sends nothing without the topic, without a schedule or in quiet hours", async () => {
+    it("sends nothing without the topic", async () => {
       await withVapid(async () => {
         pushService.subscriptionsWithTrip.mockResolvedValue([
           { ...morningSubscription, topics: ["next-up"] },
         ]);
         await processor.handleDue({} as never);
+        expect(pushService.send).not.toHaveBeenCalled();
+      });
+    });
 
-        pushService.subscriptionsWithTrip.mockResolvedValue([
-          morningSubscription,
-        ]);
+    it("sends nothing for a park without a schedule", async () => {
+      await withVapid(async () => {
         parksService.getScheduleForDate.mockResolvedValue([]);
         await processor.handleDue({} as never);
+        expect(pushService.send).not.toHaveBeenCalled();
+      });
+    });
 
-        parksService.getScheduleForDate.mockResolvedValue([
-          { scheduleType: "OPERATING", openingTime: OPENING },
-        ]);
+    it("sends nothing for a park that cannot be resolved", async () => {
+      await withVapid(async () => {
+        parksService.findByGeographicPath.mockResolvedValue(null);
+        await processor.handleDue({} as never);
+        expect(pushService.send).not.toHaveBeenCalled();
+      });
+    });
+
+    it("sends nothing when the plan's zone is not the park's zone", async () => {
+      await withVapid(async () => {
+        parksService.findByGeographicPath.mockResolvedValue({
+          id: "park-1",
+          slug: "phantasialand",
+          timezone: "America/New_York",
+        });
+        await processor.handleDue({} as never);
+        expect(pushService.send).not.toHaveBeenCalled();
+      });
+    });
+
+    it("sends nothing in the subscriber's quiet hours", async () => {
+      await withVapid(async () => {
         // 07:30 in Berlin is 00:30 in Chicago.
         pushService.subscriptionsWithTrip.mockResolvedValue([
           { ...morningSubscription, timezone: "America/Chicago" },
         ]);
         await processor.handleDue({} as never);
         expect(pushService.send).not.toHaveBeenCalled();
+      });
+    });
+
+    it("uses the earliest OPERATING opening of the day", async () => {
+      await withVapid(async () => {
+        parksService.getScheduleForDate.mockResolvedValue([
+          {
+            scheduleType: "OPERATING",
+            openingTime: new Date("2026-10-17T07:30:00.000Z"),
+          },
+          { scheduleType: "OPERATING", openingTime: OPENING },
+          {
+            scheduleType: "TICKETED_EVENT",
+            openingTime: new Date("2026-10-17T04:00:00.000Z"),
+          },
+        ]);
+        await processor.handleDue({} as never);
+        expect(pushService.send.mock.calls[0][1].title).toContain("08:30");
+      });
+    });
+
+    it("sends no marker after a failed send, so the next tick tries again", async () => {
+      await withVapid(async () => {
+        pushService.send.mockResolvedValueOnce(false);
+        await processor.handleDue({} as never);
+        await processor.handleDue({} as never);
+        expect(pushService.send).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it("sends only to the subscription that has no marker yet", async () => {
+      await withVapid(async () => {
+        const second = {
+          ...morningSubscription,
+          id: "sub-2",
+          endpoint: "https://fcm.googleapis.com/fcm/send/second",
+        };
+        pushService.subscriptionsWithTrip.mockResolvedValue([
+          morningSubscription,
+          second,
+        ]);
+        pushService.send
+          .mockResolvedValueOnce(true)
+          .mockResolvedValueOnce(false);
+        await processor.handleDue({} as never);
+        await processor.handleDue({} as never);
+        const endpoints = pushService.send.mock.calls.map((c) => c[0].endpoint);
+        expect(endpoints).toEqual([
+          morningSubscription.endpoint,
+          second.endpoint,
+          second.endpoint,
+        ]);
       });
     });
   });
