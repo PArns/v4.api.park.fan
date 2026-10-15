@@ -2,6 +2,8 @@ import {
   LEAD_MAX_MIN,
   LEAD_MIN,
   dueNotifications,
+  isMorningPlanDue,
+  morningPlansToday,
   parksPlannedToday,
 } from "./notification-planner";
 
@@ -349,5 +351,112 @@ describe("parksPlannedToday", () => {
   it("survives a malformed payload", () => {
     expect(parksPlannedToday(null, NOW)).toEqual([]);
     expect(parksPlannedToday({ parks: "x" }, NOW)).toEqual([]);
+  });
+});
+
+describe("morningPlansToday", () => {
+  /** 2026-10-17, 06:00 in Berlin (UTC+2). */
+  const NOW = Date.parse("2026-10-17T04:00:00.000Z");
+  const geo = { continent: "europe", country: "germany", city: "bruehl" };
+  const plan = (entries: unknown[], extra: Record<string, unknown> = {}) => ({
+    version: 2,
+    parks: {
+      phantasialand: {
+        slug: "phantasialand",
+        name: "Phantasialand",
+        timezone: "Europe/Berlin",
+        geo,
+        days: { "2026-10-17": { date: "2026-10-17", entries } },
+        ...extra,
+      },
+    },
+  });
+
+  it("names the first three entries by start time, with name and time", () => {
+    const result = morningPlansToday(
+      plan([
+        { id: "d", attractionName: "Winja's", startMinute: 12 * 60 },
+        { id: "a", attractionName: "Taron", startMinute: 9 * 60 + 30 },
+        { id: "c", custom: { label: "Mittag" }, startMinute: 11 * 60 + 15 },
+        { id: "b", attractionName: "Black Mamba", startMinute: 10 * 60 },
+      ]),
+      NOW,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].entries).toEqual([
+      { name: "Taron", atTime: "09:30" },
+      { name: "Black Mamba", atTime: "10:00" },
+      { name: "Mittag", atTime: "11:15" },
+    ]);
+    expect(result[0].today).toBe("2026-10-17");
+  });
+
+  it("skips entries without a name and parks without entries, zone or geo", () => {
+    expect(
+      morningPlansToday(plan([{ id: "x", startMinute: 600 }]), NOW),
+    ).toEqual([]);
+    expect(morningPlansToday(plan([]), NOW)).toEqual([]);
+    expect(
+      morningPlansToday(
+        plan([{ id: "a", attractionName: "Taron", startMinute: 600 }], {
+          timezone: undefined,
+        }),
+        NOW,
+      ),
+    ).toEqual([]);
+    expect(
+      morningPlansToday(
+        plan([{ id: "a", attractionName: "Taron", startMinute: 600 }], {
+          geo: undefined,
+        }),
+        NOW,
+      ),
+    ).toEqual([]);
+    expect(morningPlansToday("junk", NOW)).toEqual([]);
+  });
+
+  it("reads the day in the park's zone, not UTC", () => {
+    // 22:30 UTC on the 16th is already the 17th in Berlin.
+    const late = Date.parse("2026-10-16T22:30:00.000Z");
+    expect(
+      morningPlansToday(
+        plan([{ id: "a", attractionName: "Taron", startMinute: 600 }]),
+        late,
+      ),
+    ).toHaveLength(1);
+  });
+});
+
+describe("isMorningPlanDue", () => {
+  const berlin = (hhmm: string) => Date.parse(`2026-10-17T${hhmm}:00+02:00`);
+  const due = (opens: string, now: string) =>
+    isMorningPlanDue(berlin(opens), "Europe/Berlin", "2026-10-17", berlin(now));
+
+  it("opens the window 60 minutes before the park opens", () => {
+    expect(due("09:00", "07:59")).toBe(false);
+    expect(due("09:00", "08:00")).toBe(true);
+    expect(due("09:00", "08:55")).toBe(true);
+  });
+
+  it("closes the window when the park opens", () => {
+    expect(due("09:00", "09:00")).toBe(false);
+    expect(due("09:00", "11:00")).toBe(false);
+  });
+
+  it("holds an early opening back to 07:00 park-local", () => {
+    // Opens 07:30, so 60 minutes before is 06:30: not before 07:00.
+    expect(due("07:30", "06:45")).toBe(false);
+    expect(due("07:30", "07:00")).toBe(true);
+  });
+
+  it("is false for an unknown zone", () => {
+    expect(
+      isMorningPlanDue(
+        berlin("09:00"),
+        "Not/AZone",
+        "2026-10-17",
+        berlin("08:30"),
+      ),
+    ).toBe(false);
   });
 });

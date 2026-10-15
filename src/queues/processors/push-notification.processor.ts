@@ -2,14 +2,24 @@ import { Process, Processor } from "@nestjs/bull";
 import { Inject, Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { createHash } from "crypto";
+import { formatInTimeZone } from "date-fns-tz";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { PushService } from "../../push/push.service";
 import { TripsService } from "../../trips/trips.service";
 import { isPushConfigured } from "../../push/push-config";
-import { dueNotifications } from "../../push/notification-planner";
+import {
+  dueNotifications,
+  isMorningPlanDue,
+  morningPlansToday,
+} from "../../push/notification-planner";
 import { isWithinQuietHours } from "../../push/quiet-hours";
-import { writeMessage } from "../../push/push-messages";
+import {
+  writeMessage,
+  writeMorningPlanMessage,
+} from "../../push/push-messages";
+import { ParksService } from "../../parks/parks.service";
+import { ScheduleType } from "../../parks/entities/schedule-entry.entity";
 import { ShowFollowsService } from "../../show-follows/show-follows.service";
 import { ShowFollow } from "../../show-follows/entities/show-follow.entity";
 import { ShowsService } from "../../shows/shows.service";
@@ -19,7 +29,10 @@ import {
   type FollowedShowStatus,
 } from "../../show-follows/show-follow-notifications";
 import { LiveStatus } from "../../external-apis/themeparks/themeparks.types";
-import { frontendShowsPath } from "../../common/utils/frontend-url.util";
+import {
+  frontendParkPath,
+  frontendShowsPath,
+} from "../../common/utils/frontend-url.util";
 import {
   formatInParkTimezone,
   getTomorrowDateInTimezoneAt,
@@ -73,6 +86,13 @@ export class PushNotificationProcessor {
   private static readonly SENT_TTL_SECONDS = 45 * 60;
 
   /**
+   * The marker for `morning-plan`, which is due for as long as the park is
+   * still closed and so outlives the 45-minute marker: the window can be
+   * an hour wide, and a marker that expired inside it would send twice.
+   */
+  private static readonly MORNING_SENT_TTL_SECONDS = 12 * 60 * 60;
+
+  /**
    * How many show-follow sends to run concurrently — same value and same
    * reasoning as `RideAlertsService.SEND_BATCH_SIZE`: a popular show
    * followed by hundreds of browsers must not turn into hundreds of
@@ -86,6 +106,7 @@ export class PushNotificationProcessor {
     private readonly showFollowsService: ShowFollowsService,
     private readonly showsService: ShowsService,
     private readonly rainSoon: RainSoonPushService,
+    private readonly parksService: ParksService,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
@@ -191,6 +212,12 @@ export class PushNotificationProcessor {
         const trip = await this.tripsService.find(tripId);
         if (!trip) continue;
 
+        sent += await this.sendMorningPlans(
+          trip.payload,
+          subscriptions,
+          startedMs,
+        );
+
         const due = dueNotifications(trip.payload, startedMs);
         if (due.length === 0) continue;
 
@@ -237,6 +264,92 @@ export class PushNotificationProcessor {
     if (quiet > 0) {
       this.logger.log(
         `Held trip notifications back for ${quiet} subscriber(s) — quiet hours where they are`,
+      );
+    }
+    return sent;
+  }
+
+  /**
+   * The `morning-plan` messages of one trip: once per subscription, park and
+   * park day, from an hour before the park opens.
+   *
+   * The opening time is the earliest OPERATING schedule entry of the park's own
+   * today. A park without one (closed, or no schedule yet) sends nothing, since
+   * there is no moment to count back from. A subscriber inside quiet hours is
+   * skipped without a marker, so a later tick before opening can still send.
+   * Never throws: this must not stop the `next-up` messages of the same trip.
+   */
+  private async sendMorningPlans(
+    payload: unknown,
+    subscriptions: PushSubscription[],
+    nowMs: number,
+  ): Promise<number> {
+    const recipients = subscriptions.filter(
+      (s) =>
+        s.topics?.includes("morning-plan") &&
+        !isWithinQuietHours(s.timezone, nowMs),
+    );
+    if (recipients.length === 0) return 0;
+
+    let sent = 0;
+    try {
+      for (const plan of morningPlansToday(payload, nowMs)) {
+        const dedupeKey = `morning-plan:${plan.slug}:${plan.today}`;
+        const pending: PushSubscription[] = [];
+        for (const subscription of recipients) {
+          if (!(await this.alreadySent(subscription.endpoint, dedupeKey))) {
+            pending.push(subscription);
+          }
+        }
+        if (pending.length === 0) continue;
+
+        const park = await this.parksService.findByGeographicPath(
+          plan.geo.continent,
+          plan.geo.country,
+          plan.geo.city,
+          plan.slug,
+        );
+        if (!park) continue;
+        const schedule = await this.parksService.getScheduleForDate(
+          park.id,
+          plan.today,
+        );
+        const openings = schedule
+          .filter((e) => e.scheduleType === ScheduleType.OPERATING)
+          .flatMap((e) => (e.openingTime ? [new Date(e.openingTime)] : []))
+          .map((d) => d.getTime())
+          .filter(Number.isFinite);
+        if (openings.length === 0) continue;
+        const openingMs = Math.min(...openings);
+        if (!isMorningPlanDue(openingMs, plan.timezone, plan.today, nowMs)) {
+          continue;
+        }
+
+        const copy = {
+          dedupeKey,
+          parkName: plan.name,
+          opensAt: formatInParkTime(openingMs, plan.timezone),
+          entries: plan.entries,
+          url: frontendParkPath(park) ?? "/",
+        };
+        for (const subscription of pending) {
+          const ok = await this.pushService.send(
+            subscription,
+            writeMorningPlanMessage(copy, subscription.locale),
+          );
+          if (ok) {
+            await this.markSent(
+              subscription.endpoint,
+              dedupeKey,
+              PushNotificationProcessor.MORNING_SENT_TTL_SECONDS,
+            );
+            sent++;
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        `morning-plan push notifications failed after sending ${sent}: ${(error as Error)?.message ?? error}`,
       );
     }
     return sent;
@@ -567,14 +680,13 @@ export class PushNotificationProcessor {
     }
   }
 
-  private async markSent(endpoint: string, key: string): Promise<void> {
+  private async markSent(
+    endpoint: string,
+    key: string,
+    ttlSeconds = PushNotificationProcessor.SENT_TTL_SECONDS,
+  ): Promise<void> {
     try {
-      await this.redis.set(
-        this.sentKey(endpoint, key),
-        "1",
-        "EX",
-        PushNotificationProcessor.SENT_TTL_SECONDS,
-      );
+      await this.redis.set(this.sentKey(endpoint, key), "1", "EX", ttlSeconds);
     } catch {
       // Same reason as above, one layer on: failing to write the marker costs a
       // duplicate, failing the job costs everybody their notification.
@@ -591,6 +703,10 @@ export class PushNotificationProcessor {
   private sentKey(endpoint: string, dedupeKey: string): string {
     return `push:sent:${hash(endpoint)}:${hash(dedupeKey)}`;
   }
+}
+
+function formatInParkTime(instantMs: number, timezone: string): string {
+  return formatInTimeZone(new Date(instantMs), timezone, "HH:mm");
 }
 
 function hash(value: string): string {

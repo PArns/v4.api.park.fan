@@ -262,3 +262,46 @@ export function writeRainSoonMessage(
     tag: notification.dedupeKey,
   };
 }
+
+/** What a `morning-plan` notification needs. */
+export interface MorningPlanCopy {
+  dedupeKey: string;
+  parkName: string;
+  /** Park-local `HH:mm` the park opens. */
+  opensAt: string;
+  /** The first entries of the day, earliest first. */
+  entries: Array<{ name: string; atTime: string }>;
+  url: string;
+}
+
+const MORNING_PLAN_TITLES: Record<
+  string,
+  (parkName: string, opensAt: string) => string
+> = {
+  de: (p, t) => `${p} öffnet um ${t} Uhr`,
+  en: (p, t) => `${p} opens at ${t}`,
+  nl: (p, t) => `${p} opent om ${t}`,
+  fr: (p, t) => `${p} ouvre à ${t}`,
+  es: (p, t) => `${p} abre a las ${t}`,
+  it: (p, t) => `${p} apre alle ${t}`,
+};
+
+/**
+ * The morning summary of a park day, written for one subscriber.
+ *
+ * The body is the first entries as `HH:mm Name`, one per line, and nothing
+ * else: no greeting and no advice, like the other messages here.
+ */
+export function writeMorningPlanMessage(
+  notification: MorningPlanCopy,
+  locale: string,
+): PushMessage {
+  const base = locale.split("-")[0]?.toLowerCase() ?? "en";
+  const title = MORNING_PLAN_TITLES[base] ?? MORNING_PLAN_TITLES.en;
+  return {
+    title: title(notification.parkName, notification.opensAt),
+    body: notification.entries.map((e) => `${e.atTime} ${e.name}`).join("\n"),
+    url: notification.url,
+    tag: notification.dedupeKey,
+  };
+}

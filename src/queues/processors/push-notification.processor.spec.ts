@@ -7,6 +7,7 @@ import { ShowFollowsService } from "../../show-follows/show-follows.service";
 import { ShowsService } from "../../shows/shows.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RainSoonPushService } from "../services/rain-soon-push.service";
+import { ParksService } from "../../parks/parks.service";
 
 /**
  * The two halves of `handleDue` are unrelated (a trip topic vs. a followed
@@ -79,6 +80,10 @@ describe("PushNotificationProcessor", () => {
     getShowtimeInstantsOnDate: jest.Mock;
   };
   let rainSoon: { run: jest.Mock };
+  let parksService: {
+    findByGeographicPath: jest.Mock;
+    getScheduleForDate: jest.Mock;
+  };
   let redisStore: Map<string, string>;
   let redis: { exists: jest.Mock; set: jest.Mock };
 
@@ -112,6 +117,10 @@ describe("PushNotificationProcessor", () => {
     };
 
     rainSoon = { run: jest.fn().mockResolvedValue(0) };
+    parksService = {
+      findByGeographicPath: jest.fn().mockResolvedValue(null),
+      getScheduleForDate: jest.fn().mockResolvedValue([]),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -121,6 +130,7 @@ describe("PushNotificationProcessor", () => {
         { provide: ShowFollowsService, useValue: showFollowsService },
         { provide: ShowsService, useValue: showsService },
         { provide: RainSoonPushService, useValue: rainSoon },
+        { provide: ParksService, useValue: parksService },
         { provide: REDIS_CLIENT, useValue: redis },
       ],
     }).compile();
@@ -963,6 +973,106 @@ describe("PushNotificationProcessor", () => {
 
         await processor.handleDue({} as never);
         expect(pushService.send).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+  describe("morning-plan", () => {
+    // 2026-10-17 07:30 in Berlin (05:30 UTC); the park opens at 08:30.
+    const MORNING = Date.parse("2026-10-17T05:30:00.000Z");
+    const OPENING = new Date("2026-10-17T06:30:00.000Z");
+    const morningSubscription = {
+      ...tripSubscription,
+      topics: ["morning-plan"],
+    };
+    const trip = {
+      payload: {
+        version: 2,
+        parks: {
+          phantasialand: {
+            slug: "phantasialand",
+            name: "Phantasialand",
+            timezone: "Europe/Berlin",
+            geo: { continent: "europe", country: "germany", city: "bruehl" },
+            days: {
+              "2026-10-17": {
+                entries: [
+                  { id: "b", attractionName: "Black Mamba", startMinute: 600 },
+                  { id: "a", attractionName: "Taron", startMinute: 570 },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+
+    beforeEach(() => {
+      jest.spyOn(Date, "now").mockReturnValue(MORNING);
+      pushService.subscriptionsWithTrip.mockResolvedValue([
+        morningSubscription,
+      ]);
+      tripsService.find.mockResolvedValue(trip);
+      parksService.findByGeographicPath.mockResolvedValue({
+        id: "park-1",
+        slug: "phantasialand",
+        timezone: "Europe/Berlin",
+      });
+      parksService.getScheduleForDate.mockResolvedValue([
+        { scheduleType: "OPERATING", openingTime: OPENING },
+      ]);
+    });
+
+    it("sends once, 60 minutes before opening, and not again on the next tick", async () => {
+      await withVapid(async () => {
+        await processor.handleDue({} as never);
+        expect(pushService.send).toHaveBeenCalledTimes(1);
+        const [, message] = pushService.send.mock.calls[0];
+        expect(message.title).toBe("Phantasialand öffnet um 08:30 Uhr");
+        expect(message.body).toBe("09:30 Taron\n10:00 Black Mamba");
+        expect(message.tag).toBe("morning-plan:phantasialand:2026-10-17");
+
+        jest.spyOn(Date, "now").mockReturnValue(MORNING + 5 * 60_000);
+        await processor.handleDue({} as never);
+        expect(pushService.send).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("sends nothing before the window opens or after the park opened", async () => {
+      await withVapid(async () => {
+        jest
+          .spyOn(Date, "now")
+          .mockReturnValue(Date.parse("2026-10-17T05:00:00.000Z"));
+        await processor.handleDue({} as never);
+        jest
+          .spyOn(Date, "now")
+          .mockReturnValue(Date.parse("2026-10-17T06:35:00.000Z"));
+        await processor.handleDue({} as never);
+        expect(pushService.send).not.toHaveBeenCalled();
+      });
+    });
+
+    it("sends nothing without the topic, without a schedule or in quiet hours", async () => {
+      await withVapid(async () => {
+        pushService.subscriptionsWithTrip.mockResolvedValue([
+          { ...morningSubscription, topics: ["next-up"] },
+        ]);
+        await processor.handleDue({} as never);
+
+        pushService.subscriptionsWithTrip.mockResolvedValue([
+          morningSubscription,
+        ]);
+        parksService.getScheduleForDate.mockResolvedValue([]);
+        await processor.handleDue({} as never);
+
+        parksService.getScheduleForDate.mockResolvedValue([
+          { scheduleType: "OPERATING", openingTime: OPENING },
+        ]);
+        // 07:30 in Berlin is 00:30 in Chicago.
+        pushService.subscriptionsWithTrip.mockResolvedValue([
+          { ...morningSubscription, timezone: "America/Chicago" },
+        ]);
+        await processor.handleDue({} as never);
+        expect(pushService.send).not.toHaveBeenCalled();
       });
     });
   });
