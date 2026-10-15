@@ -28,15 +28,20 @@ describe("MLService — windowed hourly prediction purge", () => {
   let service: MLService;
   let queries: Array<{ sql: string; params: unknown[] }>;
   let oldestCreatedAt: Date | null;
+  let compressedBoundary: Date | string | null;
 
   const DAY = 24 * 60 * 60 * 1000;
 
   beforeEach(async () => {
     queries = [];
     oldestCreatedAt = null;
+    compressedBoundary = null;
 
     const runQuery = (sql: string, params: unknown[] = []) => {
       queries.push({ sql, params });
+      if (sql.includes("timescaledb_information.chunks")) {
+        return Promise.resolve([{ boundary: compressedBoundary }]);
+      }
       if (sql.includes("MIN(")) {
         return Promise.resolve([{ oldest: oldestCreatedAt }]);
       }
@@ -204,5 +209,88 @@ describe("MLService — windowed hourly prediction purge", () => {
     );
 
     expect(result.deleted).toBe(300); // 3 windows × 100
+  });
+
+  describe("daily delete by predictedTime (PAR-900)", () => {
+    const cutoff = new Date("2026-07-17T03:30:00Z");
+
+    it("bounds the DELETE to chunks after the newest compressed one, as a constant", async () => {
+      compressedBoundary = new Date("2026-10-01T00:00:00Z");
+
+      const result = await service.deleteOldPredictions("daily", cutoff);
+
+      const [del] = deleteCalls();
+      expect(del.sql).toContain(`"predictedTime" < $2`);
+      // Inlined, not a parameter: the planner must see it to leave the
+      // compressed chunks out of the plan instead of pruning them at startup.
+      expect(del.sql).toContain(
+        `"createdAt" >= '2026-10-01T00:00:00.000Z'::timestamptz`,
+      );
+      expect(del.params).toEqual(["daily", cutoff]);
+      expect(result).toEqual({
+        deleted: 100,
+        createdFrom: new Date("2026-10-01T00:00:00Z"),
+      });
+    });
+
+    it("reads the boundary from the catalog before deleting", async () => {
+      compressedBoundary = new Date("2026-10-01T00:00:00Z");
+
+      await service.deleteOldPredictions("daily", cutoff);
+
+      const catalog = queries.findIndex((q) =>
+        q.sql.includes("timescaledb_information.chunks"),
+      );
+      const del = queries.findIndex((q) =>
+        q.sql.includes("DELETE FROM wait_time_predictions"),
+      );
+      expect(catalog).toBeGreaterThanOrEqual(0);
+      expect(catalog).toBeLessThan(del);
+      expect(queries[catalog].sql).toContain("is_compressed");
+      expect(queries[catalog].sql).toContain("max(range_end)");
+    });
+
+    it("accepts the boundary as a string from the driver", async () => {
+      compressedBoundary = "2026-10-01 00:00:00+00";
+
+      const result = await service.deleteOldPredictions("daily", cutoff);
+
+      expect(result.createdFrom?.toISOString()).toBe(
+        "2026-10-01T00:00:00.000Z",
+      );
+      expect(deleteCalls()[0].sql).toContain(
+        `'2026-10-01T00:00:00.000Z'::timestamptz`,
+      );
+    });
+
+    it("adds no createdAt bound when no chunk is compressed", async () => {
+      compressedBoundary = null;
+
+      const result = await service.deleteOldPredictions("daily", cutoff);
+
+      expect(deleteCalls()[0].sql).not.toContain(`"createdAt"`);
+      expect(result.createdFrom).toBeNull();
+    });
+
+    it("refuses to delete when the boundary cannot be read", async () => {
+      compressedBoundary = "not a date";
+
+      await expect(
+        service.deleteOldPredictions("daily", cutoff),
+      ).rejects.toThrow(/Unreadable compressed-chunk boundary/);
+      expect(deleteCalls()).toHaveLength(0);
+    });
+
+    it("never lifts the decompression limit", async () => {
+      compressedBoundary = new Date("2026-10-01T00:00:00Z");
+
+      await service.deleteOldPredictions("daily", cutoff);
+
+      expect(
+        queries.some((q) =>
+          q.sql.includes("max_tuples_decompressed_per_dml_transaction"),
+        ),
+      ).toBe(false);
+    });
   });
 });
