@@ -23,6 +23,7 @@ import { AttractionHourlyHistory } from "./entities/attraction-hourly-history.en
 import { AttractionRopeDrop } from "./entities/attraction-rope-drop.entity";
 import { AttractionTypicalWaits } from "./entities/attraction-typical-waits.entity";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
+import { observedReadingsSql } from "../common/utils/closure-gap.sql";
 
 /**
  * Focused coverage for the P90 baseline + hourly-history infrastructure
@@ -404,6 +405,21 @@ describe("AnalyticsService — P90 + hourly history", () => {
       );
 
       expect(result.size).toBe(0);
+    });
+
+    // PAR-729. The rollup read carried rows as measurements: a frozen feed
+    // published slots nothing could tell from observations, because
+    // `writeHourlyHeartbeats` copies the previous row's `data_source` too.
+    // Asserted against the helper's own text rather than a retyped predicate —
+    // the names in it come from the writers' exports, and a copy here would
+    // keep passing after either writer renamed its source.
+    it("reads observations only — carried heartbeat rows are excluded", async () => {
+      queueDataRepo.query.mockResolvedValueOnce([]);
+
+      await service.computeParkHourlyHistoryForDate("p1", "2026-05-18", "UTC");
+
+      const [sql] = queueDataRepo.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain(observedReadingsSql("qd"));
     });
   });
 

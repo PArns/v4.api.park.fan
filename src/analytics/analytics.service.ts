@@ -59,6 +59,7 @@ import {
   getCurrentTimeInTimezone,
 } from "../common/utils/date.util";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
+import { observedReadingsSql } from "../common/utils/closure-gap.sql";
 import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { subDays } from "date-fns";
@@ -5895,6 +5896,23 @@ export class AnalyticsService {
    *
    * The date range is computed in park timezone (start of day → next
    * day) so we always capture exactly one operating calendar day.
+   *
+   * `observedReadingsSql` keeps the carried rows out. `writeHourlyHeartbeats`
+   * copies the previous row's status, wait AND `data_source`, so a frozen feed
+   * used to produce slots this rollup could not tell from measurements — and
+   * they went into `p90`, `avgWait` and `sampleCount` alike. Measured against
+   * production on 2026-10-15 (PAR-729): on 2026-09-19 `Midnight` at Cedar Point
+   * published twelve slots at p90 = 5 min for a day in which the feed delivered
+   * the ride not once.
+   *
+   * It costs next to nothing now. PAR-720 fixed the writer on 2026-10-07 so a
+   * heartbeat is only written for a ride no feed has delivered for over an
+   * hour; over 2026-10-08..14 three of 176,797 slots fall away (0.002 %). Over
+   * the five weeks before that fix it would have been 13–19 %, which is why
+   * the existing rows are NOT recomputed: 99.8 % of the slots a backfill would
+   * delete carry a wait the same ride was also measured at on the same day.
+   * The decision and its numbers are in PAR-729; the sibling table
+   * `queue_data_aggregates` is PAR-720 / PAR-755 and is unchanged here.
    */
   async computeParkHourlyHistoryForDate(
     parkId: string,
@@ -5933,6 +5951,7 @@ export class AnalyticsService {
         AND qd."queueType" = 'STANDBY'
         AND qd."waitTime" IS NOT NULL
         AND qd."waitTime" >= 5
+        AND ${observedReadingsSql("qd")}
       GROUP BY qd."attractionId", time_slot
       HAVING COUNT(*) >= 1
       ORDER BY qd."attractionId", time_slot
