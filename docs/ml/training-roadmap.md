@@ -112,6 +112,22 @@ Monitor after every retraining. Check `/v1/ml/models/metrics-history` for trends
 
 ---
 
+### 5. Tree Cap Reached Before Convergence ("early stopping never fires") — FIXED 2026-10-15 (PAR-902)
+
+Every nightly run grew all `CATBOOST_ITERATIONS` = 2000 trees with `best_iteration` = 1999, and
+paid for them twice (fit + refit, ~64 of ~73 minutes). The detector was wired correctly (eval set,
+`od_wait` 100, `use_best_model`, eval metric = loss); at learning rate 0.03 the validation loss —
+and the out-of-time hold-out — simply kept falling past 3000 trees. Now `0.1 × 1500`: better on
+hold-out MAE (4.33 vs 4.36) and busy MAE (15.17 vs 15.61) with 25 % fewer trees, ~57 min per run.
+Measurement table and the reasoning: [Model Overview → Tree count and early stopping](./model-overview.md).
+
+**After deploy, check** in the first nightly model's metadata: `early_stopping.trees_built` =
+1500, `training_timings.fit.seconds` ≈ 1270 and `refit.seconds` ≈ 1600, `holdout_metrics.mae`
+≤ the previous model's. `stopped_early: true` is fine (the data stopped supporting more trees);
+a validation MAE far above the previous run's is what the champion gate (×1.25) exists for.
+
+---
+
 ## Training Trigger Checklist
 
 Before triggering a new training:
