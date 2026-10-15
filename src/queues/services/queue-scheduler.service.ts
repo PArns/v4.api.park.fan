@@ -272,6 +272,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     // it always runs after the parks it reads exist. The former 04:00 cron
     // fired the same job a second time ~31 min later and rewrote every row
     // again (PAR-875). Its repeatable entry outlives the code in Redis.
+    this.runs.checkpoint();
     const retiredChildrenJobs = await this.childrenQueue.getRepeatableJobs();
     const retiredChildrenCron = retiredChildrenJobs.find(
       (j) => j.id === "children-metadata-cron",

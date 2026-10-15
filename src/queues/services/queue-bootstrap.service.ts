@@ -69,10 +69,14 @@ export class QueueBootstrapService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * A shutdown during the first seconds of a boot (a Coolify redeploy replacing
-   * the previous container) stops the chain at its next step and waits for the
-   * step in flight, instead of letting it query a closed DataSource and log the
-   * result as a failure (see `AbortableRuns`).
+   * A shutdown during the first seconds of a boot stops the chain at its next
+   * step and waits for the step in flight, instead of letting it query a closed
+   * DataSource and log the result as a failure (see `AbortableRuns`).
+   *
+   * Reached on an explicit `app.close()`, which is what the E2E suites do
+   * between tests. A SIGTERM from a Coolify redeploy does NOT reach it today:
+   * `app.enableShutdownHooks()` is called nowhere in this repo, so Nest runs no
+   * lifecycle hook on a signal (PAR-903).
    */
   async onModuleDestroy(): Promise<void> {
     await this.runs.abortAndDrain();
