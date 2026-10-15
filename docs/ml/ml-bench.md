@@ -1428,3 +1428,52 @@ it as `sanity_33parks.csv`**. It is not produced by `report`, so it is not in th
 This is the only evidence on this page that the harness agrees with an
 independent implementation, so it has to be reproducible from the repository: it
 previously came from an ad-hoc query over the git-ignored `parts/` directory.
+
+### TiDE vs Chronos-2, head to head on identical rows (PAR-869)
+
+PAR-829 found TiDE (`nf_tide`) serve-eligible on live and intraday leads and PAR-828
+found Chronos-2 (`chronos2_grid`, `chronos2_x_h5`) ahead of the incumbents on the
+planner's 15-min curve — but in **two different runs**, so there was no paired margin
+between the two candidates themselves. There cannot be one across runs: the harness
+pairs models **inside** a run. `run --pair-with` writes the paired sums per origin
+(`pn__<a>__<b>`, `psm__<a>__<b>`, `psr__<a>__<b>` — paired slot count and the two
+absolute-error sums over the slots both models cover), and `report --vs <b>` turns
+those columns into a margin with a CI. Two runs share no such column, and a difference
+of two separately measured MAEs is not a paired difference: it has no CI, and on this
+data the two runs do not even cover the same rows, because each model's coverage is
+its own.
+
+`results/20261012-tide-vs-chronos` is therefore one run with both families:
+`--model chronos2 --model chronos2_grid --model mlbench.models.neuralforecast_models:NFTiDE`
+on the 30-park subset with `--shard 0/5` (47 origins, all seven weekdays — the same
+sample as the owner's mixed-weekday Chronos run, so the two are comparable), and
+`--pair-with chronos2,chronos2_grid,chronos2_x_h5,nf_tide,nf_tide_x_h5,h5,lvlh5_tft,persistence`.
+Chronos-2 is inferred on the GPU; TiDE is **not** recomputed — `NFCached` reads
+PAR-829's precomputed hourly cache (`MLBENCH_NF_CACHE`) and spreads it over the 15-min
+slots, so the TiDE forecasts scored here are exactly the ones PAR-829's eligibility
+rests on and the run costs no extra GPU minutes for them.
+
+Three helper scripts turn that run into the published tables, and all three are in
+`ml-bench/`:
+
+```
+tide_vs_chronos.py          every table + the German answer, from the run's CSVs only
+splice_results.py           moves generated sections between marker pairs in a document
+verify_cells_from_parts.py  re-derives published cells from parts/, without report.py
+```
+
+`verify_cells_from_parts.py` exists because every verdict in this review is recomputed
+at report time, so "the report says so" is not evidence that the report read the right
+rows. It rebuilds `diff_vs_ref`, `n_paired`, `n_units_park` and
+`n_paired_origin_days` for the largest-margin cells per use case straight from
+`parts/`, and a wrong lead mapping, a wrong segment filter or a silently empty arm
+shows up as a mismatch instead of as a plausible number.
+
+**What this run cannot answer.** `report --vs` runs its paired engine on the `slot` and
+the `intraday` table only, and the ride-day sums are written against the naive
+candidates alone (`rideday_pair_sql(B.REF_CANDIDATES, cfg)`). So D3 (best visit time),
+D4 and UC4 have **no** model-vs-model paired margin here; they are reported as both
+families against the *same* naive candidate, each on its own paired rows, which is an
+ordering and not a test. Extending `rideday_pair_sql` / `pairs_sql` to the
+`--pair-with` set is the fix; it changes the schema of the per-origin aggregates and
+so needs a new run.
