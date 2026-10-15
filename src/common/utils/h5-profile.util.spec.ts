@@ -419,12 +419,17 @@ describe("h5-profile.util", () => {
   });
 
   describe("h5LevelFor (the benchmark's routing)", () => {
-    it("applies a TFT level only to a busy ride within six days", () => {
+    it("applies a TFT level only to a busy ride within two days", () => {
+      // The full-period bench supports d0–d2 only (d3 −0.267 [−0.553, +0.002]).
+      expect(TFT_LEVEL_MAX_LEAD_DAYS).toBe(2);
       const busy = profile({ q90: BUSY_Q90_MINUTES });
       expect(h5LevelFor(busy, 0, 70)).toBe(70);
+      expect(h5LevelFor(busy, 2, 70)).toBe(70);
+      expect(h5LevelFor(busy, 3, 70)).toBeNull();
+      expect(h5LevelFor(busy, 6, 70)).toBeNull();
       expect(h5LevelFor(busy, TFT_LEVEL_MAX_LEAD_DAYS, 70)).toBe(70);
       expect(h5LevelFor(busy, TFT_LEVEL_MAX_LEAD_DAYS + 1, 70)).toBeNull();
-      expect(h5LevelFor(busy, 3, null)).toBeNull();
+      expect(h5LevelFor(busy, 1, null)).toBeNull();
     });
 
     it("serves a quiet ride the plain profile at every lead", () => {

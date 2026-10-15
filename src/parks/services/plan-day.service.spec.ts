@@ -3457,7 +3457,7 @@ describe("PlanDayService", () => {
       },
       slot: { wd: {}, we: {}, all: {} },
       refLevel: { wd: null, we: null, all: 40 },
-      // Busy ex ante (≥ 45), so a TFT level applies up to d6.
+      // Busy ex ante (≥ 45), so a TFT level applies up to d2.
       q90: 50,
       days: 42,
     });
@@ -3491,7 +3491,7 @@ describe("PlanDayService", () => {
     });
 
     it("serves a busy ride quarter-hours scaled by the TFT level, the ramp unscaled", async () => {
-      const date = composedDay("tft", dayFromToday(3));
+      const date = composedDay("tft", dayFromToday(2));
 
       const plan = await service.buildPlanDay(park, date);
 
@@ -3526,8 +3526,8 @@ describe("PlanDayService", () => {
       expect(taron.profileDays).toBe(42);
     });
 
-    it("serves the plain profile past six days, TFT level or not", async () => {
-      const date = composedDay("tft", dayFromToday(7));
+    it("serves the plain profile past two days, TFT level or not", async () => {
+      const date = composedDay("tft", dayFromToday(3));
 
       const plan = await service.buildPlanDay(park, date);
 
@@ -3535,8 +3535,8 @@ describe("PlanDayService", () => {
       expect(plan.rides[0].slots!.find((s) => s.minute === 600)!.wait).toBe(26);
     });
 
-    it("serves a quiet ride the plain profile even at d3", async () => {
-      const date = composedDay("tft", dayFromToday(3));
+    it("serves a quiet ride the plain profile even at d2", async () => {
+      const date = composedDay("tft", dayFromToday(2));
       h5Profiles = new Map([["a-taron", { ...h5(), q90: 30 }]]);
 
       const plan = await service.buildPlanDay(park, date);
@@ -3596,7 +3596,7 @@ describe("PlanDayService", () => {
 
     it("hands the archive all three composers on the same quarter-hours, flag or not", async () => {
       delete process.env.PLAN_DAY_H5_COMPOSER;
-      const date = composedDay("tft", dayFromToday(3));
+      const date = composedDay("tft", dayFromToday(2));
 
       const { plan, shadow } = await service.buildPlanDayWithShadow(park, date);
 
@@ -3612,7 +3612,7 @@ describe("PlanDayService", () => {
       expect(minutes[2]).toEqual(minutes[0]);
       expect(shadow[0].slots.every((s) => s.code === "k")).toBe(true);
       expect(shadow[1].slots.every((s) => s.code === "h")).toBe(true);
-      // Busy ride at d3 with a TFT level: the routed curve is scaled.
+      // Busy ride at d2 with a TFT level: the routed curve is scaled.
       expect(shadow[2].slots.every((s) => s.code === "t")).toBe(true);
       const at600 = (i: number) =>
         shadow[i].slots.find((s) => s.minute === 600)!.wait;

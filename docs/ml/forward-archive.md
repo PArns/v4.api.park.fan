@@ -63,8 +63,9 @@ both an old-composer curve and an H5 profile, the composers side by side on the
 SAME quarter-hours: surface 3 `plan_day_shadow_peak` (old composer, its hour
 repeated across four quarters, `k`), 4 `plan_day_shadow_h5` (plain H5, `h`),
 5 `plan_day_shadow_routed` (H5 as the flag would serve it — `h5LevelFor`'s
-routing, `t`). Surface 5 is written only where a level was applied (busy rides,
-d0–d6); where it is missing the scorer reads surface 4 under its name too, so the
+routing, `t`, the same `h5LevelFor` call the served path makes). Surface 5 is
+written only where a level was applied (busy rides, d0–d2 since PAR-901, d0–d6
+before); where it is missing the scorer reads surface 4 under its name too, so the
 three always cover the same ride-days. Scored under use case **`UC3S`**, sources
 `shadow_peak_scaled` / `shadow_h5` / `shadow_h5_routed`, never into `all` and
 never into `UC3` — slot MAE/bias and the ride-day shape metrics (best-time
@@ -73,7 +74,8 @@ Measured hours play no part: this compares composers, not the hourly model.
 
 Added size (estimate from §2's measured row counts, not yet measured): at most
 two shadow rows per planner ride and lead (~57 k planner rows a day) plus the
-routed row for busy rides d0–d6 (~8 k) — **≤ ~120 k rows / ~43 MB a day**
+routed row for busy rides d0–d6 (~8 k; since PAR-901 only d0–d2, 3 of those 7
+leads, so ~3.4 k) — **≤ ~120 k rows / ~43 MB a day**
 (~0.35 KB per 15-minute row with its index entry), steady state **≤ ~1.5 GB**,
 two thirds of it the d10–d90 rows waiting for their day. If that is too much,
 capping the shadow at d30 drops the long-lead share (d45/d60/d90 hold most of the

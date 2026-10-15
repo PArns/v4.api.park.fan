@@ -76,9 +76,20 @@ export const BUSY_Q90_MINUTES = 45;
  * `ml-bench/results/20261009-baselines/tables/horizon_curve_mae.csv`, UC3 vs
  * the weekday median: `lvlh5_tft` over ALL rides is worse at every lead
  * (+0.09 at d1 rising to +0.44 at d30) while plain `h5` is better at every lead
- * (−0.07 … −0.20); on busy rides `lvlh5_tft` wins at d1–d6 only.
+ * (−0.07 … −0.20). On busy rides that first run (the 37-day autumn window)
+ * showed a win to d6, which is where this constant first sat.
+ *
+ * The full-period pass narrowed it to d0–d2 (PAR-901;
+ * `ml-bench/results/20261009-baselines-v2/summary.md`, UC3 "Paired difference
+ * vs EACH naive candidate, busy", `lvlh5_tft` vs `wt_med`, park-cluster CI):
+ * d1 −0.495 [−0.796, −0.207] and d2 −0.415 [−0.699, −0.149] are wins, d3
+ * −0.267 [−0.553, +0.002] is not, d4–d6 −0.248 … −0.108 straddle 0, d7 +0.033,
+ * and d30 +0.420 [+0.116, +0.708] is significantly WORSE. Plain `h5` beats the
+ * weekday median at every lead in both passes (−0.19 at d3), so past d2 the
+ * plain profile is the evidenced answer (`docs/ml/ml-bench.md`, "The
+ * load-bearing correction").
  */
-export const TFT_LEVEL_MAX_LEAD_DAYS = 6;
+export const TFT_LEVEL_MAX_LEAD_DAYS = 2;
 
 /** Median per index, for weekdays, weekends and all days. Thresholded. */
 export interface H5Split {
@@ -280,7 +291,7 @@ export function buildH5Profile(
  * plain profile. The routing measured in the benchmark
  * (`horizon_curve_mae.csv`, UC3 against the weekday median): scaling every
  * ride by the TFT level LOSES at every lead, plain H5 WINS at every lead, and
- * the level only pays on busy rides at d1–d6. So: a TFT level, a ride whose
+ * the level only pays on busy rides at d0–d2 (full-period pass). So: a TFT level, a ride whose
  * window q90 is ≥ {@link BUSY_Q90_MINUTES}, a lead ≤
  * {@link TFT_LEVEL_MAX_LEAD_DAYS} — all three, or no level.
  */

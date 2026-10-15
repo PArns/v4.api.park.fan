@@ -1102,7 +1102,8 @@ the full period `lvlh5_tft` beats the weekday median on busy rides only to d2
 +0.420 [+0.116, +0.708]), while it stays ahead of climatology to d10. The d10
 figure in the headline window is real for that window and **autumn-specific**;
 widening PAR-834's routing to d10 would be a year-round change justified by 37
-autumn days, which is exactly what critic B2 warned against.
+autumn days, which is exactly what critic B2 warned against. PAR-901 acted on it:
+`TFT_LEVEL_MAX_LEAD_DAYS` went from 6 to 2.
 
 **The mirror correction, in the models' favour.** `h5` is *stronger* on the full
 period than in the window: it beats the whole envelope at **every lead d0–d45 and
