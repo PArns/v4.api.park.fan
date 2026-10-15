@@ -2298,10 +2298,13 @@ export class MLService {
    * chunks still listed as delete targets. The value comes from our own catalog
    * read and is rendered by `toISOString()`, so nothing outside reaches the SQL.
    *
-   * The decompression limit (`max_tuples_decompressed_per_dml_transaction`) is
-   * deliberately left at its default: should a chunk become compressed between
-   * the lookup and the DELETE, the statement fails loudly instead of unpacking
-   * it.
+   * The `createdAt` bound is the safeguard: it keeps the DELETE off every chunk
+   * that was compressed at lookup time. The decompression limit
+   * (`max_tuples_decompressed_per_dml_transaction`, default 100 000) is left at
+   * its default and only caps the damage of the remaining race — a chunk
+   * compressed between the lookup and the DELETE would be unpacked up to that
+   * limit, not refused. In practice nothing matches there: compression takes
+   * chunks older than 14 days, the DELETE only rows predicted > 90 days ago.
    */
   async deleteOldPredictions(
     predictionType: "hourly" | "daily",
