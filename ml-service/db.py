@@ -813,6 +813,14 @@ def fetch_prediction_errors_for_training(
             AND pa."target_time" BETWEEN :start_date AND :end_date
             AND pa."absolute_error" IS NOT NULL
             AND pa."absolute_error" >= 0
+            -- Forecast errors only (PAR-912), the API's scoredSlotSql: a closure
+            -- charged the full prediction, or a status-only feed's 0, is not an
+            -- error a sample weight should chase. Rows compared before PAR-912
+            -- carry no score_class; only their positive waits are trusted.
+            AND (pa.score_class = 'scored'
+                 OR (pa.score_class IS NULL
+                     AND pa."wasUnplannedClosure" = false
+                     AND pa.actual_wait_time > 0))
     """
     )
 

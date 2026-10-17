@@ -1,7 +1,11 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Between, LessThan } from "typeorm";
-import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
+import {
+  PredictionAccuracy,
+  ScoreClass,
+  scoredSlotSql,
+} from "../entities/prediction-accuracy.entity";
 import { AttractionAccuracyStats } from "../entities/attraction-accuracy-stats.entity";
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
@@ -62,6 +66,9 @@ export type ServedIntradayAccuracy = {
  * `MLService.servedIntradayValues` for how it is computed and
  * `PredictionAccuracy.servedWaitTime` for why it is stored.
  */
+/** The model's own upper quantiles for one slot, in minutes (PAR-912). */
+export type PredictionQuantiles = { q80: number | null; q95: number | null };
+
 export type ServedIntradayValue = {
   wait: number;
   source: "pcn" | "chronos" | "catboost";
@@ -93,6 +100,67 @@ export function accuracyBasisSql(basis: AccuracyBasis): {
         rowFilter: "served_source IS NOT NULL",
       }
     : { error: "absolute_error", rowFilter: "TRUE" };
+}
+
+/**
+ * How far back a ride must have published a wait above 0 for its OPERATING-0
+ * reading to count as a real 0-minute wait (PAR-912). Seven days covers a
+ * weekly closing day and a quiet midweek; a ride silent for longer is a
+ * status-only or free-flow feed whose 0 means "no number".
+ */
+export const WAIT_SIGNAL_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The reading `compareWithActuals` matched to a slot. */
+export type MatchedReading = { status: string; waitTime: number | null };
+
+/**
+ * What one matched reading makes of a forecast slot (PAR-912).
+ *
+ * - `{ kind: "no_reading" }` — nothing to compare against: OPERATING without a
+ *   wait value, or a status we do not know. The slot stays PENDING and times
+ *   out to MISSED, as a slot with no reading at all does. An unknown status is
+ *   an absent fact, never a closure (docs/rules/absent-facts.md).
+ * - `{ kind: "compared", scoreClass, actual }` — COMPLETED, with the verdict
+ *   documented on {@link PredictionAccuracy.scoreClass}. `actual` is NULL for
+ *   the two classes that are not forecast errors.
+ *
+ * The two context flags are looked up by the caller only where they matter:
+ * `rideRanEarlierToday` for CLOSED, `rideHasWaitSignal` for OPERATING with 0.
+ */
+export function classifyComparison(
+  reading: MatchedReading,
+  ctx: { rideRanEarlierToday: boolean; rideHasWaitSignal: boolean },
+):
+  | { kind: "no_reading" }
+  | { kind: "compared"; scoreClass: ScoreClass; actual: number | null } {
+  switch (reading.status) {
+    case "OPERATING":
+      if (reading.waitTime === null || reading.waitTime === undefined) {
+        return { kind: "no_reading" };
+      }
+      if (reading.waitTime > 0 || ctx.rideHasWaitSignal) {
+        return {
+          kind: "compared",
+          scoreClass: "scored",
+          actual: reading.waitTime,
+        };
+      }
+      return { kind: "compared", scoreClass: "no_wait_signal", actual: null };
+    case "DOWN":
+      return { kind: "compared", scoreClass: "unplanned_closure", actual: 0 };
+    case "CLOSED":
+      return ctx.rideRanEarlierToday
+        ? { kind: "compared", scoreClass: "unplanned_closure", actual: 0 }
+        : { kind: "compared", scoreClass: "ride_not_operating", actual: null };
+    case "REFURBISHMENT":
+      return {
+        kind: "compared",
+        scoreClass: "ride_not_operating",
+        actual: null,
+      };
+    default:
+      return { kind: "no_reading" };
+  }
 }
 
 export type AccuracyBadge =
@@ -193,6 +261,79 @@ export function servedAttractionStatsRow(row: {
     badge,
     message: message ?? null,
   };
+}
+
+/** One row of {@link PredictionAccuracyService.getOperatingAccuracy}. */
+export type OperatingAccuracyRow = {
+  /** null on the all-versions row. */
+  modelVersion: string | null;
+  n: number;
+  mae: number;
+  bias: number;
+  /** P(actual ≤ quantile); null where no row carries that quantile. */
+  coverage: { q50: number | null; q80: number | null; q95: number | null };
+  quantileSamples: { q80: number; q95: number };
+};
+
+export type OperatingAccuracy = { days: number; rows: OperatingAccuracyRow[] };
+
+/** The GROUPING SETS row as Postgres returns it (numerics arrive as text). */
+export type OperatingAccuracySqlRow = {
+  model_version: string | null;
+  is_total: number | string;
+  n: string;
+  mae: string | null;
+  bias: string | null;
+  cov50: string | null;
+  n_q80: string;
+  cov80: string | null;
+  n_q95: string;
+  cov95: string | null;
+};
+
+/**
+ * Parse and order the operating-accuracy rows: the all-versions row first, then
+ * one per model version, newest first (versions are `vYYYYMMDD_HHMM`, so the
+ * string order is the time order). Errors to 0.01 min, coverages to 0.001.
+ */
+export function operatingAccuracyRows(
+  rows: OperatingAccuracySqlRow[],
+): OperatingAccuracyRow[] {
+  const num = (v: string | null, digits: number): number | null => {
+    if (v == null) return null;
+    const x = parseFloat(v);
+    if (!Number.isFinite(x)) return null;
+    const f = 10 ** digits;
+    return Math.round(x * f) / f;
+  };
+  const parsed = rows
+    .filter((r) => (parseInt(r.n, 10) || 0) > 0)
+    .map((r) => ({
+      isTotal: Number(r.is_total) === 1,
+      row: {
+        modelVersion: Number(r.is_total) === 1 ? null : r.model_version,
+        n: parseInt(r.n, 10) || 0,
+        mae: num(r.mae, 2) ?? 0,
+        bias: num(r.bias, 2) ?? 0,
+        coverage: {
+          q50: num(r.cov50, 3),
+          q80: num(r.cov80, 3),
+          q95: num(r.cov95, 3),
+        },
+        quantileSamples: {
+          q80: parseInt(r.n_q80, 10) || 0,
+          q95: parseInt(r.n_q95, 10) || 0,
+        },
+      } satisfies OperatingAccuracyRow,
+    }));
+  const total = parsed.filter((p) => p.isTotal).map((p) => p.row);
+  const versions = parsed
+    .filter((p) => !p.isTotal)
+    .map((p) => p.row)
+    .sort((a, b) =>
+      String(b.modelVersion ?? "").localeCompare(String(a.modelVersion ?? "")),
+    );
+  return [...total, ...versions];
 }
 
 /** Best/worst-predicted attractions board (shared by the CatBoost hourly and TFT
@@ -320,11 +461,17 @@ export class PredictionAccuracyService {
    * raw columns keep the latest write either way, as before. A row that never
    * got a served value stays NULL there and does not count towards the badge.
    *
+   * `quantiles` runs parallel as well and carries the model's q0.8/q0.95 for
+   * the slot (PAR-912). Unlike the served value it is written on EVERY row —
+   * NULL where the model gave none — because it belongs to the same run as the
+   * raw `predicted_wait_time` and must keep its latest-write semantics.
+   *
    * @returns the number of predictions written
    */
   async recordPredictions(
     predictions: WaitTimePrediction[],
     served?: Array<ServedIntradayValue | null>,
+    quantiles?: Array<PredictionQuantiles | null>,
   ): Promise<number> {
     if (!predictions || predictions.length === 0) return 0;
 
@@ -339,6 +486,8 @@ export class PredictionAccuracyService {
       accuracy.modelVersion = prediction.modelVersion;
       accuracy.predictionType = prediction.predictionType;
       accuracy.features = prediction.features;
+      accuracy.predictedQ80 = quantiles?.[i]?.q80 ?? null;
+      accuracy.predictedQ95 = quantiles?.[i]?.q95 ?? null;
       const s = served?.[i];
       if (s) {
         accuracy.servedWaitTime = s.wait;
@@ -479,98 +628,114 @@ export class PredictionAccuracyService {
       queueDataMap.get(record.attractionId)!.push(record);
     }
 
-    // 4. Match Predictions
+    // 4. Match each prediction to the closest reading within ±30 minutes.
+    const matches = pendingPredictions.map((prediction) => {
+      const targetTimeMs = prediction.targetTime.getTime();
+      const records = queueDataMap.get(prediction.attractionId) || [];
+      let bestMatch: QueueData | null = null;
+      let minDiff = 30 * 60 * 1000 + 1; // Start just outside window
+      for (const record of records) {
+        const diff = Math.abs(record.timestamp.getTime() - targetTimeMs);
+        if (diff <= 30 * 60 * 1000 && diff < minDiff) {
+          minDiff = diff;
+          bestMatch = record;
+          // Optimization: if diff is very small (e.g., < 1 min), we can stop
+          if (diff < 60 * 1000) break;
+        }
+      }
+      return { prediction, bestMatch };
+    });
+
+    // 5. The two facts the classification needs beyond the reading itself
+    // (PAR-912), looked up only for the rows that need them: whether a CLOSED
+    // ride had already run that day, and whether a ride reading OPERATING with
+    // 0 publishes waits at all.
+    const closedRows = matches.filter((m) => m.bestMatch?.status === "CLOSED");
+    const ranEarlierToday = await this.rowsWhereRideRanEarlierToday(
+      closedRows.map((m) => m.prediction),
+    );
+    const zeroRides = new Set(
+      matches
+        .filter(
+          (m) =>
+            m.bestMatch?.status === "OPERATING" && m.bestMatch.waitTime === 0,
+        )
+        .map((m) => m.prediction.attractionId),
+    );
+    const withSignal = await this.ridesWithWaitSignal(
+      [...zeroRides],
+      actualDataRecords,
+    );
+
     let completed = 0;
     let missed = 0;
     let unplannedClosures = 0;
-    const updates = [];
+    let notScored = 0;
+    const updates: PredictionAccuracy[] = [];
 
-    for (const prediction of pendingPredictions) {
+    for (const { prediction, bestMatch } of matches) {
       const targetTimeMs = prediction.targetTime.getTime();
-      const records = queueDataMap.get(prediction.attractionId) || [];
+      const verdict = bestMatch
+        ? classifyComparison(bestMatch, {
+            rideRanEarlierToday: ranEarlierToday.has(prediction.id),
+            rideHasWaitSignal: withSignal.has(prediction.attractionId),
+          })
+        : ({ kind: "no_reading" } as const);
 
-      // Find best match within ±30 minutes
-      // Since records are sorted by time, we can find the closest one
-      let bestMatch: QueueData | null = null;
-      let minDiff = 30 * 60 * 1000 + 1; // Start just outside window
-
-      for (const record of records) {
-        const diff = Math.abs(record.timestamp.getTime() - targetTimeMs);
-        if (diff <= 30 * 60 * 1000) {
-          if (diff < minDiff) {
-            minDiff = diff;
-            bestMatch = record;
-            // Optimization: if diff is very small (e.g., < 1 min), we can stop
-            if (diff < 60 * 1000) break;
-          }
+      if (verdict.kind === "no_reading") {
+        // No reading, OPERATING without a wait value (status-only parks such
+        // as Chimelong report OPERATING and never a queue length), or a status
+        // we do not know. There is no ground truth, so the slot stays PENDING
+        // until it times out and then becomes MISSED — a data gap, never a
+        // fabricated 0-wait COMPLETED row.
+        if (Date.now() - targetTimeMs > 2 * 60 * 60 * 1000) {
+          prediction.comparisonStatus = "MISSED";
+          missed++;
         }
-      }
-
-      if (bestMatch) {
-        if (bestMatch.status === "OPERATING" && bestMatch.waitTime !== null) {
-          // MATCH FOUND — comparable: ride was operating with a real wait value
-          prediction.comparisonStatus = "COMPLETED";
-          prediction.actualWaitTime = bestMatch.waitTime;
-          prediction.wasUnplannedClosure = false;
+      } else {
+        prediction.comparisonStatus = "COMPLETED";
+        prediction.scoreClass = verdict.scoreClass;
+        prediction.actualWaitTime = verdict.actual;
+        prediction.percentageError = null;
+        prediction.wasUnplannedClosure =
+          verdict.scoreClass === "unplanned_closure";
+        if (verdict.scoreClass === "scored") {
+          const actualWait = verdict.actual as number;
           prediction.absoluteError = Math.abs(
-            prediction.predictedWaitTime - bestMatch.waitTime,
+            prediction.predictedWaitTime - actualWait,
           );
           prediction.servedAbsoluteError =
             prediction.servedWaitTime == null
               ? null
-              : Math.abs(prediction.servedWaitTime - bestMatch.waitTime);
-          if (bestMatch.waitTime > 0) {
+              : Math.abs(prediction.servedWaitTime - actualWait);
+          if (actualWait > 0) {
             prediction.percentageError =
-              (prediction.absoluteError / bestMatch.waitTime) * 100;
-          } else {
-            prediction.percentageError = null;
+              (prediction.absoluteError / actualWait) * 100;
           }
-          completed++;
-        } else if (bestMatch.status === "OPERATING") {
-          // Ride was OPEN but the source reported NO wait value (waitTime=null).
-          // This is NOT a closure — status-only parks (e.g. Chimelong and many
-          // Asian/water parks) report OPERATING without ever publishing a queue
-          // length. Counting it as an unplanned closure with full error (the old
-          // behaviour) wrongly inflated MAE and dragged "verified coverage" down
-          // (~37% of all "unplanned closures" were actually open-but-null rides).
-          // There is no ground truth to compare against, so leave it uncompared:
-          // PENDING until it times out, then MISSED (a genuine data gap), never
-          // a fabricated 0-wait COMPLETED row.
-          const timeSinceTarget = Date.now() - targetTimeMs;
-          if (timeSinceTarget > 2 * 60 * 60 * 1000) {
-            prediction.comparisonStatus = "MISSED";
-            missed++;
-          }
-        } else {
-          // Genuine unplanned closure: predicted operating, but ride was
-          // CLOSED / DOWN / REFURBISHMENT at the target time.
-          prediction.comparisonStatus = "COMPLETED";
-          prediction.wasUnplannedClosure = true;
-          prediction.actualWaitTime = 0; // Effectively 0 wait time, but not "free"
-          prediction.absoluteError = prediction.predictedWaitTime; // Full error
-          prediction.servedAbsoluteError = prediction.servedWaitTime; // Same rule, served side
-          prediction.percentageError = null;
+        } else if (verdict.scoreClass === "unplanned_closure") {
+          // The existing rule: predicted open, the ride broke down or shut
+          // after it had run — the full prediction is the error, raw and
+          // served alike. No accuracy figure averages these rows.
+          prediction.absoluteError = prediction.predictedWaitTime;
+          prediction.servedAbsoluteError = prediction.servedWaitTime ?? null;
           unplannedClosures++;
-          completed++;
+        } else {
+          // Not scheduled to run, or no wait published at all: not a forecast
+          // error, so neither error is written. COMPLETED still — the slot WAS
+          // checked against the feed, which is what coverage counts.
+          prediction.absoluteError = null;
+          prediction.servedAbsoluteError = null;
+          notScored++;
         }
-      } else {
-        // NO MATCH FOUND
-        // Check timeout: If prediction is older than 2 hours, mark as MISSED
-        const timeSinceTarget = Date.now() - targetTimeMs;
-        if (timeSinceTarget > 2 * 60 * 60 * 1000) {
-          prediction.comparisonStatus = "MISSED";
-          missed++;
-        }
-        // Else: Leave as PENDING (try again next batch)
+        completed++;
       }
 
-      // Add to updates if changed
       if (prediction.comparisonStatus !== "PENDING") {
         updates.push(prediction);
       }
     }
 
-    // 5. Save Updates in Bulk — two SQL statements instead of N individual UPDATEs
+    // 6. Save Updates in Bulk — two SQL statements instead of N individual UPDATEs
     if (updates.length > 0) {
       const missed = updates.filter((u) => u.comparisonStatus === "MISSED");
       const completed = updates.filter(
@@ -595,23 +760,29 @@ export class PredictionAccuracyService {
              absolute_error       = u.absolute_error::int,
              percentage_error     = u.percentage_error::float,
              "wasUnplannedClosure" = u.was_unplanned_closure::boolean,
-             served_absolute_error = u.served_absolute_error::int
+             served_absolute_error = u.served_absolute_error::int,
+             score_class          = u.score_class::varchar
            FROM unnest(
              $1::uuid[],
              $2::int[],
              $3::int[],
              $4::float[],
              $5::boolean[],
-             $6::int[]
-           ) AS u(id, actual_wait_time, absolute_error, percentage_error, was_unplanned_closure, served_absolute_error)
+             $6::int[],
+             $7::varchar[]
+           ) AS u(id, actual_wait_time, absolute_error, percentage_error, was_unplanned_closure, served_absolute_error, score_class)
            WHERE pa.id = u.id`,
           [
             completed.map((u) => u.id),
-            completed.map((u) => u.actualWaitTime ?? 0),
-            completed.map((u) => u.absoluteError ?? 0),
+            // NULL, never 0, for a slot that is not a forecast error (PAR-912):
+            // a 0 here would be read as a measured empty queue by any reader
+            // that filters on the actual alone.
+            completed.map((u) => u.actualWaitTime ?? null),
+            completed.map((u) => u.absoluteError ?? null),
             completed.map((u) => u.percentageError ?? null),
             completed.map((u) => u.wasUnplannedClosure ?? false),
             completed.map((u) => u.servedAbsoluteError ?? null),
+            completed.map((u) => u.scoreClass ?? null),
           ],
         );
       }
@@ -620,7 +791,7 @@ export class PredictionAccuracyService {
     const duration = Date.now() - startTime;
     this.logger.log(
       `✅ Batch complete: Processed ${pendingPredictions.length}, Saved ${updates.length} updates. ` +
-        `Completed: ${completed} (${unplannedClosures} closures), Missed: ${missed}. Duration: ${duration}ms`,
+        `Completed: ${completed} (${unplannedClosures} closures, ${notScored} not scored), Missed: ${missed}. Duration: ${duration}ms`,
     );
 
     if (missed > 0) {
@@ -632,6 +803,114 @@ export class PredictionAccuracyService {
     // Return count of new comparisons for tracking
     await this.recordAccuracyCheck(completed);
     return { newComparisons: completed };
+  }
+
+  /**
+   * Ids of the CLOSED-matched rows whose ride had an OPERATING reading earlier
+   * the same park-local day, before the slot (PAR-912). Such a closure is the
+   * existing unplanned-closure case; a ride that has not run yet that day is
+   * closed for the day, for the season, or opens later than its park — it was
+   * not scheduled to run, and the slot is no forecast error.
+   *
+   * Decidable at comparison time, because it only looks backwards: a ride that
+   * opens after the slot still had not run at the slot. One statement per tick
+   * over `idx_queue_data_operating` (attractionId, timestamp) WHERE OPERATING;
+   * the day is the PARK's day (`schedule_entries` and every other day rule here
+   * are park-local).
+   */
+  private async rowsWhereRideRanEarlierToday(
+    rows: Array<Pick<PredictionAccuracy, "id" | "attractionId" | "targetTime">>,
+  ): Promise<Set<string>> {
+    if (rows.length === 0) return new Set();
+    const result: Array<{ id: string }> = await this.queueDataRepository.query(
+      `SELECT u.id::text AS id
+         FROM unnest($1::uuid[], $2::uuid[], $3::timestamptz[]) AS u(id, aid, t)
+         JOIN attractions a ON a.id = u.aid
+         JOIN parks p ON p.id = a."parkId"
+        WHERE EXISTS (
+          SELECT 1 FROM queue_data q
+           WHERE q."attractionId" = u.aid
+             AND q.status = 'OPERATING'
+             AND q."queueType" = 'STANDBY'
+             AND q.timestamp >= (date_trunc('day', u.t AT TIME ZONE p.timezone) AT TIME ZONE p.timezone)
+             AND q.timestamp < u.t)`,
+      [
+        rows.map((r) => r.id),
+        rows.map((r) => r.attractionId),
+        rows.map((r) => r.targetTime),
+      ],
+    );
+    return new Set(result.map((r) => r.id));
+  }
+
+  /** attractionId → whether it published a wait above 0 recently, and when we
+   *  asked. Per process; an hour is far below the seven-day lookback. */
+  private readonly waitSignalCache = new Map<
+    string,
+    { has: boolean; at: number }
+  >();
+  private static readonly WAIT_SIGNAL_CACHE_MS = 60 * 60 * 1000;
+
+  /**
+   * Of `attractionIds`, the rides that published an OPERATING wait above 0 in
+   * the last {@link WAIT_SIGNAL_LOOKBACK_MS} (PAR-912). Only for those is an
+   * OPERATING 0 a measured empty queue; for the rest — status-only feeds and
+   * free-flow attractions, measured as 37.8 % of all zero-actual rows — the 0 is
+   * the feed's placeholder.
+   *
+   * The batch's own readings answer most rides for free; the rest cost one
+   * EXISTS per ride (stopping at the first hit) and are cached for an hour.
+   */
+  private async ridesWithWaitSignal(
+    attractionIds: string[],
+    batchReadings: QueueData[],
+  ): Promise<Set<string>> {
+    const has = new Set<string>();
+    if (attractionIds.length === 0) return has;
+    const wanted = new Set(attractionIds);
+    for (const r of batchReadings) {
+      if (
+        wanted.has(r.attractionId) &&
+        r.status === "OPERATING" &&
+        (r.waitTime ?? 0) > 0
+      ) {
+        has.add(r.attractionId);
+      }
+    }
+    const now = Date.now();
+    const unknown: string[] = [];
+    for (const id of wanted) {
+      if (has.has(id)) continue;
+      const cached = this.waitSignalCache.get(id);
+      if (
+        cached &&
+        now - cached.at < PredictionAccuracyService.WAIT_SIGNAL_CACHE_MS
+      ) {
+        if (cached.has) has.add(id);
+      } else {
+        unknown.push(id);
+      }
+    }
+    if (unknown.length > 0) {
+      const rows: Array<{ id: string }> = await this.queueDataRepository.query(
+        `SELECT a.id::text AS id
+           FROM unnest($1::uuid[]) AS a(id)
+          WHERE EXISTS (
+            SELECT 1 FROM queue_data q
+             WHERE q."attractionId" = a.id
+               AND q.status = 'OPERATING'
+               AND q."queueType" = 'STANDBY'
+               AND q."waitTime" > 0
+               AND q.timestamp >= $2)`,
+        [unknown, new Date(now - WAIT_SIGNAL_LOOKBACK_MS)],
+      );
+      const found = new Set(rows.map((r) => r.id));
+      for (const id of unknown) {
+        this.waitSignalCache.set(id, { has: found.has(id), at: now });
+        if (found.has(id)) has.add(id);
+      }
+    }
+    return has;
   }
 
   /**
@@ -1195,7 +1474,7 @@ export class PredictionAccuracyService {
         "highError",
       )
       .where("pa.targetTime >= :startDate", { startDate })
-      .andWhere("pa.actualWaitTime IS NOT NULL")
+      .andWhere(scoredSlotSql("pa", MAX_PLAUSIBLE_WAIT_TIME)) // PAR-912
       .setParameters({ threshold: errorThreshold });
 
     if (attractionId) {
@@ -1241,7 +1520,7 @@ export class PredictionAccuracyService {
           "low",
         )
         .where("pa.targetTime >= :startDate", { startDate })
-        .andWhere("pa.actualWaitTime IS NOT NULL")
+        .andWhere(scoredSlotSql("pa", MAX_PLAUSIBLE_WAIT_TIME)) // PAR-912
         .andWhere(`${featureExpression} IS NOT NULL`)
         .groupBy(featureExpression)
         .setParameters({ threshold: errorThreshold });
@@ -1450,8 +1729,11 @@ export class PredictionAccuracyService {
    * @returns {Promise<SystemAccuracyStats>} System-wide accuracy statistics
    */
   async getSystemAccuracyStats(days: number = 7) {
-    return this.cachedAgg(`accuracy:sys:${days}`, this.TTL_ACCURACY_AGG, () =>
-      this.computeSystemAccuracyStats(days),
+    // `v2`: PAR-912 changed which rows the MAE averages.
+    return this.cachedAgg(
+      `accuracy:sys:v2:${days}`,
+      this.TTL_ACCURACY_AGG,
+      () => this.computeSystemAccuracyStats(days),
     );
   }
 
@@ -1531,14 +1813,15 @@ export class PredictionAccuracyService {
       .addSelect("SUM(pa.actual_wait_time)", "sumActual")
       .addSelect("SUM(POWER(pa.actual_wait_time, 2))", "sumSqActual")
       .where("pa.target_time >= :startDate", { startDate })
-      .andWhere("pa.actual_wait_time IS NOT NULL")
-      .andWhere(
-        `(pa.actual_wait_time >= 5 OR (pa.actual_wait_time >= 0 AND NOT ${PARK_DAY_IS_CLOSED_SQL}))`,
-      )
-      .andWhere("pa.actual_wait_time <= :maxWait", {
-        maxWait: MAX_PLAUSIBLE_WAIT_TIME,
-      })
-      .andWhere('pa."wasUnplannedClosure" = false') // Exclude random closures
+      // Only slots that are forecast errors (PAR-912). This used to admit every
+      // 0 on a day the park was not shut — and 65–70 % of the hourly COMPLETED
+      // rows had an actual of 0, mostly rides that were not running or publish
+      // no wait at all, which put CatBoost at MAE 11–12 / bias +10. A real
+      // 0-minute wait on a ride that publishes waits still counts.
+      .andWhere(scoredSlotSql("pa", MAX_PLAUSIBLE_WAIT_TIME))
+      // Kept beside it: a 0 on a day the park's calendar calls shut is a
+      // feed's around-the-clock placeholder (PAR-692), whatever the ride says.
+      .andWhere(`(pa.actual_wait_time >= 5 OR NOT ${PARK_DAY_IS_CLOSED_SQL})`)
       .getRawOne();
     const matchedCount = parseInt(statsResult.matchedCount || "0", 10);
     const mae = parseFloat(parseFloat(statsResult.mae || "0").toFixed(1));
@@ -1592,15 +1875,20 @@ export class PredictionAccuracyService {
       .getRawOne();
 
     // 4. Breakdown by Prediction Type
+    // `matched` is the checked share (COMPLETED), as `overall.coveragePercent`
+    // counts it — a slot found closed was verified, it is just not an error.
+    // `mae` is over forecast errors only (PAR-912); it used to average every
+    // compared row, closures and status-only zeros included.
+    const scored = scoredSlotSql("pa", MAX_PLAUSIBLE_WAIT_TIME);
     const typeStatsRaw = await this.accuracyRepository
       .createQueryBuilder("pa")
       .select("pa.predictionType", "type")
       .addSelect("COUNT(*)", "total")
-      .addSelect("COUNT(pa.actualWaitTime)", "matched")
       .addSelect(
-        "AVG(CASE WHEN pa.actualWaitTime IS NOT NULL THEN pa.absoluteError ELSE NULL END)",
-        "mae",
+        "COUNT(*) FILTER (WHERE pa.comparison_status = 'COMPLETED')",
+        "matched",
       )
+      .addSelect(`AVG(pa.absolute_error) FILTER (WHERE ${scored})`, "mae")
       .where("pa.targetTime >= :startDate", { startDate })
       .groupBy("pa.predictionType")
       .getRawMany();
@@ -1636,9 +1924,12 @@ export class PredictionAccuracyService {
         // Tracked only if rows exist AND at least one was matched to an actual.
         const tracked = total > 0 && matched > 0;
         byType[type as "HOURLY" | "DAILY"] = {
-          mae: tracked
-            ? parseFloat(parseFloat(row.mae || "0").toFixed(1))
-            : null,
+          // null, never 0, when every checked slot was a closure or carried
+          // no wait: nothing was scored, which is not a perfect score.
+          mae:
+            tracked && row.mae != null
+              ? parseFloat(parseFloat(row.mae).toFixed(1))
+              : null,
           totalPredictions: total,
           coveragePercent: tracked
             ? parseFloat(((matched / total) * 100).toFixed(1))
@@ -1710,6 +2001,43 @@ export class PredictionAccuracyService {
       delta: catboostMae != null ? round1(catboostMae - mae) : null,
       days,
     };
+  }
+
+  /**
+   * Raw CatBoost hourly accuracy on scored slots only, per model version plus
+   * an all-versions row, with the coverage of the served median and of the
+   * stored q0.8 / q0.95 (PAR-912). Read-through cached like its siblings; the
+   * key is versioned because it is new and its rows changed meaning with the
+   * scoring rule.
+   */
+  async getOperatingAccuracy(days: number = 7): Promise<OperatingAccuracy> {
+    return this.cachedAgg(
+      `accuracy:operating:v1:${days}`,
+      this.TTL_ACCURACY_AGG,
+      async () => {
+        const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        const rows: OperatingAccuracySqlRow[] =
+          await this.accuracyRepository.query(
+            `SELECT pa."modelVersion" AS model_version,
+                    GROUPING(pa."modelVersion") AS is_total,
+                    COUNT(*) AS n,
+                    AVG(pa.absolute_error) AS mae,
+                    AVG(pa.predicted_wait_time - pa.actual_wait_time) AS bias,
+                    AVG((pa.actual_wait_time <= pa.predicted_wait_time)::int) AS cov50,
+                    COUNT(pa.predicted_q80) AS n_q80,
+                    AVG((pa.actual_wait_time <= pa.predicted_q80)::int) AS cov80,
+                    COUNT(pa.predicted_q95) AS n_q95,
+                    AVG((pa.actual_wait_time <= pa.predicted_q95)::int) AS cov95
+               FROM prediction_accuracy pa
+              WHERE pa.target_time >= $1
+                AND pa."predictionType" = 'hourly'
+                AND ${scoredSlotSql("pa", MAX_PLAUSIBLE_WAIT_TIME)}
+              GROUP BY GROUPING SETS ((pa."modelVersion"), ())`,
+            [startDate],
+          );
+        return { days, rows: operatingAccuracyRows(rows) };
+      },
+    );
   }
 
   /**

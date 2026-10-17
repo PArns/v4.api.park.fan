@@ -4,7 +4,11 @@ import {
   PARK_DAY_IS_CLOSED_SQL,
   PredictionAccuracyService,
 } from "./prediction-accuracy.service";
-import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
+import {
+  PredictionAccuracy,
+  scoredSlotSql,
+} from "../entities/prediction-accuracy.entity";
+import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
 import { AttractionAccuracyStats } from "../entities/attraction-accuracy-stats.entity";
 import { WaitTimePrediction } from "../entities/wait-time-prediction.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
@@ -51,6 +55,8 @@ describe("PredictionAccuracyService", () => {
   const predictionRepo = { findOne: jest.fn(), find: jest.fn() };
   const queueDataRepo = {
     findOne: jest.fn(),
+    // The two PAR-912 lookups (ride ran earlier today, ride publishes waits).
+    query: jest.fn().mockResolvedValue([]),
     createQueryBuilder: jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
@@ -71,6 +77,7 @@ describe("PredictionAccuracyService", () => {
   beforeEach(async () => {
     redisStore.clear();
     jest.clearAllMocks();
+    queueDataRepo.query.mockImplementation(() => Promise.resolve([]));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -201,6 +208,42 @@ describe("PredictionAccuracyService", () => {
             String(args[0]).includes(`NOT ${PARK_DAY_IS_CLOSED_SQL}`),
         ),
       ).toBe(true);
+    });
+
+    // PAR-912: the overall MAE used to admit every 0 on a day the park was not
+    // shut, and the HOURLY breakdown averaged every compared row — closures and
+    // status-only zeros included (10.1 vs 6.9 over the same 7 days).
+    it("averages forecast errors only, in the overall figure and the HOURLY breakdown", async () => {
+      const calls: Array<[string, unknown[]]> = [];
+      (accuracyRepo as any).count = jest.fn().mockResolvedValue(0);
+      const original = accuracyRepo.createQueryBuilder.getMockImplementation();
+      accuracyRepo.createQueryBuilder.mockImplementation(
+        () => recordingBuilder(calls) as any,
+      );
+      try {
+        await (service as any).computeSystemAccuracyStats(7);
+      } finally {
+        accuracyRepo.createQueryBuilder.mockImplementation(original!);
+      }
+
+      const scored = scoredSlotSql("pa", MAX_PLAUSIBLE_WAIT_TIME);
+      expect(
+        calls.some(([m, args]) => m === "andWhere" && args[0] === scored),
+      ).toBe(true);
+      expect(
+        calls.some(
+          ([m, args]) =>
+            m === "addSelect" &&
+            args[1] === "mae" &&
+            String(args[0]).includes(`FILTER (WHERE ${scored})`),
+        ),
+      ).toBe(true);
+      // The old "every 0 on an open day" clause is gone.
+      expect(
+        calls.some(([, args]) =>
+          String(args[0]).includes("pa.actual_wait_time >= 0"),
+        ),
+      ).toBe(false);
     });
 
     it("calls a day CLOSED only when no OPERATING row shares it", () => {
@@ -348,6 +391,47 @@ describe("PredictionAccuracyService", () => {
       // Undefined, not null: the column stays out of the statement entirely.
       expect(withoutServed[0].servedWaitTime).toBeUndefined();
       expect(withoutServed[0].servedSource).toBeUndefined();
+      // No quantiles handed over → written as NULL, never left stale.
+      expect(withServed[0].predictedQ80).toBeNull();
+      expect(withoutServed[0].predictedQ95).toBeNull();
+    });
+
+    it("writes q0.8/q0.95 on every row, served or not (PAR-912)", async () => {
+      const at = (h: number) =>
+        ({
+          attractionId: `a-${h}`,
+          createdAt: new Date(),
+          predictedTime: new Date(`2026-07-01T${h}:00:00Z`),
+          predictedWaitTime: 30,
+          modelVersion: "v1",
+          predictionType: "hourly",
+          features: {},
+        }) as unknown as WaitTimePrediction;
+
+      await service.recordPredictions(
+        [at(10), at(11), at(12)],
+        [{ wait: 55, source: "pcn" }, null, null],
+        [{ q80: 41, q95: 70 }, null, { q80: 12, q95: null }],
+      );
+
+      const rows = accuracyRepo.upsert.mock.calls.flatMap(
+        ([batch]) => batch as Array<Record<string, unknown>>,
+      );
+      const byId = Object.fromEntries(rows.map((r) => [r.attractionId, r]));
+      // Latest-write semantics, like predicted_wait_time: a run without a value
+      // writes NULL instead of leaving an older run's quantile beside its median.
+      expect(byId["a-10"]).toMatchObject({
+        predictedQ80: 41,
+        predictedQ95: 70,
+      });
+      expect(byId["a-11"]).toMatchObject({
+        predictedQ80: null,
+        predictedQ95: null,
+      });
+      expect(byId["a-12"]).toMatchObject({
+        predictedQ80: 12,
+        predictedQ95: null,
+      });
     });
   });
 
@@ -459,6 +543,21 @@ describe("PredictionAccuracyService", () => {
     const lastCheck = () =>
       JSON.parse(redisStore.get("ml:last-accuracy-check") ?? "{}");
 
+    /**
+     * Answers the two PAR-912 lookups: which CLOSED rows' ride had already run
+     * that park-local day (by row id), and which rides published a wait above 0
+     * in the last seven days (by attraction id).
+     */
+    const facts = (f: { ranEarlierToday?: string[]; withSignal?: string[] }) =>
+      queueDataRepo.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          (sql.includes("date_trunc")
+            ? (f.ranEarlierToday ?? [])
+            : (f.withSignal ?? [])
+          ).map((id) => ({ id })),
+        ),
+      );
+
     it("returns 0 and writes the check marker when nothing is ready", async () => {
       accuracyRepo.find.mockResolvedValueOnce([]);
 
@@ -493,28 +592,151 @@ describe("PredictionAccuracyService", () => {
       expect(lastCheck().newComparisonsAdded).toBe(1);
     });
 
-    it("leaves percentageError null when the actual wait is 0", async () => {
+    it("scores a real 0-minute wait, with percentageError null, on a ride that publishes waits", async () => {
       const p = pending({ predictedWaitTime: 15 });
       arrange([p], [actual("a-1", p.targetTime, "OPERATING", 0)]);
+      facts({ withSignal: ["a-1"] });
 
       await service.compareWithActuals();
 
       expect(p.comparisonStatus).toBe("COMPLETED");
+      expect((p as Record<string, unknown>).scoreClass).toBe("scored");
+      expect(p.actualWaitTime).toBe(0);
       expect(p.absoluteError).toBe(15);
       expect(p.percentageError).toBeNull();
     });
 
-    it("counts CLOSED at the target time as an unplanned closure with the full predicted error", async () => {
+    it("counts CLOSED after the ride had run that day as an unplanned closure with the full predicted error", async () => {
       const p = pending({ predictedWaitTime: 25 });
       arrange([p], [actual("a-1", p.targetTime, "CLOSED", null)]);
+      facts({ ranEarlierToday: ["p"] });
 
       const res = await service.compareWithActuals();
 
       expect(res.newComparisons).toBe(1);
       expect(p.wasUnplannedClosure).toBe(true);
+      expect((p as Record<string, unknown>).scoreClass).toBe(
+        "unplanned_closure",
+      );
       expect(p.actualWaitTime).toBe(0);
       expect(p.absoluteError).toBe(25);
       expect(p.percentageError).toBeNull();
+    });
+
+    // PAR-912: 65-70 % of the compared hourly rows had an actual of 0. These
+    // are the classes that are not forecast errors.
+    it("does not score CLOSED before the ride's first run of the day — it was not scheduled to run", async () => {
+      const p = pending({ predictedWaitTime: 25, servedWaitTime: 30 });
+      arrange([p], [actual("a-1", p.targetTime, "CLOSED", null)]);
+      facts({ ranEarlierToday: [] });
+
+      const res = await service.compareWithActuals();
+
+      expect(res.newComparisons).toBe(1); // checked, so it counts as covered
+      expect(p.comparisonStatus).toBe("COMPLETED");
+      expect((p as Record<string, unknown>).scoreClass).toBe(
+        "ride_not_operating",
+      );
+      expect(p.wasUnplannedClosure).toBe(false);
+      expect(p.actualWaitTime).toBeNull();
+      expect(p.absoluteError).toBeNull();
+      expect((p as Record<string, unknown>).servedAbsoluteError).toBeNull();
+    });
+
+    it("does not score REFURBISHMENT, and asks no lookup for it", async () => {
+      const p = pending({ predictedWaitTime: 25 });
+      arrange([p], [actual("a-1", p.targetTime, "REFURBISHMENT", null)]);
+
+      await service.compareWithActuals();
+
+      expect((p as Record<string, unknown>).scoreClass).toBe(
+        "ride_not_operating",
+      );
+      expect(p.actualWaitTime).toBeNull();
+      expect(queueDataRepo.query).not.toHaveBeenCalled();
+    });
+
+    it("keeps DOWN an unplanned closure even before the ride's first run", async () => {
+      const p = pending({ predictedWaitTime: 40 });
+      arrange([p], [actual("a-1", p.targetTime, "DOWN", null)]);
+
+      await service.compareWithActuals();
+
+      expect((p as Record<string, unknown>).scoreClass).toBe(
+        "unplanned_closure",
+      );
+      expect(p.wasUnplannedClosure).toBe(true);
+      expect(p.absoluteError).toBe(40);
+    });
+
+    it("does not score OPERATING 0 on a ride that publishes no wait at all", async () => {
+      const p = pending({ predictedWaitTime: 15 });
+      arrange([p], [actual("a-1", p.targetTime, "OPERATING", 0)]);
+      facts({ withSignal: [] });
+
+      await service.compareWithActuals();
+
+      expect(p.comparisonStatus).toBe("COMPLETED");
+      expect((p as Record<string, unknown>).scoreClass).toBe("no_wait_signal");
+      expect(p.actualWaitTime).toBeNull();
+      expect(p.absoluteError).toBeNull();
+    });
+
+    it("takes the wait signal from the batch's own readings without a lookup", async () => {
+      const early = pending({ id: "early", targetTime: target(100) });
+      const late = pending({ id: "late", targetTime: target(40) });
+      arrange(
+        [early, late],
+        [
+          actual("a-1", early.targetTime, "OPERATING", 25),
+          actual("a-1", late.targetTime, "OPERATING", 0),
+        ],
+      );
+
+      await service.compareWithActuals();
+
+      expect((late as Record<string, unknown>).scoreClass).toBe("scored");
+      expect(late.actualWaitTime).toBe(0);
+      expect(queueDataRepo.query).not.toHaveBeenCalled();
+    });
+
+    it("treats an unknown reading status as no reading, never a closure", async () => {
+      const young = pending({ id: "young", targetTime: target(60) });
+      const old = pending({ id: "old", targetTime: target(180) });
+      arrange(
+        [old, young],
+        [
+          actual("a-1", old.targetTime, "UNKNOWN", null),
+          actual("a-1", young.targetTime, "UNKNOWN", null),
+        ],
+      );
+
+      const res = await service.compareWithActuals();
+
+      expect(young.comparisonStatus).toBe("PENDING");
+      expect(old.comparisonStatus).toBe("MISSED");
+      expect(old.wasUnplannedClosure).toBe(false);
+      expect(res.newComparisons).toBe(0);
+    });
+
+    it("asks the ran-earlier-today lookup for CLOSED rows only, in the park's day", async () => {
+      const shut = pending({ id: "shut", attractionId: "a-2" });
+      const open = pending({ id: "open", attractionId: "a-1" });
+      arrange(
+        [shut, open],
+        [
+          actual("a-2", shut.targetTime, "CLOSED", null),
+          actual("a-1", open.targetTime, "OPERATING", 20),
+        ],
+      );
+
+      await service.compareWithActuals();
+
+      expect(queueDataRepo.query).toHaveBeenCalledTimes(1);
+      const [sql, args] = queueDataRepo.query.mock.calls[0];
+      expect(sql).toContain("AT TIME ZONE p.timezone");
+      expect(sql).toContain("q.timestamp < u.t");
+      expect(args).toEqual([["shut"], ["a-2"], [shut.targetTime]]);
     });
 
     it("does not fabricate a 0-wait row for OPERATING without a wait value", async () => {
@@ -597,7 +819,8 @@ describe("PredictionAccuracyService", () => {
       const [missedSql, missedArgs] = accuracyRepo.query.mock.calls[0];
       expect(missedSql).toContain("MISSED");
       expect(missedArgs).toEqual([["gone"]]);
-      const [, completedArgs] = accuracyRepo.query.mock.calls[1];
+      const [completedSql, completedArgs] = accuracyRepo.query.mock.calls[1];
+      expect(completedSql).toContain("score_class          = u.score_class");
       expect(completedArgs).toEqual([
         ["done"],
         [30],
@@ -606,6 +829,7 @@ describe("PredictionAccuracyService", () => {
         [false],
         // No served value recorded (a pre-PAR-854 row) → no served error.
         [null],
+        ["scored"],
       ]);
     });
 
@@ -635,6 +859,7 @@ describe("PredictionAccuracyService", () => {
         servedWaitTime: 45,
       });
       arrange([row], [actual("a-1", row.targetTime, "CLOSED", null)]);
+      facts({ ranEarlierToday: ["shut"] });
 
       await service.compareWithActuals();
 

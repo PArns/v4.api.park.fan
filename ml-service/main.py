@@ -234,6 +234,12 @@ class PredictionResponse(BaseModel):
     # extra='ignore', and `PredictionResponse(**p)` at :545 silently discards
     # anything predict.py sets that this class does not declare.
     uncertaintyMinutes: Optional[int] = None
+    # The model's raw q0.8 / q0.95 in whole minutes (PAR-912) — stored by the API
+    # beside the served median in prediction_accuracy so their live coverage can
+    # be measured. Internal: the API strips them from every served read. None
+    # without a quantile head.
+    predictedQ80: Optional[int] = None
+    predictedQ95: Optional[int] = None
     trend: str = "stable"  # "increasing", "decreasing", "stable"
     crowdLevel: str
     baseline: float

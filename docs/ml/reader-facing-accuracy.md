@@ -4,6 +4,12 @@
 forecast. Each must measure the forecast that reader was actually shown — not
 the model that happens to write the table the number used to come from.
 
+Which compared slots count as an error at all — a ride not scheduled to run, or
+a feed that publishes no wait, is not one — is
+[Which compared slot is a forecast error](accuracy-scoring-rule.md) (PAR-912).
+The badge and `raw_mae` already excluded every such slot through their
+`actual ≥ 5` filter and are unchanged by it.
+
 | Figure | Surface | Forecast it describes | Scored from |
 | --- | --- | --- | --- |
 | `leadTimeMae` | `/plan/day` | the **served** daily level: TFT for headliners over days 1–60, CatBoost elsewhere | `prediction_lead_snapshots`, rows with `source` set |
