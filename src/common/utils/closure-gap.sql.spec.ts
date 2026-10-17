@@ -108,9 +108,16 @@ describe("closure-gap statements", () => {
     const earlyEnd = cteBody(CURRENT_CLOSURE_GAP_SQL, "early_end");
 
     // 1. "Open earlier the same day" compares two operating days.
+    //    The reading's day from its window; the closure's from run_window,
+    //    which reads win as well (PAR-913 follow-up). Outside every window a
+    //    reading is placed by night_mid, never by its calendar date.
     expect(openToday).toMatch(/LEFT JOIN win wr\b/);
-    expect(openToday).toMatch(/LEFT JOIN win ws\b/);
-    expect(openToday).toMatch(/COALESCE\(wr\.op_day,[\s\S]{0,60}?::date\)/);
+    expect(openToday).toMatch(/JOIN run_window s\b/);
+    expect(openToday).toMatch(/wr\.op_day = s\.op_day/);
+    expect(openToday).toMatch(/wr\.op_day IS NULL AND r\.ts >= s\.night_mid/);
+    expect(cteBody(CURRENT_CLOSURE_GAP_SQL, "win_prev")).toContain(
+      "FROM win w",
+    );
     expect(openToday).not.toMatch(/AT TIME ZONE [^)]+\)::date\s*\n?\s*=\s*\(/);
 
     // 2. Both day-end CTEs read win instead of scanning the table again.
@@ -310,18 +317,30 @@ describe("closure-gap statements", () => {
     expect(openToday).toContain(`INTERVAL '${MIN_GAP_MINUTES} minutes'`);
   });
 
-  it("measures the last-hour margin against the window the closure started in (PAR-913)", () => {
+  it("measures the last-hour margin against the closure's own window (PAR-913)", () => {
     // Against today's close (po.closes_at) a closure that began after
-    // YESTERDAY's close passed, and stood on the page all the next day. The
-    // nightly statement asks the start's own window (window_closes_at); the
-    // live one asks the same question now.
+    // YESTERDAY's close passed, and stood on the page all the next day.
     const openToday = cteBody(CURRENT_CLOSURE_GAP_SQL, "open_today");
     expect(openToday).toMatch(
       new RegExp(
-        `ws\\.closes_at >= s\\.started_at\\s+\\+ INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'`,
+        `s\\.closes_at >= s\\.started_at\\s+\\+ INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'`,
       ),
     );
     expect(openToday).not.toMatch(/po\.closes_at >=/);
+  });
+
+  it("clips a pre-opening start to the opening of the same day's window, and only that day's", () => {
+    const runWindow = cteBody(CURRENT_CLOSURE_GAP_SQL, "run_window");
+    expect(runWindow).toContain(
+      "GREATEST(s.started_at, w.opens_at) AS started_at",
+    );
+    expect(runWindow).toMatch(
+      /w\.op_day = \(s\.started_at AT TIME ZONE \$2\)::date/,
+    );
+    // Simultaneity stays on the minute the rides flipped.
+    expect(cteBody(CURRENT_CLOSURE_GAP_SQL, "open_today")).toContain(
+      "date_trunc('minute', s.raw_started_at)",
+    );
   });
 
   it("leaves free-flow rides out of both statements (PAR-913)", () => {
