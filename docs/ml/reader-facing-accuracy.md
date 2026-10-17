@@ -7,7 +7,7 @@ the model that happens to write the table the number used to come from.
 | Figure | Surface | Forecast it describes | Scored from |
 | --- | --- | --- | --- |
 | `leadTimeMae` | `/plan/day` | the **served** daily level: TFT for headliners over days 1–60, CatBoost elsewhere | `prediction_lead_snapshots`, rows with `source` set |
-| accuracy badge (`badge`, `last30Days.mae`) | attraction detail | the **served** intraday wait: PCN + §7.7 persistence blend when `SERVE_PCN_INTRADAY=true`, CatBoost otherwise | `prediction_accuracy.served_*` → `attraction_accuracy_stats.mae` |
+| accuracy badge (`badge`, `last30Days.mae`) | attraction detail | the **served** intraday wait: PCN + §7.7 persistence blend when `SERVE_PCN_INTRADAY=true`, CatBoost otherwise; `served_source = chronos` where Chronos-2 served the scored slot (PAR-911 — rare at the 2-hour scored lead, see forward-archive.md §10.4) | `prediction_accuracy.served_*` → `attraction_accuracy_stats.mae` |
 | `forecastError` | ride day curve (`/stats/day`) | **raw CatBoost** — the curve plots `wait_time_predictions` | `prediction_accuracy.absolute_error` → `attraction_accuracy_stats.raw_mae` |
 
 The admin boards (`/v1/ml/accuracy/*`, the dashboard, drift) keep scoring raw

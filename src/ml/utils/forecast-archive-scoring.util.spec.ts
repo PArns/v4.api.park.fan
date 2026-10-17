@@ -672,6 +672,61 @@ describe("Chronos-2 shadow surfaces (PAR-852)", () => {
     // rideQ90 20 < 45: no busy segment, not a headliner.
     expect(paired.entries().map((e) => e.segment)).not.toContain("busy");
   });
+  // PAR-911: once Chronos is served, park_hourly carries it on 45–120 min and
+  // the incumbent (surface 8) is what the shadow must be paired with.
+  it("pairs live with the incumbent when it was archived, not with the served copy of itself", () => {
+    const paired = new PairedAccumulator();
+    scorePairedShadows(
+      [
+        curve("park_hourly", [null, 30, 35, 40, 45], "-ssss"),
+        curve("park_hourly_incumbent", [20, 20, 20, 20, 20], "ppppp"),
+        curve("chronos_live", [null, 30, 35, 40, 45], "-xxxx"),
+      ],
+      truth,
+      paired,
+    );
+    const served = paired
+      .entries()
+      .find(
+        (e) =>
+          e.reference === "served" &&
+          e.segment === "all" &&
+          e.lead === "h0-1" &&
+          e.model === "chronos2",
+      );
+    expect(served).toMatchObject({
+      n: 4,
+      saeModel: 0,
+      saeRef: 10 + 15 + 20 + 25,
+    });
+  });
+
+  it("scores the incumbent under its own source and never into all", () => {
+    const acc = new ScoreAccumulator();
+    scoreParkDay(
+      {
+        region: "EU",
+        curves: [
+          curve("park_hourly", [null, 30, 35, 40, 45], "-ssss"),
+          curve("park_hourly_incumbent", [20, 20, 20, 20, 20], "ppppp"),
+        ],
+        parkDays: [],
+        truth,
+        hadWindows: false,
+        calendarDayValue: null,
+      },
+      acc,
+    );
+    expect(sumsOf(acc, "EU|UC1|h0-1|incumbent|all")).toMatchObject({
+      n: 4,
+      sae: 10 + 15 + 20 + 25,
+    });
+    // `all` is the served curve alone, its Chronos slots under their own code.
+    expect(sumsOf(acc, "EU|UC1|h0-1|all|all")).toMatchObject({ n: 4, sae: 0 });
+    expect(sumsOf(acc, "EU|UC1|h0-1|chronos2_served|all")).toMatchObject({
+      n: 4,
+    });
+  });
 });
 
 describe("scoreCrossParkCrowd (D6 pairs)", () => {

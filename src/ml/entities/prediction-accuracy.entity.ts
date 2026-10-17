@@ -88,16 +88,17 @@ export class PredictionAccuracy {
   @Column({ name: "served_wait_time", type: "int", nullable: true })
   servedWaitTime: number | null;
 
-  /** Which model produced {@link servedWaitTime}: `pcn` (override + blend) or
-   *  `catboost` (flag off, no PCN forecast for the slot, or PCN stale). NULL
-   *  exactly when `servedWaitTime` is. */
+  /** Which model produced {@link servedWaitTime}: `pcn` (override + blend),
+   *  `chronos` (the Chronos-2 30–120 min window, PAR-911) or `catboost` (flags
+   *  off, no forecast for the slot, or stale). NULL exactly when
+   *  `servedWaitTime` is. A varchar, so the new value needs no migration. */
   @Column({
     name: "served_source",
     type: "varchar",
     length: 16,
     nullable: true,
   })
-  servedSource: "pcn" | "catboost" | null;
+  servedSource: "pcn" | "chronos" | "catboost" | null;
 
   /** |servedWaitTime − actualWaitTime|, filled by the comparison job beside
    *  `absoluteError`. An unplanned closure charges the full served wait, as it

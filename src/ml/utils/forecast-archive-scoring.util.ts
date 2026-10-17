@@ -349,6 +349,13 @@ export const CHRONOS_SOURCES: Partial<Record<ArchiveSurface, string>> = {
   chronos_grid: "chronos2_grid",
 };
 
+/**
+ * The incumbent served curve (PAR-911), captured only while Chronos is served:
+ * scored on the served use case and slot leads under its own source, never
+ * into `all` — the slots it covers are `park_hourly`'s a second time.
+ */
+export const INCUMBENT_SOURCE = "incumbent";
+
 // `composed_h5` is not here: the plain H5 profile uses no day level at all.
 const LEVEL_DERIVED = new Set(["composed", "composed_h5_tft", "climatology"]);
 
@@ -637,7 +644,9 @@ export function scoreParkDay(
     // source and never "all".
     const composerShadow = SHADOW_SOURCES[curve.surface] ?? null;
     const shadowSource =
-      composerShadow ?? CHRONOS_SOURCES[curve.surface] ?? null;
+      composerShadow ??
+      CHRONOS_SOURCES[curve.surface] ??
+      (curve.surface === "park_hourly_incumbent" ? INCUMBENT_SOURCE : null);
     if (shadowSource) {
       for (const c of compared) {
         c.src = shadowSource;
@@ -645,7 +654,9 @@ export function scoreParkDay(
     }
     // Scored on slot leads after the origin (UC1/UC2), not on day leads.
     const slotLeads =
-      curve.surface === "park_hourly" || curve.surface === "chronos_live";
+      curve.surface === "park_hourly" ||
+      curve.surface === "park_hourly_incumbent" ||
+      curve.surface === "chronos_live";
     // Surfaces whose `bands` hold a per-slot q95 − q50.
     const slotBand = slotLeads || curve.surface === "chronos_grid";
 
@@ -975,8 +986,17 @@ export function scorePairedShadows(
     const ref = (surface: ArchiveSurface) =>
       byKey.get(`${curve.originAt}|${curve.attractionId}|${surface}`);
     const live = curve.surface === "chronos_live";
+    // `served` for the live shadow is the INCUMBENT (PAR-911): while Chronos
+    // is not served that is `park_hourly` itself; once it is, park_hourly
+    // carries Chronos on 45–120 min and pairing with it would compare the
+    // shadow with its own served copy, so the incumbent surface is used.
     const refs: Array<{ name: string; curve: ArchivedCurve | undefined }> = live
-      ? [{ name: "served", curve: ref("park_hourly") }]
+      ? [
+          {
+            name: "served",
+            curve: ref("park_hourly_incumbent") ?? ref("park_hourly"),
+          },
+        ]
       : [
           { name: "served", curve: ref("plan_day") },
           { name: "h5", curve: ref("plan_day_shadow_h5") },
