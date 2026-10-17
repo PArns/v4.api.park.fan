@@ -1078,21 +1078,71 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        AND qd.timestamp <= $3::timestamptz
      GROUP BY 1
   ),
+  -- Which window each closure belongs to, and where it starts on the page.
+  --
+  -- The window that contains the start, or else the first window that opens
+  -- LATER ON THE SAME park-local day. The second case is a ride that went
+  -- CLOSED before the opening and never came back (PAR-913): Phantasialand's
+  -- Pferdekarussell ran a pre-opening cycle at 08:05, read CLOSED from 08:55,
+  -- and was still CLOSED at 12:55 in a park open since 09:00. Requiring the
+  -- start inside a window dropped it, and „not run yet today" counts the 08:05
+  -- reading as a run, so the ride stood on the page as a bare GESCHLOSSEN. It is
+  -- an outage of the operating day, and it starts when that day does:
+  -- started_at is clipped to the window's opening, so neither the line nor
+  -- the elapsed minutes the curve is read at name a minute the park was shut.
+  --
+  -- A start AFTER the day's last close finds no window: the next window opens
+  -- on another date. That is the other half of PAR-913 (Die 3 Mausketiere,
+  -- CLOSED from Friday 18:05, after an 18:00 close), and it stays dropped —
+  -- „not run yet today" speaks for that ride the next morning.
+  --
+  -- night_mid is where "today" begins for a reading outside every window,
+  -- the same instant NOT_RUN_TODAY_SQL uses: halfway between the previous
+  -- close and this window's opening. A feed often reads a ride OPERATING once
+  -- more after the close, and that reading belongs to the evening, not to the
+  -- morning that follows — without this, a ride carried OPERATING to 01:00 and
+  -- CLOSED at 01:50 would be clipped into the next day's opening as a fault.
+  -- With no previous window on file it is the window's park-local midnight,
+  -- which is exactly the calendar-date test this replaced.
+  --
+  -- No LATERAL (the "hoists the day close" spec forbids one in either
+  -- statement): the previous close is a LAG over win, which is disjoint and
+  -- one park's, and the window per closure is a DISTINCT ON over a join.
+  win_prev AS (
+    SELECT w.opens_at, w.closes_at, w.op_day,
+           lag(w.closes_at) OVER (ORDER BY w.opens_at) AS prev_close
+      FROM win w
+  ),
+  run_window AS (
+    SELECT DISTINCT ON (s.aid)
+           s.aid,
+           s.started_at                       AS raw_started_at,
+           GREATEST(s.started_at, w.opens_at) AS started_at,
+           w.closes_at,
+           w.op_day,
+           COALESCE(w.prev_close + (w.opens_at - w.prev_close) / 2,
+                    w.op_day::timestamp AT TIME ZONE $2) AS night_mid
+      FROM run_start s
+      JOIN win_prev w
+        ON w.closes_at > s.started_at
+       AND (w.opens_at <= s.started_at
+            OR w.op_day = (s.started_at AT TIME ZONE $2)::date)
+     ORDER BY s.aid, w.opens_at
+  ),
   -- Was it OPERATING earlier the same park-local OPERATING day?
   --
   -- The two per-ride gates below used to sit in the final WHERE, after the
   -- three historical CTEs had read the whole window for every ride that got
-  -- this far.
-  -- Both are functions of s.started_at and the window it started in alone, so they belong
-  -- where they can still remove a ride cheaply. It is the same cheap-test-last
-  -- shape as the two pseudoconstants, one level down, and it is worst at the
-  -- moment a blind park is closing: every ride winds down, enters run_start
-  -- and open_today, and has the window materialised for it a moment before
-  -- MIN_PARK_MINUTES_LEFT throws it away.
+  -- this far. Both are functions of the closure's start and its window alone,
+  -- so they belong where they can still remove a ride cheaply. It is the same
+  -- cheap-test-last shape as the two pseudoconstants, one level down, and it
+  -- is worst at the moment a blind park is closing: every ride winds down,
+  -- enters run_start and open_today, and has the window materialised for it a
+  -- moment before MIN_PARK_MINUTES_LEFT throws it away.
   open_today AS (
     SELECT DISTINCT r.aid
       FROM recent r
-      JOIN run_start s ON s.aid = r.aid
+      JOIN run_window s ON s.aid = r.aid
       CROSS JOIN park_open po
       -- The most selective gate in the statement, and it used to sit in the
       -- final WHERE below three CTEs that had already read the window for every
@@ -1101,48 +1151,38 @@ export const CURRENT_CLOSURE_GAP_SQL = `
       -- duration gates pass, all 40 are materialised, and every row is thrown
       -- away at closers = 40. Materialisation happens for the whole CTE the
       -- moment it is first demanded, so no join order rescues it.
+      --
+      -- On the RAW start: simultaneity is about the minute the rides flipped,
+      -- not about where the page starts the line.
       JOIN park_closers sm
-        ON sm.minute = date_trunc('minute', s.started_at)
+        ON sm.minute = date_trunc('minute', s.raw_started_at)
        AND sm.closers <= ${MAX_SIMULTANEOUS_CLOSERS}
-      -- The operating day of each side of the comparison below, from the WINDOW
-      -- that contains it rather than from the calendar — the rule
-      -- park-open-window.sql §3 states and the nightly twin's gap_edges already
-      -- applies.
-      --
-      -- LEFT, with the calendar day as the fallback, for the same two reasons
-      -- gap_edges gives. It keeps the population identical outside opening
-      -- hours, which matters more here than there: queue_data is a change log,
-      -- so a ride reads OPERATING for hours after its park shuts, and an INNER
-      -- join would drop those readings from every park rather than re-key them
-      -- in the few that close late.
-      --
-      -- No park_id predicate: park_tz is a single row built from $4, so every
-      -- win row is this park's.
+      -- The operating day of the OPERATING reading, from the WINDOW that
+      -- contains it — the rule park-open-window.sql §3 states and the nightly
+      -- twin's gap_edges applies. No park_id predicate: park_tz is a single
+      -- row built from $4, so every win row is this park's.
       LEFT JOIN win wr
         ON r.ts >= wr.opens_at AND r.ts < wr.closes_at
-      LEFT JOIN win ws
-        ON s.started_at >= ws.opens_at AND s.started_at < ws.closes_at
      WHERE r.st = 'OPERATING'
-       AND r.ts < s.started_at
-       -- Was it OPERATING earlier the same OPERATING day. Read off the calendar
-       -- instead, a park that closes after midnight keeps this gate shut all
-       -- night: park_open normalizes and returns a row at 00:30, and this line
-       -- threw the ride out anyway because its last OPERATING reading carried
-       -- yesterday's date.
-       AND COALESCE(wr.op_day, (r.ts AT TIME ZONE $2)::date)
-         = COALESCE(ws.op_day, (s.started_at AT TIME ZONE $2)::date)
+       AND r.ts < s.raw_started_at
+       -- Was it OPERATING earlier the same OPERATING day. Inside a window that
+       -- is the window's day; outside every window (a pre-opening test run,
+       -- or the reading a feed leaves standing after the close) it is "after
+       -- the middle of the night before this window" — see run_window. The
+       -- calendar date it used to fall back on let a reading at 01:00 count
+       -- for the day that opens at 12:00.
+       AND (wr.op_day = s.op_day
+            OR (wr.op_day IS NULL AND r.ts >= s.night_mid))
        -- Winding down with the park is not breaking — measured against the
-       -- window the closure STARTED in, which is what the nightly statement's
-       -- mid_day asks (window_closes_at). It used to read po.closes_at, today's
-       -- close: a ride that went CLOSED after yesterday's closing time and was
-       -- never seen again passed against TODAY's evening, and stood on the page
-       -- as „steht seit Freitag, 18:05 still" all of Saturday (PAR-913). A start
-       -- outside every published window has ws NULL and fails here, as it does
-       -- at night; „not run yet today" (NOT_RUN_TODAY_SQL) is that ride's line.
-       AND ws.closes_at >= s.started_at
+       -- closure's own window, which is what the nightly statement's mid_day
+       -- asks (window_closes_at). It used to read po.closes_at, today's close,
+       -- and a ride that went CLOSED after yesterday's closing time passed
+       -- against TODAY's evening (PAR-913).
+       AND s.closes_at >= s.started_at
            + INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'
        -- One poll of noise is a reading, not an outage. 27.1 % of raw gaps are
-       -- exactly one 5-minute cycle.
+       -- exactly one 5-minute cycle. Counted from the clipped start: ten
+       -- minutes of the park being open, not ten minutes of the night.
        AND $3::timestamptz >= s.started_at
            + INTERVAL '${MIN_GAP_MINUTES} minutes'
   ),
@@ -1487,7 +1527,9 @@ export const CURRENT_CLOSURE_GAP_SQL = `
             WHERE w.closes_at > s.started_at
               AND w.opens_at  < $3::timestamptz
          ), 0)::int                              AS "elapsedOperatingMinutes"
-    FROM run_start s
+    -- run_window, not run_start: startedAt is the clipped start, the instant
+    -- the page names and the elapsed figure above is counted from.
+    FROM run_window s
     JOIN open_today o ON o.aid = s.aid
     -- No re-join to park_closers. It used to be here to carry a
     -- simultaneousClosers column that nothing ever read -- addClosureGaps reads

@@ -1,5 +1,20 @@
 # TODO
 
+## The nightly closure statement does not store pre-opening closures (2026-10-17, PAR-913)
+
+The live statement (`CURRENT_CLOSURE_GAP_SQL` → `run_window`) clips a closure
+that started before the opening and is still standing inside that day's window
+to the opening (Phantasialand's Pferdekarussell: CLOSED from 08:55, park open
+09:00). The nightly `CLOSURE_GAP_INTERVALS_SQL` still requires the start inside
+a window (`gap_edges` → `window_closes_at` → `mid_day`), so those closures are
+shown live but never stored, and the `closed_gap` recovery curve never learns
+from them. That is the conservative direction: the curve has fewer long
+closures, not invented ones. But it is a live/nightly drift of the kind
+`closure-gap.sql.ts` keeps removing. The fix: give `gap_edges` the same
+"first window opening later the same park-local day" fallback and the same
+`night_mid` rule. Then measure how many intervals that adds over 60 days
+before shipping.
+
 ## The nightly duty-cycle denominator reads a table the same job rewrites (measured 2026-09-08, not fixed)
 
 `DowntimeReconstructionProcessor` runs `CLOSURE_GAP_INTERVALS_SQL` at

@@ -392,15 +392,43 @@ offenem Park". Two independent defects met on one card:
   the start fell in (`window_closes_at` → `mid_day`). So a CLOSED run that
   began after Friday's 18:00 close, or in Friday's last hour, passed on
   Saturday and stood all day, with `startedAt` at Friday evening and the elapsed
-  minutes counting Saturday from the opening. The live gate now reads `ws` (the
-  start's window). A start outside every window has no `ws` and fails, the
-  same as it does at night. „Not run yet today" (`notRunToday`) is that ride's
-  line. Measured against production at 12:50 Berlin: 7 of 29 live closure
-  lines went, in 3 parks. All 7 started after the close, before the opening or
-  in the last hour: Mausketiere (Fri 18:05), Pferdekarussell (08:55, before the
-  09:00 opening), Liseberg's Nattsvart på Gasten (01:50, after a 22:00 close),
-  and four rides at Fantawild Adventure Zhengzhou (20:30–20:45, before a 21:30
-  close). The other 22 were unchanged.
+  minutes counting Saturday from the opening. The gate now asks the closure's
+  own window (`run_window`). That window is the one containing the start or,
+  failing that, the first window opening later the same park-local day.
+- **A start before the opening is the day's outage, from the opening.** The
+  first version of this fix required the start to lie inside a window. That
+  dropped Pferdekarussell, which had a pre-opening cycle at 08:05, read CLOSED
+  from 08:55 and was still CLOSED at 12:55 in a park open since 09:00.
+  „Not run yet today" did not cover it either, because it counts the 08:05
+  reading as a run, so the page showed a bare „geschlossen". Such a closure is
+  now clipped: `startedAt` is the window's opening, and the 10-minute floor
+  and the elapsed minutes count from there. A start after the day's last close
+  finds no window that day and is still dropped (Mausketiere).
+  `notRunToday` speaks for that ride the next morning. `notRunToday` itself is
+  unchanged. It counts a pre-opening reading as a run on purpose: a ride that
+  ran in an unpublished early-entry hour has run today. With the outage
+  covering the pre-opening case, the two lines cannot both appear, because
+  `notRunToday` is only asked for rides without an outage.
+- **Outside every window, "today" begins halfway through the night.** The
+  OPERATING reading that proves the ride ran the same day used to fall back to
+  its calendar date. With clipping, that let a reading the feed left standing
+  after the close (OPERATING 01:00, CLOSED 01:50, park opening 12:00) make the
+  next day's fault. A reading outside every window now counts only from
+  halfway between the previous close and the window's opening (`night_mid`).
+  That is the instant `NOT_RUN_TODAY_SQL` uses. With no earlier window on file
+  it falls back to the window's park-local midnight, which is the old calendar
+  test.
+
+Measured against production at 13:25 Berlin, before #491, after #491 and with
+this follow-up: 30, 23 and 24 live closure lines over the 88 blind parks. The
+one line that comes back is Pferdekarussell, now starting at 09:00. Still
+dropped: Mausketiere (Fri 18:05), Liseberg's Nattsvart på Gasten (01:50,
+after a 22:00 close) and four rides at Fantawild Adventure Zhengzhou
+(20:30–20:45, inside the last hour of a 21:30 close). The nightly statement
+still requires the start inside a window. Pre-opening closures are therefore
+shown live but not yet stored for the curve, which is the conservative
+direction, and is filed as a follow-up.
+
 - **Free-flow rides were candidates.** The DOWN reconstruction's `tracked`
   population has always excluded `open_with_park`, because the flag is the
   owner's statement that the ride's CLOSED readings are not evidence. Neither
