@@ -136,12 +136,27 @@ describe("chronos-serving (PAR-911)", () => {
       expect(p.predictedWaitTime).toBe(35);
     });
 
-    it("keeps the existing band when the curve has no q95", () => {
+    it("drops the old CatBoost band when the curve has no q95", () => {
+      // A Chronos wait next to CatBoost's band would describe neither model.
       const e = entry();
       e.segments[0].q95 = [];
       const p = pred(60);
       applyChronosOverride([p], new Map([["a1", e]]), BASE, BASE);
-      expect(p.uncertaintyMinutes).toBe(9);
+      expect(p.uncertaintyMinutes).toBeNull();
+    });
+  });
+
+  describe("chronosServeEntries — robustness", () => {
+    it("ignores a malformed body instead of throwing (review of #489)", () => {
+      expect(() =>
+        chronosServeEntries(null as never, new Date(BASE), null),
+      ).not.toThrow();
+      const out = chronosServeEntries(
+        [null as never, { attractionId: "a1" } as never],
+        new Date(BASE),
+        null,
+      );
+      expect(out.size).toBe(0);
     });
   });
 

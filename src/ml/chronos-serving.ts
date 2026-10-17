@@ -93,7 +93,16 @@ export function chronosServeEntries(
   revision: string | null | undefined,
 ): Map<string, ChronosServeEntry> {
   const out = new Map<string, ChronosServeEntry>();
-  for (const c of curves ?? []) {
+  if (!Array.isArray(curves)) return out;
+  // One decimal is far below the served rounding and keeps the cache entries small.
+  const r1 = (a: (number | null)[] | null | undefined): (number | null)[] =>
+    Array.isArray(a)
+      ? a.map((v) =>
+          v === null || !Number.isFinite(v) ? null : Math.round(v * 10) / 10,
+        )
+      : [];
+  for (const c of curves) {
+    if (!c || typeof c.slotStart !== "string") continue;
     const start = Date.parse(c.slotStart);
     if (!Number.isFinite(start) || !Array.isArray(c.q50)) continue;
     if (c.q50.every((v) => v === null || !Number.isFinite(v))) continue;
@@ -105,9 +114,9 @@ export function chronosServeEntries(
     entry.segments.push({
       slotStart: start,
       slotMinutes: c.slotMinutes || 15,
-      q50: c.q50,
-      q80: c.q80 ?? [],
-      q95: c.q95 ?? [],
+      q50: r1(c.q50),
+      q80: r1(c.q80),
+      q95: r1(c.q95),
     });
     out.set(c.attractionId, entry);
   }
@@ -217,9 +226,9 @@ export function applyChronosOverride(
 
     const display = Math.max(0, q.q50);
     p.predictedWaitTime = roundServedWait(display);
-    if (q.q95 !== null) {
-      p.uncertaintyMinutes = Math.max(0, Math.round(q.q95 - display));
-    }
+    // Never leave CatBoost's band next to a Chronos wait.
+    p.uncertaintyMinutes =
+      q.q95 !== null ? Math.max(0, Math.round(q.q95 - display)) : null;
     if (p.baseline && p.baseline > 0) {
       const crowdWait = roundServedWait(Math.max(q.q80 ?? display, display));
       p.crowdLevel = determineCrowdLevel(

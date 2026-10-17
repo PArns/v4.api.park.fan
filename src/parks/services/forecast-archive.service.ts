@@ -395,11 +395,20 @@ export class ForecastArchiveService {
     const chronosWritten: Promise<ChronosResponse | null> =
       kind === "intraday"
         ? chronosPending.then(async (res) => {
+            // The shadow must never fail the capture: a malformed nf-service
+            // body (non-iterable curves, a null element) would otherwise reject
+            // here and abort this park's whole archive run (review of #489).
             if (res) {
-              await writeChronosServeCache(
-                this.redis,
-                chronosServeEntries(res.curves, originAt, res.revision),
-              );
+              try {
+                await writeChronosServeCache(
+                  this.redis,
+                  chronosServeEntries(res.curves, originAt, res.revision),
+                );
+              } catch (err) {
+                this.logger.warn(
+                  `Chronos serving cache not written for park ${park.id}: ${(err as Error).message}`,
+                );
+              }
             }
             return res;
           })
