@@ -405,6 +405,12 @@ export const CLOSURE_GAP_INTERVALS_SQL = `
       JOIN blind_parks b ON b.pid = a."parkId"
      WHERE qd."queueType" = 'STANDBY'
        AND a.retired_at IS NULL
+       -- Not a free-flow ride. open_with_park is a hand-made statement that
+       -- this ride's CLOSED readings are not evidence (it is open whenever the
+       -- park is), so a CLOSED run is not a closure either. The DOWN
+       -- reconstruction's tracked population has always excluded them; this
+       -- statement did not, and stored 21 closures for two of them (PAR-913).
+       AND COALESCE(a.open_with_park, FALSE) = FALSE
        AND (a.last_merged_at IS NULL OR a.last_merged_at < $2::timestamptz)
        AND ${observedReadingsSql("qd")}
        AND qd.timestamp >= $2::timestamptz
@@ -1019,7 +1025,19 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        AND qd.timestamp >= $3::timestamptz - INTERVAL '${LIVE_LOOKBACK_HOURS} hours'
        AND qd.timestamp <= $3::timestamptz
   ),
-  newest AS (SELECT * FROM recent WHERE rn = 1 AND st = 'CLOSED'),
+  -- A free-flow ride (open_with_park) is never a candidate: the flag is a
+  -- hand-made statement that its CLOSED readings are not evidence, and the page
+  -- serves it OPERATING whenever the park is. Asking anyway put „steht still"
+  -- under „geöffnet" on Die 3 Mausketiere (PAR-913). The nightly statement
+  -- excludes the same population in src.
+  newest AS (
+    SELECT r.*
+      FROM recent r
+      JOIN attractions a ON a.id = r.aid
+     WHERE r.rn = 1
+       AND r.st = 'CLOSED'
+       AND COALESCE(a.open_with_park, FALSE) = FALSE
+  ),
   -- When the current CLOSED run started: the oldest CLOSED reading with no
   -- OPERATING after it.
   run_start AS (
@@ -1065,7 +1083,7 @@ export const CURRENT_CLOSURE_GAP_SQL = `
   -- The two per-ride gates below used to sit in the final WHERE, after the
   -- three historical CTEs had read the whole window for every ride that got
   -- this far.
-  -- Both are functions of s.started_at and po.closes_at alone, so they belong
+  -- Both are functions of s.started_at and the window it started in alone, so they belong
   -- where they can still remove a ride cheaply. It is the same cheap-test-last
   -- shape as the two pseudoconstants, one level down, and it is worst at the
   -- moment a blind park is closing: every ride winds down, enters run_start
@@ -1113,8 +1131,15 @@ export const CURRENT_CLOSURE_GAP_SQL = `
        -- yesterday's date.
        AND COALESCE(wr.op_day, (r.ts AT TIME ZONE $2)::date)
          = COALESCE(ws.op_day, (s.started_at AT TIME ZONE $2)::date)
-       -- Winding down with the park is not breaking.
-       AND po.closes_at >= s.started_at
+       -- Winding down with the park is not breaking — measured against the
+       -- window the closure STARTED in, which is what the nightly statement's
+       -- mid_day asks (window_closes_at). It used to read po.closes_at, today's
+       -- close: a ride that went CLOSED after yesterday's closing time and was
+       -- never seen again passed against TODAY's evening, and stood on the page
+       -- as „steht seit Freitag, 18:05 still" all of Saturday (PAR-913). A start
+       -- outside every published window has ws NULL and fails here, as it does
+       -- at night; „not run yet today" (NOT_RUN_TODAY_SQL) is that ride's line.
+       AND ws.closes_at >= s.started_at
            + INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'
        -- One poll of noise is a reading, not an outage. 27.1 % of raw gaps are
        -- exactly one 5-minute cycle.

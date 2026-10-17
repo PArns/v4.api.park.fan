@@ -301,13 +301,36 @@ describe("closure-gap statements", () => {
 
   it("the cheap per-ride gates run before the historical CTEs, not after", () => {
     // The same cheap-test-last shape as the two pseudoconstants, one level
-    // down. Both are functions of s.started_at and po.closes_at alone, and in
+    // down. Both are functions of s.started_at and its window alone, and in
     // the last hour of a blind park's day every ride winds down, enters
     // open_today, and has 21 days materialised a moment before
     // MIN_PARK_MINUTES_LEFT throws it away.
     const openToday = cteBody(CURRENT_CLOSURE_GAP_SQL, "open_today");
     expect(openToday).toContain(`INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'`);
     expect(openToday).toContain(`INTERVAL '${MIN_GAP_MINUTES} minutes'`);
+  });
+
+  it("measures the last-hour margin against the window the closure started in (PAR-913)", () => {
+    // Against today's close (po.closes_at) a closure that began after
+    // YESTERDAY's close passed, and stood on the page all the next day. The
+    // nightly statement asks the start's own window (window_closes_at); the
+    // live one asks the same question now.
+    const openToday = cteBody(CURRENT_CLOSURE_GAP_SQL, "open_today");
+    expect(openToday).toMatch(
+      new RegExp(
+        `ws\\.closes_at >= s\\.started_at\\s+\\+ INTERVAL '${MIN_PARK_MINUTES_LEFT} minutes'`,
+      ),
+    );
+    expect(openToday).not.toMatch(/po\.closes_at >=/);
+  });
+
+  it("leaves free-flow rides out of both statements (PAR-913)", () => {
+    expect(cteBody(CURRENT_CLOSURE_GAP_SQL, "newest")).toContain(
+      "COALESCE(a.open_with_park, FALSE) = FALSE",
+    );
+    expect(cteBody(CLOSURE_GAP_INTERVALS_SQL, "src")).toContain(
+      "COALESCE(a.open_with_park, FALSE) = FALSE",
+    );
   });
 
   it("the live statement resolves the park's day end in one timezone", () => {
