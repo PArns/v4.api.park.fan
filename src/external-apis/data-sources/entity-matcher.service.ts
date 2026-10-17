@@ -207,6 +207,8 @@ export class EntityMatcherService {
     n1: string = normalizeForMatching(wiki.name),
     n2: string = normalizeForMatching(qt.name),
   ): number {
+    // A park without a name cannot be matched by name.
+    if (!n1 || !n2) return 0;
     // HARD CONSTRAINT: Different continents = instant rejection
     // This prevents false matches like Everland (Asia) + Toverland (Europe)
     if (wiki.continent && qt.continent) {
@@ -402,9 +404,9 @@ export class EntityMatcherService {
   /**
    * Strict normalization for manual match keys (remove all non-alphanumeric)
    */
-  private normalizeByKey(text: string): string {
+  private normalizeByKey(text: string | null | undefined): string {
     return (
-      text
+      (text ?? "")
         .toLowerCase()
         // Remove country code suffixes like " (FR)", " (US)", etc. before other normalization
         .replace(/\s*\(\s*[A-Z]{2}\s*\)\s*$/g, "")

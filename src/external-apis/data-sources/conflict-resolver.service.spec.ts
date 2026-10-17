@@ -255,6 +255,28 @@ describe("ConflictResolverService", () => {
         }),
       );
 
+    it("never merges two nameless entities from different sources (PAR-909)", () => {
+      const result = service.aggregateParkData(
+        sources({
+          "themeparks-wiki": response("themeparks-wiki", [
+            entity(null as unknown as string, 20, { externalId: "w-nameless" }),
+            entity("Taron", 40),
+          ]),
+          "queue-times": response("queue-times", [
+            entity(null as unknown as string, 90, { externalId: "q-nameless" }),
+            entity("Taron", 50),
+          ]),
+        }),
+      );
+
+      // Taron merges as usual; the nameless queue-times entity is not folded
+      // into the nameless wiki one, so its 90 min never reaches another ride.
+      expect(wait(result, "Taron")).toBe(45);
+      const nameless = result.entities.filter((e) => !e.name);
+      expect(nameless.every((e) => e.waitTime !== 55)).toBe(true);
+      expect(nameless.some((e) => e.waitTime === 90)).toBe(false);
+    });
+
     it("matches names that differ in case", () => {
       const result = mergeNames("Silver Star", "SILVER STAR");
 
