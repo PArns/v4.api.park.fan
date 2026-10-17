@@ -376,8 +376,63 @@ close, it reports nothing.
 >   carried it (2026-09-08) and is corrected here too, because it gave a reader
 >   a documented reason to send the whole roster where one ride is right and
 >   cheap.
+>
 > - **The live statement had no duration floor**, so a ride two minutes into a
 >   closure was announced as a fault — 27 % of raw gaps are one poll cycle.
+
+#### The margin belongs to the closure's own window, and free-flow rides have no closures (2026-10-17, PAR-913)
+
+Phantasialand, Saturday 12:30: Die 3 Mausketiere showed „geöffnet", 0 min,
+„Beste Zeit: Jetzt" — and „Steht seit Freitag, 18:05 Uhr still · 3:25 Std. bei
+offenem Park". Two independent defects met on one card:
+
+- **The live statement measured `MIN_PARK_MINUTES_LEFT` against the wrong
+  window.** `open_today` compared the closure start with `park_open.closes_at`,
+  today's close. The nightly statement has always compared it with the window
+  the start fell in (`window_closes_at` → `mid_day`). So a CLOSED run that
+  began after Friday's 18:00 close, or in Friday's last hour, passed on
+  Saturday and stood all day, with `startedAt` at Friday evening and the elapsed
+  minutes counting Saturday from the opening. The live gate now reads `ws` (the
+  start's window). A start outside every window has no `ws` and fails, the
+  same as it does at night. „Not run yet today" (`notRunToday`) is that ride's
+  line. Measured against production at 12:50 Berlin: 7 of 29 live closure
+  lines went, in 3 parks. All 7 started after the close, before the opening or
+  in the last hour: Mausketiere (Fri 18:05), Pferdekarussell (08:55, before the
+  09:00 opening), Liseberg's Nattsvart på Gasten (01:50, after a 22:00 close),
+  and four rides at Fantawild Adventure Zhengzhou (20:30–20:45, before a 21:30
+  close). The other 22 were unchanged.
+- **Free-flow rides were candidates.** The DOWN reconstruction's `tracked`
+  population has always excluded `open_with_park`, because the flag is the
+  owner's statement that the ride's CLOSED readings are not evidence. Neither
+  closure statement excluded those rides, so the page served the ride as
+  OPERATING by the flag and as standing still from the same CLOSED rows. Both
+  statements now leave them out (`src`, `newest`). The recovery curve skips
+  the 21 closures already stored for two of them (Der lustige Papagei 13,
+  Die 3 Mausketiere 8). The reconstruction no longer covers those rides, so
+  nothing rewrites those rows. `AttractionOutageService` also stops asking
+  about any ride the caller resolved to OPERATING: the line has to follow the
+  badge it sits under.
+
+Mausketiere's feed in numbers, for the next person who wonders whether the
+flag is right. ThemeParks.wiki reports the ride CLOSED with
+`lastUpdated 2026-10-16T16:02Z`, Wartezeiten.app reports `closed` and 0, and
+Queue-Times does not list it. Across 76 published operating days from
+2026-08-03 to 2026-10-17, the feed read OPERATING on 13, almost never in
+August. Since 2026-10-06 it reads OPERATING on weekdays and CLOSED on
+weekends, and its wait is 0 throughout. The owner's judgement (2026-10-17) is
+that the ride is more likely open than shut. The flag stays, and nothing in
+this signal may contradict it.
+
+**Not done, and why.** A broader rule — no closure line for any ride whose
+feed carries no wait (always 0) — was measured and rejected for now. In the
+blind parks this signal serves, 1105 rides with a P90 wait of 0 read
+OPERATING on ≥ 80 % of their park's open days, and they produced 777 of the
+4140 closures stored in the last 60 days. Those parks publish status
+and nothing else, which is the population the closure signal was built for.
+Rides whose feed reads OPERATING on fewer than 40 % of open days — the
+Mausketiere shape — produced 74 closures in the same 60 days. A track-record
+gate on that share is the candidate rule if those prove wrong. It needs a
+ground truth this table does not have.
 
 ### Two bugs the first nightly run exposed
 
@@ -415,7 +470,7 @@ loops that re-run each aggregate per outer row:
 | ------------------------- | ---------------: | ----------------------: |
 | 3 days                    |           14.3 s |                   9.9 s |
 | 10 days                   |  > 300 s timeout |                   9.1 s |
-| 60 days (the nightly run) |  not in 12 hours |  12.7 s, 4404 rows      |
+| 60 days (the nightly run) |  not in 12 hours |       12.7 s, 4404 rows |
 
 With nested loops off, ~9 s of those 12.7 s were `blind_parks`' evidence-hours
 check: written as a correlated subquery, it became a sequential scan of the
@@ -465,13 +520,13 @@ superseding the one before it. Every stage therefore leaves a self-consistent
 table, which is what makes stopping between two of them safe.
 
 | Window | Intervals | Closure gaps | Exposure days | Duration |
-| ------ | --------- | ------------ | ------------- | --------- |
-| 30 d   | 38 619    | 3 316        | 256 032       | 118 s     |
-| 60 d   | 57 792    | 3 330        | 359 865       | 207 s     |
-| 90 d   | 90 112    | 4 186        | 506 846       | 356 s     |
-| 120 d  | 114 639   | 4 584        | 633 245       | 558 s     |
-| 180 d  | 138 969   | 4 740        | 809 573       | 1 037 s   |
-| 270 d  | 154 150   | 5 000        | 936 141       | 1 713 s   |
+| ------ | --------- | ------------ | ------------- | -------- |
+| 30 d   | 38 619    | 3 316        | 256 032       | 118 s    |
+| 60 d   | 57 792    | 3 330        | 359 865       | 207 s    |
+| 90 d   | 90 112    | 4 186        | 506 846       | 356 s    |
+| 120 d  | 114 639   | 4 584        | 633 245       | 558 s    |
+| 180 d  | 138 969   | 4 740        | 809 573       | 1 037 s  |
+| 270 d  | 154 150   | 5 000        | 936 141       | 1 713 s  |
 
 The last stage reaches the source's own floor: `queue_data`'s oldest chunk
 starts **2025-12-24**, and `attraction_outages` now spans 2025-12-24 to
@@ -932,7 +987,7 @@ trusted at the long end.
 | **0. Count events, publish nothing** (2-3 d)        | api      | Run statement 1 read-only over 90 days for ~30 rides across Magic Kingdom, Epcot, Anaheim, Disneyland Paris, Universal Studios Florida, Efteling, Europa-Park. Report the **event** count and a duration histogram, not DOWN-hours. Capability census (`COUNT(*) FROM parks WHERE wiki_entity_id IS NOT NULL`). `EXPLAIN (ANALYZE, BUFFERS)` over a 45-day-old chunk.                                                                                            | Nothing user-facing. Every threshold in phases 3-4 is written from this table, and the event floor of 24 is re-derived or replaced.      |
 | **1. Write-path columns** (1 d + restore timing)    | api      | `is_heartbeat`, `raw_status`, `last_merged_at`. Hand-run `ALTER`, timed against a restore.                                                                                                                                                                                                                                                                                                                                                                       | No behaviour change. Starts the 30-day clock on the erasure measurement.                                                                 |
 | **2. The live line** (2-3 d)                        | api + fe | `outage-rows.sql.ts` as the shared row filter, `AttractionOutageService.getCurrentOutages`, attached from one service in **both** integration paths so the two precedence chains cannot disagree. Frontend: one line under the existing `ParkStatusBadge`, in the status row so no panel is created, `data-nosnippet`, six locales.                                                                                                                              | „Störung gemeldet seit 14:20 Uhr" wherever a `DOWN` already renders, including the 21 schedule-less parks. No new table, no denominator. |
-| **3. Reconstruct, still publish nothing** (1.5 wk)  | api      | The four tables, the two statements, the park-open-window SQL/TS twin with a shared spec. `downtime-reconstruction.processor.ts`: one statement per time chunk across all parks, delete-then-insert scoped to the rides each run covers within (park, window). Then a **hand check**: the twenty rides that would clear the gates, verified against the parks' own channels. More than two of twenty disagree and nothing proceeds.                                                                     | The tables plus the corrected per-day entry on `attraction_hourly_history`. Nothing on the API.                                          |
+| **3. Reconstruct, still publish nothing** (1.5 wk)  | api      | The four tables, the two statements, the park-open-window SQL/TS twin with a shared spec. `downtime-reconstruction.processor.ts`: one statement per time chunk across all parks, delete-then-insert scoped to the rides each run covers within (park, window). Then a **hand check**: the twenty rides that would clear the gates, verified against the parks' own channels. More than two of twenty disagree and nothing proceeds.                              | The tables plus the corrected per-day entry on `attraction_hourly_history`. Nothing on the API.                                          |
 | **4. Publish the four measured numbers** (1.5-2 wk) | api + fe | Profile table, event floor on every derived quantity, discriminated-union DTO (`{kind:'figures'}` / `{kind:'withheld', reason}`) so no decision input rides along. Frontend: a chapter only where figures publish, one inline line where they do not. Own message namespace, server-read. Methodology page in the same release. Withdrawal path: a regime flip clears the profile and POSTs `parkCacheTag` to `/api/revalidate` with `expire: 0` the same night. | Count, median, longest, `downShare`, four refusal states, one methodology page.                                                          |
 | **5. Measure the erasure** (3-4 d)                  | api      | Thirty days after phase 1: how many `DOWN` readings the override rewrote, per park and per ride, in rows and in minutes. Falsification kit (Fano factor, time-rescaling KS, shuffled control).                                                                                                                                                                                                                                                                   | A written verdict, most likely a documented refusal with a number attached.                                                              |
 

@@ -224,6 +224,12 @@ const RECOVERY_CURVE_SQL = `
        -- Kaplan-Meier needs and the reason the filter could go.
        AND NOT o.likely_works_period
        AND NOT o.start_censored
+       -- Not a free-flow ride. Neither reconstruction writes them any more
+       -- (PAR-913), but the rows written before that stay until the 400-day
+       -- prune — the reconstruction only rewrites rides it still covers — and
+       -- a CLOSED run on a ride whose CLOSED is curated as "not evidence" is
+       -- not a closure to learn a recovery time from.
+       AND COALESCE(a.open_with_park, FALSE) = FALSE
        AND o.operating_minutes > 0
        AND o.observed_operating_minutes::numeric / o.operating_minutes >= 0.5
   ),

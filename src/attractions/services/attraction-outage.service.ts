@@ -459,9 +459,27 @@ export class AttractionOutageService {
     // signal` requires the page to say „steht still" rather than „gemeldet" for
     // that. A query timing out would silently restate what the operator told
     // us as something we merely noticed.
+    //
+    // A ride the caller resolved to OPERATING is not asked at all. The page
+    // already says it runs, and „steht still" under „geöffnet" is the one
+    // pairing no reader can resolve — Die 3 Mausketiere carried exactly that,
+    // with „Beste Zeit: Jetzt" beside it (PAR-913). It is not the filtering the
+    // NOTE forbids: that one dropped rides that WERE standing still on the
+    // strength of a DOWN query's answer. Here the caller's own precedence chain
+    // has put something above the stored CLOSED (the free-flow flag, a fresher
+    // queue type), and the outage line has to follow the badge it sits under,
+    // not argue with it.
     const downIds = new Set(ids);
+    const runningIds = new Set(
+      eligible
+        .filter((c) => c.effectiveStatus === "OPERATING")
+        .map((c) => c.id),
+    );
     const notDown = allIds.filter(
-      (id) => !out.has(id) && (downAnswered || !downIds.has(id)),
+      (id) =>
+        !out.has(id) &&
+        !runningIds.has(id) &&
+        (downAnswered || !downIds.has(id)),
     );
     if (notDown.length > 0) {
       await this.addClosureGaps(park, notDown, asOf, out);

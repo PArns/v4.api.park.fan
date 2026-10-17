@@ -137,6 +137,33 @@ describe("AttractionOutageService — the closure path", () => {
     expect(closureCall![1][0]).toEqual([OPEN_RIDE.id]);
   });
 
+  it("does not ask about a ride the page already serves as running (PAR-913)", async () => {
+    // Die 3 Mausketiere: OPERATING by the free-flow flag, CLOSED in the feed.
+    // Asked anyway, the statement answered with a closure and the page put
+    // „steht still" under „geöffnet".
+    const RUNNING = {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      effectiveStatus: "OPERATING",
+    };
+    const CLOSED = {
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      effectiveStatus: "CLOSED",
+    };
+
+    await service.getCurrentOutages(PARK, [RUNNING, CLOSED]);
+
+    const closureCall = query.mock.calls.find((c) => c[1][3] === PARK.id);
+    expect(closureCall![1][0]).toEqual([CLOSED.id]);
+  });
+
+  it("asks nothing when every ride is running", async () => {
+    await service.getCurrentOutages(PARK, [
+      { id: OPEN_RIDE.id, effectiveStatus: "OPERATING" },
+    ]);
+
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it("a failing closure query costs the line, never the page", async () => {
     query.mockRejectedValue(new Error("statement timeout"));
 
