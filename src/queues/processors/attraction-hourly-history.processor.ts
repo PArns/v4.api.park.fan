@@ -96,6 +96,15 @@ export class AttractionHourlyHistoryProcessor {
    * the table after deploy or to repair missing rows. The cron job above
    * only handles "yesterday"; everything else goes through this entry
    * point.
+   *
+   * It rewrites a day with TODAY'S rollup, which since PAR-729 reads
+   * observations only. Over days written before that change that is not a
+   * repair, it is a different answer: the old heartbeat writer suppressed the
+   * feed's own 60-minute rule, so 13–19 % of those slots consist of carried
+   * rows — and 99.8 % of them carry a wait the same ride was also measured at
+   * on the same day. PAR-729 decided against recomputing them for exactly that
+   * reason. A range reaching back before the PAR-729 deploy deletes coverage;
+   * run it over those days only with that in mind.
    */
   @Process("backfill-attraction-hourly-history")
   async handleBackfill(
