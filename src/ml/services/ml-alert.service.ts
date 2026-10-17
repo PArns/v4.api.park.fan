@@ -50,7 +50,15 @@ export class MLAlertService {
     // constant false positive. The honest fix for the quiet over-read is
     // MultiQuantile serving (median for the wait display, q0.8 for the crowd
     // signal) — see docs/ml/tft-vs-catboost-clean-comparison.md §6.5.
-    const MAE_THRESHOLD = 13;
+    //
+    // PAR-912: most of that "structural baseline" was not the quantile at all.
+    // `overall.mae` averaged every 0 on a day the park was open, and 65–70 % of
+    // the compared rows were 0 — rides not running and feeds that publish no
+    // wait. On scored slots only the same 7 days read 6.9 instead of 10.1
+    // (measured 2026-10-17), and about 7.5–8 once real 0-minute waits of new
+    // rows count again. 10 keeps the old ~1.3× margin over that baseline; 13
+    // would now never fire.
+    const MAE_THRESHOLD = 10;
 
     // 1. Check accuracy degradation — MAE only, independent of coverage
     if (mae > MAE_THRESHOLD) {
@@ -251,10 +259,11 @@ export class MLAlertService {
   private determineSeverity(
     mae: number,
   ): "low" | "medium" | "high" | "critical" {
-    // q0.8-era calibration (see MAE_THRESHOLD above): baseline live MAE ~10-12.
-    if (mae > 22) return "critical";
-    if (mae > 17) return "high";
-    if (mae > 13) return "medium";
+    // Scored-slot calibration (PAR-912, see MAE_THRESHOLD above): baseline
+    // live MAE ~7-8. The old 13/17/22 ladder scaled by the same 10/13.
+    if (mae > 17) return "critical";
+    if (mae > 13) return "high";
+    if (mae > 10) return "medium";
     return "low";
   }
 

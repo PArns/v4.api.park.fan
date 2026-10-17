@@ -10,6 +10,59 @@ import {
 } from "typeorm";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 
+/** See {@link PredictionAccuracy.scoreClass}. */
+export type ScoreClass =
+  "scored" | "unplanned_closure" | "ride_not_operating" | "no_wait_signal";
+
+/**
+ * {@link scoredSlotSql} for a row already in memory — the same rule, for
+ * readers that load rows rather than aggregate them.
+ */
+export function isScoredSlot(
+  row: Pick<
+    PredictionAccuracy,
+    "comparisonStatus" | "actualWaitTime" | "wasUnplannedClosure" | "scoreClass"
+  >,
+  maxWait: number,
+): boolean {
+  if (row.comparisonStatus !== "COMPLETED") return false;
+  if (row.actualWaitTime === null || row.actualWaitTime === undefined) {
+    return false;
+  }
+  if (row.actualWaitTime > maxWait) return false;
+  if (row.scoreClass === "scored") return true;
+  return (
+    (row.scoreClass === null || row.scoreClass === undefined) &&
+    row.wasUnplannedClosure === false &&
+    row.actualWaitTime > 0
+  );
+}
+
+/**
+ * The one predicate for "this row is a forecast error" (PAR-912), as SQL over
+ * a `prediction_accuracy` alias. Rows compared since PAR-912 carry their
+ * verdict; rows compared before it do not, and for them only a positive wait
+ * outside an unplanned closure is trusted — their zeros mix status-only feeds,
+ * closed rides and the rare real 0-minute wait, and nothing on the row can tell
+ * them apart. So the transition drops the old real zeros too (about 9 % of the
+ * old zero rows, measured 2026-10-17) rather than keeping the 91 % that are not
+ * waits. Works without a backfill; the old rows age out with the 90-day
+ * retention.
+ *
+ * Includes `actual_wait_time <= MAX_PLAUSIBLE_WAIT_TIME` via the `maxWait`
+ * argument because every caller needs the sentinel cut as well.
+ */
+export function scoredSlotSql(alias: string, maxWait: number): string {
+  const a = alias;
+  return `(${a}.comparison_status = 'COMPLETED'
+    AND ${a}.actual_wait_time IS NOT NULL
+    AND ${a}.actual_wait_time <= ${Math.trunc(maxWait)}
+    AND (${a}.score_class = 'scored'
+         OR (${a}.score_class IS NULL
+             AND ${a}."wasUnplannedClosure" = false
+             AND ${a}.actual_wait_time > 0)))`;
+}
+
 /**
  * PredictionAccuracy Entity
  *
@@ -105,6 +158,50 @@ export class PredictionAccuracy {
    *  does the raw one. */
   @Column({ name: "served_absolute_error", type: "int", nullable: true })
   servedAbsoluteError: number | null;
+
+  /**
+   * The model's own q0.8 and q0.95 for the slot, in minutes (PAR-912), written
+   * beside `predictedWaitTime` (the served q0.5) by the same upsert, so the three
+   * always come from one run. q0.8 drives the crowd level and q0.95 the
+   * uncertainty band; storing them makes their coverage measurable live —
+   * P(actual ≤ q) on the slots that are scored at all (`scoreClass = 'scored'`).
+   *
+   * Raw quantiles rounded to whole minutes, NOT the posted-wait rounding
+   * (`predictedWaitTime` is rounded to 5 with a floor of 10). On a quiet slot the
+   * served median can therefore sit above q0.8 — that is the rounding, not a
+   * crossing. NULL when the model has no quantile head, and on every row written
+   * before PAR-912. No index: nothing filters on them, and this table takes ~13M
+   * upserts a day.
+   */
+  @Column({ name: "predicted_q80", type: "int", nullable: true })
+  predictedQ80: number | null;
+
+  @Column({ name: "predicted_q95", type: "int", nullable: true })
+  predictedQ95: number | null;
+
+  /**
+   * What the comparison decided this slot IS (PAR-912), written by
+   * `compareWithActuals` beside `comparisonStatus = 'COMPLETED'`:
+   *
+   * - `scored` — the ride was OPERATING with a wait: a forecast error. A real
+   *   0-minute wait counts, if the ride has published a wait above 0 in the
+   *   seven days before (otherwise see `no_wait_signal`).
+   * - `unplanned_closure` — DOWN, or CLOSED after the ride had already run that
+   *   park-local day. The existing rule: `wasUnplannedClosure`, actual 0, full
+   *   error — and no accuracy figure averages it.
+   * - `ride_not_operating` — REFURBISHMENT, or CLOSED before the ride's first
+   *   OPERATING reading of the day: the ride was not scheduled to run (closed
+   *   for the day, for the season, not open yet). Actual and errors stay NULL.
+   * - `no_wait_signal` — OPERATING with a wait of 0 on a ride that has not
+   *   published a wait above 0 in seven days (status-only feeds, free-flow
+   *   attractions). That 0 is a feed's placeholder, not a measured wait, so
+   *   actual and errors stay NULL — docs/rules/absent-facts.md.
+   *
+   * NULL on rows compared before PAR-912 (and on PENDING/MISSED rows). Readers
+   * that must also be right for those use {@link scoredSlotSql}.
+   */
+  @Column({ name: "score_class", type: "varchar", length: 24, nullable: true })
+  scoreClass: ScoreClass | null;
 
   @Column({
     type: "enum",

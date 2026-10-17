@@ -41,6 +41,7 @@ import { dayStatusRank } from "../common/utils/schedule.util";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
 import {
   PredictionAccuracyService,
+  PredictionQuantiles,
   ServedIntradayValue,
 } from "./services/prediction-accuracy.service";
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
@@ -129,6 +130,47 @@ export const DEDUPE_CREATED_AFTER_HOURS: Record<"hourly" | "daily", number> = {
   hourly: 72,
   daily: 8 * 24,
 };
+
+/**
+ * The model's q0.8/q0.95 off one prediction, as whole minutes (PAR-912), or
+ * `null` when it carries neither (a model without a quantile head, an
+ * ml-service from before the fields existed). A non-finite or negative value is
+ * dropped rather than stored: a coverage figure built on it would be noise.
+ */
+export function predictionQuantilesOf(
+  p: Pick<PredictionDto, "predictedQ80" | "predictedQ95">,
+): PredictionQuantiles | null {
+  const minutes = (v: number | null | undefined): number | null =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0
+      ? Math.round(v)
+      : null;
+  const q80 = minutes(p.predictedQ80);
+  const q95 = minutes(p.predictedQ95);
+  return q80 === null && q95 === null ? null : { q80, q95 };
+}
+
+/**
+ * The response with `predictedQ80`/`predictedQ95` removed from COPIES of its
+ * predictions (PAR-912). The two fields exist for the accuracy rows only; the
+ * served read feeds park pages, `/plan/day` and the calendar, several of which
+ * spread a prediction into their payload, so they would otherwise reach the
+ * public API. The raw read (`getRawParkPredictions`, the generator's input)
+ * keeps them, and the Redis entry is never touched.
+ */
+export function withoutInternalQuantiles(
+  response: BulkPredictionResponseDto,
+): BulkPredictionResponseDto {
+  if (!response.predictions) return response;
+  return {
+    ...response,
+    predictions: response.predictions.map((p) => {
+      const copy = { ...p };
+      delete copy.predictedQ80;
+      delete copy.predictedQ95;
+      return copy;
+    }),
+  };
+}
 
 /**
  * The oldest `createdAt` a reader of stored predictions looks at.
@@ -356,7 +398,9 @@ export class MLService {
       maxDays,
       liveStatus,
     );
-    if (!this.serveIntradayOverride || predictionType !== "hourly") return raw;
+    if (!this.serveIntradayOverride || predictionType !== "hourly") {
+      return withoutInternalQuantiles(raw);
+    }
 
     // Champion-swap consistency: the park-level hourly curve (park page, plan/day,
     // calendar today, favorites) must show the SAME served waits as the
@@ -366,7 +410,7 @@ export class MLService {
     // `chronos: false` is the forward archive's incumbent read (PAR-911): the
     // curve as it would be served without Chronos, so the live A/B keeps a
     // reference once Chronos is part of what is served. No endpoint passes it.
-    const predictions = (raw.predictions ?? []).map((p) => ({ ...p }));
+    const predictions = withoutInternalQuantiles(raw).predictions ?? [];
     await this.applyServedIntradayOverride(
       predictions,
       new Date(currentSlotStartMs()),
@@ -1310,7 +1354,9 @@ export class MLService {
     };
 
     const response = await this.getPredictions(request);
-    return response.predictions;
+    // A served fallback path (getAttractionPredictionsWithFallback), so the
+    // accuracy-only quantiles are dropped here as on the park read.
+    return withoutInternalQuantiles(response).predictions;
   }
 
   /**
@@ -1602,12 +1648,21 @@ export class MLService {
     // accuracy metric exactly where forecasting is hardest, and it would let our
     // own missing bookkeeping stand in for an operator's statement — see
     // docs/rules/absent-facts.md. null covers rows written before PAR-117.
-    const validPredictionsForFeedback = entities.filter(
-      (pred) =>
-        pred.predictionType === "hourly" &&
-        (pred.status === "OPERATING" ||
-          pred.status === "UNKNOWN" ||
-          pred.status === null),
+    // Index-aligned with `entities`, which map `validPredictions` 1:1: the
+    // model's q0.8/q0.95 have no column on the hypertable and travel beside it
+    // to the accuracy row only (PAR-912).
+    const feedbackIdx = entities
+      .map((pred, i) => ({ pred, i }))
+      .filter(
+        ({ pred }) =>
+          pred.predictionType === "hourly" &&
+          (pred.status === "OPERATING" ||
+            pred.status === "UNKNOWN" ||
+            pred.status === null),
+      );
+    const validPredictionsForFeedback = feedbackIdx.map(({ pred }) => pred);
+    const feedbackQuantiles = feedbackIdx.map(({ i }) =>
+      predictionQuantilesOf(validPredictions[i]),
     );
 
     if (validPredictionsForFeedback.length < entities.length) {
@@ -1630,6 +1685,7 @@ export class MLService {
       recordedCount = await this.predictionAccuracyService.recordPredictions(
         validPredictionsForFeedback,
         served,
+        feedbackQuantiles,
       );
     } catch (error) {
       const errorMessage =

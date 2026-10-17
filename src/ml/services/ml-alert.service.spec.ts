@@ -56,7 +56,7 @@ describe("MLAlertService", () => {
     // save() N times. PR #46 replaced it with a single repository.update.
     // We exercise it via checkAndCreateAlerts when the condition clears.
     it("auto-resolves all matching alerts with ONE UPDATE call (no N+1 save loop)", async () => {
-      // Healthy MAE (< 13) triggers the auto-resolve branch for
+      // Healthy MAE (< 10) triggers the auto-resolve branch for
       // accuracy_degradation alerts. Drift checks return clean too.
       accuracyService.getSystemAccuracyStats.mockResolvedValue({
         overall: {
@@ -99,10 +99,10 @@ describe("MLAlertService", () => {
   });
 
   describe("checkAndCreateAlerts — create on threshold breach", () => {
-    it("creates an accuracy_degradation alert when MAE crosses 13 minutes", async () => {
+    it("creates an accuracy_degradation alert when MAE crosses 10 minutes", async () => {
       accuracyService.getSystemAccuracyStats.mockResolvedValue({
         overall: {
-          mae: 14,
+          mae: 12,
           coveragePercent: 95,
           totalPredictions: 500,
           matchedPredictions: 475,
@@ -124,17 +124,17 @@ describe("MLAlertService", () => {
         (a) => a.alertType === "accuracy_degradation",
       );
       expect(accuracyAlerts).toHaveLength(1);
-      expect(accuracyAlerts[0].severity).toBe("medium"); // MAE 14 → medium (>13)
+      expect(accuracyAlerts[0].severity).toBe("medium"); // MAE 12 → medium (>10)
       expect(accuracyAlerts[0].title).toMatch(/accuracy/i);
-      expect(accuracyAlerts[0].message).toContain("14");
+      expect(accuracyAlerts[0].message).toContain("12");
     });
 
     it("returns null instead of creating a duplicate when an active alert exists", async () => {
       accuracyService.getSystemAccuracyStats.mockResolvedValue({
         overall: {
-          // MAE 14 → medium (>13), breaches the threshold so the
+          // MAE 12 → medium (>10), breaches the threshold so the
           // createAlert dedup path is actually exercised.
-          mae: 14,
+          mae: 12,
           coveragePercent: 95,
           totalPredictions: 500,
           matchedPredictions: 475,
@@ -198,15 +198,15 @@ describe("MLAlertService", () => {
   describe("severity ladder", () => {
     // Severity boundaries are user-visible thresholds: a slide here
     // means the on-call gets paged at a different MAE.
-    // Recalibrated for the Quantile(0.8) loss era (commit 7960f27):
-    // alert fires at MAE > 13, ladder is 13 (medium) / 17 (high) / 22
-    // (critical). Values below bracket each boundary.
+    // Recalibrated for scored slots only (PAR-912): alert fires at MAE > 10,
+    // ladder is 10 (medium) / 13 (high) / 17 (critical). Values below bracket
+    // each boundary.
     it.each([
-      [5, "accuracy_degradation"], // < 13 → no alert
-      [12, "accuracy_degradation"], // < 13 → no alert
-      [14, "accuracy_degradation"], // > 13 → medium
-      [18, "accuracy_degradation"], // > 17 → high
-      [23, "accuracy_degradation"], // > 22 → critical
+      [5, "accuracy_degradation"], // < 10 → no alert
+      [9, "accuracy_degradation"], // < 10 → no alert
+      [11, "accuracy_degradation"], // > 10 → medium
+      [14, "accuracy_degradation"], // > 13 → high
+      [18, "accuracy_degradation"], // > 17 → critical
     ])("classifies MAE=%d correctly via createAlert dispatch", async (mae) => {
       accuracyService.getSystemAccuracyStats.mockResolvedValue({
         overall: {
@@ -227,8 +227,8 @@ describe("MLAlertService", () => {
 
       const { alerts } = await service.checkAndCreateAlerts();
 
-      // MAE at or below the threshold (13) doesn't trigger the alert.
-      if (mae <= 13) {
+      // MAE at or below the threshold (10) doesn't trigger the alert.
+      if (mae <= 10) {
         expect(
           alerts.filter((a) => a.alertType === "accuracy_degradation"),
         ).toHaveLength(0);
@@ -238,7 +238,7 @@ describe("MLAlertService", () => {
         (a) => a.alertType === "accuracy_degradation",
       );
       const expectedSeverity =
-        mae > 22 ? "critical" : mae > 17 ? "high" : mae > 13 ? "medium" : "low";
+        mae > 17 ? "critical" : mae > 13 ? "high" : mae > 10 ? "medium" : "low";
       expect(accuracy!.severity).toBe(expectedSeverity);
     });
   });

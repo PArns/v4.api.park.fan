@@ -1290,6 +1290,26 @@ describe("MLService", () => {
           null,
         ]);
       });
+
+      // PAR-912: the quantiles have no column on the hypertable and travel to
+      // the accuracy row beside it — aligned with the rows the feedback filter
+      // kept, not with the input.
+      it("hands q0.8/q0.95 over aligned with the recorded rows (PAR-912)", async () => {
+        await service.storePredictions([
+          {
+            ...hourly("10", "OPERATING"),
+            predictedQ80: 41.6,
+            predictedQ95: 70,
+          },
+          { ...hourly("11", "CLOSED"), predictedQ80: 99, predictedQ95: 99 },
+          hourly("12", "UNKNOWN"), // an ml-service without the fields
+        ]);
+
+        const [raw, , quantiles] =
+          mockPredictionAccuracyService.recordPredictions.mock.calls[0];
+        expect(raw).toHaveLength(2);
+        expect(quantiles).toEqual([{ q80: 42, q95: 70 }, null]);
+      });
     });
 
     it("should filter out predictions in seasonal gaps", async () => {

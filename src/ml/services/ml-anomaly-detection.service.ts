@@ -2,7 +2,11 @@ import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, Between, LessThan, Not, IsNull } from "typeorm";
 import { MLPredictionAnomaly } from "../entities/ml-prediction-anomaly.entity";
-import { PredictionAccuracy } from "../entities/prediction-accuracy.entity";
+import {
+  PredictionAccuracy,
+  isScoredSlot,
+} from "../entities/prediction-accuracy.entity";
+import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
 
 /**
  * ML Anomaly Detection Service
@@ -35,15 +39,22 @@ export class MLAnomalyDetectionService {
   }> {
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-    // Get recent predictions with actuals
-    const predictions = await this.accuracyRepository.find({
-      where: {
-        targetTime: Between(startDate, new Date()),
-        actualWaitTime: Not(IsNull()),
-        comparisonStatus: "COMPLETED",
-      },
-      take: 10000, // Sample size
-    });
+    // Get recent predictions with actuals — forecast errors only (PAR-912).
+    // This used to take every COMPLETED row, so an unplanned closure (full
+    // prediction charged as the error) or a status-only ride's 0 raised a
+    // "large_error" anomaly for a slot no forecast could have got right, and
+    // the closures' zeros dragged the extreme-value baseline down.
+    const predictions = (
+      await this.accuracyRepository.find({
+        where: {
+          targetTime: Between(startDate, new Date()),
+          actualWaitTime: Not(IsNull()),
+          comparisonStatus: "COMPLETED",
+          wasUnplannedClosure: false,
+        },
+        take: 10000, // Sample size
+      })
+    ).filter((p) => isScoredSlot(p, MAX_PLAUSIBLE_WAIT_TIME));
 
     if (predictions.length === 0) {
       this.logger.warn(

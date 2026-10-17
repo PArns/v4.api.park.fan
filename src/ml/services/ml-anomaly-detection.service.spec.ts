@@ -205,4 +205,48 @@ describe("MLAnomalyDetectionService", () => {
       expect(a1Extreme.length).toBeLessThanOrEqual(1);
     });
   });
+
+  // PAR-912: an unplanned closure is charged the full prediction, and a feed
+  // that publishes no wait reads 0 — neither is an error a forecast could have
+  // avoided, so neither may raise a "large_error".
+  describe("detectAnomalies — forecast errors only (PAR-912)", () => {
+    it("asks for non-closure rows and ignores legacy zeros", async () => {
+      const targetTime = new Date("2026-10-16T12:00:00Z");
+      const row = (id: string, over: Record<string, unknown>) => ({
+        id,
+        attractionId: id,
+        targetTime,
+        predictedWaitTime: 30,
+        actualWaitTime: 30,
+        absoluteError: 2,
+        wasUnplannedClosure: false,
+        scoreClass: null,
+        features: null,
+        modelVersion: "v1",
+        comparisonStatus: "COMPLETED",
+        ...over,
+      });
+      accuracyRepo.find.mockResolvedValueOnce([
+        // A pre-PAR-912 status-only zero against a 90-minute prediction.
+        row("legacy-zero", {
+          predictedWaitTime: 90,
+          actualWaitTime: 0,
+          absoluteError: 90,
+        }),
+        ...Array.from({ length: 10 }, (_, i) => row(`bg-${i}`, {})),
+      ]);
+      anomalyRepo.find.mockResolvedValueOnce([]);
+
+      await service.detectAnomalies(7);
+
+      const [options] = accuracyRepo.find.mock.calls[0] as unknown as [
+        { where: Record<string, unknown> },
+      ];
+      expect(options.where.wasUnplannedClosure).toBe(false);
+      const flagged = anomalyRepo.save.mock.calls.map(
+        ([e]) => (e as { attractionId: string }).attractionId,
+      );
+      expect(flagged).not.toContain("legacy-zero");
+    });
+  });
 });
