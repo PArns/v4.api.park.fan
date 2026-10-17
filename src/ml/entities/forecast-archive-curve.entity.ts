@@ -12,7 +12,8 @@ import {
  */
 export const ARCHIVE_SURFACES = {
   /** `MLService.getParkPredictions(…, "hourly")` — the served 15-min curve
-   *  (CatBoost, PCN-overridden + persistence-blended where PCN answered). */
+   *  (CatBoost, PCN-overridden + persistence-blended where PCN answered, and
+   *  Chronos-2 on 45–120 min where `SERVE_CHRONOS_INTRADAY` is on — PAR-911). */
   park_hourly: 1,
   /** `PlanDayService.buildPlanDay` — the planner's hourly curve per ride. */
   plan_day: 2,
@@ -37,6 +38,16 @@ export const ARCHIVE_SURFACES = {
    * origin, d0 … d7 — compared with `plan_day` from the same origin.
    */
   chronos_grid: 7,
+  /**
+   * The INCUMBENT served curve (PAR-911), NOT served while Chronos is: what
+   * `park_hourly` would have shown without the Chronos-2 override (CatBoost,
+   * PCN + blend), read at the intraday origins only while
+   * `SERVE_CHRONOS_INTRADAY` is on. Once Chronos is part of `park_hourly`,
+   * this is the reference the `chronos_live` shadow is paired against — so the
+   * live A/B keeps comparing Chronos with the model it replaced instead of with
+   * itself. Absent while the flag is off (then `park_hourly` IS the incumbent).
+   */
+  park_hourly_incumbent: 8,
 } as const;
 export type ArchiveSurface = keyof typeof ARCHIVE_SURFACES;
 
@@ -76,6 +87,13 @@ export const ARCHIVE_SOURCE_CODES = {
   x: "chronos2",
   /** Chronos-2 shadow, bench variant `chronos2_grid` (PAR-852). */
   g: "chronos2_grid",
+  /**
+   * Chronos-2 as SERVED on `park_hourly` (PAR-911, `SERVE_CHRONOS_INTRADAY`):
+   * the 45–120 min slots its cached `live` curve covered. Not `x`, which is
+   * the shadow surface's code, so the board can tell the served slots from
+   * the shadow it is still compared with.
+   */
+  s: "chronos2_served",
 } as const;
 export type ArchiveSourceCode = keyof typeof ARCHIVE_SOURCE_CODES;
 export type ArchiveSourceName =

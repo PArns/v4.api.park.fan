@@ -31,6 +31,13 @@ import {
 import { addIsoDays, formatInParkTimezone } from "../../common/utils/date.util";
 import { mapWithDbBudget } from "../../common/utils/db-job-budget";
 import {
+  CHRONOS_SERVE_HOURS,
+  chronosServeEntries,
+  serveChronosIntraday,
+  stripServedSuffix,
+  writeChronosServeCache,
+} from "../../ml/chronos-serving";
+import {
   CHRONOS_LAST_RUN_KEY,
   ChronosResponse,
   ChronosRunSummary,
@@ -77,6 +84,8 @@ export interface ArchiveCaptureResult {
   curves: number;
   parkDays: number;
   failed: number;
+  /** Parks whose Chronos serving curve was refreshed off-origin (PAR-911). */
+  chronosRefreshed?: number;
 }
 
 /** A curve row before it is an entity — what the pure builders return. */
@@ -193,6 +202,67 @@ export class ForecastArchiveService {
   }
 
   /**
+   * Whether a park's clock shows an hour at which Chronos serving refreshes
+   * its curves without an archive origin (PAR-911): inside
+   * {@link CHRONOS_SERVE_HOURS} and not one of the intraday origins, which
+   * write the cache themselves.
+   */
+  static isChronosRefreshHour(now: Date, timezone: string): boolean {
+    const hour = Number(formatInTimeZone(now, timezone, "H"));
+    return (
+      CHRONOS_SERVE_HOURS.includes(hour) &&
+      !ForecastArchiveService.INTRADAY_ORIGIN_HOURS.includes(hour)
+    );
+  }
+
+  /**
+   * Chronos serving refresh (PAR-911): one `live` call per park whose daily
+   * capture found a curve for today, written to the serving cache only — no
+   * archive rows, so the A/B keeps its 2-hourly origins. Same breaker and run
+   * summary as the shadow; a failure leaves the previous curve, which the
+   * 90-minute guard then retires.
+   */
+  private async refreshChronosServing(
+    parks: Park[],
+    clock: () => Date,
+  ): Promise<number> {
+    let written = 0;
+    for (let i = 0; i < parks.length; i += BATCH_SIZE) {
+      const batch = parks.slice(i, i + BATCH_SIZE);
+      const done = await Promise.all(
+        batch.map(async (park) => {
+          const at = clock();
+          const localDate = formatInParkTimezone(at, park.timezone);
+          const hour = formatInTimeZone(at, park.timezone, "HH");
+          const active = await this.redis
+            .get(this.activeKey(park.id, localDate))
+            .catch(() => null);
+          if (!active) return 0;
+          const marker = `chronos-serve:refresh:${park.id}:${localDate}:${hour}`;
+          const claimed = await this.redis
+            .set(marker, "1", "EX", 3 * 3600, "NX")
+            .catch(() => null);
+          if (claimed !== "OK") return 0;
+          const res = await this.chronos.forecast(
+            park.id,
+            at,
+            "live",
+            ForecastArchiveService.INTRADAY_WINDOW_MINUTES,
+          );
+          if (!res) return 0;
+          await writeChronosServeCache(
+            this.redis,
+            chronosServeEntries(res.curves, at, res.revision),
+          );
+          return 1;
+        }),
+      );
+      written += done.reduce<number>((a, b) => a + b, 0);
+    }
+    return written;
+  }
+
+  /**
    * The hourly job: capture every park that sits at an origin now. `clock` is
    * read once per park, immediately before its capture.
    */
@@ -203,10 +273,22 @@ export class ForecastArchiveService {
     const parks = await this.parkRepository.find();
     const due: Array<{ park: Park; kind: ArchiveOriginKind; marker: string }> =
       [];
+    const refresh: Park[] = [];
     for (const park of parks) {
       if (!park.timezone) continue;
       const kind = ForecastArchiveService.originKindAt(runStart, park.timezone);
-      if (!kind) continue;
+      if (!kind) {
+        // Chronos serving refresh (PAR-911): the hours between the 2-hourly
+        // intraday origins, only while the flag is on — so the switched-off
+        // default costs the shared GPU nothing beyond the shadow.
+        if (
+          serveChronosIntraday() &&
+          ForecastArchiveService.isChronosRefreshHour(runStart, park.timezone)
+        ) {
+          refresh.push(park);
+        }
+        continue;
+      }
       const localDate = formatInParkTimezone(runStart, park.timezone);
       if (kind === "intraday") {
         const active = await this.redis
@@ -262,6 +344,12 @@ export class ForecastArchiveService {
         result.parkDays += d.parkDays;
       }
     }
+    if (refresh.length > 0) {
+      result.chronosRefreshed = await this.refreshChronosServing(
+        refresh,
+        clock,
+      );
+    }
     const chronosRun = this.chronos.endRun();
     // The admin ML overview's "is Chronos warming up?" (PAR-861). Only runs that
     // asked Chronos anything, so an hour without intraday origins keeps the last.
@@ -299,6 +387,26 @@ export class ForecastArchiveService {
         : kind === "daily"
           ? this.chronos.forecast(park.id, originAt, "grid")
           : Promise.resolve(null);
+    // The live curves are also what Chronos serving reads (PAR-911): written
+    // to the serving cache whatever the flag says (one Redis key per ride, so
+    // the cache can be inspected before the switch), and — with the flag on —
+    // awaited BEFORE the served read below, so this origin's surface-1 row
+    // shows the curve readers get from now on, not the one it replaces.
+    const chronosWritten: Promise<ChronosResponse | null> =
+      kind === "intraday"
+        ? chronosPending.then(async (res) => {
+            if (res) {
+              await writeChronosServeCache(
+                this.redis,
+                chronosServeEntries(res.curves, originAt, res.revision),
+              );
+            }
+            return res;
+          })
+        : chronosPending;
+    if (kind === "intraday" && serveChronosIntraday()) {
+      await chronosWritten;
+    }
 
     const [headliners, q90, attractions] = await Promise.all([
       this.analyticsService
@@ -349,6 +457,26 @@ export class ForecastArchiveService {
           untilMs,
         ),
       );
+      // The incumbent (PAR-911): with Chronos served, the same read without
+      // it, so the live A/B pairs Chronos with the model it replaced. Only at
+      // intraday origins — the only ones the chronos_live shadow exists at.
+      if (kind === "intraday" && serveChronosIntraday()) {
+        const incumbent = await this.mlService
+          .getParkPredictions(park.id, "hourly", undefined, undefined, {
+            chronos: false,
+          })
+          .catch(() => ({ predictions: [] as PredictionDto[] }));
+        drafts.push(
+          ...ForecastArchiveService.curvesFromServed(
+            incumbent.predictions ?? [],
+            park.timezone,
+            localToday,
+            fromMs,
+            untilMs,
+            ARCHIVE_SURFACES.park_hourly_incumbent,
+          ),
+        );
+      }
     }
 
     // ---- intraday: today's plan, as the next-best-ride decision (D1) ----
@@ -479,7 +607,7 @@ export class ForecastArchiveService {
     }
 
     // ---- Chronos-2 shadow curves (never served) ----
-    const chronos = await chronosPending;
+    const chronos = await chronosWritten;
     if (chronos) {
       drafts.push(
         ...ForecastArchiveService.curvesFromChronos(
@@ -575,6 +703,7 @@ export class ForecastArchiveService {
     localToday: string,
     fromMs: number,
     untilMs: number,
+    surface: number = ARCHIVE_SURFACES.park_hourly,
   ): CurveDraft[] {
     const groups = new Map<string, PredictionDto[]>();
     for (const p of predictions) {
@@ -606,19 +735,25 @@ export class ForecastArchiveService {
         const idx = Math.round((Date.parse(p.predictedTime) - first) / SLOT_MS);
         if (idx < 0 || idx >= n) continue;
         waits[idx] = Math.round(p.predictedWaitTime);
-        const pcn = (p.modelVersion ?? "").endsWith("+pcn");
-        sources[idx] = pcn ? "p" : "c";
+        const mv = p.modelVersion ?? "";
+        // `s`: the Chronos-2 serving override (PAR-911) — its own code, never
+        // `x`, which is the shadow surface's.
+        sources[idx] = mv.endsWith("+chronos")
+          ? "s"
+          : mv.endsWith("+pcn")
+            ? "p"
+            : "c";
         if (p.uncertaintyMinutes != null) {
           bands[idx] = Math.round(p.uncertaintyMinutes);
           anyBand = true;
         }
         if (!modelVersion && p.modelVersion) {
-          modelVersion = p.modelVersion.replace(/\+pcn$/, "").slice(0, 64);
+          modelVersion = (stripServedSuffix(p.modelVersion) ?? "").slice(0, 64);
         }
       }
       out.push({
         attractionId,
-        surface: ARCHIVE_SURFACES.park_hourly,
+        surface,
         targetDate: date,
         leadDays: ForecastArchiveService.daysBetween(localToday, date),
         slotStart: new Date(first),

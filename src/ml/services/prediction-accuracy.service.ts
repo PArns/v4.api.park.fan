@@ -64,7 +64,7 @@ export type ServedIntradayAccuracy = {
  */
 export type ServedIntradayValue = {
   wait: number;
-  source: "pcn" | "catboost";
+  source: "pcn" | "chronos" | "catboost";
 };
 
 /**

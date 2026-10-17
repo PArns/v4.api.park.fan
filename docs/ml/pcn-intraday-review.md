@@ -545,3 +545,14 @@ Nothing in this change does that. Options, after the backlog has drained:
    end.
 3. Do nothing: the space is reused by the table itself, and only the other
    tables' growth would want it back.
+
+## 11. Chronos-2 takes 45–120 min when switched on (PAR-911, 2026-10-17)
+
+`SERVE_CHRONOS_INTRADAY` (default off) layers a second override after the PCN
+override + §7.7 blend: Chronos-2's cached `live` curve replaces the served
+value on the slots 45–120 minutes ahead; ≤ 30 min stays the blend (persistence
+wins at 15 min) and > 120 min stays PCN, which is also the fallback when the
+Chronos curve is older than 90 min or missing. Crowd level from Chronos's q80
+against the carried P50, as PCN's q0.8. `pcn_forecasts` and the PCN shadow
+board are untouched. Design, cadence, the archive's incumbent surface,
+switch-on checklist and rollback: [forward-archive.md §10](forward-archive.md#10-chronos-2-served-on-the-live-surface-par-911).

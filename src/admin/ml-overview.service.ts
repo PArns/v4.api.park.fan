@@ -17,6 +17,7 @@ import {
   ChronosShadowService,
 } from "../parks/services/chronos-shadow.service";
 import { ARCHIVE_SURFACES } from "../ml/entities/forecast-archive-curve.entity";
+import { serveChronosIntraday } from "../ml/chronos-serving";
 import { servePcnIntraday } from "../ml/pcn-serving.constants";
 import { ModelComparisonResponseDto } from "../ml/dto/model-comparison.dto";
 import { MlComponentDto, MlOverviewDto } from "../ml/dto/ml-overview.dto";
@@ -244,6 +245,7 @@ export class MlOverviewService {
     const cbNote = trainingNote(mlTrain, cbFailed, catboost?.[0]?.version);
 
     // --- Chronos-2 -----------------------------------------------------
+    const chronosServed = serveChronosIntraday();
     const chronosAt = latest(
       surfaceAt(ARCHIVE_SURFACES.chronos_live),
       surfaceAt(ARCHIVE_SURFACES.chronos_grid),
@@ -310,12 +312,22 @@ export class MlOverviewService {
       {
         id: "chronos",
         name: "Chronos-2",
-        delivers: "Live 30–120 Min., Tagesplaner 0–7 Tage (nur Schatten)",
-        role: "shadow",
+        // PAR-911: with SERVE_CHRONOS_INTRADAY on, the live 30–120 min slots
+        // are served; the planner variant stays a shadow either way.
+        delivers: chronosServed
+          ? "Live 30–120 Min. (ausgeliefert), Tagesplaner 0–7 Tage (Schatten)"
+          : "Live 30–120 Min., Tagesplaner 0–7 Tage (nur Schatten)",
+        role: chronosServed ? "served" : "shadow",
         lastRunAt: iso(chronosAt),
-        expected: "stündlich zur Minute :05 UTC (je offenem Park alle 2 Std.)",
+        expected: chronosServed
+          ? "stündlich zur Minute :05 UTC (je offenem Park 10–18 Uhr Ortszeit)"
+          : "stündlich zur Minute :05 UTC (je offenem Park alle 2 Std.)",
         status: status(chronosAt, LATE_AFTER_MS.chronos, chronos.override),
-        note: chronos.note,
+        note: chronosServed
+          ? ["Live ausgeliefert (SERVE_CHRONOS_INTRADAY an)", chronos.note]
+              .filter(Boolean)
+              .join(" · ")
+          : chronos.note,
       },
       {
         id: "h5",

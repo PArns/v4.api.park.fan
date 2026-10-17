@@ -47,6 +47,11 @@ import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.entity";
 import { persistenceBlendServe } from "./utils/persistence-blend.util";
 import {
+  applyChronosOverride,
+  readChronosServeCache,
+  serveChronosIntraday,
+} from "./chronos-serving";
+import {
   HOURLY_FRESHNESS_MS,
   HOURLY_LOOKBACK_MS,
   StoredSlotRow,
@@ -343,6 +348,7 @@ export class MLService {
     predictionType: "hourly" | "daily" = "hourly",
     maxDays?: number,
     liveStatus?: "OPERATING" | "CLOSED",
+    options: { chronos?: boolean } = {},
   ): Promise<BulkPredictionResponseDto> {
     const raw = await this.getRawParkPredictions(
       parkId,
@@ -350,17 +356,21 @@ export class MLService {
       maxDays,
       liveStatus,
     );
-    if (!this.servePcnIntraday || predictionType !== "hourly") return raw;
+    if (!this.serveIntradayOverride || predictionType !== "hourly") return raw;
 
     // Champion-swap consistency: the park-level hourly curve (park page, plan/day,
     // calendar today, favorites) must show the SAME served waits as the
     // per-attraction read paths, which apply the PCN override + persistence blend.
     // Overridden on COPIES, so neither the Redis entry nor the raw object a caller
     // may still hold ever carries a PCN number.
+    // `chronos: false` is the forward archive's incumbent read (PAR-911): the
+    // curve as it would be served without Chronos, so the live A/B keeps a
+    // reference once Chronos is part of what is served. No endpoint passes it.
     const predictions = (raw.predictions ?? []).map((p) => ({ ...p }));
-    await this.applyPcnIntradayOverride(
+    await this.applyServedIntradayOverride(
       predictions,
       new Date(currentSlotStartMs()),
+      options.chronos ?? true,
     );
     return { ...raw, predictions };
   }
@@ -1965,8 +1975,8 @@ export class MLService {
       result.set(p.attractionId, list);
     }
 
-    if (this.servePcnIntraday && predictionType === "hourly") {
-      await this.applyPcnIntradayOverride(
+    if (this.serveIntradayOverride && predictionType === "hourly") {
+      await this.applyServedIntradayOverride(
         [...result.values()].flat(),
         startTime,
       );
@@ -1977,9 +1987,14 @@ export class MLService {
   /** Champion-swap flag: serve PCN's intraday 15-min forecast in place of CatBoost's
    * `hourly` predictions (PCN beats CatBoost on the matched board). Default OFF —
    * enable per env once the win is confirmed over a few days. Always falls back to
-   * CatBoost where PCN has no forecast (or the table/flag is absent). */
-  private get servePcnIntraday(): boolean {
-    return servePcnIntradayFlag();
+   * CatBoost where PCN has no forecast (or the table/flag is absent).
+   *
+   * Since PAR-911 the read paths ask whether EITHER served-model override is on:
+   * the PCN champion swap or the Chronos-2 30–120 min window
+   * (`SERVE_CHRONOS_INTRADAY`, also default OFF). With both off every read path
+   * returns CatBoost untouched, exactly as before. */
+  private get serveIntradayOverride(): boolean {
+    return servePcnIntradayFlag() || serveChronosIntraday();
   }
 
   /** Freshest forward PCN forecast per (attraction, slot) for upcoming slots, keyed by
@@ -2070,6 +2085,12 @@ export class MLService {
    * anchor is "the wait now", and recomputing it once the slot has happened
    * would hand the forecast the answer.
    *
+   * `chronos` where the Chronos-2 serving override (PAR-911) produced the
+   * slot. Chronos serves only 45–120 min ahead, so under the two-hour scored
+   * lead below it is recorded only where the two windows meet — see
+   * docs/ml/forward-archive.md §10.4 before reading the badge as a Chronos
+   * figure.
+   *
    * `catboost` wherever CatBoost is what was served: the flag off, no PCN
    * forecast for that ride and slot, a producer older than the staleness guard,
    * or the PCN read failing (the override swallows that and falls back too).
@@ -2107,20 +2128,67 @@ export class MLService {
       baseline: r.baseline,
       modelVersion: r.modelVersion,
     }));
-    const overridden = this.servePcnIntraday
-      ? await this.applyPcnIntradayOverride(
+    const overridden = this.serveIntradayOverride
+      ? await this.applyServedIntradayOverride(
           copies,
           new Date(currentSlotStartMs()),
         )
-      : new Set<PredictionDto>();
+      : new Map<PredictionDto, "pcn" | "chronos">();
     return copies.map((c, i) =>
       rows[i].predictedTime.getTime() - now < SERVED_ACCURACY_MIN_LEAD_MS
         ? null
         : {
             wait: c.predictedWaitTime,
-            source: overridden.has(c) ? "pcn" : "catboost",
+            source: overridden.get(c) ?? "catboost",
           },
     );
+  }
+
+  /**
+   * Every served-model override, in order, on these rows (in place), and which
+   * model each changed row ended on.
+   *
+   * 1. PCN + §7.7 persistence blend (`SERVE_PCN_INTRADAY`) on every slot it has.
+   * 2. Chronos-2 (`SERVE_CHRONOS_INTRADAY`, PAR-911) on the 45–120 min slots
+   *    its cached curve covers — so ≤ 30 min stays the blend (persistence wins
+   *    at 15 min) and > 120 min stays PCN, and a stale or missing curve leaves
+   *    whatever step 1 served.
+   *
+   * Chronos's lead base is the current slot start, never the caller's
+   * `startTime`: a read that starts later must not shift Chronos's window.
+   */
+  private async applyServedIntradayOverride(
+    preds: PredictionDto[],
+    startTime?: Date,
+    withChronos = true,
+  ): Promise<Map<PredictionDto, "pcn" | "chronos">> {
+    const out = new Map<PredictionDto, "pcn" | "chronos">();
+    if (servePcnIntradayFlag()) {
+      for (const p of await this.applyPcnIntradayOverride(preds, startTime)) {
+        out.set(p, "pcn");
+      }
+    }
+    if (withChronos && serveChronosIntraday()) {
+      const hourly = preds.filter((p) => p.predictionType === "hourly");
+      if (hourly.length > 0) {
+        const curves = await readChronosServeCache(this.redis, [
+          ...new Set(hourly.map((p) => p.attractionId)),
+        ]);
+        const done = applyChronosOverride(
+          hourly,
+          curves,
+          currentSlotStartMs(),
+          Date.now(),
+        );
+        for (const p of done) out.set(p, "chronos");
+        if (done.size > 0) {
+          this.logger.debug(
+            `Chronos intraday override: ${done.size}/${hourly.length} slots`,
+          );
+        }
+      }
+    }
+    return out;
   }
 
   /** Override matched hourly predictions in place with PCN's q0.5 wait, recomputing
@@ -2251,8 +2319,8 @@ export class MLService {
         modelVersion: p.modelVersion,
         status: p.status || undefined,
       }));
-      if (this.servePcnIntraday && predictionType === "hourly") {
-        await this.applyPcnIntradayOverride(dtos, startTime);
+      if (this.serveIntradayOverride && predictionType === "hourly") {
+        await this.applyServedIntradayOverride(dtos, startTime);
       }
       return dtos;
     }
@@ -2263,8 +2331,8 @@ export class MLService {
       attractionId,
       predictionType,
     );
-    if (this.servePcnIntraday && predictionType === "hourly") {
-      await this.applyPcnIntradayOverride(live, startTime);
+    if (this.serveIntradayOverride && predictionType === "hourly") {
+      await this.applyServedIntradayOverride(live, startTime);
     }
     return live;
   }
