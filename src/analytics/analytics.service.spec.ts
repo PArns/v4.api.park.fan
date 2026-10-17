@@ -646,6 +646,94 @@ describe("AnalyticsService", () => {
     });
   });
 
+  describe("computeTypicalWaitsForPark", () => {
+    const pipeline = { set: jest.fn(), exec: jest.fn().mockResolvedValue([]) };
+
+    /** `n` operating days (from a Monday) of one ride, all peaking at `peak`. */
+    const dayRows = (attractionId: string, n: number, peak: number) =>
+      Array.from({ length: n }, (_, i) => {
+        const d = new Date(Date.UTC(2026, 5, 1 + i));
+        return {
+          attraction_id: attractionId,
+          day: d.toISOString().slice(0, 10),
+          dow: d.getUTCDay(),
+          day_peak: String(peak),
+        };
+      });
+
+    beforeEach(() => {
+      (mockRedis as any).pipeline = jest.fn(() => pipeline);
+    });
+
+    it("covers every ride of the park in one aggregate scan, not only headliners", async () => {
+      mockQueueDataRepository.query.mockResolvedValueOnce([
+        { id: "ride-big" },
+        { id: "ride-small" },
+        { id: "ride-thin" },
+      ]);
+      mockQueueDataAggregateRepository.manager.query.mockResolvedValueOnce([
+        ...dayRows("ride-big", 30, 60),
+        ...dayRows("ride-small", 20, 5),
+        ...dayRows("ride-thin", 19, 30), // one day short of the floor
+        ...dayRows("ride-moved-away", 40, 50), // aggregates outlive a re-parent
+      ]);
+
+      const result = await service.computeTypicalWaitsForPark(
+        "park-1",
+        "Europe/Berlin",
+        "DE",
+      );
+
+      expect([...result.keys()].sort()).toEqual(["ride-big", "ride-small"]);
+      expect(result.get("ride-small")!.weekday.typical).toBe(5);
+      expect(result.get("ride-small")!.displayable).toBe(true);
+      expect(result.get("ride-big")!.byDayOfWeek).toHaveLength(7);
+
+      // One scan for the whole park, keyed on the park — never one per ride.
+      expect(
+        mockQueueDataAggregateRepository.manager.query,
+      ).toHaveBeenCalledTimes(1);
+      const [sql, params] =
+        mockQueueDataAggregateRepository.manager.query.mock.calls[0];
+      expect(sql).toContain(`qda."parkId" = $1`);
+      expect(params[0]).toBe("park-1");
+      expect(mockQueueDataRepository.query).not.toHaveBeenCalledWith(
+        expect.stringContaining("headliner_attractions"),
+        expect.anything(),
+      );
+    });
+
+    it("primes the detail endpoint's cache so both serve the same numbers", async () => {
+      mockQueueDataRepository.query.mockResolvedValueOnce([{ id: "ride-big" }]);
+      mockQueueDataAggregateRepository.manager.query.mockResolvedValueOnce(
+        dayRows("ride-big", 25, 40),
+      );
+
+      const result = await service.computeTypicalWaitsForPark(
+        "park-1",
+        "Europe/Berlin",
+        "DE",
+      );
+
+      expect(pipeline.set).toHaveBeenCalledWith(
+        "attraction:typical-waits:v2:ride-big:365",
+        JSON.stringify(result.get("ride-big")),
+        "EX",
+        24 * 60 * 60,
+      );
+      expect(pipeline.exec).toHaveBeenCalledTimes(1);
+
+      // The detail endpoint then reads exactly that payload back.
+      mockRedis.get.mockResolvedValueOnce(pipeline.set.mock.calls[0][1]);
+      const detail = await service.getAttractionTypicalWaits(
+        "ride-big",
+        "Europe/Berlin",
+        "DE",
+      );
+      expect(detail).toEqual(result.get("ride-big"));
+    });
+  });
+
   /**
    * `schedule_entries` holds the park's opening hours (`attractionId IS NULL`)
    * and a row per ride in the same table. These two read the park's hours and

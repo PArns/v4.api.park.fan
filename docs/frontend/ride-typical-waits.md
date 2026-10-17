@@ -12,8 +12,21 @@ GET /v1/parks/:continent/:country/:city/:parkSlug/attractions/:attractionSlug
 → AttractionResponseDto.typicalWaits: TypicalWaitsDto | null
 ```
 
-It is only populated on the **single-attraction detail** endpoint (not on the
-park's `/attractions` list). `null` (or omitted) ⇒ no data; render nothing.
+The same payload also rides on every attraction of the **park** response
+(`GET /v1/parks/:continent/:country/:city/:parkSlug`), for every ride with at
+least 20 measured operating days in the window (the `displayable` floor) —
+since PAR-908, not only headliners. That is what the SSR ride page renders from
+without a second API call. Below the floor the park payload omits the field;
+the detail endpoint still answers with `displayable: false`. `null` (or
+omitted) ⇒ no data; render nothing.
+
+The park copy is precomputed nightly (05:30 UTC, `attraction_typical_waits`) by
+one grouped scan of `queue_data_aggregates` per park, and the job primes the
+detail endpoint's cache, so both surfaces serve identical numbers for the day.
+`byDayOfWeek` stays in the park copy because the frontend component maps over
+it unguarded; going from 10 to 84 rides cost Europa-Park +58.7 KB
+uncompressed and +1.05 KB brotli (measured 2026-10-17). The
+5-minute live poll (`LiveParkSnapshot`) leaves `typicalWaits` out.
 
 ## What the numbers mean
 

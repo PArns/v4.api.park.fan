@@ -8,12 +8,12 @@ import { mapWithDbBudget } from "../../common/utils/db-job-budget";
 /**
  * Typical-Waits Processor
  *
- * Precomputes the typical (P50) vs busy (P90) peak-wait stats for every park's
- * tier1/tier2 headliners and stores them in `attraction_typical_waits`, so the
- * park response — and thus the statically-prerendered ride-page shell — can
+ * Precomputes the typical (P50) vs busy (P90) peak-wait stats for every ride
+ * with enough measured days and stores them in `attraction_typical_waits`, so
+ * the park response — and thus the statically-prerendered ride-page shell — can
  * serve them without a per-request percentile scan. Mirrors the rope-drop
- * processor (daily, parks in batches of 5). Reuses the 24h-cached per-attraction
- * aggregate, so a run is cheap after the daily percentile rebuild.
+ * processor (daily, parks in batches of 5). One grouped aggregate scan per park,
+ * not one per ride (see `computeTypicalWaitsForPark`).
  */
 @Processor("typical-waits")
 export class TypicalWaitsProcessor {
@@ -26,9 +26,7 @@ export class TypicalWaitsProcessor {
 
   @Process("calculate-typical-waits")
   async handleCalculateTypicalWaits(_job: Job): Promise<void> {
-    this.logger.log(
-      "⏳ Calculating typical-waits for all parks' headliners...",
-    );
+    this.logger.log("⏳ Calculating typical-waits for all parks' rides...");
 
     try {
       const parks = await this.parksService.findAll();
