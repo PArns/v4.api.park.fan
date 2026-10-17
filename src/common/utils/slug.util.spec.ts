@@ -1,6 +1,12 @@
 import { normalizeForMatching } from "./slug.util";
 
 describe("normalizeForMatching", () => {
+  it("returns an empty string for an absent name instead of throwing", () => {
+    expect(normalizeForMatching(null)).toBe("");
+    expect(normalizeForMatching(undefined)).toBe("");
+    expect(normalizeForMatching("")).toBe("");
+  });
+
   it("keeps a trailing country code, which marks the language of a show", () => {
     expect(normalizeForMatching("Taron Coaster (DE)")).toBe(
       "taron coaster (de)",

@@ -99,7 +99,10 @@ export class EntityMatcherService {
       // 3. Smart Strategy: Slug Match (High Confidence)
       if (!bestMatch) {
         const wikiSlug = norm(wiki.name);
-        const slugMatch = qtOnly.find((p) => norm(p.name) === wikiSlug);
+        // An absent name normalises to "" — it must never equal another absent one.
+        const slugMatch = wikiSlug
+          ? qtOnly.find((p) => norm(p.name) === wikiSlug)
+          : undefined;
         if (slugMatch) {
           bestMatch = slugMatch;
           bestScore = 0.95;
@@ -112,14 +115,17 @@ export class EntityMatcherService {
       // 4. Smart Strategy: Ride Signature Match (Very High Confidence)
       // If two parks share multiple unique attraction names, they are the same.
       if (!bestMatch && wiki.attractions && wiki.attractions.length > 0) {
-        const wikiRides = new Set(wiki.attractions.map((a) => norm(a.name)));
+        const wikiRides = new Set(
+          wiki.attractions.map((a) => norm(a.name)).filter((n) => n !== ""),
+        );
 
         for (const qt of qtOnly) {
           if (!qt.attractions || qt.attractions.length === 0) continue;
 
           let sharedRides = 0;
           for (const qtRide of qt.attractions) {
-            if (wikiRides.has(norm(qtRide.name))) {
+            const qtRideName = norm(qtRide.name);
+            if (qtRideName !== "" && wikiRides.has(qtRideName)) {
               sharedRides++;
             }
           }
@@ -175,9 +181,10 @@ export class EntityMatcherService {
    * Matching runs compare the same names against many candidates, so the
    * normalization (regex + transliteration) dominates without a cache.
    */
-  private memoizedNormalizer(): (name: string) => string {
+  private memoizedNormalizer(): (name: string | null | undefined) => string {
     const cache = new Map<string, string>();
-    return (name: string) => {
+    return (name: string | null | undefined) => {
+      if (typeof name !== "string") return "";
       let normalized = cache.get(name);
       if (normalized === undefined) {
         normalized = normalizeForMatching(name);
@@ -200,6 +207,8 @@ export class EntityMatcherService {
     n1: string = normalizeForMatching(wiki.name),
     n2: string = normalizeForMatching(qt.name),
   ): number {
+    // A park without a name cannot be matched by name.
+    if (!n1 || !n2) return 0;
     // HARD CONSTRAINT: Different continents = instant rejection
     // This prevents false matches like Everland (Asia) + Toverland (Europe)
     if (wiki.continent && qt.continent) {
@@ -395,9 +404,9 @@ export class EntityMatcherService {
   /**
    * Strict normalization for manual match keys (remove all non-alphanumeric)
    */
-  private normalizeByKey(text: string): string {
+  private normalizeByKey(text: string | null | undefined): string {
     return (
-      text
+      (text ?? "")
         .toLowerCase()
         // Remove country code suffixes like " (FR)", " (US)", etc. before other normalization
         .replace(/\s*\(\s*[A-Z]{2}\s*\)\s*$/g, "")
@@ -517,6 +526,8 @@ export class EntityMatcherService {
     n1: string = normalizeForMatching(e1.name),
     n2: string = normalizeForMatching(e2.name),
   ): number {
+    // An entity without a name cannot be matched by name (PAR-803 regression guard).
+    if (!n1 || !n2) return 0;
     // Name similarity calculation
     let rawNameSim = compareTwoStrings(n1, n2);
 
