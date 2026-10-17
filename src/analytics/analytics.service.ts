@@ -54,6 +54,14 @@ import {
 import { buildParkUrl, buildAttractionUrl } from "../common/utils/url.util";
 import { peakHourConfidence } from "./utils/peak-hour.util";
 import {
+  buildTypicalWaits,
+  typicalWaitsWindow,
+  TypicalWaitsDayInput,
+  TYPICAL_WAITS_MIN_SAMPLES_PER_HOUR,
+  TYPICAL_WAITS_MIN_TOTAL_SAMPLE_DAYS,
+  TYPICAL_WAITS_WINDOW_DAYS,
+} from "./utils/typical-waits.util";
+import {
   getStartOfDayInTimezone,
   getCurrentDateInTimezone,
   getCurrentTimeInTimezone,
@@ -4879,29 +4887,13 @@ export class AnalyticsService {
     timezone: string,
     countryCode: string,
   ): Promise<TypicalWaitsDto> {
-    const WINDOW_DAYS = 365; // one full seasonal cycle
-    const MIN_SAMPLES_PER_HOUR = 2; // drop noisy single-sample hours
-    const MIN_TOTAL_SAMPLE_DAYS = 20; // gate for `displayable`
-
-    const cacheKey = `attraction:typical-waits:v2:${attractionId}:${WINDOW_DAYS}`;
     const cached = safeJsonParse<TypicalWaitsDto>(
-      await this.redis.get(cacheKey),
+      await this.redis.get(typicalWaitsCacheKey(attractionId)),
     );
     if (cached) return cached;
 
     const now = new Date();
-    const dataTo = formatInTimeZone(subDays(now, 1), timezone, "yyyy-MM-dd");
-    const dataFrom = formatInTimeZone(
-      subDays(now, WINDOW_DAYS),
-      timezone,
-      "yyyy-MM-dd",
-    );
-    // Bound the scan in UTC against the park-local date window.
-    const startUtc = fromZonedTime(`${dataFrom}T00:00:00`, timezone);
-    const endUtc = fromZonedTime(`${dataTo}T00:00:00`, timezone);
-    endUtc.setUTCDate(endUtc.getUTCDate() + 1); // inclusive of dataTo
-
-    const weekendDays = new Set(getWeekendDaysForCountry(countryCode));
+    const window = typicalWaitsWindow(now, timezone);
 
     // One row per operating day: its peak (max hourly P90) + day-of-week.
     const rows: Array<{ day: string; dow: number; day_peak: string }> =
@@ -4920,94 +4912,33 @@ export class AnalyticsService {
         [
           attractionId,
           timezone,
-          startUtc.toISOString(),
-          endUtc.toISOString(),
-          MIN_SAMPLES_PER_HOUR,
+          window.startUtc.toISOString(),
+          window.endUtc.toISOString(),
+          TYPICAL_WAITS_MIN_SAMPLES_PER_HOUR,
         ],
       );
 
-    const daily = rows.map((r) => ({
-      date: r.day,
-      dow: Number(r.dow),
-      peak: Number(r.day_peak),
-    }));
-
-    // Bucket = {typical: P50, busy: P90} over a set of daily peaks.
-    const bucketOf = (peaks: number[]): TypicalWaitsDto["weekday"] => {
-      if (peaks.length === 0) {
-        return { typical: null, busy: null, sampleDays: 0 };
-      }
-      const sorted = [...peaks].sort((a, b) => a - b);
-      return {
-        typical: roundToNearest5Minutes(this.percentileCont(sorted, 0.5)),
-        busy: roundToNearest5Minutes(this.percentileCont(sorted, 0.9)),
-        sampleDays: peaks.length,
-      };
-    };
-
-    const weekday = bucketOf(
-      daily.filter((d) => !weekendDays.has(d.dow)).map((d) => d.peak),
+    const result = buildTypicalWaits(
+      rows.map((r) => ({
+        date: r.day,
+        dow: Number(r.dow),
+        peak: Number(r.day_peak),
+      })),
+      new Set(getWeekendDaysForCountry(countryCode)),
+      window,
+      now,
     );
-    const weekend = bucketOf(
-      daily.filter((d) => weekendDays.has(d.dow)).map((d) => d.peak),
-    );
-
-    // Per day-of-week (only days with data), ordered 0=Sun..6=Sat.
-    const byDayOfWeek: TypicalWaitsDto["byDayOfWeek"] = [];
-    for (let dow = 0; dow <= 6; dow++) {
-      const peaks = daily.filter((d) => d.dow === dow).map((d) => d.peak);
-      if (peaks.length === 0) continue;
-      byDayOfWeek.push({
-        dayOfWeek: dow,
-        isWeekend: weekendDays.has(dow),
-        ...bucketOf(peaks),
-      });
-    }
-
-    // Record peak over the window, with the date it occurred. On ties, the
-    // most recent date wins (daily is sorted ascending, so >= keeps the last).
-    let record: { peak: number; date: string } | null = null;
-    for (const d of daily) {
-      if (record === null || d.peak >= record.peak) {
-        record = { peak: d.peak, date: d.date };
-      }
-    }
-    const peak: TypicalWaitsDto["peak"] = record
-      ? { value: roundToNearest5Minutes(record.peak), date: record.date }
-      : null;
-
-    const result: TypicalWaitsDto = {
-      weekday,
-      weekend,
-      byDayOfWeek,
-      peak,
-      windowDays: WINDOW_DAYS,
-      dataFrom,
-      dataTo,
-      displayable: daily.length >= MIN_TOTAL_SAMPLE_DAYS,
-      generatedAt: new Date().toISOString(),
-    };
 
     await this.redis
-      .set(cacheKey, JSON.stringify(result), "EX", 24 * 60 * 60)
+      .set(
+        typicalWaitsCacheKey(attractionId),
+        JSON.stringify(result),
+        "EX",
+        TYPICAL_WAITS_CACHE_TTL,
+      )
       .catch(() => undefined);
 
     return result;
-  }
-
-  /**
-   * Linear-interpolation percentile over an ascending-sorted array, matching
-   * PostgreSQL's percentile_cont semantics. `q` in [0, 1].
-   */
-  private percentileCont(sortedAsc: number[], q: number): number {
-    const n = sortedAsc.length;
-    if (n === 0) return 0;
-    if (n === 1) return sortedAsc[0];
-    const rank = q * (n - 1);
-    const lo = Math.floor(rank);
-    const hi = Math.ceil(rank);
-    if (lo === hi) return sortedAsc[lo];
-    return sortedAsc[lo] + (rank - lo) * (sortedAsc[hi] - sortedAsc[lo]);
   }
 
   /**
@@ -6276,40 +6207,95 @@ export class AnalyticsService {
   }
 
   // ───────────────────────────── Typical waits ─────────────────────────────
-  // Precomputed P50/P90 peak-wait stats per headliner, stored so the park
-  // response (and the SSR ride-page shell) can serve them without a percentile
-  // scan. Mirrors the rope-drop precompute above.
+  // Precomputed P50/P90 peak-wait stats per ride, stored so the park response
+  // (and the SSR ride-page shell) can serve them without a percentile scan.
+  // Mirrors the rope-drop precompute above.
 
   /**
-   * Compute typical-waits for a park's tier1/tier2 headliners by reusing the
-   * per-attraction aggregate (`getAttractionTypicalWaits`, 24h-cached). Returns
-   * only the displayable ones — the rows worth persisting for the park response.
+   * Compute typical-waits for every ride of a park in ONE scan of
+   * `queue_data_aggregates` (the `(parkId, hour)` index), built with the same
+   * `buildTypicalWaits` the detail endpoint uses. One grouped query per park
+   * replaces one query per ride: measured on Europa-Park (84 rides), ~0.25 s
+   * against ~5.9 s — each per-ride query paid ~60 ms of planning over every
+   * chunk of the year. Returns only the displayable ones (the rows worth
+   * persisting) and primes the detail endpoint's cache with them, so the park
+   * payload and the detail endpoint serve the same numbers for the day.
    */
   async computeTypicalWaitsForPark(
     parkId: string,
     timezone: string,
     countryCode: string,
   ): Promise<Map<string, TypicalWaitsDto>> {
-    const rows: Array<{ attractionId: string }> =
-      await this.queueDataRepository.query(
-        `SELECT "attractionId" FROM headliner_attractions
-         WHERE "parkId" = $1::uuid AND tier IN ('tier1', 'tier2')`,
-        [parkId],
-      );
+    const now = new Date();
+    const window = typicalWaitsWindow(now, timezone);
 
-    const result = new Map<string, TypicalWaitsDto>();
-    for (const { attractionId } of rows) {
-      try {
-        const tw = await this.getAttractionTypicalWaits(
-          attractionId,
+    const [attractionRows, dayRows]: [
+      Array<{ id: string }>,
+      Array<{
+        attraction_id: string;
+        day: string;
+        dow: number;
+        day_peak: string;
+      }>,
+    ] = await Promise.all([
+      // Only rides that still belong to the park: aggregates outlive a merged
+      // or re-parented attraction, and the stored row's FK would reject them.
+      this.queueDataRepository.query(
+        `SELECT id::text AS id FROM attractions WHERE "parkId" = $1::uuid`,
+        [parkId],
+      ),
+      this.queueDataAggregateRepository.manager.query(
+        `SELECT
+           qda."attractionId"                                 AS attraction_id,
+           (qda.hour AT TIME ZONE $2)::date::text             AS day,
+           EXTRACT(DOW FROM qda.hour AT TIME ZONE $2)::int    AS dow,
+           MAX(qda.p90)                                       AS day_peak
+         FROM queue_data_aggregates qda
+         WHERE qda."parkId" = $1
+           AND qda.hour >= $3
+           AND qda.hour <  $4
+           AND qda."sampleCount" >= $5
+         GROUP BY qda."attractionId", day, dow
+         ORDER BY qda."attractionId", day`,
+        [
+          parkId,
           timezone,
-          countryCode,
-        );
-        if (tw.displayable) result.set(attractionId, tw);
-      } catch {
-        // skip attractions whose aggregate can't be computed
+          window.startUtc.toISOString(),
+          window.endUtc.toISOString(),
+          TYPICAL_WAITS_MIN_SAMPLES_PER_HOUR,
+        ],
+      ),
+    ]);
+
+    const parkAttractionIds = new Set(attractionRows.map((r) => r.id));
+    const dailyByAttraction = new Map<string, TypicalWaitsDayInput[]>();
+    for (const r of dayRows) {
+      if (!parkAttractionIds.has(r.attraction_id)) continue;
+      let daily = dailyByAttraction.get(r.attraction_id);
+      if (!daily) {
+        daily = [];
+        dailyByAttraction.set(r.attraction_id, daily);
       }
+      daily.push({ date: r.day, dow: Number(r.dow), peak: Number(r.day_peak) });
     }
+
+    const weekendDays = new Set(getWeekendDaysForCountry(countryCode));
+    const result = new Map<string, TypicalWaitsDto>();
+    const pipeline = this.redis.pipeline();
+    for (const [attractionId, daily] of dailyByAttraction) {
+      // Below the floor nothing is stored; the detail endpoint computes (and
+      // caches) its own on demand, as before.
+      if (daily.length < TYPICAL_WAITS_MIN_TOTAL_SAMPLE_DAYS) continue;
+      const tw = buildTypicalWaits(daily, weekendDays, window, now);
+      result.set(attractionId, tw);
+      pipeline.set(
+        typicalWaitsCacheKey(attractionId),
+        JSON.stringify(tw),
+        "EX",
+        TYPICAL_WAITS_CACHE_TTL,
+      );
+    }
+    if (result.size > 0) await pipeline.exec().catch(() => undefined);
     return result;
   }
 
@@ -6368,6 +6354,14 @@ export class AnalyticsService {
     return this.attractionTypicalWaitsRepository.count();
   }
 }
+
+/** Detail-endpoint cache for one ride's typical-waits (the park job primes it). */
+function typicalWaitsCacheKey(attractionId: string): string {
+  return `attraction:typical-waits:v2:${attractionId}:${TYPICAL_WAITS_WINDOW_DAYS}`;
+}
+
+/** The inputs (hourly percentile aggregates) only change once a day. */
+const TYPICAL_WAITS_CACHE_TTL = 24 * 60 * 60;
 
 /** `HH:mm` floored to the quarter hour. See `getRideOpeningTimes` for why. */
 function floorToQuarter(hhmm: string): string {

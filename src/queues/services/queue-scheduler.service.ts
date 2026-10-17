@@ -1163,7 +1163,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Typical-waits: daily at 5:30 AM (after rope-drop at 5:15 + the hourly-history
-    // / percentile rebuild). Precomputes P50/P90 peak-wait stats per headliner so
+    // / percentile rebuild). Precomputes P50/P90 peak-wait stats per ride so
     // the park response (SSR ride-page shell) serves them without a percentile scan.
     const hasTypicalWaitsCron = await this.hasRepeatableJob(
       this.typicalWaitsQueue,

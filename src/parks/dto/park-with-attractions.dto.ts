@@ -341,8 +341,10 @@ export class ParkAttractionDto {
 
   @ApiProperty({
     description:
-      "Precomputed typical (P50) vs busy (P90) peak-wait stats. Present only for " +
-      "displayable headliners — lets the SSR ride-page shell render them.",
+      "Precomputed typical (P50) vs busy (P90) peak-wait stats, the same payload " +
+      "as the attraction detail endpoint. Present for every ride with at least " +
+      "20 measured operating days in the last 365 — lets the SSR ride-page " +
+      "shell render them. Absent means too few days, never zero waits.",
     required: false,
     nullable: true,
   })
