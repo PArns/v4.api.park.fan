@@ -1,7 +1,13 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { DataSource } from "typeorm";
 import { HYPERTABLES } from "./hypertables";
+import { AbortableRuns, RunAborted } from "../common/utils/abortable-runs";
 
 /**
  * TimescaleDB Initialization Service
@@ -24,16 +30,29 @@ import { HYPERTABLES } from "./hypertables";
  * 3. Set up compression policies
  */
 @Injectable()
-export class TimescaleInitService implements OnModuleInit {
+export class TimescaleInitService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TimescaleInitService.name);
+  private readonly runs = new AbortableRuns();
 
   constructor(@InjectDataSource() private dataSource: DataSource) {}
 
   async onModuleInit(): Promise<void> {
     // Run async, don't block startup
-    this.initializeHypertables().catch((err) => {
-      this.logger.error("Failed to initialize TimescaleDB hypertables", err);
-    });
+    this.runs.start(
+      () => this.initializeHypertables(),
+      (err) =>
+        this.logger.error("Failed to initialize TimescaleDB hypertables", err),
+    );
+  }
+
+  /**
+   * Stops the setup at its next statement and waits for the one in flight, so
+   * a shutdown during the first seconds of a boot neither closes the DataSource
+   * under a running DDL statement nor logs the interruption as a failure (see
+   * `AbortableRuns`). Every statement is idempotent, so the next boot resumes.
+   */
+  async onModuleDestroy(): Promise<void> {
+    await this.runs.abortAndDrain();
   }
 
   private async initializeHypertables(): Promise<void> {
@@ -41,6 +60,7 @@ export class TimescaleInitService implements OnModuleInit {
 
     try {
       // Check if TimescaleDB extension is installed
+      this.runs.checkpoint();
       const hasTimescale = await this.checkTimescaleExtension();
       if (!hasTimescale) {
         this.logger.warn(
@@ -51,6 +71,7 @@ export class TimescaleInitService implements OnModuleInit {
 
       // Convert tables to hypertables
       for (const spec of HYPERTABLES) {
+        this.runs.checkpoint();
         await this.createHypertable(
           spec.table,
           spec.timeColumn,
@@ -59,16 +80,20 @@ export class TimescaleInitService implements OnModuleInit {
       }
 
       // Compression must never queue an ACCESS EXCLUSIVE lock (runbook §0b)
+      this.runs.checkpoint();
       await this.setupCompressTruncateBehaviour();
 
       // Set up compression policies (preserves hourly data!)
+      this.runs.checkpoint();
       await this.setupCompressionPolicies();
 
       // Retention is the cleanup-old job's, not a policy's (runbook §0b)
+      this.runs.checkpoint();
       await this.setupRetentionPolicies();
 
       this.logger.log("✅ TimescaleDB hypertables initialized successfully!");
     } catch (error) {
+      if (error instanceof RunAborted) throw error;
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error(
@@ -241,6 +266,7 @@ export class TimescaleInitService implements OnModuleInit {
 
     try {
       for (const spec of HYPERTABLES) {
+        this.runs.checkpoint();
         await this.enableCompression(
           spec.table,
           spec.timeColumn,
@@ -253,6 +279,7 @@ export class TimescaleInitService implements OnModuleInit {
 
       this.logger.log("✅ Compression policies configured");
     } catch (error) {
+      if (error instanceof RunAborted) throw error;
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.warn(

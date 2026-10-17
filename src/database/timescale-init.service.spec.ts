@@ -183,3 +183,37 @@ describe("TimescaleInitService — lock-safe boot steps", () => {
     });
   });
 });
+
+describe("TimescaleInitService — shutdown during the boot setup", () => {
+  it("stops before the next statement, logs no error and awaits the one in flight", async () => {
+    let releaseExtension!: () => void;
+    const gate = new Promise<void>((resolve) => (releaseExtension = resolve));
+    const query = jest.fn((sql: string) =>
+      sql.includes("pg_extension")
+        ? gate.then(() => [{ installed: true }])
+        : Promise.resolve([]),
+    );
+    const service = new TimescaleInitService({
+      query,
+    } as unknown as DataSource);
+    const error = jest
+      .spyOn(Logger.prototype, "error")
+      .mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
+
+    try {
+      await service.onModuleInit();
+      expect(query).toHaveBeenCalledTimes(1);
+
+      const destroyed = service.onModuleDestroy();
+      releaseExtension();
+      await destroyed;
+
+      // The extension check finished; no hypertable was touched after it.
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      jest.restoreAllMocks();
+    }
+  });
+});
