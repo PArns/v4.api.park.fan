@@ -1,4 +1,5 @@
 import {
+  writeMorningPlanMessage,
   writeMessage,
   writeRideAlertMessage,
   writeRainSoonMessage,
@@ -152,5 +153,34 @@ describe("writeRainSoonMessage", () => {
     expect(writeRainSoonMessage({ ...base, rides }, "nl-BE").title).toBe(
       "Regen vanaf ongeveer 14:20",
     );
+  });
+});
+
+describe("writeMorningPlanMessage", () => {
+  const copy = {
+    dedupeKey: "morning-plan:phantasialand:2026-10-17",
+    parkName: "Phantasialand",
+    opensAt: "09:00",
+    entries: [
+      { name: "Taron", atTime: "09:30" },
+      { name: "Black Mamba", atTime: "10:00" },
+    ],
+    url: "/",
+  };
+
+  it.each([
+    ["de", "Phantasialand öffnet um 09:00 Uhr"],
+    ["en", "Phantasialand opens at 09:00"],
+    ["nl", "Phantasialand opent om 09:00"],
+    ["fr", "Phantasialand ouvre à 09:00"],
+    ["es", "Phantasialand abre a las 09:00"],
+    ["it", "Phantasialand apre alle 09:00"],
+    ["de-AT", "Phantasialand öffnet um 09:00 Uhr"],
+    ["pt", "Phantasialand opens at 09:00"],
+  ])("writes %s", (locale, title) => {
+    const message = writeMorningPlanMessage(copy, locale);
+    expect(message.title).toBe(title);
+    expect(message.body).toBe("09:30 Taron\n10:00 Black Mamba");
+    expect(message.tag).toBe(copy.dedupeKey);
   });
 });
