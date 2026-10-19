@@ -171,47 +171,46 @@ describe("MultiSourceOrchestrator", () => {
     });
 
     it("runs source fetches in parallel (concurrency, not serial)", async () => {
-      // Two sources that each take ~50 ms. If serial, total ≈ 100 ms;
-      // parallel ≈ 50 ms. We assert the total is closer to 50 than 100.
-      const delay = (ms: number, value: unknown) =>
-        new Promise((resolve) => setTimeout(() => resolve(value), ms));
-
-      orchestrator.registerSource(
-        stubSource("themeparks-wiki", {
-          live: () =>
-            delay(50, { entities: [], operatingHours: [] }) as Promise<{
-              entities: unknown[];
-              operatingHours: unknown[];
-            }>,
-        }),
+      // Order of calls, not wall-clock: a serial implementation never starts
+      // the second fetch while the first is still pending, so the second
+      // fetch is never called and `bothStarted` never resolves.
+      type Live = { entities: unknown[]; operatingHours: unknown[] };
+      const empty: Live = { entities: [], operatingHours: [] };
+      let started = 0;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let markBothStarted!: () => void;
+      const bothStarted = new Promise<void>(
+        (resolve) => (markBothStarted = resolve),
       );
-      orchestrator.registerSource(
-        stubSource("queue-times", {
-          live: () =>
-            delay(50, { entities: [], operatingHours: [] }) as Promise<{
-              entities: unknown[];
-              operatingHours: unknown[];
-            }>,
-        }),
-      );
-      conflictResolver.aggregateParkData.mockReturnValue({
-        entities: [],
-        operatingHours: [],
-      });
+      const live = () => {
+        started += 1;
+        if (started === 2) markBothStarted();
+        return gate.then(() => empty);
+      };
 
-      const start = Date.now();
-      await orchestrator.fetchParkLiveData(
+      orchestrator.registerSource(stubSource("themeparks-wiki", { live }));
+      orchestrator.registerSource(stubSource("queue-times", { live }));
+      conflictResolver.aggregateParkData.mockReturnValue(empty);
+
+      const run = orchestrator.fetchParkLiveData(
         "p-1",
         new Map([
-          ["themeparks-wiki", "x"],
-          ["queue-times", "y"],
+          ["themeparks-wiki", "ext-1"],
+          ["queue-times", "ext-2"],
         ]),
       );
-      const elapsed = Date.now() - start;
 
-      // Parallel: should finish well under serial sum (90 ms is a
-      // generous upper bound for two 50 ms fetches in parallel).
-      expect(elapsed).toBeLessThan(90);
+      // Both fetches are in flight while neither has resolved.
+      const outcome = await Promise.race([
+        bothStarted.then(() => "parallel"),
+        new Promise((resolve) => setImmediate(() => resolve("serial"))),
+      ]);
+      release();
+      await run;
+
+      expect(outcome).toBe("parallel");
+      expect(started).toBe(2);
     });
   });
 
