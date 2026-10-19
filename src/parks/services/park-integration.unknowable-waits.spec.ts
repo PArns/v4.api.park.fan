@@ -99,6 +99,7 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
     getBatchAttractionP90Baselines: jest.fn().mockResolvedValue(new Map()),
     getRopeDropForPark: jest.fn().mockResolvedValue(new Map()),
     getTypicalWaitsForPark: jest.fn().mockResolvedValue(new Map()),
+    getRideRunWeekdays: jest.fn().mockResolvedValue(new Map()),
     isParkRatable: jest.fn().mockResolvedValue(false),
     getTypicalDayPeakFromCache: jest.fn().mockResolvedValue(0),
     determineCrowdLevel: jest.fn().mockReturnValue("very_low"),
