@@ -9,6 +9,7 @@ import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy
 import { ParksService } from "../../parks/parks.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RECONCILIATION_SOURCE } from "../../common/utils/source-absent-status.util";
+import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
 import { Park } from "../../parks/entities/park.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { ScheduleEntry } from "../../parks/entities/schedule-entry.entity";
@@ -1013,6 +1014,41 @@ describe("AttractionIntegrationService", () => {
       ];
       const got = await runWindow("2027-03-31T09:00:00Z", 6, dates);
       expect(got).toEqual(dates.slice(1));
+    });
+  });
+
+  describe("calculateAttractionHistory live day slice", () => {
+    it("keeps carried heartbeat rows out of both live queries, as the rollup does", async () => {
+      jest.useFakeTimers({
+        now: new Date("2026-10-28T09:00:00Z"),
+        doNotFake: ["nextTick"],
+      });
+      try {
+        mockRedis.get.mockResolvedValue(null);
+        mockParksService.getSchedule.mockResolvedValue([]);
+        mockAnalyticsService.getAttractionHourlyHistory.mockResolvedValue(
+          new Map(),
+        );
+        mockDataSource.query.mockClear();
+        mockDataSource.query.mockResolvedValue([]);
+
+        await service.calculateAttractionHistory(
+          "attraction-1",
+          "park-1",
+          "Europe/Berlin",
+          3,
+        );
+
+        const live = mockDataSource.query.mock.calls
+          .map(([sql]) => String(sql))
+          .filter((sql) => /FROM queue_data qd/.test(sql));
+        expect(live).toHaveLength(2);
+        for (const sql of live) {
+          expect(sql).toContain(observedReadingsSql("qd"));
+        }
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 });
