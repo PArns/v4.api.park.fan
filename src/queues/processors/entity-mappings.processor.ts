@@ -126,6 +126,7 @@ export class EntityMappingsProcessor {
       wikiEntities = await wikiSource.fetchParkEntities(
         wikiMapping.externalEntityId,
       );
+      await this.addCuratedNames(parkId, wikiEntities);
     }
 
     // Process Queue-Times (if available)
@@ -190,6 +191,35 @@ export class EntityMappingsProcessor {
       );
     }
     return totalMappings;
+  }
+
+  /**
+   * The wiki feed names some rows in the park's local language ("Helhuis"),
+   * the other feeds use the operator's name. The row's curated name is that
+   * operator name, so it is offered to the matcher as a second name (PAR-924).
+   */
+  private async addCuratedNames(
+    parkId: string,
+    wikiEntities: EntityMetadata[],
+  ): Promise<void> {
+    const attractions = wikiEntities.filter(
+      (e) => e.entityType === "ATTRACTION",
+    );
+    if (attractions.length === 0) return;
+
+    const rows = await this.attractionsService.getRepository().find({
+      where: { parkId, externalId: In(attractions.map((e) => e.externalId)) },
+      select: { externalId: true, curatedName: true },
+    });
+    const curatedByExternalId = new Map(
+      rows.flatMap((r) =>
+        r.curatedName ? [[r.externalId, r.curatedName]] : [],
+      ),
+    );
+    for (const entity of attractions) {
+      const curated = curatedByExternalId.get(entity.externalId);
+      if (curated && curated !== entity.name) entity.altNames = [curated];
+    }
   }
 
   /**
