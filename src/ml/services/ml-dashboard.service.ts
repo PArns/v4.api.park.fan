@@ -38,7 +38,8 @@ export class MLDashboardService {
     // 15-min compare cron only trickles in new matches), so a 1h TTL keeps most
     // polls warm at zero meaningful freshness cost; acute issues surface via the
     // separate /alerts endpoint, not here.
-    const cacheKey = "ml:dashboard:v2";
+    // v3: PAR-912 changed `live` (scored slots only) and added `operating`.
+    const cacheKey = "ml:dashboard:v3";
     const cached = await this.redis.get(cacheKey).catch(() => null);
     const cachedDto = safeJsonParse<MLDashboardDto>(cached);
     if (cachedDto) return cachedDto;
@@ -62,6 +63,7 @@ export class MLDashboardService {
       weekdayPatterns,
       drift,
       servedIntraday,
+      operating,
     ] = await Promise.all([
       this.mlModelService.getActiveModel(),
       this.mlModelService.getModelComparison(),
@@ -71,6 +73,7 @@ export class MLDashboardService {
       this.accuracyService.getDayOfWeekAccuracyPatterns(30),
       this.getDriftMetrics(),
       this.getServedIntradayAccuracy(),
+      this.getOperatingAccuracy(),
     ]);
 
     if (!currentModelData) {
@@ -128,6 +131,7 @@ export class MLDashboardService {
           badge: this.getBadge(systemAccuracyStats.overall.mae),
         },
         servedIntraday,
+        operating,
         drift,
         improvement: modelComparison.improvement,
       },
@@ -165,6 +169,17 @@ export class MLDashboardService {
       return await this.accuracyService.getServedIntradayAccuracy(7);
     } catch (error) {
       this.logger.warn(`Could not fetch served intraday accuracy: ${error}`);
+      return null;
+    }
+  }
+
+  // Catch-and-null like the two above: a new aggregation must not be able to
+  // take the whole dashboard down.
+  private async getOperatingAccuracy() {
+    try {
+      return await this.accuracyService.getOperatingAccuracy(7);
+    } catch (error) {
+      this.logger.warn(`Could not fetch operating accuracy: ${error}`);
       return null;
     }
   }

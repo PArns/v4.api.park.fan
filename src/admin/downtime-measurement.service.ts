@@ -5,6 +5,21 @@ import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { outageRunBreaks } from "../common/utils/outage-rows.sql";
 import { OUTAGE_QUEUE_TYPE } from "../common/utils/outage-rows.sql";
 import { usableOperatingScheduleRowSql } from "../common/utils/park-open-window.sql";
+import {
+  StatementLimits,
+  queryWithLimits,
+} from "../common/utils/statement-limits.util";
+import { reconstructionReadLimits } from "../queues/processors/downtime-reconstruction.processor";
+
+/**
+ * The count of parks: three small tables, no `queue_data`. It stays under the
+ * 10 s mark of the slow-query log, so 30 s is at least 3x.
+ */
+const COUNT_LIMITS: StatementLimits = {
+  statementTimeoutMs: 30_000,
+  lockTimeoutMs: 2_000,
+  idleInTransactionTimeoutMs: 10_000,
+};
 
 /**
  * Phase 0 of the downtime work: count events, publish nothing.
@@ -145,7 +160,8 @@ export class DowntimeMeasurementService {
     const window = Math.min(Math.max(days, 1), 365);
     const since = new Date(Date.now() - window * 24 * 60 * 60 * 1000);
 
-    const rows: ErasureRow[] = await this.queueDataRepository.manager.query(
+    const rows = await queryWithLimits<ErasureRow[]>(
+      this.queueDataRepository.manager.connection,
       `
       WITH marked AS (
         SELECT qd."attractionId" AS aid,
@@ -188,6 +204,7 @@ export class DowntimeMeasurementService {
        ORDER BY COUNT(*) FILTER (WHERE raw = 'DOWN') DESC
       `,
       [since],
+      reconstructionReadLimits(since, new Date()),
     );
 
     const totals = rows.reduce(
@@ -238,7 +255,9 @@ export class DowntimeMeasurementService {
    */
   private async capabilityCensus(): Promise<CapabilityCensus> {
     const rows: Array<{ capable: string; total: string; scheduled: string }> =
-      await this.queueDataRepository.manager.query(`
+      await queryWithLimits(
+        this.queueDataRepository.manager.connection,
+        `
         SELECT COUNT(*) FILTER (WHERE p.wiki_entity_id IS NOT NULL) AS capable,
                COUNT(*)                                            AS total,
                COUNT(*) FILTER (
@@ -249,7 +268,10 @@ export class DowntimeMeasurementService {
                  )
                ) AS scheduled
           FROM parks p
-      `);
+      `,
+        [],
+        COUNT_LIMITS,
+      );
     const row = rows[0] ?? { capable: "0", total: "0", scheduled: "0" };
     return {
       downCapableParks: Number(row.capable),
@@ -276,7 +298,8 @@ export class DowntimeMeasurementService {
     since: Date,
   ): Promise<OutageRow[]> {
     const filtered = parkSlugs.length > 0;
-    return this.queueDataRepository.manager.query(
+    return queryWithLimits<OutageRow[]>(
+      this.queueDataRepository.manager.connection,
       `
       WITH tracked AS (
         SELECT a.id AS aid, a.name AS aname, p.id AS pid, p.slug AS pslug,
@@ -340,6 +363,7 @@ export class DowntimeMeasurementService {
        ORDER BY pslug, pcity, aname, started_at
       `,
       [filtered, parkSlugs, since],
+      reconstructionReadLimits(since, new Date()),
     );
   }
 

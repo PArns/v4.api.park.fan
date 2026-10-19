@@ -1,9 +1,19 @@
 import { normalizeForMatching } from "./slug.util";
 
 describe("normalizeForMatching", () => {
-  it("strips an uppercase country code suffix", () => {
-    expect(normalizeForMatching("Taron Coaster (DE)")).toBe("taron coaster");
-    expect(normalizeForMatching("Astérix ( FR )")).toBe("asterix");
+  it("returns an empty string for an absent name instead of throwing", () => {
+    expect(normalizeForMatching(null)).toBe("");
+    expect(normalizeForMatching(undefined)).toBe("");
+    expect(normalizeForMatching("")).toBe("");
+  });
+
+  it("keeps a trailing country code, which marks the language of a show", () => {
+    expect(normalizeForMatching("Taron Coaster (DE)")).toBe(
+      "taron coaster (de)",
+    );
+    expect(normalizeForMatching("V.I.M. Dance Party (DK)")).not.toBe(
+      normalizeForMatching("V.I.M. Dance Party (UK)"),
+    );
   });
 
   it("keeps a parenthesis that is not a trailing country code", () => {
@@ -20,9 +30,9 @@ describe("normalizeForMatching", () => {
     );
   });
 
-  it("combines both rules and normalizes whitespace", () => {
+  it("strips ®/™ and normalizes whitespace together", () => {
     expect(normalizeForMatching("  Taron®   Coaster (DE) ")).toBe(
-      "taron coaster",
+      "taron coaster (de)",
     );
   });
 

@@ -65,6 +65,28 @@ def round_to_nearest_5(value: float) -> int:
     return int((value + 2.5) // 5) * 5
 
 
+def quantile_minutes(
+    quantiles: dict[float, Any], i: int
+) -> tuple[int | None, int | None]:
+    """Row ``i``'s q0.8 and q0.95 as whole minutes, for the API's accuracy rows.
+
+    Only an alpha the model was actually trained for counts (within 0.01): the
+    API stores the value as ``predicted_q80`` / ``predicted_q95`` and measures
+    how often the actual lands below it, so a neighbouring quantile standing in
+    would report the wrong coverage. ``None`` for a missing alpha, a model
+    without a quantile head (``{}``) or a non-finite value.
+    """
+
+    def pick(alpha: float) -> int | None:
+        for a, values in quantiles.items():
+            if abs(float(a) - alpha) <= 0.01:
+                v = float(values[i])
+                return round(v) if np.isfinite(v) and v >= 0 else None
+        return None
+
+    return pick(0.8), pick(0.95)
+
+
 def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add attraction type heuristics based on attraction name.
@@ -2040,6 +2062,13 @@ def predict_wait_times(
             int(round(float(uncertainties[i]))) if use_uncertainty else None
         )
 
+        # The raw q0.8 and q0.95 (PAR-912), so the API can store them beside the
+        # served median and measure their live coverage. q0.8 is what the crowd
+        # level reads (before its round-to-5); q0.95 is the band's top. Whole
+        # minutes, never rounded to 5: a coverage test against a posted-wait
+        # rounding would measure the rounding. None without a quantile head.
+        q80_minutes, q95_minutes = quantile_minutes(quantiles, i)
+
         results.append(
             {
                 "attractionId": row["attractionId"],
@@ -2049,6 +2078,8 @@ def predict_wait_times(
                 "predictionType": prediction_type,
                 "confidence": round(confidence, 1),
                 "uncertaintyMinutes": uncertainty_minutes,
+                "predictedQ80": q80_minutes,
+                "predictedQ95": q95_minutes,
                 "crowdLevel": crowd_level,
                 "baseline": round(baseline, 1),
                 "modelVersion": model.version,

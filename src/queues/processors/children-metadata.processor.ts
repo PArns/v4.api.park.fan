@@ -166,13 +166,13 @@ export const ABSENT_UPSTREAM_SEED_LOOKBACK_DAYS = 400;
  * How recently the feed has to have listed a row for the seed to treat the
  * absence as new rather than back-dating it.
  *
- * Three runs of the `0 4 * * *` children cron. A row listed inside that window
+ * Three runs of the daily children sync. A row listed inside that window
  * was there inside it, so its absence is at most that old whatever its
  * readings say, and back-dating it to an old reading would take away the whole
  * 60-day grace against a feed that drops an id for one run.
  *
  * Three rather than two because a park's own run can fail — the error is
- * caught per park and the cron carries no `attempts`, so one bad run leaves a
+ * caught per park and the job carries no `attempts`, so one bad run leaves a
  * listed row's stamp at almost exactly two days and the branch would be
  * decided by batch jitter. The third run is the slack for that.
  *

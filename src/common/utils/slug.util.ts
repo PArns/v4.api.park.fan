@@ -103,7 +103,7 @@ export function generateUniqueSlug(
  * ignoring case, symbols, and extra whitespace.
  *
  * Process:
- * - Remove trademark symbols (®, ™) and a trailing uppercase country code like " (DE)"
+ * - Remove trademark symbols (®, ™)
  * - Convert to lowercase
  * - Remove &, ' and -
  * - Normalize whitespace to single spaces
@@ -113,22 +113,25 @@ export function generateUniqueSlug(
  * - "Spider-Man® Web Slingers" → "spiderman web slingers"
  * - "Walt Disney's Magic Kingdom" → "walt disneys magic kingdom"
  *
+ * A trailing country code such as " (DK)" is kept: it names the language of a
+ * show, not the source of a duplicate (see docs/architecture/data-ingestion.md).
+ *
  * @param text - Original text to normalize
  * @returns Normalized text for comparison
  */
-export function normalizeForMatching(text: string): string {
+export function normalizeForMatching(text: string | null | undefined): string {
+  // A source can list an entity without a name. Before PAR-803 transliterate()
+  // swallowed that; the ®/™ strip below ran first and threw, aborting the whole
+  // park's mapping sync every night from 2026-10-14. An absent name matches nothing.
+  if (typeof text !== "string" || text.length === 0) return "";
   // ®/™ go before transliterate, which would turn them into "(r)" / "(tm)".
   const stripped = text.replace(/[®™]/g, "");
   // Transliterate first to handle accents (e.g. Astérix -> Asterix)
   const transliterated = transliterate(stripped);
 
-  return (
-    transliterated
-      // Country code suffixes like " (FR)" are uppercase, so this runs before toLowerCase.
-      .replace(/\s*\(\s*[A-Z]{2}\s*\)\s*$/g, "")
-      .toLowerCase()
-      .replace(/[&'\-]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-  );
+  return transliterated
+    .toLowerCase()
+    .replace(/[&'\-]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }

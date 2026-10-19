@@ -21,10 +21,25 @@ class Settings(BaseSettings):
     MODEL_VERSION: str = "v1.1.0"
 
     # CatBoost Hyperparameters
-    CATBOOST_ITERATIONS: int = (
-        2000  # Raised from 1000: best_iteration was 998/1000 → model was still learning
-    )
-    CATBOOST_LEARNING_RATE: float = 0.03  # 0.03 works well with 2000 iterations
+    # Tree cap and step size (PAR-902). At 0.03 the validation loss was still
+    # falling at the cap — best_iteration was 998/1000, raised to 2000, then
+    # 1999/2000 on every nightly run — so early stopping never had a plateau to
+    # detect and every run paid for the full cap twice (fit + refit, ~64 of ~73
+    # min). Measured on the production frame (4.44 M rows, 2026-10-15): at 0.03
+    # both the random-week validation set and the 30-day out-of-time hold-out are
+    # still improving at 3000 trees, so this was under-fitting, not a broken
+    # detector. At 0.1, 1500 trees beat 0.03 × 2000 on every measure (hold-out MAE
+    # 4.33 vs 4.36, busy MAE 15.17 vs 15.61, validation MAE 4.39 vs 4.55) with 25 %
+    # fewer trees. Raise the cap only together with the training timeout: fit and
+    # refit each scale linearly with it. See docs/ml/model-overview.md.
+    CATBOOST_ITERATIONS: int = 1500
+    CATBOOST_LEARNING_RATE: float = 0.1
+    # od_wait: rounds without a new best validation loss before training stops.
+    # A safety net, not the tree count's normal source: at the defaults the
+    # validation loss still improves at the cap (lr 0.1 would stop at ~2500).
+    # It fires when the data stops supporting more trees, and whether it did is
+    # recorded in the model metadata (`early_stopping`).
+    CATBOOST_EARLY_STOPPING_ROUNDS: int = 100
     CATBOOST_DEPTH: int = (
         7  # Raised from 6: more depth for complex holiday×season interactions
     )

@@ -94,6 +94,13 @@ export class PredictionAccuracyProcessor {
       // completed row, so a ride with only pre-PAR-854 (CatBoost) rows comes
       // back with zero compared predictions and is rewritten as
       // `insufficient_data` instead of keeping its CatBoost badge.
+      //
+      // PAR-912: the `actual_wait_time >= 5 AND NOT wasUnplannedClosure` filter
+      // already keeps every non-error slot out — a ride not scheduled to run
+      // or without a wait signal is written with a NULL actual, an unplanned
+      // closure with the flag — so the badge and `raw_mae` see exactly the
+      // scored slots of `scoredSlotSql` that are 5 minutes or longer. Its
+      // sub-5-minute cut (aligned with the training set) stays as it was.
       const results = await this.accuracyRepository.query(
         `
         SELECT

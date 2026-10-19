@@ -9,6 +9,10 @@ import {
 } from "./entities/park-downtime-coverage.entity";
 import type { DowntimeRegime } from "./entities/park-downtime-coverage.entity";
 import { usableOperatingScheduleRowSql } from "../common/utils/park-open-window.sql";
+import {
+  StatementLimits,
+  queryWithLimits,
+} from "../common/utils/statement-limits.util";
 
 /**
  * Thresholds, all of them provisional.
@@ -109,6 +113,18 @@ export const DOWNTIME_GATES = {
 } as const;
 
 /**
+ * The two reads of the nightly rebuild. The slower, the coverage read, took
+ * 12.3 s in the production log of 2026-10-10 and the profile read stayed below
+ * the 10 s threshold of the same listing, so 120 s is about 10x the worst
+ * measured run. It is a ceiling for a plan that flips, not a target.
+ */
+const REBUILD_READ_LIMITS: StatementLimits = {
+  statementTimeoutMs: 120_000,
+  lockTimeoutMs: 10_000,
+  idleInTransactionTimeoutMs: 30_000,
+};
+
+/**
  * Turn intervals and exposure into what may be published, and mostly refuse.
  *
  * The gates live here and nowhere else. A surface that computed its own
@@ -173,7 +189,8 @@ export class DowntimeProfileService {
     // measurement's parksWithSchedule asks the same helper.
     const usableOperatingRow = usableOperatingScheduleRowSql();
 
-    const rows: CoverageRow[] = await this.dataSource.query(
+    const rows = await queryWithLimits<CoverageRow[]>(
+      this.dataSource,
       `
       SELECT p.id                                        AS "parkId",
              (p.wiki_entity_id IS NOT NULL)              AS "downCapable",
@@ -313,6 +330,7 @@ export class DowntimeProfileService {
        GROUP BY p.id, p.wiki_entity_id
       `,
       [parkIds, windowFrom, windowTo],
+      REBUILD_READ_LIMITS,
     );
 
     const regimes = new Map<string, DowntimeRegime>();
@@ -406,7 +424,8 @@ export class DowntimeProfileService {
       )
       .map(([parkId]) => parkId);
 
-    const rows: ProfileRow[] = await this.dataSource.query(
+    const rows = await queryWithLimits<ProfileRow[]>(
+      this.dataSource,
       `
       WITH ex AS (
         SELECT e."attractionId" AS aid, e."parkId" AS pid,
@@ -414,7 +433,15 @@ export class DowntimeProfileService {
                SUM(e.down_minutes)::int           AS down_minutes,
                COUNT(*) FILTER (WHERE e.operating_minutes > 0)::int AS observed_days
           FROM attraction_exposure_days e
+          JOIN attractions ea ON ea.id = e."attractionId"
          WHERE e.op_day >= $2::date AND e.op_day <= $3::date
+           -- A retired ride leaves the population the day it retires. The
+           -- 90-day window still holds its exposure days, and without this it
+           -- was rewritten every night with a fresh generatedAt for three
+           -- months, so it never even went stale_data. Free-flow rides are
+           -- sourced by flow below, which is where their reason comes from.
+           AND ea.retired_at IS NULL
+           AND COALESCE(ea.open_with_park, FALSE) = FALSE
            AND ($1::uuid[] IS NULL OR e."parkId" = ANY($1::uuid[]))
          GROUP BY e."attractionId", e."parkId"
       ),
@@ -450,15 +477,31 @@ export class DowntimeProfileService {
            -- would make one ride's refusal depend on its park's calendar while
            -- the actual reason is the ride, and naming the wrong obstacle is
            -- the failure this whole feature exists to avoid. It has no honest
-           -- reason of its own yet; that is PF-73, not a licence to borrow the
-           -- park's.
+           -- reason of its own (free_flow, sourced by flow below), not a
+           -- licence to borrow the park's.
            AND COALESCE(a.open_with_park, FALSE) = FALSE
            AND NOT EXISTS (SELECT 1 FROM ex WHERE ex.aid = a.id)
+      ),
+      -- Free-flow rides, in every park.
+      --
+      -- No queue, reported CLOSED all day, so the reconstruction never tracks
+      -- them and ex never sees them. Without a row the read path answers
+      -- not_down_capable, a claim about the park's source; the row carries the
+      -- ride's own reason instead. Retired ones are left out like everywhere.
+      flow AS (
+        SELECT a.id AS aid, a."parkId" AS pid, 0 AS operating_minutes,
+               0 AS down_minutes, 0 AS observed_days
+          FROM attractions a
+         WHERE a.retired_at IS NULL
+           AND COALESCE(a.open_with_park, FALSE) = TRUE
+           AND ($1::uuid[] IS NULL OR a."parkId" = ANY($1::uuid[]))
       ),
       pop AS (
         SELECT * FROM ex
         UNION ALL
         SELECT * FROM sched
+        UNION ALL
+        SELECT * FROM flow
       ),
       ou AS (
         SELECT o."attractionId" AS aid,
@@ -533,6 +576,7 @@ export class DowntimeProfileService {
              ou.longest_minutes           AS "longestMinutes",
              ou.longest_started_at        AS "longestStartedAt",
              a.last_merged_at             AS "lastMergedAt",
+             COALESCE(a.open_with_park, FALSE) AS "freeFlow",
              (SELECT MIN(e2.op_day) FROM attraction_exposure_days e2
                WHERE e2."attractionId" = pop.aid AND e2.operating_minutes > 0)
                                           AS "firstObservedDay",
@@ -550,6 +594,7 @@ export class DowntimeProfileService {
         midpoint(windowFrom, windowTo),
         unmeasuredParkIds,
       ],
+      REBUILD_READ_LIMITS,
     );
 
     const toSave: Partial<AttractionDowntimeProfile>[] = [];
@@ -662,6 +707,9 @@ export class DowntimeProfileService {
     // to compile here instead of quietly killing the arm and leaving the
     // frozen row this branch exists to prevent.
     const unrefreshableReason: DowntimeWithheldReason = "no_schedule";
+    // The same shape: a free_flow row exists only while the ride is free-flow,
+    // and the read path lets a permanent reason win over stale_data.
+    const freeFlowReason: DowntimeWithheldReason = "free_flow";
 
     await this.dataSource.transaction(async (manager) => {
       await manager.query(
@@ -675,8 +723,9 @@ export class DowntimeProfileService {
                    AND a.retired_at IS NULL
               )
               OR p.withheld_reason = $3::text
+              OR p.withheld_reason = $4::text
             )`,
-        [rebuiltParkIds, keptIds, unrefreshableReason],
+        [rebuiltParkIds, keptIds, unrefreshableReason, freeFlowReason],
       );
       const repo = manager.getRepository(AttractionDowntimeProfile);
       for (let i = 0; i < toSave.length; i += 500) {
@@ -719,6 +768,8 @@ export interface ProfileInputs {
   longestMinutes: number | string | null;
   lastMergedAt: Date | string | null;
   lifetimeObservedDays: number | string;
+  /** The ride is free-flow (`open_with_park`): it has no queue to show an outage in. */
+  freeFlow?: boolean;
 }
 
 export interface ProfileDecision {
@@ -763,6 +814,9 @@ export function decideProfile(
     censoredShare,
   });
 
+  // The ride's own obstacle outranks the park's: it holds in every park, so
+  // naming the park's source or calendar would name the wrong one.
+  if (row.freeFlow) return withhold("free_flow");
   if (!regime || regime === "not_capable") return withhold("not_down_capable");
   if (regime === "never_reports") return withhold("park_never_reports");
   if (regime === "no_schedule") return withhold("no_schedule");

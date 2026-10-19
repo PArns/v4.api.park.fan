@@ -31,17 +31,34 @@ describe("AttractionOutageService — the closure path", () => {
 
   let service: AttractionOutageService;
   let query: jest.Mock;
+  /** Every `SET LOCAL` the reads issue (PAR-837). */
+  let limitSql: string[];
   let curves: { find: jest.Mock };
 
   const build = async () => {
     query = jest.fn().mockResolvedValue([]);
+    limitSql = [];
+    // The reads go through `queryWithLimits`, whose transaction scopes the
+    // `SET LOCAL`s: those are recorded here and never reach `query`.
+    const connection = {
+      transaction: (cb: (m: unknown) => Promise<unknown>) =>
+        cb({
+          query: (sql: string, params?: unknown[]) => {
+            if (/^SET LOCAL/.test(sql)) {
+              limitSql.push(sql);
+              return Promise.resolve([]);
+            }
+            return query(sql, params);
+          },
+        }),
+    };
     curves = { find: jest.fn().mockResolvedValue([]) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AttractionOutageService,
         {
           provide: getRepositoryToken(QueueData),
-          useValue: { manager: { query } },
+          useValue: { manager: { query, connection } },
         },
         {
           provide: getRepositoryToken(DowntimeRecoveryCurve),
@@ -68,6 +85,12 @@ describe("AttractionOutageService — the closure path", () => {
       expect.any(Date),
       PARK.id,
     ]);
+  });
+
+  it("runs the closure statement under a 30 s statement_timeout (PAR-837)", async () => {
+    await service.getCurrentOutages(PARK, [OPEN_RIDE]);
+
+    expect(limitSql).toContain("SET LOCAL statement_timeout = 30000");
   });
 
   it("asks it for EVERY ride the DOWN query did not place, the DOWN one included", async () => {
@@ -112,6 +135,33 @@ describe("AttractionOutageService — the closure path", () => {
     expect(out.get(DOWN_RIDE.id)?.signal).toBe("down");
     const closureCall = query.mock.calls.find((c) => c[1][3] === PARK.id);
     expect(closureCall![1][0]).toEqual([OPEN_RIDE.id]);
+  });
+
+  it("does not ask about a ride the page already serves as running (PAR-913)", async () => {
+    // Die 3 Mausketiere: OPERATING by the free-flow flag, CLOSED in the feed.
+    // Asked anyway, the statement answered with a closure and the page put
+    // „steht still" under „geöffnet".
+    const RUNNING = {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      effectiveStatus: "OPERATING",
+    };
+    const CLOSED = {
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      effectiveStatus: "CLOSED",
+    };
+
+    await service.getCurrentOutages(PARK, [RUNNING, CLOSED]);
+
+    const closureCall = query.mock.calls.find((c) => c[1][3] === PARK.id);
+    expect(closureCall![1][0]).toEqual([CLOSED.id]);
+  });
+
+  it("asks nothing when every ride is running", async () => {
+    await service.getCurrentOutages(PARK, [
+      { id: OPEN_RIDE.id, effectiveStatus: "OPERATING" },
+    ]);
+
+    expect(query).not.toHaveBeenCalled();
   });
 
   it("a failing closure query costs the line, never the page", async () => {

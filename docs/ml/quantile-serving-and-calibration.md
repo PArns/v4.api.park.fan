@@ -117,6 +117,15 @@ quantiles into **ascending-alpha order** and applies `np.maximum.accumulate`, so
 the served quantiles are always monotonic. The median pick (`argmin|α−0.5|`) and
 `predict.py`'s `_pick` are unaffected.
 
+### Live coverage of q0.8 / q0.95 (PAR-912)
+
+The raw q0.8 and q0.95 of every hourly slot are stored in
+`prediction_accuracy.predicted_q80` / `predicted_q95` (whole minutes, not the
+posted-wait rounding) and their coverage on scored slots is on the ML dashboard
+(`performance.operating`). Until then q0.8 — the crowd-level quantile — was
+stored nowhere and could not be checked live. See
+[Which compared slot is a forecast error](accuracy-scoring-rule.md#quantiles).
+
 ## TFT / nf-service — `predicted_peak` is E[daily-P90], not P90-of-distribution
 
 ⚠️ **Naming hazard, by design.** The TFT trains on a **daily-P90 target**

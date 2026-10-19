@@ -466,9 +466,20 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
     // never cost the row cleanup its run.
     await this.dropExpiredPredictionChunks();
 
-    try {
-      const now = new Date();
+    // The two row cleanups are independent, so each runs in its own try: until
+    // PAR-900 one try block held both, so a failed hourly purge skipped the
+    // daily delete, and a failed daily delete lost the log line saying the
+    // hourly purge had worked. A failed step is
+    // logged and the other still runs; the job fails afterwards so the failure
+    // stays visible in the failed-job history and the data-quality report.
+    const now = new Date();
+    const failures: string[] = [];
+    const describe = (error: unknown) =>
+      error instanceof Error ? error.message : String(error);
 
+    let hourly: { deleted: number; windows: number; done: boolean } | null =
+      null;
+    try {
       // Hourly: keep 7 days of past targets. Pruned on createdAt (the partition
       // key) in day-windows — see purgeHourlyPredictionsBefore. The slack is the
       // generation horizon rounded up to whole days (HOURLY_PREDICTIONS = 48h →
@@ -480,26 +491,7 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
       const hourlyCutoff = new Date(now);
       hourlyCutoff.setDate(hourlyCutoff.getDate() - 9);
 
-      const hourly =
-        await this.mlService.purgeHourlyPredictionsBefore(hourlyCutoff);
-
-      // Delete daily predictions older than 90 days. Daily predictions are made
-      // up to a year ahead, so these must be selected by predictedTime.
-      const dailyCutoff = new Date(now);
-      dailyCutoff.setDate(dailyCutoff.getDate() - 90);
-
-      const deletedDaily = await this.mlService.deleteOldPredictions(
-        "daily",
-        dailyCutoff,
-      );
-
-      const totalDeleted = hourly.deleted + deletedDaily;
-
-      this.logger.log(
-        `✅ Cleanup complete: Removed ${totalDeleted.toLocaleString()} old predictions ` +
-          `(hourly: ${hourly.deleted.toLocaleString()} in ${hourly.windows} day-window(s), ` +
-          `daily: ${deletedDaily.toLocaleString()})`,
-      );
+      hourly = await this.mlService.purgeHourlyPredictionsBefore(hourlyCutoff);
 
       if (!hourly.done) {
         // Expected while a backlog is being worked off; each run takes the
@@ -509,10 +501,43 @@ export class PredictionGeneratorProcessor implements OnModuleInit {
         );
       }
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(`Prediction cleanup failed: ${errorMessage}`);
-      throw error;
+      const message = describe(error);
+      this.logger.error(`Hourly prediction purge failed: ${message}`);
+      failures.push(`hourly: ${message}`);
+    }
+
+    let daily: { deleted: number; createdFrom: Date | null } | null = null;
+    try {
+      // Daily: drop targets older than 90 days. Daily predictions are made up to
+      // a year ahead, so these are selected by predictedTime — from the
+      // uncompressed chunks only; the compressed ones are the chunk drop's
+      // (MLService.deleteOldPredictions, PAR-900).
+      const dailyCutoff = new Date(now);
+      dailyCutoff.setDate(dailyCutoff.getDate() - 90);
+
+      daily = await this.mlService.deleteOldPredictions("daily", dailyCutoff);
+    } catch (error) {
+      const message = describe(error);
+      this.logger.error(`Daily prediction cleanup failed: ${message}`);
+      failures.push(`daily: ${message}`);
+    }
+
+    const hourlyPart = hourly
+      ? `hourly: ${hourly.deleted.toLocaleString()} in ${hourly.windows} day-window(s)`
+      : "hourly: failed";
+    const dailyPart = daily
+      ? `daily: ${daily.deleted.toLocaleString()}` +
+        (daily.createdFrom
+          ? ` (uncompressed chunks from ${daily.createdFrom.toISOString()})`
+          : "")
+      : "daily: failed";
+    this.logger.log(
+      `${failures.length ? "⚠️ " : "✅"} Cleanup ${failures.length ? "partly done" : "complete"}: ` +
+        `${hourlyPart}, ${dailyPart}`,
+    );
+
+    if (failures.length > 0) {
+      throw new Error(`Prediction cleanup failed — ${failures.join("; ")}`);
     }
   }
 

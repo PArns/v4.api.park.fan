@@ -588,6 +588,212 @@ describe("MLService", () => {
     });
   });
 
+  // PAR-911: Chronos-2 on the 45–120 min slots behind SERVE_CHRONOS_INTRADAY,
+  // read from the serving cache the forward-archive capture writes.
+  describe("Chronos-2 serving override (PAR-911)", () => {
+    const parkId = "park-chronos";
+    const MIN = 60_000;
+    const prevPcn = process.env.SERVE_PCN_INTRADAY;
+    const prevChronos = process.env.SERVE_CHRONOS_INTRADAY;
+    // A slot-aligned "now", so a lead of exactly 120 min is reachable for the
+    // recorder test below.
+    const NOW = Math.floor(Date.UTC(2026, 9, 17, 12, 0) / 900_000) * 900_000;
+    const LEADS = [30, 60, 120, 180];
+    const pyIso = (ms: number) =>
+      new Date(ms).toISOString().replace(".000Z", "+00:00");
+
+    const chronosEntry = (originAt = NOW - 10 * MIN) =>
+      JSON.stringify({
+        originAt,
+        revision: "29ec376",
+        segments: [
+          {
+            slotStart: NOW,
+            slotMinutes: 15,
+            q50: Array.from({ length: 17 }, () => 42),
+            q80: Array.from({ length: 17 }, () => 50),
+            q95: Array.from({ length: 17 }, () => 60),
+          },
+        ],
+      });
+
+    const pcnRows = (wait: string) =>
+      LEADS.flatMap((l) => [
+        {
+          aid: "attr-1",
+          predicted_time: new Date(NOW + l * MIN),
+          quantile: 0.5,
+          wait,
+        },
+      ]);
+
+    beforeEach(() => {
+      jest.spyOn(Date, "now").mockReturnValue(NOW);
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        timezone: "UTC",
+        countryCode: "DE",
+        regionCode: null,
+      });
+      mockRedis.get.mockResolvedValue(
+        JSON.stringify({
+          predictions: LEADS.map((l) => ({
+            attractionId: "attr-1",
+            predictedTime: pyIso(NOW + l * MIN),
+            predictedWaitTime: 20,
+            predictionType: "hourly",
+            confidence: 80,
+            crowdLevel: "low",
+            baseline: 40,
+            modelVersion: "v1",
+            uncertaintyMinutes: 5,
+          })),
+          count: LEADS.length,
+          modelVersion: "v1",
+        }),
+      );
+      mockRedis.mget.mockResolvedValue([chronosEntry()]);
+      mockQueueDataRepository.createQueryBuilder.mockImplementation(() => ({
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        distinctOn: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([]),
+        getMany: jest
+          .fn()
+          .mockResolvedValue([{ attractionId: "attr-1", waitTime: 100 }]),
+      }));
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      if (prevPcn === undefined) delete process.env.SERVE_PCN_INTRADAY;
+      else process.env.SERVE_PCN_INTRADAY = prevPcn;
+      if (prevChronos === undefined) delete process.env.SERVE_CHRONOS_INTRADAY;
+      else process.env.SERVE_CHRONOS_INTRADAY = prevChronos;
+      mockPredictionRepository.manager.query.mockResolvedValue([]);
+      mockRedis.get.mockReset();
+      mockRedis.mget.mockReset();
+    });
+
+    const byLead = (preds: { predictedTime: string }[]) => (l: number) =>
+      preds.find(
+        (p) => Date.parse(p.predictedTime) === NOW + l * MIN,
+      ) as unknown as {
+        predictedWaitTime: number;
+        modelVersion: string;
+        crowdLevel: string;
+        uncertaintyMinutes: number;
+      };
+
+    it("both flags off: CatBoost untouched and the cache never read", async () => {
+      delete process.env.SERVE_PCN_INTRADAY;
+      delete process.env.SERVE_CHRONOS_INTRADAY;
+
+      const res = await service.getParkPredictions(parkId, "hourly");
+
+      expect(res.predictions.every((p) => p.modelVersion === "v1")).toBe(true);
+      expect(mockRedis.mget).not.toHaveBeenCalled();
+    });
+
+    it("Chronos only: 45–120 min from Chronos, the rest stays CatBoost", async () => {
+      delete process.env.SERVE_PCN_INTRADAY;
+      process.env.SERVE_CHRONOS_INTRADAY = "true";
+
+      const res = await service.getParkPredictions(parkId, "hourly");
+      const at = byLead(res.predictions);
+
+      expect(at(30).modelVersion).toBe("v1");
+      expect(at(30).predictedWaitTime).toBe(20);
+      for (const l of [60, 120]) {
+        expect(at(l).modelVersion).toBe("v1+chronos");
+        expect(at(l).predictedWaitTime).toBe(40); // q50 42 → 40
+        expect(at(l).uncertaintyMinutes).toBe(18); // q95 60 − q50 42
+        expect(at(l).crowdLevel).toBe("high"); // q80 50 / 40 = 125 %
+      }
+      expect(at(180).modelVersion).toBe("v1");
+      expect(mockPredictionRepository.manager.query).not.toHaveBeenCalled();
+    });
+
+    it("with PCN on: blend ≤ 30 min, Chronos 45–120, PCN beyond", async () => {
+      process.env.SERVE_PCN_INTRADAY = "true";
+      process.env.SERVE_CHRONOS_INTRADAY = "true";
+      mockPredictionRepository.manager.query.mockResolvedValue(pcnRows("60"));
+
+      const res = await service.getParkPredictions(parkId, "hourly");
+      const at = byLead(res.predictions);
+
+      expect(at(30).modelVersion).toBe("v1+pcn");
+      expect(at(30).predictedWaitTime).toBe(100); // pure anchor ≤ 1 h
+      expect(at(60).modelVersion).toBe("v1+chronos");
+      expect(at(120).modelVersion).toBe("v1+chronos");
+      expect(at(180).modelVersion).toBe("v1+pcn");
+    });
+
+    it("falls back to PCN where the Chronos curve is stale", async () => {
+      process.env.SERVE_PCN_INTRADAY = "true";
+      process.env.SERVE_CHRONOS_INTRADAY = "true";
+      mockPredictionRepository.manager.query.mockResolvedValue(pcnRows("60"));
+      mockRedis.mget.mockResolvedValue([chronosEntry(NOW - 91 * MIN)]);
+
+      const res = await service.getParkPredictions(parkId, "hourly");
+
+      expect(res.predictions.every((p) => p.modelVersion === "v1+pcn")).toBe(
+        true,
+      );
+    });
+
+    it("`chronos: false` (the archive's incumbent read) skips Chronos", async () => {
+      process.env.SERVE_PCN_INTRADAY = "true";
+      process.env.SERVE_CHRONOS_INTRADAY = "true";
+      mockPredictionRepository.manager.query.mockResolvedValue(pcnRows("60"));
+
+      const res = await service.getParkPredictions(
+        parkId,
+        "hourly",
+        undefined,
+        undefined,
+        { chronos: false },
+      );
+
+      expect(res.predictions.every((p) => p.modelVersion === "v1+pcn")).toBe(
+        true,
+      );
+      expect(mockRedis.mget).not.toHaveBeenCalled();
+    });
+
+    it("servedIntradayValues records `chronos` where Chronos served the scored slot", async () => {
+      process.env.SERVE_PCN_INTRADAY = "true";
+      process.env.SERVE_CHRONOS_INTRADAY = "true";
+      mockPredictionRepository.manager.query.mockResolvedValue(pcnRows("60"));
+      const row = (l: number) =>
+        ({
+          attractionId: "attr-1",
+          predictedTime: new Date(NOW + l * MIN),
+          predictedWaitTime: 20,
+          predictionType: "hourly" as const,
+          confidence: 80,
+          crowdLevel: "low" as const,
+          baseline: 40,
+          modelVersion: "v1",
+        }) as never;
+
+      const served = await service.servedIntradayValues(
+        [row(60), row(120), row(180)],
+        NOW,
+      );
+
+      expect(served).toEqual([
+        null, // closer than the two-hour scored lead
+        { wait: 40, source: "chronos" },
+        { wait: 60, source: "pcn" },
+      ]);
+    });
+  });
+
   describe("getTftDailyPredictions (the measured band)", () => {
     const parkId = "park-band";
     const today = getCurrentDateInTimezone("Europe/Berlin");
@@ -1083,6 +1289,26 @@ describe("MLService", () => {
           { wait: 45, source: "catboost" },
           null,
         ]);
+      });
+
+      // PAR-912: the quantiles have no column on the hypertable and travel to
+      // the accuracy row beside it — aligned with the rows the feedback filter
+      // kept, not with the input.
+      it("hands q0.8/q0.95 over aligned with the recorded rows (PAR-912)", async () => {
+        await service.storePredictions([
+          {
+            ...hourly("10", "OPERATING"),
+            predictedQ80: 41.6,
+            predictedQ95: 70,
+          },
+          { ...hourly("11", "CLOSED"), predictedQ80: 99, predictedQ95: 99 },
+          hourly("12", "UNKNOWN"), // an ml-service without the fields
+        ]);
+
+        const [raw, , quantiles] =
+          mockPredictionAccuracyService.recordPredictions.mock.calls[0];
+        expect(raw).toHaveLength(2);
+        expect(quantiles).toEqual([{ q80: 42, q95: 70 }, null]);
       });
     });
 

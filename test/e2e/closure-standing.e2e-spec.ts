@@ -421,6 +421,121 @@ describe("standing closures, nightly and live (e2e)", () => {
     expect(Number(rows[0].elapsedOperatingMinutes)).toBe(195);
   });
 
+  it("says nothing about a ride that went CLOSED after yesterday's closing time (PAR-913)", async () => {
+    // Die 3 Mausketiere on 2026-10-17: running all Friday, its first CLOSED
+    // reading five minutes after the 18:00 close, CLOSED every reading since.
+    // The 60-minute margin used to be measured against TODAY's close, so the
+    // Friday-evening reading passed and the page said „steht seit Freitag,
+    // 18:05 still" from Saturday's opening on. It is measured against the
+    // window the closure started in now, as the nightly statement does — and
+    // 18:05 is in no window at all.
+    await seedPark();
+    await reading("A", at("2026-06-08", "10:00:00"), "OPERATING");
+    await reading("A", at("2026-06-08", "17:50:00"), "OPERATING");
+    await reading("A", at("2026-06-08", "18:05:00"), "CLOSED");
+    await reading("A", at("2026-06-09", "09:30:00"), "CLOSED");
+    await reading("A", at("2026-06-09", "11:30:00"), "CLOSED");
+
+    const live = await dataSource.query(CURRENT_CLOSURE_GAP_SQL, [
+      [rides.get("A")],
+      TZ,
+      at("2026-06-09", "12:30:00"),
+      parkId,
+    ]);
+    expect(live).toHaveLength(0);
+
+    // The counter-check: one hour earlier on the Monday, with the margin
+    // still open in the window it started in, the same ride is a closure.
+    // (Its OPERATING reading inside LIVE_LOOKBACK_HOURS of the as-of.)
+    await reading("B", at("2026-06-08", "11:00:00"), "OPERATING");
+    await reading("B", at("2026-06-08", "16:50:00"), "CLOSED");
+    const standing = await dataSource.query(CURRENT_CLOSURE_GAP_SQL, [
+      [rides.get("B")],
+      TZ,
+      at("2026-06-09", "12:30:00"),
+      parkId,
+    ]);
+    expect(standing).toHaveLength(1);
+  });
+
+  it("starts a closure that began before the opening at the opening, not never (PAR-913)", async () => {
+    // Pferdekarussell on 2026-10-17: a pre-opening cycle at 08:05, CLOSED from
+    // 08:55, still CLOSED at 12:55 in a park open since 09:00. Requiring the
+    // start inside a window dropped it, and „not run yet today" counted the
+    // 08:05 reading as a run — the ride read GESCHLOSSEN with nothing beside
+    // it. Here the park opens at 10:00.
+    await seedPark();
+    await reading("C", at("2026-06-09", "09:05:00"), "OPERATING");
+    await reading("C", at("2026-06-09", "09:55:00"), "CLOSED");
+    await reading("C", at("2026-06-09", "11:00:00"), "CLOSED");
+
+    const rows: Array<{
+      startedAt: Date;
+      elapsedOperatingMinutes: number;
+    }> = await dataSource.query(CURRENT_CLOSURE_GAP_SQL, [
+      [rides.get("C")],
+      TZ,
+      at("2026-06-09", "12:55:00"),
+      parkId,
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(iso(rows[0].startedAt)).toBe(iso(at("2026-06-09", "10:00:00")));
+    expect(Number(rows[0].elapsedOperatingMinutes)).toBe(175);
+
+    // Ten minutes into the day it is still one poll of noise, counted from
+    // the opening rather than from 09:55.
+    const early = await dataSource.query(CURRENT_CLOSURE_GAP_SQL, [
+      [rides.get("C")],
+      TZ,
+      at("2026-06-09", "10:05:00"),
+      parkId,
+    ]);
+    expect(early).toHaveLength(0);
+  });
+
+  it("does not clip a reading the feed left standing after the close into the next day (PAR-913)", async () => {
+    // OPERATING at 01:00 is the evening's, not the morning's: halfway between
+    // the 18:00 close and the 10:00 opening is 02:00. Read by its calendar
+    // date it would make a closure at 01:50 Tuesday's fault from 10:00.
+    await seedPark();
+    await reading("D", at("2026-06-09", "01:00:00"), "OPERATING");
+    await reading("D", at("2026-06-09", "01:50:00"), "CLOSED");
+    await reading("D", at("2026-06-09", "11:00:00"), "CLOSED");
+
+    const rows = await dataSource.query(CURRENT_CLOSURE_GAP_SQL, [
+      [rides.get("D")],
+      TZ,
+      at("2026-06-09", "12:55:00"),
+      parkId,
+    ]);
+    expect(rows).toHaveLength(0);
+  });
+
+  it("never turns a free-flow ride's CLOSED run into a closure, live or stored (PAR-913)", async () => {
+    // Ride A's own case from above — a closure the statements keep — on a ride
+    // flagged open_with_park. The flag says its CLOSED readings are not
+    // evidence, and the page serves it OPERATING whenever the park is.
+    await seedPark();
+    await dataSource.query(
+      `UPDATE attractions SET open_with_park = true WHERE id = $1`,
+      [rides.get("A")],
+    );
+    await reading("A", at("2026-06-08", "10:00:00"), "OPERATING");
+    await reading("A", at("2026-06-08", "15:00:00"), "CLOSED");
+    await reading("A", at("2026-06-09", "10:30:00"), "OPERATING");
+
+    expect((await nightly()).get("A")).toHaveLength(0);
+
+    const live = await dataSource.query(CURRENT_CLOSURE_GAP_SQL, [
+      [rides.get("A")],
+      TZ,
+      at("2026-06-09", "10:15:00"),
+      parkId,
+    ]);
+    expect(live).toHaveLength(0);
+  });
+
   it("builds a curve for each signal, and a closure that turned into REFURBISHMENT is censored", async () => {
     // Twenty-two intervals per signal, identical except for the signal:
     // one recovery at 5 minutes, one REFURBISHMENT at 20, ten recoveries at 30

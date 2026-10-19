@@ -35,7 +35,9 @@ describe("PredictionGeneratorProcessor", () => {
     getServingDailyPredictions: jest.fn(),
     deduplicatePredictions: jest.fn().mockResolvedValue(0),
     storePredictions: jest.fn().mockResolvedValue(undefined),
-    deleteOldPredictions: jest.fn().mockResolvedValue(0),
+    deleteOldPredictions: jest
+      .fn()
+      .mockResolvedValue({ deleted: 0, createdFrom: null }),
     purgeHourlyPredictionsBefore: jest
       .fn()
       .mockResolvedValue({ deleted: 0, windows: 0, done: true }),
@@ -559,7 +561,10 @@ describe("PredictionGeneratorProcessor", () => {
         windows: 3,
         done: true,
       });
-      mlService.deleteOldPredictions.mockResolvedValueOnce(3_500); // daily
+      mlService.deleteOldPredictions.mockResolvedValueOnce({
+        deleted: 3_500,
+        createdFrom: new Date("2026-10-01T00:00:00Z"),
+      }); // daily
 
       await processor.handleCleanupOld({} as Job);
 
@@ -633,14 +638,72 @@ describe("PredictionGeneratorProcessor", () => {
       ).resolves.toBeUndefined();
     });
 
-    it("rethrows when delete fails — the cron job retries on next schedule", async () => {
-      mlService.purgeHourlyPredictionsBefore.mockRejectedValueOnce(
-        new Error("DB unavailable"),
-      );
+    describe("step isolation (PAR-900)", () => {
+      let error: jest.SpyInstance;
+      beforeEach(() => {
+        error = jest
+          .spyOn(
+            (processor as unknown as { logger: { error: jest.Mock } }).logger,
+            "error",
+          )
+          .mockImplementation(() => undefined);
+      });
+      afterEach(() => error.mockRestore());
 
-      await expect(processor.handleCleanupOld({} as Job)).rejects.toThrow(
-        /DB unavailable/,
-      );
+      it("still runs the daily delete when the hourly purge fails, then fails the job", async () => {
+        mlService.purgeHourlyPredictionsBefore.mockRejectedValueOnce(
+          new Error("DB unavailable"),
+        );
+
+        await expect(processor.handleCleanupOld({} as Job)).rejects.toThrow(
+          /hourly: DB unavailable/,
+        );
+        expect(mlService.deleteOldPredictions).toHaveBeenCalledTimes(1);
+        expect(error).toHaveBeenCalledWith(
+          expect.stringContaining("Hourly prediction purge failed"),
+        );
+      });
+
+      it("keeps the hourly purge's result when the daily delete fails, then fails the job", async () => {
+        mlService.deleteOldPredictions.mockRejectedValueOnce(
+          new Error(
+            'duplicate key value violates unique constraint "1229_1462_wait_time_predictions_pkey"',
+          ),
+        );
+
+        await expect(processor.handleCleanupOld({} as Job)).rejects.toThrow(
+          /daily: duplicate key value/,
+        );
+        expect(mlService.purgeHourlyPredictionsBefore).toHaveBeenCalledTimes(1);
+        expect(error).toHaveBeenCalledWith(
+          expect.stringContaining("Daily prediction cleanup failed"),
+        );
+      });
+
+      it("names both steps when both fail", async () => {
+        mlService.purgeHourlyPredictionsBefore.mockRejectedValueOnce(
+          new Error("a"),
+        );
+        mlService.deleteOldPredictions.mockRejectedValueOnce(new Error("b"));
+
+        await expect(processor.handleCleanupOld({} as Job)).rejects.toThrow(
+          "Prediction cleanup failed — hourly: a; daily: b",
+        );
+      });
+
+      it("runs both row steps even when the chunk drop fails as well", async () => {
+        mlService.dropExpiredPredictionChunks.mockRejectedValueOnce(
+          new Error("lock"),
+        );
+        mlService.purgeHourlyPredictionsBefore.mockRejectedValueOnce(
+          new Error("a"),
+        );
+
+        await expect(processor.handleCleanupOld({} as Job)).rejects.toThrow(
+          /hourly: a/,
+        );
+        expect(mlService.deleteOldPredictions).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });

@@ -41,11 +41,17 @@ import { dayStatusRank } from "../common/utils/schedule.util";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
 import {
   PredictionAccuracyService,
+  PredictionQuantiles,
   ServedIntradayValue,
 } from "./services/prediction-accuracy.service";
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { ForecastAccuracyProfile } from "./entities/forecast-accuracy-profile.entity";
 import { persistenceBlendServe } from "./utils/persistence-blend.util";
+import {
+  applyChronosOverride,
+  readChronosServeCache,
+  serveChronosIntraday,
+} from "./chronos-serving";
 import {
   HOURLY_FRESHNESS_MS,
   HOURLY_LOOKBACK_MS,
@@ -124,6 +130,47 @@ export const DEDUPE_CREATED_AFTER_HOURS: Record<"hourly" | "daily", number> = {
   hourly: 72,
   daily: 8 * 24,
 };
+
+/**
+ * The model's q0.8/q0.95 off one prediction, as whole minutes (PAR-912), or
+ * `null` when it carries neither (a model without a quantile head, an
+ * ml-service from before the fields existed). A non-finite or negative value is
+ * dropped rather than stored: a coverage figure built on it would be noise.
+ */
+export function predictionQuantilesOf(
+  p: Pick<PredictionDto, "predictedQ80" | "predictedQ95">,
+): PredictionQuantiles | null {
+  const minutes = (v: number | null | undefined): number | null =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0
+      ? Math.round(v)
+      : null;
+  const q80 = minutes(p.predictedQ80);
+  const q95 = minutes(p.predictedQ95);
+  return q80 === null && q95 === null ? null : { q80, q95 };
+}
+
+/**
+ * The response with `predictedQ80`/`predictedQ95` removed from COPIES of its
+ * predictions (PAR-912). The two fields exist for the accuracy rows only; the
+ * served read feeds park pages, `/plan/day` and the calendar, several of which
+ * spread a prediction into their payload, so they would otherwise reach the
+ * public API. The raw read (`getRawParkPredictions`, the generator's input)
+ * keeps them, and the Redis entry is never touched.
+ */
+export function withoutInternalQuantiles(
+  response: BulkPredictionResponseDto,
+): BulkPredictionResponseDto {
+  if (!response.predictions) return response;
+  return {
+    ...response,
+    predictions: response.predictions.map((p) => {
+      const copy = { ...p };
+      delete copy.predictedQ80;
+      delete copy.predictedQ95;
+      return copy;
+    }),
+  };
+}
 
 /**
  * The oldest `createdAt` a reader of stored predictions looks at.
@@ -343,6 +390,7 @@ export class MLService {
     predictionType: "hourly" | "daily" = "hourly",
     maxDays?: number,
     liveStatus?: "OPERATING" | "CLOSED",
+    options: { chronos?: boolean } = {},
   ): Promise<BulkPredictionResponseDto> {
     const raw = await this.getRawParkPredictions(
       parkId,
@@ -350,17 +398,23 @@ export class MLService {
       maxDays,
       liveStatus,
     );
-    if (!this.servePcnIntraday || predictionType !== "hourly") return raw;
+    if (!this.serveIntradayOverride || predictionType !== "hourly") {
+      return withoutInternalQuantiles(raw);
+    }
 
     // Champion-swap consistency: the park-level hourly curve (park page, plan/day,
     // calendar today, favorites) must show the SAME served waits as the
     // per-attraction read paths, which apply the PCN override + persistence blend.
     // Overridden on COPIES, so neither the Redis entry nor the raw object a caller
     // may still hold ever carries a PCN number.
-    const predictions = (raw.predictions ?? []).map((p) => ({ ...p }));
-    await this.applyPcnIntradayOverride(
+    // `chronos: false` is the forward archive's incumbent read (PAR-911): the
+    // curve as it would be served without Chronos, so the live A/B keeps a
+    // reference once Chronos is part of what is served. No endpoint passes it.
+    const predictions = withoutInternalQuantiles(raw).predictions ?? [];
+    await this.applyServedIntradayOverride(
       predictions,
       new Date(currentSlotStartMs()),
+      options.chronos ?? true,
     );
     return { ...raw, predictions };
   }
@@ -1300,7 +1354,9 @@ export class MLService {
     };
 
     const response = await this.getPredictions(request);
-    return response.predictions;
+    // A served fallback path (getAttractionPredictionsWithFallback), so the
+    // accuracy-only quantiles are dropped here as on the park read.
+    return withoutInternalQuantiles(response).predictions;
   }
 
   /**
@@ -1592,12 +1648,21 @@ export class MLService {
     // accuracy metric exactly where forecasting is hardest, and it would let our
     // own missing bookkeeping stand in for an operator's statement — see
     // docs/rules/absent-facts.md. null covers rows written before PAR-117.
-    const validPredictionsForFeedback = entities.filter(
-      (pred) =>
-        pred.predictionType === "hourly" &&
-        (pred.status === "OPERATING" ||
-          pred.status === "UNKNOWN" ||
-          pred.status === null),
+    // Index-aligned with `entities`, which map `validPredictions` 1:1: the
+    // model's q0.8/q0.95 have no column on the hypertable and travel beside it
+    // to the accuracy row only (PAR-912).
+    const feedbackIdx = entities
+      .map((pred, i) => ({ pred, i }))
+      .filter(
+        ({ pred }) =>
+          pred.predictionType === "hourly" &&
+          (pred.status === "OPERATING" ||
+            pred.status === "UNKNOWN" ||
+            pred.status === null),
+      );
+    const validPredictionsForFeedback = feedbackIdx.map(({ pred }) => pred);
+    const feedbackQuantiles = feedbackIdx.map(({ i }) =>
+      predictionQuantilesOf(validPredictions[i]),
     );
 
     if (validPredictionsForFeedback.length < entities.length) {
@@ -1620,6 +1685,7 @@ export class MLService {
       recordedCount = await this.predictionAccuracyService.recordPredictions(
         validPredictionsForFeedback,
         served,
+        feedbackQuantiles,
       );
     } catch (error) {
       const errorMessage =
@@ -1965,8 +2031,8 @@ export class MLService {
       result.set(p.attractionId, list);
     }
 
-    if (this.servePcnIntraday && predictionType === "hourly") {
-      await this.applyPcnIntradayOverride(
+    if (this.serveIntradayOverride && predictionType === "hourly") {
+      await this.applyServedIntradayOverride(
         [...result.values()].flat(),
         startTime,
       );
@@ -1977,9 +2043,14 @@ export class MLService {
   /** Champion-swap flag: serve PCN's intraday 15-min forecast in place of CatBoost's
    * `hourly` predictions (PCN beats CatBoost on the matched board). Default OFF —
    * enable per env once the win is confirmed over a few days. Always falls back to
-   * CatBoost where PCN has no forecast (or the table/flag is absent). */
-  private get servePcnIntraday(): boolean {
-    return servePcnIntradayFlag();
+   * CatBoost where PCN has no forecast (or the table/flag is absent).
+   *
+   * Since PAR-911 the read paths ask whether EITHER served-model override is on:
+   * the PCN champion swap or the Chronos-2 30–120 min window
+   * (`SERVE_CHRONOS_INTRADAY`, also default OFF). With both off every read path
+   * returns CatBoost untouched, exactly as before. */
+  private get serveIntradayOverride(): boolean {
+    return servePcnIntradayFlag() || serveChronosIntraday();
   }
 
   /** Freshest forward PCN forecast per (attraction, slot) for upcoming slots, keyed by
@@ -2070,6 +2141,12 @@ export class MLService {
    * anchor is "the wait now", and recomputing it once the slot has happened
    * would hand the forecast the answer.
    *
+   * `chronos` where the Chronos-2 serving override (PAR-911) produced the
+   * slot. Chronos serves only 45–120 min ahead, so under the two-hour scored
+   * lead below it is recorded only where the two windows meet — see
+   * docs/ml/forward-archive.md §10.4 before reading the badge as a Chronos
+   * figure.
+   *
    * `catboost` wherever CatBoost is what was served: the flag off, no PCN
    * forecast for that ride and slot, a producer older than the staleness guard,
    * or the PCN read failing (the override swallows that and falls back too).
@@ -2107,20 +2184,67 @@ export class MLService {
       baseline: r.baseline,
       modelVersion: r.modelVersion,
     }));
-    const overridden = this.servePcnIntraday
-      ? await this.applyPcnIntradayOverride(
+    const overridden = this.serveIntradayOverride
+      ? await this.applyServedIntradayOverride(
           copies,
           new Date(currentSlotStartMs()),
         )
-      : new Set<PredictionDto>();
+      : new Map<PredictionDto, "pcn" | "chronos">();
     return copies.map((c, i) =>
       rows[i].predictedTime.getTime() - now < SERVED_ACCURACY_MIN_LEAD_MS
         ? null
         : {
             wait: c.predictedWaitTime,
-            source: overridden.has(c) ? "pcn" : "catboost",
+            source: overridden.get(c) ?? "catboost",
           },
     );
+  }
+
+  /**
+   * Every served-model override, in order, on these rows (in place), and which
+   * model each changed row ended on.
+   *
+   * 1. PCN + §7.7 persistence blend (`SERVE_PCN_INTRADAY`) on every slot it has.
+   * 2. Chronos-2 (`SERVE_CHRONOS_INTRADAY`, PAR-911) on the 45–120 min slots
+   *    its cached curve covers — so ≤ 30 min stays the blend (persistence wins
+   *    at 15 min) and > 120 min stays PCN, and a stale or missing curve leaves
+   *    whatever step 1 served.
+   *
+   * Chronos's lead base is the current slot start, never the caller's
+   * `startTime`: a read that starts later must not shift Chronos's window.
+   */
+  private async applyServedIntradayOverride(
+    preds: PredictionDto[],
+    startTime?: Date,
+    withChronos = true,
+  ): Promise<Map<PredictionDto, "pcn" | "chronos">> {
+    const out = new Map<PredictionDto, "pcn" | "chronos">();
+    if (servePcnIntradayFlag()) {
+      for (const p of await this.applyPcnIntradayOverride(preds, startTime)) {
+        out.set(p, "pcn");
+      }
+    }
+    if (withChronos && serveChronosIntraday()) {
+      const hourly = preds.filter((p) => p.predictionType === "hourly");
+      if (hourly.length > 0) {
+        const curves = await readChronosServeCache(this.redis, [
+          ...new Set(hourly.map((p) => p.attractionId)),
+        ]);
+        const done = applyChronosOverride(
+          hourly,
+          curves,
+          currentSlotStartMs(),
+          Date.now(),
+        );
+        for (const p of done) out.set(p, "chronos");
+        if (done.size > 0) {
+          this.logger.debug(
+            `Chronos intraday override: ${done.size}/${hourly.length} slots`,
+          );
+        }
+      }
+    }
+    return out;
   }
 
   /** Override matched hourly predictions in place with PCN's q0.5 wait, recomputing
@@ -2251,8 +2375,8 @@ export class MLService {
         modelVersion: p.modelVersion,
         status: p.status || undefined,
       }));
-      if (this.servePcnIntraday && predictionType === "hourly") {
-        await this.applyPcnIntradayOverride(dtos, startTime);
+      if (this.serveIntradayOverride && predictionType === "hourly") {
+        await this.applyServedIntradayOverride(dtos, startTime);
       }
       return dtos;
     }
@@ -2263,44 +2387,95 @@ export class MLService {
       attractionId,
       predictionType,
     );
-    if (this.servePcnIntraday && predictionType === "hourly") {
-      await this.applyPcnIntradayOverride(live, startTime);
+    if (this.serveIntradayOverride && predictionType === "hourly") {
+      await this.applyServedIntradayOverride(live, startTime);
     }
     return live;
   }
 
   /**
-   * Delete old predictions to manage database size
+   * Deletes predictions whose `predictedTime` is before `cutoffDate`, from the
+   * UNCOMPRESSED chunks only.
    *
-   * @param predictionType - Type of prediction to delete
-   * @param cutoffDate - Delete predictions older than this date
-   * @returns Number of deleted records
+   * `predictedTime` is not the partition key (`createdAt` is), so an unbounded
+   * DELETE on it plans every chunk, and TimescaleDB has to decompress the
+   * matching batches of every compressed chunk before it can delete from them.
+   * Decompression writes the rows back through the chunk's primary key, and a
+   * compressed chunk never enforced that key: the two July chunks held 1051 and
+   * 1267 duplicate keys, and from 2026-10-10 on the nightly cleanup died on
+   * `duplicate key value violates unique constraint "…_wait_time_predictions_pkey"`
+   * as soon as the cutoff reached them (PAR-900).
+   *
+   * Leaving compressed chunks out loses nothing: they are past the 14-day
+   * compression horizon, and the 90-day chunk drop that runs first in the same
+   * job ({@link dropExpiredPredictionChunks}) removes them whole. On production
+   * a daily row's `predictedTime` is never earlier than its `createdAt` (the
+   * shortest lead is ~11 h), so a row past the 90-day cutoff lives in a chunk
+   * older than 90 days — in practice this deletes nothing and is a guard for
+   * the case where compression is behind or switched off.
+   *
+   * The bound is the end of the newest compressed chunk, so no compressed chunk
+   * can sit above it even when an old one was decompressed by hand. It goes into
+   * the SQL as a constant rather than a parameter on purpose: a constant lets
+   * the planner leave those chunks out of the plan entirely, where a parameter
+   * under a generic plan would only exclude them at executor startup with the
+   * chunks still listed as delete targets. The value comes from our own catalog
+   * read and is rendered by `toISOString()`, so nothing outside reaches the SQL.
+   *
+   * The `createdAt` bound is the safeguard: it keeps the DELETE off every chunk
+   * that was compressed at lookup time. The decompression limit
+   * (`max_tuples_decompressed_per_dml_transaction`, default 100 000) is left at
+   * its default and only caps the damage of the remaining race — a chunk
+   * compressed between the lookup and the DELETE would be unpacked up to that
+   * limit, not refused. In practice nothing matches there: compression takes
+   * chunks older than 14 days, the DELETE only rows predicted > 90 days ago.
    */
   async deleteOldPredictions(
     predictionType: "hourly" | "daily",
     cutoffDate: Date,
-  ): Promise<number> {
-    // wait_time_predictions is a hypertable partitioned on createdAt with
-    // compression after 14 days; rows this old live in compressed chunks, and a
-    // plain DELETE aborts once it decompresses more than
-    // timescaledb.max_tuples_decompressed_per_dml_transaction (100k) tuples.
-    // Lift the limit locally for this one bounded nightly cleanup.
-    const rows: Array<{ affected: string }> =
-      await this.predictionRepository.manager.transaction(async (em) => {
-        await em.query(
-          `SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0`,
-        );
-        return em.query(
-          `WITH del AS (
-             DELETE FROM wait_time_predictions
-             WHERE "predictionType" = $1 AND "predictedTime" < $2
-             RETURNING 1
-           ) SELECT count(*)::text AS affected FROM del`,
-          [predictionType, cutoffDate],
-        );
-      });
+  ): Promise<{ deleted: number; createdFrom: Date | null }> {
+    const createdFrom = await this.getNewestCompressedPredictionChunkEnd();
+    const createdBound = createdFrom
+      ? ` AND "createdAt" >= '${createdFrom.toISOString()}'::timestamptz`
+      : "";
 
-    return Number(rows?.[0]?.affected ?? 0);
+    const rows: Array<{ affected: string }> =
+      await this.predictionRepository.manager.query(
+        `WITH del AS (
+           DELETE FROM wait_time_predictions
+           WHERE "predictionType" = $1 AND "predictedTime" < $2${createdBound}
+           RETURNING 1
+         ) SELECT count(*)::text AS affected FROM del`,
+        [predictionType, cutoffDate],
+      );
+
+    return { deleted: Number(rows?.[0]?.affected ?? 0), createdFrom };
+  }
+
+  /**
+   * End of the newest compressed `wait_time_predictions` chunk, or null when no
+   * chunk is compressed. Everything at or after it is uncompressed. Reads the
+   * catalog only.
+   */
+  private async getNewestCompressedPredictionChunkEnd(): Promise<Date | null> {
+    const rows: Array<{ boundary: Date | string | null }> =
+      await this.predictionRepository.manager.query(
+        `SELECT max(range_end) AS boundary
+           FROM timescaledb_information.chunks
+          WHERE hypertable_schema = 'public'
+            AND hypertable_name = 'wait_time_predictions'
+            AND is_compressed`,
+      );
+    const boundary = rows?.[0]?.boundary ?? null;
+    if (boundary === null) return null;
+    const date = boundary instanceof Date ? boundary : new Date(boundary);
+    // A value that does not parse must not silently drop the bound.
+    if (Number.isNaN(date.getTime())) {
+      throw new Error(
+        `Unreadable compressed-chunk boundary for wait_time_predictions: ${String(boundary)}`,
+      );
+    }
+    return date;
   }
 
   /**

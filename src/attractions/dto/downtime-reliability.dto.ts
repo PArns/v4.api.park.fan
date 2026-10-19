@@ -86,7 +86,8 @@ export class DowntimeWithheldDto {
     description:
       "Why nothing is published. `not_down_capable`, `park_never_reports`, " +
       "`artefact_regime`, `no_schedule` and `outside_window` are statements " +
-      "about OUR data and say nothing about the ride; the rest are about how " +
+      "about OUR data and say nothing about the ride; `free_flow` is about the " +
+      "ride, which has no queue to show an outage in; the rest are about how " +
       "much of it there is. `park_never_reports` is the common one — 91 parks " +
       "are listed at the source and have still never emitted a single DOWN " +
       "reading. `outside_window` is the only one that resolves on its own: the " +
@@ -173,6 +174,7 @@ const PERMANENT_REASONS: ReadonlySet<DowntimeWithheldReason> = new Set([
   "park_never_reports",
   "artefact_regime",
   "no_schedule",
+  "free_flow",
 ]);
 
 export function toDowntimeBlock(

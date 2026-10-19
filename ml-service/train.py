@@ -405,9 +405,10 @@ def estimate_refit(
     """Would the final refit finish inside the caller's budget?
 
     The refit is estimated as the early-stopped fit's duration scaled by the row
-    ratio (refit rows / fit training rows). In production early stopping never
-    fires (tree_count = CATBOOST_ITERATIONS = 2000), so the refit runs as many
-    trees as the fit did, on ~1.25x the rows. No budget means no limit.
+    ratio (refit rows / fit training rows). The refit runs best_iteration + 1
+    trees, which is at most the trees the fit grew, so the estimate is an upper
+    bound; at the defaults the validation loss still improves at the cap and the
+    two are equal (PAR-902). No budget means no limit.
     """
     estimate = fit_seconds * (rows_all / max(rows_train, 1))
     if budget_seconds is None:
@@ -763,7 +764,7 @@ def train_model(
     logger.info(f"   Iterations: {settings.CATBOOST_ITERATIONS}")
     logger.info(f"   Learning rate: {settings.CATBOOST_LEARNING_RATE}")
     logger.info(f"   Depth: {settings.CATBOOST_DEPTH}")
-    logger.info("   Early stopping: 100 rounds")
+    logger.info(f"   Early stopping: {settings.CATBOOST_EARLY_STOPPING_ROUNDS} rounds")
     logger.info("")
 
     model = WaitTimeModel(version)
@@ -774,6 +775,10 @@ def train_model(
         "seconds": round(time.perf_counter() - fit_start, 1),
         "train_rows": len(X_train),
         "val_rows": len(X_val),
+        # Trees grown and whether early stopping ended the fit (PAR-902), so a
+        # slow run shows in /train/status whether the cap was the reason.
+        "trees": model.metadata["early_stopping"]["trees_built"],
+        "stopped_early": model.metadata["early_stopping"]["stopped_early"],
     }
     logger.info(
         f"   ⏱️  Fit: {timings['fit']['seconds']:.1f}s "

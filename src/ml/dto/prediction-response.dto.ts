@@ -52,6 +52,33 @@ export class PredictionDto {
   })
   uncertaintyMinutes?: number | null;
 
+  /**
+   * Internal (PAR-912): the model's raw q0.8 and q0.95 for the slot, in whole
+   * minutes, for live calibration in `prediction_accuracy`. Not rounded to 5 and
+   * without the 10-minute floor `predictedWaitTime` carries. Absent when the
+   * model has no quantile head. Not part of any public response contract —
+   * public endpoints build their own DTOs from stored rows.
+   */
+  @ApiProperty({
+    description:
+      "Internal: the model's raw q0.8 in minutes (live calibration only). " +
+      "Absent when the model has no quantile head.",
+    required: false,
+    type: Number,
+    nullable: true,
+  })
+  predictedQ80?: number | null;
+
+  @ApiProperty({
+    description:
+      "Internal: the model's raw q0.95 in minutes (live calibration only). " +
+      "Absent when the model has no quantile head.",
+    required: false,
+    type: Number,
+    nullable: true,
+  })
+  predictedQ95?: number | null;
+
   @ApiProperty({
     enum: ["increasing", "decreasing", "stable"],
     required: false,

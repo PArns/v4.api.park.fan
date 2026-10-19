@@ -15,10 +15,10 @@ import type { TypicalWaitsDto } from "../../attractions/dto/attraction-response.
 /**
  * Attraction Typical-Waits Entity
  *
- * Precomputed typical (P50) vs busy (P90) peak-wait stats per headliner, so the
+ * Precomputed typical (P50) vs busy (P90) peak-wait stats per ride, so the
  * park response (and thus the statically-prerendered ride-page shell) can serve
  * them without a per-request percentile scan. Mirrors the rope-drop precompute:
- * a nightly job stores one row per displayable headliner; the park integration
+ * a nightly job stores one row per displayable ride; the park integration
  * reads them in one query and attaches them to the embedded attractions.
  *
  * The payload is the exact `TypicalWaitsDto` the detail endpoint serves, kept as

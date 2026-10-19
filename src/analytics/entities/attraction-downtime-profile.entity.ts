@@ -43,6 +43,15 @@ export const DOWNTIME_WITHHELD_REASONS = [
    * not current" is the truer sentence.
    */
   "outside_window",
+  /**
+   * The ride has no queue, so nothing would show an outage.
+   *
+   * A free-flow ride (`open_with_park`) is reported CLOSED all day by its
+   * source, in every park. The obstacle is the ride, not the park's source
+   * (`not_down_capable`) and not the park's calendar (`no_schedule`), and a
+   * reader is owed the one that is true.
+   */
+  "free_flow",
   /** Real outages, too few of them for anything but the count. */
   "thin_events",
   /** Too little observed operating time behind the window. */

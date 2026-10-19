@@ -21,6 +21,10 @@ When two sources report different wait times for the *same* attraction:
 - **Sanity Check**: We discard data that looks "stuck" (unchanged for > 2 hours) if a fresher source is available.
 - **Normalization**: All statuses are mapped to our internal enum (`OPERATING`, `DOWN`, `CLOSED`).
 
+### Name matching keeps a trailing country code
+
+`normalizeForMatching` (`src/common/utils/slug.util.ts`) does not strip a suffix like ` (DK)`. In the data it marks the language of a show, not the source of a duplicate: on 2026-10-13 exactly 3 rows carried one, all in `shows` at LEGOLAND Billund (`V.I.M. Dance Party (DK)`, `V.I.M. Dance Party (UK)`, `Playdate with Peppa & George (UK)`), and no attraction or park name did. Merging two different performances costs more than a missed merge, and the fuzzy branch of `EntityMatcherService` (`dice > 0.9`) still catches a real cross-source duplicate. The rule applies to shows and attractions alike.
+
 ### Wait times are stored in five-minute steps
 Every STANDBY, SINGLE_RIDER and PAID_STANDBY wait is rounded with `roundToNearest5Minutes`
 in `QueueDataService.buildQueueCandidates`, the one place every source's row passes through.

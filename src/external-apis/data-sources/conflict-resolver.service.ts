@@ -198,12 +198,15 @@ export class ConflictResolverService {
         source: "themeparks-wiki",
         sources: ["themeparks-wiki"],
       });
-      normalizedKeys.set(normKey, entity.name);
+      // A nameless entity (normalises to "") is kept but never used as a match
+      // key, or every nameless entity from another source would merge into it.
+      if (normKey) normalizedKeys.set(normKey, entity.name);
     }
 
     // Helper for fuzzy matching within a park's entities
     const findBestMatch = (name: string): string | undefined => {
       const norm = normalizeForMatching(name);
+      if (!norm) return undefined;
       // 1. Exact match (fast)
       if (normalizedKeys.has(norm)) return normalizedKeys.get(norm);
 
@@ -229,6 +232,8 @@ export class ConflictResolverService {
 
     // Step 2: Merge Queue-Times entities
     for (const qtEntity of qtEntities) {
+      // Without a name an entity cannot be matched or keyed; skip it.
+      if (!normalizeForMatching(qtEntity.name)) continue;
       const matchKey = findBestMatch(qtEntity.name);
       if (matchKey) {
         this.updateMergedEntry(merged.get(matchKey)!, qtEntity, "queue-times");
@@ -245,6 +250,7 @@ export class ConflictResolverService {
 
     // Step 3: Merge Wartezeiten entities
     for (const wzEntity of wzEntities) {
+      if (!normalizeForMatching(wzEntity.name)) continue;
       const matchKey = findBestMatch(wzEntity.name);
       if (matchKey) {
         this.updateMergedEntry(
@@ -413,6 +419,7 @@ export class ConflictResolverService {
         [];
 
       // Find matching entities in other sources by name
+      if (!normalizeForMatching(wikiEntity.name)) continue;
       const qtEntity = qt?.entities.find(
         (e) =>
           normalizeForMatching(e.name) ===

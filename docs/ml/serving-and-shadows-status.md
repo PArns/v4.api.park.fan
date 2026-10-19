@@ -21,6 +21,7 @@
 | Horizont | Serviertes Modell (Champion) | Challenger / Status |
 |---|---|---|
 | **Intraday 0–24 h** (15-Min) | **PCN** (Flag `SERVE_PCN_INTRADAY=true`, **LIVE**) | **PCN gewinnt** alle Segmente bei jedem Lead (gereift 29.06: busy 24.9 vs 26.2, all 8.3 vs 8.9). CatBoost-Fallback bei stale/fehlend (3h-Guard). |
+| **Intraday 45–120 min** | PCN-Blend wie oben; **Chronos-2** vorbereitet hinter `SERVE_CHRONOS_INTRADAY` (default aus, PAR-911) | Live-A/B im Forward-Archiv (§8.4); Umschalten + Rollback: [forward-archive.md §10](forward-archive.md#10-chronos-2-served-on-the-live-surface-par-911) |
 | **Daily ≤45–60 d** | **TFT** (gemerged) | live; TFT schlägt CatBoost daily (−39…46%). |
 | **Far-daily 61–365 d** | **CatBoost (Level)** | bleibt — TFT datengelimitet bis ~Dez 2026; Shape liefert kein Level. **Long-term weiter nötig.** |
 | **Intraday/far-daily Kurve** | CatBoost-Shape | **Shape-Modell** (Level×Shape) als Shadow — Board reift noch. |

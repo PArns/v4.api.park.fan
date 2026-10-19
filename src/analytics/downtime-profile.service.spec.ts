@@ -66,6 +66,19 @@ describe("decideProfile", () => {
     ).toBe("not_down_capable");
   });
 
+  it("names the ride, not the park, for a free-flow ride in any regime", () => {
+    for (const regime of [
+      "reports",
+      "not_capable",
+      "no_schedule",
+      "never_reports",
+    ] as const) {
+      expect(
+        decideProfile({ ...HEALTHY, freeFlow: true }, regime),
+      ).toMatchObject({ figures: false, reason: "free_flow", downShare: null });
+    }
+  });
+
   it("refuses an unknown park rather than defaulting to publishable", () => {
     expect(decideProfile(HEALTHY, undefined).figures).toBe(false);
   });
@@ -362,11 +375,14 @@ describe("DowntimeProfileService — the rebuild's population", () => {
   let query: jest.Mock;
   let profileUpsert: jest.Mock;
   let managerQuery: jest.Mock;
+  /** Every `SET LOCAL` the reads issue, in order (PAR-837). */
+  let limitSql: string[];
   /** Every write in order, so "delete before upsert" is checkable. */
   let writes: string[];
 
   const build = async (coverageRows: unknown[], profileRows: unknown[]) => {
     writes = [];
+    limitSql = [];
     query = jest
       .fn()
       .mockResolvedValueOnce(coverageRows)
@@ -387,9 +403,20 @@ describe("DowntimeProfileService — the rebuild's population", () => {
           provide: DataSource,
           useValue: {
             query,
-            transaction: (cb: (m: unknown) => Promise<void>) =>
+            transaction: (cb: (m: unknown) => Promise<unknown>) =>
               cb({
-                query: managerQuery,
+                // The two reads run through `queryWithLimits`, which opens a
+                // transaction of its own: its `SET LOCAL`s are recorded, its
+                // statement goes to `query`, and only the DELETE is a write.
+                query: (sql: string, params?: unknown[]) => {
+                  if (/^SET LOCAL/.test(sql)) {
+                    limitSql.push(sql);
+                    return Promise.resolve([]);
+                  }
+                  return /^\s*DELETE/.test(sql)
+                    ? managerQuery(sql, params)
+                    : query(sql, params);
+                },
                 getRepository: () => ({ upsert: profileUpsert }),
               }),
           },
@@ -408,6 +435,23 @@ describe("DowntimeProfileService — the rebuild's population", () => {
     profileUpsert.mock.calls.flatMap(
       (call) => call[0] as Record<string, unknown>[],
     );
+
+  describe("read deadlines (PAR-837)", () => {
+    it("puts a statement_timeout of at least 3x the measured 12.3 s on both reads", async () => {
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [publishableRow(LIVE_RIDE, REPORTING_PARK)],
+      );
+      await service.rebuild(null);
+
+      const timeouts = limitSql.filter((q) => q.includes("statement_timeout"));
+      expect(timeouts).toHaveLength(2);
+      for (const sql of timeouts) {
+        const ms = Number(sql.split("=")[1]);
+        expect(ms).toBeGreaterThanOrEqual(3 * 12_300);
+      }
+    });
+  });
 
   describe("stale rows", () => {
     it("deletes the profiles of rides that dropped out, before writing", async () => {
@@ -788,6 +832,84 @@ describe("DowntimeProfileService — the rebuild's population", () => {
         publishable: false,
         withheldReason: "no_schedule",
       });
+    });
+  });
+
+  describe("free-flow rides", () => {
+    const FREE_FLOW_RIDE = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+    it("sources them in every park, scoped like ex, and leaves retired ones out", async () => {
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      const sql = flatSql(query.mock.calls[1][0] as string);
+      expect(sql).toContain("flow AS (");
+      expect(sql).toContain("SELECT * FROM flow");
+      const flow = sql.slice(sql.indexOf("flow AS ("), sql.indexOf("pop AS ("));
+      expect(flow).toContain("COALESCE(a.open_with_park, FALSE) = TRUE");
+      expect(flow).toContain("a.retired_at IS NULL");
+      expect(flow).toContain("$1::uuid[] IS NULL");
+    });
+
+    it("keeps them out of ex, so a lingering exposure day cannot duplicate the row", async () => {
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      const sql = flatSql(query.mock.calls[1][0] as string);
+      const ex = sql.slice(
+        sql.indexOf("WITH ex AS ("),
+        sql.indexOf("sched AS ("),
+      );
+      expect(ex).toContain("COALESCE(ea.open_with_park, FALSE) = FALSE");
+    });
+
+    it("writes free_flow, not the park's reason, even in a park that reports", async () => {
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [
+          {
+            ...publishableRow(FREE_FLOW_RIDE, REPORTING_PARK),
+            operatingMinutes: 0,
+            downMinutes: 0,
+            observedDays: 0,
+            freeFlow: true,
+          },
+        ],
+      );
+      await service.rebuild(null);
+
+      expect(saved()[0]).toMatchObject({
+        attractionId: FREE_FLOW_RIDE,
+        publishable: false,
+        withheldReason: "free_flow",
+      });
+    });
+
+    it("deletes a free_flow row once the ride stops being sourced, like no_schedule", async () => {
+      await build(
+        [coverageRow(REPORTING_PARK)],
+        [publishableRow(LIVE_RIDE, REPORTING_PARK)],
+      );
+      await service.rebuild(null);
+
+      const [sql, params] = managerQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain("p.withheld_reason = $4::text");
+      expect(params[3]).toBe("free_flow");
+    });
+  });
+
+  describe("retired rides", () => {
+    it("are excluded from ex, so the profile does not outlive the ride by 90 days", async () => {
+      await build([coverageRow(REPORTING_PARK)], []);
+      await service.rebuild(null);
+
+      const sql = flatSql(query.mock.calls[1][0] as string);
+      const ex = sql.slice(
+        sql.indexOf("WITH ex AS ("),
+        sql.indexOf("sched AS ("),
+      );
+      expect(ex).toContain('JOIN attractions ea ON ea.id = e."attractionId"');
+      expect(ex).toContain("ea.retired_at IS NULL");
     });
   });
 

@@ -36,14 +36,15 @@ it drifted the board would score a product nobody is shown.
 | 10, 12, 14, 16, 18 | `plan_day` (D1 row) | `buildPlanDay(park, today)` | 60 min | per planned ride: the plan hours of the 2-h look-ahead, the frontend's next-best-ride "later" value and the live anchor — feeds D1 only |
 
 | 06:00 daily | `chronos_grid` (surface 7, **shadow**) | nf-service `POST /chronos/forecast` `variant=grid` | 15 min | d0 … d7, Chronos-2 never served — see §8 |
-| 10, 12, 14, 16, 18 | `chronos_live` (surface 6, **shadow**) | nf-service `POST /chronos/forecast` `variant=live` | 15 min | next 4 h, Chronos-2 never served, with the live anchor — see §8 |
+| 10, 12, 14, 16, 18 | `chronos_live` (surface 6, **shadow**) | nf-service `POST /chronos/forecast` `variant=live` | 15 min | next 4 h, with the live anchor — see §8; also feeds the Chronos serving cache (§10) |
+| 10, 12, 14, 16, 18, only while `SERVE_CHRONOS_INTRADAY` is on | `park_hourly_incumbent` (surface 8, not served) | `MLService.getParkPredictions(…, { chronos: false })` | 15 min | next 4 h: what `park_hourly` would show without Chronos, the live A/B's reference once Chronos is served — see §10.5 |
 
 Intraday origins run only for parks whose 06:00 capture found a curve for today,
 so a closed park costs nothing all day.
 
 `getParkPredictions` is the **served** read: CatBoost hourly with the PCN
 override and §7.7 persistence blend applied where PCN answered. Each slot records
-its source in `sources` (`p` = pcn_blend, `c` = catboost); `/plan/day` hours
+its source in `sources` (`p` = pcn_blend, `c` = catboost, `s` = chronos2_served since PAR-911); `/plan/day` hours
 record `m` measured (the hour-mean of that same served curve), `k` composed,
 `l` climatology, `o` observed. `-` is a slot the payload did not carry.
 
@@ -63,8 +64,9 @@ both an old-composer curve and an H5 profile, the composers side by side on the
 SAME quarter-hours: surface 3 `plan_day_shadow_peak` (old composer, its hour
 repeated across four quarters, `k`), 4 `plan_day_shadow_h5` (plain H5, `h`),
 5 `plan_day_shadow_routed` (H5 as the flag would serve it — `h5LevelFor`'s
-routing, `t`). Surface 5 is written only where a level was applied (busy rides,
-d0–d6); where it is missing the scorer reads surface 4 under its name too, so the
+routing, `t`, the same `h5LevelFor` call the served path makes). Surface 5 is
+written only where a level was applied (busy rides, d0–d2 since PAR-901, d0–d6
+before); where it is missing the scorer reads surface 4 under its name too, so the
 three always cover the same ride-days. Scored under use case **`UC3S`**, sources
 `shadow_peak_scaled` / `shadow_h5` / `shadow_h5_routed`, never into `all` and
 never into `UC3` — slot MAE/bias and the ride-day shape metrics (best-time
@@ -73,7 +75,8 @@ Measured hours play no part: this compares composers, not the hourly model.
 
 Added size (estimate from §2's measured row counts, not yet measured): at most
 two shadow rows per planner ride and lead (~57 k planner rows a day) plus the
-routed row for busy rides d0–d6 (~8 k) — **≤ ~120 k rows / ~43 MB a day**
+routed row for busy rides d0–d6 (~8 k; since PAR-901 only d0–d2, 3 of those 7
+leads, so ~3.4 k) — **≤ ~120 k rows / ~43 MB a day**
 (~0.35 KB per 15-minute row with its index entry), steady state **≤ ~1.5 GB**,
 two thirds of it the d10–d90 rows waiting for their day. If that is too much,
 capping the shadow at d30 drops the long-lead share (d45/d60/d90 hold most of the
@@ -300,8 +303,10 @@ is scored at 12:00 UTC on *D + 1*:
 PAR-828 offline benchmark also win on live, leakage-free forecasts? The owner's
 rule for replacing a model needs (1) an offline win, (2) a live confirmation in
 this archive — ≥ 14 days and ≥ 10 parks per lead — and (3) a visible effect on a
-user surface. This section is (2). **Nothing here is served to a user**: the
-only reader of nf-service `/chronos/forecast` is the archive capture.
+user surface. This section is (2). **Nothing here is served to a user** — until
+`SERVE_CHRONOS_INTRADAY` is switched on (§10, PAR-911): the only reader of
+nf-service `/chronos/forecast` is the archive capture, and the curves it reads
+are what serving would use.
 
 ### 8.1 Model and variants
 
@@ -374,7 +379,7 @@ origin instant** where truth, shadow and reference all have a value:
 
 | shadow | reference | what |
 | --- | --- | --- |
-| `chronos2` | `served` | `park_hourly` (CatBoost / PCN blend as served) |
+| `chronos2` | `served` | `park_hourly` (CatBoost / PCN blend as served) — or, once Chronos is served, `park_hourly_incumbent` (§10.5) |
 | `chronos2` | `persistence` | the live wait in force at the origin, held flat |
 | `chronos2_grid` | `served` | `plan_day` (its hour value on each quarter-hour) |
 | `chronos2_grid` | `h5` | the composer shadow's plain H5 curve (surface 4) |
@@ -651,3 +656,132 @@ All admin-auth, read-only, every query under statement limits.
   `origin.at` (instant) and `origin.localLabel` ("10.10. 06:05 Uhr",
   park-local; "keine Prognose gespeichert" without a capture), `openingHours`
   park-local or null. Cached 15 min.
+
+## 10. Chronos-2 served on the live surface (PAR-911)
+
+**Default OFF.** `SERVE_CHRONOS_INTRADAY=true` on the API serves Chronos-2's
+`live` curve for the slots 45–120 minutes ahead; nothing else changes. Prepared
+so that the switch, once §8's live A/B has confirmed the offline result
+(PAR-828/PAR-869: Chronos-2 beats persistence from 30 min and the served
+PCN/profiles at 30–120 min; persistence stays best at 15 min), is a flag flip.
+
+### 10.1 Which model serves which lead
+
+Lead = slot start − the current slot start, the base the §7.7 persistence blend
+uses (`src/ml/chronos-serving.ts`, `MLService.applyServedIntradayOverride`):
+
+| lead | served with both flags on | Chronos only on (`SERVE_PCN_INTRADAY` off) |
+| --- | --- | --- |
+| 0 – 30 min | PCN + persistence blend (pure anchor for a ride with a ≥ 40 min wait) | CatBoost |
+| 45 – 120 min | **Chronos-2** q50 | **Chronos-2** q50 |
+| > 120 min | PCN + blend (anchor share decays to 0 by 3 h) | CatBoost |
+
+A ride without a cached curve, a curve older than **90 min**, or a slot the
+curve has no value for (outside the published window) keeps what the row
+above would serve — the fallback is the incumbent, never an empty slot. There
+is a seam at 120 → 135 min (Chronos → a blend that still holds half the
+anchor at 2 h); the offline bench shows no lead where that ordering is wrong.
+
+Per served slot, the same per-purpose quantile split CatBoost and PCN use
+(docs/ml/quantile-serving-and-calibration.md):
+
+- **wait** = q50, through `roundServedWait` (5-minute steps, ≥ 10 when positive);
+- **`uncertaintyMinutes`** = q95 − q50, the one-sided upper half-width the
+  CatBoost band is (Chronos's own quantile, not a measured residual);
+- **`crowdLevel`** = q80 (clamped ≥ the shown wait) ÷ the row's carried P50
+  baseline — the live **ratio-vs-P50** regime of docs/rules/crowd-levels.md,
+  exactly what the PCN override does with its q0.8. No baseline → the row's
+  crowd level is left as it was.
+- `modelVersion` = `<catboost version>+chronos` (replacing `+pcn`).
+
+### 10.2 Serving cache and cadence
+
+The request path never calls nf-service. It reads one Redis `MGET` of
+`ml:chronos-serve:<attractionId>` (JSON: `originAt`, `revision`, the curve's
+segments with q50/q80/q95; TTL 3 h, the 90-min guard decides) for the rides of
+the rows being served.
+
+Writers, both on the hourly `forecast-archive` job (`:05`):
+
+| park-local hour | who writes | GPU cost |
+| --- | --- | --- |
+| 10, 12, 14, 16, 18 | the intraday archive capture (§8): its `live` response is written to the cache **whatever the flag says**, so the cache can be inspected before the switch | none extra — the shadow call already happens |
+| 11, 13, 15, 17 | `refreshChronosServing`: one `live` call (`keep_minutes` 240) per park whose daily capture marked it active, cache only, no archive rows; claimed per park and hour (`NX`) | **only while the flag is on** |
+
+Why hourly and not more often: the archive's origins are 2-hourly, so a curve
+would be up to ~2 h 15 min old at its last use — the 90-min guard would retire
+it for half of every gap. Hourly keeps the newest curve ≤ ~80 min old (`:05` +
+up to ~15 min of capture). Measured 2026-10-16/17: up to 64 parks at one
+origin hour (~1.3 k rides), one forward pass each (~3 s on CPU for a 40-ride
+park, §8.5); the odd hours roughly double the hourly Chronos calls, still a few
+minutes of the shared RTX 5080 per hour, and a TFT training run (503) only
+costs those hours' refresh (→ fallback to PCN). A 30-minute cadence would need
+its own cron and double that again for a freshness gain the A/B has not
+measured; not built. Hours 19+ are not refreshed because the A/B measured
+origins 10–18 only: after ~19:30 a park falls back to PCN.
+
+With the flag on, an intraday capture awaits the Chronos call **before** its
+served read, so that origin's surface-1 row already shows the new curve (it
+costs the capture the overlap §8.5 describes, ~3 s per park).
+
+### 10.3 Where it applies
+
+Every read path that applies the PCN override applies this one too, through
+`applyServedIntradayOverride`: `getParkPredictions` (park page, `/plan/day`
+measured hours, calendar today, favorites, the archive's surface 1),
+`getBatchStoredPredictions`, `getAttractionPredictionsWithFallback`, and
+`servedIntradayValues` (the badge recorder). `prediction-deviation` is not
+touched: it compares the CURRENT slot, which is inside the ≤ 30 min stretch
+Chronos never serves.
+
+### 10.4 The served-accuracy badge (PAR-854)
+
+`prediction_accuracy.served_source` gains the value `chronos` (varchar, no
+migration), set wherever the served pipeline's Chronos step produced the row.
+**Read this before taking the badge as a Chronos figure:** the recorder scores
+each slot at the last write ≥ 2 h ahead (`SERVED_ACCURACY_MIN_LEAD_MS`), and
+Chronos serves ≤ 120 min — so in practice the scored row is PCN/blend at 2 h
+to 2 h 15 min, and `chronos` appears only where the generator runs on a slot
+boundary. That is consistent (the badge measures what a reader sees at the
+lead it is defined for), but it means the switch will barely move the badge.
+Moving the scored lead into Chronos's window is a separate decision: at
+60–90 min the fallback rides would be scored on a mostly-anchor blend, which
+is the self-grading PAR-854 avoided.
+
+### 10.5 The archive after the switch
+
+- **Surface 1 (`park_hourly`)** keeps archiving what is served; its Chronos
+  slots carry the source code `s` (`chronos2_served`), so `all` and the
+  per-source rows show the served product as it is.
+- **Surface 8 (`park_hourly_incumbent`)**, captured only while the flag is on:
+  the same read with `{ chronos: false }`. `scorePairedShadows` pairs
+  `chronos_live` with it under the reference `served` when present (else with
+  `park_hourly`, which before the switch IS the incumbent) — otherwise, after
+  the switch, Chronos would be compared with its own served copy and the
+  board's `diff` would read ~0. The admin matrix (`reference = 'served'`)
+  therefore continues as one series across the switch. Surface 8 is scored
+  under the source `incumbent`, never into `all`. Size: one more 4-hour row
+  per ride and intraday origin (~+5 k rows a day).
+- The `persistence` reference is unchanged.
+
+### 10.6 Switch-on checklist (planned ~2026-10-25)
+
+1. §8.4 board: `chronos2` vs `served` on UC1 `h0-1` … UC2 2-hour leads,
+   `verdict: chronos_better` with ≥ 14 days and ≥ 10 parks, and vs
+   `persistence` not worse beyond 30 min.
+2. Cache is warm: `redis-cli --scan --pattern 'ml:chronos-serve:*' | wc -l`
+   during an intraday hour ≈ the rides of the parks at that origin, and a
+   sample's `originAt` is the last even hour.
+3. `GET /v1/admin/ml-overview` Chronos component not `failed`/`warming`.
+4. Set `SERVE_CHRONOS_INTRADAY=true` on the API in Coolify, redeploy.
+5. Next odd hour: the archive job log shows the refresh; the overview says
+   "Live ausgeliefert"; `GET /v1/parks/<slug>` hourly forecast shows
+   `modelVersion …+chronos` on 45–120 min slots.
+6. Next day's scoring: surface 8 rows exist and `chronos2` vs `served` keeps
+   its sign; surface 1 `chronos2_served` slots appear in the scores.
+
+**Rollback:** `SERVE_CHRONOS_INTRADAY=false` (or unset) and redeploy. Every
+read path is back to PCN/blend/CatBoost on the next request; nothing is
+persisted that depends on the flag (the cache keys expire within 3 h and are
+only read while the flag is on; surface 8 simply stops being written). The
+shadow keeps running under `CHRONOS_SHADOW_ENABLED`, independent of this flag.

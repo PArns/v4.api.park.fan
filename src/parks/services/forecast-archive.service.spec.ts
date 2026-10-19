@@ -128,6 +128,50 @@ describe("ForecastArchiveService.curvesFromServed", () => {
   });
 });
 
+describe("ForecastArchiveService.curvesFromServed — Chronos served (PAR-911)", () => {
+  it("codes a Chronos-served slot `s` and strips both served suffixes", () => {
+    const rows = ForecastArchiveService.curvesFromServed(
+      [
+        pred("r1", "2026-10-08T08:00:00Z", 20, "v1+pcn"),
+        pred("r1", "2026-10-08T08:15:00Z", 25, "v1+chronos"),
+        pred("r1", "2026-10-08T08:30:00Z", 30, "v1"),
+      ],
+      TZ,
+      "2026-10-08",
+      0,
+      Number.POSITIVE_INFINITY,
+    );
+    expect(rows[0].sources).toBe("psc");
+    expect(rows[0].modelVersion).toBe("v1");
+    expect(rows[0].surface).toBe(1);
+  });
+
+  it("writes the incumbent read under the surface it is given", () => {
+    const rows = ForecastArchiveService.curvesFromServed(
+      [pred("r1", "2026-10-08T08:00:00Z", 20)],
+      TZ,
+      "2026-10-08",
+      0,
+      Number.POSITIVE_INFINITY,
+      8,
+    );
+    expect(rows[0].surface).toBe(8);
+  });
+});
+
+describe("ForecastArchiveService.isChronosRefreshHour (PAR-911)", () => {
+  it("is the odd hours between the intraday origins, on the park's clock", () => {
+    const at = (iso: string) =>
+      ForecastArchiveService.isChronosRefreshHour(new Date(iso), TZ);
+    // Berlin is UTC+2 in October.
+    expect(at("2026-10-08T09:05:00Z")).toBe(true); // 11
+    expect(at("2026-10-08T15:05:00Z")).toBe(true); // 17
+    expect(at("2026-10-08T10:05:00Z")).toBe(false); // 12 — an origin
+    expect(at("2026-10-08T07:05:00Z")).toBe(false); // 09 — outside 10–18
+    expect(at("2026-10-08T17:05:00Z")).toBe(false); // 19 — outside 10–18
+  });
+});
+
 describe("ForecastArchiveService.curvesFromPlanDay", () => {
   const plan = (tier: PlanDayDto["tier"], rides: PlanDayDto["rides"]) =>
     ({ tier, rides }) as unknown as PlanDayDto;
@@ -691,6 +735,21 @@ describe("ForecastArchiveService — Chronos-2 shadow (PAR-852)", () => {
     const shadow = {
       forecast: jest.fn().mockResolvedValue(chronos),
     };
+    const ml = {
+      getParkPredictions: jest.fn().mockResolvedValue({ predictions: [] }),
+      getServingDailyPredictions: jest
+        .fn()
+        .mockResolvedValue({ predictions: [] }),
+    };
+    const cacheSet = jest.fn();
+    const redis = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue("OK"),
+      pipeline: () => ({
+        set: cacheSet,
+        exec: jest.fn().mockResolvedValue([]),
+      }),
+    };
     const service = new ForecastArchiveService(
       {} as never,
       {
@@ -698,12 +757,7 @@ describe("ForecastArchiveService — Chronos-2 shadow (PAR-852)", () => {
       } as never,
       repo as never,
       repo as never,
-      {
-        getParkPredictions: jest.fn().mockResolvedValue({ predictions: [] }),
-        getServingDailyPredictions: jest
-          .fn()
-          .mockResolvedValue({ predictions: [] }),
-      } as never,
+      ml as never,
       {
         buildPlanDay: jest.fn().mockResolvedValue(plan),
         buildPlanDayWithShadow: jest
@@ -717,16 +771,87 @@ describe("ForecastArchiveService — Chronos-2 shadow (PAR-852)", () => {
         getHeadlinerAttractions: jest.fn().mockResolvedValue([]),
         getTypicalDayPeakFromCache: jest.fn().mockResolvedValue(0),
       } as never,
-      {
-        get: jest.fn().mockResolvedValue(null),
-        set: jest.fn().mockResolvedValue("OK"),
-      } as never,
+      redis as never,
       shadow as never,
     );
-    return { service, shadow, inserted };
+    return { service, shadow, inserted, ml, cacheSet };
   }
 
-  afterEach(() => jest.useRealTimers());
+  const prevServe = process.env.SERVE_CHRONOS_INTRADAY;
+  afterEach(() => {
+    jest.useRealTimers();
+    if (prevServe === undefined) delete process.env.SERVE_CHRONOS_INTRADAY;
+    else process.env.SERVE_CHRONOS_INTRADAY = prevServe;
+  });
+
+  // PAR-911: the live curves feed the serving cache, and with the flag on the
+  // archive also keeps the incumbent so the live A/B keeps a reference.
+  it("writes the live curves to the serving cache, flag on or off", async () => {
+    delete process.env.SERVE_CHRONOS_INTRADAY;
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T10:05:00Z"));
+    const { service, ml, cacheSet, inserted } = build(
+      response("2026-10-08", "2026-10-08T10:15:00Z"),
+    );
+    const origin = new Date();
+    await service.capturePark(park, "intraday", origin);
+    expect(cacheSet).toHaveBeenCalledTimes(2); // id-taron and the ghost ride
+    expect(cacheSet.mock.calls[0][0]).toBe("ml:chronos-serve:id-taron");
+    expect(JSON.parse(cacheSet.mock.calls[0][1])).toMatchObject({
+      originAt: origin.getTime(),
+      revision: "29ec3766d36d6f73f0696f85560a422f50e8498c",
+    });
+    // Flag off: one served read, no incumbent surface.
+    expect(ml.getParkPredictions).toHaveBeenCalledTimes(1);
+    expect(
+      (inserted[0] as Array<Record<string, unknown>>).some(
+        (r) => r.surface === 8,
+      ),
+    ).toBe(false);
+  });
+
+  it("with the flag on, caches before the served read and archives the incumbent as surface 8", async () => {
+    process.env.SERVE_CHRONOS_INTRADAY = "true";
+    jest.useFakeTimers().setSystemTime(new Date("2026-10-08T10:05:00Z"));
+    const { service, ml, cacheSet, inserted } = build(
+      response("2026-10-08", "2026-10-08T10:15:00Z"),
+    );
+    const order: string[] = [];
+    cacheSet.mockImplementation(() => order.push("cache"));
+    ml.getParkPredictions.mockImplementation(
+      async (_id: string, _t: string, _m: unknown, _l: unknown, o?: object) => {
+        order.push(o ? "incumbent" : "served");
+        return {
+          predictions: [
+            pred(
+              "id-taron",
+              "2026-10-08T11:00:00Z",
+              o ? 50 : 40,
+              o ? "v1+pcn" : "v1+chronos",
+            ),
+          ],
+        };
+      },
+    );
+    await service.capturePark(park, "intraday", new Date());
+    expect(order.indexOf("cache")).toBeLessThan(order.indexOf("served"));
+    expect(ml.getParkPredictions).toHaveBeenLastCalledWith(
+      "p1",
+      "hourly",
+      undefined,
+      undefined,
+      { chronos: false },
+    );
+    const rows = inserted[0] as Array<Record<string, unknown>>;
+    expect(rows.find((r) => r.surface === 1)).toMatchObject({
+      waits: [40],
+      sources: "s",
+      modelVersion: "v1",
+    });
+    expect(rows.find((r) => r.surface === 8)).toMatchObject({
+      waits: [50],
+      sources: "p",
+    });
+  });
 
   it("captures the grid variant at the 06:00 origin as surface 7, d0 … d7", async () => {
     jest.useFakeTimers().setSystemTime(new Date("2026-10-08T04:05:00Z"));
@@ -860,5 +985,101 @@ describe("ForecastArchiveService.captureDue", () => {
     // One breaker / one log line per run for the Chronos shadow.
     expect(chronos.beginRun).toHaveBeenCalledTimes(1);
     expect(chronos.endRun).toHaveBeenCalledTimes(1);
+  });
+
+  describe("Chronos serving refresh between the origins (PAR-911)", () => {
+    const prev = process.env.SERVE_CHRONOS_INTRADAY;
+    afterEach(() => {
+      if (prev === undefined) delete process.env.SERVE_CHRONOS_INTRADAY;
+      else process.env.SERVE_CHRONOS_INTRADAY = prev;
+    });
+
+    function setup() {
+      const service = Object.create(
+        ForecastArchiveService.prototype,
+      ) as ForecastArchiveService;
+      const parks = [
+        { id: "open-park", slug: "a", timezone: TZ },
+        { id: "closed", slug: "c", timezone: TZ },
+      ];
+      const cacheSet = jest.fn();
+      const redis = {
+        // Only the first park's daily capture found a curve for today.
+        get: jest.fn((k: string) =>
+          Promise.resolve(k.includes(":open-park:") ? "1" : null),
+        ),
+        set: jest.fn().mockResolvedValue("OK"),
+        pipeline: () => ({ set: cacheSet, exec: jest.fn() }),
+      };
+      const chronos = {
+        beginRun: jest.fn(),
+        endRun: jest.fn().mockReturnValue({
+          calls: 1,
+          ok: 1,
+          failures: 0,
+          warming: 0,
+          skipped: 0,
+        }),
+        forecast: jest.fn().mockResolvedValue({
+          status: "ok",
+          revision: "r",
+          curves: [
+            {
+              attractionId: "ride",
+              date: "2026-10-08",
+              slotStart: "2026-10-08T09:15:00Z",
+              slotMinutes: 15,
+              covariates: { holidays: "full", schedule: "published" },
+              q50: [30],
+              q80: [40],
+              q95: [50],
+            },
+          ],
+        }),
+      };
+      Object.assign(service, {
+        parkRepository: { find: jest.fn().mockResolvedValue(parks) },
+        redis,
+        logger: { warn: jest.fn(), debug: jest.fn() },
+        chronos,
+      });
+      const capture = jest.spyOn(service, "capturePark");
+      return { service, chronos, cacheSet, capture, redis };
+    }
+
+    // 09:05 UTC = 11:05 in Berlin: no archive origin, a refresh hour.
+    const clock = () => new Date("2026-10-08T09:05:00Z");
+
+    it("refreshes active parks only, writes the cache and no archive rows", async () => {
+      process.env.SERVE_CHRONOS_INTRADAY = "true";
+      const { service, chronos, cacheSet, capture, redis } = setup();
+      const res = await service.captureDue(clock);
+      expect(capture).not.toHaveBeenCalled();
+      expect(chronos.forecast).toHaveBeenCalledTimes(1);
+      expect(chronos.forecast).toHaveBeenCalledWith(
+        "open-park",
+        expect.any(Date),
+        "live",
+        240,
+      );
+      expect(cacheSet.mock.calls[0][0]).toBe("ml:chronos-serve:ride");
+      expect(res.chronosRefreshed).toBe(1);
+      // Claimed once per park and hour (NX), so a re-run asks no second time.
+      expect(redis.set).toHaveBeenCalledWith(
+        "chronos-serve:refresh:open-park:2026-10-08:11",
+        "1",
+        "EX",
+        3 * 3600,
+        "NX",
+      );
+    });
+
+    it("costs the GPU nothing while the flag is off", async () => {
+      delete process.env.SERVE_CHRONOS_INTRADAY;
+      const { service, chronos } = setup();
+      const res = await service.captureDue(clock);
+      expect(chronos.forecast).not.toHaveBeenCalled();
+      expect(res.chronosRefreshed).toBeUndefined();
+    });
   });
 });

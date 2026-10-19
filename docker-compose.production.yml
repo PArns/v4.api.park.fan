@@ -230,6 +230,11 @@ services:
       # (CatBoost fallback where PCN has none). Default off — flip to "true" once the
       # PCN-vs-CatBoost board win is confirmed over a few days.
       - SERVE_PCN_INTRADAY=${SERVE_PCN_INTRADAY:-false}
+      # Chronos-2 SERVED on the 45–120 min intraday slots (PAR-911), read from the
+      # serving cache the forward-archive capture writes; also turns on the hourly
+      # refresh at the odd park-local hours 11–17. Default off — flip once the
+      # Chronos live A/B (docs/ml/forward-archive.md §8.4) is confirmed; see §10.6.
+      - SERVE_CHRONOS_INTRADAY=${SERVE_CHRONOS_INTRADAY:-false}
       # Chronos-2 SHADOW capture into the forward archive (PAR-852). Never served to
       # users; "false" stops the API calling nf-service /chronos/forecast at all.
       - CHRONOS_SHADOW_ENABLED=${CHRONOS_SHADOW_ENABLED:-true}

@@ -7,6 +7,7 @@ import {
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { createHash } from "crypto";
+import { AbortableRuns } from "../../common/utils/abortable-runs";
 import { DB_VACUUM_CRON } from "../../database/maintenance/vacuum-plan";
 
 /**
@@ -49,7 +50,7 @@ export function materialisedRepeatJobId(entry: {
  * Schedule:
  * - wait-times: Every 5 minutes (frequent updates)
  * - park-metadata: Daily at 3am (metadata changes rarely)
- * - children-metadata: Daily at 4am (Phase 6.2: Combined Attractions + Shows + Restaurants - 67% fewer requests!)
+ * - children-metadata: chained after sync-all-parks (03:00, step 11), no cron of its own since PAR-875
  * - weather: full every 12 hours (0:00 and 12:00), current-only at 7:00 and 19:00
  * - live-cache-warmup: enqueued by every wait-times run, not on a cron
  * - weather-historical: Daily at 5am (mark past data as historical)
@@ -66,6 +67,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(QueueSchedulerService.name);
   private registerTimer?: NodeJS.Timeout;
   private reRegisterInterval?: NodeJS.Timeout;
+  private readonly runs = new AbortableRuns();
 
   constructor(
     @InjectQueue("wait-times") private waitTimesQueue: Queue,
@@ -120,17 +122,19 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     // Wait a bit to let bootstrap complete first
     this.registerTimer = setTimeout(() => {
       this.registerTimer = undefined;
-      this.registerScheduledJobs().catch((err) => {
-        this.logger.error("Failed to register scheduled jobs", err);
-      });
+      this.runs.start(
+        () => this.registerScheduledJobs(),
+        (err) => this.logger.error("Failed to register scheduled jobs", err),
+      );
     }, 5000); // 5 second delay
 
     // Repair pass: re-checks every repeatable entry so a chain broken by an
     // evicted job hash heals within the hour (see RE_REGISTER_INTERVAL_MS).
     this.reRegisterInterval = setInterval(() => {
-      this.registerScheduledJobs(true).catch((err) => {
-        this.logger.error("Failed to re-check scheduled jobs", err);
-      });
+      this.runs.start(
+        () => this.registerScheduledJobs(true),
+        (err) => this.logger.error("Failed to re-check scheduled jobs", err),
+      );
     }, RE_REGISTER_INTERVAL_MS);
     this.reRegisterInterval.unref();
   }
@@ -140,8 +144,12 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
    * app it was started for. Five seconds is short enough to be invisible in
    * production and long enough for a fast test to shut down first, and the
    * callback then writes repeatable jobs into queues that are already closing.
+   *
+   * A registration that is already running stops at the next entry
+   * (`hasRepeatableJob` opens with a checkpoint) and the entry in flight is
+   * awaited: the queues close after its last Redis call, not under it.
    */
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     if (this.registerTimer) {
       clearTimeout(this.registerTimer);
       this.registerTimer = undefined;
@@ -150,6 +158,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.reRegisterInterval);
       this.reRegisterInterval = undefined;
     }
+    await this.runs.abortAndDrain();
   }
 
   private async registerScheduledJobs(repairPass = false): Promise<void> {
@@ -258,25 +267,19 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    // Phase 6.2: Combined Children Metadata (Attractions + Shows + Restaurants)
-    // Daily at 4am (replaces 3 separate jobs at 4am, 4:30am, 5am)
-    // This reduces API requests by 67% (105 instead of 315)
-    const hasChildrenCron = await this.hasRepeatableJob(
-      this.childrenQueue,
-      "children-metadata-cron",
+    // Children metadata (attractions + shows + restaurants) has no cron of its
+    // own: step 11 of `sync-all-parks` (03:00) queues `fetch-all-children`, so
+    // it always runs after the parks it reads exist. The former 04:00 cron
+    // fired the same job a second time ~31 min later and rewrote every row
+    // again (PAR-875). Its repeatable entry outlives the code in Redis.
+    this.runs.checkpoint();
+    const retiredChildrenJobs = await this.childrenQueue.getRepeatableJobs();
+    const retiredChildrenCron = retiredChildrenJobs.find(
+      (j) => j.id === "children-metadata-cron",
     );
-
-    if (!hasChildrenCron) {
-      await this.childrenQueue.add(
-        "fetch-all-children",
-        {},
-        {
-          repeat: {
-            cron: "0 4 * * *", // Daily at 4am
-          },
-          jobId: "children-metadata-cron",
-        },
-      );
+    if (retiredChildrenCron) {
+      await this.childrenQueue.removeRepeatableByKey(retiredChildrenCron.key);
+      this.logger.log('Removed retired "children-metadata-cron" job');
     }
 
     // Six Flags ride heights. Weekly: ThemeParks.wiki carries none for these
@@ -312,7 +315,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         {},
         {
           repeat: {
-            cron: "30 5 * * 0", // Weekly: Sunday 5:30am, after the 4am children sync
+            cron: "30 5 * * 0", // Weekly: Sunday 5:30am, after the children sync
           },
           jobId: "attraction-details-cron",
         },
@@ -382,6 +385,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Remove old combined weather cron if still registered
+    this.runs.checkpoint();
     const oldWeatherJobs = await this.weatherQueue.getRepeatableJobs();
     const oldWeatherCron = oldWeatherJobs.find((j) => j.id === "weather-cron");
     if (oldWeatherCron) {
@@ -493,6 +497,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     // The TFT-vs-CatBoost scoreboard (`score-comparison`) was retired in PAR-870.
     // Its repeatable entry outlives the code in Redis, and with no handler left
     // on this queue every 07:00 run would fail as "Missing process handler".
+    this.runs.checkpoint();
     const retiredNfJobs = await this.nfTrainingQueue.getRepeatableJobs();
     const retiredScoreCron = retiredNfJobs.find(
       (j) => j.id === "nf-score-comparison-cron",
@@ -1170,7 +1175,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Typical-waits: daily at 5:30 AM (after rope-drop at 5:15 + the hourly-history
-    // / percentile rebuild). Precomputes P50/P90 peak-wait stats per headliner so
+    // / percentile rebuild). Precomputes P50/P90 peak-wait stats per ride so
     // the park response (SSR ride-page shell) serves them without a percentile scan.
     const hasTypicalWaitsCron = await this.hasRepeatableJob(
       this.typicalWaitsQueue,
@@ -1296,6 +1301,7 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
     jobId: string,
     expectedCron?: string,
   ): Promise<boolean> {
+    this.runs.checkpoint();
     const repeatableJobs = await queue.getRepeatableJobs();
     const existing = repeatableJobs.find((job) => job.id === jobId);
 

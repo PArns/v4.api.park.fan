@@ -504,6 +504,79 @@ export class ServedIntradayAccuracyDto {
   days: number;
 }
 
+export class QuantileCoverageDto {
+  @ApiProperty({
+    nullable: true,
+    description:
+      "P(actual ≤ served median) — the stored `predicted_wait_time`, which is " +
+      "the q0.5 rounded to 5 with a 10-minute floor. A calibrated median sits " +
+      "near 0.5; the rounding and floor push it up on quiet slots.",
+  })
+  q50: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      "P(actual ≤ raw q0.8), the quantile the crowd level reads. Calibrated ≈ " +
+      "0.8. null until rows carry `predicted_q80` (PAR-912).",
+  })
+  q80: number | null;
+
+  @ApiProperty({
+    nullable: true,
+    description:
+      "P(actual ≤ raw q0.95), the top of the uncertainty band. Calibrated ≈ " +
+      "0.95. null until rows carry `predicted_q95` (PAR-912).",
+  })
+  q95: number | null;
+}
+
+export class OperatingAccuracyRowDto {
+  @ApiProperty({
+    nullable: true,
+    description: "CatBoost model version; null on the all-versions row",
+  })
+  modelVersion: string | null;
+
+  @ApiProperty({
+    description: "Scored slots (ride operating with a wait; see PAR-912)",
+  })
+  n: number;
+
+  @ApiProperty({ description: "Mean absolute error (min)" })
+  mae: number;
+
+  @ApiProperty({
+    description: "Mean (predicted − actual), min; > 0 ⇒ over-prediction",
+  })
+  bias: number;
+
+  @ApiProperty({ type: QuantileCoverageDto })
+  coverage: QuantileCoverageDto;
+
+  @ApiProperty({
+    description:
+      "Slots the q0.8 / q0.95 coverage is computed over (rows written since PAR-912)",
+    example: { q80: 12000, q95: 12000 },
+  })
+  quantileSamples: { q80: number; q95: number };
+}
+
+export class OperatingAccuracyDto {
+  @ApiProperty({ description: "Look-back window in days" })
+  days: number;
+
+  @ApiProperty({
+    type: [OperatingAccuracyRowDto],
+    description:
+      "Raw CatBoost hourly accuracy on scored slots only — slots where the " +
+      "ride was not scheduled to run or publishes no wait are not forecast " +
+      "errors (PAR-912). First row: all versions together " +
+      "(`modelVersion: null`); then one per version, newest first.",
+  })
+  rows: OperatingAccuracyRowDto[];
+}
+
 export class PerformanceSectionDto {
   @ApiProperty({ description: "Training metrics (baseline)" })
   training: ModelTrainingMetricsDto;
@@ -519,6 +592,15 @@ export class PerformanceSectionDto {
     nullable: true,
   })
   servedIntraday: ServedIntradayAccuracyDto | null;
+
+  @ApiProperty({
+    type: OperatingAccuracyDto,
+    nullable: true,
+    description:
+      "MAE, bias and quantile coverage per model version over scored slots " +
+      "(PAR-912). null when the aggregation failed.",
+  })
+  operating: OperatingAccuracyDto | null;
 
   @ApiProperty({ description: "Model drift", nullable: true })
   drift: MLDriftDto | null;

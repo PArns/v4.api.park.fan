@@ -619,7 +619,7 @@ export class ParkIntegrationService {
         ),
         // One DB read for the whole park — no N+1 across attractions.
         this.analyticsService.getRopeDropForPark(park.id),
-        // Precomputed P50/P90 typical-waits per headliner (one DB read) — lets
+        // Precomputed P50/P90 typical-waits per ride (one DB read) — lets
         // the SSR ride-page shell render them without a percentile scan.
         this.analyticsService.getTypicalWaitsForPark(park.id),
         // Ratability gate: a thin parent park (< 30 operating days → NULL
