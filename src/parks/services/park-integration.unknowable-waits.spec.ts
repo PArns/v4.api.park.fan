@@ -20,6 +20,7 @@ import { PopularityService } from "../../popularity/popularity.service";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { AttractionOutageService } from "../../attractions/services/attraction-outage.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { RECONCILIATION_SOURCE } from "../../common/utils/source-absent-status.util";
 import { PARK_FEED_SILENT_DAYS } from "../../common/utils/no-live-data-status.util";
 import type { Park } from "../entities/park.entity";
 
@@ -94,8 +95,11 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
     getBatchAttractionTrends: jest.fn().mockResolvedValue(new Map()),
     getBatchAttractionWaitTimeHistory: jest.fn().mockResolvedValue(new Map()),
     getBatchAttractionP50P90: jest.fn().mockResolvedValue(new Map()),
-    getRopeDropForPark: jest.fn().mockResolvedValue(null),
+    getBatchAttractionP50s: jest.fn().mockResolvedValue(new Map()),
+    getBatchAttractionP90Baselines: jest.fn().mockResolvedValue(new Map()),
+    getRopeDropForPark: jest.fn().mockResolvedValue(new Map()),
     getTypicalWaitsForPark: jest.fn().mockResolvedValue(new Map()),
+    getRideRunWeekdays: jest.fn().mockResolvedValue(new Map()),
     isParkRatable: jest.fn().mockResolvedValue(false),
     getTypicalDayPeakFromCache: jest.fn().mockResolvedValue(0),
     determineCrowdLevel: jest.fn().mockReturnValue("very_low"),
@@ -246,7 +250,10 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
         },
         {
           provide: RideProfileService,
-          useValue: { getForPark: jest.fn().mockResolvedValue(new Map()) },
+          useValue: {
+            getForPark: jest.fn().mockResolvedValue(new Map()),
+            findByAttractions: jest.fn().mockResolvedValue(new Map()),
+          },
         },
         {
           provide: AttractionOutageService,
@@ -317,6 +324,38 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
       );
       expect(dto.analytics?.statistics.avgWaitTime).toBeNull();
       expect(dto.analytics?.occupancy).toBeUndefined();
+    });
+  });
+
+  describe("a ride whose only rows are our own reconciliation", () => {
+    it("is rated unknown, not very_low, on a park we can read", async () => {
+      const park = buildPark(true);
+      (park as unknown as { attractions: unknown[] }).attractions = [
+        { id: "hell-house", name: "Hell House", slug: "hell-house" },
+      ];
+      queueDataService.findCurrentStatusByPark.mockResolvedValueOnce(
+        new Map([
+          [
+            "hell-house",
+            [
+              {
+                queueType: "STANDBY",
+                status: "CLOSED",
+                waitTime: null,
+                dataSource: RECONCILIATION_SOURCE,
+                lastUpdated: now,
+                timestamp: now,
+              },
+            ],
+          ],
+        ]),
+      );
+
+      const dto = await buildResponse(park);
+      const ride = dto.attractions?.find((a) => a.id === "hell-house");
+
+      expect(ride?.effectiveStatus).toBe("UNKNOWN");
+      expect(ride?.crowdLevel).toBe("unknown");
     });
   });
 

@@ -8,6 +8,7 @@ import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
 import { ParksService } from "../../parks/parks.service";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { RECONCILIATION_SOURCE } from "../../common/utils/source-absent-status.util";
 import { Park } from "../../parks/entities/park.entity";
 import { QueueData } from "../../queue-data/entities/queue-data.entity";
 import { ScheduleEntry } from "../../parks/entities/schedule-entry.entity";
@@ -854,6 +855,55 @@ describe("AttractionIntegrationService", () => {
       });
       expect(result.effectiveStatus).toBe("OPERATING");
       expect(result.hourlyForecast).toHaveLength(1);
+    });
+
+    it("rates a ride with no reading and no status unknown, whatever the model row says", async () => {
+      mockRedis.get.mockResolvedValue(null);
+      mockQueueDataService.findCurrentStatusByAttraction.mockResolvedValue([
+        {
+          queueType: "STANDBY",
+          status: "CLOSED",
+          waitTime: null,
+          dataSource: RECONCILIATION_SOURCE,
+          lastUpdated: new Date(),
+          timestamp: new Date(),
+        },
+      ]);
+      mockQueueDataService.findForecastsByAttraction.mockResolvedValue([]);
+      mockParkRepository.findOne.mockResolvedValue({
+        ...unreadablePark,
+        slug: "europa-park",
+      });
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["park-hansa", "OPERATING"]]),
+      );
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
+      mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
+        null,
+      );
+      mockMLService.getAttractionPredictionsWithFallback.mockResolvedValue([
+        {
+          predictedTime: new Date().toISOString(),
+          predictedWaitTime: 30,
+          confidence: 50,
+          crowdLevel: "moderate",
+          baseline: 25,
+          trend: "stable",
+          modelVersion: "v1.0.0",
+        },
+      ]);
+
+      const result = await service.buildIntegratedResponse(
+        createTestAttraction("park-hansa", {
+          id: "attraction-no-reading",
+          slug: "some-ride",
+          park: { ...unreadablePark, slug: "europa-park" } as never,
+        }),
+      );
+
+      expect(result.effectiveStatus).toBe("UNKNOWN");
+      expect(result.crowdLevel).toBe("unknown");
     });
 
     it("serves hourly confidence as null only for slots more than 24 h ahead", async () => {
