@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { H5ProfileService } from "./h5-profile.service";
 import type { H5RideProfile } from "../../common/utils/h5-profile.util";
+import { isoWeekdayOf } from "../../common/utils/run-weekdays.util";
 
 // The failure paths below would otherwise append to ./logs on every run.
 jest.mock("../../common/utils/file-logger.util", () => ({
@@ -72,6 +73,7 @@ describe("PlanDayService", () => {
   let referenceHistoryMock: jest.Mock;
   let leadMae: number | null;
   let rideOpenings: Map<string, RideOpening>;
+  let rideRunWeekdays: Map<string, number[]>;
   let accuracyProfile: Map<
     string,
     { mae: number; leadBucket: string; sampleSize: number }
@@ -159,6 +161,9 @@ describe("PlanDayService", () => {
             getRideOpeningTimes: jest
               .fn()
               .mockImplementation(async () => rideOpenings),
+            getRideRunWeekdays: jest
+              .fn()
+              .mockImplementation(async () => rideRunWeekdays),
           },
         },
         {
@@ -313,6 +318,7 @@ describe("PlanDayService", () => {
     dailyPredictionsFail = false;
     leadMae = null;
     rideOpenings = new Map();
+    rideRunWeekdays = new Map();
     accuracyProfile = new Map();
     parkShows = [];
     scheduledTimes = new Map();
@@ -1088,6 +1094,79 @@ describe("PlanDayService", () => {
 
   // ── When the RIDE opens, which is not when the park opens ──────────────────
   describe("a ride that opens later than its park", () => {
+    describe("on a weekday it does not usually run on", () => {
+      // Movie Park's mazes run Fri–Sun evenings. Their measured opening, 17:00,
+      // was served on every day, so a Monday read „opens at 17:00".
+      const planFor = async (weekdays: number[]) => {
+        const date = farDate();
+        calendarDay = { ...calendarDay!, date };
+        dailyPredictions = [
+          {
+            ...(dailyPredictions[0] as object),
+            predictedTime: `${date}T12:00:00.000Z`,
+          },
+        ];
+        rideOpenings = new Map([
+          ["a-taron|09:00", { opensAt: "17:00", confidence: "high" }],
+        ]);
+        rideRunWeekdays = new Map([["a-taron", weekdays]]);
+        return { plan: await service.buildPlanDay(park, date), date };
+      };
+      const otherWeekdays = (w: number) =>
+        [1, 2, 3, 4, 5, 6, 7].filter((d) => d !== w).slice(0, 3);
+
+      it("serves no opening, and says which weekdays it runs on", async () => {
+        const w = isoWeekdayOf(farDate());
+        const { plan } = await planFor(otherWeekdays(w));
+
+        expect(plan.rides[0].opensAt).toBeUndefined();
+        expect(plan.rides[0].opensAtConfidence).toBeUndefined();
+        expect(plan.rides[0].runsOnWeekdays).toEqual(otherWeekdays(w));
+        // The curve draws the park's day, as for any ride without an opening.
+        expect(plan.rides[0].hours[0].hour).toBe(9);
+      });
+
+      it("keeps the opening on a weekday it runs on", async () => {
+        const w = isoWeekdayOf(farDate());
+        const { plan } = await planFor([w]);
+
+        expect(plan.rides[0].opensAt).toBe("17:00");
+        expect(plan.rides[0].runsOnWeekdays).toEqual([w]);
+      });
+
+      it("leaves a ride that runs every day as it was", async () => {
+        const { plan } = await planFor([1, 2, 3, 4, 5, 6, 7]);
+
+        expect(plan.rides[0].opensAt).toBe("17:00");
+        expect(plan.rides[0].opensAtConfidence).toBe("high");
+      });
+
+      it("keeps the opening when the pattern cannot be read", async () => {
+        const date = farDate();
+        calendarDay = { ...calendarDay!, date };
+        dailyPredictions = [
+          {
+            ...(dailyPredictions[0] as object),
+            predictedTime: `${date}T12:00:00.000Z`,
+          },
+        ];
+        rideOpenings = new Map([
+          ["a-taron|09:00", { opensAt: "17:00", confidence: "high" }],
+        ]);
+        const analytics = (
+          service as unknown as {
+            analyticsService: { getRideRunWeekdays: jest.Mock };
+          }
+        ).analyticsService;
+        analytics.getRideRunWeekdays.mockRejectedValueOnce(new Error("down"));
+
+        const plan = await service.buildPlanDay(park, date);
+
+        expect(plan.rides[0].opensAt).toBe("17:00");
+        expect(plan.rides[0].runsOnWeekdays).toBeUndefined();
+      });
+    });
+
     it("starts the curve at the ride's own opening and says when that is", async () => {
       // Phantasialand opens at 09:00 and Taron runs from 10:00 — measured over
       // 30 days, its rides split into two groups an hour apart. Starting every

@@ -71,6 +71,7 @@ import {
   resolveCuratedFacts,
 } from "../../attractions/utils/curated-attraction-facts.util";
 import { isCuratedOutOfService } from "../../attractions/utils/curated-out-of-service.util";
+import { isoWeekdayOf } from "../../common/utils/run-weekdays.util";
 
 /**
  * One day, ride by ride, hour by hour — the series a trip planner draws.
@@ -1014,6 +1015,7 @@ export class PlanDayService {
       downIds,
       headlinerIds,
       openings,
+      runWeekdays,
       measured,
       runningNow,
       h5Profiles,
@@ -1022,6 +1024,7 @@ export class PlanDayService {
       this.downYesterday(park, dateStr),
       this.headlinerIds(park),
       this.rideOpenings(park),
+      this.rideRunWeekdays(park),
       withinHourly
         ? this.measuredHours(park, dateStr, openHour, closeHour)
         : Promise.resolve({
@@ -1038,6 +1041,7 @@ export class PlanDayService {
     ]);
 
     const dayLevels = levels.levels;
+    const plannedWeekday = isoWeekdayOf(dateStr);
     for (const id of runningNow.ids) blocked.delete(id);
     const plannable = attractions.filter((a) => !blocked.has(a.id));
     const byId = new Map(plannable.map((a) => [a.id, a]));
@@ -1180,9 +1184,17 @@ export class PlanDayService {
       // with an 11:00 one, so a summer median applied to a winter morning — or
       // the reverse — would be a confident wrong answer. A park opening we have
       // never watched simply has no entry, and the ride draws the park's day.
-      const opening = parkOpensAt
-        ? openings.get(`${attractionId}|${parkOpensAt}`)
-        : undefined;
+      //
+      // On a weekday the ride does not usually run on there is no opening to
+      // report: „opens at 17:00" on a Monday promises a maze that only runs
+      // Fri–Sun. A ride without a pattern keeps its opening, as before.
+      const rideWeekdays = runWeekdays.get(attractionId);
+      const runsThisWeekday =
+        rideWeekdays === undefined || rideWeekdays.includes(plannedWeekday);
+      const opening =
+        parkOpensAt && runsThisWeekday
+          ? openings.get(`${attractionId}|${parkOpensAt}`)
+          : undefined;
       const opensAt = opening?.opensAt;
       const rideOpenHour = Math.max(
         openHour,
@@ -1389,6 +1401,7 @@ export class PlanDayService {
               opensAtConfidence: laterOpening.confidence,
             }
           : {}),
+        ...(rideWeekdays ? { runsOnWeekdays: rideWeekdays } : {}),
         latitude: PlanDayService.coord(attraction.latitude),
         longitude: PlanDayService.coord(attraction.longitude),
         ...(downIds.has(attractionId) ? { downYesterday: true } : {}),
@@ -2685,6 +2698,23 @@ export class PlanDayService {
           `Plan day: ride openings unavailable for ${park.slug}: ${err.message}`,
         );
         return new Map<string, RideOpening>();
+      });
+  }
+
+  /**
+   * The weekdays each ride usually runs on, or an empty map.
+   *
+   * A failure here costs the pattern, not the day: every ride then keeps its
+   * opening, which is the behaviour before the pattern existed.
+   */
+  private async rideRunWeekdays(park: Park): Promise<Map<string, number[]>> {
+    return this.analyticsService
+      .getRideRunWeekdays(park.id, park.timezone)
+      .catch((err: Error) => {
+        this.logger.warn(
+          `Plan day: ride run weekdays unavailable for ${park.slug}: ${err.message}`,
+        );
+        return new Map<string, number[]>();
       });
   }
 
