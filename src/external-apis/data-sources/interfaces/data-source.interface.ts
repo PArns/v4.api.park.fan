@@ -75,6 +75,8 @@ export interface EntityMetadata {
   source: string;
   entityType: EntityType;
   name: string;
+  /** Further names for the same entity, e.g. the operator's own name next to a translated feed name. */
+  altNames?: string[];
   latitude?: number;
   longitude?: number;
   landName?: string;

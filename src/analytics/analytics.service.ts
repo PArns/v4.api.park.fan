@@ -68,6 +68,10 @@ import {
 } from "../common/utils/date.util";
 import { roundToNearest5Minutes } from "../common/utils/wait-time.utils";
 import { observedReadingsSql } from "../common/utils/closure-gap.sql";
+import {
+  RUN_WEEKDAYS_WINDOW_DAYS,
+  runWeekdays,
+} from "../common/utils/run-weekdays.util";
 import { determineCrowdLevel } from "../common/utils/crowd-level.util";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { subDays } from "date-fns";
@@ -5733,6 +5737,72 @@ export class AnalyticsService {
     );
     await this.redis
       .set(cacheKey, JSON.stringify([...out]), "EX", 24 * 60 * 60)
+      .catch(() => undefined);
+    return out;
+  }
+
+  /**
+   * The weekdays each ride of a park usually runs on, keyed by attraction id.
+   * A ride with no pattern (`runWeekdays` returns null) has no entry.
+   *
+   * The opening time from `getRideOpeningTimes` says when a ride starts on the
+   * days it runs, not that it runs: Movie Park's mazes run Fri–Sun evenings and
+   * read „opens at 17:00" on a Monday. This is the other half, taken from the
+   * same `queue_data`. Only observed readings count — a heartbeat or a
+   * reconciliation row is our own bookkeeping, and a carried OPERATING row
+   * would put a Monday into a weekend ride's pattern.
+   *
+   * Cached for six hours rather than a day: the idle rule is measured against
+   * today, and a ride that stopped a week ago should lose its pattern the same
+   * day, not tomorrow.
+   */
+  async getRideRunWeekdays(
+    parkId: string,
+    timezone: string,
+  ): Promise<Map<string, number[]>> {
+    const cacheKey = `park:ride-run-weekdays:v2:${parkId}`;
+    const cached = safeJsonParse<Array<[string, number[]]>>(
+      await this.redis.get(cacheKey).catch(() => null),
+    );
+    if (cached) return new Map(cached);
+
+    // One scan, two answers: each ride's operating days, and the park's open
+    // days as the union of them. The park calendar is not asked — Movie Park's
+    // does not mark its Halloween evenings, and a park with no ride running is
+    // not open in any sense a visitor cares about.
+    const rows: Array<{
+      attractionId: string | null;
+      days: string[];
+      today: string;
+    }> = await this.queueDataRepository.manager.query(
+      `WITH obs AS (
+         SELECT qd."attractionId" AS aid,
+                to_char(qd.timestamp AT TIME ZONE $2, 'YYYY-MM-DD') AS day
+           FROM queue_data qd
+           JOIN attractions a ON a.id = qd."attractionId"
+          WHERE a."parkId" = $1::uuid
+            AND a.retired_at IS NULL
+            AND qd.status = 'OPERATING'
+            AND ${observedReadingsSql("qd")}
+            AND qd.timestamp >= ((now() AT TIME ZONE $2)::date - $3::int)::timestamp AT TIME ZONE $2
+          GROUP BY 1, 2
+       )
+       SELECT aid AS "attractionId", array_agg(DISTINCT day) AS days,
+              to_char(now() AT TIME ZONE $2, 'YYYY-MM-DD') AS today
+         FROM obs GROUP BY GROUPING SETS ((aid), ())`,
+      [parkId, timezone, RUN_WEEKDAYS_WINDOW_DAYS],
+    );
+
+    // The grouping-sets total row carries a NULL id and every open day.
+    const parkOpenDays = rows.find((r) => r.attractionId === null)?.days ?? [];
+    const out = new Map<string, number[]>();
+    for (const r of rows) {
+      if (r.attractionId === null) continue;
+      const weekdays = runWeekdays(r.days, parkOpenDays, r.today);
+      if (weekdays) out.set(r.attractionId, weekdays);
+    }
+    await this.redis
+      .set(cacheKey, JSON.stringify([...out]), "EX", 6 * 60 * 60)
       .catch(() => undefined);
     return out;
   }

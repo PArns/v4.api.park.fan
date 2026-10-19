@@ -477,11 +477,16 @@ export class EntityMatcherService {
           continue;
         }
 
-        const score = this.calculateEntitySimilarity(
-          entity1,
-          entity2,
-          norm(entity1.name),
-          norm(entity2.name),
+        // The curated name beats a translated feed name (PAR-924: "Helhuis" vs "Hell House").
+        const score = Math.max(
+          ...[entity1.name, ...(entity1.altNames ?? [])].map((name) =>
+            this.calculateEntitySimilarity(
+              entity1,
+              entity2,
+              norm(name),
+              norm(entity2.name),
+            ),
+          ),
         );
         // Dynamic threshold: Lower for entities without geo data (e.g. Wartezeiten)
         // This ensures we can match entities even when one source lacks location data
