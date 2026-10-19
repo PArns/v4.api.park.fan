@@ -128,3 +128,18 @@ export function runWeekdays(
   // and an empty list would read as „never runs".
   return out.length > 0 ? out : null;
 }
+
+/**
+ * The pattern as the park payload carries it: only when it leaves a weekday
+ * out. A ride that runs every day has nothing to say about weekdays, and the
+ * park page reads the field only to tell „not on today's programme" from „not
+ * yet today", so a full week would be bytes on every ride of every park for no
+ * sentence at all.
+ */
+export function partialRunWeekdays(
+  weekdays: readonly number[] | null | undefined,
+): number[] | undefined {
+  return weekdays && weekdays.length > 0 && weekdays.length < 7
+    ? [...weekdays]
+    : undefined;
+}

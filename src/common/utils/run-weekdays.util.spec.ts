@@ -1,4 +1,8 @@
-import { isoWeekdayOf, runWeekdays } from "./run-weekdays.util";
+import {
+  isoWeekdayOf,
+  partialRunWeekdays,
+  runWeekdays,
+} from "./run-weekdays.util";
 
 /** Every date from `from` to `to`, inclusive, whose ISO weekday is listed. */
 function datesOn(from: string, to: string, weekdays: number[]): string[] {
@@ -127,5 +131,26 @@ describe("runWeekdays", () => {
 
   it("has no pattern without a single operating day", () => {
     expect(runWeekdays([], movieParkOpen, today)).toBeNull();
+  });
+});
+
+describe("partialRunWeekdays", () => {
+  it("keeps a pattern that leaves a weekday out", () => {
+    expect(partialRunWeekdays([5, 6, 7])).toEqual([5, 6, 7]);
+    expect(partialRunWeekdays([1, 2, 3, 4, 5, 6])).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("drops a ride that runs every day, and a ride with no pattern", () => {
+    expect(partialRunWeekdays([1, 2, 3, 4, 5, 6, 7])).toBeUndefined();
+    expect(partialRunWeekdays(undefined)).toBeUndefined();
+    expect(partialRunWeekdays(null)).toBeUndefined();
+    expect(partialRunWeekdays([])).toBeUndefined();
+  });
+
+  it("hands out a copy, so the cached map cannot be changed through the payload", () => {
+    const cached = [5, 6, 7];
+    const served = partialRunWeekdays(cached);
+    served?.push(1);
+    expect(cached).toEqual([5, 6, 7]);
   });
 });
