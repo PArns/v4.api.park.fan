@@ -123,10 +123,10 @@ export class EntityMappingsProcessor {
     // Fetch Wiki entities (Primary Source)
     let wikiEntities: EntityMetadata[] = [];
     if (wikiSource && wikiMapping) {
-      wikiEntities = await wikiSource.fetchParkEntities(
-        wikiMapping.externalEntityId,
+      wikiEntities = await this.withCuratedNames(
+        parkId,
+        await wikiSource.fetchParkEntities(wikiMapping.externalEntityId),
       );
-      await this.addCuratedNames(parkId, wikiEntities);
     }
 
     // Process Queue-Times (if available)
@@ -198,17 +198,17 @@ export class EntityMappingsProcessor {
    * the other feeds use the operator's name. The row's curated name is that
    * operator name, so it is offered to the matcher as a second name (PAR-924).
    */
-  private async addCuratedNames(
+  private async withCuratedNames(
     parkId: string,
     wikiEntities: EntityMetadata[],
-  ): Promise<void> {
-    const attractions = wikiEntities.filter(
-      (e) => e.entityType === "ATTRACTION",
-    );
-    if (attractions.length === 0) return;
+  ): Promise<EntityMetadata[]> {
+    const externalIds = wikiEntities
+      .filter((e) => e.entityType === "ATTRACTION")
+      .map((e) => e.externalId);
+    if (externalIds.length === 0) return wikiEntities;
 
     const rows = await this.attractionsService.getRepository().find({
-      where: { parkId, externalId: In(attractions.map((e) => e.externalId)) },
+      where: { parkId, externalId: In(externalIds) },
       select: { externalId: true, curatedName: true },
     });
     const curatedByExternalId = new Map(
@@ -216,10 +216,13 @@ export class EntityMappingsProcessor {
         r.curatedName ? [[r.externalId, r.curatedName]] : [],
       ),
     );
-    for (const entity of attractions) {
-      const curated = curatedByExternalId.get(entity.externalId);
-      if (curated && curated !== entity.name) entity.altNames = [curated];
-    }
+    return wikiEntities.map((e) => {
+      const curated =
+        e.entityType === "ATTRACTION"
+          ? curatedByExternalId.get(e.externalId)
+          : undefined;
+      return curated && curated !== e.name ? { ...e, altNames: [curated] } : e;
+    });
   }
 
   /**
