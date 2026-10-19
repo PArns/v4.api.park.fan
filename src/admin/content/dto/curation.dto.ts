@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import {
   ArrayNotEmpty,
   IsArray,
@@ -10,6 +10,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsUrl,
   Matches,
   Max,
   MaxLength,
@@ -338,7 +339,28 @@ export class SeasonPatchDto {
   note?: string | null;
 }
 
-export class RideProfileWriteDto {
+export class RideProfileProvenanceDto {
+  @ApiPropertyOptional({
+    description:
+      "Why. Goes into the audit row and is what makes the change reviewable.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  reason?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "The page the manufacturer, model, year or measurements were read from.",
+  })
+  @Transform(({ value }) => (value === "" ? undefined : value))
+  @IsOptional()
+  @IsUrl({ require_protocol: true, protocols: ["http", "https"] })
+  @MaxLength(2000)
+  sourceUrl?: string;
+}
+
+export class RideProfileWriteDto extends RideProfileProvenanceDto {
   @ApiPropertyOptional({
     description:
       "Glossary term ids of the track elements, IN RIDE ORDER. Order is " +

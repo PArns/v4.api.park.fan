@@ -51,6 +51,7 @@ import {
 import {
   BulkCurationDto,
   CurationPatchDto,
+  RideProfileProvenanceDto,
   RideProfileWriteDto,
   SeasonPatchDto,
   SeasonWriteDto,
@@ -717,7 +718,8 @@ export class AdminContentController {
   ) {
     const attraction = await this.curation.findAttraction(id);
     const before = await this.rideProfiles.find(id);
-    const { profile } = await this.rideProfiles.upsert(id, body);
+    const { reason, sourceUrl, ...input } = body;
+    const { profile } = await this.rideProfiles.upsert(id, input);
 
     await this.audit.record({
       actor: admin,
@@ -725,6 +727,8 @@ export class AdminContentController {
       entityType: "attraction",
       entityId: id,
       entityLabel: attraction.name,
+      reason,
+      sourceUrl,
       before: before
         ? {
             elements: before.elements,
@@ -759,6 +763,7 @@ export class AdminContentController {
   async deleteRideProfile(
     @Param("id") id: string,
     @CurrentAdmin() admin: AdminPrincipal,
+    @Body() body?: RideProfileProvenanceDto,
   ): Promise<void> {
     const attraction = await this.curation.findAttraction(id);
     const before = await this.rideProfiles.find(id);
@@ -771,6 +776,8 @@ export class AdminContentController {
       entityType: "attraction",
       entityId: id,
       entityLabel: attraction.name,
+      reason: body?.reason,
+      sourceUrl: body?.sourceUrl,
       // Same reasoning as the season delete: the row is hand-assembled from
       // the park's own page, the manufacturer and a cross-check, and nothing
       // regenerates it. Recording two of its nine fields means the audit row
