@@ -507,9 +507,14 @@ export class AttractionIntegrationService {
           dto.comparison = null;
         }
       } else {
-        crowdLevel = currentPred?.crowdLevel
-          ? (currentPred.crowdLevel as CrowdLevel)
-          : "very_low";
+        // A ride with no reading and no status has nothing to be rated on; the
+        // model's hour row for it is a prior, not an observation.
+        crowdLevel =
+          dto.effectiveStatus === "UNKNOWN"
+            ? "unknown"
+            : currentPred?.crowdLevel
+              ? (currentPred.crowdLevel as CrowdLevel)
+              : "very_low";
         dto.baseline = null;
         dto.comparison = null;
       }

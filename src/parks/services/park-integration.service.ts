@@ -840,6 +840,9 @@ export class ParkIntegrationService {
               );
               crowdLevel = rating;
             }
+          } else if (attraction.effectiveStatus === "UNKNOWN") {
+            // No reading and no status: nothing to rate, same as the detail page.
+            crowdLevel = "unknown";
           } else {
             // 2. Fallback to ML Prediction if no live data
             if (currentPred && currentPred.crowdLevel) {
