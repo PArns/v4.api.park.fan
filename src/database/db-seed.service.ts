@@ -14,6 +14,7 @@ import { WeatherData } from "../parks/entities/weather-data.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { MLModel } from "../ml/entities/ml-model.entity";
 import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
+import { AbortableRuns } from "../common/utils/abortable-runs";
 
 /**
  * Database Seeding Service
@@ -36,6 +37,7 @@ import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 export class DbSeedService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DbSeedService.name);
   private seedTimer?: NodeJS.Timeout;
+  private readonly runs = new AbortableRuns();
 
   constructor(
     @InjectRepository(Park)
@@ -72,9 +74,10 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
     // Run async to not block app startup
     this.seedTimer = setTimeout(() => {
       this.seedTimer = undefined;
-      this.checkAndSeed().catch((err) => {
-        this.logger.error("Failed to auto-seed database", err);
-      });
+      this.runs.start(
+        () => this.checkAndSeed(),
+        (err) => this.logger.error("Failed to auto-seed database", err),
+      );
     }, SEED_DELAY_MS);
   }
 
@@ -85,12 +88,17 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
    * where `TypeORMError: Driver not Connected` came from. Cancelling it on
    * teardown is also what makes the seed a property of a *running* app rather
    * than of the process that once started one.
+   *
+   * A timer that has already fired leaves the chain behind it running. That
+   * chain stops at its next checkpoint and the step in flight is awaited, so
+   * the DataSource closes after the last query (see `AbortableRuns`).
    */
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     if (this.seedTimer) {
       clearTimeout(this.seedTimer);
       this.seedTimer = undefined;
     }
+    await this.runs.abortAndDrain();
   }
 
   /**
@@ -100,6 +108,7 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
     this.logger.log("🔍 Checking database for missing data...");
 
     const checks = await this.performDataChecks();
+    this.runs.checkpoint();
     const jobsToQueue: Array<{
       name: string;
       priority: number;
@@ -206,6 +215,7 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
       jobsToQueue.sort((a, b) => b.priority - a.priority);
 
       for (const job of jobsToQueue) {
+        this.runs.checkpoint();
         this.logger.log(`📦 Queueing ${job.name} sync...`);
         await job.fn();
       }
@@ -236,14 +246,18 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
     scheduleCount: number;
   }> {
     // Check Parks
+    this.runs.checkpoint();
     const parkCount = await this.parkRepository.count();
     const needsParks = parkCount === 0;
 
     // Check Holidays (informational only — never seeded on boot)
+    this.runs.checkpoint();
     const holidayCount = await this.holidayRepository.count();
 
     // Check Weather (informational only — never seeded on boot)
+    this.runs.checkpoint();
     const weatherCount = await this.weatherRepository.count();
+    this.runs.checkpoint();
     const latestWeather = await this.weatherRepository.findOne({
       where: {},
       order: { date: "DESC" },
@@ -252,12 +266,14 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
 
     // Check Wait Times (should have data from last 24h)
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    this.runs.checkpoint();
     const recentQueueData = await this.queueDataRepository.count({
       where: {
         timestamp: MoreThan(oneDayAgo),
       },
     });
 
+    this.runs.checkpoint();
     const latestQueue = await this.queueDataRepository.findOne({
       where: {},
       order: { timestamp: "DESC" },
@@ -267,6 +283,7 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
     const needsWaitTimes = recentQueueData === 0;
 
     // Check ML Model (should have at least one active model)
+    this.runs.checkpoint();
     const activeModel = await this.mlModelRepository.findOne({
       where: { isActive: true },
       select: ["version"],
@@ -275,6 +292,7 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
     const needsMLModel = !activeModel;
 
     // Check Schedules
+    this.runs.checkpoint();
     const scheduleCount = await this.scheduleRepository.count();
     // We expect a baseline of schedule entries for operating parks
     const needsSchedules = scheduleCount < parkCount * 7; // At least one week for each park

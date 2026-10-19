@@ -1,3 +1,4 @@
+import { Logger } from "@nestjs/common";
 import { Queue } from "bull";
 import {
   materialisedRepeatJobId,
@@ -126,12 +127,57 @@ describe("QueueSchedulerService — repeatable entry whose next run lost its nam
       expect(register).toHaveBeenLastCalledWith(true);
       expect(register).toHaveBeenCalledTimes(2);
 
-      service.onModuleDestroy();
+      void service.onModuleDestroy();
       jest.advanceTimersByTime(2 * 60 * 60 * 1000);
       expect(register).toHaveBeenCalledTimes(2);
     } finally {
       if (prev !== undefined) process.env.SKIP_QUEUE_BOOTSTRAP = prev;
       jest.useRealTimers();
+    }
+  });
+});
+
+describe("QueueSchedulerService — shutdown during a registration", () => {
+  it("stops before the next entry, logs no error and awaits the entry in flight", async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve));
+    const queue = {
+      getRepeatableJobs: jest
+        .fn()
+        .mockReturnValueOnce(firstGate.then(() => []))
+        .mockResolvedValue([]),
+      add: jest.fn().mockResolvedValue({}),
+    };
+    const service = new (
+      QueueSchedulerService as unknown as new (
+        ...args: unknown[]
+      ) => QueueSchedulerService
+    )(...new Array(30).fill(queue));
+    const error = jest
+      .spyOn(Logger.prototype, "error")
+      .mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
+    jest.useFakeTimers();
+    const prev = process.env.SKIP_QUEUE_BOOTSTRAP;
+    delete process.env.SKIP_QUEUE_BOOTSTRAP;
+
+    try {
+      await service.onModuleInit();
+      jest.advanceTimersByTime(5000);
+      expect(queue.getRepeatableJobs).toHaveBeenCalledTimes(1);
+
+      const destroyed = service.onModuleDestroy();
+      releaseFirst();
+      await destroyed;
+
+      // The entry in flight finished its add; no further entry was looked at.
+      expect(queue.add).toHaveBeenCalledTimes(1);
+      expect(queue.getRepeatableJobs).toHaveBeenCalledTimes(1);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      if (prev !== undefined) process.env.SKIP_QUEUE_BOOTSTRAP = prev;
+      jest.useRealTimers();
+      jest.restoreAllMocks();
     }
   });
 });
