@@ -961,26 +961,41 @@ The opening time says when a ride starts on the days it runs, not that it runs.
 Movie Park's Halloween mazes run Fri–Sun evenings, and their measured 17:00 was
 served on every day, so a Monday read „opens at 17:00".
 
-`runsOnWeekdays` lists the ISO weekdays (Monday 1 … Sunday 7) the ride ran on in
-the last eight weeks, in the park's time zone, from observed `OPERATING`
-readings only (no heartbeat, no reconciliation row). A weekday counts when the
-ride ran on at least half of its occurrences, counted from the ride's own first
-operating day in the window: a festival three weeks old would otherwise put
-Fri–Sun at 3 of 8. Half and not more, because the errors are unequal — a weekday
-kept wrongly shows `opensAt` as before, one dropped wrongly tells a visitor the
-ride is not on the programme. Measured on 2026-10-19 the mazes ran on 1 of 3
-Wednesdays and 3 of 4 Fridays, and read `[5, 6, 7]`.
+`runsOnWeekdays` lists the ISO weekdays (Monday 1 … Sunday 7) the ride usually
+runs on, in the park's time zone, from the last eight weeks of observed
+`OPERATING` readings only (no heartbeat, no reconciliation row).
+
+**The denominator is the park's open days, not the calendar.** A weekday counts
+when the ride ran on at least half of the days the PARK was open on that
+weekday, counted from the ride's own first operating day in the window. „Open"
+is read from the same readings — any ride of the park observed `OPERATING` that
+day — because Movie Park's calendar does not mark its Halloween evenings. On a
+calendar denominator Movie Park, which opens on Mondays only in holiday weeks,
+put Star Trek at „not on Mondays" on the holiday Monday it was running; the
+morning before its first run the frontend would have said „not on today's
+programme". Half and not more, because the errors are unequal — a weekday kept
+wrongly shows `opensAt` as before, one dropped wrongly tells a visitor the ride
+is not on the programme.
+
+**One open day is an anecdote.** The park opened on one Wednesday (30.09.) since
+the mazes began, and they ran on it. A weekday the park was open on fewer than
+twice therefore counts only for a ride that ran on at least 90 % of all the
+park's open days since its first run — a ride that runs whenever the park does.
+Star Trek ran on all of them, the mazes on 11 of 15. A weekday the park was
+never open on is not in the pattern, except today's, once any ride of the park
+has run today and the ride runs whenever the park does: on the first holiday
+Monday there is no earlier open Monday to count.
+
+Measured on 2026-10-19 over Movie Park: the six mazes with readings read
+`[5, 6, 7]`, Star Trek and Van Helsing's Factory `[1, 2, 3, 4, 5, 6, 7]`, 25 of
+35 rides with readings every weekday.
 
 On a planned day whose weekday is not in the list, `opensAt` and
 `opensAtConfidence` are absent and the curve draws the park's day. The field
 itself is absent when there is no pattern: less than two weeks of history, no
-operating day in the last seven, or no weekday that clears half. A ride that
-stopped more than a week ago has no weekend to promise. Absent never means
+operating day in the last seven, or no weekday that clears its share. A ride
+that stopped more than a week ago has no weekend to promise. Absent never means
 „runs every day".
-
-A weekday the park opens on only for a holiday week does not reach half until
-it has happened often enough, so rides read as not running on it in the first
-weeks. That costs `opensAt` on those days, which is the smaller error.
 
 The pure rule is `runWeekdays` in `src/common/utils/run-weekdays.util.ts`; the
 readings come from `AnalyticsService.getRideRunWeekdays` (cached six hours, so

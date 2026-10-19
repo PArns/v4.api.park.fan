@@ -7,9 +7,8 @@ export const RUN_WEEKDAYS_WINDOW_DAYS = 56;
 
 /**
  * History a ride needs before it gets a pattern at all, in days since its first
- * operating day inside the window. Two weeks puts every weekday at least twice
- * into the denominator; below that one missed Friday reads as „does not run on
- * Fridays".
+ * operating day inside the window. Below two weeks one missed Friday reads as
+ * „does not run on Fridays".
  */
 export const RUN_WEEKDAYS_MIN_HISTORY_DAYS = 14;
 
@@ -21,28 +20,41 @@ export const RUN_WEEKDAYS_MIN_HISTORY_DAYS = 14;
 export const RUN_WEEKDAYS_MAX_IDLE_DAYS = 7;
 
 /**
- * Share of a weekday's occurrences the ride must have run on for the weekday to
- * count, measured from the ride's first operating day in the window rather than
- * from the window's start — a season that began three weeks ago would otherwise
- * put Fri–Sun at 3 of 8 and drop them.
+ * Share of the park's open days of a weekday the ride must have run on for the
+ * weekday to count.
+ *
+ * The denominator is the days the PARK was open, not the calendar: a ride that
+ * runs whenever the park does must not lose a weekday because the park is shut
+ * on it most weeks. Movie Park opens on Mondays only in holiday weeks, and on a
+ * calendar denominator Star Trek read „not on Mondays" on the holiday Monday it
+ * was running.
  *
  * Half, inclusive, because the two errors are not equal. A weekday kept wrongly
  * shows `opensAt` as before; a weekday dropped wrongly tells a visitor the ride
- * is not on that day's programme. Measured at Movie Park on 2026-10-19: the
- * mazes ran on 1 of 3 Wednesdays (30.09., a one-off) and on 3 of 4 Fridays.
+ * is not on that day's programme.
  */
 export const RUN_WEEKDAYS_MIN_SHARE = 0.5;
+
+/**
+ * Open days of a weekday the park needs before that weekday's own share is
+ * trusted. One open day is an anecdote: Movie Park opened on one Wednesday
+ * (30.09.) since the Halloween mazes began, the mazes ran on it, and 1 of 1
+ * would make them a Wednesday attraction.
+ */
+export const RUN_WEEKDAYS_MIN_OPEN_DAYS = 2;
+
+/**
+ * Below `RUN_WEEKDAYS_MIN_OPEN_DAYS`, a weekday counts only for a ride that ran
+ * on at least this share of ALL the park's open days since its first run — a
+ * ride that runs whenever the park does. Measured on 2026-10-19: Star Trek ran
+ * on every open day, the mazes on 11 of 15.
+ */
+export const RUN_WEEKDAYS_EVERY_OPEN_DAY_SHARE = 0.9;
 
 /** ISO weekday (Monday 1 … Sunday 7) of a `YYYY-MM-DD` calendar date. */
 export function isoWeekdayOf(date: string): number {
   const day = new Date(`${date}T00:00:00Z`).getUTCDay();
   return day === 0 ? 7 : day;
-}
-
-function addDays(date: string, days: number): string {
-  const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
 }
 
 function daysBetween(from: string, to: string): number {
@@ -57,13 +69,17 @@ function daysBetween(from: string, to: string): number {
  * no pattern to tell: less than two weeks of history, no operating day in the
  * last week, or no weekday that clears the share.
  *
- * `operatingDays` are the park-local dates with at least one observed
- * OPERATING reading inside the window; `today` is the park-local date. Today
- * counts towards „ran recently" but not towards the shares, because the day is
- * not over.
+ * `operatingDays` are the park-local dates the ride has an observed OPERATING
+ * reading on; `parkOpenDays` the dates ANY ride of the park has one on, which
+ * is how „the park was open" is read — Movie Park's calendar does not say.
+ * `today` is the park-local date. Today counts towards „ran recently" but not
+ * towards the shares, because the day is not over. A weekday the park was
+ * never open on since the ride's first run is not in the pattern, unless the
+ * park is open on it today and the ride runs whenever the park does.
  */
 export function runWeekdays(
   operatingDays: readonly string[],
+  parkOpenDays: readonly string[],
   today: string,
 ): number[] | null {
   const days = [...new Set(operatingDays)].filter((d) => d <= today).sort();
@@ -73,17 +89,40 @@ export function runWeekdays(
   if (daysBetween(first, today) < RUN_WEEKDAYS_MIN_HISTORY_DAYS) return null;
   if (daysBetween(last, today) > RUN_WEEKDAYS_MAX_IDLE_DAYS) return null;
 
-  const occurrences = new Array<number>(8).fill(0);
-  for (let d = first; d < today; d = addDays(d, 1)) {
-    occurrences[isoWeekdayOf(d)]++;
+  const ran = new Set(days);
+  const openDays = new Array<number>(8).fill(0);
+  const ranDays = new Array<number>(8).fill(0);
+  // A day the ride ran on is a day the park was open, whatever the other list
+  // says.
+  for (const d of new Set([...parkOpenDays, ...days])) {
+    if (d < first || d >= today) continue;
+    const w = isoWeekdayOf(d);
+    openDays[w]++;
+    if (ran.has(d)) ranDays[w]++;
   }
-  const ran = new Array<number>(8).fill(0);
-  for (const d of days) if (d < today) ran[isoWeekdayOf(d)]++;
+  const totalOpen = openDays.reduce((a, b) => a + b, 0);
+  const totalRan = ranDays.reduce((a, b) => a + b, 0);
+  const runsWheneverOpen =
+    totalOpen > 0 && totalRan / totalOpen >= RUN_WEEKDAYS_EVERY_OPEN_DAY_SHARE;
+
+  // The park is open today once any of its rides has run, and on the first
+  // holiday Monday there is no earlier open Monday to count. A ride that runs
+  // whenever the park does runs today too.
+  const openToday = parkOpenDays.includes(today);
+  const todayWeekday = isoWeekdayOf(today);
 
   const out: number[] = [];
   for (let w = 1; w <= 7; w++) {
-    if (occurrences[w] > 0 && ran[w] / occurrences[w] >= RUN_WEEKDAYS_MIN_SHARE)
-      out.push(w);
+    if (openDays[w] === 0) {
+      if (w === todayWeekday && openToday && runsWheneverOpen) out.push(w);
+      continue;
+    }
+    const share = ranDays[w] / openDays[w];
+    const counts =
+      openDays[w] >= RUN_WEEKDAYS_MIN_OPEN_DAYS
+        ? share >= RUN_WEEKDAYS_MIN_SHARE
+        : runsWheneverOpen && share > 0;
+    if (counts) out.push(w);
   }
   // A ride that runs now and then on no weekday in particular has no pattern,
   // and an empty list would read as „never runs".

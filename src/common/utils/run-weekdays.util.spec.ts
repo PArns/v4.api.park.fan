@@ -12,6 +12,8 @@ function datesOn(from: string, to: string, weekdays: number[]): string[] {
   return out;
 }
 
+const EVERY_DAY = [1, 2, 3, 4, 5, 6, 7];
+
 describe("isoWeekdayOf", () => {
   it("numbers Monday 1 and Sunday 7", () => {
     expect(isoWeekdayOf("2026-10-19")).toBe(1);
@@ -23,68 +25,107 @@ describe("runWeekdays", () => {
   // Monday 2026-10-19, the day the mazes read „opens at 17:00".
   const today = "2026-10-19";
 
+  // Movie Park as measured that day: open every day in late August, then
+  // Thu–Sun, once on Wednesday 30.09., and on the holiday Monday itself.
+  const movieParkOpen = [
+    ...datesOn("2026-08-24", "2026-09-06", EVERY_DAY),
+    ...datesOn("2026-09-07", "2026-10-18", [4, 5, 6, 7]),
+    "2026-09-30",
+    today,
+  ];
+
   it("reads Movie Park's mazes as Fri–Sun, without the one Wednesday", () => {
-    // The season began on Saturday 26.09. The mazes ran every Fri–Sun since,
-    // and on Wednesday 30.09. once.
-    const days = [
+    // The park opened on one Wednesday since the mazes began, and they ran on
+    // it. 1 of 1 is an anecdote, not a Wednesday attraction.
+    const mazes = [
       ...datesOn("2026-09-26", "2026-10-18", [5, 6, 7]),
       "2026-09-30",
     ];
 
-    expect(runWeekdays(days, today)).toEqual([5, 6, 7]);
+    expect(runWeekdays(mazes, movieParkOpen, today)).toEqual([5, 6, 7]);
+  });
+
+  it("keeps the weekdays a ride that runs whenever the park does runs on", () => {
+    // Star Trek ran on every open day. The park opens on Mondays only in
+    // holiday weeks, and Monday must not drop out because of that.
+    const starTrek = movieParkOpen.filter((d) => d < today);
+
+    expect(runWeekdays(starTrek, movieParkOpen, today)).toEqual(EVERY_DAY);
+  });
+
+  it("keeps a weekday the park was open on only once, for a ride that runs whenever it is", () => {
+    const parkOpen = [
+      ...datesOn("2026-08-24", "2026-10-18", [4, 5, 6, 7]),
+      "2026-10-07",
+    ];
+
+    expect(runWeekdays(parkOpen, parkOpen, today)).toEqual([3, 4, 5, 6, 7]);
+  });
+
+  it("gives today's weekday to a ride that runs whenever the park does, on the first such day", () => {
+    // The first holiday Monday: no earlier open Monday to count, but rides of
+    // the park have run today.
+    const parkOpen = [...datesOn("2026-08-24", "2026-10-18", [4, 5, 6, 7])];
+
+    expect(runWeekdays(parkOpen, [...parkOpen, today], today)).toEqual([
+      1, 4, 5, 6, 7,
+    ]);
+    // Before any ride has run today, the park is not known to be open.
+    expect(runWeekdays(parkOpen, parkOpen, today)).toEqual([4, 5, 6, 7]);
+  });
+
+  it("leaves out a weekday the park was never open on", () => {
+    const parkOpen = datesOn("2026-08-24", "2026-10-18", [5, 6, 7]);
+
+    expect(runWeekdays(parkOpen, parkOpen, today)).toEqual([5, 6, 7]);
   });
 
   it("measures the share from the ride's first day, not the window's", () => {
     // Three Fridays of eight would fail a share taken over the whole window.
-    const days = datesOn("2026-09-26", "2026-10-18", [5, 6, 7]);
-    expect(runWeekdays(days, today)).toEqual([5, 6, 7]);
+    const mazes = datesOn("2026-09-26", "2026-10-18", [5, 6, 7]);
+    expect(runWeekdays(mazes, movieParkOpen, today)).toEqual([5, 6, 7]);
   });
 
-  it("gives a ride that runs every day every weekday", () => {
-    const days = datesOn("2026-08-24", "2026-10-19", [1, 2, 3, 4, 5, 6, 7]);
-    expect(runWeekdays(days, today)).toEqual([1, 2, 3, 4, 5, 6, 7]);
-  });
-
-  it("keeps a weekday the ride ran on half the time", () => {
-    const days = [
+  it("keeps a weekday the ride ran on half of the park's open days", () => {
+    const parkOpen = datesOn("2026-09-21", "2026-10-18", [5, 6, 7]);
+    const ride = [
       ...datesOn("2026-09-21", "2026-10-18", [6, 7]),
       "2026-09-25",
       "2026-10-09",
     ];
-    expect(runWeekdays(days, today)).toEqual([5, 6, 7]);
+    expect(runWeekdays(ride, parkOpen, today)).toEqual([5, 6, 7]);
   });
 
   it("has no pattern below two weeks of history", () => {
-    expect(
-      runWeekdays(datesOn("2026-10-09", "2026-10-18", [5, 6, 7]), today),
-    ).toBeNull();
+    const ride = datesOn("2026-10-09", "2026-10-18", [5, 6, 7]);
+    expect(runWeekdays(ride, movieParkOpen, today)).toBeNull();
   });
 
   it("has no pattern for a ride idle for more than a week", () => {
     // Last ran on Sunday 11.10., eight days before today.
-    expect(
-      runWeekdays(datesOn("2026-08-24", "2026-10-11", [5, 6, 7]), today),
-    ).toBeNull();
+    const ride = datesOn("2026-08-24", "2026-10-11", [5, 6, 7]);
+    expect(runWeekdays(ride, movieParkOpen, today)).toBeNull();
   });
 
   it("keeps the pattern for a ride idle for exactly a week", () => {
-    expect(
-      runWeekdays(datesOn("2026-08-24", "2026-10-12", [1, 6, 7]), today),
-    ).toEqual([1, 6, 7]);
+    const parkOpen = datesOn("2026-08-24", "2026-10-18", [1, 6, 7]);
+    const ride = datesOn("2026-08-24", "2026-10-12", [1, 6, 7]);
+    expect(runWeekdays(ride, parkOpen, today)).toEqual([1, 6, 7]);
   });
 
   it("has no pattern for a ride that runs on no weekday in particular", () => {
-    const days = ["2026-09-01", "2026-09-10", "2026-09-26", "2026-10-15"];
-    expect(runWeekdays(days, today)).toBeNull();
+    const parkOpen = datesOn("2026-08-24", "2026-10-18", EVERY_DAY);
+    const ride = ["2026-09-01", "2026-09-10", "2026-09-26", "2026-10-15"];
+    expect(runWeekdays(ride, parkOpen, today)).toBeNull();
   });
 
   it("does not count today towards the shares", () => {
-    // A ride that ran this Monday for the first time is still a weekend ride.
-    const days = [...datesOn("2026-09-26", "2026-10-18", [5, 6, 7]), today];
-    expect(runWeekdays(days, today)).toEqual([5, 6, 7]);
+    // A maze that ran this Monday for the first time is still a weekend ride.
+    const mazes = [...datesOn("2026-09-26", "2026-10-18", [5, 6, 7]), today];
+    expect(runWeekdays(mazes, movieParkOpen, today)).toEqual([5, 6, 7]);
   });
 
   it("has no pattern without a single operating day", () => {
-    expect(runWeekdays([], today)).toBeNull();
+    expect(runWeekdays([], movieParkOpen, today)).toBeNull();
   });
 });

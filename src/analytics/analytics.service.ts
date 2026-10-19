@@ -5760,17 +5760,24 @@ export class AnalyticsService {
     parkId: string,
     timezone: string,
   ): Promise<Map<string, number[]>> {
-    const cacheKey = `park:ride-run-weekdays:v1:${parkId}`;
+    const cacheKey = `park:ride-run-weekdays:v2:${parkId}`;
     const cached = safeJsonParse<Array<[string, number[]]>>(
       await this.redis.get(cacheKey).catch(() => null),
     );
     if (cached) return new Map(cached);
 
-    const rows: Array<{ attractionId: string; days: string[]; today: string }> =
-      await this.queueDataRepository.manager.query(
-        `SELECT qd."attractionId",
-                array_agg(DISTINCT to_char(qd.timestamp AT TIME ZONE $2, 'YYYY-MM-DD')) AS days,
-                to_char(now() AT TIME ZONE $2, 'YYYY-MM-DD') AS today
+    // One scan, two answers: each ride's operating days, and the park's open
+    // days as the union of them. The park calendar is not asked — Movie Park's
+    // does not mark its Halloween evenings, and a park with no ride running is
+    // not open in any sense a visitor cares about.
+    const rows: Array<{
+      attractionId: string | null;
+      days: string[];
+      today: string;
+    }> = await this.queueDataRepository.manager.query(
+      `WITH obs AS (
+         SELECT qd."attractionId" AS aid,
+                to_char(qd.timestamp AT TIME ZONE $2, 'YYYY-MM-DD') AS day
            FROM queue_data qd
            JOIN attractions a ON a.id = qd."attractionId"
           WHERE a."parkId" = $1::uuid
@@ -5778,13 +5785,20 @@ export class AnalyticsService {
             AND qd.status = 'OPERATING'
             AND ${observedReadingsSql("qd")}
             AND qd.timestamp >= ((now() AT TIME ZONE $2)::date - $3::int)::timestamp AT TIME ZONE $2
-          GROUP BY 1`,
-        [parkId, timezone, RUN_WEEKDAYS_WINDOW_DAYS],
-      );
+          GROUP BY 1, 2
+       )
+       SELECT aid AS "attractionId", array_agg(DISTINCT day) AS days,
+              to_char(now() AT TIME ZONE $2, 'YYYY-MM-DD') AS today
+         FROM obs GROUP BY GROUPING SETS ((aid), ())`,
+      [parkId, timezone, RUN_WEEKDAYS_WINDOW_DAYS],
+    );
 
+    // The grouping-sets total row carries a NULL id and every open day.
+    const parkOpenDays = rows.find((r) => r.attractionId === null)?.days ?? [];
     const out = new Map<string, number[]>();
     for (const r of rows) {
-      const weekdays = runWeekdays(r.days, r.today);
+      if (r.attractionId === null) continue;
+      const weekdays = runWeekdays(r.days, parkOpenDays, r.today);
       if (weekdays) out.set(r.attractionId, weekdays);
     }
     await this.redis
