@@ -849,7 +849,15 @@ describe("PlanDayService", () => {
     // actually REJECT — asserting this against a working lookup would pass
     // whatever the service does with the error.
     headlinerFails = true;
-    const plan = await service.buildPlanDay(park, "2026-10-17");
+    const today = formatInTimeZone(new Date(), park.timezone, "yyyy-MM-dd");
+    calendarDay = { ...calendarDay!, date: today };
+    dailyPredictions = [
+      {
+        ...(dailyPredictions[0] as object),
+        predictedTime: `${today}T12:00:00.000Z`,
+      },
+    ];
+    const plan = await service.buildPlanDay(park, today);
 
     expect(plan.rides.length).toBeGreaterThan(0);
     expect(plan.rides.every((r) => r.isHeadliner === undefined)).toBe(true);
