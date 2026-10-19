@@ -123,8 +123,9 @@ export class EntityMappingsProcessor {
     // Fetch Wiki entities (Primary Source)
     let wikiEntities: EntityMetadata[] = [];
     if (wikiSource && wikiMapping) {
-      wikiEntities = await wikiSource.fetchParkEntities(
-        wikiMapping.externalEntityId,
+      wikiEntities = await this.withCuratedNames(
+        parkId,
+        await wikiSource.fetchParkEntities(wikiMapping.externalEntityId),
       );
     }
 
@@ -190,6 +191,38 @@ export class EntityMappingsProcessor {
       );
     }
     return totalMappings;
+  }
+
+  /**
+   * The wiki feed names some rows in the park's local language ("Helhuis"),
+   * the other feeds use the operator's name. The row's curated name is that
+   * operator name, so it is offered to the matcher as a second name (PAR-924).
+   */
+  private async withCuratedNames(
+    parkId: string,
+    wikiEntities: EntityMetadata[],
+  ): Promise<EntityMetadata[]> {
+    const externalIds = wikiEntities
+      .filter((e) => e.entityType === "ATTRACTION")
+      .map((e) => e.externalId);
+    if (externalIds.length === 0) return wikiEntities;
+
+    const rows = await this.attractionsService.getRepository().find({
+      where: { parkId, externalId: In(externalIds) },
+      select: { externalId: true, curatedName: true },
+    });
+    const curatedByExternalId = new Map(
+      rows.flatMap((r) =>
+        r.curatedName ? [[r.externalId, r.curatedName]] : [],
+      ),
+    );
+    return wikiEntities.map((e) => {
+      const curated =
+        e.entityType === "ATTRACTION"
+          ? curatedByExternalId.get(e.externalId)
+          : undefined;
+      return curated && curated !== e.name ? { ...e, altNames: [curated] } : e;
+    });
   }
 
   /**
