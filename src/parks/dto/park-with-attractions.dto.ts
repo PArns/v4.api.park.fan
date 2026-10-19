@@ -110,6 +110,23 @@ export class ParkAttractionDto {
   notRunToday?: NotRunTodayDto;
 
   @ApiProperty({
+    required: false,
+    type: [Number],
+    example: [5, 6, 7],
+    description:
+      "The weekdays this ride usually runs on, ISO numbering (Monday 1 … " +
+      "Sunday 7), ascending, in the park's time zone — the same pattern and " +
+      "the same rule as `plan/day`'s `rides[].runsOnWeekdays`.\n\n" +
+      "Only present when the pattern leaves a weekday out. Absent means " +
+      "either that the ride runs every day the park is open or that there is " +
+      "no pattern to tell (less than two weeks of history, no run in the last " +
+      "seven days) — in both cases nothing should be said about weekdays. " +
+      "Here so a page can tell „not on today's programme\" from „not yet " +
+      'today" on its first render, before `plan/day` arrives.',
+  })
+  runsOnWeekdays?: number[];
+
+  @ApiProperty({
     description:
       "Crowd level badge. `unknown` when there is no baseline to rate this " +
       "ride against; `closed` when it is not operating.",

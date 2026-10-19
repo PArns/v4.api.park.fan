@@ -73,6 +73,7 @@ import {
 } from "../../common/utils/best-visit-times.util";
 import { resolveCuratedFacts } from "../../attractions/utils/curated-attraction-facts.util";
 import { isClosedByOperatingRange } from "../utils/schedule-closed-day.util";
+import { partialRunWeekdays } from "../../common/utils/run-weekdays.util";
 
 /**
  * Park Integration Service
@@ -1130,6 +1131,25 @@ export class ParkIntegrationService {
             const line = toNotRunTodayDto(notRun.get(attraction.id));
             if (line) attraction.notRunToday = line;
           }
+        }
+      }
+
+      // --- The weekdays a ride usually runs on ---
+      //
+      // `plan/day` loads last on the park page, so without this a maze on a
+      // Monday reads „not yet today" until it arrives.
+      if (dto.attractions.length > 0) {
+        const runWeekdays = await this.analyticsService
+          .getRideRunWeekdays(park.id, park.timezone)
+          .catch((err: Error) => {
+            this.logger.warn(
+              `Ride run weekdays unavailable for ${park.slug}: ${err.message}`,
+            );
+            return new Map<string, number[]>();
+          });
+        for (const attraction of dto.attractions) {
+          const weekdays = partialRunWeekdays(runWeekdays.get(attraction.id));
+          if (weekdays) attraction.runsOnWeekdays = weekdays;
         }
       }
 
