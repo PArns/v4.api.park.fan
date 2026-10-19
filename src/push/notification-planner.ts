@@ -1,4 +1,4 @@
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import type { PushTopic } from "./push-config";
 
 /**
@@ -163,6 +163,117 @@ export function parksPlannedToday(
     out.push({ slug: park.slug, geo: park.geo });
   }
   return out;
+}
+
+/** How long before a park opens its `morning-plan` message goes out. */
+export const MORNING_LEAD_MIN = 60;
+
+/** Park-local hour before which `morning-plan` never goes out. */
+export const MORNING_EARLIEST_HOUR = 7;
+
+/** Longest name the morning message carries; payload names are client input. */
+export const MORNING_NAME_MAX_CHARS = 60;
+
+/** How many entries the morning message names. */
+export const MORNING_ENTRY_COUNT = 3;
+
+/** A park whose own today has a plan, with what the morning message names. */
+export interface MorningPlanPark {
+  slug: string;
+  name: string;
+  timezone: string;
+  /** The park's own today, `yyyy-MM-dd`. */
+  today: string;
+  geo: { continent: string; country: string; city: string };
+  /** The first entries of the day by start time, named ones only. */
+  entries: Array<{ name: string; atTime: string }>;
+}
+
+/**
+ * The parks in a plan that have something planned for the park's own today,
+ * each with the first three named entries.
+ *
+ * Same park-local day and the same geo requirement as `parksPlannedToday`: the
+ * opening time is looked up through the park, and a bare slug can name two
+ * parks. Entries without a name are left out of the list rather than printed
+ * as an empty line, and a park with no named entry at all is left out, since
+ * the message would have nothing to say.
+ */
+export function morningPlansToday(
+  payload: unknown,
+  nowMs: number,
+): MorningPlanPark[] {
+  const out: MorningPlanPark[] = [];
+  for (const park of readParks(payload)) {
+    if (!park.timezone || !park.geo) continue;
+    let today: string;
+    try {
+      today = formatInTimeZone(new Date(nowMs), park.timezone, "yyyy-MM-dd");
+    } catch {
+      continue;
+    }
+    const entries = [...(park.days[today]?.entries ?? [])]
+      .sort((a, b) => a.startMinute - b.startMinute)
+      .flatMap((entry) => {
+        const name =
+          entry.custom?.label?.trim() || entry.attractionName?.trim();
+        return name
+          ? [{ name: clip(name), atTime: formatMinute(entry.startMinute) }]
+          : [];
+      })
+      .slice(0, MORNING_ENTRY_COUNT);
+    if (entries.length === 0) continue;
+    out.push({
+      slug: park.slug,
+      name: clip(park.name || park.slug),
+      timezone: park.timezone,
+      today,
+      geo: park.geo,
+      entries,
+    });
+  }
+  return out;
+}
+
+function clip(text: string): string {
+  const chars = [...text];
+  return chars.length <= MORNING_NAME_MAX_CHARS
+    ? text
+    : `${chars.slice(0, MORNING_NAME_MAX_CHARS - 1).join("")}…`;
+}
+
+/** The earliest instant `morning-plan` may go out on a park day, or null for an unknown zone. */
+export function morningFloorMs(timezone: string, today: string): number | null {
+  try {
+    return fromZonedTime(
+      `${today}T${String(MORNING_EARLIEST_HOUR).padStart(2, "0")}:00:00`,
+      timezone,
+    ).getTime();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the `morning-plan` message is due now for a park opening at
+ * `openingMs`.
+ *
+ * Due from 60 minutes before opening, or from 07:00 park-local when that is
+ * later, and until the park opens: a plan summary after the gates are open is
+ * an interruption. The window is open-ended on the near side on purpose, so a
+ * missed tick or a held-back quiet hour still sends on a later one, and the
+ * caller's day-long dedupe marker stops it repeating.
+ */
+export function isMorningPlanDue(
+  openingMs: number,
+  timezone: string,
+  today: string,
+  nowMs: number,
+): boolean {
+  const earliestMs = morningFloorMs(timezone, today);
+  if (earliestMs === null) return false;
+  const sendAtMs = Math.max(openingMs - MORNING_LEAD_MIN * 60_000, earliestMs);
+  return nowMs >= sendAtMs && nowMs < openingMs;
 }
 
 interface PlanPark {

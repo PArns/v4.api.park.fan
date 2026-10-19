@@ -409,3 +409,31 @@ readable wait-time source names no rides.
 ```
 
 The frontend switch for the topic is a separate ticket (PAR-849).
+
+## 7. Morning summary (`morning-plan`, PAR-895)
+
+Part of the trip half of the five-minute job (`PushNotificationProcessor.sendMorningPlans`),
+for subscriptions with a `tripId` and the topic. Per subscription, park and park day, one
+message goes out from 60 minutes before the park opens, but not before 07:00 park-local, and
+only while the park is still closed. It is sent only when the park's own today has at least
+one named entry in the stored plan.
+
+**Opening time.** The earliest `OPERATING` schedule entry of the park's own today
+(`ParksService.getScheduleForDate`); the park is resolved through the plan's `geo` path. No
+`geo`, no zone, no schedule or no `openingTime` means no message: there is no moment to
+count back from. `isMorningPlanDue` (`push/notification-planner.ts`) is the pure decision.
+
+**Names.** From the stored payload (`attractionName`, or a custom block's `label`), which the
+planner always writes for a ride. Entries without a name are left out of the list; nothing is
+resolved server-side.
+
+**Once.** The marker `push:sent:<endpoint>:<morning-plan:slug:date>` lives 12 hours, longer
+than the default 45 minutes, because the window can be an hour wide. A subscriber in quiet
+hours (23:00-07:00 in their own zone) gets no marker and is tried again on later ticks until
+the park opens.
+
+```json
+{ "title": "Phantasialand öffnet um 09:00 Uhr", "body": "09:30 Taron\n10:00 Black Mamba", "url": "/parks/europe/germany/bruehl/phantasialand", "tag": "morning-plan:phantasialand:2026-10-17" }
+```
+
+The frontend switch for the topic is a separate ticket (PAR-896).

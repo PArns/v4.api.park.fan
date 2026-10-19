@@ -66,15 +66,17 @@ export function isPushConfigured(): boolean {
  * - `next-up` — the next block in the plan is about to start.
  * - `rain-soon` — rain is forecast to reach a park the subscriber has a plan or
  *   a ride alert for (`rain-soon.ts`, sent by `PushNotificationProcessor`).
+ * - `morning-plan` — the park opens in an hour (not before 07:00) and the plan
+ *   has entries that day (`isMorningPlanDue`, sent by `PushNotificationProcessor`).
  *
  * That is the whole list, and it is short on purpose. "A ride in your plan
  * stopped running" is obviously wanted too and needs a producer that does not
  * exist yet. Listing a topic here before something sends it would put a switch
  * in the browser that turns on and does nothing, which is the one failure this
  * whole module is arranged against. A topic goes in the same commit as its
- * producer or not at all; `rain-soon` arrived with PAR-848 that way.
+ * producer or not at all; `rain-soon` arrived with PAR-848 and `morning-plan` with PAR-895 that way.
  */
-export const PUSH_TOPICS = ["next-up", "rain-soon"] as const;
+export const PUSH_TOPICS = ["next-up", "rain-soon", "morning-plan"] as const;
 export type PushTopic = (typeof PUSH_TOPICS)[number];
 
 export function isPushTopic(value: unknown): value is PushTopic {

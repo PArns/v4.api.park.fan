@@ -90,7 +90,7 @@ describe("PushController", () => {
     expect(status.publicKey).toBeUndefined();
     // The topic list is still published: a browser that cannot subscribe still
     // needs to know what it would be subscribing to.
-    expect(status.topics).toEqual(["next-up", "rain-soon"]);
+    expect(status.topics).toEqual(["next-up", "rain-soon", "morning-plan"]);
   });
 
   it("hands over the public key once configured", () => {
