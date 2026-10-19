@@ -456,6 +456,7 @@ minimising queues.
 | `uncertaintyMinutes` | half-width of the model's band, from the same row as `dayPeak`. Absent where the model reports no spread — **not** a band of width zero, and it must not be drawn as one |
 | `opensAt` | when the RIDE opens, park-local `HH:mm` — see §9 |
 | `opensAtConfidence` | how much watching `opensAt` rests on: `high` / `medium` / `low`. Present exactly when `opensAt` is — see §9 |
+| `runsOnWeekdays` | the weekdays the ride usually runs on, ISO 1–7, ascending. On any other weekday `opensAt` is absent — see §9 |
 | `expectedError` | how wrong `dayPeak` typically is, in minutes — see §10 |
 | `sampleDays` | measured days behind the historical shape. `1` on an observed day, `0` for a ride the shape does not cover |
 | `latitude` / `longitude` | **numbers**, not the strings TypeORM returns for a decimal column. A geodesic distance between two of them is a *lower bound* on the walk and nothing more |
@@ -953,6 +954,37 @@ Three things make the detection clean, and each was a wrong answer first:
   operator's system state, not whether a visitor can walk up.
 - **Floored to the quarter hour.** The raw median is a detection time — a
   five-minute poller plus the feed's own lag puts a 10:00 ride at 10:10.
+
+### A ride that does not run every day (`runsOnWeekdays`)
+
+The opening time says when a ride starts on the days it runs, not that it runs.
+Movie Park's Halloween mazes run Fri–Sun evenings, and their measured 17:00 was
+served on every day, so a Monday read „opens at 17:00".
+
+`runsOnWeekdays` lists the ISO weekdays (Monday 1 … Sunday 7) the ride ran on in
+the last eight weeks, in the park's time zone, from observed `OPERATING`
+readings only (no heartbeat, no reconciliation row). A weekday counts when the
+ride ran on at least half of its occurrences, counted from the ride's own first
+operating day in the window: a festival three weeks old would otherwise put
+Fri–Sun at 3 of 8. Half and not more, because the errors are unequal — a weekday
+kept wrongly shows `opensAt` as before, one dropped wrongly tells a visitor the
+ride is not on the programme. Measured on 2026-10-19 the mazes ran on 1 of 3
+Wednesdays and 3 of 4 Fridays, and read `[5, 6, 7]`.
+
+On a planned day whose weekday is not in the list, `opensAt` and
+`opensAtConfidence` are absent and the curve draws the park's day. The field
+itself is absent when there is no pattern: less than two weeks of history, no
+operating day in the last seven, or no weekday that clears half. A ride that
+stopped more than a week ago has no weekend to promise. Absent never means
+„runs every day".
+
+A weekday the park opens on only for a holiday week does not reach half until
+it has happened often enough, so rides read as not running on it in the first
+weeks. That costs `opensAt` on those days, which is the smaller error.
+
+The pure rule is `runWeekdays` in `src/common/utils/run-weekdays.util.ts`; the
+readings come from `AnalyticsService.getRideRunWeekdays` (cached six hours, so
+the seven-day rule follows the calendar within the day).
 
 **There is no `closesAt` and there will not be one.** The feeds do not reliably
 flip a ride to CLOSED at the end of the day — rides read OPERATING for hours after

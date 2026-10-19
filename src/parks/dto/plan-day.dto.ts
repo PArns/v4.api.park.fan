@@ -299,6 +299,27 @@ export class PlanDayRideDto {
 
   @ApiProperty({
     required: false,
+    type: [Number],
+    example: [5, 6, 7],
+    description:
+      "The weekdays this ride usually runs on, ISO numbering (Monday 1 … " +
+      "Sunday 7), ascending, in the park's time zone. Taken from the last " +
+      "eight weeks of observed OPERATING readings: a weekday counts when the " +
+      "ride ran on at least half of its occurrences since the ride's first " +
+      "operating day in that window. Movie Park's Halloween mazes read " +
+      "`[5, 6, 7]`.\n\n" +
+      "On a planned day whose weekday is not in the list, `opensAt` and " +
+      "`opensAtConfidence` are absent — a time is the start of a day the ride " +
+      "runs, and a Monday is not one.\n\n" +
+      "Absent when there is no pattern to tell: less than two weeks of " +
+      "history, no operating day in the last seven days (a ride closed for " +
+      "longer than a week has no weekend to promise), or no weekday that " +
+      'clears half. Absent never means „runs every day".',
+  })
+  runsOnWeekdays?: number[];
+
+  @ApiProperty({
+    required: false,
     example: 16,
     description:
       "How wrong `dayPeak` typically is, in minutes — measured, not assumed. " +
