@@ -49,7 +49,7 @@ describe("AttractionMergeService", () => {
   };
   const revalidationService = { revalidateTags: jest.fn() };
   const redis = {
-    keys: jest.fn().mockResolvedValue([]),
+    scan: jest.fn().mockResolvedValue(["0", []]),
     del: jest.fn(),
     pipeline: jest.fn(() => ({ del: jest.fn(), exec: jest.fn() })),
   };
@@ -465,7 +465,7 @@ describe("AttractionMergeService — batch", () => {
   const dataSource = { query: jest.fn(), transaction: jest.fn() };
   const revalidationService = { revalidateTags: jest.fn() };
   const redis = {
-    keys: jest.fn().mockResolvedValue([]),
+    scan: jest.fn().mockResolvedValue(["0", []]),
     del: jest.fn(),
     pipeline: jest.fn(() => ({ del: jest.fn(), exec: jest.fn() })),
   };
@@ -1292,7 +1292,7 @@ describe("AttractionMergeService — the curated window it would delete", () => 
         transaction: jest.fn((fn: (m: unknown) => unknown) => fn(manager)),
       } as never,
       {
-        keys: jest.fn().mockResolvedValue([]),
+        scan: jest.fn().mockResolvedValue(["0", []]),
         del: jest.fn(),
         pipeline: jest.fn(() => ({ del: jest.fn(), exec: jest.fn() })),
       } as never,
@@ -1731,7 +1731,7 @@ describe("AttractionMergeService — the single curated values it would delete",
         transaction: jest.fn((fn: (m: unknown) => unknown) => fn(manager)),
       } as never,
       {
-        keys: jest.fn().mockResolvedValue([]),
+        scan: jest.fn().mockResolvedValue(["0", []]),
         del: jest.fn(),
         pipeline: jest.fn(() => ({ del: jest.fn(), exec: jest.fn() })),
       } as never,

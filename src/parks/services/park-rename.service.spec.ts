@@ -64,7 +64,6 @@ describe("ParkRenameService", () => {
 
     redis = {
       del: jest.fn().mockResolvedValue(1),
-      keys: jest.fn().mockResolvedValue([]),
       scan: jest.fn().mockResolvedValue(["0", []]),
     } as unknown as jest.Mocked<Redis>;
 

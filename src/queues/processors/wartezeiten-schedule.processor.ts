@@ -6,6 +6,7 @@ import { ParksService } from "../../parks/parks.service";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
+import { isDecisiveScheduleRow } from "../../common/utils/schedule-window.sql";
 
 /**
  * Wartezeiten Schedule Processor
@@ -46,8 +47,6 @@ export class WartezeitenScheduleProcessor {
       // Filter parks: Skip only if they have Wiki data AND already have schedule data for today
       // This allows Wartezeiten to fill gaps when Wiki doesn't provide schedules
       const parks: typeof allParks = [];
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
 
       for (const park of allParks) {
         if (park.wikiEntityId) {
@@ -56,8 +55,9 @@ export class WartezeitenScheduleProcessor {
             park.id,
           );
 
-          // If Wiki schedule exists for today, skip Wartezeiten (Wiki is more reliable)
-          if (todaySchedule && todaySchedule.length > 0) {
+          // If Wiki schedule exists for today, skip Wartezeiten (Wiki is more reliable).
+          // Only a decisive row counts: the gap-fill's UNKNOWN placeholder is not Wiki data.
+          if (todaySchedule?.some(isDecisiveScheduleRow)) {
             this.logger.verbose(
               `Skipping ${park.name} - Wiki schedule data exists`,
             );

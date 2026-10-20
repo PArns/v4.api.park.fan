@@ -1,5 +1,6 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { CacheKeys } from "../common/cache/cache-keys";
+import { deleteKeysByPatterns } from "../common/cache/delete-keys-by-patterns";
 import { safeJsonParse } from "../common/utils/json.util";
 import { attractionIsOutOfSeason } from "../common/utils/season-window.sql";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -4686,12 +4687,9 @@ export class AnalyticsService {
     await this.redis
       .del(CacheKeys.parkStatistics(parkId))
       .catch(() => undefined);
-    const crowdKeys = await this.redis
-      .keys(CacheKeys.parkCrowdLevelPattern(parkId))
-      .catch(() => [] as string[]);
-    if (crowdKeys.length > 0) {
-      await this.redis.del(...crowdKeys).catch(() => undefined);
-    }
+    await deleteKeysByPatterns(this.redis, [
+      CacheKeys.parkCrowdLevelPattern(parkId),
+    ]).catch(() => undefined);
 
     this.logger.log(
       `Saved baselines for park ${parkId}: P50=${baseline.p50}min P90=${baseline.p90}min typical-day-peak=${baseline.typicalDayPeak}min (${headliners.length} headliners, tier: ${baseline.tier})`,
