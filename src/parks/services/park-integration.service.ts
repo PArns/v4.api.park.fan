@@ -1,6 +1,8 @@
 import { Injectable, Logger, Inject } from "@nestjs/common";
 import { CacheKeys } from "../../common/cache/cache-keys";
 import { safeJsonParse } from "../../common/utils/json.util";
+import { SingleFlight } from "../../common/utils/single-flight.util";
+import { predictionLocalDate } from "../../ml/utils/prediction-local-date.util";
 import { Park } from "../entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "../entities/schedule-entry.entity";
 import { dayStatusRank } from "../../common/utils/schedule.util";
@@ -105,6 +107,9 @@ export class ParkIntegrationService {
    */
   private readonly refreshingParks = new Set<string>();
 
+  /** Collapses concurrent cache-miss rebuilds of the same park into one. */
+  private readonly rebuildFlight = new SingleFlight();
+
   constructor(
     private readonly parksService: ParksService,
     private readonly weatherService: WeatherService,
@@ -206,6 +211,16 @@ export class ParkIntegrationService {
       }
     }
 
+    return this.rebuildFlight.run(park.id, () =>
+      this.rebuildIntegratedResponse(park, cacheKey),
+    );
+  }
+
+  /** The uncached build behind `buildIntegratedResponse`; writes the result to `cacheKey`. */
+  private async rebuildIntegratedResponse(
+    park: Park,
+    cacheKey: string,
+  ): Promise<ParkWithAttractionsDto> {
     // Start with base DTO
     const dto = ParkWithAttractionsDto.fromEntity(park);
 
@@ -544,8 +559,12 @@ export class ParkIntegrationService {
 
     if (hourlyRes && hourlyRes.predictions) {
       for (const p of hourlyRes.predictions) {
-        // Check if prediction is for target date
-        if (p.predictedTime.startsWith(targetDateStr)) {
+        // predictedTime is a UTC instant; targetDateStr is park-local. A
+        // prefix match drops LA's evening slots (already tomorrow in UTC),
+        // and with them the current-hour ML fallback below.
+        if (
+          predictionLocalDate(p.predictedTime, park.timezone) === targetDateStr
+        ) {
           if (!hourlyPredictions[p.attractionId])
             hourlyPredictions[p.attractionId] = [];
           hourlyPredictions[p.attractionId].push(p);
@@ -1613,9 +1632,10 @@ export class ParkIntegrationService {
       // and deleting would open a miss window where concurrent readers fall
       // through to their own full rebuilds (the dogpile we're avoiding).
       // Rebuild over the existing key so readers keep getting the stale value
-      // until the fresh one is written. Don't count a popularity hit — the
-      // triggering user request was already counted.
-      await this.buildIntegratedResponse(park, false, false);
+      // until the fresh one is written. skipCache=true: the key is still live,
+      // so reading it would hand back the stale value and rebuild nothing.
+      // Don't count a popularity hit — the triggering request was counted.
+      await this.buildIntegratedResponse(park, true, false);
     } finally {
       this.refreshingParks.delete(park.id);
     }

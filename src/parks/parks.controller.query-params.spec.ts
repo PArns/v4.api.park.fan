@@ -258,4 +258,17 @@ describe("ParksController › query parameters are validated", () => {
       );
     });
   });
+
+  describe("plan/day", () => {
+    it.each(["2026-02-31", "2026-13-01", "tomorrow"])(
+      "answers date=%s with 400",
+      async (date) => {
+        const res = await request(app.getHttpServer())
+          .get(`${base}/plan/day`)
+          .query({ date });
+
+        expect(res.status).toBe(400);
+      },
+    );
+  });
 });

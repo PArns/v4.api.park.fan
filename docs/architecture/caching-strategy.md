@@ -12,7 +12,13 @@ Full JSON responses for "Integrated" DTOs (aggregating weather, schedule, attrac
 
 - **Keys**:
   - `park:integrated:{parkId}` (TTL: 5 min)
-  - `attraction:integrated:{attractionId}` (TTL: 5 min)
+  - `attraction:integrated:{attractionId}:{days}` (TTL: 5 min) — `days` is the
+    history length the request asked for (1..365, default 30), so each variant
+    is its own entry; evict all of them with `CacheKeys.attractionIntegratedPattern`.
+- **Rebuilds**: a cold miss on `park:integrated` and the stale-while-revalidate
+  refresh both run through one in-process `SingleFlight` per park, and the
+  refresh skips the cache read (it used to read the still-live key and rebuild
+  nothing). The `ml:park:{id}:{type}:{date}` read has the same guard.
 - **Invalidation**:
   - Time-based (TTL)
   - Event-based (via `CacheInvalidationService` when significant data changes)

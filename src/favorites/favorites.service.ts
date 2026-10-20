@@ -597,7 +597,7 @@ export class FavoritesService {
   /**
    * Enrich attractions with live data and calculate distances.
    *
-   * Fast path: MGET all `attraction:integrated:{id}` keys in one Redis round-trip.
+   * Fast path: MGET all `attraction:integrated:{id}:30` keys (the default-history variant) in one Redis round-trip.
    * Slow path: call buildIntegratedResponse() for cache misses.
    */
   private async enrichAttractions(

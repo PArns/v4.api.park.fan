@@ -1531,8 +1531,13 @@ export class ParksController {
 
     const date = dateStr ?? getCurrentDateInTimezone(park.timezone);
     // Validated rather than coerced: `new Date("tomorrow")` is Invalid Date and
-    // would otherwise become a day of nulls that reads like a closed park.
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) {
+    // would otherwise become a day of nulls that reads like a closed park. The
+    // round trip also rejects 2026-02-31, which Date.parse rolls into March.
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+      Number.isNaN(Date.parse(date)) ||
+      new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date
+    ) {
       throw new BadRequestException(
         `Invalid date "${date}" — expected YYYY-MM-DD`,
       );

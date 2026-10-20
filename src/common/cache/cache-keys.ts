@@ -22,9 +22,16 @@ export const CacheKeys = {
   /** Integrated park response (hottest endpoint; warmed by cache-warmup). */
   parkIntegrated: (parkId: string): string => `park:integrated:${parkId}`,
 
-  /** Integrated attraction response. */
-  attractionIntegrated: (attractionId: string): string =>
-    `attraction:integrated:${attractionId}`,
+  /**
+   * Integrated attraction response. `days` sets the history length (1..365),
+   * so each variant is its own entry; 30 is the endpoint's default.
+   */
+  attractionIntegrated: (attractionId: string, days: number = 30): string =>
+    `attraction:integrated:${attractionId}:${days}`,
+
+  /** Glob over every `days` variant of one attraction's integrated response. */
+  attractionIntegratedPattern: (attractionId: string): string =>
+    `attraction:integrated:${attractionId}:*`,
 
   /** 16-day weather forecast per park. */
   weatherForecast: (parkId: string): string => `weather:forecast:${parkId}`,

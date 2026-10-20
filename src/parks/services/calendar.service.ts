@@ -46,6 +46,8 @@ import { isClosedByOperatingRange } from "../utils/schedule-closed-day.util";
 import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { rateOrUnknown } from "../../common/utils/crowd-level.util";
 import { PredictionDto } from "../../ml/dto";
+import { predictionLocalDate } from "../../ml/utils/prediction-local-date.util";
+import { formatInTimeZone } from "date-fns-tz";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { InjectQueue } from "@nestjs/bull";
@@ -614,9 +616,10 @@ export class CalendarService {
       meta: {
         slug: park.slug,
         timezone: park.timezone,
+        // Same rule as the uncached build: a park-wide fact, not one about the requested months.
         hasOperatingSchedule:
-          allDays.length > 0 &&
-          allDays.some((d) => d.hours && !d.hours.isInferred),
+          operatingDateRange.minDate !== null &&
+          operatingDateRange.maxDate !== null,
         scheduleCoverage: {
           from: operatingDateRange.minDate,
           to: operatingDateRange.maxDate,
@@ -1184,15 +1187,20 @@ export class CalendarService {
     dateStr: string,
     allPredictions: PredictionDto[],
   ): Promise<HourlyPrediction[] | undefined> {
-    const dailyPreds = allPredictions.filter((p) =>
-      p.predictedTime.startsWith(dateStr),
+    // predictedTime is a UTC instant: read both the day and the hour on the park's clock.
+    const dailyPreds = allPredictions.filter(
+      (p) => predictionLocalDate(p.predictedTime, park.timezone) === dateStr,
     );
     if (dailyPreds.length === 0) return undefined;
 
-    // Group by hour
+    // Group by park-local hour
     const hoursMap = new Map<string, PredictionDto[]>();
     for (const p of dailyPreds) {
-      const hour = p.predictedTime.substring(11, 13); // HH
+      const hour = formatInTimeZone(
+        new Date(p.predictedTime),
+        park.timezone,
+        "HH",
+      );
       if (!hoursMap.has(hour)) hoursMap.set(hour, []);
       hoursMap.get(hour)!.push(p);
     }
