@@ -69,6 +69,7 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { NegativeCache } from "../common/utils/negative-cache.util";
 import { invalidateParkCaches } from "../common/cache/park-cache-invalidation";
+import { deleteKeysByPatterns } from "../common/cache/delete-keys-by-patterns";
 import { RevalidationService } from "../common/revalidation/revalidation.service";
 
 /**
@@ -3499,13 +3500,15 @@ export class ParksService {
       return new Map();
     }
 
-    // Load park-level schedule entries for today (+ yesterday to cover post-midnight closings)
+    // Load park-level schedule entries within a day of the server's date: `date` is
+    // park-local and CURRENT_DATE is UTC, so a park east of UTC opens on its "tomorrow"
+    // (USJ 08:00 JST = 23:00Z the day before) and one west closes on its "yesterday".
     const scheduleEntries = await this.scheduleRepository
       .createQueryBuilder("schedule")
       .where("schedule.parkId IN (:...parkIds)", { parkIds })
       .andWhere("schedule.attractionId IS NULL")
       .andWhere("schedule.date >= CURRENT_DATE - INTERVAL '1 day'")
-      .andWhere("schedule.date <= CURRENT_DATE")
+      .andWhere("schedule.date <= CURRENT_DATE + INTERVAL '1 day'")
       .getMany();
 
     const schedulesByPark = new Map<string, ScheduleEntry[]>();
@@ -3596,10 +3599,9 @@ export class ParksService {
    * Invalidates schedule cache for a park
    */
   async invalidateScheduleCache(parkId: string): Promise<void> {
-    const keys = await this.redis.keys(CacheKeys.scheduleParkPattern(parkId));
-    if (keys.length > 0) {
-      await this.redis.del(...keys);
-    }
+    await deleteKeysByPatterns(this.redis, [
+      CacheKeys.scheduleParkPattern(parkId),
+    ]);
   }
 
   /**
@@ -3608,11 +3610,12 @@ export class ParksService {
    * after ThemeParks Wiki publishes new opening hours.
    */
   async invalidateCalendarMonthCache(parkId: string): Promise<void> {
-    const keys = await this.redis.keys(CacheKeys.calendarMonthPattern(parkId));
-    if (keys.length > 0) {
-      await this.redis.del(...keys);
+    const cleared = await deleteKeysByPatterns(this.redis, [
+      CacheKeys.calendarMonthPattern(parkId),
+    ]);
+    if (cleared > 0) {
       this.logger.debug(
-        `Cleared ${keys.length} calendar month cache keys for park ${parkId}`,
+        `Cleared ${cleared} calendar month cache keys for park ${parkId}`,
       );
     }
   }

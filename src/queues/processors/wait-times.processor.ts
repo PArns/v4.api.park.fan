@@ -34,6 +34,7 @@ import {
   getCurrentDateInTimezone,
 } from "../../common/utils/date.util";
 import { extractQueueTimesNumericId } from "../../common/utils/external-id.util";
+import { isDecisiveScheduleRow } from "../../common/utils/schedule-window.sql";
 import { dedupePollEntities } from "../../common/utils/dedupe-poll-entities.util";
 import { RideAlertsService } from "../../ride-alerts/ride-alerts.service";
 import {
@@ -229,7 +230,9 @@ export class WaitTimesProcessor {
                 const todayWiki = await this.parksService.getTodaySchedule(
                   park.id,
                 );
-                if (!todayWiki || todayWiki.length === 0) {
+                // The gap-fill's UNKNOWN placeholder for today is not hours; only a
+                // decisive row means the schedule sync already answered the day.
+                if (!todayWiki?.some(isDecisiveScheduleRow)) {
                   const scheduleUpdates = liveData.operatingHours.map((w) => ({
                     date: w.open,
                     type: w.type,
@@ -418,8 +421,16 @@ export class WaitTimesProcessor {
                 }
               }
               phases.add("writeSumMs", Date.now() - t);
-            } catch (_e) {
-              this.logger.debug(`Failed to process park ${park.name}`);
+            } catch (e) {
+              const message = (e as Error)?.message ?? String(e);
+              // All sources failed: the orchestrator already logged each one.
+              if (message.includes("No live data available")) {
+                this.logger.debug(`Failed to process park ${park.name}`);
+              } else {
+                this.logger.warn(
+                  `Failed to process park ${park.name}: ${message}`,
+                );
+              }
             }
           }),
         );
@@ -633,6 +644,8 @@ export class WaitTimesProcessor {
 
   private readonly LAST_SEEN_TTL_SECONDS = 14 * 24 * 3600; // 14 days buffer
   private readonly STALE_THRESHOLD_MS = 24 * 3600 * 1000; // 24h
+  // downtime:status / downtime:start must survive the ~65-min heartbeat gap.
+  private readonly DOWNTIME_KEY_TTL_S = 2 * 3600;
   // A ride a feed delivered more recently than this gets its hourly row from
   // that feed's next sync instead of from a heartbeat (PAR-720). Two sync ticks.
   private readonly FEED_WILL_WRITE_MS = 10 * 60 * 1000; // 10 min
@@ -687,7 +700,14 @@ export class WaitTimesProcessor {
     // One MGET instead of a GET per missing attraction.
     const lastSeenValues = await this.redis
       .mget(...graceFiltered.map((a) => this.attractionLastSeenKey(a.id)))
-      .catch(() => [] as (string | null)[]);
+      .catch((e: unknown) => {
+        this.logger.warn(
+          `Reconcile skipped: last-seen lookup failed: ${(e as Error)?.message ?? e}`,
+        );
+        return null;
+      });
+    // An unreadable last-seen is not "never seen" — closing on it would mass-close the park.
+    if (!lastSeenValues) return 0;
 
     const toClose = graceFiltered.filter((_, i) => {
       const raw = lastSeenValues[i];
@@ -952,12 +972,20 @@ export class WaitTimesProcessor {
       let dailyKey: string | null = null;
       let currentTotalDaily = 0;
       const didRecover = wasDownish && currentStatus === LiveStatus.OPERATING;
-      if (didRecover && existingStart) {
+      const today = getCurrentDateInTimezone(timezone);
+      // A start from an earlier park-local day is last night's close, not an outage.
+      const startIsToday =
+        !!existingStart &&
+        formatInParkTimezone(
+          new Date(parseInt(existingStart, 10)),
+          timezone,
+        ) === today;
+      if (didRecover && startIsToday) {
         downtimeMinutes = Math.round(
-          (Date.now() - parseInt(existingStart)) / 60000,
+          (Date.now() - parseInt(existingStart!, 10)) / 60000,
         );
         if (downtimeMinutes > 0) {
-          dailyKey = `downtime:daily:${attractionId}:${getCurrentDateInTimezone(timezone)}`;
+          dailyKey = `downtime:daily:${attractionId}:${today}`;
           currentTotalDaily = parseInt(
             (await this.redis.get(dailyKey)) ?? "0",
             10,
@@ -967,10 +995,19 @@ export class WaitTimesProcessor {
 
       // Pipeline every write — the status SET always fires plus 0-3
       // conditional ops. One round-trip regardless of branch.
+      // TTLs outlast the gap between rows: a ride that stays DOWN only writes
+      // again at the ~65-min heartbeat, and trackDowntime only runs on a write.
       const pipeline = this.redis.pipeline();
-      pipeline.set(statusKey, currentStatus, "EX", 3600);
+      pipeline.set(statusKey, currentStatus, "EX", this.DOWNTIME_KEY_TTL_S);
       if (recordDowntimeStart) {
-        pipeline.set(downtimeStartKey, Date.now().toString(), "EX", 3600);
+        pipeline.set(
+          downtimeStartKey,
+          Date.now().toString(),
+          "EX",
+          this.DOWNTIME_KEY_TTL_S,
+        );
+      } else if (wasDownish && isDownish && existingStart) {
+        pipeline.expire(downtimeStartKey, this.DOWNTIME_KEY_TTL_S);
       }
       if (didRecover && existingStart) {
         if (dailyKey && downtimeMinutes > 0) {

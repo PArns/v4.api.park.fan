@@ -46,6 +46,17 @@ export const SCHEDULE_TODAY_WINDOW_DAYS = 1;
 export const DECISIVE_SCHEDULE_TYPES = ["OPERATING", "CLOSED"] as const;
 
 /**
+ * The in-memory form of the same rule: does this row say what the park does that
+ * day? `fillScheduleGaps` writes an UNKNOWN placeholder for today, so "any row for
+ * today" is not "the source published today's hours".
+ */
+export function isDecisiveScheduleRow(row: { scheduleType: string }): boolean {
+  return (DECISIVE_SCHEDULE_TYPES as readonly string[]).includes(
+    row.scheduleType,
+  );
+}
+
+/**
  * Builds the WHERE-predicate for "this park-level schedule row speaks for today".
  *
  * @param alias - Table alias the `schedule_entries` row is bound to in the caller's SQL.
