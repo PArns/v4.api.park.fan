@@ -1,8 +1,9 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
-import { WeatherService } from "./weather.service";
+import { nowcastCacheTtlSeconds, WeatherService } from "./weather.service";
 import { WeatherData } from "./entities/weather-data.entity";
 import { Park } from "./entities/park.entity";
+import { ScheduleEntry } from "./entities/schedule-entry.entity";
 import { OpenMeteoClient } from "../external-apis/weather/open-meteo.client";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
@@ -40,6 +41,17 @@ describe("WeatherService", () => {
     }),
   };
 
+  const scheduleQuery = {
+    select: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    getOne: jest.fn().mockResolvedValue(null),
+  };
+  const mockScheduleRepository = {
+    createQueryBuilder: jest.fn(() => scheduleQuery),
+  };
+
   const mockOpenMeteoClient = {
     getHistoricalWeather: jest.fn(),
     getWeatherForecast: jest.fn(),
@@ -57,6 +69,10 @@ describe("WeatherService", () => {
         {
           provide: getRepositoryToken(Park),
           useValue: mockParkRepository,
+        },
+        {
+          provide: getRepositoryToken(ScheduleEntry),
+          useValue: mockScheduleRepository,
         },
         {
           provide: OpenMeteoClient,
@@ -262,6 +278,39 @@ describe("WeatherService", () => {
       const result = await service.getNowcast(PARK_ID);
 
       expect(result).toBeNull();
+    });
+
+    it("caches a closed park's nowcast until an hour before it opens", async () => {
+      mockOpenMeteoClient.getMinutelyNowcast.mockResolvedValueOnce(
+        buildNowcast([0]),
+      );
+      scheduleQuery.getOne.mockResolvedValueOnce({
+        openingTime: new Date(NOW.getTime() + 150 * 60 * 1000),
+      });
+
+      await service.getNowcast(PARK_ID);
+
+      expect(mockRedis.set).toHaveBeenCalledWith(
+        `weather:nowcast:raw:${PARK_ID}`,
+        expect.any(String),
+        "EX",
+        90 * 60,
+      );
+    });
+
+    describe("nowcastCacheTtlSeconds", () => {
+      const now = NOW.getTime();
+      const inMin = (m: number) => new Date(now + m * 60 * 1000);
+
+      it.each([
+        ["no known opening", null, 30 * 60],
+        ["open now", inMin(-120), 30 * 60],
+        ["opening within the hour", inMin(45), 30 * 60],
+        ["opening in 2 h", inMin(120), 60 * 60],
+        ["opening tomorrow", inMin(14 * 60), 3 * 60 * 60],
+      ])("%s", (_, opening, ttl) => {
+        expect(nowcastCacheTtlSeconds(opening, now)).toBe(ttl);
+      });
     });
 
     it("re-derives the snapshot from cached raw on a hit, skipping upstream + park lookup", async () => {

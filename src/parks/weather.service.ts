@@ -7,6 +7,7 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { WeatherData } from "./entities/weather-data.entity";
 import { Park } from "./entities/park.entity";
+import { ScheduleEntry, ScheduleType } from "./entities/schedule-entry.entity";
 import {
   CurrentConditions,
   DailyWeather,
@@ -22,6 +23,31 @@ import {
 import { ClimateNormals } from "../external-apis/weather/climate-normals";
 import { addDays } from "date-fns";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
+
+const NOWCAST_OPEN_TTL_SECONDS = 30 * 60;
+const NOWCAST_CLOSED_TTL_SECONDS = 3 * 60 * 60;
+const NOWCAST_PRE_OPENING_LEAD_MS = 60 * 60 * 1000;
+
+/**
+ * How long a park's raw nowcast may stay cached. Rain timing only matters while
+ * someone can be in the park: an open park (or one opening within the hour)
+ * keeps the 30-min cadence, a closed one refreshes every 3 h but never later
+ * than an hour before it opens. No known opening is not "closed", so it keeps
+ * the open cadence.
+ */
+export function nowcastCacheTtlSeconds(
+  nextOpening: Date | null,
+  nowMs: number,
+): number {
+  if (!nextOpening) return NOWCAST_OPEN_TTL_SECONDS;
+  const untilLead = Math.floor(
+    (nextOpening.getTime() - NOWCAST_PRE_OPENING_LEAD_MS - nowMs) / 1000,
+  );
+  return Math.min(
+    NOWCAST_CLOSED_TTL_SECONDS,
+    Math.max(NOWCAST_OPEN_TTL_SECONDS, untilLead),
+  );
+}
 
 /**
  * Weather Service
@@ -128,7 +154,6 @@ export class WeatherService {
   // Open-Meteo quota. Jitter spreads expiry so all parks don't refetch at once.
   private readonly HOURLY_CACHE_TTL = 6 * 60 * 60; // 6 hours
   private readonly HOURLY_CACHE_JITTER = 60 * 60; // up to +1h random spread
-  private readonly NOWCAST_CACHE_TTL = 30 * 60; // 30 minutes
 
   /** Precipitation threshold (mm per 15-min slot) considered "raining". */
   private static readonly RAIN_THRESHOLD_MM = 0.1;
@@ -155,6 +180,8 @@ export class WeatherService {
     private weatherDataRepository: Repository<WeatherData>,
     @InjectRepository(Park)
     private parkRepository: Repository<Park>,
+    @InjectRepository(ScheduleEntry)
+    private scheduleRepository: Repository<ScheduleEntry>,
     private openMeteoClient: OpenMeteoClient,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
@@ -167,9 +194,10 @@ export class WeatherService {
    * expected to start/stop, and whether a thunderstorm / hail / storm
    * is imminent (with a matching ends-time).
    *
-   * Cache strategy: the derived response is cached per-park for 30 min to keep
-   * upstream request volume low (Open-Meteo refreshes ~every 15 min, so this is
-   * ~half the upstream cadence). The client still polls every 15 min — on a
+   * Cache strategy: the raw forecast is cached per-park for 30 min while the
+   * park is open (Open-Meteo refreshes ~every 15 min, so this is ~half the
+   * upstream cadence) and up to 3 h while it is closed, back to 30 min an hour
+   * before opening (`nowcastCacheTtlSeconds`). The client still polls every 15 min — on a
    * cache hit we recompute `nextUpdateAt` from read time, so the client refresh
    * cadence is decoupled from the upstream fetch cadence. This is safe because
    * every "event" field is an absolute ISO timestamp that does not drift with
@@ -235,20 +263,48 @@ export class WeatherService {
     const timezone = park.timezone || "UTC";
 
     try {
-      // Upstream cadence: cache the raw forecast for ~30 min to keep request
-      // volume low. Freshness of the snapshot does not depend on this TTL — each
-      // read re-derives against the cached window — so a long raw TTL is fine.
+      // Upstream cadence follows the park's hours (see nowcastCacheTtlSeconds).
+      // Freshness of the snapshot does not depend on this TTL — each read
+      // re-derives against the cached ~6 h window — so a long raw TTL is fine.
       await this.redis.set(
         cacheKey,
         JSON.stringify({ raw, timezone }),
         "EX",
-        this.NOWCAST_CACHE_TTL,
+        await this.nowcastTtlSeconds(parkId),
       );
     } catch (err) {
       this.logger.warn(`Failed to cache nowcast response: ${err}`);
     }
 
     return this.deriveNowcastAlert(raw, timezone, nowIso);
+  }
+
+  /** The nowcast cache TTL for a park, from its current or next opening window. */
+  private async nowcastTtlSeconds(parkId: string): Promise<number> {
+    const now = Date.now();
+    try {
+      // The earliest window that has not closed yet: started → open now.
+      const next = await this.scheduleRepository
+        .createQueryBuilder("s")
+        .select(["s.id", "s.openingTime"])
+        .where("s.parkId = :parkId", { parkId })
+        .andWhere("s.attractionId IS NULL")
+        .andWhere("s.scheduleType IN (:...types)", {
+          types: [
+            ScheduleType.OPERATING,
+            ScheduleType.EXTRA_HOURS,
+            ScheduleType.TICKETED_EVENT,
+          ],
+        })
+        .andWhere("s.openingTime IS NOT NULL")
+        .andWhere("s.closingTime > :now", { now: new Date(now) })
+        .orderBy("s.openingTime", "ASC")
+        .getOne();
+      return nowcastCacheTtlSeconds(next?.openingTime ?? null, now);
+    } catch (err) {
+      this.logger.warn(`Nowcast TTL lookup failed for ${parkId}: ${err}`);
+      return nowcastCacheTtlSeconds(null, now);
+    }
   }
 
   /**
