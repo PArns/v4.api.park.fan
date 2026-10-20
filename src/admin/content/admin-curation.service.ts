@@ -51,6 +51,12 @@ export interface CurationPatch {
   sourceUrl?: string | null;
 }
 
+interface AttractionDiff {
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  changed: string[];
+}
+
 export interface CurationResult<T> {
   entity: T;
   changed: string[];
@@ -161,6 +167,13 @@ export class AdminCurationService {
       auditId: string | null;
     }> = [];
 
+    // Every entry is validated before any is written: a bad tenth ride used to
+    // leave the first nine written and the park never republished.
+    const prepared: Array<{
+      attraction: Attraction;
+      patch: CurationPatch;
+      diff: AttractionDiff;
+    }> = [];
     for (const patch of patches) {
       const attraction = await this.findAttraction(patch.id);
       if (attraction.parkId !== parkId) {
@@ -169,23 +182,33 @@ export class AdminCurationService {
             `the park it was opened from`,
         );
       }
+      const diff = await this.prepareAttractionPatch(attraction, patch);
+      if (diff.changed.length > 0) prepared.push({ attraction, patch, diff });
+    }
 
-      const result = await this.applyAttractionPatch(attraction, patch, actor);
-      if (result.changed.length > 0) {
+    try {
+      for (const { attraction, patch, diff } of prepared) {
+        const result = await this.commitAttractionPatch(
+          attraction,
+          diff,
+          patch,
+          actor,
+        );
         changed.push({
           id: attraction.id,
           changed: result.changed,
           auditId: result.auditId,
         });
       }
-    }
-
-    // One eviction, one revalidation, one delayed sweep — for the whole edit.
-    if (changed.length > 0) {
-      await this.publish(
-        parkId,
-        changed.map((entry) => entry.id),
-      );
+    } finally {
+      // One eviction, one revalidation, one delayed sweep — for the whole
+      // edit, and for whatever was written even if a later write failed.
+      if (changed.length > 0) {
+        await this.publish(
+          parkId,
+          changed.map((entry) => entry.id),
+        );
+      }
     }
 
     return { changed };
@@ -202,6 +225,18 @@ export class AdminCurationService {
     patch: CurationPatch,
     actor: AdminPrincipal,
   ): Promise<CurationResult<Attraction>> {
+    const diff = await this.prepareAttractionPatch(attraction, patch);
+    if (diff.changed.length === 0) {
+      return { entity: attraction, changed: [], auditId: null };
+    }
+    return this.commitAttractionPatch(attraction, diff, patch, actor);
+  }
+
+  /** Diff and validate a patch against the row, writing nothing. */
+  private async prepareAttractionPatch(
+    attraction: Attraction,
+    patch: CurationPatch,
+  ): Promise<AttractionDiff> {
     const changes = await this.normalizePatch(
       patch.fields,
       ATTRACTION_CURATED_KEYS,
@@ -224,9 +259,7 @@ export class AdminCurationService {
     // Nothing changed: no write, no cache eviction, no audit row. A form that
     // PATCHes every field on every blur would otherwise fill the log with
     // empty edits and bury the real ones.
-    if (changed.length === 0) {
-      return { entity: attraction, changed: [], auditId: null };
-    }
+    if (changed.length === 0) return { before, after, changed };
 
     // One RCDB id must never sit on two attractions. Nothing in the database
     // enforces it, and the consequence is not cosmetic: the ride page links to
@@ -299,9 +332,7 @@ export class AdminCurationService {
     // The normalisation above can empty the edit, so the same question is
     // asked once more — the early return is before it because everything
     // between the two reads `changed`.
-    if (changed.length === 0) {
-      return { entity: attraction, changed: [], auditId: null };
-    }
+    if (changed.length === 0) return { before, after, changed };
 
     if (changed.includes("rcdbId") && attraction.rcdbId !== null) {
       const clash = await this.attractions.findOne({
@@ -316,7 +347,19 @@ export class AdminCurationService {
       }
     }
 
-    await this.attractions.save(attraction);
+    return { before, after, changed };
+  }
+
+  /** Write a prepared diff and its audit row. */
+  private async commitAttractionPatch(
+    attraction: Attraction,
+    { before, after, changed }: AttractionDiff,
+    patch: CurationPatch,
+    actor: AdminPrincipal,
+  ): Promise<CurationResult<Attraction>> {
+    // Only the changed columns: `save()` wrote every loaded one, so two
+    // editors saving different fields of one ride reverted each other.
+    await this.attractions.update(attraction.id, after as never);
 
     const auditRow = await this.audit.record({
       actor,
@@ -371,7 +414,8 @@ export class AdminCurationService {
       return { entity: park, changed: [], auditId: null };
     }
 
-    await this.parks.save(park);
+    // Only the changed columns — see commitAttractionPatch.
+    await this.parks.update(park.id, after as never);
 
     const auditRow = await this.audit.record({
       actor,

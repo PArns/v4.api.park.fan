@@ -79,7 +79,15 @@ used to leave the count at the threshold, so a single wrong password re-locked
 the account immediately, and one bad guess every fifteen minutes kept it shut
 forever without either rate-limit bucket ever firing.
 
-Both buckets count failures only, both use a fixed window (a sliding one lets a
+Both buckets end up counting failures only, but every attempt is counted
+**before** the password check and handed back if it was not a failure (a
+success, a `totp-required`, a correct password on a locked account): counted
+afterwards, a hundred parallel guesses all read the same counter and all passed.
+The account lockout is incremented in one SQL statement for the same reason, the
+TOTP step is claimed with a conditional `UPDATE` so a code replayed in parallel
+is accepted once, and a login re-reads `is_active` and `role` after creating its
+session so a deactivation that landed mid-login is not outlived. Both buckets
+use a fixed window (a sliding one lets a
 slow attacker hold the door shut forever), and both fail **open** if Redis is
 down —
 the durable defence is the per-account lockout in Postgres, and a Redis outage

@@ -25,10 +25,12 @@ import { incrementWithWindow } from "../../common/redis/rate-limit.util";
  *    in the UI, this one is cheap and sheds load before a password hash is
  *    ever computed (~100 ms of scrypt per attempt is itself a DoS surface).
  *
- * Counters are only incremented on FAILURE. A person signing in ten times a
- * day from an office is not an attack, and a limiter that cannot tell the
- * difference gets switched off by the person it annoys.
- */
+ * Only failures are counted in the end. A person signing in ten times a day
+ * from an office is not an attack, and a limiter that cannot tell the
+ * difference gets switched off by the person it annoys. Every attempt is
+ * counted up front, though, and the ones that turn out not to be failures are
+ * handed back: counting only after the ~100 ms password check let a hundred
+ * parallel guesses all read the same counter and all pass. */
 
 const IP_PREFIX = "admin:login:ip:";
 const ACCOUNT_PREFIX = "admin:login:acct:";
@@ -66,25 +68,28 @@ export class AdminLoginRateLimitService {
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
   /**
-   * Check before doing any work. Never throws: Redis being down must not lock
-   * everybody out of the admin — the per-account lockout in Postgres is still
-   * standing, and it is the durable half of the defence.
+   * Check before doing any work, and count this attempt while doing so. Never
+   * throws: Redis being down must not lock everybody out of the admin — the
+   * per-account lockout in Postgres is still standing, and it is the durable
+   * half of the defence.
+   *
+   * A refused attempt is handed back, so being refused never extends a bucket.
+   * An attempt that is not a failure is handed back by `recordSuccess` or
+   * `release`; one that fails simply keeps its count.
    */
   async check(ip: string | null, email: string): Promise<RateLimitVerdict> {
+    const buckets = this.loginBuckets(ip, email);
+    const counted: Array<[string, number]> = [];
     try {
-      const checks: Array<[string, number, "ip" | "account"]> = [
-        [ACCOUNT_PREFIX + hash(email), ACCOUNT_MAX_FAILURES, "account"],
-      ];
-      if (ip) checks.unshift([IP_PREFIX + hash(ip), IP_MAX_FAILURES, "ip"]);
-
-      for (const [key, max, reason] of checks) {
-        const raw = await this.redis.get(key);
-        const count = raw ? Number.parseInt(raw, 10) : 0;
-        if (count >= max) {
+      for (const [key, max, windowSeconds, reason] of buckets) {
+        const count = await incrementWithWindow(this.redis, key, windowSeconds);
+        counted.push([key, windowSeconds]);
+        if (count > max) {
           const ttl = await this.redis.ttl(key);
+          await this.refund(counted);
           return {
             allowed: false,
-            retryAfterSeconds: ttl > 0 ? ttl : ACCOUNT_WINDOW_SECONDS,
+            retryAfterSeconds: ttl > 0 ? ttl : windowSeconds,
             reason,
           };
         }
@@ -97,24 +102,59 @@ export class AdminLoginRateLimitService {
     }
   }
 
-  /** Count one failed attempt against both buckets. */
-  async recordFailure(ip: string | null, email: string): Promise<void> {
+  /** Hand back an attempt `check` counted that was not a failure (a correct
+   *  password that still needs its second factor, or a locked account). */
+  async release(ip: string | null, email: string): Promise<void> {
     try {
-      await this.bump(ACCOUNT_PREFIX + hash(email), ACCOUNT_WINDOW_SECONDS);
-      if (ip) await this.bump(IP_PREFIX + hash(ip), IP_WINDOW_SECONDS);
+      await this.refund(
+        this.loginBuckets(ip, email).map(([key, , w]) => [key, w]),
+      );
     } catch {
       // Best effort — see check().
     }
   }
 
-  /** Clear the account bucket after a success. The address bucket is left
-   *  alone: one correct password does not vouch for the other 24 attempts
-   *  from the same place. */
-  async recordSuccess(email: string): Promise<void> {
+  /** Clear the account bucket after a success, and hand this attempt back to
+   *  the address bucket. The rest of the address bucket is left alone: one
+   *  correct password does not vouch for the other 24 attempts from the same
+   *  place. */
+  async recordSuccess(ip: string | null, email: string): Promise<void> {
     try {
       await this.redis.del(ACCOUNT_PREFIX + hash(email));
+      if (ip) await this.refund([[IP_PREFIX + hash(ip), IP_WINDOW_SECONDS]]);
     } catch {
       // Best effort.
+    }
+  }
+
+  private loginBuckets(
+    ip: string | null,
+    email: string,
+  ): Array<[string, number, number, "ip" | "account"]> {
+    const buckets: Array<[string, number, number, "ip" | "account"]> = [
+      [
+        ACCOUNT_PREFIX + hash(email),
+        ACCOUNT_MAX_FAILURES,
+        ACCOUNT_WINDOW_SECONDS,
+        "account",
+      ],
+    ];
+    if (ip) {
+      buckets.unshift([
+        IP_PREFIX + hash(ip),
+        IP_MAX_FAILURES,
+        IP_WINDOW_SECONDS,
+        "ip",
+      ]);
+    }
+    return buckets;
+  }
+
+  private async refund(buckets: Array<[string, number]>): Promise<void> {
+    for (const [key, windowSeconds] of buckets) {
+      await this.redis.decr(key);
+      // A key that expired in between comes back from DECR with no TTL.
+      await this.redis.expire(key, windowSeconds, "NX");
     }
   }
 

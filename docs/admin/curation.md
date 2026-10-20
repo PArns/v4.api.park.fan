@@ -582,9 +582,15 @@ would each fire a revalidation webhook at the frontend for one edit.
 
 Only step 4's siblings are hoisted. Each ride keeps its own diff and its own
 audit row, so undo still works one ride at a time; the eviction, the
-revalidation and the delayed sweep happen once for the batch. A ride from
-another park in the list is rejected rather than written — a bulk edit stays
-inside the park it was opened from.
+revalidation and the delayed sweep happen once for the batch. Every entry is
+loaded and validated before any is written, so a ride from another park or an
+invalid value anywhere in the list rejects the whole batch — a bulk edit stays
+inside the park it was opened from. If a write fails partway, whatever was
+already written is still published.
+
+Every curation writes only the columns it changed (`update`, not `save`):
+`save()` wrote every loaded column, so two editors saving different fields of
+one row reverted each other.
 
 ### Ride profiles
 
