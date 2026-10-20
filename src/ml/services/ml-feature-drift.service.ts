@@ -278,27 +278,6 @@ export class MLFeatureDriftService {
   }
 
   /**
-   * Get feature drift history
-   */
-  async getFeatureDriftHistory(
-    featureName?: string,
-    days: number = 30,
-  ): Promise<MLFeatureDrift[]> {
-    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-
-    const query = this.featureDriftRepository
-      .createQueryBuilder("drift")
-      .where("drift.detectedAt >= :startDate", { startDate })
-      .orderBy("drift.detectedAt", "DESC");
-
-    if (featureName) {
-      query.andWhere("drift.featureName = :featureName", { featureName });
-    }
-
-    return query.getMany();
-  }
-
-  /**
    * Calculate Kolmogorov-Smirnov statistic (simplified)
    */
   private calculateKSStatistic(

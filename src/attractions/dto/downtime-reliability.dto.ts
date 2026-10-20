@@ -1,8 +1,6 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { DOWNTIME_WITHHELD_REASONS } from "../../analytics/entities/attraction-downtime-profile.entity";
 import type { DowntimeWithheldReason } from "../../analytics/entities/attraction-downtime-profile.entity";
-import { DOWNTIME_REGIMES } from "../../analytics/entities/park-downtime-coverage.entity";
-import type { DowntimeRegime } from "../../analytics/entities/park-downtime-coverage.entity";
 import type { AttractionDowntimeProfile } from "../../analytics/entities/attraction-downtime-profile.entity";
 
 /**
@@ -111,24 +109,6 @@ export class DowntimeWithheldDto {
     example: 90,
   })
   windowDays: number;
-}
-
-export class ParkDowntimeCoverageDto {
-  @ApiProperty({
-    description:
-      "What this park's outage readings are worth. `not_capable` is read from " +
-      "the park's source configuration. `never_reports` is the one value read " +
-      "from the outcome, and only past an evidence threshold at which silence " +
-      "is no longer compatible with a working feed: the park has been watched " +
-      "for 1500+ operating hours and has never emitted a DOWN. Both mean the " +
-      "same thing for a ride — its outages are invisible to us — and neither " +
-      "may be rendered as 'no outages'. `outside_window` is the one value that " +
-      "ends by itself: the park publishes hours, none of them fall in the " +
-      "window, so there is no operating time to divide by yet.",
-    enum: DOWNTIME_REGIMES,
-    example: "reports",
-  })
-  regime: DowntimeRegime;
 }
 
 export type DowntimeBlockDto = DowntimeFiguresDto | DowntimeWithheldDto;

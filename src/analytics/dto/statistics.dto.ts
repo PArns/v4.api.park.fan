@@ -249,8 +249,3 @@ export class AttractionStatisticsDto {
     p90Last7d: number;
   };
 }
-
-export interface StatisticsResponseDto {
-  park?: ParkStatisticsDto;
-  attraction?: AttractionStatisticsDto;
-}

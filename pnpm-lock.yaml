@@ -38,9 +38,6 @@ importers:
       '@elsikora/string-similarity':
         specifier: ^1.0.1
         version: 1.0.1
-      '@nestjs/axios':
-        specifier: ^4.0.1
-        version: 4.0.1(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2))(axios@1.20.0)(rxjs@7.8.2)
       '@nestjs/bull':
         specifier: ^11.0.5
         version: 11.0.5(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.7)(bull@4.16.5)
@@ -122,9 +119,6 @@ importers:
       typeorm:
         specifier: ^0.3.31
         version: 0.3.31(ioredis@5.11.1)(pg@8.23.1)(ts-node@10.9.2(@types/node@26.6.5)(typescript@6.0.3))
-      uuid:
-        specifier: ^14.0.3
-        version: 14.0.3
       web-push:
         specifier: ^3.6.7
         version: 3.6.7
@@ -189,18 +183,12 @@ importers:
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
-      source-map-support:
-        specifier: ^0.5.21
-        version: 0.5.21
       supertest:
         specifier: ^7.3.1
         version: 7.3.1
       ts-jest:
         specifier: ^29.4.15
         version: 29.4.15(@babel/core@7.29.7)(@jest/transform@30.5.2)(@jest/types@30.5.1)(babel-jest@30.5.2(@babel/core@7.29.7))(jest-util@30.5.1)(jest@30.5.2(@types/node@26.6.5)(ts-node@10.9.2(@types/node@26.6.5)(typescript@6.0.3)))(typescript@6.0.3)
-      ts-loader:
-        specifier: ^9.6.2
-        version: 9.6.2(typescript@6.0.3)(webpack@5.106.2)
       ts-node:
         specifier: ^10.9.2
         version: 10.9.2(@types/node@26.6.5)(typescript@6.0.3)
@@ -828,13 +816,6 @@ packages:
     peerDependencies:
       '@emnapi/core': ^1.7.1 || ^2.0.0-alpha.4
       '@emnapi/runtime': ^1.7.1 || ^2.0.0-alpha.4
-
-  '@nestjs/axios@4.0.1':
-    resolution: {integrity: sha512-68pFJgu+/AZbWkGu65Z3r55bTsCPlgyKaV4BSG8yUAD72q1PPuyVRgUwFv6BxdnibTUHlyxm06FmYWNC+bjN7A==}
-    peerDependencies:
-      '@nestjs/common': ^10.0.0 || ^11.0.0
-      axios: ^1.3.1
-      rxjs: ^7.0.0
 
   '@nestjs/bull-shared@11.0.5':
     resolution: {integrity: sha512-QI7GHPk4oePBwszAZn/Kz5hgB79KijB1RDoo+E/BrSt33sHUrvRZXVyO0+knZleyloRYy0LT2VwsqSP/aQvg4Q==}
@@ -3430,10 +3411,6 @@ packages:
     resolution: {integrity: sha512-l3BikUxvPOcn5E74dZiq5BGsTb5yEwhaTSzccU6t4sDOH8NWJCstKO5QT2CvtFoK6F0saL7p9xHAqHOlCPJygA==}
     engines: {node: '>= 8'}
 
-  source-map@0.7.6:
-    resolution: {integrity: sha512-i5uvt8C3ikiWeNZSVZNWcfZPItFQOsYTUAOkcUPGd8DqDy1uOUikjt5dG+uRlwyvR108Fb9DOd4GvXfT0N2/uQ==}
-    engines: {node: '>= 12'}
-
   split-ca@1.0.1:
     resolution: {integrity: sha512-Q5thBSxp5t8WPTTJQS59LrGqOZqOsrhDGDVm8azCqIBjSBd7nd9o2PM+mDulQQkh8h//4U6hFZnc/mul8t5pWQ==}
 
@@ -3685,17 +3662,6 @@ packages:
       esbuild:
         optional: true
       jest-util:
-        optional: true
-
-  ts-loader@9.6.2:
-    resolution: {integrity: sha512-R4iuczmtgxvtuI556s+hTZ6/7Ee03VCAk/l/M8LY1OAsUgB7YydsCxkgq9D9pKRaD7GJqUi2u8fp9zZP/ufjKA==}
-    engines: {node: '>=12.0.0'}
-    peerDependencies:
-      loader-utils: '*'
-      typescript: '*'
-      webpack: ^4.0.0 || ^5.0.0
-    peerDependenciesMeta:
-      loader-utils:
         optional: true
 
   ts-node@10.9.2:
@@ -4750,12 +4716,6 @@ snapshots:
       '@emnapi/runtime': 1.10.0
       '@tybys/wasm-util': 0.10.4
     optional: true
-
-  '@nestjs/axios@4.0.1(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2))(axios@1.20.0)(rxjs@7.8.2)':
-    dependencies:
-      '@nestjs/common': 11.2.7(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      axios: 1.20.0
-      rxjs: 7.8.2
 
   '@nestjs/bull-shared@11.0.5(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.7)':
     dependencies:
@@ -7614,8 +7574,6 @@ snapshots:
 
   source-map@0.7.4: {}
 
-  source-map@0.7.6: {}
-
   split-ca@1.0.1: {}
 
   split2@4.2.0: {}
@@ -7889,14 +7847,6 @@ snapshots:
       '@jest/types': 30.5.1
       babel-jest: 30.5.2(@babel/core@7.29.7)
       jest-util: 30.5.1
-
-  ts-loader@9.6.2(typescript@6.0.3)(webpack@5.106.2):
-    dependencies:
-      chalk: 4.1.2
-      picomatch: 4.0.7
-      source-map: 0.7.6
-      typescript: 6.0.3
-      webpack: 5.106.2
 
   ts-node@10.9.2(@types/node@26.6.5)(typescript@6.0.3):
     dependencies:

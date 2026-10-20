@@ -21,5 +21,3 @@ export interface OpenHolidaysEntry {
   groups?: OpenHolidaysSubdivision[]; // Some countries (e.g. BE) use groups instead
   comment?: OpenHolidaysName[];
 }
-
-export type OpenHolidaysResponse = OpenHolidaysEntry[];

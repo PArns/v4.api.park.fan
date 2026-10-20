@@ -78,22 +78,3 @@ export function sortByDistance<T extends GeoCoordinate>(
     }))
     .sort((a, b) => a.distance - b.distance);
 }
-
-/**
- * Filter items within a certain radius from a reference point
- *
- * @param items - Array of items with latitude/longitude
- * @param referencePoint - Point to calculate distance from
- * @param radiusInMeters - Maximum distance in meters
- * @returns Filtered array of items within radius
- */
-export function filterByRadius<T extends GeoCoordinate>(
-  items: T[],
-  referencePoint: GeoCoordinate,
-  radiusInMeters: number,
-): T[] {
-  return items.filter((item) => {
-    const distance = calculateHaversineDistance(referencePoint, item, "m");
-    return distance <= radiusInMeters;
-  });
-}

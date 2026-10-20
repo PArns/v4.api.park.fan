@@ -5,7 +5,6 @@ export * from "./prediction-accuracy.entity";
 export * from "./prediction-lead-snapshot.entity";
 export * from "./forecast-accuracy-profile.entity";
 export * from "./attraction-accuracy-stats.entity";
-export * from "./ml-accuracy-comparison.entity";
 export * from "./ml-feature-stats.entity";
 export * from "./ml-feature-drift.entity";
 export * from "./ml-alert.entity";

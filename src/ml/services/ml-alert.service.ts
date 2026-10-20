@@ -181,48 +181,6 @@ export class MLAlertService {
   }
 
   /**
-   * Acknowledge alert
-   */
-  async acknowledgeAlert(
-    alertId: string,
-    acknowledgedBy: string,
-  ): Promise<MLAlert> {
-    const alert = await this.alertRepository.findOne({
-      where: { id: alertId },
-    });
-    if (!alert) {
-      throw new Error(`Alert ${alertId} not found`);
-    }
-
-    alert.status = "acknowledged";
-    alert.acknowledgedBy = acknowledgedBy;
-    alert.acknowledgedAt = new Date();
-
-    return await this.alertRepository.save(alert);
-  }
-
-  /**
-   * Resolve alert
-   */
-  async resolveAlert(
-    alertId: string,
-    resolutionNote?: string,
-  ): Promise<MLAlert> {
-    const alert = await this.alertRepository.findOne({
-      where: { id: alertId },
-    });
-    if (!alert) {
-      throw new Error(`Alert ${alertId} not found`);
-    }
-
-    alert.status = "resolved";
-    alert.resolutionNote = resolutionNote || null;
-    alert.resolvedAt = new Date();
-
-    return await this.alertRepository.save(alert);
-  }
-
-  /**
    * Cleanup old resolved alerts (older than 30 days)
    */
   async cleanupOldAlerts(): Promise<number> {

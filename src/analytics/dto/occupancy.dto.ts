@@ -85,15 +85,3 @@ export class OccupancyDto {
     activeAttractions: number;
   };
 }
-
-export class ParkOccupancyResponseDto {
-  @ApiProperty({ type: OccupancyDto })
-  occupancy: OccupancyDto;
-
-  @ApiProperty({
-    description: "Optional informational message",
-    required: false,
-    example: "Park is currently busier than typical for this time",
-  })
-  message?: string;
-}

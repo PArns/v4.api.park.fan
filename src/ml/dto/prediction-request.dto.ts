@@ -117,11 +117,3 @@ export class PredictionRequestDto {
   })
   typicalDayPeakBaseline?: number;
 }
-
-export class ParkPredictionRequestDto {
-  @ApiProperty({ description: "Park ID" })
-  parkId: string;
-
-  @ApiProperty({ enum: ["hourly", "daily"], description: "Type of prediction" })
-  predictionType: "hourly" | "daily";
-}

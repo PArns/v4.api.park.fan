@@ -125,24 +125,6 @@ export class MLModelService {
   }
 
   /**
-   * Get model version history
-   *
-   * Returns last N models ordered by training date (most recent first)
-   *
-   * @param {number} limit - Number of models to return (default: 10)
-   * @returns {Promise<MLModel[]>} Array of models
-   */
-  async getModelHistory(limit: number = 10): Promise<MLModel[]> {
-    const models = await this.mlModelRepository.find({
-      order: { trainedAt: "DESC" },
-      take: limit,
-    });
-
-    this.logger.debug(`Retrieved ${models.length} model(s) from history`);
-    return models;
-  }
-
-  /**
    * Get model metrics history for sparklines
    *
    * Returns all models ordered by trainedAt ASC (oldest first) so the
