@@ -123,7 +123,7 @@ export class RideAlertsService {
       .innerJoin("alert.attraction", "attraction")
       .select("alert.subscriptionId", "subscriptionId")
       .addSelect("attraction.parkId", "parkId")
-      .where("alert.subscriptionId IN (:...subscriptionIds)", {
+      .where("alert.subscriptionId = ANY(:subscriptionIds)", {
         subscriptionIds,
       })
       .andWhere("attraction.retiredAt IS NULL")

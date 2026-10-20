@@ -316,8 +316,8 @@ describe("PushService", () => {
     });
   });
 
-  it("asks the repository for exactly the requested ids", async () => {
-    await service.findByIds(["a", "b"]);
+  it("asks the repository for exactly the requested ids, once each", async () => {
+    await service.findByIds(["a", "b", "a"]);
     expect(findBy).toHaveBeenCalledWith({ id: In(["a", "b"]) });
   });
 

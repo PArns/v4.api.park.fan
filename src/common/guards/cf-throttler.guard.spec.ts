@@ -34,7 +34,7 @@ describe("CfThrottlerGuard", () => {
           "cf-connecting-ip": "203.0.113.7",
           "x-forwarded-for": "10.0.0.1",
         },
-        ip: "172.16.0.1",
+        socket: { remoteAddress: "172.16.0.1" },
       });
       expect(key).toBe("203.0.113.7");
     });
@@ -42,13 +42,16 @@ describe("CfThrottlerGuard", () => {
     it("falls back to the first X-Forwarded-For hop", async () => {
       const key = await callGetTracker({
         headers: { "x-forwarded-for": "198.51.100.9, 10.0.0.1" },
-        ip: "172.16.0.1",
+        socket: { remoteAddress: "172.16.0.1" },
       });
       expect(key).toBe("198.51.100.9");
     });
 
-    it("falls back to req.ip when no proxy headers are present", async () => {
-      const key = await callGetTracker({ headers: {}, ip: "172.16.0.1" });
+    it("falls back to the socket address when no proxy headers are present", async () => {
+      const key = await callGetTracker({
+        headers: {},
+        socket: { remoteAddress: "172.16.0.1" },
+      });
       expect(key).toBe("172.16.0.1");
     });
   });
@@ -57,7 +60,7 @@ describe("CfThrottlerGuard", () => {
     it("ignores a non-IP CF-Connecting-IP (no unbounded buckets)", async () => {
       const key = await callGetTracker({
         headers: { "cf-connecting-ip": "not-an-ip-" + Math.random() },
-        ip: "172.16.0.1",
+        socket: { remoteAddress: "172.16.0.1" },
       });
       expect(key).toBe("172.16.0.1");
     });
@@ -65,7 +68,7 @@ describe("CfThrottlerGuard", () => {
     it("ignores a non-IP X-Forwarded-For hop", async () => {
       const key = await callGetTracker({
         headers: { "x-forwarded-for": "garbage, 10.0.0.1" },
-        ip: "172.16.0.1",
+        socket: { remoteAddress: "172.16.0.1" },
       });
       expect(key).toBe("172.16.0.1");
     });
@@ -74,7 +77,7 @@ describe("CfThrottlerGuard", () => {
       process.env.CF_ORIGIN_SECRET = "s3cr3t";
       const key = await callGetTracker({
         headers: { "cf-connecting-ip": "203.0.113.7" }, // no secret header
-        ip: "172.16.0.1",
+        socket: { remoteAddress: "172.16.0.1" },
       });
       expect(key).toBe("172.16.0.1");
     });
@@ -86,7 +89,7 @@ describe("CfThrottlerGuard", () => {
           "cf-connecting-ip": "203.0.113.7",
           "x-cf-origin-secret": "s3cr3t",
         },
-        ip: "172.16.0.1",
+        socket: { remoteAddress: "172.16.0.1" },
       });
       expect(key).toBe("203.0.113.7");
     });

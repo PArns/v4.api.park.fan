@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, IsNull, Not, Repository } from "typeorm";
+import { In, IsNull, MoreThanOrEqual, Not, Repository } from "typeorm";
 import * as webpush from "web-push";
 import { PushSubscription } from "./entities/push-subscription.entity";
 import { Trip } from "../trips/entities/trip.entity";
@@ -215,7 +215,8 @@ export class PushService {
    */
   async findByIds(ids: string[]): Promise<Map<string, PushSubscription>> {
     if (ids.length === 0) return new Map();
-    const rows = await this.repository.findBy({ id: In(ids) });
+    // Deduped: callers pass one id per alert or follow, and `In` binds each.
+    const rows = await this.repository.findBy({ id: In([...new Set(ids)]) });
     return new Map(rows.map((row) => [row.id, row]));
   }
 
@@ -293,9 +294,12 @@ export class PushService {
         },
       );
 
-      subscription.failureCount = 0;
-      subscription.lastNotifiedAt = new Date();
-      await this.repository.save(subscription);
+      // An update by id, never a save of the row loaded at cycle start: a save
+      // re-inserts a row unsubscribed mid-cycle and writes back stale keys.
+      await this.repository.update(
+        { id: subscription.id },
+        { failureCount: 0, lastNotifiedAt: new Date() },
+      );
       return true;
     } catch (error) {
       await this.recordFailure(subscription, error);
@@ -322,14 +326,16 @@ export class PushService {
       return;
     }
 
-    subscription.failureCount += 1;
-    if (subscription.failureCount >= PushService.MAX_FAILURES) {
+    // Atomic, and on the live row: no save that could resurrect a deleted one.
+    await this.repository.increment({ id: subscription.id }, "failureCount", 1);
+    const dropped = await this.repository.delete({
+      id: subscription.id,
+      failureCount: MoreThanOrEqual(PushService.MAX_FAILURES),
+    });
+    if (dropped.affected) {
       this.logger.warn(
-        `Dropping push subscription after ${subscription.failureCount} failures`,
+        `Dropping push subscription after ${PushService.MAX_FAILURES} failures`,
       );
-      await this.repository.delete({ id: subscription.id });
-      return;
     }
-    await this.repository.save(subscription);
   }
 }

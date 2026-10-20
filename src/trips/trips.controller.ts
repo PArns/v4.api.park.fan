@@ -15,7 +15,7 @@ import {
 } from "@nestjs/common";
 import { ApiOperation, ApiParam, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { Request } from "express";
-import { getClientIp } from "../common/utils/request.util";
+import { getRateLimitIp } from "../common/utils/request.util";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { TripsService } from "./trips.service";
 import { TripWriteRateLimitService } from "./trip-write-rate-limit.service";
@@ -174,7 +174,7 @@ export class TripsController {
     request: Request,
     kind: "create" | "update",
   ): Promise<void> {
-    const verdict = await this.rateLimit.check(getClientIp(request), kind);
+    const verdict = await this.rateLimit.check(getRateLimitIp(request), kind);
     if (verdict.allowed) return;
     throw new HttpException(
       {

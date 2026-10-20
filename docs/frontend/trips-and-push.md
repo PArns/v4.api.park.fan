@@ -90,6 +90,14 @@ before the lookup on every verb, so a miss costs an attempt exactly as a hit
 does — otherwise enumeration would be free, since a miss is the only answer an
 enumeration ever gets.
 
+"Per address" means `getRateLimitIp`, not `getClientIp`: `X-Forwarded-For` counts
+only on a request carrying a valid throttle bypass key (our own frontend proxy,
+which forwards the visitor's address there); everyone else is keyed on
+Cloudflare's `CF-Connecting-IP`, then the socket address. Cloudflare appends the
+real address to a caller-written `X-Forwarded-For`, so trusting its first hop let
+a script buy a fresh bucket per request. The ride-alert, show-follow and
+`POST /v1/push/subscriptions` limiters use the same key.
+
 **A 429 says how long to wait**, in two places that always agree: the body's
 `retryAfterSeconds` (exact, as the limiter counted it) and a `Retry-After`
 header in whole seconds, rounded up. The push-follow routes below answer the
@@ -137,6 +145,7 @@ It refuses, rather than storing something that can never produce a notification:
 | 503 | this deploy has no VAPID keypair |
 | 404 | `tripId` was sent but names no trip |
 | 400 | the endpoint is not an https URL **at a known push service**, or `topics` was sent with no known topic left |
+| 429 | more than 60 subscription writes an hour from this address (its own bucket, beside the ride-alert and show-follow ones) |
 
 The endpoint host is checked against the four push services (FCM, Mozilla, WNS,
 Apple), extensible through `PUSH_ENDPOINT_HOSTS`. That check is not tidiness: the
