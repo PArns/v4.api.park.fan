@@ -204,7 +204,7 @@ See [Caching Strategy](../architecture/caching-strategy.md) for `park_daily_stat
 
 ## 5. Machine Learning Integration
 
-The Python ML service derives its crowd level on the **same scale as the calendar**. `ml.service.ts` now passes **`typicalDayPeakBaseline`** in every prediction request; `ml-service/predict.py` divides the predicted wait by it, with a fallback chain of typical-day-peak → P50 → `rolling_avg_7d` → 30. The dead `p90Baseline` that the request used to carry (Python never read it) was removed.
+The Python ML service derives its crowd level on the **same scale as the calendar**. `ml.service.ts` now passes **`typicalDayPeakBaseline`** in every prediction request; `ml-service/predict.py` divides the predicted wait by it, with typical-day-peak → P50 as the fallback; with neither it answers `unknown` (stored as NULL) — never the ride's own `rolling_avg_7d`, which is a different scale (PAR-943). The dead `p90Baseline` that the request used to carry (Python never read it) was removed.
 
 This keeps `getCrowdLevelTrainingData`-style labels, the yearly-predictions endpoint, and the stored `wait_time_predictions.crowdLevel` apples-to-apples with the user-facing calendar. The ML model predicts wait times directly; the baseline only affects the labelled percentage exposed for evaluation, so swapping the denominator doesn't require retraining. Note: `getCurrentOccupancy` (the live ÷P50 signal) is a separate ML *input feature* (`park_occupancy_pct`) and intentionally keeps its P50 shape.
 

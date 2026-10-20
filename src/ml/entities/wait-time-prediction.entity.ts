@@ -106,6 +106,9 @@ export class WaitTimePrediction {
     ],
     nullable: true,
   })
+  // NULL = "unknown": the ML service rated the slot without a baseline
+  // (PAR-943). Stored as NULL rather than a new enum label, because adding a
+  // label makes `synchronize` rebuild the type on the heaviest-written table.
   crowdLevel:
     | "very_low"
     | "low"
@@ -113,7 +116,8 @@ export class WaitTimePrediction {
     | "high"
     | "very_high"
     | "extreme"
-    | "closed";
+    | "closed"
+    | null;
 
   // "OPERATING" or "UNKNOWN" as predict.py derived it for that hour; CLOSED rows
   // never get this far. NULL on every row written before PAR-117 declared the

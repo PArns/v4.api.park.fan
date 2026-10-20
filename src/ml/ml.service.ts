@@ -1313,6 +1313,18 @@ export class MLService {
     const windowMin = new Date(thirtyAgo.getTime() - 15 * 60 * 1000);
     const windowMax = new Date(thirtyAgo.getTime() + 15 * 60 * 1000);
 
+    // The same baselines the park path sends (PAR-943): without them the ML
+    // service has nothing real to rate against and answers `unknown`.
+    const baselinesPromise = Promise.all([
+      this.analyticsService.getP50BaselineFromCache(attraction.parkId),
+      this.analyticsService.getTypicalDayPeakFromCache(attraction.parkId),
+    ]).catch((err) => {
+      this.logger.warn(
+        `Failed to fetch baselines for park ${attraction.parkId}: ${err}`,
+      );
+      return [undefined, undefined];
+    });
+
     const [weatherForecastRaw, latestData, recentData] = await Promise.all([
       attraction.parkId
         ? this.weatherService
@@ -1370,6 +1382,8 @@ export class MLService {
       recentWaitTimes[attractionId] = recentData.waitTime;
     }
 
+    const [p50, typicalPeak] = await baselinesPromise;
+
     // 4. Request predictions
     const request: PredictionRequestDto = {
       attractionIds: [attractionId],
@@ -1378,6 +1392,8 @@ export class MLService {
       weatherForecast,
       currentWaitTimes,
       recentWaitTimes,
+      p50Baseline: p50 || undefined,
+      typicalDayPeakBaseline: typicalPeak || undefined,
     };
 
     const response = await this.getPredictions(request);
@@ -1638,7 +1654,8 @@ export class MLService {
       entity.predictionType = pred.predictionType;
       entity.confidence = pred.confidence;
       entity.uncertaintyMinutes = pred.uncertaintyMinutes ?? null;
-      entity.crowdLevel = pred.crowdLevel;
+      entity.crowdLevel =
+        pred.crowdLevel === "unknown" ? null : pred.crowdLevel;
       entity.baseline = pred.baseline;
       entity.modelVersion = pred.modelVersion;
       entity.status = pred.status || null;
@@ -2050,7 +2067,7 @@ export class MLService {
         predictionType: p.predictionType,
         confidence: p.confidence,
         uncertaintyMinutes: p.uncertaintyMinutes,
-        crowdLevel: p.crowdLevel,
+        crowdLevel: p.crowdLevel ?? "unknown",
         baseline: p.baseline,
         modelVersion: p.modelVersion,
         status: p.status || undefined,
@@ -2207,7 +2224,7 @@ export class MLService {
       predictedWaitTime: r.predictedWaitTime,
       predictionType: r.predictionType,
       confidence: r.confidence,
-      crowdLevel: r.crowdLevel,
+      crowdLevel: r.crowdLevel ?? "unknown",
       baseline: r.baseline,
       modelVersion: r.modelVersion,
     }));
@@ -2397,7 +2414,7 @@ export class MLService {
         predictionType: p.predictionType,
         confidence: p.confidence,
         uncertaintyMinutes: p.uncertaintyMinutes,
-        crowdLevel: p.crowdLevel,
+        crowdLevel: p.crowdLevel ?? "unknown",
         baseline: p.baseline,
         modelVersion: p.modelVersion,
         status: p.status || undefined,

@@ -186,12 +186,28 @@ def train(req: TrainRequest):
 
     runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_runner.py")
 
+    # Take the lock HERE, before the runner exists: it only writes its own status
+    # once its imports are done, and a second /train in that gap passed the check
+    # above and launched a second run (PAR-943). Same shape the runner rewrites.
+    _write_status({
+        "is_training": True, "status": "training", "version": version,
+        "started_at": datetime.now(timezone.utc).isoformat(), "error": None,
+    })
+
     def _launch():
         # Run training as its OWN OS process (not a uvicorn thread). Keeps uvicorn
         # responsive, lets DataLoader workers fork from a clean process, and means an
         # OOM kills only the runner — uvicorn survives. A daemon thread waits on it
         # and clears a stale lock if the runner is killed without a terminal status.
-        proc = subprocess.Popen([sys.executable, runner, version])
+        try:
+            proc = subprocess.Popen([sys.executable, runner, version])
+        except Exception as e:
+            logger.error("Could not launch train_runner %s: %s", version, e)
+            _write_status({
+                "is_training": False, "status": "failed", "version": version,
+                "error": f"could not launch train_runner: {e}",
+            })
+            return
         deadline_min = settings.NF_TRAIN_DEADLINE_MINUTES
         try:
             proc.wait(timeout=deadline_min * 60)

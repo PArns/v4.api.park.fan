@@ -2,6 +2,7 @@
 Filter predictions by park operating hours with fallback to queue data
 """
 
+from datetime import timedelta
 from typing import List, Dict, Any
 from sqlalchemy import text
 import pytz
@@ -119,6 +120,10 @@ def filter_predictions_by_schedule(
         unique_dates = preds_df["_date"].unique()
         if len(unique_dates) == 0:
             continue
+        query_dates = set(unique_dates)
+        if prediction_type == "hourly":
+            # The previous day's window can run past midnight into these dates.
+            query_dates |= {d - timedelta(days=1) for d in unique_dates}
 
         # Query schedule for these dates
         query = text(
@@ -147,7 +152,7 @@ def filter_predictions_by_schedule(
                     query,
                     {
                         "park_id": park_uuid,
-                        "dates": [d.isoformat() for d in unique_dates],
+                        "dates": [d.isoformat() for d in sorted(query_dates)],
                     },
                 )
                 schedules_raw = result.fetchall()
@@ -195,36 +200,40 @@ def filter_predictions_by_schedule(
                 sched_df.loc[sched_df["scheduleType"] == "UNKNOWN", "date"]
             )
 
-            # Predictions on OPERATING days: filter to within opening hours
+            # Predictions on OPERATING days: filter to within opening hours.
+            # Each slot is tested against its own date's window AND the
+            # previous date's: a 10:00 → 01:00 day owns the 00:00-00:45 slots
+            # that carry the next local date (PAR-943).
+            kept = set()
             if not operating_sched.empty:
-                merged = preds_df.merge(
-                    operating_sched[["date", "openingTime", "closingTime"]],
-                    left_on="_date",
-                    right_on="date",
-                    how="inner",
+                windows = operating_sched[["date", "openingTime", "closingTime"]]
+                windows = pd.concat(
+                    [
+                        windows,
+                        windows.assign(
+                            date=windows["date"].map(lambda d: d + timedelta(days=1))
+                        ),
+                    ]
+                )
+                merged = (
+                    preds_df[["_date", "_local_time"]]
+                    .reset_index()
+                    .merge(windows, left_on="_date", right_on="date", how="inner")
                 )
                 valid_mask = (merged["_local_time"] >= merged["openingTime"]) & (
                     merged["_local_time"] < merged["closingTime"]
                 )
-                valid_df = merged[valid_mask].drop(
-                    columns=[
-                        "_parsed_time",
-                        "_utc_time",
-                        "_local_time",
-                        "_date",
-                        "date",
-                        "openingTime",
-                        "closingTime",
-                    ]
+                kept = set(merged.loc[valid_mask, "index"])
+                filtered_predictions.extend(
+                    p for i, p in enumerate(park_preds) if i in kept
                 )
-                filtered_predictions.extend(valid_df.to_dict("records"))
 
             # Predictions on UNKNOWN days: apply wait-time gate (no schedule → only if rides running)
             if unknown_dates:
                 unknown_preds = [
                     p
-                    for p, d in zip(park_preds, preds_df["_date"])
-                    if d in unknown_dates
+                    for i, (p, d) in enumerate(zip(park_preds, preds_df["_date"]))
+                    if d in unknown_dates and i not in kept
                 ]
                 filtered_predictions.extend(
                     _filter_by_active_rides(unknown_preds, current_wait_times)

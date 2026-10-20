@@ -87,7 +87,11 @@ describe("MLService QueueType Safeguards", () => {
         },
         {
           provide: AnalyticsService,
-          useValue: { getCurrentOccupancy: jest.fn() },
+          useValue: {
+            getCurrentOccupancy: jest.fn(),
+            getP50BaselineFromCache: jest.fn().mockResolvedValue(42),
+            getTypicalDayPeakFromCache: jest.fn().mockResolvedValue(60),
+          },
         },
         {
           provide: HolidaysService,
@@ -166,6 +170,17 @@ describe("MLService QueueType Safeguards", () => {
             attractionId: "attr1",
             queueType: QueueType.STANDBY,
           }),
+        }),
+      );
+    });
+
+    it("sends the park's baselines, as the park path does (PAR-943)", async () => {
+      await service.getAttractionPredictions("attr1");
+
+      expect(service.getPredictions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          p50Baseline: 42,
+          typicalDayPeakBaseline: 60,
         }),
       );
     });

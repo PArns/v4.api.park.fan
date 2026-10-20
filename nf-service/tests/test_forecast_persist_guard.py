@@ -183,6 +183,33 @@ def test_watchdog_kills_a_hung_runner_and_marks_it_failed():
     assert hung[0].poll() is not None, "runner still alive"
 
 
+def test_a_second_train_is_refused_before_the_runner_writes():
+    """PAR-943: the lock is taken by the handler, not by the runner's first write."""
+    real_popen = subprocess.Popen
+    _status(is_training=False, status="completed", version="prev")
+    started = []
+
+    def _silent_popen(args, *a, **kw):
+        # A runner still importing: alive, but no status written yet.
+        proc = real_popen([sys.executable, "-c", "import time; time.sleep(2)"])
+        started.append(proc)
+        return proc
+
+    subprocess.Popen = _silent_popen
+    try:
+        main.train(main.TrainRequest(version="first"))
+        try:
+            main.train(main.TrainRequest(version="second"))
+        except HTTPException as e:
+            assert e.status_code == 409, e.status_code
+        else:
+            raise AssertionError("second /train was accepted")
+    finally:
+        subprocess.Popen = real_popen
+        for p in started:
+            p.kill()
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
