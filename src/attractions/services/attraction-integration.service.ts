@@ -35,6 +35,7 @@ import {
   getStartOfDayInTimezone,
 } from "../../common/utils/date.util";
 import { roundToNearest5Minutes } from "../../common/utils/wait-time.utils";
+import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
 import {
   computeBestVisitTimes,
   currentSlotStartMs,
@@ -994,6 +995,7 @@ export class AttractionIntegrationService {
               AND qd."queueType" = 'STANDBY'
               AND qd."waitTime" IS NOT NULL
               AND qd."waitTime" >= 5
+              AND ${observedReadingsSql("qd")}
             GROUP BY time_slot
             HAVING COUNT(*) >= 1
             ORDER BY time_slot
@@ -1014,6 +1016,7 @@ export class AttractionIntegrationService {
               AND qd.timestamp >= $2
               AND qd.timestamp < $4
               AND qd.status = 'DOWN'
+              AND ${observedReadingsSql("qd")}
             `,
             [
               attractionId,
