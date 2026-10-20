@@ -1,3 +1,6 @@
+import { isIP } from "net";
+import { carriesThrottleBypassKey } from "../throttler/throttler.config";
+
 /**
  * Minimal request shape for IP/header extraction (Express Request compatible).
  */
@@ -35,6 +38,28 @@ export function getClientIp(req: RequestLike | undefined): string | null {
     req.socket?.remoteAddress ??
     null;
   return raw ? normalizeIp(raw) : null;
+}
+
+/**
+ * Client IP for a rate-limit key — never a value the caller can rotate.
+ *
+ * `getClientIp` trusts the first `X-Forwarded-For` hop, which the caller
+ * writes (Cloudflare appends the real address after it), so a fresh value per
+ * request would mean a fresh bucket. Here X-Forwarded-For counts only from our
+ * own frontend proxy (bypass key); everyone else is keyed on Cloudflare's
+ * `CF-Connecting-IP`, then the socket address.
+ */
+export function getRateLimitIp(req: RequestLike | undefined): string | null {
+  if (!req) return null;
+  if (carriesThrottleBypassKey(req.headers)) {
+    const forwarded = getFirstHeader(req, "x-forwarded-for");
+    const ip = forwarded ? normalizeIp(forwarded) : null;
+    if (ip && isIP(ip)) return ip;
+  }
+  const cfIp = getFirstHeader(req, "cf-connecting-ip");
+  if (cfIp && isIP(cfIp)) return cfIp;
+  const socketIp = req.socket?.remoteAddress;
+  return socketIp ? normalizeIp(socketIp) : null;
 }
 
 /**

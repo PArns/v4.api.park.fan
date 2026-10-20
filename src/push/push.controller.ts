@@ -8,9 +8,12 @@ import {
   HttpException,
   HttpStatus,
   Post,
+  Req,
   UseInterceptors,
 } from "@nestjs/common";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
+import { Request } from "express";
+import { PushFollowAccessGuard } from "./push-follow-access.guard";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
 import { PushService } from "./push.service";
 import { TripsService } from "../trips/trips.service";
@@ -48,6 +51,7 @@ export class PushController {
   constructor(
     private readonly pushService: PushService,
     private readonly tripsService: TripsService,
+    private readonly writeAccess: PushFollowAccessGuard,
   ) {}
 
   @Get()
@@ -96,13 +100,17 @@ export class PushController {
     status: 503,
     description: "Push is not configured on this deploy.",
   })
-  async subscribe(@Body() body: PushSubscribeDto): Promise<void> {
+  async subscribe(
+    @Body() body: PushSubscribeDto,
+    @Req() request: Request,
+  ): Promise<void> {
     if (!isPushConfigured()) {
       throw new HttpException(
         "Push is not configured on this deploy",
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
+    await this.writeAccess.writeGuard(request, "subscription");
 
     const endpoint = requireUrl(body?.endpoint, "endpoint");
     const p256dh = requireString(body?.p256dh, "p256dh");

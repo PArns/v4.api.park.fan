@@ -5,9 +5,12 @@ import {
   Injectable,
 } from "@nestjs/common";
 import { Request } from "express";
-import { getClientIp } from "../common/utils/request.util";
+import { getRateLimitIp } from "../common/utils/request.util";
 import { PushService } from "./push.service";
-import { PushFollowWriteRateLimitService } from "./push-follow-write-rate-limit.service";
+import {
+  PushFollowWriteRateLimitService,
+  type PushWriteKind,
+} from "./push-follow-write-rate-limit.service";
 import { PushSubscription } from "./entities/push-subscription.entity";
 
 /**
@@ -55,11 +58,8 @@ export class PushFollowAccessGuard {
   }
 
   /** Rate-limit a write, naming which bucket in both the log and the 429 body. */
-  async writeGuard(
-    request: Request,
-    kind: "ride-alert" | "show-follow",
-  ): Promise<void> {
-    const verdict = await this.rateLimit.check(getClientIp(request), kind);
+  async writeGuard(request: Request, kind: PushWriteKind): Promise<void> {
+    const verdict = await this.rateLimit.check(getRateLimitIp(request), kind);
     if (verdict.allowed) return;
     throw new HttpException(
       {

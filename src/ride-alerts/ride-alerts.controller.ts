@@ -141,6 +141,7 @@ export class RideAlertsController {
       subscription.id,
       found.attraction.id,
     );
+    // shortcut: the cap can overshoot by the number of concurrent requests; enforce in SQL if abused
     if (!existing) {
       const count = await this.rideAlerts.countForSubscription(subscription.id);
       if (count >= MAX_RIDE_ALERTS_PER_SUBSCRIPTION) {

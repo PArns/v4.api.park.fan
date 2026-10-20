@@ -4,6 +4,8 @@ import { PushController } from "./push.controller";
 import { PushService } from "./push.service";
 import { TripsService } from "../trips/trips.service";
 import { PushSubscribeDto } from "./dto/push.dto";
+import { PushFollowAccessGuard } from "./push-follow-access.guard";
+import { Request } from "express";
 
 /**
  * One rule runs through this controller: never accept a subscription this
@@ -27,7 +29,9 @@ describe("PushController", () => {
   let subscribe: jest.Mock;
   let unsubscribe: jest.Mock;
   let tripsFind: jest.Mock;
+  let writeGuard: jest.Mock;
   let trip: unknown;
+  const REQ = { headers: {} } as Request;
 
   // `await`s the callback INSIDE the try — not `return run()` — because a
   // callback with more than one `await` would otherwise see `finally` restore
@@ -62,6 +66,7 @@ describe("PushController", () => {
     unsubscribe = jest.fn().mockResolvedValue(undefined);
     trip = { id: VALID.tripId };
     tripsFind = jest.fn().mockImplementation(async () => trip);
+    writeGuard = jest.fn().mockResolvedValue(undefined);
 
     const moduleRef = await Test.createTestingModule({
       controllers: [PushController],
@@ -73,6 +78,10 @@ describe("PushController", () => {
         {
           provide: TripsService,
           useValue: { find: tripsFind },
+        },
+        {
+          provide: PushFollowAccessGuard,
+          useValue: { writeGuard },
         },
       ],
     }).compile();
@@ -102,15 +111,17 @@ describe("PushController", () => {
   });
 
   it("answers 503 rather than storing a subscription it can never send to", async () => {
-    await expect(controller.subscribe({ ...VALID })).rejects.toMatchObject({
-      status: 503,
-    });
+    await expect(controller.subscribe({ ...VALID }, REQ)).rejects.toMatchObject(
+      {
+        status: 503,
+      },
+    );
     expect(subscribe).not.toHaveBeenCalled();
   });
 
   it("stores a valid subscription", async () => {
     await withVapid(async () => {
-      await controller.subscribe({ ...VALID });
+      await controller.subscribe({ ...VALID }, REQ);
       expect(subscribe).toHaveBeenCalledWith(
         expect.objectContaining({
           endpoint: VALID.endpoint,
@@ -123,6 +134,19 @@ describe("PushController", () => {
     });
   });
 
+  it("counts the write against the subscription bucket before storing it", async () => {
+    await withVapid(async () => {
+      writeGuard.mockRejectedValue(new HttpException("slow down", 429));
+      await expect(
+        controller.subscribe({ ...VALID }, REQ),
+      ).rejects.toMatchObject({
+        status: 429,
+      });
+      expect(writeGuard).toHaveBeenCalledWith(REQ, "subscription");
+      expect(subscribe).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses an endpoint no push service issued", async () => {
     await withVapid(async () => {
       for (const endpoint of [
@@ -132,7 +156,7 @@ describe("PushController", () => {
         "https://ml-service:8000/predict",
       ]) {
         await expect(
-          controller.subscribe({ ...VALID, endpoint }),
+          controller.subscribe({ ...VALID, endpoint }, REQ),
         ).rejects.toBeInstanceOf(HttpException);
       }
       expect(subscribe).not.toHaveBeenCalled();
@@ -142,7 +166,9 @@ describe("PushController", () => {
   it("refuses a subscription against a trip nobody created", async () => {
     await withVapid(async () => {
       trip = null;
-      await expect(controller.subscribe({ ...VALID })).rejects.toMatchObject({
+      await expect(
+        controller.subscribe({ ...VALID }, REQ),
+      ).rejects.toMatchObject({
         status: 404,
       });
       expect(subscribe).not.toHaveBeenCalled();
@@ -152,7 +178,7 @@ describe("PushController", () => {
   it("refuses a body whose topics are all unknown", async () => {
     await withVapid(async () => {
       await expect(
-        controller.subscribe({ ...VALID, topics: ["ride-down"] }),
+        controller.subscribe({ ...VALID, topics: ["ride-down"] }, REQ),
       ).rejects.toMatchObject({ status: 400 });
       expect(subscribe).not.toHaveBeenCalled();
     });
@@ -161,7 +187,7 @@ describe("PushController", () => {
   it("subscribes with neither tripId nor topics — a ride alert or show follow", async () => {
     await withVapid(async () => {
       const { tripId: _tripId, topics: _topics, ...noTripOrTopics } = VALID;
-      await controller.subscribe(noTripOrTopics);
+      await controller.subscribe(noTripOrTopics, REQ);
       // The whole point: no trip to look up, no topic to demand — ride alerts
       // and show follows are not trip-planner topics at all.
       expect(tripsFind).not.toHaveBeenCalled();
@@ -177,7 +203,7 @@ describe("PushController", () => {
     await withVapid(async () => {
       trip = null;
       const { topics: _topics, ...noTopics } = VALID;
-      await expect(controller.subscribe(noTopics)).rejects.toMatchObject({
+      await expect(controller.subscribe(noTopics, REQ)).rejects.toMatchObject({
         status: 404,
       });
       expect(subscribe).not.toHaveBeenCalled();
@@ -192,7 +218,7 @@ describe("PushController", () => {
       // would create a brand-new row with a real `tripId` and `topics: []`,
       // permanently subscribed to nothing.
       const { topics: _topics, ...noTopics } = VALID;
-      await expect(controller.subscribe(noTopics)).rejects.toMatchObject({
+      await expect(controller.subscribe(noTopics, REQ)).rejects.toMatchObject({
         status: 400,
       });
       expect(subscribe).not.toHaveBeenCalled();
@@ -201,7 +227,7 @@ describe("PushController", () => {
 
   it("falls back to English for an unreadable locale rather than refusing", async () => {
     await withVapid(async () => {
-      await controller.subscribe({ ...VALID, locale: "not a tag" });
+      await controller.subscribe({ ...VALID, locale: "not a tag" }, REQ);
       expect(subscribe).toHaveBeenCalledWith(
         expect.objectContaining({ locale: "en" }),
       );
@@ -214,7 +240,7 @@ describe("PushController", () => {
     // alert or show follow arrives without one.
     await withVapid(async () => {
       const { locale: _omitted, ...withoutLocale } = VALID;
-      await controller.subscribe(withoutLocale as PushSubscribeDto);
+      await controller.subscribe(withoutLocale as PushSubscribeDto, REQ);
       expect(subscribe).toHaveBeenCalledTimes(1);
       expect(subscribe.mock.calls[0][0].locale).toBeUndefined();
     });
@@ -222,7 +248,7 @@ describe("PushController", () => {
 
   it("drops a timezone that is not a zone rather than storing it", async () => {
     await withVapid(async () => {
-      await controller.subscribe({ ...VALID, timezone: "'; DROP TABLE" });
+      await controller.subscribe({ ...VALID, timezone: "'; DROP TABLE" }, REQ);
       expect(subscribe).toHaveBeenCalledWith(
         expect.objectContaining({ timezone: null }),
       );
@@ -236,7 +262,7 @@ describe("PushController", () => {
     // switch the quiet window off for that browser.
     await withVapid(async () => {
       const { timezone: _omitted, ...withoutZone } = VALID;
-      await controller.subscribe(withoutZone);
+      await controller.subscribe(withoutZone, REQ);
       expect(subscribe).toHaveBeenCalledWith(
         expect.objectContaining({ timezone: undefined }),
       );

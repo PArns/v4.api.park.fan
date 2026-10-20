@@ -27,7 +27,10 @@ import {
 @Injectable()
 export class CfThrottlerGuard extends ThrottlerGuard {
   protected async getTracker(req: Record<string, any>): Promise<string> {
-    const realIp = (typeof req.ip === "string" && req.ip) || "unknown";
+    // The socket, not `req.ip`: with `trust proxy` on, `req.ip` is the
+    // caller-written leftmost X-Forwarded-For hop.
+    const socketIp = req.socket?.remoteAddress;
+    const realIp = (typeof socketIp === "string" && socketIp) || "unknown";
 
     // If an origin secret is configured, only trust the CF-set client-IP
     // headers when the request carries the matching secret header; otherwise
