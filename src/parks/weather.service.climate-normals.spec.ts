@@ -5,6 +5,7 @@ import { getRepositoryToken } from "@nestjs/typeorm";
 import { WeatherService } from "./weather.service";
 import { WeatherData } from "./entities/weather-data.entity";
 import { Park } from "./entities/park.entity";
+import { ScheduleEntry } from "./entities/schedule-entry.entity";
 import { OpenMeteoClient } from "../external-apis/weather/open-meteo.client";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 
@@ -67,6 +68,7 @@ describe("climate normals never reach the wait-time model", () => {
         WeatherService,
         { provide: getRepositoryToken(WeatherData), useValue: weatherRepo },
         { provide: getRepositoryToken(Park), useValue: parkRepo },
+        { provide: getRepositoryToken(ScheduleEntry), useValue: {} },
         { provide: OpenMeteoClient, useValue: client },
         { provide: REDIS_CLIENT, useValue: redis },
       ],

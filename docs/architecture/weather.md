@@ -194,3 +194,25 @@ For parks east of UTC (e.g. `Europe/Berlin` = UTC+2), the save bug and the query
 - Max forecast days: **16** (current implementation uses all 16)
 - Historical: 1940–present via `/archive` endpoint
 - Redis rate-limit guard: `ratelimit:openmeteo:blocked` key (60s block on 429)
+
+### Call cadence per surface
+
+| Surface | Cache | Refresh |
+|---------|-------|---------|
+| Daily (`weather:daily:{lat}:{lon}:{days}`) | 2 h, per ~1 km coordinate | Crons only (table above), ~185 unique locations |
+| Hourly for ML (`weather:hourly:v2:park:{id}`, client `weather:hourly:utc:…`) | 6 h + ≤1 h jitter | On demand |
+| Nowcast (`weather:nowcast:raw:{parkId}`) | **Park-hours aware** (`nowcastCacheTtlSeconds`) | On demand (park page, `rain-soon` push) |
+
+The nowcast is the only surface that refreshes every 30 min, and it is demand-driven,
+so crawlers and evening visitors kept closed parks on that cadence: on 2026-10-20 at
+19:34 UTC, 20 of the 29 warm nowcast keys belonged to parks that were closed
+(Universal Studios Japan at 04:34 local). The TTL is now chosen on each upstream
+fetch from the earliest OPERATING / EXTRA_HOURS / TICKETED_EVENT window that has not
+closed yet:
+
+- open, or opening within the hour → 30 min (unchanged)
+- closed → 3 h, but never past one hour before the next opening
+- no upcoming window known → 30 min — a missing schedule is not a closed park
+
+Only the per-park key follows the park; the client's per-coordinate key stays at
+30 min so an open park sharing coordinates with a closed one is never served stale.
