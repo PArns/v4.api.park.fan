@@ -1247,41 +1247,57 @@ def add_park_schedule_features(
                 .reset_index()
             )
 
-            # Merge with df to get schedule info
             df["schedule_date"] = df["date_local"]
-            df_merged = df.merge(
-                operating_schedules[
-                    ["park_id", "date_only", "opening_time", "closing_time"]
-                ],
-                left_on=["parkId", "schedule_date"],
-                right_on=["park_id", "date_only"],
-                how="left",
-                suffixes=("", "_schedule"),
-            )
 
-            # Vectorized time comparisons.
-            # The JOIN key is the park-local date (`date_local`), but the time
-            # comparison is between INSTANTS: opening_time/closing_time come
-            # from a TIMESTAMPTZ column, so they are compared against
-            # `timestamp` (UTC) and never against the naive wall-clock
-            # `local_timestamp`. Same shape as predict.py's schedule join.
-            ts_compare = pd.to_datetime(df_merged["timestamp"], utc=True)
-            opening = df_merged["opening_time"]
-            closing = df_merged["closing_time"]
-            if getattr(opening.dt, "tz", None) is not None:
-                opening = opening.dt.tz_convert("UTC")
-                closing = closing.dt.tz_convert("UTC")
-            else:
-                # Schedules read back naive: they are UTC, so drop the tz on
-                # the other side rather than localizing theirs.
-                ts_compare = ts_compare.dt.tz_localize(None)
+            def window_of(schedule_date):
+                """(ts, opening, closing, valid, open) against `schedule_date`'s window.
 
-            mask_valid = opening.notna() & closing.notna()
-            mask_open = mask_valid & (ts_compare >= opening) & (ts_compare <= closing)
+                The JOIN key is a park-local date, but the time comparison is
+                between INSTANTS: opening_time/closing_time come from a
+                TIMESTAMPTZ column, so they are compared against `timestamp`
+                (UTC) and never against the naive wall-clock `local_timestamp`.
+                Same shape as predict.py's `_open_against_schedule`.
+                """
+                df_merged = pd.DataFrame(
+                    {"parkId": df["parkId"].values, "_date": schedule_date.values}
+                ).merge(
+                    operating_schedules[
+                        ["park_id", "date_only", "opening_time", "closing_time"]
+                    ],
+                    left_on=["parkId", "_date"],
+                    right_on=["park_id", "date_only"],
+                    how="left",
+                )
+                ts_compare = pd.to_datetime(
+                    pd.Series(df["timestamp"].values), utc=True
+                )
+                opening = df_merged["opening_time"]
+                closing = df_merged["closing_time"]
+                if getattr(opening.dt, "tz", None) is not None:
+                    opening = opening.dt.tz_convert("UTC")
+                    closing = closing.dt.tz_convert("UTC")
+                else:
+                    # Schedules read back naive: they are UTC, so drop the tz on
+                    # the other side rather than localizing theirs.
+                    ts_compare = ts_compare.dt.tz_localize(None)
+                valid = opening.notna() & closing.notna()
+                is_open = valid & (ts_compare >= opening) & (ts_compare <= closing)
+                return ts_compare, opening, valid, is_open
+
+            ts_compare, opening, mask_valid, mask_open = window_of(df["schedule_date"])
+            # A 10:00 -> 01:00 day owns the 00:00-00:45 slots that carry the
+            # NEXT local date: also ask the previous date's window (PAR-943),
+            # exactly as predict.apply_schedule_features does at serving time.
+            prev_date = (pd.to_datetime(df["schedule_date"]) - pd.Timedelta(days=1)).dt.date
+            _, opening_prev, _, mask_open_prev = window_of(prev_date)
+            use_prev = mask_open_prev & ~mask_open
+            opening = opening.where(~use_prev, opening_prev)
+            mask_valid = mask_valid | use_prev
+            mask_open = mask_open | mask_open_prev
 
             df["is_park_open"] = mask_open.astype(int).values
 
-            # Calculate time since open (vectorized)
+            # Calculate time since open (vectorized), from the window the row is in
             time_since_open = (ts_compare - opening).dt.total_seconds() / 60.0
             df["time_since_park_open_mins"] = (
                 time_since_open.where(mask_valid, 0.0).clip(lower=0).values

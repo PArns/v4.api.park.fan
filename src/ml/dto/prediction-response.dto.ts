@@ -94,7 +94,10 @@ export class PredictionDto {
       "very_high",
       "extreme",
       "closed",
+      "unknown",
     ],
+    description:
+      "`unknown` when the park has no baseline to rate against (docs/rules/crowd-levels.md).",
   })
   crowdLevel:
     | "very_low"
@@ -103,7 +106,8 @@ export class PredictionDto {
     | "high"
     | "very_high"
     | "extreme"
-    | "closed";
+    | "closed"
+    | "unknown";
 
   @ApiProperty({ description: "Baseline wait time" })
   baseline: number;

@@ -256,6 +256,69 @@ def test_schedule_join_still_closes_a_row_outside_opening_hours():
     assert out.loc[0, "is_park_open"] == 0
 
 
+# A Berlin day 10:00 -> 01:00 (CEST), twice: 00:30 on the 4th belongs to the
+# 3rd's window, while the 4th's own window opens at 10:00 (PAR-943).
+LATE_DAYS = [
+    ("2026-07-03", "2026-07-03 08:00", "2026-07-03 23:00"),
+    ("2026-07-04", "2026-07-04 08:00", "2026-07-04 23:00"),
+]
+AFTER_MIDNIGHT_ROW = (BERLIN, "2026-07-03 22:30")  # 00:30 CEST on the 4th
+AFTER_CLOSE_ROW = (BERLIN, "2026-07-04 00:00")  # 02:00 CEST, after the 01:00 close
+
+
+def _late_schedules(camel: bool) -> pd.DataFrame:
+    keys = (
+        ("parkId", "attractionId", "scheduleType", "openingTime", "closingTime")
+        if camel
+        else ("park_id", "attraction_id", "schedule_type", "opening_time", "closing_time")
+    )
+    return pd.DataFrame(
+        [
+            dict(
+                zip(
+                    keys,
+                    (
+                        BERLIN,
+                        None,
+                        "OPERATING",
+                        pd.Timestamp(o, tz="UTC"),
+                        pd.Timestamp(c, tz="UTC"),
+                    ),
+                ),
+                date=pd.Timestamp(d),
+            )
+            for d, o, c in LATE_DAYS
+        ]
+    )
+
+
+def test_inference_keeps_a_slot_after_midnight_inside_yesterdays_window():
+    df = add_time_features(
+        _frame([AFTER_MIDNIGHT_ROW, AFTER_CLOSE_ROW]), PARKS_METADATA
+    )
+
+    out = apply_schedule_features(df, _late_schedules(camel=True))
+
+    assert list(out["status"]) == ["OPERATING", "CLOSED"]
+
+
+def test_training_keeps_a_slot_after_midnight_inside_yesterdays_window():
+    df = add_time_features(
+        _frame([AFTER_MIDNIGHT_ROW, AFTER_CLOSE_ROW]), PARKS_METADATA
+    )
+
+    out = add_park_schedule_features(
+        df,
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+        datetime(2026, 7, 5, tzinfo=timezone.utc),
+        cached_schedules_df=_late_schedules(camel=False),
+    )
+
+    assert list(out["is_park_open"]) == [1, 0]
+    # measured from the 3rd's 10:00 opening, not clipped against the 4th's
+    assert out.loc[0, "time_since_park_open_mins"] == pytest.approx(14.5 * 60)
+
+
 class _StopAfterFetch(Exception):
     """Ends engineer_features once the schedule window has been observed."""
 

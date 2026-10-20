@@ -491,6 +491,10 @@ async def train_model_endpoint(request: TrainRequest):
     if current["is_training"]:
         raise HTTPException(status_code=409, detail="Training already in progress")
 
+    # The version names files under the model dir and is passed to a subprocess.
+    if request.version and not is_safe_version(request.version):
+        raise HTTPException(status_code=400, detail="Invalid model version")
+
     # Generate version if not provided
     version = request.version
     if not version:

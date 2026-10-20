@@ -82,7 +82,7 @@ The typical-day-peak is computed and stored **atomically** with P50/P90 (`calcul
 ### Surfaces
 - **Calendar past/historical (park):** `calculateCrowdLevelForDate` → typical-day-peak. (`baselineType = "typical_day"`.)
 - **Calendar future (park):** `buildPredictedCrowdLevels` (calendar.service.ts) → AVG of predicted headliner waits ÷ typical-day-peak.
-- **ML / Python crowd level:** `ml.service.ts` passes `typicalDayPeakBaseline`; `ml-service/predict.py` divides predicted wait by it (fallback: p50 → rolling_avg_7d → 30). Keeps the yearly-predictions endpoint + stored `wait_time_predictions.crowdLevel` on the same scale as the calendar.
+- **ML / Python crowd level:** `ml.service.ts` passes `typicalDayPeakBaseline`; `ml-service/predict.py` divides predicted wait by it (fallback: p50; neither → `unknown`, PAR-943). Keeps the yearly-predictions endpoint + stored `wait_time_predictions.crowdLevel` on the same scale as the calendar.
 
 ### Point-in-time / live → ratio-vs-P50 (rating gated)
 These surfaces keep the P50 denominator. When the park isn't ratable the
