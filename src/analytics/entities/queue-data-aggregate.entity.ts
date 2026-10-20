@@ -7,7 +7,7 @@ import {
   UpdateDateColumn,
   BeforeInsert,
 } from "typeorm";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "node:crypto";
 
 /**
  * Queue Data Aggregate Entity
@@ -88,7 +88,7 @@ export class QueueDataAggregate {
   @BeforeInsert()
   generateId(): void {
     if (!this.id) {
-      this.id = uuidv4();
+      this.id = randomUUID();
     }
   }
 }

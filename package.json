@@ -44,7 +44,6 @@
   },
   "dependencies": {
     "@elsikora/string-similarity": "^1.0.1",
-    "@nestjs/axios": "^4.0.1",
     "@nestjs/bull": "^11.0.5",
     "@nestjs/common": "^11.2.7",
     "@nestjs/config": "^4.0.4",
@@ -72,7 +71,6 @@
     "tar": "^7.5.22",
     "transliteration": "^2.6.1",
     "typeorm": "^0.3.31",
-    "uuid": "^14.0.3",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
@@ -96,10 +94,8 @@
     "eslint-plugin-prettier": "^5.5.7",
     "jest": "^30.5.2",
     "prettier": "^3.9.10",
-    "source-map-support": "^0.5.21",
     "supertest": "^7.3.1",
     "ts-jest": "^29.4.15",
-    "ts-loader": "^9.6.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^6.0.3"

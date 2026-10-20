@@ -127,10 +127,9 @@ new rows bring the real zeros back.
 | Ride day-curve band (`raw_mae`) | no — same filter | unchanged |
 | `/v1/ml/accuracy/system` + dashboard `live` (`getSystemAccuracyStats.overall`) | **yes** — admitted every 0 on an open park day | `scoredSlotSql`; cache `accuracy:sys:v2:*`, `ml:dashboard:v3` |
 | `byPredictionType.HOURLY.mae` | **yes** — averaged every compared row | `scoredSlotSql`; coverage there is now COMPLETED/total like `overall` |
-| `/v1/ml/accuracy/features/analysis` | **yes** — every row with an actual | `scoredSlotSql` |
 | Accuracy alert (`ml-alert`, MAE > threshold) | **yes** — threshold 13 was calibrated on the inflated figure | threshold 10, ladder 10/13/17 |
 | Anomaly detection (daily `detect-anomalies`) | **yes** — unplanned closures and status-only zeros raised `large_error` | non-closures only, `isScoredSlot` |
-| Drift (`/drift/model`, dashboard `drift`), top/bottom, hourly/weekday patterns, daily trends, park/attraction stats | no — `actual ≥ 5` filter | unchanged |
+| Drift (dashboard `drift`), top/bottom, hourly/weekday patterns, daily trends, attraction stats | no — `actual ≥ 5` filter | unchanged |
 | Training sample weights (`fetch_attraction_accuracy`) | no — reads `attraction_accuracy_stats` | unchanged |
 | `fetch_prediction_errors_for_training` (ml-service) | would be — unused today | filter added |
 | `checkRetrainingNeeded`, `shouldRetrain` | would be — never called | unchanged |

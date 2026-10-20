@@ -1,5 +1,3 @@
-import { fromZonedTime } from "date-fns-tz";
-
 /**
  * Country to Timezone mapping
  * Maps country ISO codes to their primary timezone
@@ -69,29 +67,6 @@ export const COUNTRY_TIMEZONES: Record<string, string> = {
   JO: "Asia/Amman",
   UY: "America/Montevideo",
 };
-
-/**
- * Convert a date string to a Date object at midnight in a specific timezone
- *
- * The Nager.Date API returns dates as "YYYY-MM-DD" strings representing local dates.
- * We need to store them as UTC Date objects that represent midnight in the local timezone.
- *
- * @param dateString - Date string in format "YYYY-MM-DD" (e.g., "2025-12-25")
- * @param timezone - IANA timezone identifier (e.g., "Europe/Berlin")
- * @returns Date object representing midnight in the specified timezone, as UTC
- *
- * @example
- * parseDateInTimezone("2025-12-25", "Europe/Berlin")
- * // Returns: Date object for 2025-12-24T23:00:00.000Z
- * // (which is midnight on Dec 25 in Europe/Berlin timezone)
- */
-export function parseDateInTimezone(
-  dateString: string,
-  timezone: string,
-): Date {
-  // Interpret midnight of the given calendar date in the timezone, as UTC
-  return fromZonedTime(`${dateString}T00:00:00`, timezone);
-}
 
 /**
  * Get timezone for a country code

@@ -11,14 +11,30 @@ import { invalidateParkCaches } from "./park-cache-invalidation";
  * listed alice-in-wonderland-2, big-dipper-2 and three more.
  */
 describe("invalidateParkCaches", () => {
+  const pipelineDel = jest.fn();
   const redis = {
     del: jest.fn().mockResolvedValue(1),
-    keys: jest.fn().mockResolvedValue([]),
+    keys: jest.fn(() => {
+      throw new Error("KEYS blocks Redis and must not be called");
+    }),
+    scan: jest.fn(async (_c: string, _m: string, pattern: string) =>
+      pattern.startsWith("schedule:")
+        ? ["0", ["schedule:today:park-1:x"]]
+        : ["0", []],
+    ),
+    pipeline: jest.fn(() => ({ del: pipelineDel, exec: jest.fn() })),
   };
 
   beforeEach(() => jest.clearAllMocks());
 
   const deletedKeys = () => redis.del.mock.calls.flat();
+
+  it("evicts the glob patterns with SCAN, never KEYS", async () => {
+    await invalidateParkCaches(redis as never, "park-1");
+
+    expect(redis.scan).toHaveBeenCalled();
+    expect(pipelineDel).toHaveBeenCalledWith("schedule:today:park-1:x");
+  });
 
   it("evicts the attraction sitemap so removed slugs stop being advertised", async () => {
     await invalidateParkCaches(redis as never, "park-1");

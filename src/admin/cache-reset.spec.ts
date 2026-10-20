@@ -1,6 +1,6 @@
 import { HttpException } from "@nestjs/common";
 import { AdminController } from "./admin.controller";
-import { deleteKeysByPatterns } from "./delete-keys-by-patterns";
+import { deleteKeysByPatterns } from "../common/cache/delete-keys-by-patterns";
 
 function globToRegExp(glob: string): RegExp {
   const escaped = glob.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*");

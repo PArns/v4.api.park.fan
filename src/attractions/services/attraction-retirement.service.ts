@@ -1,4 +1,9 @@
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { IsNull, Not, Repository } from "typeorm";
 import { Redis } from "ioredis";
@@ -193,6 +198,15 @@ export class AttractionRetirementService {
     const results: RetirementResult[] = [];
     const touchedParks = new Set<string>();
 
+    // Validated and loaded before anything is written: a bad date halfway
+    // down the list used to leave the rows above it retired and unpublished.
+    const invalid = requests.find((r) => Number.isNaN(Date.parse(r.retiredAt)));
+    if (invalid) {
+      throw new BadRequestException(
+        `retiredAt "${invalid.retiredAt}" for ${invalid.attractionId} is not a date`,
+      );
+    }
+    const loaded: Array<[RetirementRequest, Attraction]> = [];
     for (const request of requests) {
       const attraction = await this.attractionRepository.findOne({
         where: { id: request.attractionId },
@@ -201,24 +215,39 @@ export class AttractionRetirementService {
         this.logger.warn(`Attraction ${request.attractionId} not found`);
         continue;
       }
-
-      await this.attractionRepository.update(attraction.id, {
-        retiredAt: new Date(request.retiredAt),
-        retiredReason: request.reason,
-      });
-
-      touchedParks.add(attraction.parkId);
-      results.push({
-        attractionId: attraction.id,
-        name: attraction.name,
-        parkId: attraction.parkId,
-        retiredAt: request.retiredAt,
-      });
-      this.logger.log(
-        `🪦 Retired "${attraction.name}" as of ${request.retiredAt} — ${request.reason}`,
-      );
+      loaded.push([request, attraction]);
     }
 
+    try {
+      for (const [request, attraction] of loaded) {
+        await this.attractionRepository.update(attraction.id, {
+          retiredAt: new Date(request.retiredAt),
+          retiredReason: request.reason,
+        });
+
+        touchedParks.add(attraction.parkId);
+        results.push({
+          attractionId: attraction.id,
+          name: attraction.name,
+          parkId: attraction.parkId,
+          retiredAt: request.retiredAt,
+        });
+        this.logger.log(
+          `🪦 Retired "${attraction.name}" as of ${request.retiredAt} — ${request.reason}`,
+        );
+      }
+    } finally {
+      // Whatever was written is published, even if a later write failed.
+      await this.publishRetirements(touchedParks, results.length > 0);
+    }
+
+    return results;
+  }
+
+  private async publishRetirements(
+    touchedParks: Set<string>,
+    anyRetired: boolean,
+  ): Promise<void> {
     for (const parkId of touchedParks) {
       await invalidateParkCaches(this.redis, parkId).catch((e) =>
         this.logger.warn(
@@ -227,7 +256,7 @@ export class AttractionRetirementService {
       );
     }
 
-    if (results.length > 0) {
+    if (anyRetired) {
       // The frontend holds the park payload for a day, and that payload is
       // what decides whether a ride page renders live or as closed
       // permanently. Without this it keeps rendering the ride as running.
@@ -239,8 +268,6 @@ export class AttractionRetirementService {
           ),
         );
     }
-
-    return results;
   }
 
   /**

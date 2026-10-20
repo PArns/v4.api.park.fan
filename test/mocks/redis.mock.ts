@@ -91,8 +91,16 @@ export class RedisMock {
   }
 
   async incr(key: string): Promise<number> {
+    return this.incrby(key, 1);
+  }
+
+  async decr(key: string): Promise<number> {
+    return this.incrby(key, -1);
+  }
+
+  async incrby(key: string, by: number): Promise<number> {
     const entry = this.alive(this.strings.get(key));
-    const next = entry ? Number.parseInt(entry.value, 10) + 1 : 1;
+    const next = (entry ? Number.parseInt(entry.value, 10) : 0) + by;
     this.strings.set(key, {
       value: String(next),
       expiresAt: entry?.expiresAt ?? null,

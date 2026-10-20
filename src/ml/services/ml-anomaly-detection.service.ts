@@ -234,28 +234,6 @@ export class MLAnomalyDetectionService {
   }
 
   /**
-   * Get anomalies
-   */
-  async getAnomalies(
-    days: number = 7,
-    severity?: "low" | "medium" | "high",
-  ): Promise<MLPredictionAnomaly[]> {
-    const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-
-    const query = this.anomalyRepository
-      .createQueryBuilder("anomaly")
-      .where("anomaly.detectedAt >= :startDate", { startDate })
-      .orderBy("anomaly.detectedAt", "DESC")
-      .addOrderBy("anomaly.anomalyScore", "DESC");
-
-    if (severity) {
-      query.andWhere("anomaly.severity = :severity", { severity });
-    }
-
-    return query.getMany();
-  }
-
-  /**
    * Get anomaly statistics
    */
   async getAnomalyStats(days: number = 7): Promise<{

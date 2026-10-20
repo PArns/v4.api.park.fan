@@ -38,7 +38,7 @@ describe("ParkRenameService.correctLocation", () => {
   };
   const revalidation = { revalidateTags: jest.fn() };
   const redis = {
-    keys: jest.fn().mockResolvedValue([]),
+    scan: jest.fn().mockResolvedValue(["0", []]),
     del: jest.fn(),
     pipeline: jest.fn(() => ({ del: jest.fn(), exec: jest.fn() })),
   };

@@ -8,7 +8,7 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { IsNull, LessThan, Or, Repository } from "typeorm";
 import { randomBytes } from "crypto";
 import { isIP } from "net";
 import {
@@ -247,7 +247,6 @@ export class AdminAuthService implements OnModuleInit {
       // Same cost as a real verification — see decoyHash.
       if (this.decoyHash)
         await verifyPassword(request.password ?? "", this.decoyHash);
-      await this.loginLimiter.recordFailure(request.ip ?? null, email);
       throw new UnauthorizedException("Invalid credentials");
     }
 
@@ -267,9 +266,9 @@ export class AdminAuthService implements OnModuleInit {
 
     if (locked) {
       if (!passwordOk) {
-        await this.loginLimiter.recordFailure(request.ip ?? null, email);
         throw new UnauthorizedException("Invalid credentials");
       }
+      await this.loginLimiter.release(request.ip ?? null, email);
       return {
         outcome: "locked",
         retryAfterSeconds: Math.ceil((lockedUntil - Date.now()) / 1000),
@@ -291,7 +290,6 @@ export class AdminAuthService implements OnModuleInit {
 
     if (!passwordOk) {
       await this.recordFailedLogin(user);
-      await this.loginLimiter.recordFailure(request.ip ?? null, email);
       throw new UnauthorizedException("Invalid credentials");
     }
 
@@ -300,7 +298,6 @@ export class AdminAuthService implements OnModuleInit {
     // other — the login form must not become a way to enumerate who still
     // works here.
     if (!user.isActive) {
-      await this.loginLimiter.recordFailure(request.ip ?? null, email);
       throw new UnauthorizedException("Invalid credentials");
     }
 
@@ -315,25 +312,37 @@ export class AdminAuthService implements OnModuleInit {
     const owesEnrolment = isTotpRequired() && !user.totpEnabled;
 
     if (user.totpEnabled) {
-      if (!request.totpCode) return { outcome: "totp-required" };
+      if (!request.totpCode) {
+        await this.loginLimiter.release(request.ip ?? null, email);
+        return { outcome: "totp-required" };
+      }
       const lastStep = user.totpLastStep ? Number(user.totpLastStep) : null;
       const check = verifyTotp(
         user.totpSecret ?? "",
         request.totpCode,
         lastStep,
       );
-      if (!check.valid) {
+      // The step is claimed with a conditional write, not read-then-write: two
+      // logins replaying one code in parallel both pass `verifyTotp` against
+      // the same stored step, and only the database can pick one of them.
+      const claimed =
+        check.valid &&
+        ((
+          await this.users.update(
+            {
+              id: user.id,
+              totpLastStep: Or(IsNull(), LessThan(String(check.step))),
+            },
+            { totpLastStep: String(check.step) },
+          )
+        ).affected ?? 0) > 0;
+      if (!claimed) {
         await this.recordFailedLogin(user);
-        await this.loginLimiter.recordFailure(request.ip ?? null, email);
         throw new UnauthorizedException("Invalid credentials");
       }
-      await this.users.update(
-        { id: user.id },
-        { totpLastStep: String(check.step) },
-      );
     }
 
-    await this.loginLimiter.recordSuccess(email);
+    await this.loginLimiter.recordSuccess(request.ip ?? null, email);
 
     const ip = truncateIp(request.ip);
     await this.users.update(
@@ -362,25 +371,49 @@ export class AdminAuthService implements OnModuleInit {
       mustEnrolTotp: owesEnrolment,
     });
 
+    // A deactivation or demotion that landed while this login was in its
+    // password check destroyed or patched the sessions that existed then —
+    // not this one. Re-read the row now that the session exists.
+    const current = await this.users.findOne({
+      where: { id: user.id },
+      select: { id: true, isActive: true, role: true },
+    });
+    if (!current?.isActive) {
+      await this.sessions.destroy(issued.token);
+      throw new UnauthorizedException("Invalid credentials");
+    }
+    if (current.role !== issued.session.role) {
+      await this.sessions.patchUserSessions(user.id, { role: current.role });
+      issued.session.role = current.role;
+    }
+
     return { outcome: "ok", token: issued.token, session: issued.session };
   }
 
+  /**
+   * Count a failure and lock at the threshold, in one statement. Computed from
+   * the row read at the start of the request, a hundred parallel wrong
+   * passwords all wrote `1` and the account never locked.
+   */
   private async recordFailedLogin(user: AdminUser): Promise<void> {
-    const failed = (user.failedLoginCount ?? 0) + 1;
     const threshold = getLoginLockoutThreshold();
-    const lockedUntil =
-      failed >= threshold
-        ? new Date(Date.now() + getLoginLockoutMinutes() * 60_000)
-        : null;
+    // TypeORM hands an UPDATE back as [rows, rowCount].
+    const [rows] = (await this.users.query(
+      `UPDATE admin_users
+          SET failed_login_count = failed_login_count + 1,
+              locked_until = CASE
+                WHEN failed_login_count + 1 >= $2
+                THEN now() + make_interval(mins => $3)
+                ELSE locked_until END
+        WHERE id = $1
+    RETURNING failed_login_count, locked_until`,
+      [user.id, threshold, getLoginLockoutMinutes()],
+    )) as [Array<{ failed_login_count: number; locked_until: Date | null }>];
+    const row = rows?.[0];
 
-    await this.users.update(
-      { id: user.id },
-      { failedLoginCount: failed, lockedUntil },
-    );
-
-    if (lockedUntil) {
+    if (row && row.failed_login_count >= threshold && row.locked_until) {
       this.logger.warn(
-        `🔒 Locked admin account ${user.email} after ${failed} failed logins, until ${lockedUntil.toISOString()}`,
+        `🔒 Locked admin account ${user.email} after ${row.failed_login_count} failed logins, until ${new Date(row.locked_until).toISOString()}`,
       );
     }
   }
@@ -485,10 +518,15 @@ export class AdminAuthService implements OnModuleInit {
               "This is the last active owner — promote another account first",
             );
           }
-          Object.assign(user, changes);
-          return manager.save(user);
+          // Only the changed columns — `save()` wrote the whole row read above.
+          await manager.update(AdminUser, { id: user.id }, changes);
+          return Object.assign(user, changes);
         })
-      : await this.users.save(Object.assign(user, changes));
+      : Object.keys(changes).length === 0
+        ? user
+        : await this.users
+            .update({ id: user.id }, changes)
+            .then(() => Object.assign(user, changes));
 
     if (patch.isActive === false) {
       await this.sessions.destroyAllForUser(id);

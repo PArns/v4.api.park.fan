@@ -262,6 +262,32 @@ describe("MLService", () => {
       expect(result).toEqual(cachedData);
       expect(mockRedis.get).toHaveBeenCalled();
     });
+
+    it("collapses concurrent hourly cache misses into one ml-service build", async () => {
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        timezone: "UTC",
+      });
+      mockRedis.get.mockResolvedValue(null);
+      const payload = { predictions: [], count: 0, modelVersion: "v" };
+      const build = jest
+        .spyOn(
+          service as unknown as {
+            buildRawParkPredictions: () => Promise<unknown>;
+          },
+          "buildRawParkPredictions",
+        )
+        .mockResolvedValue(payload);
+
+      const results = await Promise.all([
+        service.getRawParkPredictions(parkId, "hourly"),
+        service.getRawParkPredictions(parkId, "hourly"),
+      ]);
+
+      expect(build).toHaveBeenCalledTimes(1);
+      expect(results).toEqual([payload, payload]);
+      build.mockRestore();
+    });
   });
 
   describe("PCN champion-swap on the park-level path (PAR-817)", () => {

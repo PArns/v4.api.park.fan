@@ -150,8 +150,20 @@ def train(req: TrainRequest):
 
     runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_runner.py")
 
+    # Take the lock HERE, before the runner exists: it only writes its own status
+    # once it is up, and a second /train in that gap passed the check above and
+    # launched a second run (PAR-943). Same shape the runner rewrites.
+    _write(_TRAIN_STATUS, {"is_training": True, "status": "running",
+                           "version": version, "error": None})
+
     def _launch():
-        proc = subprocess.Popen([sys.executable, runner, version, *(req.park_ids or [])])
+        try:
+            proc = subprocess.Popen([sys.executable, runner, version, *(req.park_ids or [])])
+        except Exception as e:
+            _write(_TRAIN_STATUS, {"is_training": False, "status": "failed",
+                                   "version": version,
+                                   "error": f"could not launch train_runner: {e}"})
+            return
         proc.wait()
         st = _read(_TRAIN_STATUS, {})
         if st.get("is_training") and st.get("version") == version:

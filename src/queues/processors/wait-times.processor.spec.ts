@@ -51,7 +51,8 @@ describe("WaitTimesProcessor", () => {
 
   // Redis with state — exercise the new MGET + pipeline path.
   const redisStore = new Map<string, string>();
-  const pipelineOps: Array<["set" | "del", string, ...unknown[]]> = [];
+  const pipelineOps: Array<["set" | "del" | "expire", string, ...unknown[]]> =
+    [];
   const redis = {
     get: jest.fn((k: string) => Promise.resolve(redisStore.get(k) ?? null)),
     set: jest.fn((k: string, v: string) => {
@@ -66,7 +67,7 @@ describe("WaitTimesProcessor", () => {
       return Promise.resolve(1);
     }),
     pipeline: jest.fn(() => {
-      const local: Array<["set" | "del", string, ...unknown[]]> = [];
+      const local: Array<["set" | "del" | "expire", string, ...unknown[]]> = [];
       return {
         set: jest.fn(function (
           this: { set: jest.Mock },
@@ -79,6 +80,14 @@ describe("WaitTimesProcessor", () => {
         }),
         del: jest.fn(function (this: { del: jest.Mock }, k: string) {
           local.push(["del", k]);
+          return this;
+        }),
+        expire: jest.fn(function (
+          this: { expire: jest.Mock },
+          k: string,
+          s: number,
+        ) {
+          local.push(["expire", k, s]);
           return this;
         }),
         exec: jest.fn(async () => {
@@ -409,7 +418,7 @@ describe("WaitTimesProcessor", () => {
       // Pipeline should contain exactly one SET, no DEL.
       const writes = pipelineOps.filter((op) => op[1].includes("a1"));
       expect(writes).toEqual([
-        ["set", "downtime:status:a1", LiveStatus.OPERATING, "EX", 3600],
+        ["set", "downtime:status:a1", LiveStatus.OPERATING, "EX", 7200],
       ]);
     });
 
@@ -422,6 +431,71 @@ describe("WaitTimesProcessor", () => {
 
       expect(redis.mget).not.toHaveBeenCalled();
       expect(redis.pipeline).not.toHaveBeenCalled();
+    });
+
+    describe("outages longer than the heartbeat gap", () => {
+      // Pinned clock: the start and the recovery fall on one park-local day.
+      const NOON = new Date("2026-07-01T12:00:00Z").getTime();
+      beforeEach(() =>
+        jest.useFakeTimers({
+          now: NOON,
+          doNotFake: ["nextTick", "setImmediate"],
+        }),
+      );
+      afterEach(() => jest.useRealTimers());
+
+      it("counts a 90-minute outage: keys outlive the ~65-min gap between rows", async () => {
+        redisStore.set("downtime:status:a1", LiveStatus.DOWN);
+        redisStore.set("downtime:start:a1", String(NOON - 90 * 60_000));
+
+        // Still down at the heartbeat row: the start key's expiry is refreshed.
+        await run(LiveStatus.DOWN);
+        expect(pipelineOps).toContainEqual([
+          "set",
+          "downtime:status:a1",
+          LiveStatus.DOWN,
+          "EX",
+          7200,
+        ]);
+        expect(pipelineOps).toContainEqual([
+          "expire",
+          "downtime:start:a1",
+          7200,
+        ]);
+
+        await run(LiveStatus.OPERATING);
+        expect(redisStore.get("downtime:daily:a1:2026-07-01")).toBe("90");
+      });
+
+      it("adds nothing for a start dated an earlier park-local day (overnight)", async () => {
+        redisStore.set("downtime:status:a1", LiveStatus.CLOSED);
+        redisStore.set("downtime:start:a1", String(NOON - 14 * 3600_000));
+
+        await run(LiveStatus.OPERATING);
+
+        const daily = [...redisStore.keys()].filter((k) =>
+          k.startsWith("downtime:daily:a1:"),
+        );
+        expect(daily).toEqual([]);
+        expect(redisStore.get("downtime:start:a1")).toBeUndefined();
+      });
+    });
+  });
+
+  describe("reconcileMissingAttractions — unreadable last-seen", () => {
+    it("closes nothing when the last-seen lookup fails", async () => {
+      mockAttractionRepository.find.mockResolvedValueOnce([
+        { id: "a1", createdAt: new Date(Date.now() - 30 * 86_400_000) },
+      ]);
+      redis.mget.mockRejectedValueOnce(new Error("redis down"));
+
+      const closed = await (processor as any).reconcileMissingAttractions(
+        [{ id: "a1", name: "Ride" }],
+        new Set<string>(),
+      );
+
+      expect(closed).toBe(0);
+      expect(mockQueueDataService.saveLiveDataBatch).not.toHaveBeenCalled();
     });
   });
 

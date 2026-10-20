@@ -114,7 +114,7 @@ export class AttractionIntegrationService {
     days: number = 30,
   ): Promise<AttractionResponseDto> {
     // Try cache first
-    const cacheKey = CacheKeys.attractionIntegrated(attraction.id);
+    const cacheKey = CacheKeys.attractionIntegrated(attraction.id, days);
 
     // Track popularity hit (background)
     this.popularityService

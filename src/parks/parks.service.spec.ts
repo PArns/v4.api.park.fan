@@ -38,7 +38,8 @@ describe("ParksService", () => {
     set: jest.fn(),
     del: jest.fn(),
     setex: jest.fn(),
-    keys: jest.fn().mockResolvedValue([]),
+    scan: jest.fn().mockResolvedValue(["0", []]),
+    pipeline: jest.fn(() => ({ del: jest.fn(), exec: jest.fn() })),
     mget: jest.fn().mockResolvedValue([]),
   };
 
@@ -340,6 +341,33 @@ describe("ParksService", () => {
       expect(result).toEqual([]);
       expect(mockRedis.get).toHaveBeenCalled();
       expect(mockRedis.set).toHaveBeenCalled();
+    });
+  });
+
+  describe("getBatchParkStatus — parks east of UTC", () => {
+    // Universal Studios Japan opens 08:00 JST on day D, which is 23:00Z on D-1:
+    // for its first hour the server's CURRENT_DATE is still the day before.
+    it("loads the row dated the server's tomorrow, so the park reads OPERATING", async () => {
+      const now = Date.now();
+      const qb = scheduleQueryBuilder();
+      qb.getMany.mockResolvedValue([
+        {
+          parkId: "usj",
+          attractionId: null,
+          scheduleType: ScheduleType.OPERATING,
+          openingTime: new Date(now - 30 * 60_000),
+          closingTime: new Date(now + 12 * 3_600_000),
+        },
+      ]);
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() => qb);
+      mockParkRepository.manager.query.mockResolvedValue([]);
+
+      const status = await service.getBatchParkStatus(["usj"]);
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "schedule.date <= CURRENT_DATE + INTERVAL '1 day'",
+      );
+      expect(status.get("usj")).toBe("OPERATING");
     });
   });
 
@@ -1025,7 +1053,7 @@ describe("ParksService", () => {
       builders = [];
       mockRedis.get.mockResolvedValue(null);
       mockRedis.set.mockResolvedValue("OK");
-      mockRedis.keys.mockResolvedValue([]);
+      mockRedis.scan.mockResolvedValue(["0", []]);
       mockHolidaysService.getHolidays.mockResolvedValue([]);
       mockScheduleRepository.save.mockResolvedValue([]);
       mockScheduleRepository.query.mockResolvedValue([]);
@@ -2569,11 +2597,12 @@ describe("ParksService", () => {
         // The geo skeleton is the entry named in the issue: it lists every
         // park and the frontend builds links and sitemap entries from it.
         expect(evicted).toContain(CacheKeys.discoveryGeoStructure());
-        // The inherited ride, whose integrated payload embeds park context.
+        // The inherited ride, whose cached payloads embed park context (its
+        // integrated response goes by pattern, one key per `days` variant).
         // Passing no attraction ids would evict every key above and still
         // leave this one, which is why it is asserted separately.
         expect(evicted).toContain(
-          CacheKeys.attractionIntegrated(inheritedAttractionId),
+          CacheKeys.attractionP50(inheritedAttractionId),
         );
         expect(mockRevalidationService.revalidateTags).toHaveBeenCalledWith(
           REVALIDATED_TAGS,
@@ -2607,7 +2636,7 @@ describe("ParksService", () => {
         expect(evicted).toContain(CacheKeys.parkIntegrated(ghostParkId));
         expect(evicted).toContain(CacheKeys.discoveryGeoStructure());
         expect(evicted).toContain(
-          CacheKeys.attractionIntegrated(inheritedAttractionId),
+          CacheKeys.attractionP50(inheritedAttractionId),
         );
         expect(mockRevalidationService.revalidateTags).toHaveBeenCalledWith(
           REVALIDATED_TAGS,

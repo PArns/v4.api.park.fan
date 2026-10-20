@@ -94,7 +94,10 @@ export class PredictionDto {
       "very_high",
       "extreme",
       "closed",
+      "unknown",
     ],
+    description:
+      "`unknown` when the park has no baseline to rate against (docs/rules/crowd-levels.md).",
   })
   crowdLevel:
     | "very_low"
@@ -103,7 +106,8 @@ export class PredictionDto {
     | "high"
     | "very_high"
     | "extreme"
-    | "closed";
+    | "closed"
+    | "unknown";
 
   @ApiProperty({ description: "Baseline wait time" })
   baseline: number;
@@ -152,27 +156,6 @@ export class PredictionDto {
     percentageDeviation: number;
     detectedAt: string;
   };
-}
-
-export class PredictionItemDto {
-  @ApiProperty({ description: "Attraction ID" })
-  attractionId: string;
-
-  @ApiProperty({ description: "Predicted wait time in minutes" })
-  predictedWaitTime: number;
-
-  @ApiProperty({
-    description:
-      "Prediction confidence score, 30-100 — the same scale as " +
-      "`PredictionDto.confidence`, which is what fills it. It said 0-1 and " +
-      "never was.",
-  })
-  confidence: number;
-}
-
-export class PredictionResponseDto {
-  @ApiProperty({ description: "List of predictions", type: [PredictionDto] })
-  predictions: PredictionDto[];
 }
 
 export class BulkPredictionResponseDto {

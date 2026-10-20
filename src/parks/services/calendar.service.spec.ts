@@ -895,6 +895,43 @@ describe("CalendarService › meta.scheduleCoverage (assembleFromMonthCaches)", 
     expect(meta.scheduleCoverage.to).toBe("2027-01-06");
     expect(meta.scheduleCoverage.to).not.toBe("2026-10-02");
   });
+
+  it("derives hasOperatingSchedule from the park-wide range, like the uncached build", () => {
+    // The assembled days carry no published hours; the park still has a schedule.
+    expect(
+      assemble({ minDate: "2025-12-26", maxDate: "2027-01-06" }).meta
+        .hasOperatingSchedule,
+    ).toBe(true);
+    expect(
+      assemble({ minDate: null, maxDate: null }).meta.hasOperatingSchedule,
+    ).toBe(false);
+  });
+
+  it("buckets hourly forecasts by the park-local day and hour", async () => {
+    (service as any).analyticsService = {
+      getP50BaselineFromCache: jest.fn().mockResolvedValue(0),
+      isParkRatable: jest.fn().mockResolvedValue(false),
+    };
+    // 18:00 PDT on Oct 20 is 01:00 UTC on Oct 21.
+    const hourly = await (service as any).buildHourlyPredictionsFromList(
+      { id: "la", timezone: "America/Los_Angeles" },
+      "2026-10-20",
+      [
+        {
+          predictedTime: "2026-10-21T01:00:00+00:00",
+          predictedWaitTime: 40,
+        },
+        {
+          predictedTime: "2026-10-20T08:00:00+00:00",
+          predictedWaitTime: 5,
+        },
+      ],
+    );
+    expect(hourly).toEqual([
+      { hour: 1, crowdLevel: "unknown", predictedWaitTime: 5 },
+      { hour: 18, crowdLevel: "unknown", predictedWaitTime: 40 },
+    ]);
+  });
 });
 
 describe("CalendarService › buildDaysBounded (private)", () => {

@@ -230,8 +230,8 @@ const RECOVERY_CURVE_SQL = `
        -- a CLOSED run on a ride whose CLOSED is curated as "not evidence" is
        -- not a closure to learn a recovery time from.
        AND COALESCE(a.open_with_park, FALSE) = FALSE
-       AND o.operating_minutes > 0
-       AND o.observed_operating_minutes::numeric / o.operating_minutes >= 0.5
+       AND o.observed_operating_minutes::numeric
+           / NULLIF(o.operating_minutes, 0) >= 0.5
   ),
   -- The pooled curve is the SAME events with the park key dropped, never a
   -- second query with a different WHERE: a serving path that falls back must

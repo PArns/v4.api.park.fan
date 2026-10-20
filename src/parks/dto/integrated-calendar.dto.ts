@@ -184,20 +184,6 @@ export class CalendarEvent {
 }
 
 /**
- * Show Time
- */
-export class ShowTime {
-  @ApiProperty()
-  name: string;
-
-  @ApiProperty()
-  time: string;
-
-  @ApiProperty({ required: false })
-  endTime?: string;
-}
-
-/**
  * Hourly Prediction
  */
 export class HourlyPrediction {
@@ -495,17 +481,6 @@ export class CalendarDay {
     required: false,
   })
   hourly?: HourlyPrediction[];
-}
-
-/**
- * Metadata for a month response
- */
-export class CalendarMonthResponse {
-  @ApiProperty({ description: "Month (YYYY-MM)" })
-  month: string;
-
-  @ApiProperty({ type: () => [CalendarDay] })
-  days: CalendarDay[];
 }
 
 /**

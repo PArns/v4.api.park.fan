@@ -49,11 +49,3 @@ export interface WartezeitenOpeningTimeResponse {
   open_from: string; // ISO 8601 timestamp
   closed_from: string; // ISO 8601 timestamp
 }
-
-/**
- * API Error Response
- */
-export interface WartezeitenErrorResponse {
-  error?: string;
-  message?: string;
-}

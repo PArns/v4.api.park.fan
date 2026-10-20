@@ -60,7 +60,7 @@ import { AdminMinRole } from "./auth/admin-auth.decorators";
 import { AdminAuditInterceptor } from "./auth/admin-audit.interceptor";
 import { DataQualityMonitorService } from "../monitoring/data-quality-monitor.service";
 import { PARK_CACHE_FLUSH_PATTERNS } from "./flush-cache-patterns";
-import { deleteKeysByPatterns } from "./delete-keys-by-patterns";
+import { deleteKeysByPatterns } from "../common/cache/delete-keys-by-patterns";
 import {
   AttractionRetirementService,
   RetirementRequest,

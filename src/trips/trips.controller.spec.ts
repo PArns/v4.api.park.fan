@@ -22,8 +22,11 @@ describe("TripsController · DELETE", () => {
   let remove: jest.Mock;
   let check: jest.Mock;
 
-  const request = (ip = "203.0.113.7") =>
-    ({ headers: { "x-forwarded-for": ip }, ip }) as unknown as Request;
+  const request = (ip = "203.0.113.7", forwardedFor?: string) =>
+    ({
+      headers: { "cf-connecting-ip": ip, "x-forwarded-for": forwardedFor },
+      socket: { remoteAddress: "172.16.0.1" },
+    }) as unknown as Request;
 
   beforeEach(async () => {
     remove = jest.fn().mockResolvedValue(true);
@@ -78,6 +81,17 @@ describe("TripsController · DELETE", () => {
     // A third bucket would hand a script a fresh allowance for guessing ids.
     await controller.remove(ID, request());
     expect(check).toHaveBeenCalledWith("203.0.113.7", "update");
+  });
+
+  it("keys on CF-Connecting-IP, so a spoofed X-Forwarded-For buys no fresh bucket", async () => {
+    // Cloudflare appends the real address to a caller-written XFF, so the
+    // leftmost hop is whatever the caller wants it to be.
+    await controller.remove(ID, request("203.0.113.7", "198.51.100.1"));
+    await controller.remove(ID, request("203.0.113.7", "198.51.100.2"));
+    expect(check.mock.calls).toEqual([
+      ["203.0.113.7", "update"],
+      ["203.0.113.7", "update"],
+    ]);
   });
 
   it("answers 429 over the limit, and does not touch the trip", async () => {

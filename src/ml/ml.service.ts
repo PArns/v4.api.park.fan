@@ -210,6 +210,10 @@ export class MLService {
   // not one per concurrent request. Shared by the calendar and yearly views.
   private readonly servingFlight = new SingleFlight();
 
+  // Same guard for the park-level ml-service read (`ml:park:{id}:{type}:{date}`):
+  // the hourly key lapses every 30 min and every park page then misses at once.
+  private readonly parkPredictionFlight = new SingleFlight();
+
   constructor(
     @InjectRepository(WaitTimePrediction)
     private predictionRepository: Repository<WaitTimePrediction>,
@@ -470,6 +474,29 @@ export class MLService {
       return cachedData;
     }
 
+    // maxDays and liveStatus change what the build returns, so they are part of the flight key.
+    return this.parkPredictionFlight.run(
+      `${cacheKey}:${maxDays ?? ""}:${liveStatus ?? ""}`,
+      () =>
+        this.buildRawParkPredictions(
+          park,
+          predictionType,
+          cacheKey,
+          maxDays,
+          liveStatus,
+        ),
+    );
+  }
+
+  /** The cache-miss half of {@link getRawParkPredictions}: one ml-service call, written to `cacheKey`. */
+  private async buildRawParkPredictions(
+    park: Park,
+    predictionType: "hourly" | "daily",
+    cacheKey: string,
+    maxDays?: number,
+    liveStatus?: "OPERATING" | "CLOSED",
+  ): Promise<BulkPredictionResponseDto> {
+    const parkId = park.id;
     try {
       // 1. Fetch park with timezone (already fetched above for cache key)
       // Park timezone is already loaded
@@ -1286,6 +1313,18 @@ export class MLService {
     const windowMin = new Date(thirtyAgo.getTime() - 15 * 60 * 1000);
     const windowMax = new Date(thirtyAgo.getTime() + 15 * 60 * 1000);
 
+    // The same baselines the park path sends (PAR-943): without them the ML
+    // service has nothing real to rate against and answers `unknown`.
+    const baselinesPromise = Promise.all([
+      this.analyticsService.getP50BaselineFromCache(attraction.parkId),
+      this.analyticsService.getTypicalDayPeakFromCache(attraction.parkId),
+    ]).catch((err) => {
+      this.logger.warn(
+        `Failed to fetch baselines for park ${attraction.parkId}: ${err}`,
+      );
+      return [undefined, undefined];
+    });
+
     const [weatherForecastRaw, latestData, recentData] = await Promise.all([
       attraction.parkId
         ? this.weatherService
@@ -1343,6 +1382,8 @@ export class MLService {
       recentWaitTimes[attractionId] = recentData.waitTime;
     }
 
+    const [p50, typicalPeak] = await baselinesPromise;
+
     // 4. Request predictions
     const request: PredictionRequestDto = {
       attractionIds: [attractionId],
@@ -1351,6 +1392,8 @@ export class MLService {
       weatherForecast,
       currentWaitTimes,
       recentWaitTimes,
+      p50Baseline: p50 || undefined,
+      typicalDayPeakBaseline: typicalPeak || undefined,
     };
 
     const response = await this.getPredictions(request);
@@ -1611,7 +1654,8 @@ export class MLService {
       entity.predictionType = pred.predictionType;
       entity.confidence = pred.confidence;
       entity.uncertaintyMinutes = pred.uncertaintyMinutes ?? null;
-      entity.crowdLevel = pred.crowdLevel;
+      entity.crowdLevel =
+        pred.crowdLevel === "unknown" ? null : pred.crowdLevel;
       entity.baseline = pred.baseline;
       entity.modelVersion = pred.modelVersion;
       entity.status = pred.status || null;
@@ -2023,7 +2067,7 @@ export class MLService {
         predictionType: p.predictionType,
         confidence: p.confidence,
         uncertaintyMinutes: p.uncertaintyMinutes,
-        crowdLevel: p.crowdLevel,
+        crowdLevel: p.crowdLevel ?? "unknown",
         baseline: p.baseline,
         modelVersion: p.modelVersion,
         status: p.status || undefined,
@@ -2180,7 +2224,7 @@ export class MLService {
       predictedWaitTime: r.predictedWaitTime,
       predictionType: r.predictionType,
       confidence: r.confidence,
-      crowdLevel: r.crowdLevel,
+      crowdLevel: r.crowdLevel ?? "unknown",
       baseline: r.baseline,
       modelVersion: r.modelVersion,
     }));
@@ -2370,7 +2414,7 @@ export class MLService {
         predictionType: p.predictionType,
         confidence: p.confidence,
         uncertaintyMinutes: p.uncertaintyMinutes,
-        crowdLevel: p.crowdLevel,
+        crowdLevel: p.crowdLevel ?? "unknown",
         baseline: p.baseline,
         modelVersion: p.modelVersion,
         status: p.status || undefined,

@@ -17,19 +17,6 @@ export function normalizeSortDirection(direction: string): "ASC" | "DESC" {
 }
 
 /**
- * Parse sort parameter into field and direction
- *
- * Handles formats like "name:asc", "createdAt:desc"
- *
- * @param sort - Sort parameter string (e.g., "name:asc")
- * @returns Tuple of [field, direction]
- */
-export function parseSortParameter(sort: string): [string, "ASC" | "DESC"] {
-  const [field, direction = "asc"] = sort.split(":");
-  return [field, normalizeSortDirection(direction)];
-}
-
-/**
  * Applies page/limit pagination to a query builder and returns data + total.
  * Shared by the attractions/shows/restaurants list endpoints.
  */

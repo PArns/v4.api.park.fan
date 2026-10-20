@@ -8,7 +8,7 @@ import {
   BeforeInsert,
 } from "typeorm";
 import { Park } from "../../parks/entities/park.entity";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "node:crypto";
 
 /**
  * ParkOccupancy Entity
@@ -62,7 +62,7 @@ export class ParkOccupancy {
   @BeforeInsert()
   generateId(): void {
     if (!this.id) {
-      this.id = uuidv4();
+      this.id = randomUUID();
     }
     if (!this.timestamp) {
       this.timestamp = new Date();

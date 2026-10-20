@@ -359,6 +359,74 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
     });
   });
 
+  describe("hourly forecasts are filtered by the park-local day", () => {
+    afterEach(() => jest.useRealTimers());
+
+    it("keeps an LA ride's 18:00 PDT slot, which is already tomorrow in UTC", async () => {
+      // 18:20 PDT on Oct 20 = 01:20 UTC on Oct 21. Only Date is faked.
+      jest.useFakeTimers({
+        now: new Date("2026-10-21T01:20:00Z"),
+        doNotFake: [
+          "setTimeout",
+          "setInterval",
+          "setImmediate",
+          "nextTick",
+          "queueMicrotask",
+        ],
+      });
+      const park = buildPark(true);
+      Object.assign(park, {
+        timezone: "America/Los_Angeles",
+        attractions: [{ id: "ride-la", name: "Ride LA", slug: "ride-la" }],
+      });
+      parksService.getUpcomingSchedule.mockResolvedValueOnce([
+        {
+          scheduleType: "OPERATING",
+          openingTime: new Date("2026-10-20T16:00:00Z"),
+          closingTime: new Date("2026-10-21T05:00:00Z"),
+          date: new Date("2026-10-20T12:00:00Z"),
+        },
+      ]);
+      // An open ride with no wait reading falls back to the current-hour forecast.
+      queueDataService.findCurrentStatusByPark.mockResolvedValueOnce(
+        new Map([
+          [
+            "ride-la",
+            [
+              {
+                queueType: "STANDBY",
+                status: "OPERATING",
+                waitTime: null,
+                lastUpdated: new Date(),
+                timestamp: new Date(),
+              },
+            ],
+          ],
+        ]),
+      );
+      (
+        service as unknown as {
+          mlService: { getParkPredictions: jest.Mock };
+        }
+      ).mlService.getParkPredictions.mockResolvedValueOnce({
+        predictions: [
+          {
+            attractionId: "ride-la",
+            predictedTime: "2026-10-21T01:00:00+00:00",
+            predictedWaitTime: 70,
+            crowdLevel: "high",
+          },
+        ],
+      });
+
+      const dto = await buildResponse(park);
+      const ride = dto.attractions?.find((a) => a.id === "ride-la");
+
+      expect(ride?.effectiveStatus).toBe("OPERATING");
+      expect(ride?.crowdLevel).toBe("high");
+    });
+  });
+
   describe("the counter-check: a park we can read", () => {
     it("keeps its aggregates and its occupancy object", async () => {
       // Same park, same schedule, same zeroed analytics — the ONLY difference

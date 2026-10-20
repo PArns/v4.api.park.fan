@@ -21,10 +21,14 @@ import {
  * shape (an upsert keyed by endpoint + a foreign id).
  */
 
-const PREFIX: Record<"ride-alert" | "show-follow", string> = {
+// `subscription` is `POST /v1/push/subscriptions`, the row the other two hang off.
+const PREFIX = {
   "ride-alert": "push-follow:ride-alert:ip:",
   "show-follow": "push-follow:show-follow:ip:",
-};
+  subscription: "push-follow:subscription:ip:",
+} as const;
+
+export type PushWriteKind = keyof typeof PREFIX;
 
 /** A person configures a handful of alerts. A script makes thousands. */
 const WINDOW_SECONDS = 60 * 60;
@@ -40,7 +44,7 @@ export class PushFollowWriteRateLimitService {
 
   async check(
     ip: string | null,
-    kind: "ride-alert" | "show-follow",
+    kind: PushWriteKind,
   ): Promise<PushFollowWriteVerdict> {
     if (!ip) return { allowed: true, retryAfterSeconds: 0 };
 

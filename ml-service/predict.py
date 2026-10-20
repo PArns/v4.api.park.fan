@@ -244,13 +244,23 @@ ROLLING_STATS_DAYS = 90
 
 # Rows the serving features are built from. Shared by both reads so the lookups
 # and the rolling statistics see the same population.
+#
+# It mirrors db.fetch_training_data's row filter (PAR-943): training accepts
+# `status = 'OPERATING' OR waitTime > 0` (beside `waitTime >= 5` that admits any
+# status) and days with no schedule or an UNKNOWN
+# one, so serving must too — the lags and rolling averages were learnt on that
+# population. shortcut: training additionally requires its park-wide
+# operating_days_heuristic on no-schedule/UNKNOWN days; replicating that CTE here
+# would scan every ride of the park per request. A day on which this ride posted
+# a >= 5 min wait passes that heuristic in practice; port the CTE if the two
+# populations are ever measured apart.
 _SERVING_QUEUE_FILTER = """
             qd."attractionId" = ANY(CAST(:attraction_ids AS uuid[]))
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 5
-                AND qd.status = 'OPERATING'
+                AND (qd.status = 'OPERATING' OR qd."waitTime" > 0)
                 AND qd."queueType" = 'STANDBY'
-                AND (se.id IS NULL OR se."scheduleType" = 'OPERATING')
+                AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
 """
 
 
@@ -563,6 +573,42 @@ def generate_future_timestamps(
         raise ValueError(f"Unknown prediction_type: {prediction_type}")
 
 
+def _open_against_schedule(
+    df: pd.DataFrame, operating_schedules: pd.DataFrame, schedule_date: pd.Series
+) -> tuple:
+    """(mask_valid, mask_open) of each row of `df` against the OPERATING window
+    of `schedule_date` - the park-local date whose window is being asked.
+
+    The JOIN key is a park-local date; the time comparison is between INSTANTS.
+    openingTime/closingTime from the DB are timezone-aware (TIMESTAMPTZ), so
+    they are compared against `timestamp` (UTC) - never against the naive
+    wall-clock `local_timestamp`.
+    """
+    df_merged = pd.DataFrame({"parkId": df["parkId"], "_date": schedule_date}).merge(
+        operating_schedules[["parkId", "date_only", "openingTime", "closingTime"]],
+        left_on=["parkId", "_date"],
+        right_on=["parkId", "date_only"],
+        how="left",
+    )
+    df_merged.index = df.index
+
+    ts_compare = pd.to_datetime(df["timestamp"], utc=True)
+    opening = df_merged["openingTime"]
+    closing = df_merged["closingTime"]
+
+    # Set tz to UTC to compare if opening has tzinfo
+    if getattr(opening.dt, "tz", None) is not None:
+        opening = opening.dt.tz_convert("UTC")
+        closing = closing.dt.tz_convert("UTC")
+    else:
+        # If opening time from DB is naive, make ts_compare naive (UTC) as well
+        ts_compare = ts_compare.dt.tz_localize(None)
+
+    mask_valid = opening.notna() & closing.notna()
+    mask_open = mask_valid & (ts_compare >= opening) & (ts_compare <= closing)
+    return mask_valid, mask_open
+
+
 def apply_schedule_features(
     df: pd.DataFrame, schedules_df: pd.DataFrame
 ) -> pd.DataFrame:
@@ -658,41 +704,22 @@ def apply_schedule_features(
                 .reset_index()
             )
 
-            # Merge df with operating_schedules
-            df_merged = df.merge(
-                operating_schedules[
-                    ["parkId", "date_only", "openingTime", "closingTime"]
-                ],
-                left_on=["parkId", "schedule_date"],
-                right_on=["parkId", "date_only"],
-                how="left",
+            # A slot is open when it falls inside its own local date's window
+            # OR inside the previous date's: a 10:00 -> 01:00 day owns the
+            # 00:00-00:45 slots that carry the NEXT local date (PAR-943).
+            mask_valid, mask_open_same = _open_against_schedule(
+                df, operating_schedules, df["schedule_date"]
             )
-            # Set index to match df
-            df_merged.index = df.index
-
-            # The JOIN key above is the park-local date; the time comparison
-            # below is between INSTANTS. openingTime/closingTime from the DB are
-            # timezone-aware (TIMESTAMPTZ), so they are compared against
-            # `timestamp` (UTC) — never against the naive wall-clock
-            # `local_timestamp`.
-            ts_compare = pd.to_datetime(df_merged["timestamp"], utc=True)
-            opening = df_merged["openingTime"]
-            closing = df_merged["closingTime"]
-
-            # Set tz to UTC to compare if opening has tzinfo
-            if getattr(opening.dt, "tz", None) is not None:
-                opening = opening.dt.tz_convert("UTC")
-                closing = closing.dt.tz_convert("UTC")
-            else:
-                # If opening time from DB is naive, make ts_compare naive (UTC) as well
-                ts_compare = ts_compare.dt.tz_localize(None)
-
-            mask_valid = opening.notna() & closing.notna()
-            mask_open = mask_valid & (ts_compare >= opening) & (ts_compare <= closing)
+            _, mask_open_prev = _open_against_schedule(
+                df, operating_schedules, df["schedule_date"] - pd.Timedelta(days=1)
+            )
+            mask_open = mask_open_same | mask_open_prev
 
             df.loc[mask_open, "is_park_open"] = 1
             mask_closed_operating_day = mask_valid & ~mask_open
             df.loc[mask_closed_operating_day, "status"] = "CLOSED"
+        else:
+            mask_open = pd.Series(False, index=df.index)
 
         # Handle non-operating schedules (CLOSED / UNKNOWN) on dates with NO operating schedule
         # First, find the dates where operating schedules were missing
@@ -711,7 +738,8 @@ def apply_schedule_features(
         else:
             has_operating = pd.Series(False, index=df.index)
 
-        mask_no_operating = ~has_operating
+        # A slot still inside yesterday's window is not on a day without hours.
+        mask_no_operating = ~has_operating & ~mask_open
 
         if mask_no_operating.any():
             # For these rows, we check if park_has_operating is True.
@@ -1282,7 +1310,9 @@ def create_prediction_features(
             schedule_query,
             {
                 "park_ids": uuid_list(set(park_ids), "schedule features"),
-                "start_date": start_date_local,
+                # One day earlier: the first slots after midnight may still sit
+                # inside the previous day's window (apply_schedule_features).
+                "start_date": start_date_local - timedelta(days=1),
                 "end_date": end_date_local,
             },
         )
@@ -1823,6 +1853,46 @@ def create_prediction_features(
     return df
 
 
+def crowd_level_for(
+    crowd_wait: float,
+    typical_day_peak_baseline: float | None,
+    p50_baseline: float | None,
+) -> tuple:
+    """(crowd level, baseline) of a predicted wait against the park's real baseline.
+
+    The TYPICAL-DAY-PEAK baseline comes first so the ML service's crowd levels
+    match the calendar (100% = a typical day = moderate); P50 when it is absent.
+    Without either there is no baseline to rate against, and the answer is
+    ("unknown", 0.0) (rule 3, docs/rules/crowd-levels.md) - never a placeholder
+    "moderate", and never the ride's own rolling_avg_7d, which rates on a
+    different scale than the park path does (PAR-943). The 0.0 baseline keeps
+    the API's served re-tiering (PCN / Chronos, gated on baseline > 0) off it.
+
+    Same thresholds as the TypeScript determineCrowdLevel(): 60, 89, 110, 150, 200.
+    """
+    if typical_day_peak_baseline is not None and typical_day_peak_baseline > 0:
+        baseline = typical_day_peak_baseline
+    elif p50_baseline is not None and p50_baseline > 0:
+        baseline = p50_baseline
+    else:
+        return "unknown", 0.0
+
+    occupancy_pct = crowd_wait / baseline * 100
+    if occupancy_pct <= 60:
+        level = "very_low"
+    elif occupancy_pct <= 89:
+        level = "low"
+    elif occupancy_pct <= 110:  # 90-110%: +/-10% around a typical day = moderate
+        level = "moderate"
+    elif occupancy_pct <= 150:
+        level = "high"
+    elif occupancy_pct <= 200:
+        level = "very_high"
+    else:
+        level = "extreme"
+    return level, baseline
+
+
 def predict_wait_times(
     model: WaitTimeModel,
     attraction_ids: List[str],
@@ -2007,46 +2077,12 @@ def predict_wait_times(
         # Combined confidence (weighted average)
         confidence = 0.6 * time_confidence + 0.4 * model_confidence
 
-        # Calculate crowd level based on predicted wait time vs the
-        # TYPICAL-DAY-PEAK baseline, so the ML service's crowd levels match
-        # the calendar (100% = a typical day = moderate).
-        #
-        # Fallback chain (graceful degradation):
-        #   1. typical-day-peak baseline from API (primary — matches calendar)
-        #   2. P50 baseline from API (when typical-day-peak absent)
-        #   3. rolling_avg_7d from features (legacy)
-        #   4. Default 30 min (safeguard)
-        if typical_day_peak_baseline is not None and typical_day_peak_baseline > 0:
-            baseline = typical_day_peak_baseline
-        elif p50_baseline is not None and p50_baseline > 0:
-            baseline = p50_baseline
-        else:
-            # Fallback to rolling_avg_7d during migration period
-            baseline = row.get("rolling_avg_7d", 30.0)
-
-        if baseline > 0:
-            # Crowd level off the busy-calibrated crowd quantile (= pred_wait for
-            # non-MultiQuantile models), so the median display can read honestly low
-            # on quiet rides without dragging the crowd signal down.
-            ratio = crowd_wait / baseline
-        else:
-            ratio = 1.0  # Default if no baseline
-
-        # Categorize crowd level using the SAME thresholds as the TypeScript
-        # determineCrowdLevel(): 60, 89, 110, 150, 200. 100% = "moderate".
-        occupancy_pct = ratio * 100
-        if occupancy_pct <= 60:
-            crowd_level = "very_low"
-        elif occupancy_pct <= 89:
-            crowd_level = "low"
-        elif occupancy_pct <= 110:  # 90-110%: ±10% around P50 = moderate
-            crowd_level = "moderate"
-        elif occupancy_pct <= 150:
-            crowd_level = "high"
-        elif occupancy_pct <= 200:
-            crowd_level = "very_high"
-        else:
-            crowd_level = "extreme"
+        # Crowd level off the busy-calibrated crowd quantile (= pred_wait for
+        # non-MultiQuantile models), so the median display can read honestly low
+        # on quiet rides without dragging the crowd signal down.
+        crowd_level, baseline = crowd_level_for(
+            crowd_wait, typical_day_peak_baseline, p50_baseline
+        )
 
         # The uncertainty band, in minutes. `uncertainties[i]` is (top quantile −
         # median) for a MultiQuantile model, i.e. the width alpha=0.95 is trained

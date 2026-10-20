@@ -140,16 +140,3 @@ export function getCountryISOCode(country: string): string | null {
   // 2. Check mapping for full names or aliases
   return COUNTRY_NAME_TO_ISO_CODE[trimmed] || null;
 }
-
-/**
- * Gets country name from ISO code (reverse lookup)
- *
- * @param isoCode - ISO 3166-1 alpha-2 code (e.g., "US")
- * @returns Country name (e.g., "United States") or null if not found
- */
-export function getCountryNameFromISO(isoCode: string): string | null {
-  const entry = Object.entries(COUNTRY_NAME_TO_ISO_CODE).find(
-    ([_, code]) => code === isoCode,
-  );
-  return entry ? entry[0] : null;
-}

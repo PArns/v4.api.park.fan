@@ -43,6 +43,20 @@ max_requests = int(os.environ.get("ML_MAX_REQUESTS", "1000"))
 max_requests_jitter = int(os.environ.get("ML_MAX_REQUESTS_JITTER", "200"))
 
 
+def pre_fork(server, worker):
+    # Every fork copies the master's model, and the master loaded it at import.
+    # After a retrain (/model/reload wrote a new sentinel) a worker recycled by
+    # max_requests would start on the stale model and swap on its first request;
+    # refresh the master first so the fork already carries the active version.
+    # Never blocks the fork: a failed reload leaves the old model in place.
+    try:
+        import main
+
+        main._get_active_model()
+    except Exception as e:
+        server.log.warning(f"pre_fork model refresh failed: {e}")
+
+
 def post_fork(server, worker):
     # The SQLAlchemy engine is created at import — i.e. inside the preloaded master —
     # so the worker inherits its connection pool across the fork. Sharing a TCP

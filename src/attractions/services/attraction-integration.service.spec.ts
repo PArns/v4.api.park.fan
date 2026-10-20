@@ -207,11 +207,23 @@ describe("AttractionIntegrationService", () => {
 
       expect(result).toEqual(cachedResponse);
       expect(mockRedis.get).toHaveBeenCalledWith(
-        `attraction:integrated:${testAttraction.id}`,
+        `attraction:integrated:${testAttraction.id}:30`,
       );
       expect(
         mockQueueDataService.findCurrentStatusByAttraction,
       ).not.toHaveBeenCalled();
+    });
+
+    it("keys the cache by history length so ?days=7 never reads the 30-day entry", async () => {
+      mockRedis.get.mockResolvedValue(
+        JSON.stringify({ id: testAttraction.id, url: "/test-url" }),
+      );
+
+      await service.buildIntegratedResponse(testAttraction, 7);
+
+      expect(mockRedis.get).toHaveBeenCalledWith(
+        `attraction:integrated:${testAttraction.id}:7`,
+      );
     });
 
     it("should build integrated response when not cached", async () => {

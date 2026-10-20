@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import { CacheKeys } from "./cache-keys";
+import { deleteKeysByPatterns } from "./delete-keys-by-patterns";
 
 /**
  * Delete every park-scoped cache entry for one park: the exact keys first,
@@ -53,7 +54,6 @@ export async function invalidateParkCaches(
   // the old park context; their baselines are cheap to recompute.
   for (const id of attractionIds) {
     exactKeys.push(
-      CacheKeys.attractionIntegrated(id),
       CacheKeys.attractionP50(id),
       CacheKeys.attractionP90(id),
       CacheKeys.attractionRopeDrop(id),
@@ -75,9 +75,7 @@ export async function invalidateParkCaches(
     CacheKeys.parkDerivedHoursPattern(parkId),
     CacheKeys.mlParkPattern(parkId),
     ...attractionIds.map((id) => CacheKeys.attractionHistoryPattern(id)),
+    ...attractionIds.map((id) => CacheKeys.attractionIntegratedPattern(id)),
   ];
-  for (const pattern of patterns) {
-    const keys = await redis.keys(pattern);
-    if (keys.length > 0) await redis.del(...keys);
-  }
+  await deleteKeysByPatterns(redis, patterns);
 }
