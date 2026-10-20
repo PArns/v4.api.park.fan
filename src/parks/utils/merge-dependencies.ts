@@ -838,11 +838,6 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     strategy: "custom",
     apply: moveAggregateBuckets,
   },
-  {
-    table: "ml_accuracy_comparisons",
-    column: "attractionId",
-    strategy: "move",
-  },
   // FK is NO ACTION: leaving these behind blocks the DELETE outright.
   {
     table: "ml_prediction_anomalies",
@@ -1227,7 +1222,6 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
   // A plain `move` unlike its attraction-side twin: `id` is a hash of
   // `"attractionId"` and the hour, and `parkId` is in neither.
   { table: "queue_data_aggregates", column: "parkId", strategy: "move" },
-  { table: "ml_accuracy_comparisons", column: "parkId", strategy: "move" },
   { table: "ml_prediction_anomalies", column: "park_id", strategy: "move" },
 ];
 

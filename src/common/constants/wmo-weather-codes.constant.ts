@@ -49,25 +49,3 @@ export const WMO_WEATHER_CODES: Record<number, string> = {
 export function getWeatherDescription(code: number): string {
   return WMO_WEATHER_CODES[code] || `Unknown (code: ${code})`;
 }
-
-/**
- * Categorizes weather codes into simple categories
- *
- * Useful for filtering and grouping weather data.
- *
- * @param code - WMO weather code
- * @returns Weather category
- */
-export function getWeatherCategory(
-  code: number,
-): "clear" | "cloudy" | "rain" | "snow" | "thunderstorm" | "fog" | "unknown" {
-  if (code === 0 || code === 1) return "clear";
-  if (code === 2 || code === 3) return "cloudy";
-  if (code === 45 || code === 48) return "fog";
-  if (code >= 51 && code <= 67) return "rain";
-  if (code >= 71 && code <= 77) return "snow";
-  if (code >= 80 && code <= 82) return "rain";
-  if (code >= 85 && code <= 86) return "snow";
-  if (code >= 95 && code <= 99) return "thunderstorm";
-  return "unknown";
-}

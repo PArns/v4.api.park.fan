@@ -154,27 +154,6 @@ export class PredictionDto {
   };
 }
 
-export class PredictionItemDto {
-  @ApiProperty({ description: "Attraction ID" })
-  attractionId: string;
-
-  @ApiProperty({ description: "Predicted wait time in minutes" })
-  predictedWaitTime: number;
-
-  @ApiProperty({
-    description:
-      "Prediction confidence score, 30-100 — the same scale as " +
-      "`PredictionDto.confidence`, which is what fills it. It said 0-1 and " +
-      "never was.",
-  })
-  confidence: number;
-}
-
-export class PredictionResponseDto {
-  @ApiProperty({ description: "List of predictions", type: [PredictionDto] })
-  predictions: PredictionDto[];
-}
-
 export class BulkPredictionResponseDto {
   @ApiProperty({ type: [PredictionDto] })
   predictions: PredictionDto[];

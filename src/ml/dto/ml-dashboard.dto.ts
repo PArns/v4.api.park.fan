@@ -233,29 +233,6 @@ export class AttractionPerformanceDto {
   predictionsCount: number;
 }
 
-export class SystemAccuracyDto {
-  @ApiProperty({ description: "Overall system-wide accuracy metrics" })
-  overall: SystemAccuracyOverallDto;
-
-  @ApiProperty({ description: "Accuracy breakdown by prediction type" })
-  byPredictionType: {
-    HOURLY: PredictionTypeBreakdownDto;
-    DAILY: PredictionTypeBreakdownDto;
-  };
-
-  @ApiProperty({
-    type: [AttractionPerformanceDto],
-    description: "Top 5 best performing attractions",
-  })
-  topPerformers: AttractionPerformanceDto[];
-
-  @ApiProperty({
-    type: [AttractionPerformanceDto],
-    description: "Top 5 worst performing attractions",
-  })
-  bottomPerformers: AttractionPerformanceDto[];
-}
-
 // ==================== TRENDS SECTION ====================
 
 export class ModelVersionInfoDto {
@@ -363,29 +340,6 @@ export class DayOfWeekAccuracyDto {
   predictionsCount: number;
 }
 
-export class TrendsDto {
-  @ApiProperty({ description: "Model comparison (current vs previous)" })
-  modelComparison: ModelComparisonDto;
-
-  @ApiProperty({
-    type: [DailyAccuracyDto],
-    description: "Daily accuracy trends (last 30 days)",
-  })
-  dailyAccuracy: DailyAccuracyDto[];
-
-  @ApiProperty({
-    type: [HourlyAccuracyDto],
-    description: "Accuracy by hour of day (0-23)",
-  })
-  byHourOfDay: HourlyAccuracyDto[];
-
-  @ApiProperty({
-    type: [DayOfWeekAccuracyDto],
-    description: "Accuracy by day of week",
-  })
-  byDayOfWeek: DayOfWeekAccuracyDto[];
-}
-
 // ==================== SYSTEM HEALTH SECTION ====================
 
 export class LastJobDto {
@@ -428,20 +382,6 @@ export class ModelAgeDto {
     description: "Minutes since model was trained (excluding hours)",
   })
   minutes: number;
-}
-
-export class SystemHealthDto {
-  @ApiProperty({ description: "Last training job information" })
-  lastTrainingJob: LastJobDto;
-
-  @ApiProperty({ description: "Last accuracy check information" })
-  lastAccuracyCheck: LastAccuracyCheckDto;
-
-  @ApiProperty({ description: "Next scheduled training timestamp (ISO 8601)" })
-  nextScheduledTraining: string;
-
-  @ApiProperty({ description: "Model age (days and hours since training)" })
-  modelAge: ModelAgeDto;
 }
 
 // ==================== MAIN DASHBOARD V2 ====================

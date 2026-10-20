@@ -1,148 +1,32 @@
 import {
   Controller,
   Get,
-  Post,
   Query,
-  Param,
-  Body,
   ParseIntPipe,
   DefaultValuePipe,
-  UseGuards,
-  UseInterceptors,
 } from "@nestjs/common";
-import {
-  ApiTags,
-  ApiOperation,
-  ApiQuery,
-  ApiResponse,
-  ApiParam,
-} from "@nestjs/swagger";
-import { MLFeatureDriftService } from "../services/ml-feature-drift.service";
+import { ApiTags, ApiOperation, ApiQuery } from "@nestjs/swagger";
 import { MLAlertService } from "../services/ml-alert.service";
 import { MLAnomalyDetectionService } from "../services/ml-anomaly-detection.service";
-import { MLDriftMonitoringService } from "../services/ml-drift-monitoring.service";
 import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
-import { MLDriftDto } from "../dto/ml-drift.dto";
-import { AdminAuthGuard } from "../../admin/auth/admin-auth.guard";
-import { AdminMinRole } from "../../admin/auth/admin-auth.decorators";
-import { AdminAuditInterceptor } from "../../admin/auth/admin-audit.interceptor";
-
-/**
- * The four state-changing endpoints on this controller, guarded one by one.
- *
- * Not on the class, deliberately. Eight of the twelve handlers are reads the
- * admin ML dashboard fetches through a GET-only passthrough that sends no
- * Authorization header, so a class guard would need `@AdminPublic()` sprinkled
- * over all eight — which inverts the rule the rest of the admin follows, that a
- * forgotten decorator locks something down rather than opening it up. Here the
- * asymmetry is the other way round: the reads are already public, and it is the
- * writes that were never brought under the guard when the rest of the admin
- * was.
- */
-const AdminWrite = () =>
-  function (
-    target: object,
-    key: string | symbol,
-    descriptor: PropertyDescriptor,
-  ) {
-    UseGuards(AdminAuthGuard)(target, key, descriptor);
-    UseInterceptors(AdminAuditInterceptor)(target, key, descriptor);
-    AdminMinRole("editor")(target, key, descriptor);
-    return descriptor;
-  };
 
 /**
  * ML Monitoring Controller
  *
- * Endpoints for ML monitoring and observability:
- * - Feature Drift Detection
- * - Alerts Management
- * - Anomaly Detection
+ * Read-only endpoints the admin ML dashboard fetches through its GET-only
+ * passthrough:
+ * - Active alerts
+ * - Anomaly statistics
+ * - TFT per-attraction performers
  */
 @ApiTags("ML Monitoring")
 @Controller("ml/monitoring")
 export class MLMonitoringController {
   constructor(
-    private featureDriftService: MLFeatureDriftService,
     private alertService: MLAlertService,
     private anomalyDetectionService: MLAnomalyDetectionService,
-    private driftService: MLDriftMonitoringService,
     private accuracyService: PredictionAccuracyService,
   ) {}
-
-  // ==================== Drift Monitoring ====================
-
-  /**
-   * Get model drift metrics
-   * Track model performance degradation over time
-   */
-  @Get("drift/model")
-  @ApiOperation({
-    summary: "Get model drift metrics",
-    description:
-      "Returns drift analysis comparing live performance vs training performance",
-  })
-  @ApiQuery({
-    name: "days",
-    required: false,
-    type: Number,
-    description: "Number of days to analyze (default: 30)",
-  })
-  @ApiResponse({
-    status: 200,
-    description: "Drift metrics retrieved successfully",
-    type: MLDriftDto,
-  })
-  async getModelDrift(
-    @Query("days", new DefaultValuePipe(30), ParseIntPipe) days: number,
-  ): Promise<MLDriftDto> {
-    return this.driftService.getDriftMetrics(days);
-  }
-
-  /**
-   * Get feature drift status
-   */
-  @Get("drift/features")
-  @ApiOperation({
-    summary: "Get feature drift detection results",
-    description: "Returns detected feature drift for all features",
-  })
-  @ApiQuery({
-    name: "days",
-    required: false,
-    type: Number,
-    description: "Days to analyze (default: 7)",
-  })
-  async getFeatureDrift(
-    @Query("days", new DefaultValuePipe(7), ParseIntPipe) days: number,
-  ) {
-    return await this.featureDriftService.detectFeatureDrift(days);
-  }
-
-  /**
-   * Get feature drift history for a specific feature
-   */
-  @Get("drift/features/:featureName")
-  @ApiOperation({
-    summary: "Get feature drift history",
-    description: "Returns drift history for a specific feature",
-  })
-  @ApiParam({ name: "featureName", description: "Feature name" })
-  @ApiQuery({
-    name: "days",
-    required: false,
-    type: Number,
-    description: "Days to analyze (default: 30)",
-  })
-  async getFeatureDriftHistory(
-    @Param("featureName") featureName: string,
-    @Query("days", new DefaultValuePipe(30), ParseIntPipe) days: number,
-  ) {
-    return await this.featureDriftService.getFeatureDriftHistory(
-      featureName,
-      days,
-    );
-  }
 
   // ==================== Alerts ====================
 
@@ -158,84 +42,7 @@ export class MLMonitoringController {
     return await this.alertService.getActiveAlerts();
   }
 
-  /**
-   * Acknowledge alert
-   */
-  @Post("alerts/:id/acknowledge")
-  @AdminWrite()
-  @ApiOperation({
-    summary: "Acknowledge an alert",
-    description: "Marks an alert as acknowledged",
-  })
-  @ApiParam({ name: "id", description: "Alert ID" })
-  async acknowledgeAlert(
-    @Param("id") alertId: string,
-    @Body() body: { acknowledgedBy: string },
-  ) {
-    return await this.alertService.acknowledgeAlert(
-      alertId,
-      body.acknowledgedBy,
-    );
-  }
-
-  /**
-   * Resolve alert
-   */
-  @Post("alerts/:id/resolve")
-  @AdminWrite()
-  @ApiOperation({
-    summary: "Resolve an alert",
-    description: "Marks an alert as resolved",
-  })
-  @ApiParam({ name: "id", description: "Alert ID" })
-  async resolveAlert(
-    @Param("id") alertId: string,
-    @Body() body?: { resolutionNote?: string },
-  ) {
-    return await this.alertService.resolveAlert(alertId, body?.resolutionNote);
-  }
-
-  /**
-   * Check and create alerts (manual trigger)
-   */
-  @Post("alerts/check")
-  @AdminWrite()
-  @ApiOperation({
-    summary: "Check for issues and create alerts",
-    description: "Manually triggers alert check (usually done by cron job)",
-  })
-  async checkAndCreateAlerts() {
-    return await this.alertService.checkAndCreateAlerts();
-  }
-
   // ==================== Anomaly Detection ====================
-
-  /**
-   * Get detected anomalies
-   */
-  @Get("anomalies")
-  @ApiOperation({
-    summary: "Get detected prediction anomalies",
-    description: "Returns anomalies detected in recent predictions",
-  })
-  @ApiQuery({
-    name: "days",
-    required: false,
-    type: Number,
-    description: "Days to analyze (default: 7)",
-  })
-  @ApiQuery({
-    name: "severity",
-    required: false,
-    enum: ["low", "medium", "high"],
-    description: "Filter by severity",
-  })
-  async getAnomalies(
-    @Query("days", new DefaultValuePipe(7), ParseIntPipe) days: number,
-    @Query("severity") severity?: "low" | "medium" | "high",
-  ) {
-    return await this.anomalyDetectionService.getAnomalies(days, severity);
-  }
 
   /**
    * Get anomaly statistics
@@ -281,27 +88,5 @@ export class MLMonitoringController {
     @Query("days", new DefaultValuePipe(14), ParseIntPipe) days: number,
   ) {
     return await this.accuracyService.getTftTopBottomPerformers(days);
-  }
-
-  /**
-   * Detect anomalies (manual trigger)
-   */
-  @Post("anomalies/detect")
-  @AdminWrite()
-  @ApiOperation({
-    summary: "Detect anomalies in recent predictions",
-    description:
-      "Manually triggers anomaly detection (usually done by cron job)",
-  })
-  @ApiQuery({
-    name: "days",
-    required: false,
-    type: Number,
-    description: "Days to analyze (default: 7)",
-  })
-  async detectAnomalies(
-    @Query("days", new DefaultValuePipe(7), ParseIntPipe) days: number,
-  ) {
-    return await this.anomalyDetectionService.detectAnomalies(days);
   }
 }

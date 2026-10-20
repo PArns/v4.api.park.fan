@@ -243,48 +243,6 @@ describe("MLAlertService", () => {
     });
   });
 
-  describe("acknowledge + resolve lifecycle", () => {
-    it("acknowledgeAlert flips the status and stores who/when", async () => {
-      const stored: Record<string, unknown> = {
-        id: "a-1",
-        alertType: "accuracy_degradation",
-        severity: "high",
-        status: "active",
-      };
-      alertRepo.findOne.mockResolvedValue(stored);
-      alertRepo.save.mockImplementation((entity) => Promise.resolve(entity));
-
-      const result = await service.acknowledgeAlert("a-1", "alice@example.com");
-
-      expect(result.status).toBe("acknowledged");
-      expect(result.acknowledgedBy).toBe("alice@example.com");
-      expect(result.acknowledgedAt).toBeInstanceOf(Date);
-    });
-
-    it("acknowledgeAlert throws when the id is unknown", async () => {
-      alertRepo.findOne.mockResolvedValue(null);
-      await expect(
-        service.acknowledgeAlert("nope", "alice@example.com"),
-      ).rejects.toThrow(/not found/);
-    });
-
-    it("resolveAlert records the note and timestamp", async () => {
-      alertRepo.findOne.mockResolvedValue({
-        id: "a-1",
-        alertType: "data_drift",
-        severity: "medium",
-        status: "active",
-      });
-      alertRepo.save.mockImplementation((entity) => Promise.resolve(entity));
-
-      const result = await service.resolveAlert("a-1", "Fixed by retrain");
-
-      expect(result.status).toBe("resolved");
-      expect(result.resolutionNote).toBe("Fixed by retrain");
-      expect(result.resolvedAt).toBeInstanceOf(Date);
-    });
-  });
-
   describe("cleanupOldAlerts", () => {
     it("deletes resolved alerts older than 30 days and returns the row count", async () => {
       alertRepo.delete.mockResolvedValue({ affected: 7 });

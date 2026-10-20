@@ -21,26 +21,3 @@ export class ForecastItemDto {
   @ApiProperty({ description: "Source of the prediction" })
   source: string; // 'themeparks_wiki' or 'our_ml_model'
 }
-
-export class ForecastResponseDto {
-  @ApiProperty({ description: "Attraction details" })
-  attraction: {
-    id: string;
-    name: string;
-    slug: string;
-  };
-
-  @ApiProperty({ description: "Park details" })
-  park: {
-    id: string;
-    name: string;
-    slug: string;
-    timezone: string;
-  };
-
-  @ApiProperty({
-    description: "List of forecast items",
-    type: [ForecastItemDto],
-  })
-  forecasts: ForecastItemDto[];
-}

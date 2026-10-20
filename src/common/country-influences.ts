@@ -91,32 +91,3 @@ export const COUNTRY_INFLUENCES: Record<string, string[]> = {
   // Additional
   RU: ["FI", "PL", "DE"], // Russia
 };
-
-/**
- * Get influencing countries for a park's country
- */
-export function getInfluencingCountries(country: string): string[] {
-  return COUNTRY_INFLUENCES[country] || [];
-}
-
-/**
- * Priority order for neighbor countries (closer = higher priority)
- */
-export function prioritizeNeighbors(
-  country: string,
-  neighbors: string[],
-): string[] {
-  const influence = COUNTRY_INFLUENCES[country] || [];
-
-  // Sort by order in COUNTRY_INFLUENCES (first = closest/most important)
-  return neighbors.sort((a, b) => {
-    const indexA = influence.indexOf(a);
-    const indexB = influence.indexOf(b);
-
-    if (indexA === -1 && indexB === -1) return 0;
-    if (indexA === -1) return 1;
-    if (indexB === -1) return -1;
-
-    return indexA - indexB;
-  });
-}

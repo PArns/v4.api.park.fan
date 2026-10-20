@@ -263,13 +263,6 @@ export interface DiningAvailabilityData {
 // Schedule API Response
 // ===========================
 
-/**
- * Response from GET /v1/entity/{id}/schedule
- */
-export interface EntityScheduleResponse {
-  schedule: ScheduleEntry[];
-}
-
 export interface ScheduleEntry {
   date: string; // YYYY-MM-DD
   openingTime?: string;

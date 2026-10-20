@@ -36,8 +36,8 @@ export class MLDriftMonitoringService {
   ) {}
 
   // Cached like the accuracy aggregations it reads (getDailyAccuracy → a DATE scan over
-  // prediction_accuracy). The dashboard caches its own getDriftMetrics call; this covers
-  // the standalone /drift/model endpoint. 30-min TTL — 30d drift barely moves intraday.
+  // prediction_accuracy). The dashboard caches its own getDriftMetrics call on top
+  // of this one. 30-min TTL — 30d drift barely moves intraday.
   async getDriftMetrics(days: number = 30): Promise<MLDriftDto> {
     const cached = safeJsonParse<MLDriftDto>(
       await this.redis.get(`ml:drift:${days}`).catch(() => null),
