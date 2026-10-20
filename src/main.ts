@@ -6,6 +6,7 @@ import compression from "compression";
 import helmet from "helmet";
 import { SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
+import { enableGracefulShutdown } from "./common/utils/graceful-shutdown";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.interceptor";
@@ -70,6 +71,12 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: logLevelMap[logLevel] ?? logLevelMap["log"],
   });
+
+  // Make SIGTERM run the lifecycle hooks — a Coolify redeploy stops the old
+  // container with it, and without this nothing closed the Bull queues, the
+  // TypeORM pool or the abortable boot chains (PAR-903). Enabled before the
+  // middleware wiring so a signal during the boot is covered too.
+  enableGracefulShutdown(app);
 
   // Trust the proxy in front of us (Cloudflare → reverse proxy) so
   // `req.ip` and protocol reflect the real client, not the edge. Rate
