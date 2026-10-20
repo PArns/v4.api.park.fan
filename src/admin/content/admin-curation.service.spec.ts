@@ -35,16 +35,16 @@ function build(
   const attractions = {
     findOne: jest.fn(async (): Promise<unknown> => attraction),
     find: jest.fn(async (): Promise<unknown[]> => []),
-    save: jest.fn(async (entity: unknown) => {
+    update: jest.fn(async (_id: unknown, _fields: unknown) => {
       calls.push("save");
-      return entity;
+      return { affected: 1 };
     }),
   };
   const parks = {
     findOne: jest.fn(async (): Promise<unknown> => park),
-    save: jest.fn(async (entity: unknown) => {
+    update: jest.fn(async (_id: unknown, _fields: unknown) => {
       calls.push("save");
-      return entity;
+      return { affected: 1 };
     }),
   };
   const revalidation = {
@@ -141,11 +141,14 @@ describe("AdminCurationService", () => {
       ACTOR,
     );
 
-    const saved = attractions.save.mock.calls[0][0] as Record<string, unknown>;
+    const saved = attractions.update.mock.calls[0][1] as Record<
+      string,
+      unknown
+    >;
     expect(saved.curatedMinimumHeight).toBe(0);
     // Untouched — the next children-metadata run owns this cell and would
     // overwrite anything written into it.
-    expect(saved.minimumHeight).toBe(100);
+    expect(saved).toEqual({ curatedMinimumHeight: 0 });
   });
 
   it("refuses a field that is not curatable", async () => {
@@ -172,7 +175,7 @@ describe("AdminCurationService", () => {
     );
 
     expect(result.changed).toEqual([]);
-    expect(attractions.save).not.toHaveBeenCalled();
+    expect(attractions.update).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
     expect(revalidation.revalidateTags).not.toHaveBeenCalled();
   });
@@ -261,7 +264,7 @@ describe("AdminCurationService", () => {
         { fields: { curatedName: "  " } },
         ACTOR,
       );
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -277,7 +280,7 @@ describe("AdminCurationService", () => {
         { fields: { curatedMinimumHeight: 0 } },
         ACTOR,
       );
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -291,7 +294,7 @@ describe("AdminCurationService", () => {
         { fields: { curatedSeasonMonths: [7, 4, 7, 5] } },
         ACTOR,
       );
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -307,7 +310,7 @@ describe("AdminCurationService", () => {
         { fields: { curatedSeasonMonths: [] } },
         ACTOR,
       );
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -379,7 +382,7 @@ describe("AdminCurationService", () => {
         { fields: { curatedWebsite: "  https://www.phantasialand.de/  " } },
         ACTOR,
       );
-      const saved = parks.save.mock.calls[0][0] as Record<string, unknown>;
+      const saved = parks.update.mock.calls[0][1] as Record<string, unknown>;
       expect(saved.curatedWebsite).toBe("https://www.phantasialand.de/");
 
       const cleared = build(null, {
@@ -392,7 +395,7 @@ describe("AdminCurationService", () => {
         { fields: { curatedWebsite: "" } },
         ACTOR,
       );
-      const second = cleared.parks.save.mock.calls[0][0] as Record<
+      const second = cleared.parks.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -422,7 +425,7 @@ describe("AdminCurationService", () => {
         { fields: { curatedAreaHectares: 28.333333 } },
         ACTOR,
       );
-      const saved = parks.save.mock.calls[0][0] as Record<string, unknown>;
+      const saved = parks.update.mock.calls[0][1] as Record<string, unknown>;
       expect(saved.curatedAreaHectares).toBe(28.33);
     });
 
@@ -475,7 +478,7 @@ describe("AdminCurationService", () => {
         { fields: { attractionKind: "TRANSPORT" }, reason: "Parkbahn" },
         ACTOR,
       );
-      const saved = accepting.attractions.save.mock.calls[0][0] as Record<
+      const saved = accepting.attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -489,7 +492,7 @@ describe("AdminCurationService", () => {
         { fields: { attractionKind: "MAZE" }, reason: "Halloween maze" },
         ACTOR,
       );
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -508,7 +511,7 @@ describe("AdminCurationService", () => {
         { fields: { attractionKind: "" } },
         ACTOR,
       );
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -536,7 +539,7 @@ describe("AdminCurationService", () => {
         { fields: { indoorOutdoor: "covered_queue" } },
         ACTOR,
       );
-      const saved = accepting.attractions.save.mock.calls[0][0] as Record<
+      const saved = accepting.attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -577,7 +580,7 @@ describe("AdminCurationService", () => {
         { fields: { indoorOutdoor: "" } },
         ACTOR,
       );
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -664,7 +667,7 @@ describe("AdminCurationService", () => {
           ]),
         }),
       ]);
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -675,6 +678,48 @@ describe("AdminCurationService", () => {
         curatedAttractionType: "ROLLER_COASTER",
       });
       expect(audit.record).toHaveBeenCalledTimes(1);
+    });
+
+    it("writes nothing when a later entry is invalid", async () => {
+      const { service, attractions, audit, calls } = build(anAttraction());
+
+      await expect(
+        service.curateAttractionsBulk(
+          "park-1",
+          [
+            { id: "ride-1", fields: { hasVirtualLine: true } },
+            { id: "ride-1", fields: { curatedMinimumHeight: 9999 } },
+          ],
+          ACTOR,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(attractions.update).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    });
+
+    it("still publishes the rides written before a write failed", async () => {
+      const { service, attractions, calls } = build(anAttraction());
+      attractions.update
+        .mockImplementationOnce(async () => {
+          calls.push("save");
+          return { affected: 1 };
+        })
+        .mockImplementationOnce(async () => {
+          throw new Error("connection lost");
+        });
+
+      await expect(
+        service.curateAttractionsBulk(
+          "park-1",
+          [
+            { id: "ride-1", fields: { hasVirtualLine: true } },
+            { id: "ride-1", fields: { hasSingleRider: true } },
+          ],
+          ACTOR,
+        ),
+      ).rejects.toThrow("connection lost");
+      expect(calls).toEqual(["save", "evict", "revalidate", "delayed-sweep"]);
     });
   });
 
@@ -692,7 +737,7 @@ describe("AdminCurationService", () => {
         ACTOR,
       );
 
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -709,7 +754,7 @@ describe("AdminCurationService", () => {
         ACTOR,
       );
 
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -729,7 +774,7 @@ describe("AdminCurationService", () => {
         ACTOR,
       );
 
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -772,7 +817,7 @@ describe("AdminCurationService", () => {
         ACTOR,
       );
 
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -797,11 +842,12 @@ describe("AdminCurationService", () => {
         ACTOR,
       );
 
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
-      expect(saved.curatedOutOfServiceToUncertain).toBe(true);
+      // Not part of the write at all, so the stored `true` stands.
+      expect(saved).toEqual({ curatedOutOfServiceFrom: "2026-01-20" });
     });
 
     it("records the flag's stored value when one save clears both", async () => {
@@ -839,7 +885,7 @@ describe("AdminCurationService", () => {
         }),
       );
 
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -867,7 +913,7 @@ describe("AdminCurationService", () => {
 
       expect(attraction.curatedOutOfServiceToUncertain).toBeNull();
       expect(result.changed).toEqual([]);
-      expect(attractions.save).not.toHaveBeenCalled();
+      expect(attractions.update).not.toHaveBeenCalled();
       expect(audit.record).not.toHaveBeenCalled();
       expect(calls).toEqual([]);
     });
@@ -890,7 +936,7 @@ describe("AdminCurationService", () => {
       );
 
       expect(result.changed).toEqual(["curatedOutOfServiceToUncertain"]);
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -915,7 +961,7 @@ describe("AdminCurationService", () => {
         ACTOR,
       );
 
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -1065,7 +1111,7 @@ describe("AdminCurationService", () => {
       );
 
       expect(park).toEqual(snapshot);
-      expect(parks.save).not.toHaveBeenCalled();
+      expect(parks.update).not.toHaveBeenCalled();
       expect(revalidation.revalidateTags).not.toHaveBeenCalled();
       expect(queue.add).not.toHaveBeenCalled();
       expect(evictMock).not.toHaveBeenCalled();
@@ -1161,7 +1207,7 @@ describe("AdminCurationService", () => {
       await expect(service.revert("audit-v", ACTOR)).rejects.toThrow(
         /nothing to undo/,
       );
-      expect(parks.save).not.toHaveBeenCalled();
+      expect(parks.update).not.toHaveBeenCalled();
       expect(audit.markReverted).not.toHaveBeenCalled();
     });
   });
@@ -1183,7 +1229,7 @@ describe("AdminCurationService", () => {
 
       await service.revert("audit-0", ACTOR);
 
-      const saved = attractions.save.mock.calls[0][0] as Record<
+      const saved = attractions.update.mock.calls[0][1] as Record<
         string,
         unknown
       >;
@@ -1211,7 +1257,7 @@ describe("AdminCurationService", () => {
       await expect(service.revert("audit-A", ACTOR)).rejects.toThrow(
         /overwritten since/,
       );
-      expect(attractions.save).not.toHaveBeenCalled();
+      expect(attractions.update).not.toHaveBeenCalled();
     });
 
     it("refuses to undo the same change twice", async () => {

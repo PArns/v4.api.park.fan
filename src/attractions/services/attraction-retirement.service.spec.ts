@@ -1,3 +1,4 @@
+import { BadRequestException } from "@nestjs/common";
 import {
   AttractionRetirementService,
   RECLASSIFIED_UPSTREAM_REASON,
@@ -62,6 +63,19 @@ describe("AttractionRetirementService", () => {
       "parks",
       "attractions",
     ]);
+  });
+
+  it("rejects a bad date before writing any row", async () => {
+    const { service, findOne, update } = build();
+    findOne.mockResolvedValue({ id: "a1", name: "Dino-Sue", parkId: "p1" });
+
+    await expect(
+      service.retire([
+        { attractionId: "a1", retiredAt: "2026-02-15", reason: "gone" },
+        { attractionId: "a2", retiredAt: "last spring", reason: "gone" },
+      ]),
+    ).rejects.toThrow(BadRequestException);
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("does not revalidate when nothing was retired", async () => {
