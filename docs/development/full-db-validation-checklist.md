@@ -148,7 +148,7 @@ survive:
 redis-cli --scan --pattern 'park:*:$PARK'         # statistics/p50/p90/typicalpeak/...
 redis-cli --scan --pattern 'analytics:crowdlevel:park:$PARK:*'
 redis-cli --scan --pattern 'park:historical-stats:v2:$PARK:*'
-redis-cli GET attraction:integrated:$MIGRATED_ATTR   # should be (nil) right after merge
+redis-cli GET attraction:integrated:$MIGRATED_ATTR:30   # should be (nil) right after merge
 ```
 **Pass:** all gone immediately after the merge (not just after TTL).
 

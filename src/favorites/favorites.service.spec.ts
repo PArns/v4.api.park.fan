@@ -346,7 +346,7 @@ describe("FavoritesService", () => {
       // is asserted through the mock first, or the absences below would be
       // green for the wrong reason.
       attractionRepo.find.mockResolvedValueOnce([attractionEntity]);
-      redisStore.set(`attraction:integrated:${validAttractionUuid}`, "null");
+      redisStore.set(`attraction:integrated:${validAttractionUuid}:30`, "null");
       const queuesCalls =
         queueDataService.findCurrentStatusByAttractionIds.mock.calls.length;
 
@@ -372,7 +372,7 @@ describe("FavoritesService", () => {
     it("keeps effectiveStatus when the response comes from the integrated cache", async () => {
       attractionRepo.find.mockResolvedValueOnce([attractionEntity]);
       redisStore.set(
-        `attraction:integrated:${validAttractionUuid}`,
+        `attraction:integrated:${validAttractionUuid}:30`,
         JSON.stringify({
           id: validAttractionUuid,
           name: "Fēnix",
@@ -510,7 +510,7 @@ describe("FavoritesService", () => {
     it("passes the integrated cache's baseline through on a cache hit", async () => {
       attractionRepo.find.mockResolvedValueOnce([attractionEntity]);
       redisStore.set(
-        `attraction:integrated:${validAttractionUuid}`,
+        `attraction:integrated:${validAttractionUuid}:30`,
         JSON.stringify({
           id: validAttractionUuid,
           name: "Frozen Ever After",

@@ -210,6 +210,10 @@ export class MLService {
   // not one per concurrent request. Shared by the calendar and yearly views.
   private readonly servingFlight = new SingleFlight();
 
+  // Same guard for the park-level ml-service read (`ml:park:{id}:{type}:{date}`):
+  // the hourly key lapses every 30 min and every park page then misses at once.
+  private readonly parkPredictionFlight = new SingleFlight();
+
   constructor(
     @InjectRepository(WaitTimePrediction)
     private predictionRepository: Repository<WaitTimePrediction>,
@@ -470,6 +474,29 @@ export class MLService {
       return cachedData;
     }
 
+    // maxDays and liveStatus change what the build returns, so they are part of the flight key.
+    return this.parkPredictionFlight.run(
+      `${cacheKey}:${maxDays ?? ""}:${liveStatus ?? ""}`,
+      () =>
+        this.buildRawParkPredictions(
+          park,
+          predictionType,
+          cacheKey,
+          maxDays,
+          liveStatus,
+        ),
+    );
+  }
+
+  /** The cache-miss half of {@link getRawParkPredictions}: one ml-service call, written to `cacheKey`. */
+  private async buildRawParkPredictions(
+    park: Park,
+    predictionType: "hourly" | "daily",
+    cacheKey: string,
+    maxDays?: number,
+    liveStatus?: "OPERATING" | "CLOSED",
+  ): Promise<BulkPredictionResponseDto> {
+    const parkId = park.id;
     try {
       // 1. Fetch park with timezone (already fetched above for cache key)
       // Park timezone is already loaded

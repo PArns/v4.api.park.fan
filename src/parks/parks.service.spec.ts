@@ -2569,11 +2569,12 @@ describe("ParksService", () => {
         // The geo skeleton is the entry named in the issue: it lists every
         // park and the frontend builds links and sitemap entries from it.
         expect(evicted).toContain(CacheKeys.discoveryGeoStructure());
-        // The inherited ride, whose integrated payload embeds park context.
+        // The inherited ride, whose cached payloads embed park context (its
+        // integrated response goes by pattern, one key per `days` variant).
         // Passing no attraction ids would evict every key above and still
         // leave this one, which is why it is asserted separately.
         expect(evicted).toContain(
-          CacheKeys.attractionIntegrated(inheritedAttractionId),
+          CacheKeys.attractionP50(inheritedAttractionId),
         );
         expect(mockRevalidationService.revalidateTags).toHaveBeenCalledWith(
           REVALIDATED_TAGS,
@@ -2607,7 +2608,7 @@ describe("ParksService", () => {
         expect(evicted).toContain(CacheKeys.parkIntegrated(ghostParkId));
         expect(evicted).toContain(CacheKeys.discoveryGeoStructure());
         expect(evicted).toContain(
-          CacheKeys.attractionIntegrated(inheritedAttractionId),
+          CacheKeys.attractionP50(inheritedAttractionId),
         );
         expect(mockRevalidationService.revalidateTags).toHaveBeenCalledWith(
           REVALIDATED_TAGS,
