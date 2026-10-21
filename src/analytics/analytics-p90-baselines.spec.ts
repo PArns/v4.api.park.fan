@@ -439,6 +439,19 @@ describe("AnalyticsService — P90 + hourly history", () => {
       expect(result.get("a1")).toBe(3);
       expect(result.get("a2")).toBe(0);
     });
+
+    // PAR-897. The second column of the same row had the same gap: a carried
+    // DOWN counts as an outage hour of its own, so a frozen feed published up
+    // to 11 outage hours a day the ride was reported down once. Asserted
+    // against the helper's own text for the reason given one describe above.
+    it("counts observations only — carried DOWN rows are excluded", async () => {
+      queueDataRepo.query.mockResolvedValueOnce([]);
+
+      await service.computeParkDownCountForDate("p1", "2026-05-18", "UTC");
+
+      const [sql] = queueDataRepo.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain(observedReadingsSql("qd"));
+    });
   });
 
   describe("saveAttractionHourlyHistoryBatch", () => {
