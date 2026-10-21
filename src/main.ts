@@ -6,6 +6,8 @@ import compression from "compression";
 import helmet from "helmet";
 import { SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
+import { enableGracefulShutdown } from "./common/utils/graceful-shutdown";
+import { installCrashHandlers } from "./common/utils/crash-handlers";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.interceptor";
@@ -18,21 +20,6 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 
-function writeCrashLog(type: string, message: string): void {
-  const logsDir = path.join(process.cwd(), "logs");
-  if (!fs.existsSync(logsDir)) {
-    fs.mkdirSync(logsDir, { recursive: true });
-  }
-  const entry =
-    JSON.stringify({ timestamp: new Date().toISOString(), type, message }) +
-    "\n";
-  try {
-    fs.appendFileSync(path.join(logsDir, "crash.log"), entry, "utf8");
-  } catch {
-    // ignore — we're already crashing
-  }
-}
-
 // Suppress EPIPE on stdout/stderr — happens when Docker's log pipe closes while
 // the process is still writing (e.g. under heavy error-log volume). Not a crash.
 process.stdout.on("error", (err: NodeJS.ErrnoException) => {
@@ -42,21 +29,10 @@ process.stderr.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code !== "EPIPE") throw err;
 });
 
-process.on("uncaughtException", (error: Error) => {
-  // EPIPE on stdout/stderr is benign — the log pipe closed, the API is fine.
-  if ((error as NodeJS.ErrnoException).code === "EPIPE") return;
-  const message = error.stack ?? error.message;
-  writeCrashLog("uncaughtException", message);
-  process.exit(1);
-});
-
-process.on("unhandledRejection", (reason: unknown) => {
-  const message =
-    reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
-  console.error("[CRASH] unhandledRejection", message);
-  writeCrashLog("unhandledRejection", message);
-  process.exit(1);
-});
+// Record an uncaught exception or an unhandled rejection and end the process —
+// unless the shutdown hooks are running, where a rejection out of a closing
+// connection must not abort them (PAR-903).
+installCrashHandlers();
 
 async function bootstrap(): Promise<void> {
   const logLevel = process.env.LOG_LEVEL ?? "log";
@@ -70,6 +46,12 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: logLevelMap[logLevel] ?? logLevelMap["log"],
   });
+
+  // Make SIGTERM run the lifecycle hooks — a Coolify redeploy stops the old
+  // container with it, and without this nothing closed the Bull queues, the
+  // TypeORM pool or the abortable boot chains (PAR-903). Enabled before the
+  // middleware wiring so a signal during the boot is covered too.
+  enableGracefulShutdown(app);
 
   // Trust the proxy in front of us (Cloudflare → reverse proxy) so
   // `req.ip` and protocol reflect the real client, not the edge. Rate
