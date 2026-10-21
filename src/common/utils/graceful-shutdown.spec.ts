@@ -4,6 +4,7 @@ import {
   SHUTDOWN_DEADLINE_MS,
   SHUTDOWN_SIGNALS,
   enableGracefulShutdown,
+  isShuttingDown,
 } from "./graceful-shutdown";
 
 type Handler = (...args: unknown[]) => void;
@@ -124,5 +125,42 @@ describe("enableGracefulShutdown", () => {
 
   it("leaves Coolify's 30 s stop timeout head room", () => {
     expect(SHUTDOWN_DEADLINE_MS).toBeLessThan(30_000);
+  });
+
+  // The three cases below cover the one way this file can make a shutdown
+  // worse than no shutdown at all: `logToFile` creates the log directory
+  // outside its own try/catch, so the trace throws on a read-only or full
+  // mount — and an exception out of a signal listener reaches the
+  // `uncaughtException` handler.
+  it("arms the deadline even when the trace throws on the signal", () => {
+    trace.mockImplementation(() => {
+      throw new Error("EROFS: read-only file system, mkdir '/app/logs'");
+    });
+    enable();
+
+    expect(() => proc.raise(ShutdownSignal.SIGTERM)).not.toThrow();
+
+    jest.advanceTimersByTime(deadlineMs);
+    expect(proc.exits).toEqual([FORCED_SHUTDOWN_EXIT_CODE]);
+  });
+
+  it("forces the exit even when the trace throws on the deadline", () => {
+    enable();
+    proc.raise(ShutdownSignal.SIGTERM);
+    trace.mockImplementation(() => {
+      throw new Error("ENOSPC: no space left on device");
+    });
+
+    expect(() => jest.advanceTimersByTime(deadlineMs)).not.toThrow();
+    expect(proc.exits).toEqual([FORCED_SHUTDOWN_EXIT_CODE]);
+  });
+
+  it("reports a running shutdown, which is what keeps the crash handlers out of it", () => {
+    enable();
+    expect(isShuttingDown()).toBe(false);
+
+    proc.raise(ShutdownSignal.SIGTERM);
+
+    expect(isShuttingDown()).toBe(true);
   });
 });
