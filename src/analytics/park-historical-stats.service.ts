@@ -881,7 +881,7 @@ export class ParkHistoricalStatsService {
   ): Promise<Record<string, unknown>[]> {
     return this.aggregateRepo.manager.query(
       `WITH ${closedParkDaysCte("$1")},
-       ${openingHoursCtes("$1")},
+       ${openingHoursCtes("$1", "$3", "$4")},
        eligible AS (
          SELECT qda."attractionId"                    AS aid,
                 COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date)::int AS sample_days
@@ -993,7 +993,7 @@ export class ParkHistoricalStatsService {
     const rows: Array<Record<string, unknown>> =
       await this.aggregateRepo.manager.query(
         `WITH ${closedParkDaysCte("$1")},
-         ${openingHoursCtes("$1")},
+         ${openingHoursCtes("$1", "$3", "$4")},
          per_attraction_day AS (
            SELECT
              (qda.hour AT TIME ZONE $2)::date                     AS day,
@@ -1087,7 +1087,7 @@ export class ParkHistoricalStatsService {
     // 20-day floor decides differently for 14 of them.
     return this.aggregateRepo.manager.query(
       `WITH ${closedParkDaysCte("$1")},
-       ${openingHoursCtes("$1")}
+       ${openingHoursCtes("$1", "$3", "$4")}
        SELECT
          a.slug,
          COALESCE(a.curated_name, a.name)                        AS name,

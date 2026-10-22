@@ -167,7 +167,7 @@ export function isNotAClosedParkDay(parkLocalDayExpr: string): string {
  * Two CTEs, `park_open_hours` and `park_scheduled_days`, that
  * {@link isWithinOpeningHours} reads. They hold the hour buckets (UTC, as
  * `queue_data_aggregates.hour` is stored) that overlap a park-level entry with
- * both times, and the park-local days that carry such an OPERATING entry.
+ * both times, and the park-local days that carry such an entry.
  *
  * Some feeds report rides as OPERATING around the clock: Energylandia posts 0
  * minutes from 22:00 to 09:00, Toverland 5 to 10 minutes all night. The
@@ -175,47 +175,64 @@ export function isNotAClosedParkDay(parkLocalDayExpr: string): string {
  * averaging those hours in pulls Zadra's median from ~20 to 10 (PAR-981).
  *
  * `EXTRA_HOURS` and `TICKETED_EVENT` entries extend the open window, so rides
- * that run late for an event keep their hours. An entry longer than 24 hours
- * or with a closing time before its opening is not a window and is ignored, as
- * in `h5-profile.service.ts`.
+ * that run late for an event keep their hours, and a day that carries only
+ * such an entry is a scheduled day too: its rides count inside that window
+ * alone. An entry longer than 24 hours or with a closing time before its
+ * opening is not a window and is ignored, as in `h5-profile.service.ts`.
  *
- * Unbounded by date for the same reason as {@link closedParkDaysCte}: the
- * park's few hundred park-level rows read in one scan, and the CTEs stay free
- * of placeholders. Joined as hashed sub-selects, not per-row index probes.
+ * Both CTEs are bounded to the query's window (one day of slack either side,
+ * because the window is compared in UTC and the day is park-local) and
+ * de-duplicated. Unbounded, `generate_series` is estimated at 1,000 rows per
+ * schedule row; past roughly a thousand rows the planner no longer expects the
+ * set to fit `work_mem`, and the `IN` turns into an unhashed SubPlan that
+ * rescans the CTE for every aggregate row. `DISTINCT` gives the planner a
+ * small estimate and keeps the hash.
  *
  * @param parkIdParam The caller's placeholder holding the park id, e.g. `"$1"`.
- *   A compile-time constant from our own SQL, never user input.
+ * @param fromParam Placeholder holding the window's first day (`date`).
+ * @param toParam Placeholder holding the window's last day (`date`).
+ *   All three are compile-time constants from our own SQL, never user input.
  */
-export function openingHoursCtes(parkIdParam: string): string {
+export function openingHoursCtes(
+  parkIdParam: string,
+  fromParam: string,
+  toParam: string,
+): string {
+  const timedParkEntry = `se."parkId" = ${parkIdParam}::text::uuid
+       AND se."attractionId" IS NULL
+       AND se."scheduleType" IN ('OPERATING', 'EXTRA_HOURS', 'TICKETED_EVENT')
+       AND se.date BETWEEN ${fromParam}::date - 1 AND ${toParam}::date + 1
+       AND se."openingTime" IS NOT NULL
+       AND se."closingTime" > se."openingTime"
+       AND se."closingTime" - se."openingTime" <= INTERVAL '24 hours'`;
   return `park_open_hours AS (
-     SELECT generate_series(
+     SELECT DISTINCT generate_series(
               date_trunc('hour', se."openingTime" AT TIME ZONE 'UTC'),
               date_trunc('hour', (se."closingTime" - INTERVAL '1 microsecond') AT TIME ZONE 'UTC'),
               INTERVAL '1 hour'
             ) AS hr
      FROM schedule_entries se
-     WHERE se."parkId" = ${parkIdParam}::text::uuid
-       AND se."attractionId" IS NULL
-       AND se."scheduleType" IN ('OPERATING', 'EXTRA_HOURS', 'TICKETED_EVENT')
-       AND se."openingTime" IS NOT NULL
-       AND se."closingTime" > se."openingTime"
-       AND se."closingTime" - se."openingTime" <= INTERVAL '24 hours'
+     WHERE ${timedParkEntry}
    ),
    park_scheduled_days AS (
      SELECT DISTINCT se.date AS day
      FROM schedule_entries se
-     WHERE se."parkId" = ${parkIdParam}::text::uuid
-       AND se."attractionId" IS NULL
-       AND se."scheduleType" = 'OPERATING'
-       AND se."openingTime" IS NOT NULL
-       AND se."closingTime" > se."openingTime"
-       AND se."closingTime" - se."openingTime" <= INTERVAL '24 hours'
+     WHERE ${timedParkEntry}
+       -- An untimed OPERATING row says the park is open all day for all we
+       -- know, so a timed early-entry window beside it must not narrow it.
+       AND (se."scheduleType" = 'OPERATING' OR NOT EXISTS (
+             SELECT 1 FROM schedule_entries op
+             WHERE op."parkId" = se."parkId"
+               AND op."attractionId" IS NULL
+               AND op.date = se.date
+               AND op."scheduleType" = 'OPERATING'
+           ))
    )`;
 }
 
 /**
  * The predicate that keeps an hour in: it overlaps an opening window, or its
- * park-local day has no timed OPERATING entry at all, so a park or a day
+ * park-local day has no timed park-level entry at all, so a park or a day
  * without a timetable reads as it did before. Needs {@link openingHoursCtes}
  * in the same statement.
  *

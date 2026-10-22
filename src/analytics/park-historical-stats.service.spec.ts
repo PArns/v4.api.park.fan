@@ -295,6 +295,10 @@ describe("ParkHistoricalStatsService", () => {
     for (const sql of [top, days]) {
       expect(sql).toContain("park_open_hours");
       expect(sql).toContain("NOT IN (SELECT day FROM park_scheduled_days)");
+      // Bounded to the query window and de-duplicated, so the planner keeps
+      // the `IN` a hashed SubPlan instead of rescanning per row.
+      expect(sql).toContain("se.date BETWEEN $3::date - 1 AND $4::date + 1");
+      expect(sql).toContain("SELECT DISTINCT generate_series(");
     }
     // A park or a day without a timetable keeps every hour, as before.
     expect(top).toMatch(
