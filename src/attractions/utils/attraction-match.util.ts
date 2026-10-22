@@ -21,6 +21,19 @@ export function normalizeName(name: string): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
+/**
+ * The normalized name of the ride a Queue-Times "<ride> Single Rider" entry
+ * queues for, or `null` when the name carries no such suffix. Queue-Times
+ * lists the single-rider line as a park entry of its own; it is a queue of the
+ * ride beside it, not a ride.
+ */
+export function singleRiderBaseName(name: string): string | null {
+  const base = name.replace(/\s+single[\s-]?rider$/i, "");
+  if (base === name) return null;
+  const normalized = normalizeName(base);
+  return normalized.length > 0 ? normalized : null;
+}
+
 export interface AttractionMatchCandidate {
   id: string;
   externalId: string | null;

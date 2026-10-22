@@ -24,6 +24,7 @@ import { isCanonicalUuid } from "../../common/utils/uuid-param.util";
 import {
   findExistingAttraction,
   normalizeName,
+  singleRiderBaseName,
 } from "../../attractions/utils/attraction-match.util";
 import { publishedHeightUnit } from "../../common/utils/height-unit.util";
 import { ExternalEntityMapping } from "../../database/entities/external-entity-mapping.entity";
@@ -1909,6 +1910,23 @@ export class ChildrenMetadataProcessor {
       if (normalized.length > 0 && showNames.has(normalized)) {
         this.logger.log(
           `⏭️  Not creating Queue-Times attraction "${entity.name}" — this park already carries a show of that name`,
+        );
+        return;
+      }
+
+      // Queue-Times also lists a ride's single-rider line as an entry of its
+      // own, written as STANDBY. The ride beside it already carries
+      // `has_single_rider`, so the row would count as a second ride (PAR-556).
+      // Creation only, like the show guard above.
+      const singleRiderBase = singleRiderBaseName(entity.name ?? "");
+      if (
+        singleRiderBase &&
+        existingAttractions.some(
+          (a) => normalizeName(a.name ?? "") === singleRiderBase,
+        )
+      ) {
+        this.logger.log(
+          `⏭️  Not creating Queue-Times attraction "${entity.name}" — it is the single-rider line of a ride this park already carries`,
         );
         return;
       }
