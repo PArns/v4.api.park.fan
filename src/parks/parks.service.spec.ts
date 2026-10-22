@@ -1,5 +1,6 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
+import { IsNull } from "typeorm";
 import { ParksService } from "./parks.service";
 import { Park } from "./entities/park.entity";
 import { ScheduleEntry, ScheduleType } from "./entities/schedule-entry.entity";
@@ -224,7 +225,9 @@ describe("ParksService", () => {
 
       expect(result).toEqual(testParks);
       expect(mockParkRepository.find).toHaveBeenCalledTimes(1);
+      // A retired park leaves findAll, and with it every job that loops parks.
       expect(mockParkRepository.find).toHaveBeenCalledWith({
+        where: { retiredAt: IsNull() },
         relations: ["destination"],
         order: { name: "ASC" },
       });

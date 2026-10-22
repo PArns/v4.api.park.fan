@@ -230,4 +230,72 @@ describe("isOnParkPage", () => {
       ),
     ).toBe(false);
   });
+
+  describe("retirePark", () => {
+    const buildPark = () => {
+      const parkUpdate = jest.fn().mockResolvedValue({});
+      const parkFindOne = jest
+        .fn()
+        .mockResolvedValue({ id: "p1", name: "Six Flags America" });
+      const update = jest.fn().mockResolvedValue({});
+      const find = jest.fn().mockResolvedValue([{ id: "a1" }, { id: "a2" }]);
+      const redis = {
+        del: jest.fn(),
+        keys: jest.fn().mockResolvedValue([]),
+        scan: jest.fn().mockResolvedValue(["0", []]),
+        pipeline: jest.fn(() => ({ del: jest.fn(), exec: jest.fn() })),
+      };
+      const revalidateTags = jest.fn().mockResolvedValue(undefined);
+      const manager = {
+        getRepository: () => ({ findOne: parkFindOne, update: parkUpdate }),
+      };
+      const service = new AttractionRetirementService(
+        { update, find, manager } as never,
+        redis as never,
+        { revalidateTags } as never,
+      );
+      return { service, parkUpdate, update, find, revalidateTags };
+    };
+
+    it("retires the park and its still-active rides on the same day", async () => {
+      const { service, parkUpdate, update, find } = buildPark();
+
+      const result = await service.retirePark(
+        "p1",
+        "2025-11-02",
+        "Closed after the 2025 season — foxla.com",
+      );
+
+      expect(parkUpdate).toHaveBeenCalledWith("p1", {
+        retiredAt: new Date("2025-11-02"),
+        retiredReason: "Closed after the 2025 season — foxla.com",
+      });
+      // Only active rides: one retired earlier keeps its own date.
+      expect(find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ parkId: "p1" }),
+        }),
+      );
+      expect(update).toHaveBeenCalledWith(["a1", "a2"], {
+        retiredAt: new Date("2025-11-02"),
+        retiredReason: "Closed after the 2025 season — foxla.com",
+      });
+      expect(result).toEqual({
+        parkId: "p1",
+        name: "Six Flags America",
+        attractions: 2,
+      });
+    });
+
+    it("refuses a bad date or an empty reason before writing", async () => {
+      const { service, parkUpdate } = buildPark();
+      await expect(service.retirePark("p1", "soon", "x")).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.retirePark("p1", "2025-11-02", " ")).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(parkUpdate).not.toHaveBeenCalled();
+    });
+  });
 });

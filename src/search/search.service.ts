@@ -684,6 +684,8 @@ export class SearchService implements OnModuleInit {
               .orWhere(":query <% park.name");
           }),
         )
+        // A retired park keeps its page but leaves search, like a closed ride.
+        .andWhere("park.retiredAt IS NULL")
         .orderBy(
           // Priority Ranking (Lower is better):
           // 0: Exact Name Match
@@ -1919,6 +1921,7 @@ export class SearchService implements OnModuleInit {
         "destination.id",
         "destination.name",
       ])
+      .where("park.retiredAt IS NULL")
       .getMany();
     return rows.map((p) => this.mapParkForIndex(p));
   }

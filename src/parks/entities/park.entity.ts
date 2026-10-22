@@ -184,6 +184,21 @@ export class Park {
   curatedName: string | null;
 
   /**
+   * When the park closed for good — the operator's last operating day, not the
+   * day somebody noticed. Same meaning as `attractions.retired_at` for a ride
+   * retired as closed: the park keeps its page and its history, and that page
+   * says it is closed, but it leaves every listing (`findAll`, the geo lists,
+   * search, discovery, nearby) and so every job that iterates parks. Written
+   * only by hand through `POST /admin/retire-parks`; no sync writes it.
+   */
+  @Column({ name: "retired_at", type: "timestamptz", nullable: true })
+  retiredAt: Date | null;
+
+  /** Why, with the source it was established from. User-facing. */
+  @Column({ name: "retired_reason", type: "text", nullable: true })
+  retiredReason: string | null;
+
+  /**
    * `THEME_PARK` / `WATER_PARK`, corrected.
    *
    * `park_type` is inferred upstream and gets combined resorts wrong — a water
