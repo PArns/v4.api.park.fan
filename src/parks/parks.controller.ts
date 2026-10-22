@@ -2161,7 +2161,7 @@ export class ParksController {
   }
 }
 
-/** Longest explicit `stats/hourly` window, the same as the `years` ceiling. */
+/** Longest explicit `stats/hourly` window in days, both ends counted. */
 const MAX_HOURLY_RANGE_DAYS = 5 * 366;
 
 /**
@@ -2182,7 +2182,8 @@ export function parseHourlyProfileRange(
   if (from > to) {
     throw new BadRequestException("from must not be after to");
   }
-  if (Date.parse(to) - Date.parse(from) >= MAX_HOURLY_RANGE_DAYS * 86_400_000) {
+  const inclusiveDays = (Date.parse(to) - Date.parse(from)) / 86_400_000 + 1;
+  if (inclusiveDays > MAX_HOURLY_RANGE_DAYS) {
     throw new BadRequestException("The window may span at most five years");
   }
   return { from, to };

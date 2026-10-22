@@ -19,11 +19,18 @@ park-local days, both inclusive, instead of the last `years` years, and
 `meta.dataFrom` / `meta.dataTo` echo them; `meta.windowYears` then reports the
 span read in years (one decimal) rather than the `years` parameter. Both or
 neither: one alone, a day the calendar does not have, `from` after `to` or a
-span over five years answers 400. A window with too few measured days is not an
+span over 1830 days (both ends counted) answers 400. A window with too few measured days is not an
 error — it answers `meta.displayable: false`, usually because no ride clears
 `minAttractionDays` (20 by default; lower it for a short window). Each window
 is its own cache entry; a request without one keeps the key and the answer it
 always had.
+
+Known limit, shared with the default window: the SQL bounds the aggregate scan
+at `$from::date` / `$to::date + 1 day` as timestamps in the session zone (UTC),
+not at the park's midnight, so for a park east of UTC the first few local hours
+of `from` are missing and a few hours of the day after `to` are read. The days
+themselves are counted park-local. Fixing the bound changes the default answer
+too, so it is a separate change.
 
 ## Why it is its own endpoint
 

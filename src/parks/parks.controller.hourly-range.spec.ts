@@ -17,6 +17,14 @@ describe("parseHourlyProfileRange (PAR-978)", () => {
     });
   });
 
+  it("allows 1830 days, both ends counted, and no more", () => {
+    // 2021-10-22 → 2026-10-25 is 1830 days inclusive.
+    expect(parseHourlyProfileRange("2021-10-22", "2026-10-25")).toBeDefined();
+    expect(() => parseHourlyProfileRange("2021-10-21", "2026-10-25")).toThrow(
+      BadRequestException,
+    );
+  });
+
   it.each([
     ["2025-12-01", undefined],
     [undefined, "2026-10-21"],
