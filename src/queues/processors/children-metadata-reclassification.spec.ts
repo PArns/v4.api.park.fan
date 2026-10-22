@@ -430,7 +430,7 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       expect(retirementService.unretire).not.toHaveBeenCalled();
       expect(attractionRepo.find).toHaveBeenCalledWith(
         expect.objectContaining({
-          select: expect.arrayContaining(["retiredKind"]),
+          select: expect.objectContaining({ retiredKind: true }),
         }),
       );
     });
