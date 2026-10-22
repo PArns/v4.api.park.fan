@@ -40,7 +40,10 @@ import { Attraction } from "./attraction.entity";
 // statement as its mirror. Storing both would let a UNION-style read surface
 // the pair twice — the bug that made the duplicate detector count 63 rows for
 // 53 real pairs. The canonical order is enforced here rather than remembered.
+// Named explicitly: TypeORM 1 hashes check expressions differently, and a new
+// generated name would make `synchronize` drop and re-add the constraint.
 @Check(
+  "CHK_c974a586f663a6ac971b85f016",
   `"other_attraction_id" IS NULL OR "attraction_id" < "other_attraction_id"`,
 )
 export class AttractionReviewMark {

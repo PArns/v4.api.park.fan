@@ -406,14 +406,14 @@ export class ParkValidatorService {
 
     const parksWithQtId = await this.parkRepository.find({
       where: { queueTimesEntityId: Not(IsNull()) },
-      select: [
-        "id",
-        "name",
-        "city",
-        "queueTimesEntityId",
-        "latitude",
-        "longitude",
-      ],
+      select: {
+        id: true,
+        name: true,
+        city: true,
+        queueTimesEntityId: true,
+        latitude: true,
+        longitude: true,
+      },
     });
 
     if (parksWithQtId.length === 0) return [];
@@ -525,7 +525,12 @@ export class ParkValidatorService {
 
     const parksWithWzId = await this.parkRepository.find({
       where: { wartezeitenEntityId: Not(IsNull()) },
-      select: ["id", "name", "city", "wartezeitenEntityId"],
+      select: {
+        id: true,
+        name: true,
+        city: true,
+        wartezeitenEntityId: true,
+      },
     });
 
     if (parksWithWzId.length === 0) return [];
@@ -612,16 +617,16 @@ export class ParkValidatorService {
    */
   async findDuplicates(): Promise<DuplicatePair[]> {
     const allParks = await this.parkRepository.find({
-      select: [
-        "id",
-        "name",
-        "city",
-        "wikiEntityId",
-        "queueTimesEntityId",
-        "wartezeitenEntityId",
-        "latitude",
-        "longitude",
-      ],
+      select: {
+        id: true,
+        name: true,
+        city: true,
+        wikiEntityId: true,
+        queueTimesEntityId: true,
+        wartezeitenEntityId: true,
+        latitude: true,
+        longitude: true,
+      },
     });
 
     const attractionNames = await this.loadAttractionNames();
@@ -787,7 +792,10 @@ export class ParkValidatorService {
    */
   private async loadAttractionNames(): Promise<Map<string, Set<string>>> {
     const attractions = await this.attractionRepository.find({
-      select: ["parkId", "name"],
+      select: {
+        parkId: true,
+        name: true,
+      },
       where: { retiredAt: IsNull() },
     });
     const byPark = new Map<string, Set<string>>();
@@ -860,7 +868,13 @@ export class ParkValidatorService {
 
     const parksWithoutQtId = await this.parkRepository.find({
       where: { queueTimesEntityId: IsNull() },
-      select: ["id", "name", "city", "latitude", "longitude"],
+      select: {
+        id: true,
+        name: true,
+        city: true,
+        latitude: true,
+        longitude: true,
+      },
     });
 
     if (parksWithoutQtId.length === 0) return [];
@@ -955,7 +969,11 @@ export class ParkValidatorService {
 
     const parksWithoutWzId = await this.parkRepository.find({
       where: { wartezeitenEntityId: IsNull() },
-      select: ["id", "name", "city"],
+      select: {
+        id: true,
+        name: true,
+        city: true,
+      },
     });
 
     if (parksWithoutWzId.length === 0) return [];

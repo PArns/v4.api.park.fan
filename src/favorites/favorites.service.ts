@@ -336,7 +336,9 @@ export class FavoritesService {
     // stored id is left alone so the favorite returns with the row.
     return this.attractionRepository.find({
       where: { id: In(ids), retiredAt: IsNull() },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
     });
   }
 
@@ -352,7 +354,9 @@ export class FavoritesService {
     // row can come back, and then so does the favorite.
     return this.showRepository.find({
       where: { id: In(ids), retiredAt: IsNull() },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
     });
   }
 
@@ -366,7 +370,9 @@ export class FavoritesService {
     // See `fetchShows`.
     return this.restaurantRepository.find({
       where: { id: In(ids), retiredAt: IsNull() },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
     });
   }
 

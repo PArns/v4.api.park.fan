@@ -38,7 +38,7 @@ describe("PlanDayCoverageService", () => {
                   parks.map((p) => ({ id: p.id })),
                 ),
             },
-            findByIds: jest.fn().mockImplementation(async () => parks),
+            findBy: jest.fn().mockImplementation(async () => parks),
           },
         },
         {

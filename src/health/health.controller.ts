@@ -8,7 +8,7 @@ import { getMlServiceUrl, getNfServiceUrl } from "../config/ml-services.config";
 import { SkipThrottle } from "@nestjs/throttler";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { InjectConnection, InjectRepository } from "@nestjs/typeorm";
-import { Connection, Repository, MoreThanOrEqual } from "typeorm";
+import { DataSource, Repository, MoreThanOrEqual } from "typeorm";
 import { Park } from "../parks/entities/park.entity";
 import { Attraction } from "../attractions/entities/attraction.entity";
 import { QueueData } from "../queue-data/entities/queue-data.entity";
@@ -91,7 +91,7 @@ export class HealthController {
   } | null = null;
 
   constructor(
-    @InjectConnection() private connection: Connection,
+    @InjectConnection() private connection: DataSource,
     @InjectRepository(Park)
     private parkRepository: Repository<Park>,
     @InjectRepository(Attraction)
@@ -349,7 +349,12 @@ export class HealthController {
     try {
       const activeModel = await this.mlModelRepository.findOne({
         where: { isActive: true },
-        select: ["version", "trainedAt", "mae", "rmse"],
+        select: {
+          version: true,
+          trainedAt: true,
+          mae: true,
+          rmse: true,
+        },
       });
       return activeModel || null;
     } catch {

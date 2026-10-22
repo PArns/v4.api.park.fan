@@ -52,6 +52,8 @@ export const REDIS_CLIENT = "REDIS_CLIENT";
           host: configService.get<string>("REDIS_HOST") || "localhost",
           port: parseInt(configService.get<string>("REDIS_PORT") || "6379", 10),
           password: configService.get<string>("REDIS_PASSWORD") || undefined,
+          // ioredis 6 defaults to RESP3, which changes reply shapes; keep v5's wire protocol.
+          protocol: 2,
           // Performance optimizations
           enableReadyCheck: true,
           maxRetriesPerRequest: 3,

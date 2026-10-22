@@ -643,7 +643,10 @@ export class LocationService {
     // Get park ID from first attraction
     const attraction = await this.attractionRepository.findOne({
       where: { id: attractionIds[0] },
-      select: ["id", "parkId"],
+      select: {
+        id: true,
+        parkId: true,
+      },
     });
 
     if (!attraction) {

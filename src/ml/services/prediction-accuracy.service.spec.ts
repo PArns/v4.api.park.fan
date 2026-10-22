@@ -873,9 +873,9 @@ describe("PredictionAccuracyService", () => {
       await service.compareWithActuals();
 
       const [options] = accuracyRepo.find.mock.calls[0];
-      expect((options as { select: string[] }).select).toContain(
-        "servedWaitTime",
-      );
+      expect(
+        (options as { select: Record<string, boolean> }).select,
+      ).toHaveProperty("servedWaitTime", true);
     });
   });
 

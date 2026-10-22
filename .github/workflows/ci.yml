@@ -23,10 +23,10 @@ jobs:
       # Reads the pnpm version from "packageManager" in package.json.
       - uses: pnpm/action-setup@v4
 
-      # Node 22 matches the Dockerfile; package.json has no "engines" field.
+      # Node 26 matches the Dockerfile and "engines" in package.json.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile

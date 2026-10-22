@@ -1,5 +1,5 @@
 # Stage 1: Builder
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /app
 
@@ -216,7 +216,7 @@ EOFSCRIPT
 RUN pnpm run build
 
 # Stage 2: Production
-FROM node:22-alpine AS production
+FROM node:26-alpine AS production
 
 WORKDIR /app
 

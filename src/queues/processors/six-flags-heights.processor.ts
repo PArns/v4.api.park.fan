@@ -36,7 +36,9 @@ export class SixFlagsHeightsProcessor {
     const repo = this.attractionsService.getRepository();
     const pending = await repo.find({
       where: { minimumHeight: IsNull() },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
       select: { id: true, slug: true, minimumHeight: true },
     });
 

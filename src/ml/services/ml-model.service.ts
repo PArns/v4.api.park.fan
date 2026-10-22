@@ -135,16 +135,16 @@ export class MLModelService {
    */
   async getMetricsHistory(limit: number = 30): Promise<ModelMetricsHistoryDto> {
     const [models, total] = await this.mlModelRepository.findAndCount({
-      select: [
-        "version",
-        "trainedAt",
-        "mae",
-        "rmse",
-        "mape",
-        "r2Score",
-        "trainSamples",
-        "isActive",
-      ],
+      select: {
+        version: true,
+        trainedAt: true,
+        mae: true,
+        rmse: true,
+        mape: true,
+        r2Score: true,
+        trainSamples: true,
+        isActive: true,
+      },
       // Newest `limit` models (PAR-632), handed out oldest first for the chart.
       order: { trainedAt: "DESC" },
       take: limit,

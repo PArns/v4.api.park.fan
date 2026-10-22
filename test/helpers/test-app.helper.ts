@@ -27,6 +27,8 @@ export async function createTestApp(
         entities: [__dirname + "/../../src/**/*.entity{.ts,.js}"],
         synchronize: true, // Auto-create schema for tests
         logging: false, // Disable SQL logging in tests
+        // Same as production (src/config/typeorm.config.ts).
+        invalidWhereValuesBehavior: { null: "ignore", undefined: "ignore" },
       }),
       ...moduleImports,
     ],

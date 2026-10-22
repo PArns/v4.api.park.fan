@@ -153,7 +153,10 @@ export class RideProfileService implements OnModuleInit {
   async findCuratedSince(since: Date): Promise<TouchedPark[]> {
     const rows = await this.repo.find({
       where: { seededAt: MoreThanOrEqual(since) },
-      select: ["attractionId", "parkId"],
+      select: {
+        attractionId: true,
+        parkId: true,
+      },
     });
 
     const byPark = new Map<string, string[]>();

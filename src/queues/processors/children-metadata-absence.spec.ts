@@ -138,7 +138,10 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
             retiredAt: IsNull(),
             queueTimesEntityId: IsNull(),
           },
-          select: expect.arrayContaining(["updatedAt", "absentSince"]),
+          select: expect.objectContaining({
+            updatedAt: true,
+            absentSince: true,
+          }),
         }),
       );
     });
@@ -501,7 +504,7 @@ describe("ChildrenMetadataProcessor — attractions absent upstream", () => {
 
         expect(attractionRepo.find).toHaveBeenCalledWith(
           expect.objectContaining({
-            select: expect.arrayContaining(["lastListedAt"]),
+            select: expect.objectContaining({ lastListedAt: true }),
           }),
         );
       });

@@ -370,7 +370,7 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       // while every mocked test above stays green.
       expect(attractionRepo.find).toHaveBeenCalledWith(
         expect.objectContaining({
-          select: expect.arrayContaining(["retiredReason"]),
+          select: expect.objectContaining({ retiredReason: true }),
         }),
       );
     });

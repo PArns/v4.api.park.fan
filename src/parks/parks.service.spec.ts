@@ -228,7 +228,7 @@ describe("ParksService", () => {
       // A retired park leaves findAll, and with it every job that loops parks.
       expect(mockParkRepository.find).toHaveBeenCalledWith({
         where: { retiredAt: IsNull() },
-        relations: ["destination"],
+        relations: { destination: true },
         order: { name: "ASC" },
       });
     });
@@ -256,7 +256,7 @@ describe("ParksService", () => {
       expect(result?.id).toBe(testPark.id);
       expect(mockParkRepository.findOne).toHaveBeenCalledWith({
         where: { slug: "test-magic-kingdom" },
-        relations: ["destination"],
+        relations: { destination: true },
       });
       // attractions/shows/restaurants come from the entity manager
       expect(result?.attractions).toEqual([]);
@@ -272,7 +272,7 @@ describe("ParksService", () => {
       expect(result).toBeNull();
       expect(mockParkRepository.findOne).toHaveBeenCalledWith({
         where: { slug: "non-existent" },
-        relations: ["destination"],
+        relations: { destination: true },
       });
     });
   });
@@ -309,7 +309,7 @@ describe("ParksService", () => {
       expect(result).toEqual(testPark);
       expect(mockParkRepository.findOne).toHaveBeenCalledWith({
         where: { id: testPark.id },
-        relations: ["destination"],
+        relations: { destination: true },
       });
     });
   });

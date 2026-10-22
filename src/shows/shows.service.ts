@@ -73,7 +73,9 @@ export class ShowsService {
   async findAll(): Promise<Show[]> {
     return this.showRepository.find({
       where: { retiredAt: IsNull() },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
       order: { name: "ASC" },
     });
   }
@@ -144,7 +146,11 @@ export class ShowsService {
     // would have to decide it in a hurry.
     return this.showRepository.findOne({
       where: { slug },
-      relations: ["park", "park.destination"],
+      relations: {
+        park: {
+          destination: true,
+        },
+      },
     });
   }
 
@@ -159,7 +165,11 @@ export class ShowsService {
   async findByParkId(parkId: string): Promise<Show[]> {
     return this.showRepository.find({
       where: { parkId, retiredAt: IsNull() },
-      relations: ["park", "park.destination"],
+      relations: {
+        park: {
+          destination: true,
+        },
+      },
       order: { name: "ASC" },
     });
   }
@@ -183,7 +193,11 @@ export class ShowsService {
         parkId,
         slug: showSlug,
       },
-      relations: ["park", "park.destination"],
+      relations: {
+        park: {
+          destination: true,
+        },
+      },
     });
   }
 
@@ -215,7 +229,9 @@ export class ShowsService {
       // This handles race condition where live data arrives before metadata sync
       const showExists = await this.showRepository.findOne({
         where: { id: showId },
-        select: ["id"], // Minimal select for performance
+        select: {
+          id: true,
+        }, // Minimal select for performance
       });
 
       if (!showExists) {
@@ -250,7 +266,9 @@ export class ShowsService {
         // Fetch show to get park timezone
         const show = await this.showRepository.findOne({
           where: { id: showId },
-          relations: ["park"],
+          relations: {
+            park: true,
+          },
         });
 
         if (show && show.park && show.park.timezone) {
@@ -330,7 +348,11 @@ export class ShowsService {
     const latest = await this.showLiveDataRepository.findOne({
       where: { showId, timestamp: MoreThanOrEqual(cutoff) },
       order: { timestamp: "DESC" },
-      relations: ["show", "show.park"],
+      relations: {
+        show: {
+          park: true,
+        },
+      },
     });
 
     // No previous data → save
@@ -436,7 +458,11 @@ export class ShowsService {
     const cutoff = liveDataCutoff();
     return this.showLiveDataRepository.findOne({
       where: { showId, timestamp: MoreThanOrEqual(cutoff) },
-      relations: ["show", "show.park"],
+      relations: {
+        show: {
+          park: true,
+        },
+      },
       order: { timestamp: "DESC" },
     });
   }
@@ -524,7 +550,11 @@ export class ShowsService {
 
     const [data, total] = await this.showLiveDataRepository.findAndCount({
       where: whereClause,
-      relations: ["show", "show.park"],
+      relations: {
+        show: {
+          park: true,
+        },
+      },
       order: { timestamp: "DESC" },
       skip: (page - 1) * limit,
       take: limit,

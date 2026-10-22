@@ -513,7 +513,10 @@ export class AnalyticsService {
     // the live "peak feel" stays apples-to-apples with the 548-day reference).
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
-      select: ["parkId", "attractionId"],
+      select: {
+        parkId: true,
+        attractionId: true,
+      },
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
 
@@ -775,7 +778,10 @@ export class AnalyticsService {
     // P50 is missing P90 is missing too.
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
-      select: ["parkId", "attractionId"],
+      select: {
+        parkId: true,
+        attractionId: true,
+      },
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
     const currentPeakWait = await this.getCurrentParkPeakWait(
@@ -810,7 +816,9 @@ export class AnalyticsService {
   } | null> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["timezone"],
+      select: {
+        timezone: true,
+      },
     });
     const startOfDay = getStartOfDayInTimezone(park?.timezone || "UTC");
 
@@ -866,7 +874,9 @@ export class AnalyticsService {
   } | null> {
     const attraction = await this.attractionRepository.findOne({
       where: { id: attractionId },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
       select: { park: { timezone: true } },
     });
     const startOfDay = getStartOfDayInTimezone(
@@ -940,7 +950,9 @@ export class AnalyticsService {
     // Fetch park info for timezone lookup (single query)
     const attractions = await this.attractionRepository.find({
       where: { id: In(attractionIds) },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
       select: { id: true, park: { timezone: true } },
     });
 
@@ -1442,7 +1454,9 @@ export class AnalyticsService {
     if (!resolvedTimezone) {
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: ["timezone"],
+        select: {
+          timezone: true,
+        },
       });
       resolvedTimezone = park?.timezone || "UTC";
     }
@@ -1692,7 +1706,10 @@ export class AnalyticsService {
     let peakWaitToday = roundToNearest5Minutes(stats?.max_wait_today || 0);
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
-      select: ["parkId", "attractionId"],
+      select: {
+        parkId: true,
+        attractionId: true,
+      },
     });
     const headlinerIds = headliners.map((h) => h.attractionId);
     if (headlinerIds.length > 0) {
@@ -1806,7 +1823,10 @@ export class AnalyticsService {
       // PERFORMANCE: Only select timezone, not entire park entity
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: ["id", "timezone"],
+        select: {
+          id: true,
+          timezone: true,
+        },
       });
       if (park && park.timezone) {
         const startTime = await this.getEffectiveStartTime(
@@ -2138,7 +2158,10 @@ export class AnalyticsService {
       // Batch fetch timezones
       const parks = await this.parkRepository.find({
         where: { id: In(parkIds) },
-        select: ["id", "timezone"],
+        select: {
+          id: true,
+          timezone: true,
+        },
       });
 
       // Calculate effective start times in batch
@@ -3852,7 +3875,9 @@ export class AnalyticsService {
       if (baseline > 0) {
         const rec = await this.parkP50BaselineRepository.findOne({
           where: { parkId: entityId },
-          select: ["confidence"],
+          select: {
+            confidence: true,
+          },
         });
         baselineConfidence = rec?.confidence || "low";
       }
@@ -3865,7 +3890,9 @@ export class AnalyticsService {
       if (baseline > 0) {
         const rec = await this.attractionP50BaselineRepository.findOne({
           where: { attractionId: entityId },
-          select: ["confidence"],
+          select: {
+            confidence: true,
+          },
         });
         baselineConfidence = rec?.confidence || "low";
       }
@@ -3931,7 +3958,10 @@ export class AnalyticsService {
       // For parks, use headliner attractions to match live crowd level and baseline calculations
       const headliners = await this.headlinerAttractionRepository.find({
         where: { parkId: entityId },
-        select: ["parkId", "attractionId"],
+        select: {
+          parkId: true,
+          attractionId: true,
+        },
       });
       let targetAttractionIds = headliners.map((h) => h.attractionId);
 
@@ -3939,7 +3969,9 @@ export class AnalyticsService {
       if (targetAttractionIds.length === 0) {
         const allAttractions = await this.attractionRepository.find({
           where: { parkId: entityId },
-          select: ["id"],
+          select: {
+            id: true,
+          },
         });
         targetAttractionIds = allAttractions.map((a) => a.id);
       }
@@ -4056,7 +4088,9 @@ export class AnalyticsService {
   ): Promise<boolean> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["timezone"],
+      select: {
+        timezone: true,
+      },
     });
     const timezone = park?.timezone || "UTC";
     const now = new Date();
@@ -4097,7 +4131,9 @@ export class AnalyticsService {
     // Get park timezone
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["timezone"],
+      select: {
+        timezone: true,
+      },
     });
     const timezone = park?.timezone || "UTC";
 
@@ -4481,7 +4517,9 @@ export class AnalyticsService {
       return { typicalDayPeak: 0, operatingDays: 0 };
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["timezone"],
+      select: {
+        timezone: true,
+      },
     });
     const timezone = park?.timezone || "UTC";
     const cutoff = subDays(new Date(), 548);
@@ -4554,7 +4592,9 @@ export class AnalyticsService {
     }
     const row = await this.parkP50BaselineRepository.findOne({
       where: { parkId },
-      select: ["typicalDayPeak"],
+      select: {
+        typicalDayPeak: true,
+      },
     });
     const value =
       row?.typicalDayPeak != null
@@ -4586,7 +4626,10 @@ export class AnalyticsService {
     if (parkIds.length === 0) return new Set();
     const rows = await this.parkP50BaselineRepository.find({
       where: { parkId: In(parkIds) },
-      select: ["parkId", "typicalDayPeak"],
+      select: {
+        parkId: true,
+        typicalDayPeak: true,
+      },
     });
     return new Set(
       rows
@@ -5093,7 +5136,10 @@ export class AnalyticsService {
 
     const rows = await this.attractionP50BaselineRepository.find({
       where: { attractionId: In(uncachedIds) },
-      select: ["attractionId", "p50Baseline"],
+      select: {
+        attractionId: true,
+        p50Baseline: true,
+      },
     });
 
     const pipeline = this.redis.pipeline();
@@ -5141,8 +5187,13 @@ export class AnalyticsService {
     // Get attraction and park info
     const attraction = await this.attractionRepository.findOne({
       where: { id: attractionId },
-      relations: ["park"],
-      select: ["id", "parkId"],
+      relations: {
+        park: true,
+      },
+      select: {
+        id: true,
+        parkId: true,
+      },
     });
 
     if (!attraction) {
@@ -5296,7 +5347,9 @@ export class AnalyticsService {
     // findOne per attraction.
     const headliners = await this.headlinerAttractionRepository.find({
       where: { parkId },
-      select: ["attractionId"],
+      select: {
+        attractionId: true,
+      },
     });
     const headlinerSet = new Set(headliners.map((h) => h.attractionId));
 
@@ -6433,7 +6486,9 @@ export class AnalyticsService {
     // Drop rows for this park that are no longer in the displayable set.
     const existing = await this.attractionTypicalWaitsRepository.find({
       where: { parkId },
-      select: ["attractionId"],
+      select: {
+        attractionId: true,
+      },
     });
     const stale = existing
       .map((e) => e.attractionId)

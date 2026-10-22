@@ -588,7 +588,9 @@ export class ParksService {
           // Get all existing slugs for this destination
           const existingParks = await this.parkRepository.find({
             where: { destinationId: destination.id },
-            select: ["slug"],
+            select: {
+              slug: true,
+            },
           });
           const existingSlugs = existingParks.map((p) => p.slug);
 
@@ -1201,7 +1203,10 @@ export class ParksService {
   async findByExternalId(externalId: string): Promise<Park | null> {
     return this.parkRepository.findOne({
       where: { externalId },
-      relations: ["destination", "attractions"],
+      relations: {
+        destination: true,
+        attractions: true,
+      },
     });
   }
 
@@ -1211,7 +1216,9 @@ export class ParksService {
   async findById(id: string): Promise<Park | null> {
     return this.parkRepository.findOne({
       where: { id },
-      relations: ["destination"],
+      relations: {
+        destination: true,
+      },
     });
   }
 
@@ -1222,7 +1229,9 @@ export class ParksService {
     if (ids.length === 0) return [];
     return this.parkRepository.find({
       where: { id: In(ids) },
-      relations: ["destination"],
+      relations: {
+        destination: true,
+      },
     });
   }
 
@@ -1233,7 +1242,9 @@ export class ParksService {
     // Retired parks keep their page but leave every listing and every job loop.
     return this.parkRepository.find({
       where: { retiredAt: IsNull() },
-      relations: ["destination"],
+      relations: {
+        destination: true,
+      },
       order: { name: "ASC" },
     });
   }
@@ -1334,7 +1345,9 @@ export class ParksService {
   async findBySlug(slug: string): Promise<Park | null> {
     const park = await this.parkRepository.findOne({
       where: { slug },
-      relations: ["destination"],
+      relations: {
+        destination: true,
+      },
     });
     if (!park) return null;
     return this.loadParkRelations(park);
@@ -1369,13 +1382,13 @@ export class ParksService {
     // 1. Fetch Park geo data for holiday checking
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: [
-        "id",
-        "countryCode",
-        "regionCode",
-        "timezone",
-        "curatedUsesTwelveHourClock",
-      ],
+      select: {
+        id: true,
+        countryCode: true,
+        regionCode: true,
+        timezone: true,
+        curatedUsesTwelveHourClock: true,
+      },
     });
 
     // 2. Normalize date + type once per entry; reused by the holiday prefetch,
@@ -2226,7 +2239,12 @@ export class ParksService {
   ): Promise<number> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "countryCode", "regionCode", "timezone"],
+      select: {
+        id: true,
+        countryCode: true,
+        regionCode: true,
+        timezone: true,
+      },
     });
 
     if (!park?.countryCode) return 0;
@@ -2543,7 +2561,12 @@ export class ParksService {
     // Clean up duplicate schedule entries before filling gaps
     await this.cleanupDuplicateScheduleEntries();
 
-    const parks = await this.parkRepository.find({ select: ["id", "name"] });
+    const parks = await this.parkRepository.find({
+      select: {
+        id: true,
+        name: true,
+      },
+    });
     let totalUpdated = 0;
 
     for (const park of parks) {
@@ -2830,7 +2853,10 @@ export class ParksService {
     if (!tz) {
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: ["id", "timezone"],
+        select: {
+          id: true,
+          timezone: true,
+        },
       });
       if (!park) return [];
       tz = park.timezone ?? "UTC";
@@ -2875,7 +2901,10 @@ export class ParksService {
   async getNextSchedule(parkId: string): Promise<ScheduleEntry | null> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "timezone"],
+      select: {
+        id: true,
+        timezone: true,
+      },
     });
 
     if (!park) return null;
@@ -2947,7 +2976,10 @@ export class ParksService {
     // Fetch parks with timezones
     const parks = await this.parkRepository.find({
       where: { id: In(parkIds) },
-      select: ["id", "timezone"],
+      select: {
+        id: true,
+        timezone: true,
+      },
     });
 
     const timezoneMap = new Map<string, string>();
@@ -3155,7 +3187,10 @@ export class ParksService {
   ): Promise<ScheduleEntry[]> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "timezone"],
+      select: {
+        id: true,
+        timezone: true,
+      },
     });
 
     if (!park) return [];
@@ -3200,7 +3235,9 @@ export class ParksService {
   async findByContinent(continentSlug: string): Promise<Park[]> {
     return this.parkRepository.find({
       where: { continentSlug, retiredAt: IsNull() },
-      relations: ["destination"],
+      relations: {
+        destination: true,
+      },
       order: { name: "ASC" },
     });
   }
@@ -3218,7 +3255,9 @@ export class ParksService {
   ): Promise<Park[]> {
     return this.parkRepository.find({
       where: { continentSlug, countrySlug, retiredAt: IsNull() },
-      relations: ["destination"],
+      relations: {
+        destination: true,
+      },
       order: { name: "ASC" },
     });
   }
@@ -3238,7 +3277,9 @@ export class ParksService {
   ): Promise<Park[]> {
     return this.parkRepository.find({
       where: { continentSlug, countrySlug, citySlug, retiredAt: IsNull() },
-      relations: ["destination"],
+      relations: {
+        destination: true,
+      },
       order: { name: "ASC" },
     });
   }
@@ -3265,7 +3306,9 @@ export class ParksService {
 
     const park = await this.parkRepository.findOne({
       where: { continentSlug, countrySlug, citySlug, slug: parkSlug },
-      relations: ["destination"],
+      relations: {
+        destination: true,
+      },
     });
 
     if (!park) {
@@ -3337,7 +3380,10 @@ export class ParksService {
   async isParkCurrentlyOpen(parkId: string): Promise<boolean> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "timezone"],
+      select: {
+        id: true,
+        timezone: true,
+      },
     });
 
     if (!park || !park.timezone) {
@@ -3385,7 +3431,10 @@ export class ParksService {
   async isParkOperatingToday(parkId: string): Promise<boolean> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "timezone"],
+      select: {
+        id: true,
+        timezone: true,
+      },
     });
 
     if (!park || !park.timezone) {
@@ -3576,7 +3625,10 @@ export class ParksService {
    */
   async getSyncCountryCodes(): Promise<string[]> {
     const parks = await this.parkRepository.find({
-      select: ["countryCode", "influencingRegions"],
+      select: {
+        countryCode: true,
+        influencingRegions: true,
+      },
     });
 
     const codes = new Set<string>();

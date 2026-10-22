@@ -177,7 +177,12 @@ export class ForecastArchiveScoringService {
   /** Scores one target date over all parks; returns the score rows written. */
   async scoreDate(targetDate: string, now: Date = new Date()): Promise<number> {
     const parks = await this.parkRepository.find({
-      select: ["id", "slug", "timezone", "continentSlug"],
+      select: {
+        id: true,
+        slug: true,
+        timezone: true,
+        continentSlug: true,
+      },
     });
     const acc = new ScoreAccumulator();
     const observations: CrowdObservation[] = [];
@@ -256,7 +261,9 @@ export class ForecastArchiveScoringService {
     const attractionIds = (
       await this.attractionRepository.find({
         where: { parkId: park.id },
-        select: ["id"],
+        select: {
+          id: true,
+        },
       })
     ).map((a) => a.id);
 

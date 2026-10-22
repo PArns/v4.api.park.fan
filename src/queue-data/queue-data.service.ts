@@ -782,7 +782,11 @@ export class QueueDataService {
     // Query with pagination
     const [data, total] = await this.queueDataRepository.findAndCount({
       where: whereClause,
-      relations: ["attraction", "attraction.park"],
+      relations: {
+        attraction: {
+          park: true,
+        },
+      },
       order: { timestamp: "DESC" },
       skip: (page - 1) * limit,
       take: limit,
@@ -809,7 +813,9 @@ export class QueueDataService {
     // Get attraction to find park
     const attraction = await this.attractionRepository.findOne({
       where: { id: attractionId },
-      select: ["parkId"],
+      select: {
+        parkId: true,
+      },
     });
 
     let cutoff: Date | undefined;
@@ -1113,7 +1119,11 @@ export class QueueDataService {
         attractionId,
         predictedTime: Between(now, futureTime),
       },
-      relations: ["attraction", "attraction.park"],
+      relations: {
+        attraction: {
+          park: true,
+        },
+      },
       order: { predictedTime: "ASC" },
     });
   }

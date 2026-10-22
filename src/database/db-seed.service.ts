@@ -261,7 +261,9 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
     const latestWeather = await this.weatherRepository.findOne({
       where: {},
       order: { date: "DESC" },
-      select: ["date"],
+      select: {
+        date: true,
+      },
     });
 
     // Check Wait Times (should have data from last 24h)
@@ -277,7 +279,9 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
     const latestQueue = await this.queueDataRepository.findOne({
       where: {},
       order: { timestamp: "DESC" },
-      select: ["timestamp"],
+      select: {
+        timestamp: true,
+      },
     });
 
     const needsWaitTimes = recentQueueData === 0;
@@ -286,7 +290,9 @@ export class DbSeedService implements OnModuleInit, OnModuleDestroy {
     this.runs.checkpoint();
     const activeModel = await this.mlModelRepository.findOne({
       where: { isActive: true },
-      select: ["version"],
+      select: {
+        version: true,
+      },
     });
 
     const needsMLModel = !activeModel;

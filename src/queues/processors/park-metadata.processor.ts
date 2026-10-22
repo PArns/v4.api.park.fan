@@ -72,7 +72,12 @@ export class ParkMetadataProcessor {
     }
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "name", "wikiEntityId", "dataSources"],
+      select: {
+        id: true,
+        name: true,
+        wikiEntityId: true,
+        dataSources: true,
+      },
     });
     if (!park) {
       this.logger.warn(`sync-park-schedule: park ${parkId} not found`);
@@ -176,7 +181,11 @@ export class ParkMetadataProcessor {
       // fields.
       this.logger.log("🔒 Building ID-based match maps from DB...");
       const dbParks = await this.parkRepository.find({
-        select: ["wikiEntityId", "queueTimesEntityId", "wartezeitenEntityId"],
+        select: {
+          wikiEntityId: true,
+          queueTimesEntityId: true,
+          wartezeitenEntityId: true,
+        },
       });
 
       const wikiToQt = new Map<string, string>();

@@ -124,7 +124,9 @@ export class ParkRenameService implements OnModuleInit {
             citySlug: previous.citySlug,
             slug: currentSlug,
           },
-          select: ["id"],
+          select: {
+            id: true,
+          },
         });
         // The park may have been renamed again, or not exist in this environment.
         if (!park) continue;
@@ -283,7 +285,9 @@ export class ParkRenameService implements OnModuleInit {
   async resolveAlias(path: ParkGeoPath): Promise<ParkGeoPath | null> {
     const alias = await this.aliasRepository.findOne({
       where: path,
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
     });
     if (!alias?.park) return null;
 

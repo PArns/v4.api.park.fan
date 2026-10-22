@@ -66,7 +66,11 @@ export class ParkRepairService {
     const correctQtIds = fixes.map((f) => f.correctQtId);
     const conflicting = await this.parkRepository.find({
       where: { queueTimesEntityId: In(correctQtIds) },
-      select: ["id", "name", "queueTimesEntityId"],
+      select: {
+        id: true,
+        name: true,
+        queueTimesEntityId: true,
+      },
     });
     const qtIdToOwner = new Map(
       conflicting.map((p) => [p.queueTimesEntityId!, p]),
@@ -128,7 +132,11 @@ export class ParkRepairService {
     const correctWzIds = fixes.map((f) => f.correctWzId);
     const conflicting = await this.parkRepository.find({
       where: { wartezeitenEntityId: In(correctWzIds) },
-      select: ["id", "name", "wartezeitenEntityId"],
+      select: {
+        id: true,
+        name: true,
+        wartezeitenEntityId: true,
+      },
     });
     const wzIdToOwner = new Map(
       conflicting.map((p) => [p.wartezeitenEntityId!, p]),
@@ -190,11 +198,18 @@ export class ParkRepairService {
     const [conflicting, targetParks] = await Promise.all([
       this.parkRepository.find({
         where: { queueTimesEntityId: In(qtIds) },
-        select: ["id", "name", "queueTimesEntityId"],
+        select: {
+          id: true,
+          name: true,
+          queueTimesEntityId: true,
+        },
       }),
       this.parkRepository.find({
         where: { id: In(parkIds) },
-        select: ["id", "queueTimesEntityId"],
+        select: {
+          id: true,
+          queueTimesEntityId: true,
+        },
       }),
     ]);
     const qtIdToOwner = new Map(
@@ -271,11 +286,18 @@ export class ParkRepairService {
     const [conflicting, targetParks] = await Promise.all([
       this.parkRepository.find({
         where: { wartezeitenEntityId: In(wzIds) },
-        select: ["id", "name", "wartezeitenEntityId"],
+        select: {
+          id: true,
+          name: true,
+          wartezeitenEntityId: true,
+        },
       }),
       this.parkRepository.find({
         where: { id: In(parkIds) },
-        select: ["id", "wartezeitenEntityId"],
+        select: {
+          id: true,
+          wartezeitenEntityId: true,
+        },
       }),
     ]);
     const wzIdToOwner = new Map(

@@ -90,7 +90,9 @@ export type ParkSeasonStatus = (typeof PARK_SEASON_STATUSES)[number];
 // A season that ends before it starts is a typo, and one that reaches the
 // public is worse than a rejected form: it silently drops out of every range
 // query instead of showing up wrong.
-@Check(`"end_date" >= "start_date"`)
+// Named explicitly: TypeORM 1 hashes check expressions differently, and a new
+// generated name would make `synchronize` drop and re-add the constraint.
+@Check("CHK_5f83b1482a06d98638e198a8f8", `"end_date" >= "start_date"`)
 export class ParkSeason {
   @PrimaryGeneratedColumn("uuid")
   id: string;
