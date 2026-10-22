@@ -59,3 +59,27 @@ substring tier). Fixes:
 
 Both are pure recall additions — they only add matches, never remove existing ones. Stale
 empty results for a previously-failed query self-heal within the 5 min result-cache TTL.
+
+## A literal hit switches the typo tolerance off (2026-10-22)
+
+Typo tolerance is a fallback for a query that names nothing. Once one match carries the query as
+typed, `search()` drops every match that only the typo tiers found, in every type
+(`isLiteralHit`, step 1b). "Literal" is what tiers 0–5 test: the folded query inside the name,
+the name without its punctuation (`F.L.Y.` for `fly`), a ride's land, or a park's city, country
+or continent.
+
+The case that showed it: `phantasialand` against the land `Fantasyland` is a trigram similarity
+of exactly 0.30, so the park came back with ten Disney Fantasyland rides under it. A query with
+no literal match keeps all of its fuzzy matches: `fantasialand` still finds Phantasialand and the
+Fantasyland rides, `taaron` still finds Taron.
+
+`searchAttractionsInProcess` and `searchParksInProcess` sort literal matches ahead of the rest
+before they cut to `limit`. The popularity boost lifts a typo match to tier 3, above a land match
+(tier 5), and a list cut before the drop could otherwise hold only the typo match.
+
+Measured on 2026-10-22 against the in-process index built from the production API (211 parks,
+7,447 rides, 432 shows, 3,319 restaurants), 104 queries, `limit` 10: 65 lists changed, 39 did not,
+and every typo query in the set (`fantasialand`, `phantasialnd`, `eftling`, `europa prak`,
+`taaron`, `orlndo`, `hagird`, `disnyland`, `epuc universe`) is among the 39. Examples: `taron`
+24 → 1, `heide park` 17 → 3 (the park, the Heide Park Express and the Heide Park Grill),
+`dollywood` 26 → 2, `joris` 27 → 1, `alton towers` 11 → 2.

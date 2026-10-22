@@ -529,6 +529,69 @@ describe("SearchService", () => {
       expect(result.results.map((r) => r.id)).toContain("fly");
     });
 
+    it("drops the typo matches once a result names the query", async () => {
+      // "phantasialand" against the land "Fantasyland" is a trigram similarity
+      // of exactly 0.30, so every ride standing in it used to fill the list
+      // under the park the query names.
+      await primeIndex({
+        parks: [park()],
+        attractions: [
+          attraction({
+            id: "dumbo",
+            name: "Dumbo the Flying Elephant",
+            landName: "Fantasyland",
+            park: park({ id: "mk", name: "Magic Kingdom Park" }),
+          }),
+        ],
+      });
+
+      const result = await service.search({ q: "phantasialand" });
+
+      expect(result.results.map((r) => r.id)).toEqual(["p1"]);
+      expect(result.counts.attraction).toEqual({ returned: 0, total: 0 });
+    });
+
+    it("keeps the typo matches when nothing names the query", async () => {
+      await primeIndex({
+        parks: [park()],
+        attractions: [
+          attraction({
+            id: "dumbo",
+            name: "Dumbo the Flying Elephant",
+            landName: "Fantasyland",
+            park: park({ id: "mk", name: "Magic Kingdom Park" }),
+          }),
+        ],
+      });
+
+      const result = await service.search({ q: "fantasialand" });
+
+      const ids = result.results.map((r) => r.id);
+      expect(ids).toContain("p1");
+      expect(ids).toContain("dumbo");
+    });
+
+    it("does not let a popular typo match take a literal match's slot", async () => {
+      // The popularity boost lifts a typo match to tier 3, above a land match
+      // (tier 5). Cut to the limit first, the typo match was all that came back,
+      // and with no literal hit left to see, nothing dropped it.
+      mockPopularityService.getTopAttractions.mockResolvedValue(["typo"]);
+      await primeIndex({
+        attractions: [
+          attraction({ id: "typo", name: "Klugheym Coaster", slug: "kc" }),
+          attraction({ id: "land", name: "Chiapas", landName: "Klugheim" }),
+        ],
+      });
+
+      const result = await service.search({
+        q: "klugheim",
+        type: ["attraction"],
+        limit: 1,
+      });
+
+      expect(result.results.map((r) => r.id)).toEqual(["land"]);
+    });
+
     it("derives location results from the park index", async () => {
       await primeIndex({
         parks: [park({ id: "p1", city: "Orlando", citySlug: "orlando" })],
