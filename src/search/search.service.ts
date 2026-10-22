@@ -305,7 +305,7 @@ export class SearchService implements OnModuleInit {
     };
 
     // Step 1: Run all search queries in parallel
-    const [rawParks, rawAttractions, rawShows, rawRestaurants, locations] =
+    let [rawParks, rawAttractions, rawShows, rawRestaurants, locations] =
       await Promise.all([
         searchTypes.includes("park")
           ? timed(
@@ -375,6 +375,38 @@ export class SearchService implements OnModuleInit {
           : Promise.resolve([] as SearchResultItemDto[]),
       ]);
 
+    const exactQueryLc = this.fold(q).toLowerCase();
+    const exactQueryNorm = exactQueryLc.replace(/[^a-z0-9]/g, "");
+
+    // Step 1b: typo tolerance is the fallback for a query that names nothing.
+    // Once one match carries the query as typed, the near-misses only bury it:
+    // "phantasialand" is a park, and the rides of every Disney "Fantasyland"
+    // (trigram 0.30 against it) filled the attraction list under it. A query
+    // with no literal match ("fantasialand", "taaron") keeps all of them.
+    const literal = (
+      name: string,
+      secondary: (string | null | undefined)[] = [],
+    ): boolean =>
+      this.isLiteralHit(exactQueryLc, exactQueryNorm, name, secondary);
+    const literalPark = (p: (typeof rawParks)[number]): boolean =>
+      literal(p.name, [p.city, p.country, p.continent]);
+    const literalAttraction = (a: (typeof rawAttractions)[number]): boolean =>
+      literal(a.name, [a.landName]);
+    const literalName = (e: { name: string }): boolean => literal(e.name);
+    if (
+      rawParks.some(literalPark) ||
+      rawAttractions.some(literalAttraction) ||
+      rawShows.some(literalName) ||
+      rawRestaurants.some(literalName) ||
+      locations.some(literalName)
+    ) {
+      rawParks = rawParks.filter(literalPark);
+      rawAttractions = rawAttractions.filter(literalAttraction);
+      rawShows = rawShows.filter(literalName);
+      rawRestaurants = rawRestaurants.filter(literalName);
+      locations = locations.filter(literalName);
+    }
+
     // Step 2: Rank + deduplicate the RAW matches BEFORE enrichment, so the
     // expensive per-entity work (wait times, baselines, occupancy, hours,
     // show times) only runs for the items we actually return — not for
@@ -411,8 +443,6 @@ export class SearchService implements OnModuleInit {
     // "Verbatim" ignores punctuation and accents, the same way the matcher does,
     // so "fly" is an exact hit on "F.L.Y." and "farup" on "Fårup Sommerland".
     // Deliberately narrow: prefix and substring hits stay subject to OPERATING-first.
-    const exactQueryLc = this.fold(q).toLowerCase();
-    const exactQueryNorm = exactQueryLc.replace(/[^a-z0-9]/g, "");
     const isVerbatimName = (c: Candidate): boolean => {
       const name = this.fold(c.entity.name).toLowerCase();
       return (
@@ -2072,6 +2102,27 @@ export class SearchService implements OnModuleInit {
       .replace(/[\u0300-\u036f]/g, "");
   }
 
+  /**
+   * Whether the folded query stands in `name` as typed (punctuation aside, so
+   * "fly" in "F.L.Y.") or in one of the `secondary` fields the matcher also
+   * searches: a ride's land, a park's city, country or continent. These are the
+   * substring tests behind tiers 0–5 of `scoreEntryPre`; everything above them
+   * is typo tolerance.
+   */
+  private isLiteralHit(
+    qLower: string,
+    qNorm: string,
+    name: string,
+    secondary: (string | null | undefined)[] = [],
+  ): boolean {
+    const lc = this.fold(name).toLowerCase();
+    if (lc.includes(qLower)) return true;
+    if (qNorm && lc.replace(/[^a-z0-9]/g, "").includes(qNorm)) return true;
+    return secondary.some(
+      (field) => !!field && this.fold(field).toLowerCase().includes(qLower),
+    );
+  }
+
   private buildTrigrams(s: string): Set<string> {
     const t = new Set<string>();
     for (const word of this.fold(s)
@@ -2221,6 +2272,9 @@ export class SearchService implements OnModuleInit {
     });
   }
 
+  /** The last tier of `scoreEntryPre` that finds the query as typed; above it is typo tolerance. */
+  private static readonly LAST_LITERAL_TIER = 5;
+
   /**
    * Score one entry against a query using precomputed `pre` data and the
    * once-per-search query fields. Tier semantics are identical to the previous
@@ -2277,7 +2331,12 @@ export class SearchService implements OnModuleInit {
       tri: qTri,
       words: qWords,
     } = this.buildQueryPre(q);
-    type Scored = { entry: AttractionIndexEntry; tier: number; sim: number };
+    type Scored = {
+      entry: AttractionIndexEntry;
+      tier: number;
+      sim: number;
+      literal: boolean;
+    };
     const scored: Scored[] = [];
     for (const entry of this.attractionIndex) {
       const r = this.scoreEntryPre(
@@ -2295,10 +2354,18 @@ export class SearchService implements OnModuleInit {
           entry,
           tier: popular && r.tier > 2 && r.tier < 8 ? 3 : r.tier,
           sim: r.sim,
+          literal: r.tier <= SearchService.LAST_LITERAL_TIER,
         });
       }
     }
-    scored.sort((a, b) => a.tier - b.tier || b.sim - a.sim);
+    // Literal matches first: `search()` drops the typo matches whenever one
+    // exists, so a popular typo match boosted to tier 3 must not take a slot.
+    scored.sort(
+      (a, b) =>
+        Number(b.literal) - Number(a.literal) ||
+        a.tier - b.tier ||
+        b.sim - a.sim,
+    );
     return scored.slice(0, limit).map((s) => s.entry);
   }
 
@@ -2364,7 +2431,12 @@ export class SearchService implements OnModuleInit {
       tri: qTri,
       words: qWords,
     } = this.buildQueryPre(q);
-    type Scored = { entry: ParkIndexData; tier: number; sim: number };
+    type Scored = {
+      entry: ParkIndexData;
+      tier: number;
+      sim: number;
+      literal: boolean;
+    };
     const scored: Scored[] = [];
 
     for (const park of this.parkIndex) {
@@ -2389,16 +2461,13 @@ export class SearchService implements OnModuleInit {
           qWords,
         );
 
-      const matches =
+      const literal =
         nameLower.includes(qLower) ||
         (qNorm.length > 0 && nameNorm.includes(qNorm)) ||
         cityLower.includes(qLower) ||
         countryLower.includes(qLower) ||
-        continentLower.includes(qLower) ||
-        sim >= 0.3 ||
-        fuzzyWord ||
-        fuzzyCity;
-      if (!matches) continue;
+        continentLower.includes(qLower);
+      if (!literal && sim < 0.3 && !fuzzyWord && !fuzzyCity) continue;
 
       let tier: number;
       if (nameLower === qLower) tier = 0;
@@ -2416,10 +2485,16 @@ export class SearchService implements OnModuleInit {
       // query actually names.
       if (tier > 2 && tier < 8 && this.topParkIdSet.has(park.id)) tier = 3;
 
-      scored.push({ entry: park, tier, sim });
+      scored.push({ entry: park, tier, sim, literal });
     }
 
-    scored.sort((a, b) => a.tier - b.tier || b.sim - a.sim);
+    // Literal matches first, for the reason `searchAttractionsInProcess` gives.
+    scored.sort(
+      (a, b) =>
+        Number(b.literal) - Number(a.literal) ||
+        a.tier - b.tier ||
+        b.sim - a.sim,
+    );
     return scored.slice(0, limit).map((s) => s.entry);
   }
 
