@@ -1,5 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
-import { getCurrentDateInTimezone, formatInParkTimezone } from "./date.util";
+import { getCurrentDateInTimezone, addIsoDays } from "./date.util";
 import { fromZonedTime } from "date-fns-tz";
 
 /**
@@ -70,9 +70,7 @@ export function parseDateRange(
     // Default: today in park timezone
     const today = getCurrentDateInTimezone(timezone);
     if (defaultFromDaysAgo > 0) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - defaultFromDaysAgo);
-      fromDateStr = formatInParkTimezone(d, timezone);
+      fromDateStr = addIsoDays(today, -defaultFromDaysAgo);
     } else {
       fromDateStr = today;
     }
@@ -89,10 +87,14 @@ export function parseDateRange(
     }
     toDateStr = to;
   } else {
-    // Default: from + N days ahead
-    const fromDate = new Date(fromDateStr);
-    fromDate.setDate(fromDate.getDate() + defaultToDaysAhead);
-    toDateStr = formatInParkTimezone(fromDate, timezone);
+    // Calendar arithmetic on the date string: going through an instant moves
+    // the day back by one in every zone west of UTC.
+    if (isNaN(fromZonedTime(`${fromDateStr}T00:00:00`, timezone).getTime())) {
+      throw new BadRequestException(
+        'Invalid "from" date. Use YYYY-MM-DD with a day the month has.',
+      );
+    }
+    toDateStr = addIsoDays(fromDateStr, defaultToDaysAhead);
   }
 
   // Convert to Date objects representing midnight and end-of-day in park timezone
