@@ -1338,12 +1338,13 @@ closed on its own page. `POST /admin/retire-attractions` now takes an optional
   is one of `RECLASSIFIED_UPSTREAM_REASONS`, so a hand-entered reclassification
   survives every run even if somebody pasted the sync's wording into it.
 - **Retiring again without a kind writes null**, i.e. takes back a kind stated
-  earlier; `unretire` clears it with the rest. A merge carries it with
-  `retiredReason`.
-- **What it does not change:** `detect-seasonal` step 2c and the wiki re-issue
-  match (`attraction-match.util.ts`) stay keyed on the sync's reason strings.
-  Both ask "can the sync undo this?", and for a hand-entered reclassification
-  the answer is no, so treating it like any human retirement is right there.
+  earlier; `unretire` clears it with the rest. A merge carries the loser's kind
+  only together with the loser's `retiredAt`, never onto a winner retired some
+  other way.
+- **"Can the sync undo this?" is asked the same way everywhere:** kind null and
+  a sync reason. `detect-seasonal` step 2c and the wiki re-issue match
+  (`attraction-match.util.ts`) ask it too, so a hand-entered reclassification
+  is treated like any human retirement there.
 
 Switching an existing row is the same call with the row's current `retiredAt`
 and `reason` plus `kind: "reclassified"`; it overwrites in place.

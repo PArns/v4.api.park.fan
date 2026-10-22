@@ -138,6 +138,8 @@ export function findExistingAttraction(
       c.externalId &&
       sourceOf(c.externalId) === "wiki" &&
       !listedExternalIds.has(c.externalId) &&
+      // Unretired, or retired by the sync: a stated kind is a human's (PAR-997).
+      c.retiredKind == null &&
       (c.retiredReason == null ||
         isReclassifiedUpstreamReason(c.retiredReason)),
   );
