@@ -6,7 +6,7 @@ import { ABSENT_UPSTREAM_REASON } from "../attractions/services/attraction-retir
 import { reissueNamesMatch } from "../attractions/utils/attraction-match.util";
 import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
-import { parseExpression } from "cron-parser";
+import { CronExpressionParser } from "cron-parser";
 import { BULL_QUEUE_REGISTRATIONS } from "../queues/queue-registrations";
 
 /**
@@ -235,7 +235,7 @@ export function failureWindowStarts(
         if (every <= 0) continue;
         previousFire = Math.floor(now / every) * every;
       } else {
-        previousFire = parseExpression(spec, {
+        previousFire = CronExpressionParser.parse(spec, {
           currentDate: new Date(now),
           tz,
         })
