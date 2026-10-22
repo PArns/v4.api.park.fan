@@ -272,8 +272,10 @@ export function isRealIsoDate(value: unknown): value is string {
     return false;
   }
   const parsed = new Date(`${value}T00:00:00Z`);
+  // Postgres has no year 0, so `0000-01-01` round-trips here and still fails there.
   return (
     !Number.isNaN(parsed.getTime()) &&
+    parsed.getUTCFullYear() >= 1 &&
     parsed.toISOString().slice(0, 10) === value
   );
 }

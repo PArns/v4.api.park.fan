@@ -3,6 +3,7 @@ import {
   getTomorrowDateInTimezoneAt,
   eachDayAtNoonInTimezone,
   formatInParkTimezone,
+  isRealIsoDate,
 } from "./date.util";
 import { parseDateRange } from "./date-parsing.util";
 
@@ -130,5 +131,24 @@ describe("eachDayAtNoonInTimezone", () => {
     expect(days("2026-10-25", "2026-10-25", "Europe/Berlin")).toEqual([
       "2026-10-25",
     ]);
+  });
+});
+
+describe("isRealIsoDate", () => {
+  it.each(["2024-02-29", "2026-10-22"])("accepts %s", (v) => {
+    expect(isRealIsoDate(v)).toBe(true);
+  });
+  it.each([
+    "2026-02-29",
+    "2026-04-31",
+    "2026-13-01",
+    "0000-01-01",
+    "20260101",
+    "",
+  ])("rejects %s", (v) => {
+    expect(isRealIsoDate(v)).toBe(false);
+  });
+  it("rejects a non-string", () => {
+    expect(isRealIsoDate(["2026-01-01"])).toBe(false);
   });
 });

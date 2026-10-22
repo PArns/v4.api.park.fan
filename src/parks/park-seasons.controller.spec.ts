@@ -29,6 +29,22 @@ describe("ParkSeasonsController", () => {
     expect(seasons.forParkInRange).not.toHaveBeenCalled();
   });
 
+  it("answers 400 for year 0 and for a repeated parameter", async () => {
+    const { controller } = build();
+    await expect(
+      controller.forPark(...path, "0000-01-01"),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      controller.forPark(...path, ["2026-01-01", "2026-01-02"] as never),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("treats an empty parameter as absent", async () => {
+    const { controller, seasons } = build();
+    await controller.forPark(...path, "", "");
+    expect(seasons.forParkInRange).toHaveBeenCalledTimes(1);
+  });
+
   it("starts the default range on the park's day, not the UTC day", async () => {
     jest.useFakeTimers().setSystemTime(new Date("2026-10-22T20:00:00Z"));
     const { controller, seasons } = build("Asia/Tokyo");

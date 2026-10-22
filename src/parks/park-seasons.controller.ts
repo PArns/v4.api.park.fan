@@ -64,12 +64,6 @@ export class ParkSeasonsController {
     to: string;
     seasons: PublicParkSeason[];
   }> {
-    const park = await this.parks.findOne({
-      where: { continentSlug, countrySlug, citySlug, slug },
-      select: { id: true, timezone: true },
-    });
-    if (!park) throw new NotFoundException("Park not found");
-
     for (const [name, value] of [
       ["from", from],
       ["to", to],
@@ -80,6 +74,12 @@ export class ParkSeasonsController {
         );
       }
     }
+
+    const park = await this.parks.findOne({
+      where: { continentSlug, countrySlug, citySlug, slug },
+      select: { id: true, timezone: true },
+    });
+    if (!park) throw new NotFoundException("Park not found");
 
     // Defaults to a year from today: long enough that a visitor planning next
     // Halloween in August sees it, short enough that a park with a decade of
