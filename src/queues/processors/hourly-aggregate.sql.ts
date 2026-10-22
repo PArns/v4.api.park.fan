@@ -1,3 +1,5 @@
+import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
+
 /**
  * The SELECT behind every row of `queue_data_aggregates`, shared by
  * `calculate-percentiles` and `backfill-percentiles` so the two cannot drift.
@@ -18,6 +20,15 @@
  * The two extra bounds on `p.timestamp` in the LATERAL are implied by the window
  * (`$1 <= hour < $2`) but are constants, so chunk exclusion happens at plan time
  * instead of once per row (281 chunk nodes and 10.3 s for one day become 3 and 0.3 s).
+ *
+ * Both reads of `queue_data` keep only real readings (`observedReadingsSql`):
+ * a heartbeat or `system-reconciliation` row is our own bookkeeping, carried
+ * forward or written for a ride no source mentioned, and once made up 35.4 % of
+ * the buckets (PAR-720). In `observed` the filter can only remove samples. In
+ * the LATERAL it chooses the anchor, so it can also ADD a bucket: a CLOSED row
+ * we wrote no longer hides the real OPERATING row before it (PAR-755, May
+ * sample: 1,543 buckets). There it is wrapped in `COALESCE(..., true)` as in
+ * `queue-percentile.processor.ts`, so a row we cannot classify still anchors.
  *
  * `HAVING COUNT(*) >= 2` is not the old threshold in disguise: one real row and
  * its anchor is a full hour, a single unanchored row (the first reading after
@@ -72,6 +83,7 @@ export const HOURLY_AGGREGATE_SELECT = `
       AND qd.status = 'OPERATING'
       AND qd."waitTime" IS NOT NULL
       AND qd."queueType" = 'STANDBY'
+      AND ${observedReadingsSql("qd")}
   ),
   anchors AS (
     SELECT h."attractionId", h.hour, prev."waitTime"
@@ -85,6 +97,7 @@ export const HOURLY_AGGREGATE_SELECT = `
         AND p.timestamp >= h.hour - INTERVAL '${ANCHOR_LOOKBACK}'
         AND p.timestamp >= $1 - INTERVAL '${ANCHOR_LOOKBACK}'
         AND p.timestamp < $2
+        AND COALESCE(${observedReadingsSql("p")}, true)
       ORDER BY p.timestamp DESC
       LIMIT 1
     ) prev
