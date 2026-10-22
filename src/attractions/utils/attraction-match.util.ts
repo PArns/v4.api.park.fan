@@ -42,6 +42,8 @@ export interface AttractionMatchCandidate {
   queueTimesEntityId?: string | null;
   /** Carried through so a caller can tell a sync retirement from a human one. */
   retiredReason?: string | null;
+  /** Set only by a human (PAR-997); a row carrying it is never the sync's. */
+  retiredKind?: "closed" | "reclassified" | null;
   /**
    * Carried through so a caller can tell a value the feed moved from one it
    * did not. The match itself never reads them: `latitude` is a `numeric` and
@@ -136,6 +138,8 @@ export function findExistingAttraction(
       c.externalId &&
       sourceOf(c.externalId) === "wiki" &&
       !listedExternalIds.has(c.externalId) &&
+      // Unretired, or retired by the sync: a stated kind is a human's (PAR-997).
+      c.retiredKind == null &&
       (c.retiredReason == null ||
         isReclassifiedUpstreamReason(c.retiredReason)),
   );

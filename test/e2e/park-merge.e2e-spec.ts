@@ -575,14 +575,17 @@ describe("Park merge (E2E)", () => {
       return row.id as string;
     };
 
-    /** Readings in one hour, enough of them to clear `HAVING COUNT(*) >= 2`. */
+    /**
+     * Readings in one hour, enough of them to clear `HAVING COUNT(*) >= 2`.
+     * Marked as real readings: the rollup drops a row it cannot classify (PAR-966).
+     */
     const readings = (attractionId: string, hour: string, minutes: number[]) =>
       Promise.all(
         minutes.map((minute, index) =>
           dataSource.query(
-            `INSERT INTO queue_data (id, "attractionId", "queueType", status, "waitTime", timestamp, "data_source")
+            `INSERT INTO queue_data (id, "attractionId", "queueType", status, "waitTime", timestamp, "data_source", is_heartbeat)
              VALUES (gen_random_uuid(), $1, 'STANDBY', 'OPERATING', $2,
-                     $3::timestamptz + ($4 || ' minutes')::interval, 'queue-times')`,
+                     $3::timestamptz + ($4 || ' minutes')::interval, 'queue-times', false)`,
             [attractionId, 20 + index, hour, minute],
           ),
         ),

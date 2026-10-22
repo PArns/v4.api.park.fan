@@ -96,8 +96,10 @@ export function isReclassifiedUpstreamReason(
  *   "closed permanently since …" and keeps it in the sitemap.
  * - `reclassified` — the children sync retired the row because ThemeParks.wiki
  *   now lists the entity as a show or a restaurant, or no longer lists it in
- *   the park at all ({@link ABSENT_UPSTREAM_REASON}). Nothing is known to have
- *   closed, so nothing may say so.
+ *   the park at all ({@link ABSENT_UPSTREAM_REASON}) — or a human retired it
+ *   with `kind: "reclassified"` because it was never a ride of its own (a show
+ *   duplicate, a single-rider line; PAR-997). Nothing is known to have closed,
+ *   so nothing may say so. Only the sync's own kind is ever lifted again.
  */
 export type RetiredKind = "closed" | "reclassified";
 
@@ -132,6 +134,7 @@ export function isOnParkPage(
   row: {
     retiredAt: Date | null;
     retiredReason: string | null;
+    retiredKind?: RetiredKind | null;
     retiredHidden?: boolean | null;
   },
   now: Date = new Date(),
@@ -146,6 +149,10 @@ export function isOnParkPage(
 /**
  * Which retirement a row carries, or null while it is not retired.
  *
+ * A kind stated by hand (`retiredKind`, PAR-997) wins. Without one it is
+ * derived from the reason: the sync's own wordings read `reclassified`,
+ * everything else `closed`.
+ *
  * Served so that no client has to match {@link RECLASSIFIED_UPSTREAM_REASON}
  * itself: that string is the sync's marker and its wording may change, and
  * {@link RECLASSIFIED_UPSTREAM_REASONS} is the one place that keeps track.
@@ -153,8 +160,10 @@ export function isOnParkPage(
 export function retiredKindOf(row: {
   retiredAt: Date | null;
   retiredReason: string | null;
+  retiredKind?: RetiredKind | null;
 }): RetiredKind | null {
   if (!row.retiredAt) return null;
+  if (row.retiredKind) return row.retiredKind;
   return isReclassifiedUpstreamReason(row.retiredReason)
     ? "reclassified"
     : "closed";
@@ -166,6 +175,14 @@ export interface RetirementRequest {
   retiredAt: string;
   /** Why, and the URL it was established from. */
   reason: string;
+  /**
+   * What the retirement means. `reclassified` is for a row that was never a
+   * ride of its own (a show duplicate, a single-rider line): it reads as "no
+   * longer tracked as a ride" rather than "closed permanently", stays off the
+   * park page and the sitemap, and the children sync never lifts it. Omitted,
+   * the kind is derived from the reason — `closed` for a hand-written one.
+   */
+  kind?: RetiredKind;
 }
 
 export interface RetirementResult {
@@ -208,6 +225,14 @@ export class AttractionRetirementService {
         `retiredAt "${invalid.retiredAt}" for ${invalid.attractionId} is not a date`,
       );
     }
+    const badKind = requests.find(
+      (r) => r.kind != null && !RETIRED_KIND_VALUES.includes(r.kind),
+    );
+    if (badKind) {
+      throw new BadRequestException(
+        `kind "${String(badKind.kind)}" for ${badKind.attractionId} is not one of ${RETIRED_KIND_VALUES.join(", ")}`,
+      );
+    }
     const loaded: Array<[RetirementRequest, Attraction]> = [];
     for (const request of requests) {
       const attraction = await this.attractionRepository.findOne({
@@ -225,6 +250,9 @@ export class AttractionRetirementService {
         await this.attractionRepository.update(attraction.id, {
           retiredAt: new Date(request.retiredAt),
           retiredReason: request.reason,
+          // Null re-derives the kind from the reason, so retiring again
+          // without a kind also takes back one stated earlier.
+          retiredKind: request.kind ?? null,
         });
 
         touchedParks.add(attraction.parkId);
@@ -350,6 +378,7 @@ export class AttractionRetirementService {
     await this.attractionRepository.update(attractionId, {
       retiredAt: null,
       retiredReason: null,
+      retiredKind: null,
       retiredHidden: false,
       absentSince: new Date(),
     });

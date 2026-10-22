@@ -1,6 +1,7 @@
 import { Logger, ShutdownSignal } from "@nestjs/common";
 import type { INestApplication } from "@nestjs/common";
 import { logToFile } from "./file-logger.util";
+import type { ShutdownWork } from "./shutdown-work";
 
 /**
  * The signals that shut the app down. Deliberately NOT Nest's default set:
@@ -50,6 +51,8 @@ interface GracefulShutdownOptions {
   proc?: ShutdownProcess;
   /** Where the trace goes. Injected by the spec. */
   trace?: (data: Record<string, unknown>) => void;
+  /** Stops the Bull workers first and names what is open at the deadline. */
+  work?: ShutdownWork;
 }
 
 /**
@@ -105,14 +108,13 @@ export function enableGracefulShutdown(
     proc = process,
     trace = (data: Record<string, unknown>) =>
       logToFile(SHUTDOWN_LOG_FILE, data),
+    work,
   } = options;
   const logger = new Logger("Shutdown");
 
   // Registering is the start of a lifecycle, so nothing is shutting down yet.
   // Only the spec ever reaches this twice; `bootstrap()` calls it once.
   shutdownStartedAt = undefined;
-
-  app.enableShutdownHooks(SHUTDOWN_SIGNALS, { useProcessExit: true });
 
   /**
    * Writing the trace must never be the reason a shutdown stops. `logToFile`
@@ -151,7 +153,14 @@ export function enableGracefulShutdown(
         logger.error(
           `Shutdown hooks still running after ${waitedMs} ms — forcing exit`,
         );
-        traceSafely({ event: "deadline-exceeded", signal, waitedMs });
+        // Which hook held the shutdown, and which jobs it is about to kill.
+        let open: Record<string, unknown> = {};
+        try {
+          open = work?.describeOpen() ?? {};
+        } catch (error) {
+          open = { describeFailed: String(error) };
+        }
+        traceSafely({ event: "deadline-exceeded", signal, waitedMs, ...open });
       } finally {
         proc.exit(FORCED_SHUTDOWN_EXIT_CODE);
       }
@@ -160,15 +169,26 @@ export function enableGracefulShutdown(
     // finish and nothing else holds the loop, the process may just end.
     deadline.unref();
 
+    // Before any hook: a worker that takes a job now would have it killed by
+    // the deadline and marked stalled by the next container (PAR-948).
+    try {
+      work?.stopTakingJobs();
+    } catch (error) {
+      logger.error(`Failed to pause the Bull workers: ${String(error)}`);
+    }
+
     logger.log(
       `${signal} received — running shutdown hooks (${deadlineMs} ms)`,
     );
     traceSafely({ event: "signal", signal, deadlineMs });
   };
 
+  // Registered before Nest's own listener, which `enableShutdownHooks` adds:
+  // listeners run in order, so the workers are paused before the hooks start.
   for (const signal of SHUTDOWN_SIGNALS) {
     proc.on(signal, () => onSignal(signal));
   }
+  app.enableShutdownHooks(SHUTDOWN_SIGNALS, { useProcessExit: true });
 
   // The duration is the number that says whether the hooks ran at all, and it
   // is only knowable here, after Nest's `process.exit(0)`.

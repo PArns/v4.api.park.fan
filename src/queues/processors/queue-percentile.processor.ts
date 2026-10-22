@@ -215,7 +215,8 @@ export class QueuePercentileProcessor {
       `UPDATE attractions
           SET is_seasonal = false, season_months = NULL
         WHERE retired_at IS NOT NULL AND is_seasonal = true
-          AND (retired_reason IS NULL OR retired_reason <> ALL($1::text[]))`,
+          AND (retired_kind IS NOT NULL OR retired_reason IS NULL
+               OR retired_reason <> ALL($1::text[]))`,
       [RECLASSIFIED_UPSTREAM_REASONS],
     );
     if (retiredReset[1] > 0) {

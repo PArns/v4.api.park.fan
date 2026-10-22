@@ -4,6 +4,7 @@ import {
   reissueNamesMatch,
   singleRiderBaseName,
 } from "./attraction-match.util";
+import { RECLASSIFIED_UPSTREAM_REASON } from "../services/attraction-retirement.service";
 
 /**
  * The hint on the re-issue candidate list (PAR-686). Every case is a pair
@@ -282,6 +283,21 @@ describe("findExistingAttraction — a rename must not steal a neighbour's row",
       const result = findExistingAttraction(
         incoming,
         [wikiRow({ retiredReason: "Closed for good. Source: https://…" })],
+        new Set([incoming.externalId]),
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it("does not take a row a human retired with a stated kind, whatever its reason (PAR-997)", () => {
+      const result = findExistingAttraction(
+        incoming,
+        [
+          wikiRow({
+            retiredReason: RECLASSIFIED_UPSTREAM_REASON,
+            retiredKind: "reclassified",
+          }),
+        ],
         new Set([incoming.externalId]),
       );
 

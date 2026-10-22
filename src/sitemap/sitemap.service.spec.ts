@@ -53,7 +53,7 @@ describe("SitemapService.getAttractionsSitemap", () => {
     await service.getAttractionsSitemap();
 
     expect(conditions).toContain(
-      "(a.retiredAt IS NULL OR a.retiredReason IS NULL OR a.retiredReason NOT IN (:...reclassified))",
+      "(a.retiredAt IS NULL OR a.retiredKind = 'closed' OR (a.retiredKind IS NULL AND (a.retiredReason IS NULL OR a.retiredReason NOT IN (:...reclassified))))",
     );
   });
 

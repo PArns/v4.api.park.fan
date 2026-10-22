@@ -14,6 +14,24 @@ GET /v1/parks/:continent/:country/:city/:parkSlug/stats/hourly
 Cached 24 h (Redis + `HttpCacheInterceptor`), like `/stats`. The inputs are the
 daily hourly percentile rollups, which only change once a day — do not poll it.
 
+**An explicit window (PAR-978).** `?from=2025-12-01&to=2026-10-21` reads those
+park-local days, both inclusive, instead of the last `years` years, and
+`meta.dataFrom` / `meta.dataTo` echo them; `meta.windowYears` then reports the
+span read in years (one decimal) rather than the `years` parameter. Both or
+neither: one alone, a day the calendar does not have, `from` after `to` or a
+span over 1830 days (both ends counted) answers 400. A window with too few measured days is not an
+error — it answers `meta.displayable: false`, usually because no ride clears
+`minAttractionDays` (20 by default; lower it for a short window). Each window
+is its own cache entry; a request without one keeps the key and the answer it
+always had.
+
+Known limit, shared with the default window: the SQL bounds the aggregate scan
+at `$from::date` / `$to::date + 1 day` as timestamps in the session zone (UTC),
+not at the park's midnight, so for a park east of UTC the first few local hours
+of `from` are missing and a few hours of the day after `to` are read. The days
+themselves are counted park-local. Fixing the bound changes the default answer
+too, so it is a separate change.
+
 ## Why it is its own endpoint
 
 Everything in it could be read off the attraction detail endpoint. That one

@@ -959,6 +959,11 @@ export class AttractionMergeService {
         inherited[column] = loser[column];
       }
     }
+    // A stated kind qualifies the loser's own retirement, so it travels only
+    // with that `retiredAt` and never onto a winner retired some other way.
+    if ("retiredAt" in inherited && isSet(loser.retiredKind)) {
+      inherited.retiredKind = loser.retiredKind;
+    }
 
     // The survivor keeps its own curated value. The loser's stays behind and
     // is gone with the row, so it is named here. All of them form one entry,

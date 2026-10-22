@@ -74,9 +74,8 @@ export class QueueBootstrapService implements OnModuleInit, OnModuleDestroy {
    * DataSource and log the result as a failure (see `AbortableRuns`).
    *
    * Reached on an explicit `app.close()`, which is what the E2E suites do
-   * between tests. A SIGTERM from a Coolify redeploy does NOT reach it today:
-   * `app.enableShutdownHooks()` is called nowhere in this repo, so Nest runs no
-   * lifecycle hook on a signal (PAR-903).
+   * between tests, and on SIGTERM/SIGINT via `enableGracefulShutdown()`
+   * (PAR-903).
    */
   async onModuleDestroy(): Promise<void> {
     await this.runs.abortAndDrain();

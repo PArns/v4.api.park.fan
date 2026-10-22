@@ -51,6 +51,7 @@ export class SitemapService {
         "a.curatedName",
         "a.retiredAt",
         "a.retiredReason",
+        "a.retiredKind",
         "p.id",
         "p.slug",
         "p.continentSlug",
@@ -67,8 +68,10 @@ export class SitemapService {
       // has no ride page to render, so it stays out. On 2026-09-24 the flat
       // `retiredAt IS NULL` filter that stood here dropped 70 of 7,374 rows, X2 at
       // Magic Mountain among them, and its news post linked to a 404.
+      // The SQL twin of `retiredKindOf`: a kind stated by hand wins, so a row a
+      // human retired as `reclassified` stays out too (PAR-997).
       .andWhere(
-        "(a.retiredAt IS NULL OR a.retiredReason IS NULL OR a.retiredReason NOT IN (:...reclassified))",
+        "(a.retiredAt IS NULL OR a.retiredKind = 'closed' OR (a.retiredKind IS NULL AND (a.retiredReason IS NULL OR a.retiredReason NOT IN (:...reclassified))))",
         { reclassified: [...RECLASSIFIED_UPSTREAM_REASONS] },
       )
       .getMany();

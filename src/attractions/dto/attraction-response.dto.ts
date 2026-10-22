@@ -638,8 +638,10 @@ export class AttractionResponseDto {
       "page and its sitemap entry and is shown as closed permanently. " +
       "`reclassified`: ThemeParks.wiki now lists the entity as a show or a " +
       "restaurant, or has stopped listing it in the park for at least 60 " +
-      "days, so it is no longer tracked as a ride; nothing is known to have " +
-      "closed.",
+      "days, or an editor retired it because it was never a ride of its own " +
+      "(a show duplicate, a single-rider line) — so it is no longer tracked " +
+      "as a ride; nothing is known to have closed. Not listed on the park " +
+      "page and not in the sitemap.",
     enum: RETIRED_KIND_VALUES,
     required: false,
     nullable: true,

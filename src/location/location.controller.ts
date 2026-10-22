@@ -13,6 +13,14 @@ import { LocationService } from "./location.service";
 import { GeoipService } from "../geoip/geoip.service";
 import { NearbyResponseDto } from "./dto/nearby-response.dto";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
+import { QueryIntPipe } from "../common/pipes/query-int.pipe";
+
+/** `Number()` rather than `parseFloat`, so `48.1abc` is rejected, not cut to 48.1. */
+function parseCoordinate(value: unknown, max: number): number | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && Math.abs(parsed) <= max ? parsed : null;
+}
 
 /**
  * Location Controller
@@ -47,7 +55,7 @@ export class LocationController {
   @ApiQuery({
     name: "lat",
     description:
-      "User latitude. If omitted, location is derived from IP (GeoLite2-City) when possible.",
+      "User latitude (−90 to 90). If both lat and lng are omitted, location is derived from IP (GeoLite2-City) when possible; an invalid or half-sent pair answers 400.",
     example: 48.266,
     required: false,
     type: Number,
@@ -55,7 +63,7 @@ export class LocationController {
   @ApiQuery({
     name: "lng",
     description:
-      "User longitude. If omitted, location is derived from IP (GeoLite2-City) when possible.",
+      "User longitude (−180 to 180). If both lat and lng are omitted, location is derived from IP (GeoLite2-City) when possible; an invalid or half-sent pair answers 400.",
     example: 7.722,
     required: false,
     type: Number,
@@ -69,14 +77,16 @@ export class LocationController {
   })
   @ApiQuery({
     name: "radius",
-    description: "Radius in meters to consider 'in park' (default: 1000)",
+    description:
+      "Radius in meters to consider 'in park' (integer, default: 1000, clamped to 0–10000)",
     example: 1000,
     required: false,
     type: Number,
   })
   @ApiQuery({
     name: "limit",
-    description: "Maximum number of parks to return (default: 6)",
+    description:
+      "Maximum number of parks to return (integer, default: 6, clamped to 1–50)",
     example: 6,
     required: false,
     type: Number,
@@ -172,27 +182,29 @@ export class LocationController {
     @Query("lat") lat: string | undefined,
     @Query("lng") lng: string | undefined,
     @Query("ip") ipParam: string | undefined,
-    @Query("radius") radius?: string,
-    @Query("limit") limit?: string,
+    @Query(
+      "radius",
+      new QueryIntPipe({ name: "radius", fallback: 1000, min: 0, max: 10000 }),
+    )
+    radius: number,
+    @Query(
+      "limit",
+      new QueryIntPipe({ name: "limit", fallback: 6, min: 1, max: 50 }),
+    )
+    limit: number,
     @Req() req?: Request,
   ): Promise<NearbyResponseDto> {
     // Resolve coordinates: 1) lat/lng params, 2) ip param (debug), 3) X-Forwarded-For, 4) request IP → GeoIP
     let latitude: number | null = null;
     let longitude: number | null = null;
 
-    if (lat != null && lng != null) {
-      const parsedLat = parseFloat(lat);
-      const parsedLng = parseFloat(lng);
-      if (
-        !Number.isNaN(parsedLat) &&
-        !Number.isNaN(parsedLng) &&
-        parsedLat >= -90 &&
-        parsedLat <= 90 &&
-        parsedLng >= -180 &&
-        parsedLng <= 180
-      ) {
-        latitude = parsedLat;
-        longitude = parsedLng;
+    // A coordinate that is sent but unusable is the caller's error. Falling
+    // back to the IP would answer for a different place as if it were a hit.
+    if (lat !== undefined || lng !== undefined) {
+      latitude = parseCoordinate(lat, 90);
+      longitude = parseCoordinate(lng, 180);
+      if (latitude === null || longitude === null) {
+        throw new BadRequestException("Invalid latitude or longitude");
       }
     }
 
@@ -214,37 +226,6 @@ export class LocationController {
       longitude = coords.longitude;
     }
 
-    // Parse and validate radius
-    let radiusInMeters = 1000; // Default: 1km to cover large parks
-    if (radius) {
-      radiusInMeters = parseInt(radius);
-      if (
-        isNaN(radiusInMeters) ||
-        radiusInMeters < 0 ||
-        radiusInMeters > 10000
-      ) {
-        throw new BadRequestException(
-          "Invalid radius (must be between 0 and 10000 meters)",
-        );
-      }
-    }
-
-    // Parse and validate limit
-    let limitCount = 6; // Default: 6 parks
-    if (limit) {
-      limitCount = parseInt(limit);
-      if (isNaN(limitCount) || limitCount < 1 || limitCount > 50) {
-        throw new BadRequestException(
-          "Invalid limit (must be between 1 and 50)",
-        );
-      }
-    }
-
-    return this.locationService.findNearby(
-      latitude,
-      longitude,
-      radiusInMeters,
-      limitCount,
-    );
+    return this.locationService.findNearby(latitude, longitude, radius, limit);
   }
 }

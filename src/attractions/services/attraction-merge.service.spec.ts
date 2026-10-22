@@ -330,6 +330,52 @@ describe("AttractionMergeService", () => {
     );
   });
 
+  describe("a stated retirement kind across a merge (PAR-997)", () => {
+    const retiredAt = new Date("2026-09-20T00:00:00Z");
+
+    it("travels with the loser's retirement", async () => {
+      givenRows([
+        { ...baseRow, retiredAt: null, retiredReason: null, retiredKind: null },
+        {
+          ...suffixRow,
+          retiredAt,
+          retiredReason: "Queue-Times duplicate",
+          retiredKind: "reclassified",
+        },
+      ]);
+
+      await service.mergeAttractions("row-base", "row-suffix");
+
+      expect(manager.update).toHaveBeenCalledWith(
+        Attraction,
+        "row-base",
+        expect.objectContaining({ retiredAt, retiredKind: "reclassified" }),
+      );
+    });
+
+    it("never lands on a winner retired some other way", async () => {
+      givenRows([
+        {
+          ...baseRow,
+          retiredAt,
+          retiredReason: "Demolished. Source: https://…",
+          retiredKind: null,
+        },
+        {
+          ...suffixRow,
+          retiredAt,
+          retiredReason: "Queue-Times duplicate",
+          retiredKind: "reclassified",
+        },
+      ]);
+
+      await service.mergeAttractions("row-base", "row-suffix");
+
+      const payload = (manager.update as jest.Mock).mock.calls[0][2];
+      expect(payload).not.toHaveProperty("retiredKind");
+    });
+  });
+
   it("never overwrites metadata the survivor already has", async () => {
     givenRows([
       { ...baseRow, queueTimesEntityId: "111", latitude: 1, longitude: 2 },

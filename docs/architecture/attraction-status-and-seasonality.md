@@ -1317,6 +1317,38 @@ reason, with the entity URL in it, rather than the constant. They were an admin
 write, so the sync treats them the way it treats any human retirement: it will
 not lift them. That is the intended reading, not an oversight.
 
+**A reclassification entered by hand (PAR-997).** The flip side of that reading
+was that a human retirement could only ever mean `closed`: `retiredKindOf`
+derived the kind from the reason text alone. A row retired because it was never
+a ride of its own — the 21 Queue-Times show duplicates of PAR-161, the 8
+single-rider lines of PAR-965 — therefore read as "closed permanently": listed
+in the park payload's `closedAttractions` for 365 days, in the sitemap, and
+closed on its own page. `POST /admin/retire-attractions` now takes an optional
+`kind: "closed" | "reclassified"` per retirement, stored in the nullable
+`retired_kind` column. The rules:
+
+- **A stated kind wins.** `retiredKindOf` returns `retired_kind` when it is set
+  and derives from the reason only when it is null, so every row retired before
+  the column existed reads exactly as before. The sitemap's SQL filter is the
+  same rule written out (`retiredKind = 'closed' OR (retiredKind IS NULL AND
+  <reason rule>)`); `findClosedForParkPage` and the admin list go through
+  `isOnParkPage`/`retiredKindOf` and follow by themselves.
+- **The sync never writes the column and never lifts a row that has one.**
+  `syncAttraction` un-retires only when `retired_kind IS NULL` *and* the reason
+  is one of `RECLASSIFIED_UPSTREAM_REASONS`, so a hand-entered reclassification
+  survives every run even if somebody pasted the sync's wording into it.
+- **Retiring again without a kind writes null**, i.e. takes back a kind stated
+  earlier; `unretire` clears it with the rest. A merge carries the loser's kind
+  only together with the loser's `retiredAt`, never onto a winner retired some
+  other way.
+- **"Can the sync undo this?" is asked the same way everywhere:** kind null and
+  a sync reason. `detect-seasonal` step 2c and the wiki re-issue match
+  (`attraction-match.util.ts`) ask it too, so a hand-entered reclassification
+  is treated like any human retirement there.
+
+Switching an existing row is the same call with the row's current `retiredAt`
+and `reason` plus `kind: "reclassified"`; it overwrites in place.
+
 ### 5.7 · The other direction, `SHOW`/`RESTAURANT` -> `ATTRACTION`
 
 Both tables now carry `retired_at` / `retired_reason`, nullable and with the
