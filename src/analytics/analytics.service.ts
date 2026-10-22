@@ -5989,6 +5989,26 @@ export class AnalyticsService {
    * inline query inside `getAttractionHistory` — counts distinct hours
    * with status='DOWN' per attraction. Returned as a Map<attractionId,
    * downCount>.
+   *
+   * `observedReadingsSql` for the same reason as the slot rollup above, on the
+   * second column of the same row: `writeHourlyHeartbeats` copies the previous
+   * row's status too, so a frozen DOWN was carried forward hour by hour and
+   * this `COUNT(DISTINCT DATE_TRUNC('hour', …))` turned every carried hour into
+   * an outage hour of its own. The live twin for "today" in
+   * `AttractionIntegrationService` already filters (PAR-898), so without this
+   * the same day's `downCount` dropped the moment it moved from the live path
+   * into this rollup.
+   *
+   * Measured against production on 2026-10-21 (PAR-897), per attraction and
+   * park-local day: over 2026-09-01..10-07, before PAR-720 fixed the writer,
+   * 4,163 of 253,752 rows (1.64 %) carry a `downCount` this predicate changes,
+   * 77,450 outage hours against 67,594 (−12.7 %); over 2026-10-08..10-20 it is
+   * one row of 206,353. Existing rows are NOT recomputed, and the reason is
+   * not the size: not one of the 4,163 rows loses its outage (a carried DOWN
+   * always follows an observed one, on the same local day), while
+   * `backfill-attraction-hourly-history` rewrites `slots` along with
+   * `downCount` and would strip the pre-PAR-729 slot coverage those same days
+   * deliberately keep. The numbers are in PAR-897.
    */
   async computeParkDownCountForDate(
     parkId: string,
@@ -6009,6 +6029,7 @@ export class AnalyticsService {
         AND qd.timestamp >= $2
         AND qd.timestamp < $3
         AND qd.status = 'DOWN'
+        AND ${observedReadingsSql("qd")}
       GROUP BY qd."attractionId"
       `,
       [parkId, startOfDay, nextDay, timezone],
