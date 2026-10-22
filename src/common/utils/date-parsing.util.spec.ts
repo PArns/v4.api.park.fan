@@ -81,6 +81,22 @@ describe("parseDateRange", () => {
       },
     );
 
+    it.each(["America/New_York", "Europe/Berlin", "Asia/Tokyo"])(
+      "%s: an explicit from without a to gets from + 30 days",
+      (timezone) => {
+        const { toDate } = parseDateRange("2026-10-22", undefined, {
+          timezone,
+        });
+        expect(formatInParkTimezone(toDate, timezone)).toBe("2026-11-21");
+      },
+    );
+
+    it("answers 400, not 500, for a from with a time part and no to", () => {
+      expect(() =>
+        parseDateRange("2026-10-22T10:00:00Z", undefined, berlin),
+      ).toThrow(BadRequestException);
+    });
+
     it("still answers 400 for an impossible from without a to", () => {
       expect(() => parseDateRange("2026-02-30", undefined, berlin)).toThrow(
         BadRequestException,
