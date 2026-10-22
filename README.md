@@ -46,10 +46,10 @@
 
 | Category | Technology |
 |----------|-----------|
-| **Backend** | [NestJS 11](https://nestjs.com/) · TypeScript (strict mode) |
-| **Database** | [PostgreSQL 16](https://www.postgresql.org/) · [TimescaleDB](https://www.timescale.com/) |
-| **Cache & Queue** | [Redis 7](https://redis.io/) · [Bull Queue](https://github.com/OptimalBits/bull) |
-| **ML Service** | Python 3.11 · CatBoost · FastAPI |
+| **Backend** | [NestJS 12](https://nestjs.com/) · [TypeORM 1](https://typeorm.io/) · TypeScript (strict mode) · Node.js 26 |
+| **Database** | [PostgreSQL 18](https://www.postgresql.org/) · [TimescaleDB](https://www.timescale.com/) |
+| **Cache & Queue** | [Redis 8](https://redis.io/) · [Bull Queue](https://github.com/OptimalBits/bull) |
+| **ML Services** | Python 3.11–3.13 · CatBoost · NeuralForecast (TFT) · PyTorch · FastAPI |
 | **DevOps** | Docker Compose · GitHub Actions |
 | **Testing** | Jest · Supertest · Testcontainers |
 
@@ -81,7 +81,7 @@ The system automatically identifies "Seasonal Parks" (parks with winter gaps > 2
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 26+ (the test scripts rely on Jest loading NestJS's ESM packages natively)
 - pnpm 11+ (`corepack enable` picks up the pinned `packageManager` version)
 - Docker & Docker Compose
 - Git

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Node.js**: v20+ (recommended)
+- **Node.js**: v26+ (CI and the Docker image run 26; Jest needs ≥ 24.9 to load NestJS 12's ESM packages)
 - **Docker**: For running PostgreSQL, Redis, and ML Service locally.
 - **Python**: 3.11+ (if working on ML service locally).
 
@@ -16,7 +16,7 @@
 
 2. **Install dependencies**:
    ```bash
-   npm install
+   pnpm install
    ```
 
 3. **Environment Setup**:
