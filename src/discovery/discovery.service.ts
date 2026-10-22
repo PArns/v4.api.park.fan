@@ -256,6 +256,7 @@ export class DiscoveryService {
     // Fetch all parks with complete geographic data and attractions
     const parks = await this.parkRepository.find({
       where: {
+        retiredAt: IsNull(),
         continent: Not(IsNull()),
         country: Not(IsNull()),
         city: Not(IsNull()),
@@ -731,7 +732,7 @@ export class DiscoveryService {
     if (cached) return cached;
 
     const parks = await this.parkRepository.find({
-      where: { continentSlug, countrySlug },
+      where: { continentSlug, countrySlug, retiredAt: IsNull() },
       select: [
         "id",
         "name",

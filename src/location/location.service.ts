@@ -202,7 +202,11 @@ export class LocationService {
     }
 
     const rows = await this.parkRepository.find({
-      where: { latitude: Not(IsNull()), longitude: Not(IsNull()) },
+      where: {
+        latitude: Not(IsNull()),
+        longitude: Not(IsNull()),
+        retiredAt: IsNull(),
+      },
       select: {
         id: true,
         name: true,

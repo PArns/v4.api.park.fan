@@ -11,6 +11,8 @@ import { Attraction } from "../entities/attraction.entity";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
 import { invalidateParkCaches } from "../../common/cache/park-cache-invalidation";
+import { deleteKeysByPatterns } from "../../common/cache/delete-keys-by-patterns";
+import { Park } from "../../parks/entities/park.entity";
 
 /**
  * The exact `retired_reason` the children sync writes when an entity is
@@ -242,6 +244,59 @@ export class AttractionRetirementService {
     }
 
     return results;
+  }
+
+  /**
+   * Retire a whole park that closed for good.
+   *
+   * The park keeps its page (it serves `retiredAt`/`retiredReason`) and leaves
+   * every listing and job loop — see `Park.retiredAt`. Its rides that are still
+   * active are retired as closed on the same day and with the same reason, so
+   * no ride page of a closed park keeps rendering live. Rides already retired
+   * keep their own, earlier date.
+   */
+  async retirePark(
+    parkId: string,
+    retiredAt: string,
+    reason: string,
+  ): Promise<{ parkId: string; name: string; attractions: number }> {
+    if (Number.isNaN(Date.parse(retiredAt))) {
+      throw new BadRequestException(`retiredAt "${retiredAt}" is not a date`);
+    }
+    if (!reason?.trim()) {
+      throw new BadRequestException(
+        "reason is required — it is shown to users",
+      );
+    }
+    const parks = this.attractionRepository.manager.getRepository(Park);
+    const park = await parks.findOne({ where: { id: parkId } });
+    if (!park) throw new BadRequestException(`Park ${parkId} not found`);
+
+    await parks.update(parkId, {
+      retiredAt: new Date(retiredAt),
+      retiredReason: reason,
+    });
+    const active = await this.attractionRepository.find({
+      where: { parkId, retiredAt: IsNull() },
+      select: ["id"],
+    });
+    if (active.length > 0) {
+      await this.attractionRepository.update(
+        active.map((a) => a.id),
+        { retiredAt: new Date(retiredAt), retiredReason: reason },
+      );
+    }
+    this.logger.log(
+      `🪦 Retired park "${park.name}" as of ${retiredAt} with ${active.length} ride(s) — ${reason}`,
+    );
+
+    // The country summary lists the park and is not park-scoped, so the
+    // park-cache eviction below does not reach it.
+    await deleteKeysByPatterns(this.redis, [
+      "discovery:country-summary:*",
+    ]).catch(() => {});
+    await this.publishRetirements(new Set([parkId]), true);
+    return { parkId, name: park.name, attractions: active.length };
   }
 
   private async publishRetirements(

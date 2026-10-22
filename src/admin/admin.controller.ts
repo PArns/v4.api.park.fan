@@ -259,6 +259,34 @@ export class AdminController {
     return { retired: retired.length, attractions: retired };
   }
 
+  @Post("retire-parks")
+  @AdminMinRole("owner")
+  @ApiOperation({
+    summary: "Retire a park that closed for good (and its still-active rides)",
+    description:
+      "`retiredAt` is the operator's last operating day; `reason` is shown to " +
+      "users and should carry the source. The park keeps its page and leaves " +
+      "every listing, search and job loop.",
+  })
+  async retireParks(
+    @Body()
+    body: {
+      retirements?: { parkId: string; retiredAt: string; reason: string }[];
+    },
+  ) {
+    const parks = [];
+    for (const r of body?.retirements ?? []) {
+      parks.push(
+        await this.retirementService.retirePark(
+          r.parkId,
+          r.retiredAt,
+          r.reason,
+        ),
+      );
+    }
+    return { retired: parks.length, parks };
+  }
+
   @Post("unretire-attraction/:id")
   @AdminMinRole("owner")
   @ApiOperation({ summary: "Undo a retirement" })

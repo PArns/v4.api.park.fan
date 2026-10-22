@@ -789,6 +789,27 @@ export class ParkWithAttractionsDto {
   liveWaitTimes: LiveWaitTimesDto;
 
   @ApiProperty({
+    description:
+      "When the park closed for good (the operator's last operating day), or " +
+      "null while it operates. A retired park keeps its page and history but " +
+      "is absent from listings, search and nearby — render it as closed " +
+      "permanently, the way a ride retired as closed is rendered.",
+    type: String,
+    nullable: true,
+    required: false,
+  })
+  retiredAt?: string | null;
+
+  @ApiProperty({
+    description:
+      "Why the park was retired, including its source. Null while it operates.",
+    type: String,
+    nullable: true,
+    required: false,
+  })
+  retiredReason?: string | null;
+
+  @ApiProperty({
     description: "Current operating status",
     enum: ["OPERATING", "CLOSED"],
     required: false,
@@ -934,6 +955,8 @@ export class ParkWithAttractionsDto {
       // a property of the park, and it must be right even on the paths that
       // never reach ParkIntegrationService.
       liveWaitTimes: buildLiveWaitTimes(curatedPark.noWaitTimesReason),
+      retiredAt: park.retiredAt ? park.retiredAt.toISOString() : null,
+      retiredReason: park.retiredAt ? park.retiredReason : null,
       status: "CLOSED", // Default to ensure order
       latitude: park.latitude !== undefined ? park.latitude : null,
       longitude: park.longitude !== undefined ? park.longitude : null,

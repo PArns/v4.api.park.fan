@@ -1230,7 +1230,9 @@ export class ParksService {
    * Finds all parks
    */
   async findAll(): Promise<Park[]> {
+    // Retired parks keep their page but leave every listing and every job loop.
     return this.parkRepository.find({
+      where: { retiredAt: IsNull() },
       relations: ["destination"],
       order: { name: "ASC" },
     });
@@ -1266,7 +1268,8 @@ export class ParksService {
   }): Promise<{ data: Park[]; total: number }> {
     const queryBuilder = this.parkRepository
       .createQueryBuilder("park")
-      .leftJoinAndSelect("park.destination", "destination");
+      .leftJoinAndSelect("park.destination", "destination")
+      .where("park.retiredAt IS NULL");
 
     // Apply filters - prefer slugs over names (from geo routes)
     if (filters.continentSlug) {
@@ -3196,7 +3199,7 @@ export class ParksService {
    */
   async findByContinent(continentSlug: string): Promise<Park[]> {
     return this.parkRepository.find({
-      where: { continentSlug },
+      where: { continentSlug, retiredAt: IsNull() },
       relations: ["destination"],
       order: { name: "ASC" },
     });
@@ -3214,7 +3217,7 @@ export class ParksService {
     countrySlug: string,
   ): Promise<Park[]> {
     return this.parkRepository.find({
-      where: { continentSlug, countrySlug },
+      where: { continentSlug, countrySlug, retiredAt: IsNull() },
       relations: ["destination"],
       order: { name: "ASC" },
     });
@@ -3234,7 +3237,7 @@ export class ParksService {
     citySlug: string,
   ): Promise<Park[]> {
     return this.parkRepository.find({
-      where: { continentSlug, countrySlug, citySlug },
+      where: { continentSlug, countrySlug, citySlug, retiredAt: IsNull() },
       relations: ["destination"],
       order: { name: "ASC" },
     });
