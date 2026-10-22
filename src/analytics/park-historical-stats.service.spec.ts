@@ -297,7 +297,9 @@ describe("ParkHistoricalStatsService", () => {
       expect(sql).toContain("NOT IN (SELECT day FROM park_scheduled_days)");
     }
     // A park or a day without a timetable keeps every hour, as before.
-    expect(top).toContain("OR (");
+    expect(top).toMatch(
+      /IN \(SELECT hr FROM park_open_hours\)\s+OR \(.*\) NOT IN \(SELECT day FROM park_scheduled_days\)/s,
+    );
   });
 
   it("restricts the day-values query to the park's headliner IDs", async () => {
