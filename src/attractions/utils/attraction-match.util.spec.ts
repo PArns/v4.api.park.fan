@@ -2,6 +2,7 @@ import {
   findExistingAttraction,
   AttractionMatchCandidate,
   reissueNamesMatch,
+  singleRiderBaseName,
 } from "./attraction-match.util";
 
 /**
@@ -286,5 +287,25 @@ describe("findExistingAttraction — a rename must not steal a neighbour's row",
 
       expect(result).toBeNull();
     });
+  });
+});
+
+describe("singleRiderBaseName", () => {
+  it.each([
+    ["Revenge of the Mummy™ Single Rider", "revengeofthemummy"],
+    ["Doctor Doom's Fearfall® Single Rider", "doctordoomsfearfall"],
+    ["Hulk Coaster single-rider", "hulkcoaster"],
+    ["Hulk Coaster SingleRider", "hulkcoaster"],
+  ])("returns the normalized ride name of %s", (name, expected) => {
+    expect(singleRiderBaseName(name)).toBe(expected);
+  });
+
+  it.each([
+    ["Revenge of the Mummy"],
+    ["Revenge of the Mummy Express Pass"],
+    ["Single Rider Swing"],
+    ["Single Rider"],
+  ])("returns null for %s", (name) => {
+    expect(singleRiderBaseName(name)).toBeNull();
   });
 });

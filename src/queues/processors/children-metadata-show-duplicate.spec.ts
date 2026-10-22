@@ -174,4 +174,93 @@ describe("ChildrenMetadataProcessor — Queue-Times rides that are already shows
       expect.objectContaining({ externalId: "qt-ride-999" }),
     );
   });
+
+  describe("single-rider lines of a ride the park already carries (PAR-556)", () => {
+    const parent = {
+      id: "row-mummy",
+      externalId: "wiki-mummy",
+      slug: "revenge-of-the-mummy",
+      name: "Revenge of the Mummy",
+      queueTimesEntityId: "100",
+      parkId,
+    };
+
+    it("does not create the single-rider line, even when the parent differs by a trademark sign", async () => {
+      attractionRepo.find.mockResolvedValue([parent]);
+
+      await (processor as any).syncQtAttraction(
+        {
+          externalId: "qt-ride-555",
+          name: "Revenge of the Mummy™ Single Rider",
+          entityType: "ATTRACTION",
+        },
+        parkId,
+      );
+
+      expect(attractionRepo.save).not.toHaveBeenCalled();
+      expect(mappingRepository.save).not.toHaveBeenCalled();
+    });
+
+    it("still creates a row when the suffix is not Single Rider", async () => {
+      attractionRepo.find.mockResolvedValue([parent]);
+
+      await (processor as any).syncQtAttraction(
+        {
+          externalId: "qt-ride-556",
+          name: "Revenge of the Mummy Express Pass",
+          entityType: "ATTRACTION",
+        },
+        parkId,
+      );
+
+      expect(attractionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ externalId: "qt-ride-556" }),
+      );
+    });
+
+    it("keeps updating a single-rider row that already exists", async () => {
+      attractionRepo.find.mockResolvedValue([
+        parent,
+        {
+          id: "row-mummy-sr",
+          externalId: "qt-ride-555",
+          slug: "revenge-of-the-mummy-single-rider",
+          name: "Revenge of the Mummy Single Rider",
+          queueTimesEntityId: "555",
+          parkId,
+        },
+      ]);
+
+      await (processor as any).syncQtAttraction(
+        {
+          externalId: "qt-ride-555",
+          name: "Revenge of the Mummy™ Single Rider",
+          entityType: "ATTRACTION",
+        },
+        parkId,
+      );
+
+      expect(attractionRepo.update).toHaveBeenCalledWith("row-mummy-sr", {
+        name: "Revenge of the Mummy™ Single Rider",
+      });
+      expect(attractionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it("still creates a single-rider row whose parent this park does not carry", async () => {
+      attractionRepo.find.mockResolvedValue([parent]);
+
+      await (processor as any).syncQtAttraction(
+        {
+          externalId: "qt-ride-557",
+          name: "Hulk Coaster Single Rider",
+          entityType: "ATTRACTION",
+        },
+        parkId,
+      );
+
+      expect(attractionRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ externalId: "qt-ride-557" }),
+      );
+    });
+  });
 });
