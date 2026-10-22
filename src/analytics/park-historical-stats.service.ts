@@ -30,7 +30,12 @@ import { RideDayCurveDto } from "./dto/ride-day-curve.dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { rateOrUnknown } from "../common/utils/crowd-level.util";
 import { HISTORICAL_STATS_CACHE_VERSION } from "../common/cache/cache-keys";
-import { closedParkDaysCte, isNotAClosedParkDay } from "./closed-park-days.sql";
+import {
+  closedParkDaysCte,
+  isNotAClosedParkDay,
+  isWithinOpeningHours,
+  openingHoursCtes,
+} from "./closed-park-days.sql";
 
 /** Response schema version — bump when the contract changes (see DTO). */
 const SCHEMA_VERSION = 4;
@@ -345,12 +350,13 @@ export class ParkHistoricalStatsService {
     topN: number,
     minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
   ): Promise<ParkHourlyProfileDto> {
+    // v7: hours outside the park's opening window no longer count (PAR-981).
     // v6: days the park's schedule calls CLOSED no longer count (PAR-698).
     // v5 was retired rides no longer counting towards the top N. The bump
     // makes the filter apply on deploy instead of up to 24 h later, when the
     // previous entry would have expired. No invalidation glob exists for this
     // key — the version segment is the only way to retire one.
-    const cacheKey = `park:hourly-profile:v6:${park.id}:${years}:${topN}:${minAttractionDays}`;
+    const cacheKey = `park:hourly-profile:v7:${park.id}:${years}:${topN}:${minAttractionDays}`;
     const cached = safeJsonParse<ParkHourlyProfileDto>(
       await this.redis.get(cacheKey),
     );
@@ -875,6 +881,7 @@ export class ParkHistoricalStatsService {
   ): Promise<Record<string, unknown>[]> {
     return this.aggregateRepo.manager.query(
       `WITH ${closedParkDaysCte("$1")},
+       ${openingHoursCtes("$1")},
        eligible AS (
          SELECT qda."attractionId"                    AS aid,
                 COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date)::int AS sample_days
@@ -889,6 +896,7 @@ export class ParkHistoricalStatsService {
            AND qda."sampleCount" >= $5
            AND a.retired_at IS NULL
            AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
+           AND ${isWithinOpeningHours("qda.hour", `(qda.hour AT TIME ZONE $2)::date`)}
          GROUP BY qda."attractionId"
          HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6
          ORDER BY AVG(qda.p90) DESC
@@ -912,6 +920,7 @@ export class ParkHistoricalStatsService {
            -- rule only in the ranking, a park's shut days would be gone from
            -- it and still in every number the table prints.
            AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
+           AND ${isWithinOpeningHours("qda.hour", `(qda.hour AT TIME ZONE $2)::date`)}
          -- The planner fence (PAR-832, see the doc comment). Not a no-op.
          OFFSET 0
        )
@@ -984,6 +993,7 @@ export class ParkHistoricalStatsService {
     const rows: Array<Record<string, unknown>> =
       await this.aggregateRepo.manager.query(
         `WITH ${closedParkDaysCte("$1")},
+         ${openingHoursCtes("$1")},
          per_attraction_day AS (
            SELECT
              (qda.hour AT TIME ZONE $2)::date                     AS day,
@@ -997,6 +1007,7 @@ export class ParkHistoricalStatsService {
              AND qda.hour <  ($4::date + INTERVAL '1 day')
              AND qda."sampleCount" >= $5
              AND ($6::text[] IS NULL OR qda."attractionId" = ANY($6))
+             AND ${isWithinOpeningHours("qda.hour", `(qda.hour AT TIME ZONE $2)::date`)}
            GROUP BY day, aid
          )
          SELECT
@@ -1075,7 +1086,8 @@ export class ParkHistoricalStatsService {
     // query cannot be right; the counts move for 1,468 of 5,692 rides and the
     // 20-day floor decides differently for 14 of them.
     return this.aggregateRepo.manager.query(
-      `WITH ${closedParkDaysCte("$1")}
+      `WITH ${closedParkDaysCte("$1")},
+       ${openingHoursCtes("$1")}
        SELECT
          a.slug,
          COALESCE(a.curated_name, a.name)                        AS name,
@@ -1092,6 +1104,7 @@ export class ParkHistoricalStatsService {
          AND qda."sampleCount" >= $7
          AND a.retired_at IS NULL
          AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
+         AND ${isWithinOpeningHours("qda.hour", `(qda.hour AT TIME ZONE $2)::date`)}
        GROUP BY a.id, a.slug, name, land, attraction_type
        HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6
        ORDER BY avg_p90 DESC

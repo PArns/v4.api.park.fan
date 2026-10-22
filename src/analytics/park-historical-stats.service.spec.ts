@@ -284,6 +284,22 @@ describe("ParkHistoricalStatsService", () => {
     expect(result.meta.displayable).toBe(false); // 45 < 100
   });
 
+  it("keeps hours outside the park's opening window out of all three aggregate queries (PAR-981)", async () => {
+    // Energylandia posts 0 minutes from 22:00 to 09:00 as OPERATING, and
+    // Toverland 5 to 10 minutes all night. The closed-day rule cannot see
+    // either, because the day is open.
+    await service.getParkHistoricalStats(park, 2);
+    const sqls = aggregateQuery.mock.calls.map(([sql]) => String(sql));
+    const top = sqls.find((sql) => sql.includes("avg_p50"))!;
+    const days = sqls.find((sql) => sql.includes("per_attraction_day"))!;
+    for (const sql of [top, days]) {
+      expect(sql).toContain("park_open_hours");
+      expect(sql).toContain("NOT IN (SELECT day FROM park_scheduled_days)");
+    }
+    // A park or a day without a timetable keeps every hour, as before.
+    expect(top).toContain("OR (");
+  });
+
   it("restricts the day-values query to the park's headliner IDs", async () => {
     await service.getParkHistoricalStats(park, 2);
     const dayCall = aggregateQuery.mock.calls.find((c) =>
@@ -518,6 +534,7 @@ describe("ParkHistoricalStatsService", () => {
       expect(measured).toContain("FROM queue_data_aggregates qda");
       // Both halves still drop the park's shut days (PAR-698).
       expect(measured).toContain("closed_park_days");
+      expect(measured).toContain("park_open_hours");
       expect(measured).toMatch(/OFFSET 0\s*\)/);
 
       const outer = sql.slice(sql.lastIndexOf("SELECT"));
@@ -526,6 +543,7 @@ describe("ParkHistoricalStatsService", () => {
       // The grouped query must not reach the hypertable itself again.
       expect(outer).not.toContain("queue_data_aggregates");
       expect(outer).not.toContain("closed_park_days");
+      expect(outer).not.toContain("park_open_hours");
     });
 
     it("keeps only hours measured on enough days, ascending", async () => {

@@ -164,6 +164,82 @@ export function isNotAClosedParkDay(parkLocalDayExpr: string): string {
 }
 
 /**
+ * Two CTEs, `park_open_hours` and `park_scheduled_days`, that
+ * {@link isWithinOpeningHours} reads. They hold the hour buckets (UTC, as
+ * `queue_data_aggregates.hour` is stored) that overlap a park-level entry with
+ * both times, and the park-local days that carry such an OPERATING entry.
+ *
+ * Some feeds report rides as OPERATING around the clock: Energylandia posts 0
+ * minutes from 22:00 to 09:00, Toverland 5 to 10 minutes all night. The
+ * closed-day rule above cannot see that, because the day itself is open, and
+ * averaging those hours in pulls Zadra's median from ~20 to 10 (PAR-981).
+ *
+ * `EXTRA_HOURS` and `TICKETED_EVENT` entries extend the open window, so rides
+ * that run late for an event keep their hours. An entry longer than 24 hours
+ * or with a closing time before its opening is not a window and is ignored, as
+ * in `h5-profile.service.ts`.
+ *
+ * Unbounded by date for the same reason as {@link closedParkDaysCte}: the
+ * park's few hundred park-level rows read in one scan, and the CTEs stay free
+ * of placeholders. Joined as hashed sub-selects, not per-row index probes.
+ *
+ * @param parkIdParam The caller's placeholder holding the park id, e.g. `"$1"`.
+ *   A compile-time constant from our own SQL, never user input.
+ */
+export function openingHoursCtes(parkIdParam: string): string {
+  return `park_open_hours AS (
+     SELECT generate_series(
+              date_trunc('hour', se."openingTime" AT TIME ZONE 'UTC'),
+              date_trunc('hour', (se."closingTime" - INTERVAL '1 microsecond') AT TIME ZONE 'UTC'),
+              INTERVAL '1 hour'
+            ) AS hr
+     FROM schedule_entries se
+     WHERE se."parkId" = ${parkIdParam}::text::uuid
+       AND se."attractionId" IS NULL
+       AND se."scheduleType" IN ('OPERATING', 'EXTRA_HOURS', 'TICKETED_EVENT')
+       AND se."openingTime" IS NOT NULL
+       AND se."closingTime" > se."openingTime"
+       AND se."closingTime" - se."openingTime" <= INTERVAL '24 hours'
+   ),
+   park_scheduled_days AS (
+     SELECT DISTINCT se.date AS day
+     FROM schedule_entries se
+     WHERE se."parkId" = ${parkIdParam}::text::uuid
+       AND se."attractionId" IS NULL
+       AND se."scheduleType" = 'OPERATING'
+       AND se."openingTime" IS NOT NULL
+       AND se."closingTime" > se."openingTime"
+       AND se."closingTime" - se."openingTime" <= INTERVAL '24 hours'
+   )`;
+}
+
+/**
+ * The predicate that keeps an hour in: it overlaps an opening window, or its
+ * park-local day has no timed OPERATING entry at all, so a park or a day
+ * without a timetable reads as it did before. Needs {@link openingHoursCtes}
+ * in the same statement.
+ *
+ * `IN` and `NOT IN` on purpose: both sub-selects are uncorrelated and
+ * NULL-free, so Postgres hashes them once instead of scanning the CTE per
+ * aggregate row, which a correlated `EXISTS` inside an `OR` would force.
+ *
+ * @param hourExpr SQL yielding the aggregate's `timestamptz` hour bucket, e.g.
+ *   `"qda.hour"`. A compile-time constant from our own SQL, never user input.
+ * @param parkLocalDayExpr SQL yielding a PARK-LOCAL `date`, as for
+ *   {@link isNotAClosedParkDay}. A compile-time constant from our own SQL,
+ *   never user input.
+ */
+export function isWithinOpeningHours(
+  hourExpr: string,
+  parkLocalDayExpr: string,
+): string {
+  return `(
+            (${hourExpr} AT TIME ZONE 'UTC') IN (SELECT hr FROM park_open_hours)
+            OR (${parkLocalDayExpr}) NOT IN (SELECT day FROM park_scheduled_days)
+          )`;
+}
+
+/**
  * The same rule as a self-contained `EXISTS`, for a query that spans every park
  * and therefore cannot bind the park as a parameter. True when the given park's
  * given day is shut. Needs no CTE, so it drops into a query builder's
