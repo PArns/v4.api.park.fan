@@ -153,7 +153,7 @@ describe("enableGracefulShutdown", () => {
       work: {
         stopTakingJobs: () => undefined,
         describeOpen: () => ({
-          openHooks: ["BullModule.onApplicationShutdown"],
+          openHooks: ["Queue(live-cache-warmup).onApplicationShutdown"],
           activeJobs: {
             "live-cache-warmup": [{ id: "3698", name: "warmup-after-sync" }],
           },
@@ -168,7 +168,7 @@ describe("enableGracefulShutdown", () => {
       event: "deadline-exceeded",
       signal: ShutdownSignal.SIGTERM,
       waitedMs: deadlineMs,
-      openHooks: ["BullModule.onApplicationShutdown"],
+      openHooks: ["Queue(live-cache-warmup).onApplicationShutdown"],
       activeJobs: {
         "live-cache-warmup": [{ id: "3698", name: "warmup-after-sync" }],
       },

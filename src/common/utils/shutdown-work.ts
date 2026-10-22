@@ -22,7 +22,7 @@ interface BullQueueLike {
   whenCurrentJobsFinished(): Promise<void>;
   on(
     event: string,
-    listener: (job: { id: unknown; name: string }) => void,
+    listener: (job: { id: unknown; name: string } | null) => void,
   ): unknown;
 }
 
@@ -56,7 +56,9 @@ function isBullQueue(instance: unknown): instance is BullQueueLike {
 export function watchShutdownWork(modules: ModulesContainer): ShutdownWork {
   const logger = new Logger("Shutdown");
   const queues = new Set<BullQueueLike>();
-  const hookOwners = new Set<object>();
+  // Owner -> its label. A queue's own hook (`close()`, set by @nestjs/bull) is
+  // the likeliest one to hold the deadline, and "Queue" alone names nothing.
+  const hookOwners = new Map<object, string>();
 
   for (const module of modules.values()) {
     for (const wrappers of [
@@ -66,7 +68,7 @@ export function watchShutdownWork(modules: ModulesContainer): ShutdownWork {
     ]) {
       for (const { instance } of wrappers.values()) {
         if (isBullQueue(instance)) queues.add(instance);
-        else if (
+        if (
           typeof instance === "object" &&
           instance !== null &&
           LIFECYCLE_HOOKS.some(
@@ -74,21 +76,33 @@ export function watchShutdownWork(modules: ModulesContainer): ShutdownWork {
               typeof (instance as Record<string, unknown>)[hook] === "function",
           )
         ) {
-          hookOwners.add(instance);
+          hookOwners.set(
+            instance,
+            isBullQueue(instance)
+              ? `Queue(${instance.name})`
+              : instance.constructor.name,
+          );
         }
       }
     }
   }
 
   // Bull keeps no local list of the jobs it runs, so this process keeps one.
-  // The events are local: only the worker that runs a job emits them.
+  // The events are local: only the worker that runs a job emits them. These
+  // listeners sit ahead of the app's own `@OnQueue*` ones, so they must not
+  // throw: Bull's stalled checker emits `failed` with a job that can be null.
   const active = new Map<string, Map<string, string>>();
   for (const queue of queues) {
     const running = active.get(queue.name) ?? new Map<string, string>();
     active.set(queue.name, running);
-    queue.on("active", (job) => running.set(String(job.id), job.name));
-    queue.on("completed", (job) => running.delete(String(job.id)));
-    queue.on("failed", (job) => running.delete(String(job.id)));
+    queue.on("active", (job) => {
+      if (job) running.set(String(job.id), job.name);
+    });
+    for (const done of ["completed", "failed", "stalled"]) {
+      queue.on(done, (job) => {
+        if (job) running.delete(String(job.id));
+      });
+    }
   }
 
   const openHooks = new Map<object, string>();
@@ -99,27 +113,36 @@ export function watchShutdownWork(modules: ModulesContainer): ShutdownWork {
    * hook up on the instance when it calls it, which is after this runs.
    */
   const trackHooks = (): void => {
-    for (const owner of hookOwners) {
+    for (const [owner, name] of hookOwners) {
       const target = owner as Record<string, unknown>;
       for (const hook of LIFECYCLE_HOOKS) {
         const original = target[hook];
         if (typeof original !== "function") continue;
-        const label = `${owner.constructor.name}.${hook}`;
-        target[hook] = function (this: unknown, ...args: unknown[]): unknown {
-          const key = {};
-          openHooks.set(key, label);
-          try {
-            const result: unknown = original.apply(this, args);
-            if (result instanceof Promise) {
-              return result.finally(() => openHooks.delete(key));
+        const label = `${name}.${hook}`;
+        try {
+          target[hook] = function (this: unknown, ...args: unknown[]): unknown {
+            const key = {};
+            openHooks.set(key, label);
+            try {
+              const result: unknown = original.apply(this, args);
+              if (
+                typeof (result as PromiseLike<unknown>)?.then === "function"
+              ) {
+                return Promise.resolve(result).finally(() =>
+                  openHooks.delete(key),
+                );
+              }
+              openHooks.delete(key);
+              return result;
+            } catch (error) {
+              openHooks.delete(key);
+              throw error;
             }
-            openHooks.delete(key);
-            return result;
-          } catch (error) {
-            openHooks.delete(key);
-            throw error;
-          }
-        };
+          };
+        } catch (error) {
+          // A frozen instance keeps its hook untracked; the others still count.
+          logger.warn(`Cannot track ${label}: ${String(error)}`);
+        }
       }
     }
   };

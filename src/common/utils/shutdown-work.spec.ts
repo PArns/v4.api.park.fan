@@ -18,6 +18,11 @@ class FakeQueue extends EventEmitter {
   whenCurrentJobsFinished(): Promise<void> {
     return Promise.resolve();
   }
+
+  // What @nestjs/bull sets on every queue it provides.
+  onApplicationShutdown(): Promise<void> {
+    return new Promise(() => undefined);
+  }
 }
 
 class SlowService {
@@ -28,7 +33,16 @@ class SlowService {
 }
 
 class QuickService {
-  onApplicationShutdown(): void {}
+  calls = 0;
+  onApplicationShutdown(): void {
+    this.calls += 1;
+  }
+}
+
+class BrokenService {
+  onModuleDestroy(): void {
+    throw new Error("boom");
+  }
 }
 
 /** The slice of a ModulesContainer the walk reads. */
@@ -79,6 +93,8 @@ describe("watchShutdownWork", () => {
     warmup.emit("active", { id: 3698, name: "warmup-after-sync" });
     stats.emit("active", { id: 7, name: "aggregate" });
     stats.emit("completed", { id: 7, name: "aggregate" });
+    // Bull's stalled checker can emit a local `failed` with no job.
+    expect(() => stats.emit("failed", null)).not.toThrow();
 
     expect(work.describeOpen().activeJobs).toEqual({
       "live-cache-warmup": [{ id: "3698", name: "warmup-after-sync" }],
@@ -101,5 +117,30 @@ describe("watchShutdownWork", () => {
     slow.release();
     await destroying;
     expect(work.describeOpen().openHooks).toEqual([]);
+  });
+
+  it("keeps `this`, and clears a hook that throws", () => {
+    const quick = new QuickService();
+    const broken = new BrokenService();
+    const work = watchShutdownWork(modulesOf(quick, broken));
+
+    work.stopTakingJobs();
+    quick.onApplicationShutdown();
+
+    expect(quick.calls).toBe(1);
+    expect(() => broken.onModuleDestroy()).toThrow("boom");
+    expect(work.describeOpen().openHooks).toEqual([]);
+  });
+
+  it("names a queue's own close hook by the queue", () => {
+    const warmup = new FakeQueue("live-cache-warmup");
+    const work = watchShutdownWork(modulesOf(warmup));
+
+    work.stopTakingJobs();
+    void warmup.onApplicationShutdown();
+
+    expect(work.describeOpen().openHooks).toEqual([
+      "Queue(live-cache-warmup).onApplicationShutdown",
+    ]);
   });
 });
