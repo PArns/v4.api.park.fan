@@ -1,5 +1,6 @@
 import { BadRequestException } from "@nestjs/common";
 import { parseDateRange } from "./date-parsing.util";
+import { formatInParkTimezone } from "./date.util";
 
 describe("parseDateRange", () => {
   const berlin = { timezone: "Europe/Berlin" };
@@ -45,5 +46,45 @@ describe("parseDateRange", () => {
     expect(isNaN(fromDate.getTime())).toBe(false);
     expect(isNaN(toDate.getTime())).toBe(false);
     expect(toDate.getTime()).toBeGreaterThan(fromDate.getTime());
+  });
+
+  describe("default dates", () => {
+    beforeEach(() => {
+      jest.useFakeTimers().setSystemTime(new Date("2026-10-22T12:00:00Z"));
+    });
+    afterEach(() => jest.useRealTimers());
+
+    const day = (d: Date, timezone: string) =>
+      formatInParkTimezone(d, timezone);
+
+    it.each([
+      ["America/New_York", "2026-11-21", "2026-10-22", "2026-10-15"],
+      ["Europe/Berlin", "2026-11-21", "2026-10-22", "2026-10-15"],
+      ["Asia/Tokyo", "2026-11-21", "2026-10-22", "2026-10-15"],
+    ])(
+      "%s: to = from + N days on the calendar",
+      (timezone, ahead30, ahead0, fromWeekAgo) => {
+        const thirty = parseDateRange(undefined, undefined, { timezone });
+        expect(day(thirty.toDate, timezone)).toBe(ahead30);
+
+        const zero = parseDateRange(undefined, undefined, {
+          timezone,
+          defaultToDaysAhead: 0,
+        });
+        expect(day(zero.toDate, timezone)).toBe(ahead0);
+
+        const weekAgo = parseDateRange(undefined, undefined, {
+          timezone,
+          defaultFromDaysAgo: 7,
+        });
+        expect(day(weekAgo.fromDate, timezone)).toBe(fromWeekAgo);
+      },
+    );
+
+    it("still answers 400 for an impossible from without a to", () => {
+      expect(() => parseDateRange("2026-02-30", undefined, berlin)).toThrow(
+        BadRequestException,
+      );
+    });
   });
 });
