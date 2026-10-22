@@ -29,6 +29,9 @@ import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
  * we wrote no longer hides the real OPERATING row before it (PAR-755, May
  * sample: 1,543 buckets). There it is wrapped in `COALESCE(..., true)` as in
  * `queue-percentile.processor.ts`, so a row we cannot classify still anchors.
+ * In `observed` it stays bare, as in every other sample reader: such a row
+ * (no `is_heartbeat`, no `lastUpdated`) is dropped there. Production holds
+ * none, per the same comment in the processor.
  *
  * `HAVING COUNT(*) >= 2` is not the old threshold in disguise: one real row and
  * its anchor is a full hour, a single unanchored row (the first reading after
