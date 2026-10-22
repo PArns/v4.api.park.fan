@@ -235,7 +235,11 @@ export class WeatherService {
 
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["latitude", "longitude", "timezone"],
+      select: {
+        latitude: true,
+        longitude: true,
+        timezone: true,
+      },
     });
 
     if (!park || park.latitude == null || park.longitude == null) {
@@ -560,7 +564,11 @@ export class WeatherService {
     try {
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: ["latitude", "longitude", "timezone"],
+        select: {
+          latitude: true,
+          longitude: true,
+          timezone: true,
+        },
       });
 
       if (!park || !park.latitude || !park.longitude) {
@@ -608,7 +616,9 @@ export class WeatherService {
       try {
         const park = await this.parkRepository.findOne({
           where: { id: parkId },
-          select: ["timezone"],
+          select: {
+            timezone: true,
+          },
         });
         const tz = park?.timezone || "UTC";
         const today = getCurrentDateInTimezone(tz);
@@ -661,7 +671,10 @@ export class WeatherService {
     // Get park timezone for correct date interpretation
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "timezone"],
+      select: {
+        id: true,
+        timezone: true,
+      },
     });
 
     if (!park || !park.timezone) {
@@ -730,7 +743,10 @@ export class WeatherService {
     if (!tz) {
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: ["id", "timezone"],
+        select: {
+          id: true,
+          timezone: true,
+        },
       });
       if (!park || !park.timezone) {
         this.logger.warn(
@@ -789,7 +805,10 @@ export class WeatherService {
   async markPastDataAsHistorical(): Promise<number> {
     try {
       const parks = await this.parkRepository.find({
-        select: ["id", "timezone"],
+        select: {
+          id: true,
+          timezone: true,
+        },
       });
       let totalUpdated = 0;
 
@@ -839,7 +858,10 @@ export class WeatherService {
   }> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "timezone"],
+      select: {
+        id: true,
+        timezone: true,
+      },
     });
 
     const cacheKey = CacheKeys.weatherForecast(parkId);
@@ -918,7 +940,11 @@ export class WeatherService {
   ): Promise<{ latitude: number; longitude: number } | null> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "latitude", "longitude"],
+      select: {
+        id: true,
+        latitude: true,
+        longitude: true,
+      },
     });
     if (!park || park.latitude == null || park.longitude == null) return null;
     return { latitude: park.latitude, longitude: park.longitude };

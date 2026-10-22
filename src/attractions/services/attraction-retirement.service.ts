@@ -278,7 +278,9 @@ export class AttractionRetirementService {
     });
     const active = await this.attractionRepository.find({
       where: { parkId, retiredAt: IsNull() },
-      select: ["id"],
+      select: {
+        id: true,
+      },
     });
     if (active.length > 0) {
       await this.attractionRepository.update(
@@ -392,7 +394,9 @@ export class AttractionRetirementService {
   async listRetired(): Promise<Attraction[]> {
     return this.attractionRepository.find({
       where: { retiredAt: Not(IsNull()) },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
       order: { retiredAt: "DESC" },
     });
   }

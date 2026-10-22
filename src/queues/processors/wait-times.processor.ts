@@ -154,7 +154,11 @@ export class WaitTimesProcessor {
                   // CLOSED heartbeat row forever. That is the write half of the
                   // bug the UNKNOWN read-path fix addressed.
                   where: { parkId: park.id, retiredAt: IsNull() },
-                  select: ["id", "externalId", "name"],
+                  select: {
+                    id: true,
+                    externalId: true,
+                    name: true,
+                  },
                 }),
                 // Same rule, and here it decides who gets the live data. The
                 // lookup is keyed on `<source>:<externalId>` and the shows go
@@ -166,11 +170,19 @@ export class WaitTimesProcessor {
                 // not speak for its entity any more.
                 this.showsService.getRepository().find({
                   where: { parkId: park.id, retiredAt: IsNull() },
-                  select: ["id", "externalId", "name"],
+                  select: {
+                    id: true,
+                    externalId: true,
+                    name: true,
+                  },
                 }),
                 this.restaurantsService.getRepository().find({
                   where: { parkId: park.id, retiredAt: IsNull() },
-                  select: ["id", "externalId", "name"],
+                  select: {
+                    id: true,
+                    externalId: true,
+                    name: true,
+                  },
                 }),
               ]);
 
@@ -684,7 +696,10 @@ export class WaitTimesProcessor {
     // Load createdAt for the grace-period check in one query
     const attractionMeta = await this.attractionsService.getRepository().find({
       where: { id: In(missing.map((a) => a.id)) },
-      select: ["id", "createdAt"],
+      select: {
+        id: true,
+        createdAt: true,
+      },
     });
     const createdAtMap = new Map(
       attractionMeta.map((a) => [a.id, a.createdAt.getTime()]),
@@ -779,7 +794,12 @@ export class WaitTimesProcessor {
     // attraction (a SELECT inside updateLandInfo plus two UPDATEs), so on
     // a 100-attraction park that's ~300 queries every 5 minutes.
     const parkAttractions = await this.attractionsService.getRepository().find({
-      select: ["id", "landName", "landExternalId", "queueTimesEntityId"],
+      select: {
+        id: true,
+        landName: true,
+        landExternalId: true,
+        queueTimesEntityId: true,
+      },
       where: { parkId: park.id },
     });
     const attractionIds = parkAttractions.map((a) => a.id);
@@ -1041,7 +1061,12 @@ export class WaitTimesProcessor {
       const allAttractions = await this.attractionsService
         .getRepository()
         .find({
-          select: ["id", "name", "externalId", "parkId"],
+          select: {
+            id: true,
+            name: true,
+            externalId: true,
+            parkId: true,
+          },
           where: { retiredAt: IsNull() },
         });
       const attractionsByPark = new Map<string, typeof allAttractions>();

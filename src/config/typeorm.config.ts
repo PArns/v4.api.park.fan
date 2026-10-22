@@ -23,6 +23,9 @@ export const typeOrmConfig: TypeOrmModuleAsyncOptions = {
       logger: new SlowQueryFileLogger(),
       maxQueryExecutionTime: 500, // Triggers logQuerySlow → logs/slow-queries.log
       timezone: "UTC", // Always use UTC
+      // TypeORM 1 throws on null/undefined in find `where`; 0.3 skipped them and
+      // nobody has audited every call site yet, so keep the old behaviour.
+      invalidWhereValuesBehavior: { null: "ignore", undefined: "ignore" },
       // Every service connects as the same `parkfan` role, so without a name
       // pg_stat_activity cannot say whose session is holding a lock. The
       // 2026-10-07..09 incidents could not be attributed for exactly that

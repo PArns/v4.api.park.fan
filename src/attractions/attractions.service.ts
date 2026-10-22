@@ -39,7 +39,10 @@ export class AttractionsService {
     if (ids.length === 0) return result;
     const rows = await this.attractionRepository.find({
       where: { id: In(ids) },
-      select: ["id", "name"],
+      select: {
+        id: true,
+        name: true,
+      },
     });
     for (const row of rows) {
       result.set(row.id, row.name);
@@ -52,7 +55,9 @@ export class AttractionsService {
    */
   async findAll(): Promise<Attraction[]> {
     return this.attractionRepository.find({
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
       order: { name: "ASC" },
     });
   }
@@ -226,7 +231,11 @@ export class AttractionsService {
   async findBySlug(slug: string): Promise<Attraction | null> {
     return this.attractionRepository.findOne({
       where: { slug },
-      relations: ["park", "park.destination"],
+      relations: {
+        park: {
+          destination: true,
+        },
+      },
     });
   }
 
@@ -247,7 +256,11 @@ export class AttractionsService {
       // Retired attractions leave the park's list. The row and its history
       // stay; only its own detail endpoint still answers for it.
       where: { parkId, retiredAt: IsNull() },
-      relations: ["park", "park.destination"],
+      relations: {
+        park: {
+          destination: true,
+        },
+      },
       order: { name: "ASC" },
       take: limit,
       skip: (page - 1) * limit,
@@ -295,7 +308,11 @@ export class AttractionsService {
         parkId,
         slug: attractionSlug,
       },
-      relations: ["park", "park.destination"],
+      relations: {
+        park: {
+          destination: true,
+        },
+      },
     });
   }
 
@@ -406,7 +423,10 @@ export class AttractionsService {
   ): Promise<boolean> {
     const attraction = await this.attractionRepository.findOne({
       where: { id: attractionId },
-      select: ["landName", "landExternalId"],
+      select: {
+        landName: true,
+        landExternalId: true,
+      },
     });
 
     if (

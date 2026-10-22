@@ -548,15 +548,15 @@ export class PredictionAccuracyService {
     const readyToCompare = new Date(Date.now() - 20 * 60 * 1000);
 
     const pendingPredictions = await this.accuracyRepository.find({
-      select: [
-        "id",
-        "attractionId",
-        "targetTime",
-        "predictedWaitTime",
-        "servedWaitTime",
-        "predictionType",
-        "features",
-      ], // Select only needed fields
+      select: {
+        id: true,
+        attractionId: true,
+        targetTime: true,
+        predictedWaitTime: true,
+        servedWaitTime: true,
+        predictionType: true,
+        features: true,
+      }, // Select only needed fields
       where: {
         comparisonStatus: "PENDING",
         targetTime: Between(lookbackWindow, readyToCompare),
@@ -2226,7 +2226,9 @@ export class PredictionAccuracyService {
         actualWaitTime: Between(5, MAX_PLAUSIBLE_WAIT_TIME),
         wasUnplannedClosure: false,
       },
-      relations: ["attraction"],
+      relations: {
+        attraction: true,
+      },
     });
 
     const comparedRecords = accuracyRecords.filter(

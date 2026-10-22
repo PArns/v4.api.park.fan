@@ -143,7 +143,9 @@ export class QueueBootstrapService implements OnModuleInit, OnModuleDestroy {
       const latestData = await this.queueDataRepository.findOne({
         where: {},
         order: { timestamp: "DESC" },
-        select: ["timestamp"],
+        select: {
+          timestamp: true,
+        },
       });
 
       const isFresh =

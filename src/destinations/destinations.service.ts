@@ -90,7 +90,9 @@ export class DestinationsService {
   async findByExternalId(externalId: string): Promise<Destination | null> {
     return this.destinationRepository.findOne({
       where: { externalId },
-      relations: ["parks"],
+      relations: {
+        parks: true,
+      },
     });
   }
 
@@ -105,7 +107,9 @@ export class DestinationsService {
     limit: number = 10,
   ): Promise<{ data: Destination[]; total: number }> {
     const [data, total] = await this.destinationRepository.findAndCount({
-      relations: ["parks"],
+      relations: {
+        parks: true,
+      },
       order: { name: "ASC" },
       take: limit,
       skip: (page - 1) * limit,
@@ -120,7 +124,9 @@ export class DestinationsService {
   async findBySlug(slug: string): Promise<Destination | null> {
     return this.destinationRepository.findOne({
       where: { slug },
-      relations: ["parks"],
+      relations: {
+        parks: true,
+      },
     });
   }
 }

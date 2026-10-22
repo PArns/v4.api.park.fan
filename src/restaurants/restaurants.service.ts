@@ -46,7 +46,9 @@ export class RestaurantsService {
   async findAll(): Promise<Restaurant[]> {
     return this.restaurantRepository.find({
       where: { retiredAt: IsNull() },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
       order: { name: "ASC" },
     });
   }
@@ -122,7 +124,11 @@ export class RestaurantsService {
     // would have to decide it in a hurry.
     return this.restaurantRepository.findOne({
       where: { slug },
-      relations: ["park", "park.destination"],
+      relations: {
+        park: {
+          destination: true,
+        },
+      },
     });
   }
 
@@ -137,7 +143,11 @@ export class RestaurantsService {
   async findByParkId(parkId: string): Promise<Restaurant[]> {
     return this.restaurantRepository.find({
       where: { parkId, retiredAt: IsNull() },
-      relations: ["park", "park.destination"],
+      relations: {
+        park: {
+          destination: true,
+        },
+      },
       order: { name: "ASC" },
     });
   }
@@ -161,7 +171,11 @@ export class RestaurantsService {
         parkId,
         slug: restaurantSlug,
       },
-      relations: ["park", "park.destination"],
+      relations: {
+        park: {
+          destination: true,
+        },
+      },
     });
   }
 
@@ -244,7 +258,11 @@ export class RestaurantsService {
     const latest = await this.restaurantLiveDataRepository.findOne({
       where: { restaurantId, timestamp: MoreThanOrEqual(cutoff) },
       order: { timestamp: "DESC" },
-      relations: ["restaurant", "restaurant.park"],
+      relations: {
+        restaurant: {
+          park: true,
+        },
+      },
     });
 
     // No previous data → save
@@ -306,7 +324,11 @@ export class RestaurantsService {
     const cutoff = liveDataCutoff();
     return this.restaurantLiveDataRepository.findOne({
       where: { restaurantId, timestamp: MoreThanOrEqual(cutoff) },
-      relations: ["restaurant", "restaurant.park"],
+      relations: {
+        restaurant: {
+          park: true,
+        },
+      },
       order: { timestamp: "DESC" },
     });
   }
@@ -378,7 +400,11 @@ export class RestaurantsService {
 
     const [data, total] = await this.restaurantLiveDataRepository.findAndCount({
       where: whereClause,
-      relations: ["restaurant", "restaurant.park"],
+      relations: {
+        restaurant: {
+          park: true,
+        },
+      },
       order: { timestamp: "DESC" },
       skip: (page - 1) * limit,
       take: limit,

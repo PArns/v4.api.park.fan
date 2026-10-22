@@ -761,7 +761,9 @@ export class ChildrenMetadataProcessor {
       where: { retiredAt: IsNull() },
       // The park comes along for countryCode: the wiki reports centimetres
       // for everyone, but US parks publish the inch figure on their signage.
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
       select: {
         id: true,
         externalId: true,
@@ -899,20 +901,17 @@ export class ChildrenMetadataProcessor {
       .getRepository()
       .find({
         where: { parkId },
-        select: [
-          "id",
-          "externalId",
-          "slug",
-          "name",
-          "queueTimesEntityId",
-          "retiredReason",
-          // Only so the update below can tell a changed value from an
-          // unchanged one. Without them every listed row is written on every
-          // run whether the feed moved it or not.
-          "latitude",
-          "longitude",
-          "attractionType",
-        ],
+        select: {
+          id: true,
+          externalId: true,
+          slug: true,
+          name: true,
+          queueTimesEntityId: true,
+          retiredReason: true,
+          latitude: true,
+          longitude: true,
+          attractionType: true,
+        },
       });
 
     const existing = findExistingAttraction(
@@ -1076,7 +1075,9 @@ export class ChildrenMetadataProcessor {
       // Get all existing slugs for this park
       const existingShows = await this.showsService.getRepository().find({
         where: { parkId },
-        select: ["slug"],
+        select: {
+          slug: true,
+        },
       });
       const existingSlugs = existingShows.map((s) => s.slug);
 
@@ -1134,7 +1135,9 @@ export class ChildrenMetadataProcessor {
         .getRepository()
         .find({
           where: { parkId },
-          select: ["slug"],
+          select: {
+            slug: true,
+          },
         });
       const existingSlugs = existingRestaurants.map((r) => r.slug);
 
@@ -1259,7 +1262,11 @@ export class ChildrenMetadataProcessor {
         retiredAt: IsNull(),
         queueTimesEntityId: IsNull(),
       },
-      select: ["id", "name", "parkId"],
+      select: {
+        id: true,
+        name: true,
+        parkId: true,
+      },
     });
     if (candidates.length === 0) return;
 
@@ -1342,11 +1349,19 @@ export class ChildrenMetadataProcessor {
     const [shows, restaurants] = await Promise.all([
       this.showsService.getRepository().find({
         where: { externalId: In(reclassifiedExternalIds), retiredAt: IsNull() },
-        select: ["id", "name", "parkId"],
+        select: {
+          id: true,
+          name: true,
+          parkId: true,
+        },
       }),
       this.restaurantsService.getRepository().find({
         where: { externalId: In(reclassifiedExternalIds), retiredAt: IsNull() },
-        select: ["id", "name", "parkId"],
+        select: {
+          id: true,
+          name: true,
+          parkId: true,
+        },
       }),
     ]);
     if (shows.length === 0 && restaurants.length === 0) return;
@@ -1511,16 +1526,16 @@ export class ChildrenMetadataProcessor {
         retiredAt: IsNull(),
         queueTimesEntityId: IsNull(),
       },
-      select: [
-        "id",
-        "name",
-        "externalId",
-        "lastListedAt",
-        "updatedAt",
-        "absentSince",
-        "isSeasonal",
-        "curatedIsSeasonal",
-      ],
+      select: {
+        id: true,
+        name: true,
+        externalId: true,
+        lastListedAt: true,
+        updatedAt: true,
+        absentSince: true,
+        isSeasonal: true,
+        curatedIsSeasonal: true,
+      },
     });
 
     // A row the wiki could list at all: it carries a wiki id, and that id is
@@ -1596,7 +1611,10 @@ export class ChildrenMetadataProcessor {
     if (claimedRowIds.size === 0) return new Set();
     const rows = await this.attractionsService.getRepository().find({
       where: { id: In([...claimedRowIds]) },
-      select: ["id", "name"],
+      select: {
+        id: true,
+        name: true,
+      },
     });
     return new Set(rows.map((row) => normalizeName(row.name)));
   }
@@ -1804,7 +1822,9 @@ export class ChildrenMetadataProcessor {
         internalEntityType,
         externalSource: Not("themeparks-wiki"),
       },
-      select: ["internalEntityId"],
+      select: {
+        internalEntityId: true,
+      },
     });
     const claimed = new Set(mappings.map((m) => m.internalEntityId));
     return candidates.filter((c) => !claimed.has(c.id));
@@ -1828,7 +1848,13 @@ export class ChildrenMetadataProcessor {
       .getRepository()
       .find({
         where: { parkId },
-        select: ["id", "externalId", "slug", "name", "queueTimesEntityId"],
+        select: {
+          id: true,
+          externalId: true,
+          slug: true,
+          name: true,
+          queueTimesEntityId: true,
+        },
       });
 
     const existing = findExistingAttraction(
@@ -1896,7 +1922,9 @@ export class ChildrenMetadataProcessor {
       if (!showNames) {
         const parkShows = await this.showsService.getRepository().find({
           where: { parkId, retiredAt: IsNull() },
-          select: ["name"],
+          select: {
+            name: true,
+          },
         });
         showNames = new Set(
           parkShows

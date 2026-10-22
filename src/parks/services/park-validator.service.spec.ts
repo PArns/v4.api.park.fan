@@ -1168,7 +1168,7 @@ describe("ParkValidatorService.findDuplicates — shared attractions", () => {
       await service.findDuplicates();
 
       expect(attractionRepository.find).toHaveBeenCalledWith({
-        select: ["parkId", "name"],
+        select: { parkId: true, name: true },
         where: { retiredAt: IsNull() },
       });
     });

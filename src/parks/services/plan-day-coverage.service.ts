@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { Repository, In } from "typeorm";
 import { Park } from "../entities/park.entity";
 import { PlanDayCoverage } from "../entities/plan-day-coverage.entity";
 import { PlanDayService } from "./plan-day.service";
@@ -152,7 +152,9 @@ export class PlanDayCoverageService {
       [plannedDate],
     );
     if (ids.length === 0) return [];
-    return this.parkRepository.findByIds(ids.map((row) => row.id));
+    return this.parkRepository.findBy({
+      id: In(ids.map((row) => row.id)),
+    });
   }
 
   private static summarise(

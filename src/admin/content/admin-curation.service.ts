@@ -119,7 +119,9 @@ export class AdminCurationService {
   async findAttraction(id: string): Promise<Attraction> {
     const attraction = await this.attractions.findOne({
       where: { id },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
     });
     if (!attraction) throw new NotFoundException(`No attraction ${id}`);
     return attraction;
@@ -337,7 +339,9 @@ export class AdminCurationService {
     if (changed.includes("rcdbId") && attraction.rcdbId !== null) {
       const clash = await this.attractions.findOne({
         where: { rcdbId: attraction.rcdbId, id: Not(attraction.id) },
-        relations: ["park"],
+        relations: {
+          park: true,
+        },
       });
       if (clash) {
         throw new BadRequestException(

@@ -40,18 +40,18 @@ export class ParkEnrichmentProcessor {
     );
 
     const parks = await this.parkRepository.find({
-      select: [
-        "id",
-        "name",
-        "country",
-        "countryCode",
-        "region",
-        "regionCode",
-        "latitude",
-        "longitude",
-        "influencingRegions",
-        "metadataRetryCount",
-      ],
+      select: {
+        id: true,
+        name: true,
+        country: true,
+        countryCode: true,
+        region: true,
+        regionCode: true,
+        latitude: true,
+        longitude: true,
+        influencingRegions: true,
+        metadataRetryCount: true,
+      },
     });
 
     let updatedCountryCodes = 0;

@@ -264,29 +264,24 @@ export class DiscoveryService {
         countrySlug: Not(IsNull()),
         citySlug: Not(IsNull()),
       },
-      select: [
-        "id",
-        "name",
-        "slug",
-        "timezone",
-        "continent",
-        "continentSlug",
-        "country",
-        "countrySlug",
-        "countryCode",
-        "city",
-        "citySlug",
-        "latitude",
-        "longitude",
-        // The curated columns have to be on every projection that later calls
-        // `resolveCuratedPark`. Left off, the resolver reads `undefined`, falls
-        // back to the synced name and reports nothing — and this particular
-        // projection is cached for 24 hours, so the silent no-op would outlive
-        // several curation sessions.
-        "curatedName",
-        "curatedParkType",
-        "curatedNoWaitTimesReason",
-      ],
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        timezone: true,
+        continent: true,
+        continentSlug: true,
+        country: true,
+        countrySlug: true,
+        countryCode: true,
+        city: true,
+        citySlug: true,
+        latitude: true,
+        longitude: true,
+        curatedName: true,
+        curatedParkType: true,
+        curatedNoWaitTimesReason: true,
+      },
       order: {
         continent: "ASC",
         country: "ASC",
@@ -733,18 +728,16 @@ export class DiscoveryService {
 
     const parks = await this.parkRepository.find({
       where: { continentSlug, countrySlug, retiredAt: IsNull() },
-      select: [
-        "id",
-        "name",
-        "slug",
-        "city",
-        "citySlug",
-        "continentSlug",
-        "countrySlug",
-        // See the note on the geo-structure projection: a resolver handed a
-        // row without these columns quietly reports the upstream name.
-        "curatedName",
-      ],
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        city: true,
+        citySlug: true,
+        continentSlug: true,
+        countrySlug: true,
+        curatedName: true,
+      },
     });
 
     if (parks.length === 0) {

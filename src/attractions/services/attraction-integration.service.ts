@@ -155,20 +155,20 @@ export class AttractionIntegrationService {
       attraction.parkId
         ? this.parkRepository.findOne({
             where: { id: attraction.parkId },
-            select: [
-              "id",
-              "slug",
-              "continentSlug",
-              "countrySlug",
-              "citySlug",
-              "continent",
-              "country",
-              "city",
-              "timezone",
-              "countryCode",
-              "regionCode",
-              "influencingRegions",
-            ],
+            select: {
+              id: true,
+              slug: true,
+              continentSlug: true,
+              countrySlug: true,
+              citySlug: true,
+              continent: true,
+              country: true,
+              city: true,
+              timezone: true,
+              countryCode: true,
+              regionCode: true,
+              influencingRegions: true,
+            },
           })
         : Promise.resolve(null),
       this.mlService

@@ -102,7 +102,11 @@ export class MLAnomalyDetectionService {
     );
     const existingAnomalies = await this.anomalyRepository.find({
       where: { detectedAt: Between(dedupWindowStart, new Date()) },
-      select: ["attractionId", "anomalyType", "detectedAt"],
+      select: {
+        attractionId: true,
+        anomalyType: true,
+        detectedAt: true,
+      },
     });
     const recentByKey = new Map<string, Date[]>();
     for (const ex of existingAnomalies) {

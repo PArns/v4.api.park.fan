@@ -425,7 +425,10 @@ export class ForecastArchiveService {
       this.rideQ90(park.id, park.timezone, localToday),
       this.attractionRepository.find({
         where: { parkId: park.id },
-        select: ["id", "slug"],
+        select: {
+          id: true,
+          slug: true,
+        },
       }),
     ]);
     const slugToId = new Map(attractions.map((a) => [a.slug, a.id]));

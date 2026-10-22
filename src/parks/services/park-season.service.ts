@@ -128,7 +128,9 @@ export class ParkSeasonService {
   async findOne(id: string): Promise<ParkSeason> {
     const season = await this.seasons.findOne({
       where: { id },
-      relations: ["park"],
+      relations: {
+        park: true,
+      },
     });
     if (!season) throw new NotFoundException(`No season ${id}`);
     return season;

@@ -1490,7 +1490,7 @@ describe("MLService", () => {
       expect(storedReads[0]).toContain('"attractionId" = ANY($1::uuid[])');
       expect(mockAttractionRepository.find).toHaveBeenCalledWith({
         where: { parkId },
-        select: ["id"],
+        select: { id: true },
       });
     });
 

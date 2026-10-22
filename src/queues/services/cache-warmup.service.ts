@@ -367,7 +367,9 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         async ({ id }) => {
           const park = await this.parkRepository.findOne({
             where: { id },
-            relations: ["influencingRegions"],
+            relations: {
+              influencingRegions: true,
+            },
           });
           if (!park) return false;
           const slug = await this.warmupCalendarForPark(park, true);
@@ -515,14 +517,14 @@ export class CacheWarmupService implements OnApplicationBootstrap {
         // The four geo slugs ride along for the frontend cache tag — see
         // ParkStatusRevalidationService. They are on the row this query already reads.
         this.parkRepository.find({
-          select: [
-            "id",
-            "name",
-            "slug",
-            "citySlug",
-            "countrySlug",
-            "continentSlug",
-          ],
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            citySlug: true,
+            countrySlug: true,
+            continentSlug: true,
+          },
         }),
         this.popularityService.getTopParks(50),
       ]);
@@ -711,7 +713,9 @@ export class CacheWarmupService implements OnApplicationBootstrap {
       // Fetch attraction
       const attraction = await this.attractionRepository.findOne({
         where: { id: attractionId },
-        relations: ["park"],
+        relations: {
+          park: true,
+        },
       });
 
       if (!attraction) {
@@ -907,7 +911,10 @@ export class CacheWarmupService implements OnApplicationBootstrap {
             // PERFORMANCE: Only select timezone, not entire park entity
             const park = await this.parkRepository.findOne({
               where: { id: parkId },
-              select: ["id", "timezone"],
+              select: {
+                id: true,
+                timezone: true,
+              },
             });
 
             if (!park) {

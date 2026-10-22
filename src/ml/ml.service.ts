@@ -442,7 +442,12 @@ export class MLService {
     // Get park timezone for cache key
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "timezone", "countryCode", "regionCode"],
+      select: {
+        id: true,
+        timezone: true,
+        countryCode: true,
+        regionCode: true,
+      },
     });
 
     if (!park) {
@@ -504,7 +509,9 @@ export class MLService {
       // 2. Fetch all attractions for this park
       const attractions = await this.attractionRepository.find({
         where: { parkId },
-        select: ["id"],
+        select: {
+          id: true,
+        },
       });
 
       if (attractions.length === 0) {
@@ -757,7 +764,10 @@ export class MLService {
       try {
         const park = await this.parkRepository.findOne({
           where: { id: parkId },
-          select: ["id", "timezone"],
+          select: {
+            id: true,
+            timezone: true,
+          },
         });
         const todayStr = park?.timezone
           ? getCurrentDateInTimezone(park.timezone)
@@ -805,7 +815,11 @@ export class MLService {
         // Get park timezone for downtime cache keys
         const parkForDowntime = await this.parkRepository.findOne({
           where: { id: parkId },
-          select: ["id", "timezone", "countryCode"],
+          select: {
+            id: true,
+            timezone: true,
+            countryCode: true,
+          },
         });
 
         const today = formatInParkTimezone(
@@ -861,7 +875,11 @@ export class MLService {
       try {
         const park = await this.parkRepository.findOne({
           where: { id: parkId },
-          select: ["id", "countryCode", "regionCode"],
+          select: {
+            id: true,
+            countryCode: true,
+            regionCode: true,
+          },
         });
 
         if (park?.countryCode) {
@@ -890,7 +908,9 @@ export class MLService {
             // the same question: a ride's row is not the park having a schedule.
             attractionId: IsNull(),
           },
-          select: ["id"],
+          select: {
+            id: true,
+          },
         });
 
         parkHasSchedule[parkId] = !!scheduleExists;
@@ -906,13 +926,13 @@ export class MLService {
       try {
         const park = await this.parkRepository.findOne({
           where: { id: parkId },
-          select: [
-            "id",
-            "countryCode",
-            "regionCode",
-            "timezone",
-            "influencingRegions",
-          ],
+          select: {
+            id: true,
+            countryCode: true,
+            regionCode: true,
+            timezone: true,
+            influencingRegions: true,
+          },
         });
 
         if (park?.countryCode) {
@@ -977,7 +997,10 @@ export class MLService {
     // Get park timezone for cache key
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "timezone"],
+      select: {
+        id: true,
+        timezone: true,
+      },
     });
 
     if (!park) {
@@ -1085,7 +1108,10 @@ export class MLService {
   ): Promise<PredictionDto[]> {
     const park = await this.parkRepository.findOne({
       where: { id: parkId },
-      select: ["id", "timezone"],
+      select: {
+        id: true,
+        timezone: true,
+      },
     });
     if (!park) return [];
     const today = getCurrentDateInTimezone(park.timezone);
@@ -1269,7 +1295,10 @@ export class MLService {
       // local day, CatBoost an instant whose UTC date can be the day after.
       const park = await this.parkRepository.findOne({
         where: { id: parkId },
-        select: ["id", "timezone"],
+        select: {
+          id: true,
+          timezone: true,
+        },
       });
       const tz = park?.timezone || "UTC";
       const key = (p: PredictionDto) =>
@@ -1295,8 +1324,13 @@ export class MLService {
     // 1. Fetch park to get coordinates (for weather)
     const attraction = await this.attractionRepository.findOne({
       where: { id: attractionId },
-      relations: ["park"], // Fetch park relationship
-      select: ["id", "parkId"],
+      relations: {
+        park: true,
+      }, // Fetch park relationship
+      select: {
+        id: true,
+        parkId: true,
+      },
     });
 
     if (!attraction) {
@@ -1814,7 +1848,9 @@ export class MLService {
     // only be recognised as dropped if its ride is in the comparison.
     const attractions = await this.attractionRepository.find({
       where: { parkId },
-      select: ["id"],
+      select: {
+        id: true,
+      },
     });
     const attractionIds = attractions.map((a) => a.id);
     if (attractionIds.length === 0) {
@@ -2773,7 +2809,9 @@ export class MLService {
     // Get all attraction IDs for this park
     const attractions = await this.attractionRepository.find({
       where: { parkId },
-      select: ["id"],
+      select: {
+        id: true,
+      },
     });
 
     const attractionIds = attractions.map((a) => a.id);

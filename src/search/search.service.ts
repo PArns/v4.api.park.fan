@@ -2608,7 +2608,14 @@ export class SearchService implements OnModuleInit {
       }
 
       const [parks, popularParkIds] = await Promise.all([
-        this.parkRepository.find({ select: ["id", "name", "city", "country"] }),
+        this.parkRepository.find({
+          select: {
+            id: true,
+            name: true,
+            city: true,
+            country: true,
+          },
+        }),
         this.popularityService.getTopParks(30),
       ]);
 
