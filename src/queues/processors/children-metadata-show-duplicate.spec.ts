@@ -218,6 +218,34 @@ describe("ChildrenMetadataProcessor — Queue-Times rides that are already shows
       );
     });
 
+    it("keeps updating a single-rider row that already exists", async () => {
+      attractionRepo.find.mockResolvedValue([
+        parent,
+        {
+          id: "row-mummy-sr",
+          externalId: "qt-ride-555",
+          slug: "revenge-of-the-mummy-single-rider",
+          name: "Revenge of the Mummy Single Rider",
+          queueTimesEntityId: "555",
+          parkId,
+        },
+      ]);
+
+      await (processor as any).syncQtAttraction(
+        {
+          externalId: "qt-ride-555",
+          name: "Revenge of the Mummy™ Single Rider",
+          entityType: "ATTRACTION",
+        },
+        parkId,
+      );
+
+      expect(attractionRepo.update).toHaveBeenCalledWith("row-mummy-sr", {
+        name: "Revenge of the Mummy™ Single Rider",
+      });
+      expect(attractionRepo.save).not.toHaveBeenCalled();
+    });
+
     it("still creates a single-rider row whose parent this park does not carry", async () => {
       attractionRepo.find.mockResolvedValue([parent]);
 
