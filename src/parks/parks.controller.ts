@@ -76,6 +76,7 @@ import { HttpCacheInterceptor } from "../common/interceptors/cache.interceptor";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
+  isRealIsoDate,
 } from "../common/utils/date.util";
 import { ttlSecondsToNextBoundary } from "../common/utils/best-visit-times.util";
 
@@ -1588,7 +1589,29 @@ export class ParksController {
       "Measured days a ride needs before it may appear (default: 20)",
     example: 20,
   })
+  @ApiQuery({
+    name: "from",
+    required: false,
+    description:
+      "First park-local day of the window (YYYY-MM-DD, inclusive). Needs " +
+      "`to`; together they replace `years`. A window with too few measured " +
+      "days answers `meta.displayable: false`.",
+    example: "2025-12-01",
+  })
+  @ApiQuery({
+    name: "to",
+    required: false,
+    description:
+      "Last park-local day of the window (YYYY-MM-DD, inclusive). Needs `from`.",
+    example: "2026-10-21",
+  })
   @ApiResponse({ status: 200, type: ParkHourlyProfileDto })
+  @ApiResponse({
+    status: 400,
+    description:
+      "Only one of from/to, a day the calendar does not have, from after " +
+      "to, or a window longer than five years",
+  })
   @ApiResponse({ status: 404, description: "Park not found" })
   async getParkHourlyProfile(
     @Param("continent") continent: string,
@@ -1598,7 +1621,10 @@ export class ParksController {
     @Query("years") yearsStr?: string,
     @Query("topN") topNStr?: string,
     @Query("minAttractionDays") minAttractionDaysStr?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
   ): Promise<ParkHourlyProfileDto> {
+    const range = parseHourlyProfileRange(from, to);
     const park = await this.parksService.findByGeographicPath(
       continent,
       country,
@@ -1623,6 +1649,7 @@ export class ParksController {
       years,
       topN,
       minAttractionDays,
+      range,
     );
   }
 
@@ -2132,4 +2159,31 @@ export class ParksController {
       attribution: OPEN_METEO_ATTRIBUTION,
     };
   }
+}
+
+/** Longest explicit `stats/hourly` window, the same as the `years` ceiling. */
+const MAX_HOURLY_RANGE_DAYS = 5 * 366;
+
+/**
+ * `from`/`to` for `stats/hourly` (PAR-978): both park-local `YYYY-MM-DD` days,
+ * inclusive, or neither. Neither returns `undefined`, so the endpoint keeps its
+ * `years` window and its cache key.
+ */
+export function parseHourlyProfileRange(
+  from?: string,
+  to?: string,
+): { from: string; to: string } | undefined {
+  if (from === undefined && to === undefined) return undefined;
+  if (!isRealIsoDate(from) || !isRealIsoDate(to)) {
+    throw new BadRequestException(
+      "from and to must both be given as real YYYY-MM-DD days",
+    );
+  }
+  if (from > to) {
+    throw new BadRequestException("from must not be after to");
+  }
+  if (Date.parse(to) - Date.parse(from) >= MAX_HOURLY_RANGE_DAYS * 86_400_000) {
+    throw new BadRequestException("The window may span at most five years");
+  }
+  return { from, to };
 }

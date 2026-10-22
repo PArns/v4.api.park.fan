@@ -823,6 +823,43 @@ describe("ParkHistoricalStatsService", () => {
       expect(result.meta.displayable).toBe(false);
     });
 
+    it("reads an explicit park-local window and reports it back (PAR-978)", async () => {
+      aggregateQuery.mockImplementation(routeHourly(hourRows));
+      const range = { from: "2025-12-01", to: "2026-10-21" };
+      const result = await service.getParkHourlyProfile(park, 1, 8, 20, range);
+      const call = aggregateQuery.mock.calls.find((c) =>
+        String(c[0]).includes("hour_of_day"),
+      )!;
+      const params = call[1] as unknown[];
+      expect(params[2]).toBe("2025-12-01");
+      expect(params[3]).toBe("2026-10-21");
+      expect(result.meta.dataFrom).toBe("2025-12-01");
+      expect(result.meta.dataTo).toBe("2026-10-21");
+      expect(result.meta.windowYears).toBe(0.9); // 325 days
+      // The key without a window stays the key it always was.
+      expect(redis.get).toHaveBeenCalledWith(
+        "park:hourly-profile:v6:park-uuid:1:8:20:2025-12-01:2026-10-21",
+      );
+    });
+
+    it("keeps the cache key of a request without a window unchanged", async () => {
+      aggregateQuery.mockImplementation(routeHourly(hourRows));
+      await service.getParkHourlyProfile(park, 1, 8, 20);
+      expect(redis.get).toHaveBeenCalledWith(
+        "park:hourly-profile:v6:park-uuid:1:8:20",
+      );
+    });
+
+    it("answers a window without enough measured days as non-displayable", async () => {
+      aggregateQuery.mockImplementation(routeHourly([]));
+      const result = await service.getParkHourlyProfile(park, 1, 8, 20, {
+        from: "2026-10-20",
+        to: "2026-10-21",
+      });
+      expect(result.meta.displayable).toBe(false);
+      expect(result.meta.dataFrom).toBe("2026-10-20");
+    });
+
     it("reads the hour bucket in the park's timezone, never UTC", async () => {
       aggregateQuery.mockImplementation(routeHourly(hourRows));
       await service.getParkHourlyProfile(park, 1, 8);
