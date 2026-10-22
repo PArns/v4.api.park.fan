@@ -1052,6 +1052,11 @@ export class ParkHistoricalStatsService {
     // set. `attractionType` is one of the few unquoted camelCase columns on
     // this table — every neighbour here is snake_case, so it needs the quotes.
     //
+    // An hour carrying fewer than MIN_SAMPLES_PER_HOUR samples is dropped, as
+    // in the other two aggregate queries: otherwise a day made only of
+    // single-sample hours is discarded there but still counts here towards the
+    // `minAttractionDays` floor and the averages (PAR-708).
+    //
     // `retired_at IS NULL` keeps a demolished ride out of the ranking. Its
     // aggregates stay in the table (retiring deletes nothing), so without it
     // Toverland's table led with Maximus' Blitz Bahn months after it was taken
@@ -1084,13 +1089,22 @@ export class ParkHistoricalStatsService {
        WHERE qda."parkId" = $1
          AND qda.hour >= $3::date
          AND qda.hour <  ($4::date + INTERVAL '1 day')
+         AND qda."sampleCount" >= $7
          AND a.retired_at IS NULL
          AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
        GROUP BY a.id, a.slug, name, land, attraction_type
        HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6
        ORDER BY avg_p90 DESC
        LIMIT $5`,
-      [parkId, timezone, startDate, endDate, topN, minAttractionDays],
+      [
+        parkId,
+        timezone,
+        startDate,
+        endDate,
+        topN,
+        minAttractionDays,
+        MIN_SAMPLES_PER_HOUR,
+      ],
     );
   }
 
