@@ -787,6 +787,7 @@ export class AttractionMergeService {
     "curatedSeasonMonths",
     "retiredAt",
     "retiredReason",
+    "retiredKind",
     "attractionKind",
     "indoorOutdoor",
     "hasSingleRider",

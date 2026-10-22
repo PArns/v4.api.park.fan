@@ -908,6 +908,7 @@ export class ChildrenMetadataProcessor {
           name: true,
           queueTimesEntityId: true,
           retiredReason: true,
+          retiredKind: true,
           latitude: true,
           longitude: true,
           attractionType: true,
@@ -1002,7 +1003,12 @@ export class ChildrenMetadataProcessor {
       // endpoint has to survive this run and every one after it. It goes
       // through the service rather than a column write, because lifting a
       // retirement has the same cache and sitemap consequences as setting one.
-      if (isReclassifiedUpstreamReason(existing.retiredReason)) {
+      // A stated `retiredKind` is a human's, whatever the reason says, and
+      // stays (PAR-997): the sync never writes that column.
+      if (
+        existing.retiredKind == null &&
+        isReclassifiedUpstreamReason(existing.retiredReason)
+      ) {
         await this.attractionRetirementService.unretire(existing.id);
       }
     } else {

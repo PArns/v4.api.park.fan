@@ -42,6 +42,8 @@ export interface AttractionMatchCandidate {
   queueTimesEntityId?: string | null;
   /** Carried through so a caller can tell a sync retirement from a human one. */
   retiredReason?: string | null;
+  /** Set only by a human (PAR-997); a row carrying it is never the sync's. */
+  retiredKind?: "closed" | "reclassified" | null;
   /**
    * Carried through so a caller can tell a value the feed moved from one it
    * did not. The match itself never reads them: `latitude` is a `numeric` and

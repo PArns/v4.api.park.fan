@@ -416,6 +416,25 @@ describe("ChildrenMetadataProcessor — upstream entityType changes", () => {
       expect(attractionRepo.update).not.toHaveBeenCalled();
     });
 
+    it("leaves a reclassification a human stated alone, even under the sync's wording (PAR-997)", async () => {
+      // The marker is the column, not the text: a human who retired the row
+      // with `kind: "reclassified"` owns it, whatever the reason reads.
+      await syncBack({
+        id: "row-sesame-street",
+        externalId: showExternalId,
+        name: "Sesame Street",
+        retiredReason: RECLASSIFIED_UPSTREAM_REASON,
+        retiredKind: "reclassified",
+      });
+
+      expect(retirementService.unretire).not.toHaveBeenCalled();
+      expect(attractionRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.arrayContaining(["retiredKind"]),
+        }),
+      );
+    });
+
     it("syncs a row a human retired without reviving it", async () => {
       // The counter-check for the case above, which can only assert an
       // absence. Here the feed renamed the ride, so there IS a write — and it
