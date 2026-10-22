@@ -262,3 +262,20 @@ export function addIsoDays(isoDate: string, days: number): string {
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
+
+/**
+ * True for a `YYYY-MM-DD` string that names a day the calendar has. The shape
+ * alone lets `2026-02-31` through, and Postgres refuses it later with a 500.
+ */
+export function isRealIsoDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  // Postgres has no year 0, so `0000-01-01` round-trips here and still fails there.
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.getUTCFullYear() >= 1 &&
+    parsed.toISOString().slice(0, 10) === value
+  );
+}

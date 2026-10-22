@@ -104,6 +104,37 @@ describe("ParkSeasonService", () => {
     });
   });
 
+  describe("current", () => {
+    afterEach(() => jest.useRealTimers());
+
+    it("uses the park's own day when the list is scoped to a park", async () => {
+      jest.useFakeTimers().setSystemTime(new Date("2026-10-22T20:00:00Z"));
+      const { service, seasons, parks } = build();
+      parks.findOne = jest.fn(async (): Promise<unknown> => ({
+        id: "park-1",
+        timezone: "Asia/Tokyo",
+      }));
+      const qb: Record<string, jest.Mock> = {};
+      for (const m of [
+        "leftJoinAndSelect",
+        "orderBy",
+        "addOrderBy",
+        "take",
+        "skip",
+        "andWhere",
+      ]) {
+        qb[m] = jest.fn(() => qb);
+      }
+      qb.getManyAndCount = jest.fn(async () => [[], 0]);
+      seasons.createQueryBuilder = jest.fn(() => qb);
+      await service.list({ parkId: "park-1", current: true });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        "season.startDate <= :today AND season.endDate >= :today",
+        { today: "2026-10-23" },
+      );
+    });
+  });
+
   describe("validation", () => {
     it("rejects an end before the start", async () => {
       const { service } = build();

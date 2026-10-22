@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   NotFoundException,
@@ -10,6 +11,11 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Park } from "./entities/park.entity";
 import { ParkSeason } from "./entities/park-season.entity";
+import {
+  addIsoDays,
+  getCurrentDateInTimezone,
+  isRealIsoDate,
+} from "../common/utils/date.util";
 import { ParkSeasonService } from "./services/park-season.service";
 
 /**
@@ -58,23 +64,29 @@ export class ParkSeasonsController {
     to: string;
     seasons: PublicParkSeason[];
   }> {
+    for (const [name, value] of [
+      ["from", from],
+      ["to", to],
+    ] as const) {
+      if (value && !isRealIsoDate(value)) {
+        throw new BadRequestException(
+          `${name} must be a YYYY-MM-DD date the calendar has`,
+        );
+      }
+    }
+
     const park = await this.parks.findOne({
       where: { continentSlug, countrySlug, citySlug, slug },
-      select: { id: true },
+      select: { id: true, timezone: true },
     });
     if (!park) throw new NotFoundException("Park not found");
 
     // Defaults to a year from today: long enough that a visitor planning next
     // Halloween in August sees it, short enough that a park with a decade of
-    // history does not answer with all of it.
-    const today = new Date();
-    const defaultFrom = today.toISOString().slice(0, 10);
-    const defaultTo = new Date(today.getTime() + 365 * 86_400_000)
-      .toISOString()
-      .slice(0, 10);
-
-    const rangeFrom = isDate(from) ? from : defaultFrom;
-    const rangeTo = isDate(to) ? to : defaultTo;
+    // history does not answer with all of it. "Today" is the park's day.
+    const defaultFrom = getCurrentDateInTimezone(park.timezone ?? "UTC");
+    const rangeFrom = from || defaultFrom;
+    const rangeTo = to || addIsoDays(defaultFrom, 365);
 
     return {
       parkId: park.id,
@@ -138,8 +150,4 @@ function toPublicSeason(season: ParkSeason): PublicParkSeason {
     sourceUrl: season.sourceUrl,
     confirmedAt: season.confirmedAt ? season.confirmedAt.toISOString() : null,
   };
-}
-
-function isDate(value: string | undefined): value is string {
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }

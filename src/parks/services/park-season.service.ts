@@ -16,6 +16,10 @@ import {
 import { Park } from "../entities/park.entity";
 import { Attraction } from "../../attractions/entities/attraction.entity";
 import { parseHttpUrl } from "../../common/utils/http-url.util";
+import {
+  getCurrentDateInTimezone,
+  isRealIsoDate,
+} from "../../common/utils/date.util";
 
 export interface SeasonInput {
   kind: ParkSeasonKind;
@@ -101,7 +105,17 @@ export class ParkSeasonService {
     }
 
     if (query.current) {
-      const today = new Date().toISOString().slice(0, 10);
+      // The park's own day when the list is scoped to one park; the
+      // cross-park admin list has no single zone and keeps the UTC day.
+      const park = query.parkId
+        ? await this.parks.findOne({
+            where: { id: query.parkId },
+            select: { id: true, timezone: true },
+          })
+        : null;
+      const today = park?.timezone
+        ? getCurrentDateInTimezone(park.timezone)
+        : new Date().toISOString().slice(0, 10);
       qb.andWhere("season.startDate <= :today AND season.endDate >= :today", {
         today,
       });
@@ -396,13 +410,7 @@ export class ParkSeasonService {
     if (typeof value !== "string" || !DATE_RE.test(value)) {
       throw new BadRequestException(`${field} must be a YYYY-MM-DD date`);
     }
-    // Rejects 2026-02-30 and friends, which the regex alone lets through and
-    // Postgres would then take as a 400 from a layer with no useful message.
-    const parsed = new Date(`${value}T00:00:00Z`);
-    if (
-      Number.isNaN(parsed.getTime()) ||
-      parsed.toISOString().slice(0, 10) !== value
-    ) {
+    if (!isRealIsoDate(value)) {
       throw new BadRequestException(`${field} is not a real date`);
     }
     return value;
