@@ -1,4 +1,4 @@
-import { NestFactory } from "@nestjs/core";
+import { ModulesContainer, NestFactory } from "@nestjs/core";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import { Logger, ValidationPipe, LogLevel } from "@nestjs/common";
 import { Request, Response, NextFunction } from "express";
@@ -7,6 +7,7 @@ import helmet from "helmet";
 import { SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import { enableGracefulShutdown } from "./common/utils/graceful-shutdown";
+import { watchShutdownWork } from "./common/utils/shutdown-work";
 import { installCrashHandlers } from "./common/utils/crash-handlers";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
@@ -51,7 +52,9 @@ async function bootstrap(): Promise<void> {
   // container with it, and without this nothing closed the Bull queues, the
   // TypeORM pool or the abortable boot chains (PAR-903). Enabled before the
   // middleware wiring so a signal during the boot is covered too.
-  enableGracefulShutdown(app);
+  enableGracefulShutdown(app, {
+    work: watchShutdownWork(app.get(ModulesContainer)),
+  });
 
   // Trust the proxy in front of us (Cloudflare → reverse proxy) so
   // `req.ip` and protocol reflect the real client, not the edge. Rate
