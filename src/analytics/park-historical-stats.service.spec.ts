@@ -906,7 +906,7 @@ describe("ParkHistoricalStatsService", () => {
       expect(result.meta.windowYears).toBe(0.9); // 325 days
       // The key without a window stays the key it always was.
       expect(redis.get).toHaveBeenCalledWith(
-        "park:hourly-profile:v6:park-uuid:1:8:20:2025-12-01:2026-10-21",
+        "park:hourly-profile:v7:park-uuid:1:8:20:2025-12-01:2026-10-21",
       );
     });
 
@@ -914,7 +914,7 @@ describe("ParkHistoricalStatsService", () => {
       aggregateQuery.mockImplementation(routeHourly(hourRows));
       await service.getParkHourlyProfile(park, 1, 8, 20);
       expect(redis.get).toHaveBeenCalledWith(
-        "park:hourly-profile:v6:park-uuid:1:8:20",
+        "park:hourly-profile:v7:park-uuid:1:8:20",
       );
     });
 
