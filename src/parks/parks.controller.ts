@@ -39,7 +39,10 @@ import { ShowsService } from "../shows/shows.service";
 import { RestaurantsService } from "../restaurants/restaurants.service";
 import { QueueDataService } from "../queue-data/queue-data.service";
 import { AnalyticsService } from "../analytics/analytics.service";
-import { ParkHistoricalStatsService } from "../analytics/park-historical-stats.service";
+import {
+  MAX_TOP_ATTRACTIONS,
+  ParkHistoricalStatsService,
+} from "../analytics/park-historical-stats.service";
 import { MLService } from "../ml/ml.service";
 import { PredictionAccuracyService } from "../ml/services/prediction-accuracy.service";
 import { QueueType } from "../external-apis/themeparks/themeparks.types";
@@ -1385,7 +1388,10 @@ export class ParksController {
     }
 
     const years = Math.min(Math.max(Number(yearsStr) || 2, 1), 5);
-    const topN = Math.min(Math.max(Number(topNStr) || 10, 1), 50);
+    const topN = Math.min(
+      Math.max(Number(topNStr) || 10, 1),
+      MAX_TOP_ATTRACTIONS,
+    );
     const minSampleDays = Math.max(Number(minSampleDaysStr) || 30, 0);
     const minAttractionDays = Math.max(Number(minAttractionDaysStr) || 20, 0);
     return this.parkHistoricalStatsService.getParkHistoricalStats(

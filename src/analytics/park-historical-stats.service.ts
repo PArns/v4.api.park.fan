@@ -36,6 +36,8 @@ import { closedParkDaysCte, isNotAClosedParkDay } from "./closed-park-days.sql";
 const SCHEMA_VERSION = 4;
 /** Default minimum sample days before the section is considered displayable. */
 const DEFAULT_MIN_SAMPLE_DAYS = 30;
+/** Deepest `topAttractions` list `/stats` serves; every topN is a slice of it. */
+export const MAX_TOP_ATTRACTIONS = 50;
 /**
  * Longest `busiestDays` / `quietestDays` list. With the floor below, the two
  * lists can never share a day.
@@ -137,18 +139,21 @@ export class ParkHistoricalStatsService {
   ) {}
 
   /**
-   * Redis key for a cached historical-stats payload. topN / minSampleDays
-   * change the payload, so they're part of the key (v2: occupancy-relative
-   * avgCrowdLevel + additive meta fields).
+   * Redis key for a cached historical-stats payload. minSampleDays and
+   * minAttractionDays change the payload, so they're part of the key. topN is
+   * not: every depth is a slice of one payload computed at
+   * {@link MAX_TOP_ATTRACTIONS}, so two widgets asking for different depths on
+   * the same page read the same day's numbers. With topN in the key each depth
+   * was computed on its own 24-hour cycle, and Thorpe Park's Hyperia read 60
+   * at the default depth and 55 at topN=30 (PAR-983).
    */
   private statsCacheKey(
     parkId: string,
     years: number,
-    topN: number,
     minSampleDays: number,
     minAttractionDays: number,
   ): string {
-    return `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:${parkId}:${years}:${topN}:${minSampleDays}:${minAttractionDays}`;
+    return `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:${parkId}:${years}:${minSampleDays}:${minAttractionDays}`;
   }
 
   async getParkHistoricalStats(
@@ -161,34 +166,36 @@ export class ParkHistoricalStatsService {
     const cacheKey = this.statsCacheKey(
       park.id,
       years,
-      topN,
       minSampleDays,
       minAttractionDays,
     );
-    const cached = safeJsonParse<ParkHistoricalStatsDto>(
+    let result = safeJsonParse<ParkHistoricalStatsDto>(
       await this.redis.get(cacheKey),
     );
-    if (cached) return cached;
-
-    const result = await this.compute(
-      park,
-      years,
-      topN,
-      minSampleDays,
-      minAttractionDays,
-    );
-    await this.redis.set(
-      cacheKey,
-      JSON.stringify(result),
-      "EX",
-      this.CACHE_TTL,
-    );
-    return result;
+    if (!result) {
+      result = await this.compute(
+        park,
+        years,
+        MAX_TOP_ATTRACTIONS,
+        minSampleDays,
+        minAttractionDays,
+      );
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(result),
+        "EX",
+        this.CACHE_TTL,
+      );
+    }
+    return {
+      ...result,
+      topAttractions: result.topAttractions.slice(0, topN),
+    };
   }
 
   /**
    * Read-only accessor for the cached per-weekday aggregate, keyed like the
-   * default `/stats` request (years=2, topN=10, minSampleDays=30) that the
+   * default `/stats` request (years=2, minSampleDays=30) that the
    * endpoint + warmup populate.
    *
    * Returns `null` WITHOUT computing when the cache is cold — callers on a
@@ -199,7 +206,6 @@ export class ParkHistoricalStatsService {
     const cacheKey = this.statsCacheKey(
       park.id,
       2,
-      10,
       DEFAULT_MIN_SAMPLE_DAYS,
       DEFAULT_MIN_ATTRACTION_DAYS,
     );

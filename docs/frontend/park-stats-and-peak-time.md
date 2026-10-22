@@ -62,7 +62,7 @@ Historical aggregates. **`schemaVersion: 4`** (4 added `busiestDays` / `quietest
 | Name            | Type        | Default | Description |
 | --------------- | ----------- | ------- | ----------- |
 | `years`         | int (1..5)  | 2       | Look-back window size |
-| `topN`          | int (1..50) | 10      | Number of top attractions |
+| `topN`          | int (1..50) | 10      | Number of top attractions. Every depth is a slice of one cached 50-ride list, so two depths requested on the same day carry the same figures per ride (PAR-983) |
 | `minSampleDays` | int (≥0)    | 30      | Below this, `meta.displayable` becomes `false` |
 | `minAttractionDays` | int        | 20      | Measured days a ride needs to enter `topAttractions`. Not clamped the way you would expect: `0` falls back to the default (as `minSampleDays=0` does), while a **negative** value clamps to 0 and removes the floor entirely — which is the one-measured-day ranking the default exists to prevent |
 
