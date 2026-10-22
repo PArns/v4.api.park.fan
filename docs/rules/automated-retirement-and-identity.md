@@ -33,7 +33,9 @@ next time. Detail: [Attraction Status & Seasonality §5.9/5.9a](../architecture/
   again), `false` when it is really gone (PAR-684, option B).
 - A retirement written by the sync must undo itself
   (`RECLASSIFIED_UPSTREAM_REASONS`); a human retirement must never be undone by
-  the sync.
+  the sync. A human who retires a row that was never a ride of its own states
+  `kind: "reclassified"` (column `retired_kind`); the sync never lifts a row
+  whose kind is set (PAR-997).
 
 ## 2. A destructive job's first run is a mass write — count it before merging
 

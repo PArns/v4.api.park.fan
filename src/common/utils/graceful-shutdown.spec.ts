@@ -123,6 +123,85 @@ describe("enableGracefulShutdown", () => {
     expect(trace).not.toHaveBeenCalled();
   });
 
+  it("pauses the Bull workers before Nest's own listener runs the hooks", () => {
+    const order: string[] = [];
+    // What Nest does in enableShutdownHooks: one listener per signal that
+    // runs the hooks.
+    app.enableShutdownHooks.mockImplementation((signals: string[]) => {
+      for (const signal of signals) proc.on(signal, () => order.push("hooks"));
+    });
+    enableGracefulShutdown(app as never, {
+      proc: proc as never,
+      trace,
+      deadlineMs,
+      work: {
+        stopTakingJobs: () => order.push("pause"),
+        describeOpen: () => ({ openHooks: [], activeJobs: {} }),
+      },
+    });
+
+    proc.raise(ShutdownSignal.SIGTERM);
+
+    expect(order).toEqual(["pause", "hooks"]);
+  });
+
+  it("names the open hooks and the active jobs in the deadline line", () => {
+    enableGracefulShutdown(app as never, {
+      proc: proc as never,
+      trace,
+      deadlineMs,
+      work: {
+        stopTakingJobs: () => undefined,
+        describeOpen: () => ({
+          openHooks: ["Queue(live-cache-warmup).onApplicationShutdown"],
+          activeJobs: {
+            "live-cache-warmup": [{ id: "3698", name: "warmup-after-sync" }],
+          },
+        }),
+      },
+    });
+    proc.raise(ShutdownSignal.SIGTERM);
+
+    jest.advanceTimersByTime(deadlineMs);
+
+    expect(trace).toHaveBeenCalledWith({
+      event: "deadline-exceeded",
+      signal: ShutdownSignal.SIGTERM,
+      waitedMs: deadlineMs,
+      openHooks: ["Queue(live-cache-warmup).onApplicationShutdown"],
+      activeJobs: {
+        "live-cache-warmup": [{ id: "3698", name: "warmup-after-sync" }],
+      },
+    });
+  });
+
+  it("still arms the deadline and traces the signal when pausing throws", () => {
+    enableGracefulShutdown(app as never, {
+      proc: proc as never,
+      trace,
+      deadlineMs,
+      work: {
+        stopTakingJobs: () => {
+          throw new Error("Connection is closed.");
+        },
+        describeOpen: () => {
+          throw new Error("Connection is closed.");
+        },
+      },
+    });
+
+    expect(() => proc.raise(ShutdownSignal.SIGTERM)).not.toThrow();
+    expect(trace).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "signal" }),
+    );
+
+    jest.advanceTimersByTime(deadlineMs);
+    expect(proc.exits).toEqual([FORCED_SHUTDOWN_EXIT_CODE]);
+    expect(trace).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "deadline-exceeded" }),
+    );
+  });
+
   it("leaves Coolify's 30 s stop timeout head room", () => {
     expect(SHUTDOWN_DEADLINE_MS).toBeLessThan(30_000);
   });

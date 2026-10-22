@@ -30,12 +30,19 @@ import { RideDayCurveDto } from "./dto/ride-day-curve.dto";
 import { CrowdLevel } from "../common/types/crowd-level.type";
 import { rateOrUnknown } from "../common/utils/crowd-level.util";
 import { HISTORICAL_STATS_CACHE_VERSION } from "../common/cache/cache-keys";
-import { closedParkDaysCte, isNotAClosedParkDay } from "./closed-park-days.sql";
+import {
+  closedParkDaysCte,
+  isNotAClosedParkDay,
+  isWithinOpeningHours,
+  openingHoursCtes,
+} from "./closed-park-days.sql";
 
 /** Response schema version — bump when the contract changes (see DTO). */
 const SCHEMA_VERSION = 4;
 /** Default minimum sample days before the section is considered displayable. */
 const DEFAULT_MIN_SAMPLE_DAYS = 30;
+/** Deepest `topAttractions` list `/stats` serves; every topN is a slice of it. */
+export const MAX_TOP_ATTRACTIONS = 50;
 /**
  * Longest `busiestDays` / `quietestDays` list. With the floor below, the two
  * lists can never share a day.
@@ -137,18 +144,21 @@ export class ParkHistoricalStatsService {
   ) {}
 
   /**
-   * Redis key for a cached historical-stats payload. topN / minSampleDays
-   * change the payload, so they're part of the key (v2: occupancy-relative
-   * avgCrowdLevel + additive meta fields).
+   * Redis key for a cached historical-stats payload. minSampleDays and
+   * minAttractionDays change the payload, so they're part of the key. topN is
+   * not: every depth is a slice of one payload computed at
+   * {@link MAX_TOP_ATTRACTIONS}, so two widgets asking for different depths on
+   * the same page read the same day's numbers. With topN in the key each depth
+   * was computed on its own 24-hour cycle, and Thorpe Park's Hyperia read 60
+   * at the default depth and 55 at topN=30 (PAR-983).
    */
   private statsCacheKey(
     parkId: string,
     years: number,
-    topN: number,
     minSampleDays: number,
     minAttractionDays: number,
   ): string {
-    return `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:${parkId}:${years}:${topN}:${minSampleDays}:${minAttractionDays}`;
+    return `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:${parkId}:${years}:${minSampleDays}:${minAttractionDays}`;
   }
 
   async getParkHistoricalStats(
@@ -161,34 +171,36 @@ export class ParkHistoricalStatsService {
     const cacheKey = this.statsCacheKey(
       park.id,
       years,
-      topN,
       minSampleDays,
       minAttractionDays,
     );
-    const cached = safeJsonParse<ParkHistoricalStatsDto>(
+    let result = safeJsonParse<ParkHistoricalStatsDto>(
       await this.redis.get(cacheKey),
     );
-    if (cached) return cached;
-
-    const result = await this.compute(
-      park,
-      years,
-      topN,
-      minSampleDays,
-      minAttractionDays,
-    );
-    await this.redis.set(
-      cacheKey,
-      JSON.stringify(result),
-      "EX",
-      this.CACHE_TTL,
-    );
-    return result;
+    if (!result) {
+      result = await this.compute(
+        park,
+        years,
+        MAX_TOP_ATTRACTIONS,
+        minSampleDays,
+        minAttractionDays,
+      );
+      await this.redis.set(
+        cacheKey,
+        JSON.stringify(result),
+        "EX",
+        this.CACHE_TTL,
+      );
+    }
+    return {
+      ...result,
+      topAttractions: result.topAttractions.slice(0, topN),
+    };
   }
 
   /**
    * Read-only accessor for the cached per-weekday aggregate, keyed like the
-   * default `/stats` request (years=2, topN=10, minSampleDays=30) that the
+   * default `/stats` request (years=2, minSampleDays=30) that the
    * endpoint + warmup populate.
    *
    * Returns `null` WITHOUT computing when the cache is cold — callers on a
@@ -199,7 +211,6 @@ export class ParkHistoricalStatsService {
     const cacheKey = this.statsCacheKey(
       park.id,
       2,
-      10,
       DEFAULT_MIN_SAMPLE_DAYS,
       DEFAULT_MIN_ATTRACTION_DAYS,
     );
@@ -345,12 +356,13 @@ export class ParkHistoricalStatsService {
     topN: number,
     minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
   ): Promise<ParkHourlyProfileDto> {
+    // v7: hours outside the park's opening window no longer count (PAR-981).
     // v6: days the park's schedule calls CLOSED no longer count (PAR-698).
     // v5 was retired rides no longer counting towards the top N. The bump
     // makes the filter apply on deploy instead of up to 24 h later, when the
     // previous entry would have expired. No invalidation glob exists for this
     // key — the version segment is the only way to retire one.
-    const cacheKey = `park:hourly-profile:v6:${park.id}:${years}:${topN}:${minAttractionDays}`;
+    const cacheKey = `park:hourly-profile:v7:${park.id}:${years}:${topN}:${minAttractionDays}`;
     const cached = safeJsonParse<ParkHourlyProfileDto>(
       await this.redis.get(cacheKey),
     );
@@ -875,6 +887,7 @@ export class ParkHistoricalStatsService {
   ): Promise<Record<string, unknown>[]> {
     return this.aggregateRepo.manager.query(
       `WITH ${closedParkDaysCte("$1")},
+       ${openingHoursCtes("$1", "$3", "$4")},
        eligible AS (
          SELECT qda."attractionId"                    AS aid,
                 COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date)::int AS sample_days
@@ -889,6 +902,7 @@ export class ParkHistoricalStatsService {
            AND qda."sampleCount" >= $5
            AND a.retired_at IS NULL
            AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
+           AND ${isWithinOpeningHours("qda.hour", `(qda.hour AT TIME ZONE $2)::date`)}
          GROUP BY qda."attractionId"
          HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6
          ORDER BY AVG(qda.p90) DESC
@@ -912,6 +926,7 @@ export class ParkHistoricalStatsService {
            -- rule only in the ranking, a park's shut days would be gone from
            -- it and still in every number the table prints.
            AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
+           AND ${isWithinOpeningHours("qda.hour", `(qda.hour AT TIME ZONE $2)::date`)}
          -- The planner fence (PAR-832, see the doc comment). Not a no-op.
          OFFSET 0
        )
@@ -984,6 +999,7 @@ export class ParkHistoricalStatsService {
     const rows: Array<Record<string, unknown>> =
       await this.aggregateRepo.manager.query(
         `WITH ${closedParkDaysCte("$1")},
+         ${openingHoursCtes("$1", "$3", "$4")},
          per_attraction_day AS (
            SELECT
              (qda.hour AT TIME ZONE $2)::date                     AS day,
@@ -997,6 +1013,7 @@ export class ParkHistoricalStatsService {
              AND qda.hour <  ($4::date + INTERVAL '1 day')
              AND qda."sampleCount" >= $5
              AND ($6::text[] IS NULL OR qda."attractionId" = ANY($6))
+             AND ${isWithinOpeningHours("qda.hour", `(qda.hour AT TIME ZONE $2)::date`)}
            GROUP BY day, aid
          )
          SELECT
@@ -1075,7 +1092,8 @@ export class ParkHistoricalStatsService {
     // query cannot be right; the counts move for 1,468 of 5,692 rides and the
     // 20-day floor decides differently for 14 of them.
     return this.aggregateRepo.manager.query(
-      `WITH ${closedParkDaysCte("$1")}
+      `WITH ${closedParkDaysCte("$1")},
+       ${openingHoursCtes("$1", "$3", "$4")}
        SELECT
          a.slug,
          COALESCE(a.curated_name, a.name)                        AS name,
@@ -1092,6 +1110,7 @@ export class ParkHistoricalStatsService {
          AND qda."sampleCount" >= $7
          AND a.retired_at IS NULL
          AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
+         AND ${isWithinOpeningHours("qda.hour", `(qda.hour AT TIME ZONE $2)::date`)}
        GROUP BY a.id, a.slug, name, land, attraction_type
        HAVING COUNT(DISTINCT (qda.hour AT TIME ZONE $2)::date) >= $6
        ORDER BY avg_p90 DESC

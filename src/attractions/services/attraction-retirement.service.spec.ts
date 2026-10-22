@@ -45,8 +45,46 @@ describe("AttractionRetirementService", () => {
       retiredAt: new Date("2026-02-15"),
       // A retirement is a claim about the world, so it travels with its source.
       retiredReason: expect.stringContaining("blogmickey.com"),
+      // No kind stated: derived from the reason, i.e. closed.
+      retiredKind: null,
     });
     expect(result.name).toBe("Dino-Sue");
+  });
+
+  it("stores a kind a human states, so a duplicate never reads as closed (PAR-997)", async () => {
+    const { service, findOne, update } = build();
+    findOne.mockResolvedValue({ id: "a1", name: "Shrek 4-D", parkId: "p1" });
+
+    await service.retire([
+      {
+        attractionId: "a1",
+        retiredAt: "2026-09-20",
+        reason: "Queue-Times duplicate of the show",
+        kind: "reclassified",
+      },
+    ]);
+
+    expect(update).toHaveBeenCalledWith(
+      "a1",
+      expect.objectContaining({ retiredKind: "reclassified" }),
+    );
+  });
+
+  it("refuses an unknown kind before writing anything", async () => {
+    const { service, findOne, update } = build();
+    findOne.mockResolvedValue({ id: "a1", name: "Shrek 4-D", parkId: "p1" });
+
+    await expect(
+      service.retire([
+        {
+          attractionId: "a1",
+          retiredAt: "2026-09-20",
+          reason: "x",
+          kind: "duplicate" as never,
+        },
+      ]),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("revalidates the frontend, because the sitemap keeps advertising the slug", async () => {
@@ -102,6 +140,7 @@ describe("AttractionRetirementService", () => {
     expect(update).toHaveBeenCalledWith("a1", {
       retiredAt: null,
       retiredReason: null,
+      retiredKind: null,
       // A ride that comes back must not stay hidden by a leftover flag.
       retiredHidden: false,
       // The absence runs from the statement, not from the old evidence it
@@ -184,6 +223,40 @@ describe("retiredKindOf", () => {
         retiredReason: RECLASSIFIED_UPSTREAM_REASON,
       }),
     ).toBe("reclassified");
+  });
+
+  it("is reclassified when a human said so, whatever the reason reads (PAR-997)", () => {
+    expect(
+      retiredKindOf({
+        retiredAt: new Date("2026-10-22T00:00:00Z"),
+        retiredReason: "Single-rider line of a ride the park already carries",
+        retiredKind: "reclassified",
+      }),
+    ).toBe("reclassified");
+  });
+
+  it("is closed when a human said so, even over the sync's own wording", () => {
+    expect(
+      retiredKindOf({
+        retiredAt: new Date("2026-10-22T00:00:00Z"),
+        retiredReason: RECLASSIFIED_UPSTREAM_REASON,
+        retiredKind: "closed",
+      }),
+    ).toBe("closed");
+  });
+
+  it("keeps a stated reclassification off the park page", () => {
+    expect(
+      isOnParkPage(
+        {
+          retiredAt: new Date("2026-10-22T00:00:00Z"),
+          retiredReason: "Queue-Times duplicate of the show",
+          retiredKind: "reclassified",
+          retiredHidden: false,
+        },
+        new Date("2026-10-23T00:00:00Z"),
+      ),
+    ).toBe(false);
   });
 });
 

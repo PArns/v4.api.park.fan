@@ -1,6 +1,9 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
-import { ParkHistoricalStatsService } from "./park-historical-stats.service";
+import {
+  MAX_TOP_ATTRACTIONS,
+  ParkHistoricalStatsService,
+} from "./park-historical-stats.service";
 import { QueueDataAggregate } from "./entities/queue-data-aggregate.entity";
 import {
   CacheKeys,
@@ -284,6 +287,28 @@ describe("ParkHistoricalStatsService", () => {
     expect(result.meta.displayable).toBe(false); // 45 < 100
   });
 
+  it("keeps hours outside the park's opening window out of all three aggregate queries (PAR-981)", async () => {
+    // Energylandia posts 0 minutes from 22:00 to 09:00 as OPERATING, and
+    // Toverland 5 to 10 minutes all night. The closed-day rule cannot see
+    // either, because the day is open.
+    await service.getParkHistoricalStats(park, 2);
+    const sqls = aggregateQuery.mock.calls.map(([sql]) => String(sql));
+    const top = sqls.find((sql) => sql.includes("avg_p50"))!;
+    const days = sqls.find((sql) => sql.includes("per_attraction_day"))!;
+    for (const sql of [top, days]) {
+      expect(sql).toContain("park_open_hours");
+      expect(sql).toContain("NOT IN (SELECT day FROM park_scheduled_days)");
+      // Bounded to the query window and de-duplicated, so the planner keeps
+      // the `IN` a hashed SubPlan instead of rescanning per row.
+      expect(sql).toContain("se.date BETWEEN $3::date - 1 AND $4::date + 1");
+      expect(sql).toContain("SELECT DISTINCT generate_series(");
+    }
+    // A park or a day without a timetable keeps every hour, as before.
+    expect(top).toMatch(
+      /IN \(SELECT hr FROM park_open_hours\)\s+OR \(.*\) NOT IN \(SELECT day FROM park_scheduled_days\)/s,
+    );
+  });
+
   it("restricts the day-values query to the park's headliner IDs", async () => {
     await service.getParkHistoricalStats(park, 2);
     const dayCall = aggregateQuery.mock.calls.find((c) =>
@@ -292,13 +317,14 @@ describe("ParkHistoricalStatsService", () => {
     expect(dayCall[1]).toContainEqual(["a1", "a2"]);
   });
 
-  it("passes topN and the attraction sample floor to the top-attractions query", async () => {
+  it("asks the top-attractions query for the deepest list and the attraction sample floor", async () => {
     await service.getParkHistoricalStats(park, 2, 25);
     const topCall = aggregateQuery.mock.calls.find((c) =>
       String(c[0]).includes("ORDER BY avg_p90 DESC"),
     )!;
     const params = topCall[1] as unknown[];
-    expect(params[4]).toBe(25);
+    // Every topN is sliced from one payload (PAR-983).
+    expect(params[4]).toBe(MAX_TOP_ATTRACTIONS);
     // Ranking by average P90 makes a one-day average outrank a season's worth
     // of them — Walibi Hollands Sky Diver led its park's table off a single
     // measured day. $6 is the floor that keeps it out.
@@ -403,11 +429,51 @@ describe("ParkHistoricalStatsService", () => {
     expect(aggregateQuery).not.toHaveBeenCalled();
   });
 
-  it("keys the cache by park, years, topN, minSampleDays and the attraction floor", async () => {
+  it("keys the cache by park, years, minSampleDays and the attraction floor, not topN", async () => {
     await service.getParkHistoricalStats(park, 2, 10, 30);
-    expect(redis.get).toHaveBeenCalledWith(
-      `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:park-uuid:2:10:30:20`,
+    await service.getParkHistoricalStats(park, 2, 30, 30);
+    const key = `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:park-uuid:2:30:20`;
+    expect(redis.get).toHaveBeenNthCalledWith(1, key);
+    expect(redis.get).toHaveBeenNthCalledWith(2, key);
+  });
+
+  it("slices every topN from the same cached payload (PAR-983)", async () => {
+    // Thorpe Park: the default depth and topN=30 were cached separately, a day
+    // apart, and Hyperia read 60 in one widget and 55 in the other.
+    const topAttractions = Array.from({ length: 30 }, (_, i) => ({
+      attractionSlug: `ride-${i}`,
+      avgWaitP50: 60 - i,
+      rank: i + 1,
+    }));
+    const cached = JSON.stringify({ topAttractions, meta: {} });
+    redis.get.mockResolvedValueOnce(cached).mockResolvedValueOnce(cached);
+
+    const shallow = await service.getParkHistoricalStats(park, 2);
+    const deep = await service.getParkHistoricalStats(park, 2, 30);
+
+    expect(shallow.topAttractions).toEqual(topAttractions.slice(0, 10));
+    expect(deep.topAttractions).toEqual(topAttractions);
+    expect(aggregateQuery).not.toHaveBeenCalled();
+  });
+
+  it("caches the deepest list and serves the requested slice on a miss", async () => {
+    aggregateQuery.mockImplementation(
+      route(
+        dayRows,
+        headlinerRows,
+        Array.from({ length: 12 }, (_, i) => ({
+          slug: `ride-${i}`,
+          name: `Ride ${i}`,
+          avg_p50: 30,
+          avg_p90: 60 - i,
+          sample_days: 100,
+        })),
+      ),
     );
+    const result = await service.getParkHistoricalStats(park, 2, 3);
+    expect(result.topAttractions.map((a) => a.rank)).toEqual([1, 2, 3]);
+    const stored = JSON.parse(String(redis.set.mock.calls[0][1]));
+    expect(stored.topAttractions).toHaveLength(12);
   });
 
   describe("getParkHourlyProfile", () => {
@@ -518,6 +584,7 @@ describe("ParkHistoricalStatsService", () => {
       expect(measured).toContain("FROM queue_data_aggregates qda");
       // Both halves still drop the park's shut days (PAR-698).
       expect(measured).toContain("closed_park_days");
+      expect(measured).toContain("park_open_hours");
       expect(measured).toMatch(/OFFSET 0\s*\)/);
 
       const outer = sql.slice(sql.lastIndexOf("SELECT"));
@@ -526,6 +593,7 @@ describe("ParkHistoricalStatsService", () => {
       // The grouped query must not reach the hypertable itself again.
       expect(outer).not.toContain("queue_data_aggregates");
       expect(outer).not.toContain("closed_park_days");
+      expect(outer).not.toContain("park_open_hours");
     });
 
     it("keeps only hours measured on enough days, ascending", async () => {

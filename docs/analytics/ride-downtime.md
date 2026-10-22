@@ -14,7 +14,7 @@
 > | 2. The live line                     | **shipped** — `outage` on the payload, one line under the status badge.                                                           |
 > | 3. Reconstruct, publish nothing      | built, both statements `EXPLAIN`ed and the exposure invariant verified read-only (88 814 days, 0 violations).                     |
 > | 4. Publish the four measured numbers | built, gates re-derived from §0. Still publishes nothing until the twenty-ride hand check passes.                                 |
-> | 5. Measure the erasure               | built — `GET /v1/admin/downtime-erasure`. Says nothing useful until 30 days after phase 1 lands.                                  |
+> | 5. Measure the erasure               | **measured** 2026-10-22 over 30 days: 4.6 % of DOWN rows erased, 36–64 % in some parks. Refusal confirmed, see §6.                |
 > | **6. How much longer** _(new)_       | built — `downtime_recovery_curves`, on the ride card and the ride page. See [§6a](#6a-how-long-a-running-outage-still-has-to-go). |
 >
 > Two of the four open decisions in §10 were already settled (the live line
@@ -823,6 +823,19 @@ thirty days, counted in rows _and_ in the minutes they carried (rows alone under
 state rewritten to `OPERATING` is then stable and writes no further row). That one number decides
 whether the question can ever be asked again. If it comes out small, the answer is still no, because of
 reasons 1 and 4.
+
+**Measured (2026-10-22, 30 days, PAR-155):** the override erased 3,485 DOWN readings (31,054 minutes)
+and 35,218 CLOSED readings across 94 parks. That is 4.6 % of all DOWN rows — but 36–43 % in the Disney
+parks and 64 % at Universal Studios Japan, where a second source reports waits. Reason 3 is therefore
+measured, not argued, and the weekly rate (764–964 DOWN rows, up from 91 a day in September) shows
+reason 2. The refusal stands.
+
+The window is 2026-09-22 17:15 to 2026-10-22 17:15 UTC, all of it after `raw_status` shipped. It was
+read with the statement from `DowntimeMeasurementService.measureErasure` against a fixed clock, not
+through `GET /v1/admin/downtime-erasure`, so a call to the endpoint returns a different figure as the
+window moves. The six Disney parks carry 2,718 of the 3,485 erased DOWN rows (78 %). Counted in minutes
+the erased share is 0.8 %, and that is a lower bound: the kept DOWN minutes it is divided by include
+time after park close.
 
 **Explicitly also excluded:** any softer rewording of the same claim. No „rechnerisch etwa eine Störung
 an einem Tag mit neun Betriebsstunden", no „eher unzuverlässig", no conversion of a rate onto a visit,

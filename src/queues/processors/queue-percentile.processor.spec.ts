@@ -1,6 +1,7 @@
 import { RECLASSIFIED_UPSTREAM_REASONS } from "../../attractions/services/attraction-retirement.service";
 import { HEARTBEAT_SOURCE } from "../../common/utils/outage-rows.sql";
 import { RECONCILIATION_SOURCE } from "../../common/utils/source-absent-status.util";
+import { observedReadingsSql } from "../../common/utils/closure-gap.sql";
 import { HOURLY_AGGREGATE_SELECT } from "./hourly-aggregate.sql";
 import { QueuePercentileProcessor } from "./queue-percentile.processor";
 
@@ -110,6 +111,10 @@ describe("QueuePercentileProcessor — quiet hours keep their aggregate row", ()
       expect(sql).toContain("prev.status = 'OPERATING'");
       expect(sql).not.toContain("HAVING COUNT(*) >= 3");
       expect(sql).toContain("HAVING COUNT(*) >= 2");
+      // PAR-966: both reads skip our own bookkeeping. The behaviour is executed
+      // in test/e2e/hourly-aggregate-observed.e2e-spec.ts; this keeps it in CI.
+      expect(sql).toContain(`AND ${observedReadingsSql("qd")}`);
+      expect(sql).toContain(`COALESCE(${observedReadingsSql("p")}, true)`);
     },
   );
 

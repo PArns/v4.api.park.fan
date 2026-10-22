@@ -620,6 +620,22 @@ export class Attraction {
   retiredReason: string | null;
 
   /**
+   * What a retirement entered by hand means, when the person said so: `closed`
+   * (stopped operating for good) or `reclassified` (never a ride of its own —
+   * a show duplicate, a single-rider line). Read through `retiredKindOf`,
+   * which prefers it over the reason text.
+   *
+   * Null means nobody stated a kind, and the kind is then derived from
+   * `retiredReason` exactly as before: the sync's own wordings read
+   * `reclassified`, everything else `closed`. The children sync never writes
+   * it and only lifts retirements whose kind is null, so a hand-entered
+   * reclassification survives every run (PAR-997). Nullable so the deploy can
+   * add it to the existing rows (`synchronize: true`).
+   */
+  @Column({ name: "retired_kind", type: "varchar", length: 16, nullable: true })
+  retiredKind: "closed" | "reclassified" | null;
+
+  /**
    * Takes a ride retired as closed off its park's page, and off nothing else.
    *
    * A closed ride is listed on its park's page (`closedAttractions` on the park
