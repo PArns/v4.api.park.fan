@@ -136,10 +136,13 @@ done < <(find "$NAS_ROOT/db" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null
 # ── ML Model Backup (CatBoost) ─────────────────────────────────────────────────
 log "Backing up last $BACKUP_ML_MODELS_KEEP CatBoost model versions from $ML_MODELS_DIR"
 
+# Versions are named vYYYYMMDD_HHMM, so the name sorts chronologically. mtime does
+# not: on the NAS it is the copy time, and pruning by it deleted versions that a
+# later run then copied back (v20261017 on 2026-10-22).
 mapfile -t SOURCE_VERSIONS < <(
   find "$ML_MODELS_DIR" -maxdepth 1 -name "catboost_*.cbm" \
-    -printf "%T@ %f\n" 2>/dev/null \
-  | sort -n | awk '{print $2}' \
+    -printf "%f\n" 2>/dev/null \
+  | LC_ALL=C sort \
   | sed 's/^catboost_\(.*\)\.cbm$/\1/' \
   | tail -n "$BACKUP_ML_MODELS_KEEP"
 )
@@ -169,8 +172,8 @@ else
 
   mapfile -t NAS_VERSIONS < <(
     find "$NAS_ML_DIR" -maxdepth 1 -name "catboost_*.cbm" \
-      -printf "%T@ %f\n" 2>/dev/null \
-    | sort -n | awk '{print $2}' \
+      -printf "%f\n" 2>/dev/null \
+    | LC_ALL=C sort \
     | sed 's/^catboost_\(.*\)\.cbm$/\1/'
   )
   NAS_COUNT=${#NAS_VERSIONS[@]}
