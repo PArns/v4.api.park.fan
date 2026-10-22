@@ -93,6 +93,14 @@ describe("LocationController › nearby query parameters", () => {
     expect(findNearby).toHaveBeenCalledWith(-33.5, 151.2, 500, 10);
   });
 
+  it("clamps out-of-range integers instead of rejecting them", async () => {
+    await request(app.getHttpServer())
+      .get(url)
+      .query({ lat: "48.1", lng: "7.7", radius: "20000", limit: "500" })
+      .expect(200);
+    expect(findNearby).toHaveBeenCalledWith(48.1, 7.7, 10000, 50);
+  });
+
   it("resolves the IP when neither coordinate is sent, with the defaults", async () => {
     await request(app.getHttpServer())
       .get(url)
