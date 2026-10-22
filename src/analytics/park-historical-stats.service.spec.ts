@@ -329,6 +329,32 @@ describe("ParkHistoricalStatsService", () => {
     expect(where).toContain("AND a.retired_at IS NULL");
   });
 
+  it("drops single-sample hours from the top-attractions ranking like the other aggregate queries", async () => {
+    // A day made only of one-sample hours is discarded by the day-values and
+    // hourly-profile queries; without the same filter here it still counted as
+    // a sample day and fed avg_p50/avg_p90 (PAR-708).
+    await service.getParkHistoricalStats(park, 2);
+    const topCall = aggregateQuery.mock.calls.find((c) =>
+      String(c[0]).includes("ORDER BY avg_p90 DESC"),
+    )!;
+    const topSql = String(topCall[0]);
+    const where = topSql.slice(
+      topSql.indexOf("WHERE"),
+      topSql.indexOf("GROUP BY"),
+    );
+    expect(where).toContain('AND qda."sampleCount" >= $7');
+    const dayCall = aggregateQuery.mock.calls.find((c) =>
+      String(c[0]).includes("per_attraction_day"),
+    )!;
+    expect(String(dayCall[0])).toContain('qda."sampleCount" >= $5');
+    // One constant for all three queries: the value bound to $7 here is the
+    // one bound to $5 there.
+    const topParams = topCall[1] as unknown[];
+    const dayParams = dayCall[1] as unknown[];
+    expect(topParams[6]).toBe(2);
+    expect(topParams[6]).toBe(dayParams[4]);
+  });
+
   it("reports the attraction sample floor it used in meta", async () => {
     const result = await service.getParkHistoricalStats(park, 2, 10, 30, 45);
     expect(result.meta.minAttractionDays).toBe(45);
