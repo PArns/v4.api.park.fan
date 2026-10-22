@@ -355,6 +355,7 @@ export class ParkHistoricalStatsService {
     years: number,
     topN: number,
     minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
+    range?: { from: string; to: string },
   ): Promise<ParkHourlyProfileDto> {
     // v7: hours outside the park's opening window no longer count (PAR-981).
     // v6: days the park's schedule calls CLOSED no longer count (PAR-698).
@@ -362,7 +363,10 @@ export class ParkHistoricalStatsService {
     // makes the filter apply on deploy instead of up to 24 h later, when the
     // previous entry would have expired. No invalidation glob exists for this
     // key — the version segment is the only way to retire one.
-    const cacheKey = `park:hourly-profile:v7:${park.id}:${years}:${topN}:${minAttractionDays}`;
+    // An explicit window (PAR-978) appends its two days, so the key without
+    // one is the key it always was.
+    const rangeSuffix = range ? `:${range.from}:${range.to}` : "";
+    const cacheKey = `park:hourly-profile:v7:${park.id}:${years}:${topN}:${minAttractionDays}${rangeSuffix}`;
     const cached = safeJsonParse<ParkHourlyProfileDto>(
       await this.redis.get(cacheKey),
     );
@@ -393,6 +397,7 @@ export class ParkHistoricalStatsService {
           years,
           topN,
           minAttractionDays,
+          range,
         );
       } catch (err) {
         try {
@@ -428,18 +433,20 @@ export class ParkHistoricalStatsService {
     years: number,
     topN: number,
     minAttractionDays: number,
+    range?: { from: string; to: string },
   ): Promise<ParkHourlyProfileDto> {
     const now = new Date();
-    const endStr = formatInTimeZone(
-      subDays(now, 1),
-      park.timezone,
-      "yyyy-MM-dd",
-    );
-    const startStr = formatInTimeZone(
-      subYears(subDays(now, 1), years),
-      park.timezone,
-      "yyyy-MM-dd",
-    );
+    // Both bounds are park-local days, inclusive, as the default window is.
+    const endStr =
+      range?.to ??
+      formatInTimeZone(subDays(now, 1), park.timezone, "yyyy-MM-dd");
+    const startStr =
+      range?.from ??
+      formatInTimeZone(
+        subYears(subDays(now, 1), years),
+        park.timezone,
+        "yyyy-MM-dd",
+      );
 
     const rows = await this.queryHourlyProfile(
       park.id,
@@ -581,7 +588,14 @@ export class ParkHistoricalStatsService {
         parkSlug: park.slug,
         dataFrom: startStr,
         dataTo: endStr,
-        windowYears: years,
+        // With an explicit window `years` was not used; report the span read.
+        windowYears: range
+          ? Math.round(
+              ((Date.parse(range.to) - Date.parse(range.from)) / 86_400_000 +
+                1) /
+                36.525,
+            ) / 10
+          : years,
         totalSampleDays,
         // Two independent ways to have nothing worth drawing: no ride cleared
         // the sample floor, or the park's hours are so ragged that no single
