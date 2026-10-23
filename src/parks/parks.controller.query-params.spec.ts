@@ -40,6 +40,8 @@ describe("ParksController › query parameters are validated", () => {
   let findByGeographicPath: jest.Mock;
   let getTopParksWithScores: jest.Mock;
   let findByIds: jest.Mock;
+  let getParkHistoricalStats: jest.Mock;
+  let getParkHourlyProfile: jest.Mock;
 
   const base = "/v1/parks/europe/germany/bruhl/phantasialand";
 
@@ -55,6 +57,8 @@ describe("ParksController › query parameters are validated", () => {
     buildCalendarResponse = jest.fn().mockResolvedValue({ days: [] });
     getTopParksWithScores = jest.fn().mockResolvedValue([]);
     findByIds = jest.fn().mockResolvedValue([]);
+    getParkHistoricalStats = jest.fn().mockResolvedValue({});
+    getParkHourlyProfile = jest.fn().mockResolvedValue({});
 
     const noop = {};
     const moduleRef = await Test.createTestingModule({
@@ -85,7 +89,10 @@ describe("ParksController › query parameters are validated", () => {
         { provide: RestaurantsService, useValue: noop },
         { provide: QueueDataService, useValue: noop },
         { provide: AnalyticsService, useValue: noop },
-        { provide: ParkHistoricalStatsService, useValue: noop },
+        {
+          provide: ParkHistoricalStatsService,
+          useValue: { getParkHistoricalStats, getParkHourlyProfile },
+        },
         { provide: MLService, useValue: noop },
         { provide: PredictionAccuracyService, useValue: noop },
         { provide: ParkEnrichmentService, useValue: noop },
@@ -118,6 +125,8 @@ describe("ParksController › query parameters are validated", () => {
     buildIntegratedResponse.mockClear();
     buildCalendarResponse.mockClear();
     getTopParksWithScores.mockClear();
+    getParkHistoricalStats.mockClear();
+    getParkHourlyProfile.mockClear();
   });
 
   describe("attractions list", () => {
@@ -164,6 +173,88 @@ describe("ParksController › query parameters are validated", () => {
       expect(res.status).toBe(200);
       expect(findAllWithFilters).toHaveBeenCalledWith(
         expect.objectContaining({ page: 2, limit: 100 }),
+      );
+    });
+  });
+
+  describe("stats and stats/hourly", () => {
+    const params = ["years", "topN", "minSampleDays", "minAttractionDays"];
+
+    it.each(
+      ["stats", "stats/hourly"].flatMap((path) =>
+        ["1.5", "Infinity", "abc"].flatMap((value) =>
+          params
+            .filter((key) => path === "stats" || key !== "minSampleDays")
+            .map((key) => [path, key, value]),
+        ),
+      ),
+    )(
+      "answers %s?%s=%s with 400 and never queries",
+      async (path, key, value) => {
+        const res = await request(app.getHttpServer())
+          .get(`${base}/${path}`)
+          .query({ [key]: value });
+
+        expect(res.status).toBe(400);
+        expect(res.headers["cache-control"]).toBeUndefined();
+        expect(getParkHistoricalStats).not.toHaveBeenCalled();
+        expect(getParkHourlyProfile).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ["omitted", {}],
+      [
+        "empty",
+        { years: "", topN: "", minSampleDays: "", minAttractionDays: "" },
+      ],
+    ])("reads the defaults when the parameters are %s", async (_, query) => {
+      const res = await request(app.getHttpServer())
+        .get(`${base}/stats`)
+        .query(query);
+
+      expect(res.status).toBe(200);
+      expect(getParkHistoricalStats).toHaveBeenCalledWith(
+        expect.anything(),
+        2,
+        10,
+        30,
+        20,
+      );
+    });
+
+    it("clamps years and topN and reads 0 as 0 for the day thresholds", async () => {
+      const res = await request(app.getHttpServer())
+        .get(`${base}/stats`)
+        .query({
+          years: "99",
+          topN: "9999",
+          minSampleDays: "0",
+          minAttractionDays: "-4",
+        });
+
+      expect(res.status).toBe(200);
+      expect(getParkHistoricalStats).toHaveBeenCalledWith(
+        expect.anything(),
+        5,
+        50,
+        0,
+        0,
+      );
+    });
+
+    it("hourly reads its own defaults when the parameters are omitted", async () => {
+      const res = await request(app.getHttpServer()).get(
+        `${base}/stats/hourly`,
+      );
+
+      expect(res.status).toBe(200);
+      expect(getParkHourlyProfile).toHaveBeenCalledWith(
+        expect.anything(),
+        1,
+        8,
+        20,
+        undefined,
       );
     });
   });

@@ -1371,10 +1371,13 @@ export class ParksController {
     @Param("country") country: string,
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
-    @Query("years") yearsStr?: string,
-    @Query("topN") topNStr?: string,
-    @Query("minSampleDays") minSampleDaysStr?: string,
-    @Query("minAttractionDays") minAttractionDaysStr?: string,
+    @QueryInt({ name: "years", fallback: 2, min: 1, max: 5 }) years: number,
+    @QueryInt({ name: "topN", fallback: 10, min: 1, max: MAX_TOP_ATTRACTIONS })
+    topN: number,
+    @QueryInt({ name: "minSampleDays", fallback: 30, min: 0 })
+    minSampleDays: number,
+    @QueryInt({ name: "minAttractionDays", fallback: 20, min: 0 })
+    minAttractionDays: number,
   ): Promise<ParkHistoricalStatsDto> {
     const park = await this.parksService.findByGeographicPath(
       continent,
@@ -1389,13 +1392,6 @@ export class ParksController {
       );
     }
 
-    const years = Math.min(Math.max(Number(yearsStr) || 2, 1), 5);
-    const topN = Math.min(
-      Math.max(Number(topNStr) || 10, 1),
-      MAX_TOP_ATTRACTIONS,
-    );
-    const minSampleDays = Math.max(Number(minSampleDaysStr) || 30, 0);
-    const minAttractionDays = Math.max(Number(minAttractionDaysStr) || 20, 0);
     return this.parkHistoricalStatsService.getParkHistoricalStats(
       park,
       years,
@@ -1625,9 +1621,13 @@ export class ParksController {
     @Param("country") country: string,
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
-    @Query("years") yearsStr?: string,
-    @Query("topN") topNStr?: string,
-    @Query("minAttractionDays") minAttractionDaysStr?: string,
+    // One year, not two: the table describes what a day looks like NOW, and a
+    // park that moved its opening time or rebuilt a queue line last spring
+    // would otherwise average the old shape into the new one.
+    @QueryInt({ name: "years", fallback: 1, min: 1, max: 5 }) years: number,
+    @QueryInt({ name: "topN", fallback: 8, min: 1, max: 20 }) topN: number,
+    @QueryInt({ name: "minAttractionDays", fallback: 20, min: 0 })
+    minAttractionDays: number,
     @Query("from") from?: string,
     @Query("to") to?: string,
   ): Promise<ParkHourlyProfileDto> {
@@ -1645,12 +1645,6 @@ export class ParksController {
       );
     }
 
-    // One year, not two: the table describes what a day looks like NOW, and a
-    // park that moved its opening time or rebuilt a queue line last spring
-    // would otherwise average the old shape into the new one.
-    const years = Math.min(Math.max(Number(yearsStr) || 1, 1), 5);
-    const topN = Math.min(Math.max(Number(topNStr) || 8, 1), 20);
-    const minAttractionDays = Math.max(Number(minAttractionDaysStr) || 20, 0);
     return this.parkHistoricalStatsService.getParkHourlyProfile(
       park,
       years,
