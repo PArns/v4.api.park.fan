@@ -1,9 +1,15 @@
-import { BadRequestException, PipeTransform } from "@nestjs/common";
+import {
+  BadRequestException,
+  createParamDecorator,
+  ExecutionContext,
+  PipeTransform,
+} from "@nestjs/common";
+import type { Request } from "express";
 
 interface QueryIntOptions {
   /** Query parameter name, used in the 400 message. */
   name: string;
-  /** Returned when the parameter is absent. */
+  /** Returned when the parameter is absent or empty. */
   fallback?: number;
   /** Smaller values are clamped up to this. */
   min?: number;
@@ -17,6 +23,9 @@ interface QueryIntOptions {
  * (`enableImplicitConversion`) turns `?page=abc` into `NaN`, which reached
  * TypeORM's `skip()` and came back as HTTP 500 (PAR-415).
  *
+ * An empty or blank value (`?limit=`) counts as absent: `Number("")` is 0,
+ * which would otherwise replace the route's default with 0.
+ *
  * Out-of-range integers are clamped, not rejected, so a caller that already
  * sends `limit=500` keeps getting a page.
  */
@@ -28,7 +37,11 @@ export class QueryIntPipe implements PipeTransform<
 
   transform(value: unknown): number | undefined {
     const { name, fallback, min, max } = this.options;
-    if (value === undefined || value === null) {
+    if (
+      value === undefined ||
+      value === null ||
+      (typeof value === "string" && value.trim() === "")
+    ) {
       return fallback;
     }
     if (typeof value !== "number" && typeof value !== "string") {
@@ -44,3 +57,19 @@ export class QueryIntPipe implements PipeTransform<
     return result;
   }
 }
+
+const RawQueryParam = createParamDecorator(
+  (name: string, ctx: ExecutionContext): unknown =>
+    ctx.switchToHttp().getRequest<Request>().query[name],
+);
+
+/**
+ * `@Query(name, new QueryIntPipe(options))` for an integer parameter.
+ *
+ * The global `ValidationPipe` (`enableImplicitConversion`) converts a
+ * `@Query()` parameter typed `number` with `+value` before any parameter pipe
+ * runs, so `?limit=` reached `QueryIntPipe` as 0 and `NaN` for `?limit=abc`.
+ * It leaves custom decorators alone, so the raw string arrives here.
+ */
+export const QueryInt = (options: QueryIntOptions): ParameterDecorator =>
+  RawQueryParam(options.name, new QueryIntPipe(options));
