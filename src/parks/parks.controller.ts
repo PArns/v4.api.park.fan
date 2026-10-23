@@ -1011,7 +1011,7 @@ export class ParksController {
     name: "from",
     required: false,
     description:
-      "Start date (YYYY-MM-DD) in park's local timezone. Defaults to 30 days ago.",
+      "Start date (YYYY-MM-DD) in park's local timezone. Defaults to 30 days ago. Max range: 90 days.",
     example: "2025-12-01",
   })
   @ApiQuery({
@@ -1027,7 +1027,7 @@ export class ParksController {
     type: WeatherResponseDto,
   })
   @ApiResponse({ status: 404, description: "Park not found" })
-  @ApiResponse({ status: 400, description: "Invalid date format" })
+  @ApiResponse({ status: 400, description: "Invalid date range or format" })
   async getWeatherByGeographicPath(
     @Param("continent") continent: string,
     @Param("country") country: string,
@@ -1050,13 +1050,14 @@ export class ParksController {
     }
 
     // Parse date range with timezone awareness
-    const { parseDateRange } =
+    const { parseDateRange, validateDateRange } =
       await import("../common/utils/date-parsing.util");
     const { fromDate, toDate } = parseDateRange(from, to, {
       timezone: park.timezone,
       defaultFromDaysAgo: 30,
       defaultToDaysAhead: 0, // Default 'to' is today
     });
+    validateDateRange(fromDate, toDate, 90);
 
     const weatherData = await this.weatherService.getWeatherData(
       park.id,
@@ -1129,7 +1130,7 @@ export class ParksController {
     name: "to",
     required: false,
     description:
-      "End date (YYYY-MM-DD) in park's local timezone. Defaults to from + 30 days.",
+      "End date (YYYY-MM-DD) in park's local timezone. Defaults to from + 30 days. Max range: 90 days.",
     example: "2025-12-30",
   })
   @ApiResponse({
@@ -1138,7 +1139,7 @@ export class ParksController {
     type: ScheduleResponseDto,
   })
   @ApiResponse({ status: 404, description: "Park not found" })
-  @ApiResponse({ status: 400, description: "Invalid date format" })
+  @ApiResponse({ status: 400, description: "Invalid date range or format" })
   async getScheduleByGeographicPath(
     @Param("continent") continent: string,
     @Param("country") country: string,
@@ -1161,13 +1162,14 @@ export class ParksController {
     }
 
     // Parse date range with timezone awareness
-    const { parseDateRange } =
+    const { parseDateRange, validateDateRange } =
       await import("../common/utils/date-parsing.util");
     const { fromDate, toDate } = parseDateRange(from, to, {
       timezone: park.timezone,
       defaultFromDaysAgo: 0, // Default from: today
       defaultToDaysAhead: 30, // Default to: 30 days ahead
     });
+    validateDateRange(fromDate, toDate, 90);
 
     const fromDateStr = formatInParkTimezone(fromDate, park.timezone);
     const toDateStr = formatInParkTimezone(toDate, park.timezone);
