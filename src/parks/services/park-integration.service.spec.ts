@@ -65,6 +65,10 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
     isParkSeasonal: jest.fn().mockResolvedValue(false),
   };
 
+  const holidaysService = {
+    getHolidays: jest.fn().mockResolvedValue([]),
+  };
+
   const noopRedis = {
     get: jest.fn(),
     set: jest.fn(),
@@ -92,7 +96,7 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         { provide: MLService, useValue: {} },
         { provide: PredictionAccuracyService, useValue: {} },
         { provide: PredictionDeviationService, useValue: {} },
-        { provide: HolidaysService, useValue: {} },
+        { provide: HolidaysService, useValue: holidaysService },
         { provide: ParkEnrichmentService, useValue: {} },
         { provide: ThemeParksClient, useValue: {} },
         { provide: QueueTimesClient, useValue: {} },
@@ -503,6 +507,86 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
     it("returns an empty array when no predictions are provided", async () => {
       const days = await service.aggregateDailyPredictions([], "p1", TZ);
       expect(days).toEqual([]);
+    });
+  });
+
+  describe("getYearlyHolidays", () => {
+    const park = {
+      id: "p1",
+      countryCode: "DE",
+      regionCode: "DE-NW",
+      timezone: "Europe/Berlin",
+    };
+
+    beforeEach(() => {
+      // Only the clock: the service's promises still need real timers.
+      jest.useFakeTimers({
+        now: new Date("2026-10-23T10:00:00Z"),
+        doNotFake: [
+          "nextTick",
+          "setImmediate",
+          "setTimeout",
+          "setInterval",
+          "queueMicrotask",
+        ],
+      });
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("reads a year of holidays from the park's today, three days past both ends", async () => {
+      await service.getYearlyHolidays(park);
+
+      expect(holidaysService.getHolidays).toHaveBeenCalledWith(
+        "DE",
+        "2026-10-20",
+        "2027-10-25",
+      );
+    });
+
+    it("lists only the days that carry a flag, with the English name", async () => {
+      holidaysService.getHolidays.mockResolvedValueOnce([
+        {
+          date: "2026-12-25",
+          name: "Christmas Day",
+          localName: "Erster Weihnachtstag",
+          country: "DE",
+          region: null,
+          holidayType: "public",
+          isNationwide: true,
+        },
+      ]);
+
+      expect(await service.getYearlyHolidays(park)).toEqual([
+        {
+          date: "2026-12-25",
+          isHoliday: true,
+          isSchoolVacation: false,
+          isBridgeDay: false,
+          holidayName: "Christmas Day",
+        },
+      ]);
+    });
+
+    it("answers an empty list for a year without holidays", async () => {
+      expect(await service.getYearlyHolidays(park)).toEqual([]);
+    });
+
+    it("answers nothing for a park without a country", async () => {
+      expect(
+        await service.getYearlyHolidays({
+          ...park,
+          countryCode: null as never,
+        }),
+      ).toBeUndefined();
+      expect(holidaysService.getHolidays).not.toHaveBeenCalled();
+    });
+
+    it("answers nothing, not an empty list, when the holidays cannot be read", async () => {
+      holidaysService.getHolidays.mockRejectedValueOnce(new Error("redis"));
+
+      expect(await service.getYearlyHolidays(park)).toBeUndefined();
     });
   });
 });

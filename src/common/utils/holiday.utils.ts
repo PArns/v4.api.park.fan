@@ -1,6 +1,8 @@
-import { formatInParkTimezone } from "./date.util";
-import { formatInTimeZone } from "date-fns-tz";
+import { addIsoDays, formatInParkTimezone } from "./date.util";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { addDays } from "date-fns";
+import type { HolidayRow } from "../../holidays/holidays.service";
+import { normalizeRegionCode } from "./region.util";
 
 /**
  * Holiday Calculation Utilities
@@ -354,4 +356,184 @@ export function calculateHolidayInfoFromString<
   // whereas Noon UTC is safely within the same calendar day for all timezones between UTC-12 and UTC+12.
   const date = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
   return calculateHolidayInfo(date, entryMap, timezone);
+}
+
+/** The park fields the local-holiday rule reads. */
+export interface HolidayLocation {
+  countryCode: string;
+  regionCode: string | null;
+  timezone: string;
+}
+
+/**
+ * Whether a holiday row applies at the park itself: the park's country, and
+ * nationwide, without a region, or in the park's own region. Every other row is
+ * a neighbour's holiday. The calendar and the yearly forecast both ask this, so
+ * a day cannot be a holiday on one and a plain day on the other.
+ */
+export function isLocalHoliday(
+  h: Pick<HolidayRow, "country" | "region" | "isNationwide">,
+  park: Pick<HolidayLocation, "countryCode" | "regionCode">,
+): boolean {
+  return localHolidayTest(park)(h);
+}
+
+/**
+ * {@link isLocalHoliday} for one park, as a test to run over many rows: the
+ * park's region is normalised once, and each distinct row region once. The
+ * Netherlands stores school breaks per municipality, about 250,000 rows over
+ * the two years a yearly window touches, and normalising both sides of every
+ * row cost 210 ms.
+ */
+function localHolidayTest(
+  park: Pick<HolidayLocation, "countryCode" | "regionCode">,
+): (h: Pick<HolidayRow, "country" | "region" | "isNationwide">) => boolean {
+  const parkRegion = normalizeRegionCode(park.regionCode);
+  const byRegion = new Map<string, boolean>();
+  return (h) => {
+    if (h.country !== park.countryCode) return false;
+    if (h.isNationwide || !h.region) return true;
+    let local = byRegion.get(h.region);
+    if (local === undefined) {
+      local = normalizeRegionCode(h.region) === parkRegion;
+      byRegion.set(h.region, local);
+    }
+    return local;
+  };
+}
+
+/**
+ * The calendar day a holiday row names. The row already is one, `YYYY-MM-DD`
+ * in the country's own calendar. Reading it through a `Date` at noon UTC and
+ * the park's zone, as the calendar did, put every holiday a day late for a park
+ * at UTC+12 or beyond: noon UTC on Christmas Day is already the 26th in
+ * Auckland.
+ */
+export function holidayDay(h: Pick<HolidayRow, "date">): string {
+  return h.date.slice(0, 10);
+}
+
+/**
+ * The park's local holidays keyed by park-local day, in the shape
+ * {@link calculateHolidayInfo} reads. A day with several rows keeps every type
+ * in `allTypes` and takes its name from the public holiday, which is the entry
+ * the bridge-day rule looks at.
+ */
+export function buildLocalHolidayMap(
+  holidays: HolidayRow[],
+  park: HolidayLocation,
+): Map<string, HolidayEntry> {
+  const map = new Map<string, HolidayEntry>();
+  const isLocal = localHolidayTest(park);
+
+  for (const h of holidays) {
+    if (!isLocal(h)) continue;
+
+    const day = holidayDay(h);
+    const name = h.localName || h.name || "";
+    const type = h.holidayType;
+
+    const existing = map.get(day);
+    if (!existing) {
+      map.set(day, { name, type, allTypes: [type] });
+      continue;
+    }
+    if (!existing.allTypes) existing.allTypes = [existing.type];
+    if (!existing.allTypes.includes(type)) existing.allTypes.push(type);
+    if (type === "public" || type === "bank") {
+      existing.name = name;
+      existing.type = type;
+    }
+  }
+
+  return map;
+}
+
+/** The calendar's holiday flags for one day, plus the English names behind them. */
+export interface DayHolidayFlags {
+  isHoliday: boolean;
+  isSchoolVacation: boolean;
+  isBridgeDay: boolean;
+  /** Only on an `isHoliday` day. English, as the calendar's `events[].name`. */
+  holidayName?: string;
+  /**
+   * Only on a day a school-break row covers. The weekends and public holidays
+   * the break absorbs read `isSchoolVacation` without one.
+   */
+  schoolVacationName?: string;
+}
+
+/**
+ * The calendar's three holiday flags for each of `dates` (park-local
+ * `YYYY-MM-DD`), by the calendar's own rule: {@link buildLocalHolidayMap} and
+ * {@link calculateHolidayInfo}. `holidays` must reach three days past both ends
+ * of `dates`, because a school break absorbs a weekend by looking across it to
+ * the Thursday or the Tuesday.
+ *
+ * Neighbouring regions are left out: they are the calendar's `neighborHolidays`,
+ * a separate signal.
+ */
+export function dayHolidayFlags(
+  dates: string[],
+  holidays: HolidayRow[],
+  park: HolidayLocation,
+): Map<string, DayHolidayFlags> {
+  const local = holidays.filter(localHolidayTest(park));
+  const map = buildLocalHolidayMap(local, park);
+
+  // The names come from `name`, not the map's `localName`: the calendar sends
+  // the English name, and the frontend translates from it.
+  const publicNames = new Map<string, string>();
+  const schoolNames = new Map<string, string>();
+  for (const h of local) {
+    const day = holidayDay(h);
+    if (h.holidayType === "school") {
+      if (!schoolNames.has(day)) schoolNames.set(day, h.name);
+    } else if (h.holidayType === "public" || h.holidayType === "bank") {
+      if (!publicNames.has(day)) publicNames.set(day, h.name);
+    }
+  }
+
+  // `calculateHolidayInfo` looks no further than three days from the day it
+  // rates (a weekend reaches across to the Thursday or the Tuesday), so a day
+  // with no map entry that close cannot be flagged, and only the rest pay for
+  // its timezone formatting: 21 ms for a year of days.
+  const reachable = new Set<string>();
+  for (const day of map.keys()) {
+    for (let offset = -3; offset <= 3; offset++) {
+      reachable.add(addIsoDays(day, offset));
+    }
+  }
+
+  const result = new Map<string, DayHolidayFlags>();
+  for (const date of dates) {
+    if (!reachable.has(date)) {
+      result.set(date, {
+        isHoliday: false,
+        isSchoolVacation: false,
+        isBridgeDay: false,
+      });
+      continue;
+    }
+    // Park-local noon, the instant the calendar rates a day at: noon UTC is
+    // already the next day east of UTC+12.
+    const info = calculateHolidayInfo(
+      fromZonedTime(`${date}T12:00:00`, park.timezone),
+      map,
+      park.timezone,
+    );
+    const flags: DayHolidayFlags = {
+      isHoliday: info.isPublicHoliday,
+      isSchoolVacation: info.isSchoolHoliday,
+      isBridgeDay: info.isBridgeDay,
+    };
+    const holidayName = info.isPublicHoliday ? publicNames.get(date) : null;
+    if (holidayName) flags.holidayName = holidayName;
+    const schoolVacationName = info.isSchoolHoliday
+      ? schoolNames.get(date)
+      : null;
+    if (schoolVacationName) flags.schoolVacationName = schoolVacationName;
+    result.set(date, flags);
+  }
+  return result;
 }

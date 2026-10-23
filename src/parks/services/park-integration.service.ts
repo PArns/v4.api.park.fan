@@ -32,10 +32,13 @@ import { PredictionDeviationService } from "../../ml/services/prediction-deviati
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
+  addIsoDays,
   getCurrentDateInTimezone,
   getTomorrowDateInTimezone,
   formatInParkTimezone,
 } from "../../common/utils/date.util";
+import { dayHolidayFlags } from "../../common/utils/holiday.utils";
+import type { ParkYearlyHolidayDto } from "../dto/park-yearly-holiday.dto";
 import { buildAttractionUrl } from "../../common/utils/url.util";
 import {
   nameDuplicateKey,
@@ -1927,6 +1930,51 @@ export class ParkIntegrationService {
         }`,
       );
       return new Set();
+    }
+  }
+
+  /**
+   * The park's holidays from today through 364 days ahead, for the yearly
+   * forecast: every day that is a public holiday, a school-break day or a
+   * bridge day, by the calendar's rule ({@link dayHolidayFlags}). A list of its
+   * own rather than flags on the forecast days, because the forecast skips the
+   * days it has nothing for (Christmas Day at Phantasialand) and stops about
+   * 182 days out, while next summer's school break is already known.
+   *
+   * `undefined` when the holiday table cannot be read or the park has no
+   * country: an absent list is "not known", an empty one says the year has no
+   * holiday.
+   */
+  public async getYearlyHolidays(
+    park: Pick<Park, "id" | "countryCode" | "regionCode" | "timezone">,
+  ): Promise<ParkYearlyHolidayDto[] | undefined> {
+    // No country, no holiday table to ask: an empty list would claim a year
+    // without holidays.
+    if (!park.countryCode) return undefined;
+    const today = getCurrentDateInTimezone(park.timezone);
+    const dates = Array.from({ length: 365 }, (_, i) => addIsoDays(today, i));
+    try {
+      // Three days past each end: a break absorbs a weekend by looking across
+      // it to the Thursday or the Tuesday.
+      const holidays = await this.holidaysService.getHolidays(
+        park.countryCode,
+        addIsoDays(dates[0], -3),
+        addIsoDays(dates[dates.length - 1], 3),
+      );
+      const flags = dayHolidayFlags(dates, holidays, park);
+      return dates.flatMap((date) => {
+        const day = flags.get(date);
+        return day && (day.isHoliday || day.isSchoolVacation || day.isBridgeDay)
+          ? [{ date, ...day }]
+          : [];
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Holidays unavailable for yearly predictions of park ${park.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return undefined;
     }
   }
 
