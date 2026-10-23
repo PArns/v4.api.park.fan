@@ -190,7 +190,7 @@ export class ParkHistoricalStatsService {
       topAttractions: result.topAttractions.slice(0, topN),
       meta: {
         ...result.meta,
-        displayable: result.meta.totalSampleDays >= minSampleDays,
+        displayable: (result.meta?.totalSampleDays ?? 0) >= minSampleDays,
       },
     };
   }

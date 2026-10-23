@@ -455,6 +455,20 @@ describe("ParkHistoricalStatsService", () => {
     expect(aggregateQuery).not.toHaveBeenCalled();
   });
 
+  it("is displayable at exactly minSampleDays and does not throw on a payload without meta", async () => {
+    redis.get
+      .mockResolvedValueOnce(
+        JSON.stringify({ topAttractions: [], meta: { totalSampleDays: 45 } }),
+      )
+      .mockResolvedValueOnce(JSON.stringify({ topAttractions: [] }));
+
+    const boundary = await service.getParkHistoricalStats(park, 2, 10, 45);
+    const bare = await service.getParkHistoricalStats(park, 2, 10, 30);
+
+    expect(boundary.meta.displayable).toBe(true);
+    expect(bare.meta.displayable).toBe(false);
+  });
+
   it("slices every topN from the same cached payload (PAR-983)", async () => {
     // Thorpe Park: the default depth and topN=30 were cached separately, a day
     // apart, and Hyperia read 60 in one widget and 55 in the other.
