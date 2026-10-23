@@ -13,7 +13,7 @@ import { LocationService } from "./location.service";
 import { GeoipService } from "../geoip/geoip.service";
 import { NearbyResponseDto } from "./dto/nearby-response.dto";
 import { NoCdnCacheInterceptor } from "../common/interceptors/no-cdn-cache.interceptor";
-import { QueryIntPipe } from "../common/pipes/query-int.pipe";
+import { QueryInt } from "../common/pipes/query-int.pipe";
 
 /** `Number()` rather than `parseFloat`, so `48.1abc` is rejected, not cut to 48.1. */
 function parseCoordinate(value: unknown, max: number): number | null {
@@ -182,15 +182,9 @@ export class LocationController {
     @Query("lat") lat: string | undefined,
     @Query("lng") lng: string | undefined,
     @Query("ip") ipParam: string | undefined,
-    @Query(
-      "radius",
-      new QueryIntPipe({ name: "radius", fallback: 1000, min: 0, max: 10000 }),
-    )
+    @QueryInt({ name: "radius", fallback: 1000, min: 0, max: 10000 })
     radius: number,
-    @Query(
-      "limit",
-      new QueryIntPipe({ name: "limit", fallback: 6, min: 1, max: 50 }),
-    )
+    @QueryInt({ name: "limit", fallback: 6, min: 1, max: 50 })
     limit: number,
     @Req() req?: Request,
   ): Promise<NearbyResponseDto> {

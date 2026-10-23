@@ -1,4 +1,10 @@
-import { BadRequestException, PipeTransform } from "@nestjs/common";
+import {
+  BadRequestException,
+  createParamDecorator,
+  ExecutionContext,
+  PipeTransform,
+} from "@nestjs/common";
+import type { Request } from "express";
 
 interface QueryIntOptions {
   /** Query parameter name, used in the 400 message. */
@@ -51,3 +57,19 @@ export class QueryIntPipe implements PipeTransform<
     return result;
   }
 }
+
+const RawQueryParam = createParamDecorator(
+  (name: string, ctx: ExecutionContext): unknown =>
+    ctx.switchToHttp().getRequest<Request>().query[name],
+);
+
+/**
+ * `@Query(name, new QueryIntPipe(options))` for an integer parameter.
+ *
+ * The global `ValidationPipe` (`enableImplicitConversion`) converts a
+ * `@Query()` parameter typed `number` with `+value` before any parameter pipe
+ * runs, so `?limit=` reached `QueryIntPipe` as 0 and `NaN` for `?limit=abc`.
+ * It leaves custom decorators alone, so the raw string arrives here.
+ */
+export const QueryInt = (options: QueryIntOptions): ParameterDecorator =>
+  RawQueryParam(options.name, new QueryIntPipe(options));

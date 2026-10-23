@@ -22,7 +22,7 @@ import {
   ApiQuery,
 } from "@nestjs/swagger";
 import type { Response } from "express";
-import { QueryIntPipe } from "../common/pipes/query-int.pipe";
+import { QueryInt } from "../common/pipes/query-int.pipe";
 import { ParksService } from "./parks.service";
 import { ParkRenameService } from "./services/park-rename.service";
 import { WeatherService } from "./weather.service";
@@ -1839,12 +1839,14 @@ export class ParksController {
     name: "page",
     required: false,
     description: "Page number (default: 1)",
+    type: Number,
     example: 1,
   })
   @ApiQuery({
     name: "limit",
     required: false,
     description: "Items per page (default: 10, max: 100)",
+    type: Number,
     example: 10,
   })
   @ApiExtraModels(PaginatedResponseDto, ParkAttractionListItemDto)
@@ -1871,12 +1873,9 @@ export class ParksController {
     @Param("country") country: string,
     @Param("city") city: string,
     @Param("parkSlug") parkSlug: string,
-    @Query("page", new QueryIntPipe({ name: "page", fallback: 1, min: 1 }))
+    @QueryInt({ name: "page", fallback: 1, min: 1 })
     page: number,
-    @Query(
-      "limit",
-      new QueryIntPipe({ name: "limit", fallback: 10, min: 1, max: 100 }),
-    )
+    @QueryInt({ name: "limit", fallback: 10, min: 1, max: 100 })
     limit: number,
   ): Promise<{
     data: ParkAttractionListItemDto[];
@@ -2006,7 +2005,7 @@ export class ParksController {
     @Param("parkSlug") parkSlug: string,
     @Param("attractionSlug") attractionSlug: string,
     @Res({ passthrough: true }) res: Response,
-    @Query("days", new QueryIntPipe({ name: "days", min: 1, max: 365 }))
+    @QueryInt({ name: "days", min: 1, max: 365 })
     days?: number,
   ): Promise<AttractionResponseDto | undefined> {
     const attraction = await this.attractionsService.findByGeographicPath(

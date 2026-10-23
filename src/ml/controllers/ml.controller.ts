@@ -1,6 +1,6 @@
-import { Controller, Get, Query } from "@nestjs/common";
+import { Controller, Get } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiQuery, ApiResponse } from "@nestjs/swagger";
-import { QueryIntPipe } from "../../common/pipes/query-int.pipe";
+import { QueryInt } from "../../common/pipes/query-int.pipe";
 import { MLDashboardService } from "../services/ml-dashboard.service";
 import { MLModelService } from "../services/ml-model.service";
 import { PredictionAccuracyService } from "../services/prediction-accuracy.service";
@@ -66,10 +66,7 @@ export class MLController {
   })
   @ApiResponse({ status: 200, type: ModelMetricsHistoryDto })
   async getMetricsHistory(
-    @Query(
-      "limit",
-      new QueryIntPipe({ name: "limit", fallback: 30, min: 1, max: 100 }),
-    )
+    @QueryInt({ name: "limit", fallback: 30, min: 1, max: 100 })
     limit: number,
   ): Promise<ModelMetricsHistoryDto> {
     return this.modelService.getMetricsHistory(limit);
@@ -90,10 +87,7 @@ export class MLController {
     description: "Look-back window in days (default 7, clamped to 1-365)",
   })
   async getSystemAccuracy(
-    @Query(
-      "days",
-      new QueryIntPipe({ name: "days", fallback: 7, min: 1, max: 365 }),
-    )
+    @QueryInt({ name: "days", fallback: 7, min: 1, max: 365 })
     days: number,
   ) {
     const stats = await this.accuracyService.getSystemAccuracyStats(days);
