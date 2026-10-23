@@ -118,6 +118,7 @@
 ### 🚀 Deployment
 - [Coolify Deployment](docs/deployment/coolify.md) - Production deployment guide.
 - [Backup Strategy](docs/deployment/backup.md) - Daily DB + ML model backups to Samba NAS, retention, and restore steps.
+- [CORS](docs/deployment/cors.md) - Allowed browser origins come from `buildCorsOptions()` (`src/common/cors/cors.config.ts`): park.fan by default in production, `CORS_ORIGINS` replaces the list (`*` inside a host label). A foreign or missing `Origin` gets a normal answer without CORS headers, never an error (that was a 500 for every server-side caller). Cloudflare ignores `Vary: Origin`, so only `no-store` endpoints are safe to call cross-origin.
 
 ---
 

@@ -13,6 +13,7 @@ import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { LoggingInterceptor } from "./common/interceptors/logging.interceptor";
 import { ExcludeNullInterceptor } from "./common/interceptors/exclude-null.interceptor";
 import { CacheControlInterceptor } from "./common/interceptors/cache-control.interceptor";
+import { buildCorsOptions } from "./common/cors/cors.config";
 import {
   GLOBAL_PREFIX,
   GLOBAL_PREFIX_OPTIONS,
@@ -107,58 +108,9 @@ async function bootstrap(): Promise<void> {
     new ExcludeNullInterceptor(), // Remove null values (disable with ?debug=true)
   );
 
-  // CORS Configuration
-  // SECURITY: In production, CORS should be disabled or use a whitelist
-  // Cloudflare handles CORS in production, so we disable it at application level
-  const isProduction = process.env.NODE_ENV === "production";
-  const allowedOrigins = process.env.CORS_ORIGINS
-    ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())
-    : [];
-
-  if (isProduction) {
-    // Production: Use whitelist if provided, otherwise disable CORS (Cloudflare handles it)
-    if (allowedOrigins.length > 0) {
-      app.enableCors({
-        origin: (origin, callback) => {
-          if (origin && allowedOrigins.includes(origin)) {
-            callback(null, true);
-          } else {
-            callback(new Error("Not allowed by CORS"));
-          }
-        },
-        credentials: true,
-        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Authorization", "X-Admin-API-Key"],
-        // Retry-After is not a CORS-safelisted response header: without this a
-        // cross-origin browser client gets the header on a 429 but reads null.
-        // Exposing it costs no client anything (PAR-242).
-        exposedHeaders: ["Retry-After"],
-      });
-    } else {
-      // No CORS origins configured - disable CORS (Cloudflare will handle it)
-      // This is safer than allowing all origins
-      app.enableCors({
-        origin: false,
-        credentials: false,
-      });
-    }
-  } else {
-    // Development: restrict to explicit CORS_ORIGINS or local dev hosts.
-    // No wildcard here — this branch also runs when NODE_ENV is accidentally
-    // unset in a deployed environment, so localhost is the widest default.
-    const devOrigins: (string | RegExp)[] =
-      allowedOrigins.length > 0
-        ? allowedOrigins
-        : [/^https?:\/\/localhost(:\d+)?$/, /^https?:\/\/127\.0\.0\.1(:\d+)?$/];
-    app.enableCors({
-      origin: devOrigins,
-      credentials: false,
-      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization", "X-Admin-API-Key"],
-      // Same as production: keep Retry-After readable to browser clients.
-      exposedHeaders: ["Retry-After"],
-    });
-  }
+  // Cloudflare adds no CORS headers; the allowed origins live here. See
+  // docs/deployment/cors.md.
+  app.enableCors(buildCorsOptions(process.env.NODE_ENV === "production"));
 
   // API versioning prefix (exclude root controller — docs page and robots.txt,
   // both of which must stay at the host root to be found)
