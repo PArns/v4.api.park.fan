@@ -29,8 +29,10 @@ import {
   eachDayAtNoonInTimezone,
 } from "../../common/utils/date.util";
 import {
+  buildLocalHolidayMap,
   calculateHolidayInfo,
-  HolidayEntry,
+  holidayDay,
+  isLocalHoliday,
 } from "../../common/utils/holiday.utils";
 import { normalizeRegionCode } from "../../common/utils/region.util";
 import { WeatherData } from "../entities/weather-data.entity";
@@ -850,51 +852,7 @@ export class CalendarService {
         ) === dateStr,
     );
 
-    // Build holiday map for calculateHolidayInfo utility (includes ±1 day for bridge day detection)
-    const holidayMap = new Map<string, string | HolidayEntry>();
-    const extendedHolidays = [...holidays];
-
-    for (const h of extendedHolidays) {
-      // Normalize to noon UTC to prevent timezone shifts (YYYY-MM-DD from DB)
-      const normalizedDate = new Date(h.date);
-      normalizedDate.setUTCHours(12, 0, 0, 0);
-      const hDateStr = formatInParkTimezone(normalizedDate, park.timezone);
-
-      // Use normalized region codes for consistent matching
-      const normalizedParkRegion = normalizeRegionCode(park.regionCode);
-      const normalizedHolidayRegion = normalizeRegionCode(h.region);
-      const isLocal =
-        h.country === park.countryCode &&
-        (h.isNationwide ||
-          !h.region ||
-          normalizedHolidayRegion === normalizedParkRegion);
-
-      if (isLocal) {
-        // Add to holidayMap with type information
-        const existing = holidayMap.get(hDateStr);
-        const hType = h.holidayType;
-
-        if (!existing || typeof existing === "string") {
-          holidayMap.set(hDateStr, {
-            name: h.localName || h.name || "",
-            type: hType,
-            allTypes: [hType],
-          });
-        } else {
-          // Aggregate types
-          if (!existing.allTypes) existing.allTypes = [existing.type];
-          if (!existing.allTypes.includes(hType)) {
-            existing.allTypes.push(hType);
-          }
-
-          // Prioritize public holidays for the main entry (useful for bridge day logic)
-          if (hType === "public" || hType === "bank") {
-            existing.name = h.localName || h.name || "";
-            existing.type = hType;
-          }
-        }
-      }
-    }
+    const holidayMap = buildLocalHolidayMap(holidays, park);
 
     // Use utility function to calculate holiday info including bridge days
     const holidayInfo = calculateHolidayInfo(date, holidayMap, park.timezone);
@@ -908,26 +866,13 @@ export class CalendarService {
     const neighborHolidaysRaw: NeighborHoliday[] = [];
     const seenEvents = new Set<string>();
 
-    const dayHolidays = holidays.filter((h) => {
-      const normalizedDate = new Date(h.date);
-      normalizedDate.setUTCHours(12, 0, 0, 0);
-      return formatInParkTimezone(normalizedDate, park.timezone) === dateStr;
-    });
+    const dayHolidays = holidays.filter((h) => holidayDay(h) === dateStr);
 
     for (const h of dayHolidays) {
       const type = h.holidayType === "school" ? "school-holiday" : "holiday";
       const key = `${type}:${h.name}`;
 
-      // Use normalized region codes for consistent matching
-      const normalizedParkRegion = normalizeRegionCode(park.regionCode);
-      const normalizedHolidayRegion = normalizeRegionCode(h.region);
-      const isLocal =
-        h.country === park.countryCode &&
-        (h.isNationwide ||
-          !h.region ||
-          normalizedHolidayRegion === normalizedParkRegion);
-
-      if (isLocal) {
+      if (isLocalHoliday(h, park)) {
         if (!seenEvents.has(key)) {
           seenEvents.add(key);
           events.push({

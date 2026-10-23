@@ -51,6 +51,7 @@ import { PopularParkDto } from "./dto/popular-park.dto";
 import { ParkWithAttractionsDto } from "./dto/park-with-attractions.dto";
 import { ParkQueryDto } from "./dto/park-query.dto";
 import { ParkDailyPredictionDto } from "./dto/park-daily-prediction.dto";
+import { ParkYearlyHolidayDto } from "./dto/park-yearly-holiday.dto";
 import { WeatherResponseDto } from "./dto/weather-response.dto";
 import { WeatherItemDto } from "./dto/weather-item.dto";
 import { WeatherNowcastDto } from "./dto/weather-nowcast.dto";
@@ -1672,10 +1673,13 @@ export class ParksController {
       "Returns daily crowd predictions from today to roughly 182 days ahead (the daily model's horizon) via geographic path. " +
       "A day the park's schedule calls closed reads crowdLevel and recommendation `closed`, by the same rule as the calendar; " +
       "a day rated `unknown` carries no recommendation. " +
+      "`holidays` lists every day from today through 364 days ahead that is a public holiday, a school-break day " +
+      "or a bridge day in the park's own region, by the calendar's rule, whether or not the forecast covers it; " +
+      "it is absent when the holiday table could not be read. " +
       "Useful for long-term trip planning and identifying best times to visit. " +
       "Cached for 24 hours.",
   })
-  @ApiExtraModels(ParkDailyPredictionDto)
+  @ApiExtraModels(ParkDailyPredictionDto, ParkYearlyHolidayDto)
   @ApiResponse({
     status: 200,
     description: "Yearly predictions retrieved",
@@ -1695,6 +1699,13 @@ export class ParksController {
           items: { $ref: getSchemaPath("ParkDailyPredictionDto") },
           description:
             "Daily predictions up to about 182 days ahead (fewer where the model filtered off-season days out)",
+        },
+        holidays: {
+          type: "array",
+          items: { $ref: getSchemaPath("ParkYearlyHolidayDto") },
+          description:
+            "The park's holidays from today through 364 days ahead, independent of the forecast's coverage. " +
+            "Absent when the holiday table could not be read.",
         },
         generatedAt: {
           type: "string",
@@ -1734,12 +1745,14 @@ export class ParksController {
    */
   private async buildYearlyPredictionsResponse(park: Park) {
     const predictions = await this.mlService.getParkPredictionsYearly(park.id);
-    const dailyPredictions =
-      await this.parkIntegrationService.aggregateDailyPredictions(
+    const [dailyPredictions, holidays] = await Promise.all([
+      this.parkIntegrationService.aggregateDailyPredictions(
         predictions.predictions,
         park.id,
         park.timezone,
-      );
+      ),
+      this.parkIntegrationService.getYearlyHolidays(park),
+    ]);
 
     return {
       park: {
@@ -1748,6 +1761,7 @@ export class ParksController {
         slug: park.slug,
       },
       predictions: dailyPredictions,
+      ...(holidays && { holidays }),
       generatedAt: new Date().toISOString(),
     };
   }
