@@ -36,6 +36,11 @@ import { seedMinimalTestData, clearTestData } from "../helpers/seed-test-data";
  * `/stats/hourly` read `queue_data_aggregates` directly, so they kept counting
  * shut days: 78,425 of Europa-Park's 252,893 aggregate rows over one year sit
  * on them. All three now read one rule, `closed-park-days.sql.ts`.
+ *
+ * PAR-999 adds the window itself. Which rows these queries see at the edges of
+ * their window is the same kind of raw-SQL decision, so it is checked here for
+ * the same reason: a mocked result cannot tell a park-local bound from a UTC
+ * one.
  */
 describe("Park historical stats — days the schedule calls CLOSED (E2E)", () => {
   let app: INestApplication;
@@ -89,6 +94,35 @@ describe("Park historical stats — days the schedule calls CLOSED (E2E)", () =>
         sampleCount: 6,
       });
     }
+  }
+
+  /**
+   * One measured hour on one park-local day, for the window-edge cases: they
+   * place single rows ON a bound, which `addDay`'s pair of hours cannot.
+   */
+  async function addHour(
+    park: Park,
+    attractionId: string,
+    day: string,
+    hour: string,
+    wait: number,
+  ) {
+    await dataSource.getRepository(QueueDataAggregate).insert({
+      id: randomUUID(),
+      hour: fromZonedTime(`${day}T${hour}`, park.timezone),
+      attractionId,
+      parkId: park.id,
+      p25: wait,
+      p50: wait,
+      p75: wait,
+      p90: wait,
+      p95: wait,
+      p99: wait,
+      iqr: 0,
+      stdDev: 0,
+      mean: wait,
+      sampleCount: 6,
+    });
   }
 
   /** The nightly job's verdict for one park-local day (PAR-697). */
@@ -436,5 +470,98 @@ describe("Park historical stats — days the schedule calls CLOSED (E2E)", () =>
     const row = result.find((r) => r.attractionSlug === ride.slug)!;
     expect(row.sampleDays).toBe(2);
     expect(row.avgWaitP90).toBe(40);
+  });
+  describe("window bounds are park-local midnight (PAR-999)", () => {
+    /**
+     * `/stats/hourly` takes an explicit park-local window (PAR-978), which is
+     * what makes these two cases exact: no `now()`, no DST transition, no
+     * dependence on when the suite runs (G-56). Europe/Berlin is UTC+1 in
+     * March, so park-local midnight is 23:00 UTC the day before — the hour a
+     * UTC bound puts on the wrong side.
+     *
+     * MIN_DAYS_PER_HOUR is the amplifier. An hour becomes a column of the table
+     * at ten measured days, so one row landing on the wrong side of a bound is
+     * the difference between a column and no column, and the assertion is a
+     * list membership rather than an average that rounding could hide.
+     */
+    const FROM = "2026-03-02";
+    const TO = "2026-03-13"; // 12 days, all before Europe/Berlin's DST switch.
+    const DAYS = Array.from(
+      { length: 12 },
+      (_, i) => `2026-03-${String(i + 2).padStart(2, "0")}`,
+    );
+
+    /** The park east of UTC these cases need; the fixtures are US parks. */
+    async function berlinPark(): Promise<[Park, string]> {
+      const seeded = await seedMinimalTestData(app);
+      const park = seeded.parks[0];
+      const ride = seeded.attractions.find((a) => a.parkId === park.id)!;
+      park.timezone = "Europe/Berlin";
+      await dataSource
+        .getRepository(Park)
+        .update(park.id, { timezone: park.timezone });
+      return [park, ride.id];
+    }
+
+    /** The table's hour columns for the explicit window. */
+    async function hoursIn(park: Park) {
+      await redis.flushdb();
+      const result = await service.getParkHourlyProfile(park, 1, 8, 2, {
+        from: FROM,
+        to: TO,
+      });
+      return result.hours;
+    }
+
+    /**
+     * 12:00 on every day of the window, so the best-measured hour has 12 days
+     * and MIN_HOUR_DAY_RATIO (0.4 × 12 = 4.8) never decides anything here.
+     */
+    async function addMiddayBaseline(park: Park, rideId: string) {
+      for (const day of DAYS) await addHour(park, rideId, day, "12:00:00", 40);
+    }
+
+    it("counts the first local hour of the first day", async () => {
+      // 00:00 Berlin on 2026-03-02 is 2026-03-01 23:00 UTC. Bounded at
+      // `$3::date` that row is before the window and midnight is a nine-day
+      // hour; bounded at park-local midnight it is the window's first instant.
+      const [park, rideId] = await berlinPark();
+      await addMiddayBaseline(park, rideId);
+      const midnightDays = DAYS.slice(0, 10); // 03-02 … 03-11
+
+      // Reachable: without the first day, midnight has nine days and no column.
+      for (const day of midnightDays.slice(1))
+        await addHour(park, rideId, day, "00:00:00", 40);
+      expect(await hoursIn(park)).toEqual([12]);
+
+      await addHour(park, rideId, midnightDays[0], "00:00:00", 40);
+      expect(await hoursIn(park)).toEqual([0, 12]);
+    });
+
+    it("does not count the first local hour of the day after the last day", async () => {
+      // 00:00 Berlin on 2026-03-14 is 2026-03-13 23:00 UTC, so a bound of
+      // `$4::date + 1 day` lets it in and it buys midnight its tenth day.
+      const [park, rideId] = await berlinPark();
+      await addMiddayBaseline(park, rideId);
+      // 03-03 … 03-11, deliberately NOT starting on the window's first day:
+      // the first day's midnight is the other case's subject, and a row that
+      // both bounds agree on keeps this case about the closing bound alone.
+      const midnightDays = DAYS.slice(1, 10);
+      for (const day of midnightDays)
+        await addHour(park, rideId, day, "00:00:00", 40);
+
+      // Reachable: a tenth day INSIDE the window does give midnight a column,
+      // so the assertion below is about the bound and not about a floor that
+      // nothing could clear.
+      await addHour(park, rideId, DAYS[10], "00:00:00", 40);
+      expect(await hoursIn(park)).toEqual([0, 12]);
+      await dataSource
+        .getRepository(QueueDataAggregate)
+        .delete({ hour: fromZonedTime(`${DAYS[10]}T00:00:00`, park.timezone) });
+      expect(await hoursIn(park)).toEqual([12]);
+
+      await addHour(park, rideId, "2026-03-14", "00:00:00", 40);
+      expect(await hoursIn(park)).toEqual([12]);
+    });
   });
 });
