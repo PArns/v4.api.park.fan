@@ -899,6 +899,19 @@ describe("ParksService", () => {
       });
       expect(byDay.get("2025-12-26")?.isHoliday).toBe(false);
     });
+
+    it("asks for the holidays one day either side of the synced days, east of UTC+12 too", async () => {
+      await service.saveScheduleData(parkId, [
+        operating("2025-12-24"),
+        operating("2025-12-26"),
+      ]);
+
+      expect(mockHolidaysService.getHolidays).toHaveBeenCalledWith(
+        "NZ",
+        "2025-12-23",
+        "2025-12-27",
+      );
+    });
   });
 
   /**

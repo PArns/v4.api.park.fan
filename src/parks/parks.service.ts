@@ -1518,9 +1518,8 @@ export class ParksService {
     let holidayMap = new Map<string, HolidayEntry>();
     if (park?.countryCode) {
       try {
-        // Use noon-UTC timestamps so formatInParkTimezone() stays on the same
-        // calendar day for parks in every timezone (west-of-UTC parks shift
-        // midnight-UTC to the previous day, which would narrow the holiday range).
+        // The range is cut from the entries' own day strings: reading it back
+        // through the park's zone moves it a day east of UTC+12.
         const dates = normalizedEntries.map((e) =>
           new Date(`${e.dateStr}T12:00:00Z`).getTime(),
         );
@@ -1528,13 +1527,13 @@ export class ParksService {
         const maxDate = new Date(Math.max(...dates));
 
         // Extend range by 1 day for bridge day detection
-        minDate.setDate(minDate.getDate() - 1);
-        maxDate.setDate(maxDate.getDate() + 1);
+        minDate.setUTCDate(minDate.getUTCDate() - 1);
+        maxDate.setUTCDate(maxDate.getUTCDate() + 1);
 
         const holidays = await this.holidaysService.getHolidays(
           park.countryCode,
-          formatInParkTimezone(minDate, park.timezone),
-          formatInParkTimezone(maxDate, park.timezone),
+          minDate.toISOString().slice(0, 10),
+          maxDate.toISOString().slice(0, 10),
         );
 
         holidayMap = buildLocalHolidayMap(holidays, {
