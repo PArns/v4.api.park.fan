@@ -144,21 +144,20 @@ export class ParkHistoricalStatsService {
   ) {}
 
   /**
-   * Redis key for a cached historical-stats payload. minSampleDays and
-   * minAttractionDays change the payload, so they're part of the key. topN is
-   * not: every depth is a slice of one payload computed at
-   * {@link MAX_TOP_ATTRACTIONS}, so two widgets asking for different depths on
-   * the same page read the same day's numbers. With topN in the key each depth
-   * was computed on its own 24-hour cycle, and Thorpe Park's Hyperia read 60
-   * at the default depth and 55 at topN=30 (PAR-983).
+   * Redis key for a cached historical-stats payload. minAttractionDays changes
+   * the payload, so it is part of the key. topN and minSampleDays are not:
+   * every depth is a slice of one payload computed at
+   * {@link MAX_TOP_ATTRACTIONS}, and minSampleDays only sets
+   * `meta.displayable`, which is derived on every read. With either in the key
+   * each value was computed on its own 24-hour cycle, and Thorpe Park's Hyperia
+   * read 60 at the default depth and 55 at topN=30 (PAR-983, PAR-1003).
    */
   private statsCacheKey(
     parkId: string,
     years: number,
-    minSampleDays: number,
     minAttractionDays: number,
   ): string {
-    return `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:${parkId}:${years}:${minSampleDays}:${minAttractionDays}`;
+    return `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:${parkId}:${years}:${minAttractionDays}`;
   }
 
   async getParkHistoricalStats(
@@ -168,12 +167,7 @@ export class ParkHistoricalStatsService {
     minSampleDays = DEFAULT_MIN_SAMPLE_DAYS,
     minAttractionDays = DEFAULT_MIN_ATTRACTION_DAYS,
   ): Promise<ParkHistoricalStatsDto> {
-    const cacheKey = this.statsCacheKey(
-      park.id,
-      years,
-      minSampleDays,
-      minAttractionDays,
-    );
+    const cacheKey = this.statsCacheKey(park.id, years, minAttractionDays);
     let result = safeJsonParse<ParkHistoricalStatsDto>(
       await this.redis.get(cacheKey),
     );
@@ -182,7 +176,6 @@ export class ParkHistoricalStatsService {
         park,
         years,
         MAX_TOP_ATTRACTIONS,
-        minSampleDays,
         minAttractionDays,
       );
       await this.redis.set(
@@ -195,12 +188,16 @@ export class ParkHistoricalStatsService {
     return {
       ...result,
       topAttractions: result.topAttractions.slice(0, topN),
+      meta: {
+        ...result.meta,
+        displayable: (result.meta?.totalSampleDays ?? 0) >= minSampleDays,
+      },
     };
   }
 
   /**
    * Read-only accessor for the cached per-weekday aggregate, keyed like the
-   * default `/stats` request (years=2, minSampleDays=30) that the
+   * default `/stats` request (years=2) that the
    * endpoint + warmup populate.
    *
    * Returns `null` WITHOUT computing when the cache is cold — callers on a
@@ -211,7 +208,6 @@ export class ParkHistoricalStatsService {
     const cacheKey = this.statsCacheKey(
       park.id,
       2,
-      DEFAULT_MIN_SAMPLE_DAYS,
       DEFAULT_MIN_ATTRACTION_DAYS,
     );
     const cached = safeJsonParse<ParkHistoricalStatsDto>(
@@ -224,7 +220,6 @@ export class ParkHistoricalStatsService {
     park: Park,
     years: number,
     topN: number,
-    minSampleDays: number,
     minAttractionDays: number,
   ): Promise<ParkHistoricalStatsDto> {
     // Use park timezone so "yesterday" and the start boundary are correct
@@ -332,7 +327,7 @@ export class ParkHistoricalStatsService {
         dataTo: endStr,
         totalSampleDays,
         windowYears: years,
-        displayable: totalSampleDays >= minSampleDays,
+        displayable: totalSampleDays >= DEFAULT_MIN_SAMPLE_DAYS,
         generatedAt: new Date().toISOString(),
         schemaVersion: SCHEMA_VERSION,
         minAttractionDays,

@@ -457,21 +457,53 @@ describe("ParkHistoricalStatsService", () => {
       byMonth: [],
       byDayOfWeek: [],
       topAttractions: [],
-      meta: {},
+      meta: { totalSampleDays: 45, displayable: true },
     };
     redis.get.mockResolvedValueOnce(JSON.stringify(cached));
 
     const result = await service.getParkHistoricalStats(park, 2);
-    expect(result).toEqual(cached);
+    expect(result).toEqual({
+      ...cached,
+      meta: { totalSampleDays: 45, displayable: true },
+    });
     expect(aggregateQuery).not.toHaveBeenCalled();
   });
 
-  it("keys the cache by park, years, minSampleDays and the attraction floor, not topN", async () => {
+  it("keys the cache by park, years and the attraction floor, not topN or minSampleDays", async () => {
     await service.getParkHistoricalStats(park, 2, 10, 30);
-    await service.getParkHistoricalStats(park, 2, 30, 30);
-    const key = `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:park-uuid:2:30:20`;
+    await service.getParkHistoricalStats(park, 2, 30, 100);
+    const key = `park:historical-stats:v${HISTORICAL_STATS_CACHE_VERSION}:park-uuid:2:20`;
     expect(redis.get).toHaveBeenNthCalledWith(1, key);
     expect(redis.get).toHaveBeenNthCalledWith(2, key);
+  });
+
+  it("derives displayable from minSampleDays on each read of one cached payload (PAR-1003)", async () => {
+    const cached = JSON.stringify({
+      topAttractions: [],
+      meta: { totalSampleDays: 45, displayable: true },
+    });
+    redis.get.mockResolvedValueOnce(cached).mockResolvedValueOnce(cached);
+
+    const lenient = await service.getParkHistoricalStats(park, 2, 10, 30);
+    const strict = await service.getParkHistoricalStats(park, 2, 10, 100);
+
+    expect(lenient.meta.displayable).toBe(true);
+    expect(strict.meta.displayable).toBe(false);
+    expect(aggregateQuery).not.toHaveBeenCalled();
+  });
+
+  it("is displayable at exactly minSampleDays and does not throw on a payload without meta", async () => {
+    redis.get
+      .mockResolvedValueOnce(
+        JSON.stringify({ topAttractions: [], meta: { totalSampleDays: 45 } }),
+      )
+      .mockResolvedValueOnce(JSON.stringify({ topAttractions: [] }));
+
+    const boundary = await service.getParkHistoricalStats(park, 2, 10, 45);
+    const bare = await service.getParkHistoricalStats(park, 2, 10, 30);
+
+    expect(boundary.meta.displayable).toBe(true);
+    expect(bare.meta.displayable).toBe(false);
   });
 
   it("slices every topN from the same cached payload (PAR-983)", async () => {
