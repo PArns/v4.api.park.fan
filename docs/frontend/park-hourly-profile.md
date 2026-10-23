@@ -25,12 +25,14 @@ error — it answers `meta.displayable: false`, usually because no ride clears
 is its own cache entry; a request without one keeps the key and the answer it
 always had.
 
-Known limit, shared with the default window: the SQL bounds the aggregate scan
-at `$from::date` / `$to::date + 1 day` as timestamps in the session zone (UTC),
-not at the park's midnight, so for a park east of UTC the first few local hours
-of `from` are missing and a few hours of the day after `to` are read. The days
-themselves are counted park-local. Fixing the bound changes the default answer
-too, so it is a separate change.
+The bound is the park's midnight (PAR-999). It used to be `$from::date` /
+`$to::date + 1 day` as timestamps in the session zone (UTC), so a park east of
+UTC lost the first local hours of `from` and read a few hours of the day after
+`to`. Measured against production for Universal Studios Japan (UTC+9, window
+2025-10-22 … 2026-10-22): the old bound returned 303 days ending `2026-10-23`,
+a day outside the window the caller asked for; the park-local bound returns 302
+ending `2026-10-22`. This applied to the default `years` window as well, which
+is why fixing it moved both answers.
 
 ## Why it is its own endpoint
 
@@ -161,3 +163,13 @@ makes the old statement run, which places the fault in ChunkAppend's handling of
 the sort the aggregate pushes into the chunks. It depends on row estimates and
 does not reproduce on the E2E database; the unit test pins the shape instead.
 Do not inline the fence.
+
+**The same fault reappeared on `queryHeadlinerDayValues` with PAR-999's
+park-local bound, but only in `EXPLAIN`.** `no tlist entry for key 5` on the
+same PostgreSQL 18.6 + TimescaleDB 2.24.0, for both park-local spellings and
+with or without `ANALYZE`, while the statement itself runs: checked as a plain
+`SELECT` against production for all five parks above plus Gardaland, Chimelong
+Paradise and Universal Studios Japan, at the day planner's 60-ride fetch as
+well, with identical row counts to the old bound. So this one costs the plan,
+not the answer — time that query with `\timing`, not `EXPLAIN ANALYZE`
+(PAR-1014).

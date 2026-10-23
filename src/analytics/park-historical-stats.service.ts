@@ -911,8 +911,10 @@ export class ParkHistoricalStatsService {
          -- leave the table one ride short (PAR-569, as PAR-557 for topAttractions).
          JOIN attractions a ON a.id::text = qda."attractionId"
          WHERE qda."parkId" = $1
-           AND qda.hour >= $3::date
-           AND qda.hour <  ($4::date + INTERVAL '1 day')
+           -- Park-local midnight, not UTC midnight, and written as a range on
+           -- the column so it stays sargable (PAR-999, see queryTopAttractions).
+           AND qda.hour >= ($3::date::timestamp AT TIME ZONE $2)
+           AND qda.hour <  (($4::date + INTERVAL '1 day')::timestamp AT TIME ZONE $2)
            AND qda."sampleCount" >= $5
            AND a.retired_at IS NULL
            AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}
@@ -931,8 +933,8 @@ export class ParkHistoricalStatsService {
                 qda.p90
          FROM queue_data_aggregates qda
          WHERE qda."parkId" = $1
-           AND qda.hour >= $3::date
-           AND qda.hour <  ($4::date + INTERVAL '1 day')
+           AND qda.hour >= ($3::date::timestamp AT TIME ZONE $2)
+           AND qda.hour <  (($4::date + INTERVAL '1 day')::timestamp AT TIME ZONE $2)
            AND qda."sampleCount" >= $5
            AND qda."attractionId" IN (SELECT aid FROM eligible)
            -- Both halves of this query filter: eligible decides WHICH rides
@@ -1023,8 +1025,10 @@ export class ParkHistoricalStatsService {
              COUNT(*)                                             AS hours
            FROM queue_data_aggregates qda
            WHERE qda."parkId" = $1
-             AND qda.hour >= $3::date
-             AND qda.hour <  ($4::date + INTERVAL '1 day')
+             -- Park-local midnight, not UTC midnight (PAR-999, see
+             -- queryTopAttractions).
+             AND qda.hour >= ($3::date::timestamp AT TIME ZONE $2)
+             AND qda.hour <  (($4::date + INTERVAL '1 day')::timestamp AT TIME ZONE $2)
              AND qda."sampleCount" >= $5
              AND ($6::text[] IS NULL OR qda."attractionId" = ANY($6))
              AND ${isWithinOpeningHours("qda.hour", `(qda.hour AT TIME ZONE $2)::date`)}
@@ -1105,6 +1109,15 @@ export class ParkHistoricalStatsService {
     // Dropping rows by one day notion and counting days by another inside one
     // query cannot be right; the counts move for 1,468 of 5,692 rides and the
     // 20-day floor decides differently for 14 of them.
+    //
+    // The WINDOW is park-local for the same reason (PAR-999). `$3`/`$4` are
+    // park-local days, so a bare `$3::date` bounds the rows at midnight UTC:
+    // east of UTC the first day loses its early local hours and the last day
+    // gains the next day's, west of UTC the other way round. Lifting the day
+    // to a timestamp in `$2` first keeps the bound ON the column, so the
+    // `("parkId", hour)` index and the chunk exclusion still apply — the same
+    // bound written as `(hour AT TIME ZONE $2)::date` would be correct and
+    // cost the factor 40 that G-146 measured.
     return this.aggregateRepo.manager.query(
       `WITH ${closedParkDaysCte("$1")},
        ${openingHoursCtes("$1", "$3", "$4")}
@@ -1119,8 +1132,8 @@ export class ParkHistoricalStatsService {
        FROM queue_data_aggregates qda
        JOIN attractions a ON a.id::text = qda."attractionId"
        WHERE qda."parkId" = $1
-         AND qda.hour >= $3::date
-         AND qda.hour <  ($4::date + INTERVAL '1 day')
+         AND qda.hour >= ($3::date::timestamp AT TIME ZONE $2)
+         AND qda.hour <  (($4::date + INTERVAL '1 day')::timestamp AT TIME ZONE $2)
          AND qda."sampleCount" >= $7
          AND a.retired_at IS NULL
          AND ${isNotAClosedParkDay(`(qda.hour AT TIME ZONE $2)::date`)}

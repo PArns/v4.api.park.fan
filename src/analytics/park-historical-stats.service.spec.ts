@@ -309,6 +309,43 @@ describe("ParkHistoricalStatsService", () => {
     );
   });
 
+  it("bounds all three aggregate windows at park-local midnight, as a range on the column (PAR-999)", async () => {
+    // `$3`/`$4` are park-local days. A bare `$3::date` bounds the rows at
+    // midnight UTC, so east of UTC the first day loses its early local hours
+    // and the last day gains the next day's. The E2E spec shows that on real
+    // data; this one is the regression lock on the SQL, because a bound that
+    // reads correct and is written UTC looks identical in every mocked result.
+    await service.getParkHistoricalStats(park, 2);
+    await service.getParkHourlyProfile(park, 2, 10);
+    const sqls = aggregateQuery.mock.calls.map(([sql]) => String(sql));
+    const windowed = sqls.filter((sql) =>
+      sql.includes("queue_data_aggregates"),
+    );
+    // Three statements read the table — the hourly profile, the day values and
+    // the top-attractions ranking — and four bounded reads, because the hourly
+    // profile bounds both of its CTEs.
+    expect(windowed).toHaveLength(3);
+    const bounds = windowed.flatMap((sql) => [
+      ...sql.matchAll(/AND qda\.hour\s+[<>=]+\s*(.*)/g),
+    ]);
+    expect(bounds).toHaveLength(8);
+    for (const [, bound] of bounds) {
+      // Park-local: the day is lifted to a timestamp in the park's zone.
+      expect(bound).toContain("AT TIME ZONE $2");
+      // Sargable: the zone conversion is on the BOUND, never on the column.
+      // `(qda.hour AT TIME ZONE $2)::date` would be just as correct and cost
+      // the factor 40 that G-146 measured against production.
+      expect(bound).not.toContain("qda.hour AT TIME ZONE");
+    }
+    // The UTC form this replaced, so a copy-paste of it fails here.
+    for (const sql of windowed) {
+      expect(sql).not.toMatch(/AND qda\.hour\s+>=\s*\$3::date\s*$/m);
+      expect(sql).not.toMatch(
+        /AND qda\.hour\s+<\s*\(\$4::date \+ INTERVAL '1 day'\)\s*$/m,
+      );
+    }
+  });
+
   it("restricts the day-values query to the park's headliner IDs", async () => {
     await service.getParkHistoricalStats(park, 2);
     const dayCall = aggregateQuery.mock.calls.find((c) =>
