@@ -178,9 +178,34 @@ describe("ParkRenameService.correctLocation", () => {
       );
     });
 
-    it("clears a region the lookup cannot confirm instead of keeping the old one", async () => {
+    it.each([
+      [
+        "throws",
+        () => geocoding.reverseGeocode.mockRejectedValue(new Error("quota")),
+      ],
+      ["returns null", () => geocoding.reverseGeocode.mockResolvedValue(null)],
+    ])("keeps the old region when the lookup %s", async (_label, arrange) => {
       parkRepository.findOne.mockResolvedValue(flUsh());
-      geocoding.reverseGeocode.mockRejectedValue(new Error("quota"));
+      arrange();
+
+      await service.correctLocation("ush", {
+        latitude: 34.137261,
+        longitude: -118.355516,
+      });
+
+      expect(parkRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ region: "Florida", regionCode: "FL" }),
+      );
+    });
+
+    it("clears the region when a successful lookup has none", async () => {
+      parkRepository.findOne.mockResolvedValue(flUsh());
+      geocoding.reverseGeocode.mockResolvedValue({
+        city: "Somewhere",
+        country: "United States",
+        countryCode: "US",
+        continent: "North America",
+      });
 
       await service.correctLocation("ush", {
         latitude: 34.137261,

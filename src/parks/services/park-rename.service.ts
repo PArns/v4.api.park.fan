@@ -271,8 +271,9 @@ export class ParkRenameService implements OnModuleInit {
 
     // The region came from the old coordinates' geocode (USH kept "FL" from
     // its Bull Creek fix, PAR-1065), and the geocode job never revisits a park
-    // that has one — so re-derive it here. A failed lookup clears it rather
-    // than keep a region the park is not in; the geocode job then retries.
+    // that has one — so re-derive it here. Only a successful lookup changes
+    // it: an error or a null result (the client returns null on failure too)
+    // keeps the old value; a result without a region clears it.
     if (
       (location.latitude !== undefined || location.longitude !== undefined) &&
       park.latitude != null &&
@@ -280,10 +281,16 @@ export class ParkRenameService implements OnModuleInit {
     ) {
       const geo = await this.geocoding
         .reverseGeocode(Number(park.latitude), Number(park.longitude))
-        .catch(() => null);
-      // The entity types these as string, the columns are nullable.
-      park.region = (geo?.region ?? null) as string;
-      park.regionCode = (geo?.regionCode?.substring(0, 50) ?? null) as string;
+        .catch((error: unknown) => String(error));
+      if (geo && typeof geo === "object") {
+        // The entity types these as string, the columns are nullable.
+        park.region = (geo.region ?? null) as string;
+        park.regionCode = (geo.regionCode?.substring(0, 50) ?? null) as string;
+      } else {
+        this.logger.warn(
+          `Region lookup failed for "${park.name}", region kept: ${geo ?? "no result"}`,
+        );
+      }
     }
 
     await this.parkRepository.save(park);

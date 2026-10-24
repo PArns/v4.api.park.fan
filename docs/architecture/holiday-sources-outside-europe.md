@@ -68,8 +68,11 @@ are 01-04, 02-14, 02-28, 05-09, 09-20 and 10-10: Saturdays and Sundays with work
 **and school**, so they tend to be quiet days. No feature knew about them before.
 
 They are stored as `holidayType = 'working_day'`, a new value of the
-`holidays.holidayType` enum (TypeORM `synchronize` adds it on deploy). **They
-are not holidays:**
+`holidays.holidayType` enum. TypeORM `synchronize` adds it on deploy by
+recreating the enum type and converting the column, which rewrites `holidays`
+(≈199k rows, 164 MB on 2026-10-24) under an ACCESS EXCLUSIVE lock — a few
+seconds in which every holiday read waits. Deploy outside the busy window.
+**They are not holidays:**
 
 - The readers in `HolidaysService` that take every type (`getHolidays`,
   `getAllHolidays`, `isHoliday`) filter them out (`NOT_A_WORKING_DAY`), so
@@ -184,8 +187,11 @@ geocode job never revisits a park that already has them. So the park was
 matched against Florida holidays and Florida neighbours.
 
 Fix: `ParkRenameService.correctLocation` re-derives `region`/`regionCode` by
-reverse-geocoding the corrected coordinates. A failed lookup clears them, and
-the geocode job, which retries parks without a region, fills them in later.
+reverse-geocoding the corrected coordinates. Only a successful lookup changes
+them: an error or a null result (the client returns null on failure too)
+keeps the old values and logs a warning; a successful result without a region
+clears them, and the geocode job, which retries parks without a region, fills
+them in later.
 
 Repair (owner, against production — re-sends the coordinates the park already
 has):
