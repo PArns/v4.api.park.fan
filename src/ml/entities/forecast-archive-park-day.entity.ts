@@ -107,9 +107,9 @@ export class ForecastArchiveParkDay {
 
   /**
    * True when the calendar had no forecast for the day (`predictedCrowdLevel`
-   * absent), so `crowdLevel` came from its fallback chain — the per-ride ML
-   * crowd or the placeholder `moderate` (calendar.service.ts). Scored apart,
-   * as `fallback`, never as a forecast.
+   * absent), so `crowdLevel` is no forecast: `unknown` since PAR-1028 (before
+   * it, the per-ride ML crowd or a placeholder `moderate`). Scored apart, as
+   * `fallback`, never as a forecast; rows from before PAR-1028 keep the old values.
    */
   @Column({ name: "crowd_level_fallback", type: "boolean", default: false })
   crowdLevelFallback: boolean;

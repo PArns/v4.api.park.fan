@@ -189,6 +189,25 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       // Not ratable → no recommendation either (PAR-410).
       expect(day.recommendation).toBeUndefined();
     });
+
+    it("reads 'unknown', not 'moderate', for a day whose rows carry no wait (PAR-1028)", async () => {
+      analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
+        new Set(["h1"]),
+      );
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
+
+      const predictions = buildPredictions([
+        { attractionId: "h1", date: "2026-06-13", hour: 12, wait: 0 },
+      ]).map((p) => ({ ...p, predictedWaitTime: null as unknown as number }));
+
+      const [day] = await service.aggregateDailyPredictions(
+        predictions,
+        "p1",
+        TZ,
+      );
+
+      expect(day.crowdLevel).toBe("unknown");
+    });
   });
 
   describe("headliner filtering", () => {

@@ -1195,7 +1195,8 @@ export class MLService {
         // `!= null` covers both, and keeps a genuine measured 0.
         uncertaintyMinutes:
           cell?.uncertaintyP95 != null ? Math.round(cell.uncertaintyP95) : null,
-        crowdLevel: "moderate" as const, // placeholder — consumers recompute from predictedWaitTime
+        // TFT rates nothing; "unknown" so no reader can take it for a level (PAR-1028).
+        crowdLevel: "unknown" as const,
         baseline: 0,
         modelVersion: "tft",
       };

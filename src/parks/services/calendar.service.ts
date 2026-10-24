@@ -319,7 +319,7 @@ export class CalendarService {
     // headliners) ÷ the typical-day-peak baseline (median of daily peaks),
     // so 100% = a typical day. No fallback — the typical-day-peak is written
     // atomically with the park baseline; when absent (brand-new park) the
-    // load rating defaults to moderate.
+    // rating is "unknown", and so is a day with no headliner forecast.
     const [allHeadliners, predictedBaseline] = await Promise.all([
       this.analyticsService.getHeadlinerAttractions(park.id),
       this.analyticsService.getTypicalDayPeakFromCache(park.id),
@@ -494,7 +494,6 @@ export class CalendarService {
         date,
         schedules,
         weatherData,
-        mlPredictions.predictions,
         holidays,
         includeHourly,
         today,
@@ -505,7 +504,6 @@ export class CalendarService {
         predictedCrowdLevels,
         isSeasonal,
         derivedHistoricalHours.get(dateStr) || null,
-        predictedBaseline > 0,
         // Past days: actual recorded averages; today/future: ML forecast.
         dateStr < today
           ? historicalForecastByDate.get(dateStr)
@@ -786,7 +784,6 @@ export class CalendarService {
    * @param date - The date to build (park local midnight)
    * @param schedules - Pre-fetched schedule list
    * @param weatherData - Pre-fetched weather list
-   * @param mlPredictions - Pre-fetched daily ML predictions
    * @param holidays - Pre-fetched holiday list (local + influencing)
    * @param includeHourly - Current includeHourly config
    * @param today - Current date string (YYYY-MM-DD)
@@ -798,7 +795,6 @@ export class CalendarService {
     date: Date,
     schedules: ScheduleEntry[],
     weatherData: WeatherData[],
-    mlPredictions: PredictionDto[],
     holidays: HolidayRow[],
     includeHourly: string,
     today: string,
@@ -818,7 +814,6 @@ export class CalendarService {
     > = new Map(),
     isSeasonal: boolean = false,
     derivedHours: { openingTime: string; closingTime: string } | null = null,
-    ratable: boolean = true,
     headlinerForecast?: HeadlinerForecast,
     climateNormals: ClimateNormals | null = null,
     /**
@@ -836,11 +831,6 @@ export class CalendarService {
       schedules.filter(
         (s) => formatInParkTimezone(s.date, park.timezone) === dateStr,
       ),
-    );
-
-    // Find ML prediction for this day
-    const mlPrediction = mlPredictions.find(
-      (p) => p.predictedTime?.split("T")[0] === dateStr,
     );
 
     // Find weather for this day
@@ -995,8 +985,8 @@ export class CalendarService {
         peakLoad = prefetched.peakLoad;
       } else {
         // Always query real usage data for a past day (calculateCrowdLevelForDate has its
-        // own Redis cache: 24h for historical). ML prediction is only the last resort when
-        // genuinely no data exists.
+        // own Redis cache: 24h for historical). The headliner forecast is only the last
+        // resort when genuinely no data exists.
         const crowdData =
           await this.analyticsService.calculateCrowdLevelForDate(
             park.id,
@@ -1004,30 +994,22 @@ export class CalendarService {
             dateStr,
             park.timezone,
           );
-        // Ratability honoured throughout: a thin park (not ratable) reads
-        // "unknown" rather than a made-up "moderate", and the per-attraction
-        // ML crowdLevel is not used as a fallback for it either.
-        const fallback: CrowdLevel = ratable ? "moderate" : "unknown";
-        const mlCrowd = ratable ? mlPrediction?.crowdLevel : undefined;
+        // No measurement and no headliner forecast → "unknown" (PAR-1028).
+        // Never one ride's own crowdLevel: that is a ratio-vs-P50 (or, on a
+        // TFT row, a placeholder) on a typical-day-peak surface.
+        const predicted = predictedCrowdLevels.get(dateStr);
         inferredCrowdLevel = crowdData.hasData
           ? crowdData.crowdLevel
-          : predictedCrowdLevels.get(dateStr)?.crowdLevel ||
-            mlCrowd ||
-            fallback;
-
+          : (predicted?.crowdLevel ?? "unknown");
         peakLoad = crowdData.hasData
           ? crowdData.peakCrowdLevel
-          : predictedCrowdLevels.get(dateStr)?.peakLoad ||
-            mlCrowd || // Fallback to normal crowdLevel if no P90
-            fallback;
+          : (predicted?.peakLoad ?? "unknown");
       }
     } else {
+      // Same rule as the past branch: the headliner forecast or "unknown".
       const predicted = predictedCrowdLevels.get(dateStr);
-      const fallback: CrowdLevel = ratable ? "moderate" : "unknown";
-      const mlCrowd = ratable ? mlPrediction?.crowdLevel : undefined;
-      inferredCrowdLevel = predicted?.crowdLevel || mlCrowd || fallback;
-
-      peakLoad = predicted?.peakLoad || mlCrowd || fallback;
+      inferredCrowdLevel = predicted?.crowdLevel ?? "unknown";
+      peakLoad = predicted?.peakLoad ?? "unknown";
     }
 
     // Future UNKNOWN (no schedule): show ML crowd prediction; strictly past CLOSED → closed
@@ -1081,7 +1063,7 @@ export class CalendarService {
       crowdLevel,
       // The ML forward prediction for this day (independent of the live override applied to
       // `crowdLevel` for today). Lets the park hero show a true "forecast today" instead of
-      // the current live level. Undefined when no ML prediction / not ratable.
+      // the current live level. Undefined when no headliner forecast exists.
       predictedCrowdLevel: predictedCrowdLevels.get(dateStr)?.crowdLevel,
       peakLoad,
       weather: weatherSummary,
@@ -1216,8 +1198,7 @@ export class CalendarService {
    * headliner waits for the day, averaged across headliners, divided by the
    * typical-day-peak baseline the caller passes (median of daily peaks,
    * headliner-only). 100% = a typical day. No P50/P90 fallback — when the
-   * typical-day-peak is absent (brand-new park) the load rating defaults to
-   * moderate.
+   * typical-day-peak is absent (brand-new park) the rating is "unknown".
    *
    * Known limitation: ML emits a single smoothed value per attraction per
    * day (not a real intra-day peak), so future days read more

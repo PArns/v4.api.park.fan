@@ -1765,7 +1765,7 @@ export class ParkIntegrationService {
     // monthly calendar's future path uses
     // (CalendarService.buildPredictedCrowdLevels), so the yearly and monthly
     // calendars agree for the same date. A missing typical-day-peak
-    // (brand-new park) → 'moderate'; there is NO P50/P90 fallback.
+    // (brand-new park) → 'unknown'; there is NO P50/P90 fallback.
     const baselineForCrowd = typicalDayPeak;
 
     const datesMap = new Map<string, PredictionDto[]>();
@@ -1809,7 +1809,8 @@ export class ParkIntegrationService {
 
         crowdLevel = rateOrUnknown(meanWait, baselineForCrowd);
       } else {
-        crowdLevel = baselineForCrowd > 0 ? "moderate" : "unknown";
+        // No predicted wait to rate: an absent fact, not a typical day (PAR-1028).
+        crowdLevel = "unknown";
       }
 
       const avgConfidence =
