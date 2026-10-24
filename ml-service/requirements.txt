@@ -1,25 +1,26 @@
 # FastAPI & Server
-fastapi==0.141.1
+fastapi==0.143.0
 # starlette is transitive (via fastapi) but pinned on purpose: everything below
 # 1.3.1 is unpatched (PYSEC-2026-161/248/249/2280/2281) and fastapi's own floor
 # (starlette>=0.46.0) would not keep us above it.
-starlette==1.6.0
-uvicorn[standard]==0.39.0
-gunicorn==23.0.0  # process manager: runs uvicorn workers with --preload (see gunicorn.conf.py)
-pydantic==2.12.5
-pydantic-settings==2.11.0
+starlette==1.7.0
+uvicorn[standard]==0.54.0
+gunicorn==26.2.0  # process manager: runs uvicorn workers with --preload (see gunicorn.conf.py)
+uvicorn-worker==0.4.0  # the UvicornWorker class gunicorn.conf.py names (uvicorn.workers is deprecated)
+pydantic==2.14.0
+pydantic-settings==2.15.0
 
 # ML & Data Processing
 catboost==1.2.10  # pinned: nightly retrain must not silently pick up a new major
-numpy==1.26.4
-pandas==2.2.3
-scikit-learn==1.6.1
+numpy==2.4.6  # newest that runs on Python 3.11 (2.5 needs >= 3.12); one numpy in every image, see docs/development/python-dependencies.md
+pandas==2.3.3  # last 2.x; 3.x (copy-on-write, string dtype) is a separate migration of the feature code
+scikit-learn==1.9.1
 
 # Database
-psycopg2-binary==2.9.10
-sqlalchemy==2.0.36
+psycopg2-binary==2.9.13
+sqlalchemy==2.0.54  # newest 2.0.x; pandas 2.3.3 predates SQLAlchemy 2.1
 
 # Utilities
 python-dateutil==2.9.0.post0
-pytz==2025.2
-psutil==6.1.1  # Memory monitoring (latest stable)
+pytz==2026.5
+psutil==7.2.2  # Memory monitoring (latest stable)

@@ -21,7 +21,8 @@ follow-up fix.
 import os
 
 bind = "0.0.0.0:8000"
-worker_class = "uvicorn.workers.UvicornWorker"
+# uvicorn.workers is deprecated upstream; the same worker now ships as uvicorn-worker.
+worker_class = "uvicorn_worker.UvicornWorker"
 workers = int(os.environ.get("ML_WORKERS", "2"))
 preload_app = True
 
