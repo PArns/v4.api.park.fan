@@ -321,4 +321,103 @@ describe("HolidaysService", () => {
       expect(h).not.toHaveProperty("createdAt");
     });
   });
+
+  describe("working days (PAR-1065)", () => {
+    // China's 调休: a Saturday people work. It is stored, but no reader that
+    // takes every holiday type may count it as one.
+    const filter = "holiday.holidayType <> 'working_day'";
+
+    beforeEach(() => {
+      mockRedis.get.mockResolvedValue(null);
+      mockRedis.set.mockResolvedValue("OK");
+      Object.assign(mockQueryBuilder, {
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+      });
+      mockQueryBuilder.getMany.mockResolvedValue([]);
+      mockQueryBuilder.getCount.mockResolvedValue(0);
+    });
+
+    it("isHoliday leaves them out", async () => {
+      await service.isHoliday(new Date("2026-02-14T12:00:00Z"), "CN");
+      expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(filter);
+    });
+
+    it("getHolidays leaves them out", async () => {
+      await service.getHolidays("CN", "2026-02-01", "2026-02-28");
+      expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(filter);
+    });
+
+    it("getAllHolidays leaves them out", async () => {
+      await service.getAllHolidays(new Date(), new Date());
+      expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(filter);
+    });
+  });
+
+  describe("replaceHolidaysBySource (PAR-1065)", () => {
+    const deleteQb = {
+      delete: jest.fn().mockReturnThis(),
+      from: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({ affected: 2 }),
+    };
+    const row = (day: string) => ({
+      externalId: `curated:SG:national:school:${day}`,
+      date: new Date(`${day}T00:00:00Z`),
+      name: "x",
+      country: "SG",
+      holidayType: "school" as const,
+      isNationwide: true,
+    });
+
+    beforeEach(() => {
+      mockHolidayRepository.createQueryBuilder.mockReturnValue(
+        deleteQb as never,
+      );
+    });
+    afterEach(() => {
+      mockHolidayRepository.createQueryBuilder.mockImplementation(
+        () => mockQueryBuilder,
+      );
+    });
+
+    it("upserts the rows and deletes that source's rows no longer listed", async () => {
+      const result = await service.replaceHolidaysBySource(
+        "curated:SG:",
+        [row("2026-03-14"), row("2026-03-15")],
+        "2025-01-01",
+      );
+
+      expect(result).toEqual({ saved: 2, removed: 2 });
+      expect(mockHolidayRepository.upsert).toHaveBeenCalled();
+      expect(deleteQb.where).toHaveBeenCalledWith(
+        `"externalId" LIKE :pattern`,
+        {
+          pattern: "curated:SG:%",
+        },
+      );
+      expect(deleteQb.andWhere).toHaveBeenCalledWith(`date >= :fromDate`, {
+        fromDate: "2025-01-01",
+      });
+      expect(deleteQb.andWhere).toHaveBeenCalledWith(
+        `NOT ("externalId" = ANY(:ids))`,
+        {
+          ids: [
+            "curated:SG:national:school:2026-03-14",
+            "curated:SG:national:school:2026-03-15",
+          ],
+        },
+      );
+    });
+
+    it("deletes nothing when the source came back empty", async () => {
+      expect(await service.replaceHolidaysBySource("neis:KR:", [])).toEqual({
+        saved: 0,
+        removed: 0,
+      });
+      expect(deleteQb.execute).not.toHaveBeenCalled();
+    });
+  });
 });

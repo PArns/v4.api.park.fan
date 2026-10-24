@@ -6,6 +6,27 @@ import { NagerDateClient } from "../../external-apis/nager-date/nager-date.clien
 import { OpenHolidaysClient } from "../../external-apis/open-holidays/open-holidays.client";
 import { ParksService } from "../../parks/parks.service";
 import { HolidayInput } from "../../common/types/holiday-input.type";
+import {
+  CURATED_HOLIDAY_SETS,
+  curatedPrefix,
+  expandCuratedHolidays,
+} from "../../holidays/data/curated-holidays";
+import {
+  NeisClient,
+  NeisScheduleRow,
+  vacationDaysByMajority,
+} from "../../external-apis/korea/neis.client";
+import { KasiClient, KasiHoliday } from "../../external-apis/korea/kasi.client";
+import {
+  KASI_PREFIX,
+  NEIS_PREFIX,
+  kasiHolidayRows,
+  krImportTargets,
+  neisHolidayRows,
+} from "../../external-apis/korea/korea-holidays";
+
+/** Elementary schools sampled per Korean education office (majority vote). */
+const NEIS_SCHOOLS_PER_OFFICE = 15;
 
 /**
  * Holidays Processor
@@ -31,7 +52,105 @@ export class HolidaysProcessor {
     private parksService: ParksService,
     @InjectQueue("park-metadata")
     private parkMetadataQueue: Queue,
+    private neisClient: NeisClient,
+    private kasiClient: KasiClient,
   ) {}
+
+  /** Writes one country's curated file, if it has one. Never throws. */
+  private async syncCurated(isoCode: string): Promise<number> {
+    const set = CURATED_HOLIDAY_SETS.find((s) => s.country === isoCode);
+    if (!set) return 0;
+    try {
+      const { saved, removed } =
+        await this.holidaysService.replaceHolidaysBySource(
+          curatedPrefix(isoCode),
+          expandCuratedHolidays(set),
+        );
+      this.logger.log(
+        `Curated holidays for ${isoCode}: ${saved} days` +
+          (removed ? `, ${removed} no longer listed removed` : ""),
+      );
+      return saved;
+    } catch (error) {
+      this.logger.error(`Curated holidays for ${isoCode} failed: ${error}`);
+      return 0;
+    }
+  }
+
+  /**
+   * Korea. Each part is skipped without its key and fails on its own; a
+   * failed fetch writes and deletes nothing, so the last good import stays.
+   */
+  private async syncKorea(startYear: number, endYear: number): Promise<number> {
+    let saved = 0;
+    const from = `${startYear}-01-01`;
+
+    if (!this.kasiClient.enabled) {
+      this.logger.warn(
+        "KASI_SERVICE_KEY not set — KR public holidays from KASI skipped",
+      );
+    } else {
+      try {
+        const holidays: KasiHoliday[] = [];
+        for (let year = startYear; year <= endYear; year++) {
+          holidays.push(...(await this.kasiClient.getPublicHolidays(year)));
+        }
+        saved += (
+          await this.holidaysService.replaceHolidaysBySource(
+            KASI_PREFIX,
+            kasiHolidayRows(holidays),
+            from,
+          )
+        ).saved;
+      } catch (error) {
+        this.logger.error(`KASI public holidays failed: ${error}`);
+      }
+    }
+
+    if (!this.neisClient.enabled) {
+      this.logger.warn("NEIS_API_KEY not set — KR school vacations skipped");
+      return saved;
+    }
+    try {
+      const { targets, unknown } = krImportTargets(
+        await this.parksService.getSyncRegionCodes("KR"),
+      );
+      if (unknown.length > 0) {
+        this.logger.warn(
+          `KR region codes that name no Korean region, no school data for them: ${unknown.join(", ")}`,
+        );
+      }
+      const rows: HolidayInput[] = [];
+      for (const [region, codes] of targets) {
+        const schools = await this.neisClient.getElementarySchools(
+          region.office,
+          NEIS_SCHOOLS_PER_OFFICE,
+        );
+        const schedules: NeisScheduleRow[][] = [];
+        for (const school of schools) {
+          schedules.push(
+            await this.neisClient.getSchedule(
+              region.office,
+              school,
+              from,
+              `${endYear}-12-31`,
+            ),
+          );
+        }
+        rows.push(...neisHolidayRows(codes, vacationDaysByMajority(schedules)));
+      }
+      saved += (
+        await this.holidaysService.replaceHolidaysBySource(
+          NEIS_PREFIX,
+          rows,
+          from,
+        )
+      ).saved;
+    } catch (error) {
+      this.logger.error(`NEIS school vacations failed: ${error}`);
+    }
+    return saved;
+  }
 
   /**
    * Calculate Easter Sunday for a given year (Anonymous Gregorian algorithm).
@@ -163,6 +282,14 @@ export class HolidaysProcessor {
             this.logger.warn(
               `Summer-holiday synthesis failed for ${isoCode}: ${error}`,
             );
+          }
+
+          // 3. Hand-curated holidays (SG, AU-QLD, CN — PAR-1065).
+          totalHolidaysSaved += await this.syncCurated(isoCode);
+
+          // 4. Korea: NEIS school calendars + KASI public holidays.
+          if (isoCode === "KR") {
+            totalHolidaysSaved += await this.syncKorea(startYear, endYear);
           }
         } catch (error) {
           this.logger.error(

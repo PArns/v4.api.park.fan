@@ -11,14 +11,24 @@ describe("HolidaysProcessor", () => {
     saveRawHolidays: jest.fn(),
     deleteOldHolidays: jest.fn(),
     logSchoolCoverageGaps: jest.fn(),
+    replaceHolidaysBySource: jest.fn(),
   };
   const nagerDateClient = {
     getHolidaysForYears: jest.fn(),
     getLongWeekends: jest.fn(),
   };
   const openHolidaysClient = { getSchoolHolidays: jest.fn() };
-  const parksService = { getSyncCountryCodes: jest.fn() };
+  const parksService = {
+    getSyncCountryCodes: jest.fn(),
+    getSyncRegionCodes: jest.fn(),
+  };
   const parkMetadataQueue = { add: jest.fn() };
+  const neisClient = {
+    enabled: false,
+    getElementarySchools: jest.fn(),
+    getSchedule: jest.fn(),
+  };
+  const kasiClient = { enabled: false, getPublicHolidays: jest.fn() };
 
   const run = () => processor.handleSyncHolidays({} as any);
 
@@ -36,6 +46,14 @@ describe("HolidaysProcessor", () => {
     nagerDateClient.getLongWeekends.mockResolvedValue([]);
     openHolidaysClient.getSchoolHolidays.mockResolvedValue([]);
     parkMetadataQueue.add.mockResolvedValue(undefined);
+    holidaysService.replaceHolidaysBySource.mockImplementation(
+      async (_p: string, rows: unknown[]) => ({
+        saved: rows.length,
+        removed: 0,
+      }),
+    );
+    neisClient.enabled = false;
+    kasiClient.enabled = false;
 
     processor = new HolidaysProcessor(
       holidaysService as any,
@@ -43,6 +61,8 @@ describe("HolidaysProcessor", () => {
       openHolidaysClient as any,
       parksService as any,
       parkMetadataQueue as any,
+      neisClient as any,
+      kasiClient as any,
     );
     for (const m of ["log", "warn", "error"] as const) {
       jest.spyOn((processor as any).logger, m).mockImplementation();
@@ -244,6 +264,95 @@ describe("HolidaysProcessor", () => {
       {},
       { priority: 5 },
     );
+  });
+
+  describe("curated and Korean sources (PAR-1065)", () => {
+    const sources = () =>
+      holidaysService.replaceHolidaysBySource.mock.calls.map((c) => c[0]);
+
+    it("writes a country's curated file, and only for countries that have one", async () => {
+      parksService.getSyncCountryCodes.mockResolvedValue(["AU", "DE", "CN"]);
+
+      await run();
+
+      expect(sources()).toEqual(["curated:AU:", "curated:CN:"]);
+      const cn = holidaysService.replaceHolidaysBySource.mock.calls[1][1];
+      expect(cn.some((r: any) => r.holidayType === "working_day")).toBe(true);
+    });
+
+    it("skips Korea's API sources without their keys", async () => {
+      parksService.getSyncCountryCodes.mockResolvedValue(["KR"]);
+
+      await run();
+
+      expect(sources()).toEqual([]);
+      expect(neisClient.getSchedule).not.toHaveBeenCalled();
+      expect(kasiClient.getPublicHolidays).not.toHaveBeenCalled();
+    });
+
+    it("imports KASI holidays and NEIS majority vacations for the parks' regions", async () => {
+      neisClient.enabled = true;
+      kasiClient.enabled = true;
+      parksService.getSyncCountryCodes.mockResolvedValue(["KR"]);
+      parksService.getSyncRegionCodes.mockResolvedValue(["11", "Mars"]);
+      kasiClient.getPublicHolidays.mockImplementation(async (y: number) =>
+        y === 2026 ? [{ date: "2026-09-25", name: "추석" }] : [],
+      );
+      neisClient.getElementarySchools.mockResolvedValue(["a", "b"]);
+      const vac = (d: string) => ({
+        AA_YMD: d,
+        EVENT_NM: "여름방학",
+        SBTR_DD_SC_NM: "휴업일",
+      });
+      neisClient.getSchedule.mockImplementation(
+        async (_o: string, school: string) =>
+          school === "a"
+            ? [vac("20260720"), vac("20260721")]
+            : [vac("20260721")],
+      );
+
+      await run();
+
+      expect(kasiClient.getPublicHolidays.mock.calls).toEqual([
+        [2025],
+        [2026],
+        [2027],
+        [2028],
+      ]);
+      expect(neisClient.getElementarySchools).toHaveBeenCalledWith("B10", 15);
+      expect(neisClient.getSchedule).toHaveBeenCalledWith(
+        "B10",
+        "a",
+        "2025-01-01",
+        "2028-12-31",
+      );
+      const [
+        [kasiPrefix, kasiRows, kasiFrom],
+        [neisPrefix, neisRows, neisFrom],
+      ] = holidaysService.replaceHolidaysBySource.mock.calls;
+      expect([kasiPrefix, kasiFrom]).toEqual(["kasi:KR:", "2025-01-01"]);
+      expect(kasiRows).toHaveLength(1);
+      expect([neisPrefix, neisFrom]).toEqual(["neis:KR:", "2025-01-01"]);
+      // 07-20: one of two schools — not a majority. 07-21: both.
+      expect(neisRows.map((r: any) => r.externalId)).toEqual([
+        "neis:KR:KR-11:2026-07-21",
+      ]);
+      expect((processor as any).logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Mars"),
+      );
+    });
+
+    it("keeps the last good NEIS import when a fetch fails", async () => {
+      neisClient.enabled = true;
+      parksService.getSyncCountryCodes.mockResolvedValue(["KR"]);
+      parksService.getSyncRegionCodes.mockResolvedValue(["41"]);
+      neisClient.getElementarySchools.mockRejectedValue(new Error("quota"));
+
+      await run();
+
+      expect(sources()).toEqual([]);
+      expect(parkMetadataQueue.add).toHaveBeenCalled();
+    });
   });
 
   it("rethrows when the country lookup fails", async () => {

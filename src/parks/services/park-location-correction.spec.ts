@@ -5,6 +5,7 @@ import { Park } from "../entities/park.entity";
 import { ParkSlugAlias } from "../entities/park-slug-alias.entity";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { RevalidationService } from "../../common/revalidation/revalidation.service";
+import { GoogleGeocodingClient } from "../../external-apis/geocoding/google-geocoding.client";
 
 /**
  * Universal Studios Hollywood survived its merge on the row whose geocode had
@@ -37,6 +38,7 @@ describe("ParkRenameService.correctLocation", () => {
     })),
   };
   const revalidation = { revalidateTags: jest.fn() };
+  const geocoding = { reverseGeocode: jest.fn() };
   const redis = {
     scan: jest.fn().mockResolvedValue(["0", []]),
     del: jest.fn(),
@@ -60,6 +62,7 @@ describe("ParkRenameService.correctLocation", () => {
     jest.clearAllMocks();
     insertedAliases.length = 0;
     parkRepository.save.mockImplementation(async (p: unknown) => p);
+    geocoding.reverseGeocode.mockReset().mockResolvedValue(null);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -71,6 +74,7 @@ describe("ParkRenameService.correctLocation", () => {
         },
         { provide: REDIS_CLIENT, useValue: redis },
         { provide: RevalidationService, useValue: revalidation },
+        { provide: GoogleGeocodingClient, useValue: geocoding },
       ],
     }).compile();
 
@@ -141,5 +145,87 @@ describe("ParkRenameService.correctLocation", () => {
     await expect(
       service.correctLocation("nope", { city: "X" }),
     ).rejects.toThrow(/not found/i);
+  });
+
+  describe("region (PAR-1065)", () => {
+    // USH was geocoded at Bull Creek and got regionCode "FL"; moving the
+    // coordinates to Los Angeles kept it, so California holidays never applied.
+    const flUsh = (): Park =>
+      ({ ...ush(), region: "Florida", regionCode: "FL" }) as Park;
+
+    it("re-derives region and regionCode from the corrected coordinates", async () => {
+      parkRepository.findOne.mockResolvedValue(flUsh());
+      geocoding.reverseGeocode.mockResolvedValue({
+        city: "Los Angeles",
+        country: "United States",
+        countryCode: "US",
+        continent: "North America",
+        region: "California",
+        regionCode: "CA",
+      });
+
+      await service.correctLocation("ush", {
+        latitude: 34.137261,
+        longitude: -118.355516,
+      });
+
+      expect(geocoding.reverseGeocode).toHaveBeenCalledWith(
+        34.137261,
+        -118.355516,
+      );
+      expect(parkRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ region: "California", regionCode: "CA" }),
+      );
+    });
+
+    it.each([
+      [
+        "throws",
+        () => geocoding.reverseGeocode.mockRejectedValue(new Error("quota")),
+      ],
+      ["returns null", () => geocoding.reverseGeocode.mockResolvedValue(null)],
+    ])("keeps the old region when the lookup %s", async (_label, arrange) => {
+      parkRepository.findOne.mockResolvedValue(flUsh());
+      arrange();
+
+      await service.correctLocation("ush", {
+        latitude: 34.137261,
+        longitude: -118.355516,
+      });
+
+      expect(parkRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ region: "Florida", regionCode: "FL" }),
+      );
+    });
+
+    it("clears the region when a successful lookup has none", async () => {
+      parkRepository.findOne.mockResolvedValue(flUsh());
+      geocoding.reverseGeocode.mockResolvedValue({
+        city: "Somewhere",
+        country: "United States",
+        countryCode: "US",
+        continent: "North America",
+      });
+
+      await service.correctLocation("ush", {
+        latitude: 34.137261,
+        longitude: -118.355516,
+      });
+
+      expect(parkRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ region: null, regionCode: null }),
+      );
+    });
+
+    it("leaves the region alone when only the city changes", async () => {
+      parkRepository.findOne.mockResolvedValue(flUsh());
+
+      await service.correctLocation("ush", { city: "Los Angeles" });
+
+      expect(geocoding.reverseGeocode).not.toHaveBeenCalled();
+      expect(parkRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ regionCode: "FL" }),
+      );
+    });
   });
 });

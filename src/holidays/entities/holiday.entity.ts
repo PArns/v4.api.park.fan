@@ -27,6 +27,9 @@ import {
  * - Stored separately via `DateFeaturesService`
  * - Region-specific (e.g., Middle East: Fri+Sat, Western: Sat+Sun)
  */
+export type HolidayType =
+  "public" | "observance" | "school" | "bank" | "bridge" | "working_day";
+
 @Entity("holidays")
 @Index(["country", "date"])
 @Index(["country", "region", "date"])
@@ -76,12 +79,17 @@ export class Holiday {
    * - school: School vacation period
    * - bank: Bank holiday only
    * - bridge: Bridge day (Brückentag) connecting holiday and weekend
+   * - working_day: a weekend day declared a working (and school) day to make
+   *   up for a holiday block — China's 调休. NOT a holiday: every reader in
+   *   HolidaysService leaves these rows out, and the ML services match types
+   *   by name, so they ignore them. See
+   *   docs/architecture/holiday-sources-outside-europe.md.
    */
   @Column({
     type: "enum",
-    enum: ["public", "observance", "school", "bank", "bridge"],
+    enum: ["public", "observance", "school", "bank", "bridge", "working_day"],
   })
-  holidayType: "public" | "observance" | "school" | "bank" | "bridge";
+  holidayType: HolidayType;
 
   /**
    * Whether this is a nationwide holiday
