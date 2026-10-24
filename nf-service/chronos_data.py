@@ -108,11 +108,12 @@ def fetch_readings(ride_ids: list[str], t0: pd.Timestamp, t1: pd.Timestamp) -> p
     )
 
 
-def fetch_holidays(countries: list[str]) -> tuple[pd.DataFrame, dict[str, dt.date]]:
-    """All holiday rows of the countries (a few thousand), plus each country's
-    last date — the coverage the ``holidays`` flag on each curve is read from."""
+def fetch_holidays(countries: list[str]) -> pd.DataFrame:
+    """All holiday rows of the countries (a few thousand). The coverage the
+    ``holidays`` flag on each curve is read from is ``cs.holidays_through`` —
+    per type, never this frame's last date (PAR-1049)."""
     if not countries:
-        return pd.DataFrame(columns=["country", "date", "region", "holiday_type", "is_nationwide"]), {}
+        return pd.DataFrame(columns=["country", "date", "region", "holiday_type", "is_nationwide"])
     df = _query(
         """SELECT country, date, region, "holidayType"::text AS holiday_type,
                   "isNationwide" AS is_nationwide
@@ -120,8 +121,7 @@ def fetch_holidays(countries: list[str]) -> tuple[pd.DataFrame, dict[str, dt.dat
         {"c": countries},
     )
     df["date"] = pd.to_datetime(df["date"]).dt.date
-    through = df.groupby("country")["date"].max().to_dict() if len(df) else {}
-    return df, through
+    return df
 
 
 # --------------------------------------------------------------------------- truth cache
@@ -319,7 +319,8 @@ def run(park_id: str, origin: pd.Timestamp, variant: str, keep_minutes: int | No
     rides = cs.recent_rides(truth, origin, rides_all)
     countries = sorted({c for c in [meta.country, *[r.get("countryCode") for r in meta.influencing
                                                     if isinstance(r, dict)]] if c})
-    holidays, through = fetch_holidays(countries)
+    holidays = fetch_holidays(countries)
+    hol_through = cs.holidays_through(holidays, meta)
     # Day covariates for every date a context step can fall on: the grid's
     # off-window steps reach back 8192 × 15 min regardless of truth (the bench
     # had covariates for every calendar day).
@@ -335,7 +336,7 @@ def run(park_id: str, origin: pd.Timestamp, variant: str, keep_minutes: int | No
         "originAt": origin.isoformat().replace("+00:00", "Z"),
         "model": settings.CHRONOS_MODEL_ID, "revision": settings.CHRONOS_REVISION,
         "covariateNames": cs.cov_names(mode),
-        "holidayDataThrough": through.get(meta.country).isoformat() if through.get(meta.country) else None,
+        "holidayDataThrough": hol_through.isoformat() if hol_through else None,
     }
     if task is None:
         return {**base, "status": "no_data", "reason": "no context or no published window ahead",
@@ -345,7 +346,6 @@ def run(park_id: str, origin: pd.Timestamp, variant: str, keep_minutes: int | No
     t_model = time.monotonic() - t1
     keep_until = origin + pd.Timedelta(minutes=keep_minutes) if keep_minutes else None
     rows = cs.postprocess(task, q, keep_until)
-    hol_through = through.get(meta.country)
 
     def coverage(date: dt.date) -> dict:
         return {"holidays": cs.holiday_coverage(hol_through, date), "schedule": "published"}

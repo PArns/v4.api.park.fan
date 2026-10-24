@@ -520,3 +520,92 @@ cannot hold both variants side by side — its key is `(attraction_id, target_da
 forecast_date)`, `model_version` is not part of it — so a same-night shadow needs either a
 shadow table or a run against a copy of the database; switching the flag for a fortnight
 and comparing against the fortnight before is cheaper but confounded by the season.
+
+### The grid as a nightly shadow (PAR-1041)
+
+The measurement plan above is built: `tft_forecasts_shadow` is the shadow table.
+
+- **nf-service.** With `NF_GRID_SHADOW` (default `true`) `train_runner.py` trains the grid
+  variant a second time after the served run (`run_grid_shadow`): grid forced on through
+  `forecast.calendar_grid(True)` whatever `NF_CALENDAR_GRID` says, model version
+  `<served>-grid`, written under the served run's `forecast_date`. Skipped when
+  `NF_CALENDAR_GRID` is already on (the served run is the grid then).
+- **Sequencing.** Same process, after the served forecast is persisted, never concurrently.
+  The `is_training` lock stays on through it (`phase: "grid_shadow"` in the status), so no
+  second `/train` and no Chronos-2 call shares the GPU, and the NestJS `train-nf` job waits
+  for both. A shadow failure (OOM included) is reported in `info.shadow.error` and logged by
+  the job; it never fails the night.
+- **Cost.** GPU time roughly doubles (~11 min served + the grid run, which reads more rows per
+  series: closed days are masked rows now). Peak memory of one fit is unchanged: the same
+  `NF_WINDOWS_BATCH_SIZE` / `NF_BATCH_SIZE` / park chunks, and the two fits never overlap.
+  Both stay well inside the 90-min job and 120-min runner deadlines, and 03:00 UTC leaves
+  three hours before the CatBoost training at 06:00. Kill switch: `NF_GRID_SHADOW=false`.
+- **Table.** `CREATE TABLE IF NOT EXISTS tft_forecasts_shadow (LIKE tft_forecasts INCLUDING
+  ALL)` in `nf-service/db.py` — same columns and key, cannot drift. Plain table, no FK,
+  no retention, like `tft_forecasts`; it grows by about one served night's rows per night.
+  Registered in the merge (`ATTRACTION_DEPENDENCIES`) and in the E2E schema.
+- **Comparison.** The forward archive reads it at scoring time as model `tft_grid` on the
+  calendar questions `cal_rank`, `cal_busier` and `cal_far` — see
+  [forward-archive.md §9.1](forward-archive.md#91-generalised-paired-scoring).
+
+### The PAR-830 drivers in the grid shadow (PAR-1057)
+
+The shadow — never the served model — also gets the level drivers that
+[level-drivers.md §5](level-drivers.md#5-ranked-covariates-worth-adding-to-tft--catboost)
+ranks highest, and a different target. It is a **third nightly run, its own model**: after
+the served run and the grid-only shadow, `run_grid_shadow(..., drivers=True)` trains it into
+`tft_forecasts_shadow_drivers` (`LIKE tft_forecasts`, model version `<served>-grid-drivers`),
+and the forward archive pairs it as `tft_grid_drivers` beside PAR-1041's `tft_grid`. One
+comparison would otherwise mix three changes (grid, drivers, time-weighted target — and that
+target is closer to the archive's `rideQ90` truth than the served P90-over-rows one), so the
+grid-only shadow keeps running and both are read separately against the served TFT.
+`NF_SHADOW_DRIVERS` (default `true`) switches only this run, `NF_GRID_SHADOW` only the
+grid-only one; it still runs when `NF_CALENDAR_GRID` serves the grid (it differs from that).
+Cost: one more fit, the night's `train-nf` job ~40–50 min instead of ~25, inside the 90-min
+poll deadline. `forecast.calendar_grid(True, drivers=True)` is the only way in, `db.DRIVERS`
+is not an env setting, and `futr_exog()` returns `DRIVER_EXOG` only with the grid AND the flag.
+Memory: the target is read as raw change-log rows (`fetch_time_weighted_panel`, every status,
+~3M rows per 10-park chunk over the 730-day window) and expanded to a 15-min grid, so ids and
+status are categoricals (the groupbys pass `observed=True`), and each chunk logs
+`time-weighted panel: <parks> parks, <readings> readings -> <ride-days> ride-days, RSS <GB>`.
+Watch that line and `docker stats` on the first nights; expected ~1–3 GB peak per chunk in the
+14 GB container.
+
+| futr_exog | meaning | unknown |
+|---|---|---|
+| `hours_ratio` | opening hours ÷ their mean over the last four same weekdays (d−7 … d−28) with a published window | 1.0 |
+| `close_vs_ref` | closing hour − those days' mean closing hour, hours (past midnight counts past 24) — the late close | 0.0 |
+| `closed_days_before` | days without a published window since the previous one, cap 14; > 0 = first operating day after a closure. Only a gap between two published windows counts | 0 |
+| `sched_known` | the day's OPERATING window was published as of the origin | — (flag) |
+| `school_break_first_day` / `_last_day` / `_day_after` | change of the own region's school-break state (d−1 → d, d → d+1) | 0, with `school_holiday_known` (PAR-1049) |
+
+All are NaN-free, as NeuralForecast requires of a futr_exog: an unknown value is its neutral
+value plus a flag. Built in `db.schedule_drivers` and `add_calendar_covariates`.
+
+**As of the origin — what is and is not possible.** `schedule_entries` keeps only the latest
+version of a day, with `updatedAt` as the one hint of when it became known (ml-bench's
+`updated_us` is that column exported). A futr_exog has **one value per day**, shared by every
+training window whatever its lead, so a per-lead as-of (ml-bench's `add_asof`, which masks
+per origin) cannot be expressed. What is built: `sched_asof` = the window's last write came
+before the day began — for today and later, before now. In the future frame that is exactly
+the schedule as published at the forecast origin; in the history it is "published by the
+day before", i.e. a lead-1 as-of for every training day, and a re-sync that rewrote an
+unchanged row reads as unknown (conservative). At long leads the history therefore knows
+more windows than the forecast does (PAR-830 §4: 84 % known at d1, 59 % at d60);
+`sched_known` is how the model can tell the two apart. The reference days and the closure
+gap read every published window before the day — those days are past at the origin.
+
+**Target.** The shadow trains on the **time-weighted** daily P90 (`db.time_weighted_p90`):
+each quarter-hour of the published OPERATING window (cut at midnight; without one, the
+span of the park's own OPERATING readings) takes the last reading before its end, of any
+status, held for at most 3 h; slots that are OPERATING with a wait ≥ `NF_MIN_WAIT` enter the
+P90 (≥ 3 slots per ride-day) — `rideQ90`'s rule in `forecast-archive.service.ts`. The served
+target stays the P90 over change-log rows, which weighs a jittery busy hour above a calm
+one. The archive's truth is built from 15-min slots too, so part of any `cal_busier` /
+`cal_far` gain of the shadow can be target alignment rather than the drivers; `cal_rank` is
+scale-free. Separating the two needs a second shadow — an owner decision, raised on the PAR-1057 pull request.
+
+**Cost.** One more `queue_data` read per chunk (every status, not only OPERATING, and raw
+rows rather than one aggregate per ride-day) and a 15-min grid in pandas — roughly
+rides × days × 40 rows per chunk of 10 parks. The fit itself is unchanged: seven more
+futr_exog columns, same `NF_WINDOWS_BATCH_SIZE`.

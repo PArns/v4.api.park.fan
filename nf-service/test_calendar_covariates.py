@@ -78,3 +78,17 @@ def test_norm_region():
     assert db._norm_region("NDS") == "NI"
     assert db._norm_region("") is None
     assert db._norm_region(None) is None
+
+
+def test_school_holiday_known_flags_days_past_the_regions_coverage():
+    """PAR-1049: DE-RP's last school row is 2026-07-15, so 07-16 is unpublished —
+    flag 0 and placeholder distances, never a measured "last break 1 day ago"."""
+    frame = pd.DataFrame(
+        {"unique_id": ["a1"] * 3, "ds": pd.to_datetime(["2026-07-14", "2026-07-15", "2026-07-16"])}
+    )
+    out = db.add_calendar_covariates(frame, _meta([]), HOLIDAYS)
+    assert out["school_holiday_known"].tolist() == [1, 1, 0]
+    assert out["is_school_holiday"].tolist() == [0, 1, 0]
+    assert out["days_since_school_holiday"].tolist() == [30.0, 0.0, 30.0]
+    assert "school_holiday_known" in db.FUTR_EXOG_GRID
+    assert "school_holiday_known" not in db.FUTR_EXOG  # the default model's inputs are unchanged

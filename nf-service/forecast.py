@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import contextmanager
 
 import pandas as pd
 
@@ -150,21 +151,40 @@ def _build_static_df(meta: pd.DataFrame, panel: pd.DataFrame):
     return sdf[["unique_id", "country_code", "region_code"]], ["country_code", "region_code"]
 
 
+@contextmanager
+def calendar_grid(on: bool, drivers: bool = False):
+    """NF_CALENDAR_GRID set to `on` for the block, restored after it. Every grid
+    switch (panel, futr/hist exog, logs) reads the one shared settings object,
+    so this is how the grid shadow (PAR-1041) runs the grid variant while the
+    served run keeps the env value. `drivers` (PAR-1057) adds the PAR-830
+    drivers and the time-weighted target; it is not an env setting, so only a
+    caller of this block — the shadow — can turn it on."""
+    prev, prev_drivers = settings.NF_CALENDAR_GRID, getattr(db, "DRIVERS", False)
+    settings.NF_CALENDAR_GRID, db.DRIVERS = on, drivers
+    try:
+        yield
+    finally:
+        settings.NF_CALENDAR_GRID, db.DRIVERS = prev, prev_drivers
+
+
 def build_panel(park_ids: list[str]):
     """Returns (panel_with_covariates, meta, holidays, weather, schedule) for the
     given parks. Empty frames if the parks have no data in the window (caller skips
     the chunk). schedule is None unless NF_CALENDAR_GRID is on."""
     empty = (pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None)
-    panel = db.fetch_daily_peak_panel(park_ids)
+    schedule = db.fetch_schedule(park_ids) if settings.NF_CALENDAR_GRID else None
+    if settings.NF_CALENDAR_GRID and db.DRIVERS:
+        # PAR-1057 shadow target: time-weighted daily P90 inside the windows.
+        panel = db.fetch_time_weighted_panel(park_ids, schedule)
+    else:
+        panel = db.fetch_daily_peak_panel(park_ids)
     if panel.empty:
         return empty
     meta = db.fetch_attraction_meta(park_ids)
-    schedule = None
     if settings.NF_CALENDAR_GRID:
         panel = db.to_calendar_grid(panel, meta, settings.NF_MAX_STALE_DAYS)
         if panel.empty:
             return empty
-        schedule = db.fetch_schedule(park_ids)
     countries = sorted({c for c in meta["country"].dropna().unique()})
     # include influencing countries
     for inf in meta["influencing"].dropna():
@@ -236,6 +256,7 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     logger.info("   Learning rate:      %s", settings.NF_LEARNING_RATE)
     logger.info("   Static covariates:  %s", "on" if settings.NF_USE_STATIC else "off")
     logger.info("   Calendar grid:      %s", "on" if settings.NF_CALENDAR_GRID else "off")
+    logger.info("   PAR-830 drivers:    %s", "on" if db.DRIVERS else "off")
     logger.info(
         "📊 Panel: %d parks → %d chunk(s) of %d (dataloader workers=%d)",
         len(park_ids), len(chunks), size, settings.NF_NUM_WORKERS,

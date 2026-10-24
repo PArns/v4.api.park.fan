@@ -1071,7 +1071,10 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
         },
         {
           provide: HolidaysService,
-          useValue: { getHolidays: jest.fn().mockResolvedValue([]) },
+          useValue: {
+            getHolidays: jest.fn().mockResolvedValue([]),
+            getSchoolHolidayCoverage: jest.fn().mockResolvedValue(null),
+          },
         },
         {
           provide: AttractionsService,
@@ -1138,6 +1141,43 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
     const october = await dates("2026-10-01", "2026-10-31", "Europe/Berlin");
     expect(october).toHaveLength(31);
     expect(new Set(october).size).toBe(31);
+  });
+
+  it("marks days past the park's school-holiday data as unknown (PAR-1049)", async () => {
+    const { buildSchoolCoverage } =
+      await import("../../common/utils/holiday.utils");
+    (
+      service as any
+    ).holidaysService.getSchoolHolidayCoverage.mockResolvedValueOnce(
+      buildSchoolCoverage([
+        { country: "DE", region: "DE-NW", through: "2026-10-25" },
+      ]),
+    );
+    const { parseDateRange } =
+      await import("../../common/utils/date-parsing.util");
+    const { fromDate, toDate } = parseDateRange("2026-10-24", "2026-10-26", {
+      timezone: "Europe/Berlin",
+    });
+    const response = await service.buildCalendarResponse(
+      {
+        id: "p1",
+        slug: "test-park",
+        timezone: "Europe/Berlin",
+        countryCode: "DE",
+        regionCode: "NRW",
+      } as any,
+      fromDate,
+      toDate,
+      "none",
+    );
+    expect(
+      response.days.map((d) => [d.date, d.schoolVacationUnknown ?? false]),
+    ).toEqual([
+      ["2026-10-24", false],
+      ["2026-10-25", false],
+      ["2026-10-26", true],
+    ]);
+    expect(response.days.every((d) => d.isSchoolVacation === false)).toBe(true);
   });
   describe("event rows beside the day's status row (PAR-640)", () => {
     const at = (iso: string) => new Date(iso);

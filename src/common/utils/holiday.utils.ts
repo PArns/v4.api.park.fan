@@ -537,3 +537,75 @@ export function dayHolidayFlags(
   }
   return result;
 }
+
+/**
+ * The last stored school-holiday date per location (PAR-1049), as
+ * {@link buildSchoolCoverage} builds it from `MAX(date) GROUP BY country,
+ * region` over the school rows. Past it, a day's school flag is unknown: an
+ * unpublished break has no row, and no row is not "no break".
+ */
+export interface SchoolCoverage {
+  regional: Map<string, string>; // `${country}|${normalized region}` -> YYYY-MM-DD
+  national: Map<string, string>; // country -> YYYY-MM-DD
+  countryAny: Map<string, string>; // country -> latest date of any region
+}
+
+export function buildSchoolCoverage(
+  rows: { country: string; region: string | null; through: string }[],
+): SchoolCoverage {
+  const coverage: SchoolCoverage = {
+    regional: new Map(),
+    national: new Map(),
+    countryAny: new Map(),
+  };
+  const keepMax = (m: Map<string, string>, key: string, day: string) => {
+    if ((m.get(key) ?? "") < day) m.set(key, day);
+  };
+  for (const r of rows) {
+    const region = normalizeRegionCode(r.region);
+    if (region) keepMax(coverage.regional, `${r.country}|${region}`, r.through);
+    else keepMax(coverage.national, r.country, r.through);
+    keepMax(coverage.countryAny, r.country, r.through);
+  }
+  return coverage;
+}
+
+/**
+ * The last day a location's school-holiday flag rests on data, or null when
+ * its country has no school row at all. The same rule as ml-service's
+ * `SchoolCoverage.through`: the later of the region's own and the national
+ * rows; a region no row names falls back to the country's latest row.
+ */
+export function schoolCoverageThrough(
+  coverage: SchoolCoverage,
+  countryCode: string,
+  regionCode: string | null,
+): string | null {
+  const region = normalizeRegionCode(regionCode);
+  const own = [
+    region ? coverage.regional.get(`${countryCode}|${region}`) : undefined,
+    coverage.national.get(countryCode),
+  ].filter((d): d is string => d !== undefined);
+  if (own.length > 0) return own.sort()[own.length - 1];
+  return coverage.countryAny.get(countryCode) ?? null;
+}
+
+/**
+ * Mark each day past `through` (null: the country has no school data) whose
+ * `isSchoolVacation` is false as `schoolVacationUnknown`. A day that reads
+ * true keeps it: a stored break is a fact wherever the coverage ends.
+ */
+export function markUnknownSchoolVacation(
+  days: {
+    date: string;
+    isSchoolVacation: boolean;
+    schoolVacationUnknown?: boolean;
+  }[],
+  through: string | null,
+): void {
+  for (const day of days) {
+    if (!day.isSchoolVacation && (through === null || day.date > through)) {
+      day.schoolVacationUnknown = true;
+    }
+  }
+}

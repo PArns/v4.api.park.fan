@@ -42,6 +42,18 @@ export interface MergeDependency {
    */
   conflictColumns?: string[];
   /**
+   * The table may not exist yet, and the merge skips it rather than failing.
+   * Only for tables an ML sub-service creates in raw SQL on its first write
+   * (no entity, so `synchronize` never makes them): `tft_forecasts_shadow`
+   * (and `tft_forecasts_shadow_drivers`, PAR-1057) appears after the first
+   * nightly shadow run, or never with `NF_GRID_SHADOW=false`
+   * (`NF_SHADOW_DRIVERS=false`), and until then every attraction merge — including
+   * the `repairDuplicates` inside `syncParks` — died with 42P01 (PAR-1041).
+   * Not on entity tables: there a missing table is a bug, and skipping it
+   * would orphan rows silently.
+   */
+  mayBeAbsent?: true;
+  /**
    * How much a row of this table says, as a number. Only read by
    * `winner-authoritative`, and only where it is declared.
    *
@@ -822,12 +834,30 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     table: "pcn_forecasts",
     column: "attraction_id",
     strategy: "move",
+    mayBeAbsent: true,
     conflictColumns: ["target_slot", "origin_slot", "quantile"],
   },
   {
     table: "tft_forecasts",
     column: "attraction_id",
     strategy: "move",
+    mayBeAbsent: true,
+    conflictColumns: ["target_date", "forecast_date"],
+  },
+  {
+    // The calendar-grid TFT shadow (PAR-1041): same key as tft_forecasts.
+    table: "tft_forecasts_shadow",
+    column: "attraction_id",
+    strategy: "move",
+    mayBeAbsent: true,
+    conflictColumns: ["target_date", "forecast_date"],
+  },
+  {
+    // The grid + drivers TFT shadow (PAR-1057): same key, same may-be-absent.
+    table: "tft_forecasts_shadow_drivers",
+    column: "attraction_id",
+    strategy: "move",
+    mayBeAbsent: true,
     conflictColumns: ["target_date", "forecast_date"],
   },
   {
@@ -1700,6 +1730,15 @@ export async function applyMergeDependencies(
   }
 
   for (const dep of dependencies) {
+    if (dep.mayBeAbsent) {
+      const [row] = asRows(
+        await manager.query("SELECT to_regclass($1) IS NOT NULL AS present", [
+          dep.table,
+        ]),
+      );
+      if (row?.present === false) continue;
+    }
+
     if (dep.strategy === "discard") {
       await manager.query(
         `DELETE FROM ${dep.table} WHERE "${dep.column}" = $1`,

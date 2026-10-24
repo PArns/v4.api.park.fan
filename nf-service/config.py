@@ -85,6 +85,24 @@ class Settings(BaseSettings):
     # school-holiday distance, and every forecast starts at park-local today.
     # Default off because it changes the training data shape: shadow/A-B first.
     NF_CALENDAR_GRID: bool = False
+    # PAR-1041: after the served run, the same nightly runner trains the grid
+    # variant a second time (grid forced on, whatever NF_CALENDAR_GRID says) and
+    # writes it to `tft_forecasts_shadow`, which only the forward archive reads.
+    # Sequential, never concurrent, in the same process and under the same
+    # is_training lock and watchdog; same windows_batch_size, so the peak
+    # memory of one fit is unchanged, but the night's GPU time roughly doubles.
+    # Skipped when NF_CALENDAR_GRID is already on (the served run IS the grid).
+    NF_GRID_SHADOW: bool = True
+    # PAR-1057: the grid shadow also gets the PAR-830 level drivers (opening
+    # hours vs the last 4 same weekdays as published at the origin, late close,
+    # first day after a closure, school-break start/end/day-after) and trains
+    # on the TIME-WEIGHTED daily P90 instead of the P90 over change-log rows.
+    # Shadow only: the served run never reads them. A THIRD run after the
+    # grid-only shadow, into its own table `tft_forecasts_shadow_drivers` (model
+    # version "<v>-grid-drivers"), so the archive pairs it as `tft_grid_drivers`
+    # beside PAR-1041's `tft_grid` instead of replacing it. Adds one more fit to
+    # the night's GPU time. false = no drivers run; the grid-only one is unaffected.
+    NF_SHADOW_DRIVERS: bool = True
     # With the grid on: a series whose last observation is more than this many
     # days before park-local today is not forecast (CatBoost serves it). Equal to
     # NF_INPUT_SIZE: past that the whole context window is masked — the model

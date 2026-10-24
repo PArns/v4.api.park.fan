@@ -44,6 +44,7 @@ describe("CalendarService - Basic Verification", () => {
       isHoliday: jest.fn().mockResolvedValue(false),
       isBridgeDay: jest.fn().mockResolvedValue(false),
       isSchoolHoliday: jest.fn().mockResolvedValue(false),
+      getSchoolHolidayCoverage: jest.fn().mockResolvedValue(null),
     };
 
     const mockAttractionsService = {

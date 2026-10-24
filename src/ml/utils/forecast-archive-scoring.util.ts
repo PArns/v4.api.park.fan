@@ -284,6 +284,17 @@ export interface ArchivedCurve {
   laterAt?: number | null;
   /** plan_day: model behind the day level. */
   levelSource?: string | null;
+  /**
+   * plan_day: the calendar-grid TFT shadow's day peak for this ride-day as it
+   * stood at the origin (`tft_forecasts_shadow`, PAR-1041), read at scoring
+   * time; rounded like the served TFT level.
+   */
+  tftGridPeak?: number | null;
+  /**
+   * plan_day: the same for the grid + PAR-830 drivers shadow
+   * (`tft_forecasts_shadow_drivers`, PAR-1057), paired as its own model.
+   */
+  tftGridDriversPeak?: number | null;
 }
 
 export interface ArchivedParkDay {
@@ -1108,6 +1119,10 @@ export const PAIRED_MODELS = {
   shadowPeak: "shadow_peak_scaled",
   chronosGrid: "chronos2_grid",
   weekdayAvg: "weekday_avg",
+  /** The calendar-grid TFT shadow (PAR-1041), on the TFT-levelled ride-days. */
+  tftGrid: "tft_grid",
+  /** The grid + drivers + time-weighted target TFT shadow (PAR-1057). */
+  tftGridDrivers: "tft_grid_drivers",
 } as const;
 
 /** Ride-day use cases of the paired table besides the slot ones (UC1/2/3). */
@@ -1261,6 +1276,8 @@ export const PAIRED_OPTIONAL_MODELS: ReadonlySet<string> = new Set([
   PAIRED_MODELS.chronosLive,
   PAIRED_MODELS.chronosGrid,
   PAIRED_MODELS.shadowPeak,
+  PAIRED_MODELS.tftGrid,
+  PAIRED_MODELS.tftGridDrivers,
 ]);
 
 /**
@@ -1531,19 +1548,81 @@ export function scorePairedModels(
         p90,
       );
     }
-    if (plan.isHeadliner && plan.levelSource === "tft") {
-      acc.addSums(
-        PAIRED_D7_USE_CASE,
-        lead,
-        PAIRED_MODELS.weekdayAvg,
-        PAIRED_LEVEL_REFERENCES.tft,
-        "headliner",
-        wkdPeak,
-        plan.dayPeak,
-        p90,
-      );
+    // The grid shadows are optional: on the same ride-days, where each has a value.
+    const tft = plan.levelSource === "tft";
+    const grids: Array<[string, number | null]> = [
+      [PAIRED_MODELS.tftGrid, tft ? (plan.tftGridPeak ?? null) : null],
+      [
+        PAIRED_MODELS.tftGridDrivers,
+        tft ? (plan.tftGridDriversPeak ?? null) : null,
+      ],
+    ];
+    for (const [model, grid] of grids) {
+      if (grid === null) continue;
+      for (const seg of plan.isHeadliner ? ["all", "headliner"] : ["all"]) {
+        acc.add(
+          PAIRED_PEAK_USE_CASE,
+          lead,
+          model,
+          levelRef,
+          seg,
+          grid,
+          plan.dayPeak,
+          p90,
+        );
+      }
+    }
+    if (plan.isHeadliner && tft) {
+      const d7: Array<[string, number | null]> = [
+        [PAIRED_MODELS.weekdayAvg, wkdPeak],
+        ...grids,
+      ];
+      for (const [model, pred] of d7) {
+        if (pred === null) continue;
+        acc.addSums(
+          PAIRED_D7_USE_CASE,
+          lead,
+          model,
+          PAIRED_LEVEL_REFERENCES.tft,
+          "headliner",
+          pred,
+          plan.dayPeak,
+          p90,
+        );
+      }
     }
   }
+}
+
+/** One `tft_forecasts_shadow` (or `_shadow_drivers`) row for a ride and target date. */
+export interface ShadowLevelRow {
+  attractionId: string;
+  forecastDate: string;
+  createdAt: number;
+  peak: number;
+}
+
+/**
+ * The grid shadow's level for one archived plan_day curve, read the way the
+ * served TFT level is (`MLService.getTftDailyPredictions`): the freshest
+ * forecast_date no older than 3 days before the origin's park-local date —
+ * restricted to rows written at or before the origin, so a forecast made
+ * after it never counts. Rounded and floored at 0 like the served level.
+ */
+export function shadowLevelAt(
+  rows: ShadowLevelRow[],
+  attractionId: string,
+  originAt: number,
+  originDate: string,
+): number | null {
+  const oldest = addIsoDays(originDate, -3);
+  let best: ShadowLevelRow | null = null;
+  for (const r of rows) {
+    if (r.attractionId !== attractionId) continue;
+    if (r.createdAt > originAt || r.forecastDate < oldest) continue;
+    if (!best || r.forecastDate > best.forecastDate) best = r;
+  }
+  return best ? Math.max(0, Math.round(best.peak)) : null;
 }
 
 /**

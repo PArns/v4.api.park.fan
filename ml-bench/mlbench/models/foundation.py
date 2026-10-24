@@ -8,8 +8,10 @@ Two models, one series construction:
   the rides of a park. Context up to 8192 steps, 64 output patches × 16 = 1024 steps
   without autoregressive unrolling.
 * **TimesFM 3.0** (``google/timesfm-3.0-pytorch``; weights under the TimesFM
-  Non-Commercial License v1.0 — non-commercial use only, which covers park.fan and
-  this offline benchmark; production serving is an owner decision on the licence). Past-and-future covariates
+  Non-Commercial License v1.0 — "non-commercial and NON-PRODUCTION use"; use "in
+  direct or indirect interactions with end users or production systems" is excluded
+  by the licence text, so ``timesfm3`` is a BENCHMARK-ONLY arm and can never be
+  served on park.fan without a commercial licence from Google). Past-and-future covariates
   are native in 3.0. Its variate attention is capped at 32 variates (targets AND
   covariates), which a park with 40–70 rides does not fit, so each ride is a
   univariate task with the covariates as extra variates. Quantile head 0.1 … 0.9:
@@ -68,6 +70,30 @@ The runner composes it with H5 as ``<name>_x_h5`` at every slot lead, so long le
 
 Both heads are 0.1 … 0.9: there is no q95, so both return q95 = NaN like TimesFM.
 
+**PAR-1064 — TimesFM 2.5** (``google/timesfm-2.5-200m-pytorch``, weights Apache-2.0 per
+the model card; the class ``timesfm.TimesFM_2p5_200M_torch`` ships in the same
+``timesfm==3.0.2`` wheel as TimesFM 3.0). Univariate: every ride is its own series.
+Covariates go through the package's own ``forecast_with_covariates`` (in-context
+linear regression, "XReg", mode ``xreg + timesfm``: a ridge/OLS fit of the target on the
+covariates over the context, TimesFM forecasts the residual) — one regression per
+``forecast_with_covariates`` call, and ``forecast()`` makes one call per task, so one per
+PARK, shared by its rides (batching tasks into one call would silently pool parks). That is a covariate path bolted on beside the network, not
+covariates the network attends to as Chronos-2's do. TimesFM interpolates NaN linearly
+(also inside the XReg target, which would otherwise be NaN), so the grid layout turns
+nights into ramps; ``timesfm25_grid`` measures what that costs rather than assuming it.
+Quantile head 0.1 … 0.9 (continuous head, horizon <= 1024): q95 = NaN.
+
+**PAR-1063 — Chronos-2 LoRA** (``chronos2_lora``): chronos-forecasting's own
+``fit(finetune_mode="lora")`` (peft adapter on the attention q/k/v/o and the output
+layer, the package default), on exactly the inputs and cadence of ``chronos2_ft`` — so
+the two differ only in full vs low-rank adaptation.
+
+**PAR-1067** — Granite PatchTST-FM-r2 (``patchtst_fm``, no covariate input, 99 quantiles),
+Granite TTM-r2 (``ttm_r2`` zero-shot without covariates; ``ttm_r2_ft`` with the covariates
+as exogenous channels, which exist only after fine-tuning) and TabPFN-TS (``tabpfn_ts``,
+daily level only, BENCHMARK-ONLY weights). Every variant declares ``licence`` and
+``serving_candidate``; a benchmark-only class marked as a serving candidate is refused.
+
 The information cut is the runner's: truth comes only from ``origin.history``
 (slots that end before the park's origin); covariates and windows are known-future
 inputs by definition (``windows`` is the published schedule, flagged
@@ -84,6 +110,7 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
+from ..licences import is_benchmark_only
 from .base import Model, Origin
 
 QUANTILES = (0.5, 0.8, 0.95)
@@ -93,7 +120,9 @@ DAY_COVS = ["is_weekend", "dow_sin", "dow_cos", "is_holiday_primary", "is_school
             "is_bridge_day"]
 WX_COVS = ["temp_max", "precip_sum"]
 #: backends that treat a NaN covariate as missing (TimesFM interpolates it instead)
-NAN_MASKING_BACKENDS = ("chronos2", "tirex2", "toto2")
+NAN_MASKING_BACKENDS = ("chronos2", "tirex2", "toto2", "tabpfn_ts")
+#: licence verdicts of the weights (docs/ml/foundation-models.md quotes the line each rests on)
+LICENCES = ("servable", "benchmark-only", "unclear")
 EMPTY = pd.DataFrame(columns=["attraction_id", "slot_start_utc", "q50", "q80", "q95"])
 
 _BACKENDS: dict[str, object] = {}
@@ -155,9 +184,13 @@ class ChronosBackend(_Backend):
         self.context_length = self.pipe.model_context_length
 
     def finetune(self, tasks, cov_names, prediction_length: int, steps: int, context_length: int,
-                 learning_rate: float, batch_size: int):
-        """A fine-tuned COPY of the pipeline (full fine-tune, chronos-forecasting's own
-        trainer) on the context windows of ``tasks`` — truth before the origin only."""
+                 learning_rate: float, batch_size: int, mode: str = "full"):
+        """A fine-tuned COPY of the pipeline (chronos-forecasting's own trainer; ``mode``
+        "full" or "lora") on the context windows of ``tasks`` — truth before the origin only."""
+        if mode == "lora":
+            # without peft, fit() warns and silently runs a FULL fine-tune — which would
+            # then be scored as chronos2_lora
+            import peft  # noqa: F401
         inputs = []
         for y, pc, _fc in tasks:
             d = {"target": y.astype(np.float32)}
@@ -165,10 +198,10 @@ class ChronosBackend(_Backend):
                 d["past_covariates"] = {n: pc[i].astype(np.float32) for i, n in enumerate(cov_names)}
                 d["future_covariates"] = {n: None for n in cov_names}
             inputs.append(d)
-        return self.pipe.fit(inputs, prediction_length=prediction_length, finetune_mode="full",
+        return self.pipe.fit(inputs, prediction_length=prediction_length, finetune_mode=mode,
                              context_length=context_length, learning_rate=learning_rate,
                              num_steps=steps, batch_size=batch_size,
-                             output_dir="/tmp/chronos2-ft", remove_printer_callback=True,
+                             output_dir=f"/tmp/chronos2-{mode}", remove_printer_callback=True,
                              report_to="none", save_strategy="no", logging_steps=50)
 
     def forecast(self, tasks, cov_names, pipe=None):
@@ -233,6 +266,99 @@ class TimesFMBackend(_Backend):
             qq = np.asarray(r.quantiles)[:H]
             out[ti][i, :, 0] = qq[:, self.qi[0]]
             out[ti][i, :, 1] = qq[:, self.qi[1]]
+        if self.device == "cuda":
+            self.peak_vram_gb = max(self.peak_vram_gb, self.torch.cuda.max_memory_allocated() / 1e9)
+        return out
+
+
+class TimesFM25Backend(_Backend):
+    """TimesFM 2.5 (200M, Apache-2.0): univariate per ride; covariates via the package's
+    in-context regression (``forecast_with_covariates``), fitted once per task (= park)."""
+
+    name = "timesfm25"
+    #: Hugging Face revision of the weights (2025-10-02), pinned like TiRex-2 / Toto 2.0
+    REVISION = os.environ.get("MLBENCH_TFM25_REVISION", "1d952420fba87f3c6dee4f240de0f1a0fbc790e3")
+    #: the continuous quantile head covers 1024 steps (``output_quantile_len``); the
+    #: longest request is 8 days on the 15-min grid (768) or 366 days on the daily path
+    MAX_HORIZON = 1024
+    QI = (5, 8)        # output column 0 is the mean, then 0.1 … 0.9 -> q50, q80
+
+    def __init__(self, model_id: str = "google/timesfm-2.5-200m-pytorch",
+                 context_length: int = int(os.environ.get("MLBENCH_TFM25_CONTEXT", "8192")),
+                 batch_size: int = int(os.environ.get("MLBENCH_TFM25_BATCH", "32"))):
+        import timesfm
+        import torch
+
+        self.torch = torch
+        _cap_vram(torch)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # torch_compile=False: inductor needs a C compiler the slim image does not ship
+        # (the TiRex-2 trap); eager mode gives the same numbers
+        self.fm = timesfm.TimesFM_2p5_200M_torch.from_pretrained(model_id, revision=self.REVISION,
+                                                                 torch_compile=False)
+        self.context_length = context_length
+        # return_backcast is required by forecast_with_covariates; plain forecast()
+        # output then carries the backcast in front, so every read takes the last
+        # MAX_HORIZON steps
+        self.fm.compile(timesfm.ForecastConfig(
+            max_context=context_length, max_horizon=self.MAX_HORIZON, normalize_inputs=True,
+            per_core_batch_size=batch_size, use_continuous_quantile_head=True,
+            force_flip_invariance=True, infer_is_positive=True, fix_quantile_crossing=True,
+            return_backcast=True))
+
+    @staticmethod
+    def _clean(y: np.ndarray) -> np.ndarray | None:
+        """What the package does to every input (strip leading NaN, interpolate the rest),
+        done up front because the XReg target must not contain NaN; None = never ran."""
+        if not np.isfinite(y).any():
+            return None
+        v = y[int(np.argmax(np.isfinite(y))):].astype(np.float64)
+        nan = ~np.isfinite(v)
+        if nan.any():
+            idx = np.arange(len(v))
+            v[nan] = np.interp(idx[nan], idx[~nan], v[~nan])
+        return v
+
+    def forecast(self, tasks, cov_names, pipe=None):
+        C, M = self.context_length, self.MAX_HORIZON
+        out = [np.full((y.shape[0], fc.shape[1], 3), np.nan) for y, _p, fc in tasks]
+        plain, plain_owner = [], []
+        for ti, (y, pc, fc) in enumerate(tasks):
+            H = fc.shape[1]
+            if H > M:
+                raise ValueError(f"timesfm25: horizon {H} > {M} (continuous quantile head)")
+            rows, inputs, covs = [], [], []
+            for i in range(y.shape[0]):
+                v = self._clean(y[i, -C:])
+                if v is None:
+                    continue
+                rows.append(i)
+                inputs.append(v)
+                if pc is not None and len(cov_names):
+                    # a NaN covariate (grid: no window-relative minutes off-window, which
+                    # in_win flags) is 0 for the regression; day_len_h is never passed here
+                    covs.append(np.nan_to_num(np.concatenate([pc[:, -len(v):], fc], axis=1), nan=0.0))
+            if not rows:
+                continue
+            if covs:
+                _pts, qs = self.fm.forecast_with_covariates(
+                    inputs=inputs,
+                    dynamic_numerical_covariates={n: [c[k] for c in covs] for k, n in enumerate(cov_names)},
+                    xreg_mode="xreg + timesfm", force_on_cpu=True)
+                for i, q in zip(rows, qs):
+                    q = np.asarray(q)[:H]
+                    out[ti][i, :, 0], out[ti][i, :, 1] = q[:, self.QI[0]], q[:, self.QI[1]]
+            else:
+                plain += inputs
+                plain_owner += [(ti, i) for i in rows]
+        if plain:
+            # one pooled call for tasks of different H, so always M (1024) steps; sliced to
+            # [:H] below — an 8-step intraday task pays for 1024 steps (cost only)
+            _pts, qs = self.fm.forecast(horizon=M, inputs=list(plain))
+            for (ti, i), q in zip(plain_owner, qs):
+                H = out[ti].shape[1]
+                q = np.asarray(q)[-M:][:H]
+                out[ti][i, :, 0], out[ti][i, :, 1] = q[:, self.QI[0]], q[:, self.QI[1]]
         if self.device == "cuda":
             self.peak_vram_gb = max(self.peak_vram_gb, self.torch.cuda.max_memory_allocated() / 1e9)
         return out
@@ -390,11 +516,283 @@ class Toto2Backend(_Backend):
         return out
 
 
+def _quantile_columns(levels, want=QUANTILES) -> list[int | None]:
+    """Index of each wanted quantile in a model's quantile levels (None = not in the head)."""
+    lv = [round(float(q), 6) for q in levels]
+    return [lv.index(q) if q in lv else None for q in want]
+
+
+class PatchTSTFMBackend(_Backend):
+    """PAR-1067: Granite PatchTST-FM-r2 (385M; Apache-2.0 OR OpenMDW-1.0). Univariate: the
+    rides of a park are a batch of independent series. ``forward`` has no covariate input
+    (``future_values`` is commented out as "future use" in granite-tsfm 0.3.10), so the
+    model never sees one. NaN is masked natively (``past_observed_mask`` from NaN). The
+    99-quantile head (0.01 … 0.99) holds q0.5, q0.8 AND q0.95."""
+
+    name = "patchtst_fm"
+    #: Hugging Face revision of the weights (2026-09-09)
+    REVISION = os.environ.get("MLBENCH_PATCHTSTFM_REVISION", "b125275f9204d37cbb81fe47b9cf5e08a521e829")
+
+    def __init__(self, model_id: str = "ibm-granite/granite-timeseries-patchtst-fm-r2",
+                 batch_size: int = int(os.environ.get("MLBENCH_PATCHTSTFM_BATCH", "16"))):
+        import torch
+        from tsfm_public import PatchTSTFMForPrediction
+
+        self.torch = torch
+        _cap_vram(torch)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = PatchTSTFMForPrediction.from_pretrained(model_id, revision=self.REVISION)
+        self.model = self.model.to(self.device).eval()
+        self.qi = _quantile_columns(self.model.config.quantile_levels)
+        #: context + forecast must fit the model's 8192 steps
+        self.window = int(self.model.config.context_length)
+        #: the model always decodes at least this many steps (d_patch × pretrain_mask_cont = 128)
+        self.min_h = int(self.model.config.d_patch) * max(int(self.model.config.pretrain_mask_cont), 2)
+        self.batch_size = batch_size
+
+    def forecast(self, tasks, cov_names, pipe=None):
+        torch = self.torch
+        out = []
+        for y, _pc, fc in tasks:
+            H = fc.shape[1]
+            res = np.full((y.shape[0], H, 3), np.nan)
+            keep = np.flatnonzero(np.isfinite(y).any(axis=1))
+            ctx = y[keep][:, -(self.window - max(H, self.min_h)):].astype(np.float32)
+            for b in range(0, len(keep), self.batch_size):
+                x = torch.from_numpy(np.ascontiguousarray(ctx[b:b + self.batch_size])).to(self.device)
+                with torch.inference_mode():
+                    o = self.model(past_values=x, prediction_length=H, return_dict=True)
+                q = o.quantile_outputs.float().cpu().numpy()[..., 0]        # (B, 99, H)
+                for j, k in enumerate(self.qi):
+                    res[keep[b:b + self.batch_size], :, j] = q[:, k, :]
+            out.append(res)
+        if self.device == "cuda":
+            self.peak_vram_gb = max(self.peak_vram_gb, torch.cuda.max_memory_allocated() / 1e9)
+        return out
+
+
+def _standardise(a: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-row z-score over the finite values (TTM's card: scale every channel yourself)."""
+    with np.errstate(all="ignore"):
+        mu = np.nanmean(a, axis=-1, keepdims=True)
+        sd = np.nanstd(a, axis=-1, keepdims=True)
+    mu = np.where(np.isfinite(mu), mu, 0.0)
+    sd = np.where(np.isfinite(sd) & (sd > 1e-6), sd, 1.0)
+    return (a - mu) / sd, mu, sd
+
+
+def ttm_windows(T: int, C: int, H: int, min_past: int, stride: int) -> list[tuple[int, int, int]]:
+    """Training windows inside a context of length T: (past start, cut, future end), the
+    past ``[start, cut)`` at most C long, the future ``[cut, end)`` at most H long and
+    ALWAYS ending at or before T — the context is truth before the origin, so no window can
+    reach past it."""
+    return [(max(0, e - C), e, min(e + H, T)) for e in range(min_past, T, stride)]
+
+
+class TTMBackend(_Backend):
+    """PAR-1067: Granite TinyTimeMixer r2 (Apache-2.0), branch ``1536-720-r2`` (context 1536,
+    horizon 720, 15-min is in r2's "minutely to hourly" range). Point forecast only: q80 and
+    q95 are NaN. Zero-shot it is channel-independent and takes no covariates; the
+    exogenous path (``exogenous_channel_indices`` + forecast channel mixing) is a block the
+    pretrained weights do not contain, so it exists only after ``finetune``."""
+
+    name = "ttm_r2"
+    MODEL_ID = "ibm-granite/granite-timeseries-ttm-r2"
+    #: the commit of branch 1536-720-r2 (branches move; a commit does not)
+    REVISION = os.environ.get("MLBENCH_TTM_REVISION", "3ca910a81018c6a6159a02e2505f3d62c39e91a4")
+
+    def __init__(self, batch_size: int = int(os.environ.get("MLBENCH_TTM_BATCH", "256"))):
+        import torch
+        from tsfm_public import TinyTimeMixerForPrediction
+
+        self.torch = torch
+        self.cls = TinyTimeMixerForPrediction
+        _cap_vram(torch)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = self.cls.from_pretrained(self.MODEL_ID, revision=self.REVISION).to(self.device).eval()
+        self.C = int(self.model.config.context_length)
+        self.max_h = int(self.model.config.prediction_length)
+        self.batch_size = batch_size
+
+    @staticmethod
+    def _channels(y: np.ndarray, cov: np.ndarray | None) -> tuple[np.ndarray, np.ndarray]:
+        """(T,) target + (k, T) covariates -> values (T, 1+k) with NaN as 0, observed mask."""
+        v = y[None] if cov is None else np.vstack([y[None], cov])
+        return np.nan_to_num(v, nan=0.0).T.astype(np.float32), np.isfinite(v).T
+
+    def _pad(self, v: np.ndarray, m: np.ndarray, L: int, left: bool):
+        n = L - len(v)
+        if n <= 0:
+            return (v[-L:], m[-L:]) if left else (v[:L], m[:L])
+        pv, pm = np.zeros((n, v.shape[1]), np.float32), np.zeros((n, v.shape[1]), bool)
+        return (np.vstack([pv, v]), np.vstack([pm, m])) if left else (np.vstack([v, pv]), np.vstack([m, pm]))
+
+    def finetune(self, tasks, cov_names, prediction_length: int, steps: int, context_length: int,
+                 learning_rate: float, batch_size: int, mode: str = "full"):
+        """A TTM with ``len(cov_names)`` exogenous channels and forecast channel mixing,
+        backbone frozen, decoder + head + mixer trained on windows of the CONTEXT of
+        ``tasks`` (truth before the origin only, see ``ttm_windows``)."""
+        torch = self.torch
+        k = len(cov_names)
+        m = self.cls.from_pretrained(
+            self.MODEL_ID, revision=self.REVISION, num_input_channels=1 + k, prediction_channel_indices=[0],
+            exogenous_channel_indices=list(range(1, 1 + k)), enable_forecast_channel_mixing=k > 0,
+            decoder_mode="mix_channel", fcm_use_mixer=True, fcm_mix_layers=2, fcm_context_length=1,
+            fcm_prepend_past=True, ignore_mismatched_sizes=True).to(self.device)
+        for p in m.backbone.parameters():
+            p.requires_grad = False
+        prep = [(_standardise(y)[0], _standardise(pc)[0] if pc is not None and k else None)
+                for y, pc, _fc in tasks]
+        samples = [(ti, i, s, e, f)
+                   for ti, (z, _cz) in enumerate(prep) for i in range(z.shape[0])
+                   for s, e, f in ttm_windows(z.shape[1], self.C, self.max_h, min_past=self.C // 4,
+                                              stride=max(self.max_h // 4, 1))
+                   if np.isfinite(z[i, e:f]).any() and np.isfinite(z[i, s:e]).sum() >= 32]
+        if not samples:
+            raise ValueError("ttm_r2_ft: no training window with truth before the origin")
+        rng = np.random.default_rng(1066)
+        opt = torch.optim.AdamW([p for p in m.parameters() if p.requires_grad], lr=learning_rate)
+        m.train()
+        for _step in range(steps):
+            pick = rng.integers(0, len(samples), size=min(batch_size, len(samples)))
+            pv, pm, fv, fm = [], [], [], []
+            for j in pick:
+                ti, i, s, e, f = samples[j]
+                z, cz = prep[ti]
+                a, am = self._pad(*self._channels(z[i, s:e], None if cz is None else cz[:, s:e]), self.C, True)
+                b, bm = self._pad(*self._channels(z[i, e:f], None if cz is None else cz[:, e:f]), self.max_h, False)
+                pv.append(a), pm.append(am), fv.append(b), fm.append(bm)
+            t = lambda xs, dt_=torch.float32: torch.from_numpy(np.stack(xs)).to(self.device, dt_)  # noqa: E731
+            fvt, fmt = t(fv), t(fm, torch.bool)
+            target, tmask = fvt[..., 0].clone(), fmt[..., 0]
+            # the model gets exactly what forecast() gives it: future covariates, 0 on the
+            # target channel and no future mask, so the label is never an input; the masked
+            # MSE on channel 0 is computed here instead of by the model from future_values
+            fvt[..., 0] = 0
+            pred = m(past_values=t(pv), past_observed_mask=t(pm, torch.bool),
+                     future_values=fvt if k else None, return_loss=False,
+                     return_dict=True).prediction_outputs[..., 0]
+            loss = ((pred - target) ** 2)[tmask].mean()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+        return m.eval()
+
+    def forecast(self, tasks, cov_names, pipe=None):
+        torch = self.torch
+        model = pipe or self.model
+        exog = pipe is not None and len(cov_names) > 0
+        out = []
+        for y, pc, fc in tasks:
+            H = fc.shape[1]
+            if H > self.max_h:
+                raise ValueError(f"ttm_r2: horizon {H} > {self.max_h} (branch 1536-720-r2)")
+            res = np.full((y.shape[0], H, 3), np.nan)
+            keep = np.flatnonzero(np.isfinite(y).any(axis=1))
+            z, mu, sd = _standardise(y)
+            if exog:
+                # the covariates are scaled with their PAST statistics on both sides
+                _, cmu, csd = _standardise(pc)
+                cz, czf = (pc - cmu) / csd, (fc - cmu) / csd
+            batch = []
+            for i in keep:
+                a, am = self._pad(*self._channels(z[i], cz if exog else None), self.C, True)
+                if exog:
+                    b, bm = self._pad(*self._channels(np.full(H, np.nan), czf), self.max_h, False)
+                else:
+                    b = bm = None
+                batch.append((i, a, am, b, bm))
+            for s in range(0, len(batch), self.batch_size):
+                chunk = batch[s:s + self.batch_size]
+                kw = {"past_values": torch.from_numpy(np.stack([c[1] for c in chunk])).to(self.device),
+                      "past_observed_mask": torch.from_numpy(np.stack([c[2] for c in chunk])).to(self.device)}
+                if exog:
+                    kw["future_values"] = torch.from_numpy(np.stack([c[3] for c in chunk])).to(self.device)
+                with torch.inference_mode():
+                    p = model(**kw, return_loss=False, return_dict=True).prediction_outputs
+                p = p.float().cpu().numpy()[:, :H, 0]
+                rows = [c[0] for c in chunk]
+                res[rows, :, 0] = p * sd[rows] + mu[rows]
+            out.append(res)
+        if self.device == "cuda":
+            self.peak_vram_gb = max(self.peak_vram_gb, torch.cuda.max_memory_allocated() / 1e9)
+        return out
+
+
+class TabPFNTSBackend(_Backend):
+    """PAR-1067: TabPFN-TS 1.3.0 on TabPFN-3.5 weights (NON-COMMERCIAL, NON-PRODUCTION
+    licence: benchmark-only). Daily levels only (``wants_days``: the pipeline builds its
+    calendar features from real dates). Every ride is its own series, the day covariates
+    are known-future columns, NaN is TabPFN's own missing value. LOCAL mode only — the
+    CLIENT mode would send our data to Prior Labs' cloud. The gated weights need
+    ``HF_TOKEN`` (Hugging Face) and ``TABPFN_TOKEN`` (Prior Labs' licence acceptance) in
+    the environment at run time; neither is ever written to the repository or the image."""
+
+    name = "tabpfn_ts"
+    wants_days = True
+
+    def __init__(self, max_context: int = int(os.environ.get("MLBENCH_TABPFN_CONTEXT", "4096"))):
+        # anonymous usage telemetry (posthog) is on by default in tabpfn-common-utils
+        os.environ.setdefault("TABPFN_DISABLE_TELEMETRY", "1")
+        import torch
+        from tabpfn_time_series import TabPFNMode, TabPFNTSPipeline
+        from tabpfn_time_series.features import CalendarFeature, RunningIndexFeature
+
+        self.torch = torch
+        _cap_vram(torch)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # no AutoSeasonalFeature: closed days leave the daily series irregular, and the
+        # package recommends opting out of it for irregular timestamps
+        self.pipe = TabPFNTSPipeline(max_context_length=max_context, tabpfn_mode=TabPFNMode.LOCAL,
+                                     temporal_features=[RunningIndexFeature(), CalendarFeature()])
+
+    @staticmethod
+    def frames(y, pc, fc, cov_names, ctx_days, fut_days) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Long context / future frames (item_id = row of y); a day without a level is
+        left out of the context, never filled."""
+        n, T = y.shape
+        H = len(fut_days)
+        ctx = pd.DataFrame({"item_id": np.repeat(np.arange(n), T),
+                            "timestamp": np.tile(pd.to_datetime(ctx_days), n),
+                            "target": y.reshape(-1).astype(float)})
+        fut = pd.DataFrame({"item_id": np.repeat(np.arange(n), H),
+                            "timestamp": np.tile(pd.to_datetime(fut_days), n)})
+        for k, c in enumerate(cov_names):
+            ctx[c] = np.tile(pc[k], n)
+            fut[c] = np.tile(fc[k], n)
+        ctx = ctx[np.isfinite(ctx["target"])]
+        fut = fut[fut["item_id"].isin(ctx["item_id"].unique())]
+        return ctx.reset_index(drop=True), fut.reset_index(drop=True)
+
+    def forecast(self, tasks, cov_names, pipe=None, days=None):
+        import warnings
+
+        if days is None:
+            raise ValueError("tabpfn_ts: daily levels only (the backend needs the calendar dates)")
+        ctx_days, fut_days = days
+        out = []
+        for y, pc, fc in tasks:
+            res = np.full((y.shape[0], len(fut_days), 3), np.nan)
+            ctx, fut = self.frames(y, pc, fc, cov_names, ctx_days, fut_days)
+            if len(ctx):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", UserWarning)   # NaN future covariates are expected
+                    p = self.pipe.predict_df(ctx, future_df=fut, quantiles=[0.5]).reset_index()
+                pos = pd.Series(np.arange(len(fut_days)), index=pd.to_datetime(fut_days))
+                res[p["item_id"].to_numpy(int), pos.reindex(pd.to_datetime(p["timestamp"])).to_numpy(int), 0] = \
+                    p["target"].to_numpy(float)
+            out.append(res)
+        return out
+
+
 def get_backend(kind: str) -> _Backend:
     if kind not in _BACKENDS:
         t0 = time.monotonic()
         _BACKENDS[kind] = {"chronos2": ChronosBackend, "timesfm3": TimesFMBackend,
+                           "timesfm25": TimesFM25Backend,
                            "tirex2": TiRex2Backend, "toto2": Toto2Backend,
+                           "patchtst_fm": PatchTSTFMBackend, "ttm_r2": TTMBackend,
+                           "tabpfn_ts": TabPFNTSBackend,
                            "stub": StubBackend}[kind]()
         print(f"[foundation] loaded {kind} in {time.monotonic() - t0:.1f}s", flush=True)
     return _BACKENDS[kind]
@@ -485,6 +883,21 @@ class FoundationModel(Model):
     #: of the two or `HistoryView.df()` raises (critic S9 capped it at 56).
     truth_history_days: ClassVar[int] = max(400, context_slots // 24 + 2)
 
+    #: the weights' licence verdict, and whether the arm may ever be proposed for serving
+    licence: ClassVar[str] = "unclear"
+    serving_candidate: ClassVar[bool] = False
+
+    def __init_subclass__(cls, **kw):
+        super().__init_subclass__(**kw)
+        if cls.licence not in LICENCES:
+            raise TypeError(f"{cls.__name__}: licence must be one of {LICENCES}, got {cls.licence!r}")
+        if cls.serving_candidate and cls.licence != "servable":
+            raise TypeError(f"{cls.__name__}: a {cls.licence} model can never be a serving candidate")
+        # the class and mlbench/benchmark_only_models.json may not drift apart
+        if is_benchmark_only(getattr(cls, "name", "")) and cls.licence != "benchmark-only":
+            raise TypeError(f"{cls.__name__}: {cls.name!r} is listed benchmark-only in "
+                            f"benchmark_only_models.json but declares licence {cls.licence!r}")
+
     def __init__(self):
         self.stats = {"slot_calls": 0, "slot_seconds": 0.0, "daily_calls": 0, "daily_seconds": 0.0}
         self._hkey = None
@@ -517,6 +930,8 @@ class FoundationModel(Model):
     finetune_context: ClassVar[int] = 2048
     finetune_horizon: ClassVar[int] = 384      # ~8 operating days of 15-min slots
     finetune_lr: ClassVar[float] = float(os.environ.get("MLBENCH_FT_LR", "1e-5"))
+    #: "full" or "lora" (chronos-forecasting's own fit(finetune_mode=...))
+    finetune_mode: ClassVar[str] = "full"
 
     def _maybe_finetune(self, origin: Origin, tasks, names):
         """Fine-tune on the series the model is about to forecast from (truth before
@@ -528,12 +943,19 @@ class FoundationModel(Model):
         due = last is None or (origin.date - last).days >= self.finetune_every_days
         if origin.kind == "daily" and due:
             t0 = time.monotonic()
-            self._ft_pipe = self._engine().finetune(
+            eng = self._engine()
+            self._ft_pipe = eng.finetune(
                 tasks, names, prediction_length=self.finetune_horizon, steps=self.finetune_steps,
-                context_length=self.finetune_context, learning_rate=self.finetune_lr, batch_size=64)
+                context_length=self.finetune_context, learning_rate=self.finetune_lr, batch_size=64,
+                mode=self.finetune_mode)
             self._ft_date = origin.date
-            print(f"[fm] {self.scored_name()} fine-tuned at {origin.date} in {time.monotonic() - t0:.0f}s",
-                  flush=True)
+            sec = time.monotonic() - t0
+            self.stats["finetune_calls"] = self.stats.get("finetune_calls", 0) + 1
+            self.stats["finetune_seconds"] = self.stats.get("finetune_seconds", 0.0) + sec
+            torch = getattr(eng, "torch", None)
+            vram = torch.cuda.max_memory_allocated() / 1e9 if torch is not None and torch.cuda.is_available() else 0.0
+            print(f"[fm] {self.scored_name()} fine-tuned ({self.finetune_mode}) at {origin.date} in {sec:.0f}s "
+                  f"vram_peak={vram:.2f}GB", flush=True)
         return getattr(self, "_ft_pipe", None)
 
     def _history(self, origin: Origin, days: int) -> pd.DataFrame:
@@ -639,7 +1061,8 @@ class FoundationModel(Model):
         out["slot_start_utc"] = pd.to_datetime(out["slot_start_utc"], utc=True)
         for k in ("q50", "q80", "q95"):
             out[k] = out[k].clip(lower=0)
-        out["q80"] = np.fmax(out["q80"], out["q50"])
+        # a point-only backend (TTM) leaves q80 NaN: fmax alone would turn it into q50
+        out["q80"] = np.where(np.isfinite(out["q80"]), np.fmax(out["q80"], out["q50"]), np.nan)
         out["q95"] = np.where(np.isfinite(out["q95"]), np.fmax(out["q95"], out["q80"]), np.nan)
         out = out.merge(hz[["attraction_id", "slot_start_utc"]], on=["attraction_id", "slot_start_utc"])
         out = out[np.isfinite(out["q50"])]
@@ -719,7 +1142,9 @@ class FoundationModel(Model):
         if not tasks:
             return None
         te = time.monotonic()
-        preds = self._engine().forecast(tasks, names)
+        eng = self._engine()
+        kw = {"days": (ctx_days, fut_days)} if getattr(eng, "wants_days", False) else {}
+        preds = eng.forecast(tasks, names, **kw)
         self._t_engine = time.monotonic() - te
         frames = []
         for rides, q in zip(meta, preds):
@@ -742,6 +1167,8 @@ class Chronos2(FoundationModel):
     """Chronos-2 zero-shot, compressed operating-slot context, no weather (the honest variant)."""
     name = "chronos2"
     backend = "chronos2"
+    licence = "servable"              # Apache-2.0 code and weights
+    serving_candidate = True
 
 
 class Chronos2Owx(Chronos2):
@@ -767,10 +1194,12 @@ class Chronos2NoCov(Chronos2):
 
 
 class TimesFM3(FoundationModel):
-    """TimesFM 3.0 zero-shot, compressed context, no weather. NC-licensed weights."""
+    """TimesFM 3.0 zero-shot, compressed context, no weather. BENCHMARK-ONLY, NON-PRODUCTION:
+    the weights' licence excludes production and end-user use (see the module docstring)."""
     name = "timesfm3"
     backend = "timesfm3"
     intraday = False
+    licence = "benchmark-only"        # TimesFM Non-Commercial License v1.0: non-production
 
 
 class TimesFM3Owx(TimesFM3):
@@ -786,12 +1215,41 @@ class Chronos2FT(Chronos2):
     daily = False
 
 
+class Chronos2Lora(Chronos2FT):
+    """PAR-1063: a LoRA adapter (peft, r=8, alpha=16, the package default targets) instead
+    of a full fine-tune, everything else as ``chronos2_ft``. Refit every 28 days, not per
+    origin: 231 per-origin fits would add 231 × fit time to a ~12.7 h inference night
+    (see ``--probe``), while 28 days is ~9 fits and the SAME cadence as chronos2_ft, so
+    the pair isolates the adaptation method. Each fit sees truth before its own origin."""
+    name = "chronos2_lora"
+    finetune_mode = "lora"
+
+
+class TimesFM25(FoundationModel):
+    """PAR-1064: TimesFM 2.5 (200M, Apache-2.0) zero-shot, compressed context, the chronos2
+    covariates through XReg (minus day_len_h, whose NaN means "unknown" and would read 0)."""
+    name = "timesfm25"
+    backend = "timesfm25"
+    licence = "servable"              # Apache-2.0 weights
+    serving_candidate = True
+
+
+class TimesFM25Grid(TimesFM25):
+    """Regular 15-min grid (8192 steps = 85 days); TimesFM interpolates the NaN nights."""
+    name = "timesfm25_grid"
+    context_mode = "grid"
+    intraday = False
+    daily = False
+
+
 # ---- PAR-853: TiRex-2 and Toto 2.0 (same inputs as chronos2 where the model takes them)
 
 class TiRex2(FoundationModel):
     """TiRex-2 zero-shot, compressed context, the chronos2 covariates as known-future."""
     name = "tirex2"
     backend = "tirex2"
+    licence = "servable"              # Apache-2.0
+    serving_candidate = True
     context_slots = int(os.environ.get("MLBENCH_TIREX2_CONTEXT", "2048"))
 
 
@@ -808,6 +1266,8 @@ class Toto2(FoundationModel):
     ``known_dynamic`` hook — exogenous inputs are NOT a trained feature of 2.0."""
     name = "toto2"
     backend = "toto2"
+    licence = "servable"              # Apache-2.0
+    serving_candidate = True
     context_slots = int(os.environ.get("MLBENCH_TOTO2_CONTEXT", "4096"))
 
 
@@ -827,5 +1287,62 @@ class Toto2Grid(Toto2):
     daily = False
 
 
+# ---- PAR-1067: Granite PatchTST-FM-r2, Granite TTM-r2, TabPFN-TS
+
+class PatchTSTFM(FoundationModel):
+    """PatchTST-FM-r2 zero-shot, compressed context (8192 steps minus the horizon). The
+    model has NO covariate input, so this is a covariate-free arm like chronos2_nocov;
+    the daily path gives patchtst_fm_x_h5. Real q0.95 from the 99-quantile head."""
+    name = "patchtst_fm"
+    backend = "patchtst_fm"
+    use_covariates = False
+    licence = "servable"              # Apache-2.0 OR OpenMDW-1.0, the user's choice
+    serving_candidate = True
+
+
+class TTMR2(FoundationModel):
+    """TTM-r2 (branch 1536-720-r2) zero-shot, compressed context, no covariates (its
+    exogenous path needs fine-tuning). Point forecast: no q80/q95. r2 covers minutely to
+    hourly data, so there is no daily path (r2.1 adds daily; not benchmarked here)."""
+    name = "ttm_r2"
+    backend = "ttm_r2"
+    use_covariates = False
+    provides_quantiles = False
+    daily = False
+    context_slots = 1536
+    licence = "servable"              # Apache-2.0
+    serving_candidate = True
+
+
+class TTMR2FT(TTMR2):
+    """TTM-r2 fine-tuned with the chronos2 slot + day covariates as EXOGENOUS channels
+    (forecast channel mixing), backbone frozen, on windows of the truth before the origin
+    — refit every 28 days at a daily origin, like chronos2_ft / chronos2_lora."""
+    name = "ttm_r2_ft"
+    use_covariates = True
+    finetune_every_days = 28
+    finetune_lr = float(os.environ.get("MLBENCH_TTM_FT_LR", "1e-3"))
+    #: the fit draws its windows from 8192 compressed slots (~170 operating days); the
+    #: forecast itself reads the last 1536
+    context_slots = 8192
+
+
+class TabPFNTS(FoundationModel):
+    """TabPFN-TS on the ride-day P90 level only (UC4 / D6 / D7 / PEAK, and tabpfn_ts_x_h5
+    at the slot leads), with the day covariates + published day length as known-future
+    columns. BENCHMARK-ONLY: the TabPFN-3.5 weights' licence excludes production use."""
+    name = "tabpfn_ts"
+    backend = "tabpfn_ts"
+    intraday = False
+    provides_quantiles = False
+    licence = "benchmark-only"        # TABPFN-3.5 License v1.0: non-commercial, non-production
+    #: no 15-min slots of its own (tests/test_runner.py reads this)
+    slot_path = False
+
+    def predict(self, origin, horizon_slots, known_future_covariates):
+        return EMPTY
+
+
 VARIANTS = [Chronos2, Chronos2Owx, Chronos2Grid, Chronos2NoCov, TimesFM3, TimesFM3Owx, Chronos2FT,
-            TiRex2, TiRex2Grid, Toto2, Toto2NoCov, Toto2Grid]
+            TiRex2, TiRex2Grid, Toto2, Toto2NoCov, Toto2Grid, Chronos2Lora, TimesFM25, TimesFM25Grid,
+            PatchTSTFM, TTMR2, TTMR2FT, TabPFNTS]

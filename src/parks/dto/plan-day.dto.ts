@@ -35,9 +35,12 @@ export type PlanDayTier =
  * Tuesday in July and an ordinary Tuesday in July are different days to a
  * queue, so a reference day only counts when it sits in the same one.
  * `holiday` covers public holidays and bridge days; `school_vacation` a day
- * inside school holidays that is not one of those.
+ * inside school holidays that is not one of those; `school_unknown` a day
+ * past the park's school-holiday data (PAR-1049), which matches only other
+ * such days — never a known "regular" one.
  */
-export type PlanDayHolidayState = "holiday" | "school_vacation" | "regular";
+export type PlanDayHolidayState =
+  "holiday" | "school_vacation" | "regular" | "school_unknown";
 
 /** Where a single hour's number came from, when it is not the response's tier. */
 export type PlanDayHourSource = "observed" | "measured" | "composed";
@@ -570,6 +573,14 @@ export class PlanDayContextDto {
   isSchoolVacation: boolean;
 
   @ApiProperty({
+    required: false,
+    description:
+      "`true` when the park's school-holiday data ends before this day, so " +
+      "`isSchoolVacation: false` is unknown, not 'no vacation'. Absent otherwise.",
+  })
+  schoolVacationUnknown?: boolean;
+
+  @ApiProperty({
     example: true,
     description:
       "Saturday or Sunday in the park's own timezone. Derived here because " +
@@ -761,7 +772,7 @@ export class PlanDayClimatologyDto {
   label: "how_it_was_last_year";
 
   @ApiProperty({
-    enum: ["holiday", "school_vacation", "regular"],
+    enum: ["holiday", "school_vacation", "regular", "school_unknown"],
     description:
       "The holiday situation of the date asked about. Every reference date " +
       "sits in the same one.",

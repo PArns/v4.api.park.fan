@@ -96,6 +96,14 @@ export class BestDayEntry {
   @ApiProperty({ description: "Local school vacation" })
   isSchoolVacation: boolean;
 
+  @ApiProperty({
+    description:
+      "`true` when the park's school-holiday data ends before this day, so " +
+      "`isSchoolVacation: false` is unknown, not 'no vacation'. Absent otherwise.",
+    required: false,
+  })
+  schoolVacationUnknown?: boolean;
+
   @ApiProperty({ description: "Bridge day between a holiday and the weekend" })
   isBridgeDay: boolean;
 }

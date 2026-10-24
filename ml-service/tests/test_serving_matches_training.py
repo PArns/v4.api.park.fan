@@ -23,7 +23,8 @@ def test_serving_rows_include_unknown_schedule_days_like_training():
     smaller population than the one the model learnt on."""
     sql = " ".join(predict._SERVING_QUEUE_FILTER.split())
     assert "se.id IS NULL OR se.\"scheduleType\" IN ('OPERATING', 'UNKNOWN')" in sql
-    assert "(qd.status = 'OPERATING' OR qd.\"waitTime\" > 0)" in sql
+    assert "qd.status = 'OPERATING'" in sql
+    assert "OR qd.\"waitTime\" > 0" not in sql
 
 
 def test_no_baseline_rates_unknown_not_moderate():

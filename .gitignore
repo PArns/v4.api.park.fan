@@ -43,6 +43,7 @@ scripts/*
 !scripts/README.md
 !scripts/prod-psql.sh
 !scripts/backup/
+!scripts/python-deps/
 scripts/backup/*.env
 
 # Temporary markdown files (keep README.md and DEPLOYMENT.md)

@@ -188,6 +188,23 @@ describe("HolidaysService", () => {
     });
   });
 
+  describe("logSchoolCoverageGaps (PAR-1049)", () => {
+    it("names countries whose school data ends within 90 days or holds none", async () => {
+      (mockHolidayRepository as any).query = jest.fn().mockResolvedValue([
+        { country: "ES", region: "ES-CT", through: "2026-09-11" },
+        { country: "ES", region: "ES-MD", through: "2026-09-10" },
+        { country: "DE", region: "DE-NW", through: "2027-07-20" },
+      ]);
+      const warn = jest.spyOn((service as any).logger, "warn");
+      const gaps = await service.logSchoolCoverageGaps(
+        ["ES", "DE", "SE"],
+        "2026-10-24",
+      );
+      expect(gaps).toEqual(["ES: MD 2026-09-10, CT 2026-09-11", "SE: none"]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("SE: none"));
+    });
+  });
+
   describe("synthesizeProjectedSummerHolidays", () => {
     const now = new Date().getUTCFullYear();
 

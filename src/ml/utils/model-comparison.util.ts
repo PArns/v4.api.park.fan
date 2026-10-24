@@ -80,8 +80,22 @@ export function cellFloorDate(questionId: string, modelId: string): string {
   const names = q.models[modelId] ?? [];
   const leads = names.length > 0 ? cellLeads(q, names) : q.leads;
   const maxLead = Math.max(0, ...leads.map(leadDays));
-  return addIsoDays(ARCHIVE_START, maxLead + MIN_DAYS);
+  return addIsoDays(
+    MODEL_ARCHIVE_START[modelId] ?? ARCHIVE_START,
+    maxLead + MIN_DAYS,
+  );
 }
+
+/**
+ * Columns whose archived rows start after ARCHIVE_START, because the model
+ * itself does: the grid TFT shadow (PAR-1041) writes its first forecast the
+ * night after its deploy. shortcut: the assumed first shadow night; set it to
+ * the real first `forecast_date` of `tft_forecasts_shadow` once it exists.
+ */
+export const MODEL_ARCHIVE_START: Record<string, string> = {
+  tft_grid: "2026-10-26",
+  tft_grid_drivers: "2026-10-26",
+};
 
 export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
   {
@@ -129,6 +143,18 @@ export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
     id: "tft",
     label: "TFT",
     oneLiner: "Unser Tagesmodell für die nächsten 60 Tage. Heute im Kalender.",
+  },
+  {
+    id: "tft_grid",
+    label: "TFT mit Lücken-Raster",
+    oneLiner:
+      "Dasselbe Tagesmodell, aber es lernt auf jedem Kalendertag statt nur auf Öffnungstagen und kennt Öffnungsplan und Schulferien. Läuft jede Nacht nebenher, nicht in der App.",
+  },
+  {
+    id: "tft_grid_drivers",
+    label: "TFT mit Lücken-Raster + Treibern",
+    oneLiner:
+      "Wie „TFT mit Lücken-Raster“, kennt zusätzlich längere oder kürzere Öffnungszeiten als sonst, den ersten Tag nach einer Schließung und Ferienanfang/-ende, und lernt die zeitgewichtete Tagesspitze. Läuft jede Nacht nebenher, nicht in der App.",
   },
   {
     id: "catboost",
@@ -440,7 +466,12 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     segment: "headliner",
     reference: PAIRED_LEVEL_REFERENCES.tft,
     unit: "rate",
-    models: { catboost: null, wkd: [PAIRED_MODELS.weekdayAvg] },
+    models: {
+      tft_grid: [PAIRED_MODELS.tftGrid],
+      tft_grid_drivers: [PAIRED_MODELS.tftGridDrivers],
+      catboost: null,
+      wkd: [PAIRED_MODELS.weekdayAvg],
+    },
   },
   {
     id: "cal_busier",
@@ -453,7 +484,12 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     leads: CAL_NEAR_LEADS,
     segment: "headliner",
     reference: PAIRED_LEVEL_REFERENCES.tft,
-    models: { catboost: null, wkd: ["weekday_avg"] },
+    models: {
+      tft_grid: [PAIRED_MODELS.tftGrid],
+      tft_grid_drivers: [PAIRED_MODELS.tftGridDrivers],
+      catboost: null,
+      wkd: ["weekday_avg"],
+    },
     pairwise: CAL_PAIRWISE,
   },
   {
@@ -469,7 +505,12 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     leads: ["d30", "d45", "d60"],
     segment: "headliner",
     reference: PAIRED_LEVEL_REFERENCES.tft,
-    models: { catboost: null, wkd: ["weekday_avg"] },
+    models: {
+      tft_grid: [PAIRED_MODELS.tftGrid],
+      tft_grid_drivers: [PAIRED_MODELS.tftGridDrivers],
+      catboost: null,
+      wkd: ["weekday_avg"],
+    },
     pairwise: CAL_PAIRWISE,
   },
   {
@@ -794,6 +835,23 @@ export function d7Aggregates(
     }
   }
   return out;
+}
+
+/**
+ * {@link d7Aggregates} per stored model: the day pairs are formed within one
+ * model's rows only, because each model has its own set of ride-days (the
+ * grid TFT shadow, PAR-1041, only where it has a value).
+ */
+export function d7AggregatesByModel(
+  rows: Array<D7Row & { model: string }>,
+): PairedAggregate[] {
+  const models = [...new Set(rows.map((r) => r.model))];
+  return models.flatMap((m) =>
+    d7Aggregates(
+      rows.filter((r) => r.model === m),
+      m,
+    ),
+  );
 }
 
 /**

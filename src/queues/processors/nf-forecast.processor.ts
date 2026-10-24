@@ -21,6 +21,20 @@ interface NfTrainStatus {
     rows?: number;
     persisted?: number;
     chunks?: { total?: number; ok?: number; skipped?: number };
+    /** The calendar-grid shadow run after the served one (PAR-1041); never fails the job. */
+    shadow?: {
+      version?: string;
+      persisted?: number;
+      error?: string;
+      skipped?: string;
+    } | null;
+    /** The grid + PAR-830 drivers shadow after it (PAR-1057), same shape. */
+    shadow_drivers?: {
+      version?: string;
+      persisted?: number;
+      error?: string;
+      skipped?: string;
+    } | null;
   };
 }
 
@@ -30,7 +44,12 @@ interface NfTrainStatus {
  * - train-nf: runs at 03:00 UTC, well BEFORE the CatBoost 06:00 cron, so the two
  *   training spikes never overlap on the shared host. Triggers nf /train and polls
  *   until THIS run completes; the runner persists tft_forecasts itself. A timeout or
- *   any other end state fails the job (attempts: 1) and persists nothing.
+ *   any other end state fails the job (attempts: 1) and persists nothing. With
+ *   NF_GRID_SHADOW (PAR-1041) the same run then trains the calendar-grid shadow
+ *   into tft_forecasts_shadow, and with NF_SHADOW_DRIVERS (PAR-1057) the grid +
+ *   drivers shadow into tft_forecasts_shadow_drivers, before it reports
+ *   completed, so the job waits for all three (~3x the GPU time, ~40-50 min,
+ *   inside the 90-min deadline).
  *
  * The TFT-vs-CatBoost forward scoreboard (`score-comparison`, writing
  * `catboost_daily_forecasts` + `model_comparisons`) lived here until PAR-870
@@ -149,6 +168,20 @@ export class NfForecastProcessor {
           `TFT run ${version}: ${chunks.skipped} of ${chunks.total} park chunk(s) failed and were skipped — ` +
             "their parks keep the previous forecast_date",
         );
+      }
+      for (const [shadow, table] of [
+        [done.info?.shadow, "tft_forecasts_shadow"],
+        [done.info?.shadow_drivers, "tft_forecasts_shadow_drivers"],
+      ] as const) {
+        if (shadow?.error) {
+          this.logger.warn(
+            `TFT grid shadow ${shadow.version} failed (served forecast unaffected): ${shadow.error}`,
+          );
+        } else if (shadow?.persisted !== undefined) {
+          this.logger.log(
+            `TFT grid shadow ${shadow.version}: ${shadow.persisted} rows in ${table}`,
+          );
+        }
       }
       this.logger.log(
         `✅ TFT training completed: ${version} — ${done.info?.rows ?? "?"} rows, ` +

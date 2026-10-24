@@ -3,4 +3,4 @@
 # Installed by Dockerfile.neuralforecast on top of the base image, with the base
 # image's torch pinned as a constraint (a resolver upgrade would swap the cu128
 # wheel for a build without sm_120 kernels).
-neuralforecast==3.1.8
+neuralforecast==3.3.0

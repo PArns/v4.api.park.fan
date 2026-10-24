@@ -48,10 +48,12 @@ real database proves the transaction **commits**.
 `test/helpers/ml-forecast-tables.ts` creates the entity-less tables by
 **extracting the `CREATE TABLE` statement from the file that issues it**:
 
-| Table           | Source of truth     |
-| --------------- | ------------------- |
-| `pcn_forecasts` | `pcn-service/db.py` |
-| `tft_forecasts` | `nf-service/db.py`  |
+| Table                          | Source of truth                                                         |
+| ------------------------------ | ----------------------------------------------------------------------- |
+| `pcn_forecasts`                | `pcn-service/db.py`                                                     |
+| `tft_forecasts`                | `nf-service/db.py`                                                      |
+| `tft_forecasts_shadow`         | `nf-service/db.py` (`LIKE tft_forecasts`, so listed after it; PAR-1041) |
+| `tft_forecasts_shadow_drivers` | `nf-service/db.py` (`LIKE tft_forecasts`; PAR-1057)                     |
 
 Until PAR-870 (2026-10-12) the table also listed `shape_forecasts`
 (`shape-service/db.py`) and `catboost_daily_forecasts`
@@ -76,6 +78,23 @@ services that do not share this schema's entity graph — which is exactly why
 forgotten". A test schema stricter than production would turn a forgotten
 dependency into a loud 23503 instead of the quiet orphan the merge code exists
 to prevent.
+
+## The E2E schema has a table production may not have yet
+
+> **2026-10-24, PAR-1041** — the opposite direction of the rule above.
+
+Reading the writer's DDL makes every sub-service table exist from the first
+test, but in production these tables only appear on the sub-service's **first
+write**. `tft_forecasts_shadow` did not exist between the API deploy and the
+first nightly shadow run (and never would with `NF_GRID_SHADOW=false`), so the
+merge's `move` on it was a 42P01 that rolled back every attraction merge —
+including `repairDuplicates`, which `syncParks` awaits — while the suite stayed
+green. Dependencies on these raw-SQL tables (`pcn_forecasts`, `tft_forecasts`,
+`tft_forecasts_shadow`, `tft_forecasts_shadow_drivers`) therefore carry `mayBeAbsent: true`, and
+`applyMergeDependencies` skips them when `to_regclass` is null (unit test in
+`merge-dependencies.spec.ts`). A new sub-service table needs the flag too.
+Entity tables never get it: `synchronize` creates them, so a missing one is a
+bug, and skipping it would orphan rows silently.
 
 ## A table can exist and still be the wrong kind
 

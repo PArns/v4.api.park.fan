@@ -52,6 +52,28 @@
       ]
     },
     {
+      "id": "calendar_tft_grid",
+      "title": "Kalender: TFT mit Lücken-Raster",
+      "detail": "Dasselbe Tagesmodell, trainiert auf jedem Kalendertag statt nur auf Öffnungstagen, mit Öffnungsplan und Schulferien. Läuft seit dem Deploy jede Nacht nebenher und wird nur im Archiv mit dem heutigen TFT verglichen. Offline ist es noch nicht gemessen; erst danach kann es den heutigen TFT im Kalender ersetzen.",
+      "evaluateOn": "2027-01-08",
+      "cells": [
+        { "questionId": "cal_rank", "modelId": "tft_grid" },
+        { "questionId": "cal_busier", "modelId": "tft_grid" },
+        { "questionId": "cal_far", "modelId": "tft_grid" }
+      ]
+    },
+    {
+      "id": "calendar_tft_grid_drivers",
+      "title": "Kalender: TFT mit Lücken-Raster + Treibern",
+      "detail": "Wie das Lücken-Raster, zusätzlich mit Öffnungszeiten gegenüber den letzten vier gleichen Wochentagen, spätem Schluss, dem ersten Tag nach einer Schließung und Ferienanfang/-ende, und mit der zeitgewichteten Tagesspitze als Ziel. Läuft als eigenes Modell neben dem Lücken-Raster, damit beide getrennt gegen den heutigen TFT gemessen werden. Offline ist es noch nicht gemessen.",
+      "evaluateOn": "2027-01-08",
+      "cells": [
+        { "questionId": "cal_rank", "modelId": "tft_grid_drivers" },
+        { "questionId": "cal_busier", "modelId": "tft_grid_drivers" },
+        { "questionId": "cal_far", "modelId": "tft_grid_drivers" }
+      ]
+    },
+    {
       "id": "catboost_daily_off",
       "title": "CatBoost-Tagesniveau abschalten",
       "detail": "Macht die Prognose offline schlechter. Erst abschalten, wenn der Ersatz live bestätigt ist. Live entscheidet „Kalendertage 3 Monate voraus“ (dort liefert CatBoost das Tagesniveau) gegen den Wochentag-Durchschnitt.",
