@@ -1197,6 +1197,16 @@ def build_report(run: Path, export: Path | None = None, target_from: str | None 
         if paired("intraday"):
             rows.append(run_cells(d, cfg, "intraday", "lead_key", UC1_KEYS + UC2_INTRADAY_KEYS,
                                   [cmp_model], lambda k: "UC1" if k.startswith("m") else "UC2-intraday"))
+        # D3 best-time regret, paired on the ride-days both cover in full; the runner writes
+        # these rows for its --pair-with refs since PAR-1043 (older runs have none)
+        if "rideday" in d.tables and len(d.df(
+                f"SELECT 1 FROM rideday WHERE ref = '{cmp_model}' AND model <> ref LIMIT 1")):
+            rows.append(decision_cells(d, cfg, f"""
+                SELECT L, park_id, date, model, ref, sum(regret_m) num_m, sum(bt_n) den_m,
+                       sum(coalesce(regret_r, 0)) num_r, sum(bt_n) den_r
+                FROM rideday WHERE ref = '{cmp_model}' OR ref = model
+                GROUP BY ALL ORDER BY L, park_id, date, model, ref""",
+                "L", "best-time regret (min)", "D3", True, [cmp_model]))
         frames = [r for r in rows if r is not None and not r.empty]
         if frames:
             t = pd.concat(frames, ignore_index=True)

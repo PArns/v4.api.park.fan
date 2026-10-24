@@ -66,6 +66,10 @@ after another, resumable (finished files are skipped).
   export; the range is across models because each has its own coverage; the
   median operator publishing horizon is 39 d), so the runner treats it as
   unknown — see "Protocol".
+- `forecast_archive_curves` (`--tables archive_curves`, PAR-1043): the served
+  `park_hourly` / `plan_day` / incumbent curves by UTC origin day from `--archive-from`
+  (default 15 days back), for the served arm. Rows expire 14 days past their target
+  date, so an export only covers a recent window — see "The served arm".
 - `headliner_attractions` is the current table (548-day window), not ex-ante.
   It only decides which rides count as headliners (UC4 / D2 / D4 / D6).
 
@@ -359,6 +363,151 @@ records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 Model families benchmarked so far get their own document: the foundation models
 Chronos-2 and TimesFM 3.0 (PAR-828) plus TiRex-2 and Toto 2.0 (PAR-853) in
 `docs/ml/foundation-models.md`.
+
+## The served arm — candidates against what production showed (PAR-1043)
+
+The owner's switch rule needs an offline win **over what is served**
+(`offlineBetterThanServed`, `src/ml/utils/model-comparison.util.ts`). The bench could
+not give one: `prod_served` is a reconstruction of the planner's composed tier and
+only exists from d3, and PCN + the persistence blend are not in the bench at all.
+So `live_chronos` could only beat persistence and `planner_h5_slots` only the weekday
+median. The served arm replays the product instead of re-implementing it:
+`forecast_archive_curves` ([forward archive](./forward-archive.md)) holds the curves as
+they were served, with their capture time.
+
+**Data path.** `export` table `archive_curves` (surfaces 1 `park_hourly`, 2 `plan_day`,
+8 `park_hourly_incumbent`; one UTC origin day per query, `origin_at` leads the primary
+key so it is an index range scan) → `build` → `parquet/served_curves.parquet` (one row
+per curve, `waits` as a list) → plug-in `served` (`mlbench/models/served.py`), which
+reads that file with its own DuckDB connection and never reads truth.
+
+**What `served` predicts at (bench origin, ride, slot).**
+
+| bench origin | surface | archived origins used |
+| --- | --- | --- |
+| daily, 06:00 (slot table: UC2 d0, UC3, D3) | `plan_day` — the planner, an hour served as a step over its four quarters | the 06:00 capture (d0–d7) and the 07:00 long-lead capture (d10–d90), which counts as the 06:00 origin it extends |
+| intraday 08–20 (intraday table: UC1, UC2-intraday) | `park_hourly` — CatBoost + PCN + blend (+ Chronos-2 where served) | the 06:00 capture (48 h) and the 10–18 captures (4 h) |
+
+`served_incumbent` is the same arm preferring surface 8 at the same capture — what
+`park_hourly` would have shown without Chronos-2, archived only while
+`SERVE_CHRONOS_INTRADAY` is on; it is the reference once Chronos-2 is itself served.
+
+**Nearest origin, and the information cut** (`tests/test_served.py`). A capture runs
+within the hour of its *nominal* origin (the job fires at :05 UTC and reads each
+park's clock), so the curve read at 10:07 is the 10:00 origin's. Per (ride, target day)
+the arm takes the archived row with the **latest nominal origin not after the bench
+origin**, at most **2 h** older (one intraday capture cadence: 08:00 is answered by the
+06:00 curve, 20:00 by the 18:00 one, nothing staler — production would have shown a
+fresher curve the archive does not hold). The nearest row answers or nothing does: a
+slot past what it archived is not filled from an older curve. **A slot that starts
+before the capture instant is never answered**, so no slot the served curve could have
+partly observed is scored. What is left is a head start of minutes — the served curve
+knew the live readings up to its capture — which favours served: a candidate's win is,
+if anything, understated.
+
+**Known biases, documented and not corrected.** `park_hourly` is archived **rounded**
+(`roundServedWait`, 5-minute steps, floor 5) while every bench candidate is scored raw;
+the rounding costs the served arm a little MAE, i.e. favours the candidate. The
+archive's own live board rounds both arms (forward-archive §3); the bench cannot round
+another model's output without changing every other table. Read a margin of a few
+tenths of a minute against `park_hourly` with that in mind. `plan_day` is archived at
+1-minute precision. The calendar questions (`cal_*`, served by TFT) are not covered:
+the arm has no daily level.
+
+**The window limitation.** A curve is deleted **14 days past its target date**, so an
+export taken on day X holds d0–d7 rows only for targets in X−14 … X−1, and the bench can
+only score a target whose truth is complete (≤ X−1). The archive started 2026-10-09, so
+lead L has its first scored target on 2026-10-09 + L (d30: 2026-11-08, d60: 2026-12-08)
+— the same floor as the live matrix (`cellFloorDate`). With ~14 scorable target days,
+the report's usual 30-origin-day LOW-N gate is never met; the generator's floor is
+`--min-origin-days 14`. Rows are never updated after their capture and an origin day is
+exported only once complete, so **the window can be lengthened by accumulating**:
+export `--tables archive_curves` into one persistent directory every week (finished
+days are skipped) and copy its `raw/archive_curves_*.csv.gz` over a new export's before
+`build` — for a day in both, the earlier file holds every row the later one does.
+
+**Pairing.** `run --model served --pair-with served` writes paired sums of every model —
+baselines (`h5`, `lvlh5_tft`, `wt_med`, `persistence`) and plug-ins (`chronos2`,
+`chronos2_grid`, …) — against `served` into the slot and intraday tables, and since this
+change also into `rideday` (the runner pairs ride-days against its `--pair-with` refs),
+so `report --vs served` writes `cells_vs_served.csv`: slot MAE per use case × lead and
+D3 best-time regret per lead, park-cluster CI, segments `all`/`busy`, regions.
+
+**Verdicts are generated, never typed.** `python3 -m mlbench.served_verdicts --run <run>`
+(stdlib only) maps each matrix cell to its bench cells (`QUESTIONS` in the script; a
+question straddling an intraday bucket takes every bucket it touches) and writes one
+entry per cell with `reference: "served"`, `metric`, `runId`, `diff`/`ciLow`/`ciHigh`
+and a German note. `better` needs every lead to win (park-cluster CI below 0, ≥ 10
+parks, ≥ `--min-origin-days`) in **every** pass; `worse` every CI above 0; anything else
+is `unclear`. The quoted figure is the least favourable cell (largest CI upper bound),
+never a pool across leads. `referenceIsServed` is not stored: the API derives it from
+`reference`. Dry run by default (prints the unified diff); `--write` writes
+`src/ml/data/offline-model-verdicts.json`, whose spec accepts a figure only as a whole
+triple against `served` from a named run.
+
+### Running it (celestrial) — not run yet
+
+Outside the 00:55–09:30 UTC quiet window; the Chronos-2 plug-ins need the GPU lock.
+Dates below are for a run on 2026-11-09 (the `live_chronos` `evaluateOn`); move them
+with the day.
+
+```bash
+cd ~/claude-worktrees/<checkout-at-the-PR-commit>
+EXP=20261109-served
+
+# 1. export (read-only, system python, every query through scripts/prod-psql.sh).
+#    Full queue history: Chronos-2 reads ~343 days of context. The archive from its start;
+#    on 2026-11-09 only targets from ~2026-10-26 on are still held (14-day retention), so
+#    the early origin days contribute their long-lead rows only.
+python3 ml-bench/mlbench/export.py --out /data/parkfan/ml-bench/exports/$EXP --repo $PWD \
+  --queue-to 2026-11-08 --archive-from 2026-10-09
+#    optional, to lengthen the window: an accumulated archive directory (see above)
+# cp /data/parkfan/ml-bench/archive-curves/raw/archive_curves_*.csv.gz \
+#    /data/parkfan/ml-bench/exports/$EXP/raw/
+
+# 2. image + build (CPU)
+docker build -t ml-bench:par-1043 --build-arg GIT_SHA=$(git rev-parse HEAD) \
+  --build-arg EXTRA_REQUIREMENTS=requirements-foundation.txt \
+  --build-context mlsvc=ml-service ml-bench
+docker run --rm --user 1000:1000 -e HOME=/tmp --cpus 6 --memory 8g --cpu-shares 256 \
+  -v /data/parkfan/ml-bench:/data ml-bench:par-1043 build --export /data/exports/$EXP \
+  --memory 5GB --threads 4
+
+# 3. run, three shards over the archive's origins (3 is not a multiple of 7, so no
+#    weekday aliasing), one container at a time under the GPU lock
+RUN=20261109-par1043-served
+LOCK=/data/parkfan/ml-bench/gpu.lock
+for i in 0 1 2; do
+  while ! (set -o noclobber; echo "PAR-1043 $RUN $i $(date -u +%FT%TZ)" > $LOCK) 2>/dev/null; do
+    sleep 60; done
+  docker run --rm --name mlbench-par1043-$i --gpus all --user 1000:1000 -e HOME=/tmp \
+    -e HF_HOME=/hf -e MLBENCH_IMAGE_ID=$(docker image inspect -f '{{.Id}}' ml-bench:par-1043) \
+    --cpus 6 --memory 8g --cpu-shares 256 --entrypoint nice \
+    -v /data/parkfan/ml-bench/par-828/hf:/hf -v /data/parkfan/ml-bench:/data \
+    -v $PWD/ml-bench/results:/app/results -v $PWD/ml-bench/subsets:/app/subsets \
+    ml-bench:par-1043 -n 10 python -m mlbench run --export /data/exports/$EXP \
+    --out /app/results/$RUN --from 2026-10-09 --to 2026-11-07 --shard $i/3 \
+    --model served --model chronos2 --model chronos2_grid --pair-with served \
+    --parks @/app/subsets/par828-30parks.txt --memory 5GB --threads 4 --reference
+  rm -f $LOCK
+done
+
+# 4. report, two passes: the target window and the origin window, both the archive's
+R="docker run --rm --user 1000:1000 -e HOME=/tmp -v /data/parkfan/ml-bench:/data \
+   -v $PWD/ml-bench/results:/app/results ml-bench:par-1043 report --run /app/results/$RUN --vs served"
+$R --target-from 2026-10-10 --target-to 2026-11-07
+$R --origin-from 2026-10-09 --origin-to 2026-11-07
+
+# 5. verdicts: dry run prints the JSON diff, then write and open a PR with it
+cd ml-bench
+python3 -m mlbench.served_verdicts --run results/$RUN \
+  --pass tables_2026-10-10_2026-11-07 --pass tables_o2026-10-09_2026-11-07
+python3 -m mlbench.served_verdicts --run results/$RUN \
+  --pass tables_2026-10-10_2026-11-07 --pass tables_o2026-10-09_2026-11-07 --write
+```
+
+Without `--parks` the run covers every park the archive holds, at a multiple of the
+GPU time; the subset keeps it comparable with PR #450.
 
 ## Level drivers (PAR-830)
 

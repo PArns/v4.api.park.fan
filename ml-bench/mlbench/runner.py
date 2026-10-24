@@ -704,7 +704,8 @@ class Runner:
                 verb = "CREATE OR REPLACE TEMP TABLE rd AS" if j == 0 else "INSERT INTO rd"
                 x(f"{verb} {rideday_sql(models, cfg, L)}")
             self._tick('rd')
-            self.write("rideday", rideday_pair_sql(B.REF_CANDIDATES, cfg), c)
+            # --pair-with refs too, so `report --vs served` has paired best-time regret (D3)
+            self.write("rideday", rideday_pair_sql(self.refs_for(models), cfg), c)
             self._tick('rideday')
             self.write("pairs", pairs_sql(B.REF_CANDIDATES, cfg), c)
             self._tick('pairs')
@@ -949,6 +950,8 @@ def main(args: argparse.Namespace) -> int:
     out = Path(args.out or Path(__file__).resolve().parents[1] / "results" / run_id)
     out.mkdir(parents=True, exist_ok=True)
     i, n = (int(v) for v in args.shard.split("/"))
+    # the served arm (PAR-1043) finds the archived curves next to the export it scores
+    os.environ.setdefault("MLBENCH_EXPORT", str(args.export))
     models = [load_model(s) for s in args.model]
     sha = git_sha()
     image = os.environ.get("MLBENCH_IMAGE_ID", "unknown")

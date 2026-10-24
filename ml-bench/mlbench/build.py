@@ -242,9 +242,38 @@ def build(raw: Path, out: Path, con, ml_service_dir: Path | None = None,
     x("""CREATE TABLE b.truth AS SELECT *, CAST(dayofweek(date) IN (0, 6) AS INTEGER) AS we,
            dayofweek(date) AS dow FROM truth ORDER BY date, park_id, aid, slot_utc""")
     x("DETACH b")
+    stats["served_curves"] = served_curves(con, raw, out)
     stats["build_seconds"] = round(time.monotonic() - t0, 1)
     (out / "build_stats.json").write_text(json.dumps(stats, indent=2, default=str))
     return stats
+
+
+SERVED_CURVE_COLUMNS = ("{'origin_us':'BIGINT','attraction_id':'VARCHAR','park_id':'VARCHAR',"
+                        "'surface':'SMALLINT','origin_kind':'SMALLINT','lead_days':'SMALLINT',"
+                        "'target_date':'DATE','slot_start_us':'BIGINT','slot_minutes':'SMALLINT',"
+                        "'waits':'VARCHAR','sources':'VARCHAR'}")
+
+
+def served_curves(con, raw: Path, out: Path) -> int:
+    """``raw/archive_curves_*.csv.gz`` -> ``served_curves.parquet`` (PAR-1043): one row
+    per archived served curve, ``waits`` as an INTEGER list (NULL where the surface had
+    no value), sorted by origin so the served arm's origin-range reads prune row groups.
+    Read only by ``mlbench.models.served``; nothing else in the bench uses it."""
+    files = sorted(raw.glob("archive_curves_*.csv.gz"))
+    if not files:
+        return 0
+    names = "[" + ", ".join(f"'{f}'" for f in files) + "]"
+    con.execute(f"""
+        COPY (SELECT make_timestamptz(origin_us) AS origin_utc, attraction_id AS aid, park_id,
+                     surface, origin_kind, lead_days, target_date,
+                     make_timestamptz(slot_start_us) AS slot_start_utc, slot_minutes,
+                     list_transform(string_split(coalesce(waits, ''), ','),
+                                    v -> TRY_CAST(nullif(v, '') AS INTEGER)) AS waits,
+                     sources
+              FROM read_csv({names}, header=true, columns={SERVED_CURVE_COLUMNS})
+              ORDER BY origin_utc, aid)
+        TO '{out}/served_curves.parquet' (FORMAT parquet, COMPRESSION zstd)""")
+    return con.execute(f"SELECT count(*) FROM '{out}/served_curves.parquet'").fetchone()[0]
 
 
 def covariates(con, ml_service_dir: Path | None) -> None:
