@@ -87,7 +87,7 @@ describe("MlOverviewService", () => {
       unclear: 0,
       worse: 0,
     });
-    expect(out.decisions).toHaveLength(5);
+    expect(out.decisions).toHaveLength(6);
     expect(out.decisions.some((d) => d.state === "ready")).toBe(false);
   });
 

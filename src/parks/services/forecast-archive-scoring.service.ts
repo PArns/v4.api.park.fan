@@ -36,6 +36,8 @@ import {
   scoreParkDay,
   scorePairedModels,
   scorePairedShadows,
+  shadowLevelAt,
+  ShadowLevelRow,
 } from "../../ml/utils/forecast-archive-scoring.util";
 import {
   DaySlots,
@@ -374,6 +376,34 @@ export class ForecastArchiveScoringService {
     const planLeads = curves
       .filter((c) => c.surface === "plan_day" && c.originKind !== "intraday")
       .map((c) => c.leadDays);
+    // The calendar-grid TFT shadow (PAR-1041), only where TFT levelled the day.
+    const tftPlans = curves.filter(
+      (c) =>
+        c.surface === "plan_day" &&
+        c.originKind !== "intraday" &&
+        c.levelSource === "tft",
+    );
+    if (tftPlans.length > 0) {
+      const shadow = await this.shadowLevels(
+        [...new Set(tftPlans.map((c) => c.attractionId))],
+        targetDate,
+        Math.max(...tftPlans.map((c) => c.leadDays)),
+      ).catch((err: Error) => {
+        // A shadow; without it the rest scores.
+        this.logger.warn(
+          `Forward archive scoring: TFT grid shadow for ${park.slug} ${targetDate} unavailable: ${err.message}`,
+        );
+        return [] as ShadowLevelRow[];
+      });
+      for (const c of tftPlans) {
+        c.tftGridPeak = shadowLevelAt(
+          shadow,
+          c.attractionId,
+          c.originAt,
+          addIsoDays(targetDate, -c.leadDays),
+        );
+      }
+    }
     const history =
       planLeads.length > 0 && attractionIds.length > 0
         ? await this.weekdayHistory(
@@ -496,6 +526,39 @@ export class ForecastArchiveScoringService {
       out.set(r.id, m);
     }
     return out;
+  }
+
+  /**
+   * `tft_forecasts_shadow` rows of the rides for one target date, from every
+   * forecast_date a capture up to `maxLead` days earlier could have read
+   * (`shadowLevelAt` picks per origin). PK-bounded: attraction + target date.
+   * nf-service creates the table on its first shadow write; before that the
+   * read fails and the caller scores without the shadow.
+   */
+  private async shadowLevels(
+    attractionIds: string[],
+    targetDate: string,
+    maxLead: number,
+  ): Promise<ShadowLevelRow[]> {
+    const rows = await queryWithLimits<
+      Array<{ id: string; fd: string; created: Date; peak: number }>
+    >(
+      this.curveRepository.manager.connection,
+      `SELECT attraction_id::text AS id, forecast_date::text AS fd,
+              created_at AS created, predicted_peak::float AS peak
+         FROM tft_forecasts_shadow
+        WHERE attraction_id = ANY($1::uuid[])
+          AND target_date = $2::date
+          AND forecast_date >= $2::date - $3::int`,
+      [attractionIds, targetDate, maxLead + 3],
+      READ_LIMITS,
+    );
+    return rows.map((r) => ({
+      attractionId: r.id,
+      forecastDate: r.fd,
+      createdAt: new Date(r.created).getTime(),
+      peak: Number(r.peak),
+    }));
   }
 
   /** The park's published OPERATING windows for the date (park-wide rows). */
