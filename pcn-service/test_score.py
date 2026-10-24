@@ -165,9 +165,15 @@ def test_persistence_blend():
     out = score.persistence_blend(pcn, persist, lead, full_h=1.0, horizon_h=3.0)
     # ≤1h → pure persist (70); 2h → α=0.5 → 50; ≥3h → pure PCN (30)
     np.testing.assert_array_equal(out, [70.0, 70.0, 50.0, 30.0, 30.0])
-    # Anchor gate: persist below gate_min → pure PCN regardless of lead
+    # First hour: any anchor ≥ 5 min is served (PAR-1026); under 5 → pure PCN
+    out_first = score.persistence_blend(
+        np.array([30.0, 30.0, 30.0]), np.array([20.0, 39.0, 4.0]),
+        np.array([0.5, 1.0, 0.25]), gate_min=40.0,
+    )
+    np.testing.assert_array_equal(out_first, [20.0, 40.0, 30.0])  # 39 serve-rounds to 40
+    # Ramp gate: persist below gate_min → pure PCN past the first hour
     out_low = score.persistence_blend(
-        np.array([30.0, 30.0]), np.array([20.0, 39.0]), np.array([0.5, 1.0]), gate_min=40.0
+        np.array([30.0, 30.0]), np.array([20.0, 39.0]), np.array([1.5, 2.0]), gate_min=40.0
     )
     np.testing.assert_array_equal(out_low, [30.0, 30.0])
     # NaN persist (missing) → NaN blend (dropped for the pcn_blend model downstream)

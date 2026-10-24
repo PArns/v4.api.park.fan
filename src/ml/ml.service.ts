@@ -2271,6 +2271,8 @@ export class MLService {
       ? await this.applyServedIntradayOverride(
           copies,
           new Date(currentSlotStartMs()),
+          true,
+          now,
         )
       : new Map<PredictionDto, "pcn" | "chronos">();
     return copies.map((c, i) =>
@@ -2295,15 +2297,21 @@ export class MLService {
    *
    * Chronos's lead base is the current slot start, never the caller's
    * `startTime`: a read that starts later must not shift Chronos's window.
+   * `nowMs` is the moment the blend's lead is measured from (default: now).
    */
   private async applyServedIntradayOverride(
     preds: PredictionDto[],
     startTime?: Date,
     withChronos = true,
+    nowMs: number = Date.now(),
   ): Promise<Map<PredictionDto, "pcn" | "chronos">> {
     const out = new Map<PredictionDto, "pcn" | "chronos">();
     if (servePcnIntradayFlag()) {
-      for (const p of await this.applyPcnIntradayOverride(preds, startTime)) {
+      for (const p of await this.applyPcnIntradayOverride(
+        preds,
+        startTime,
+        nowMs,
+      )) {
         out.set(p, "pcn");
       }
     }
@@ -2317,7 +2325,7 @@ export class MLService {
           hourly,
           curves,
           currentSlotStartMs(),
-          Date.now(),
+          nowMs,
         );
         for (const p of done) out.set(p, "chronos");
         if (done.size > 0) {
@@ -2340,6 +2348,7 @@ export class MLService {
   private async applyPcnIntradayOverride(
     preds: PredictionDto[],
     startTime?: Date,
+    nowMs: number = Date.now(),
   ): Promise<Set<PredictionDto>> {
     const done = new Set<PredictionDto>();
     const hourly = preds.filter((p) => p.predictionType === "hourly");
@@ -2349,9 +2358,8 @@ export class MLService {
       this.getPcnIntradayWaits(ids, startTime),
       this.fetchCurrentWaits(ids), // §7.7 blend anchor: latest realised wait per attraction
     ]);
-    // Lead from the actual time, not from `startTime` (the current slot start or a
-    // caller's read start): the blend's first hour is "the next 60 minutes" (PAR-1026).
-    const nowMs = Date.now();
+    // Lead from `nowMs` (the actual time), not from `startTime` (the current slot start
+    // or a caller's read start): on the 1–3 h ramp α follows the clock inside a slot.
     let overridden = 0;
     for (const p of hourly) {
       // Compare instants, not strings — see getPcnIntradayWaits.
@@ -2365,7 +2373,7 @@ export class MLService {
       const anchor = anchors.get(p.attractionId);
       const displayWait = persistenceBlendServe(q.display, anchor, leadHours);
       // Same serve-side quantization CatBoost applies before storing (5er steps,
-      // min 10 when positive) — a plain Math.round leaked 1-minute waits into the UI.
+      // floor 5 when positive) — a plain Math.round leaked 1-minute waits into the UI.
       p.predictedWaitTime = roundServedWait(displayWait);
       // Never leave CatBoost's band next to a PCN wait. pcn_forecasts holds no q0.95
       // (PCN_SERVE_QUANTILES = 0.5,0.8), so there is no PCN band to serve.

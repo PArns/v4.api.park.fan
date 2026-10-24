@@ -429,7 +429,7 @@ the gate left almost every ride on raw PCN even 15 minutes ahead, and on the liv
 forward archive persistence beat the served curve by 1.7 min MAE in the first hour.
 The rules of `persistenceBlendServe` since then:
 
-| lead (from now, not from the slot start) | anchor | served q0.5 |
+| lead | anchor | served q0.5 |
 | --- | --- | --- |
 | ≤ 1 h | ≥ 5 min (`BLEND_FIRST_HOUR_MIN_ANCHOR`) | the anchor |
 | ≤ 1 h | < 5 min or none | raw PCN |
@@ -441,7 +441,17 @@ The crowd level's q0.8 goes through the same blend (same anchor, same α) and is
 still clamped to ≥ the shown wait, so the tier and the wait agree in the first
 hour. A PCN slot serves `uncertaintyMinutes: null`: `pcn_forecasts` holds only
 q0.5 and q0.8 (`PCN_SERVE_QUANTILES`), so there is no PCN band, and CatBoost's
-band beside a PCN wait described a different forecast. To check it live:
+band beside a PCN wait described a different forecast. The same `rules` hold in
+`pcn-service/score.py persistence_blend`, so the `pcn_blend` shadow board scores
+what is served.
+
+The lead is measured from the actual time (`nowMs`, default `Date.now()`;
+`servedIntradayValues` passes its generation time), not from the current slot
+start. On the 15-min grid this changes nothing in the first hour — a slot ≤ 1 h
+from the slot start is ≤ 1 h from now too — but on the 1–3 h ramp α now follows
+the clock inside a slot, so the served value drifts by up to ~1/8 of the
+anchor–PCN gap within one slot, and a cached response or the :05 archive capture
+can differ slightly from a read later in the same slot. To check it live:
 `live_h0_1` persistence vs served in `forecast_archive_paired` (definition 2)
 should move toward 0.
 

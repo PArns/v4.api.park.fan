@@ -439,8 +439,9 @@ describe("MLService", () => {
       expect(far.uncertaintyMinutes).toBeNull();
     });
 
-    it("measures the lead from now, not from the start of the current slot", async () => {
-      const slot = currentSlotStartMs() + 70 * 60_000; // 70 min from the slot start
+    it("measures the ramp's lead from now, not from the start of the current slot", async () => {
+      const base = currentSlotStartMs();
+      const slot = base + 2 * HOUR; // grid-aligned, on the 1–3 h ramp
       mockRedis.get.mockResolvedValue(
         JSON.stringify({
           ...JSON.parse(catboostPayload),
@@ -460,13 +461,11 @@ describe("MLService", () => {
           wait: "60",
         },
       ]);
-      // 14 min into the slot: the slot is 56 min ahead, inside the first hour.
-      const now = jest
-        .spyOn(Date, "now")
-        .mockReturnValue(currentSlotStartMs() + 14 * 60_000);
+      // 12 min into the slot: lead 1.8 h, α = 0.6 → 0.6·100 + 0.4·60 = 84 → 85.
+      const now = jest.spyOn(Date, "now").mockReturnValue(base + 12 * 60_000);
       try {
-        // From the slot start (70 min, α ≈ 0.92) this would read 95.
-        expect((await servedAt(slot)).predictedWaitTime).toBe(100);
+        // From the slot start (lead 2 h, α = 0.5) this would read 80.
+        expect((await servedAt(slot)).predictedWaitTime).toBe(85);
       } finally {
         now.mockRestore();
       }
