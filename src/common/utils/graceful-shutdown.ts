@@ -25,6 +25,19 @@ export const SHUTDOWN_SIGNALS: ShutdownSignal[] = [
  * long: Bull's `queue.close()` waits for the job in flight across 31 queues,
  * and jobs here run for minutes (the daily `downtime` run takes ~200 s). 20 s
  * leaves 10 s of head room for the exit itself.
+ *
+ * That 30 s is Coolify's own `--timeout`, and it covers deploys only. Every
+ * other stop path — a host reboot, a `docker.service` restart, a `docker stop`
+ * without `--time` — reads the container's own `StopTimeout`, which was unset
+ * until `stop_grace_period: 30s` landed in `docker-compose.production.yml`.
+ * Before that it was Docker's default of 10 s, so this deadline could not
+ * fire: on 2026-10-21 the API was SIGKILLed 10.000 s after the signal, with
+ * neither a `deadline-exceeded` nor an `exit` line to show for it (PAR-1004).
+ *
+ * On a reboot it still cannot fire. Stopping the daemon is additionally capped
+ * by dockerd's `--shutdown-timeout`, 15 s on this host, which no setting in
+ * this repo reaches. So 20 s is the budget on a deploy and a ceiling the other
+ * paths never reach — do not read a surviving hook as proof it finished.
  */
 export const SHUTDOWN_DEADLINE_MS = 20_000;
 
@@ -72,6 +85,18 @@ let shutdownStartedAt: number | undefined;
  * abort the hooks mid-run, with code 1 instead of 0 or 143 and without the
  * `exit` line in `logs/shutdown.<date>.log` that PAR-948 measures. The deadline
  * stays the backstop for a hook that hangs.
+ *
+ * "Redis is already connecting/connected" belongs to the same set, and it is
+ * Bull's, not ours: `whenCurrentJobsFinished()` (bull@4.16.5
+ * `lib/queue.js:1383`) forces the blocking client to reconnect so the pending
+ * BRPOPLPUSH aborts, and `redisClientDisconnect()` resolves early while that
+ * client is still `connecting`, so the `connect()` behind it meets a client
+ * that is already connecting. Nothing here calls `connect()` during a
+ * shutdown. It surfaces as *unhandled* because Bull builds that promise before
+ * it awaits `Promise.all(this.processing)` and only chains the handler on
+ * afterwards — reproduced on 2026-10-24 against a throwaway Redis, where the
+ * `unhandledRejection` is followed by a `rejectionHandled` and a shutdown with
+ * a connected blocking client stays silent (PAR-1004).
  */
 export function isShuttingDown(): boolean {
   return shutdownStartedAt !== undefined;

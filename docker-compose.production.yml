@@ -218,6 +218,26 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # The budget the 20 s shutdown deadline in `graceful-shutdown.ts` is sized
+    # against. Coolify passes `docker stop --timeout=30` on a deploy, but that
+    # number lives in Coolify's command, not here — so every other stop path
+    # fell back to Docker's per-container default of 10 s and the deadline
+    # could never fire. Measured on 2026-10-21 (PAR-1004): a `docker.service`
+    # restart from an unattended NVIDIA driver update SIGTERMed the API at
+    # 20:40:38.808 and dockerd logged "Container failed to exit within 10s of
+    # signal 15 - using the force" at 20:40:48.808 — SIGKILL with 31 Bull job
+    # locks still held, which is what PAR-903 exists to avoid. `StopTimeout`
+    # was `<nil>` on the container; this is the value those paths read.
+    #
+    # It does not make the 20 s deadline reachable on a reboot. A daemon
+    # shutdown is bounded by dockerd's own `--shutdown-timeout` as well, unset
+    # on this host and therefore 15 s, and that budget cannot be set from this
+    # repo — it is `/etc/docker/daemon.json` plus a daemon restart, which is an
+    # API outage and Patrick's call (PAR-1055). What this value buys is the
+    # floor: a stop that used to be cut at exactly 10 s now gets at least 15,
+    # and the full 30 wherever the daemon is not the one stopping us. No path
+    # ends up with less head room than before.
+    stop_grace_period: 30s
     env_file:
       - .env
     environment:
