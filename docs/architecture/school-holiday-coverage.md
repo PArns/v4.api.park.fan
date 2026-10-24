@@ -49,7 +49,7 @@ as 0 as before.
 | TFT (nf-service `add_calendar_covariates`) | NaN is not allowed in a futr_exog, so the placeholders stay (`is_school_holiday` 0, school distances 30) and a new `school_holiday_known` 0/1 says they are placeholders. It is in `FUTR_EXOG_GRID` only, so the default model's inputs are byte-identical. |
 | Chronos-2 shadow | Covariate values unchanged (they must be finite). The per-curve `covariates.holidays` flag and `holidayDataThrough` use `holidays_through`: the earlier of the country's last public row and the park region's last school row, `none` when a type has no row. It used to be the last date over all types, which made Spain look covered to 2028. |
 | Calendar (`CalendarDay`), `/best-days`, `/plan/day` context | `isSchoolVacation` keeps its boolean type (changing it would break clients); a day where it is `false` only because the data ends gets the additive `schoolVacationUnknown: true`. |
-| `/plan/day` climatology | A planned or reference day with `schoolVacationUnknown` has no holiday situation (`holidayState` → `null`), so it is not matched against "regular" days. For a country without school data this switches the climatology tier off. |
+| `/plan/day` climatology | A planned or reference day with `schoolVacationUnknown` is `holidayState: "school_unknown"`, which matches only other such days. A country without any school data still looks back (unknown on both sides); Spain's unpublished days are not compared with its known past "regular" days. |
 
 ### CatBoost and NaN
 
@@ -57,8 +57,15 @@ The model is trained with the default `nan_mode = Min`. A model trained before
 this change saw no NaN in these columns, and `Min` sends NaN to the side of the
 lowest border — the side of 0 — so serving the current model is unchanged until
 the next training. From the next daily training on, CatBoost may split NaN off
-from 0 and learn "unknown" as its own state; rows inside the coverage keep their
-0/1 values.
+from 0 — but what it learns there is **not** "unknown school status". Training
+rows are past days, and most countries' school data reaches past today, so
+nearly all NaN rows in training come from the countries with no school data at
+all (CN, GB, JP, KR, AU, SE, SG, …), plus the days since a short
+coverage ran out (Ireland since 2026-04-12, Mexico since 2026-07-15, Hungary
+since 2026-08-31). The NaN branch therefore mostly learns a country effect,
+which the park/attraction categoricals already carry. At serve
+time a future NaN day in Spain lands in that branch too. Rows inside the
+coverage keep their 0/1 values.
 
 ## The summer projection
 
