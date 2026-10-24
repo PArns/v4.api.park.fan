@@ -660,8 +660,16 @@ class TTMBackend(_Backend):
                 b, bm = self._pad(*self._channels(z[i, e:f], None if cz is None else cz[:, e:f]), self.max_h, False)
                 pv.append(a), pm.append(am), fv.append(b), fm.append(bm)
             t = lambda xs, dt_=torch.float32: torch.from_numpy(np.stack(xs)).to(self.device, dt_)  # noqa: E731
-            loss = m(past_values=t(pv), past_observed_mask=t(pm, torch.bool), future_values=t(fv),
-                     future_observed_mask=t(fm, torch.bool), return_loss=True, return_dict=True).loss
+            fvt, fmt = t(fv), t(fm, torch.bool)
+            target, tmask = fvt[..., 0].clone(), fmt[..., 0]
+            # the model gets exactly what forecast() gives it: future covariates, 0 on the
+            # target channel and no future mask, so the label is never an input; the masked
+            # MSE on channel 0 is computed here instead of by the model from future_values
+            fvt[..., 0] = 0
+            pred = m(past_values=t(pv), past_observed_mask=t(pm, torch.bool),
+                     future_values=fvt if k else None, return_loss=False,
+                     return_dict=True).prediction_outputs[..., 0]
+            loss = ((pred - target) ** 2)[tmask].mean()
             opt.zero_grad()
             loss.backward()
             opt.step()

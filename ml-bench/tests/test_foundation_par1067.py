@@ -214,6 +214,49 @@ def test_ttm_finetune_sees_only_the_context_and_builds_exogenous_config():
     for c in m.calls:
         assert c["pv"].shape == (4, 1536, 3) and c["fv"].shape == (4, 720, 3)
         assert np.abs(c["fv"]).max() <= zmax + 1e-4 and np.abs(c["pv"]).max() <= zmax + 1e-4
+        # the label is not an input: the target channel arrives as inference sends it
+        assert (c["fv"][..., 0] == 0).all() and c["fm"] is None
+
+
+def test_ttm_finetune_inputs_ignore_the_future_target_channel():
+    """Two fits whose future targets differ must feed the model identical inputs (inference
+    only ever sends 0 on the target channel of future_values)."""
+    T = 3000
+    y = np.sin(np.arange(T, dtype=np.float32) / 30)[None]
+    pc = (np.arange(T, dtype=np.float32) % 7)[None]
+    seen = []
+    for bump in (0.0, 5.0):
+        b = _ttm()
+        y2 = y.copy()
+        y2[:, 2000:] += bump * np.arange(T - 2000)                      # changes the targets only
+        b.finetune([(y2, pc, None)], ["a"], prediction_length=384, steps=2, context_length=2048,
+                   learning_rate=1e-3, batch_size=4)
+        seen.append([c["fv"] for c in b._ft_model.calls])
+    for a, c in zip(*seen):
+        assert (a[..., 0] == 0).all() and (c[..., 0] == 0).all()
+        np.testing.assert_array_equal(a[..., 1:], c[..., 1:])
+
+
+def test_real_ttm_output_is_invariant_to_the_future_target_channel():
+    """The same property on granite-tsfm's own model with forecast channel mixing (tiny
+    random config, no weights); skipped where granite-tsfm is not installed."""
+    tsfm = pytest.importorskip("tsfm_public")
+    cfg = tsfm.TinyTimeMixerConfig(
+        context_length=64, prediction_length=16, patch_length=8, patch_stride=8, d_model=16,
+        num_layers=1, decoder_num_layers=1, decoder_d_model=16, num_input_channels=3,
+        prediction_channel_indices=[0], exogenous_channel_indices=[1, 2],
+        enable_forecast_channel_mixing=True, decoder_mode="mix_channel", fcm_use_mixer=True,
+        fcm_mix_layers=2, fcm_context_length=1, fcm_prepend_past=True)
+    torch.manual_seed(0)
+    m = tsfm.TinyTimeMixerForPrediction(cfg).eval()
+    pv, pm = torch.randn(2, 64, 3), torch.ones(2, 64, 3, dtype=torch.bool)
+    fv = torch.randn(2, 16, 3)
+    fv2 = fv.clone()
+    fv2[..., 0] += 100.0
+    with torch.inference_mode():
+        a = m(past_values=pv, past_observed_mask=pm, future_values=fv, return_dict=True).prediction_outputs
+        b = m(past_values=pv, past_observed_mask=pm, future_values=fv2, return_dict=True).prediction_outputs
+    torch.testing.assert_close(a, b)
 
 
 def test_ttm_finetune_without_any_window_fails_loudly():
