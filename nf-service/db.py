@@ -66,7 +66,7 @@ def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
         f"""
         SELECT a.id::text AS unique_id, a."parkId"::text AS park_id,
                p.timezone, p."countryCode" AS country, p."regionCode" AS region,
-               p."influencingRegions" AS influencing
+               p."influencingRegions" AS influencing, p.latitude::float AS latitude
         FROM attractions a
         JOIN parks p ON p.id = a."parkId"
         {where}
@@ -83,7 +83,16 @@ def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:
 def fetch_daily_peak_panel(park_ids: list[str]) -> pd.DataFrame:
     """Long panel: one (unique_id, ds) row per attraction per OPERATING local
     day, y = daily P90 of waitTime. Closed days are simply absent (we do NOT
-    zero-fill — that would teach the model spurious zeros)."""
+    zero-fill — that would teach the model spurious zeros); with
+    NF_CALENDAR_GRID, `to_calendar_grid` re-adds them as masked rows.
+
+    Two filters hold regardless of that flag (PAR-1033 / PAR-1039):
+    - park-local TODAY is excluded. Training runs 03:00 UTC, which is late
+      morning in Tokyo/Shanghai: a partial day's P90 would become the last
+      context value and a training target.
+    - heartbeat rows are excluded: they copy the last status and wait with a
+      fresh timestamp, so they are not observations (same rule as the forward
+      archive's truth, `truthRowsSql`, PAR-1024). NULL = before the column."""
     pct = settings.NF_TARGET_PERCENTILE
     minw = settings.NF_MIN_WAIT
     window = settings.NF_WINDOW_DAYS
@@ -98,6 +107,8 @@ def fetch_daily_peak_panel(park_ids: list[str]) -> pd.DataFrame:
         JOIN attractions a ON a.id = qd."attractionId"
         JOIN parks p ON p.id = a."parkId"
         WHERE qd.timestamp >= NOW() - (:window || ' days')::interval
+          AND DATE(qd.timestamp AT TIME ZONE p.timezone) < DATE(NOW() AT TIME ZONE p.timezone)
+          AND NOT COALESCE(qd.is_heartbeat, false)
           AND qd.status = 'OPERATING'
           AND qd."queueType" = 'STANDBY'
           AND qd."waitTime" >= {minw}
@@ -158,6 +169,79 @@ def fetch_weather(park_ids: list[str]) -> pd.DataFrame:
     return df.drop_duplicates(["park_id", "ds"])
 
 
+def fetch_schedule(park_ids: list[str]) -> pd.DataFrame:
+    """Published park-wide schedule per (park, local day), for NF_CALENDAR_GRID:
+    sched_open = an OPERATING entry, sched_closed = a CLOSED entry and no
+    OPERATING one. A day without an entry is neither — unknown, never closed."""
+    where = 'AND "parkId" = ANY(CAST(:pids AS uuid[]))' if park_ids else ""
+    sql = text(
+        f"""
+        SELECT "parkId"::text AS park_id, date AS ds,
+               bool_or("scheduleType" = 'OPERATING')::int AS sched_open,
+               (bool_or("scheduleType" = 'CLOSED')
+                AND NOT bool_or("scheduleType" = 'OPERATING'))::int AS sched_closed
+        FROM schedule_entries
+        WHERE "attractionId" IS NULL
+          AND date >= CURRENT_DATE - CAST(:window AS int)
+          {where}
+        GROUP BY 1, 2
+        """
+    )
+    params = {"window": settings.NF_WINDOW_DAYS}
+    if park_ids:
+        params["pids"] = uuid_list(park_ids, "fetch_schedule")
+    with _engine.connect() as c:
+        df = pd.read_sql(sql, c, params=params)
+    df["ds"] = pd.to_datetime(df["ds"]).dt.normalize()
+    return df
+
+
+def park_local_today(meta: pd.DataFrame, now: pd.Timestamp | None = None) -> dict:
+    """unique_id -> park-local today (naive midnight), from each park's timezone."""
+    now = pd.Timestamp.now(tz="UTC") if now is None else now
+    m = meta.drop_duplicates("unique_id").dropna(subset=["timezone"])
+    by_tz = {tz: now.tz_convert(tz).normalize().tz_localize(None) for tz in m["timezone"].unique()}
+    return {uid: by_tz[tz] for uid, tz in zip(m["unique_id"], m["timezone"])}
+
+
+def to_calendar_grid(
+    panel: pd.DataFrame, meta: pd.DataFrame, max_stale_days: int,
+    now: pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """NF_CALENDAR_GRID: every calendar day from a series' first observation to
+    park-local YESTERDAY. Absent days get y=0 with available_mask=0 — NeuralForecast
+    keeps them out of the scaler and the loss; y is 0, not NaN, because TFT never
+    reads the mask in its forward pass and a NaN input would poison the batch.
+
+    Every series then ends on the same park-local day, so build_future_frame's
+    `last + 1` is park-local today for all of them. A series last observed more
+    than `max_stale_days` ago is dropped (no forecast; CatBoost serves it)."""
+    today = park_local_today(meta, now)
+    one = pd.Timedelta(days=1)
+    parts, stale = [], 0
+    for uid, g in panel.groupby("unique_id"):
+        t = today.get(uid)
+        if t is None:
+            continue
+        if (t - g["ds"].max()).days > max_stale_days:
+            stale += 1
+            continue
+        days = pd.date_range(g["ds"].min(), t - one, freq="D")
+        y = g.set_index("ds")["y"].reindex(days)
+        parts.append(pd.DataFrame({
+            "unique_id": uid, "ds": days, "y": y.fillna(0.0).to_numpy(),
+            "available_mask": y.notna().astype(float).to_numpy(),
+            # The mask hides closed days from the scaler and loss, but TFT still
+            # READS their y=0 as input; this hist_exog lets it tell closed from quiet.
+            "is_observed": y.notna().astype(int).to_numpy(),
+        }))
+    logger.info("calendar grid: %d series kept, %d dropped as stale (>%dd)",
+                len(parts), stale, max_stale_days)
+    if not parts:
+        return pd.DataFrame(columns=["unique_id", "ds", "y", "available_mask", "is_observed"])
+    return pd.concat(parts, ignore_index=True)
+
+
 # Non-ISO codes geocoding returns -> ISO 3166-2 suffix. Mirrors REGION_ALIASES in
 # src/common/utils/region.util.ts and ml-service/holiday_utils.py.
 _REGION_ALIASES = {"NRW": "NW", "NDS": "NI", "England": "ENG", "Scotland": "SCT", "Wales": "WLS"}
@@ -173,7 +257,7 @@ def _norm_region(r):
 
 def add_calendar_covariates(
     df: pd.DataFrame, meta: pd.DataFrame, holidays: pd.DataFrame,
-    weather: pd.DataFrame | None = None,
+    weather: pd.DataFrame | None = None, schedule: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Add the futr_exog columns to a (unique_id, ds) frame (historical panel or
     future frame): calendar (incl. day-of-week one-hot), holiday flags + distance,
@@ -197,6 +281,10 @@ def add_calendar_covariates(
     df["doy_cos"] = np.cos(2 * np.pi * doy / 365.0)
     month = ds.dt.month
     df["season_code"] = (month % 12 // 3).astype(int)  # 0=winter..3=fall
+    # Summer + December in the north; the same rule six months on in the south
+    # (PAR-1033). Only south of 15°S: the tropics have no summer season to shift
+    # (Jakarta −6°, Singapore +1°), so they keep the months they had. A park
+    # without a latitude keeps them too.
     df["is_peak_season"] = month.isin([6, 7, 8, 12]).astype(int)
     # Day-of-week ONE-HOT: theme-park dow effect is step-like (Sa-peak), not smoothly
     # cyclical — explicit per-day columns help the model learn the jump directly
@@ -214,6 +302,8 @@ def add_calendar_covariates(
     # Holiday-distance defaults (capped at 30d). Filled per park inside the loop.
     df["days_until_holiday"] = 30.0
     df["days_since_holiday"] = 30.0
+    df["days_until_school_holiday"] = 30.0
+    df["days_since_school_holiday"] = 30.0
 
     # Per-series → park map (used by both the holiday loop and the weather merge), so
     # weather still attaches even when there are no holidays for the scope.
@@ -222,6 +312,9 @@ def add_calendar_covariates(
     if "park_id" in meta.columns:
         meta_by_id = meta.drop_duplicates("unique_id").set_index("unique_id")
         df["_park"] = df["unique_id"].map(meta_by_id["park_id"].to_dict())
+        if "latitude" in meta_by_id.columns:
+            south = df["unique_id"].map(meta_by_id["latitude"].to_dict()).lt(-15).to_numpy()
+            df.loc[south, "is_peak_season"] = month[south].isin([12, 1, 2, 6]).astype(int)
 
     n_parks = 0
     if not holidays.empty and meta_by_id is not None:
@@ -287,22 +380,16 @@ def add_calendar_covariates(
             df.loc[idx, "is_holiday_neighbor"] = d.isin(nb).astype(int).values
             df.loc[idx, "is_school_holiday"] = d.isin(sc).astype(int).values
             df.loc[idx, "is_bridge_day"] = d.isin(br).astype(int).values
-            # Distance to nearest PUBLIC holiday (forward/backward), capped at 30d.
-            # searchsorted on the sorted holiday array — vectorised, ~O(n log h).
-            if lp:
-                hol_sorted = np.sort(np.array(list(lp), dtype="datetime64[ns]"))
-                dv = d.values.astype("datetime64[ns]")
-                day = np.timedelta64(1, "D")
-                until = np.full(len(dv), 30.0)
-                pos = np.searchsorted(hol_sorted, dv, side="left")
-                hasn = pos < len(hol_sorted)
-                until[hasn] = (hol_sorted[pos[hasn]] - dv[hasn]) / day
-                since = np.full(len(dv), 30.0)
-                pos2 = np.searchsorted(hol_sorted, dv, side="right") - 1
-                hasp = pos2 >= 0
-                since[hasp] = (dv[hasp] - hol_sorted[pos2[hasp]]) / day
-                df.loc[idx, "days_until_holiday"] = np.clip(until, 0, 30)
-                df.loc[idx, "days_since_holiday"] = np.clip(since, 0, 30)
+            # Distance to the nearest public / school holiday, capped at 30d.
+            dv = d.values.astype("datetime64[ns]")
+            for dates, cu, cs in (
+                (lp, "days_until_holiday", "days_since_holiday"),
+                (sc, "days_until_school_holiday", "days_since_school_holiday"),
+            ):
+                if dates:
+                    until, since = _holiday_distance(dv, dates)
+                    df.loc[idx, cu] = until
+                    df.loc[idx, cs] = since
             n_parks += 1
             if n_parks % 50 == 0:
                 logger.info(
@@ -333,6 +420,16 @@ def add_calendar_covariates(
         df[col] = df[col].fillna(df[col].median()).fillna(const)
     df["is_wet"] = df["is_wet"].fillna(0).astype(int)
 
+    # --- Published schedule (NF_CALENDAR_GRID only; both 0 = unknown) ---
+    if schedule is not None:
+        for col in ("sched_open", "sched_closed"):
+            df[col] = 0
+        if not schedule.empty and df["_park"].notna().any():
+            s = schedule.drop_duplicates(["park_id", "ds"]).set_index(["park_id", "ds"])
+            key = pd.MultiIndex.from_arrays([df["_park"], df["ds"].dt.normalize()])
+            for col in ("sched_open", "sched_closed"):
+                df[col] = s[col].reindex(key).fillna(0).astype(int).to_numpy()
+
     if "_park" in df.columns:
         df = df.drop(columns=["_park"])
     logger.info(
@@ -340,6 +437,22 @@ def add_calendar_covariates(
         n_parks, len(df), time.time() - t0,
     )
     return df
+
+
+def _holiday_distance(dv: np.ndarray, dates: set) -> tuple[np.ndarray, np.ndarray]:
+    """Days until / since the nearest date in `dates`, clipped to [0, 30].
+    searchsorted on the sorted holiday array — vectorised, ~O(n log h)."""
+    hol_sorted = np.sort(np.array(list(dates), dtype="datetime64[ns]"))
+    day = np.timedelta64(1, "D")
+    until = np.full(len(dv), 30.0)
+    pos = np.searchsorted(hol_sorted, dv, side="left")
+    hasn = pos < len(hol_sorted)
+    until[hasn] = (hol_sorted[pos[hasn]] - dv[hasn]) / day
+    since = np.full(len(dv), 30.0)
+    pos2 = np.searchsorted(hol_sorted, dv, side="right") - 1
+    hasp = pos2 >= 0
+    since[hasp] = (dv[hasp] - hol_sorted[pos2[hasp]]) / day
+    return np.clip(until, 0, 30), np.clip(since, 0, 30)
 
 
 FUTR_EXOG = [
@@ -373,6 +486,24 @@ FUTR_EXOG = [
     "wind_max",
     "is_wet",
 ]
+
+# NF_CALENDAR_GRID adds the published schedule and the school-holiday distance.
+# Kept out of FUTR_EXOG so the default model's inputs stay exactly as they were.
+FUTR_EXOG_GRID = FUTR_EXOG + [
+    "sched_open",
+    "sched_closed",
+    "days_until_school_holiday",
+    "days_since_school_holiday",
+]
+
+
+def futr_exog() -> list[str]:
+    return FUTR_EXOG_GRID if settings.NF_CALENDAR_GRID else FUTR_EXOG
+
+
+def hist_exog() -> list[str]:
+    """Past-only inputs: with the grid, whether the day was observed at all."""
+    return ["is_observed"] if settings.NF_CALENDAR_GRID else []
 
 
 def persist_forecast(
@@ -440,14 +571,20 @@ def persist_forecast(
 
 def build_future_frame(
     panel: pd.DataFrame, meta: pd.DataFrame, holidays: pd.DataFrame, horizon: int,
-    weather: pd.DataFrame | None = None,
+    weather: pd.DataFrame | None = None, schedule: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Exactly `horizon` future daily rows per unique_id with all FUTR_EXOG
-    columns filled (NeuralForecast requires futr_df = h rows/series)."""
+    columns filled (NeuralForecast requires futr_df = h rows/series).
+
+    Starts at each series' `last ds + 1`, which NeuralForecast requires. On the
+    default operating-days panel that is in the past for a ride last seen weeks
+    ago (and its frame then reaches only `horizon - gap` days ahead); with
+    NF_CALENDAR_GRID every series ends park-local yesterday (`to_calendar_grid`),
+    so every frame starts park-local today (PAR-1033)."""
     rows = []
     for uid, g in panel.groupby("unique_id"):
         last = g["ds"].max()
         future_ds = pd.date_range(last + pd.Timedelta(days=1), periods=horizon, freq="D")
         rows.append(pd.DataFrame({"unique_id": uid, "ds": future_ds}))
     fut = pd.concat(rows, ignore_index=True)
-    return add_calendar_covariates(fut, meta, holidays, weather)
+    return add_calendar_covariates(fut, meta, holidays, weather, schedule)

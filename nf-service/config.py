@@ -75,6 +75,22 @@ class Settings(BaseSettings):
     # static features don't affect windowing).
     NF_USE_STATIC: bool = True
 
+    # PAR-1033: train on a FULL calendar-day grid. Off (default) = the panel holds
+    # operating days only, so with freq="D" NeuralForecast reads `input_size` as 90
+    # OPERATING days and step k as the k-th operating day — wrong spacing for any
+    # park with rest days or a closed season. On = every day from a series' first
+    # observation to park-local yesterday, absent days y=0 with available_mask=0
+    # (excluded from the scaler and the loss), the published schedule as two
+    # futr_exog flags (sched_open / sched_closed, both 0 = unknown) plus the
+    # school-holiday distance, and every forecast starts at park-local today.
+    # Default off because it changes the training data shape: shadow/A-B first.
+    NF_CALENDAR_GRID: bool = False
+    # With the grid on: a series whose last observation is more than this many
+    # days before park-local today is not forecast (CatBoost serves it). Equal to
+    # NF_INPUT_SIZE: past that the whole context window is masked — the model
+    # would forecast from nothing but the calendar.
+    NF_MAX_STALE_DAYS: int = 90
+
     # Loss for the daily-peak TFT. "studentt" (DistributionLoss, median + 80/90
     # intervals) is the production default. "quantile" (upper conditional quantile,
     # CatBoost-q0.8 analog) was tested via the headliner sweep and REJECTED: TFT's busy

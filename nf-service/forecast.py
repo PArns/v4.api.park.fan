@@ -106,7 +106,7 @@ def _build_models(chunk_idx: int = 1, n_chunks: int = 1, stat_exog=None, loss=No
     common = dict(
         h=settings.NF_HORIZON,
         input_size=settings.NF_INPUT_SIZE,
-        futr_exog_list=db.FUTR_EXOG,
+        futr_exog_list=db.futr_exog(),
         scaler_type="robust",  # required by NeuralForecast when using exog
         loss=loss if loss is not None else _build_loss(),
         max_steps=settings.NF_MAX_STEPS,
@@ -125,6 +125,8 @@ def _build_models(chunk_idx: int = 1, n_chunks: int = 1, stat_exog=None, loss=No
     )
     if stat_exog:
         common["stat_exog_list"] = stat_exog
+    if db.hist_exog():
+        common["hist_exog_list"] = db.hist_exog()
     # TFT only — it's the model under evaluation; NHITS was an unused baseline whose
     # training just doubled time + memory. (Re-add if a baseline is needed later.)
     return [
@@ -149,12 +151,20 @@ def _build_static_df(meta: pd.DataFrame, panel: pd.DataFrame):
 
 
 def build_panel(park_ids: list[str]):
-    """Returns (panel_with_covariates, meta, holidays, weather) for the given parks.
-    Empty frames if the parks have no data in the window (caller skips the chunk)."""
+    """Returns (panel_with_covariates, meta, holidays, weather, schedule) for the
+    given parks. Empty frames if the parks have no data in the window (caller skips
+    the chunk). schedule is None unless NF_CALENDAR_GRID is on."""
+    empty = (pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None)
     panel = db.fetch_daily_peak_panel(park_ids)
     if panel.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return empty
     meta = db.fetch_attraction_meta(park_ids)
+    schedule = None
+    if settings.NF_CALENDAR_GRID:
+        panel = db.to_calendar_grid(panel, meta, settings.NF_MAX_STALE_DAYS)
+        if panel.empty:
+            return empty
+        schedule = db.fetch_schedule(park_ids)
     countries = sorted({c for c in meta["country"].dropna().unique()})
     # include influencing countries
     for inf in meta["influencing"].dropna():
@@ -163,8 +173,8 @@ def build_panel(park_ids: list[str]):
     countries = sorted(set(countries))
     holidays = db.fetch_holidays(countries)
     weather = db.fetch_weather(park_ids)
-    panel = db.add_calendar_covariates(panel, meta, holidays, weather)
-    return panel, meta, holidays, weather
+    panel = db.add_calendar_covariates(panel, meta, holidays, weather, schedule)
+    return panel, meta, holidays, weather, schedule
 
 
 def train_and_forecast(version: str) -> pd.DataFrame:
@@ -225,17 +235,20 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     logger.info("   Windows batch size: %d", settings.NF_WINDOWS_BATCH_SIZE)
     logger.info("   Learning rate:      %s", settings.NF_LEARNING_RATE)
     logger.info("   Static covariates:  %s", "on" if settings.NF_USE_STATIC else "off")
+    logger.info("   Calendar grid:      %s", "on" if settings.NF_CALENDAR_GRID else "off")
     logger.info(
         "📊 Panel: %d parks → %d chunk(s) of %d (dataloader workers=%d)",
         len(park_ids), len(chunks), size, settings.NF_NUM_WORKERS,
     )
 
-    cols = ["unique_id", "ds", "y"] + db.FUTR_EXOG
+    cols = ["unique_id", "ds", "y"] + db.futr_exog()
+    if settings.NF_CALENDAR_GRID:
+        cols += db.hist_exog() + ["available_mask"]
     parts = []
     skipped = 0
     for ci, chunk in enumerate(chunks, 1):
         tc = time.time()
-        panel, meta, holidays, weather = build_panel(chunk)
+        panel, meta, holidays, weather, schedule = build_panel(chunk)
         if panel.empty:
             logger.info("chunk %d/%d: no data, skip", ci, len(chunks))
             continue
@@ -261,7 +274,9 @@ def train_and_forecast(version: str) -> pd.DataFrame:
                 models=_build_models(ci, len(chunks), stat_exog), freq="D"
             )
             nf.fit(df=panel[cols], static_df=static_df)
-            futr = db.build_future_frame(panel, meta, holidays, settings.NF_HORIZON, weather)
+            futr = db.build_future_frame(
+                panel, meta, holidays, settings.NF_HORIZON, weather, schedule
+            )
             # static_df must be passed to predict too (else: "static exogenous
             # variables not found in input dataset"); None when static is off.
             yh = nf.predict(df=panel[cols], static_df=static_df, futr_df=futr)
