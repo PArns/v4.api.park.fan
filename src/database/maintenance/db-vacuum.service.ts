@@ -214,7 +214,8 @@ export class DbVacuumService {
    * Batched retention DELETE on the TFT forecast tables by `forecast_date`
    * (PAR-1054, the PAR-873 pattern): each batch is its own autocommitted
    * statement of at most {@link TFT_PRUNE_BATCH_ROWS} rows; a table stops at
-   * its first short batch, after {@link TFT_PRUNE_MAX_BATCHES}, or when the
+   * its first short batch, when the run has used {@link TFT_PRUNE_MAX_BATCHES}
+   * (one budget for all tables, not one each), or when the
    * clock leaves 04:35–04:48 UTC (each batch's timeout capped to 04:50, when
    * the VACUUM starts) — a stopped run logs the rows left and the next night
    * continues. A missing
@@ -227,6 +228,7 @@ export class DbVacuumService {
     maxBatches: number = TFT_PRUNE_MAX_BATCHES,
   ): Promise<TftPruneResult[]> {
     const results: TftPruneResult[] = [];
+    let used = 0; // batches of the whole run: the tables share one budget
     const client = await this.openClient("TFT prune", VACUUM_LOCK_TIMEOUT);
     if (!client) return results;
     try {
@@ -244,11 +246,12 @@ export class DbVacuumService {
             [table],
           );
           if (!exists.rows[0]?.present) {
+            this.logger.debug(`🗑️  ${table}: not there yet, skipped`);
             r.done = true;
             continue;
           }
           const sql = tftPruneSql(table);
-          while (r.batches < maxBatches) {
+          while (used < maxBatches) {
             const now = this.now();
             if (!mayStartTftPruneBatch(now)) {
               this.logger.warn(
@@ -263,6 +266,7 @@ export class DbVacuumService {
             const n = Number(res.rowCount ?? 0);
             r.deleted += n;
             r.batches++;
+            used++;
             if (n < batchRows) {
               r.done = true;
               break;

@@ -142,7 +142,7 @@ export const TFT_PRUNE_CRON = "35 4 * * *";
 
 /**
  * Rows whose `forecast_date` is older than this many days are deleted from
- * `tft_forecasts` and `tft_forecasts_shadow`. Neither had any retention; on
+ * `tft_forecasts` and its two shadows ({@link TFT_PRUNE_TABLES}). None had any retention; on
  * 2026-10-24 `tft_forecasts` held 27 M rows (3.8 GB), +180 k a day.
  *
  * The oldest `forecast_date` each reader asks for:
@@ -150,7 +150,7 @@ export const TFT_PRUNE_CRON = "35 4 * * *";
  * | reader | window | oldest forecast_date |
  * |---|---|---|
  * | `ForecastAccuracyService.rebuild` (planner band, 03:10) | targets 45 d back, leads ≤ 60 | today − 105 |
- * | forward-archive shadow scoring (`tft_forecasts_shadow`) | targets ≤ 14 d back (curve retention), lead ≤ 90 + 3 | today − 107 |
+ * | forward-archive shadow scoring (`tft_forecasts_shadow`, `_shadow_drivers`) | targets ≤ 14 d back (curve retention), lead ≤ 90 + 3 | today − 107 |
  * | `getTftTopBottomPerformers` (admin board, `days` = 14) | newest forecast before each target | today − 15 |
  * | calendar serving (`MLService`, TFT level) | `forecast_date >= today − 3` | today − 3 |
  * | admin ML overview probe | newest row for today + 2 | today − 2 |
@@ -162,12 +162,26 @@ export const TFT_PRUNE_CRON = "35 4 * * *";
  */
 export const TFT_FORECAST_RETENTION_DAYS = 120;
 
-/** The tables the prune covers. Both PLAIN tables: the ctid batching relies on it. */
-export const TFT_PRUNE_TABLES = ["tft_forecasts", "tft_forecasts_shadow"];
+/**
+ * The tables the prune covers, in the order it runs: the served table first, so
+ * a short window still gets the one that matters. All PLAIN tables (the ctid
+ * batching relies on it). The two shadows are `LIKE tft_forecasts`, created by
+ * nf-service on its first shadow write (PAR-1041, PAR-1057) and skipped until
+ * then. Their one reader is the forward-archive scoring above (`forecast_date
+ * >= target − (lead + 3)`), so the same 120 days serve them.
+ */
+export const TFT_PRUNE_TABLES = [
+  "tft_forecasts",
+  "tft_forecasts_shadow",
+  "tft_forecasts_shadow_drivers",
+];
 
 /** Rows per DELETE (one autocommitted statement each), as for pcn_forecasts (PAR-873). */
 export const TFT_PRUNE_BATCH_ROWS = 200_000;
-/** Batches per table per run: steady state needs one; the first run ~25. */
+/**
+ * Batches per run, shared by all {@link TFT_PRUNE_TABLES}: steady state needs
+ * one per table; the first run ~25 on `tft_forecasts`.
+ */
 export const TFT_PRUNE_MAX_BATCHES = 40;
 /**
  * Per batch. There is no index on `forecast_date`, so a batch is a sequential

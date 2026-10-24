@@ -105,10 +105,14 @@ beforeEach(() => {
 afterEach(() => jest.restoreAllMocks());
 
 describe("TFT forecast retention (PAR-1054)", () => {
-  it("keeps 120 days, runs 04:35 UTC, covers both tables, none a hypertable", () => {
+  it("keeps 120 days, runs 04:35 UTC, served table then both shadows, none a hypertable", () => {
     expect(TFT_FORECAST_RETENTION_DAYS).toBe(120);
     expect(TFT_PRUNE_CRON).toBe("35 4 * * *");
-    expect(TFT_PRUNE_TABLES).toEqual(["tft_forecasts", "tft_forecasts_shadow"]);
+    expect(TFT_PRUNE_TABLES).toEqual([
+      "tft_forecasts",
+      "tft_forecasts_shadow",
+      "tft_forecasts_shadow_drivers",
+    ]);
     // The ctid batching is only correct on a plain table.
     const hyper = HYPERTABLES.map((h) => h.table);
     for (const t of TFT_PRUNE_TABLES) expect(hyper).not.toContain(t);
@@ -127,7 +131,11 @@ describe("TFT forecast retention (PAR-1054)", () => {
 
   it("loops until a short batch, per table, each DELETE its own statement", async () => {
     const client = fakeClient({
-      deletes: { tft_forecasts: [100, 100, 40], tft_forecasts_shadow: [5] },
+      deletes: {
+        tft_forecasts: [100, 100, 40],
+        tft_forecasts_shadow: [5],
+        tft_forecasts_shadow_drivers: [7],
+      },
     });
     const results = await serviceWith(
       client,
@@ -137,9 +145,23 @@ describe("TFT forecast retention (PAR-1054)", () => {
     expect(results).toEqual([
       { table: "tft_forecasts", deleted: 240, batches: 3, done: true },
       { table: "tft_forecasts_shadow", deleted: 5, batches: 1, done: true },
+      {
+        table: "tft_forecasts_shadow_drivers",
+        deleted: 7,
+        batches: 1,
+        done: true,
+      },
     ]);
     const dels = client.statements.filter((s) => s.sql.startsWith("DELETE"));
-    expect(dels).toHaveLength(4);
+    expect(dels).toHaveLength(5);
+    // The served table is pruned to the end before either shadow starts.
+    expect(dels.map((d) => d.sql.match(/^DELETE FROM "([^"]+)"/)![1])).toEqual([
+      "tft_forecasts",
+      "tft_forecasts",
+      "tft_forecasts",
+      "tft_forecasts_shadow",
+      "tft_forecasts_shadow_drivers",
+    ]);
     expect(dels[0].params).toEqual([120, 100]);
     expect(client.statements.map((s) => s.sql)).toContain(
       `SET statement_timeout = ${5 * MIN}`,
@@ -166,6 +188,28 @@ describe("TFT forecast retention (PAR-1054)", () => {
       done: false,
       remaining: 0,
     });
+  });
+
+  it("shares one batch budget across the tables", async () => {
+    const client = fakeClient({
+      deletes: {
+        tft_forecasts: [100, 100, 40],
+        tft_forecasts_shadow: [100, 100, 100],
+        tft_forecasts_shadow_drivers: [5],
+      },
+    });
+    const results = await serviceWith(
+      client,
+      sunday("04:35"),
+    ).pruneTftForecasts(TFT_PRUNE_TABLES, 120, 100, 4);
+    expect(results.map((r) => [r.table, r.batches, r.done])).toEqual([
+      ["tft_forecasts", 3, true],
+      ["tft_forecasts_shadow", 1, false],
+      ["tft_forecasts_shadow_drivers", 0, false],
+    ]);
+    expect(
+      client.statements.filter((s) => s.sql.startsWith("DELETE")),
+    ).toHaveLength(4);
   });
 
   it("starts batches only 04:35-04:48 UTC, each capped to end by 04:50", () => {
@@ -204,6 +248,12 @@ describe("TFT forecast retention (PAR-1054)", () => {
         remaining: 1234,
       },
       { table: "tft_forecasts_shadow", deleted: 0, batches: 0, done: false },
+      {
+        table: "tft_forecasts_shadow_drivers",
+        deleted: 0,
+        batches: 0,
+        done: false,
+      },
     ]);
     const sqls = client.statements.map((s) => s.sql);
     expect(sqls).toContain(`SET statement_timeout = ${3 * MIN}`);
@@ -222,23 +272,37 @@ describe("TFT forecast retention (PAR-1054)", () => {
     ).toBe(false);
   });
 
-  it("skips a table that does not exist yet", async () => {
-    const client = fakeClient({ missing: ["tft_forecasts_shadow"] });
+  it("skips a table that does not exist yet, without an error, and goes on", async () => {
+    const client = fakeClient({
+      missing: ["tft_forecasts_shadow_drivers"],
+      deletes: { tft_forecasts: [3], tft_forecasts_shadow: [2] },
+    });
+    const debug = jest
+      .spyOn(Logger.prototype, "debug")
+      .mockImplementation(() => undefined);
     const results = await serviceWith(
       client,
       sunday("04:35"),
     ).pruneTftForecasts();
-    expect(results[1]).toEqual({
-      table: "tft_forecasts_shadow",
-      deleted: 0,
-      batches: 0,
-      done: true,
-    });
+    expect(results).toEqual([
+      { table: "tft_forecasts", deleted: 3, batches: 1, done: true },
+      { table: "tft_forecasts_shadow", deleted: 2, batches: 1, done: true },
+      {
+        table: "tft_forecasts_shadow_drivers",
+        deleted: 0,
+        batches: 0,
+        done: true,
+      },
+    ]);
     expect(
       client.statements.some((s) =>
-        s.sql.startsWith('DELETE FROM "tft_forecasts_shadow"'),
+        s.sql.startsWith('DELETE FROM "tft_forecasts_shadow_drivers"'),
       ),
     ).toBe(false);
+    expect(Logger.prototype.error).not.toHaveBeenCalled();
+    expect(debug).toHaveBeenCalledWith(
+      expect.stringContaining("tft_forecasts_shadow_drivers: not there yet"),
+    );
   });
 });
 
