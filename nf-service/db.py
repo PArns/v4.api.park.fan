@@ -173,19 +173,32 @@ def fetch_weather(park_ids: list[str]) -> pd.DataFrame:
 def fetch_schedule(park_ids: list[str]) -> pd.DataFrame:
     """Published park-wide schedule per (park, local day), for NF_CALENDAR_GRID:
     sched_open = an OPERATING entry, sched_closed = a CLOSED entry and no
-    OPERATING one. A day without an entry is neither — unknown, never closed."""
-    where = 'AND "parkId" = ANY(CAST(:pids AS uuid[]))' if park_ids else ""
+    OPERATING one. A day without an entry is neither — unknown, never closed.
+
+    Also the OPERATING window as park-local NAIVE timestamps (open_local /
+    close_local, datetime-handling §8) and `sched_asof` (PAR-1057): 1 when the
+    window's last write (`updatedAt`) came before the day began — or, for today
+    and later, before now — i.e. it was known at an origin before the day. The
+    table keeps only the latest version of a day, so a re-sync that rewrote an
+    unchanged row reads as unknown (conservative, as `add_asof` in ml-bench)."""
+    where = 'AND se."parkId" = ANY(CAST(:pids AS uuid[]))' if park_ids else ""
+    op = "se.\"scheduleType\" = 'OPERATING'"
     sql = text(
         f"""
-        SELECT "parkId"::text AS park_id, date AS ds,
-               bool_or("scheduleType" = 'OPERATING')::int AS sched_open,
-               (bool_or("scheduleType" = 'CLOSED')
-                AND NOT bool_or("scheduleType" = 'OPERATING'))::int AS sched_closed
-        FROM schedule_entries
-        WHERE "attractionId" IS NULL
-          AND date >= CURRENT_DATE - CAST(:window AS int)
+        SELECT se."parkId"::text AS park_id, se.date AS ds,
+               bool_or({op})::int AS sched_open,
+               (bool_or(se."scheduleType" = 'CLOSED') AND NOT bool_or({op}))::int AS sched_closed,
+               min(se."openingTime" AT TIME ZONE p.timezone) FILTER (WHERE {op}) AS open_local,
+               max(se."closingTime" AT TIME ZONE p.timezone) FILTER (WHERE {op}) AS close_local,
+               COALESCE(max(se."updatedAt") FILTER (WHERE {op})
+                        < GREATEST(se.date::timestamp AT TIME ZONE p.timezone, now()),
+                        false)::int AS sched_asof
+        FROM schedule_entries se
+        JOIN parks p ON p.id = se."parkId"
+        WHERE se."attractionId" IS NULL
+          AND se.date >= CURRENT_DATE - CAST(:window AS int)
           {where}
-        GROUP BY 1, 2
+        GROUP BY 1, 2, p.timezone
         """
     )
     params = {"window": settings.NF_WINDOW_DAYS}
@@ -194,7 +207,165 @@ def fetch_schedule(park_ids: list[str]) -> pd.DataFrame:
     with _engine.connect() as c:
         df = pd.read_sql(sql, c, params=params)
     df["ds"] = pd.to_datetime(df["ds"]).dt.normalize()
+    for col in ("open_local", "close_local"):
+        df[col] = pd.to_datetime(df[col])
     return df
+
+
+# PAR-1057: the grid shadow's extra inputs and target (the PAR-830 drivers). Set
+# only by forecast.calendar_grid(..., drivers=True), i.e. inside the shadow run.
+DRIVERS = False
+CLOSED_DAYS_CAP = 14
+_DRIVER_SCHEDULE_COLS = ["hours_ratio", "close_vs_ref", "closed_days_before", "sched_known"]
+_DRIVER_NEUTRAL = {"hours_ratio": 1.0, "close_vs_ref": 0.0, "closed_days_before": 0, "sched_known": 0}
+
+
+def schedule_drivers(schedule: pd.DataFrame | None) -> pd.DataFrame:
+    """Per (park_id, ds) with a published window: the PAR-830 schedule drivers.
+
+    - hours_ratio: the day's opening hours / their mean over the last four same
+      weekdays (d-7 … d-28) that have a published window; 1.0 when unknown.
+    - close_vs_ref: closing hour minus those days' mean closing hour, in hours
+      (a past-midnight close counts past 24) — the late close; 0.0 when unknown.
+    - closed_days_before: days without a published window since the previous
+      one, capped at CLOSED_DAYS_CAP; > 0 is the first operating day after a
+      closure. Only a gap BETWEEN two published windows counts; before the
+      first one nothing is known (0).
+    - sched_known: the day's window was published as of the origin
+      (`sched_asof`). Where it is 0 every other column is neutral.
+    """
+    cols = ["park_id", "ds", *_DRIVER_SCHEDULE_COLS]
+    if schedule is None or schedule.empty or "open_local" not in schedule.columns:
+        return pd.DataFrame(columns=cols)
+    w = schedule.dropna(subset=["open_local", "close_local"]).copy()
+    w["hours"] = (w["close_local"] - w["open_local"]).dt.total_seconds() / 3600
+    w["close_h"] = (w["close_local"] - w["ds"]).dt.total_seconds() / 3600
+    w = w[w["hours"] > 0].drop_duplicates(["park_id", "ds"]).sort_values(["park_id", "ds"])
+    w = w.reset_index(drop=True)
+    if w.empty:
+        return pd.DataFrame(columns=cols)
+    idx = w.set_index(["park_id", "ds"])
+    hsum = np.zeros(len(w))
+    csum = np.zeros(len(w))
+    n = np.zeros(len(w))
+    for k in range(1, 5):
+        key = pd.MultiIndex.from_arrays([w["park_id"], w["ds"] - pd.Timedelta(days=7 * k)])
+        h = idx["hours"].reindex(key).to_numpy()
+        c = idx["close_h"].reindex(key).to_numpy()
+        ok = ~np.isnan(h)
+        hsum += np.where(ok, h, 0.0)
+        csum += np.where(ok, c, 0.0)
+        n += ok
+    known = w["sched_asof"].fillna(0).astype(int).to_numpy() == 1
+    ref = known & (n > 0)
+    nn = np.maximum(n, 1)
+    w["hours_ratio"] = np.where(ref, w["hours"] / (hsum / nn), 1.0)
+    w["close_vs_ref"] = np.where(ref, w["close_h"] - csum / nn, 0.0)
+    gap = (w["ds"] - w.groupby("park_id")["ds"].shift()).dt.days - 1
+    w["closed_days_before"] = np.where(known, gap.fillna(0).clip(0, CLOSED_DAYS_CAP), 0).astype(int)
+    w["sched_known"] = known.astype(int)
+    return w[cols]
+
+
+def time_weighted_p90(
+    readings: pd.DataFrame, windows: pd.DataFrame | None, pct: float, min_wait: float,
+    max_stale_hours: float = 3, min_slots: int = 3,
+) -> pd.DataFrame:
+    """Daily P`pct` over a TIME-WEIGHTED 15-min grid, not over change-log rows.
+
+    `queue_data` writes a row only when something changes, so a percentile over
+    its rows weighs a jittery busy hour above a calm one. Here each quarter-hour
+    of the day's operating window takes the last reading before its end — any
+    status, so a DOWN/CLOSED row ends the carry — valid for at most `max_stale_hours`
+    (the archive truth's 3 h rule); a slot whose value is OPERATING with a wait
+    ≥ `min_wait` enters the percentile, as `rideQ90` in
+    forecast-archive.service.ts does. The window is the park's published
+    OPERATING window (open_local / close_local, park-local naive), cut at
+    midnight; a park-day without one falls back to the span of the park's own
+    OPERATING readings that day.
+
+    `readings`: unique_id, park_id, ts (park-local naive), status, wait.
+    Returns unique_id, ds, y for ride-days with ≥ `min_slots` counted slots."""
+    out_cols = ["unique_id", "ds", "y"]
+    if readings.empty:
+        return pd.DataFrame(columns=out_cols)
+    q = pd.Timedelta(minutes=15)
+    day = pd.Timedelta(days=1)
+    r = readings.sort_values("ts").reset_index(drop=True)
+    r["ds"] = r["ts"].dt.normalize()
+    rd = r[["unique_id", "park_id", "ds"]].drop_duplicates()
+    # observed=True: ids/status may be categoricals (fetch_time_weighted_panel);
+    # without it a groupby would build every id × day combination.
+    span = (r[r["status"] == "OPERATING"].groupby(["park_id", "ds"], observed=True)["ts"]
+            .agg(fb_open="min", fb_close="max").reset_index())
+    span["fb_close"] += q
+    rd = rd.merge(span, on=["park_id", "ds"], how="left")
+    if windows is not None and not windows.empty and "open_local" in windows.columns:
+        win = windows.dropna(subset=["open_local", "close_local"])
+        rd = rd.merge(win[["park_id", "ds", "open_local", "close_local"]]
+                      .drop_duplicates(["park_id", "ds"]), on=["park_id", "ds"], how="left")
+    else:
+        rd["open_local"] = rd["close_local"] = pd.NaT
+    start = rd["open_local"].fillna(rd["fb_open"]).dt.floor("15min")
+    end = rd["close_local"].fillna(rd["fb_close"]).clip(upper=rd["ds"] + day)
+    n = np.ceil((end - start) / q).fillna(0).clip(lower=0).astype(int).to_numpy()
+    rd = rd.assign(_start=start)[n > 0]
+    n = n[n > 0]
+    if rd.empty:
+        return pd.DataFrame(columns=out_cols)
+    g = rd.loc[rd.index.repeat(n), ["unique_id", "ds", "_start"]].reset_index(drop=True)
+    offsets = np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)
+    g["t_end"] = g["_start"] + q * (offsets + 1)
+    m = pd.merge_asof(
+        g.sort_values("t_end"), r[["unique_id", "ts", "status", "wait"]],
+        left_on="t_end", right_on="ts", by="unique_id", direction="backward",
+        allow_exact_matches=False, tolerance=pd.Timedelta(hours=max_stale_hours),
+    )
+    m = m[(m["status"] == "OPERATING") & (m["wait"] >= min_wait)]
+    grp = m.groupby(["unique_id", "ds"], observed=True)["wait"]
+    # Linear interpolation, as PERCENTILE_CONT in fetch_daily_peak_panel.
+    agg = pd.DataFrame({"y": grp.quantile(pct), "n": grp.size()}).reset_index()
+    return agg.loc[agg["n"] >= min_slots, out_cols].reset_index(drop=True)
+
+
+def fetch_time_weighted_panel(park_ids: list[str], schedule: pd.DataFrame | None) -> pd.DataFrame:
+    """The grid shadow's target (PAR-1057): `time_weighted_p90` per ride-day over
+    the rows `fetch_daily_peak_panel` reads (STANDBY, no heartbeat, before
+    park-local today) — at every status, because a non-operating row is what
+    ends the carry of the last wait."""
+    where_park = 'AND a."parkId" = ANY(CAST(:pids AS uuid[]))' if park_ids else ""
+    sql = text(
+        f"""
+        SELECT qd."attractionId"::text AS unique_id, a."parkId"::text AS park_id,
+               qd.timestamp AT TIME ZONE p.timezone AS ts,
+               qd.status::text AS status, qd."waitTime"::real AS wait
+        FROM queue_data qd
+        JOIN attractions a ON a.id = qd."attractionId"
+        JOIN parks p ON p.id = a."parkId"
+        WHERE qd.timestamp >= NOW() - (:window || ' days')::interval
+          AND DATE(qd.timestamp AT TIME ZONE p.timezone) < DATE(NOW() AT TIME ZONE p.timezone)
+          AND NOT COALESCE(qd.is_heartbeat, false)
+          AND qd."queueType" = 'STANDBY'
+          {where_park}
+        """
+    )
+    params = {"window": str(settings.NF_WINDOW_DAYS)}
+    if park_ids:
+        params["pids"] = uuid_list(park_ids, "fetch_time_weighted_panel")
+    with _engine.connect() as c:
+        r = pd.read_sql(sql, c, params=params)
+    r["ts"] = pd.to_datetime(r["ts"])
+    # Raw change-log rows (~3M per 10-park chunk) and their 15-min grid: as
+    # categoricals the ids and status are int codes, not one Python str per row.
+    r = r.astype({"unique_id": "category", "park_id": "category", "status": "category"})
+    out = time_weighted_p90(r, schedule, settings.NF_TARGET_PERCENTILE, settings.NF_MIN_WAIT)
+    out["unique_id"] = out["unique_id"].astype(str)
+    out["ds"] = pd.to_datetime(out["ds"])
+    out["y"] = out["y"].astype(float)
+    import psutil
+    logger.info("time-weighted panel: %d parks, %d readings -> %d ride-days, RSS %.2f GB",
+                len(park_ids), len(r), len(out), psutil.Process().memory_info().rss / 1e9)
+    return out
 
 
 def park_local_today(meta: pd.DataFrame, now: pd.Timestamp | None = None) -> dict:
@@ -298,6 +469,9 @@ def add_calendar_covariates(
         "is_holiday_neighbor",
         "is_school_holiday",
         "is_bridge_day",
+        "school_break_first_day",
+        "school_break_last_day",
+        "school_break_day_after",
     ):
         df[col] = 0
     # Holiday-distance defaults (capped at 30d). Filled per park inside the loop.
@@ -401,6 +575,15 @@ def add_calendar_covariates(
             else:
                 known = d <= pd.Timestamp(sc_through)
             df.loc[idx, "school_holiday_known"] = known.astype(int).values
+            # PAR-1057: the CHANGE of school-break state, own region. A day it
+            # reads past the coverage (d for all three, d+1 for the last day)
+            # makes it 0 — school_holiday_known says so.
+            one = pd.Timedelta(days=1)
+            known_next = (d + one <= pd.Timestamp(sc_through)) if sc_through is not None else known
+            on, on_prev, on_next = d.isin(sc), (d - one).isin(sc), (d + one).isin(sc)
+            df.loc[idx, "school_break_first_day"] = (known & on & ~on_prev).astype(int).values
+            df.loc[idx, "school_break_last_day"] = (known_next & on & ~on_next).astype(int).values
+            df.loc[idx, "school_break_day_after"] = (known & ~on & on_prev).astype(int).values
             unknown_idx = known.index[~known.to_numpy()]
             df.loc[unknown_idx, ["days_until_school_holiday", "days_since_school_holiday"]] = 30.0
             n_parks += 1
@@ -442,6 +625,11 @@ def add_calendar_covariates(
             key = pd.MultiIndex.from_arrays([df["_park"], df["ds"].dt.normalize()])
             for col in ("sched_open", "sched_closed"):
                 df[col] = s[col].reindex(key).fillna(0).astype(int).to_numpy()
+        # PAR-1057 drivers (read only by the shadow); neutral where unknown.
+        drv = schedule_drivers(schedule).set_index(["park_id", "ds"])
+        key = pd.MultiIndex.from_arrays([df["_park"], df["ds"].dt.normalize()])
+        for col, neutral in _DRIVER_NEUTRAL.items():
+            df[col] = drv[col].reindex(key).fillna(neutral).to_numpy() if len(drv) else neutral
 
     if "_park" in df.columns:
         df = df.drop(columns=["_park"])
@@ -511,8 +699,21 @@ FUTR_EXOG_GRID = FUTR_EXOG + [
 ]
 
 
+# PAR-1057: the PAR-830 drivers, in the grid shadow only (`DRIVERS`), never in
+# the served model. All NaN-free: unknown is the neutral value plus a flag
+# (sched_known; school_holiday_known for the school-break changes).
+DRIVER_EXOG = [
+    *_DRIVER_SCHEDULE_COLS,
+    "school_break_first_day",
+    "school_break_last_day",
+    "school_break_day_after",
+]
+
+
 def futr_exog() -> list[str]:
-    return FUTR_EXOG_GRID if settings.NF_CALENDAR_GRID else FUTR_EXOG
+    if not settings.NF_CALENDAR_GRID:
+        return FUTR_EXOG
+    return FUTR_EXOG_GRID + DRIVER_EXOG if DRIVERS else FUTR_EXOG_GRID
 
 
 def hist_exog() -> list[str]:
@@ -520,12 +721,14 @@ def hist_exog() -> list[str]:
     return ["is_observed"] if settings.NF_CALENDAR_GRID else []
 
 
-# The served forecast and the grid shadow (PAR-1041). Two tables because the
-# key has no model_version: two variants of one night cannot share a row. The
-# shadow is `LIKE` the served table so the two schemas cannot drift apart; the
+# The served forecast and the two grid shadows (PAR-1041 grid only, PAR-1057
+# grid + drivers). One table each because the key has no model_version: two
+# variants of one night cannot share a row. The
+# shadows are `LIKE` the served table so the schemas cannot drift apart; the
 # literal statements are also what the E2E schema reads (test/helpers/
 # ml-forecast-tables.ts), and the dict is the whitelist for the table name.
 SHADOW_TABLE = "tft_forecasts_shadow"
+SHADOW_DRIVERS_TABLE = "tft_forecasts_shadow_drivers"
 _FORECAST_DDL = {
     "tft_forecasts": """
         CREATE TABLE IF NOT EXISTS tft_forecasts (
@@ -540,6 +743,9 @@ _FORECAST_DDL = {
         """,
     SHADOW_TABLE: """
         CREATE TABLE IF NOT EXISTS tft_forecasts_shadow (LIKE tft_forecasts INCLUDING ALL)
+        """,
+    SHADOW_DRIVERS_TABLE: """
+        CREATE TABLE IF NOT EXISTS tft_forecasts_shadow_drivers (LIKE tft_forecasts INCLUDING ALL)
         """,
 }
 

@@ -384,23 +384,37 @@ export class ForecastArchiveScoringService {
         c.levelSource === "tft",
     );
     if (tftPlans.length > 0) {
-      const shadow = await this.shadowLevels(
-        [...new Set(tftPlans.map((c) => c.attractionId))],
-        targetDate,
-        Math.max(...tftPlans.map((c) => c.leadDays)),
-      ).catch((err: Error) => {
-        // A shadow; without it the rest scores.
-        this.logger.warn(
-          `Forward archive scoring: TFT grid shadow for ${park.slug} ${targetDate} unavailable: ${err.message}`,
+      const ids = [...new Set(tftPlans.map((c) => c.attractionId))];
+      const maxLead = Math.max(...tftPlans.map((c) => c.leadDays));
+      // Grid only (PAR-1041) and grid + drivers (PAR-1057), each its own model.
+      // Read one after the other: two pool connections per park are not worth it.
+      const read = (
+        table: "tft_forecasts_shadow" | "tft_forecasts_shadow_drivers",
+      ): Promise<ShadowLevelRow[]> =>
+        this.shadowLevels(table, ids, targetDate, maxLead).catch(
+          (err: Error) => {
+            // A shadow; without it the rest scores.
+            this.logger.warn(
+              `Forward archive scoring: ${table} for ${park.slug} ${targetDate} unavailable: ${err.message}`,
+            );
+            return [];
+          },
         );
-        return [] as ShadowLevelRow[];
-      });
+      const grid = await read("tft_forecasts_shadow");
+      const drivers = await read("tft_forecasts_shadow_drivers");
       for (const c of tftPlans) {
+        const originDate = addIsoDays(targetDate, -c.leadDays);
         c.tftGridPeak = shadowLevelAt(
-          shadow,
+          grid,
           c.attractionId,
           c.originAt,
-          addIsoDays(targetDate, -c.leadDays),
+          originDate,
+        );
+        c.tftGridDriversPeak = shadowLevelAt(
+          drivers,
+          c.attractionId,
+          c.originAt,
+          originDate,
         );
       }
     }
@@ -530,13 +544,15 @@ export class ForecastArchiveScoringService {
   }
 
   /**
-   * `tft_forecasts_shadow` rows of the rides for one target date, from every
+   * `tft_forecasts_shadow` (or `_shadow_drivers`, PAR-1057) rows of the rides
+   * for one target date, from every
    * forecast_date a capture up to `maxLead` days earlier could have read
    * (`shadowLevelAt` picks per origin). PK-bounded: attraction + target date.
    * nf-service creates the table on its first shadow write; before that the
    * read fails and the caller scores without the shadow.
    */
   private async shadowLevels(
+    table: "tft_forecasts_shadow" | "tft_forecasts_shadow_drivers",
     attractionIds: string[],
     targetDate: string,
     maxLead: number,
@@ -547,7 +563,7 @@ export class ForecastArchiveScoringService {
       this.curveRepository.manager.connection,
       `SELECT attraction_id::text AS id, forecast_date::text AS fd,
               created_at AS created, predicted_peak::float AS peak
-         FROM tft_forecasts_shadow
+         FROM ${table}
         WHERE attraction_id = ANY($1::uuid[])
           AND target_date = $2::date
           AND forecast_date >= $2::date - $3::int`,

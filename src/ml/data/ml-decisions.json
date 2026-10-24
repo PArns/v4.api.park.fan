@@ -63,6 +63,17 @@
       ]
     },
     {
+      "id": "calendar_tft_grid_drivers",
+      "title": "Kalender: TFT mit Lücken-Raster + Treibern",
+      "detail": "Wie das Lücken-Raster, zusätzlich mit Öffnungszeiten gegenüber den letzten vier gleichen Wochentagen, spätem Schluss, dem ersten Tag nach einer Schließung und Ferienanfang/-ende, und mit der zeitgewichteten Tagesspitze als Ziel. Läuft als eigenes Modell neben dem Lücken-Raster, damit beide getrennt gegen den heutigen TFT gemessen werden. Offline ist es noch nicht gemessen.",
+      "evaluateOn": "2027-01-08",
+      "cells": [
+        { "questionId": "cal_rank", "modelId": "tft_grid_drivers" },
+        { "questionId": "cal_busier", "modelId": "tft_grid_drivers" },
+        { "questionId": "cal_far", "modelId": "tft_grid_drivers" }
+      ]
+    },
+    {
       "id": "catboost_daily_off",
       "title": "CatBoost-Tagesniveau abschalten",
       "detail": "Macht die Prognose offline schlechter. Erst abschalten, wenn der Ersatz live bestätigt ist. Live wird CatBoost jetzt an denselben Tagen gegen TFT gemessen: Wir speichern an jedem Tag, an dem TFT das Tagesniveau liefert, zusätzlich den CatBoost-Wert, ohne ihn anzuzeigen („Welcher Tag ist voller?“, „Wie hoch wird die Tagesspitze?“, „1 bis 2 Monate voraus“). Bei 3 Monaten liefert nur CatBoost; dort zählt der Vergleich mit dem Wochentag-Durchschnitt. Gemessen wird erst seit dem Einbau dieser Speicherung.",

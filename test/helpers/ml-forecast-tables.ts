@@ -6,12 +6,13 @@ import * as path from "path";
  * The merge tables that no TypeORM entity owns, and where their DDL lives.
  *
  * `ATTRACTION_DEPENDENCIES`, `PARK_DEPENDENCIES`, `PARK_INLINE_DEPENDENCIES`
- * and `PARK_TABLES_HANDLED_INLINE` name 43 tables between them. Forty are
+ * and `PARK_TABLES_HANDLED_INLINE` name 44 tables between them. Forty are
  * entities, so `synchronize: true` in `global-setup.ts` creates them. These
- * three are created at runtime by the Python sub-service that writes them, and
+ * four are created at runtime by the Python sub-service that writes them, and
  * the E2E schema therefore never had them. (There were four until PAR-870
  * retired `shape_forecasts` and `catboost_daily_forecasts` with their
- * writers; `tft_forecasts_shadow` came with PAR-1041.)
+ * writers; `tft_forecasts_shadow` came with PAR-1041 and
+ * `tft_forecasts_shadow_drivers` with PAR-1057.)
  * `applyMergeDependencies` walks its list straight through, so the
  * first one it reaches aborts the whole merge with 42P01:
  *
@@ -37,6 +38,7 @@ const ML_FORECAST_TABLE_SOURCES: ReadonlyArray<{
   { table: "tft_forecasts", source: "nf-service/db.py" },
   // After tft_forecasts: its DDL is `LIKE tft_forecasts` (PAR-1041).
   { table: "tft_forecasts_shadow", source: "nf-service/db.py" },
+  { table: "tft_forecasts_shadow_drivers", source: "nf-service/db.py" },
 ];
 
 /** Table names only — `setup-e2e.ts` truncates these alongside the entities. */

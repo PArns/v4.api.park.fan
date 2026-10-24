@@ -292,6 +292,11 @@ export interface ArchivedCurve {
    * time; rounded like the served TFT level.
    */
   tftGridPeak?: number | null;
+  /**
+   * plan_day: the same for the grid + PAR-830 drivers shadow
+   * (`tft_forecasts_shadow_drivers`, PAR-1057), paired as its own model.
+   */
+  tftGridDriversPeak?: number | null;
 }
 
 export interface ArchivedParkDay {
@@ -1124,6 +1129,8 @@ export const PAIRED_MODELS = {
   catboostShadow: "catboost_shadow",
   /** The calendar-grid TFT shadow (PAR-1041), on the TFT-levelled ride-days. */
   tftGrid: "tft_grid",
+  /** The grid + drivers + time-weighted target TFT shadow (PAR-1057). */
+  tftGridDrivers: "tft_grid_drivers",
 } as const;
 
 /** Ride-day use cases of the paired table besides the slot ones (UC1/2/3). */
@@ -1278,6 +1285,7 @@ export const PAIRED_OPTIONAL_MODELS: ReadonlySet<string> = new Set([
   PAIRED_MODELS.chronosGrid,
   PAIRED_MODELS.shadowPeak,
   PAIRED_MODELS.tftGrid,
+  PAIRED_MODELS.tftGridDrivers,
 ]);
 
 /**
@@ -1549,6 +1557,9 @@ export function scorePairedModels(
     if (plan.levelSource === "tft" && plan.tftGridPeak != null) {
       peaks.push([PAIRED_MODELS.tftGrid, plan.tftGridPeak]);
     }
+    if (plan.levelSource === "tft" && plan.tftGridDriversPeak != null) {
+      peaks.push([PAIRED_MODELS.tftGridDrivers, plan.tftGridDriversPeak]);
+    }
     for (const [model, peak] of peaks) {
       for (const seg of plan.isHeadliner ? ["all", "headliner"] : ["all"]) {
         acc.add(
@@ -1578,7 +1589,7 @@ export function scorePairedModels(
   }
 }
 
-/** One `tft_forecasts_shadow` row for a ride and target date. */
+/** One `tft_forecasts_shadow` (or `_shadow_drivers`) row for a ride and target date. */
 export interface ShadowLevelRow {
   attractionId: string;
   forecastDate: string;

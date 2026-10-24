@@ -40,6 +40,9 @@ def test_shadow_table_is_like_the_served_one_and_names_are_whitelisted():
     ddl, upsert = real_db.forecast_sql("tft_forecasts")
     assert "CREATE TABLE IF NOT EXISTS tft_forecasts (" in ddl
     assert "INSERT INTO tft_forecasts\n" in upsert
+    ddl, upsert = real_db.forecast_sql(real_db.SHADOW_DRIVERS_TABLE)
+    assert "CREATE TABLE IF NOT EXISTS tft_forecasts_shadow_drivers (LIKE tft_forecasts INCLUDING ALL)" in ddl
+    assert "INSERT INTO tft_forecasts_shadow_drivers" in upsert
     with pytest.raises(ValueError):
         real_db.forecast_sql("tft_forecasts; DROP TABLE x")
 
@@ -50,9 +53,9 @@ class _Fakes:
         self.fail_shadow = fail_shadow
 
     def train(self, version):
-        grid = forecast.settings.NF_CALENDAR_GRID
+        grid = (forecast.settings.NF_CALENDAR_GRID, getattr(forecast.db, "DRIVERS", False))
         self.calls.append(("train", version, grid))
-        if grid and self.fail_shadow:
+        if grid[0] and self.fail_shadow:
             raise RuntimeError("CUDA out of memory")
         df = pd.DataFrame({"unique_id": ["a"], "ds": pd.to_datetime(["2026-10-24"]),
                            "TFT": [30.0]})
@@ -70,12 +73,14 @@ def fakes(monkeypatch, tmp_path):
     monkeypatch.setattr(train_runner, "forecast", types.SimpleNamespace(
         calendar_grid=forecast.calendar_grid, train_and_forecast=f.train))
     monkeypatch.setattr(train_runner, "db", types.SimpleNamespace(
-        persist_forecast=f.persist, SHADOW_TABLE=real_db.SHADOW_TABLE))
+        persist_forecast=f.persist, SHADOW_TABLE=real_db.SHADOW_TABLE,
+        SHADOW_DRIVERS_TABLE=real_db.SHADOW_DRIVERS_TABLE))
     monkeypatch.setattr(main, "_STATUS_FILE", str(tmp_path / "status.json"))
     monkeypatch.setattr(main, "_FORECAST_FILE", str(tmp_path / "f.parquet"))
     monkeypatch.setattr(main.settings, "MODEL_DIR", str(tmp_path))
     monkeypatch.setattr(main.settings, "NF_CALENDAR_GRID", False)
     monkeypatch.setattr(main.settings, "NF_GRID_SHADOW", True)
+    monkeypatch.setattr(main.settings, "NF_SHADOW_DRIVERS", True)
     # The served run caches its parquet; no pyarrow needed for that here.
     monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, path: None)
     return f
@@ -84,14 +89,27 @@ def fakes(monkeypatch, tmp_path):
 def test_shadow_trains_with_the_grid_forced_on_and_writes_its_own_table(fakes):
     out = train_runner.run_grid_shadow("nf1", FD)
     assert fakes.calls == [
-        ("train", "nf1-grid", True),
+        ("train", "nf1-grid", (True, False)),
         ("persist", "nf1-grid", "tft_forecasts_shadow", FD),
     ]
     assert out["persisted"] == 1
     assert main.settings.NF_CALENDAR_GRID is False  # restored
+    assert forecast.db.DRIVERS is False
 
 
-def test_flag_off_or_grid_already_served_runs_nothing(fakes, monkeypatch):
+def test_drivers_shadow_is_its_own_model_in_its_own_table(fakes):
+    """PAR-1057: grid + drivers never replaces the grid-only shadow."""
+    train_runner.run_grid_shadow("nf1", FD, drivers=True)
+    assert fakes.calls == [
+        ("train", "nf1-grid-drivers", (True, True)),
+        ("persist", "nf1-grid-drivers", "tft_forecasts_shadow_drivers", FD),
+    ]
+    assert forecast.db.DRIVERS is False
+
+
+def test_flags_switch_each_shadow_alone(fakes, monkeypatch):
+    monkeypatch.setattr(main.settings, "NF_SHADOW_DRIVERS", False)
+    assert train_runner.run_grid_shadow("nf1", FD, drivers=True) is None
     monkeypatch.setattr(main.settings, "NF_GRID_SHADOW", False)
     assert train_runner.run_grid_shadow("nf1", FD) is None
     monkeypatch.setattr(main.settings, "NF_GRID_SHADOW", True)
@@ -104,12 +122,14 @@ def test_night_runs_served_first_then_shadow_and_a_shadow_failure_does_not_fail_
     fakes.fail_shadow = True
     train_runner.run("nf1")
     assert fakes.calls == [
-        ("train", "nf1", False),
+        ("train", "nf1", (False, False)),
         ("persist", "nf1", "tft_forecasts", datetime.now(timezone.utc).date()),
-        ("train", "nf1-grid", True),
+        ("train", "nf1-grid", (True, False)),
+        ("train", "nf1-grid-drivers", (True, True)),
     ]
     st = main._read_status()
     assert st["status"] == "completed" and st["is_training"] is False
     assert st["info"]["persisted"] == 1
     assert "CUDA out of memory" in st["info"]["shadow"]["error"]
+    assert "CUDA out of memory" in st["info"]["shadow_drivers"]["error"]
     assert main.settings.NF_CALENDAR_GRID is False
