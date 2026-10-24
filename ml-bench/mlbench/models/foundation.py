@@ -75,8 +75,9 @@ the model card; the class ``timesfm.TimesFM_2p5_200M_torch`` ships in the same
 ``timesfm==3.0.2`` wheel as TimesFM 3.0). Univariate: every ride is its own series.
 Covariates go through the package's own ``forecast_with_covariates`` (in-context
 linear regression, "XReg", mode ``xreg + timesfm``: a ridge/OLS fit of the target on the
-covariates over the context, TimesFM forecasts the residual) — one regression per PARK,
-shared by its rides. That is a covariate path bolted on beside the network, not
+covariates over the context, TimesFM forecasts the residual) — one regression per
+``forecast_with_covariates`` call, and ``forecast()`` makes one call per task, so one per
+PARK, shared by its rides (batching tasks into one call would silently pool parks). That is a covariate path bolted on beside the network, not
 covariates the network attends to as Chronos-2's do. TimesFM interpolates NaN linearly
 (also inside the XReg target, which would otherwise be NaN), so the grid layout turns
 nights into ramps; ``timesfm25_grid`` measures what that costs rather than assuming it.
@@ -350,6 +351,8 @@ class TimesFM25Backend(_Backend):
                 plain += inputs
                 plain_owner += [(ti, i) for i in rows]
         if plain:
+            # one pooled call for tasks of different H, so always M (1024) steps; sliced to
+            # [:H] below — an 8-step intraday task pays for 1024 steps (cost only)
             _pts, qs = self.fm.forecast(horizon=M, inputs=list(plain))
             for (ti, i), q in zip(plain_owner, qs):
                 H = out[ti].shape[1]

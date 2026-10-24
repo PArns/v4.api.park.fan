@@ -375,7 +375,13 @@ result.
 is paired inside the run. Image: the default Python 3.11 base plus
 `requirements-par1063.txt` (Chronos-2, timesfm 3.0.2 — which ships TimesFM 2.5 — peft,
 CPU jax for TimesFM's covariate regression). The GPU lock, quiet window and provenance
-gate are `scripts-par828/run.sh`'s, pointed at this checkout by its three env vars.
+gate are `scripts-par828/run.sh`'s, pointed at this checkout by its three env vars. The
+lock only orders bench runs among themselves — production's nf/pcn/Chronos-shadow jobs do
+not take it, and with `MLBENCH_FM_VRAM_FRACTION=0.6` a bench arm may hold 9.6 of the 16 GB
+(leaving production ~6.4 GB during the 03:00 UTC TFT training). So `run.sh` refuses to
+**start** inside 00:55–09:30 UTC (exit 3; also checked while it waits for the lock;
+`MLBENCH_IGNORE_WINDOW=1` overrides). Only the start is guarded: size the run with the
+probe so it ends before 00:55.
 
 ```bash
 cd ~/claude-worktrees/par-1063-1064            # a checkout of parns123/par-1063-1064-bench-plugins
