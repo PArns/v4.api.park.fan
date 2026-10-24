@@ -1299,7 +1299,7 @@ long-term home.
 Built as recommended: `ml-service/driver_level.py` is a pandas port of
 `drivers.py` and of this plug-in's fit / predict (same 29 features in the same
 order, same `HistGradientBoostingRegressor` parameters, seed 830), run nightly
-at 02:00 UTC on CPU in its own process, never served. It writes
+at 01:30 UTC on CPU in its own process, never served. It writes
 `driver_level_forecasts`; the forward archive pairs it as model `driver_level`
 on PEAK and D7 (`cal_rank`, `cal_busier`, `cal_far`, `cal_far_90`) —
 [forward-archive.md](forward-archive.md) §9.1. **D3 / best visit time and the

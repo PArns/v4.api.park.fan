@@ -23,6 +23,8 @@ import { DB_VACUUM_CRON } from "../../database/maintenance/vacuum-plan";
  * deploy restarted the API (PAR-626).
  */
 const RE_REGISTER_INTERVAL_MS = 60 * 60 * 1000;
+/** PAR-1058 driver-level shadow, UTC (see the registration for why 01:30). */
+const DRIVER_LEVEL_CRON = "30 1 * * *";
 
 /**
  * Id of the job Bull materialises for one run of a repeatable entry. Mirrors
@@ -1118,16 +1120,21 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
     // The driver-level shadow (PAR-1058): nightly, before Europe's 06:00 origin.
+    // 01:30 UTC sits in the gap after generate-daily (01:00, ~2 min) and before
+    // the 02:00 queue_data readers (calculate-percentiles, detect-feature-drift,
+    // 02:30 detect-seasonal): its scan is one all-park PERCENTILE_CONT over
+    // 400 days. `tz` is explicit so a host TZ change cannot move it into them.
     const hasDriverLevelCron = await this.hasRepeatableJob(
       this.forecastArchiveQueue,
       "driver-level-cron",
+      DRIVER_LEVEL_CRON,
     );
     if (!hasDriverLevelCron) {
       await this.forecastArchiveQueue.add(
         "driver-level",
         {},
         {
-          repeat: { cron: "0 2 * * *" },
+          repeat: { cron: DRIVER_LEVEL_CRON, tz: "UTC" },
           jobId: "driver-level-cron",
         },
       );

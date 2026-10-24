@@ -17,7 +17,7 @@ import { ForecastArchiveScoringService } from "../../parks/services/forecast-arc
  * - `score` ({@link ForecastArchiveScoreProcessor}, its own queue) runs daily
  *   at 12:00 UTC, when yesterday (UTC) is over in every park's timezone,
  *   scores it against queue_data truth and prunes the archive.
- * - `driver-level` (PAR-1058) runs daily at 02:00 UTC and starts ml-service's
+ * - `driver-level` (PAR-1058) runs daily at 01:30 UTC and starts ml-service's
  *   driver-level shadow, which replaces `driver_level_forecasts` before the
  *   first 06:00 origin (Europe, 04:00 UTC in summer) reads it at capture.
  */

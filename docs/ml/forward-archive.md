@@ -663,11 +663,19 @@ replay of older dates would find no shadow rows to add.
 **The driver-level shadow (`driver_level`, PAR-1058).** ml-bench's
 `driver_level` plug-in (PAR-830, [level-drivers.md](level-drivers.md) §6.8:
 "shadow, not serve", scoped to the day-ranking surfaces) runs in production as
-`ml-service/driver_level.py`: at 02:00 UTC the `forecast-archive` queue's
+`ml-service/driver_level.py`: at 01:30 UTC the `forecast-archive` queue's
 `driver-level` job calls ml-service `POST /driver-level/run`, which starts the
 job in its own process (like `/train`); it fits on ~400 days of ride-day P90s
 and replaces `driver_level_forecasts` with one level per ride for origin+1 …
-origin+91 (origin = the park-local date at run time). The capture copies it
+origin+91 (origin = the park-local date at run time). **Why 01:30 UTC**: its
+scan is one all-park `PERCENTILE_CONT` over 400 days of `queue_data`, so it
+sits in the measured gap between `generate-daily` (01:00, ~2 min in Bull) and
+the 02:00 `queue_data` readers (`calculate-percentiles`, `detect-feature-drift`,
+02:30 `detect-seasonal`), well before the 03:00 TFT training (~12 min) and
+`sync-all-parks` (~30 min); the cron carries `tz: "UTC"`. A second
+`POST /driver-level/run` while a run is live answers **409** (an `flock` the
+child process holds until it exits, so an OOM kill frees it too); the job
+logs and returns instead of failing. The capture copies it
 into `driver_day_peak` (§1) — a capture column rather than a read at scoring
 time like `tft_grid`, because the table keeps only the latest night. The scorer
 pairs it with the served `dayPeak` as model **`driver_level`** on **every**
@@ -679,7 +687,7 @@ Niveau“). It is optional (`PAIRED_OPTIONAL_MODELS`): rows only where the
 ride-day has a shadow value, on the weekday average's rows, which stay
 unchanged; **no `PAIRED_DEFINITION` bump** for the same reasons as `tft_grid`.
 Its lead is the archive's: a park whose 06:00 origin comes before the night's
-run in its own date (Asia, the Americas — 02:00 UTC is still the previous
+run in its own date (Asia, the Americas — 01:30 UTC is still the previous
 evening there, or already late morning) reads the level that run made at lead
 L+1. `MODEL_ARCHIVE_START.driver` = 2026-10-27 is the assumed first capture
 after deploy (shortcut, like `tft_grid`'s). The switch decision
