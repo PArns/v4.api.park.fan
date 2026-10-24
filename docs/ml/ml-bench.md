@@ -501,6 +501,36 @@ never a pool across leads. `referenceIsServed` is not stored: the API derives it
 `src/ml/data/offline-model-verdicts.json`, whose spec accepts a figure only as a whole
 triple against `served` from a named run.
 
+**How this rule differs from the live matrix's** (`poolCell` in
+`src/ml/utils/model-comparison.util.ts`, PAR-1036). Both require every lead to clear
+the gate on its own. Beyond that the two differ in opposite directions, so an offline
+`better` and a live `better` are not the same test:
+
+| | offline (`served_verdicts`) | live matrix (`poolCell`) |
+| --- | --- | --- |
+| leads | every lead **and every pass** must win; the figure quoted is the least favourable lead | plain mean of the per-lead figures, each lead gated on its own |
+| CI | **park-cluster** bootstrap only (the report's `diff_lo_park` / `diff_hi_park`) | **two-way park × date** bootstrap is the gate; park-cluster shown beside it |
+| floor | ≥ 10 parks and ≥ `--min-origin-days` paired origin days per lead | ≥ 14 days and ≥ 10 parks per lead |
+
+Offline is therefore **stricter on leads** (no averaging a strong lead over a weak one,
+and two report passes must agree) but **looser on clustering**: resampling parks alone
+treats the days of one park as independent, so a CI can be narrower than the matrix's
+when a whole stretch of days is good or bad for every park at once (weather, a holiday
+week). A cell whose park-cluster CI only just clears 0 is not yet a live `better`; the
+date-clustered interval is the one the switch rule (`offlineBetterThanServed` plus the
+live gate) finally reads. Adding a park × date bootstrap to `report --vs` would close
+the gap; not done here.
+
+**Two biases to read a close cell with.** `park_hourly` is archived rounded to
+5 minutes (see above) while the candidate is scored raw, so a slot-MAE margin under
+~0.5 min against `served` on the intraday questions can be decided by the rounding
+alone — read such a cell as tied, whatever its state. And `plan_day` is an hourly step,
+so on D3 (best-time regret) the four quarters of an hour tie in the served prediction;
+the ride-day ranking breaks ties by slot start (`ORDER BY pred, ws` in `rideday_sql`),
+so served always "recommends" the first quarter of its best hour, while a 15-minute
+candidate can pick any quarter. A sensitivity pass that rounds the candidate to 5 and
+scores it again is the clean answer to the first; neither is built.
+
 ### Running it (celestrial) — not run yet
 
 Outside the 00:55–09:30 UTC quiet window; the Chronos-2 plug-ins need the GPU lock.
