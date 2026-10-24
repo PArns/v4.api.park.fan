@@ -200,6 +200,48 @@ wait ≥ 5 and the midpoint lies inside a published park-wide OPERATING window f
 crossings need no special case). A ride-day's level is the P90 of its truth
 slots (≥ 4).
 
+**Heartbeat rows are not truth (PAR-1024).** The hourly heartbeat writer copies
+the last status *and* wait with a fresh timestamp, which resets the 3 h staleness
+clock and keeps a frozen value alive while the feed is silent — persistence then
+scores 0 on exactly those slots. Truth reads `NOT COALESCE(is_heartbeat, false)`
+(`truthRowsSql`), the same filter as ml-bench `--drop-heartbeats`; NULL is a row
+written before the column existed. The live anchor (§2) still reads them: it is
+what the app shows. Other boards that read `queue_data` themselves (the
+`prediction_accuracy` performers) are not changed by this.
+
+**Paired slot waits are compared as served (PAR-1024).** `PairedAccumulator`
+puts both arms of a UC1/UC2/UC3 slot through `roundServedWait` (5-minute steps,
+floor 10) — what any candidate would go through once served. Before, persistence
+and Chronos-2 were scored raw against a rounded served curve and won partly by
+rounding. That is a choice with a cost: persistence is judged as if it were the
+served forecast, so a live 5 counts as 10, although the app shows the live wait
+itself unrounded. `plan_day` is archived at 1-minute precision and is rounded
+here like its candidates. D3 regret and PEAK stay unrounded, and so does the
+unpaired board (`ScoreAccumulator`) — its per-source MAEs are not the matrix's.
+
+**One definition per pooled window (PAR-1024).** `forecast_archive_paired.definition`
+records the scoring definition a row was written under (`PAIRED_DEFINITION`, now
+2; older rows read 1). The matrix, its `since` dates and the Chronos section read
+the current definition only, so every live gate restarts at the deploy instead of
+being met on rows scored the old way — except for what the **replay** restores:
+curves live 14 days past their target date, and they are the forecasts as they
+were made, so `scoreDue` rescores every date of that window whose paired rows
+carry an older definition (oldest first, 5 per run, `scoreDate` is
+delete-then-insert per date). Three daily runs after a deploy, the last 14 dates
+are back under the new definition with no retraining; dates older than the curve
+retention cannot be replayed and stay out of the matrix. A replayed date is written only
+when every park scored (a failed park keeps the old rows and the date is retried
+the next day). It is scored with today's headliner set, attraction list and
+`schedule_entries`, not those of the target date. While the replay runs, `since`
+is already the oldest replayed date with gaps after it, so the "frühestens" dates
+read a few days late until it finishes.
+
+**The unpaired board has a step at the deploy.** Dropping heartbeats changes
+`forecast_archive_scores` too (UC MAEs and the D-scores, D6 included), and those
+rows carry no definition: the replayed 14 dates are rewritten, everything older
+keeps the old truth, and the board's 28/56-day window mixes the two until it has
+moved past the deploy.
+
 **Crowd bucket (D6) — the calendar's own statistic, on both sides.** The
 denominator is the park's `typicalDayPeak` **as stored at the origin** (on the
 park-day row), and that baseline is the median, over 548 days, of a day value:
@@ -413,7 +455,7 @@ park, use case, lead, model, reference, segment; `n`, Σ|e| and Σe of both;
 The CI resamples **parks**, not park-days: days of one park are not
 independent, and the bench (PAR-828) found the park-day interval too narrow.
 `diff` pools first ((Σ|e_model| − Σ|e_ref|) / Σn), as the scores do. With
-fewer than 2 parks there is no CI; below 14 days or 10 parks the verdict is
+fewer than 2 parks there is no CI; with fewer than 10 parks reaching 14 days the verdict is
 `insufficient_data` whatever the interval says. `rows` (§5) carry the same
 shadow sources for every other metric (D3 regret, Spearman, …), unpaired.
 
@@ -543,8 +585,15 @@ per park (Σ minutes, then divide once) and PAR-852's park-cluster bootstrap
 referenceMae`, **negative = better than served**.
 
 State rule: the served model is `today`. A live comparison that meets the gate
-(14 days, 10 parks) decides — CI entirely < 0 `better`, entirely > 0 `worse`,
-else `unclear`. Below the gate the offline verdict speaks: offline `better` or
+(≥ 10 parks with ≥ 14 scored dates **each** — `gateDays`, the 10th-best park's
+count; a union of dates over parks let one park × 14 days plus nine × 1 day pass,
+PAR-1024) decides — CI entirely > 0 `worse`, else `unclear`, and CI entirely < 0
+`better` **only when the offline verdict is `better` too** (owner rule: offline
+AND live). A live win while the offline run is still going is `pending`; one
+offline does not share is `unclear`; the note says which. The PAR-852 Chronos
+section's `chronos_better` stays a live-only verdict and can read better where the
+matrix says `unclear`. The "frühestens" dates assume the 10th-best park is scored
+every day, so parks closing for the season make them optimistic. Below the gate the offline verdict speaks: offline `better` or
 a run in progress → `pending` (waiting for live confirmation), offline `worse`
 → `worse`, otherwise `unclear`.
 

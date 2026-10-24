@@ -18,6 +18,7 @@ import {
   BOOTSTRAP_SEED,
   CHRONOS_MIN_DAYS,
   CHRONOS_MIN_PARKS,
+  gateDays,
   parkClusterBootstrap,
 } from "./forecast-archive-paired.util";
 import {
@@ -399,7 +400,7 @@ export function poolCell(
   seed: number,
 ): LiveComparison | null {
   const perPark = new Map<string, { n: number; a: number; b: number }>();
-  const dates = new Set<string>();
+  const datesPerPark = new Map<string, Set<string>>();
   let n = 0;
   let a = 0;
   let b = 0;
@@ -410,30 +411,36 @@ export function poolCell(
     p.a += r.saeModel;
     p.b += r.saeRef;
     perPark.set(r.parkId, p);
+    const dates = datesPerPark.get(r.parkId) ?? new Set<string>();
     for (const d of r.dates) dates.add(d);
+    datesPerPark.set(r.parkId, dates);
     n += r.n;
     a += r.saeModel;
     b += r.saeRef;
   }
   if (n === 0) return null;
   const ci = parkClusterBootstrap([...perPark.values()], undefined, seed);
+  const days = gateDays(datesPerPark.values());
   return {
     n,
-    days: dates.size,
+    days,
     parks: perPark.size,
     diff: round((a - b) / n),
     modelMae: round(a / n),
     referenceMae: round(b / n),
     ciLow: ci ? round(ci.low) : null,
     ciHigh: ci ? round(ci.high) : null,
-    enoughData: dates.size >= MIN_DAYS && perPark.size >= MIN_PARKS,
+    enoughData: days >= MIN_DAYS && perPark.size >= MIN_PARKS,
   };
 }
 
 /**
  * The state rule. The served model is `today`. A live comparison that meets
- * the gate (≥ 14 days, ≥ 10 parks) decides: CI entirely below 0 → `better`,
- * entirely above → `worse`, else `unclear`. Below the gate the offline
+ * the gate (≥ 10 parks with ≥ 14 days each) decides: CI entirely above 0 →
+ * `worse`, else `unclear` — and CI entirely below 0 → `better` only when
+ * offline says better too (the owner's rule is offline AND live; a live win
+ * stays `pending` while the offline run is still going and `unclear` when
+ * offline does not share it, PAR-1024). Below the gate the offline
  * verdict speaks: offline `better` or a run still in progress → `pending`
  * (waiting for live confirmation), offline `worse` → `worse`, else `unclear`.
  */
@@ -444,7 +451,11 @@ export function cellState(
 ): ModelComparisonState {
   if (isServed) return "today";
   if (live && live.enoughData && live.ciLow !== null && live.ciHigh !== null) {
-    if (live.ciHigh < 0) return "better";
+    if (live.ciHigh < 0) {
+      if (offline?.state === "better") return "better";
+      // Offline still running: waiting on offline, not contradicted by it.
+      return offline?.state === "pending" ? "pending" : "unclear";
+    }
     if (live.ciLow > 0) return "worse";
     return "unclear";
   }
@@ -520,13 +531,22 @@ export function cellNote(
   if (state === "today") {
     return servedNote ?? "Zeigen wir heute in der App.";
   }
-  const scope = (l: LiveComparison) => `${l.days} Tage, ${l.parks} Parks.`;
+  const scope = (l: LiveComparison) =>
+    `${l.days} Tage je Park, ${l.parks} Parks.`;
   if (live && live.enoughData && live.ciLow !== null && live.ciHigh !== null) {
     if (state === "better") {
       return `${fmtDe(live.diff)} ${unitWord(q)} besser als heute, sicher. ${scope(live)}`;
     }
     if (state === "worse") {
       return `${fmtDe(live.diff)} ${unitWord(q)} schlechter als heute, sicher. ${scope(live)}`;
+    }
+    if (live.ciHigh < 0) {
+      const off = !offline
+        ? "offline nicht gemessen"
+        : offline.state === "pending"
+          ? "offline läuft die Messung noch"
+          : "offline aber nicht bestätigt";
+      return `Live ${fmtDe(live.diff)} ${unitWord(q)} besser als heute, sicher, ${off}. ${scope(live)}`;
     }
     return `Kein sicherer Unterschied zu heute (${fmtDe(live.diff, true)} ${unitWord(q)}, Spanne ${fmtDe(live.ciLow, true)} bis ${fmtDe(live.ciHigh, true)}). ${scope(live)}`;
   }
@@ -537,7 +557,7 @@ export function cellNote(
     return offline ? base : `${base} Dieses Modell wird live nicht archiviert.`;
   }
   if (!live) return `${base} Live noch keine Daten.`;
-  return `${base} Live bisher ${fmtDe(live.diff, true)} ${unitWord(q)} gegenüber heute, ${live.days} von ${MIN_DAYS} Tagen, ${live.parks} von ${MIN_PARKS} Parks.`;
+  return `${base} Live bisher ${fmtDe(live.diff, true)} ${unitWord(q)} gegenüber heute, ${live.days} von ${MIN_DAYS} Tagen je Park, ${live.parks} von ${MIN_PARKS} Parks.`;
 }
 
 /**

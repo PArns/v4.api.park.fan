@@ -9,7 +9,12 @@ const T = (iso: string) => new Date(iso);
  * 2026-10-08), one d1 plan curve archived at 06:00 the day before.
  */
 function build(
-  opts: { alreadyScored?: string[]; extraCurves?: object[] } = {},
+  opts: {
+    alreadyScored?: string[];
+    extraCurves?: object[];
+    staleDates?: string[];
+    failCurves?: boolean;
+  } = {},
 ) {
   const sql: string[] = [];
   const connection = {
@@ -82,7 +87,15 @@ function build(
   };
   const pairedRepository = {
     create: (x: unknown) => x,
-    manager: { query: jest.fn().mockResolvedValue([]) },
+    manager: {
+      query: jest
+        .fn()
+        .mockImplementation(async (q: string) =>
+          q.includes("HAVING max(definition)")
+            ? (opts.staleDates ?? []).map((d) => ({ d }))
+            : [],
+        ),
+    },
     createQueryBuilder: jest.fn().mockImplementation(() => {
       const qb = {
         where: () => qb,
@@ -140,12 +153,21 @@ function build(
         .fn()
         .mockResolvedValue([
           { id: "p1", slug: "phl", timezone: TZ, continentSlug: "europe" },
+          ...(opts.failCurves
+            ? [{ id: "p2", slug: "ep", timezone: TZ, continentSlug: "europe" }]
+            : []),
         ]),
       manager: { connection },
     } as never,
     { find: jest.fn().mockResolvedValue([{ id: "r1" }]) } as never,
     {
-      find: jest.fn().mockResolvedValue([curve, ...(opts.extraCurves ?? [])]),
+      // failCurves: the first park scores, the second one times out.
+      find: opts.failCurves
+        ? jest
+            .fn()
+            .mockResolvedValueOnce([curve])
+            .mockRejectedValue(new Error("statement timeout"))
+        : jest.fn().mockResolvedValue([curve, ...(opts.extraCurves ?? [])]),
       manager: { connection },
     } as never,
     { find: jest.fn().mockResolvedValue([parkDay]) } as never,
@@ -171,6 +193,38 @@ function build(
 }
 
 describe("ForecastArchiveScoringService.scoreDue", () => {
+  it("keeps a replayed date's old rows when a park fails (PAR-1024)", async () => {
+    const { service, deleted } = build({
+      alreadyScored: ["2026-10-06", "2026-10-07", "2026-10-08"],
+      staleDates: ["2026-10-01"],
+      failCurves: true,
+    });
+    const res = await service.scoreDue(T("2026-10-09T12:00:00Z"));
+    expect(res.dates).toEqual([]);
+    expect(deleted).toEqual([]);
+  });
+
+  it("replays dates scored under an older definition, and truth skips heartbeats (PAR-1024)", async () => {
+    const { service, deleted, pairedRepository, sql } = build({
+      alreadyScored: ["2026-10-06", "2026-10-07", "2026-10-08"],
+      staleDates: ["2026-10-08"],
+    });
+    const res = await service.scoreDue(T("2026-10-09T12:00:00Z"));
+    // Nothing new to catch up, but the stale date is rescored.
+    expect(res.dates).toEqual(["2026-10-08"]);
+    expect(deleted).toContainEqual({
+      entity: "ForecastArchivePaired",
+      targetDate: "2026-10-08",
+    });
+    const [, params] = (
+      pairedRepository.manager.query as jest.Mock
+    ).mock.calls.find(([q]: [string]) => q.includes("HAVING max(definition)"));
+    // Window: the 14 days curves are kept, ending yesterday.
+    expect(params.slice(0, 3)).toEqual(["2026-09-25", "2026-10-08", 2]);
+    const truth = sql.find((q) => q.includes("FROM queue_data"))!;
+    expect(truth).toContain("NOT COALESCE(is_heartbeat, false)");
+  });
+
   it("catches up the unscored dates only, replaces each date's rows, and retires the board cache", async () => {
     const { service, deleted, insertedScores, redis, sql } = build({
       alreadyScored: ["2026-10-06", "2026-10-07"],

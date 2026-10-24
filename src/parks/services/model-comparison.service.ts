@@ -10,11 +10,13 @@ import {
   ArchiveSurface,
   ForecastArchiveCurve,
 } from "../../ml/entities/forecast-archive-curve.entity";
+import { PAIRED_DEFINITION } from "../../ml/entities/forecast-archive-paired.entity";
 import {
   ArchivedCurve,
   OperatingWindow,
   TruthReading,
   buildTruthSlots,
+  truthRowsSql,
   valueAt,
   weekdayAverageArchived,
 } from "../../ml/utils/forecast-archive-scoring.util";
@@ -212,6 +214,7 @@ export class ModelComparisonService {
          FROM forecast_archive_paired
         WHERE target_date BETWEEN $1::date AND $2::date
           AND reference = 'served' AND segment IN ('all', 'headliner')
+          AND definition = ${PAIRED_DEFINITION}
           ${regionSql}
         GROUP BY 1, 2, 3, 4, 5`,
       params,
@@ -243,6 +246,7 @@ export class ModelComparisonService {
           `SELECT use_case AS "useCase", lead, model, segment, min(target_date)::text AS since
              FROM forecast_archive_paired
             WHERE reference = 'served' AND segment IN ('all', 'headliner')
+              AND definition = ${PAIRED_DEFINITION}
             GROUP BY 1, 2, 3, 4`,
           [],
         ).catch((err: Error) => {
@@ -364,6 +368,7 @@ export class ModelComparisonService {
           WHERE qd."attractionId" = ANY(ARRAY(SELECT attraction_id FROM rides))
             AND qd."queueType" = 'STANDBY'
             AND qd.timestamp >= $6 AND qd.timestamp < $7
+            AND ${truthRowsSql("qd")}
        )
        SELECT r.park_id AS "parkId", dw.name AS "parkName", dw.timezone,
               r.attraction_id AS "attractionId", a.name, r.hl AS "isHeadliner",
@@ -479,6 +484,7 @@ export class ModelComparisonService {
          FROM queue_data
         WHERE "attractionId" = $1::uuid AND "queueType" = 'STANDBY'
           AND timestamp >= $2 AND timestamp < $3
+          AND ${truthRowsSql()}
         ORDER BY timestamp`,
       [
         attractionId,

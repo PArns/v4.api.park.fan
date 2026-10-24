@@ -18,6 +18,7 @@ import { ForecastArchiveParkDay } from "../../ml/entities/forecast-archive-park-
 import { ForecastArchiveScore } from "../../ml/entities/forecast-archive-score.entity";
 import {
   ForecastArchivePaired,
+  PAIRED_DEFINITION,
   PAIRED_RETENTION_DAYS,
 } from "../../ml/entities/forecast-archive-paired.entity";
 import {
@@ -28,6 +29,7 @@ import {
   ScoreAccumulator,
   TruthReading,
   buildTruthSlots,
+  truthRowsSql,
   calendarDayValue,
   regionOf,
   scoreCrossParkCrowd,
@@ -41,6 +43,7 @@ import {
   weekdayHistoryDates,
 } from "../../ml/utils/weekday-average.util";
 import { ChronosShadowService } from "./chronos-shadow.service";
+import { ForecastArchiveService } from "./forecast-archive.service";
 import {
   ChronosBoard,
   buildChronosBoard,
@@ -67,6 +70,14 @@ export const BOARD_VERSION_KEY = "forecast-archive:board:version";
 const BATCH_SIZE = 4;
 /** How many missed days a run catches up on. */
 const CATCH_UP_DAYS = 3;
+/**
+ * Dates a run rescores because their paired rows predate the current
+ * {@link PAIRED_DEFINITION}. A one-time replay after a definition change:
+ * the archived curves are the forecasts as they were made, so rescoring them
+ * against the new truth needs no retraining. Bounded per run so the replay
+ * stays a few times the normal job.
+ */
+const REPLAY_PER_RUN = 5;
 /** Scores are ~0.35 MB a day; 400 days lets a season be read against the
  *  same season a year earlier. */
 const SCORE_RETENTION_DAYS = 400;
@@ -130,7 +141,8 @@ export class ForecastArchiveScoringService {
    * The job runs at 12:00 UTC: the previous UTC date is then over in every park
    * timezone (UTC−10 ends it at 10:00 UTC), including the hour or two a
    * midnight-crossing park keeps going. Up to {@link CATCH_UP_DAYS} earlier
-   * dates are picked up if a run was missed.
+   * dates are picked up if a run was missed, and up to {@link REPLAY_PER_RUN}
+   * dates scored under an older {@link PAIRED_DEFINITION} are rescored.
    */
   async scoreDue(now: Date = new Date()): Promise<{ dates: string[] }> {
     const latest = addIsoDays(now.toISOString().slice(0, 10), -1);
@@ -146,6 +158,42 @@ export class ForecastArchiveScoringService {
     for (let d = earliest; d <= latest; d = addIsoDays(d, 1)) {
       if (done.has(d)) continue;
       const rows = await this.scoreDate(d, now);
+      if (rows > 0) dates.push(d);
+    }
+    // Replay (PAR-1024): every date whose curves still exist (they live
+    // CURVE_RETENTION_AFTER_TARGET_DAYS past their target date) and whose
+    // paired rows were written under an older definition, oldest first.
+    const replayFrom = addIsoDays(
+      latest,
+      -(ForecastArchiveService.CURVE_RETENTION_AFTER_TARGET_DAYS - 1),
+    );
+    const stale: Array<{ d: string }> = await this.pairedRepository.manager
+      .query(
+        `SELECT target_date::text AS d FROM forecast_archive_paired
+          WHERE target_date BETWEEN $1::date AND $2::date
+          GROUP BY 1 HAVING max(definition) < $3
+          ORDER BY 1 LIMIT $4`,
+        [replayFrom, latest, PAIRED_DEFINITION, REPLAY_PER_RUN],
+      )
+      .catch((err: Error) => {
+        this.logger.warn(
+          `Forward archive: replay lookup failed: ${err.message}`,
+        );
+        return [];
+      });
+    for (const { d } of stale) {
+      if (dates.includes(d)) continue;
+      // A replay replaces a complete old score, so it writes only when every
+      // park scored; otherwise the date stays stale and is retried tomorrow.
+      // One failing date must not cost the run its retention and cache bump.
+      const rows = await this.scoreDate(d, now, {
+        allParksOrNothing: true,
+      }).catch((err: Error) => {
+        this.logger.warn(
+          `Forward archive: replay of ${d} failed: ${err.message}`,
+        );
+        return 0;
+      });
       if (rows > 0) dates.push(d);
     }
     await this.scoreRepository.manager
@@ -174,8 +222,15 @@ export class ForecastArchiveScoringService {
     return { dates };
   }
 
-  /** Scores one target date over all parks; returns the score rows written. */
-  async scoreDate(targetDate: string, now: Date = new Date()): Promise<number> {
+  /**
+   * Scores one target date over all parks; returns the score rows written.
+   * `allParksOrNothing`: write nothing (return 0) when any park failed.
+   */
+  async scoreDate(
+    targetDate: string,
+    now: Date = new Date(),
+    opts: { allParksOrNothing?: boolean } = {},
+  ): Promise<number> {
     const parks = await this.parkRepository.find({
       select: {
         id: true,
@@ -188,6 +243,7 @@ export class ForecastArchiveScoringService {
     const observations: CrowdObservation[] = [];
     const pairedRows: ForecastArchivePaired[] = [];
     let parksScored = 0;
+    let parksFailed = 0;
 
     for (let i = 0; i < parks.length; i += BATCH_SIZE) {
       const batch = parks.slice(i, i + BATCH_SIZE);
@@ -200,6 +256,7 @@ export class ForecastArchiveScoringService {
                 parkId: park.id,
                 region: regionOf(park.continentSlug),
                 ...e,
+                definition: PAIRED_DEFINITION,
                 scoredAt: now,
               }),
             );
@@ -209,6 +266,7 @@ export class ForecastArchiveScoringService {
           this.logger.warn(
             `Forward archive scoring: ${park.slug} ${targetDate} failed: ${err.message}`,
           );
+          parksFailed++;
           return null;
         }),
       );
@@ -222,6 +280,12 @@ export class ForecastArchiveScoringService {
 
     const entries = acc.entries();
     if (entries.length === 0) return 0;
+    if (opts.allParksOrNothing && parksFailed > 0) {
+      this.logger.warn(
+        `Forward archive ${targetDate}: ${parksFailed} parks failed, replay kept the old rows`,
+      );
+      return 0;
+    }
     const rows = entries.map((e) =>
       this.scoreRepository.create({ targetDate, ...e, scoredAt: now }),
     );
@@ -457,7 +521,7 @@ export class ForecastArchiveScoringService {
       .filter((w) => w.close > w.open);
   }
 
-  /** STANDBY change-log rows in [fromMs, toMs), grouped per ride. */
+  /** STANDBY change-log rows in [fromMs, toMs) without heartbeats, grouped per ride. */
   private async truthReadings(
     attractionIds: string[],
     fromMs: number,
@@ -472,6 +536,7 @@ export class ForecastArchiveScoringService {
         WHERE "attractionId" = ANY($1::uuid[])
           AND "queueType" = 'STANDBY'
           AND timestamp >= $2 AND timestamp < $3
+          AND ${truthRowsSql()}
         ORDER BY "attractionId", timestamp`,
       [attractionIds, new Date(fromMs), new Date(toMs)],
       READ_LIMITS,
@@ -591,6 +656,9 @@ export class ForecastArchiveScoringService {
             })
             .andWhere(region === "ALL" ? "TRUE" : "p.region = :region", {
               region,
+            })
+            .andWhere("p.definition = :definition", {
+              definition: PAIRED_DEFINITION,
             })
             // The model comparison's rows (PAR-855) share the table; the
             // Chronos section reads its own two models only.
