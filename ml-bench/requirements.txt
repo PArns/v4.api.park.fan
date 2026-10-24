@@ -1,9 +1,9 @@
 # ml-bench — offline forecasting benchmark (not deployed).
 # torch is installed separately in the Dockerfile (cu128 wheel for the RTX 5080, sm_120).
-duckdb==1.4.1
-pandas==2.2.3
-numpy==1.26.4
-pyarrow==23.0.1
-scikit-learn==1.7.2  # PAR-830 level-driver analysis + driver_level plug-in (CPU)
-pytest==9.0.3
-ruff==0.14.1
+duckdb==1.5.6
+pandas==2.3.3  # last 2.x, same as the services (gluonts in requirements-par853.txt needs < 3)
+numpy==2.4.6  # same as the services; 2.5 needs Python >= 3.12
+pyarrow==26.0.0
+scikit-learn==1.9.1  # PAR-830 level-driver analysis + driver_level plug-in (CPU)
+pytest==9.1.1
+ruff==0.17.0

@@ -3,7 +3,7 @@
 # inside one run. Build with --build-arg EXTRA_REQUIREMENTS=requirements-par1063.txt on
 # the default python:3.11-slim base. torch comes from the cu128 wheel in the
 # Dockerfile; nothing here may replace it. Every pin is at least two weeks old on
-# 2026-10-24.
+# 2026-10-24 (re-checked by PAR-1066's upgrade).
 #
 # Chronos-2 (Apache-2.0) and the timesfm package. timesfm 3.0.2 ships BOTH
 # `timesfm3` (TimesFM 3.0) and `timesfm.TimesFM_2p5_200M_torch` (TimesFM 2.5).
@@ -12,17 +12,14 @@
 # LoRA: chronos-forecasting's own `Chronos2Pipeline.fit(finetune_mode="lora")` uses peft
 # (its `extras` pin peft>=0.18.1,<1). Without peft the package WARNS and silently falls
 # back to a full fine-tune — the plug-in refuses to start instead (see foundation.py).
-peft==0.21.0
+peft==0.21.2
 #
 # TimesFM 2.5 covariates: `forecast_with_covariates` (in-context ridge regression, XReg)
 # imports jax + scikit-learn (the package's `xreg` extra asks for jax[cuda]; the CPU
 # wheel is enough because the regression runs with force_on_cpu=True, and it keeps a
-# second CUDA runtime out of the image). jax 0.7+ needs numpy >= 2, which
-# requirements.txt's numpy 1.26.4 forbids, so 0.6.2 is the newest that resolves.
-jax==0.6.2
-jaxlib==0.6.2
-# jax pulls the newest ml_dtypes, and ml_dtypes 0.6 needs numpy >= 2: pip then silently
-# upgraded the image's numpy to 2.x (found in PAR-1066's resolve). Keep requirements.txt's
-# numpy and the last ml_dtypes that still supports it.
-numpy==1.26.4
-ml_dtypes==0.5.4
+# second CUDA runtime out of the image). 0.10.2 is the newest jax that still runs on
+# Python 3.11 (0.11+ need >= 3.12); it needs numpy >= 2, which requirements.txt has
+# since PAR-1066, so the numpy 1.26.4 / ml_dtypes 0.5.4 holds are gone.
+jax==0.10.2
+jaxlib==0.10.2
+ml_dtypes==0.6.0

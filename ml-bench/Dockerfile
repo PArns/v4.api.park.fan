@@ -17,8 +17,10 @@ FROM ${PYTHON_IMAGE}
 
 WORKDIR /app
 
+# torch pinned to the newest cu128 build (2.11.0; 2.12+ ship as cu130 only, which needs a
+# driver check on the host first) so a rebuild cannot move it.
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cu128
-RUN pip install --no-cache-dir --index-url ${TORCH_INDEX} "torch>=2.7.0"
+RUN pip install --no-cache-dir --index-url ${TORCH_INDEX} "torch==2.11.0"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

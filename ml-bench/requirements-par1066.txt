@@ -10,12 +10,12 @@
 # PyPI torch (a cu13 build) over it — `python -m mlbench gpu-check` after the build says so.
 -r requirements-par1063.txt
 #
-# granite-tsfm (Apache-2.0 code): PatchTST-FM-r2 needs >= 0.3.9 (model card). It asks for
-# pandas >= 2.3.3, so this image runs pandas 2.3.3 instead of requirements.txt's 2.2.3
-# (same numpy 1.26.4; pandas 2.3 supports numpy >= 1.23.2 on Python 3.11). Only images
-# built with this extra are affected.
+# granite-tsfm (Apache-2.0 code): PatchTST-FM-r2 needs >= 0.3.9 (model card). 0.3.11 is
+# younger than two weeks. It asks for pandas >= 2.3.3 (requirements.txt has it) and
+# scikit-learn < 1.8, so this image runs scikit-learn 1.7.2 instead of requirements.txt's
+# 1.9.1 — only images built with this extra are affected.
 granite-tsfm==0.3.10
-pandas==2.3.3
+scikit-learn==1.7.2
 #
 # TabPFN-TS (Apache-2.0 code; the TabPFN-3.5 WEIGHTS are non-commercial and
 # non-production — benchmark-only, see docs/ml/foundation-models.md). The weights repo is
@@ -23,5 +23,8 @@ pandas==2.3.3
 tabpfn-time-series==1.3.0
 tabpfn==9.1.0
 tabpfn-client==0.6.1
-# datasets 5.x needs pyarrow >= 24, requirements.txt pins 23.0.1
+# tabpfn-client 0.6.1 caps pyarrow at <= 25.0.1, so this image runs 25.0.1 instead of
+# requirements.txt's 26.0.0.
+pyarrow==25.0.1
+# datasets stays on 4.x: tabpfn-time-series pulls fev, which caps datasets < 5.
 datasets==4.8.5
