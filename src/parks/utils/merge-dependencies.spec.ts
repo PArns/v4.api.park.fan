@@ -68,7 +68,7 @@ describe("merge dependency tables", () => {
    * Derived from the entities rather than from a database, because that is
    * what a cloud run can read — every `*.entity.ts` carrying an attraction id
    * column, plus the two forecast tables the ML sub-services create in raw SQL
-   * with no entity and no FK (`pcn_forecasts`, `tft_forecasts`; pcn also creates
+   * with no entity and no FK (`pcn_forecasts`, `tft_forecasts`, `tft_forecasts_shadow`; pcn also creates
    * `*_comparisons` tables, which are keyed by segment and hold no attraction
    * id). `shape_forecasts` and `catboost_daily_forecasts` were retired with
    * their writers in PAR-870.
@@ -104,6 +104,7 @@ describe("merge dependency tables", () => {
     "ride_alerts",
     "schedule_entries",
     "tft_forecasts",
+    "tft_forecasts_shadow",
     "wait_time_predictions",
   ];
 
@@ -434,7 +435,11 @@ describe("merge dependency tables", () => {
   });
 
   it("declares conflict columns for every keyed forecast table", () => {
-    const forecastTables = ["pcn_forecasts", "tft_forecasts"];
+    const forecastTables = [
+      "pcn_forecasts",
+      "tft_forecasts",
+      "tft_forecasts_shadow",
+    ];
 
     for (const table of forecastTables) {
       const dependency = ATTRACTION_DEPENDENCIES.find((d) => d.table === table);
@@ -724,6 +729,35 @@ describe("applyMergeDependencies", () => {
 
     expect(firstSql).toMatch(/^DELETE FROM prediction_accuracy/);
     expect(secondSql).toMatch(/^UPDATE prediction_accuracy/);
+  });
+
+  it("skips a may-be-absent table that does not exist and still moves one that does", async () => {
+    // PAR-1041: `tft_forecasts_shadow` exists only after nf-service's first
+    // shadow write; before that the move was a 42P01 that rolled back every
+    // attraction merge.
+    const shadow = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "tft_forecasts_shadow",
+    )!;
+    expect(shadow.mayBeAbsent).toBe(true);
+
+    const runner = {
+      query: jest.fn((sql: string, params?: unknown[]) =>
+        Promise.resolve(
+          sql.includes("to_regclass")
+            ? [{ present: params?.[0] !== "tft_forecasts_shadow" }]
+            : [],
+        ),
+      ),
+    };
+    const served = { ...shadow, table: "tft_forecasts" };
+
+    await applyMergeDependencies(runner, [shadow, served], "w", "l");
+
+    const statements = runner.query.mock.calls.map(([sql]) => sql);
+    expect(statements.some((s) => /tft_forecasts_shadow/.test(s))).toBe(false);
+    expect(
+      statements.filter((s) => /^(DELETE FROM|UPDATE) tft_forecasts /.test(s)),
+    ).toHaveLength(2);
   });
 
   it("dedupes park_slug_aliases on the whole path, so a shared last segment keeps its redirect", async () => {

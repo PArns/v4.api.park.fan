@@ -520,8 +520,50 @@ def hist_exog() -> list[str]:
     return ["is_observed"] if settings.NF_CALENDAR_GRID else []
 
 
+# The served forecast and the grid shadow (PAR-1041). Two tables because the
+# key has no model_version: two variants of one night cannot share a row. The
+# shadow is `LIKE` the served table so the two schemas cannot drift apart; the
+# literal statements are also what the E2E schema reads (test/helpers/
+# ml-forecast-tables.ts), and the dict is the whitelist for the table name.
+SHADOW_TABLE = "tft_forecasts_shadow"
+_FORECAST_DDL = {
+    "tft_forecasts": """
+        CREATE TABLE IF NOT EXISTS tft_forecasts (
+            attraction_id   uuid NOT NULL,
+            target_date     date NOT NULL,
+            forecast_date   date NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')::date,
+            predicted_peak  double precision NOT NULL,
+            model_version   text,
+            created_at      timestamptz NOT NULL DEFAULT now(),
+            PRIMARY KEY (attraction_id, target_date, forecast_date)
+        )
+        """,
+    SHADOW_TABLE: """
+        CREATE TABLE IF NOT EXISTS tft_forecasts_shadow (LIKE tft_forecasts INCLUDING ALL)
+        """,
+}
+
+
+def forecast_sql(table: str) -> tuple[str, str]:
+    """(DDL, upsert) for one of the forecast tables; any other name raises."""
+    if table not in _FORECAST_DDL:
+        raise ValueError(f"not a TFT forecast table: {table!r}")
+    upsert = f"""
+        INSERT INTO {table}
+            (attraction_id, target_date, forecast_date, predicted_peak, model_version)
+        VALUES
+            (:aid, :td, :fd, :pp, :ver)
+        ON CONFLICT (attraction_id, target_date, forecast_date)
+        DO UPDATE SET predicted_peak = EXCLUDED.predicted_peak,
+                      model_version  = EXCLUDED.model_version,
+                      created_at     = now()
+        """
+    return _FORECAST_DDL[table], upsert
+
+
 def persist_forecast(
-    yhat: pd.DataFrame, version: str, value_col: str, forecast_date: date
+    yhat: pd.DataFrame, version: str, value_col: str, forecast_date: date,
+    table: str = "tft_forecasts",
 ) -> int:
     """Store the forward daily-peak forecast so it can be scored against actuals
     once each target date passes (the forward-scoreboard vs CatBoost).
@@ -544,31 +586,8 @@ def persist_forecast(
     rows["target_date"] = pd.to_datetime(rows["target_date"]).dt.date
     rows["predicted_peak"] = rows[value_col].astype(float).clip(lower=0)
 
-    ddl = text(
-        """
-        CREATE TABLE IF NOT EXISTS tft_forecasts (
-            attraction_id   uuid NOT NULL,
-            target_date     date NOT NULL,
-            forecast_date   date NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')::date,
-            predicted_peak  double precision NOT NULL,
-            model_version   text,
-            created_at      timestamptz NOT NULL DEFAULT now(),
-            PRIMARY KEY (attraction_id, target_date, forecast_date)
-        )
-        """
-    )
-    upsert = text(
-        """
-        INSERT INTO tft_forecasts
-            (attraction_id, target_date, forecast_date, predicted_peak, model_version)
-        VALUES
-            (:aid, :td, :fd, :pp, :ver)
-        ON CONFLICT (attraction_id, target_date, forecast_date)
-        DO UPDATE SET predicted_peak = EXCLUDED.predicted_peak,
-                      model_version  = EXCLUDED.model_version,
-                      created_at     = now()
-        """
-    )
+    ddl_sql, upsert_sql = forecast_sql(table)
+    ddl, upsert = text(ddl_sql), text(upsert_sql)
     params = [
         {"aid": str(r.attraction_id), "td": r.target_date, "fd": forecast_date,
          "pp": float(r.predicted_peak), "ver": version}

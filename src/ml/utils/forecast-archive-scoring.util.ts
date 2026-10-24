@@ -286,6 +286,12 @@ export interface ArchivedCurve {
   levelSource?: string | null;
   /** plan_day, TFT-levelled ride-days only: CatBoost's day level (PAR-1042). */
   catboostDayPeak?: number | null;
+  /**
+   * plan_day: the calendar-grid TFT shadow's day peak for this ride-day as it
+   * stood at the origin (`tft_forecasts_shadow`, PAR-1041), read at scoring
+   * time; rounded like the served TFT level.
+   */
+  tftGridPeak?: number | null;
 }
 
 export interface ArchivedParkDay {
@@ -1116,6 +1122,8 @@ export const PAIRED_MODELS = {
    * meet. PEAK and D7 only.
    */
   catboostShadow: "catboost_shadow",
+  /** The calendar-grid TFT shadow (PAR-1041), on the TFT-levelled ride-days. */
+  tftGrid: "tft_grid",
 } as const;
 
 /** Ride-day use cases of the paired table besides the slot ones (UC1/2/3). */
@@ -1269,6 +1277,7 @@ export const PAIRED_OPTIONAL_MODELS: ReadonlySet<string> = new Set([
   PAIRED_MODELS.chronosLive,
   PAIRED_MODELS.chronosGrid,
   PAIRED_MODELS.shadowPeak,
+  PAIRED_MODELS.tftGrid,
 ]);
 
 /**
@@ -1537,6 +1546,9 @@ export function scorePairedModels(
     if (plan.levelSource === "tft" && plan.catboostDayPeak != null) {
       peaks.push([PAIRED_MODELS.catboostShadow, plan.catboostDayPeak]);
     }
+    if (plan.levelSource === "tft" && plan.tftGridPeak != null) {
+      peaks.push([PAIRED_MODELS.tftGrid, plan.tftGridPeak]);
+    }
     for (const [model, peak] of peaks) {
       for (const seg of plan.isHeadliner ? ["all", "headliner"] : ["all"]) {
         acc.add(
@@ -1564,6 +1576,37 @@ export function scorePairedModels(
       }
     }
   }
+}
+
+/** One `tft_forecasts_shadow` row for a ride and target date. */
+export interface ShadowLevelRow {
+  attractionId: string;
+  forecastDate: string;
+  createdAt: number;
+  peak: number;
+}
+
+/**
+ * The grid shadow's level for one archived plan_day curve, read the way the
+ * served TFT level is (`MLService.getTftDailyPredictions`): the freshest
+ * forecast_date no older than 3 days before the origin's park-local date —
+ * restricted to rows written at or before the origin, so a forecast made
+ * after it never counts. Rounded and floored at 0 like the served level.
+ */
+export function shadowLevelAt(
+  rows: ShadowLevelRow[],
+  attractionId: string,
+  originAt: number,
+  originDate: string,
+): number | null {
+  const oldest = addIsoDays(originDate, -3);
+  let best: ShadowLevelRow | null = null;
+  for (const r of rows) {
+    if (r.attractionId !== attractionId) continue;
+    if (r.createdAt > originAt || r.forecastDate < oldest) continue;
+    if (!best || r.forecastDate > best.forecastDate) best = r;
+  }
+  return best ? Math.max(0, Math.round(best.peak)) : null;
 }
 
 /**
