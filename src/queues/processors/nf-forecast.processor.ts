@@ -1,8 +1,11 @@
 import { Process, Processor } from "@nestjs/bull";
 import { getNfServiceUrl } from "../../config/ml-services.config";
-import { Logger } from "@nestjs/common";
+import { Inject, Logger } from "@nestjs/common";
 import { Job } from "bull";
 import axios from "axios";
+import { Redis } from "ioredis";
+import { REDIS_CLIENT } from "../../common/redis/redis.module";
+import { deleteKeysByPatterns } from "../../common/cache/delete-keys-by-patterns";
 
 const nfServiceUrl = getNfServiceUrl;
 /** How long this job waits for a run; also the age past which an in-flight run is hung. */
@@ -40,6 +43,8 @@ interface NfTrainStatus {
 @Processor("nf-training")
 export class NfForecastProcessor {
   private readonly logger = new Logger(NfForecastProcessor.name);
+
+  constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
   @Process("train-nf")
   async handleTrainNf(
@@ -154,6 +159,19 @@ export class NfForecastProcessor {
         `✅ TFT training completed: ${version} — ${done.info?.rows ?? "?"} rows, ` +
           `${done.info?.persisted ?? "?"} persisted for ${done.forecast_date ?? "?"}`,
       );
+      // PAR-1053: the 13 h `ml:tft-daily:*` read cache would otherwise serve
+      // the previous run until it expires. A failed eviction must not fail a
+      // training that did persist its forecast.
+      try {
+        const evicted = await deleteKeysByPatterns(this.redis, [
+          "ml:tft-daily:*",
+        ]);
+        this.logger.log(`Evicted ${evicted} ml:tft-daily cache key(s)`);
+      } catch (err) {
+        this.logger.warn(
+          `TFT cache eviction failed, entries expire on their TTL: ${(err as Error).message}`,
+        );
+      }
       return { status: "ok", version };
     } catch (e: any) {
       this.logger.error(`TFT train/forecast failed: ${e?.message ?? e}`);

@@ -160,6 +160,35 @@ describe("MlOverviewService", () => {
     expect(out.components[0].note).toContain("SERVE_PCN_INTRADAY");
   });
 
+  // PAR-1053: fresh forecasts from the previous model hid a failed training.
+  it("marks PCN failed from pcn-service's training status", async () => {
+    process.env.SERVE_PCN_INTRADAY = "true";
+    mockedGet.mockImplementation(async (url: string) => {
+      if (url.endsWith("/train/status") && url.includes("pcn")) {
+        return {
+          data: {
+            is_training: false,
+            status: "failed",
+            version: "pcn20261011_200000",
+            error: "CUDA out of memory",
+          },
+        };
+      }
+      throw new Error("unreachable");
+    });
+    const { service } = make({
+      pcn_forecasts: [
+        { at: "2026-10-11T20:16:48Z", version: "pcn20261010_201501" },
+      ],
+    });
+    const out = await service.build(NOW);
+    expect(out.components[0]).toMatchObject({
+      id: "pcn",
+      status: "failed",
+      note: "Letztes Training fehlgeschlagen: CUDA out of memory · Version pcn20261010_201501",
+    });
+  });
+
   it("reports Chronos warming from the archive's last run summary", async () => {
     const { service } = make(
       {
