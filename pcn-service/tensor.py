@@ -187,7 +187,13 @@ def _slot_time_features(slots: pd.DatetimeIndex) -> dict[str, np.ndarray]:
 
 
 def assemble_tensor(
-    panel_reg: pd.DataFrame, park_id: str = "", min_rides_open: int = 3
+    panel_reg: pd.DataFrame,
+    park_id: str = "",
+    min_rides_open: int = 3,
+    readings: pd.DataFrame | None = None,
+    windows: pd.DataFrame | None = None,
+    freq: str = "15min",
+    min_wait: float = 5,
 ) -> CrossRideTensor:
     """Pivot a regularized long panel into aligned [R, T] matrices + the [R, T, C]
     feature tensor.
@@ -196,6 +202,9 @@ def assemble_tensor(
     granularity): the park is open in slot t if at least `min_rides_open` rides report
     a real observation OR a DOWN signal in that slot. This distinguishes "park open,
     ride down/quiet" from "no data at all", so closed slots stay out of the loss.
+
+    With `readings` (PCN_TARGET_MODE=in_force) the wait matrix, obs_mask and park_open
+    come from `in_force_truth` instead — every channel derived from them follows.
     """
     ride_ids = sorted(panel_reg["unique_id"].unique().tolist())
     slots = pd.DatetimeIndex(sorted(panel_reg["ds"].unique()))
@@ -213,6 +222,16 @@ def assemble_tensor(
     down = _pivot("down_count", 0.0)
     n_obs = _pivot("n_obs", 0.0)
 
+    # park_open[t] = enough rides reporting (obs OR down) to call the park open.
+    reporting = ((obs_mask > 0) | (down > 0)).sum(axis=0)
+    park_open = (reporting >= min_rides_open).astype(float)
+
+    if readings is not None:
+        wait_raw, park_open = in_force_truth(
+            readings, ride_ids, slots, windows, freq=freq,
+            min_wait=min_wait, min_rides_open=min_rides_open)
+        obs_mask = np.isfinite(wait_raw).astype(float)
+
     # Per-ride forward-fill context level, then 0 for leading gaps (start-padding
     # analog). Done in pandas for correct row-wise ffill.
     wait_ffill = (
@@ -228,10 +247,6 @@ def assemble_tensor(
     park_occ = np.divide(
         masked.sum(axis=0), den, out=np.zeros(T), where=den > 0
     )
-
-    # park_open[t] = enough rides reporting (obs OR down) to call the park open.
-    reporting = ((obs_mask > 0) | (down > 0)).sum(axis=0)
-    park_open = (reporting >= min_rides_open).astype(float)
 
     tfeat = _slot_time_features(slots)
     occ_bcast = np.broadcast_to(park_occ, (R, T))
@@ -275,13 +290,105 @@ def build(
     freq: str = "15min",
     min_rides_open: int = 3,
     end: pd.Timestamp | None = None,
+    readings: pd.DataFrame | None = None,
+    windows: pd.DataFrame | None = None,
+    min_wait: float = 5,
 ) -> CrossRideTensor:
-    """Convenience: regularize a raw park panel and assemble the tensor in one call."""
+    """Convenience: regularize a raw park panel and assemble the tensor in one call.
+    `readings`/`windows` switch the targets to the in-force truth (see assemble_tensor)."""
     return assemble_tensor(
         regularize(panel, freq=freq, end=end),
         park_id=park_id,
         min_rides_open=min_rides_open,
+        readings=readings,
+        windows=windows,
+        freq=freq,
+        min_wait=min_wait,
     )
+
+
+#: queue_data is a change log: a reading older than this is no longer in force.
+TRUTH_STALE = pd.Timedelta(hours=3)
+
+
+def in_force_truth(
+    readings: pd.DataFrame,
+    ride_ids: list[str],
+    slots: pd.DatetimeIndex,
+    windows: pd.DataFrame | None,
+    freq: str = "15min",
+    min_wait: float = 5,
+    min_rides_open: int = 3,
+    stale: pd.Timedelta = TRUTH_STALE,
+) -> tuple[np.ndarray, np.ndarray]:
+    """BENCH-SPEC truth on the tensor grid (PAR-1034) — the rule of
+    nf-service/chronos_shadow.truth_slots and src/ml/utils/forecast-archive-scoring.util
+    buildTruthSlots: a slot's value is the STANDBY reading in force at its MIDPOINT
+    (newest row at or before it, at most `stale` old), kept only when that row says
+    OPERATING with a wait >= `min_wait` and the midpoint lies in a published operating
+    window. An unchanged ride therefore gets EVERY slot of its day, not the one slot
+    of four its hourly re-write happens to land in.
+
+    `readings` (db.fetch_in_force_readings): unique_id, ds (the slot whose
+    (midpoint - slot, midpoint] the row fell in), status, wait, ts — the LAST
+    non-heartbeat row of that interval, all park-local naive. Forward-filling that
+    on the grid is exactly "newest row at or before the midpoint", because a slot
+    with no row inherits the previous slot's.
+    `windows`: open, close (park-local naive), date — the park-wide published
+    OPERATING hours. Dates before the park's first published window (or every date,
+    for a park that publishes none) fall back to the slot heuristic: at least
+    `min_rides_open` rides with a real or DOWN reading in the slot — otherwise a park
+    without published hours would have no target at all.
+
+    Returns (truth [R, T] with NaN = no target, in_window [T] as 0/1 float)."""
+    slots = pd.DatetimeIndex(slots)
+    R, T = len(ride_ids), len(slots)
+    truth = np.full((R, T), np.nan)
+    if T == 0 or R == 0:
+        return truth, np.zeros(T)
+    mids = slots + pd.Timedelta(freq) / 2
+    rix = {u: i for i, u in enumerate(ride_ids)}
+    r = readings[readings["unique_id"].isin(rix.keys())] if len(readings) else readings
+    col = slots.get_indexer(pd.DatetimeIndex(r["ds"])) if len(r) else np.empty(0, int)
+    r, col = (r[col >= 0], col[col >= 0]) if len(r) else (r, col)
+
+    val = np.full((R, T), np.nan)
+    sec = np.full((R, T), np.nan)
+    rep = np.zeros(T)
+    if len(r):
+        row = r["unique_id"].map(rix).to_numpy()
+        wait = pd.to_numeric(r["wait"], errors="coerce").to_numpy(dtype=float)
+        status = r["status"].astype(str).to_numpy()
+        real = (status == "OPERATING") & np.isfinite(wait) & (wait >= min_wait)
+        # -1 = a reading IS in force but is not a target (CLOSED/DOWN/<min_wait): it
+        # must still be carried, so it supersedes an earlier OPERATING row.
+        val[row, col] = np.where(real, wait, -1.0)
+        sec[row, col] = (pd.DatetimeIndex(r["ts"]) - _EPOCH) / pd.Timedelta(seconds=1)
+        np.add.at(rep, col[real | (status == "DOWN")], 1.0)
+    val = pd.DataFrame(val).ffill(axis=1).to_numpy()
+    sec = pd.DataFrame(sec).ffill(axis=1).to_numpy()
+    # shortcut: age on park-local wall clock is off by the DST hour on the two switch
+    # nights (parks are closed then); carry the UTC ts if a night-time park needs it.
+    age = ((mids - _EPOCH) / pd.Timedelta(seconds=1)).to_numpy()[None, :] - sec
+    ok = (val >= min_wait) & (age <= stale.total_seconds())
+
+    cover = np.zeros(T, dtype=bool)
+    first = None
+    if windows is not None and len(windows):
+        m = mids.to_numpy()
+        for o, c in zip(pd.DatetimeIndex(windows["open"]), pd.DatetimeIndex(windows["close"])):
+            lo, hi = np.searchsorted(m, [np.datetime64(o), np.datetime64(c)], side="left")
+            cover[lo:hi] = True                   # midpoint in [open, close)
+        first = pd.Timestamp(min(windows["date"]))
+    fallback = (slots.normalize() < first) if first is not None else np.ones(T, bool)
+    in_window = np.where(fallback, rep >= min_rides_open, cover)
+
+    keep = ok & in_window[None, :]
+    truth[keep] = val[keep]
+    return truth, in_window.astype(float)
+
+
+_EPOCH = pd.Timestamp("2000-01-01")
 
 
 # Ride-specific channels zeroed for rides absent from the window; the remaining

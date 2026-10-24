@@ -40,7 +40,8 @@ def park(monkeypatch, tmp_path):
     monkeypatch.setattr(forecast.pipeline, "park_timezone", lambda pid: None)
     monkeypatch.setattr(
         forecast.pipeline, "build_park_tensor",
-        lambda pid, window_days=None: types.SimpleNamespace(
+        lambda pid, window_days=None, in_force=None: state.setdefault(
+            "in_force", []).append(in_force) or types.SimpleNamespace(
             slots=state["slots"], ride_ids=["r1", "r2"]))
     monkeypatch.setattr(forecast, "_load_model", lambda pid: model)
     monkeypatch.setattr(forecast.db, "write_pcn_forecasts",
@@ -81,3 +82,12 @@ def test_failed_write_is_retried(park, monkeypatch):
     with pytest.raises(RuntimeError):
         forecast.forecast_park("P", "v")
     assert "P" not in forecast._written
+
+
+@pytest.mark.parametrize("ckpt_mode", ["median", "in_force"])
+def test_inputs_follow_the_checkpoints_target_mode(park, ckpt_mode):
+    # The env says median (default); the inputs must still be built the way the
+    # loaded checkpoint was trained (PAR-1034), whichever way the mismatch goes.
+    park.model.target_mode = ckpt_mode
+    forecast.forecast_park("P", "v")
+    assert park.state["in_force"] == [ckpt_mode == "in_force"]

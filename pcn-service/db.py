@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
 
@@ -32,6 +33,16 @@ BIN = (
     f"date_bin('{_SLOT_MIN} minutes', {{col}} AT TIME ZONE :tz, "
     "TIMESTAMP '2000-01-01 00:00:00')"
 )
+
+# Rows a reader may treat as an observation: everything but the heartbeat that
+# wait-times.processor writes for a ride that dropped out of every feed. It copies
+# the last status AND wait forward with a fresh timestamp for up to 24 h, so in the
+# median panel it invents slots with a frozen wait (and a carried DOWN), and under
+# the in-force truth it resets the 3 h staleness clock — the same filter as the
+# forward archive's truthRowsSql (PAR-1024/PAR-1039). NULL = written before the
+# column existed. The hourly "unchanged" re-write of a live feed is NOT a heartbeat
+# (is_heartbeat = false) and stays.
+NOT_HEARTBEAT = "NOT COALESCE(qd.is_heartbeat, false)"
 
 
 def get_engine():
@@ -111,11 +122,12 @@ def park_has_fresh_data(park_id: str, max_age_hours: int) -> bool:
     the recency window so it's chunk-pruned (no full-history MAX scan). Lets the
     forecast tick skip seasonally-closed/dead parks BEFORE paying the panel fetch."""
     sql = text(
-        """
+        f"""
         SELECT 1
         FROM queue_data qd JOIN attractions a ON a.id = qd."attractionId"
         WHERE a."parkId" = :park AND qd."queueType" = 'STANDBY'
           AND qd.timestamp >= NOW() - (:h || ' hours')::interval
+          AND {NOT_HEARTBEAT}
         LIMIT 1
         """
     )
@@ -159,6 +171,7 @@ def fetch_cross_ride_panel(
         WHERE a."parkId" = :park
           AND qd.timestamp >= NOW() - (:w || ' days')::interval
           AND qd."queueType" = 'STANDBY'
+          AND {NOT_HEARTBEAT}
         GROUP BY 1, 2
         HAVING COUNT(*) FILTER (WHERE {real}) >= 1
             OR COUNT(*) FILTER (WHERE qd.status = 'DOWN') >= 1
@@ -539,8 +552,12 @@ def fetch_pcn_forecasts_window(park_id: str, lo_local, hi_local) -> pd.DataFrame
 
 
 def fetch_actuals_local(park_id: str, tz: str, lo_utc, hi_utc) -> pd.DataFrame:
-    """Realised 15-min median wait per (attraction, park-local slot) — the scoring
-    ground truth (mirror of backtest_intraday_nowcast.fetch_actuals)."""
+    """Realised 15-min wait per (attraction, park-local slot) — the scoring ground
+    truth. PCN_TARGET_MODE=median: the median of the slot's rows (mirror of
+    backtest_intraday_nowcast.fetch_actuals); in_force: the BENCH-SPEC truth the model
+    is then trained on (tensor.in_force_truth)."""
+    if settings.in_force_targets:
+        return _fetch_actuals_in_force(park_id, tz, lo_utc, hi_utc)
     sql = text(
         f"""
         SELECT qd."attractionId"::text AS unique_id,
@@ -549,6 +566,7 @@ def fetch_actuals_local(park_id: str, tz: str, lo_utc, hi_utc) -> pd.DataFrame:
         FROM queue_data qd JOIN attractions a ON a.id = qd."attractionId"
         WHERE a."parkId" = :park AND qd.timestamp >= :lo AND qd.timestamp < :hi
           AND qd.status = 'OPERATING' AND qd."queueType" = 'STANDBY' AND qd."waitTime" >= 5
+          AND {NOT_HEARTBEAT}
         GROUP BY 1, 2 HAVING COUNT(*) >= 1
         """
     )
@@ -557,6 +575,106 @@ def fetch_actuals_local(park_id: str, tz: str, lo_utc, hi_utc) -> pd.DataFrame:
     if not df.empty:
         df["target_slot"] = pd.to_datetime(df["target_slot"])
         df["actual"] = df["actual"].astype(float)
+    return df
+
+
+def _fetch_actuals_in_force(park_id: str, tz: str, lo_utc, hi_utc) -> pd.DataFrame:
+    """In-force truth per (attraction, park-local slot) for slots whose midpoint lies in
+    [lo, hi). Readings reach back one staleness span further so the first slots can
+    inherit a reading written before the window."""
+    import tensor as tns
+
+    lo = pd.Timestamp(lo_utc)
+    hi = pd.Timestamp(hi_utc)
+    readings = fetch_in_force_readings(
+        park_id, tz, (lo - tns.TRUTH_STALE).to_pydatetime(), hi.to_pydatetime())
+    if readings.empty:
+        return pd.DataFrame(columns=["unique_id", "target_slot", "actual"])
+    step = pd.Timedelta(settings.slot_freq)
+    lo_l = lo.tz_convert(tz).tz_localize(None)
+    hi_l = hi.tz_convert(tz).tz_localize(None)
+    # The grid starts one staleness span early so the carry from those readings exists
+    # (in_force_truth ignores rows off its grid); only slots from `lo` are returned.
+    slots = pd.date_range((lo_l - tns.TRUTH_STALE - step / 2).ceil(step), hi_l, freq=step)
+    slots = slots[slots + step / 2 < hi_l]        # a slot needs its midpoint passed
+    rides = sorted(readings["unique_id"].unique().tolist())
+    windows = fetch_operating_windows(park_id, tz, lo_l.date(), hi_l.date())
+    truth, _ = tns.in_force_truth(
+        readings, rides, slots, windows, freq=settings.slot_freq,
+        min_wait=settings.PCN_MIN_WAIT, min_rides_open=settings.PCN_MIN_RIDES_OPEN)
+    truth[:, slots + step / 2 < lo_l] = np.nan
+    r, c = np.nonzero(np.isfinite(truth))
+    return pd.DataFrame({
+        "unique_id": np.asarray(rides, dtype=object)[r],
+        "target_slot": slots[c],
+        "actual": truth[r, c],
+    })
+
+
+# Bins a row into the slot whose (midpoint - slot, midpoint] it falls in: shift by half
+# a slot plus 1 µs so date_bin's [start, start+slot) becomes (mid-slot, mid], then add
+# the slot back. The LAST row of that interval is the one in force at the midpoint.
+MID_BIN = (
+    f"date_bin('{_SLOT_MIN} minutes', ({{col}} AT TIME ZONE :tz) "
+    f"- interval '{_SLOT_MIN * 30_000_000 + 1} microseconds', "
+    f"TIMESTAMP '2000-01-01 00:00:00') + interval '{_SLOT_MIN} minutes'"
+)
+
+
+def fetch_in_force_readings(park_id: str, tz: str, lo_utc, hi_utc) -> pd.DataFrame:
+    """Per (ride, slot) the last STANDBY reading at or before the slot midpoint and
+    after the previous one — the input of tensor.in_force_truth. Every status, not only
+    OPERATING: a CLOSED row must supersede the OPERATING one before it. Park-local naive
+    `ds` and `ts`."""
+    sql = text(
+        f"""
+        SELECT DISTINCT ON (1, 2)
+               qd."attractionId"::text            AS unique_id,
+               {MID_BIN.format(col='qd.timestamp')} AS ds,
+               qd.status::text                    AS status,
+               qd."waitTime"                      AS wait,
+               qd.timestamp AT TIME ZONE :tz      AS ts
+        FROM queue_data qd
+        JOIN attractions a ON a.id = qd."attractionId"
+        WHERE a."parkId" = :park
+          AND qd.timestamp >= :lo AND qd.timestamp < :hi
+          AND qd."queueType" = 'STANDBY'
+          AND {NOT_HEARTBEAT}
+        ORDER BY 1, 2, qd.timestamp DESC
+        """
+    )
+    with engine().connect() as c:
+        df = pd.read_sql(sql, c, params={"park": park_id, "tz": tz, "lo": lo_utc, "hi": hi_utc})
+    if not df.empty:
+        df["ds"] = pd.to_datetime(df["ds"])
+        df["ts"] = pd.to_datetime(df["ts"])
+        df["wait"] = pd.to_numeric(df["wait"], errors="coerce").astype(float)
+    return df
+
+
+def fetch_operating_windows(park_id: str, tz: str, d0, d1) -> pd.DataFrame:
+    """Park-wide published OPERATING hours per service day in [d0 - 1, d1 + 1]: the
+    day's earliest opening and latest closing, park-local naive — the bench's
+    `windows` table (nf-service/chronos_data.fetch_windows)."""
+    sql = text(
+        """
+        SELECT date,
+               min("openingTime") AT TIME ZONE :tz AS open,
+               max("closingTime") AT TIME ZONE :tz AS close
+        FROM schedule_entries
+        WHERE "parkId" = :park
+          AND date BETWEEN CAST(:d0 AS date) - 1 AND CAST(:d1 AS date) + 1
+          AND "scheduleType" = 'OPERATING' AND "attractionId" IS NULL
+          AND "openingTime" IS NOT NULL AND "closingTime" IS NOT NULL
+        GROUP BY date ORDER BY date
+        """
+    )
+    with engine().connect() as c:
+        df = pd.read_sql(sql, c, params={"park": park_id, "tz": tz, "d0": d0, "d1": d1})
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"]).dt.date
+        df["open"] = pd.to_datetime(df["open"])
+        df["close"] = pd.to_datetime(df["close"])
     return df
 
 

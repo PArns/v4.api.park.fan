@@ -69,11 +69,24 @@ def forecast_park(park_id: str, version: str) -> int:
         logger.info("park %s: no STANDBY data in %dh — skip forecast (pre-check)",
                     park_id, settings.PCN_MAX_ORIGIN_AGE_HOURS)
         return 0
+    model = _load_model(park_id)
+    if model is None:
+        logger.warning("park %s: no trained model — run /train first", park_id)
+        return 0
+    # Inputs are built under the target mode the checkpoint was TRAINED in, not the
+    # current env: a median-trained model fed in-force inputs (denser obs_mask /
+    # wait_ffill / park_occ) would serve silently skewed forecasts until the retrain.
+    mode = getattr(model, "target_mode", "median")
+    if mode != settings.target_mode:
+        logger.error("park %s: checkpoint trained with PCN_TARGET_MODE=%s, env says %s — "
+                     "building its inputs as %s until the next retrain",
+                     park_id, mode, settings.target_mode, mode)
+    in_force = mode == "in_force"
     # SHORT inference window: the model only consumes the L-slot context (2 days) +
     # ffill warm-up; the training-sized window (~1.5y) re-aggregated the park's whole
     # history every 15 minutes for nothing. The scale factor lives in the checkpoint.
     t = pipeline.build_park_tensor(
-        park_id, window_days=settings.PCN_FORECAST_WINDOW_DAYS)
+        park_id, window_days=settings.PCN_FORECAST_WINDOW_DAYS, in_force=in_force)
     if t is None:
         return 0
     # Defense-in-depth: the pre-check said "some fresh data exists", this checks the
@@ -86,17 +99,13 @@ def forecast_park(park_id: str, version: str) -> int:
             logger.info("park %s: freshest slot %s is %.0fh stale (> %dh) — skip forecast",
                         park_id, latest, age_h, settings.PCN_MAX_ORIGIN_AGE_HOURS)
             return 0
-    model = _load_model(park_id)
-    if model is None:
-        logger.warning("park %s: no trained model — run /train first", park_id)
-        return 0
 
     L, H = settings.PCN_INPUT_SIZE, settings.PCN_HORIZON
     if len(t.slots) <= L:
         # Thin short-window grid (e.g. a park that just reopened after days closed):
         # fall back to the full training window once — same cost as every tick paid
         # before the short-window optimization, but only for this rare case.
-        t = pipeline.build_park_tensor(park_id)
+        t = pipeline.build_park_tensor(park_id, in_force=in_force)
         if t is None or len(t.slots) <= L:
             logger.warning("park %s: only %d slots — need > L=%d, skip",
                            park_id, 0 if t is None else len(t.slots), L)
