@@ -117,6 +117,19 @@ describe("MlDecisionWatchService.freezeDueReports", () => {
 });
 
 describe("MlDecisionWatchService.computeDrift", () => {
+  it("joins the weekday median on (ride, hour) keys, never an OR filter", async () => {
+    const { service, query } = make([]);
+    await service.computeDrift(NOW);
+    const sql = query.mock.calls
+      .map((c) => c[0] as string)
+      .find((s) => s.includes("FROM prediction_accuracy"))!;
+    expect(sql).toContain("CROSS JOIN generate_series(1, 4) w");
+    expect(sql).toContain(
+      "JOIN r h ON h.a = s.a AND h.lt = s.lt - w * interval '7 days'",
+    );
+    expect(sql).not.toMatch(/h\.lt IN \(/);
+  });
+
   it("stores the watch for the overview", async () => {
     const { service, redis } = make([]);
     const w = await service.computeDrift(NOW);

@@ -253,9 +253,10 @@ export class MlDecisionWatchService {
          SELECT s.a, s.lt,
                 percentile_cont(0.5) WITHIN GROUP (ORDER BY h.actual) AS b
            FROM r s
-           JOIN r h ON h.a = s.a
-            AND h.lt IN (s.lt - interval '7 days', s.lt - interval '14 days',
-                         s.lt - interval '21 days', s.lt - interval '28 days')
+          CROSS JOIN generate_series(1, 4) w
+           -- Equi-join on (ride, hour): an IN list here became an OR join
+           -- filter over every slot pair of a ride (review of PAR-1059).
+           JOIN r h ON h.a = s.a AND h.lt = s.lt - w * interval '7 days'
           WHERE s.judged
           GROUP BY s.a, s.lt
          HAVING count(*) >= 2

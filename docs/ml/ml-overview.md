@@ -188,7 +188,9 @@ the last 63 days. Two windows: **recent** = the last 7 days, **previous** = the
   coverage is null.
 
 **Weekday median.** Per scored slot, the median actual of the same ride at the
-same park-local weekday and hour 7, 14, 21 and 28 days before (≥ 2 of them),
+same park-local weekday and hour 7, 14, 21 and 28 days before (≥ 2 of them;
+four equi-join lookups on (ride, local hour) via `generate_series(1, 4)` — an
+`IN` list there became an OR join filter over every slot pair of a ride),
 from the table's own actuals. Ex ante for every slot, so both windows are
 judged alike. `skill` = Σ model error ÷ Σ weekday-median error on the slots
 that have one; below 1 beats the weekday median. The ratio, not the MAE, is
