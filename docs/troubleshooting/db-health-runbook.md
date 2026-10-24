@@ -611,6 +611,49 @@ batch is a sequential scan that stops once it has its rows; the last, short batc
 reads the table once (~4 GB). It runs before the 04:50 VACUUM, which then reclaims
 the deleted rows. The log line is `🗑️  TFT forecasts older than 120 days: …`.
 
+**Stop time.** No batch starts outside 04:35–04:48 UTC, and each batch's
+`statement_timeout` is capped to end by 04:50, when the VACUUM starts. Every batch
+rescans the heap from its start past the rows the earlier batches deleted (dead
+until the VACUUM), so the first catch-up (~29 batches) gets slower per batch; when
+the cut-off stops it, the log line says `not finished, N rows left` (one 30 s-bounded
+`count(*)`) and the next night continues. A run Bull delivers late starts nothing.
+
+**Before the first run: export what it deletes (owner decision, one-off).** The
+first run deletes every `tft_forecasts` row older than 120 days — on a run dated
+2026-10-25 that is `forecast_date < 2026-06-27`, ~5–6 M rows, the oldest month of
+TFT's only forward record. Copy them to the NAS first, on the docker host, from a
+checkout of this repo, **before the deploy that ships the job** and outside
+04:35–05:00 and 05:50–07:30 UTC. `CUTOFF` is today (UTC) − 118 days, so the file
+covers the prune of the next two nights; if the deploy slips further, run it again.
+The NAS is mounted on demand the way `scripts/backup/parkfan-backup.sh` does it
+(credentials from `/opt/parkfan/backup.env`, root-only, see
+docs/deployment/backup.md).
+
+```bash
+sudo -s                       # backup.env and the NAS mount are root-only; keeps the cwd
+set -a; . /opt/parkfan/backup.env; set +a
+MP=/mnt/parkfan-nas-backup; mkdir -p "$MP"
+mountpoint -q "$MP" && WAS_MOUNTED=1 || mount -t cifs "//$BACKUP_NAS_HOST/$BACKUP_NAS_SHARE" "$MP" \
+  -o "username=$BACKUP_NAS_USER,password=$BACKUP_NAS_PASSWORD,vers=3.0,iocharset=utf8,file_mode=0600,dir_mode=0700"
+CUTOFF=$(date -u -d 'now -118 days' +%F)
+OUT="$MP/parkfan/tft-forecasts-archive/tft_forecasts_before_${CUTOFF}.csv.gz"
+mkdir -p "$(dirname "$OUT")"
+PARKFAN_PSQL_STATEMENT_TIMEOUT=20min ./scripts/prod-psql.sh -v ON_ERROR_STOP=1 -c \
+  "COPY (SELECT * FROM tft_forecasts WHERE forecast_date < DATE '$CUTOFF') TO STDOUT WITH (FORMAT csv, HEADER)" \
+  | gzip > "$OUT"
+# Row-count check: both numbers must match (rows of a past forecast_date are never rewritten).
+EXPECTED=$(./scripts/prod-psql.sh -tA -c "SELECT count(*) FROM tft_forecasts WHERE forecast_date < DATE '$CUTOFF'")
+GOT=$(( $(gzip -cd "$OUT" | wc -l) - 1 ))
+echo "cutoff=$CUTOFF expected=$EXPECTED exported=$GOT"; [ "$EXPECTED" = "$GOT" ] && echo OK || echo MISMATCH
+ls -lh "$OUT"
+[ -n "${WAS_MOUNTED:-}" ] || umount "$MP"
+exit
+```
+
+Deploy only after it printed `OK`. `tft_forecasts_shadow` needs no export: its
+first row is from PAR-1041, nowhere near 120 days old.
+
+
 ---
 
 ## 6. Slow Query Logging
