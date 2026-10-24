@@ -11,9 +11,9 @@ It takes one of:
 
 | Value | When |
 | --- | --- |
-| `very_low` … `extreme` | A live wait exists, the park is ratable and the ride has a baseline |
+| `very_low` … `extreme` | The ride's `effectiveStatus` is `OPERATING`, a live wait exists, the park is ratable and the ride has a baseline |
 | `closed` | The ride's `effectiveStatus` is `CLOSED` |
-| `unknown` | Anything else: no live wait (a `DOWN` ride, an `OPERATING` ride whose row carries no minutes, an `UNKNOWN` ride), no baseline, a thin park, or a park whose wait times we cannot read |
+| `unknown` | Anything else: no live wait (a `DOWN` ride — even one whose row still carries a posted number or the 0 ingestion writes for a non-`OPERATING` status — an `OPERATING` ride whose row carries no minutes, an `UNKNOWN` ride), no baseline, a thin park, or a park whose wait times we cannot read |
 
 Before PAR-1029 a ride with no live wait took the model's forecast level for the
 current UTC hour (at 14:50 that was the 14:00 row), or `very_low` when there was
@@ -28,6 +28,8 @@ What the frontend must do with it:
 - The park's own `analytics.statistics.crowdLevel` / `occupancy.crowdLevel` is a
   separate computation over live waits (`calculateParkOccupancy`); it never read
   the per-ride `crowdLevel`, so it is unaffected.
+- Favorites used to send `null` where the other surfaces sent `unknown`; it
+  sends `unknown` now too.
 
 ## `bestVisitTimes` never offers "now" for a ride that is not running
 

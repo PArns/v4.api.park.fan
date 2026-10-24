@@ -10,7 +10,6 @@ import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
-import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { ParkEnrichmentService } from "./park-enrichment.service";
 import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.client";
@@ -219,12 +218,6 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
           },
         },
         { provide: PredictionAccuracyService, useValue: {} },
-        {
-          provide: PredictionDeviationService,
-          useValue: {
-            getBatchDeviationFlags: jest.fn().mockResolvedValue(new Map()),
-          },
-        },
         { provide: HolidaysService, useValue: {} },
         {
           provide: ParkEnrichmentService,
@@ -441,7 +434,7 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
   describe("a DOWN ride with no live wait (PAR-1029)", () => {
     afterEach(() => jest.useRealTimers());
 
-    const buildDownRide = async () => {
+    const buildDownRide = async (waitTime: number | null = null) => {
       jest.useFakeTimers({
         now: new Date("2026-10-21T12:20:00Z"),
         doNotFake: [
@@ -474,7 +467,7 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
               {
                 queueType: "STANDBY",
                 status: "DOWN",
-                waitTime: null,
+                waitTime,
                 lastUpdated: new Date(),
                 timestamp: new Date(),
               },
@@ -511,6 +504,25 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
       expect(ride?.effectiveStatus).toBe("DOWN");
       expect(ride?.crowdLevel).toBe("unknown");
     });
+
+    it.each([0, 45])(
+      "rates a DOWN ride carrying a %d-minute wait unknown",
+      async (waitTime) => {
+        analyticsService.getBatchAttractionP50s.mockResolvedValueOnce(
+          new Map([["ride-down", 20]]),
+        );
+        analyticsService.isParkRatable.mockResolvedValueOnce(true);
+        analyticsService.getLoadRating.mockReturnValueOnce({
+          rating: "very_low",
+          baseline: 20,
+        });
+
+        const ride = await buildDownRide(waitTime);
+
+        expect(ride?.effectiveStatus).toBe("DOWN");
+        expect(ride?.crowdLevel).toBe("unknown");
+      },
+    );
 
     it("never offers the current slot as a best visit time", async () => {
       const ride = await buildDownRide();

@@ -28,7 +28,6 @@ import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { rateOrUnknown } from "../../common/utils/crowd-level.util";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
-import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
@@ -62,7 +61,6 @@ import {
   freeFlowQueues,
 } from "../../common/utils/free-flow-status.util";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
-import { servedAdjustedConfidence } from "../../ml/utils/hourly-confidence.util";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { mapRideProfile } from "../../attractions/dto/ride-profile.dto";
 import { AttractionOutageService } from "../../attractions/services/attraction-outage.service";
@@ -124,7 +122,6 @@ export class ParkIntegrationService {
     private readonly analyticsService: AnalyticsService,
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
-    private readonly predictionDeviationService: PredictionDeviationService,
     private readonly holidaysService: HolidaysService,
     private readonly parkEnrichmentService: ParkEnrichmentService,
     private readonly themeParksClient: ThemeParksClient,
@@ -826,10 +823,15 @@ export class ParkIntegrationService {
           // "walk on, no queues" on the busiest Saturday of the year.
           crowdLevel = "unknown";
         } else {
-          // A live crowd level is a live wait rated against the ride's baseline;
-          // nothing else is one.
+          // A live crowd level is a running ride's live wait rated against its
+          // baseline; nothing else is one. A DOWN row keeps a posted number or
+          // the 0 ingestion writes for a non-OPERATING status (PAR-1029).
           const wait = attraction.queues?.[0]?.waitTime;
-          if (wait !== undefined && wait !== null) {
+          if (
+            attraction.effectiveStatus === "OPERATING" &&
+            wait !== undefined &&
+            wait !== null
+          ) {
             if (!parkRatable) {
               // Thin parent park (not ratable) → "unknown", matching the
               // park-level crowdLevel and the other live surfaces.
@@ -1953,58 +1955,6 @@ export class ParkIntegrationService {
         }`,
       );
       return undefined;
-    }
-  }
-
-  /**
-   * Enrich predictions with deviation data (Confidence Downgrade strategy)
-   *
-   * Checks Redis for deviation flags and adjusts confidence if detected
-   *
-   * @param attractionId - Attraction ID
-   * @param predictions - Raw predictions from ML service
-   * @returns Enriched predictions with deviation data
-   */
-  private async enrichPredictionsWithDeviations(
-    attractionId: string,
-    predictions: PredictionDto[],
-  ): Promise<PredictionDto[]> {
-    if (!predictions || predictions.length === 0) {
-      return predictions;
-    }
-
-    try {
-      // Get deviation flag from Redis
-      const deviationFlag =
-        await this.predictionDeviationService.getDeviationFlag(attractionId);
-
-      if (deviationFlag) {
-        // Deviation detected - enrich all predictions for this attraction
-        return predictions.map((p) => ({
-          ...p,
-          currentWaitTime: deviationFlag.actualWaitTime,
-          confidenceAdjusted: servedAdjustedConfidence(p), // Halve confidence
-          deviationDetected: true,
-          deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
-              deviationFlag.deviation > 0 ? "higher" : "lower"
-            } than predicted`,
-            deviation: deviationFlag.deviation,
-            percentageDeviation: deviationFlag.percentageDeviation,
-            detectedAt: deviationFlag.detectedAt,
-          },
-        }));
-      }
-
-      // No deviation - return predictions unchanged
-      return predictions;
-    } catch (error) {
-      // Don't fail request if enrichment fails
-      this.logger.warn(
-        `Failed to enrich predictions for ${attractionId}:`,
-        error,
-      );
-      return predictions;
     }
   }
 

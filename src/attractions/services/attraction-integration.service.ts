@@ -456,8 +456,14 @@ export class AttractionIntegrationService {
       dto.baseline = null;
       dto.comparison = null;
     } else {
+      // Only a running ride's wait is rated: a DOWN row keeps a posted number
+      // or the 0 ingestion writes for a non-OPERATING status (PAR-1029).
       const wait = dto.queues?.[0]?.waitTime;
-      if (wait !== undefined && wait !== null) {
+      if (
+        dto.effectiveStatus === "OPERATING" &&
+        wait !== undefined &&
+        wait !== null
+      ) {
         try {
           // P50 baseline (median, "typical wait"). Peak-vs-median ratio:
           // 100% = current wait matches typical, >150% = busier than

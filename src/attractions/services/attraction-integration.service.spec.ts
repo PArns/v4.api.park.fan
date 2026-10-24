@@ -1054,6 +1054,26 @@ describe("AttractionIntegrationService", () => {
       expect(result.baseline).toBeNull();
     });
 
+    it.each([0, 45])(
+      "rates a DOWN ride carrying a %d-minute wait unknown",
+      async (waitTime) => {
+        mockAnalyticsService.getAttractionP50BaselineFromCache.mockResolvedValue(
+          20,
+        );
+        mockAnalyticsService.getAttractionCrowdLevel.mockReturnValue(
+          "very_low",
+        );
+
+        const result = await buildRide("DOWN", waitTime);
+
+        expect(result.effectiveStatus).toBe("DOWN");
+        expect(result.crowdLevel).toBe("unknown");
+        expect(
+          mockAnalyticsService.getAttractionCrowdLevel,
+        ).not.toHaveBeenCalled();
+      },
+    );
+
     it("never offers the current slot as a best visit time", async () => {
       const result = await buildRide();
 
