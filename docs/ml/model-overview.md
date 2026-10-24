@@ -28,7 +28,7 @@ The ML Service is a standalone Python application responsible for predicting wai
     never the first row's month. Intra-day rain timing is not a feature: training has no hourly observed
     weather to learn it from.
   - `park_occupancy_pct`: Park-wide occupancy (current recent-peak ÷ **P50** baseline, 0–200%). Matches the API's live `getCurrentOccupancy` reading (ratio-vs-P50).
-  - `wait_time_momentum`: Velocity of change over last 30 mins
+  - `wait_time_velocity`: mean of the last six hourly changes, (x[t-1h] − x[t-7h]) / 6 in min per hour — at serving the live wait is x[t-1h], only on rows ≤ 3 h ahead, 0 beyond
   - `trend_7d`: Linear regression slope of last 7 days
   - `volatility_7d`: Std of wait times over last 7 days, **dampened** as `log(1 + std)` and **capped** at `VOLATILITY_CAP_STD_MINUTES` (default 40 min) so it acts as a modifier; occupancy and time remain primary drivers.
 
@@ -152,6 +152,24 @@ The API runs two crowd-level regimes — **live** is ratio-vs-P50 (current peak 
 - **Models retrain at 06:00 daily**. Predictions made between a deploy and the next training cycle recalibrate within ~1 cycle.
 
 See [Crowd Levels](../analytics/crowd-levels.md) §5 for the API-side contract.
+
+### One definition per feature on both paths (PAR-1030, PAR-1032, PAR-1039)
+
+Training (`features.py`) is the definition; serving (`predict.create_prediction_features`) reproduces it. `tests/test_train_serve_feature_parity.py` computes each of these through both paths on one fixture.
+
+| Feature | Definition (both paths) | Serving before |
+|---|---|---|
+| `avg_wait_last_1h` | mean of [t − 1 h, t). Serving: the live wait on rows ≤ `LIVE_LAG_MAX_LEAD` (3 h) after base_time, the same-hour-last-week profile beyond | live wait on every row, 48 h ahead too |
+| `wait_time_velocity` | (x[t−1h] − x[t−7h]) / 6 on the hourly series; serving takes the live wait as x[t−1h], ≤ 3 h, 0 beyond | (now − 30 min ago) / 6, a twelfth of the scale, on every row |
+| `time_since_park_open_mins` | minutes since the opening of the window the row is in (its own day, or the previous day's for a slot past midnight), 0 without a window | today's opening for every row, 0 when unknown |
+| `is_bridge_day` | per park-local date from the holidays (`add_bridge_day_feature`), computed before the holiday-distance features | one flag for today (`featureContext.isBridgeDay`, no longer sent) |
+| `rolling_avg_weekday/_weekend`, `volatility_weekday/_weekend` | Mon–Fri vs Sat–Sun on the **park-local** weekday | UTC weekday, on both paths |
+| `park_occupancy_pct` (training) | the park's mean wait at that hour **without the row's own wait** (the target); a ride alone at its hour reads 100 | the mean included the target |
+| interaction features | recomputed after training dropout | computed before it, so a dropped-out row kept the real occupancy inside them |
+
+`queue_data` heartbeats (`is_heartbeat`) are excluded from every training, heuristic, occupancy-profile and serving-context read: a heartbeat copies the previous status and wait with a fresh timestamp and never ends a status.
+
+Not changed, on purpose: the ride-type flags (`is_coaster`, `is_water_ride`, `is_indoor`, `is_wind_sensitive`) still come from name regexes, while the curated `attractionKind` / `indoorOutdoor` columns exist. They are hand-decided and null where nobody has judged a ride yet, so reading them beside the regex would make the feature mean two different things depending on whether a ride has been curated. Switching needs a coverage check, a single definition (curated, regex only where null — or curated only) and a retrain.
 
 ### Historical Occupancy Profile (DOW×Hour) — Timezone Fix
 

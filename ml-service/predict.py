@@ -242,6 +242,33 @@ RECENT_LOOKUP_DAYS = 32
 # The longest rolling window the model was trained on (rolling_avg_90d).
 ROLLING_STATS_DAYS = 90
 
+# How far ahead of base_time a row may be fed the live wait as its
+# `avg_wait_last_1h` and the live momentum as `wait_time_velocity` (PAR-1030).
+# Training reads avg_wait_last_1h as the mean of [t - 1 h, t): the live wait IS
+# that for a row up to an hour ahead, and stays its best estimate for a few
+# hours more - the served persistence blend measured the current wait helping
+# out to 3 h (applyPcnIntradayOverride). Past that the same-hour profile is the
+# better proxy for [t - 1 h, t), so rows beyond get the profile >24 h rows get.
+LIVE_LAG_MAX_LEAD = timedelta(hours=3)
+
+
+def live_wait_velocity(current_wait: float, earlier_hourly_waits) -> float:
+    """`wait_time_velocity` as training defines it, with the live wait as the
+    latest hour.
+
+    Training (features.add_historical_features) takes, on the hourly series,
+    the mean of the last six first differences ending one row before the
+    target: (x[i-1] - x[i-7]) / 6, fewer when the series is shorter. Here
+    x[i-1] is the live wait and `earlier_hourly_waits` the hourly values
+    before the current hour, oldest first. It used to be (now - 30 min ago) / 6,
+    a twelfth of training's per-hour scale.
+    """
+    earlier = [w for w in earlier_hourly_waits if w is not None and not pd.isna(w)]
+    if not earlier:
+        return 0.0
+    k = min(6, len(earlier))
+    return (float(current_wait) - float(earlier[-k])) / k
+
 # Rows the serving features are built from. Shared by both reads so the lookups
 # and the rolling statistics see the same population.
 #
@@ -260,6 +287,7 @@ _SERVING_QUEUE_FILTER = """
                 AND qd."waitTime" >= 5
                 AND (qd.status = 'OPERATING' OR qd."waitTime" > 0)
                 AND qd."queueType" = 'STANDBY'
+                AND NOT COALESCE(qd.is_heartbeat, false)
                 AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
 """
 
@@ -387,8 +415,8 @@ def fetch_recent_rolling_stats(
 
     Mirrors features.add_historical_features, which the model is trained on:
     the series is one MEDIAN wait per UTC hour, each window is time-based and
-    left-closed ([t - N days, t)), weekday/weekend split on the UTC weekday
-    (Mon-Fri vs Sat-Sun) and the std is the sample std (pandas ddof=1, NULL
+    left-closed ([t - N days, t)), weekday/weekend split on the park-LOCAL
+    weekday (Mon-Fri vs Sat-Sun; it was the UTC one on both sides until PAR-1032) and the std is the sample std (pandas ddof=1, NULL
     below two values — training's min_periods=2). Columns: attractionName,
     rolling_avg_7d/_weekday/_weekend/_28d/_90d, rolling_std_7d/_weekday/_weekend.
     A window with no data yields NaN; the caller applies its fallbacks.
@@ -406,6 +434,7 @@ def fetch_recent_rolling_stats(
                 SELECT
                     qd."attractionId"::text AS "attractionId",
                     a.name AS name,
+                    p.timezone AS tz,
                     DATE_TRUNC('hour', qd.timestamp) AS ts,
                     PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") AS w
                 FROM queue_data qd
@@ -418,7 +447,7 @@ def fetch_recent_rolling_stats(
                 WHERE {_SERVING_QUEUE_FILTER}
                     AND qd.timestamp >= CAST(:end_time AS timestamptz) - :days * INTERVAL '1 day'
                     AND qd.timestamp < :end_time
-                GROUP BY 1, 2, 3
+                GROUP BY 1, 2, 3, 4
             ),
             tagged AS (
                 SELECT
@@ -427,7 +456,7 @@ def fetch_recent_rolling_stats(
                     w,
                     ts >= CAST(:end_time AS timestamptz) - INTERVAL '7 days' AS in_7d,
                     ts >= CAST(:end_time AS timestamptz) - INTERVAL '28 days' AS in_28d,
-                    EXTRACT(ISODOW FROM ts AT TIME ZONE 'UTC') >= 6 AS is_weekend
+                    EXTRACT(ISODOW FROM ts AT TIME ZONE tz) >= 6 AS is_weekend
                 FROM hourly
             )
             SELECT
@@ -576,8 +605,9 @@ def generate_future_timestamps(
 def _open_against_schedule(
     df: pd.DataFrame, operating_schedules: pd.DataFrame, schedule_date: pd.Series
 ) -> tuple:
-    """(mask_valid, mask_open) of each row of `df` against the OPERATING window
-    of `schedule_date` - the park-local date whose window is being asked.
+    """(mask_valid, mask_open, mins_since_open) of each row of `df` against the
+    OPERATING window of `schedule_date` - the park-local date whose window is
+    being asked. `mins_since_open` is NaN where that date has no window.
 
     The JOIN key is a park-local date; the time comparison is between INSTANTS.
     openingTime/closingTime from the DB are timezone-aware (TIMESTAMPTZ), so
@@ -606,7 +636,8 @@ def _open_against_schedule(
 
     mask_valid = opening.notna() & closing.notna()
     mask_open = mask_valid & (ts_compare >= opening) & (ts_compare <= closing)
-    return mask_valid, mask_open
+    mins_since_open = (ts_compare - opening).dt.total_seconds() / 60.0
+    return mask_valid, mask_open, mins_since_open
 
 
 def apply_schedule_features(
@@ -640,6 +671,7 @@ def apply_schedule_features(
     df["has_special_event"] = 0
     df["has_extra_hours"] = 0
     df["status"] = "OPERATING"
+    df["time_since_park_open_mins"] = 0.0  # training's value without a window
 
     if not schedules_df.empty:
         schedules_df["openingTime"] = pd.to_datetime(schedules_df["openingTime"])
@@ -707,13 +739,23 @@ def apply_schedule_features(
             # A slot is open when it falls inside its own local date's window
             # OR inside the previous date's: a 10:00 -> 01:00 day owns the
             # 00:00-00:45 slots that carry the NEXT local date (PAR-943).
-            mask_valid, mask_open_same = _open_against_schedule(
+            mask_valid, mask_open_same, since_same = _open_against_schedule(
                 df, operating_schedules, df["schedule_date"]
             )
-            _, mask_open_prev = _open_against_schedule(
+            _, mask_open_prev, since_prev = _open_against_schedule(
                 df, operating_schedules, df["schedule_date"] - pd.Timedelta(days=1)
             )
             mask_open = mask_open_same | mask_open_prev
+
+            # Minutes since the opening of the window the row is in, per row and
+            # from that row's own day - the definition training learns
+            # (features.add_park_schedule_features). It used to come from
+            # TODAY's opening for every row, 0 when none was known (PAR-1030).
+            use_prev = mask_open_prev & ~mask_open_same
+            since = since_same.where(~use_prev, since_prev)
+            df["time_since_park_open_mins"] = (
+                since.where(mask_valid | use_prev, 0.0).clip(lower=0)
+            )
 
             df.loc[mask_open, "is_park_open"] = 1
             mask_closed_operating_day = mask_valid & ~mask_open
@@ -1208,9 +1250,6 @@ def create_prediction_features(
     )
     df["is_peak_season"] = df["is_peak_season"].astype(int)
 
-    # Initialize bridge day flag (overwritten by context or logic below)
-    df["is_bridge_day"] = 0
-
     # Region-specific weekends
     # OPTIMIZATION: Use centralized function from features.py to avoid code duplication
     from features import add_weekend_feature
@@ -1280,6 +1319,17 @@ def create_prediction_features(
         df, parks_metadata, holidays_df, park_col="parkId", date_col="local_date"
     )
     df = df.drop(columns=["local_date"], errors="ignore")
+
+    # Bridge days per row from the same holidays, the way training computes them
+    # (features.add_bridge_day_feature) and BEFORE the distance features read
+    # them. The API used to send one flag for today, applied to every row
+    # (PAR-1030).
+    from features import add_bridge_day_feature
+
+    df = add_bridge_day_feature(
+        df, parks_metadata, holidays_start, holidays_end,
+        cached_holidays_df=holidays_df,
+    ).drop(columns=["country"], errors="ignore")
 
     # Park schedule features (check if park is open at predicted time)
     schedule_query = text(
@@ -1718,15 +1768,19 @@ def create_prediction_features(
                     # Update 'avg_wait_same_dow_4w' for all mask rows
                     df.loc[mask, "avg_wait_same_dow_4w"] = same_dow_vals.values
 
-                    # Update 'avg_wait_last_24h' and 'avg_wait_last_1h' only for future mask rows
-                    # (where we drop real-time recent values)
+                    # avg_wait_last_24h: replaced beyond 24 h (its own window).
                     future_indices = df.loc[mask].index[future_mask]
                     if len(future_indices) > 0:
                         df.loc[future_indices, "avg_wait_last_24h"] = same_dow_vals[
                             future_mask
                         ].values
 
-                        ts_local_future = ts_local[future_mask]
+                    # avg_wait_last_1h: replaced beyond the live lead - the
+                    # base-time value says nothing about [t - 1 h, t) there.
+                    beyond_live = ts_utc > base_time_pd + LIVE_LAG_MAX_LEAD
+                    future_indices = df.loc[mask].index[beyond_live]
+                    if len(future_indices) > 0:
+                        ts_local_future = ts_local[beyond_live]
                         row_hours = ts_local_future.dt.hour.values
                         row_is_weekends = (ts_local_future.dt.dayofweek >= 5).values
 
@@ -1774,33 +1828,49 @@ def create_prediction_features(
     if "avg_wait_same_dow_4w" not in df.columns:
         df["avg_wait_same_dow_4w"] = df.get("avg_wait_same_hour_last_week", 0.0)
 
-    # Override lags with current wait times if available (Autoregression)
+    # Override lags with current wait times if available (Autoregression) - only
+    # on rows within LIVE_LAG_MAX_LEAD of base_time (PAR-1030). It used to set
+    # every row of the ride, 12-48 h ahead too, over the profile set above.
+    # `recent_wait_times` is no longer read: velocity comes from the hourly
+    # history, the series training differences.
     if current_wait_times:
+        _base = pd.Timestamp(base_time)
+        _base = _base.tz_localize("UTC") if _base.tzinfo is None else _base.tz_convert("UTC")
+        _ts = pd.to_datetime(df["timestamp"])
+        _ts = _ts.dt.tz_localize("UTC") if _ts.dt.tz is None else _ts.dt.tz_convert("UTC")
+        live_rows = _ts <= _base + LIVE_LAG_MAX_LEAD
+        _local_hour = {}  # tz -> base_time's local hour start (naive)
         for attraction_id, wait_time in current_wait_times.items():
-            if wait_time is not None:
-                mask = df["attractionId"] == str(attraction_id)
-                if mask.any():
-                    # Calculate velocity:
-                    # Training uses: rolling(6).mean() of differences (avg change per 5 mins over 30 mins)
-                    # Inference approximation: (Current - Recent30min) / 6.0
-
-                    velocity = 0.0
-
-                    # 1. Try explicit recent wait time (passed from API, ~30 mins ago)
-                    if recent_wait_times and str(attraction_id) in recent_wait_times:
-                        recent_val = recent_wait_times[str(attraction_id)]
-                        if recent_val is not None:
-                            velocity = (float(wait_time) - float(recent_val)) / 6.0
-
-                    # 2. Fallback to using 1h avg from DB if explicit recent not available
-                    elif not pd.isna(df.loc[mask, "avg_wait_last_1h"].iloc[0]):
-                        recent_avg = df.loc[mask, "avg_wait_last_1h"].iloc[0]
-                        velocity = (float(wait_time) - recent_avg) / 6.0
-
-                    df.loc[mask, "wait_time_velocity"] = velocity
-
-                    # Now override the lag feature with current value
-                    df.loc[mask, "avg_wait_last_1h"] = float(wait_time)
+            if wait_time is None:
+                continue
+            mask = (df["attractionId"] == str(attraction_id)) & live_rows
+            if not mask.any():
+                continue
+            history = recent_data[recent_data["attractionId"] == str(attraction_id)]
+            earlier = []
+            if not history.empty:
+                tz = parks_metadata.loc[
+                    parks_metadata["park_id"] == df.loc[mask, "parkId"].iloc[0],
+                    "timezone",
+                ]
+                tz = tz.iloc[0] if len(tz) else "UTC"
+                if tz not in _local_hour:
+                    _local_hour[tz] = (
+                        _base.tz_convert(tz).tz_localize(None).floor("h")
+                    )
+                slot = pd.to_datetime(history["date"]) + pd.to_timedelta(
+                    history["hour"].astype(int), unit="h"
+                )
+                before_now = (slot < _local_hour[tz]).values
+                earlier = (
+                    history.assign(_slot=slot.values)[before_now]
+                    .sort_values("_slot")["avg_wait"]
+                    .tolist()
+                )
+            df.loc[mask, "wait_time_velocity"] = live_wait_velocity(
+                wait_time, earlier
+            )
+            df.loc[mask, "avg_wait_last_1h"] = float(wait_time)
 
     # Add percentile features (Weather extremes)
     df = add_percentile_features(df)
@@ -1816,32 +1886,20 @@ def create_prediction_features(
     if feature_context:
         from features import (
             add_park_occupancy_feature,
-            add_time_since_park_open,
             add_downtime_features,
             add_virtual_queue_feature,
-            add_bridge_day_feature,
             add_park_has_schedule_feature,
             add_interaction_features,
         )
 
+        # time_since_park_open_mins comes from apply_schedule_features and
+        # is_bridge_day from the holiday block, both per row (PAR-1030).
         df = add_park_occupancy_feature(df, feature_context)
-        df = add_time_since_park_open(df, feature_context)
         df = add_downtime_features(df, feature_context)
         df = add_virtual_queue_feature(df, feature_context)
         df = add_park_has_schedule_feature(
             df, feature_context
         )  # NEW: Data quality indicator
-
-        # Bridge day needs metadata refetch ideally, but for inference we rely on feature_context
-        # If feature_context has it, great. If not, add_bridge_day_feature will attempt fallback or skip.
-        # But add_bridge_day_feature requires parks_metadata, start_date, end_date for fallback.
-        # For inference, if we lack context, we might skip expensive fallback or fetch metadata.
-        # Let's pass what we have.
-        # Note: add_bridge_day_feature signature: (df, parks_metadata, start_date, end_date, feature_context)
-        # OPTIMIZATION: Reuse parks_metadata from line 174 instead of fetching again
-        start = df["timestamp"].min()
-        end = df["timestamp"].max()
-        df = add_bridge_day_feature(df, parks_metadata, start, end, feature_context)
 
         # Interaction features (must be after all base features are added)
         df = add_interaction_features(df)
@@ -1851,11 +1909,9 @@ def create_prediction_features(
 
         occ_context = {"historicalOccupancy": hist_occ, "baseTime": base_time}
         df = add_park_occupancy_feature(df, occ_context)
-        df["time_since_park_open_mins"] = 0.0
         df["had_downtime_today"] = 0
         df["downtime_minutes_today"] = 0.0
         df["has_virtual_queue"] = 0
-        df["is_bridge_day"] = 0
         df["park_has_schedule"] = (
             1  # Default to 1 (assume schedule exists for better quality)
         )
