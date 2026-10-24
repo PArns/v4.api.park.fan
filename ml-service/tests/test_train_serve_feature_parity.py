@@ -121,6 +121,31 @@ def test_time_since_park_open_is_per_row_and_identical_on_both_paths():
     assert serve["time_since_park_open_mins"].tolist() == pytest.approx(expected)
 
 
+def test_is_park_open_outside_hours_on_an_operating_day_agrees():
+    """PAR-1045: before opening and after close both paths read 0."""
+
+    def frame():
+        rows = ["2026-07-02 06:00", "2026-07-02 10:00", "2026-07-02 17:30"]
+        df = pd.DataFrame(
+            {
+                "parkId": PARK,
+                "attractionId": RIDE,
+                "timestamp": [pd.Timestamp(t, tz="UTC") for t in rows],
+            }
+        )
+        return features.convert_to_local_time(df, PARKS_METADATA)
+
+    train = features.add_park_schedule_features(
+        frame(),
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+        datetime(2026, 7, 5, tzinfo=timezone.utc),
+        cached_schedules_df=_schedules_snake(),
+    )
+    serve = predict.apply_schedule_features(frame(), _schedules_camel())
+    assert train["is_park_open"].tolist() == [0, 1, 0]
+    assert serve["is_park_open"].tolist() == [0, 1, 0]
+
+
 def test_is_bridge_day_is_per_date_and_ignores_todays_flag():
     df = _frame()
     df["date_local"] = df["local_timestamp"].dt.date
@@ -309,8 +334,7 @@ def _history():
     return pd.DataFrame(rows)
 
 
-@pytest.fixture
-def served(monkeypatch):
+def _patch_serving(monkeypatch):
     monkeypatch.setattr(predict, "fetch_parks_metadata", lambda: PARKS_METADATA)
     monkeypatch.setattr(predict, "fetch_holidays", lambda *a, **k: HOLIDAYS.copy())
     monkeypatch.setattr(predict, "get_db", lambda: _Db())
@@ -323,6 +347,10 @@ def served(monkeypatch):
 
     monkeypatch.setattr(attraction_features, "get_db", lambda: _Db())
 
+
+@pytest.fixture
+def served(monkeypatch):
+    _patch_serving(monkeypatch)
     timestamps = [BASE + timedelta(hours=h) for h in range(1, 49)]
     df = predict.create_prediction_features(
         [RIDE],
@@ -400,3 +428,25 @@ def test_one_hour_dropout_also_zeroes_velocity_like_serving():
     out = train.apply_training_dropout(df, _Cfg(), _Log())
     assert out["avg_wait_last_1h"].iloc[0] == 20.0
     assert out["wait_time_velocity"].iloc[0] == 0.0
+
+
+def test_served_same_dow_beyond_28_days_reads_last_year_only_where_observed(
+    monkeypatch,
+):
+    """PAR-1045: the observed slot 52 weeks back, else rolling_avg_7d."""
+    _patch_serving(monkeypatch)
+    far = [BASE + timedelta(days=40, hours=h) for h in (4, 5)]  # 14:00, 15:00 CEST
+    year_ago = pd.Timestamp(far[0]).tz_convert(TZ).tz_localize(None) - features.LAST_YEAR_LAG
+    asked = []
+
+    def slots(keys, end_time):
+        asked.extend(keys)
+        return {(RIDE, year_ago.date(), 14): 77.0}
+
+    monkeypatch.setattr(predict, "fetch_last_year_slots", slots)
+    df = predict.create_prediction_features(
+        [RIDE], [PARK], far, BASE, feature_context={"baseTime": BASE}
+    )
+    assert (RIDE, year_ago.date(), 14) in asked
+    assert df["avg_wait_same_dow_4w"].iloc[0] == 77.0
+    assert df["avg_wait_same_dow_4w"].iloc[1] == df["rolling_avg_7d"].iloc[1]

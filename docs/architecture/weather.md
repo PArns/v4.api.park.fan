@@ -123,6 +123,24 @@ The forecast stops after 16 days. For a later travel day the calendar serves the
 
 **Timezone note**: Dates are always interpreted in park local timezone. `saveWeatherData()` converts `"2026-03-31"` → `fromZonedTime("2026-03-31T00:00:00", park.timezone)` before storing.
 
+### Hourly observed weather — design only, not built (PAR-1045)
+
+The CatBoost model trains on the **daily** rows above, while serving has an
+**hourly** forecast; PAR-1031/1032 bridge the gap by collapsing the forecast to
+training's daily units. A rain shower at 15:00 and a dry morning therefore read
+the same in training. Storing what the weather actually was, hour by hour, would
+let training learn hour-level weather and serving feed the hourly forecast
+directly. Not built: it is a new table, a backfill and a new sync job, and the
+feature change needs its own measured retrain.
+
+| | |
+|---|---|
+| Table | `weather_hourly_observed` — `parkId` uuid, `ts` timestamptz (the UTC hour), `temperature` / `apparentTemperature` real (°C), `precipitation` / `rain` real (mm), `snowfall` real (cm), `weatherCode` smallint (WMO), `windSpeed` / `windGusts` real (km/h), `cloudCover` smallint (%). PK `(parkId, ts)`. A TimescaleDB hypertable with compression after 7 days, registered in `HYPERTABLES` (`src/database/hypertables.ts`). Observed values only: forecasts never land here, and an hour the archive does not return stays absent rather than interpolated. |
+| Source | Open-Meteo **archive** (`archive-api.open-meteo.com/v1/archive`, ERA5 / ERA5-Land, `hourly=` the variables above, `timezone=GMT`). The archive runs ~5 days behind, so training's last days keep the daily row until the archive catches up. One provider for both, so the units match the forecast's. |
+| Size | ~211 parks × 8 760 h ≈ 1.85 M rows a year; ~125 B per row with the PK index ≈ 230 MB/year uncompressed, roughly 25 MB/year compressed. Two years (`TRAIN_LOOKBACK_YEARS`) ≈ 50 MB compressed. |
+| Calls | Open-Meteo weights a call by variables/10 × days/14. Backfill of 730 days for ~185 unique locations at 9 variables ≈ 47 per location ≈ 8 700 — most of one day's free allowance, so it has to be spread over 3–4 days beside the existing jobs. Ongoing: one daily request per location for the last 7 days ≈ 0.45 each ≈ 85 a day. |
+| Consumers | `ml-service/db.fetch_training_data` joins it per (park, UTC hour) in place of the daily row's fields; serving keeps the hourly forecast (it already is per hour). The climate normals stay walled off as above. |
+
 ---
 
 ## Sync Jobs (BullMQ)

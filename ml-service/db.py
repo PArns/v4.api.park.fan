@@ -908,3 +908,24 @@ def fetch_attraction_accuracy() -> pd.DataFrame:
         df = pd.read_sql(text(query), db.bind)
 
     return convert_df_types(df)
+
+
+def fetch_curated_attraction_facts(attraction_ids: List[str]) -> pd.DataFrame:
+    """Hand-curated `attraction_kind` / `indoor_outdoor` per attraction (PAR-1045).
+
+    NULL means nobody judged the attraction (docs/frontend/attraction-kind.md,
+    indoor-outdoor.md) and comes back as None, never as a value.
+    """
+    ids = uuid_list(attraction_ids, "fetch_curated_attraction_facts")
+    if not ids:
+        return pd.DataFrame(columns=["attractionId", "attraction_kind", "indoor_outdoor"])
+    query = text(
+        """
+        SELECT id::text AS "attractionId", attraction_kind, indoor_outdoor
+        FROM attractions
+        WHERE id = ANY(CAST(:ids AS uuid[]))
+        """
+    )
+    with get_db() as db:
+        result = db.execute(query, {"ids": ids})
+        return pd.DataFrame(result.fetchall(), columns=list(result.keys()))

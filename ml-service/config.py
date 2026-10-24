@@ -160,6 +160,14 @@ class Settings(BaseSettings):
         30  # Used for large datasets (>60 days); smaller datasets use adaptive % split
     )
 
+    # PAR-1045: is_indoor / is_coaster / is_water_ride from the curated
+    # indoor_outdoor / attraction_kind columns where set, name regexes where
+    # null. Read by TRAINING only and stored in the model metadata; serving
+    # follows the active model's value. Flip after the training log's
+    # "Curated ride type coverage" line shows enough curated rides; the next
+    # training (06:00 UTC, or a manual one) is what takes effect.
+    CATBOOST_CURATED_RIDE_TYPE: bool = False
+
     # Sample Weight Configuration (Feedback Loop)
     # Re-enabled: Now uses efficient attraction-level aggregated MAE from
     # attraction_accuracy_stats instead of row-level prediction_accuracy JOIN.
