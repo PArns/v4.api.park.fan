@@ -11,7 +11,10 @@ harness, so a win is a win on the model, not the loop.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
+import tempfile
 
 import numpy as np
 import torch
@@ -247,7 +250,7 @@ class TorchSeqModel:
     def save(self, path: str, ride_ids=None) -> None:
         if self.net is None or self._dims is None:
             raise RuntimeError("nothing to save — fit first")
-        torch.save({
+        ckpt = {
             "arch": self.arch,
             "state_dict": self.net.state_dict(),
             "scale": self._scale,
@@ -260,7 +263,24 @@ class TorchSeqModel:
             },
             "ride_ids": list(ride_ids) if ride_ids is not None else None,
             "channels": list(self.channels),
-        }, path)
+        }
+        # Atomic: torch.save straight onto `path` truncates the served checkpoint
+        # first, so a crash (OOM-kill, deploy) mid-write left a file the forecast
+        # tick could not load. Temp file in the SAME directory (os.replace is only
+        # atomic within one filesystem), fsync, then swap (PAR-1054).
+        d = os.path.dirname(os.path.abspath(path))
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".ckpt-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                torch.save(ckpt, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, 0o644)  # mkstemp makes 0600; keep what torch.save left
+            os.replace(tmp, path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            raise
 
     def load(self, path: str) -> "TorchSeqModel":
         ckpt = torch.load(path, map_location=self.device, weights_only=False)

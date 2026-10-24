@@ -132,3 +132,114 @@ export function vacuumStatementTimeoutMs(
 export function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
+
+// ---------------------------------------------------------------------------
+// Retention of the TFT forecast tables (PAR-1054).
+// ---------------------------------------------------------------------------
+
+/** Cron of the TFT prune: 04:35 UTC, so the 04:50 VACUUM reclaims what it deleted. */
+export const TFT_PRUNE_CRON = "35 4 * * *";
+
+/**
+ * Rows whose `forecast_date` is older than this many days are deleted from
+ * `tft_forecasts` and `tft_forecasts_shadow`. Neither had any retention; on
+ * 2026-10-24 `tft_forecasts` held 27 M rows (3.8 GB), +180 k a day.
+ *
+ * The oldest `forecast_date` each reader asks for:
+ *
+ * | reader | window | oldest forecast_date |
+ * |---|---|---|
+ * | `ForecastAccuracyService.rebuild` (planner band, 03:10) | targets 45 d back, leads ≤ 60 | today − 105 |
+ * | forward-archive shadow scoring (`tft_forecasts_shadow`) | targets ≤ 14 d back (curve retention), lead ≤ 90 + 3 | today − 107 |
+ * | `getTftTopBottomPerformers` (admin board, `days` = 14) | newest forecast before each target | today − 15 |
+ * | calendar serving (`MLService`, TFT level) | `forecast_date >= today − 3` | today − 3 |
+ * | admin ML overview probe | newest row for today + 2 | today − 2 |
+ *
+ * 120 = the 107 of the forward archive plus a 13-day margin. ml-bench's
+ * `export` is the one reader that wants more (every origin since 2026-03-01):
+ * an export taken after this runs holds 120 days of TFT origins — see
+ * docs/ml/ml-bench.md.
+ */
+export const TFT_FORECAST_RETENTION_DAYS = 120;
+
+/** The tables the prune covers. Both PLAIN tables: the ctid batching relies on it. */
+export const TFT_PRUNE_TABLES = ["tft_forecasts", "tft_forecasts_shadow"];
+
+/** Rows per DELETE (one autocommitted statement each), as for pcn_forecasts (PAR-873). */
+export const TFT_PRUNE_BATCH_ROWS = 200_000;
+/** Batches per table per run: steady state needs one; the first run ~25. */
+export const TFT_PRUNE_MAX_BATCHES = 40;
+/**
+ * Per batch. There is no index on `forecast_date`, so a batch is a sequential
+ * scan that stops once it has its rows (the expired ones sit at the start of
+ * the heap); the last, short batch reads the table once.
+ */
+export const TFT_PRUNE_STATEMENT_TIMEOUT_MS = 5 * MINUTE_MS;
+
+/**
+ * One batch. The outer DELETE has no predicate of its own (TID scan, see
+ * pcn-service `_PRUNE_PCN_FORECASTS`), which is only correct on a plain table:
+ * a ctid is unique per table, not per hypertable chunk.
+ */
+export function tftPruneSql(table: string): string {
+  return `DELETE FROM ${quoteIdent(table)}
+     WHERE ctid = ANY(ARRAY(
+       SELECT ctid FROM ${quoteIdent(table)}
+        WHERE forecast_date < (now() AT TIME ZONE 'UTC')::date - $1::int
+        LIMIT $2))`;
+}
+
+// ---------------------------------------------------------------------------
+// Weekly REINDEX of pcn_forecasts_pkey (PAR-1054).
+// ---------------------------------------------------------------------------
+
+/**
+ * Sunday 19:10 UTC. Outside 04:50–07:30 (VACUUM window, training), after the
+ * :05 forward-archive capture, and — on a Sunday evening — in the quietest
+ * hours the host has that no nightly batch job occupies.
+ */
+export const PCN_REINDEX_CRON = "10 19 * * 0";
+export const PCN_REINDEX_INDEX = "pcn_forecasts_pkey";
+export const PCN_REINDEX_TABLE = "pcn_forecasts";
+/** Day of week (UTC, 0 = Sunday) and minutes the REINDEX may START in. */
+export const PCN_REINDEX_DAY = 0;
+export const PCN_REINDEX_START_MINUTE = 19 * 60 + 10; // 19:10
+export const PCN_REINDEX_LAST_START_MINUTE = 19 * 60 + 30; // 19:30
+/** Nothing is still running at this minute: ends before the 20:05 capture. */
+export const PCN_REINDEX_DEADLINE_MINUTE = 20 * 60 + 3; // 20:03
+/** Upper bound of the build itself, before the deadline cap. */
+export const PCN_REINDEX_MAX_STATEMENT_MS = 50 * MINUTE_MS;
+/**
+ * Longer than the VACUUM's 5 s on purpose. REINDEX CONCURRENTLY asks for SHARE
+ * UPDATE EXCLUSIVE only, which no SELECT/INSERT/UPDATE/DELETE conflicts with,
+ * so a waiting request queues no reader or writer behind it. And it WAITS
+ * twice for every transaction that touches the table (the 15-minute PCN
+ * upsert, the hourly prune batch) — at 5 s it would throw away a finished
+ * build over one slow upsert.
+ */
+export const PCN_REINDEX_LOCK_TIMEOUT = "60s";
+
+/** Whether the weekly REINDEX may start at `now`: Sunday, [19:10, 19:30) UTC. */
+export function mayStartPcnReindex(now: Date): boolean {
+  const m = minuteOfDayUtc(now);
+  return (
+    now.getUTCDay() === PCN_REINDEX_DAY &&
+    m >= PCN_REINDEX_START_MINUTE &&
+    m < PCN_REINDEX_LAST_START_MINUTE
+  );
+}
+
+/** `statement_timeout` for the REINDEX: its bound, capped to end by 20:03 UTC. */
+export function pcnReindexStatementTimeoutMs(now: Date): number {
+  const deadline = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    0,
+    PCN_REINDEX_DEADLINE_MINUTE,
+  );
+  return Math.max(
+    1000,
+    Math.min(PCN_REINDEX_MAX_STATEMENT_MS, deadline - now.getTime()),
+  );
+}

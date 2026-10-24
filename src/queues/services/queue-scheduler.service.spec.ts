@@ -215,13 +215,32 @@ describe("QueueSchedulerService — nightly VACUUM (PAR-868)", () => {
     ).registerScheduledJobs();
 
     const dbMaintenance = queues[queues.length - 1];
-    expect(dbMaintenance.add).toHaveBeenCalledTimes(1);
+    expect(dbMaintenance.add).toHaveBeenCalledTimes(3);
     expect(dbMaintenance.add).toHaveBeenCalledWith(
       "vacuum-churn-tables",
       {},
       expect.objectContaining({
         repeat: { cron: "50 4 * * *", tz: "UTC" },
         jobId: "db-vacuum-cron",
+        attempts: 1,
+      }),
+    );
+    // PAR-1054: TFT retention before the VACUUM, weekly REINDEX outside the night.
+    expect(dbMaintenance.add).toHaveBeenCalledWith(
+      "prune-tft-forecasts",
+      {},
+      expect.objectContaining({
+        repeat: { cron: "35 4 * * *", tz: "UTC" },
+        jobId: "db-tft-prune-cron",
+        attempts: 1,
+      }),
+    );
+    expect(dbMaintenance.add).toHaveBeenCalledWith(
+      "reindex-pcn-forecasts-pkey",
+      {},
+      expect.objectContaining({
+        repeat: { cron: "10 19 * * 0", tz: "UTC" },
+        jobId: "db-pcn-reindex-cron",
         attempts: 1,
       }),
     );

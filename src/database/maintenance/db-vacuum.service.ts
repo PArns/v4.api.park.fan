@@ -2,8 +2,19 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Client } from "pg";
 import { getDatabaseConfig } from "../../config/database.config";
 import {
+  mayStartPcnReindex,
   mayStartVacuum,
+  PCN_REINDEX_INDEX,
+  PCN_REINDEX_LOCK_TIMEOUT,
+  PCN_REINDEX_TABLE,
+  pcnReindexStatementTimeoutMs,
   quoteIdent,
+  TFT_FORECAST_RETENTION_DAYS,
+  TFT_PRUNE_BATCH_ROWS,
+  TFT_PRUNE_MAX_BATCHES,
+  TFT_PRUNE_STATEMENT_TIMEOUT_MS,
+  TFT_PRUNE_TABLES,
+  tftPruneSql,
   VACUUM_LOCK_TIMEOUT,
   VACUUM_MAINTENANCE_WORK_MEM,
   VACUUM_TARGETS,
@@ -17,7 +28,7 @@ export interface VacuumClient {
   query(
     sql: string,
     params?: unknown[],
-  ): Promise<{ rows: Record<string, unknown>[] }>;
+  ): Promise<{ rows: Record<string, unknown>[]; rowCount?: number | null }>;
   end(): Promise<unknown>;
   /** pg.Client is an EventEmitter: a connection lost while idle is emitted, not thrown. */
   on?(event: "error", listener: (err: Error) => void): unknown;
@@ -29,6 +40,41 @@ export type VacuumOutcome =
   | "skipped_missing"
   | "skipped_in_progress"
   | "failed";
+
+export interface TftPruneResult {
+  table: string;
+  deleted: number;
+  batches: number;
+  /** false when the batch cap stopped it; the next night continues. */
+  done: boolean;
+  error?: string;
+}
+
+export type ReindexOutcome =
+  | "reindexed"
+  | "skipped_window_closed"
+  | "skipped_missing"
+  | "skipped_busy"
+  | "failed";
+
+export interface ReindexResult {
+  outcome: ReindexOutcome;
+  durationMs: number;
+  bytesBefore: number | null;
+  bytesAfter: number | null;
+  reason?: string;
+}
+
+/**
+ * Invalid leftovers of an interrupted REINDEX CONCURRENTLY: `<index>_ccnew`
+ * (the half-built copy, still maintained by every write) or `<index>_ccold`.
+ */
+const LEFTOVER_INDEXES = `
+  SELECT c.relname AS name
+    FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+   WHERE i.indrelid = to_regclass($1) AND NOT i.indisvalid
+     AND starts_with(c.relname, $2 || '_cc')
+`;
 
 export interface VacuumTableResult {
   table: string;
@@ -105,25 +151,8 @@ export class DbVacuumService {
       }));
     }
 
-    let client: VacuumClient;
-    try {
-      client = this.createClient();
-      // A dropped connection between statements (Postgres restart, terminated backend)
-      // arrives as an 'error' event; unhandled, Node would crash the whole API process.
-      client.on?.("error", (err) =>
-        this.logger.error(`🧽 VACUUM connection error: ${describe(err)}`),
-      );
-      await client.connect();
-      await client.query(`SET lock_timeout = '${VACUUM_LOCK_TIMEOUT}'`);
-      await client.query(
-        `SET maintenance_work_mem = '${VACUUM_MAINTENANCE_WORK_MEM}'`,
-      );
-    } catch (err) {
-      this.logger.error(
-        `🧽 VACUUM job could not open its connection: ${describe(err)}`,
-      );
-      return results;
-    }
+    const client = await this.openClient("VACUUM", VACUUM_LOCK_TIMEOUT);
+    if (!client) return results;
 
     try {
       for (const target of targets) {
@@ -144,6 +173,242 @@ export class DbVacuumService {
           .join(", ")})`,
     );
     return results;
+  }
+
+  /**
+   * The session every maintenance step runs on: own connection, `lock_timeout`
+   * and the 256 MB work memory (a REINDEX sorts in `maintenance_work_mem` too).
+   * Null when it cannot be opened — logged, never thrown.
+   */
+  private async openClient(
+    what: string,
+    lockTimeout: string,
+  ): Promise<VacuumClient | null> {
+    try {
+      const client = this.createClient();
+      // A dropped connection between statements (Postgres restart, terminated backend)
+      // arrives as an 'error' event; unhandled, Node would crash the whole API process.
+      client.on?.("error", (err) =>
+        this.logger.error(`🧽 ${what} connection error: ${describe(err)}`),
+      );
+      await client.connect();
+      await client.query(`SET lock_timeout = '${lockTimeout}'`);
+      await client.query(
+        `SET maintenance_work_mem = '${VACUUM_MAINTENANCE_WORK_MEM}'`,
+      );
+      return client;
+    } catch (err) {
+      this.logger.error(
+        `🧽 ${what} job could not open its connection: ${describe(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Batched retention DELETE on the TFT forecast tables by `forecast_date`
+   * (PAR-1054, the PAR-873 pattern): each batch is its own autocommitted
+   * statement of at most {@link TFT_PRUNE_BATCH_ROWS} rows; a table stops at
+   * its first short batch or after {@link TFT_PRUNE_MAX_BATCHES}. A missing
+   * table (the shadow before its first write) is skipped. Never throws.
+   */
+  async pruneTftForecasts(
+    tables: readonly string[] = TFT_PRUNE_TABLES,
+    retentionDays: number = TFT_FORECAST_RETENTION_DAYS,
+    batchRows: number = TFT_PRUNE_BATCH_ROWS,
+    maxBatches: number = TFT_PRUNE_MAX_BATCHES,
+  ): Promise<TftPruneResult[]> {
+    const results: TftPruneResult[] = [];
+    const client = await this.openClient("TFT prune", VACUUM_LOCK_TIMEOUT);
+    if (!client) return results;
+    try {
+      await client.query(
+        `SET statement_timeout = ${TFT_PRUNE_STATEMENT_TIMEOUT_MS}`,
+      );
+      for (const table of tables) {
+        const r: TftPruneResult = {
+          table,
+          deleted: 0,
+          batches: 0,
+          done: false,
+        };
+        results.push(r);
+        try {
+          const exists = await client.query(
+            "SELECT to_regclass($1) IS NOT NULL AS present",
+            [table],
+          );
+          if (!exists.rows[0]?.present) {
+            r.done = true;
+            continue;
+          }
+          const sql = tftPruneSql(table);
+          while (r.batches < maxBatches) {
+            const res = await client.query(sql, [retentionDays, batchRows]);
+            const n = Number(res.rowCount ?? 0);
+            r.deleted += n;
+            r.batches++;
+            if (n < batchRows) {
+              r.done = true;
+              break;
+            }
+          }
+        } catch (err) {
+          r.error = describe(err);
+          this.logger.error(`🗑️  ${table}: prune failed: ${r.error}`);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`🗑️  TFT prune aborted: ${describe(err)}`);
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+    this.logger.log(
+      `🗑️  TFT forecasts older than ${retentionDays} days: ` +
+        results
+          .map(
+            (r) =>
+              `${r.table} ${r.deleted.toLocaleString("en-US")} in ${r.batches} batch(es)` +
+              (r.done ? "" : " (not finished, continuing next run)"),
+          )
+          .join(", "),
+    );
+    return results;
+  }
+
+  /**
+   * Weekly `REINDEX INDEX CONCURRENTLY pcn_forecasts_pkey` (PAR-1054): the
+   * rolling prune leaves the PK at twice its packed size (10.1 GB against a
+   * 5.2 GB heap on 2026-10-24) — VACUUM marks pages reusable but never shrinks
+   * an index. CONCURRENTLY works because the table is a plain one (not in
+   * `HYPERTABLES`); it takes SHARE UPDATE EXCLUSIVE, never ACCESS EXCLUSIVE,
+   * so reads and writes go on (runbook §0b).
+   *
+   * Skipped when another index build is running anywhere, when the table is
+   * being vacuumed, or when another maintenance session is active. An
+   * interrupted earlier run's invalid `_ccnew`/`_ccold` copy is dropped first,
+   * and again after a failure, because every write keeps maintaining it.
+   * Never throws.
+   */
+  async reindexPcnForecastsPkey(): Promise<ReindexResult> {
+    const base = { durationMs: 0, bytesBefore: null, bytesAfter: null };
+    const now = this.now();
+    if (!mayStartPcnReindex(now)) {
+      this.logger.warn(
+        `🧽 REINDEX ${PCN_REINDEX_INDEX}: not started at ${now.toISOString()} (only Sunday 19:10–19:30 UTC)`,
+      );
+      return { ...base, outcome: "skipped_window_closed" };
+    }
+    const client = await this.openClient("REINDEX", PCN_REINDEX_LOCK_TIMEOUT);
+    if (!client) {
+      return { ...base, outcome: "failed", reason: "no connection" };
+    }
+
+    try {
+      const exists = await client.query(
+        "SELECT to_regclass($1) IS NOT NULL AS present",
+        [PCN_REINDEX_INDEX],
+      );
+      if (!exists.rows[0]?.present) {
+        return { ...base, outcome: "skipped_missing" };
+      }
+
+      const busy = await this.reindexBlocker(client);
+      if (busy) {
+        this.logger.log(`🧽 REINDEX ${PCN_REINDEX_INDEX}: skipped — ${busy}`);
+        return { ...base, outcome: "skipped_busy", reason: busy };
+      }
+
+      const timeoutMs = pcnReindexStatementTimeoutMs(now);
+      await client.query(`SET statement_timeout = ${timeoutMs}`);
+      await this.dropLeftoverIndexes(client);
+      const bytesBefore = await this.indexBytes(client);
+      const started = Date.now();
+      try {
+        await client.query(
+          `REINDEX INDEX CONCURRENTLY ${quoteIdent(PCN_REINDEX_INDEX)}`,
+        );
+      } catch (err) {
+        const durationMs = Date.now() - started;
+        this.logger.error(
+          `🧽 REINDEX ${PCN_REINDEX_INDEX} failed after ${Math.round(durationMs / 1000)} s (timeout ${Math.round(timeoutMs / 1000)} s): ${describe(err)}`,
+        );
+        await this.dropLeftoverIndexes(client).catch((e: unknown) =>
+          this.logger.error(
+            `🧽 could not drop the leftover index, next run retries: ${describe(e)}`,
+          ),
+        );
+        return {
+          ...base,
+          outcome: "failed",
+          durationMs,
+          bytesBefore,
+          reason: describe(err),
+        };
+      }
+      const durationMs = Date.now() - started;
+      const bytesAfter = await this.indexBytes(client);
+      this.logger.log(
+        `🧽 REINDEX ${PCN_REINDEX_INDEX} in ${Math.round(durationMs / 1000)} s — ${fmtBytes(bytesBefore)} → ${fmtBytes(bytesAfter)}`,
+      );
+      return { outcome: "reindexed", durationMs, bytesBefore, bytesAfter };
+    } catch (err) {
+      this.logger.error(
+        `🧽 REINDEX ${PCN_REINDEX_INDEX}: skipped after error: ${describe(err)}`,
+      );
+      return { ...base, outcome: "failed", reason: describe(err) };
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+  }
+
+  /** Why the REINDEX must not start now, or null. */
+  private async reindexBlocker(client: VacuumClient): Promise<string | null> {
+    const building = await client.query(
+      "SELECT pid, relid::regclass::text AS rel FROM pg_stat_progress_create_index LIMIT 1",
+    );
+    if (building.rows.length > 0) {
+      return `an index build is running (pid ${String(building.rows[0].pid)} on ${String(building.rows[0].rel)})`;
+    }
+    const vacuum = await client.query(
+      `SELECT pid FROM pg_stat_progress_vacuum WHERE ${RELATION_AND_CHILDREN} LIMIT 1`,
+      [PCN_REINDEX_TABLE],
+    );
+    if (vacuum.rows.length > 0) {
+      return `${PCN_REINDEX_TABLE} is being vacuumed (pid ${String(vacuum.rows[0].pid)})`;
+    }
+    const other = await client.query(
+      `SELECT pid FROM pg_stat_activity
+        WHERE application_name = 'parkfan-db-maintenance'
+          AND pid <> pg_backend_pid() AND state <> 'idle' LIMIT 1`,
+    );
+    if (other.rows.length > 0) {
+      return `another maintenance session is active (pid ${String(other.rows[0].pid)})`;
+    }
+    return null;
+  }
+
+  private async dropLeftoverIndexes(client: VacuumClient): Promise<void> {
+    const left = await client.query(LEFTOVER_INDEXES, [
+      PCN_REINDEX_TABLE,
+      PCN_REINDEX_INDEX,
+    ]);
+    for (const row of left.rows) {
+      const name = String(row.name);
+      this.logger.warn(`🧽 dropping invalid leftover index ${name}`);
+      await client.query(
+        `DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdent(name)}`,
+      );
+    }
+  }
+
+  private async indexBytes(client: VacuumClient): Promise<number | null> {
+    const res = await client.query(
+      "SELECT pg_relation_size(to_regclass($1))::bigint AS bytes",
+      [PCN_REINDEX_INDEX],
+    );
+    const b = res.rows[0]?.bytes;
+    return b === undefined || b === null ? null : Number(b);
   }
 
   private async vacuumOne(
@@ -238,6 +503,10 @@ export class DbVacuumService {
 
 function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function fmtBytes(n: number | null): string {
+  return n === null ? "?" : `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
 function fmt(n: number | null): string {

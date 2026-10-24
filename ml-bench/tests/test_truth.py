@@ -127,3 +127,23 @@ def test_drop_heartbeats_removes_only_carry_forward_slots(tmp_path):
     assert len(added) <= max(1, len(removed) // 100), (len(added), len(removed))
     both = a.index.intersection(b.index)
     assert (a.loc[both].to_numpy() == b.loc[both].to_numpy()).all()
+
+
+def test_heartbeats_are_dropped_by_default(tmp_path):
+    """PAR-1054: the default target drops heartbeat rows; the flag opts back in."""
+    import argparse
+
+    import synth
+    from mlbench.build import add_args, build, connect
+
+    raw = tmp_path / "raw"
+    synth.write(raw)
+    con = connect("1GB", 2)
+    assert build(raw, tmp_path / "pq", con)["drop_heartbeats"] is True
+    con.close()
+
+    p = argparse.ArgumentParser()
+    add_args(p)
+    assert p.parse_args(["--export", "x"]).drop_heartbeats is True
+    assert p.parse_args(["--export", "x", "--no-drop-heartbeats"]).drop_heartbeats is False
+    assert p.parse_args(["--export", "x", "--drop-heartbeats"]).drop_heartbeats is True

@@ -208,6 +208,8 @@ def train_and_forecast(version: str) -> pd.DataFrame:
     from neuralforecast import NeuralForecast
 
     t0 = time.time()
+    # Only parks with a series, by (country, park id): chunk membership is part of
+    # each chunk's model, so it must not shift when a park is added (PAR-1054).
     park_ids = settings.park_ids or db.fetch_park_ids()
     size = max(1, settings.NF_PARK_CHUNK_SIZE)
     chunks = [park_ids[i:i + size] for i in range(0, len(park_ids), size)]
