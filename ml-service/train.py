@@ -282,7 +282,12 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
                     f"   Holiday dropout: {h_count:,}/{holiday_count:,} holiday rows ({h_rate * 100:.0f}%) → historical proxies"
                 )
 
-    return df
+    # The interactions multiply park_occupancy_pct, which the passes above just
+    # replaced: computed before them, a dropped-out row kept the real
+    # occupancy inside its interactions (PAR-1032).
+    from features import add_interaction_features
+
+    return add_interaction_features(df)
 
 
 def compute_sample_weights(df: pd.DataFrame, accuracy_stats) -> "Optional[np.ndarray]":

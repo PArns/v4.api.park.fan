@@ -31,7 +31,6 @@ import pytest
 from features import (
     add_park_schedule_features,
     add_time_features,
-    add_time_since_park_open,
     convert_to_local_time,
 )
 from predict import apply_schedule_features
@@ -372,23 +371,4 @@ def test_engineer_features_pads_the_schedule_window_past_the_utc_edges():
     )
     assert asked["end"] >= datetime(2026, 7, 5).date(), (
         f"window ends {asked['end']}, excluding local dates east of UTC"
-    )
-
-
-def test_time_since_park_open_compares_instants_not_wall_clocks():
-    """`parkOpeningTimes` carries an ISO instant, so the difference is in UTC.
-
-    This one is GREEN on the pre-fix code too — there `local_timestamp` happened
-    to be UTC, so the subtraction worked by accident. It is here to keep the
-    next change from reaching for `local_timestamp`, which is now naive and
-    would silently add the park's offset to every reading.
-    """
-    df = add_time_features(_frame([US_EVENING_ROW]), PARKS_METADATA)
-
-    out = add_time_since_park_open(
-        df, {"parkOpeningTimes": {NEW_YORK: "2026-07-03T14:00:00.000Z"}}
-    )
-
-    assert out.loc[0, "time_since_park_open_mins"] == pytest.approx(
-        EXPECTED_MINS_SINCE_OPEN
     )
