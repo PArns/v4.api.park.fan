@@ -9,6 +9,7 @@ import {
   componentStatus,
   decisionProgress,
   deriveDecisionState,
+  decisionFloor,
   earliestFromProgress,
 } from "./ml-overview.util";
 import decisionsJson from "../data/ml-decisions.json";
@@ -228,10 +229,12 @@ describe("buildDecisions", () => {
     });
     // The served cell is still listed for the link.
     expect(a.cells).toHaveLength(2);
+    // today + 14 would be 25.10., but the cell's longest lead is d5: its
+    // first d5 target date was 14.10., so 14 of them cannot exist before 28.10.
     expect(b).toMatchObject({
       state: "open",
       progress: { liveDays: 0, liveParks: 0 },
-      earliest: { date: "2026-10-25" },
+      earliest: { date: "2026-10-28" },
     });
   });
 
@@ -240,14 +243,88 @@ describe("buildDecisions", () => {
     expect(later).toMatchObject({
       state: "later",
       progress: null,
-      earliest: { date: "2026-10-25" },
+      earliest: { date: "2026-10-28" },
     });
-    expect(later.earliest?.label).toContain("nicht vor 25.10.");
+    expect(later.earliest?.label).toContain("nicht vor 28.10.");
     expect(owner).toMatchObject({
       state: "owner",
       progress: null,
       earliest: null,
     });
+  });
+
+  it("never dates a long-lead decision before its longest lead can have 14 dates (review of PAR-1036)", () => {
+    const def = (questionId: string, modelId: string): DecisionFile => ({
+      decisions: [
+        { id: "x", title: "X", detail: "x", cells: [{ questionId, modelId }] },
+      ],
+    });
+    const thin = (q: string, mId: string) =>
+      matrix({ [q]: { [mId]: cell({ days: 0, parks: 0 }) } });
+    // d60: 09.10. + 60 + 14 — not "today + 14", which slides every day.
+    for (const today of ["2026-10-11", "2026-11-20"]) {
+      expect(
+        buildDecisions(
+          def("plan_d6_60", "h5"),
+          thin("plan_d6_60", "h5"),
+          today,
+        )[0].earliest?.date,
+      ).toBe("2026-12-22");
+    }
+    expect(
+      buildDecisions(
+        def("cal_far_90", "wkd"),
+        thin("cal_far_90", "wkd"),
+        TODAY,
+      )[0].earliest?.date,
+    ).toBe("2027-01-21");
+    expect(decisionFloor(def("plan_besttime", "h5").decisions[0])).toBe(
+      "2026-11-22",
+    );
+  });
+
+  it("is never ready before its evaluation date, and judged on the frozen window after it", () => {
+    const ready = matrix({
+      plan_d0_1: {
+        h5: cell({
+          state: "better",
+          days: 20,
+          parks: 20,
+          checks: { offline: "yes", live: "yes", visible: true },
+        }),
+      },
+    });
+    const f: DecisionFile = {
+      decisions: [
+        {
+          id: "e",
+          title: "E",
+          detail: "e",
+          evaluateOn: "2026-11-09",
+          cells: [{ questionId: "plan_d0_1", modelId: "h5" }],
+        },
+      ],
+    };
+    const before = buildDecisions(f, ready, "2026-11-01")[0];
+    expect(before).toMatchObject({
+      state: "waiting_live",
+      evaluateOn: "2026-11-09",
+      evaluated: false,
+      earliest: { date: "2026-11-09", label: "ausgewertet am 09.11." },
+    });
+    // From the date on, the frozen window (ending 08.11.) decides — not the
+    // latest matrix, which may have drifted either way.
+    const worse = matrix({
+      plan_d0_1: { h5: cell({ state: "worse", days: 30, parks: 30 }) },
+    });
+    const after = buildDecisions(
+      f,
+      worse,
+      "2026-12-01",
+      new Map([["2026-11-09", ready]]),
+    )[0];
+    expect(after).toMatchObject({ state: "ready", evaluated: true });
+    expect(after.earliest).toBeNull();
   });
 
   it("degrades to open without a matrix", () => {
@@ -270,6 +347,15 @@ describe("buildDecisions", () => {
       }
       for (const dep of d.dependsOn ?? []) expect(ids.has(dep)).toBe(true);
       if (d.state) expect(["later", "owner"]).toContain(d.state);
+      // A fixed evaluation date before the gate can be met would freeze a
+      // decision on a window that cannot pass.
+      expect({
+        id: d.id,
+        ok: !!d.evaluateOn && d.evaluateOn >= decisionFloor(d)!,
+      }).toEqual({
+        id: d.id,
+        ok: true,
+      });
     }
   });
 });

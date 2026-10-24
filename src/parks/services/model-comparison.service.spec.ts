@@ -363,7 +363,12 @@ describe("ModelComparisonService.getMatrix", () => {
   it("builds the matrix from the paired rows of the scored window, cached per scoring run", async () => {
     const { service, sql, redis } = build();
     const res = await service.getMatrix(28, "EU", T("2026-10-15T08:00:00Z"));
-    expect(res.questions).toHaveLength(10);
+    expect(res.questions).toHaveLength(12);
+    // The matrix reads its own references (PAR-1035).
+    const paired = sql.filter((q) =>
+      q.includes("FROM forecast_archive_paired"),
+    );
+    expect(paired.some((q) => q.includes("reference = ANY"))).toBe(true);
     expect(res.window.days).toBe(28);
     expect(redis.set).toHaveBeenCalledWith(
       "model-comparison:v0:EU:28",

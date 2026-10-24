@@ -1,12 +1,15 @@
 import {
   CHRONOS_MIN_DAYS,
   CHRONOS_MIN_PARKS,
+  BootstrapCell,
   PairedRow,
+  blockBootstrap,
   buildChronosBoard,
   compare,
   gateDays,
   parkClusterBootstrap,
   seededRandom,
+  stratumMeanDiff,
 } from "./forecast-archive-paired.util";
 
 function rows(
@@ -149,5 +152,70 @@ describe("forward-archive paired comparison (PAR-852)", () => {
       "served",
       "persistence",
     ]);
+  });
+});
+
+describe("blockBootstrap — park × date (PAR-1036)", () => {
+  /** 12 parks × 20 dates; `shock(d)` moves every park on date d alike. */
+  function grid(shock: (d: number) => number): BootstrapCell[] {
+    const out: BootstrapCell[] = [];
+    for (let p = 0; p < 12; p++) {
+      for (let d = 0; d < 20; d++) {
+        const diff = -0.5 + (p % 4) * 0.1 + shock(d);
+        out.push({
+          park: `p${p}`,
+          date: `2026-10-${String(d + 1).padStart(2, "0")}`,
+          stratum: "d1",
+          n: 10,
+          a: 10 * (10 + diff),
+          b: 100,
+        });
+      }
+    }
+    return out;
+  }
+
+  it("is the park-cluster bootstrap, draw for draw, with one lead", () => {
+    const cells = grid(() => 0);
+    const perPark = new Map<string, { n: number; a: number; b: number }>();
+    for (const c of cells) {
+      const x = perPark.get(c.park) ?? { n: 0, a: 0, b: 0 };
+      x.n += c.n;
+      x.a += c.a;
+      x.b += c.b;
+      perPark.set(c.park, x);
+    }
+    const old = parkClusterBootstrap([...perPark.values()], 500, 7)!;
+    const now = blockBootstrap(cells, { twoWay: false }, 500, 7)!;
+    expect(now.low).toBeCloseTo(old.low, 10);
+    expect(now.high).toBeCloseTo(old.high, 10);
+  });
+
+  it("widens the interval when a day moves every park at once", () => {
+    // Four dates where every park did 3 minutes worse (a holiday, a storm):
+    // the park-only interval treats that as twelve independent draws.
+    const shocked = grid((d) => (d % 5 === 0 ? 3 : 0));
+    const park = blockBootstrap(shocked, { twoWay: false }, 1000, 3)!;
+    const two = blockBootstrap(shocked, { twoWay: true }, 1000, 3)!;
+    expect(two.high - two.low).toBeGreaterThan(1.5 * (park.high - park.low));
+    // Same centre, wider on both sides.
+    expect(two.low).toBeLessThan(park.low);
+    expect(two.high).toBeGreaterThan(park.high);
+  });
+
+  it("needs two parks, and two dates for the date draw", () => {
+    const one = grid(() => 0).filter((c) => c.park === "p0");
+    expect(blockBootstrap(one, { twoWay: false })).toBeNull();
+    const oneDay = grid(() => 0).filter((c) => c.date === "2026-10-01");
+    expect(blockBootstrap(oneDay, { twoWay: true })).toBeNull();
+    expect(blockBootstrap(oneDay, { twoWay: false })).not.toBeNull();
+  });
+
+  it("weighs leads equally inside the statistic", () => {
+    const cells = [
+      { stratum: "d1", n: 1000, a: 8000, b: 10000 }, // −2 on many slots
+      { stratum: "d60", n: 10, a: 100, b: 100 }, // 0 on few
+    ];
+    expect(stratumMeanDiff(cells)).toBeCloseTo(-1, 10);
   });
 });

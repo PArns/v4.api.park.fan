@@ -17,7 +17,12 @@ import {
   MlDecisionDto,
   MlDecisionState,
 } from "../dto/ml-overview.dto";
-import { MIN_DAYS, MIN_PARKS, dayMonthDe } from "./model-comparison.util";
+import {
+  MIN_DAYS,
+  MIN_PARKS,
+  cellFloorDate,
+  dayMonthDe,
+} from "./model-comparison.util";
 
 export interface DecisionDef {
   id: string;
@@ -26,6 +31,13 @@ export interface DecisionDef {
   /** Static override: `later` (waits on `dependsOn`) or `owner`. */
   state?: MlDecisionState;
   dependsOn?: string[];
+  /**
+   * The fixed evaluation date (YYYY-MM-DD, Europe/Berlin; PAR-1036). Before
+   * it the decision cannot be `ready`; from it on it is judged once, on the
+   * matrix window ending the day before, and does not drift afterwards. The
+   * owner moves it by editing ml-decisions.json.
+   */
+  evaluateOn?: string;
   cells: { questionId: string; modelId: string }[];
 }
 
@@ -150,19 +162,35 @@ export function decisionProgress(
 export function earliestFromProgress(
   progress: MlDecisionDto["progress"],
   today: string,
+  /** No date before it: ARCHIVE_START + the longest lead + 14 ({@link decisionFloor}). */
+  floor?: string,
 ): MlDecisionDto["earliest"] {
   if (!progress) return null;
+  const atLeast = (d: string) => (floor && floor > d ? floor : d);
   const missing = Math.max(0, progress.needDays - progress.liveDays);
   if (missing === 0) {
     if (progress.liveParks >= progress.needParks) return null;
-    const date = addIsoDays(today, 1);
+    const date = atLeast(addIsoDays(today, 1));
     return {
       date,
       label: `frühestens ${dayMonthDe(date)} (es fehlen noch Parks)`,
     };
   }
-  const date = addIsoDays(today, missing);
+  const date = atLeast(addIsoDays(today, missing));
   return { date, label: `frühestens ${dayMonthDe(date)}` };
+}
+
+/**
+ * The earliest date any cell of the decision can pass the gate: the latest
+ * {@link cellFloorDate} of its non-served cells. A lead that has no row yet
+ * counts as 0 days in `progress`, so "today + 14" alone slides forward every
+ * day for d60 / d90 cells (≈ 22.12.2026 and 21.01.2027 from the 09.10. start).
+ */
+export function decisionFloor(def: DecisionDef): string | undefined {
+  const dates = def.cells
+    .map((c) => cellFloorDate(c.questionId, c.modelId))
+    .sort();
+  return dates[dates.length - 1];
 }
 
 /**
@@ -173,22 +201,43 @@ export function buildDecisions(
   file: DecisionFile,
   matrix: ModelComparisonResponseDto | null,
   today: string,
+  /** Per `evaluateOn` reached: the matrix of the window ending the day before. */
+  frozen: Map<string, ModelComparisonResponseDto | null> = new Map(),
 ): MlDecisionDto[] {
   const derived = new Map<string, MlDecisionDto>();
   for (const def of file.decisions) {
     if (def.state) continue;
-    const cells = decisionCells(def, matrix);
-    const state = deriveDecisionState(cells);
+    const evaluated = !!def.evaluateOn && def.evaluateOn <= today;
+    const cells = decisionCells(
+      def,
+      evaluated ? (frozen.get(def.evaluateOn!) ?? null) : matrix,
+    );
+    let state = deriveDecisionState(cells);
+    // Before the evaluation date a decision is never ready: the gate is
+    // looked at once, not every day until it happens to pass.
+    if (!evaluated && def.evaluateOn && state === "ready") {
+      state = "waiting_live";
+    }
     const progress = decisionProgress(cells);
+    let earliest: MlDecisionDto["earliest"] = null;
+    if (!evaluated && state !== "ready") {
+      earliest = earliestFromProgress(progress, today, decisionFloor(def));
+      if (def.evaluateOn && (!earliest || earliest.date < def.evaluateOn)) {
+        earliest = {
+          date: def.evaluateOn,
+          label: `ausgewertet am ${dayMonthDe(def.evaluateOn)}`,
+        };
+      }
+    }
     derived.set(def.id, {
       id: def.id,
       title: def.title,
       detail: def.detail,
       state,
       progress,
-      earliest:
-        state === "ready" ? null : earliestFromProgress(progress, today),
+      earliest,
       cells: def.cells,
+      ...(def.evaluateOn ? { evaluateOn: def.evaluateOn, evaluated } : {}),
     });
   }
   return file.decisions.map((def) => {
