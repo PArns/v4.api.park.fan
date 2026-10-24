@@ -1329,6 +1329,17 @@ describe("PlanDayService", () => {
   });
 
   describe("climatology", () => {
+    it("matches no holiday situation for a day past the school-holiday data (PAR-1049)", () => {
+      const state = (day: object) => (PlanDayService as any).holidayState(day);
+      expect(state({ isSchoolVacation: false })).toBe("regular");
+      expect(
+        state({ isSchoolVacation: false, schoolVacationUnknown: true }),
+      ).toBe("school_unknown");
+      expect(state({ isHoliday: true, schoolVacationUnknown: true })).toBe(
+        "holiday",
+      );
+    });
+
     /** The seven candidate dates one year back: 52 weeks, ±0–3 weeks. */
     const referenceDatesFor = (date: string) =>
       [-3, -2, -1, 0, 1, 2, 3].map((w) => dayShift(date, -364 + 7 * w));
@@ -1460,6 +1471,33 @@ describe("PlanDayService", () => {
       // Two of the five were school-holiday days; the planned one is not.
       referenceFlags.set(refs[0], { isSchoolVacation: true });
       referenceFlags.set(refs[1], { isSchoolVacation: true });
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("long_range");
+    });
+
+    it("looks back for a country with no school data at all: unknown on both sides (PAR-1049)", async () => {
+      const date = longRangeDay();
+      calendarDay = { ...calendarDay!, schoolVacationUnknown: true };
+      const refs = referenceDatesFor(date).slice(0, 5);
+      measureOn(refs, () => 30);
+      refs.forEach((d) =>
+        referenceFlags.set(d, { schoolVacationUnknown: true }),
+      );
+
+      const plan = await service.buildPlanDay(park, date);
+
+      expect(plan.tier).toBe("climatology");
+      expect(plan.climatology!.holidayState).toBe("school_unknown");
+      expect(plan.climatology!.referenceDates).toEqual([...refs].sort());
+    });
+
+    it("does not match an unpublished school day with known regular ones (PAR-1049)", async () => {
+      // Spain: the planned day lies past the school data, last year's did not.
+      const date = longRangeDay();
+      calendarDay = { ...calendarDay!, schoolVacationUnknown: true };
+      measureOn(referenceDatesFor(date).slice(0, 5), () => 30);
 
       const plan = await service.buildPlanDay(park, date);
 

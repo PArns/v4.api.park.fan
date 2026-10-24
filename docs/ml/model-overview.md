@@ -195,6 +195,7 @@ Holidays are critical for prediction accuracy.
 - **Logic**: Checks school and public holidays for the park's specific region (e.g., NW for Phantasialand), and all its influencing regions.
 - **Duplicates are flags, not a type (PAR-816)**: the `holidays` table holds several rows for one (country, region, date) — CH-ZH 2025-04-21 five times. They are collapsed to two flags combined with OR: `public` (any `public`/`bank`/`bridge` row) and `school`. A day can carry both; `observance` sets neither. A located park reads regional OR national rows; a country-level influencing region (`regionCode: null`) matches if any region of that country has the flag.
 - **Never assign a merge result back by index label**: a merge onto the holidays table gets longer whenever a key is duplicated. The features are evaluated once per (park, local date) and written back by position, with a row-count assertion.
+- **Past the school-holiday data, school columns are NaN (PAR-1049)**: an unpublished break is unknown, not 0. `SchoolCoverage` is passed on both paths; see [School-holiday coverage](../architecture/school-holiday-coverage.md).
 - **Easter Sunday** counts as a public holiday for parks in `EASTER_COUNTRIES` on both paths (Nager.Date lists it only for DE-BB).
 - **Bridge Days**: Detects bridging days between holidays and weekends.
 

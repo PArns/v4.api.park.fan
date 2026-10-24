@@ -39,6 +39,19 @@ regional) matches if ANY region of that country has the flag that day.
 
 Easter Sunday is a public holiday for parks in EASTER_COUNTRIES: Nager.Date
 lists it only for DE-BB, and it is one of the busiest days of the year.
+
+School-holiday coverage (PAR-1049)
+----------------------------------
+A school break that OpenHolidays has not published yet has no row, and a
+missing row used to read as "no school holiday". With a ``SchoolCoverage``
+the school columns of a day past the location's last stored school-holiday
+date are NaN — unknown — instead of 0 (Spain's last row was 2026-09-11 while
+its public holidays reach 2028; Sweden has none at all). Inside the coverage
+nothing changes. A location's coverage is its last regional OR national
+school row; a location whose region matches no row falls back to the latest
+school row of any region of its country, and a country with no school row
+has no coverage at all. Without a ``SchoolCoverage`` the features are what
+they always were.
 """
 
 from __future__ import annotations
@@ -53,6 +66,13 @@ from holiday_utils import normalize_region_code
 PUBLIC_HOLIDAY_TYPES = frozenset({"public", "bank", "bridge"})
 SCHOOL_HOLIDAY_TYPES = frozenset({"school"})
 EASTER_COUNTRIES = frozenset({"DE", "AT", "CH", "NL", "BE", "FR", "PL", "CZ", "GB", "US"})
+
+SCHOOL_FEATURE_COLUMNS = (
+    "is_school_holiday_primary",
+    "neighbor_school_holiday_count",
+    "school_holiday_count_total",
+    "is_school_holiday_any",
+)
 
 HOLIDAY_FEATURE_COLUMNS = [
     "is_holiday_primary",
@@ -143,6 +163,45 @@ class HolidayIndex:
         )
 
 
+class SchoolCoverage:
+    """Last stored school-holiday date per location (PAR-1049).
+
+    Built from any frame with ``country``, ``region`` and ``date`` columns: the
+    holiday rows themselves (filtered to ``school`` when a ``holiday_type``
+    column is present) or a ``MAX(date) GROUP BY country, region`` of them.
+    """
+
+    def __init__(self, rows: pd.DataFrame | None):
+        self.regional: dict[tuple[str, str], _dt.date] = {}
+        self.national: dict[str, _dt.date] = {}
+        self.country_any: dict[str, _dt.date] = {}
+        if rows is None or rows.empty:
+            return
+        if "holiday_type" in rows.columns:
+            rows = rows[rows["holiday_type"].isin(SCHOOL_HOLIDAY_TYPES)]
+        days = pd.to_datetime(rows["date"]).dt.date.to_numpy()
+        for country, region, day in zip(rows["country"].to_numpy(), rows["region"].to_numpy(), days):
+            region = normalize_region_code(region) if isinstance(region, str) and region else None
+            if region:
+                key = (country, region)
+                if day > self.regional.get(key, _dt.date.min):
+                    self.regional[key] = day
+            elif day > self.national.get(country, _dt.date.min):
+                self.national[country] = day
+            if day > self.country_any.get(country, _dt.date.min):
+                self.country_any[country] = day
+
+    def through(self, country, region_norm: str | None) -> _dt.date | None:
+        """The last day the location's school flags rest on data, or None."""
+        own = [d for d in (self.regional.get((country, region_norm)) if region_norm else None,
+                           self.national.get(country)) if d is not None]
+        return max(own) if own else self.country_any.get(country)
+
+    def through_any(self, country) -> _dt.date | None:
+        """Coverage of an influencing region given at country level."""
+        return self.country_any.get(country)
+
+
 def parse_influencing_regions(raw) -> list[dict]:
     """`influencingRegions` arrives as a list or as its JSON text."""
     if isinstance(raw, str):
@@ -170,17 +229,30 @@ def easter_sunday(year: int) -> _dt.date:
     return _dt.date(year, month, day)
 
 
+def _known(through: _dt.date | None, day: _dt.date) -> bool:
+    return through is not None and day <= through
+
+
 def park_day_holiday_features(
-    country, region_code, influencing_regions: Iterable, day, index: HolidayIndex
-) -> dict[str, int]:
-    """All HOLIDAY_FEATURE_COLUMNS for one park on one local date."""
+    country,
+    region_code,
+    influencing_regions: Iterable,
+    day,
+    index: HolidayIndex,
+    coverage: SchoolCoverage | None = None,
+) -> dict[str, float]:
+    """All HOLIDAY_FEATURE_COLUMNS for one park on one local date.
+
+    With ``coverage``, a school column that depends on a location whose school
+    data ends before ``day`` is NaN (see the module docstring)."""
     out = dict.fromkeys(HOLIDAY_FEATURE_COLUMNS, 0)
     if day is None or pd.isna(day) or country is None or pd.isna(country):
         return out
 
-    primary_public, primary_school = index.flags(
-        country, normalize_region_code(region_code if isinstance(region_code, str) else None), day
-    )
+    region_norm = normalize_region_code(region_code if isinstance(region_code, str) else None)
+    primary_public, primary_school = index.flags(country, region_norm, day)
+    primary_known = coverage is None or _known(coverage.through(country, region_norm), day)
+    neighbors_known = True
     if country in EASTER_COUNTRIES and day == easter_sunday(day.year):
         primary_public = True
 
@@ -197,8 +269,12 @@ def park_day_holiday_features(
         seen.add((n_country, n_region))
         if n_region:
             n_public, n_school = index.flags(n_country, n_region, day)
+            n_through = coverage.through(n_country, n_region) if coverage else None
         else:
             n_public, n_school = index.country_any(n_country, day)
+            n_through = coverage.through_any(n_country) if coverage else None
+        if coverage is not None and not _known(n_through, day):
+            neighbors_known = False
         public_count += int(n_public)
         school_count += int(n_school)
         if i < 3:
@@ -210,6 +286,16 @@ def park_day_holiday_features(
     out["holiday_count_total"] = int(primary_public) + public_count
     out["school_holiday_count_total"] = int(primary_school) + school_count
     out["is_school_holiday_any"] = int(primary_school or school_count > 0)
+    nan = float("nan")
+    if not primary_known:
+        out["is_school_holiday_primary"] = nan
+        out["school_holiday_count_total"] = nan
+    if not neighbors_known:
+        out["neighbor_school_holiday_count"] = nan
+        out["school_holiday_count_total"] = nan
+    # A known break anywhere is a break; otherwise an unknown location is unknown.
+    if not out["is_school_holiday_any"] and not (primary_known and neighbors_known):
+        out["is_school_holiday_any"] = nan
     return out
 
 
@@ -235,8 +321,12 @@ def assign_holiday_features(
     holidays_df: pd.DataFrame | None,
     park_col: str = "parkId",
     date_col: str = "date_local",
+    coverage: SchoolCoverage | None = None,
 ) -> pd.DataFrame:
     """Write HOLIDAY_FEATURE_COLUMNS onto `df`, row for row.
+
+    With ``coverage`` the SCHOOL_FEATURE_COLUMNS are floats and NaN past a
+    location's school-holiday coverage (CatBoost reads NaN as missing).
 
     Evaluated once per distinct (park, local date) — the features depend on
     nothing else — and mapped back by that key. The result is assigned by
@@ -260,7 +350,7 @@ def assign_holiday_features(
     records = []
     for park, day in zip(pairs["_park"], pairs["_day"]):
         country, region, influences = meta.get(park, (None, None, []))
-        rec = park_day_holiday_features(country, region, influences, day, index)
+        rec = park_day_holiday_features(country, region, influences, day, index, coverage)
         rec["_park"] = park
         rec["_day"] = day
         records.append(rec)
@@ -273,5 +363,8 @@ def assign_holiday_features(
         f"holiday merge changed the row count: {len(df)} -> {len(merged)}"
     )
     for col in HOLIDAY_FEATURE_COLUMNS:
-        df[col] = merged[col].fillna(0).astype(int).to_numpy()
+        if coverage is not None and col in SCHOOL_FEATURE_COLUMNS:
+            df[col] = merged[col].astype(float).to_numpy()
+        else:
+            df[col] = merged[col].fillna(0).astype(int).to_numpy()
     return df

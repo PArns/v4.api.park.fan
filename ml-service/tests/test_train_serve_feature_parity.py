@@ -313,6 +313,9 @@ def _history():
 def served(monkeypatch):
     monkeypatch.setattr(predict, "fetch_parks_metadata", lambda: PARKS_METADATA)
     monkeypatch.setattr(predict, "fetch_holidays", lambda *a, **k: HOLIDAYS.copy())
+    monkeypatch.setattr(
+        predict, "fetch_school_holiday_coverage", lambda *a, **k: HOLIDAYS.copy()
+    )
     monkeypatch.setattr(predict, "get_db", lambda: _Db())
     monkeypatch.setattr(db, "fetch_historical_park_occupancy", lambda *a, **k: {})
     monkeypatch.setattr(predict, "fetch_recent_wait_times", lambda *a, **k: _history())
