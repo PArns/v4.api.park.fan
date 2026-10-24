@@ -53,6 +53,12 @@ after another, resumable (finished files are skipped).
   reads it; `build` leaves `cbd` empty when an export has no such files, and
   `lvlh5_cbd` / `lvl_cbd` stay empty on new exports. Exports taken before the
   drop (and the `pg_dump` on celestrial) still carry it.
+  **Since PAR-1054** production keeps only the last **120 days** of
+  `forecast_date` in `tft_forecasts` (nightly prune, 04:35 UTC), so an export's
+  TFT origins start at most 120 days before it was taken, whatever
+  `--forecast-from` says. Exports taken before the first prune (e.g.
+  `20261009`) keep the longer history; a backtest that
+  needs TFT origins older than 120 days must use one of those.
 - `parks` (timezone, regionCode, influencingRegions, lat/lng), `attractions`
   (+ `headliner_attractions`, coordinates, land), park-level `schedule_entries`,
   `holidays`, `weather_data`.
@@ -1282,6 +1288,16 @@ Three things follow, and they are the load-bearing reading of this whole page:
    not.
 
 ### Heartbeat contamination of the target — measured, owner decision open
+
+> **Default changed (PAR-1054, 2026-10-24).** `build` now drops heartbeat rows
+> by default (`drop_heartbeats=True`, recorded as `"drop_heartbeats": true` in
+> `build_stats.json`), the same rule as the forward archive's truth and the TFT
+> panel. `--no-drop-heartbeats` builds the old target. **Builds made before this
+> change kept the heartbeats**: a parquet tree or result directory from before
+> 2026-10-24 whose `build_stats.json` lacks the key or reads `false` is the old
+> target, and its figures — including every table on this page measured on the
+> `20261009` export — differ from a rebuild of the same raw export. Compare
+> within one target only. The measurements below are of the old default.
 
 `queue_data` carries `is_heartbeat` rows: when the feed drops a ride, production
 writes the previous status **and wait** forward with a fresh `ts`. The harness

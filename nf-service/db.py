@@ -49,12 +49,38 @@ _engine = get_engine()
 
 
 def fetch_park_ids() -> list[str]:
-    """All park UUIDs (as text) that have attractions — used to chunk the panel for
-    iterative training so each fit stays within memory."""
-    sql = text('SELECT DISTINCT "parkId"::text AS pid FROM attractions WHERE "parkId" IS NOT NULL ORDER BY 1')
+    """The parks to train, in chunk order (see `order_parks`). A park is listed
+    only if it has at least one row the panel could keep (OPERATING STANDBY wait
+    >= NF_MIN_WAIT inside the window) — a superset of the panel's own filters, so
+    no park with a series is dropped. Parks without any (status-only feeds) used
+    to fill chunk slots and shift every later park into another chunk."""
+    sql = text(
+        f"""
+        SELECT p.id::text AS pid, p."countryCode" AS country
+        FROM parks p
+        WHERE EXISTS (
+            SELECT 1 FROM attractions a
+            JOIN queue_data qd ON qd."attractionId" = a.id
+            WHERE a."parkId" = p.id
+              AND qd.timestamp >= NOW() - (:window || ' days')::interval
+              AND qd.status = 'OPERATING'
+              AND qd."queueType" = 'STANDBY'
+              AND qd."waitTime" >= {settings.NF_MIN_WAIT}
+        )
+        """
+    )
     with _engine.connect() as c:
-        df = pd.read_sql(sql, c)
-    return df["pid"].tolist()
+        df = pd.read_sql(sql, c, params={"window": str(settings.NF_WINDOW_DAYS)})
+    return order_parks(df.to_dict("records"))
+
+
+def order_parks(rows: list[dict]) -> list[str]:
+    """Park ids sorted by (country, park id), parks without a country last. Each
+    chunk of NF_PARK_CHUNK_SIZE trains its own TFT, so membership is part of the
+    model: sorting by country keeps a new park's shift inside its own country's
+    chunks instead of moving every park after it in UUID order (PAR-1054)."""
+    return [r["pid"] for r in sorted(rows, key=lambda r: (r.get("country") is None,
+                                                         r.get("country") or "", r["pid"]))]
 
 
 def fetch_attraction_meta(park_ids: list[str]) -> pd.DataFrame:

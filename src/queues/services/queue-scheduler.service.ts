@@ -8,7 +8,11 @@ import { InjectQueue } from "@nestjs/bull";
 import { Queue } from "bull";
 import { createHash } from "crypto";
 import { AbortableRuns } from "../../common/utils/abortable-runs";
-import { DB_VACUUM_CRON } from "../../database/maintenance/vacuum-plan";
+import {
+  DB_VACUUM_CRON,
+  PCN_REINDEX_CRON,
+  TFT_PRUNE_CRON,
+} from "../../database/maintenance/vacuum-plan";
 
 /**
  * How often the scheduler re-runs its registration after startup.
@@ -62,7 +66,8 @@ export function materialisedRepeatJobId(entry: {
  * - prediction-accuracy: Every hour (compare predictions with actuals)
  * - geoip-update: Every 48 hours (GeoLite2-City for nearby endpoint)
  * - db-maintenance: 04:50 UTC VACUUM of the high-churn tables, done before the
- *   06:00 UTC training (PAR-868)
+ *   06:00 UTC training (PAR-868); 04:35 UTC TFT forecast retention, Sunday
+ *   19:10 UTC REINDEX of pcn_forecasts_pkey (PAR-1054)
  */
 @Injectable()
 export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -1258,6 +1263,30 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
           removeOnFail: 30,
         },
       );
+    }
+
+    // TFT forecast retention (PAR-1054): 04:35 UTC, before the 04:50 VACUUM.
+    // Weekly REINDEX of pcn_forecasts_pkey: Sunday 19:10 UTC. Both UTC, one
+    // attempt — the REINDEX refuses to start outside its window anyway.
+    for (const [jobName, jobId, cron] of [
+      ["prune-tft-forecasts", "db-tft-prune-cron", TFT_PRUNE_CRON],
+      ["reindex-pcn-forecasts-pkey", "db-pcn-reindex-cron", PCN_REINDEX_CRON],
+    ] as const) {
+      if (
+        !(await this.hasRepeatableJob(this.dbMaintenanceQueue, jobId, cron))
+      ) {
+        await this.dbMaintenanceQueue.add(
+          jobName,
+          {},
+          {
+            repeat: { cron, tz: "UTC" },
+            jobId,
+            attempts: 1,
+            removeOnComplete: 30,
+            removeOnFail: 30,
+          },
+        );
+      }
     }
 
     // GeoIP (GeoLite2-City): Every 48 hours (0:00 every 2 days)
