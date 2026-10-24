@@ -142,8 +142,9 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
     """
     import numpy as np
 
-    import time as _time
-    rng = np.random.default_rng(int(_time.time()))
+    # Fixed seed (PAR-1040): a nightly run must be reproducible, or the val MAE
+    # the promotion gate compares moves with the dice rather than the model.
+    rng = np.random.default_rng(cfg.CATBOOST_RANDOM_SEED)
 
     n = len(df)
     log.info("🎲 Applying training dropout...")
@@ -347,6 +348,143 @@ def holdout_summary(y_true, y_pred, busy_threshold: float = 60.0) -> dict:
         "samples": int(len(err)),
         "busy_samples": int(busy.sum()),
     }
+
+
+def select_validation_weeks(unique_weeks, seed: int, share: float = 0.2) -> set:
+    """ISO weeks (YYYYWW ints) that go to validation.
+
+    Each week's draw depends on (seed, week) only, so a week that was a
+    validation week last night still is one tonight: the window sliding by a
+    day does not reshuffle the whole split, and the val MAE the promotion gate
+    compares is measured on (almost) the same weeks run after run (PAR-1040).
+    The share is approximate; at least one week is always picked.
+    """
+    weeks = [int(w) for w in unique_weeks]
+    if not weeks:
+        return set()
+    draws = {w: np.random.default_rng([seed, w]).random() for w in weeks}
+    picked = {w for w, d in draws.items() if d < share}
+    return picked or {min(draws, key=draws.get)}
+
+
+# Served leads the "as known at origin" hold-out is scored at (PAR-1040):
+# hourly next-day, the daily calendar's next day, a week out, and the far tier
+# CatBoost serves alone (31-365 d; 61 d sits past TFT's 60-day window).
+ORIGIN_LEADS = {
+    "12h": pd.Timedelta(hours=12),
+    "24h": pd.Timedelta(hours=24),
+    "7d": pd.Timedelta(days=7),
+    "61d": pd.Timedelta(days=61),
+}
+
+# Features inference reads at base_time (the origin) for every row it serves,
+# whatever the row's own time: the rolling statistics, the same-hour lags of
+# the base hour, and today's downtime.
+_ORIGIN_VALUE_COLUMNS = [
+    "rolling_avg_7d",
+    "rolling_avg_weekday",
+    "rolling_avg_weekend",
+    "rolling_avg_28d",
+    "rolling_avg_90d",
+    "trend_7d",
+    "volatility_7d",
+    "volatility_weekday",
+    "volatility_weekend",
+    "avg_wait_same_hour_last_week",
+    "avg_wait_same_hour_last_month",
+    "avg_wait_last_24h",
+    "had_downtime_today",
+    "downtime_minutes_today",
+]
+
+
+def origin_occupancy_profile(df: pd.DataFrame) -> pd.Series:
+    """Mean park_occupancy_pct per (parkId, local weekday, local hour) — the
+    training-side stand-in for fetch_historical_park_occupancy, which inference
+    uses for rows more than 2 h from base_time. Built from rows older than the
+    hold-out, BEFORE dropout touches them."""
+    return df.groupby(["parkId", "day_of_week", "hour"])["park_occupancy_pct"].mean()
+
+
+def as_known_at_origin(
+    df_target: pd.DataFrame,
+    df_source: pd.DataFrame,
+    lead: pd.Timedelta,
+    occ_profile: pd.Series,
+) -> pd.DataFrame:
+    """The hold-out rows with the features they would have had if forecast
+    `lead` ahead, i.e. built at origin = target - lead the way
+    predict.create_prediction_features builds a row that far out.
+
+    `df_source` holds the unmodified feature rows (pool + hold-out) the origin
+    is looked up in: the last row of the same ride at or before the origin is
+    what inference would have read as "now". Rows with no such row within 7 d
+    are dropped (the ride was not running; nothing would have been served).
+
+    Mirrors serving for leads beyond its live window (> 3 h):
+    * the _ORIGIN_VALUE_COLUMNS are the origin row's values;
+    * avg_wait_same_dow_4w is the row's own value only when all four weekly
+      lags lie at or before the origin (lead <= 7 d); otherwise the origin's
+      rolling_avg_7d, serving's fallback when the history lookup misses.
+      shortcut: a lead between 7 d and 28 d knows SOME of the lags and serving
+      averages those; no served lead falls there today — add a partial mean if
+      one ever does;
+    * avg_wait_last_24h is the origin's for lead <= 24 h, else the
+      same-dow value above (serving's > 24 h replacement);
+    * avg_wait_last_1h is the target hour one week earlier when that is known
+      at the origin, else the origin's weekday/weekend rolling mean — serving's
+      far-row profile. This is the PAR-1030 definition; until that fix lands,
+      serving still writes the live wait onto these rows;
+    * wait_time_velocity is 0: a change rate measured at the origin says
+      nothing about a row hours later (PAR-1030/1032 serve 0 there too);
+    * park_occupancy_pct is the (park, weekday, hour) profile, interactions
+      recomputed from it.
+    Calendar, weather, holiday and schedule features are known ahead and stay.
+    """
+    from features import add_interaction_features
+
+    tgt = df_target.copy()
+    tgt["_origin_ts"] = tgt["timestamp"] - lead
+    tgt["_row"] = np.arange(len(tgt))
+    cols = [c for c in _ORIGIN_VALUE_COLUMNS if c in df_source.columns]
+    src = df_source[["attractionId", "timestamp", *cols]].rename(
+        columns={"timestamp": "_origin_ts", **{c: f"_o_{c}" for c in cols}}
+    )
+    merged = pd.merge_asof(
+        tgt.sort_values("_origin_ts"),
+        src.sort_values("_origin_ts"),
+        on="_origin_ts",
+        by="attractionId",
+        direction="backward",
+        tolerance=pd.Timedelta(days=7),
+    ).sort_values("_row")
+    merged = merged[merged["_o_rolling_avg_7d"].notna()].reset_index(drop=True)
+
+    r7d = merged["_o_rolling_avg_7d"]
+    same_dow = merged["avg_wait_same_dow_4w"] if lead <= pd.Timedelta(days=7) else r7d
+    same_dow = same_dow.where(same_dow > 0, r7d)
+
+    for c in cols:
+        merged[c] = merged[f"_o_{c}"]
+    merged["avg_wait_same_dow_4w"] = same_dow
+    if lead > pd.Timedelta(hours=24):
+        merged["avg_wait_last_24h"] = same_dow
+
+    weekend = merged["day_of_week"] >= 5
+    profile_1h = merged["_o_rolling_avg_weekend"].where(
+        weekend, merged["_o_rolling_avg_weekday"]
+    )
+    if lead <= pd.Timedelta(days=7) and "wait_lag_1w" in merged.columns:
+        profile_1h = merged["wait_lag_1w"].where(merged["wait_lag_1w"].notna(), profile_1h)
+    merged["avg_wait_last_1h"] = profile_1h
+    merged["wait_time_velocity"] = 0.0
+
+    keys = pd.MultiIndex.from_frame(merged[["parkId", "day_of_week", "hour"]])
+    merged["park_occupancy_pct"] = occ_profile.reindex(keys).fillna(100.0).values
+    merged = add_interaction_features(merged)
+    return merged.drop(
+        columns=["_origin_ts", "_row", *[f"_o_{c}" for c in cols]]
+    )
 
 
 def cap_training_rows(
@@ -570,6 +708,15 @@ def train_model(
     # temporal drift or concept shift in recent data).
     holdout_cutoff = df["timestamp"].max() - pd.Timedelta(days=30)
     holdout_mask = df["timestamp"] >= holdout_cutoff
+    # Unmodified rows the "as known at origin" hold-out looks its origins up in
+    # (the farthest lead reaches 61 d back into the pool), and the occupancy
+    # profile it serves far rows from — both taken before cap and dropout.
+    origin_from = holdout_cutoff - max(ORIGIN_LEADS.values()) - pd.Timedelta(days=7)
+    df_origin_source = df.loc[
+        df["timestamp"] >= origin_from,
+        ["attractionId", "timestamp", *[c for c in _ORIGIN_VALUE_COLUMNS if c in df.columns]],
+    ].copy()
+    occ_profile = origin_occupancy_profile(df[~holdout_mask])
     df_holdout = df[holdout_mask].copy().reset_index(drop=True)
     df = df[~holdout_mask].copy().reset_index(drop=True)
     gc.collect()
@@ -690,18 +837,8 @@ def train_model(
         # Blocked Split: Select 20% of weeks for validation. (numpy is imported at
         # module level; a local `import numpy as np` here would make `np` local to
         # the whole function and unbound on the sparse-split path.)
-        # Use a time-based seed so each training run tests different validation weeks.
-        # A fixed seed (CATBOOST_RANDOM_SEED) would always produce the same split,
-        # preventing detection of weeks the model over-fits to.
-        import time as _time
-        split_rng = np.random.default_rng(int(_time.time()))
-
-        # Shuffle weeks and pick 20%
-        shuffled_weeks = unique_weeks.copy()
-        split_rng.shuffle(shuffled_weeks)
-
-        val_week_count = max(1, int(len(unique_weeks) * 0.2))
-        val_weeks = set(shuffled_weeks[:val_week_count])
+        val_weeks = select_validation_weeks(unique_weeks, settings.CATBOOST_RANDOM_SEED)
+        val_week_count = len(val_weeks)
 
         val_mask = df["_week_id"].isin(val_weeks)
         train_mask = ~val_mask
@@ -839,6 +976,37 @@ def train_model(
             logger.warning(
                 f"⚠️  Hold-out eval skipped — missing features: {missing}"
             )
+
+    # 7.5b The same hold-out as it would have been forecast at served leads.
+    # The block above scores every row with its real lags — a 1 h nowcast — while
+    # the model is served 12 h to a year ahead (PAR-1040). Logged and stored only;
+    # the promotion gate still reads the validation MAE.
+    if holdout_eval is not None:
+        holdout_eval["origin_leads"] = {}
+        logger.info("📊 Hold-out as known at origin (served leads):")
+        for name, lead in ORIGIN_LEADS.items():
+            df_lead = as_known_at_origin(df_holdout, df_origin_source, lead, occ_profile)
+            if df_lead.empty:
+                holdout_eval["origin_leads"][name] = None
+                logger.info(f"   {name:>4}: no rows with a known origin")
+                continue
+            X_lead = df_lead[feature_columns].copy()
+            X_lead["parkId"] = X_lead["parkId"].astype(str)
+            X_lead["attractionId"] = X_lead["attractionId"].astype(str)
+            lead_eval = holdout_summary(
+                df_lead["waitTime"].values.astype(float), model.predict(X_lead)
+            )
+            holdout_eval["origin_leads"][name] = lead_eval
+            busy = lead_eval["busy_mae"]
+            logger.info(
+                f"   {name:>4}: MAE {lead_eval['mae']:.2f} min"
+                + (f", busy ≥60 {busy:.2f}" if busy is not None else "")
+                + f" ({lead_eval['samples']:,} rows)"
+            )
+            del df_lead, X_lead
+        logger.info("")
+    del df_origin_source, occ_profile
+    gc.collect()
 
     model.metadata["holdout_metrics"] = holdout_eval
 

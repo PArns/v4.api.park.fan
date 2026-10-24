@@ -274,6 +274,7 @@ class ModelInfoResponse(BaseModel):
     featureStats: Optional[List[dict]] = None
     trainingTimings: Optional[dict] = None
     refitSkipped: Optional[dict] = None
+    holdoutMetrics: Optional[dict] = None
 
 
 # Endpoints
@@ -351,6 +352,7 @@ def get_saved_model_info(version: str):
         featureStats=metadata.get("feature_stats"),
         trainingTimings=metadata.get("training_timings"),
         refitSkipped=metadata.get("refit_skipped"),
+        holdoutMetrics=metadata.get("holdout_metrics"),
     )
 
 

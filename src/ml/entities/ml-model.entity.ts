@@ -70,6 +70,12 @@ export class MLModel {
   @Column({ type: "jsonb", nullable: true })
   hyperparameters: Record<string, unknown>;
 
+  // Chronological hold-out scores from the model's saved metadata: the 1 h
+  // nowcast MAE plus `origin_leads` (12h/24h/7d/61d, as known at the origin,
+  // PAR-1040). Recorded only — the promotion gate reads `mae`.
+  @Column({ type: "jsonb", nullable: true })
+  holdoutMetrics: Record<string, unknown> | null;
+
   @Column({ default: true })
   isActive: boolean; // Only one model should be active at a time
 
