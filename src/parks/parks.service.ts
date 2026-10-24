@@ -25,12 +25,13 @@ import {
   getTomorrowDateInTimezone,
 } from "../common/utils/date.util";
 import { addDays, subDays } from "date-fns";
-import { normalizeRegionCode } from "../common/utils/region.util";
+import { fromZonedTime } from "date-fns-tz";
 import {
   correctTwelveHourClockClose,
   normalizeClosingTime,
 } from "../common/utils/operating-window.util";
 import {
+  buildLocalHolidayMap,
   calculateHolidayInfo,
   HolidayEntry,
 } from "../common/utils/holiday.utils";
@@ -1514,12 +1515,11 @@ export class ParksService {
     }
 
     // 3. Pre-fetch holidays for the date range (Extended by +/ 1 day for bridge day checks)
-    const holidayMap = new Map<string, string | HolidayEntry>(); // Date -> Name or HolidayEntry
+    let holidayMap = new Map<string, HolidayEntry>();
     if (park?.countryCode) {
       try {
-        // Use noon-UTC timestamps so formatInParkTimezone() stays on the same
-        // calendar day for parks in every timezone (west-of-UTC parks shift
-        // midnight-UTC to the previous day, which would narrow the holiday range).
+        // The range is cut from the entries' own day strings: reading it back
+        // through the park's zone moves it a day east of UTC+12.
         const dates = normalizedEntries.map((e) =>
           new Date(`${e.dateStr}T12:00:00Z`).getTime(),
         );
@@ -1527,60 +1527,20 @@ export class ParksService {
         const maxDate = new Date(Math.max(...dates));
 
         // Extend range by 1 day for bridge day detection
-        minDate.setDate(minDate.getDate() - 1);
-        maxDate.setDate(maxDate.getDate() + 1);
+        minDate.setUTCDate(minDate.getUTCDate() - 1);
+        maxDate.setUTCDate(maxDate.getUTCDate() + 1);
 
         const holidays = await this.holidaysService.getHolidays(
           park.countryCode,
-          formatInParkTimezone(minDate, park.timezone),
-          formatInParkTimezone(maxDate, park.timezone),
+          minDate.toISOString().slice(0, 10),
+          maxDate.toISOString().slice(0, 10),
         );
 
-        // Normalize region codes for consistent comparison
-        const normalizedParkRegion = normalizeRegionCode(park.regionCode);
-
-        for (const h of holidays) {
-          // Match: Nationwide holidays OR region matches (using normalized codes)
-          const normalizedHolidayRegion = normalizeRegionCode(h.region);
-          if (
-            h.isNationwide ||
-            (normalizedParkRegion &&
-              normalizedHolidayRegion === normalizedParkRegion)
-          ) {
-            // Use park's timezone to determine the holiday date string
-            // Normalize to noon UTC to prevent timezone shifts (YYYY-MM-DD from DB)
-            const normalizedDate = new Date(h.date);
-            normalizedDate.setUTCHours(12, 0, 0, 0);
-            const dateStr = formatInParkTimezone(normalizedDate, park.timezone);
-
-            // If multiple holidays on same day, prefer public holidays over school holidays
-            const existing = holidayMap.get(dateStr);
-            const hType = h.holidayType;
-
-            if (!existing) {
-              // Store as HolidayEntry to preserve type information for bridge day logic
-              holidayMap.set(dateStr, {
-                name: h.localName || h.name || "",
-                type: hType,
-                allTypes: [hType],
-              });
-            } else {
-              if (typeof existing !== "string") {
-                // Aggregate types
-                if (!existing.allTypes) existing.allTypes = [existing.type];
-                if (!existing.allTypes.includes(hType)) {
-                  existing.allTypes.push(hType);
-                }
-
-                // Prioritize public holidays for the main entry
-                if (hType === "public" || hType === "bank") {
-                  existing.name = h.localName || h.name || "";
-                  existing.type = hType;
-                }
-              }
-            }
-          }
-        }
+        holidayMap = buildLocalHolidayMap(holidays, {
+          countryCode: park.countryCode,
+          regionCode: park.regionCode,
+          timezone: park.timezone,
+        });
       } catch (error) {
         this.logger.warn(
           `Failed to fetch holidays for schedule sync (Park ${parkId}): ${error}`,
@@ -1647,11 +1607,13 @@ export class ParksService {
       scheduleType,
       silencedFeed,
     } of normalizedEntries) {
-      // Use noon UTC so timezone conversions inside calculateHolidayInfo won't shift the date
+      // The stored date stays noon UTC; the holiday rating below uses park-local noon.
       const dateObj = new Date(`${dateStr}T12:00:00Z`);
 
+      // Park-local noon for the rating: noon UTC is already the next day east of
+      // UTC+12, which would look up and weekday the wrong day.
       const holidayInfo = calculateHolidayInfo(
-        dateObj,
+        fromZonedTime(`${dateStr}T12:00:00`, park!.timezone),
         holidayMap,
         park!.timezone,
       );
@@ -2338,53 +2300,11 @@ export class ParksService {
       holidayEndStr,
     );
 
-    // Map Holidays by Date (with type information for bridge day logic)
-    const holidayMap = new Map<string, string | HolidayEntry>();
-    // Normalize region codes for consistent comparison
-    const normalizedParkRegion = normalizeRegionCode(park.regionCode);
-
-    for (const h of holidays) {
-      // Match: Nationwide holidays OR region matches (using normalized codes)
-      const normalizedHolidayRegion = normalizeRegionCode(h.region);
-      if (
-        h.isNationwide ||
-        (normalizedParkRegion &&
-          normalizedHolidayRegion === normalizedParkRegion)
-      ) {
-        // Use park's timezone to determine the holiday date string
-        // Normalize to noon UTC to prevent timezone shifts (YYYY-MM-DD from DB)
-        const normalizedDate = new Date(h.date);
-        normalizedDate.setUTCHours(12, 0, 0, 0);
-        const d = formatInParkTimezone(normalizedDate, park.timezone);
-
-        // If multiple holidays on same day, prefer public holidays over school holidays
-        const existing = holidayMap.get(d);
-        const hType = h.holidayType;
-
-        if (!existing) {
-          // Store as HolidayEntry to preserve type information for bridge day logic
-          holidayMap.set(d, {
-            name: h.localName || h.name || "",
-            type: hType,
-            allTypes: [hType],
-          });
-        } else {
-          if (typeof existing !== "string") {
-            // Aggregate types
-            if (!existing.allTypes) existing.allTypes = [existing.type];
-            if (!existing.allTypes.includes(hType)) {
-              existing.allTypes.push(hType);
-            }
-
-            // Prioritize public holidays for the main entry
-            if (hType === "public" || hType === "bank") {
-              existing.name = h.localName || h.name || "";
-              existing.type = hType;
-            }
-          }
-        }
-      }
-    }
+    const holidayMap = buildLocalHolidayMap(holidays, {
+      countryCode: park.countryCode,
+      regionCode: park.regionCode,
+      timezone: park.timezone,
+    });
 
     let filledCount = 0;
 
@@ -2408,7 +2328,7 @@ export class ParksService {
       const noonUtc = new Date(`${dateStr}T12:00:00Z`);
 
       const holidayInfo = calculateHolidayInfo(
-        noonUtc,
+        fromZonedTime(`${dateStr}T12:00:00`, park.timezone),
         holidayMap,
         park.timezone,
       );

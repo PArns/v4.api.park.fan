@@ -846,6 +846,74 @@ describe("ParksService", () => {
     });
   });
 
+  describe("saveScheduleData — the holiday flags follow the calendar's rule", () => {
+    const parkId = "11111111-2222-3333-4444-555555555555";
+    const christmas = {
+      date: "2025-12-25",
+      name: "Christmas Day",
+      localName: "Christmas Day",
+      country: "NZ",
+      region: null,
+      holidayType: "public",
+      isNationwide: false,
+    };
+    const operating = (date: string) => ({
+      date,
+      type: "OPERATING",
+      openingTime: `${date}T10:00:00+13:00`,
+      closingTime: `${date}T17:00:00+13:00`,
+    });
+
+    beforeEach(() => {
+      mockParkRepository.findOne.mockResolvedValue({
+        id: parkId,
+        countryCode: "NZ",
+        regionCode: null,
+        timezone: "Pacific/Auckland",
+      });
+      mockHolidaysService.getHolidays.mockResolvedValue([christmas]);
+      mockScheduleRepository.save.mockResolvedValue([]);
+      mockScheduleRepository.query.mockResolvedValue([]);
+      mockScheduleRepository.createQueryBuilder.mockImplementation(() =>
+        scheduleQueryBuilder([]),
+      );
+    });
+
+    it("flags the 25th, not the 26th, in a park east of UTC+12, from a row without a region", async () => {
+      await service.saveScheduleData(parkId, [
+        operating("2025-12-24"),
+        operating("2025-12-25"),
+        operating("2025-12-26"),
+      ]);
+
+      const [inserted] = mockScheduleRepository.save.mock.calls[0] as [
+        Array<{ date: Date; isHoliday: boolean; holidayName: string | null }>,
+      ];
+      const byDay = new Map(
+        inserted.map((r) => [r.date.toISOString().slice(0, 10), r]),
+      );
+      expect(byDay.get("2025-12-24")?.isHoliday).toBe(false);
+      expect(byDay.get("2025-12-25")).toMatchObject({
+        isHoliday: true,
+        holidayName: "Christmas Day",
+      });
+      expect(byDay.get("2025-12-26")?.isHoliday).toBe(false);
+    });
+
+    it("asks for the holidays one day either side of the synced days, east of UTC+12 too", async () => {
+      await service.saveScheduleData(parkId, [
+        operating("2025-12-24"),
+        operating("2025-12-26"),
+      ]);
+
+      expect(mockHolidaysService.getHolidays).toHaveBeenCalledWith(
+        "NZ",
+        "2025-12-23",
+        "2025-12-27",
+      );
+    });
+  });
+
   /**
    * A source that publishes a 12-hour clock unlabelled reports a midnight close
    * as `12:00`. Six Flags Qiddiya City does: `opens 15:00 / closes 12:00`, five
