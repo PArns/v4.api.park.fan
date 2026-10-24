@@ -552,10 +552,18 @@ The measurement plan above is built: `tft_forecasts_shadow` is the shadow table.
 
 The shadow — never the served model — also gets the level drivers that
 [level-drivers.md §5](level-drivers.md#5-ranked-covariates-worth-adding-to-tft--catboost)
-ranks highest, and a different target. `NF_SHADOW_DRIVERS` (default `true`) switches them;
-`forecast.calendar_grid(True, drivers=True)` is the only way in, `db.DRIVERS` is not an env
-setting, and `futr_exog()` returns `DRIVER_EXOG` only with the grid AND the flag. Rows carry
-model version `<served>-grid-drivers` (`<served>-grid` with the flag off).
+ranks highest, and a different target. It is a **third nightly run, its own model**: after
+the served run and the grid-only shadow, `run_grid_shadow(..., drivers=True)` trains it into
+`tft_forecasts_shadow_drivers` (`LIKE tft_forecasts`, model version `<served>-grid-drivers`),
+and the forward archive pairs it as `tft_grid_drivers` beside PAR-1041's `tft_grid`. One
+comparison would otherwise mix three changes (grid, drivers, time-weighted target — and that
+target is closer to the archive's `rideQ90` truth than the served P90-over-rows one), so the
+grid-only shadow keeps running and both are read separately against the served TFT.
+`NF_SHADOW_DRIVERS` (default `true`) switches only this run, `NF_GRID_SHADOW` only the
+grid-only one; it still runs when `NF_CALENDAR_GRID` serves the grid (it differs from that).
+Cost: one more fit, the night's `train-nf` job ~40–50 min instead of ~25, inside the 90-min
+poll deadline. `forecast.calendar_grid(True, drivers=True)` is the only way in, `db.DRIVERS`
+is not an env setting, and `futr_exog()` returns `DRIVER_EXOG` only with the grid AND the flag.
 
 | futr_exog | meaning | unknown |
 |---|---|---|

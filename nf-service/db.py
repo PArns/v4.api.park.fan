@@ -712,12 +712,14 @@ def hist_exog() -> list[str]:
     return ["is_observed"] if settings.NF_CALENDAR_GRID else []
 
 
-# The served forecast and the grid shadow (PAR-1041). Two tables because the
-# key has no model_version: two variants of one night cannot share a row. The
-# shadow is `LIKE` the served table so the two schemas cannot drift apart; the
+# The served forecast and the two grid shadows (PAR-1041 grid only, PAR-1057
+# grid + drivers). One table each because the key has no model_version: two
+# variants of one night cannot share a row. The
+# shadows are `LIKE` the served table so the schemas cannot drift apart; the
 # literal statements are also what the E2E schema reads (test/helpers/
 # ml-forecast-tables.ts), and the dict is the whitelist for the table name.
 SHADOW_TABLE = "tft_forecasts_shadow"
+SHADOW_DRIVERS_TABLE = "tft_forecasts_shadow_drivers"
 _FORECAST_DDL = {
     "tft_forecasts": """
         CREATE TABLE IF NOT EXISTS tft_forecasts (
@@ -732,6 +734,9 @@ _FORECAST_DDL = {
         """,
     SHADOW_TABLE: """
         CREATE TABLE IF NOT EXISTS tft_forecasts_shadow (LIKE tft_forecasts INCLUDING ALL)
+        """,
+    SHADOW_DRIVERS_TABLE: """
+        CREATE TABLE IF NOT EXISTS tft_forecasts_shadow_drivers (LIKE tft_forecasts INCLUDING ALL)
         """,
 }
 

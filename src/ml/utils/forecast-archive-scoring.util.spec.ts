@@ -1311,6 +1311,26 @@ describe("scorePairedModels — joint rows per question (PAR-855, PAR-1035)", ()
     }
   });
 
+  it("pairs the grid + drivers shadow as its own model beside tft_grid (PAR-1057)", () => {
+    const paired = new PairedAccumulator();
+    scorePairedModels(
+      planner({ levelSource: "tft", tftGridPeak: 48, tftGridDriversPeak: 52 }),
+      truth,
+      paired,
+      weekday,
+    );
+    // grid 48, drivers 52, served 45, truth P90 50.
+    expect(
+      find(paired, "PEAK", "d0", "tft_grid", "served_tft", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 2, saeRef: 5 });
+    expect(
+      find(paired, "PEAK", "d0", "tft_grid_drivers", "served_tft", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 2, saeRef: 5 });
+    expect(
+      find(paired, "D7", "d0", "tft_grid_drivers", "served_tft", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 52, saeRef: 45, seModel: 50 });
+  });
+
   it("reads the shadow level as it stood at the origin", () => {
     const at = Date.parse("2026-10-08T04:05:00Z");
     const rows = [
