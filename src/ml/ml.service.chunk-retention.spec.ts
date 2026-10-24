@@ -11,6 +11,7 @@ import { PredictionAccuracyService } from "./services/prediction-accuracy.servic
 import { ForecastAccuracyService } from "./services/forecast-accuracy.service";
 import { WeatherService } from "../parks/weather.service";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { ParkHistoricalStatsService } from "../analytics/park-historical-stats.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -95,6 +96,7 @@ describe("MLService — prediction chunk retention", () => {
         },
         { provide: WeatherService, useValue: {} },
         { provide: AnalyticsService, useValue: {} },
+        { provide: ParkHistoricalStatsService, useValue: {} },
         { provide: HolidaysService, useValue: {} },
         { provide: ParksService, useValue: {} },
         { provide: REDIS_CLIENT, useValue: {} },

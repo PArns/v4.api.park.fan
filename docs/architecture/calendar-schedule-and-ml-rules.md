@@ -109,6 +109,32 @@ Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 
 **Effect on calendar:** For **future UNKNOWN days** the ML API returns **no** daily prediction (because the day is not OPERATING). Without a headliner forecast those days read `crowdLevel: "unknown"` (PAR-1028; until then they borrowed one ride's `crowdLevel` or a placeholder `"moderate"`). To show real ML predictions for UNKNOWN days, the ML filter would need to be extended to optionally return predictions for UNKNOWN days (for parks with schedule).
 
+### 4.2a The API's own hourly gate (PAR-1048)
+
+The ml-service's fallback ("no schedule → keep all") let a park without any
+OPERATING window publish forecasts round the clock: 20 parks / 491 rides held
+stored slots at 02:00–04:00 local, and Knoebels (schedule UNKNOWN) served 192
+`hourlyForecast` slots with 05:45 as its first "optimal" `bestVisitTimes` entry.
+
+`MLService.withinKnownOpeningHours` now gates every hourly answer before anyone
+reads it — inside `buildRawParkPredictions` (before the Redis write, so the park
+payload, favorites, calendar today, `/plan/day`, the forward archive and the
+stored `wait_time_predictions` rows all inherit it) and on the attraction
+detail's live fallback (`getAttractionPredictions`). Per park-local day:
+
+- **OPERATING window that day** → the slots pass untouched.
+- **No OPERATING window** (UNKNOWN, missing, past the operator's horizon) →
+  only the hours the park's queues were measured in survive: `hours` of
+  `getParkHourlyProfile(park, 1, 60, 20)` — the `/stats/hourly` rule (an hour
+  needs 10 measured days) and the same cached profile `/plan/day` uses for
+  `hoursSource: "observed"`. Energylandia (open daily, no future schedule)
+  therefore keeps its daytime forecast.
+- **No profile** (build failed, no measured hour) → no hourly slot that day.
+
+`bestVisitTimes` is computed from these slots and needs no gate of its own. The
+replace-mode diff write removes already-stored night slots on the generator's
+next run.
+
 ### 4.3 predict.py (Inference)
 
 - **Schedule features:** From `schedule_entries`, OPERATING/CLOSED/UNKNOWN are evaluated per park/date. A park with no OPERATING entry at all is treated as “no schedule” → predictions are kept.
