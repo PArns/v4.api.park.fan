@@ -41,6 +41,9 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader
 cd "$CODE" || exit 1
 docker run --rm --name mlbench-par828-$RUN --gpus all --cpus 6 --memory 8g --cpu-shares 256 \
   -e HF_HOME=/hf -e MLBENCH_GIT_SHA="$SHA" \
+  `# PAR-1066 (tabpfn_ts): gated weights. Bare -e passes the caller's value through, or` \
+  `# nothing if unset - the tokens never appear in argv, the image or the repository.` \
+  -e HF_TOKEN -e TABPFN_TOKEN -e TABPFN_MODEL_CACHE_DIR=/hf/tabpfn \
   -e MLBENCH_IMAGE_ID=$(docker image inspect -f "{{.Id}}" "$IMAGE") \
   -v /data/parkfan/ml-bench/par-828/hf:/hf -v /data/parkfan/ml-bench:/data \
   -v $PWD/ml-bench/results:/app/results -v $PWD/ml-bench/subsets:/app/subsets \

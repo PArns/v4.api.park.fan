@@ -972,6 +972,10 @@ def main(args: argparse.Namespace) -> int:
                          f"(-e MLBENCH_IMAGE_ID=$(docker image inspect -f '{{{{.Id}}}}' <tag>)); got {sha}, {image}")
     pair_with = [v.strip() for v in (args.pair_with or "").split(",") if v.strip()]
     meta = {"config": json.loads(cfg.to_json()), "models": [type(m).scored_name() for m in models],
+            # PAR-1066: a benchmark-only arm is labelled in every run it appears in
+            "licences": {type(m).scored_name(): {"licence": getattr(m, "licence", None),
+                                                 "serving_candidate": getattr(m, "serving_candidate", None)}
+                         for m in models},
             # `git_sha` is whatever the launcher asserted; `code_sha256` is measured from
             # the sources in this process and is the one to trust (see provenance.py).
             "git_sha": sha, "git_sha_source": git_sha_source(),

@@ -131,12 +131,15 @@ def test_information_cut_plugins(name, synth_export, tmp_path):
     after = _repredict(synth_export, tmp_path / "p06", name, r, 6)
     for path in daily_paths:
         pd.testing.assert_frame_equal(before[path], after[path], obj=f"{name} / {path} / cut 06")
-    assert len(before["daily"]) > 0
     assert set(before) == set(after)
-    moved = [p for p in intraday_paths
-             if not before[p]["q50"].equals(after[p]["q50"])]
-    assert moved, (f"{name}: no intraday path moved when the origin day's truth was "
-                   "poisoned — the intraday context is not following its own cut")
+    if getattr(m, "slot_path", True):
+        assert len(before["daily"]) > 0
+        moved = [p for p in intraday_paths
+                 if not before[p]["q50"].equals(after[p]["q50"])]
+        assert moved, (f"{name}: no intraday path moved when the origin day's truth was "
+                       "poisoned — the intraday context is not following its own cut")
+    else:   # a daily-level-only plug-in (tabpfn_ts): nothing on the slot paths, a level
+        assert all(before[p].empty for p in ["daily", *intraday_paths]) and len(before["level"])
 
     # Second pass: poison from the LAST intraday cut, so every path's own history is
     # clean and all three must hold. This is what actually covers the intraday leak.

@@ -1,4 +1,4 @@
-# Foundation models in ml-bench — Chronos-2, TimesFM 3.0 (PAR-828), TiRex-2 and Toto 2.0 (PAR-853), Chronos-2 LoRA and TimesFM 2.5 (PAR-1063, PAR-1064)
+# Foundation models in ml-bench — Chronos-2, TimesFM 3.0 (PAR-828), TiRex-2 and Toto 2.0 (PAR-853), Chronos-2 LoRA and TimesFM 2.5 (PAR-1063, PAR-1064), PatchTST-FM-r2, TTM-r2 and TabPFN-TS (PAR-1066)
 
 Two pretrained time-series foundation models, plugged into the PAR-827 benchmark
 (`docs/ml/ml-bench.md`) through the same restricted plug-in interface as every
@@ -621,6 +621,13 @@ days, a ~78-day over-reach of pre-origin covariates.
 - **TimesFM 2.5 — Apache-2.0** (model card of `google/timesfm-2.5-200m-pytorch`, revision
   `1d952420`, `license: apache-2.0`; the timesfm README: "model weights up to version 2.5
   remain Apache-2.0"). Production serving would be allowed.
+- **Granite PatchTST-FM-r2, Granite TTM-r2 — servable; TabPFN-TS — benchmark-only**
+  (PAR-1066). The quoted lines and URLs are in "Licence verdicts (PAR-1066)" below. The
+  code enforces the verdict: every foundation plug-in declares `licence`
+  (`servable` / `benchmark-only` / `unclear`) and `serving_candidate`, and a class that
+  sets `serving_candidate = True` without `licence = "servable"` is refused when it is
+  defined (`FoundationModel.__init_subclass__`). Every `run-*.json` records both per arm
+  under `licences`.
 
 
 ---
@@ -848,3 +855,153 @@ PAR-1063 / PAR-1064". Every arm is meant to be scored in the same run as `chrono
 See "Licences — what is allowed" above: the weights' licence excludes production and
 end-user use outright, so `timesfm3` can be scored as a reference arm (`--model timesfm3`)
 but is never a serving candidate, whatever it scores.
+
+---
+
+# Granite PatchTST-FM-r2, Granite TTM-r2 and TabPFN-TS (PAR-1066)
+
+**Implemented and tested, not measured.** No GPU run has been made; the combined run command
+(probe, `--shard 0/5` run, both report passes) is in `docs/ml/ml-bench.md`, "Running PAR-1066
+together with PAR-1063 / PAR-1064". Image: `requirements-par1066.txt`, which includes
+`requirements-par1063.txt`, so `chronos2`, `chronos2_ft`, `chronos2_lora` and `timesfm25` pair
+with the new arms inside one run.
+
+## Licence verdicts (PAR-1066)
+
+Read from the primary sources on 2026-10-24.
+
+| model | verdict | the line it rests on | source |
+|---|---|---|---|
+| Granite PatchTST-FM-r2 | **servable** | metadata `license: openmdw-1.0`; README: "This model is dual‑licensed under the OpenMDW License version 1.0 and the Apache License 2.0. Users may choose to use the model under either license." The repository's `LICENSE` says the same. Not gated. | <https://huggingface.co/ibm-granite/granite-timeseries-patchtst-fm-r2> (revision `b125275f`) |
+| Granite TTM-r2 | **servable** | metadata `license: apache-2.0`. Not gated. | <https://huggingface.co/ibm-granite/granite-timeseries-ttm-r2> (branch `1536-720-r2` = commit `3ca910a8`) |
+| granite-tsfm (code of both) | Apache-2.0 | PyPI `license_expression: Apache-2.0` | <https://pypi.org/project/granite-tsfm/0.3.10/> |
+| TabPFN-TS → TabPFN-3.5 weights | **benchmark-only** | `LICENSE`, "TABPFN-3.5 License v1.0 — Last Revised: September 9, 2026": the weights are available "for your non-commercial and non-production use"; "For clarity, use (a) for any revenue-generating activity, (b) in direct or indirect interactions with end users or production systems, or (c) to train, fine-tune, or distill other models for commercial use, in each case is not a Non-Commercial Purpose."; "Any use of Outputs in production systems, business processes, commercial research services, client deliverables, or revenue-generating activities requires a separate commercial license." Gated (`extra_gated_fields`). | <https://huggingface.co/Prior-Labs/tabpfn_3_5/blob/main/LICENSE> |
+| tabpfn-time-series / tabpfn (code) | Apache-2.0 | repository licence (tabpfn-time-series); PyPI `license_expression: Apache-2.0` (tabpfn) | <https://github.com/PriorLabs/tabpfn-time-series> |
+
+TabPFN-TS is the TimesFM 3.0 case again: the code is open, the weights it downloads by
+default are not servable — park.fan being non-commercial does not help, because the licence
+excludes *production and end-user* use, not only revenue. tabpfn-time-series 1.3.0 pins
+`TABPFN_MODEL_VERSION = "v3.5"` (`defaults.py`). **Whatever `tabpfn_ts` scores, it is a
+reference arm, never a serving candidate.**
+
+## Covariate support — what each model can take
+
+| model | known-future covariates | evidence |
+|---|---|---|
+| PatchTST-FM-r2 | **none** | `PatchTSTFMForPrediction.forward(past_values, past_observed_mask, pad_mask, prediction_length, quantile_levels, …)` — the covariate arguments are commented out: `# future_values: Optional[torch.Tensor] = None,  # future use` (granite-tsfm 0.3.10, `modeling_patchtst_fm.py`). The model card mentions no covariates. |
+| TTM-r2, zero-shot | **none** (channel-independent) | model card: exogenous use appears only as "Finetuning and Forecasting with Exogenous/Control Variables"; "Decoder Channel-Mixing can be enabled during fine-tuning". |
+| TTM-r2, fine-tuned | **yes** — exogenous channels via forecast channel mixing | `TinyTimeMixerConfig(exogenous_channel_indices=…, enable_forecast_channel_mixing=True)`; `ForecastChannelMixer` raises "future_values cannot be none when we have exogenous channels". Loading the r2 weights with that config reports every `head.fcm_block.*` parameter and the decoder's channel mixers as "MISSING … newly initialized": the exogenous path does not exist until it is trained. |
+| TabPFN-TS | **yes**, natively | `predict_df` docstring: "Additional columns are treated as known covariates (e.g., temperature, holidays, promotional flags). These can improve forecast accuracy when their future values are known." Only columns present in both the context and the future frame are used. |
+
+So by the rule this benchmark now works under — a model without known-future covariates
+lost where it matters — **`patchtst_fm` and `ttm_r2` are covariate-free reference arms**
+(the role of `chronos2_nocov`). The arms that can actually win are `ttm_r2_ft` (slots) and
+`tabpfn_ts` (daily level, benchmark-only).
+
+## Variants registered
+
+| name | what it is | origins | quantiles |
+|---|---|---|---|
+| `patchtst_fm` | PatchTST-FM-r2 zero-shot, compressed context, no covariates | daily + intraday slots, daily level (→ `patchtst_fm_x_h5`) | q50 / q80 / **q95** |
+| `ttm_r2` | TTM-r2 `1536-720-r2` zero-shot, compressed context, no covariates | daily + intraday slots | point only |
+| `ttm_r2_ft` | TTM-r2 + the `chronos2` slot covariates as exogenous channels, fine-tuned every 28 days | daily + intraday slots | point only |
+| `tabpfn_ts` | TabPFN-TS on the ride-day P90 series, day covariates + `day_len_h` | daily LEVEL only (UC4 / D6 / D7 / PEAK; `tabpfn_ts_x_h5` at the slot leads) | — |
+
+## PatchTST-FM-r2
+
+- **Weights:** `ibm-granite/granite-timeseries-patchtst-fm-r2`, revision `b125275f`
+  (`MLBENCH_PATCHTSTFM_REVISION`), ~385 M parameters, granite-tsfm 0.3.10.
+- **Window:** context **plus** forecast must fit the model's 8192 steps
+  (`forecast_single_step_fast` raises otherwise), and the model always decodes at least
+  d_patch × pretrain_mask_cont = 128 steps; the adapter hands over the last
+  `8192 − max(H, 128)` compressed slots.
+- **Missing values:** masked natively (`past_observed_mask` from NaN). A ride that never ran
+  is not sent and stays NaN.
+- **Quantiles:** the head holds 99 quantiles 0.01 … 0.99, so q0.5, q0.8 **and q0.95** are
+  read directly — a real q95 for D8, which TimesFM, TiRex-2 and Toto do not have.
+- **Knob:** `MLBENCH_PATCHTSTFM_BATCH` (16 rides per forward).
+- **CPU smoke with the real weights** (three synthetic rides, period-40 sine, every 17th slot
+  NaN, one ride never ran): MAE 0.35 over a 200-step horizon, quantiles monotone, the empty
+  ride NaN.
+
+## TTM-r2 (`ttm_r2`, `ttm_r2_ft`)
+
+- **Weights:** `ibm-granite/granite-timeseries-ttm-r2`, branch `1536-720-r2` pinned to its
+  commit `3ca910a8` (`MLBENCH_TTM_REVISION`; a branch can move, a commit cannot): context
+  1536, horizon 720. A longer request raises instead of truncating. r2 is the "minutely to
+  hourly" release ("Ex. 10 min, 15 min, 1 hour."), so there is no daily path; r2.1 adds
+  daily data and is not benchmarked here.
+- **Scaling:** the card asks users to "externally standard scale their data independently for
+  every channel"; the adapter z-scores each ride over its context and inverts the forecast.
+  Gaps are 0 with `past_observed_mask = False`; a context shorter than 1536 is left-padded as
+  unobserved.
+- **Point forecast only:** q80 / q95 are NaN and the arm is not in D8. The shared output step
+  used to turn a missing q80 into a copy of q50 (`np.fmax(NaN, q50) = q50`); it now keeps it
+  missing (tested).
+- **Fine-tune (`ttm_r2_ft`):** a TTM with `1 + k` channels (`prediction_channel_indices=[0]`,
+  `exogenous_channel_indices=[1..k]`, forecast channel mixing, `decoder_mode="mix_channel"`),
+  backbone frozen, decoder + head + mixer trained with AdamW at lr 1e-3
+  (`MLBENCH_TTM_FT_LR`; the backbone stays frozen and the mixer starts from random weights —
+  Chronos-2's 1e-5 is a full-model rate), 400 steps (`MLBENCH_FT_STEPS`), batch 64. The exogenous channels are
+  `chronos2`'s slot covariates (minutes since opening / until closing, time of day, the day
+  covariates), z-scored with their **past** statistics on both sides of the origin.
+- **Leakage boundary:** training windows are cut from the forecast context, which the runner
+  has already cut at the origin; `ttm_windows` returns `(past start, cut, future end)` with the
+  future end ≤ the context length, so no window can reach the origin. Tested on its own, in
+  the backend (a sentinel in the future covariates never reaches a training batch) and in the
+  harness (poison every truth slot after the origin: the fit's inputs are unchanged, one fit
+  per date, never at an intraday origin).
+- **Why every 28 days.** The cadence of `chronos2_ft` and `chronos2_lora` (~9 fits over the
+  February–October origins), so the three fine-tunes differ in model and adaptation, not in
+  how fresh their weights are. A TTM fit is cheap (CPU smoke: 20 steps plus both forecasts in
+  ~3 s), so per-origin refitting is affordable — but it would no longer pair on cadence; it is
+  a one-line subclass (`finetune_every_days = 1`) if the probe makes the case.
+- **CPU smoke with the real weights:** zero-shot and fine-tuned paths both run, the empty ride
+  stays NaN. On a clean synthetic sine the zero-shot model missed a period-40 cycle (z-MAE 1.0)
+  but tracked a period-96 one (z-MAE 0.14, the same with and without a mask) — a property of
+  the model, and the compressed operating day (~40–50 slots) is close to the period it missed.
+  The run will say whether that matters on real data.
+
+## TabPFN-TS (`tabpfn_ts`)
+
+- **Packages:** tabpfn-time-series 1.3.0, tabpfn 9.1.0, tabpfn-client 0.6.1 (imported by the
+  pipeline, never used), datasets 4.8.5 (5.x needs pyarrow ≥ 24, the base pins 23.0.1).
+- **Daily level only**, against `driver_level` and `wt_med` on UC4 / D6 / D7 / PEAK. One series
+  per ride: the ride-day P90 (≥ 8 slots) over the last 400 days; a closed or unknown day is left
+  out of the context, never filled. Known-future columns: the `chronos2` day covariates plus the
+  published day length `day_len_h` — NaN beyond the publishing horizon is TabPFN's own missing
+  value, so an absent schedule never reads as a closed day.
+- **Calendar from real dates:** the backend receives the context and target dates
+  (`wants_days`); the pipeline's `RunningIndexFeature` and `CalendarFeature` are used, its
+  `AutoSeasonalFeature` is not — closed days make the series irregular, and the package
+  recommends opting out of it for irregular timestamps.
+- **LOCAL mode only.** `TabPFNMode.CLIENT` would send the data to Prior Labs' cloud API.
+  Telemetry (posthog) is on by default in tabpfn-common-utils; the backend sets
+  `TABPFN_DISABLE_TELEMETRY=1` before importing.
+- **Tokens — read from the environment, never committed, never baked into the image.** The
+  weights repo is gated and tabpfn checks a Prior Labs licence acceptance before it
+  downloads (`tabpfn/browser_auth.py`). A run needs `HF_TOKEN` (a Hugging Face token whose
+  account accepted the gate on the model page) and `TABPFN_TOKEN` (the Prior Labs token after
+  accepting the licence at ux.priorlabs.ai) passed to `docker run`, plus
+  `TABPFN_MODEL_CACHE_DIR` on a mounted volume so the checkpoint downloads once. Without them
+  the first `tabpfn_ts` forecast fails loudly.
+- **Wiring smoke (CPU):** with the ungated TabPFN v2 checkpoint swapped in (3.5 needs the
+  tokens), a weekday-driven synthetic level was forecast exactly over 14 days, a 5-day gap in
+  the context was skipped, and a ride without data stayed NaN.
+- **No slot path** of its own (`slot_path = False`; the information-cut test checks the level
+  path instead). `tabpfn_ts_x_h5` comes from the runner's level × H5 composition.
+
+## Dependencies — `requirements-par1066.txt`
+
+Resolved on top of `requirements.txt` with torch 2.11.0 — the newest cu128 wheel on
+2026-10-24 — in a Python 3.11 venv, the Dockerfile's two-step install order, `pip check` clean.
+What changes against the base image (only in images built with this extra):
+
+- **pandas 2.2.3 → 2.3.3**: granite-tsfm 0.3.x requires `pandas>=2.3.3`. numpy stays 1.26.4
+  (pandas 2.3 supports numpy ≥ 1.23.2 on Python 3.11).
+- **A latent upgrade in PAR-1063's file, fixed:** jax 0.6.2 pulled the newest `ml_dtypes`,
+  whose 0.6 release needs numpy ≥ 2, so pip silently upgraded the image's numpy to 2.4.
+  `requirements-par1063.txt` now pins `numpy==1.26.4` and `ml_dtypes==0.5.4`.
+- granite-tsfm needs `torch<2.12,>=2.10`. The Dockerfile's `torch>=2.7.0` from the cu128 index
+  is 2.11.0 today; should cu128 publish 2.12, pip would replace it with a PyPI (cu13) build —
+  `python -m mlbench gpu-check` after the build is the check.
