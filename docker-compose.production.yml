@@ -233,10 +233,10 @@ services:
     # shutdown is bounded by dockerd's own `--shutdown-timeout` as well, unset
     # on this host and therefore 15 s, and that budget cannot be set from this
     # repo — it is `/etc/docker/daemon.json` plus a daemon restart, which is an
-    # API outage and Patrick's call (PAR-1004). What this value does buy is the
+    # API outage and Patrick's call (PAR-1055). What this value buys is the
     # floor: a stop that used to be cut at exactly 10 s now gets at least 15,
-    # and the full 30 wherever the daemon is not the one stopping us. Strictly
-    # more head room on every path, less on none.
+    # and the full 30 wherever the daemon is not the one stopping us. No path
+    # ends up with less head room than before.
     stop_grace_period: 30s
     env_file:
       - .env
