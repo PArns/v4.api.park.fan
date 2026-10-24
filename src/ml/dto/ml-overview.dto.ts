@@ -40,7 +40,7 @@ export interface MlDecisionDto {
   /** YYYY-MM-DD (Europe/Berlin) + German label, e.g. "frühestens 24.10.". Null when nothing is outstanding or nothing can be dated. */
   earliest: { date: string; label: string } | null;
   /** Matrix cells the decision rests on (for a link into the model comparison). */
-  cells: { questionId: string; modelId: string }[];
+  cells: { questionId: string; modelId: string; expect?: "not_better" }[];
   /**
    * PAR-1036: the fixed evaluation date (YYYY-MM-DD). Before it the decision
    * is never `ready`; from it on (`evaluated: true`) it is judged on the
