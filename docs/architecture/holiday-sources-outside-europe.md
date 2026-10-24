@@ -120,6 +120,22 @@ lookups find them. A park region code that names no Korean region is logged
 then read as unknown or fall back to the country's coverage, as described in
 the coverage page.
 
+**Production region codes (read 2026-10-24).** The KR parks store ISO numbers:
+Caribbean Bay and Everland `41`, Legoland Korea `42`, Lotte World Adventure
+`11`. The readers build `KR-41`/`KR-42`/`KR-11` from them, which is exactly
+the region the NEIS rows carry. Other formats seen: AU `QLD` (rows `AU-QLD`),
+SG empty (national rows), HK `NT` / `Hong Kong Island`. KASI, SG and CN rows
+are all national, so they apply whatever the park's region string is.
+`src/holidays/data/production-region-codes.spec.ts` pins these literal values.
+
+**Follow-up — CN region codes are inconsistent.** The CN parks hold `Zhejiang`,
+`Jiangsu`, `Gan Su Sheng`, `Gansu`, `44`, `CN-44`, `31`, `11`, `Tianjin` and
+so on: names, pinyin with a suffix, ISO numbers, prefixed and not. The CN rows
+here are national, so nothing depends on it today. Province-level data
+(school holidays, `region-influences.ts`'s `CN-31`/`CN-44` entries) will only
+match once the parks are normalised to ISO 3166-2 `CN-xx` — do that first,
+never per-province string matching.
+
 **Check after the first import:** the geocoder stores `normalizeRegionCode()`
 of Google's `administrative_area_level_1.short_name`. That function keeps the
 part after the last `-`, so a name like `Gyeonggi-do` would be stored as `do`,
