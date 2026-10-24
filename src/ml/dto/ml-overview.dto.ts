@@ -1,3 +1,5 @@
+import type { BandCalibrationTable } from "../utils/catboost-band-calibration.util";
+
 /**
  * Admin ML overview (PAR-861): the contract of `GET /v1/admin/ml-overview`.
  *
@@ -81,4 +83,11 @@ export interface MlOverviewDto {
     worse: number;
   };
   components: MlComponentDto[];
+  /**
+   * PAR-1060: the current CatBoost hourly band factor per (lead bucket,
+   * segment) with its in-sample coverage before/after, as the daily
+   * `calibrate-bands` job wrote it. Null before the first run or once it has
+   * expired (the band is then served raw).
+   */
+  bandCalibration?: BandCalibrationTable | null;
 }

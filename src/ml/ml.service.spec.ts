@@ -20,6 +20,10 @@ import { ParksService } from "../parks/parks.service";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getCurrentDateInTimezone } from "../common/utils/date.util";
 import { currentSlotStartMs } from "../common/utils/best-visit-times.util";
+import {
+  BAND_CALIBRATION_KEY,
+  fitBandCalibration,
+} from "./utils/catboost-band-calibration.util";
 import { PCN_MAX_FORECAST_AGE_H } from "./pcn-serving.constants";
 
 describe("MLService", () => {
@@ -988,6 +992,42 @@ describe("MLService", () => {
       }
       expect(at(180).modelVersion).toBe("v1");
       expect(mockPredictionRepository.manager.query).not.toHaveBeenCalled();
+    });
+
+    it("PAR-1060: the band factor scales CatBoost slots only, never Chronos or PCN", async () => {
+      process.env.SERVE_PCN_INTRADAY = "true";
+      process.env.SERVE_CHRONOS_INTRADAY = "true";
+      // PCN only for the 180-min slot, so 30 stays CatBoost.
+      mockPredictionRepository.manager.query.mockResolvedValue(
+        pcnRows("60").filter(
+          (r) => r.predicted_time.getTime() === NOW + 180 * MIN,
+        ),
+      );
+      const payload = await mockRedis.get();
+      const table = fitBandCalibration(
+        Array.from({ length: 20 }, () => ({
+          lead: "h0-2",
+          segment: "quiet",
+          bin: 40, // every score 2.0 → k = 2
+          n: 100,
+        })),
+      );
+      mockRedis.get.mockImplementation((key: string) =>
+        Promise.resolve(
+          key === BAND_CALIBRATION_KEY ? JSON.stringify(table) : payload,
+        ),
+      );
+
+      const at = byLead(
+        (await service.getParkPredictions(parkId, "hourly")).predictions,
+      );
+
+      expect(at(30).modelVersion).toBe("v1");
+      expect(at(30).uncertaintyMinutes).toBe(10); // 5 × 2
+      expect(at(60).modelVersion).toBe("v1+chronos");
+      expect(at(60).uncertaintyMinutes).toBe(18); // Chronos's own band
+      expect(at(180).modelVersion).toBe("v1+pcn");
+      expect(at(180).uncertaintyMinutes).toBeNull();
     });
 
     it("with PCN on: blend ≤ 30 min, Chronos 45–120, PCN beyond", async () => {

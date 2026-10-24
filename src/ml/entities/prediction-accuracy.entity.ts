@@ -179,6 +179,13 @@ export class PredictionAccuracy {
   @Column({ name: "predicted_q95", type: "int", nullable: true })
   predictedQ95: number | null;
 
+  /** The RAW band CatBoost served beside `predictedWaitTime` for this slot
+   *  (`q0.95 − q0.5`, whole minutes, before the PAR-1060 calibration — so the
+   *  fit never reads its own output). Same latest-write semantics as the
+   *  quantiles. NULL before PAR-1060 and where the model reported no spread. */
+  @Column({ name: "uncertainty_minutes", type: "smallint", nullable: true })
+  uncertaintyMinutes: number | null;
+
   /**
    * What the comparison decided this slot IS (PAR-912), written by
    * `compareWithActuals` beside `comparisonStatus = 'COMPLETED'`:

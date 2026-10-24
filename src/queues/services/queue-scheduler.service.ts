@@ -623,6 +623,26 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    // CatBoost band calibration (PAR-1060): daily 04:20 UTC, after the 4am
+    // cleanup and before the 04:50 vacuum / 06:00 training window. The 15-min
+    // comparison has scored everything up to ~20 min ago by then.
+    const hasBandCalibrationCron = await this.hasRepeatableJob(
+      this.predictionAccuracyQueue,
+      "band-calibration-cron",
+      "20 4 * * *",
+    );
+    if (!hasBandCalibrationCron) {
+      await this.predictionAccuracyQueue.add(
+        "calibrate-bands",
+        {},
+        {
+          repeat: { cron: "20 4 * * *" },
+          jobId: "band-calibration-cron",
+          attempts: 2,
+        },
+      );
+    }
+
     // Predictions: Every 15 minutes (fresh predictions for bestVisitTimes and crowd levels)
     const hasHourlyPredictionsCron = await this.hasRepeatableJob(
       this.predictionsQueue,

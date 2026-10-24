@@ -222,6 +222,47 @@ the wrong scale, since `predict.py` emits 30–100. It now runs CatBoost's own
 formula (60 % distance term, 40 % spread term, each floored at 30) fed from the
 measured band, so the two models answer on one scale.
 
+## CatBoost hourly band: split-conformal factor (PAR-1060)
+
+The daily seam above is still open. The **hourly** band is calibrated since
+PAR-1060, because `prediction_accuracy` has scored hourly slots to fit on.
+
+- **Target.** `uncertaintyMinutes` is one-sided (`q0.95 − q0.5`, the distance
+  above the served wait), so the target is
+  `P(actual − predicted_wait_time ≤ k · band) = 0.95` — the reading the forward
+  archive's D8 scores (`truth ≤ pred + band`) and the TFT band is calibrated to.
+  It is not `|actual − q0.5| ≤ k·band`: that two-sided reading would ask for
+  roughly a q0.975 on top and widen every band beyond what it claims.
+- **Fit.** Daily `prediction-accuracy` / `calibrate-bands`, 04:20 UTC
+  (`PredictionAccuracyService.calibrateCatboostBands`). Last 28 days,
+  `scoredSlotSql` AND `score_class = 'scored'`, hourly, `served_source =
+  'catboost'`, raw band > 0. The SQL returns a histogram of the score
+  `(actual − predicted) / band` in 0.05 bins per lead bucket × segment;
+  `fitBandCalibration` (`src/ml/utils/catboost-band-calibration.util.ts`) takes
+  the smallest bin edge reaching 95 %. Lead buckets `h0-2`/`h2-6`/`h6-24`/`h24+`
+  from `target_time − prediction_time` (the run that last wrote the slot);
+  segments quiet < 30 ≤ mid < 60 ≤ busy on the predicted wait. A cell with fewer
+  than 500 slots borrows the pooled factor; a pool under 500 gives no factor. A
+  non-positive factor (the cell over-forecasts so far that 95 % of actuals sit
+  under the median) is no factor, never a zero band.
+- **The raw band is stored.** `prediction_accuracy.uncertainty_minutes` is the
+  band CatBoost produced, before the factor, written beside `predicted_q95`.
+  The fit reads only that, so it never fits its own output. It is NULL on rows
+  written before PAR-1060, so the first factor appears the night after the
+  deploy has accumulated 500 slots.
+- **Serve.** Redis `ml:band-calibration:catboost-hourly:v1`, TTL 3 days (two
+  missed runs). `MLService.serveHourlyRows` runs the PCN/Chronos overrides and
+  then multiplies `uncertaintyMinutes` (rounded to whole minutes) on the hourly
+  rows that stayed CatBoost — never a PCN slot (band null) or a Chronos slot
+  (its own band). Applies on all four hourly read paths, with or without the
+  override flags. No table, an expired one or no factor for the slot → the raw
+  band. The stored `wait_time_predictions` rows stay raw.
+- **Read it.** `GET /v1/admin/ml-overview` → `bandCalibration`: per cell `n`,
+  `k`, `source` (`cell`/`pooled`), `coverageRaw`, `coverageCalibrated`
+  (in-sample, so ≈ 0.95 by construction where the cell has its own k). The
+  out-of-sample check is the forward archive's D8 (`nBandCov / nBand` on
+  `park_hourly`) before and after the deploy.
+
 ## Daily serving merge + stampede guard
 
 `MLService.getServingDailyPredictions` (calendar + yearly source) merges **TFT for
