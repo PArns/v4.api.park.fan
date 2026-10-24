@@ -62,7 +62,7 @@ const tx = district("US-TX", "Northside ISD");
 
 // California — Los Angeles Unified (Universal Studios Hollywood; the LA
 // basin is the main catchment for Disneyland, Knott's and Magic Mountain).
-// The district page links both years' PDFs (media.edlio.net, LAUSD's site
+// The district page links the 2025-26, 2026-27 and 2027-28 PDFs (media.edlio.net, LAUSD's site
 // host); "Board Approved", adoption tentative pending union negotiations.
 const LAUSD =
   "https://www.lausd.org/apps/pages/index.jsp?uREC_ID=4432518&type=d&pREC_ID=2672183";
@@ -149,10 +149,23 @@ export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
     // summer stops on the last day it shows and later days read as unknown.
     tx("2028-05-25", "2028-07-31", "Summer break", NISD_2027),
 
-    // California 2026-27 (first day 2026-08-12, last day 2027-06-04). The
-    // 2026-27 calendar shows July and August 2026 without instruction; the
-    // 2025-26 calendar was not read, so summer 2026 starts on 07-01.
-    ca("2026-07-01", "2026-08-11", "Summer break", LAUSD),
+    // California 2025-26 (first day 2025-08-14, last day 2026-06-10). The
+    // 2024-25 calendar was not read; the 2025-26 one shows July 2025 without
+    // instruction, so summer 2025 starts on 07-01.
+    ca("2025-07-01", "2025-08-13", "Summer break", LAUSD),
+    ca("2025-08-29", "2025-09-01", "Admission Day and Labor Day", LAUSD),
+    ca("2025-09-23", "2025-09-23", "Unassigned day", LAUSD),
+    ca("2025-10-02", "2025-10-02", "Unassigned day", LAUSD),
+    ca("2025-11-11", "2025-11-11", "Veterans Day", LAUSD),
+    ca("2025-11-24", "2025-11-28", "Thanksgiving break", LAUSD),
+    ca("2025-12-22", "2026-01-09", "Winter recess", LAUSD),
+    ca("2026-01-19", "2026-01-19", "Martin Luther King Jr. Day", LAUSD),
+    ca("2026-02-16", "2026-02-16", "Presidents' Day", LAUSD),
+    ca("2026-03-27", "2026-04-03", "Farm Workers Day and spring recess", LAUSD),
+    ca("2026-04-24", "2026-04-24", "Armenian Genocide Remembrance Day", LAUSD),
+    ca("2026-05-25", "2026-05-25", "Memorial Day", LAUSD),
+    ca("2026-06-11", "2026-08-11", "Summer break", LAUSD),
+    // California 2026-27 (first day 2026-08-12, last day 2027-06-04)
     ca("2026-09-04", "2026-09-07", "Admission Day and Labor Day", LAUSD),
     ca("2026-09-21", "2026-09-21", "Unassigned day", LAUSD),
     ca("2026-11-11", "2026-11-11", "Veterans Day", LAUSD),

@@ -11,6 +11,7 @@ import { addDays } from "date-fns";
 import { normalizeRegionCode } from "../common/utils/region.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
 import { HolidayInput } from "../common/types/holiday-input.type";
+import { CURATED_HOLIDAY_SETS } from "./data/curated-holidays";
 import {
   SchoolCoverage,
   buildSchoolCoverage,
@@ -88,13 +89,22 @@ const NOT_A_WORKING_DAY = "holiday.holidayType <> 'working_day'";
  * the one difference is that `updatedAt` now moves only when a holiday actually
  * changed, which is what the column says. Nothing reads it.
  */
-/** Countries whose Nager.Date "School" tag is not a school holiday (PAR-1071). */
-const NAGER_SCHOOL_IGNORED: ReadonlySet<string> = new Set(["US"]);
-
 export const HOLIDAY_UPSERT_OPTIONS = {
   conflictPaths: ["externalId"],
   skipUpdateIfNoValuesChanged: true,
 };
+
+/** Countries whose Nager.Date "School" tag is not a school holiday (PAR-1071). */
+const NAGER_SCHOOL_IGNORED: ReadonlySet<string> = new Set(["US"]);
+
+/** `country|region` of every hand-curated school region (PAR-1071). */
+const CURATED_SCHOOL_REGIONS: ReadonlySet<string> = new Set(
+  CURATED_HOLIDAY_SETS.flatMap((set) =>
+    set.entries
+      .filter((e) => e.type === "school" && e.region !== null)
+      .map((e) => `${set.country}|${e.region}`),
+  ),
+);
 
 @Injectable()
 export class HolidaysService {
@@ -453,6 +463,9 @@ export class HolidaysService {
    * is a projection, not data, and it counts toward the school-holiday coverage.
    * No other break type and no later year is projected — an unpublished break
    * reads as unknown instead (docs/architecture/school-holiday-coverage.md).
+   * A region whose school data is hand-curated is skipped (PAR-1071): its file
+   * ends where the publisher's calendar ends, and a projection past that edge
+   * would be invented data.
    */
   async synthesizeProjectedSummerHolidays(
     countryCode: string,
@@ -496,6 +509,7 @@ export class HolidaysService {
 
     const toUpsert: HolidayInput[] = [];
     for (const [region, years] of byRegion) {
+      if (CURATED_SCHOOL_REGIONS.has(`${countryCode}|${region}`)) continue;
       // Only the CURRENT summer: projecting next year's too risks stale rows once
       // the range-based countries publish their (real) next-year calendar.
       {

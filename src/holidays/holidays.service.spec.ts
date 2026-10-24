@@ -208,6 +208,43 @@ describe("HolidaysService", () => {
   describe("synthesizeProjectedSummerHolidays", () => {
     const now = new Date().getUTCFullYear();
 
+    it("never projects a hand-curated region, and still projects a synced one (PAR-1071)", async () => {
+      // LAUSD's file ends 2028-06-30: 23 June days in 2028 look marker-only.
+      const marker = (region: string) => [
+        {
+          region,
+          yr: String(now - 1),
+          days: "70",
+          mn: `${now - 1}-06-05`,
+          mx: `${now - 1}-08-11`,
+        },
+        {
+          region,
+          yr: String(now),
+          days: "23",
+          mn: `${now}-06-08`,
+          mx: `${now}-06-30`,
+        },
+      ];
+      const spy = jest
+        .spyOn(service as any, "saveRawHolidays")
+        .mockResolvedValue(0);
+
+      (mockHolidayRepository as any).query = jest
+        .fn()
+        .mockResolvedValue([...marker("US-CA"), ...marker("US-FL")]);
+      expect(await service.synthesizeProjectedSummerHolidays("US")).toBe(0);
+      expect(spy).not.toHaveBeenCalled();
+
+      (mockHolidayRepository as any).query = jest
+        .fn()
+        .mockResolvedValue(marker("IT-ER"));
+      await service.synthesizeProjectedSummerHolidays("IT");
+      expect(spy).toHaveBeenCalledTimes(1);
+      const entries = spy.mock.calls[0][0] as Array<{ externalId: string }>;
+      expect(entries[0].externalId).toMatch(/^synth-summer:IT:IT-ER:/);
+    });
+
     it("projects last year's summer range forward for a marker-only region", async () => {
       (mockHolidayRepository as any).query = jest.fn().mockResolvedValue([
         // prev year: a genuine ~99-day summer range
@@ -287,8 +324,6 @@ describe("HolidaysService", () => {
     });
   });
 
-  // PAR-872: every sync re-sent the same calendar and rewrote every stored row
-  // (22 M updates on 200 k rows). The upsert now skips a row nothing changed in.
   describe("saveHolidaysFromApi: Nager types (PAR-1071)", () => {
     const nager = (types: string[], counties: string[] | null) => ({
       date: "2026-05-08",
@@ -322,6 +357,8 @@ describe("HolidaysService", () => {
     });
   });
 
+  // PAR-872: every sync re-sent the same calendar and rewrote every stored row
+  // (22 M updates on 200 k rows). The upsert now skips a row nothing changed in.
   describe("saveRawHolidays", () => {
     const h = {
       externalId: "x:DE:2026-10-03",
