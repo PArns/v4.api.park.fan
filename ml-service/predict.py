@@ -759,6 +759,10 @@ def apply_schedule_features(
 
             df.loc[mask_open, "is_park_open"] = 1
             mask_closed_operating_day = mask_valid & ~mask_open
+            # Before opening / after close on an operating day training reads 0
+            # (features.add_park_schedule_features); serving kept the "assume
+            # open" default of 1 there until PAR-1045.
+            df.loc[mask_closed_operating_day, "is_park_open"] = 0
             df.loc[mask_closed_operating_day, "status"] = "CLOSED"
         else:
             mask_open = pd.Series(False, index=df.index)

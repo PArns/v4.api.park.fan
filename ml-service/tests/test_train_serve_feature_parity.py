@@ -121,6 +121,31 @@ def test_time_since_park_open_is_per_row_and_identical_on_both_paths():
     assert serve["time_since_park_open_mins"].tolist() == pytest.approx(expected)
 
 
+def test_is_park_open_outside_hours_on_an_operating_day_agrees():
+    """PAR-1045: before opening and after close both paths read 0."""
+
+    def frame():
+        rows = ["2026-07-02 06:00", "2026-07-02 10:00", "2026-07-02 17:30"]
+        df = pd.DataFrame(
+            {
+                "parkId": PARK,
+                "attractionId": RIDE,
+                "timestamp": [pd.Timestamp(t, tz="UTC") for t in rows],
+            }
+        )
+        return features.convert_to_local_time(df, PARKS_METADATA)
+
+    train = features.add_park_schedule_features(
+        frame(),
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+        datetime(2026, 7, 5, tzinfo=timezone.utc),
+        cached_schedules_df=_schedules_snake(),
+    )
+    serve = predict.apply_schedule_features(frame(), _schedules_camel())
+    assert train["is_park_open"].tolist() == [0, 1, 0]
+    assert serve["is_park_open"].tolist() == [0, 1, 0]
+
+
 def test_is_bridge_day_is_per_date_and_ignores_todays_flag():
     df = _frame()
     df["date_local"] = df["local_timestamp"].dt.date
