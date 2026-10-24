@@ -284,6 +284,8 @@ export interface ArchivedCurve {
   laterAt?: number | null;
   /** plan_day: model behind the day level. */
   levelSource?: string | null;
+  /** plan_day, TFT-levelled ride-days only: CatBoost's day level (PAR-1042). */
+  catboostDayPeak?: number | null;
 }
 
 export interface ArchivedParkDay {
@@ -1108,6 +1110,12 @@ export const PAIRED_MODELS = {
   shadowPeak: "shadow_peak_scaled",
   chronosGrid: "chronos2_grid",
   weekdayAvg: "weekday_avg",
+  /**
+   * CatBoost's day level on the ride-days TFT levelled (PAR-1042), archived
+   * beside the served TFT `dayPeak`: the only rows where the two daily models
+   * meet. PEAK and D7 only.
+   */
+  catboostShadow: "catboost_shadow",
 } as const;
 
 /** Ride-day use cases of the paired table besides the slot ones (UC1/2/3). */
@@ -1298,6 +1306,10 @@ export const PAIRED_PAIRWISE: Array<[string, string]> = [
  *   `dayPeak`, under {@link PAIRED_LEVEL_REFERENCES} by the level's model
  *   (`all`, `headliner`).
  * - D7 dN: the per-date level sums of {@link PAIRED_D7_USE_CASE}.
+ * - `catboost_shadow` (PAR-1042) on the same PEAK / D7 rows as the weekday
+ *   average, against `served_tft`, where the ride-day has a CatBoost shadow
+ *   level — optional, like the nf-service shadows: a ride-day without one
+ *   leaves the weekday-average rows as they are.
  *
  * Plus {@link PAIRED_PAIRWISE} on the same joint rows. No key here is one
  * {@link scorePairedShadows} writes. The routed H5 curve falls back to plain
@@ -1519,29 +1531,37 @@ export function scorePairedModels(
     });
     const wkdPeak = percentileCont(span, 0.9);
     if (p90 === null || wkdPeak === null) continue;
-    for (const seg of plan.isHeadliner ? ["all", "headliner"] : ["all"]) {
-      acc.add(
-        PAIRED_PEAK_USE_CASE,
-        lead,
-        PAIRED_MODELS.weekdayAvg,
-        levelRef,
-        seg,
-        wkdPeak,
-        plan.dayPeak,
-        p90,
-      );
+    const peaks: Array<[string, number]> = [
+      [PAIRED_MODELS.weekdayAvg, wkdPeak],
+    ];
+    if (plan.levelSource === "tft" && plan.catboostDayPeak != null) {
+      peaks.push([PAIRED_MODELS.catboostShadow, plan.catboostDayPeak]);
     }
-    if (plan.isHeadliner && plan.levelSource === "tft") {
-      acc.addSums(
-        PAIRED_D7_USE_CASE,
-        lead,
-        PAIRED_MODELS.weekdayAvg,
-        PAIRED_LEVEL_REFERENCES.tft,
-        "headliner",
-        wkdPeak,
-        plan.dayPeak,
-        p90,
-      );
+    for (const [model, peak] of peaks) {
+      for (const seg of plan.isHeadliner ? ["all", "headliner"] : ["all"]) {
+        acc.add(
+          PAIRED_PEAK_USE_CASE,
+          lead,
+          model,
+          levelRef,
+          seg,
+          peak,
+          plan.dayPeak,
+          p90,
+        );
+      }
+      if (plan.isHeadliner && plan.levelSource === "tft") {
+        acc.addSums(
+          PAIRED_D7_USE_CASE,
+          lead,
+          model,
+          PAIRED_LEVEL_REFERENCES.tft,
+          "headliner",
+          peak,
+          plan.dayPeak,
+          p90,
+        );
+      }
     }
   }
 }

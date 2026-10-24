@@ -271,6 +271,17 @@ export class ForecastArchiveCurve {
   })
   levelSource: string | null;
 
+  /**
+   * plan_day only, and only where `levelSource` is `tft` (PAR-1042): the
+   * CatBoost day level for the same ride-day — the row of the cached CatBoost
+   * daily read that `getServingDailyPredictions` replaced with TFT's, matched
+   * the way the planner matches. A SHADOW: never served, it is the `dayPeak`
+   * the planner would have shown had CatBoost levelled the day, so the two
+   * daily models can be paired on the same ride-days. NULL elsewhere.
+   */
+  @Column({ name: "catboost_day_peak", type: "smallint", nullable: true })
+  catboostDayPeak: number | null;
+
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt: Date;
 }
