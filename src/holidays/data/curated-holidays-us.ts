@@ -104,6 +104,12 @@ const WJCC_2026 = `${WJCC_FILES}/2025/10/2026-27-Academic-Calendar.pdf`;
 const WJCC_2027 = `${WJCC_FILES}/2021/07/2027-28-Academic-Calendar-4-1-26.pdf`;
 const va = district("US-VA", "Williamsburg-James City County Public Schools");
 
+// Tennessee — Sevier County Schools (Dollywood). The calendar page links the
+// 2025-26 (revised January 2026) and 2026-27 PDFs. "V" (vacation),
+// "A" (administrative) and "I" (in-service) days have no students.
+const SEVIER = "https://www.sevier.org/7073";
+const tn = district("US-TN", "Sevier County Schools");
+
 export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
   country: "US",
   entries: [
@@ -403,5 +409,34 @@ export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
     va("2028-05-29", "2028-05-29", "Memorial Day", WJCC_2027),
     // 2028-29 is not published: the calendar ends with June 2028.
     va("2028-06-09", "2028-06-30", "Summer break", WJCC_2027),
+
+    // Tennessee 2025-26 (first day 2025-08-08, last day 2026-05-29). Neither
+    // the 2024-25 calendar nor its last day is on sevier.org, so summer 2025
+    // starts on 08-01, the first day the 2025-26 calendar shows.
+    tn("2025-08-01", "2025-08-07", "Summer break", SEVIER),
+    tn("2025-08-29", "2025-09-01", "Vacation day and Labor Day", SEVIER),
+    tn("2025-10-13", "2025-10-17", "Fall break", SEVIER),
+    tn("2025-11-11", "2025-11-11", "Veterans Day", SEVIER),
+    tn("2025-11-27", "2025-11-28", "Thanksgiving", SEVIER),
+    tn("2025-12-05", "2025-12-05", "Administrative day", SEVIER),
+    tn("2025-12-22", "2026-01-05", "Winter break", SEVIER),
+    tn("2026-01-19", "2026-01-19", "Martin Luther King Jr. Day", SEVIER),
+    tn("2026-02-16", "2026-02-16", "Presidents' Day", SEVIER),
+    tn("2026-03-30", "2026-04-03", "Spring break", SEVIER),
+    tn("2026-05-05", "2026-05-05", "In-service day", SEVIER),
+    tn("2026-05-30", "2026-08-06", "Summer break", SEVIER),
+    // Tennessee 2026-27 (first day 2026-08-07, last day 2027-05-28)
+    tn("2026-09-04", "2026-09-07", "Vacation day and Labor Day", SEVIER),
+    tn("2026-10-12", "2026-10-16", "Fall break", SEVIER),
+    tn("2026-11-03", "2026-11-03", "In-service day", SEVIER),
+    tn("2026-11-11", "2026-11-11", "Veterans Day", SEVIER),
+    tn("2026-11-26", "2026-11-27", "Thanksgiving", SEVIER),
+    tn("2026-12-22", "2027-01-06", "Winter break", SEVIER),
+    tn("2027-01-18", "2027-01-18", "Martin Luther King Jr. Day", SEVIER),
+    tn("2027-02-15", "2027-02-15", "Presidents' Day", SEVIER),
+    tn("2027-03-29", "2027-04-02", "Spring break", SEVIER),
+    tn("2027-05-27", "2027-05-27", "Administrative day", SEVIER),
+    // 2027-28 is not published: the calendar ends with June 2027.
+    tn("2027-05-29", "2027-06-30", "Summer break", SEVIER),
   ],
 };
