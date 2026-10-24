@@ -1,27 +1,51 @@
 {
-  "_about": "Offline verdicts per question x model for the admin model comparison (PAR-855). Seeded from the approved mockup's matrix, whose notes summarise ml-bench PR #445 (full period), #447 (driver_level, H5 + TFT level) and #450 (Chronos-2). state: better|worse|unclear|pending, always against what is served today for that question. diff/ciLow/ciHigh only where the run reported them against that reference; never filled in otherwise. expectedBy only for runs still in progress. note: one German sentence, shown when live data does not decide the cell. servedNotes: the note of each question's served (today) cell. 2026-10-11: the Chronos cells come from the mixed-weekday re-run of #450 (--shard 0/5, 47 origins over all seven weekdays; the earlier --shard 0/7 run put every origin on a Thursday, which locked every lead to one target weekday). 2026-10-12: the Toto 2.0 / TiRex-2 cells (fm) come from PR #457's run 20261011-par853-toto-tirex-shard5 (47 origins over all seven weekdays, 30 parks, same origin set as the Chronos run). Neither model beats Chronos-2 except at a 15-minute horizon; both beat the hourly profile in the live bands and lose to it in the planner from two days out. They have no live source and are not archived, so the live columns stay empty for them by design, not pending. 2026-10-11 (PAR-855 follow-up): live_h0_1 x chronos is pending (offline worse only at 15 min, better at 30 and 60 min); notes that quoted the headline window or a lead outside the question as the full period were corrected, plan_d6_60 x tfth5 was judged against wt_med instead of served (now unclear), and the plan_d0_1 x tfth5 diff was against wt_med, not served (removed).",
+  "_about": "Offline verdicts per question x model for the admin model comparison (PAR-855). Seeded from the approved mockup's matrix, whose notes summarise ml-bench PR #445 (full period), #447 (driver_level, H5 + TFT level) and #450 (Chronos-2). state: better|worse|unclear|pending, always against what is served today for that question. diff/ciLow/ciHigh only where the run reported them against that reference; never filled in otherwise. expectedBy only for runs still in progress. note: one German sentence, shown when live data does not decide the cell. servedNotes: the note of each question's served (today) cell. 2026-10-11: the Chronos cells come from the mixed-weekday re-run of #450 (--shard 0/5, 47 origins over all seven weekdays; the earlier --shard 0/7 run put every origin on a Thursday, which locked every lead to one target weekday). 2026-10-12: the Toto 2.0 / TiRex-2 cells (fm) come from PR #457's run 20261011-par853-toto-tirex-shard5 (47 origins over all seven weekdays, 30 parks, same origin set as the Chronos run). Neither model beats Chronos-2 except at a 15-minute horizon; both beat the hourly profile in the live bands and lose to it in the planner from two days out. They have no live source and are not archived, so the live columns stay empty for them by design, not pending. 2026-10-11 (PAR-855 follow-up): live_h0_1 x chronos is pending (offline worse only at 15 min, better at 30 and 60 min); notes that quoted the headline window or a lead outside the question as the full period were corrected, plan_d6_60 x tfth5 was judged against wt_med instead of served (now unclear), and the plan_d0_1 x tfth5 diff was against wt_med, not served (removed). 2026-10-24 (PAR-1038): every entry carries reference (what the offline figure was measured against: 'served' = the question's served model; 'persistence', 'wt_med', 'clim', 'chronos2', 'hourly_profile' or null when the note does not say), metric ('slot_mae', 'besttime_regret', 'daypeak_mae', 'hit_rate', null), runId (the ml-bench results directory, null when not recorded) and diff/ciLow/ciHigh (null until a bench export reports them against that reference). An offline 'better' whose reference is not 'served' cannot make a cell 'better' (model-comparison.util.ts cellState): the owner rule asks for a win over what is served, and a win over persistence or the weekday average is not one. reference was read from each note, never inferred; no number was added.",
   "questions": {
     "live_h0_1": {
       "persist": {
         "state": "unclear",
+        "reference": null,
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "In der ersten Stunde praktisch dasselbe wie PCN. Auf 15 Minuten nicht zu schlagen, ab 30 Minuten ist Chronos-2 besser."
       },
       "chronos": {
         "state": "pending",
+        "reference": "persistence",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #450 (Chronos-2, ganzer Zeitraum)",
         "period": "2026-02-19..2026-10-07",
         "note": "Offline besser als die aktuelle Wartezeit, wartet auf das Live-Archiv: nur auf 15 Minuten schlechter (+0,27 [+0,19; +0,37]), auf 30 Minuten besser (−0,41 [−0,60; −0,20]) und auf 60 Minuten besser (−1,27 [−1,62; −0,91]), sicher (ganzer Zeitraum, 47 Zeitpunkte über alle Wochentage, 30 Parks). Gegen PCN misst das erst das Live-Archiv."
       },
       "h5": {
         "state": "worse",
+        "reference": null,
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Ein Tagesprofil kennt die Lage von jetzt nicht und liegt kurzfristig klar hinten."
       },
       "fm": {
         "state": "unclear",
+        "reference": "hourly_profile",
+        "metric": "slot_mae",
+        "runId": "20261011-par853-toto-tirex-shard5",
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
         "note": "Gemessen und entschieden: beide schlagen das Stundenprofil klar (Toto −4,19 bis −2,34, TiRex −4,08 bis −2,07 Minuten über 15 bis 60 Minuten, sicher), aber Chronos-2 ist ab 30 Minuten besser als beide. Nur auf 15 Minuten liegen sie vor Chronos-2 (Toto −0,18, TiRex −0,07). Gegen PCN selbst sind sie offline nicht gemessen, und sie werden auch nicht archiviert — das bleibt offen."
@@ -30,30 +54,60 @@
     "live_h1_2": {
       "persist": {
         "state": "unclear",
+        "reference": "chronos2",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Schlägt bis 2 Stunden jedes Profil, liegt aber 1,26 bis 2,27 Minuten hinter Chronos-2."
       },
       "chronos": {
         "state": "better",
+        "reference": "persistence",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
         "note": "Offline klar besser als die aktuelle Wartezeit (60 Minuten: −1,27, 120 Minuten: −2,25 Minuten Fehler, sicher; volle Fahrgeschäfte −2,63 und −4,48). Gegen PCN misst das erst das Live-Archiv."
       },
       "h5": {
         "state": "worse",
+        "reference": "chronos2",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #450 (Chronos-2, ganzer Zeitraum)",
         "period": "2026-02-19..2026-10-07",
         "note": "Liegt bei 1 bis 2 Stunden 2,0 bis 2,5 Minuten hinter Chronos-2."
       },
       "tfth5": {
         "state": "worse",
+        "reference": "chronos2",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #450 (Chronos-2, ganzer Zeitraum)",
         "period": "2026-02-19..2026-10-07",
         "note": "Liegt bei 1 bis 2 Stunden 1,9 bis 2,4 Minuten hinter Chronos-2."
       },
       "fm": {
         "state": "unclear",
+        "reference": "hourly_profile",
+        "metric": "slot_mae",
+        "runId": "20261011-par853-toto-tirex-shard5",
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
         "note": "Dasselbe Bild wie in der ersten Stunde: besser als das Stundenprofil (Toto −2,34 bis −1,65, TiRex −2,07 bis −1,36 Minuten), aber 0,15 bis 0,58 Minuten hinter Chronos-2 an jeder Vorlaufzeit. Gegen PCN nicht gemessen und nicht archiviert."
@@ -62,18 +116,36 @@
     "today_h2_6": {
       "persist": {
         "state": "worse",
+        "reference": null,
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Ab 4 Stunden um 3 Minuten schlechter."
       },
       "tfth5": {
         "state": "unclear",
+        "reference": null,
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #447 (driver_level)",
         "period": "2026-02-19..2026-10-07",
         "note": "Im Herbst besser als die einfachen Werte (−0,3 Minuten), über das ganze Jahr noch nicht bestätigt."
       },
       "chronos": {
         "state": "pending",
+        "reference": "hourly_profile",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
         "note": "Gegen das Stundenprofil 1,58 Minuten besser in 2 bis 4 Stunden und 1,09 Minuten in 4 bis 8 Stunden (sicher, 30 Parks, Februar bis Oktober). PCN selbst ist offline nicht gemessen — das entscheidet das Live-Archiv.",
@@ -84,6 +156,12 @@
       },
       "fm": {
         "state": "unclear",
+        "reference": "hourly_profile",
+        "metric": "slot_mae",
+        "runId": "20261011-par853-toto-tirex-shard5",
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
         "note": "Besser als das Stundenprofil (Toto −1,27 in 2 bis 4 Stunden und −0,79 in 4 bis 8 Stunden, TiRex −1,00 und −0,57, sicher), aber hinter Chronos-2 (+0,31 bis +0,58). PCN ist offline nicht gemessen."
@@ -92,18 +170,36 @@
     "today_h6_12": {
       "persist": {
         "state": "worse",
+        "reference": "wt_med",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Von 4 bis 8 Stunden 3,2 Minuten und ab 8 Stunden 6,7 Minuten schlechter als der Wochentag-Durchschnitt."
       },
       "tfth5": {
         "state": "unclear",
+        "reference": null,
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Von 4 bis 8 Stunden nur im Herbst besser als die einfachen Werte (−0,3 Minuten), übers Jahr gleichauf. Ab 8 Stunden übers Jahr 0,29 Minuten schlechter (sicher)."
       },
       "chronos": {
         "state": "pending",
+        "reference": "hourly_profile",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
         "note": "Gegen das Stundenprofil 0,45 Minuten besser ab 8 Stunden (sicher). PCN selbst ist offline nicht gemessen — das entscheidet das Live-Archiv.",
@@ -114,6 +210,12 @@
       },
       "fm": {
         "state": "unclear",
+        "reference": "hourly_profile",
+        "metric": "slot_mae",
+        "runId": "20261011-par853-toto-tirex-shard5",
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
         "note": "Ab 8 Stunden nur noch Gleichstand mit dem Stundenprofil (Toto −0,13, TiRex −0,01, beide CIs schließen 0 ein) und 0,32 bis 0,44 Minuten hinter Chronos-2. Hier bringen sie nichts mehr."
@@ -122,30 +224,60 @@
     "plan_d0_1": {
       "h5": {
         "state": "unclear",
+        "reference": "served",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Etwa gleichauf mit dem, was wir heute zeigen."
       },
       "tfth5": {
         "state": "better",
+        "reference": "wt_med",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Im Herbst 0,3 Minuten besser als der Wochentag-Durchschnitt, übers Jahr nicht (+0,09, nicht sicher). Bei vollen Fahrgeschäften hält der Gewinn übers Jahr, aber kleiner (−0,49 statt −1,34)."
       },
       "chronos": {
         "state": "better",
+        "reference": "hourly_profile",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
         "note": "Mit allen Wochentagen gemessen: heute 0,68 und morgen 0,27 Minuten besser als das Stundenprofil und 0,76 bzw. 0,66 Minuten besser als TFT×H5 (sicher, beide Prüfzeiträume). Auf vollen Fahrgeschäften 1,63 und 0,74 Minuten. Verliert an keiner Vorlaufzeit.",
         "period": "2026-02-19..2026-10-07"
       },
       "wkd": {
         "state": "unclear",
+        "reference": "served",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Die Messlatte: etwa gleichauf mit dem, was wir heute zeigen."
       },
       "fm": {
         "state": "unclear",
+        "reference": "hourly_profile",
+        "metric": "slot_mae",
+        "runId": "20261011-par853-toto-tirex-shard5",
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
         "note": "Heute Gleichstand mit dem Stundenprofil (Toto −0,05, TiRex −0,04), morgen schlechter (+0,38 bzw. +0,32, sicher). Nur die Gitter-Variante von TiRex ist heute besser (−0,485) und morgen gleichauf. Gegen Chronos-2 gewinnt keine Variante."
@@ -154,30 +286,60 @@
     "plan_d2_5": {
       "h5": {
         "state": "better",
+        "reference": "served",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Besser als heute und besser als der Wochentag-Durchschnitt (übers Jahr −0,07, im Herbst −0,14 Minuten, bei jedem Abstand sicher)."
       },
       "tfth5": {
         "state": "unclear",
+        "reference": null,
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #447 (driver_level)",
         "period": "2026-02-19..2026-10-07",
         "note": "Nur bei vollen Fahrgeschäften und nur bis 2 Tage sicher besser, ab 3 Tagen nicht mehr."
       },
       "chronos": {
         "state": "unclear",
+        "reference": "hourly_profile",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
         "note": "Nur Tag 2 ist ein sicherer Gewinn (0,24 Minuten gegen das Stundenprofil, 0,66 auf vollen Fahrgeschäften); Tag 3 bis 5 ist Gleichstand. Gegen TFT×H5 gewinnt es in diesem Band an jeder Vorlaufzeit. Der frühere Verlust bei Tag 2 und 3 war ein Donnerstags-Artefakt.",
         "period": "2026-02-19..2026-10-07"
       },
       "wkd": {
         "state": "better",
+        "reference": "served",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Schon dieser einfache Wert ist ab 3 Tagen besser als das, was wir heute zeigen."
       },
       "fm": {
         "state": "worse",
+        "reference": "hourly_profile",
+        "metric": "slot_mae",
+        "runId": "20261011-par853-toto-tirex-shard5",
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #457 (Toto 2.0 / TiRex-2, Lauf mit allen Wochentagen)",
         "period": "2026-02-19..2026-10-07",
         "note": "Ab 2 Tagen klar schlechter als das Stundenprofil (Toto +0,52 bis +0,92, TiRex +0,38 bis +0,69 Minuten, sicher). Die Niveau-auf-H5-Form-Verbindung hält mit (Gleichstand), aber Chronos-2s Variante davon ist besser. Für den Planer ist das kein Kandidat."
@@ -186,18 +348,36 @@
     "plan_d6_60": {
       "h5": {
         "state": "better",
+        "reference": "served",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Besser als heute. Übers Jahr schlägt es auch alle einfachen Werte bis Tag 45, im Herbst nur den Wochentag-Durchschnitt."
       },
       "tfth5": {
         "state": "unclear",
+        "reference": "wt_med",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Schlechter als der Wochentag-Durchschnitt (30 Tage: +0,42 Minuten bei vollen Fahrgeschäften), aber nach Punktschätzung besser als das, was wir heute zeigen."
       },
       "wkd": {
         "state": "better",
+        "reference": "served",
+        "metric": "slot_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Besser als das, was wir heute zeigen."
@@ -206,12 +386,24 @@
     "plan_besttime": {
       "h5": {
         "state": "better",
+        "reference": "wt_med",
+        "metric": "besttime_regret",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Weniger verschenkte Wartezeit: übers Jahr 0,28 bis 0,31 Minuten weniger als der Wochentag-Durchschnitt, sicher (im Herbst 0,35 bis 0,42)."
       },
       "chronos": {
         "state": "worse",
+        "reference": "clim",
+        "metric": "besttime_regret",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #450 (Chronos-2, Lauf mit allen Wochentagen)",
         "note": "Für die beste Besuchszeit nicht brauchbar: die komprimierte Variante liegt 1,1 bis 3,8 Minuten über der Klimatologie, die Gitter-Variante kommt an keiner Vorlaufzeit darunter und ist an Tag 4, 6 und 7 messbar schlechter. Das Stundenprofil bleibt vorn.",
         "period": "2026-02-19..2026-10-07"
@@ -220,12 +412,24 @@
     "cal_busier": {
       "catboost": {
         "state": "worse",
+        "reference": null,
+        "metric": null,
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Als Tagesniveau macht CatBoost die Prognose schlechter."
       },
       "wkd": {
         "state": "unclear",
+        "reference": "served",
+        "metric": "daypeak_mae",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Bis Tag 3 ist die heutige Tagesspitze sicher genauer (Tag 3: 0,42 Minuten), ab Tag 14 liegt der Wochentag-Durchschnitt leicht vorn, nicht sicher."
@@ -234,12 +438,24 @@
     "cal_far": {
       "catboost": {
         "state": "worse",
+        "reference": "served",
+        "metric": null,
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Schlechter als TFT."
       },
       "wkd": {
         "state": "worse",
+        "reference": "served",
+        "metric": "hit_rate",
+        "runId": null,
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Offline schlechter als TFT in der Trefferquote."

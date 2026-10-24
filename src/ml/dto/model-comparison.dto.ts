@@ -49,6 +49,18 @@ export interface ModelComparisonOfflineDto {
   source: string;
   /** "YYYY-MM-DD..YYYY-MM-DD" of the offline backtest. */
   period?: string;
+  /**
+   * What the offline figure was measured against (PAR-1038): `served` = this
+   * question's served model, else the bench reference (`persistence`,
+   * `wt_med`, `clim`, `chronos2`, `hourly_profile`); null = not recorded.
+   */
+  reference?: string | null;
+  /** `reference === "served"`: only then can an offline win make the cell `better`. */
+  referenceIsServed?: boolean;
+  /** `slot_mae`, `besttime_regret`, `daypeak_mae`, `hit_rate`; null = not recorded. */
+  metric?: string | null;
+  /** The ml-bench results directory of the run; null = not recorded. */
+  runId?: string | null;
 }
 
 export interface ModelComparisonExpectedByDto {

@@ -27,8 +27,11 @@ const live = (o: Partial<LiveComparison> = {}): LiveComparison => ({
   enoughData: true,
   ...o,
 });
-const offline = (state: OfflineVerdict["state"], note?: string) =>
-  ({ state, source: "ml-bench PR #445", note }) as OfflineVerdict;
+const offline = (
+  state: OfflineVerdict["state"],
+  note?: string,
+  reference: string | null = "served",
+) => ({ state, source: "ml-bench PR #445", note, reference }) as OfflineVerdict;
 const q = (id: string) => COMPARISON_QUESTIONS.find((x) => x.id === id)!;
 
 /** `parks` parks × `days` days, each park with the same per-day sums. */
@@ -136,6 +139,68 @@ describe("cellState — the rule", () => {
     expect(cellState(false, thin, offline("worse"))).toBe("worse");
     expect(cellState(false, thin, offline("unclear"))).toBe("unclear");
     expect(cellState(false, null, null)).toBe("unclear");
+  });
+});
+
+describe("cellState — an offline win over another reference (PAR-1038)", () => {
+  it("never makes a cell better, live win or not", () => {
+    for (const ref of ["persistence", "wt_med", "hourly_profile", null]) {
+      expect(cellState(false, live(), offline("better", undefined, ref))).toBe(
+        "pending",
+      );
+      expect(
+        cellChecks("pending", true, live(), offline("better", undefined, ref))
+          .offline,
+      ).toBe("open");
+    }
+    // A verdict without the field is not known to be against served either.
+    expect(
+      cellState(false, live(), {
+        state: "better",
+        source: "x",
+      } as OfflineVerdict),
+    ).toBe("pending");
+    expect(
+      cellNote(
+        q("live_h1_2"),
+        "pending",
+        true,
+        live(),
+        offline("better", undefined, "persistence"),
+        undefined,
+      ),
+    ).toMatch(/nur gegen einen anderen Vergleichswert gemessen/);
+  });
+});
+
+describe("offline-model-verdicts.json — the PAR-1038 schema", () => {
+  const file = verdictsJson as unknown as OfflineVerdictFile;
+  it("states reference, metric, run id and the figures on every entry, inventing no number", () => {
+    for (const [qid, models] of Object.entries(file.questions)) {
+      for (const [mid, v] of Object.entries(models)) {
+        for (const k of [
+          "reference",
+          "metric",
+          "runId",
+          "diff",
+          "ciLow",
+          "ciHigh",
+        ]) {
+          expect({ cell: `${qid}/${mid}`, has: k in v }).toEqual({
+            cell: `${qid}/${mid}`,
+            has: true,
+          });
+        }
+        // No bench export has reported a paired figure yet.
+        expect([v.diff, v.ciLow, v.ciHigh]).toEqual([null, null, null]);
+      }
+    }
+  });
+  it("keeps the PCN questions from turning better on a win over persistence", () => {
+    const v = file.questions.live_h1_2.chronos;
+    expect(v.state).toBe("better");
+    expect(v.reference).toBe("persistence");
+    expect(cellState(false, live(), v)).toBe("pending");
   });
 });
 
