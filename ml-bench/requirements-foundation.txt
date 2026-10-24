@@ -5,7 +5,10 @@
 chronos-forecasting==2.3.2
 # TimesFM 3.0 (google/timesfm-3.0-pytorch): code Apache-2.0, WEIGHTS under the
 # TimesFM Non-Commercial License v1.0 — non-commercial use only (checked on the model
-# card 2026-10-09). park.fan is non-commercial, so this offline benchmark is covered.
-# Whether a public production service still counts as non-commercial is an OWNER
-# decision on the licence text, not a technical one.
+# card 2026-10-09). The licence grants "non-commercial and non-production use" and
+# excludes use "in direct or indirect interactions with end users or production
+# systems" (re-read 2026-10-24, PAR-1064): this offline benchmark is covered, serving
+# on park.fan is NOT, regardless of park.fan being non-commercial.
+# The same wheel also ships TimesFM 2.5 (`timesfm.TimesFM_2p5_200M_torch`), whose
+# weights (google/timesfm-2.5-200m-pytorch) are Apache-2.0.
 timesfm==3.0.2

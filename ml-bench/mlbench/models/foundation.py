@@ -8,8 +8,10 @@ Two models, one series construction:
   the rides of a park. Context up to 8192 steps, 64 output patches × 16 = 1024 steps
   without autoregressive unrolling.
 * **TimesFM 3.0** (``google/timesfm-3.0-pytorch``; weights under the TimesFM
-  Non-Commercial License v1.0 — non-commercial use only, which covers park.fan and
-  this offline benchmark; production serving is an owner decision on the licence). Past-and-future covariates
+  Non-Commercial License v1.0 — "non-commercial and NON-PRODUCTION use"; use "in
+  direct or indirect interactions with end users or production systems" is excluded
+  by the licence text, so ``timesfm3`` is a BENCHMARK-ONLY arm and can never be
+  served on park.fan without a commercial licence from Google). Past-and-future covariates
   are native in 3.0. Its variate attention is capped at 32 variates (targets AND
   covariates), which a park with 40–70 rides does not fit, so each ride is a
   univariate task with the covariates as extra variates. Quantile head 0.1 … 0.9:
@@ -67,6 +69,24 @@ The runner composes it with H5 as ``<name>_x_h5`` at every slot lead, so long le
   ``residual_attn_ratio`` = sqrt(S/ln S) with S = 128 patches of 32).
 
 Both heads are 0.1 … 0.9: there is no q95, so both return q95 = NaN like TimesFM.
+
+**PAR-1064 — TimesFM 2.5** (``google/timesfm-2.5-200m-pytorch``, weights Apache-2.0 per
+the model card; the class ``timesfm.TimesFM_2p5_200M_torch`` ships in the same
+``timesfm==3.0.2`` wheel as TimesFM 3.0). Univariate: every ride is its own series.
+Covariates go through the package's own ``forecast_with_covariates`` (in-context
+linear regression, "XReg", mode ``xreg + timesfm``: a ridge/OLS fit of the target on the
+covariates over the context, TimesFM forecasts the residual) — one regression per
+``forecast_with_covariates`` call, and ``forecast()`` makes one call per task, so one per
+PARK, shared by its rides (batching tasks into one call would silently pool parks). That is a covariate path bolted on beside the network, not
+covariates the network attends to as Chronos-2's do. TimesFM interpolates NaN linearly
+(also inside the XReg target, which would otherwise be NaN), so the grid layout turns
+nights into ramps; ``timesfm25_grid`` measures what that costs rather than assuming it.
+Quantile head 0.1 … 0.9 (continuous head, horizon <= 1024): q95 = NaN.
+
+**PAR-1063 — Chronos-2 LoRA** (``chronos2_lora``): chronos-forecasting's own
+``fit(finetune_mode="lora")`` (peft adapter on the attention q/k/v/o and the output
+layer, the package default), on exactly the inputs and cadence of ``chronos2_ft`` — so
+the two differ only in full vs low-rank adaptation.
 
 The information cut is the runner's: truth comes only from ``origin.history``
 (slots that end before the park's origin); covariates and windows are known-future
@@ -155,9 +175,13 @@ class ChronosBackend(_Backend):
         self.context_length = self.pipe.model_context_length
 
     def finetune(self, tasks, cov_names, prediction_length: int, steps: int, context_length: int,
-                 learning_rate: float, batch_size: int):
-        """A fine-tuned COPY of the pipeline (full fine-tune, chronos-forecasting's own
-        trainer) on the context windows of ``tasks`` — truth before the origin only."""
+                 learning_rate: float, batch_size: int, mode: str = "full"):
+        """A fine-tuned COPY of the pipeline (chronos-forecasting's own trainer; ``mode``
+        "full" or "lora") on the context windows of ``tasks`` — truth before the origin only."""
+        if mode == "lora":
+            # without peft, fit() warns and silently runs a FULL fine-tune — which would
+            # then be scored as chronos2_lora
+            import peft  # noqa: F401
         inputs = []
         for y, pc, _fc in tasks:
             d = {"target": y.astype(np.float32)}
@@ -165,10 +189,10 @@ class ChronosBackend(_Backend):
                 d["past_covariates"] = {n: pc[i].astype(np.float32) for i, n in enumerate(cov_names)}
                 d["future_covariates"] = {n: None for n in cov_names}
             inputs.append(d)
-        return self.pipe.fit(inputs, prediction_length=prediction_length, finetune_mode="full",
+        return self.pipe.fit(inputs, prediction_length=prediction_length, finetune_mode=mode,
                              context_length=context_length, learning_rate=learning_rate,
                              num_steps=steps, batch_size=batch_size,
-                             output_dir="/tmp/chronos2-ft", remove_printer_callback=True,
+                             output_dir=f"/tmp/chronos2-{mode}", remove_printer_callback=True,
                              report_to="none", save_strategy="no", logging_steps=50)
 
     def forecast(self, tasks, cov_names, pipe=None):
@@ -233,6 +257,99 @@ class TimesFMBackend(_Backend):
             qq = np.asarray(r.quantiles)[:H]
             out[ti][i, :, 0] = qq[:, self.qi[0]]
             out[ti][i, :, 1] = qq[:, self.qi[1]]
+        if self.device == "cuda":
+            self.peak_vram_gb = max(self.peak_vram_gb, self.torch.cuda.max_memory_allocated() / 1e9)
+        return out
+
+
+class TimesFM25Backend(_Backend):
+    """TimesFM 2.5 (200M, Apache-2.0): univariate per ride; covariates via the package's
+    in-context regression (``forecast_with_covariates``), fitted once per task (= park)."""
+
+    name = "timesfm25"
+    #: Hugging Face revision of the weights (2025-10-02), pinned like TiRex-2 / Toto 2.0
+    REVISION = os.environ.get("MLBENCH_TFM25_REVISION", "1d952420fba87f3c6dee4f240de0f1a0fbc790e3")
+    #: the continuous quantile head covers 1024 steps (``output_quantile_len``); the
+    #: longest request is 8 days on the 15-min grid (768) or 366 days on the daily path
+    MAX_HORIZON = 1024
+    QI = (5, 8)        # output column 0 is the mean, then 0.1 … 0.9 -> q50, q80
+
+    def __init__(self, model_id: str = "google/timesfm-2.5-200m-pytorch",
+                 context_length: int = int(os.environ.get("MLBENCH_TFM25_CONTEXT", "8192")),
+                 batch_size: int = int(os.environ.get("MLBENCH_TFM25_BATCH", "32"))):
+        import timesfm
+        import torch
+
+        self.torch = torch
+        _cap_vram(torch)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # torch_compile=False: inductor needs a C compiler the slim image does not ship
+        # (the TiRex-2 trap); eager mode gives the same numbers
+        self.fm = timesfm.TimesFM_2p5_200M_torch.from_pretrained(model_id, revision=self.REVISION,
+                                                                 torch_compile=False)
+        self.context_length = context_length
+        # return_backcast is required by forecast_with_covariates; plain forecast()
+        # output then carries the backcast in front, so every read takes the last
+        # MAX_HORIZON steps
+        self.fm.compile(timesfm.ForecastConfig(
+            max_context=context_length, max_horizon=self.MAX_HORIZON, normalize_inputs=True,
+            per_core_batch_size=batch_size, use_continuous_quantile_head=True,
+            force_flip_invariance=True, infer_is_positive=True, fix_quantile_crossing=True,
+            return_backcast=True))
+
+    @staticmethod
+    def _clean(y: np.ndarray) -> np.ndarray | None:
+        """What the package does to every input (strip leading NaN, interpolate the rest),
+        done up front because the XReg target must not contain NaN; None = never ran."""
+        if not np.isfinite(y).any():
+            return None
+        v = y[int(np.argmax(np.isfinite(y))):].astype(np.float64)
+        nan = ~np.isfinite(v)
+        if nan.any():
+            idx = np.arange(len(v))
+            v[nan] = np.interp(idx[nan], idx[~nan], v[~nan])
+        return v
+
+    def forecast(self, tasks, cov_names, pipe=None):
+        C, M = self.context_length, self.MAX_HORIZON
+        out = [np.full((y.shape[0], fc.shape[1], 3), np.nan) for y, _p, fc in tasks]
+        plain, plain_owner = [], []
+        for ti, (y, pc, fc) in enumerate(tasks):
+            H = fc.shape[1]
+            if H > M:
+                raise ValueError(f"timesfm25: horizon {H} > {M} (continuous quantile head)")
+            rows, inputs, covs = [], [], []
+            for i in range(y.shape[0]):
+                v = self._clean(y[i, -C:])
+                if v is None:
+                    continue
+                rows.append(i)
+                inputs.append(v)
+                if pc is not None and len(cov_names):
+                    # a NaN covariate (grid: no window-relative minutes off-window, which
+                    # in_win flags) is 0 for the regression; day_len_h is never passed here
+                    covs.append(np.nan_to_num(np.concatenate([pc[:, -len(v):], fc], axis=1), nan=0.0))
+            if not rows:
+                continue
+            if covs:
+                _pts, qs = self.fm.forecast_with_covariates(
+                    inputs=inputs,
+                    dynamic_numerical_covariates={n: [c[k] for c in covs] for k, n in enumerate(cov_names)},
+                    xreg_mode="xreg + timesfm", force_on_cpu=True)
+                for i, q in zip(rows, qs):
+                    q = np.asarray(q)[:H]
+                    out[ti][i, :, 0], out[ti][i, :, 1] = q[:, self.QI[0]], q[:, self.QI[1]]
+            else:
+                plain += inputs
+                plain_owner += [(ti, i) for i in rows]
+        if plain:
+            # one pooled call for tasks of different H, so always M (1024) steps; sliced to
+            # [:H] below — an 8-step intraday task pays for 1024 steps (cost only)
+            _pts, qs = self.fm.forecast(horizon=M, inputs=list(plain))
+            for (ti, i), q in zip(plain_owner, qs):
+                H = out[ti].shape[1]
+                q = np.asarray(q)[-M:][:H]
+                out[ti][i, :, 0], out[ti][i, :, 1] = q[:, self.QI[0]], q[:, self.QI[1]]
         if self.device == "cuda":
             self.peak_vram_gb = max(self.peak_vram_gb, self.torch.cuda.max_memory_allocated() / 1e9)
         return out
@@ -394,6 +511,7 @@ def get_backend(kind: str) -> _Backend:
     if kind not in _BACKENDS:
         t0 = time.monotonic()
         _BACKENDS[kind] = {"chronos2": ChronosBackend, "timesfm3": TimesFMBackend,
+                           "timesfm25": TimesFM25Backend,
                            "tirex2": TiRex2Backend, "toto2": Toto2Backend,
                            "stub": StubBackend}[kind]()
         print(f"[foundation] loaded {kind} in {time.monotonic() - t0:.1f}s", flush=True)
@@ -517,6 +635,8 @@ class FoundationModel(Model):
     finetune_context: ClassVar[int] = 2048
     finetune_horizon: ClassVar[int] = 384      # ~8 operating days of 15-min slots
     finetune_lr: ClassVar[float] = float(os.environ.get("MLBENCH_FT_LR", "1e-5"))
+    #: "full" or "lora" (chronos-forecasting's own fit(finetune_mode=...))
+    finetune_mode: ClassVar[str] = "full"
 
     def _maybe_finetune(self, origin: Origin, tasks, names):
         """Fine-tune on the series the model is about to forecast from (truth before
@@ -528,12 +648,19 @@ class FoundationModel(Model):
         due = last is None or (origin.date - last).days >= self.finetune_every_days
         if origin.kind == "daily" and due:
             t0 = time.monotonic()
-            self._ft_pipe = self._engine().finetune(
+            eng = self._engine()
+            self._ft_pipe = eng.finetune(
                 tasks, names, prediction_length=self.finetune_horizon, steps=self.finetune_steps,
-                context_length=self.finetune_context, learning_rate=self.finetune_lr, batch_size=64)
+                context_length=self.finetune_context, learning_rate=self.finetune_lr, batch_size=64,
+                mode=self.finetune_mode)
             self._ft_date = origin.date
-            print(f"[fm] {self.scored_name()} fine-tuned at {origin.date} in {time.monotonic() - t0:.0f}s",
-                  flush=True)
+            sec = time.monotonic() - t0
+            self.stats["finetune_calls"] = self.stats.get("finetune_calls", 0) + 1
+            self.stats["finetune_seconds"] = self.stats.get("finetune_seconds", 0.0) + sec
+            torch = getattr(eng, "torch", None)
+            vram = torch.cuda.max_memory_allocated() / 1e9 if torch is not None and torch.cuda.is_available() else 0.0
+            print(f"[fm] {self.scored_name()} fine-tuned ({self.finetune_mode}) at {origin.date} in {sec:.0f}s "
+                  f"vram_peak={vram:.2f}GB", flush=True)
         return getattr(self, "_ft_pipe", None)
 
     def _history(self, origin: Origin, days: int) -> pd.DataFrame:
@@ -767,7 +894,8 @@ class Chronos2NoCov(Chronos2):
 
 
 class TimesFM3(FoundationModel):
-    """TimesFM 3.0 zero-shot, compressed context, no weather. NC-licensed weights."""
+    """TimesFM 3.0 zero-shot, compressed context, no weather. BENCHMARK-ONLY, NON-PRODUCTION:
+    the weights' licence excludes production and end-user use (see the module docstring)."""
     name = "timesfm3"
     backend = "timesfm3"
     intraday = False
@@ -783,6 +911,31 @@ class Chronos2FT(Chronos2):
     benchmark's own history before each origin, refreshed every 28 days."""
     name = "chronos2_ft"
     finetune_every_days = 28
+    daily = False
+
+
+class Chronos2Lora(Chronos2FT):
+    """PAR-1063: a LoRA adapter (peft, r=8, alpha=16, the package default targets) instead
+    of a full fine-tune, everything else as ``chronos2_ft``. Refit every 28 days, not per
+    origin: 231 per-origin fits would add 231 × fit time to a ~12.7 h inference night
+    (see ``--probe``), while 28 days is ~9 fits and the SAME cadence as chronos2_ft, so
+    the pair isolates the adaptation method. Each fit sees truth before its own origin."""
+    name = "chronos2_lora"
+    finetune_mode = "lora"
+
+
+class TimesFM25(FoundationModel):
+    """PAR-1064: TimesFM 2.5 (200M, Apache-2.0) zero-shot, compressed context, the chronos2
+    covariates through XReg (minus day_len_h, whose NaN means "unknown" and would read 0)."""
+    name = "timesfm25"
+    backend = "timesfm25"
+
+
+class TimesFM25Grid(TimesFM25):
+    """Regular 15-min grid (8192 steps = 85 days); TimesFM interpolates the NaN nights."""
+    name = "timesfm25_grid"
+    context_mode = "grid"
+    intraday = False
     daily = False
 
 
@@ -828,4 +981,4 @@ class Toto2Grid(Toto2):
 
 
 VARIANTS = [Chronos2, Chronos2Owx, Chronos2Grid, Chronos2NoCov, TimesFM3, TimesFM3Owx, Chronos2FT,
-            TiRex2, TiRex2Grid, Toto2, Toto2NoCov, Toto2Grid]
+            TiRex2, TiRex2Grid, Toto2, Toto2NoCov, Toto2Grid, Chronos2Lora, TimesFM25, TimesFM25Grid]
