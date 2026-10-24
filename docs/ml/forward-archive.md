@@ -221,7 +221,7 @@ unpaired board (`ScoreAccumulator`) — its per-source MAEs are not the matrix's
 
 **One definition per pooled window (PAR-1024).** `forecast_archive_paired.definition`
 records the scoring definition a row was written under (`PAIRED_DEFINITION`, now
-2; older rows read 1). The matrix, its `since` dates and the Chronos section read
+3 since PAR-1035/1037 — §9.1; older rows read 1). The matrix, its `since` dates and the Chronos section read
 the current definition only, so every live gate restarts at the deploy instead of
 being met on rows scored the old way — except for what the **replay** restores:
 curves live 14 days past their target date, and they are the forecasts as they
@@ -325,8 +325,10 @@ is scored at 12:00 UTC on *D + 1*:
 
 - **D4** optimiser regret: needs the frontend's optimiser objective re-run on
   archived vs true curves; the dayPeak pairwise ordering half is scored here.
-- **D7** day-comparison winner: needs the calendar's per-day levels for a whole
-  month (UC4), which the park-day rows do not cover.
+- **D7** day-comparison winner: built in the paired table since PAR-1037 as the
+  within-park ranking of the dates of a window at one lead (§9.1, question
+  `cal_rank`). Still not built: the calendar's month view (UC4), whose per-day
+  levels the park-day rows do not cover.
 - **UC4** (daily per park out to d365) stays with `prediction_lead_snapshots`.
 - D1 assumes the visitor is at the ride (walk = 0); a walk distribution would
   shift "later" by up to an hour for distant rides.
@@ -515,22 +517,66 @@ matrix's summary and derives its open decisions from named cells of it.
 ### 9.1 Generalised paired scoring
 
 `scorePairedModels` runs inside the existing 12:00 UTC scoring next to
-`scorePairedShadows` and writes into the same `forecast_archive_paired`. Every
-row pairs one model with **`reference = served`** on identical truth slots (or
-ride-days) of the **same origin instant**. No key it writes is one
-`scorePairedShadows` writes (a spec asserts it), so PAR-852's Chronos rows are
-unchanged; the Chronos board section now reads its two models only.
+`scorePairedShadows` and writes into the same `forecast_archive_paired`. No key
+it writes is one `scorePairedShadows` writes (a spec asserts it), so PAR-852's
+Chronos rows are unchanged, and the Chronos board reads only its own two models
+**and its own references** (`served`, `persistence`, `h5`).
 
-| model | served reference | use case × lead | origins |
+**One question, one set of rows (PAR-1035, definition 3).** Before, every model
+was paired with served on its OWN coverage: persistence at every origin, the
+daily shadows only from the 06:00 origin, Chronos only from 10–18 h. `live_h1_2`
+× H5 was then the rope-drop hour of the parks that open before 08:00 (−9.1 min
+on 7 parks), and two cells of one question carried different reference MAEs
+(6.31 vs 6.50). Now a slot or ride-day is paired only where truth, the served
+reference AND every candidate of the question (`PAIRED_QUESTION_MODELS`, per use
+case × lead) have a value, under **`reference = served_joint`**. Every cell of a
+question at a lead is judged on the same rows and shares one reference MAE; a
+spec builds the matrix from the real scorer and asserts it.
+
+| use case × lead | candidates (must all have a value) | served reference | origins |
 | --- | --- | --- | --- |
-| `persistence` (live wait at the origin, held flat) | `park_hourly` | UC1/UC2 slot leads | all |
-| `shadow_h5`, `shadow_h5_routed`, `shadow_peak_scaled`, `chronos2_grid` | `park_hourly` | UC1/UC2 slot leads | 06:00 |
-| `shadow_h5`, `shadow_h5_routed`, `shadow_peak_scaled`, `weekday_avg` | `plan_day` | UC3 dN | 06:00 / 07:00 |
-| the same four + `chronos2_grid` | `plan_day` | `D3` dN: best-time regret per ride-day, both judged on the same slots (`n` = ride-days, Σ\|e\| = Σ regret) | 06:00 / 07:00 |
-| `weekday_avg` | `plan_day` `dayPeak` | `PEAK` dN: \|day peak − truth P90\| per ride-day, `all` and `headliner` | 06:00 / 07:00 |
-| `chronos2` | `park_hourly` | UC1/UC2 — PAR-852's row, read as is | intraday |
+| UC1 `h0-1` | persistence, `chronos2`, `shadow_h5` | `park_hourly` (`park_hourly_incumbent` once Chronos is served) | 10–18 h |
+| UC1 `h1-2`, UC2 `h2-6` | + `shadow_h5_routed` | same | 10–18 h (`h2-6` is therefore 2–4 h) |
+| UC2 `h6-12` | `shadow_h5`, `shadow_h5_routed`, `chronos2_grid` | `park_hourly` | 06:00 |
+| UC3 d0–d5 | `shadow_h5`, routed, `shadow_peak_scaled`, `weekday_avg`, `chronos2_grid` | `plan_day` | 06:00 |
+| UC3 d6, d7, d10 … d60 | the same without Chronos | `plan_day` | 06:00 / 07:00 |
+| D3 d0–d7 / d10–d30 | as UC3 d0–d5 / without Chronos; regret of every candidate and of served on the same slots (`n` = ride-days, Σ\|e\| = Σ regret) | `plan_day` | 06:00 / 07:00 |
+| PEAK dN | `weekday_avg`: \|peak − truth P90\| per ride-day, `all` and `headliner` | `plan_day` `dayPeak`, under **`served_tft` / `served_catboost`** by the model behind the level (PAR-1037) | 06:00 / 07:00 |
+| D7 dN | `weekday_avg` vs served `dayPeak`, headliners whose level is TFT's | `served_tft` | 06:00 / 07:00 |
 
-Segment `all` only (plus `headliner` for PEAK): the matrix shows nothing else.
+The live candidates use, at a 10–18 h origin, the daily curves (H5, routed, the
+old composer, `chronos2_grid`) **issued at or before it** — the 06:00 one: none
+of them reads anything after 06:00, so it is what would be shown at 10:00.
+Persistence is the origin's live wait. At the 06:00 origin there is no Chronos
+live curve, so it feeds no `h0-1` … `h2-6` row any more; and since almost no
+park has a live wait at 06:00, `today_h6_12` no longer shows persistence.
+A candidate that is missing (a new ride with no weekday average, a ride without
+an old-composer curve) removes that ride-day from every cell of its question —
+the price of comparing like with like.
+
+**Direct comparisons** (`PAIRED_PAIRWISE`) on the same joint rows:
+`chronos2` / `chronos2_grid` vs `shadow_h5` and `shadow_h5_routed` vs
+`shadow_h5`, with the second model as `reference`.
+
+**Calendar (PAR-1037).** TFT and CatBoost never level the same ride-day (the
+served daily read takes TFT where it has a row, CatBoost otherwise), so neither
+can be paired with the other. The day-peak rows are split by the level's model,
+so the TFT-served questions compare with TFT's days only and the 90-day
+question (`cal_far_90`, served by CatBoost beyond TFT's 60 days) with
+CatBoost's; CatBoost's live figure is its day peak against the weekday average
+on the days it levelled, shown under `comparisons` beside TFT's — two different
+sets of days, never subtracted.
+
+**D7 rows are levels, not errors**: per park, date and lead `n` headliners,
+`sae_model` = Σ weekday-average peak, `sae_ref` = Σ served `dayPeak`,
+`se_model` = `se_ref` = Σ truth P90. The read path (`d7Aggregates`) orders a
+park's dates within the window at each lead: every two dates whose realised
+level (mean headliner truth P90) differs by ≥ 5 min are a pair, wrongly ordered
+when the forecast's order disagrees (a predicted tie counts half). The cell is
+the share of wrongly ordered pairs in percent, weekday average minus served,
+lower is better (`metric.unit = "rate"`). The headliner set is the one with all
+three values on each date, so it can differ between dates.
+
 The routed H5 curve falls back to plain H5 where it was not archived, as in the
 scores.
 
@@ -549,7 +595,10 @@ and scoring date, measured **15 ms** on production for Europa-Park (~95 rides ×
 
 **Size.** ~165 rows per park-day (segment `all`), ~21 k a day over ~126 parks,
 ~2.5 M rows / ~330 MB at the 120-day retention (estimate, not measured). The
-hourly capture is untouched: everything here happens in the scoring job.
+joint pairing of PAR-1035 drops the 06:00-origin live rows and adds up to two
+pairwise rows per question and lead plus ~11 D7 rows per park-day — about the
+same count (not measured). The hourly capture is untouched: everything here
+happens in the scoring job.
 
 ### 9.2 Questions
 
@@ -557,18 +606,25 @@ hourly capture is untouched: everything here happens in the scoring job.
 | --- | --- | --- | --- | --- | --- |
 | `live_h0_1` | live | Wartezeit in der nächsten Stunde | `pcn` | UC1 h0-1 | slot MAE |
 | `live_h1_2` | live | Wartezeit in 1 bis 2 Stunden | `pcn` | UC1 h1-2 | slot MAE |
-| `today_h2_6` | today | Heute, 2 bis 6 Stunden später | `pcn` | UC2 h2-6 | slot MAE |
+| `today_h2_6` | today | Heute, 2 bis 6 Stunden später | `pcn` | UC2 h2-6 (2–4 h on the joint rows) | slot MAE |
 | `today_h6_12` | today | Heute, 6 bis 12 Stunden später | `pcn` | UC2 h6-12 | slot MAE |
 | `plan_d0_1` | planner | Geplanter Tag ist heute oder morgen | `served` | UC3 d0, d1 | slot MAE |
 | `plan_d2_5` | planner | Geplanter Tag ist in 2 bis 5 Tagen | `served` | UC3 d2–d5 | slot MAE |
 | `plan_d6_60` | planner | Geplanter Tag ist in 6 Tagen bis 2 Monaten | `served` | UC3 d6, d7, d10, d14, d21, d30, d45, d60 | slot MAE |
 | `plan_besttime` | planner | Beste Besuchszeit (bis 6 Wochen) | `served` | D3 d0–d7, d10, d14, d21, d30 | best-time regret |
-| `cal_busier` | calendar | Welcher Tag ist voller? | `tft` | PEAK d0–d7, d10, d14, d21 (headliners) | day-peak error |
-| `cal_far` | calendar | Kalendertage 1 bis 3 Monate voraus vergleichen | `tft` | PEAK d30, d45, d60, d90 (headliners) | day-peak error |
+| `cal_rank` | calendar | Welcher Tag ist voller? | `tft` | D7 d0–d7, d10, d14, d21 (headliners, TFT level) | wrongly ordered day pairs, % |
+| `cal_busier` | calendar | Wie hoch wird die Tagesspitze? | `tft` | PEAK d0–d7, d10, d14, d21 (headliners, TFT level) | day-peak error |
+| `cal_far` | calendar | Kalendertage 1 bis 2 Monate voraus vergleichen | `tft` | PEAK d30, d45, d60 (headliners, TFT level) | day-peak error |
+| `cal_far_90` | calendar | Kalendertage 3 Monate voraus vergleichen | `catboost` | PEAK d90 (headliners, CatBoost level) | day-peak error |
 
 Every question also carries `leadLabel`, the forecast distance in plain German
 ("Prognose 2–5 Tage vorher, morgens um 06:05 gespeichert"). Every live metric
-is minutes, lower is better (`metric.unit = "min"`). The calendar questions
+is minutes, lower is better (`metric.unit = "min"`), except `cal_rank` (`rate`,
+percentage points). `cal_busier` carried the label "Welcher Tag ist voller?"
+until PAR-1037 although it measured a per-ride day-peak error; that question is
+`cal_rank` now. `cal_far` stopped at d60 and d90 moved to `cal_far_90`, because
+TFT levels the calendar up to 60 days and the d90 rows were CatBoost's while the
+question named TFT as served. The calendar questions
 read the planner's per-ride `dayPeak` — built on the same daily level the
 calendar reads (TFT ≤ 60 days, CatBoost beyond) — against the truth P90; the
 calendar's crowd level itself is not archived per model. **CatBoost** and
@@ -579,10 +635,29 @@ another unit than the live figure.
 
 ### 9.3 Cells
 
-Per cell the question's leads × the column's archived model names are pooled
-per park (Σ minutes, then divide once) and PAR-852's park-cluster bootstrap
-(1,000 reps, per-cell seed) draws the 95 % CI of `diff = modelMae −
-referenceMae`, **negative = better than served**.
+Per cell and lead the column's archived model names are pooled per park (Σ
+minutes, then divide once); **across the leads of a question every lead weighs
+the same** (PAR-1036 — pooled by `n`, `plan_d6_60` was de facto d6/d7, the only
+leads with rows in its first two months). The park-cluster bootstrap (1,000
+reps, per-cell seed) resamples parks and recomputes that lead-weighted figure,
+and draws the 95 % CI of `diff = modelMae − referenceMae`, **negative = better
+than served**. `live.leads` carries the per-lead figures. A cell's leads are the
+question's leads at which one of its models is a candidate (`cellLeads`: the
+best-time Chronos cell is d0–d7), and **the gate holds only when every one of
+them meets it on its own**; `days` and `parks` are the weakest lead's, 0 while a
+lead has no rows. The "frühestens" date then still counts from the weakest
+lead's days, so for a lead without any row yet (d45/d60 in the first weeks) it is
+optimistic.
+
+**Two-way bootstrap, built but not the gate (PAR-1036).** `blockBootstrap(…,
+{ twoWay: true })` resamples parks AND dates independently and weights each
+park × date cell by the product of the two multiplicities (pigeonhole
+bootstrap): a day that moved every park at once is one draw, not ten. With one
+lead and `twoWay: false` it is the park-cluster bootstrap draw for draw (a spec
+pins it). It needs one row per park × date, which the matrix query does not
+read (it pools per park); switching the gate to it is the owner's call, as is
+a fixed evaluation date or a multiplicity correction over the ~45 cells — see
+the PR.
 
 State rule: the served model is `today`. A live comparison that meets the gate
 (≥ 10 parks with ≥ 14 scored dates **each** — `gateDays`, the 10th-best park's
@@ -608,6 +683,9 @@ that model × question over the whole table (cached per scoring run). `live` is
 null with fewer than two parks (no CI). `note` is generated from the numbers
 ("1,3 Minuten besser als heute, sicher. 18 Tage, 34 Parks."); below the gate it
 is the offline note plus the live figures so far.
+
+`comparisons` (per question, optional): the direct comparisons of §9.1 with the
+same pooling and CI, never a state.
 
 **Offline verdicts** (`offline-model-verdicts.json`): per question × model
 `{ state, diff?, ciLow?, ciHigh?, source, period?, note, expectedBy? }`, and

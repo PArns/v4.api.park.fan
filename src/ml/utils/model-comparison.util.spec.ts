@@ -7,6 +7,8 @@ import {
   PairedAggregate,
   buildModelComparison,
   cellChecks,
+  cellLeads,
+  d7Aggregates,
   cellExpectedBy,
   cellNote,
   cellState,
@@ -14,6 +16,11 @@ import {
   poolCell,
 } from "./model-comparison.util";
 import verdictsJson from "../data/offline-model-verdicts.json";
+import {
+  ArchivedCurve,
+  PairedAccumulator,
+  scorePairedModels,
+} from "./forecast-archive-scoring.util";
 
 const live = (o: Partial<LiveComparison> = {}): LiveComparison => ({
   n: 5000,
@@ -102,6 +109,30 @@ describe("poolCell", () => {
     ];
     expect(poolCell(mixed, 1)!.days).toBe(14);
     expect(poolCell(mixed, 1)!.enoughData).toBe(true);
+  });
+
+  it("weighs every lead the same, whatever its number of rows (PAR-1036)", () => {
+    // d2: many slots, 2 minutes better; d3: few slots, no difference.
+    const d2 = rows(12, 14, { n: 100, a: 800, b: 1000 });
+    const d3 = rows(12, 14, { n: 1, a: 10, b: 10 }, { lead: "d3" });
+    const c = poolCell([...d2, ...d3], 1, ["d2", "d3"])!;
+    // Pooled by n this would read about −2.0; equal weight is the mean.
+    const d2Diff = c.leads!.find((l) => l.lead === "d2")!.diff;
+    const d3Diff = c.leads!.find((l) => l.lead === "d3")!.diff;
+    expect(c.diff).toBeCloseTo((d2Diff + d3Diff) / 2, 1);
+    expect(c.diff).toBeGreaterThan(-1.5);
+    expect(c.enoughData).toBe(true);
+  });
+
+  it("passes the gate only when every lead of the cell does", () => {
+    const d6 = rows(12, 14, { n: 10, a: 80, b: 100 }, { lead: "d6" });
+    // d60 has no rows yet: the cell is d6 alone and must not be decided.
+    const c = poolCell(d6, 1, ["d6", "d60"])!;
+    expect(c.enoughData).toBe(false);
+    expect(c.days).toBe(0);
+    expect(c.leads!.map((l) => l.lead)).toEqual(["d6"]);
+    const thin = rows(12, 5, { n: 10, a: 80, b: 100 }, { lead: "d60" });
+    expect(poolCell([...d6, ...thin], 1, ["d6", "d60"])!.days).toBe(5);
   });
 
   it("has no CI with a single park and nothing with no slots", () => {
@@ -316,7 +347,7 @@ describe("buildModelComparison", () => {
   const build = (aggregates: PairedAggregate[]) =>
     buildModelComparison({
       aggregates,
-      since: new Map([["UC3|d2|shadow_h5|all", "2026-10-01"]]),
+      since: new Map([["UC3|d2|shadow_h5|served_joint|all", "2026-10-01"]]),
       verdicts,
       window: { days: 28, firstDate: "2026-10-01", lastDate: "2026-10-14" },
       today: "2026-10-15",
@@ -338,6 +369,8 @@ describe("buildModelComparison", () => {
       "planner",
       "planner",
       "planner",
+      "calendar",
+      "calendar",
       "calendar",
       "calendar",
     ]);
@@ -423,7 +456,11 @@ describe("buildModelComparison", () => {
   });
 
   it("turns a confirmed live win into `better` with its numbers and since", () => {
-    const res = build(rows(12, 14, { n: 10, a: 80, b: 100 }));
+    const res = build(
+      ["d2", "d3", "d4", "d5"].flatMap((lead) =>
+        rows(12, 14, { n: 10, a: 80, b: 100 }, { lead }),
+      ),
+    );
     const cell = res.questions.find((x) => x.id === "plan_d2_5")!.cells.h5;
     expect(cell.state).toBe("better");
     expect(cell.checks.live).toBe("yes");
@@ -437,5 +474,243 @@ describe("buildModelComparison", () => {
       /Minuten besser als heute, sicher\. 14 Tage je Park, 12 Parks\./,
     );
     expect(cell.expectedBy).toBeNull();
+  });
+});
+
+describe("one question, one set of rows (PAR-1035)", () => {
+  const T0 = Date.parse("2026-10-08T08:00:00Z");
+  const MIN = 60_000;
+  const SLOT = 15 * MIN;
+  const curve = (
+    surface: ArchivedCurve["surface"],
+    waits: (number | null)[],
+    extra: Partial<ArchivedCurve> = {},
+  ): ArchivedCurve => ({
+    attractionId: "a1",
+    surface,
+    originKind: "daily",
+    originAt: T0 - 125 * MIN,
+    leadDays: 0,
+    slotStart: T0,
+    slotMinutes: 15,
+    waits,
+    sources: "c".repeat(waits.length),
+    bands: null,
+    dayPeak: 45,
+    expectedError: null,
+    rideQ90: 50,
+    isHeadliner: true,
+    levelSource: "tft",
+    ...extra,
+  });
+  const clock = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+
+  /** Two parks, two days, every surface — scored by the real scorer. */
+  function aggregates(): PairedAggregate[] {
+    const out: PairedAggregate[] = [];
+    for (const [p, shift] of [
+      ["p1", 0],
+      ["p2", 10],
+    ] as const) {
+      for (const date of ["2026-10-08", "2026-10-09"]) {
+        const tv = [30, 30, 40, 40, 50, 50, 20, 20].map((v) => v + shift);
+        const truth = new Map([
+          ["a1", new Map(tv.map((v, i) => [T0 + i * SLOT, v]))],
+        ]);
+        const intraday = { originKind: "intraday" as const, originAt: T0 };
+        // Chronos misses one slot and H5 another: each candidate's own
+        // coverage differs, the paired rows must not.
+        const chronos: (number | null)[] = [35, null, 35, 35, 35, 35, 35, 35];
+        const h5: (number | null)[] = [30, 30, null, 40, 50, 50, 20, 20];
+        const curves = [
+          curve("park_hourly", Array(8).fill(30)),
+          curve("plan_day", [30, 45], { slotMinutes: 60 }),
+          curve("plan_day_shadow_h5", h5),
+          curve("plan_day_shadow_peak", [30, 30, 30, 30, 45, 45, 45, 45]),
+          curve("chronos_grid", Array(8).fill(30)),
+          curve("park_hourly", Array(8).fill(30), {
+            ...intraday,
+            liveWait: 25,
+          }),
+          curve("chronos_live", chronos, intraday),
+        ];
+        const acc = new PairedAccumulator();
+        scorePairedModels(curves, truth, acc, {
+          targetDate: "2026-10-08",
+          clock,
+          history: new Map([
+            [
+              "a1",
+              new Map([
+                [
+                  "2026-10-01",
+                  new Map(
+                    Array.from({ length: 8 }, (_, i) => [
+                      clock(T0 + i * SLOT),
+                      30,
+                    ]),
+                  ),
+                ],
+                [
+                  "2026-09-24",
+                  new Map(
+                    Array.from({ length: 8 }, (_, i) => [
+                      clock(T0 + i * SLOT),
+                      40,
+                    ]),
+                  ),
+                ],
+              ]),
+            ],
+          ]),
+        });
+        for (const e of acc.entries()) {
+          out.push({ ...e, parkId: p, dates: [date] });
+        }
+      }
+    }
+    return out;
+  }
+
+  it("gives every cell of a question the same reference MAE, lead by lead", () => {
+    const res = buildModelComparison({
+      aggregates: aggregates(),
+      since: new Map(),
+      verdicts: verdictsJson as unknown as OfflineVerdictFile,
+      window: { days: 28, firstDate: "2026-10-08", lastDate: "2026-10-09" },
+      today: "2026-10-10",
+      generatedAt: "2026-10-10T08:00:00.000Z",
+    });
+    let checked = 0;
+    for (const question of res.questions) {
+      const lives = Object.values(question.cells)
+        .map((c) => c.live)
+        .filter((l) => l !== null);
+      if (lives.length < 2) continue;
+      checked++;
+      const byLead = new Map<string, Set<number>>();
+      for (const l of lives) {
+        for (const x of l.leads ?? []) {
+          const set = byLead.get(x.lead) ?? new Set<number>();
+          set.add(x.referenceMae);
+          byLead.set(x.lead, set);
+        }
+      }
+      for (const [lead, set] of byLead) {
+        expect({ q: question.id, lead, refs: [...set] }).toEqual({
+          q: question.id,
+          lead,
+          refs: [[...set][0]],
+        });
+      }
+      // Cells covering the same leads share the question's reference MAE.
+      expect(new Set(lives.map((l) => l.referenceMae)).size).toBe(1);
+    }
+    // live_h0_1, live_h1_2, plan_d0_1, plan_besttime at least.
+    expect(checked).toBeGreaterThanOrEqual(4);
+    // …and the direct comparison sits on the same rows.
+    const live = res.questions.find((x) => x.id === "live_h0_1")!;
+    const pair = live.comparisons!.find((c) => c.model === "chronos")!;
+    expect(pair.live!.modelMae).toBe(live.cells.chronos.live!.modelMae);
+    expect(pair.live!.referenceMae).toBe(live.cells.h5.live!.modelMae);
+  });
+});
+
+describe("calendar questions (PAR-1037)", () => {
+  const q = (id: string) => COMPARISON_QUESTIONS.find((x) => x.id === id)!;
+  it("compares TFT's days with TFT and CatBoost's with CatBoost", () => {
+    expect(q("cal_busier").reference).toBe("served_tft");
+    expect(q("cal_far").leads).toEqual(["d30", "d45", "d60"]);
+    expect(q("cal_far_90")).toMatchObject({
+      servedModel: "catboost",
+      leads: ["d90"],
+      reference: "served_catboost",
+    });
+    expect(q("cal_rank")).toMatchObject({
+      label: "Welcher Tag ist voller?",
+      useCase: "D7",
+      unit: "rate",
+    });
+  });
+
+  it("gives CatBoost a live figure against the weekday average on its own days", () => {
+    const agg = (reference: string, a: number, b: number) =>
+      Array.from({ length: 12 }, (_, p) => ({
+        useCase: "PEAK",
+        lead: "d3",
+        model: "weekday_avg",
+        reference,
+        segment: "headliner",
+        parkId: `p${p}`,
+        dates: ["2026-10-08"],
+        n: 10,
+        saeModel: a + p,
+        saeRef: b,
+      }));
+    const res = buildModelComparison({
+      aggregates: [
+        ...agg("served_catboost", 100, 60),
+        ...agg("served_tft", 90, 50),
+      ],
+      since: new Map(),
+      verdicts: verdictsJson as unknown as OfflineVerdictFile,
+      window: { days: 28, firstDate: "2026-10-08", lastDate: "2026-10-08" },
+      today: "2026-10-09",
+      generatedAt: "2026-10-09T08:00:00.000Z",
+    });
+    const busier = res.questions.find((x) => x.id === "cal_busier")!;
+    const cb = busier.comparisons!.find((c) => c.model === "catboost")!;
+    // Stored as wkd vs CatBoost; shown as CatBoost vs wkd: 6.0 vs ~15.6.
+    expect(cb.reference).toBe("wkd");
+    expect(cb.live!.modelMae).toBe(6);
+    expect(cb.live!.diff).toBeLessThan(0);
+    // The served TFT cell's wkd column reads TFT's days only.
+    expect(busier.cells.wkd.live!.referenceMae).toBe(5);
+    expect(busier.cells.catboost.live).toBeNull();
+  });
+
+  it("orders a park's days: D7 counts wrongly ordered day pairs, ties half", () => {
+    const row = (date: string, wkd: number, served: number, truth: number) => ({
+      parkId: "p1",
+      lead: "d3",
+      date,
+      n: 2,
+      sumModel: 2 * wkd,
+      sumRef: 2 * served,
+      sumTruth: 2 * truth,
+    });
+    const out = d7Aggregates([
+      row("2026-10-01", 30, 40, 40),
+      row("2026-10-02", 30, 50, 60), // truth up
+      row("2026-10-03", 40, 30, 20), // truth down
+      row("2026-10-04", 30, 40, 42), // within 5 min of 10-01 → that pair skipped
+    ]);
+    const sum = (k: "n" | "saeModel" | "saeRef") =>
+      out.reduce((s, a) => s + a[k], 0);
+    // Pairs: (01,02) (01,03) (02,03) (02,04) (03,04) — (01,04) is under 5 min.
+    expect(sum("n")).toBe(5);
+    // Served orders all five the way they turned out.
+    expect(sum("saeRef")).toBe(0);
+    // wkd: (01,02) tie ½, (01,03) 40>30 but truth down → 1, (02,03) 1,
+    // (02,04) tie ½, (03,04) 30<40 but truth up → 1 → 4 of 5, in percent.
+    expect(sum("saeModel")).toBe(400);
+    // Every date that took part is a date of the gate.
+    expect(new Set(out.flatMap((a) => a.dates)).size).toBe(4);
+  });
+
+  it("asks the best-time Chronos cell only for the leads Chronos is archived at", () => {
+    expect(cellLeads(q("plan_besttime"), ["chronos2_grid"])).toEqual([
+      "d0",
+      "d1",
+      "d2",
+      "d3",
+      "d4",
+      "d5",
+      "d6",
+      "d7",
+    ]);
+    expect(cellLeads(q("plan_besttime"), ["shadow_h5"])).toEqual(
+      q("plan_besttime").leads,
+    );
   });
 });

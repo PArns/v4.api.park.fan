@@ -963,6 +963,36 @@ export class PairedAccumulator {
     this.rows.set(key, row);
   }
 
+  /**
+   * Raw sums instead of errors, for rows whose columns carry levels (D7):
+   * Σ pred → sae_model, Σ ref → sae_ref, Σ truth → se_model and se_ref.
+   */
+  addSums(
+    useCase: string,
+    lead: string,
+    model: string,
+    reference: string,
+    segment: string,
+    pred: number,
+    ref: number,
+    truth: number,
+  ): void {
+    const key = [useCase, lead, model, reference, segment].join("|");
+    const row = this.rows.get(key) ?? {
+      n: 0,
+      saeModel: 0,
+      saeRef: 0,
+      seModel: 0,
+      seRef: 0,
+    };
+    row.n += 1;
+    row.saeModel += pred;
+    row.saeRef += ref;
+    row.seModel += truth;
+    row.seRef += truth;
+    this.rows.set(key, row);
+  }
+
   entries(): Array<
     {
       useCase: string;
@@ -1071,6 +1101,7 @@ export function scorePairedShadows(
  */
 export const PAIRED_MODELS = {
   persistence: "persistence",
+  chronosLive: "chronos2",
   shadowH5: "shadow_h5",
   shadowRouted: "shadow_h5_routed",
   shadowPeak: "shadow_peak_scaled",
@@ -1081,13 +1112,6 @@ export const PAIRED_MODELS = {
 /** Ride-day use cases of the paired table besides the slot ones (UC1/2/3). */
 export const PAIRED_BEST_TIME_USE_CASE = "D3";
 export const PAIRED_PEAK_USE_CASE = "PEAK";
-
-const PAIRED_SHADOW_NAMES: Partial<Record<ArchiveSurface, string>> = {
-  plan_day_shadow_h5: PAIRED_MODELS.shadowH5,
-  plan_day_shadow_routed: PAIRED_MODELS.shadowRouted,
-  plan_day_shadow_peak: PAIRED_MODELS.shadowPeak,
-  chronos_grid: PAIRED_MODELS.chronosGrid,
-};
 
 /**
  * The weekday average's inputs for one park and target date: the rollup per
@@ -1138,25 +1162,128 @@ export function weekdayAverageArchived(
 }
 
 /**
- * Generalised paired scoring (PAR-855): every model the admin comparison
- * shows, each paired with WHAT IS SERVED for that question on identical slots
- * or ride-days of the same origin instant. Written beside PAR-852's
- * {@link scorePairedShadows} rows, never over them: each (use case, lead,
- * model, reference, segment) key below is produced by exactly one branch, and
- * none of them is a key `scorePairedShadows` writes.
+ * The reference the admin matrix reads (PAR-1035): what is served, on the
+ * slots (or ride-days) where truth AND every candidate of that question has a
+ * value. A name of its own, so these rows never meet PAR-852's `served` rows
+ * of the same use case × lead × model, which pair each shadow on its own
+ * coverage and feed the Chronos board.
+ */
+export const PAIRED_JOINT_REFERENCE = "served_joint";
+
+/**
+ * PEAK and D7 rows by the model behind the served day level (PAR-1037): the
+ * calendar questions compare with TFT where TFT produced the level and with
+ * CatBoost where CatBoost did — never with a mix of the two.
+ */
+export const PAIRED_LEVEL_REFERENCES: Record<string, string> = {
+  tft: "served_tft",
+  catboost: "served_catboost",
+};
+
+/**
+ * Within-park day ranking (D7, PAR-1037). Its rows are not error sums: per
+ * park, date and lead, over the headliners whose served level came from TFT
+ * and that have a weekday-average peak and a truth P90 — `n` rides,
+ * `sae_model` = Σ weekday-average peak, `sae_ref` = Σ served dayPeak,
+ * `se_model` = `se_ref` = Σ truth P90. The ranking across dates is computed
+ * at read time (`d7Aggregates`), which is why the per-date levels are kept.
+ */
+export const PAIRED_D7_USE_CASE = "D7";
+
+const PLANNER_CANDIDATES = [
+  PAIRED_MODELS.shadowH5,
+  PAIRED_MODELS.shadowRouted,
+  PAIRED_MODELS.shadowPeak,
+  PAIRED_MODELS.weekdayAvg,
+];
+
+function buildQuestionModels(): Record<string, string[]> {
+  const t: Record<string, string[]> = {
+    "UC1|h0-1": [
+      PAIRED_MODELS.persistence,
+      PAIRED_MODELS.chronosLive,
+      PAIRED_MODELS.shadowH5,
+    ],
+    "UC1|h1-2": [
+      PAIRED_MODELS.persistence,
+      PAIRED_MODELS.chronosLive,
+      PAIRED_MODELS.shadowH5,
+      PAIRED_MODELS.shadowRouted,
+    ],
+    "UC2|h2-6": [
+      PAIRED_MODELS.persistence,
+      PAIRED_MODELS.chronosLive,
+      PAIRED_MODELS.shadowH5,
+      PAIRED_MODELS.shadowRouted,
+    ],
+    "UC2|h6-12": [
+      PAIRED_MODELS.shadowH5,
+      PAIRED_MODELS.shadowRouted,
+      PAIRED_MODELS.chronosGrid,
+    ],
+  };
+  // chronos_grid is archived for d0–d7 only; plan_d6_60 shows no Chronos.
+  for (const d of [0, 1, 2, 3, 4, 5, 6, 7]) {
+    t[`UC3|d${d}`] =
+      d <= 5
+        ? [...PLANNER_CANDIDATES, PAIRED_MODELS.chronosGrid]
+        : PLANNER_CANDIDATES;
+    t[`D3|d${d}`] = [...PLANNER_CANDIDATES, PAIRED_MODELS.chronosGrid];
+  }
+  for (const d of [10, 14, 21, 30, 45, 60]) {
+    t[`UC3|d${d}`] = PLANNER_CANDIDATES;
+    if (d <= 30) t[`D3|d${d}`] = PLANNER_CANDIDATES;
+  }
+  return t;
+}
+
+/**
+ * Per matrix question (use case × lead): the candidates whose cells it shows
+ * (PAR-1035). A slot / ride-day is paired only when every one of them has a
+ * value there, so all cells of one question at one lead are judged on the
+ * SAME rows and share one reference MAE. The matrix questions
+ * (`model-comparison.util.ts`) must name the same models; a spec pins it.
+ */
+export const PAIRED_QUESTION_MODELS: Record<string, string[]> =
+  buildQuestionModels();
+
+/**
+ * Direct candidate-vs-candidate rows on the same joint rows (PAR-1035):
+ * `model` against `reference`, written wherever both are candidates.
+ */
+export const PAIRED_PAIRWISE: Array<[string, string]> = [
+  [PAIRED_MODELS.chronosLive, PAIRED_MODELS.shadowH5],
+  [PAIRED_MODELS.chronosGrid, PAIRED_MODELS.shadowH5],
+  [PAIRED_MODELS.shadowRouted, PAIRED_MODELS.shadowH5],
+];
+
+/**
+ * The paired scoring the admin matrix reads (PAR-855, joint since PAR-1035):
+ * every candidate of a question against WHAT IS SERVED for it, on the slots
+ * or ride-days where truth, the served reference and EVERY candidate of that
+ * question ({@link PAIRED_QUESTION_MODELS}) have a value. Reference
+ * {@link PAIRED_JOINT_REFERENCE}; segment `all`.
  *
- * | model | reference | use case × lead | origins |
- * |---|---|---|---|
- * | `persistence` (live wait at the origin, held flat) | `served` = park_hourly | UC1/UC2 slot leads | all |
- * | `shadow_h5`, `shadow_h5_routed`, `shadow_peak_scaled`, `chronos2_grid` | `served` = park_hourly | UC1/UC2 slot leads | 06:00 |
- * | `shadow_h5`, `shadow_h5_routed`, `shadow_peak_scaled`, `weekday_avg` | `served` = plan_day | UC3 dN | 06:00 / 07:00 |
- * | the same four + `chronos2_grid` | `served` = plan_day | D3 dN: best-time regret per ride-day, both on the same slots | 06:00 / 07:00 |
- * | `weekday_avg` | `served` = plan_day dayPeak | PEAK dN: \|dayPeak − truth P90\| per ride-day (`all`, `headliner`) | 06:00 / 07:00 |
+ * - UC1/UC2 slot leads: at every `park_hourly` origin (the incumbent surface
+ *   once Chronos is served, PAR-911). Persistence is that origin's live wait;
+ *   `chronos2` the `chronos_live` curve of the same origin; the daily curves
+ *   (H5, routed, old composer, `chronos2_grid`) are the newest of their
+ *   surface issued at or before the origin — at 10:00 the 06:00 curve, which
+ *   is what would be shown at 10:00 (none of them reads anything after 06:00).
+ *   Since `chronos2` exists at the 10–18 h origins only, the 06:00 origin no
+ *   longer feeds `h0-1` … `h2-6`: its first hours are rope drop at the parks
+ *   open that early, which is what made H5 look 9 minutes better on 7 parks.
+ * - UC3 dN slot MAE and D3 dN best-time regret against `plan_day` of the same
+ *   06:00 / 07:00 origin; D3's regret of every candidate and of served is
+ *   taken on the same slots.
+ * - PEAK dN: |peak − truth P90| of the weekday average against the served
+ *   `dayPeak`, under {@link PAIRED_LEVEL_REFERENCES} by the level's model
+ *   (`all`, `headliner`).
+ * - D7 dN: the per-date level sums of {@link PAIRED_D7_USE_CASE}.
  *
- * Segment `all` only (and `headliner` for PEAK, which the calendar reads):
- * the matrix shows nothing else, and three segments would triple the rows.
- * The routed H5 curve falls back to plain H5 where it was not archived, as in
- * {@link scoreParkDay}.
+ * Plus {@link PAIRED_PAIRWISE} on the same joint rows. No key here is one
+ * {@link scorePairedShadows} writes. The routed H5 curve falls back to plain
+ * H5 where it was not archived, as in {@link scoreParkDay}.
  */
 export function scorePairedModels(
   curves: ArchivedCurve[],
@@ -1165,144 +1292,214 @@ export function scorePairedModels(
   weekday: WeekdayAverageInput | null = null,
 ): void {
   const byKey = new Map<string, ArchivedCurve>();
+  const daily = new Map<string, ArchivedCurve[]>();
   for (const c of curves) {
     byKey.set(`${c.originAt}|${c.attractionId}|${c.surface}`, c);
-  }
-  const list = [...curves];
-  for (const c of curves) {
-    if (c.surface !== "plan_day_shadow_h5") continue;
-    const k = `${c.originAt}|${c.attractionId}|plan_day_shadow_routed`;
-    if (!byKey.has(k)) list.push({ ...c, surface: "plan_day_shadow_routed" });
+    if (c.originKind === "intraday") continue;
+    const k = `${c.attractionId}|${c.surface}`;
+    const list = daily.get(k) ?? [];
+    list.push(c);
+    daily.set(k, list);
   }
   const sibling = (c: ArchivedCurve, surface: ArchiveSurface) =>
     byKey.get(`${c.originAt}|${c.attractionId}|${surface}`);
-
-  const pairSlots = (
-    model: ArchivedCurve,
-    ref: ArchivedCurve,
-    truthSlots: Map<number, number>,
-    name: string,
-    slotLeads: boolean,
+  /** The newest daily curve of a surface issued at or before `at`. */
+  const newest = (
+    attractionId: string,
+    surface: ArchiveSurface,
+    at: number,
   ) => {
+    let best: ArchivedCurve | undefined;
+    for (const c of daily.get(`${attractionId}|${surface}`) ?? []) {
+      if (c.originAt <= at && (!best || c.originAt > best.originAt)) best = c;
+    }
+    return best;
+  };
+  const routedOf = (h5: ArchivedCurve | undefined) =>
+    h5 ? (sibling(h5, "plan_day_shadow_routed") ?? h5) : undefined;
+
+  /** Adds every candidate against served, and the pairwise rows. */
+  const addJoint = (
+    useCase: string,
+    lead: string,
+    models: string[],
+    values: number[],
+    served: number,
+    truthValue: number,
+  ) => {
+    models.forEach((m, i) =>
+      acc.add(
+        useCase,
+        lead,
+        m,
+        PAIRED_JOINT_REFERENCE,
+        "all",
+        values[i],
+        served,
+        truthValue,
+      ),
+    );
+    for (const [m, ref] of PAIRED_PAIRWISE) {
+      const i = models.indexOf(m);
+      const j = models.indexOf(ref);
+      if (i < 0 || j < 0) continue;
+      acc.add(useCase, lead, m, ref, "all", values[i], values[j], truthValue);
+    }
+  };
+
+  // UC1 / UC2: one pass per served hourly origin.
+  for (const hourly of curves) {
+    if (hourly.surface !== "park_hourly") continue;
+    const truthSlots = truth.get(hourly.attractionId);
+    if (!truthSlots || truthSlots.size === 0) continue;
+    const ref = sibling(hourly, "park_hourly_incumbent") ?? hourly;
+    const at = hourly.originAt;
+    const id = hourly.attractionId;
+    const h5 = newest(id, "plan_day_shadow_h5", at);
+    const sources: Record<string, ArchivedCurve | undefined> = {
+      [PAIRED_MODELS.chronosLive]: sibling(hourly, "chronos_live"),
+      [PAIRED_MODELS.shadowH5]: h5,
+      [PAIRED_MODELS.shadowRouted]: routedOf(h5),
+      [PAIRED_MODELS.shadowPeak]: newest(id, "plan_day_shadow_peak", at),
+      [PAIRED_MODELS.chronosGrid]: newest(id, "chronos_grid", at),
+    };
+    const anchor = hourly.liveWait;
     for (const [slot, value] of truthSlots) {
-      const m = valueAt(model, slot);
-      if (!m) continue;
       const r = valueAt(ref, slot);
       if (!r) continue;
-      let useCase = "UC3";
-      let lead = dayLead(model.leadDays);
-      if (slotLeads) {
-        const bucket = slotLeadBucket((slot - model.originAt) / 60_000);
-        if (!bucket) continue;
-        useCase = bucket.useCase;
-        lead = bucket.lead;
+      const bucket = slotLeadBucket((slot - at) / 60_000);
+      if (!bucket) continue;
+      const models = PAIRED_QUESTION_MODELS[`${bucket.useCase}|${bucket.lead}`];
+      if (!models) continue;
+      const values: number[] = [];
+      for (const m of models) {
+        const v =
+          m === PAIRED_MODELS.persistence
+            ? (anchor ?? null)
+            : (() => {
+                const c = sources[m];
+                return c ? (valueAt(c, slot)?.wait ?? null) : null;
+              })();
+        if (v === null) break;
+        values.push(v);
       }
-      acc.add(useCase, lead, name, "served", "all", m.wait, r.wait, value);
+      if (values.length !== models.length) continue;
+      addJoint(bucket.useCase, bucket.lead, models, values, r.wait, value);
     }
-  };
+  }
 
-  const pairBestTime = (
-    model: ArchivedCurve,
-    served: ArchivedCurve,
-    truthSlots: Map<number, number>,
-    name: string,
-  ) => {
-    const a: Compared[] = [];
-    const b: Compared[] = [];
-    for (const [slot, value] of truthSlots) {
-      const m = valueAt(model, slot);
-      const r = valueAt(served, slot);
-      if (!m || !r) continue;
-      a.push({ slot, pred: m.wait, truth: value, src: "", band: null });
-      b.push({ slot, pred: r.wait, truth: value, src: "", band: null });
-    }
-    const om = bestTimeOutcome(a);
-    const os = bestTimeOutcome(b);
-    if (!om || !os) return;
-    // n = 1 ride-day; Σ|e| of each is its regret (regret ≥ 0, truth 0).
-    acc.add(
-      PAIRED_BEST_TIME_USE_CASE,
-      dayLead(served.leadDays),
-      name,
-      "served",
-      "all",
-      om.regret,
-      os.regret,
-      0,
-    );
-  };
-
-  for (const c of list) {
-    const truthSlots = truth.get(c.attractionId);
+  // UC3 / D3 / PEAK / D7: one pass per daily planner curve.
+  for (const plan of curves) {
+    if (plan.surface !== "plan_day" || plan.originKind === "intraday") continue;
+    const truthSlots = truth.get(plan.attractionId);
     if (!truthSlots || truthSlots.size === 0) continue;
-
-    if (c.surface === "park_hourly") {
-      const anchor = c.liveWait;
-      if (anchor === null || anchor === undefined) continue;
+    const lead = dayLead(plan.leadDays);
+    const wkd = weekday ? weekdayAverageArchived(plan, weekday) : null;
+    const h5 = sibling(plan, "plan_day_shadow_h5");
+    const sources: Record<string, ArchivedCurve | null | undefined> = {
+      [PAIRED_MODELS.shadowH5]: h5,
+      [PAIRED_MODELS.shadowRouted]: routedOf(h5),
+      [PAIRED_MODELS.shadowPeak]: sibling(plan, "plan_day_shadow_peak"),
+      [PAIRED_MODELS.chronosGrid]: sibling(plan, "chronos_grid"),
+      [PAIRED_MODELS.weekdayAvg]: wkd,
+    };
+    /** Slots where served and every model has a value: [slot, truth, served, values]. */
+    const jointSlots = (models: string[]) => {
+      const out: Array<[number, number, number, number[]]> = [];
+      const cs = models.map((m) => sources[m]);
+      if (cs.some((c) => !c)) return out;
       for (const [slot, value] of truthSlots) {
-        const r = valueAt(c, slot);
+        const r = valueAt(plan, slot);
         if (!r) continue;
-        const bucket = slotLeadBucket((slot - c.originAt) / 60_000);
-        if (!bucket) continue;
-        acc.add(
-          bucket.useCase,
-          bucket.lead,
-          PAIRED_MODELS.persistence,
-          "served",
-          "all",
-          anchor,
-          r.wait,
-          value,
+        const values: number[] = [];
+        for (const c of cs) {
+          const v = valueAt(c!, slot);
+          if (!v) break;
+          values.push(v.wait);
+        }
+        if (values.length === cs.length)
+          out.push([slot, value, r.wait, values]);
+      }
+      return out;
+    };
+
+    const uc3 = PAIRED_QUESTION_MODELS[`UC3|${lead}`];
+    if (uc3) {
+      for (const [, value, served, values] of jointSlots(uc3)) {
+        addJoint("UC3", lead, uc3, values, served, value);
+      }
+    }
+
+    const d3 = PAIRED_QUESTION_MODELS[`${PAIRED_BEST_TIME_USE_CASE}|${lead}`];
+    if (d3) {
+      const slots = jointSlots(d3);
+      const servedOutcome = bestTimeOutcome(
+        slots.map(([slot, value, served]) => ({
+          slot,
+          pred: served,
+          truth: value,
+          src: "",
+          band: null,
+        })),
+      );
+      const outcomes = d3.map((_, i) =>
+        bestTimeOutcome(
+          slots.map(([slot, value, , values]) => ({
+            slot,
+            pred: values[i],
+            truth: value,
+            src: "",
+            band: null,
+          })),
+        ),
+      );
+      if (servedOutcome && outcomes.every((o) => o !== null)) {
+        // n = 1 ride-day; Σ|e| of each is its regret (regret ≥ 0, truth 0).
+        addJoint(
+          PAIRED_BEST_TIME_USE_CASE,
+          lead,
+          d3,
+          outcomes.map((o) => o!.regret),
+          servedOutcome.regret,
+          0,
         );
       }
-      continue;
     }
 
-    if (c.originKind === "intraday") continue;
-
-    if (c.surface === "plan_day") {
-      if (!weekday) continue;
-      const wkd = weekdayAverageArchived(c, weekday);
-      if (!wkd) continue;
-      pairSlots(wkd, c, truthSlots, PAIRED_MODELS.weekdayAvg, false);
-      pairBestTime(wkd, c, truthSlots, PAIRED_MODELS.weekdayAvg);
-      const p90 = rideDayTruthP90(truthSlots);
-      const span: number[] = [];
-      wkd.waits.forEach((w, i) => {
-        if (w === null) return;
-        if (valueAt(c, c.slotStart + i * TRUTH_SLOT_MS) === null) return;
-        span.push(w);
-      });
-      const wkdPeak = percentileCont(span, 0.9);
-      if (c.dayPeak !== null && p90 !== null && wkdPeak !== null) {
-        const segs = c.isHeadliner ? ["all", "headliner"] : ["all"];
-        for (const seg of segs) {
-          acc.add(
-            PAIRED_PEAK_USE_CASE,
-            dayLead(c.leadDays),
-            PAIRED_MODELS.weekdayAvg,
-            "served",
-            seg,
-            wkdPeak,
-            c.dayPeak,
-            p90,
-          );
-        }
-      }
-      continue;
+    const levelRef = PAIRED_LEVEL_REFERENCES[plan.levelSource ?? ""];
+    if (!wkd || !levelRef || plan.dayPeak === null) continue;
+    const p90 = rideDayTruthP90(truthSlots);
+    const span: number[] = [];
+    wkd.waits.forEach((w, i) => {
+      if (w === null) return;
+      if (valueAt(plan, plan.slotStart + i * TRUTH_SLOT_MS) === null) return;
+      span.push(w);
+    });
+    const wkdPeak = percentileCont(span, 0.9);
+    if (p90 === null || wkdPeak === null) continue;
+    for (const seg of plan.isHeadliner ? ["all", "headliner"] : ["all"]) {
+      acc.add(
+        PAIRED_PEAK_USE_CASE,
+        lead,
+        PAIRED_MODELS.weekdayAvg,
+        levelRef,
+        seg,
+        wkdPeak,
+        plan.dayPeak,
+        p90,
+      );
     }
-
-    const name = PAIRED_SHADOW_NAMES[c.surface];
-    if (!name) continue;
-    const hourly = sibling(c, "park_hourly");
-    if (hourly) pairSlots(c, hourly, truthSlots, name, true);
-    const plan = sibling(c, "plan_day");
-    if (plan) {
-      // chronos2_grid vs plan_day on UC3 is PAR-852's own row.
-      if (name !== PAIRED_MODELS.chronosGrid) {
-        pairSlots(c, plan, truthSlots, name, false);
-      }
-      pairBestTime(c, plan, truthSlots, name);
+    if (plan.isHeadliner && plan.levelSource === "tft") {
+      acc.addSums(
+        PAIRED_D7_USE_CASE,
+        lead,
+        PAIRED_MODELS.weekdayAvg,
+        PAIRED_LEVEL_REFERENCES.tft,
+        "headliner",
+        wkdPeak,
+        plan.dayPeak,
+        p90,
+      );
     }
   }
 }

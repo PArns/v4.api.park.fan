@@ -1,3 +1,4 @@
+import { PAIRED_DEFINITION } from "../../ml/entities/forecast-archive-paired.entity";
 import { ForecastArchiveScoringService } from "./forecast-archive-scoring.service";
 import { SCORE_KEY_WIDTHS } from "../../ml/entities/forecast-archive-score.entity";
 
@@ -220,7 +221,11 @@ describe("ForecastArchiveScoringService.scoreDue", () => {
       pairedRepository.manager.query as jest.Mock
     ).mock.calls.find(([q]: [string]) => q.includes("HAVING max(definition)"));
     // Window: the 14 days curves are kept, ending yesterday.
-    expect(params.slice(0, 3)).toEqual(["2026-09-25", "2026-10-08", 2]);
+    expect(params.slice(0, 3)).toEqual([
+      "2026-09-25",
+      "2026-10-08",
+      PAIRED_DEFINITION,
+    ]);
     const truth = sql.find((q) => q.includes("FROM queue_data"))!;
     expect(truth).toContain("NOT COALESCE(is_heartbeat, false)");
   });
@@ -344,24 +349,17 @@ describe("ForecastArchiveScoringService.scoreDue", () => {
         .map((r) => r.segment)
         .sort(),
     ).toEqual(["all", "all", "busy", "busy", "headliner", "headliner"]);
-    // PAR-855: the H5 shadow against the served plan on the same slots, and
-    // both shadows' best-time regret against the plan's, segment `all` only.
+    // PAR-1035: the matrix pairs a question's candidates only where ALL of
+    // them have a value. This park-day has no old-composer curve and no
+    // weekday history, so no matrix row is written — and PAR-852's own rows
+    // above are the only paired rows.
     expect(
-      insertedPaired.find(
-        (r) =>
-          r.model === "shadow_h5" && r.useCase === "UC3" && r.lead === "d1",
+      insertedPaired.filter((r) => r.reference === "served_joint"),
+    ).toEqual([]);
+    expect(
+      insertedPaired.every((r) =>
+        ["served", "h5"].includes(String(r.reference)),
       ),
-    ).toMatchObject({ reference: "served", segment: "all", n: 8, saeRef: 50 });
-    expect(
-      insertedPaired
-        .filter((r) => r.useCase === "D3")
-        .map((r) => r.model)
-        .sort(),
-    ).toEqual(["chronos2_grid", "shadow_h5", "shadow_h5_routed"]);
-    expect(
-      insertedPaired
-        .filter((r) => r.model !== "chronos2_grid" || r.useCase !== "UC3")
-        .every((r) => r.segment === "all" && r.reference === "served"),
     ).toBe(true);
   });
 
