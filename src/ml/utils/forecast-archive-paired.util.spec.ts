@@ -4,6 +4,7 @@ import {
   PairedRow,
   buildChronosBoard,
   compare,
+  gateDays,
   parkClusterBootstrap,
   seededRandom,
 } from "./forecast-archive-paired.util";
@@ -42,6 +43,27 @@ describe("forward-archive paired comparison (PAR-852)", () => {
     const a = seededRandom(7);
     const b = seededRandom(7);
     expect([a(), a(), a()]).toEqual([b(), b(), b()]);
+  });
+
+  it("counts the days the 10th-best park reached (PAR-1024)", () => {
+    const set = (n: number) =>
+      new Set(Array.from({ length: n }, (_, i) => `d${i}`));
+    expect(gateDays([])).toBe(0);
+    // Fewer than 10 parks: the weakest park's count.
+    expect(gateDays([set(14), set(3)])).toBe(3);
+    expect(gateDays([...Array(10)].map(() => set(14)).concat(set(1)))).toBe(14);
+    // One park × 14 days + nine × 1 day: 14 dates in all, 1 per the gate.
+    const sparse = [
+      ...rows(1, 14, () => ({ a: 1, b: 9 })),
+      ...rows(9, 1, () => ({ a: 1, b: 9 })).map((r, i) => ({
+        ...r,
+        parkId: `q${i}`,
+      })),
+    ];
+    const c = compare("served", sparse);
+    expect(c.days).toBe(1);
+    expect(c.enoughData).toBe(false);
+    expect(c.verdict).toBe("insufficient_data");
   });
 
   it("gives no CI for a single park — one cluster cannot be resampled", () => {

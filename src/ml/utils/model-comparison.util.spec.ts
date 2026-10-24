@@ -78,6 +78,32 @@ describe("poolCell", () => {
     ).toBe(false);
   });
 
+  it("counts the days each park reached, not the union over parks", () => {
+    // One park on 14 days and nine on one day each: 14 distinct dates in
+    // all, but only one park measured for 14 days — the gate must not pass.
+    const sparse = [
+      ...rows(1, 14, { n: 10, a: 80, b: 100 }),
+      ...rows(9, 1, { n: 10, a: 80, b: 100 }).map((r, i) => ({
+        ...r,
+        parkId: `q${i}`,
+      })),
+    ];
+    const c = poolCell(sparse, 1)!;
+    expect(c.parks).toBe(10);
+    expect(c.days).toBe(1);
+    expect(c.enoughData).toBe(false);
+    // The 10th-best park sets the count: 11 parks, the weakest on 3 days.
+    const mixed = [
+      ...rows(10, 14, { n: 10, a: 80, b: 100 }),
+      ...rows(1, 3, { n: 10, a: 80, b: 100 }).map((r) => ({
+        ...r,
+        parkId: "z",
+      })),
+    ];
+    expect(poolCell(mixed, 1)!.days).toBe(14);
+    expect(poolCell(mixed, 1)!.enoughData).toBe(true);
+  });
+
   it("has no CI with a single park and nothing with no slots", () => {
     expect(
       poolCell(rows(1, 20, { n: 10, a: 80, b: 100 }), 1)!.ciLow,
@@ -91,7 +117,11 @@ describe("cellState — the rule", () => {
     expect(cellState(true, live({ ciHigh: 5, ciLow: 1 }), null)).toBe("today");
   });
   it("lets a live comparison past the gate decide", () => {
-    expect(cellState(false, live(), offline("worse"))).toBe("better");
+    expect(cellState(false, live(), offline("better"))).toBe("better");
+    // A live win counts as better only when offline agrees (owner rule O ∧ L).
+    expect(cellState(false, live(), offline("worse"))).toBe("unclear");
+    expect(cellState(false, live(), null)).toBe("unclear");
+    expect(cellState(false, live(), offline("pending"))).toBe("pending");
     expect(cellState(false, live({ ciLow: 0.2, ciHigh: 0.9 }), null)).toBe(
       "worse",
     );
@@ -106,6 +136,34 @@ describe("cellState — the rule", () => {
     expect(cellState(false, thin, offline("worse"))).toBe("worse");
     expect(cellState(false, thin, offline("unclear"))).toBe("unclear");
     expect(cellState(false, null, null)).toBe("unclear");
+  });
+});
+
+describe("cellNote — a live win offline does not back", () => {
+  it("names whether offline disagrees or is still running", () => {
+    expect(
+      cellNote(
+        q("plan_d0_1"),
+        "unclear",
+        true,
+        live(),
+        offline("worse"),
+        undefined,
+      ),
+    ).toMatch(/besser als heute, sicher, offline aber nicht bestätigt\./);
+    expect(
+      cellNote(
+        q("plan_d0_1"),
+        "pending",
+        true,
+        live(),
+        offline("pending"),
+        undefined,
+      ),
+    ).toMatch(/offline läuft die Messung noch\./);
+    expect(
+      cellNote(q("plan_d0_1"), "unclear", true, live(), null, undefined),
+    ).toMatch(/offline nicht gemessen\./);
   });
 });
 
@@ -140,7 +198,7 @@ describe("cellNote — German, from the numbers", () => {
   it("states a confirmed win the way the owner reads it", () => {
     expect(
       cellNote(q("plan_d2_5"), "better", true, live(), null, undefined),
-    ).toBe("1,3 Minuten besser als heute, sicher. 18 Tage, 34 Parks.");
+    ).toBe("1,3 Minuten besser als heute, sicher. 18 Tage je Park, 34 Parks.");
   });
   it("states a loss, an unclear result and a thin one", () => {
     expect(
@@ -152,7 +210,9 @@ describe("cellNote — German, from the numbers", () => {
         null,
         undefined,
       ),
-    ).toBe("0,4 Minuten schlechter als heute, sicher. 18 Tage, 34 Parks.");
+    ).toBe(
+      "0,4 Minuten schlechter als heute, sicher. 18 Tage je Park, 34 Parks.",
+    );
     expect(
       cellNote(
         q("plan_d2_5"),
@@ -163,7 +223,7 @@ describe("cellNote — German, from the numbers", () => {
         undefined,
       ),
     ).toBe(
-      "Kein sicherer Unterschied zu heute (−0,2 Minuten, Spanne −0,6 bis +0,3). 18 Tage, 34 Parks.",
+      "Kein sicherer Unterschied zu heute (−0,2 Minuten, Spanne −0,6 bis +0,3). 18 Tage je Park, 34 Parks.",
     );
     expect(
       cellNote(
@@ -175,7 +235,7 @@ describe("cellNote — German, from the numbers", () => {
         undefined,
       ),
     ).toBe(
-      "Offline besser. Live bisher −0,8 Minuten gegenüber heute, 9 von 14 Tagen, 12 von 10 Parks.",
+      "Offline besser. Live bisher −0,8 Minuten gegenüber heute, 9 von 14 Tagen je Park, 12 von 10 Parks.",
     );
   });
   it("names the unit of best time", () => {
@@ -374,7 +434,7 @@ describe("buildModelComparison", () => {
     });
     expect(cell.live!.diff).toBeLessThan(0);
     expect(cell.note).toMatch(
-      /Minuten besser als heute, sicher\. 14 Tage, 12 Parks\./,
+      /Minuten besser als heute, sicher\. 14 Tage je Park, 12 Parks\./,
     );
     expect(cell.expectedBy).toBeNull();
   });

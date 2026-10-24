@@ -42,6 +42,7 @@
  */
 import { determineCrowdLevel } from "../../common/utils/crowd-level.util";
 import { addIsoDays } from "../../common/utils/date.util";
+import { roundServedWait } from "../pcn-serving.constants";
 import { DaySlots, weekdayAverageCurve } from "./weekday-average.util";
 import {
   ARCHIVE_SOURCE_CODES,
@@ -70,6 +71,17 @@ const D1_MIN_TRUTH_SLOTS = 2;
  *  slots has no best time to find: it counts for regret, not for hit rates. */
 export const FLAT_MIN_SHARE = 0.25;
 const THIRTY_MIN_MS = 30 * 60_000;
+
+/**
+ * `queue_data` rows the truth may read: everything but the hourly heartbeat,
+ * which copies the last status AND wait with a fresh timestamp and so keeps a
+ * frozen value alive past the 3 h staleness rule — persistence then scores 0
+ * on exactly those slots (11–13 % of truth slots in early October, ml-bench
+ * `--drop-heartbeats`, PAR-1024). NULL = written before the column existed.
+ */
+export function truthRowsSql(alias?: string): string {
+  return `NOT COALESCE(${alias ? `${alias}.` : ""}is_heartbeat, false)`;
+}
 
 export interface TruthReading {
   timestamp: number;
@@ -895,6 +907,9 @@ export function scoreParkDay(
   return observations;
 }
 
+/** Paired use cases whose values are slot waits (D3 regret and PEAK are not). */
+const SLOT_USE_CASES = new Set(["UC1", "UC2", "UC3"]);
+
 /** Additive paired counters of one shadow vs one reference. */
 export interface PairedSums {
   n: number;
@@ -922,6 +937,16 @@ export class PairedAccumulator {
     ref: number,
     truth: number,
   ): void {
+    // Slot waits are compared as a visitor would see them: every candidate
+    // goes through the same serve-side rounding as what is served (5-minute
+    // steps, floor 10), or an unrounded arm wins by rounding alone (PAR-1024).
+    // A no-op on park_hourly (already served-rounded); plan_day is archived at
+    // 1-minute precision and gets the same treatment as its candidates. The
+    // unpaired board (ScoreAccumulator) stays raw on purpose.
+    if (SLOT_USE_CASES.has(useCase)) {
+      pred = roundServedWait(pred);
+      ref = roundServedWait(ref);
+    }
     const key = [useCase, lead, model, reference, segment].join("|");
     const row = this.rows.get(key) ?? {
       n: 0,

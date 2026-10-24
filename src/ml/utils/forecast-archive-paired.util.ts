@@ -16,6 +16,18 @@ export const BOOTSTRAP_REPS = 1000;
 /** Fixed, so the same rows always give the same CI (the board is cached anyway). */
 export const BOOTSTRAP_SEED = 852;
 
+/**
+ * The days the live gate counts: the number of scored dates that at least
+ * {@link CHRONOS_MIN_PARKS} parks EACH reached (the 10th-best park's count).
+ * A union of dates over all parks let one park on 14 days plus nine on one
+ * day each pass (PAR-1024). With fewer parks, the weakest park's count.
+ */
+export function gateDays(datesPerPark: Iterable<Set<string>>): number {
+  const counts = [...datesPerPark].map((d) => d.size).sort((x, y) => y - x);
+  if (counts.length === 0) return 0;
+  return counts[Math.min(CHRONOS_MIN_PARKS, counts.length) - 1];
+}
+
 export interface PairedRow {
   targetDate: string;
   parkId: string;
@@ -43,7 +55,7 @@ export interface ChronosComparison {
   reference: string;
   /** Paired slots (truth, shadow and reference all present). */
   n: number;
-  /** Distinct target dates and parks contributing. */
+  /** Scored dates reached by each of the 10 best-covered parks ({@link gateDays}), and parks contributing. */
   days: number;
   parks: number;
   /** MAE of each on the paired slots, minutes. */
@@ -57,7 +69,7 @@ export interface ChronosComparison {
   /** 95 % CI of `diff`, park-cluster bootstrap; null with fewer than 2 parks. */
   ciLow: number | null;
   ciHigh: number | null;
-  /** days ≥ {@link CHRONOS_MIN_DAYS} and parks ≥ {@link CHRONOS_MIN_PARKS}. */
+  /** ≥ {@link CHRONOS_MIN_PARKS} parks with ≥ {@link CHRONOS_MIN_DAYS} scored dates each. */
   enoughData: boolean;
   verdict: ChronosVerdict;
 }
@@ -169,7 +181,7 @@ export function compare(
   seed = BOOTSTRAP_SEED,
 ): ChronosComparison {
   const perPark = new Map<string, { n: number; a: number; b: number }>();
-  const dates = new Set<string>();
+  const datesPerPark = new Map<string, Set<string>>();
   let n = 0;
   let a = 0;
   let b = 0;
@@ -182,7 +194,9 @@ export function compare(
     p.a += r.saeModel;
     p.b += r.saeRef;
     perPark.set(r.parkId, p);
-    dates.add(r.targetDate);
+    const d = datesPerPark.get(r.parkId) ?? new Set<string>();
+    d.add(r.targetDate);
+    datesPerPark.set(r.parkId, d);
     n += r.n;
     a += r.saeModel;
     b += r.saeRef;
@@ -190,8 +204,9 @@ export function compare(
     eb += r.seRef;
   }
   const ci = parkClusterBootstrap([...perPark.values()], BOOTSTRAP_REPS, seed);
+  const days = gateDays(datesPerPark.values());
   const enoughData =
-    dates.size >= CHRONOS_MIN_DAYS && perPark.size >= CHRONOS_MIN_PARKS;
+    days >= CHRONOS_MIN_DAYS && perPark.size >= CHRONOS_MIN_PARKS;
   const diff = n > 0 ? (a - b) / n : null;
   let verdict: ChronosVerdict = "insufficient_data";
   if (enoughData && ci) {
@@ -205,7 +220,7 @@ export function compare(
   return {
     reference,
     n,
-    days: dates.size,
+    days,
     parks: perPark.size,
     modelMae: n > 0 ? round(a / n) : null,
     referenceMae: n > 0 ? round(b / n) : null,

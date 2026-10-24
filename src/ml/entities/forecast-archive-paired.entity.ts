@@ -21,6 +21,14 @@ import { Column, Entity, Index, PrimaryColumn } from "typeorm";
  */
 export const PAIRED_RETENTION_DAYS = 120;
 
+/**
+ * Which scoring definition a row was written under. 2 (PAR-1024): truth
+ * without heartbeat rows, slot waits of both arms served-rounded. Readers
+ * pool only the current definition, so a live gate is never met on rows
+ * scored the old way; rows from before the column read as 1.
+ */
+export const PAIRED_DEFINITION = 2;
+
 @Entity("forecast_archive_paired")
 @Index("idx_fap_target", ["targetDate"])
 export class ForecastArchivePaired {
@@ -68,6 +76,10 @@ export class ForecastArchivePaired {
 
   @Column({ name: "se_ref", type: "double precision" })
   seRef: number;
+
+  /** {@link PAIRED_DEFINITION} at write time. */
+  @Column({ type: "smallint", default: 1 })
+  definition: number;
 
   @Column({ name: "scored_at", type: "timestamptz" })
   scoredAt: Date;

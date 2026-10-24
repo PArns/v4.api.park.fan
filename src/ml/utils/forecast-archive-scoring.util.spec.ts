@@ -1173,3 +1173,26 @@ describe("scorePairedModels (PAR-855)", () => {
     expect(later.entries()).toEqual([]);
   });
 });
+
+describe("PairedAccumulator — served rounding (PAR-1024)", () => {
+  it("rounds both arms of a slot use case like the served value", () => {
+    const acc = new PairedAccumulator();
+    // truth 5: a raw 5 would be exact, served shows 10 (floor) — both arms
+    // are judged on what a visitor would see.
+    acc.add("UC1", "h0-1", "persistence", "served", "all", 5, 10, 5);
+    acc.add("UC3", "d1", "shadow_h5", "served", "all", 23, 25, 25);
+    const [a, b] = acc.entries();
+    expect(a.saeModel).toBe(5);
+    expect(a.saeRef).toBe(5);
+    expect(b.saeModel).toBe(0); // 23 → 25
+  });
+
+  it("leaves best-time regret and day peaks unrounded", () => {
+    const acc = new PairedAccumulator();
+    acc.add("D3", "d1", "shadow_h5", "served", "all", 3, 7, 0);
+    acc.add("PEAK", "d1", "weekday_avg", "served", "all", 41, 44, 42);
+    const [d3, peak] = acc.entries();
+    expect(d3.saeModel).toBe(3);
+    expect(peak.saeRef).toBe(2);
+  });
+});
