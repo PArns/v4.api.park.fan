@@ -658,9 +658,11 @@ read the planner's per-ride `dayPeak` — built on the same daily level the
 calendar reads (TFT ≤ 60 days, CatBoost beyond) — against the truth P90; the
 calendar's crowd level itself is not archived per model. **CatBoost** and
 **Toto 2.0 / TiRex** have no archived curve, so their cells are offline only
-(`checks.live = "open"`). Offline evidence for `cal_far` is a hit rate (+0.026
-for TFT); it stays in the note, never in `offline.diff`, which would then be in
-another unit than the live figure.
+(`checks.live = "open"`). The offline hit rate (+0.026 for TFT) answers
+"which day is fuller", so since PAR-1038's review it is filed under the
+day-ranking question `cal_rank` (PAR-1037), with `metric = hit_rate`; it stays in
+the note, never in `offline.diff`, which would then be in another unit than the
+live figure.
 
 ### 9.3 Cells
 
@@ -727,8 +729,19 @@ is the offline note plus the live figures so far.
 same pooling and CI, never a state.
 
 **Offline verdicts** (`offline-model-verdicts.json`): per question × model
-`{ state, diff?, ciLow?, ciHigh?, source, period?, note, expectedBy? }`, and
-`servedNotes` for the `today` cells. A cell's state is always against the
+`{ state, reference, metric, runId, diff, ciLow, ciHigh, source, period?, note,
+expectedBy? }`, and `servedNotes` for the `today` cells. **`reference`
+(PAR-1038)** is what the offline figure was measured against: `served` (the
+question's served model — `prod_served` in ml-bench, which exists from d3 only),
+or `persistence`, `wt_med`, `clim`, `chronos2`, `hourly_profile`, or null when
+the note does not say. **An offline `better` counts only with `reference =
+served`** (`offlineBetterThanServed`): otherwise a live win reads `pending`, the
+offline check reads `open`, and the note says the offline run measured against
+something else. This keeps every PCN-served question (PCN is not in the bench)
+from turning `better` on a win over persistence. `metric` (`slot_mae`,
+`besttime_regret`, `daypeak_mae`, `hit_rate`), `runId` (the ml-bench results
+directory) and the three figures are null until a bench export reports them;
+the DTO carries `reference`, `referenceIsServed`, `metric`, `runId` additively. A cell's state is always against the
 **served** model of the question; a figure against `wt_med`, climatology or
 persistence is quoted in the note, never in `diff`, and a split across the
 question's leads (e.g. Chronos-2 worse at 15 min, better at 30 and 60) is

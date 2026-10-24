@@ -552,9 +552,20 @@ export interface PairedAggregate {
 
 export interface OfflineVerdict {
   state: "better" | "worse" | "unclear" | "pending";
-  diff?: number;
-  ciLow?: number;
-  ciHigh?: number;
+  /**
+   * What the offline figure was measured against (PAR-1038): `served` = the
+   * question's served model; otherwise the bench reference the note names
+   * (`persistence`, `wt_med`, `clim`, `chronos2`, `hourly_profile`), or null
+   * when the note does not say. Only `served` lets an offline win count.
+   */
+  reference?: string | null;
+  /** `slot_mae`, `besttime_regret`, `daypeak_mae`, `hit_rate`; null = not stated. */
+  metric?: string | null;
+  /** The ml-bench results directory of the run; null when not recorded. */
+  runId?: string | null;
+  diff?: number | null;
+  ciLow?: number | null;
+  ciHigh?: number | null;
   source: string;
   period?: string;
   note?: string;
@@ -786,6 +797,17 @@ export function d7Aggregates(
 }
 
 /**
+ * An offline `better` that counts towards the owner rule: measured against the
+ * question's served model (PAR-1038). A win over persistence or the weekday
+ * average says nothing about a win over what is served.
+ */
+export function offlineBetterThanServed(
+  offline: OfflineVerdict | null,
+): boolean {
+  return offline?.state === "better" && offline.reference === "served";
+}
+
+/**
  * The state rule. The served model is `today`. A live comparison that meets
  * the gate (≥ 10 parks with ≥ 14 days each) decides: CI entirely above 0 →
  * `worse`, else `unclear` — and CI entirely below 0 → `better` only when
@@ -803,9 +825,12 @@ export function cellState(
   if (isServed) return "today";
   if (live && live.enoughData && live.ciLow !== null && live.ciHigh !== null) {
     if (live.ciHigh < 0) {
-      if (offline?.state === "better") return "better";
-      // Offline still running: waiting on offline, not contradicted by it.
-      return offline?.state === "pending" ? "pending" : "unclear";
+      if (offlineBetterThanServed(offline)) return "better";
+      // Offline still running, or offline better against another reference:
+      // waiting on an offline result against served, not contradicted by one.
+      return offline?.state === "pending" || offline?.state === "better"
+        ? "pending"
+        : "unclear";
     }
     if (live.ciLow > 0) return "worse";
     return "unclear";
@@ -830,7 +855,10 @@ export function cellChecks(
   const off: ModelComparisonCheck = !offline
     ? "open"
     : offline.state === "better"
-      ? "yes"
+      ? // A win over another reference leaves the check against served open.
+        offlineBetterThanServed(offline)
+        ? "yes"
+        : "open"
       : offline.state === "pending"
         ? "running"
         : "no";
@@ -904,7 +932,9 @@ export function cellNote(
         ? "offline nicht gemessen"
         : offline.state === "pending"
           ? "offline läuft die Messung noch"
-          : "offline aber nicht bestätigt";
+          : offline.state === "better"
+            ? "offline aber nur gegen einen anderen Vergleichswert gemessen, nicht gegen das, was heute läuft"
+            : "offline aber nicht bestätigt";
       return `Live ${fmtDe(live.diff)} ${unitWord(q)} besser als heute, sicher, ${off}. ${scope(live)}`;
     }
     return `Kein sicherer Unterschied zu heute (${fmtDe(live.diff, true)} ${unitWord(q)}, Spanne ${fmtDe(live.ciLow, true)} bis ${fmtDe(live.ciHigh, true)}). ${scope(live)}`;
@@ -973,10 +1003,14 @@ function offlineDto(
 ): ModelComparisonOfflineDto | null {
   if (!v) return null;
   const out: ModelComparisonOfflineDto = { source: v.source };
-  if (v.diff !== undefined) out.diff = v.diff;
-  if (v.ciLow !== undefined) out.ciLow = v.ciLow;
-  if (v.ciHigh !== undefined) out.ciHigh = v.ciHigh;
+  if (v.diff != null) out.diff = v.diff;
+  if (v.ciLow != null) out.ciLow = v.ciLow;
+  if (v.ciHigh != null) out.ciHigh = v.ciHigh;
   if (v.period !== undefined) out.period = v.period;
+  out.reference = v.reference ?? null;
+  out.referenceIsServed = v.reference === "served";
+  out.metric = v.metric ?? null;
+  out.runId = v.runId ?? null;
   return out;
 }
 
