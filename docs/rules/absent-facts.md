@@ -32,6 +32,11 @@ Moved out of the repo's `claude.md` so that a session reads an index first and o
     as 14 OPERATING days for seven months. It is retracted now, but only inside
     the months the fetch reports as answered, because an empty or throttled month
     says nothing about its days: [Schedule Sync & Calendar](../architecture/schedule-sync-and-calendar.md).
+  - A school break **nobody has published yet** is not "no school holiday".
+    Past a region's last stored school row the flag is unknown (Spain's
+    school rows end 2026-09-11 while its public holidays reach 2028; Sweden
+    has none). Nothing is projected to fill it:
+    [School-holiday coverage](../architecture/school-holiday-coverage.md).
 - **Two writers, never one cell.** `curated_may_get_wet`, `curated_minimum_height`
   and `curated_stats` sit _beside_ the synced column, never in it, because the
   sync overwrites its own cell on every run. Read via `resolveCuratedFacts`.

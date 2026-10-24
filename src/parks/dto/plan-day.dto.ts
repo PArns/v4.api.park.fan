@@ -570,6 +570,14 @@ export class PlanDayContextDto {
   isSchoolVacation: boolean;
 
   @ApiProperty({
+    required: false,
+    description:
+      "`true` when the park's school-holiday data ends before this day, so " +
+      "`isSchoolVacation: false` is unknown, not 'no vacation'. Absent otherwise.",
+  })
+  schoolVacationUnknown?: boolean;
+
+  @ApiProperty({
     example: true,
     description:
       "Saturday or Sunday in the park's own timezone. Derived here because " +

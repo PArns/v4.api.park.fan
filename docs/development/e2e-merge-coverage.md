@@ -52,6 +52,7 @@ real database proves the transaction **commits**.
 | --------------- | ------------------- |
 | `pcn_forecasts` | `pcn-service/db.py` |
 | `tft_forecasts` | `nf-service/db.py`  |
+| `tft_forecasts_shadow` | `nf-service/db.py` (`LIKE tft_forecasts`, so listed after it; PAR-1041) |
 
 Until PAR-870 (2026-10-12) the table also listed `shape_forecasts`
 (`shape-service/db.py`) and `catboost_daily_forecasts`

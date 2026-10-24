@@ -1329,6 +1329,17 @@ describe("PlanDayService", () => {
   });
 
   describe("climatology", () => {
+    it("matches no holiday situation for a day past the school-holiday data (PAR-1049)", () => {
+      const state = (day: object) => (PlanDayService as any).holidayState(day);
+      expect(state({ isSchoolVacation: false })).toBe("regular");
+      expect(
+        state({ isSchoolVacation: false, schoolVacationUnknown: true }),
+      ).toBeNull();
+      expect(state({ isHoliday: true, schoolVacationUnknown: true })).toBe(
+        "holiday",
+      );
+    });
+
     /** The seven candidate dates one year back: 52 weeks, ±0–3 weeks. */
     const referenceDatesFor = (date: string) =>
       [-3, -2, -1, 0, 1, 2, 3].map((w) => dayShift(date, -364 + 7 * w));

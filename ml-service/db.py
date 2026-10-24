@@ -499,6 +499,35 @@ def fetch_holidays(
         return df
 
 
+def fetch_school_holiday_coverage(country_codes: List[str]) -> pd.DataFrame:
+    """Last stored school-holiday date per (country, region) — the coverage the
+    school features are read against (holiday_features.SchoolCoverage, PAR-1049).
+
+    Not date-windowed: the edge of the data is what is asked, and the windowed
+    ``fetch_holidays`` frame cannot tell it. Cached like the holidays.
+    """
+    import time
+
+    country_codes = sorted(c for c in country_codes if c is not None)
+    cache_key = f"school-coverage:{','.join(country_codes)}"
+    cached = _holidays_cache.get(cache_key)
+    if cached is not None and time.time() - cached[1] < _holidays_cache_ttl:
+        return cached[0].copy()
+    query = text(
+        """
+        SELECT country, region, MAX(date) AS date
+        FROM holidays
+        WHERE country = ANY(:countries) AND "holidayType" = 'school'
+        GROUP BY country, region
+    """
+    )
+    with get_db() as db:
+        result = db.execute(query, {"countries": country_codes})
+        df = pd.DataFrame(result.fetchall(), columns=["country", "region", "date"])
+    _holidays_cache[cache_key] = (df.copy(), time.time())
+    return df
+
+
 # Cache for parks metadata (5 minute TTL)
 _parks_metadata_cache = None
 _parks_metadata_cache_time = None

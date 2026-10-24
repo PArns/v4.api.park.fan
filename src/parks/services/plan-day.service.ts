@@ -386,6 +386,7 @@ export class PlanDayService {
       isHoliday: Boolean(theDay?.isHoliday),
       isBridgeDay: Boolean(theDay?.isBridgeDay),
       isSchoolVacation: Boolean(theDay?.isSchoolVacation),
+      ...(theDay?.schoolVacationUnknown ? { schoolVacationUnknown: true } : {}),
       // Derived here rather than read: the calendar carries no isWeekend, and
       // every surface that wanted one was deriving it from the date separately.
       isWeekend: this.isWeekend(dateStr),
@@ -1869,18 +1870,22 @@ export class PlanDayService {
    * The holiday situation of a calendar day, the key `climatology` matches on.
    * A public holiday and a bridge day are `holiday`; a day inside school
    * holidays that is neither is `school_vacation`. `null` for no row, which is
-   * "unknown" and not "regular".
+   * "unknown" and not "regular" — and for a day past the park's school-holiday
+   * data (`schoolVacationUnknown`, PAR-1049): it may be a break nobody has
+   * published yet.
    */
   private static holidayState(
     day: {
       isHoliday?: boolean;
       isBridgeDay?: boolean;
       isSchoolVacation?: boolean;
+      schoolVacationUnknown?: boolean;
     } | null,
   ): PlanDayHolidayState | null {
     if (!day) return null;
     if (day.isHoliday || day.isBridgeDay) return "holiday";
     if (day.isSchoolVacation) return "school_vacation";
+    if (day.schoolVacationUnknown) return null;
     return "regular";
   }
 

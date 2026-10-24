@@ -9,7 +9,9 @@ import {
   cellChecks,
   cellLeads,
   d7Aggregates,
+  d7AggregatesByModel,
   cellExpectedBy,
+  cellFloorDate,
   cellNote,
   cellState,
   fmtDe,
@@ -734,6 +736,70 @@ describe("calendar questions (PAR-1037)", () => {
       useCase: "D7",
       unit: "rate",
     });
+  });
+
+  it("has a grid-TFT shadow column on the TFT calendar questions, live only (PAR-1041)", () => {
+    for (const id of ["cal_rank", "cal_busier", "cal_far"]) {
+      expect(q(id).models.tft_grid).toEqual(["tft_grid"]);
+    }
+    expect(q("cal_far_90").models.tft_grid).toBeUndefined();
+    // Its rows begin with the shadow, not with the archive.
+    expect(cellFloorDate("cal_far", "tft_grid")).toBe("2027-01-08");
+    expect(cellFloorDate("cal_far", "wkd")).toBe("2026-12-22");
+    const agg = Array.from({ length: 24 }, (_, i) => ({
+      useCase: "PEAK",
+      lead: "d3",
+      model: "tft_grid",
+      reference: "served_tft",
+      segment: "headliner",
+      parkId: `p${i % 12}`,
+      dates: [i < 12 ? "2026-10-08" : "2026-10-09"],
+      n: 5,
+      saeModel: 20,
+      saeRef: 25,
+    }));
+    const res = buildModelComparison({
+      aggregates: agg,
+      since: new Map(),
+      verdicts: verdictsJson as unknown as OfflineVerdictFile,
+      window: { days: 28, firstDate: "2026-10-08", lastDate: "2026-10-09" },
+      today: "2026-10-10",
+      generatedAt: "2026-10-10T08:00:00.000Z",
+    });
+    const busier = res.questions.find((x) => x.id === "cal_busier")!;
+    const cell = busier.cells.tft_grid;
+    expect(cell.offline).toBeNull();
+    expect(cell.live!.modelMae).toBe(4);
+    expect(cell.live!.referenceMae).toBe(5);
+    expect(Object.keys(busier.cells).slice(0, 2)).toEqual(["tft", "tft_grid"]);
+  });
+
+  it("forms D7 day pairs within one model's rows (PAR-1041)", () => {
+    const row = (model: string, date: string, pred: number, truth: number) => ({
+      model,
+      parkId: "p1",
+      lead: "d3",
+      date,
+      n: 1,
+      sumModel: pred,
+      sumRef: 40,
+      sumTruth: truth,
+    });
+    const out = d7AggregatesByModel([
+      row("weekday_avg", "2026-10-01", 30, 30),
+      row("weekday_avg", "2026-10-02", 40, 50),
+      // The grid shadow had no value on 10-01: no pair for it.
+      row("tft_grid", "2026-10-02", 10, 50),
+      row("tft_grid", "2026-10-03", 20, 70),
+    ]);
+    const of = (m: string) => out.filter((a) => a.model === m);
+    expect(of("weekday_avg").map((a) => a.dates)).toEqual([
+      ["2026-10-02", "2026-10-01"],
+    ]);
+    expect(of("tft_grid").map((a) => a.dates)).toEqual([
+      ["2026-10-03", "2026-10-02"],
+    ]);
+    expect(of("tft_grid")[0]).toMatchObject({ n: 1, saeModel: 0 });
   });
 
   it("gives CatBoost a live figure against the weekday average on its own days", () => {

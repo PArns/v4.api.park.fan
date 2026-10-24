@@ -831,6 +831,13 @@ export const ATTRACTION_DEPENDENCIES: MergeDependency[] = [
     conflictColumns: ["target_date", "forecast_date"],
   },
   {
+    // The calendar-grid TFT shadow (PAR-1041): same key as tft_forecasts.
+    table: "tft_forecasts_shadow",
+    column: "attraction_id",
+    strategy: "move",
+    conflictColumns: ["target_date", "forecast_date"],
+  },
+  {
     // `custom` because the row names the attraction twice — in the column and
     // inside `id`, which is a hash of it. See `moveAggregateBuckets`.
     table: "queue_data_aggregates",

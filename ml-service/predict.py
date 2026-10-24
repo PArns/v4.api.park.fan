@@ -16,6 +16,7 @@ from db import (
     fetch_parks_metadata,
     get_db,
     fetch_holidays,
+    fetch_school_holiday_coverage,
     convert_df_types,
     fetch_attraction_ids_for_park,
     FROZEN_OUT_OF_WINDOW_SQL,
@@ -30,6 +31,7 @@ from features import (
 )
 from uuid_params import uuid_list
 from holiday_features import (
+    SchoolCoverage,
     assign_holiday_features,
     holiday_fetch_window,
     parse_influencing_regions,
@@ -1312,8 +1314,15 @@ def create_prediction_features(
     holidays_df = fetch_holidays(list(all_countries), holidays_start, holidays_end)
 
     df["local_date"] = df["local_timestamp"].dt.date
+    # Past a location's last school-holiday row the school columns are NaN, as
+    # in training (PAR-1049): an unpublished break is not "no break".
     df = assign_holiday_features(
-        df, parks_metadata, holidays_df, park_col="parkId", date_col="local_date"
+        df,
+        parks_metadata,
+        holidays_df,
+        park_col="parkId",
+        date_col="local_date",
+        coverage=SchoolCoverage(fetch_school_holiday_coverage(list(all_countries))),
     )
     df = df.drop(columns=["local_date"], errors="ignore")
 

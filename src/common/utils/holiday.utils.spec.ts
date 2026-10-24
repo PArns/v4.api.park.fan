@@ -1,9 +1,54 @@
 import type { HolidayRow } from "../../holidays/holidays.service";
 import {
   buildLocalHolidayMap,
+  buildSchoolCoverage,
   dayHolidayFlags,
   isLocalHoliday,
+  markUnknownSchoolVacation,
+  schoolCoverageThrough,
 } from "./holiday.utils";
+
+/** PAR-1049: past the stored school rows, "no school vacation" is unknown. */
+describe("holiday.utils › school-holiday coverage", () => {
+  const coverage = buildSchoolCoverage([
+    { country: "ES", region: "ES-CT", through: "2026-09-11" },
+    { country: "DE", region: "DE-NW", through: "2027-07-20" },
+    { country: "DE", region: null, through: "2026-01-01" },
+  ]);
+
+  it("reads the region's own rows, then the country's latest", () => {
+    expect(schoolCoverageThrough(coverage, "DE", "NRW")).toBe("2027-07-20");
+    expect(schoolCoverageThrough(coverage, "ES", "ES-MD")).toBe("2026-09-11");
+    expect(schoolCoverageThrough(coverage, "SE", null)).toBeNull();
+  });
+
+  it("marks only the false days past the coverage", () => {
+    const days = [
+      { date: "2026-09-11", isSchoolVacation: true },
+      { date: "2026-09-12", isSchoolVacation: false },
+      { date: "2026-09-10", isSchoolVacation: false },
+      { date: "2026-09-13", isSchoolVacation: true },
+    ] as {
+      date: string;
+      isSchoolVacation: boolean;
+      schoolVacationUnknown?: boolean;
+    }[];
+    markUnknownSchoolVacation(days, "2026-09-11");
+    expect(days.map((d) => d.schoolVacationUnknown ?? false)).toEqual([
+      false,
+      true,
+      false,
+      false,
+    ]);
+    const none = [{ date: "2020-01-01", isSchoolVacation: false }] as {
+      date: string;
+      isSchoolVacation: boolean;
+      schoolVacationUnknown?: boolean;
+    }[];
+    markUnknownSchoolVacation(none, null);
+    expect(none[0].schoolVacationUnknown).toBe(true);
+  });
+});
 
 /**
  * The local-holiday rule the calendar and the yearly forecast share. The

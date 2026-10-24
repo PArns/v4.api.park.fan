@@ -17,6 +17,41 @@ import forecast
 import db
 
 
+def run_grid_shadow(version: str, forecast_date) -> dict | None:
+    """PAR-1041: the calendar-grid TFT as a shadow, after the served run and in
+    the same process, written to `tft_forecasts_shadow` under the served run's
+    forecast_date. Never fails the night: the served forecast is already
+    persisted, so an error here is reported in the status and nothing else."""
+    if not main.settings.NF_GRID_SHADOW:
+        return None
+    if main.settings.NF_CALENDAR_GRID:
+        # The served run already is the grid variant; a copy would compare it
+        # with itself.
+        return {"skipped": "NF_CALENDAR_GRID is on"}
+    drivers = main.settings.NF_SHADOW_DRIVERS
+    # The suffix tells grid-only rows from grid + PAR-830 drivers (PAR-1057).
+    shadow_version = f"{version}-grid{'-drivers' if drivers else ''}"
+    try:
+        with forecast.calendar_grid(True, drivers=drivers):
+            y_hat = forecast.train_and_forecast(shadow_version)
+        tcol = main._tft_column(list(y_hat.columns))
+        persisted = (
+            db.persist_forecast(
+                y_hat, shadow_version, tcol, forecast_date, table=db.SHADOW_TABLE
+            )
+            if tcol else 0
+        )
+        return {
+            "version": shadow_version, "rows": len(y_hat),
+            "persisted": int(persisted),
+            "chunks": dict(y_hat.attrs.get("chunks") or {}),
+        }
+    except Exception as e:  # noqa: BLE001
+        main.logger.error("TFT grid shadow %s failed: %s\n%s", shadow_version, e,
+                          traceback.format_exc())
+        return {"version": shadow_version, "error": str(e)}
+
+
 def run(version: str) -> None:
     started_at = datetime.now(timezone.utc)
     # The day this run makes the forecast (UTC, as forecast_date always was),
@@ -44,6 +79,15 @@ def run(version: str) -> None:
                 "keep their previous forecast_date", version, chunks["skipped"],
                 chunks.get("total", 0),
             )
+        del y_hat
+        # The lock stays on through the shadow: no second /train and no Chronos
+        # call on the GPU until both runs are done.
+        main._write_status({
+            "is_training": True, "status": "training", "version": version,
+            "started_at": started_at.isoformat(), "phase": "grid_shadow",
+            "error": None,
+        })
+        info["shadow"] = run_grid_shadow(version, forecast_date)
         main._write_status({
             "is_training": False, "status": "completed", "version": version,
             "finished_at": datetime.now(timezone.utc).isoformat(),
