@@ -22,10 +22,13 @@ def park_timezone(park_id: str) -> str | None:
     return meta["timezone"].iloc[0]
 
 
-def build_park_tensor(park_id: str, window_days: int | None = None):
+def build_park_tensor(
+    park_id: str, window_days: int | None = None, in_force: bool | None = None
+):
     """Build the cross-ride tensor for one park over the configured window (or an
     explicit override — the forecast tick passes its short inference window), or None
-    if the park has no attractions / no queue data in the window."""
+    if the park has no attractions / no queue data in the window. `in_force` overrides
+    PCN_TARGET_MODE (forecast.py passes the loaded checkpoint's own mode)."""
     tz = park_timezone(park_id)
     if tz is None:
         logger.warning("park %s: no attractions", park_id)
@@ -35,7 +38,7 @@ def build_park_tensor(park_id: str, window_days: int | None = None):
         logger.warning("park %s (tz=%s): no queue data in window", park_id, tz)
         return None
     readings = windows = None
-    if settings.in_force_targets:
+    if settings.in_force_targets if in_force is None else in_force:
         # Same span as the panel (NOW() - window days), so the grids line up.
         hi = pd.Timestamp.now(tz="UTC")
         lo = hi - pd.Timedelta(days=window_days or settings.PCN_WINDOW_DAYS)

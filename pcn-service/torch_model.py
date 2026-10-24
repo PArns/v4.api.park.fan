@@ -54,9 +54,12 @@ class TorchSeqModel:
         self, loss: str = "quantile", quantiles=(0.5, 0.8, 0.9), tweedie_p: float = 1.5,
         hidden: int = 64, max_steps: int = 500, batch_size: int = 16, lr: float = 1e-3,
         max_train_windows: int = 6000, seed: int = 0, residual: bool = False,
-        **arch_kwargs,
+        target_mode: str = "median", **arch_kwargs,
     ):
         self.residual = residual
+        # PCN_TARGET_MODE the model was trained under — its inputs must be built the
+        # same way at inference (forecast.py reads it, PAR-1034).
+        self.target_mode = target_mode
         self.loss = loss
         self.quantiles = list(quantiles)
         self.tweedie_p = tweedie_p
@@ -253,6 +256,7 @@ class TorchSeqModel:
                 "loss": self.loss, "quantiles": self.quantiles,
                 "tweedie_p": self.tweedie_p, "hidden": self.hidden,
                 "arch_kwargs": self.arch_kwargs, "residual": self.residual,
+                "target_mode": self.target_mode,
             },
             "ride_ids": list(ride_ids) if ride_ids is not None else None,
             "channels": list(self.channels),
@@ -269,7 +273,9 @@ class TorchSeqModel:
         self.tweedie_p = cfg.get("tweedie_p", self.tweedie_p)
         self.hidden = cfg.get("hidden", self.hidden)
         self.arch_kwargs = cfg.get("arch_kwargs", self.arch_kwargs)
-        self.residual = cfg.get("residual", False)   # checkpoints before PAR-1034: absolute
+        # Checkpoints before PAR-1034: absolute level, median targets.
+        self.residual = cfg.get("residual", False)
+        self.target_mode = cfg.get("target_mode", "median")
         self._median_q = self.quantiles.index(0.5) if 0.5 in self.quantiles else 0
         # Restore the TRAINED channel list (older checkpoints predate appended channels;
         # _model_features selects them by name from whatever tensor is passed in).

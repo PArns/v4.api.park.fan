@@ -590,6 +590,29 @@ Differences from the canonical rule, on purpose:
   park without published hours would have no target at all.
 - Ages are measured on park-local wall clock: off by the DST hour on the two
   switch nights, when parks are closed.
+- `fetch_operating_windows` merges a day into one window, min(open)–max(close)
+  (the bench's `windows` table), so a midday closure between two published
+  windows counts as open — `buildTruthSlots` keeps the windows separate.
+- "First published window" is relative to the fetched range (548 days in
+  training, 7 days on the forecast tick, the board's lookback), not to the
+  park's whole history.
+- The grid still ends at the newest panel slot, and a reading bins into the slot
+  whose midpoint follows it, so the newest reading can land one slot after the
+  grid's end and the last context slot reads the previous one — up to ~15 min
+  staler than under `median`.
+
+**The checkpoint records its mode.** `target_mode` is saved in the checkpoint
+config (missing = `median`, every checkpoint before PAR-1034). `forecast.py`
+builds a park's inputs under the loaded checkpoint's own mode and logs an error
+when it differs from `PCN_TARGET_MODE`, so a flip before the retrain does not feed
+an old model inputs it was not trained on.
+
+**Pre-flip check: training DB time.** With the flag on, training runs a second
+548-day scan per park (`fetch_in_force_readings`, a `DISTINCT ON` over every
+STANDBY row of compressed `queue_data`) beside the panel aggregate — expect the
+nightly PCN DB time to roughly double. Before flipping, time it on one large park
+through `scripts/prod-psql.sh` (its statement/lock timeouts; outside 05:50–07:30
+UTC, see the DB health runbook §5a) and compare with the panel query.
 
 It is a flag because it changes what the served model learns *and* its inputs: a
 checkpoint must be served under the mode it was trained in. Flipping it on the

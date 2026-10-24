@@ -226,3 +226,19 @@ def test_residual_adds_last_context_level_and_survives_reload(tmp_path):
     m2 = backbones.LocalGRUModel(loss="quantile", hidden=8).load(str(p))
     assert m2.residual is True
     np.testing.assert_allclose(m2.predict(t, ev, 4, 2), m.predict(t, ev, 4, 2), rtol=1e-5)
+
+
+def test_target_mode_roundtrips_and_old_checkpoints_read_median(tmp_path):
+    import backbones
+    t = _tensor()
+    train, _ = backtest.rolling_origin_split(t, L=4, H=2, eval_days=2, base_hour=12)
+    m = backbones.LocalGRUModel(loss="quantile", hidden=8, max_steps=1, batch_size=2,
+                                target_mode="in_force")
+    m.fit(t, train, L=4, H=2)
+    p = tmp_path / "m.pt"
+    m.save(str(p))
+    assert backbones.LocalGRUModel(hidden=8).load(str(p)).target_mode == "in_force"
+    ck = torch.load(str(p), weights_only=False)
+    del ck["config"]["target_mode"]                     # a checkpoint before PAR-1034
+    torch.save(ck, str(p))
+    assert backbones.LocalGRUModel(hidden=8).load(str(p)).target_mode == "median"

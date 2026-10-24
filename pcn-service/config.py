@@ -115,11 +115,15 @@ class Settings(BaseSettings):
         return [p.strip() for p in self.PCN_PARK_IDS.split(",") if p.strip()]
 
     @property
-    def in_force_targets(self) -> bool:
+    def target_mode(self) -> str:
         mode = self.PCN_TARGET_MODE.strip().lower()
         if mode not in ("median", "in_force"):
             raise ValueError(f"PCN_TARGET_MODE must be 'median' or 'in_force', got {mode!r}")
-        return mode == "in_force"
+        return mode
+
+    @property
+    def in_force_targets(self) -> bool:
+        return self.target_mode == "in_force"
 
     @property
     def slot_freq(self) -> str:
