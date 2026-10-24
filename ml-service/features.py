@@ -242,7 +242,7 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
             # cos((h - 14) / 12 * PI) gives peak (1.0) at 14, trough (-1.0) at 2am
             # We map -1.0..1.0 to 0.0..1.0 range
             normalized_time = ((df["hour"] - 14) / 12) * np.pi
-            interpolation_factor = np.cos(normalized_time) * -0.5 + 0.5
+            interpolation_factor = np.cos(normalized_time) * 0.5 + 0.5
 
             df["temperature_avg"] = temp_min + (interpolation_factor * temp_range)
         else:
@@ -273,26 +273,12 @@ def add_weather_features(df: pd.DataFrame) -> pd.DataFrame:
             df["is_rain_starting"] = 0
             df["is_rain_stopping"] = 0
 
-        # Precipitation last 3 hours (cumulative effect)
-        # For training: use rolling window on historical data
-        # For inference: will be provided via feature_context
-        if "timestamp" in df.columns:
-            # Sort by (parkId, timestamp) so that groupby().rolling().values aligns
-            # correctly with df rows — groupby produces (parkId, timestamp) order.
-            original_index = df.index
-            df = df.sort_values(["parkId", "timestamp"])
-            df_sorted = df.set_index("timestamp")
-            df["precipitation_last_3h"] = (
-                df_sorted.groupby("parkId")["precipitation"]
-                .rolling("3h", closed="left", min_periods=1)
-                .sum()
-                .reset_index(level=0, drop=True)
-                .values
-            )
-            df = df.loc[original_index]  # restore original row order
-            df["precipitation_last_3h"] = df["precipitation_last_3h"].fillna(0)
-        else:
-            df["precipitation_last_3h"] = 0
+        # mm per 3 h. `precipitation` is the DAY's total (weather_data is daily),
+        # so there is no hourly series to roll: the 3 h share of the day, the same
+        # definition predict.apply_weather_features serves. It was a 3 h rolling
+        # sum over every ride's row of the park — the day's total times the number
+        # of ride-rows in the window, so it scaled with ride count (PAR-1032).
+        df["precipitation_last_3h"] = df["precipitation"].fillna(0) * 0.125
 
     # Temperature deviation (current vs. monthly average)
     # Helps model understand if weather is unusually hot/cold
