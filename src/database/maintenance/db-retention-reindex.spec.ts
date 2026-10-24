@@ -3,6 +3,7 @@ import { HYPERTABLES } from "../hypertables";
 import { DbVacuumService, VacuumClient } from "./db-vacuum.service";
 import {
   mayStartPcnReindex,
+  mayStartTftPruneBatch,
   PCN_REINDEX_CRON,
   PCN_REINDEX_TABLE,
   pcnReindexStatementTimeoutMs,
@@ -10,6 +11,7 @@ import {
   TFT_PRUNE_CRON,
   TFT_PRUNE_TABLES,
   tftPruneSql,
+  tftPruneStatementTimeoutMs,
 } from "./vacuum-plan";
 
 const MIN = 60 * 1000;
@@ -20,6 +22,8 @@ interface Fake {
   /** Rows each successive DELETE reports, per table. */
   deletes?: Record<string, number[]>;
   missing?: string[];
+  /** What the "rows left" count reports. */
+  remaining?: number;
   building?: boolean;
   vacuuming?: boolean;
   otherSession?: boolean;
@@ -44,6 +48,9 @@ function fakeClient(opts: Fake = {}) {
         return {
           rows: [{ present: !opts.missing?.includes(params?.[0] as string) }],
         };
+      }
+      if (sql.startsWith("SELECT count(*)")) {
+        return { rows: [{ n: String(opts.remaining ?? 0) }] };
       }
       if (sql.startsWith("DELETE FROM")) {
         const table = sql.match(/^DELETE FROM "([^"]+)"/)![1];
@@ -157,7 +164,62 @@ describe("TFT forecast retention (PAR-1054)", () => {
       deleted: 200,
       batches: 2,
       done: false,
+      remaining: 0,
     });
+  });
+
+  it("starts batches only 04:35-04:48 UTC, each capped to end by 04:50", () => {
+    expect(mayStartTftPruneBatch(sunday("04:34"))).toBe(false);
+    expect(mayStartTftPruneBatch(sunday("04:35"))).toBe(true);
+    expect(mayStartTftPruneBatch(sunday("04:47"))).toBe(true);
+    expect(mayStartTftPruneBatch(sunday("04:48"))).toBe(false);
+    expect(mayStartTftPruneBatch(sunday("05:30"))).toBe(false);
+    expect(tftPruneStatementTimeoutMs(sunday("04:35"))).toBe(5 * MIN);
+    expect(tftPruneStatementTimeoutMs(sunday("04:47"))).toBe(3 * MIN);
+  });
+
+  it("stops at the 04:48 cut-off, logs the rows left, next table starts no batch either", async () => {
+    const client = fakeClient({
+      deletes: { tft_forecasts: [100, 100, 100] },
+      remaining: 1234,
+    });
+    const service = serviceWith(client, sunday("04:35"));
+    jest
+      .spyOn(service as unknown as { now(): Date }, "now")
+      .mockReturnValueOnce(sunday("04:40"))
+      .mockReturnValueOnce(sunday("04:47"))
+      .mockReturnValue(sunday("04:48"));
+    const results = await service.pruneTftForecasts(
+      TFT_PRUNE_TABLES,
+      120,
+      100,
+      40,
+    );
+    expect(results).toEqual([
+      {
+        table: "tft_forecasts",
+        deleted: 200,
+        batches: 2,
+        done: false,
+        remaining: 1234,
+      },
+      { table: "tft_forecasts_shadow", deleted: 0, batches: 0, done: false },
+    ]);
+    const sqls = client.statements.map((s) => s.sql);
+    expect(sqls).toContain(`SET statement_timeout = ${3 * MIN}`);
+    expect(sqls.filter((s) => s.startsWith("DELETE"))).toHaveLength(2);
+  });
+
+  it("starts nothing when Bull delivers the job late", async () => {
+    const client = fakeClient({ deletes: { tft_forecasts: [100] } });
+    const results = await serviceWith(
+      client,
+      sunday("06:10"),
+    ).pruneTftForecasts(["tft_forecasts"], 120, 100, 40);
+    expect(results[0]).toMatchObject({ deleted: 0, batches: 0, done: false });
+    expect(
+      client.statements.some((s) => /^(DELETE|SELECT count)/.test(s.sql)),
+    ).toBe(false);
   });
 
   it("skips a table that does not exist yet", async () => {

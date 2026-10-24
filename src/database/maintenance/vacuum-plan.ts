@@ -176,6 +176,46 @@ export const TFT_PRUNE_MAX_BATCHES = 40;
  */
 export const TFT_PRUNE_STATEMENT_TIMEOUT_MS = 5 * MINUTE_MS;
 
+/** First minute (UTC) a prune batch may start: the cron's own minute. */
+export const TFT_PRUNE_WINDOW_START_MINUTE = 4 * 60 + 35; // 04:35
+/**
+ * No batch STARTS at or after this minute (UTC). Each batch rescans the heap
+ * from its start past the rows earlier batches deleted (dead until the VACUUM),
+ * so the first catch-up slows per batch; whatever is left waits for tomorrow.
+ */
+export const TFT_PRUNE_LAST_START_MINUTE = 4 * 60 + 48; // 04:48
+/** No batch is still RUNNING at this minute (UTC): the 04:50 VACUUM starts. */
+export const TFT_PRUNE_HARD_DEADLINE_MINUTE = 4 * 60 + 50; // 04:50
+/** Bound of the "rows left" count logged when a run stops early. */
+export const TFT_PRUNE_COUNT_TIMEOUT_MS = 30 * 1000;
+
+/** Whether a new prune batch may start at `now`: only inside [04:35, 04:48) UTC. */
+export function mayStartTftPruneBatch(now: Date): boolean {
+  const m = minuteOfDayUtc(now);
+  return m >= TFT_PRUNE_WINDOW_START_MINUTE && m < TFT_PRUNE_LAST_START_MINUTE;
+}
+
+/** One batch's `statement_timeout`: 5 min, capped to end by 04:50 UTC, never below 1 s. */
+export function tftPruneStatementTimeoutMs(now: Date): number {
+  const deadline = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    0,
+    TFT_PRUNE_HARD_DEADLINE_MINUTE,
+  );
+  return Math.max(
+    1000,
+    Math.min(TFT_PRUNE_STATEMENT_TIMEOUT_MS, deadline - now.getTime()),
+  );
+}
+
+/** The rows a stopped run left behind (one seq scan; only logged). */
+export function tftPruneRemainingSql(table: string): string {
+  return `SELECT count(*)::bigint AS n FROM ${quoteIdent(table)}
+     WHERE forecast_date < (now() AT TIME ZONE 'UTC')::date - $1::int`;
+}
+
 /**
  * One batch. The outer DELETE has no predicate of its own (TID scan, see
  * pcn-service `_PRUNE_PCN_FORECASTS`), which is only correct on a plain table:

@@ -3,6 +3,7 @@ import { Client } from "pg";
 import { getDatabaseConfig } from "../../config/database.config";
 import {
   mayStartPcnReindex,
+  mayStartTftPruneBatch,
   mayStartVacuum,
   PCN_REINDEX_INDEX,
   PCN_REINDEX_LOCK_TIMEOUT,
@@ -11,10 +12,12 @@ import {
   quoteIdent,
   TFT_FORECAST_RETENTION_DAYS,
   TFT_PRUNE_BATCH_ROWS,
+  TFT_PRUNE_COUNT_TIMEOUT_MS,
   TFT_PRUNE_MAX_BATCHES,
-  TFT_PRUNE_STATEMENT_TIMEOUT_MS,
   TFT_PRUNE_TABLES,
+  tftPruneRemainingSql,
   tftPruneSql,
+  tftPruneStatementTimeoutMs,
   VACUUM_LOCK_TIMEOUT,
   VACUUM_MAINTENANCE_WORK_MEM,
   VACUUM_TARGETS,
@@ -45,8 +48,10 @@ export interface TftPruneResult {
   table: string;
   deleted: number;
   batches: number;
-  /** false when the batch cap stopped it; the next night continues. */
+  /** false when the batch cap or the 04:48 UTC cut-off stopped it; the next night continues. */
   done: boolean;
+  /** Expired rows still there when it stopped early; null when the count failed. */
+  remaining?: number | null;
   error?: string;
 }
 
@@ -209,7 +214,10 @@ export class DbVacuumService {
    * Batched retention DELETE on the TFT forecast tables by `forecast_date`
    * (PAR-1054, the PAR-873 pattern): each batch is its own autocommitted
    * statement of at most {@link TFT_PRUNE_BATCH_ROWS} rows; a table stops at
-   * its first short batch or after {@link TFT_PRUNE_MAX_BATCHES}. A missing
+   * its first short batch, after {@link TFT_PRUNE_MAX_BATCHES}, or when the
+   * clock leaves 04:35–04:48 UTC (each batch's timeout capped to 04:50, when
+   * the VACUUM starts) — a stopped run logs the rows left and the next night
+   * continues. A missing
    * table (the shadow before its first write) is skipped. Never throws.
    */
   async pruneTftForecasts(
@@ -222,9 +230,6 @@ export class DbVacuumService {
     const client = await this.openClient("TFT prune", VACUUM_LOCK_TIMEOUT);
     if (!client) return results;
     try {
-      await client.query(
-        `SET statement_timeout = ${TFT_PRUNE_STATEMENT_TIMEOUT_MS}`,
-      );
       for (const table of tables) {
         const r: TftPruneResult = {
           table,
@@ -244,6 +249,16 @@ export class DbVacuumService {
           }
           const sql = tftPruneSql(table);
           while (r.batches < maxBatches) {
+            const now = this.now();
+            if (!mayStartTftPruneBatch(now)) {
+              this.logger.warn(
+                `🗑️  ${table}: no new batch at ${now.toISOString()} (batches start only 04:35–04:48 UTC)`,
+              );
+              break;
+            }
+            await client.query(
+              `SET statement_timeout = ${tftPruneStatementTimeoutMs(now)}`,
+            );
             const res = await client.query(sql, [retentionDays, batchRows]);
             const n = Number(res.rowCount ?? 0);
             r.deleted += n;
@@ -257,6 +272,9 @@ export class DbVacuumService {
           r.error = describe(err);
           this.logger.error(`🗑️  ${table}: prune failed: ${r.error}`);
         }
+        // Counted only after a run that worked: a late or stopped-before-start run must not seq-scan inside 05:50–07:30.
+        if (!r.done && r.batches > 0)
+          r.remaining = await this.countExpired(client, table, retentionDays);
       }
     } catch (err) {
       this.logger.error(`🗑️  TFT prune aborted: ${describe(err)}`);
@@ -269,11 +287,35 @@ export class DbVacuumService {
           .map(
             (r) =>
               `${r.table} ${r.deleted.toLocaleString("en-US")} in ${r.batches} batch(es)` +
-              (r.done ? "" : " (not finished, continuing next run)"),
+              (r.done
+                ? ""
+                : ` (not finished, ${r.remaining == null ? "unknown" : r.remaining.toLocaleString("en-US")} rows left, continuing next run)`),
           )
           .join(", "),
     );
     return results;
+  }
+
+  /** Expired rows left in `table`; null on any failure (only logged, never thrown). */
+  private async countExpired(
+    client: VacuumClient,
+    table: string,
+    retentionDays: number,
+  ): Promise<number | null> {
+    try {
+      await client.query(
+        `SET statement_timeout = ${TFT_PRUNE_COUNT_TIMEOUT_MS}`,
+      );
+      const res = await client.query(tftPruneRemainingSql(table), [
+        retentionDays,
+      ]);
+      return Number(res.rows[0]?.n ?? 0);
+    } catch (err) {
+      this.logger.warn(
+        `🗑️  ${table}: could not count the rows left: ${describe(err)}`,
+      );
+      return null;
+    }
   }
 
   /**
