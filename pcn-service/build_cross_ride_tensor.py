@@ -16,7 +16,7 @@ import logging
 import os
 
 import db
-import tensor
+import pipeline
 from config import get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -36,15 +36,10 @@ def build_for_park(park_id: str, meta_by_park, save_dir: str | None):
         logger.warning("park %s: no attractions, skip", park_id)
         return None
     tz = rows["timezone"].iloc[0]
-    panel = db.fetch_cross_ride_panel(park_id, tz)
-    if panel.empty:
-        logger.warning("park %s (tz=%s): no queue data in window, skip", park_id, tz)
+    # The shared step, so PCN_TARGET_MODE applies to saved bake-off tensors too.
+    crt = pipeline.build_park_tensor(park_id)
+    if crt is None:
         return None
-
-    crt = tensor.build(
-        panel, park_id=park_id, freq=settings.slot_freq,
-        min_rides_open=settings.PCN_MIN_RIDES_OPEN,
-    )
     s = crt.summary()
     logger.info(
         "park %s tz=%s: %d rides × %d slots × %d ch | obs_density=%.3f "

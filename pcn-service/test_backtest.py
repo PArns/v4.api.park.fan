@@ -126,8 +126,10 @@ def test_rolling_origin_split_no_leakage():
     t = _make_tensor(days=8, freq="6h")
     train, ev = backtest.rolling_origin_split(t, L=4, H=2, eval_days=2, base_hour=12)
     assert ev.size >= 1
-    # every training base is strictly before the earliest eval base (leakage-free)
-    assert train.max() < ev.min()
+    # every training TARGET (b+1 .. b+H) ends before the earliest eval base: a base
+    # merely before it trained on the eval window's slots (PAR-1034)
+    assert train.max() + 2 < ev.min()
+    assert train.max() == ev.min() - 2 - 1
 
 
 def test_run_backtest_persistence_identity():

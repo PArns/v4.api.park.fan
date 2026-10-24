@@ -84,7 +84,8 @@ def rolling_origin_split(
 ) -> tuple[np.ndarray, np.ndarray]:
     """(train_bases, eval_bases). Eval bases are the last `eval_days` anchors at
     `base_hour` local that have a full horizon ahead; train bases are every valid base
-    strictly before the earliest eval base (no leakage)."""
+    whose TARGETS (b+1 .. b+H) still end before the earliest eval base — a base merely
+    before it would train on the eval window's slots (PAR-1034)."""
     sl = _slots_index(t)
     T = len(sl)
     valid = set(windowing.valid_bases(T, L, H).tolist())
@@ -100,7 +101,7 @@ def rolling_origin_split(
         eval_bases = vb[-eval_days:]
     cutoff = int(eval_bases.min()) if eval_bases.size else T
     train_bases = windowing.valid_bases(T, L, H)
-    train_bases = train_bases[train_bases < cutoff]
+    train_bases = train_bases[train_bases < cutoff - H]
     return train_bases, eval_bases
 
 

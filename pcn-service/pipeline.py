@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import logging
 
+import pandas as pd
+
 import db
 import tensor as tns
 from config import get_settings
@@ -32,9 +34,19 @@ def build_park_tensor(park_id: str, window_days: int | None = None):
     if panel.empty:
         logger.warning("park %s (tz=%s): no queue data in window", park_id, tz)
         return None
+    readings = windows = None
+    if settings.in_force_targets:
+        # Same span as the panel (NOW() - window days), so the grids line up.
+        hi = pd.Timestamp.now(tz="UTC")
+        lo = hi - pd.Timedelta(days=window_days or settings.PCN_WINDOW_DAYS)
+        readings = db.fetch_in_force_readings(
+            park_id, tz, lo.to_pydatetime(), hi.to_pydatetime())
+        windows = db.fetch_operating_windows(
+            park_id, tz, lo.tz_convert(tz).date(), hi.tz_convert(tz).date())
     return tns.build(
         panel, park_id=park_id, freq=settings.slot_freq,
         min_rides_open=settings.PCN_MIN_RIDES_OPEN,
+        readings=readings, windows=windows, min_wait=settings.PCN_MIN_WAIT,
     )
 
 

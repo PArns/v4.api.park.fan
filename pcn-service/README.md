@@ -96,6 +96,8 @@ python3 build_cross_ride_tensor.py --limit 5 --save ./models   # build + save a 
 | `PCN_SLOT_MINUTES` | 15 | slot grid (matches CatBoost serving) |
 | `PCN_MIN_WAIT` | 5 | min STANDBY wait counted as a real observation |
 | `PCN_MIN_RIDES_OPEN` | 3 | rides reporting to call a slot "park open" |
+| `PCN_TARGET_MODE` | `median` | `in_force` = BENCH-SPEC truth as targets + board actuals ([review §12](../docs/ml/pcn-intraday-review.md)) |
+| `PCN_RESIDUAL` | `false` | predict last `wait_ffill` + learned change; stored per checkpoint |
 
 ## Service & shadow flow
 

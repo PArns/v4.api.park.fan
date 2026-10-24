@@ -60,27 +60,17 @@ def _load_tensors(args):
             yield tns.CrossRideTensor.from_npz(p)
         return
 
-    # Build from the DB.
-    import db
-    from config import get_settings
+    # Build from the DB through the shared step (honours PCN_TARGET_MODE).
+    import pipeline
 
-    s = get_settings()
     park_ids = [p.strip() for p in args.parks.split(",") if p.strip()] if args.parks \
-        else (s.park_ids or db.fetch_park_ids())
+        else pipeline.scope_park_ids()
     if args.limit:
         park_ids = park_ids[: args.limit]
-    meta = db.fetch_attraction_meta(park_ids)
-    by_park = dict(tuple(meta.groupby("park_id"))) if not meta.empty else {}
     for pid in park_ids:
-        rows = by_park.get(pid)
-        if rows is None or rows.empty:
-            continue
-        tz = rows["timezone"].iloc[0]
-        panel = db.fetch_cross_ride_panel(pid, tz)
-        if panel.empty:
-            continue
-        yield tns.build(panel, park_id=pid, freq=s.slot_freq,
-                        min_rides_open=s.PCN_MIN_RIDES_OPEN)
+        t = pipeline.build_park_tensor(pid)
+        if t is not None:
+            yield t
 
 
 def main():
@@ -98,11 +88,14 @@ def main():
     # 4 slots (1h) of the context; 8 layers see 256 (> L). THE bake-off knob for the
     # "does a full-context TCN beat the 1h-RF one on busy?" question (review §5a).
     ap.add_argument("--layers", type=int, default=2)
+    ap.add_argument("--residual", action="store_true",
+                    help="predict last wait_ffill + delta (PCN_RESIDUAL, PAR-1034)")
     ap.add_argument("--out", help="write the pooled report as JSON")
     args = ap.parse_args()
 
     registry = backbones.build_registry(
-        loss=args.loss, max_steps=args.max_steps, layers=args.layers)
+        loss=args.loss, max_steps=args.max_steps, layers=args.layers,
+        residual=args.residual)
     per_park, parks_done = [], []
     for t in _load_tensors(args):
         try:

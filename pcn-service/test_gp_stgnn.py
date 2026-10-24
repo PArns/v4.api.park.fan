@@ -194,3 +194,35 @@ def test_gather_batch_matches_windowing():
         np.testing.assert_allclose(x[i].numpy(), ctx, rtol=1e-6)
         np.testing.assert_allclose(y[i].numpy(), tw, rtol=1e-6)
         np.testing.assert_allclose(m[i].numpy(), tm)
+
+
+def test_scale_is_fitted_on_training_slots_only():
+    # A 10× spike after the training horizon must not move the scale (PAR-1034).
+    import backbones
+    t = _tensor()
+    train, ev = backtest.rolling_origin_split(t, L=4, H=2, eval_days=2, base_hour=12)
+    m = backbones.LocalGRUModel(loss="quantile", hidden=8, max_steps=1, batch_size=2)
+    m.fit(t, train, L=4, H=2)
+    before = m._scale
+    t.wait_raw = t.wait_raw.copy()
+    t.wait_raw[:, int(train.max()) + 2 + 1:] *= 10.0
+    m.fit(t, train, L=4, H=2)
+    assert m._scale == before
+
+
+def test_residual_adds_last_context_level_and_survives_reload(tmp_path):
+    import backbones
+    t = _tensor()
+    train, ev = backtest.rolling_origin_split(t, L=4, H=2, eval_days=2, base_hour=12)
+    m = backbones.LocalGRUModel(loss="quantile", hidden=8, max_steps=2, batch_size=2,
+                                residual=True)
+    m.fit(t, train, L=4, H=2)
+    x = m._batch(m._scaled(m._model_features(t)), ev, 4)
+    last = x[:, -1, :, m.channels.index("wait_ffill")]
+    with torch.no_grad():
+        torch.testing.assert_close(m._forward(x), m.net(x) + last[:, :, None, None])
+    p = tmp_path / "m.pt"
+    m.save(str(p), ride_ids=t.ride_ids)
+    m2 = backbones.LocalGRUModel(loss="quantile", hidden=8).load(str(p))
+    assert m2.residual is True
+    np.testing.assert_allclose(m2.predict(t, ev, 4, 2), m.predict(t, ev, 4, 2), rtol=1e-5)
