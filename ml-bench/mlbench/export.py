@@ -107,6 +107,31 @@ def forecast_query(table: str, start: dt.date, end: dt.date, max_lead: int) -> s
           AND target_date - forecast_date BETWEEN 0 AND {max_lead}"""
 
 
+# Surfaces of forecast_archive_curves (src/ml/entities/forecast-archive-curve.entity.ts):
+# 1 park_hourly (the served 15-min curve), 2 plan_day (the served planner),
+# 8 park_hourly_incumbent (what park_hourly would show without Chronos-2; written only
+# while SERVE_CHRONOS_INTRADAY is on). Surfaces 3-7 are shadows that were never served.
+ARCHIVE_SURFACES = (1, 2, 8)
+
+
+def archive_query(day: dt.date) -> str:
+    """One UTC day of archived SERVED curves, by ``origin_at`` (PAR-1043).
+
+    ``origin_at`` leads the table's primary key, so the day range is an index range
+    scan. A row expires 14 days past its TARGET date and is never updated after its
+    capture, so an origin day exported once it is complete holds every row it will
+    ever hold, minus those already expired."""
+    nxt = day + dt.timedelta(days=1)
+    return f"""
+        SELECT {_us('origin_at')} AS origin_us, attraction_id, park_id, surface, origin_kind,
+               lead_days, target_date, {_us('slot_start')} AS slot_start_us, slot_minutes,
+               array_to_string(waits, ',', '') AS waits, sources
+        FROM forecast_archive_curves
+        WHERE origin_at >= TIMESTAMPTZ '{day.isoformat()} 00:00:00+00'
+          AND origin_at <  TIMESTAMPTZ '{nxt.isoformat()} 00:00:00+00'
+          AND surface IN ({', '.join(map(str, ARCHIVE_SURFACES))})"""
+
+
 def month_starts(first: dt.date, last: dt.date) -> list[tuple[dt.date, dt.date]]:
     out = []
     cur = first.replace(day=1)
@@ -172,11 +197,14 @@ def run_export(args: argparse.Namespace) -> dict:
         "git_sha": args.git_sha or git_sha(repo),
         "queue_from": args.queue_from,
         "queue_to": args.queue_to,
+        "archive_from": args.archive_from,
         "notes": {
             "schedule": "latest published version per day (no history) -> flagged published_final",
             "weather": "daily actuals only; no forecast archive exists -> ORACLE",
             "headliners": "headliner_attractions as of export time (548-day window, not ex-ante)",
             "queue_data": "STANDBY change log, all statuses; truth built offline (build step)",
+            "archive_curves": "forecast_archive_curves surfaces 1/2/8 by origin day; a row expires "
+                              "14 days past its TARGET date, so only recent targets are complete",
         },
     })
 
@@ -216,6 +244,13 @@ def run_export(args: argparse.Namespace) -> dict:
             job(f"queue_{day.isoformat()}", queue_query(day))
             day += dt.timedelta(days=1)
 
+    if want("archive_curves"):
+        day = dt.date.fromisoformat(args.archive_from)
+        last = dt.date.fromisoformat(args.queue_to)
+        while day <= last:
+            job(f"archive_curves_{day.isoformat()}", archive_query(day))
+            day += dt.timedelta(days=1)
+
     manifest["export_finished_utc"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
     return manifest
@@ -232,9 +267,14 @@ def add_args(p: argparse.ArgumentParser) -> None:
                    help="last COMPLETE UTC day (inclusive)")
     p.add_argument("--forecast-from", default="2026-03-01")
     p.add_argument("--max-lead", type=int, default=120)
+    # forecast_archive_curves keeps a row until 14 days past its target date, so an
+    # older origin day holds only its long-lead rows (PAR-1043).
+    p.add_argument("--archive-from", default=(today - dt.timedelta(days=15)).isoformat(),
+                   help="first UTC origin day of forecast_archive_curves (the served arm), "
+                        "exported through --queue-to")
     p.add_argument("--tables", default=None,
                    help="comma list subset: parks,attractions,schedule,holidays,weather,"
-                        "tft_forecasts,queue")
+                        "tft_forecasts,queue,archive_curves")
     p.add_argument("--pause", type=float, default=0.3, help="seconds between queries")
 
 

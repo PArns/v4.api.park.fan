@@ -229,8 +229,20 @@ describe("offline-model-verdicts.json — the PAR-1038 schema", () => {
             has: true,
           });
         }
-        // No bench export has reported a paired figure yet.
-        expect([v.diff, v.ciLow, v.ciHigh]).toEqual([null, null, null]);
+        // A figure only comes from `python -m mlbench.served_verdicts` (PAR-1043): a
+        // whole triple, against served, from a named run. Hand-typed entries carry none.
+        const fig = [v.diff, v.ciLow, v.ciHigh];
+        if (fig.every((x) => x === null)) continue;
+        expect({
+          cell: `${qid}/${mid}`,
+          reference: v.reference,
+          run: !!v.runId,
+        }).toEqual({
+          cell: `${qid}/${mid}`,
+          reference: "served",
+          run: true,
+        });
+        expect(v.ciLow! <= v.diff! && v.diff! <= v.ciHigh!).toBe(true);
       }
     }
   });

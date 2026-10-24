@@ -13,7 +13,7 @@ import pytest
 
 from mlbench import baselines as B
 from mlbench.config import BenchConfig
-from mlbench.models import REGISTRY, LevelH5Example
+from mlbench.models import REGISTRY, SERVED_ARMS, LevelH5Example
 from mlbench.models.base import HistoryView
 from mlbench.report import build_report
 from mlbench.runner import Runner
@@ -97,7 +97,9 @@ def _predict_all(r: Runner, m) -> dict[str, pd.DataFrame]:
     return out
 
 
-@pytest.mark.parametrize("name", sorted(REGISTRY))
+# The served arms replay archived curves and read no truth: poisoning truth cannot move
+# them, so their cut is tested on the archive itself (tests/test_served.py).
+@pytest.mark.parametrize("name", sorted(set(REGISTRY) - set(SERVED_ARMS)))
 def test_information_cut_plugins(name, synth_export, tmp_path):
     """Every registered model, on every path it is scored on: the same forecasts after
     the future is poisoned.
