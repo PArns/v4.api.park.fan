@@ -15,6 +15,7 @@ import {
 import {
   MlComponentStatus,
   MlDecisionDto,
+  MlDecisionReportDto,
   MlDecisionState,
 } from "../dto/ml-overview.dto";
 import {
@@ -94,7 +95,7 @@ export function componentStatus(
 }
 
 /** The matrix cells a decision rests on, without the served (`today`) ones. */
-function decisionCells(
+export function decisionCells(
   def: DecisionDef,
   matrix: ModelComparisonResponseDto | null,
 ): ModelComparisonCellDto[] {
@@ -203,6 +204,8 @@ export function buildDecisions(
   today: string,
   /** Per `evaluateOn` reached: the matrix of the window ending the day before. */
   frozen: Map<string, ModelComparisonResponseDto | null> = new Map(),
+  /** PAR-1059: stored reports, keyed `${decisionId}|${evaluateOn}`; one wins over `frozen`. */
+  reports: Map<string, MlDecisionReportDto> = new Map(),
 ): MlDecisionDto[] {
   const derived = new Map<string, MlDecisionDto>();
   for (const def of file.decisions) {
@@ -212,7 +215,12 @@ export function buildDecisions(
       def,
       evaluated ? (frozen.get(def.evaluateOn!) ?? null) : matrix,
     );
-    let state = deriveDecisionState(cells);
+    const report = evaluated
+      ? reports.get(`${def.id}|${def.evaluateOn}`)
+      : undefined;
+    // A stored report is the verdict: the paired rows behind it age out after
+    // 120 days, the report does not.
+    let state = report ? report.verdict : deriveDecisionState(cells);
     // Before the evaluation date a decision is never ready: the gate is
     // looked at once, not every day until it happens to pass.
     if (!evaluated && def.evaluateOn && state === "ready") {
@@ -238,6 +246,7 @@ export function buildDecisions(
       earliest,
       cells: def.cells,
       ...(def.evaluateOn ? { evaluateOn: def.evaluateOn, evaluated } : {}),
+      ...(report ? { report } : {}),
     });
   }
   return file.decisions.map((def) => {

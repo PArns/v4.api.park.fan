@@ -13,6 +13,7 @@ import {
   earliestFromProgress,
 } from "./ml-overview.util";
 import decisionsJson from "../data/ml-decisions.json";
+import { MlDecisionReportDto } from "../dto/ml-overview.dto";
 import {
   COMPARISON_MODELS,
   COMPARISON_QUESTIONS,
@@ -325,6 +326,46 @@ describe("buildDecisions", () => {
     )[0];
     expect(after).toMatchObject({ state: "ready", evaluated: true });
     expect(after.earliest).toBeNull();
+  });
+
+  it("reads a stored report's verdict over any matrix, frozen or live (PAR-1059)", () => {
+    const f: DecisionFile = {
+      decisions: [
+        {
+          id: "e",
+          title: "E",
+          detail: "e",
+          evaluateOn: "2026-11-09",
+          cells: [{ questionId: "plan_d0_1", modelId: "h5" }],
+        },
+      ],
+    };
+    // The frozen window has since lost rows to retention and no longer reads ready.
+    const drifted = matrix({ plan_d0_1: { h5: cell({ state: "worse" }) } });
+    const report = {
+      decisionId: "e",
+      evaluateOn: "2026-11-09",
+      verdict: "ready",
+      warning: true,
+    } as unknown as MlDecisionReportDto;
+    const [d] = buildDecisions(
+      f,
+      drifted,
+      "2027-03-01",
+      new Map([["2026-11-09", drifted]]),
+      new Map([["e|2026-11-09", report]]),
+    );
+    expect(d).toMatchObject({ state: "ready", evaluated: true, report });
+    // A report for another date (evaluateOn moved) is not this decision's.
+    const [moved] = buildDecisions(
+      f,
+      drifted,
+      "2027-03-01",
+      new Map([["2026-11-09", drifted]]),
+      new Map([["e|2026-10-30", report]]),
+    );
+    expect(moved.state).toBe("waiting_live");
+    expect(moved.report).toBeUndefined();
   });
 
   it("degrades to open without a matrix", () => {

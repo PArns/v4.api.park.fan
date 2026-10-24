@@ -7,6 +7,7 @@ import {
   trainingNote,
 } from "./ml-overview.service";
 import { CHRONOS_LAST_RUN_KEY } from "../parks/services/chronos-shadow.service";
+import { DRIFT_WATCH_KEY } from "../parks/services/ml-decision-watch.service";
 
 jest.mock("axios");
 const mockedGet = axios.get as jest.Mock;
@@ -89,6 +90,39 @@ describe("MlOverviewService", () => {
     });
     expect(out.decisions).toHaveLength(5);
     expect(out.decisions.some((d) => d.state === "ready")).toBe(false);
+  });
+
+  it("carries the drift watch and stored reports without re-reading their window (PAR-1059)", async () => {
+    const drift = {
+      computedAt: NOW.toISOString(),
+      status: "drift",
+      models: [],
+    };
+    const report = {
+      decisionId: "live_chronos",
+      evaluateOn: "2026-11-09",
+      verdict: "open",
+      warning: true,
+    };
+    const { service } = make(
+      { ml_decision_reports: [{ report }] },
+      { [DRIFT_WATCH_KEY]: JSON.stringify(drift) },
+    );
+    const out = await service.build(new Date("2026-11-10T08:00:00Z"));
+    expect(out.drift).toEqual(drift);
+    const live = out.decisions.find((d) => d.id === "live_chronos")!;
+    expect(live).toMatchObject({ state: "open", evaluated: true, report });
+    const planner = out.decisions.find((d) => d.id === "planner_chronos")!;
+    expect(planner.report).toBeUndefined();
+  });
+
+  it("reads no frozen window for a date every decision of which has a report", async () => {
+    const reports = ["live_chronos", "planner_chronos"].map((id) => ({
+      report: { decisionId: id, evaluateOn: "2026-11-09", verdict: "open" },
+    }));
+    const { service, comparison } = make({ ml_decision_reports: reports });
+    await service.build(new Date("2026-11-10T08:00:00Z"));
+    expect(comparison.getMatrix).toHaveBeenCalledTimes(1);
   });
 
   it("derives ok / late from the newest run of each component", async () => {
