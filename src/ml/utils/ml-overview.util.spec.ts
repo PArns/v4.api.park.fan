@@ -429,7 +429,7 @@ describe("buildDecisions", () => {
     const questions = new Set(COMPARISON_QUESTIONS.map((q) => q.id));
     const models = new Set(COMPARISON_MODELS.map((x) => x.id));
     const ids = new Set<string>();
-    expect(f.decisions).toHaveLength(7);
+    expect(f.decisions).toHaveLength(8);
     for (const d of f.decisions) {
       expect(ids.has(d.id)).toBe(false);
       ids.add(d.id);
