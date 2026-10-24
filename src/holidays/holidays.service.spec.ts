@@ -208,6 +208,43 @@ describe("HolidaysService", () => {
   describe("synthesizeProjectedSummerHolidays", () => {
     const now = new Date().getUTCFullYear();
 
+    it("never projects a hand-curated region, and still projects a synced one (PAR-1071)", async () => {
+      // LAUSD's file ends 2028-06-30: 23 June days in 2028 look marker-only.
+      const marker = (region: string) => [
+        {
+          region,
+          yr: String(now - 1),
+          days: "70",
+          mn: `${now - 1}-06-05`,
+          mx: `${now - 1}-08-11`,
+        },
+        {
+          region,
+          yr: String(now),
+          days: "23",
+          mn: `${now}-06-08`,
+          mx: `${now}-06-30`,
+        },
+      ];
+      const spy = jest
+        .spyOn(service as any, "saveRawHolidays")
+        .mockResolvedValue(0);
+
+      (mockHolidayRepository as any).query = jest
+        .fn()
+        .mockResolvedValue([...marker("US-CA"), ...marker("US-FL")]);
+      expect(await service.synthesizeProjectedSummerHolidays("US")).toBe(0);
+      expect(spy).not.toHaveBeenCalled();
+
+      (mockHolidayRepository as any).query = jest
+        .fn()
+        .mockResolvedValue(marker("IT-ER"));
+      await service.synthesizeProjectedSummerHolidays("IT");
+      expect(spy).toHaveBeenCalledTimes(1);
+      const entries = spy.mock.calls[0][0] as Array<{ externalId: string }>;
+      expect(entries[0].externalId).toMatch(/^synth-summer:IT:IT-ER:/);
+    });
+
     it("projects last year's summer range forward for a marker-only region", async () => {
       (mockHolidayRepository as any).query = jest.fn().mockResolvedValue([
         // prev year: a genuine ~99-day summer range
@@ -284,6 +321,39 @@ describe("HolidaysService", () => {
 
       expect(spy).not.toHaveBeenCalled();
       expect(result).toBe(0);
+    });
+  });
+
+  describe("saveHolidaysFromApi: Nager types (PAR-1071)", () => {
+    const nager = (types: string[], counties: string[] | null) => ({
+      date: "2026-05-08",
+      localName: "Truman Day",
+      name: "Truman Day",
+      countryCode: "US",
+      fixed: false,
+      global: counties === null,
+      counties,
+      launchYear: null,
+      types,
+    });
+
+    const savedTypes = async (country: string, types: string[]) => {
+      await service.saveHolidaysFromApi(
+        [{ ...nager(types, [`${country}-MO`]), countryCode: country } as never],
+        country,
+      );
+      const rows = mockHolidayRepository.upsert.mock.calls[0][0];
+      return rows.map((r: { holidayType: string }) => r.holidayType);
+    };
+
+    it("stores Truman Day (US-MO, School+Authorities) as a public holiday, not a school one", async () => {
+      expect(await savedTypes("US", ["School", "Authorities"])).toEqual([
+        "public",
+      ]);
+    });
+
+    it("keeps Nager's School tag outside the US (Austrian patron saints' days)", async () => {
+      expect(await savedTypes("AT", ["School"])).toEqual(["school"]);
     });
   });
 

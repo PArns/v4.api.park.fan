@@ -11,6 +11,7 @@ import { addDays } from "date-fns";
 import { normalizeRegionCode } from "../common/utils/region.util";
 import { getTimezoneForCountry } from "../common/utils/timezone.util";
 import { HolidayInput } from "../common/types/holiday-input.type";
+import { CURATED_HOLIDAY_SETS } from "./data/curated-holidays";
 import {
   SchoolCoverage,
   buildSchoolCoverage,
@@ -93,6 +94,18 @@ export const HOLIDAY_UPSERT_OPTIONS = {
   skipUpdateIfNoValuesChanged: true,
 };
 
+/** Countries whose Nager.Date "School" tag is not a school holiday (PAR-1071). */
+const NAGER_SCHOOL_IGNORED: ReadonlySet<string> = new Set(["US"]);
+
+/** `country|region` of every hand-curated school region (PAR-1071). */
+const CURATED_SCHOOL_REGIONS: ReadonlySet<string> = new Set(
+  CURATED_HOLIDAY_SETS.flatMap((set) =>
+    set.entries
+      .filter((e) => e.type === "school" && e.region !== null)
+      .map((e) => `${set.country}|${e.region}`),
+  ),
+);
+
 @Injectable()
 export class HolidaysService {
   private readonly logger = new Logger(HolidaysService.name);
@@ -136,7 +149,7 @@ export class HolidaysService {
       isNationwide: boolean;
     }> = [];
     for (const holiday of holidays) {
-      let holidayType = this.mapHolidayType(holiday.types);
+      let holidayType = this.mapHolidayType(holiday.types, countryCode);
 
       // Fallback: If API marks known public holidays as "observance", correct them
       // This handles cases where Nager.Date API incorrectly classifies official holidays
@@ -246,14 +259,21 @@ export class HolidaysService {
    *
    * Note: If a holiday has multiple types (e.g., ["Public", "Bank"]),
    * we prioritize "Public" > "Bank" > "School" > "Authorities"
+   *
+   * In the US, Nager's "School" is ignored (PAR-1071): school days off are set
+   * per district, never per state, so a state-wide tag says nothing about a
+   * school. Truman Day (US-MO, ["School", "Authorities"]) is a state holiday,
+   * and a stored `school` row would also have counted as US school coverage.
    */
   private mapHolidayType(
     types: string[],
+    countryCode: string,
   ): "public" | "observance" | "school" | "bank" {
     // Priority order: Public > Bank > School > Authorities > Observance
     if (types.includes("Public")) return "public";
     if (types.includes("Bank")) return "bank";
-    if (types.includes("School")) return "school";
+    if (types.includes("School") && !NAGER_SCHOOL_IGNORED.has(countryCode))
+      return "school";
     // Authorities (government offices closed) should be treated as public holidays
     if (types.includes("Authorities")) return "public";
     return "observance";
@@ -443,6 +463,9 @@ export class HolidaysService {
    * is a projection, not data, and it counts toward the school-holiday coverage.
    * No other break type and no later year is projected — an unpublished break
    * reads as unknown instead (docs/architecture/school-holiday-coverage.md).
+   * A region whose school data is hand-curated is skipped (PAR-1071): its file
+   * ends where the publisher's calendar ends, and a projection past that edge
+   * would be invented data.
    */
   async synthesizeProjectedSummerHolidays(
     countryCode: string,
@@ -486,6 +509,7 @@ export class HolidaysService {
 
     const toUpsert: HolidayInput[] = [];
     for (const [region, years] of byRegion) {
+      if (CURATED_SCHOOL_REGIONS.has(`${countryCode}|${region}`)) continue;
       // Only the CURRENT summer: projecting next year's too risks stale rows once
       // the range-based countries publish their (real) next-year calendar.
       {

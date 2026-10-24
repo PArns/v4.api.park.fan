@@ -18,6 +18,7 @@ Facts about real places come from the publisher's own page, never from recall.
 | KR | public | KASI 특일 정보 `getRestDeInfo` | API, needs `KASI_SERVICE_KEY` | `kasi:KR:` | — |
 | SG | school, national | MOE press releases for [2026](https://www.moe.gov.sg/news/press-releases/20250730-school-terms-and-holidays-for-2026) and [2027](https://www.moe.gov.sg/news/press-releases/20260714-school-terms-and-holidays-for-2027) | curated file | `curated:SG:` | school through 2027-12-31 |
 | AU (QLD) | school, `AU-QLD` | Department of Education, [2026](https://education.qld.gov.au/about-us/calendar/term-dates) and [2027–2029](https://education.qld.gov.au/about-us/calendar/future-dates) | curated file | `curated:AU:` | school through 2029-12-31 |
+| US (FL, TX, CA) | school, `US-FL` / `US-TX` / `US-CA`, one district per state | [Orange County Public Schools](https://www.ocps.net/110680_3), [Northside ISD](https://www.nisd.net/schools/calendars), [Los Angeles Unified](https://www.lausd.org/apps/pages/index.jsp?uREC_ID=4432518&type=d&pREC_ID=2672183) | curated file | `curated:US:` | FL through 2028-08-09, TX through 2028-07-31, CA through 2028-06-30; other states unknown |
 | CN | public blocks + `working_day` | State Council notice for 2026, [Xinhua's authorised release](https://www.news.cn/politics/20251104/88bcffd88ae249e58c699b8772548e3d/c.html) | curated file | `curated:CN:` | no school data, so unknown |
 
 Public holidays for all of them still come from Nager.Date as well. The rows
@@ -60,6 +61,137 @@ entry. Past the last entry the coverage ends, and the day reads as unknown:
 | `curated-holidays-cn.ts` | early November, for the next year | the 国务院办公厅 notice (Xinhua "受权发布" or gov.cn) |
 | `curated-holidays-sg.ts` | July, for the next year | MOE press release "School Terms and Holidays for YYYY" |
 | `curated-holidays-au.ts` | when QLD adds a year (currently through 2029) | education.qld.gov.au "future dates" |
+| `curated-holidays-us.ts` | when a district publishes its next school year (Orange County publishes three ahead; Northside ISD two, approved each December) | the district's own calendar page, never an aggregator |
+
+## United States (PAR-1071)
+
+Neither Nager.Date nor OpenHolidays has US school data, and no free service
+publishes it: US school calendars are set by each school district, not by the
+state. `curated-holidays-us.ts` copies the calendars of one district per state
+from the district's own pages (PDFs read with `pdftotext`, every date
+weekday-checked).
+
+| State | District | Parks it stands for | School years |
+|---|---|---|---|
+| FL | Orange County Public Schools ([2026-27](https://www.ocps.net/110680_3), [2027-28](https://www.ocps.net/school-calendar-2027-28), [2028-29](https://www.ocps.net/school-calendar-2028-29), [2024-25 / 2025-26](https://www.ocps.net/110681_3)) | the 13 Orlando parks (Disney, Universal, SeaWorld) | summer 2025, 2025-26, 2026-27, 2027-28; 2028-29's first day closes summer 2028 |
+| TX | Northside ISD, San Antonio ([calendars](https://www.nisd.net/schools/calendars)) | SeaWorld / Aquatica San Antonio, Six Flags Fiesta Texas (Schlitterbahn New Braunfels nearby) | 2025-26, 2026-27 (approved 12/09/25), 2027-28 (approved 12/10/25) |
+| CA | Los Angeles Unified ([calendar page](https://www.lausd.org/apps/pages/index.jsp?uREC_ID=4432518&type=d&pREC_ID=2672183), PDFs [2025-26](https://media.edlio.net/135dff18/8fc3b7d4/7659581d/517e3313317f408baf4c01d7f43b5582), [2026-27 rev 6.9.26](https://media.edlio.net/135dff18/cc2a29d3/f0dbab90/03abacb9bbd44b1c8b86d1828e9ad968?_=2026-27%20Instructional%20Cal_Eng_Month_rev%206.9.26.pdf) and [2027-28](https://media.edlio.net/135dff18/8fc3b7d4/7659581d/160a549f27d044bab5ea9fb555faddc1?_=2027-28%20Instructional%20Cal_Eng_Month.pdf)) | Universal Studios Hollywood, and the LA basin that feeds Disneyland, Knott's and Magic Mountain | 2025-26, 2026-27, 2027-28 ("Board Approved", adoption "tentative" pending union negotiations); summer 2025 from 07-01, the first month the 2025-26 calendar shows |
+
+**What is listed.** Every day students have no school: Thanksgiving, winter,
+spring and summer breaks, plus single student holidays (teacher workdays,
+Labor Day, MLK, Presidents' Day, district holidays). A bad-weather make-up day
+(NISD 2026-02-16, 2027-02-16, 2028-02-22; OCPS uses Presidents' Day and
+Thanksgiving Monday) is listed as the holiday it is planned to be; if a
+district uses it, that day was a school day. Weekends inside a break are part
+of the range, the ones around it are not. Summer runs from the day after the
+last day of school to the day before the next first day.
+
+**Where it stops.** Nothing past a district's last published day: Northside
+ISD has not published 2028-29, so its summer 2028 stops on 2028-07-31, the
+last day its 2027-28 calendar shows. NISD's 2024-25 calendar is no longer on
+nisd.net, so TX summer 2025 is not listed. 2025-26 is included so that
+training history does not read last school year as "no break"; days before a
+state's first row read as 0, as for every country (PAR-1049 handles only the
+upper edge).
+
+**No projected summers.** `synthesizeProjectedSummerHolidays` projects last
+year's summer forward for a region whose current summer looks marker-only
+(< 25 June–September days). A curated file that ends inside a summer looks
+exactly like that — LAUSD's ends on 2028-06-30, 23 days — and in 2028 the
+sync would have written `synth-summer:US:US-CA:` rows for 06-05..08-11, an
+invented break. Regions that appear in a curated file with `school` rows
+(`CURATED_SCHOOL_REGIONS`, `holidays.service.ts`) are skipped; synced
+countries (IT, ES, IE) are projected as before.
+
+### One district per state
+
+Parks match holidays by state: they store `regionCode = FL`, the rows say
+`US-FL`, and `isLocalHoliday` / the coverage compare the normalised codes. So
+a state carries one calendar for all its parks. That is a simplification:
+Busch Gardens and Adventure Island in Tampa and LEGOLAND Florida / Peppa Pig
+in Winter Haven get Orange County's calendar, Six Flags Over Texas in
+Arlington gets San Antonio's. Writing a second district under the same key
+would union the two, and every break they hold in different weeks would
+read as twice as long, so none was added:
+
+- **Osceola County** (south of Orlando, part of Walt Disney World's area):
+  not added — the state key already carries Orange County, and its calendar
+  page needs a ParentSquare sign-in for the listing.
+- **Arlington ISD**: published 2026-27 only (approved 2026-01-22, Google Drive
+  PDFs linked from [aisd.net](https://www.aisd.net/district/about/calendars/));
+  Northside ISD has two years and stands for more of our TX parks.
+- **Anaheim Elementary** (Disneyland, board-approved 2026-27 at
+  [anaheimelementary.org](https://anaheimelementary.org/calendars/)) has not
+  published 2027-28, and **Anaheim Union High**'s site (auhsd.us) refused
+  every connection on 2026-10-25. LAUSD has two years and is the larger
+  catchment, so it carries `US-CA`. San Diego (SeaWorld, LEGOLAND, Sesame
+  Place) and the Bay Area (Great America, Discovery Kingdom, Hurricane Harbor
+  Concord) get LA's calendar too.
+- **LAUSD access**: lausd.org answers 403 to scripted requests (Cloudflare).
+  The calendar page was read through its Wayback capture of 2026-10-12, the
+  PDFs directly from LAUSD's host (media.edlio.net); every date was checked
+  against the PDF grid. The 2027-28 footnote repeats the 2026-27 pupil-free
+  dates (a copy-over); the grid's 2027-08-11 / 2028-06-08 were used. The
+  optional second-semester pupil-free day (2027-01-11, 2028-01-10) is each
+  school's choice and is not listed.
+
+Per-park districts need a sub-state key on the park (a county or district
+code) that every reader — `isLocalHoliday`, the coverage, the Python
+`HolidayIndex`/`SchoolCoverage` — would have to match. That is a follow-up,
+not part of this change.
+
+### A state without a district is unknown
+
+The coverage rule (PAR-1049) lets a region without rows fall back to the
+latest school row of any region of its country, for codes that fail to match.
+For the US that would have put Cedar Point (OH) on Orlando's coverage: every
+Ohio day through 2028 would have read "known, no school holiday". The US and
+AU (where only QLD is curated) are therefore in `REGION_ONLY_SCHOOL_COVERAGE`
+(`src/common/utils/holiday.utils.ts`, and the same set in ml-service's
+`holiday_features.py`, vendored byte-identical into nf-service): there a
+region without rows has no coverage, and an influence given at country
+level (`{"countryCode": "US"}` from a Canadian or Mexican park) has none
+either. The 38 US parks outside FL/TX/CA and their neighbour states read as
+unknown — which they were not before this change, see below.
+
+### Truman Day was a school holiday
+
+Nager.Date lists Truman Day (US-MO, May 8) with types `["School",
+"Authorities"]`. `mapHolidayType` ranks School above Authorities, so it was
+stored as `school` — the only US school rows. A Missouri park read May 8 as a
+school break, and through the country fallback every US park got a school
+coverage up to the latest of them, 2028-05-08: Cedar Point's calendar for
+2027-07-01 said `isSchoolVacation: false` with no `schoolVacationUnknown`.
+In the US, school days off are set per district, so a state-wide Nager tag
+says nothing about a school: `NAGER_SCHOOL_IGNORED` (`holidays.service.ts`)
+drops the School tag for the US and the row becomes `public` (Authorities: a
+state holiday, offices closed). Elsewhere the tag stays meaningful (Austria's
+patron saints' days are school-free) and is kept. The next sync rewrites the
+2025–2028 rows (same `externalId`); a 2024 row, outside the sync window,
+keeps `school` and must be fixed by hand after the deploy (it would otherwise
+keep counting as US school data):
+
+```sql
+UPDATE holidays SET "holidayType" = 'public'
+ WHERE country = 'US' AND name = 'Truman Day' AND "holidayType" = 'school';
+```
+
+### What the models see
+
+Before this change every US park was "covered" through 2028-05-08 by the
+Truman Day rows and the country fallback, with every day 0 (no break) except
+May 8 in Missouri. After the sync and the 2024 fix:
+
+| Parks | CatBoost school columns | TFT `is_school_holiday` | Calendar | Chronos-2 `holidayDataThrough` |
+|---|---|---|---|---|
+| FL / TX / CA (39) | known 0 → real 0/1 inside the coverage, NaN past it | 0 → real 0/1 (`school_holiday_known` 1 inside, grid only) | breaks shown; `schoolVacationUnknown` past the coverage | ~2028-05-08 → the state's last school day |
+| the other ~38 US states' parks | known 0 → NaN | stays 0, `school_holiday_known` 1 → 0 | `schoolVacationUnknown: true` on every day | ~2028-05-08 → `none` |
+| AU parks outside QLD, AU neighbours of QLD parks | known 0 (QLD fallback) → NaN | stays 0, `school_holiday_known` → 0 | unknown | QLD's date → `none` |
+
+Nothing is retrained for it: the current CatBoost model sends NaN to the side
+of 0 (`nan_mode = Min`), so serving it changes only on the days that are now
+1; the next daily training learns from both the breaks and the NaN. TFT's
+default inputs are finite; the next TFT training learns from the new 0/1.
 
 ## China's make-up working days (调休)
 

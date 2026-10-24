@@ -3,13 +3,15 @@ import { addIsoDays } from "../../common/utils/date.util";
 import { AU_CURATED_HOLIDAYS } from "./curated-holidays-au";
 import { CN_CURATED_HOLIDAYS } from "./curated-holidays-cn";
 import { SG_CURATED_HOLIDAYS } from "./curated-holidays-sg";
+import { US_CURATED_HOLIDAYS } from "./curated-holidays-us";
 import { CuratedHolidaySet } from "./curated-holidays.types";
 
-/** Every hand-curated holiday file, one per country (PAR-1065). */
+/** Every hand-curated holiday file, one per country (PAR-1065, US: PAR-1071). */
 export const CURATED_HOLIDAY_SETS: CuratedHolidaySet[] = [
   AU_CURATED_HOLIDAYS,
   CN_CURATED_HOLIDAYS,
   SG_CURATED_HOLIDAYS,
+  US_CURATED_HOLIDAYS,
 ];
 
 /** The externalId prefix of one country's curated rows. */
