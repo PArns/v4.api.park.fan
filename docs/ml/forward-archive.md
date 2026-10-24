@@ -575,8 +575,8 @@ spec builds the matrix from the real scorer and asserts it.
 | UC3 d0–d5 | `shadow_h5`, routed, `shadow_peak_scaled`, `weekday_avg`, `chronos2_grid` | `plan_day` | 06:00 |
 | UC3 d6, d7, d10 … d60 | the same without Chronos | `plan_day` | 06:00 / 07:00 |
 | D3 d0–d7 / d10–d30 | as UC3 d0–d5 / without Chronos; regret of every candidate and of served on the same slots (`n` = ride-days, Σ\|e\| = Σ regret) | `plan_day` | 06:00 / 07:00 |
-| PEAK dN | `weekday_avg`: \|peak − truth P90\| per ride-day, `all` and `headliner`; optional `catboost_shadow` (PAR-1042) on the same rows where the TFT-levelled ride-day has a CatBoost shadow level | `plan_day` `dayPeak`, under **`served_tft` / `served_catboost`** by the model behind the level (PAR-1037) | 06:00 / 07:00 |
-| D7 dN | `weekday_avg` vs served `dayPeak`, headliners whose level is TFT's; `catboost_shadow` likewise, its own rows | `served_tft` | 06:00 / 07:00 |
+| PEAK dN | `weekday_avg`: \|peak − truth P90\| per ride-day, `all` and `headliner`; optional on the TFT-levelled ride-days that have a value: `catboost_shadow` (PAR-1042), `tft_grid` (PAR-1041) | `plan_day` `dayPeak`, under **`served_tft` / `served_catboost`** by the model behind the level (PAR-1037) | 06:00 / 07:00 |
+| D7 dN | `weekday_avg` vs served `dayPeak`, headliners whose level is TFT's; `catboost_shadow`, `tft_grid` likewise, each on its own rows | `served_tft` | 06:00 / 07:00 |
 
 The live candidates use, at a 10–18 h origin, the daily curves (H5, routed, the
 old composer, `chronos2_grid`) **issued at or before it** — the 06:00 one: none
@@ -634,6 +634,26 @@ first rows are the first capture after deploy, so its cells' "frühestens"
 dates (`cellFloorDate`, counted from `ARCHIVE_START`) are optimistic by the
 time between 2026-10-09 and the deploy.
 
+**The grid TFT shadow (`tft_grid`, PAR-1041).** nf-service trains the
+calendar-grid TFT every night beside the served one into `tft_forecasts_shadow`
+([neuralforecast-tft-evaluation.md](neuralforecast-tft-evaluation.md#the-grid-as-a-nightly-shadow-par-1041)).
+The scoring job reads it per park and target date (`shadowLevels`, PK-bounded:
+rides × one target date) and picks, per archived `plan_day` curve whose level
+source is `tft`, the level the served read would have taken at that origin
+(`shadowLevelAt`): the freshest `forecast_date` no older than three days before
+the origin's park-local date, **written at or before the origin**
+(`created_at`), rounded and floored at 0 like the served level. It is read at
+scoring time rather than captured, because `tft_forecasts_shadow` keeps every
+origin (no retention), so nothing is lost by waiting; a capture column would be
+a second copy. It is paired against the served TFT (`served_tft`) on PEAK and
+D7, only on the ride-days where it has a value; like the other nf-service
+shadow it is **optional** (`PAIRED_OPTIONAL_MODELS`), so a missing shadow night
+costs its own cell rows and never the weekday average's. D7 day pairs are
+formed within one model's rows (`d7AggregatesByModel`). **No
+`PAIRED_DEFINITION` bump:** no existing row changes meaning — the weekday
+average's PEAK/D7 rows are byte-identical, `tft_grid` is a new model key, and a
+replay of older dates would find no shadow rows to add.
+
 **D7 rows are levels, not errors**: per park, date and lead `n` headliners,
 `sae_model` = Σ weekday-average peak, `sae_ref` = Σ served `dayPeak`,
 `se_model` = `se_ref` = Σ truth P90. The read path (`d7Aggregates`) orders a
@@ -687,9 +707,9 @@ happens in the scoring job.
 | `plan_d2_5` | planner | Geplanter Tag ist in 2 bis 5 Tagen | `served` | UC3 d2–d5 | slot MAE |
 | `plan_d6_60` | planner | Geplanter Tag ist in 6 Tagen bis 2 Monaten | `served` | UC3 d6, d7, d10, d14, d21, d30, d45, d60 | slot MAE |
 | `plan_besttime` | planner | Beste Besuchszeit (bis 6 Wochen) | `served` | D3 d0–d7, d10, d14, d21, d30 | best-time regret |
-| `cal_rank` | calendar | Welcher Tag ist voller? | `tft` | D7 d0–d7, d10, d14, d21 (headliners, TFT level) | wrongly ordered day pairs, % |
-| `cal_busier` | calendar | Wie hoch wird die Tagesspitze? | `tft` | PEAK d0–d7, d10, d14, d21 (headliners, TFT level) | day-peak error |
-| `cal_far` | calendar | Kalendertage 1 bis 2 Monate voraus vergleichen | `tft` | PEAK d30, d45, d60 (headliners, TFT level) | day-peak error |
+| `cal_rank` | calendar | Welcher Tag ist voller? | `tft` (column `tft_grid`: shadow) | D7 d0–d7, d10, d14, d21 (headliners, TFT level) | wrongly ordered day pairs, % |
+| `cal_busier` | calendar | Wie hoch wird die Tagesspitze? | `tft` (column `tft_grid`: shadow) | PEAK d0–d7, d10, d14, d21 (headliners, TFT level) | day-peak error |
+| `cal_far` | calendar | Kalendertage 1 bis 2 Monate voraus vergleichen | `tft` (column `tft_grid`: shadow) | PEAK d30, d45, d60 (headliners, TFT level) | day-peak error |
 | `cal_far_90` | calendar | Kalendertage 3 Monate voraus vergleichen | `catboost` | PEAK d90 (headliners, CatBoost level) | day-peak error |
 
 Every question also carries `leadLabel`, the forecast distance in plain German
@@ -737,7 +757,11 @@ them meets it on its own**; `days` and `parks` are the weakest lead's, 0 while a
 lead has no rows. Because a lead without rows counts as 0 days, the
 "frühestens" date never falls before `cellFloorDate`: `ARCHIVE_START`
 (2026-10-09, the archive's first capture) + the cell's longest lead + 14 —
-22.12.2026 for a d60 cell, 21.01.2027 for d90.
+22.12.2026 for a d60 cell, 21.01.2027 for d90. A model whose rows begin later
+than the archive starts from its own date (`MODEL_ARCHIVE_START`): `tft_grid`
+from its first shadow night, assumed 2026-10-26 — 08.01.2027 for `cal_far`;
+correct the constant to the first `forecast_date` of `tft_forecasts_shadow`
+after the deploy.
 
 **Fixed evaluation dates** (owner decision against daily re-testing): the
 decisions of the ML overview carry `evaluateOn` and are judged once, on the

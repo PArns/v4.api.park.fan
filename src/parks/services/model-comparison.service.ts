@@ -31,7 +31,7 @@ import {
   OfflineVerdictFile,
   PairedAggregate,
   buildModelComparison,
-  d7Aggregates,
+  d7AggregatesByModel,
 } from "../../ml/utils/model-comparison.util";
 import {
   ModelComparisonDayDto,
@@ -240,9 +240,9 @@ export class ModelComparisonService {
     );
     const d7 = await this.q<
       Array<{
+        model: string;
         parkId: string;
         lead: string;
-        model: string;
         date: string;
         n: string | number;
         sumModel: string | number;
@@ -250,7 +250,7 @@ export class ModelComparisonService {
         sumTruth: string | number;
       }>
     >(
-      `SELECT park_id AS "parkId", lead, model, target_date::text AS date, n,
+      `SELECT model, park_id AS "parkId", lead, target_date::text AS date, n,
               sae_model AS "sumModel", sae_ref AS "sumRef", se_model AS "sumTruth"
          FROM forecast_archive_paired
         WHERE target_date BETWEEN $1::date AND $2::date
@@ -267,23 +267,17 @@ export class ModelComparisonService {
         saeModel: Number(r.saeModel),
         saeRef: Number(r.saeRef),
       })),
-      // One ranking per model (weekday average, CatBoost shadow — PAR-1042):
-      // pooling them would order one model's dates against another's.
-      ...[...new Set(d7.map((r) => r.model))].flatMap((model) =>
-        d7Aggregates(
-          d7
-            .filter((r) => r.model === model)
-            .map((r) => ({
-              parkId: r.parkId,
-              lead: r.lead,
-              date: r.date,
-              n: Number(r.n),
-              sumModel: Number(r.sumModel),
-              sumRef: Number(r.sumRef),
-              sumTruth: Number(r.sumTruth),
-            })),
-          model,
-        ),
+      ...d7AggregatesByModel(
+        d7.map((r) => ({
+          model: r.model,
+          parkId: r.parkId,
+          lead: r.lead,
+          date: r.date,
+          n: Number(r.n),
+          sumModel: Number(r.sumModel),
+          sumRef: Number(r.sumRef),
+          sumTruth: Number(r.sumTruth),
+        })),
       ),
     ];
   }
