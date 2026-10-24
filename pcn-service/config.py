@@ -40,6 +40,21 @@ class Settings(BaseSettings):
     # this many rides report a real observation (or a DOWN signal) in it. Mirrors the
     # ml-service operating-day heuristic (>=3 attractions), applied per 15-min slot.
     PCN_MIN_RIDES_OPEN: int = 3
+    # What a training target / shadow-board actual IS (PAR-1034). 'median' (default,
+    # the behaviour every served checkpoint was trained on): the median of the rows
+    # written inside the slot — queue_data writes on change and at least hourly, so an
+    # unchanged ride lands in ~1 slot of 4 and change slots weigh ~4×. 'in_force': the
+    # BENCH-SPEC truth — the reading in force at the slot midpoint, ≤3 h old, OPERATING,
+    # wait ≥ PCN_MIN_WAIT, inside the published operating window (see
+    # tensor.in_force_truth). Changes what the served model learns AND its inputs, so a
+    # checkpoint must be served under the mode it was trained in: flip it right before
+    # a retrain, and only after the shadow comparison (docs/ml/pcn-intraday-review.md §12).
+    PCN_TARGET_MODE: str = "median"    # 'median' | 'in_force'
+    # Residual head (PAR-1034): prediction = last context wait_ffill + the net's output,
+    # so the net learns the CHANGE from the last observation instead of the absolute
+    # level. Applied at training time and stored in the checkpoint (load() restores it),
+    # so flipping it only affects models trained afterwards. Off = absolute level.
+    PCN_RESIDUAL: bool = False
 
     # --- Model / training (the bake-off candidate; quantile serving) ---
     # graphwavenet (dilated TCN, parallel over time) trains ~6× faster than the recurrent
@@ -98,6 +113,17 @@ class Settings(BaseSettings):
     @property
     def park_ids(self) -> list[str]:
         return [p.strip() for p in self.PCN_PARK_IDS.split(",") if p.strip()]
+
+    @property
+    def target_mode(self) -> str:
+        mode = self.PCN_TARGET_MODE.strip().lower()
+        if mode not in ("median", "in_force"):
+            raise ValueError(f"PCN_TARGET_MODE must be 'median' or 'in_force', got {mode!r}")
+        return mode
+
+    @property
+    def in_force_targets(self) -> bool:
+        return self.target_mode == "in_force"
 
     @property
     def slot_freq(self) -> str:

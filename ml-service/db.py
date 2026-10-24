@@ -142,6 +142,7 @@ def fetch_training_data(
                 AND se.date = DATE(q.timestamp AT TIME ZONE p.timezone)
                 AND se."attractionId" IS NULL
             WHERE q."waitTime" IS NOT NULL
+                AND NOT COALESCE(q.is_heartbeat, false)
                 AND q.timestamp BETWEEN :start_date AND :end_date
                 -- Only check heuristic if not already confirmed OPERATING
                 AND (se."scheduleType" IS NULL OR se."scheduleType" != 'OPERATING')
@@ -193,6 +194,10 @@ def fetch_training_data(
                 ON odh."parkId" = a."parkId"
                 AND odh.day = DATE(qd.timestamp AT TIME ZONE p.timezone)
             WHERE qd."queueType" = 'STANDBY'
+                -- A heartbeat copies the previous status AND wait with a fresh
+                -- timestamp: it keeps a frozen reading alive, it never ends a
+                -- status, so it is neither a target nor context (PAR-1039).
+                AND NOT COALESCE(qd.is_heartbeat, false)
                 -- Relaxed: Accept OPERATING status OR any positive wait time (some parks report CLOSED but have wait times)
                 AND (qd.status = 'OPERATING' OR qd."waitTime" > 0)
                 AND qd.timestamp BETWEEN :start_date AND :end_date
@@ -649,6 +654,7 @@ def fetch_historical_park_occupancy(
               AND qd."waitTime" >= 10
               AND qd.status = 'OPERATING'
               AND qd."queueType" = 'STANDBY'
+              AND NOT COALESCE(qd.is_heartbeat, false)
             GROUP BY a."parkId", qd."attractionId"
         ),
         headliners AS (
@@ -690,6 +696,7 @@ def fetch_historical_park_occupancy(
                   AND qd."waitTime" >= 10
                   AND qd.status = 'OPERATING'
                   AND qd."queueType" = 'STANDBY'
+              AND NOT COALESCE(qd.is_heartbeat, false)
                 GROUP BY a."parkId", qd."attractionId", p.timezone,
                          EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone),
                          EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone)

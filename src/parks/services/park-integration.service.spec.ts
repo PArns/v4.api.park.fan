@@ -11,7 +11,6 @@ import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
-import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { ParkEnrichmentService } from "./park-enrichment.service";
 import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.client";
@@ -95,7 +94,6 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
         { provide: AnalyticsService, useValue: analyticsService },
         { provide: MLService, useValue: {} },
         { provide: PredictionAccuracyService, useValue: {} },
-        { provide: PredictionDeviationService, useValue: {} },
         { provide: HolidaysService, useValue: holidaysService },
         { provide: ParkEnrichmentService, useValue: {} },
         { provide: ThemeParksClient, useValue: {} },
@@ -188,6 +186,25 @@ describe("ParkIntegrationService › aggregateDailyPredictions", () => {
       expect(day.crowdLevel).toBe("unknown");
       // Not ratable → no recommendation either (PAR-410).
       expect(day.recommendation).toBeUndefined();
+    });
+
+    it("reads 'unknown', not 'moderate', for a day whose rows carry no wait (PAR-1028)", async () => {
+      analyticsService.getHeadlinerAttractionIds.mockResolvedValueOnce(
+        new Set(["h1"]),
+      );
+      analyticsService.getTypicalDayPeakFromCache.mockResolvedValueOnce(50);
+
+      const predictions = buildPredictions([
+        { attractionId: "h1", date: "2026-06-13", hour: 12, wait: 0 },
+      ]).map((p) => ({ ...p, predictedWaitTime: null as unknown as number }));
+
+      const [day] = await service.aggregateDailyPredictions(
+        predictions,
+        "p1",
+        TZ,
+      );
+
+      expect(day.crowdLevel).toBe("unknown");
     });
   });
 

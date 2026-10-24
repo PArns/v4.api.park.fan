@@ -18,9 +18,17 @@ The ML Service is a standalone Python application responsible for predicting wai
   - `weather_condition`: Categorical code
   - `temperature`: Numerical (Celsius)
   - `temperature_deviation`: Difference from monthly average
-  - `precipitation`: Current & Last 3 Hours (accumulated)
+  - `precipitation`: the park-local DAY's total, `precipitation_last_3h` = that total / 8 (mm per 3 h)
+  - **Weather units (PAR-1031/PAR-1032)**: training reads `weather_data`, one row per park-local day, so the
+    model knows daily precipitation/snowfall sums, the daily wind maximum and the daily weather code, plus a
+    temperature on a sinusoid (min 02:00, max 14:00 local). Serving reduces the hourly forecast to those same
+    daily values per park-local day (`predict.apply_weather_features`; a day needs ≥ 12 forecast hours, sums are
+    scaled to 24 h) and keeps the hourly temperature. Every row past the forecast reads the climatology of its
+    OWN park-local month (`fetch_weather_climatology`, 3-year averages) — never 20 °C / 0 mm / code 0, and
+    never the first row's month. Intra-day rain timing is not a feature: training has no hourly observed
+    weather to learn it from.
   - `park_occupancy_pct`: Park-wide occupancy (current recent-peak ÷ **P50** baseline, 0–200%). Matches the API's live `getCurrentOccupancy` reading (ratio-vs-P50).
-  - `wait_time_momentum`: Velocity of change over last 30 mins
+  - `wait_time_velocity`: mean of the last six hourly changes, (x[t-1h] − x[t-7h]) / 6 in min per hour — at serving the live wait is x[t-1h], only on rows ≤ 3 h ahead, 0 beyond
   - `trend_7d`: Linear regression slope of last 7 days
   - `volatility_7d`: Std of wait times over last 7 days, **dampened** as `log(1 + std)` and **capped** at `VOLATILITY_CAP_STD_MINUTES` (default 40 min) so it acts as a modifier; occupancy and time remain primary drivers.
 
@@ -49,6 +57,7 @@ The ML Service is a standalone Python application responsible for predicting wai
    - **Chronological hold-out**: the newest 30 days are split off first and never seen by the early-stopped fit.
    - **Randomized Weekly Block Split**: To ensure robust validation during seasonal transitions (e.g., winter to spring), the remaining pool is grouped into weekly blocks. 20% of these weeks are randomly selected for validation (and early stopping), while the rest are used for training. This ensures that both sets contain representative data from all operational phases.
    - **Hold-out score, then refit** (PAR-815): the early-stopped model is scored on the 30-day hold-out, and `holdout_metrics` (MAE, MAE on busy rows with actual ≥ 60 min, RMSE/MAPE/R², sample counts) is saved in the model metadata. Then the **served** model is refitted on ALL rows — pool plus hold-out — with the early-stopped tree count (best iteration + 1, deliberately not scaled up for the ~15–20% larger set), the same dropout and the same sample weights. Before this, the served model never learned the newest 30 days, so a season change reached it a month late. `TRAIN_REFIT_ON_ALL_ROWS` (default on) switches the refit off. Until PAR-902 early stopping never fired (`tree_count_` = `CATBOOST_ITERATIONS` = 2000 on every run), so the refit ran a full 2000 trees on ~1.25× the rows; see *Tree count and early stopping* below for why, and for the 1500-tree cap that replaced it. The training processor therefore passes its timeout to `/train` (`timeBudgetSeconds`), and the refit is **skipped** — logged, and flagged as `refit_skipped` in the metadata and `/train/status` — when elapsed time + fit time × (refit rows / fit rows) would come closer than `TRAIN_REFIT_SAFETY_MARGIN_SECONDS` (600) to that budget. The early-stopped model is then served for that day. `training_timings.refit` shows the actual cost. The champion/challenger gate still compares the **validation** MAE of the early-stopped fit; the persisted hold-out MAE is there for a future out-of-time gate. Note: the hold-out score describes the early-stopped model, not the refitted one, which has seen those rows.
+   - **Fixed seeds and the hold-out at served leads** (PAR-1040): the validation weeks and the training dropout used to be seeded from the wall clock, so each nightly run validated on different weeks and the gate compared two MAEs measured on different data. Dropout now uses `CATBOOST_RANDOM_SEED`, and each ISO week's side of the split is drawn from `(seed, week)` alone (`select_validation_weeks`): when the window slides by a day, every week still in it keeps its side. Separately, the hold-out above scores each row with its real lags — a **1 h nowcast**, while the model is served 12 h to a year ahead. `holdout_metrics.origin_leads` therefore re-scores the same rows **as known at the origin** (target − lead) for the leads 12h / 24h / 7d / 61d (`as_known_at_origin`): rolling statistics, base-hour lags and downtime from the ride's last row at or before the origin; `avg_wait_same_dow_4w` only where all four weekly lags precede the origin, otherwise the origin's `rolling_avg_7d`; `avg_wait_last_1h` = the target hour a week earlier if known at the origin, otherwise the weekday/weekend mean (the PAR-1030 far-row definition); velocity 0; occupancy from a (park, weekday, hour) profile built from the pool; beyond 16 d (`ORIGIN_WEATHER_FORECAST_DAYS`, the forecast horizon) the weather is the pool's (park, month, hour) climatology, and beyond 30 d (`ORIGIN_SCHEDULE_KNOWN_DAYS`) the schedule columns read as a day without published hours (open, no window, no event or extra hours). **The 12 h / 24 h / 7 d figures stay optimistic**: they keep the observed weather where serving had a forecast and the final schedule where serving had what was published at the origin, so read them as a lower bound on the served error. Each lead stores MAE, busy MAE and samples; it is logged, kept in the `.pkl` metadata, exposed on `GET /model/info/{version}` as `holdoutMetrics` and written to `ml_models.holdoutMetrics` (jsonb). **The gate does not read it yet** — that is an owner decision. Approximations: the occupancy profile averages all rides (serving: headliners, last 8 weeks), and leads between 7 d and 28 d would need a partial same-weekday mean (no served lead falls there).
    - **Tree count and early stopping** (PAR-902): `CATBOOST_LEARNING_RATE = 0.1`, `CATBOOST_ITERATIONS = 1500`, `CATBOOST_EARLY_STOPPING_ROUNDS = 100` (od_type `Iter`), `use_best_model=True`, eval set = the validation weeks above, eval metric = the training loss (`MultiQuantile:alpha=0.5,0.8,0.95`). The wiring was never broken — the model files from 2026-09-28 to 10-08 all carry `od_type=Iter`, `od_wait=100`, `use_best_model=True` and an eval set — but at the old `0.03 × 2000` the validation loss was still falling at the cap: `best_iteration` was 1999 (once 1998) on every nightly run, after the cap had already been raised from 1000 for the same reason (998/1000). There was no plateau for the detector to find, and every run paid the full cap twice, fit (~28 min) and refit (~36 min), ~73 of the 90-minute timeout.
 
      Measured on the production frame of 2026-10-15 (4.44 M rows, the same fetch, features, dropout and busy weighting as the nightly run, trained locally without early stopping, losses logged per tree):
@@ -143,6 +152,24 @@ The API runs two crowd-level regimes — **live** is ratio-vs-P50 (current peak 
 - **Models retrain at 06:00 daily**. Predictions made between a deploy and the next training cycle recalibrate within ~1 cycle.
 
 See [Crowd Levels](../analytics/crowd-levels.md) §5 for the API-side contract.
+
+### One definition per feature on both paths (PAR-1030, PAR-1032, PAR-1039)
+
+Training (`features.py`) is the definition; serving (`predict.create_prediction_features`) reproduces it. `tests/test_train_serve_feature_parity.py` computes each of these through both paths on one fixture.
+
+| Feature | Definition (both paths) | Serving before |
+|---|---|---|
+| `avg_wait_last_1h` | mean of [t − 1 h, t). Serving: the live wait on rows ≤ `LIVE_LAG_MAX_LEAD` (3 h) after base_time, the same-hour-last-week profile beyond | live wait on every row, 48 h ahead too |
+| `wait_time_velocity` | (x[t−1h] − x[t−7h]) / 6 on the hourly series; serving takes the live wait as x[t−1h], ≤ 3 h, 0 beyond | (now − 30 min ago) / 6, a twelfth of the scale, on every row |
+| `time_since_park_open_mins` | minutes since the opening of the window the row is in (its own day, or the previous day's for a slot past midnight), 0 without a window | today's opening for every row, 0 when unknown |
+| `is_bridge_day` | per park-local date from the holidays (`add_bridge_day_feature`), computed before the holiday-distance features | one flag for today (`featureContext.isBridgeDay`, no longer sent) |
+| `rolling_avg_weekday/_weekend`, `volatility_weekday/_weekend` | Mon–Fri vs Sat–Sun on the **park-local** weekday | UTC weekday, on both paths |
+| `park_occupancy_pct` (training) | the park's mean wait at that hour **without the row's own wait** (the target); a ride alone at its hour reads 100 | the mean included the target |
+| interaction features | recomputed after training dropout | computed before it, so a dropped-out row kept the real occupancy inside them |
+
+`queue_data` heartbeats (`is_heartbeat`) are excluded from every training, heuristic, occupancy-profile and serving-context read: a heartbeat copies the previous status and wait with a fresh timestamp and never ends a status.
+
+Not changed, on purpose: the ride-type flags (`is_coaster`, `is_water_ride`, `is_indoor`, `is_wind_sensitive`) still come from name regexes, while the curated `attractionKind` / `indoorOutdoor` columns exist. They are hand-decided and null where nobody has judged a ride yet, so reading them beside the regex would make the feature mean two different things depending on whether a ride has been curated. Switching needs a coverage check, a single definition (curated, regex only where null — or curated only) and a retrain.
 
 ### Historical Occupancy Profile (DOW×Hour) — Timezone Fix
 

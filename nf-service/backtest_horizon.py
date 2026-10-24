@@ -50,7 +50,7 @@ def main():
         FROM queue_data qd JOIN attractions a ON a.id=qd."attractionId" JOIN parks p ON p.id=a."parkId"
         WHERE qd."attractionId"::text = ANY(:ids)
           AND qd.timestamp >= NOW() - INTERVAL '730 days' AND qd.timestamp < :base
-          AND qd.status='OPERATING' AND qd."queueType"='STANDBY' AND qd."waitTime">=5
+          AND qd.status='OPERATING' AND qd."queueType"='STANDBY' AND qd."waitTime">=5 AND NOT COALESCE(qd.is_heartbeat, false)
         GROUP BY 1,2 HAVING COUNT(*) >= 3
         """,
         ids=hl_ids, base=BASE + " 00:00+00",
@@ -77,7 +77,7 @@ def main():
                PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY qd."waitTime") y
         FROM queue_data qd JOIN attractions a ON a.id=qd."attractionId" JOIN parks p ON p.id=a."parkId"
         WHERE qd."attractionId"::text = ANY(:ids) AND qd.timestamp >= :base AND qd.timestamp < :end
-          AND qd.status='OPERATING' AND qd."queueType"='STANDBY' AND qd."waitTime">=5
+          AND qd.status='OPERATING' AND qd."queueType"='STANDBY' AND qd."waitTime">=5 AND NOT COALESCE(qd.is_heartbeat, false)
         GROUP BY 1,2 HAVING COUNT(*) >= 3
         """,
         ids=hl_ids, base=BASE + " 00:00+00", end=END + " 00:00+00",

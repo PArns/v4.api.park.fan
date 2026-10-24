@@ -483,12 +483,12 @@ describe("FavoritesService", () => {
       expect(attraction.baseline).toBeNull();
     });
 
-    it("is null when the ride reports no wait", async () => {
+    it("is null when the ride reports no wait, and the level is unknown", async () => {
       const attraction = await fetchOne({
         queue: standbyRow("OPERATING", null),
       });
 
-      expect(attraction.crowdLevel).toBeNull();
+      expect(attraction.crowdLevel).toBe("unknown");
       expect(attraction.baseline).toBeNull();
     });
 
@@ -503,9 +503,24 @@ describe("FavoritesService", () => {
       const attraction = await fetchOne({ p50: null });
 
       expect(analyticsService.getLoadRating).not.toHaveBeenCalled();
-      expect(attraction.crowdLevel).toBeNull();
+      expect(attraction.crowdLevel).toBe("unknown");
       expect(attraction.baseline).toBeNull();
     });
+
+    // PAR-1029: ingestion writes 0 for a non-OPERATING status, and a DOWN row
+    // may keep a posted number; neither is a wait anyone is standing in.
+    it.each([0, 45])(
+      "rates a DOWN ride carrying a %d-minute wait unknown, not against its P50",
+      async (waitTime) => {
+        const attraction = await fetchOne({
+          queue: standbyRow("DOWN", waitTime),
+        });
+
+        expect(analyticsService.getLoadRating).not.toHaveBeenCalled();
+        expect(attraction.crowdLevel).toBe("unknown");
+        expect(attraction.baseline).toBeNull();
+      },
+    );
 
     it("passes the integrated cache's baseline through on a cache hit", async () => {
       attractionRepo.find.mockResolvedValueOnce([attractionEntity]);

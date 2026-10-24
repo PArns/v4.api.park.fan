@@ -24,13 +24,42 @@ export interface ModelComparisonModelDto {
   oneLiner: string;
 }
 
-export interface ModelComparisonLiveDto {
-  /** modelMae − referenceMae on identical slots / ride-days, in `metric.unit`. NEGATIVE = the model is better than what is served. */
+/** One lead of a cell (PAR-1036): the per-lead figures the cell's numbers are the mean of. */
+export interface ModelComparisonLeadDto {
+  /** "h0-1", "d3", … */
+  lead: string;
+  n: number;
+  /** Scored dates reached by each of the 10 best-covered parks at this lead. */
+  days: number;
+  parks: number;
   diff: number;
-  /** 95 % park-cluster bootstrap CI of `diff` (parks resampled with replacement). */
+  modelMae: number;
+  referenceMae: number;
+}
+
+export interface ModelComparisonLiveDto {
+  /**
+   * modelMae − referenceMae on identical slots / ride-days, in `metric.unit`.
+   * NEGATIVE = the model is better than what is served. Since PAR-1035 every
+   * cell of one question is paired on the SAME rows (where every candidate of
+   * the question has a value), so the cells share `referenceMae` lead by lead.
+   * Since PAR-1036 a multi-lead cell is the plain mean of its leads.
+   */
+  diff: number;
+  /**
+   * 95 % CI of `diff`. Since PAR-1036 (owner decision) the two-way park × date
+   * block bootstrap (`ci = "park_date"`): parks AND dates resampled, so a day
+   * that moved every park at once counts once. This is the interval the gate
+   * reads. Before: park-cluster, now in `parkCiLow`/`parkCiHigh`.
+   */
   ciLow: number;
   ciHigh: number;
-  /** Distinct scored target dates and parks that contributed. */
+  /** Which bootstrap `ciLow`/`ciHigh` are; absent = park-cluster (before PAR-1036). */
+  ci?: "park_date";
+  /** 95 % park-cluster CI (parks resampled), shown beside the gate's interval; null with < 2 parks. */
+  parkCiLow?: number | null;
+  parkCiHigh?: number | null;
+  /** The weakest lead's scored dates (reached by each of 10 parks) and park count; 0 when a lead of the cell has no rows yet. */
   days: number;
   parks: number;
   /** Paired slots (or ride-days for best time / calendar). */
@@ -39,6 +68,28 @@ export interface ModelComparisonLiveDto {
   referenceMae: number;
   /** First scored target date for this model × question (all time, not just the window). */
   since: string | null;
+  /** PAR-1036: `equal` = every lead weighs the same in `diff`, `modelMae`, `referenceMae` and the CI. */
+  leadWeighting?: "equal";
+  /** PAR-1036: per lead. The gate needs every lead of the cell to pass on its own. */
+  leads?: ModelComparisonLeadDto[];
+}
+
+/**
+ * A direct comparison beside the cells (PAR-1035/1037): two candidates on the
+ * question's joint rows (Chronos-2 vs H5, H5 + TFT vs H5), or a daily-level
+ * model against the weekday average on the ride-days that model levelled
+ * (CatBoost, TFT — never the same days, so read them side by side). Not a
+ * verdict: no cell state depends on it.
+ */
+export interface ModelComparisonPairDto {
+  /** Model ids of `models`; `diff` = model − reference, negative = `model` better. */
+  model: string;
+  reference: string;
+  /** German, what the comparison covers. */
+  note: string;
+  live: ModelComparisonLiveDto | null;
+  /** Every lead with ≥ 10 parks × ≥ 14 dates. */
+  enoughData: boolean;
 }
 
 export interface ModelComparisonOfflineDto {
@@ -49,6 +100,18 @@ export interface ModelComparisonOfflineDto {
   source: string;
   /** "YYYY-MM-DD..YYYY-MM-DD" of the offline backtest. */
   period?: string;
+  /**
+   * What the offline figure was measured against (PAR-1038): `served` = this
+   * question's served model, else the bench reference (`persistence`,
+   * `wt_med`, `clim`, `chronos2`, `hourly_profile`); null = not recorded.
+   */
+  reference?: string | null;
+  /** `reference === "served"`: only then can an offline win make the cell `better`. */
+  referenceIsServed?: boolean;
+  /** `slot_mae`, `besttime_regret`, `daypeak_mae`, `hit_rate`; null = not recorded. */
+  metric?: string | null;
+  /** The ml-bench results directory of the run; null = not recorded. */
+  runId?: string | null;
 }
 
 export interface ModelComparisonExpectedByDto {
@@ -88,9 +151,19 @@ export interface ModelComparisonQuestionDto {
   leadLabel: string;
   /** Model id of the `today` cell — the reference of every other cell. */
   servedModel: string;
+  /** `min` = minutes; `rate` = percentage points (D7: share of wrongly ordered day pairs, PAR-1037). */
   metric: { unit: "min" | "rate"; lowerIsBetter: boolean };
   /** Absent key = the model does not apply to this question. */
   cells: Record<string, ModelComparisonCellDto>;
+  /** PAR-1035/1037: direct comparisons that are not "against served"; absent when there are none. */
+  comparisons?: ModelComparisonPairDto[];
+  /**
+   * Paired rows (slots or ride-days) behind each archived cell, summed over
+   * its leads, and `jointRows` — the rows every core candidate shared. A
+   * Chronos-2 or old-composer cell below `jointRows` shows that shadow's
+   * outage; it never removes rows from the other cells. Absent without data.
+   */
+  coverage?: { jointRows: number; cells: Record<string, number> };
 }
 
 export interface ModelComparisonResponseDto {

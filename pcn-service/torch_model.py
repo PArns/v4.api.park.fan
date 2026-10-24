@@ -53,8 +53,13 @@ class TorchSeqModel:
     def __init__(
         self, loss: str = "quantile", quantiles=(0.5, 0.8, 0.9), tweedie_p: float = 1.5,
         hidden: int = 64, max_steps: int = 500, batch_size: int = 16, lr: float = 1e-3,
-        max_train_windows: int = 6000, seed: int = 0, **arch_kwargs,
+        max_train_windows: int = 6000, seed: int = 0, residual: bool = False,
+        target_mode: str = "median", **arch_kwargs,
     ):
+        self.residual = residual
+        # PCN_TARGET_MODE the model was trained under — its inputs must be built the
+        # same way at inference (forecast.py reads it, PAR-1034).
+        self.target_mode = target_mode
         self.loss = loss
         self.quantiles = list(quantiles)
         self.tweedie_p = tweedie_p
@@ -84,6 +89,16 @@ class TorchSeqModel:
     # -- helpers ------------------------------------------------------------
     def head_out(self) -> int:
         return len(self.quantiles) if self.loss == "quantile" else 1
+
+    def _forward(self, x):
+        """Net output [B, N, H, head]. With `residual` the net predicts the change from
+        the last context wait_ffill (scaled like the targets), which is added back —
+        the "persistence + learned delta" form (PAR-1034, PCN_RESIDUAL)."""
+        out = self.net(x)
+        if self.residual:
+            last = x[:, -1, :, self.channels.index("wait_ffill")]       # [B, N]
+            out = out + last[:, :, None, None]
+        return out
 
     def _scaled(self, features: np.ndarray) -> np.ndarray:
         f = features.copy()
@@ -157,7 +172,11 @@ class TorchSeqModel:
         N, T, C = features.shape
         self._dims = (N, C, H)
 
-        seen = wait_raw[observed > 0]
+        # Scale from the slots training can see — contexts and targets up to the last
+        # base's horizon — so a backtest's eval window never shapes it (PAR-1034).
+        # Production trains on every valid base, which reaches the last slot: unchanged.
+        end = int(train_bases.max()) + H + 1 if train_bases.size else T
+        seen = wait_raw[:, :end][observed[:, :end] > 0]
         self._scale = max(float(np.median(np.abs(seen))) if seen.size else 1.0, 1.0)
         feats_scaled = self._scaled(features)
 
@@ -183,7 +202,7 @@ class TorchSeqModel:
         for step in range(self.max_steps):
             sel = torch.as_tensor(rng.integers(0, W, size=bs), device=self.device)
             x, y_t, m_t = self._gather_batch(X, Y, M, bases_t[sel], L, H)
-            loss = self._loss(self.net(x), y_t, m_t)
+            loss = self._loss(self._forward(x), y_t, m_t)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -197,7 +216,7 @@ class TorchSeqModel:
             raise RuntimeError(f"{self.name} not fitted")
         self.net.eval()
         x = self._batch(self._scaled(self._model_features(t)), eval_bases, L)
-        out = self.net(x)
+        out = self._forward(x)
         if self.loss == "tweedie":
             med = torch.nn.functional.softplus(out[..., 0])
         else:
@@ -216,7 +235,7 @@ class TorchSeqModel:
             raise RuntimeError(f"{self.name} not fitted")
         self.net.eval()
         x = self._batch(self._scaled(self._model_features(t)), bases, L)
-        out = self.net(x)
+        out = self._forward(x)
         if self.loss == "tweedie":
             return {0.5: (torch.nn.functional.softplus(out[..., 0]).cpu().numpy()
                           * self._scale)}
@@ -236,7 +255,8 @@ class TorchSeqModel:
             "config": {
                 "loss": self.loss, "quantiles": self.quantiles,
                 "tweedie_p": self.tweedie_p, "hidden": self.hidden,
-                "arch_kwargs": self.arch_kwargs,
+                "arch_kwargs": self.arch_kwargs, "residual": self.residual,
+                "target_mode": self.target_mode,
             },
             "ride_ids": list(ride_ids) if ride_ids is not None else None,
             "channels": list(self.channels),
@@ -253,6 +273,9 @@ class TorchSeqModel:
         self.tweedie_p = cfg.get("tweedie_p", self.tweedie_p)
         self.hidden = cfg.get("hidden", self.hidden)
         self.arch_kwargs = cfg.get("arch_kwargs", self.arch_kwargs)
+        # Checkpoints before PAR-1034: absolute level, median targets.
+        self.residual = cfg.get("residual", False)
+        self.target_mode = cfg.get("target_mode", "median")
         self._median_q = self.quantiles.index(0.5) if 0.5 in self.quantiles else 0
         # Restore the TRAINED channel list (older checkpoints predate appended channels;
         # _model_features selects them by name from whatever tensor is passed in).

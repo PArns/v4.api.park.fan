@@ -175,6 +175,125 @@ export function parkClusterBootstrap(
   return { low: quantile(stats, 0.025), high: quantile(stats, 0.975) };
 }
 
+/** One park × date × stratum (lead) of paired sums, the unit {@link blockBootstrap} weights. */
+export interface BootstrapCell {
+  park: string;
+  /** Target date; ignored by the park-only bootstrap. */
+  date: string;
+  /** The lead the cell belongs to; strata are weighted equally. */
+  stratum: string;
+  n: number;
+  a: number;
+  b: number;
+}
+
+/**
+ * The statistic both bootstraps resample (PAR-1036): per stratum the pooled
+ * paired difference (Σa − Σb) / Σn, then the plain mean over the strata that
+ * have data — so a question's leads count equally however many rows each has.
+ */
+export function stratumMeanDiff(
+  cells: Array<{ stratum: string; n: number; a: number; b: number }>,
+  weight: (i: number) => number = () => 1,
+): number | null {
+  const n = new Map<string, number>();
+  const d = new Map<string, number>();
+  cells.forEach((c, i) => {
+    const w = weight(i);
+    if (w === 0) return;
+    n.set(c.stratum, (n.get(c.stratum) ?? 0) + w * c.n);
+    d.set(c.stratum, (d.get(c.stratum) ?? 0) + w * (c.a - c.b));
+  });
+  let sum = 0;
+  let k = 0;
+  for (const [s, ns] of n) {
+    if (!(ns > 0)) continue;
+    sum += d.get(s)! / ns;
+    k++;
+  }
+  return k === 0 ? null : sum / k;
+}
+
+/**
+ * 95 % CI of {@link stratumMeanDiff} (PAR-1036).
+ *
+ * - `twoWay: false` — park-cluster: parks are drawn with replacement, all of a
+ *   drawn park's dates come along. With one stratum this is
+ *   {@link parkClusterBootstrap}, draw for draw.
+ * - `twoWay: true` — park × date: parks AND dates are drawn with replacement,
+ *   independently, and each park × date cell counts with the product of the
+ *   two multiplicities (the pigeonhole bootstrap, Owen 2007). A day that hit
+ *   every park at once — a holiday, a heat wave, a feed outage — is then one
+ *   draw rather than ten independent ones, which the park-only interval
+ *   treats it as. Needs one row per park × date (× stratum).
+ *
+ * Null with fewer than 2 parks (or, two-way, fewer than 2 dates).
+ */
+export function blockBootstrap(
+  cells: BootstrapCell[],
+  opts: { twoWay: boolean },
+  reps = BOOTSTRAP_REPS,
+  seed = BOOTSTRAP_SEED,
+): { low: number; high: number } | null {
+  const parkIdx = new Map<string, number>();
+  const dateIdx = new Map<string, number>();
+  for (const c of cells) {
+    if (!(c.n > 0)) continue;
+    if (!parkIdx.has(c.park)) parkIdx.set(c.park, parkIdx.size);
+    if (!dateIdx.has(c.date)) dateIdx.set(c.date, dateIdx.size);
+  }
+  const P = parkIdx.size;
+  const D = dateIdx.size;
+  if (P < 2 || (opts.twoWay && D < 2)) return null;
+  // The park-only path pools each park × stratum first: it is the same
+  // statistic, and the cost no longer grows with the number of dates.
+  const units: Array<{ p: number; d: number } & BootstrapCell> = [];
+  if (opts.twoWay) {
+    for (const c of cells) {
+      if (!(c.n > 0)) continue;
+      units.push({ ...c, p: parkIdx.get(c.park)!, d: dateIdx.get(c.date)! });
+    }
+  } else {
+    const pooled = new Map<string, { p: number; d: number } & BootstrapCell>();
+    for (const c of cells) {
+      if (!(c.n > 0)) continue;
+      const k = `${c.park}|${c.stratum}`;
+      const u = pooled.get(k) ?? {
+        ...c,
+        n: 0,
+        a: 0,
+        b: 0,
+        p: parkIdx.get(c.park)!,
+        d: 0,
+      };
+      u.n += c.n;
+      u.a += c.a;
+      u.b += c.b;
+      pooled.set(k, u);
+    }
+    units.push(...pooled.values());
+  }
+  const rnd = seededRandom(seed);
+  const wp = new Float64Array(P);
+  const wd = new Float64Array(D);
+  const stats: number[] = [];
+  for (let r = 0; r < reps; r++) {
+    wp.fill(0);
+    for (let i = 0; i < P; i++) wp[Math.floor(rnd() * P)] += 1;
+    if (opts.twoWay) {
+      wd.fill(0);
+      for (let i = 0; i < D; i++) wd[Math.floor(rnd() * D)] += 1;
+    }
+    const s = stratumMeanDiff(units, (i) =>
+      opts.twoWay ? wp[units[i].p] * wd[units[i].d] : wp[units[i].p],
+    );
+    if (s !== null) stats.push(s);
+  }
+  if (stats.length === 0) return null;
+  stats.sort((x, y) => x - y);
+  return { low: quantile(stats, 0.025), high: quantile(stats, 0.975) };
+}
+
 export function compare(
   reference: string,
   rows: PairedRow[],

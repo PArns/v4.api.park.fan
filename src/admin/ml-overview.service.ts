@@ -5,7 +5,10 @@ import { Redis } from "ioredis";
 import axios from "axios";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { getMlServiceUrl, getNfServiceUrl } from "../config/ml-services.config";
-import { getCurrentDateInTimezone } from "../common/utils/date.util";
+import {
+  addIsoDays,
+  getCurrentDateInTimezone,
+} from "../common/utils/date.util";
 import {
   StatementLimits,
   queryWithLimits,
@@ -107,6 +110,29 @@ export class MlOverviewService {
   }
 
   async build(now: Date): Promise<MlOverviewDto> {
+    const today = getCurrentDateInTimezone(ADMIN_TZ);
+    // A decision past its evaluation date reads the window ending the day
+    // before it, so it does not drift (PAR-1036). Cached per `until` by the
+    // comparison service.
+    const due = [
+      ...new Set(
+        this.decisionFile.decisions
+          .map((d) => d.evaluateOn)
+          .filter((d): d is string => !!d && d <= today),
+      ),
+    ];
+    const frozen = new Map<string, ModelComparisonResponseDto | null>(
+      await Promise.all(
+        due.map(
+          async (d): Promise<[string, ModelComparisonResponseDto | null]> => [
+            d,
+            await this.modelComparison
+              .getMatrix(MATRIX_DAYS, "ALL", now, addIsoDays(d, -1))
+              .catch(() => null),
+          ],
+        ),
+      ),
+    );
     const [matrix, components] = await Promise.all([
       // Cached 2 h per scoring run by the comparison service itself.
       this.modelComparison
@@ -121,11 +147,7 @@ export class MlOverviewService {
     ]);
     return {
       generatedAt: now.toISOString(),
-      decisions: buildDecisions(
-        this.decisionFile,
-        matrix,
-        getCurrentDateInTimezone(ADMIN_TZ),
-      ),
+      decisions: buildDecisions(this.decisionFile, matrix, today, frozen),
       matrixSummary: matrix?.summary ?? {
         better: 0,
         pending: 0,

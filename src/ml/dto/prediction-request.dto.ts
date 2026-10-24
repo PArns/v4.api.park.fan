@@ -94,7 +94,6 @@ export class PredictionRequestDto {
     parkOpeningTimes?: Record<string, string>; // parkId -> opening time ISO string
     downtimeCache?: Record<string, number>; // attractionId -> downtime minutes
     queueData?: Record<string, QueueDataInfo>; // attractionId -> queue info
-    isBridgeDay?: Record<string, boolean>; // parkId -> is bridge day?
     isSchoolHoliday?: Record<string, boolean>; // parkId -> is school holiday?
     parkHasSchedule?: Record<string, boolean>; // parkId -> has schedule?
     parkLiveStatus?: Record<string, string>; // parkId -> "OPERATING"|"CLOSED" (from getBatchParkStatus)

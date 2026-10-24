@@ -27,9 +27,11 @@ import {
 } from "../../ml/utils/weekday-average.util";
 import {
   COMPARISON_MODELS,
+  MATRIX_REFERENCES,
   OfflineVerdictFile,
   PairedAggregate,
   buildModelComparison,
+  d7Aggregates,
 } from "../../ml/utils/model-comparison.util";
 import {
   ModelComparisonDayDto,
@@ -142,24 +144,32 @@ export class ModelComparisonService {
     return (await this.redis.get(BOARD_VERSION_KEY).catch(() => null)) ?? "0";
   }
 
-  /** The matrix over the last `days` scored target dates. */
+  /**
+   * The matrix over the last `days` scored target dates — ending at `until`
+   * (YYYY-MM-DD, inclusive) when given, so a decision evaluated on a fixed
+   * date reads the same window every day after it (ML overview, PAR-1036).
+   */
   async getMatrix(
     days: number,
     region = "ALL",
     now: Date = new Date(),
+    until?: string,
   ): Promise<ModelComparisonResponseDto> {
     const v = await this.version();
     return this.cached(
-      `model-comparison:v${v}:${region}:${days}`,
+      `model-comparison:v${v}:${region}:${days}${until ? `:until${until}` : ""}`,
       MATRIX_TTL_SECONDS,
       async () => {
         const [win] = await this.q<
           Array<{ first: string | null; last: string | null }>
         >(
-          `SELECT min(target_date)::text AS first, max(target_date)::text AS last
-             FROM forecast_archive_scores
-            WHERE target_date > (SELECT max(target_date) FROM forecast_archive_scores) - $1::int`,
-          [days],
+          `WITH s AS (
+             SELECT target_date FROM forecast_archive_scores
+              WHERE ($2::date IS NULL OR target_date <= $2::date))
+           SELECT min(target_date)::text AS first, max(target_date)::text AS last
+             FROM s
+            WHERE target_date > (SELECT max(target_date) FROM s) - $1::int`,
+          [days, until ?? null],
         );
         const window = {
           days,
@@ -183,23 +193,28 @@ export class ModelComparisonService {
     );
   }
 
-  /** Per park, the pooled paired sums vs `served` of each key in the window. */
+  /**
+   * Per park, the pooled paired sums of each key the matrix reads in the
+   * window; D7's per-date level rows are turned into day-pair counts here
+   * (`d7Aggregates`, PAR-1037), since pairs need the dates apart.
+   */
   private async aggregates(
     first: string,
     last: string,
     region: string,
   ): Promise<PairedAggregate[]> {
-    const params: unknown[] = [first, last];
+    const params: unknown[] = [first, last, MATRIX_REFERENCES];
     let regionSql = "";
     if (region !== "ALL") {
       params.push(region);
-      regionSql = "AND region = $3";
+      regionSql = "AND region = $4";
     }
     const rows = await this.q<
       Array<{
         useCase: string;
         lead: string;
         model: string;
+        reference: string;
         segment: string;
         parkId: string;
         dates: string[];
@@ -208,24 +223,61 @@ export class ModelComparisonService {
         saeRef: string | number;
       }>
     >(
-      `SELECT use_case AS "useCase", lead, model, segment, park_id AS "parkId",
-              array_agg(DISTINCT target_date::text) AS dates,
+      // One row per park × date × key (the table's own grain): the gate's
+      // two-way bootstrap resamples dates too (PAR-1036). Bounded by the
+      // window (≤ 90 days) and the matrix's references and segments.
+      `SELECT use_case AS "useCase", lead, model, reference, segment, park_id AS "parkId",
+              ARRAY[target_date::text] AS dates,
               sum(n)::bigint AS n, sum(sae_model) AS "saeModel", sum(sae_ref) AS "saeRef"
          FROM forecast_archive_paired
         WHERE target_date BETWEEN $1::date AND $2::date
-          AND reference = 'served' AND segment IN ('all', 'headliner')
+          AND reference = ANY($3::text[]) AND segment IN ('all', 'headliner')
+          AND use_case <> 'D7'
           AND definition = ${PAIRED_DEFINITION}
           ${regionSql}
-        GROUP BY 1, 2, 3, 4, 5`,
+        GROUP BY 1, 2, 3, 4, 5, 6, target_date`,
       params,
     );
-    return rows.map((r) => ({
-      ...r,
-      dates: r.dates ?? [],
-      n: Number(r.n),
-      saeModel: Number(r.saeModel),
-      saeRef: Number(r.saeRef),
-    }));
+    const d7 = await this.q<
+      Array<{
+        parkId: string;
+        lead: string;
+        date: string;
+        n: string | number;
+        sumModel: string | number;
+        sumRef: string | number;
+        sumTruth: string | number;
+      }>
+    >(
+      `SELECT park_id AS "parkId", lead, target_date::text AS date, n,
+              sae_model AS "sumModel", sae_ref AS "sumRef", se_model AS "sumTruth"
+         FROM forecast_archive_paired
+        WHERE target_date BETWEEN $1::date AND $2::date
+          AND use_case = 'D7' AND reference = ANY($3::text[])
+          AND definition = ${PAIRED_DEFINITION}
+          ${regionSql}`,
+      params,
+    );
+    return [
+      ...rows.map((r) => ({
+        ...r,
+        dates: r.dates ?? [],
+        n: Number(r.n),
+        saeModel: Number(r.saeModel),
+        saeRef: Number(r.saeRef),
+      })),
+      ...d7Aggregates(
+        d7.map((r) => ({
+          parkId: r.parkId,
+          lead: r.lead,
+          date: r.date,
+          n: Number(r.n),
+          sumModel: Number(r.sumModel),
+          sumRef: Number(r.sumRef),
+          sumTruth: Number(r.sumTruth),
+        })),
+      ),
+    ];
   }
 
   /** First scored target date per key, all time; once per scoring run. */
@@ -239,16 +291,17 @@ export class ModelComparisonService {
             useCase: string;
             lead: string;
             model: string;
+            reference: string;
             segment: string;
             since: string;
           }>
         >(
-          `SELECT use_case AS "useCase", lead, model, segment, min(target_date)::text AS since
+          `SELECT use_case AS "useCase", lead, model, reference, segment, min(target_date)::text AS since
              FROM forecast_archive_paired
-            WHERE reference = 'served' AND segment IN ('all', 'headliner')
+            WHERE reference = ANY($1::text[]) AND segment IN ('all', 'headliner')
               AND definition = ${PAIRED_DEFINITION}
-            GROUP BY 1, 2, 3, 4`,
-          [],
+            GROUP BY 1, 2, 3, 4, 5`,
+          [MATRIX_REFERENCES],
         ).catch((err: Error) => {
           this.logger.warn(
             `Model comparison: since unavailable: ${err.message}`,
@@ -258,7 +311,7 @@ export class ModelComparisonService {
     );
     return new Map(
       rows.map((r) => [
-        [r.useCase, r.lead, r.model, r.segment].join("|"),
+        [r.useCase, r.lead, r.model, r.reference, r.segment].join("|"),
         r.since,
       ]),
     );

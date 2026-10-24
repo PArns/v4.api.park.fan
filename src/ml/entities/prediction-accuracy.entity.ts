@@ -167,7 +167,7 @@ export class PredictionAccuracy {
    * P(actual ≤ q) on the slots that are scored at all (`scoreClass = 'scored'`).
    *
    * Raw quantiles rounded to whole minutes, NOT the posted-wait rounding
-   * (`predictedWaitTime` is rounded to 5 with a floor of 10). On a quiet slot the
+   * (`predictedWaitTime` is rounded to 5 with a floor of 5). On a quiet slot the
    * served median can therefore sit above q0.8 — that is the rounding, not a
    * crossing. NULL when the model has no quantile head, and on every row written
    * before PAR-912. No index: nothing filters on them, and this table takes ~13M

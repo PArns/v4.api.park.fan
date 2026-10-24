@@ -38,7 +38,10 @@ import { QueueData } from "../queue-data/entities/queue-data.entity";
 import { ScheduleEntry } from "../parks/entities/schedule-entry.entity";
 import { ScheduleType } from "../parks/entities/schedule-entry.entity";
 import { dayStatusRank } from "../common/utils/schedule.util";
-import { QueueType } from "../external-apis/themeparks/themeparks.types";
+import {
+  LiveStatus,
+  QueueType,
+} from "../external-apis/themeparks/themeparks.types";
 import {
   PredictionAccuracyService,
   PredictionQuantiles,
@@ -870,31 +873,9 @@ export class MLService {
         this.logger.warn(`Failed to get queue data: ${error}`);
       }
 
-      // 5. Get Bridge Day Status
-      let isBridgeDay: Record<string, boolean> = {};
-      try {
-        const park = await this.parkRepository.findOne({
-          where: { id: parkId },
-          select: {
-            id: true,
-            countryCode: true,
-            regionCode: true,
-          },
-        });
-
-        if (park?.countryCode) {
-          const now = new Date();
-          const isBridge = await this.holidaysService.isBridgeDay(
-            now,
-            park.countryCode,
-            park.regionCode,
-            park.timezone,
-          );
-          isBridgeDay[parkId] = isBridge;
-        }
-      } catch (error) {
-        this.logger.warn(`Failed to check bridge day status: ${error}`);
-      }
+      // 5. Bridge days: the ML service computes them per predicted date from
+      // the holidays it already reads. One flag for today, sent here, was
+      // applied to every row up to a year ahead (PAR-1030).
 
       // 6. Check if park has schedule data
       // This helps ML understand data quality: Parks with schedules have more reliable patterns
@@ -973,7 +954,6 @@ export class MLService {
         parkOpeningTimes,
         downtimeCache,
         queueData,
-        isBridgeDay,
         parkHasSchedule,
         isSchoolHoliday,
         parkLiveStatus,
@@ -1195,7 +1175,8 @@ export class MLService {
         // `!= null` covers both, and keeps a genuine measured 0.
         uncertaintyMinutes:
           cell?.uncertaintyP95 != null ? Math.round(cell.uncertaintyP95) : null,
-        crowdLevel: "moderate" as const, // placeholder — consumers recompute from predictedWaitTime
+        // TFT rates nothing; "unknown" so no reader can take it for a level (PAR-1028).
+        crowdLevel: "unknown" as const,
         baseline: 0,
         modelVersion: "tft",
       };
@@ -2268,6 +2249,8 @@ export class MLService {
       ? await this.applyServedIntradayOverride(
           copies,
           new Date(currentSlotStartMs()),
+          true,
+          now,
         )
       : new Map<PredictionDto, "pcn" | "chronos">();
     return copies.map((c, i) =>
@@ -2292,15 +2275,21 @@ export class MLService {
    *
    * Chronos's lead base is the current slot start, never the caller's
    * `startTime`: a read that starts later must not shift Chronos's window.
+   * `nowMs` is the moment the blend's lead is measured from (default: now).
    */
   private async applyServedIntradayOverride(
     preds: PredictionDto[],
     startTime?: Date,
     withChronos = true,
+    nowMs: number = Date.now(),
   ): Promise<Map<PredictionDto, "pcn" | "chronos">> {
     const out = new Map<PredictionDto, "pcn" | "chronos">();
     if (servePcnIntradayFlag()) {
-      for (const p of await this.applyPcnIntradayOverride(preds, startTime)) {
+      for (const p of await this.applyPcnIntradayOverride(
+        preds,
+        startTime,
+        nowMs,
+      )) {
         out.set(p, "pcn");
       }
     }
@@ -2314,7 +2303,7 @@ export class MLService {
           hourly,
           curves,
           currentSlotStartMs(),
-          Date.now(),
+          nowMs,
         );
         for (const p of done) out.set(p, "chronos");
         if (done.size > 0) {
@@ -2337,6 +2326,7 @@ export class MLService {
   private async applyPcnIntradayOverride(
     preds: PredictionDto[],
     startTime?: Date,
+    nowMs: number = Date.now(),
   ): Promise<Set<PredictionDto>> {
     const done = new Set<PredictionDto>();
     const hourly = preds.filter((p) => p.predictionType === "hourly");
@@ -2346,33 +2336,36 @@ export class MLService {
       this.getPcnIntradayWaits(ids, startTime),
       this.fetchCurrentWaits(ids), // §7.7 blend anchor: latest realised wait per attraction
     ]);
-    const nowMs = (startTime ?? new Date()).getTime();
+    // Lead from `nowMs` (the actual time), not from `startTime` (the current slot start
+    // or a caller's read start): on the 1–3 h ramp α follows the clock inside a slot.
     let overridden = 0;
     for (const p of hourly) {
       // Compare instants, not strings — see getPcnIntradayWaits.
       const slotMs = Date.parse(p.predictedTime);
       const q = pcn.get(p.attractionId)?.get(slotMs);
       if (q === undefined) continue;
-      // §7.7 anchor-gated persistence blend (validated on the shadow board: busy 1h +2.2..+2.8,
-      // aggregate ~neutral): at short lead the wait "L hours from now" is better predicted by
-      // "the wait now" than by the model, so blend the served q0.5 toward the current wait —
-      // decaying to pure PCN by 3h and only for rides with a real wait (the anchor gate).
+      // §7.7 persistence blend: at short lead the wait "L hours from now" is better predicted
+      // by "the wait now" than by the model — the current wait in the first hour (any anchor
+      // ≥ 5 min, PAR-1026), a ramp to pure PCN by 3h for rides with a real wait (≥ 40 min).
       const leadHours = (slotMs - nowMs) / 3_600_000;
-      const displayWait = persistenceBlendServe(
-        q.display,
-        anchors.get(p.attractionId),
-        leadHours,
-      );
+      const anchor = anchors.get(p.attractionId);
+      const displayWait = persistenceBlendServe(q.display, anchor, leadHours);
       // Same serve-side quantization CatBoost applies before storing (5er steps,
-      // min 10 when positive) — a plain Math.round leaked 1-minute waits into the UI.
+      // floor 5 when positive) — a plain Math.round leaked 1-minute waits into the UI.
       p.predictedWaitTime = roundServedWait(displayWait);
+      // Never leave CatBoost's band next to a PCN wait. pcn_forecasts holds no q0.95
+      // (PCN_SERVE_QUANTILES = 0.5,0.8), so there is no PCN band to serve.
+      p.uncertaintyMinutes = null;
       if (p.baseline && p.baseline > 0) {
-        // Crowd signal from q0.8 (fallback to the blended display for rows written before q0.8
+        // Crowd signal from q0.8, blended with the same α as the display so the tier and the
+        // shown wait agree (fallback to the blended display for rows written before q0.8
         // serving); clamp to >= the BLENDED display so the served display/crowd pair stays
         // monotone (roundServedWait is monotone, so the rounded crowd stays >= the display).
-        const crowdWait = roundServedWait(
-          Math.max(q.crowd ?? displayWait, displayWait),
-        );
+        const crowdBlend =
+          q.crowd === undefined
+            ? displayWait
+            : persistenceBlendServe(q.crowd, anchor, leadHours);
+        const crowdWait = roundServedWait(Math.max(crowdBlend, displayWait));
         // determineCrowdLevel never returns "unknown" (we guard baseline>0), so it is a
         // valid PredictionDto crowdLevel — narrow the wider CrowdLevel type with a cast.
         p.crowdLevel = determineCrowdLevel(
@@ -2393,7 +2386,10 @@ export class MLService {
 
   /**
    * Latest realised STANDBY wait per attraction (within the last 3h) — the anchor for the
-   * §7.7 persistence blend. Non-fatal: a missing anchor just leaves that ride's forecast raw.
+   * §7.7 persistence blend. The reading in force must be OPERATING with a wait (the rule of
+   * `ForecastArchiveService.liveWaits`): a ride that just went DOWN still carries its last
+   * wait, and blending toward it would serve a queue that is not there (PAR-1029).
+   * Non-fatal: a missing anchor just leaves that ride's forecast raw.
    */
   private async fetchCurrentWaits(ids: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
@@ -2411,7 +2407,11 @@ export class MLService {
         .addOrderBy("q.timestamp", "DESC")
         .getMany();
       for (const r of rows) {
-        if (r.waitTime !== null && r.waitTime !== undefined) {
+        if (
+          r.status === LiveStatus.OPERATING &&
+          r.waitTime !== null &&
+          r.waitTime !== undefined
+        ) {
           out.set(r.attractionId, r.waitTime);
         }
       }

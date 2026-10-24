@@ -282,6 +282,8 @@ export class MLTrainingProcessor {
         featuresUsed: (modelInfo.features as string[]) || [],
         hyperparameters:
           (modelInfo.hyperparameters as Record<string, unknown>) ?? {},
+        holdoutMetrics:
+          (modelInfo.holdoutMetrics as Record<string, unknown>) ?? null,
         isActive: !rejectChallenger,
         notes: rejectChallenger
           ? `Challenger rejected (MAE ${metrics.mae.toFixed(2)} > champion ${championMae.toFixed(2)}) ${new Date().toISOString().split("T")[0]}`

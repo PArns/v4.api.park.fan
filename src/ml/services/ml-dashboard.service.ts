@@ -198,7 +198,8 @@ export class MLDashboardService {
     const next = new Date(now);
     next.setUTCHours(6, 0, 0, 0);
     if (next <= now) {
-      next.setDate(next.getDate() + 1);
+      // UTC, not local: a local-day step lands at 07:00 UTC across a DST change.
+      next.setUTCDate(next.getUTCDate() + 1);
     }
     return next.toISOString();
   }

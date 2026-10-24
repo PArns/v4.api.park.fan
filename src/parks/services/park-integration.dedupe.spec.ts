@@ -10,7 +10,6 @@ import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
-import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { ParkEnrichmentService } from "./park-enrichment.service";
 import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.client";
@@ -60,7 +59,6 @@ describe("ParkIntegrationService › deduplicateEntities", () => {
         { provide: AnalyticsService, useValue: {} },
         { provide: MLService, useValue: {} },
         { provide: PredictionAccuracyService, useValue: {} },
-        { provide: PredictionDeviationService, useValue: {} },
         { provide: HolidaysService, useValue: {} },
         { provide: ParkEnrichmentService, useValue: {} },
         { provide: ThemeParksClient, useValue: {} },

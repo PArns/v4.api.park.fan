@@ -14,7 +14,6 @@ export interface FeatureContext {
   parkOpeningTimes?: Record<string, string>;
   downtimeCache?: Record<string, number>;
   queueData?: Record<string, QueueDataInfo>;
-  isBridgeDay?: Record<string, boolean>;
   parkHasSchedule?: Record<string, boolean>;
   isSchoolHoliday?: Record<string, boolean>;
   parkLiveStatus?: Record<string, string>;

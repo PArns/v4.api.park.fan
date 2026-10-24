@@ -128,8 +128,10 @@ export class ParkAttractionDto {
 
   @ApiProperty({
     description:
-      "Crowd level badge. `unknown` when there is no baseline to rate this " +
-      "ride against; `closed` when it is not operating.",
+      "Live crowd level badge: the current wait rated against this ride's " +
+      "baseline. `unknown` when there is no live wait (DOWN, no reading) or " +
+      "no baseline to rate it against; `closed` when it is closed. Never a " +
+      "forecast. Leave `unknown` rides out of any aggregate.",
     enum: CROWD_LEVEL_WITH_CLOSED_VALUES,
     required: false,
   })
@@ -341,7 +343,9 @@ export class ParkAttractionDto {
   @ApiProperty({
     description:
       "Recommended visit time slots for today based on 15-min ML predictions. " +
-      "Sorted by time. 'optimal' = global minimum wait, 'good' = within 40% of minimum.",
+      "Sorted by time. 'optimal' = global minimum wait, 'good' = within 25% " +
+      "(at least 5 min) of minimum. The current slot is offered only while " +
+      "the ride's `effectiveStatus` is OPERATING; later slots stay.",
     required: false,
     nullable: true,
   })

@@ -665,6 +665,11 @@ export class ForecastArchiveScoringService {
             .andWhere("p.model IN (:...chronosModels)", {
               chronosModels: ["chronos2", "chronos2_grid"],
             })
+            // ...and its own references: the matrix's joint and pairwise rows
+            // (PAR-1035) carry Chronos as a model too.
+            .andWhere("p.reference IN (:...chronosRefs)", {
+              chronosRefs: ["served", "persistence", "h5"],
+            })
             .getMany()
             .catch((err: Error) => {
               this.logger.warn(

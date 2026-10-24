@@ -28,7 +28,6 @@ import { CrowdLevel } from "../../common/types/crowd-level.type";
 import { rateOrUnknown } from "../../common/utils/crowd-level.util";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
-import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import {
@@ -62,7 +61,6 @@ import {
   freeFlowQueues,
 } from "../../common/utils/free-flow-status.util";
 import { PredictionDto } from "../../ml/dto/prediction-response.dto";
-import { servedAdjustedConfidence } from "../../ml/utils/hourly-confidence.util";
 import { RideProfileService } from "../../attractions/services/ride-profile.service";
 import { mapRideProfile } from "../../attractions/dto/ride-profile.dto";
 import { AttractionOutageService } from "../../attractions/services/attraction-outage.service";
@@ -124,7 +122,6 @@ export class ParkIntegrationService {
     private readonly analyticsService: AnalyticsService,
     private readonly mlService: MLService,
     private readonly predictionAccuracyService: PredictionAccuracyService,
-    private readonly predictionDeviationService: PredictionDeviationService,
     private readonly holidaysService: HolidaysService,
     private readonly parkEnrichmentService: ParkEnrichmentService,
     private readonly themeParksClient: ThemeParksClient,
@@ -611,7 +608,6 @@ export class ParkIntegrationService {
       const [
         attractionP90s,
         attractionP50s,
-        deviationMap,
         attractionStatsMap,
         attractionHistoryMap,
         trendsMap,
@@ -624,7 +620,6 @@ export class ParkIntegrationService {
       ] = await Promise.all([
         this.analyticsService.getBatchAttractionP90Baselines(attractionIds),
         this.analyticsService.getBatchAttractionP50s(attractionIds),
-        this.predictionDeviationService.getBatchDeviationFlags(attractionIds),
         this.analyticsService.getBatchAttractionStatistics(
           attractionIds,
           startTime,
@@ -811,13 +806,6 @@ export class ParkIntegrationService {
         // Attach ML predictions
         const mlPreds = hourlyPredictions[attraction.id] || [];
 
-        // Enrich predictions with deviation data (using pre-fetched map)
-        const deviationFlag = deviationMap.get(attraction.id) || null;
-        const enrichedPreds = this.enrichPredictionsWithDeviationsSync(
-          mlPreds,
-          deviationFlag,
-        );
-
         // Determine crowd level for this attraction
         let crowdLevel: CrowdLevel | "closed" = "closed";
 
@@ -835,18 +823,15 @@ export class ParkIntegrationService {
           // "walk on, no queues" on the busiest Saturday of the year.
           crowdLevel = "unknown";
         } else {
-          // Find current hour prediction
-          // predictedTime from ML is stored as UTC. So we match with current UTC hour.
-          // The previous code `new Date().toISOString().split(":")[0]` returned the current UTC hour, which correctly matches `predictedTime.toISOString()`.
-          // We don't need to change `nowStr` here since ML prediction entity `predictedTime` is stored in UTC and queried by UTC.
-          const nowStr = new Date().toISOString().split(":")[0]; // "YYYY-MM-DDTHH" (in UTC)
-          const currentPred = enrichedPreds.find((p) =>
-            p.predictedTime.startsWith(nowStr),
-          );
-
-          // 1. Try to use REAL-TIME Wait Time first (Ground Truth)
+          // A live crowd level is a running ride's live wait rated against its
+          // baseline; nothing else is one. A DOWN row keeps a posted number or
+          // the 0 ingestion writes for a non-OPERATING status (PAR-1029).
           const wait = attraction.queues?.[0]?.waitTime;
-          if (wait !== undefined && wait !== null) {
+          if (
+            attraction.effectiveStatus === "OPERATING" &&
+            wait !== undefined &&
+            wait !== null
+          ) {
             if (!parkRatable) {
               // Thin parent park (not ratable) → "unknown", matching the
               // park-level crowdLevel and the other live surfaces.
@@ -863,17 +848,11 @@ export class ParkIntegrationService {
               );
               crowdLevel = rating;
             }
-          } else if (attraction.effectiveStatus === "UNKNOWN") {
-            // No reading and no status: nothing to rate, same as the detail page.
-            crowdLevel = "unknown";
           } else {
-            // 2. Fallback to ML Prediction if no live data
-            if (currentPred && currentPred.crowdLevel) {
-              crowdLevel = currentPred.crowdLevel as any;
-            } else {
-              // 3. Last resort default
-              crowdLevel = "very_low";
-            }
+            // No live wait (DOWN, no reading, …): nothing was measured. The
+            // model's hour row is a forecast, and "very_low" read as "walk on"
+            // for a broken-down ride (PAR-1029).
+            crowdLevel = "unknown";
           }
         }
         attraction.crowdLevel = crowdLevel;
@@ -1040,6 +1019,7 @@ export class ParkIntegrationService {
           attraction.bestVisitTimes = computeBestVisitTimes(
             todayOnlyPreds,
             closingTimeIso,
+            attraction.effectiveStatus === "OPERATING",
           );
         }
 
@@ -1765,7 +1745,7 @@ export class ParkIntegrationService {
     // monthly calendar's future path uses
     // (CalendarService.buildPredictedCrowdLevels), so the yearly and monthly
     // calendars agree for the same date. A missing typical-day-peak
-    // (brand-new park) → 'moderate'; there is NO P50/P90 fallback.
+    // (brand-new park) → 'unknown'; there is NO P50/P90 fallback.
     const baselineForCrowd = typicalDayPeak;
 
     const datesMap = new Map<string, PredictionDto[]>();
@@ -1809,7 +1789,8 @@ export class ParkIntegrationService {
 
         crowdLevel = rateOrUnknown(meanWait, baselineForCrowd);
       } else {
-        crowdLevel = baselineForCrowd > 0 ? "moderate" : "unknown";
+        // No predicted wait to rate: an absent fact, not a typical day (PAR-1028).
+        crowdLevel = "unknown";
       }
 
       const avgConfidence =
@@ -1976,93 +1957,6 @@ export class ParkIntegrationService {
       );
       return undefined;
     }
-  }
-
-  /**
-   * Enrich predictions with deviation data (Confidence Downgrade strategy)
-   *
-   * Checks Redis for deviation flags and adjusts confidence if detected
-   *
-   * @param attractionId - Attraction ID
-   * @param predictions - Raw predictions from ML service
-   * @returns Enriched predictions with deviation data
-   */
-  private async enrichPredictionsWithDeviations(
-    attractionId: string,
-    predictions: PredictionDto[],
-  ): Promise<PredictionDto[]> {
-    if (!predictions || predictions.length === 0) {
-      return predictions;
-    }
-
-    try {
-      // Get deviation flag from Redis
-      const deviationFlag =
-        await this.predictionDeviationService.getDeviationFlag(attractionId);
-
-      if (deviationFlag) {
-        // Deviation detected - enrich all predictions for this attraction
-        return predictions.map((p) => ({
-          ...p,
-          currentWaitTime: deviationFlag.actualWaitTime,
-          confidenceAdjusted: servedAdjustedConfidence(p), // Halve confidence
-          deviationDetected: true,
-          deviationInfo: {
-            message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${
-              deviationFlag.deviation > 0 ? "higher" : "lower"
-            } than predicted`,
-            deviation: deviationFlag.deviation,
-            percentageDeviation: deviationFlag.percentageDeviation,
-            detectedAt: deviationFlag.detectedAt,
-          },
-        }));
-      }
-
-      // No deviation - return predictions unchanged
-      return predictions;
-    } catch (error) {
-      // Don't fail request if enrichment fails
-      this.logger.warn(
-        `Failed to enrich predictions for ${attractionId}:`,
-        error,
-      );
-      return predictions;
-    }
-  }
-
-  /**
-   * Sync version of enrichPredictionsWithDeviations using pre-fetched deviation flag
-   * OPTIMIZED: No Redis call - uses pre-fetched deviation map
-   */
-  private enrichPredictionsWithDeviationsSync(
-    predictions: PredictionDto[],
-    deviationFlag: {
-      actualWaitTime: number;
-      deviation: number;
-      percentageDeviation: number;
-      detectedAt: string;
-    } | null,
-  ): PredictionDto[] {
-    if (!predictions || predictions.length === 0) {
-      return predictions;
-    }
-
-    if (deviationFlag) {
-      return predictions.map((p) => ({
-        ...p,
-        currentWaitTime: deviationFlag.actualWaitTime,
-        confidenceAdjusted: servedAdjustedConfidence(p),
-        deviationDetected: true,
-        deviationInfo: {
-          message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"} than predicted`,
-          deviation: deviationFlag.deviation,
-          percentageDeviation: deviationFlag.percentageDeviation,
-          detectedAt: deviationFlag.detectedAt,
-        },
-      }));
-    }
-
-    return predictions;
   }
 
   /**

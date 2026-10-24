@@ -211,17 +211,27 @@ describe("MLDashboardService", () => {
   });
 
   describe("getNextScheduledTraining (private)", () => {
-    it("returns 06:00 UTC the next day when called after 06:00", async () => {
-      happyPathSetup();
-      // Trained yesterday — used so we don't fail on missing data.
-      const result = await service.getDashboard();
-      const nextTraining = new Date(result.system.nextTraining);
+    afterEach(() => jest.useRealTimers());
 
-      // The next training is at 06:00 UTC.
-      expect(nextTraining.getUTCHours()).toBe(6);
-      expect(nextTraining.getUTCMinutes()).toBe(0);
-      // And it's in the future.
-      expect(nextTraining.getTime()).toBeGreaterThan(Date.now());
+    it("returns 06:00 UTC the next day when called after 06:00", async () => {
+      // The day before the European DST change: a local-day step would give 07:00 UTC.
+      jest.useFakeTimers({
+        now: new Date("2026-10-24T09:00:00Z"),
+        doNotFake: ["nextTick", "setImmediate"],
+      });
+      happyPathSetup();
+      const result = await service.getDashboard();
+      expect(result.system.nextTraining).toBe("2026-10-25T06:00:00.000Z");
+    });
+
+    it("returns 06:00 UTC the same day when called before 06:00", async () => {
+      jest.useFakeTimers({
+        now: new Date("2026-10-24T05:00:00Z"),
+        doNotFake: ["nextTick", "setImmediate"],
+      });
+      happyPathSetup();
+      const result = await service.getDashboard();
+      expect(result.system.nextTraining).toBe("2026-10-24T06:00:00.000Z");
     });
   });
 });

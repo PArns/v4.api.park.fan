@@ -127,4 +127,10 @@ function shouldShowCrowdLevel(day: CalendarDay): boolean {
 
 - **Endpoint:** `GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=`
 - **Response:** `meta`, `days[]` with `date`, `status`, `isEstimated`, `hours?`, `crowdLevel`, ...
+- **`crowdLevel: "unknown"` is a real value — render it as "no forecast", never as "moderate".**
+  A day reads `unknown` when there is nothing to rate it by: no measurement (past days) and no
+  headliner forecast (today and future). Since PAR-1028 this is what such a day says; before, it
+  borrowed one ride's level or a placeholder `moderate`, which looked exactly like a typical day.
+  The same holds for `peakLoad` and for `/predictions/yearly`'s `crowdLevel` on a day without a
+  predicted wait.
 - Technical details: [Smart Gaps Documentation](../analytics/smart-gaps.md)

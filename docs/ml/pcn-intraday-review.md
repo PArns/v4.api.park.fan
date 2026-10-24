@@ -417,8 +417,43 @@ Rules since then:
   neither the Redis entry nor the stored rows ever carry a `+pcn` number. (Before the
   fix the cron called the served method — harmless only because the override was a
   no-op; fixing the keys alone would have written PCN into the CatBoost board.)
-- The blend anchor (`fetchCurrentWaits`, latest STANDBY wait within 3 h) is read
-  from `queue_data` per call, so it works identically on every path.
+- The blend anchor (`fetchCurrentWaits`, latest STANDBY reading within 3 h) is read
+  from `queue_data` per call, so it works identically on every path. Since PAR-1029
+  the reading in force must be OPERATING with a wait (the rule of
+  `ForecastArchiveService.liveWaits`); a ride that just went DOWN has no anchor.
+
+### 9.1 The first hour serves the current wait (PAR-1026, PAR-1029)
+
+Measured 2026-10-24: 94.3 % of live anchors are under `BLEND_GATE_MIN` (40 min), so
+the gate left almost every ride on raw PCN even 15 minutes ahead, and on the live
+forward archive persistence beat the served curve by 1.7 min MAE in the first hour.
+The rules of `persistenceBlendServe` since then:
+
+| lead | anchor | served q0.5 |
+| --- | --- | --- |
+| ≤ 1 h | ≥ 5 min (`BLEND_FIRST_HOUR_MIN_ANCHOR`) | the anchor |
+| ≤ 1 h | < 5 min or none | raw PCN |
+| 1 – 3 h | ≥ 40 min (`BLEND_GATE_MIN`) | linear anchor → PCN |
+| 1 – 3 h | < 40 min or none | raw PCN |
+| ≥ 3 h | any | raw PCN |
+
+The crowd level's q0.8 goes through the same blend (same anchor, same α) and is
+still clamped to ≥ the shown wait, so the tier and the wait agree in the first
+hour. A PCN slot serves `uncertaintyMinutes: null`: `pcn_forecasts` holds only
+q0.5 and q0.8 (`PCN_SERVE_QUANTILES`), so there is no PCN band, and CatBoost's
+band beside a PCN wait described a different forecast. The same `rules` hold in
+`pcn-service/score.py persistence_blend`, so the `pcn_blend` shadow board scores
+what is served.
+
+The lead is measured from the actual time (`nowMs`, default `Date.now()`;
+`servedIntradayValues` passes its generation time), not from the current slot
+start. On the 15-min grid this changes nothing in the first hour — a slot ≤ 1 h
+from the slot start is ≤ 1 h from now too — but on the 1–3 h ramp α now follows
+the clock inside a slot, so the served value drifts by up to ~1/8 of the
+anchor–PCN gap within one slot, and a cached response or the :05 archive capture
+can differ slightly from a read later in the same slot. To check it live:
+`live_h0_1` persistence vs served in `forecast_archive_paired` (definition 2)
+should move toward 0.
 
 ## 10. `pcn_forecasts` write volume and retention (PAR-873, 2026-10-12)
 
@@ -556,3 +591,115 @@ Chronos curve is older than 90 min or missing. Crowd level from Chronos's q80
 against the carried P50, as PCN's q0.8. `pcn_forecasts` and the PCN shadow
 board are untouched. Design, cadence, the archive's incumbent surface,
 switch-on checklist and rollback: [forward-archive.md §10](forward-archive.md#10-chronos-2-served-on-the-live-surface-par-911).
+
+## 12. What a PCN target is (PAR-1034, PAR-1039, 2026-10-24)
+
+`queue_data` is a change log: a row is written when the wait or status changes and
+otherwise once an hour. PCN's panel took the **median of the rows written inside
+each 15-minute slot**, so a ride whose wait did not move appears in about one slot
+of four. The loss (`obs_mask × park_open`) and the shadow board's actuals
+(`fetch_actuals_local`) both only see those slots, so slots where the wait just
+changed weigh ~4× in training and in PCN's own board — a regime where the last
+observation is least informative. That is how "PCN beats persistence" offline and
+the 40-minute anchor gate of the §7.7 blend came about.
+
+### `PCN_TARGET_MODE` (default `median`)
+
+`in_force` builds targets, the `obs_mask`/`wait_ffill`/`park_occ` channels derived
+from them, `park_open`, and the board's actuals from the **BENCH-SPEC truth** — the
+rule of `buildTruthSlots` (`src/ml/utils/forecast-archive-scoring.util.ts`) and
+`nf-service/chronos_shadow.truth_slots`: the reading in force at the slot
+midpoint (newest row at or before it, ≤ 3 h old), counted only when it says
+OPERATING with a wait ≥ `PCN_MIN_WAIT` and the midpoint lies inside the park's
+published OPERATING window (`schedule_entries`, park-wide rows). Implementation:
+`db.fetch_in_force_readings` returns per (ride, slot) the last row of
+(midpoint − 15 min, midpoint] in any status; `tensor.in_force_truth` forward-fills
+it on the grid, which is exactly "newest row at or before the midpoint", and drops
+it past 3 h. A CLOSED/DOWN row is carried too, so it supersedes the OPERATING one
+before it.
+
+Differences from the canonical rule, on purpose:
+- **Dates before the park's first published window** (all dates, for a park that
+  publishes none) fall back to the old slot heuristic — at least
+  `PCN_MIN_RIDES_OPEN` rides with a real or DOWN reading in the slot. Without it a
+  park without published hours would have no target at all.
+- Ages are measured on park-local wall clock: off by the DST hour on the two
+  switch nights, when parks are closed.
+- `fetch_operating_windows` merges a day into one window, min(open)–max(close)
+  (the bench's `windows` table), so a midday closure between two published
+  windows counts as open — `buildTruthSlots` keeps the windows separate.
+- "First published window" is relative to the fetched range (548 days in
+  training, 7 days on the forecast tick, the board's lookback), not to the
+  park's whole history.
+- The grid still ends at the newest panel slot, and a reading bins into the slot
+  whose midpoint follows it, so the newest reading can land one slot after the
+  grid's end and the last context slot reads the previous one — up to ~15 min
+  staler than under `median`.
+
+**The checkpoint records its mode.** `target_mode` is saved in the checkpoint
+config (missing = `median`, every checkpoint before PAR-1034). `forecast.py`
+builds a park's inputs under the loaded checkpoint's own mode and logs an error
+when it differs from `PCN_TARGET_MODE`, so a flip before the retrain does not feed
+an old model inputs it was not trained on.
+
+**Pre-flip check: training DB time.** With the flag on, training runs a second
+548-day scan per park (`fetch_in_force_readings`, a `DISTINCT ON` over every
+STANDBY row of compressed `queue_data`) beside the panel aggregate — expect the
+nightly PCN DB time to roughly double. Before flipping, time it on one large park
+through `scripts/prod-psql.sh` (its statement/lock timeouts; outside 05:50–07:30
+UTC, see the DB health runbook §5a) and compare with the panel query.
+
+It is a flag because it changes what the served model learns *and* its inputs: a
+checkpoint must be served under the mode it was trained in. Flipping it on the
+service also changes the board's actuals, so `pcn_intraday_comparisons` and
+`pcn_lead_curve_comparisons` rows before and after the flip are not comparable
+(the board carries no definition column).
+
+**How to A/B it.** Offline first: `PCN_TARGET_MODE=in_force python3 run_bakeoff.py`
+(the runner and `build_cross_ride_tensor.py` now build through
+`pipeline.build_park_tensor`, so they honour the flag) — note that each mode scores
+against its own truth there, so only the in-force run is comparable to the forward
+archive. Live: the forward archive scores the *served* curve against BENCH truth
+under `forecast_archive_paired.definition = 2`, independent of PCN's own board.
+Train with the flag on, compare the `pcn` surface against served-before and
+persistence on definition-2 paired rows for the same parks and dates. That step
+serves the new model; a live shadow that does not would need a second PCN
+instance writing to its own forecast table, which does not exist.
+
+### Heartbeat rows (unconditional)
+
+Every PCN `queue_data` read — the panel, the freshness pre-check, the board's
+actuals, the in-force readings — now drops `is_heartbeat` rows
+(`NOT COALESCE(qd.is_heartbeat, false)`, the forward archive's `truthRowsSql`).
+The heartbeat is written by `wait-times.processor` for a ride that vanished from
+every feed and copies the last status *and* wait forward with a fresh timestamp
+for up to 24 h: in the median panel it invented slots with a frozen wait and a
+carried DOWN, and under the in-force rule it would reset the 3 h staleness clock.
+A live feed's hourly "unchanged" re-write is not a heartbeat (`is_heartbeat =
+false`) and stays — it is what keeps an unchanged ride in force.
+
+### Offline backtest leak (unconditional, offline only)
+
+`backtest.rolling_origin_split` kept every base before the first eval base, so a
+base's targets (`b+1 … b+H`) reached up to H slots into the eval window. Train
+bases are now `< cutoff − H`. `TorchSeqModel.fit` fitted its wait scale on the
+whole tensor; it now uses only the slots up to the last training base's horizon.
+Production trains on every valid base, which reaches the last slot, so its scale
+is unchanged.
+
+### `PCN_RESIDUAL` (default off)
+
+GraphWaveNet outputs the absolute level. With `PCN_RESIDUAL=true` the prediction
+is the last context `wait_ffill` plus the net's output, so the net learns the
+change from the last observation. Stored in the checkpoint's config and restored
+by `load()`, so it only affects models trained after the flip; older checkpoints
+read as absolute. `run_bakeoff.py --residual` for the offline comparison.
+
+### Not here
+
+- `park_open` / minutes-since-open as channels: **PAR-456**. `wait_ffill` still
+  carries the last value through closures and nights; under `in_force` the target
+  no longer does, which makes the missing "is the park open" channel more visible
+  (the model sees a carried level where no target exists) — PAR-456 should be
+  measured on top of `in_force`, not before it.
+- `PCN_MAX_STEPS` / early stopping: **PAR-453**.

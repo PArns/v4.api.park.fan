@@ -32,7 +32,23 @@ is `ModelComparisonService.getMatrix(28, "ALL")` — the board's default, cached
 `progress` = min `live.days` and min `live.parks` over the decision's cells (0
 when a cell has no live figure), against the gate 14 days / 10 parks.
 `earliest` = today (Europe/Berlin) + the missing days, via `addIsoDays`; days
-met but parks short = tomorrow (the next scoring); gate met or `ready` = null.
+met but parks short = tomorrow (the next scoring); gate met or `ready` = null —
+never before `decisionFloor`, the latest `cellFloorDate` of its cells
+(2026-10-09 + the longest lead + 14: a lead with no row yet counts as 0 days,
+and "today + 14" alone slid forward every day for the d60/d90 cells).
+
+**`evaluateOn`** (PAR-1036, owner decision: one fixed evaluation date instead of
+re-testing every day). Before that date a decision is never `ready` (a derived
+`ready` reads `waiting_live`) and `earliest` is at least the date ("ausgewertet
+am …"). From that date on (`evaluated: true`) the decision is judged on the
+matrix of the window ending the day before (`getMatrix(28, "ALL", now, until)`,
+cached per `until`), so its verdict no longer drifts. Each date in
+`ml-decisions.json` is at least `decisionFloor` (a spec checks it); the
+short-lead ones are 09.11.2026, two weeks after the paired-definition-3 deploy,
+so they do not rest on the replay alone. **The owner changes a decision's date
+by editing `evaluateOn` in `src/ml/data/ml-decisions.json`** (a later date
+re-judges it on the newer window; removing the field returns to daily
+derivation).
 This is park-agnostic and can differ by a day from a cell's own `expectedBy`,
 which counts from the window's last scored date.
 

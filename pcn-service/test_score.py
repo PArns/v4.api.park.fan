@@ -75,14 +75,14 @@ def test_aggregate_drops_nan_actual_and_empty():
 
 
 def test_serve_round_mirrors_catboost_serving():
-    """Parity with ml-service round_to_nearest_5 + min-10 (predict.py:1959-1969):
-    half-up 5er steps, floor of 10 for positive values, 0 stays 0. The board scores
+    """Parity with ml-service round_to_nearest_5 + min-5 (predict.py ~:2037-2042):
+    half-up 5er steps, floor of 5 for positive values (10 until PAR-1027), 0 stays 0. The board scores
     PCN through the same boundary that serves it."""
     import numpy as np
 
     x = np.array([0.0, 2.4, 2.5, 7.2, 7.5, 12.4, 23.0, 34.7])
     out = score.serve_round(x)
-    np.testing.assert_array_equal(out, [0, 0, 10, 10, 10, 10, 25, 35])
+    np.testing.assert_array_equal(out, [0, 0, 5, 5, 10, 10, 25, 35])
 
 
 def test_full_day_window_covers_only_full_days():
@@ -165,9 +165,15 @@ def test_persistence_blend():
     out = score.persistence_blend(pcn, persist, lead, full_h=1.0, horizon_h=3.0)
     # ≤1h → pure persist (70); 2h → α=0.5 → 50; ≥3h → pure PCN (30)
     np.testing.assert_array_equal(out, [70.0, 70.0, 50.0, 30.0, 30.0])
-    # Anchor gate: persist below gate_min → pure PCN regardless of lead
+    # First hour: any anchor ≥ 5 min is served (PAR-1026); under 5 → pure PCN
+    out_first = score.persistence_blend(
+        np.array([30.0, 30.0, 30.0]), np.array([20.0, 39.0, 4.0]),
+        np.array([0.5, 1.0, 0.25]), gate_min=40.0,
+    )
+    np.testing.assert_array_equal(out_first, [20.0, 40.0, 30.0])  # 39 serve-rounds to 40
+    # Ramp gate: persist below gate_min → pure PCN past the first hour
     out_low = score.persistence_blend(
-        np.array([30.0, 30.0]), np.array([20.0, 39.0]), np.array([0.5, 1.0]), gate_min=40.0
+        np.array([30.0, 30.0]), np.array([20.0, 39.0]), np.array([1.5, 2.0]), gate_min=40.0
     )
     np.testing.assert_array_equal(out_low, [30.0, 30.0])
     # NaN persist (missing) → NaN blend (dropped for the pcn_blend model downstream)

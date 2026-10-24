@@ -1289,6 +1289,113 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
     });
   });
 
+  describe("a day without a headliner forecast (PAR-1028)", () => {
+    const offsetDay = (days: number) => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().slice(0, 10);
+    };
+
+    /** One ride's daily row, as `getServingDailyPredictions` hands it over. */
+    const row = (
+      attractionId: string,
+      day: string,
+      wait: number,
+      crowdLevel: string,
+      modelVersion: string,
+    ) => ({
+      attractionId,
+      predictedTime: `${day}T12:00:00`,
+      predictedWaitTime: wait,
+      predictionType: "daily",
+      confidence: 0.8,
+      crowdLevel,
+      baseline: 0,
+      modelVersion,
+    });
+
+    const buildDay = async (day: string, predictions: unknown[]) => {
+      (service as any).parksService.getSchedule.mockResolvedValue([
+        {
+          date: day,
+          scheduleType: ScheduleType.OPERATING,
+          openingTime: new Date(`${day}T09:00:00Z`),
+          closingTime: new Date(`${day}T18:00:00Z`),
+        },
+      ]);
+      (service as any).mlService.getServingDailyPredictions.mockResolvedValue({
+        predictions,
+      });
+      // A ratable park: typical-day-peak 50, one headliner.
+      (
+        service as any
+      ).analyticsService.getHeadlinerAttractions.mockResolvedValue([
+        { attractionId: "h1" },
+      ]);
+      (
+        service as any
+      ).analyticsService.getTypicalDayPeakFromCache.mockResolvedValue(50);
+      const { parseDateRange } =
+        await import("../../common/utils/date-parsing.util");
+      const { fromDate, toDate } = parseDateRange(day, day, {
+        timezone: "UTC",
+      });
+      const response = await service.buildCalendarResponse(
+        {
+          id: "p1",
+          slug: "test-park",
+          timezone: "UTC",
+          countryCode: "DE",
+        } as any,
+        fromDate,
+        toDate,
+        "none",
+      );
+      return response.days[0];
+    };
+
+    it.each([
+      ["future", 10],
+      ["past", -10],
+    ])(
+      "reads unknown on a %s day whose only rows are other rides' levels",
+      async (_label, offset) => {
+        const day = offsetDay(offset);
+        // A TFT placeholder and a CatBoost ratio-vs-P50 level, neither a headliner.
+        const built = await buildDay(day, [
+          row("r2", day, 40, "moderate", "tft"),
+          row("r3", day, 70, "high", "catboost"),
+        ]);
+        expect(built.crowdLevel).toBe("unknown");
+        expect(built.peakLoad).toBe("unknown");
+      },
+    );
+
+    it.each([
+      ["future", 10],
+      ["past", -10],
+    ])(
+      "keeps the headliner forecast on a %s day that has one",
+      async (_label, offset) => {
+        const day = offsetDay(offset);
+        // 90 / 50 = 180 % → very_high, whatever the row's own crowdLevel says.
+        const built = await buildDay(day, [
+          row("h1", day, 90, "moderate", "tft"),
+        ]);
+        expect(built.crowdLevel).toBe("very_high");
+      },
+    );
+
+    it("gives an unrated future day no recommendation, like /predictions/yearly", async () => {
+      const day = offsetDay(10);
+      const unrated = await buildDay(day, [row("r2", day, 40, "high", "tft")]);
+      expect(unrated.recommendation).toBeUndefined();
+
+      const rated = await buildDay(day, [row("h1", day, 50, "high", "tft")]);
+      expect(rated.recommendation).toBeDefined();
+    });
+  });
+
   describe("climate normals past the forecast's reach", () => {
     // Far enough ahead to be "future" whenever the suite runs.
     const FROM = "2099-07-10";

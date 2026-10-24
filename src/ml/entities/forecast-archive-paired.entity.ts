@@ -23,11 +23,15 @@ export const PAIRED_RETENTION_DAYS = 120;
 
 /**
  * Which scoring definition a row was written under. 2 (PAR-1024): truth
- * without heartbeat rows, slot waits of both arms served-rounded. Readers
- * pool only the current definition, so a live gate is never met on rows
- * scored the old way; rows from before the column read as 1.
+ * without heartbeat rows, slot waits of both arms served-rounded. 3
+ * (PAR-1035/1037): the matrix rows are paired on the rows where EVERY
+ * candidate of the question has a value (reference `served_joint`), the
+ * day-peak rows are split by the model behind the served level
+ * (`served_tft` / `served_catboost`), and D7 rows exist. Readers pool only
+ * the current definition, so a live gate is never met on rows scored the
+ * old way; rows from before the column read as 1.
  */
-export const PAIRED_DEFINITION = 2;
+export const PAIRED_DEFINITION = 3;
 
 @Entity("forecast_archive_paired")
 @Index("idx_fap_target", ["targetDate"])
