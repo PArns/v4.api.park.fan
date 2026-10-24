@@ -237,6 +237,7 @@ export class BestDaysService {
       predictedCrowdLevel: d.predictedCrowdLevel,
       isHoliday: d.isHoliday,
       isSchoolVacation: d.isSchoolVacation,
+      ...(d.schoolVacationUnknown ? { schoolVacationUnknown: true } : {}),
       isBridgeDay: d.isBridgeDay,
     };
   }

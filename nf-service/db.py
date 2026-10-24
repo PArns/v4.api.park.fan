@@ -18,6 +18,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from config import get_settings
+from holiday_features import SchoolCoverage
 from uuid_params import uuid_list
 
 settings = get_settings()
@@ -304,6 +305,10 @@ def add_calendar_covariates(
     df["days_since_holiday"] = 30.0
     df["days_until_school_holiday"] = 30.0
     df["days_since_school_holiday"] = 30.0
+    # 1 where the park's own school-holiday data reaches the day (PAR-1049). NaN is
+    # not allowed in a futr_exog, so an unpublished break keeps the placeholder
+    # values (flag 0, distances 30) and this column says they are placeholders.
+    df["school_holiday_known"] = 0
 
     # Per-series → park map (used by both the holiday loop and the weather merge), so
     # weather still attaches even when there are no holidays for the scope.
@@ -326,7 +331,8 @@ def add_calendar_covariates(
 
         park_rep = meta.drop_duplicates("park_id").set_index("park_id")
 
-        cache: dict = {}  # signature -> (local_public, neighbor, school, bridge)
+        cache: dict = {}  # signature -> (local_public, neighbor, school, bridge, school_through)
+        coverage = SchoolCoverage(h)
 
         def _sets_for_park(pid):
             row = park_rep.loc[pid]
@@ -366,7 +372,7 @@ def add_calendar_covariates(
                 | (h["region_norm"].isna() & h["country"].isin(neigh_countries))
             )
             neighbor = set(h[nmask & h_pub_or_school]["date"])
-            cache[sig] = (local_public, neighbor, school, bridge)
+            cache[sig] = (local_public, neighbor, school, bridge, coverage.through(country, rn))
             return cache[sig]
 
         groups = df.groupby("_park").groups
@@ -374,7 +380,7 @@ def add_calendar_covariates(
         for pid, idx in groups.items():
             if pid not in park_rep.index:
                 continue
-            lp, nb, sc, br = _sets_for_park(pid)
+            lp, nb, sc, br, sc_through = _sets_for_park(pid)
             d = df.loc[idx, "ds"].dt.normalize()
             df.loc[idx, "is_holiday_primary"] = d.isin(lp).astype(int).values
             df.loc[idx, "is_holiday_neighbor"] = d.isin(nb).astype(int).values
@@ -390,6 +396,13 @@ def add_calendar_covariates(
                     until, since = _holiday_distance(dv, dates)
                     df.loc[idx, cu] = until
                     df.loc[idx, cs] = since
+            if sc_through is None:
+                known = pd.Series(False, index=d.index)
+            else:
+                known = d <= pd.Timestamp(sc_through)
+            df.loc[idx, "school_holiday_known"] = known.astype(int).values
+            unknown_idx = known.index[~known.to_numpy()]
+            df.loc[unknown_idx, ["days_until_school_holiday", "days_since_school_holiday"]] = 30.0
             n_parks += 1
             if n_parks % 50 == 0:
                 logger.info(
@@ -494,6 +507,7 @@ FUTR_EXOG_GRID = FUTR_EXOG + [
     "sched_closed",
     "days_until_school_holiday",
     "days_since_school_holiday",
+    "school_holiday_known",
 ]
 
 

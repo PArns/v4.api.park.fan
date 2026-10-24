@@ -119,8 +119,9 @@ def test_grid_flag_switches_the_exog_list(monkeypatch):
     assert db.hist_exog() == []
     monkeypatch.setattr(db.settings, "NF_CALENDAR_GRID", True)
     assert db.hist_exog() == ["is_observed"]
-    assert db.futr_exog()[-4:] == ["sched_open", "sched_closed",
-                                   "days_until_school_holiday", "days_since_school_holiday"]
+    assert db.futr_exog()[-5:] == ["sched_open", "sched_closed",
+                                   "days_until_school_holiday", "days_since_school_holiday",
+                                   "school_holiday_known"]
 
 
 class _Engine:

@@ -123,6 +123,19 @@ def test_bridge_day_sees_a_holiday_just_outside_the_asked_dates():
     assert cs.day_covariates(META, [mon], hol).loc[mon, "is_bridge_day"] == 1.0
 
 
+def test_holidays_through_is_per_type_and_region():
+    """PAR-1049: public rows to 2028 do not cover an unpublished school break."""
+    hol = _holidays([
+        ("DE", dt.date(2028, 12, 26), None, "public", True),
+        ("DE", dt.date(2026, 9, 11), "DE-NW", "school", False),
+        ("DE", dt.date(2027, 8, 1), "DE-BY", "school", False),
+    ])
+    assert cs.holidays_through(hol, META) == dt.date(2026, 9, 11)
+    assert cs.holiday_coverage(cs.holidays_through(hol, META), dt.date(2026, 10, 14)) == "short"
+    no_school = hol[hol["holiday_type"] == "public"]
+    assert cs.holidays_through(no_school, META) is None
+
+
 def test_holiday_coverage_flags_absent_data():
     assert cs.holiday_coverage(None, dt.date(2026, 10, 14)) == "none"
     assert cs.holiday_coverage(dt.date(2026, 10, 1), dt.date(2026, 10, 14)) == "short"
@@ -295,8 +308,10 @@ def test_run_reads_today_only_up_to_the_origin(monkeypatch, tmp_path):
     monkeypatch.setattr(chronos_data, "fetch_rides", lambda pid: ["a", "b"])
     monkeypatch.setattr(chronos_data, "fetch_windows", lambda pid, d0, d1: w[(w["date"] >= d0) & (w["date"] <= d1)])
     monkeypatch.setattr(chronos_data, "fetch_readings", fake_readings)
-    monkeypatch.setattr(chronos_data, "fetch_holidays",
-                        lambda c: (_holidays([]), {"DE": dt.date(2027, 12, 31)}))
+    monkeypatch.setattr(chronos_data, "fetch_holidays", lambda c: _holidays([
+        ("DE", dt.date(2027, 12, 31), None, "public", True),
+        ("DE", dt.date(2027, 12, 31), "DE-NW", "school", False),
+    ]))
     monkeypatch.setattr(chronos_data, "_start_worker", lambda: None)
     eng = StubEngine()
     cache = chronos_data.TruthCache(str(tmp_path))
@@ -349,7 +364,7 @@ def test_a_failed_backfill_is_dropped_from_the_queue(monkeypatch, tmp_path):
         raise RuntimeError("canceling statement due to statement timeout")
 
     monkeypatch.setattr(chronos_data, "fetch_readings", down)
-    monkeypatch.setattr(chronos_data, "fetch_holidays", lambda c: (_holidays([]), {}))
+    monkeypatch.setattr(chronos_data, "fetch_holidays", lambda c: _holidays([]))
     monkeypatch.setattr(chronos_data, "_start_worker", lambda: None)
     with pytest.raises(chronos_data.Warming):
         chronos_data.run(PID, origin, "grid", None, StubEngine(), chronos_data.TruthCache(str(tmp_path)))
