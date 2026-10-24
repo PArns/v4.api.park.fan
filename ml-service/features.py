@@ -21,6 +21,14 @@ from attraction_features import (
     add_park_attraction_count_feature,
 )
 
+# avg_wait_same_dow_4w more than 28 days ahead (PAR-1045): the same weekday and
+# hour 52 weeks back, for rides watched >= MIN_OBSERVED_DAYS. Read by
+# predict.fetch_last_year_slots and train.as_known_at_origin.
+LAST_YEAR_LAG = timedelta(days=364)  # 52 weeks: same weekday
+LAST_YEAR_MIN_LEAD = timedelta(days=28)
+LAST_YEAR_MIN_OBSERVED_DAYS = 330  # MIN_OBSERVED_DAYS (docs/rules/absent-facts.md)
+LAST_YEAR_WATCH_LOOKBACK_DAYS = 730  # TRAIN_LOOKBACK_YEARS: training's first-seen reach
+
 
 def convert_to_local_time(
     df: pd.DataFrame, parks_metadata: pd.DataFrame
@@ -957,7 +965,59 @@ def add_downtime_features(
     return df
 
 
-def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_attraction_type_features(df: pd.DataFrame, curated: bool = False) -> pd.DataFrame:
+    """is_coaster / is_water_ride / is_indoor / is_wind_sensitive from the name;
+    with `curated`, the hand-decided columns overrule the name where they are
+    set (PAR-1045). Training passes CATBOOST_CURATED_RIDE_TYPE and records it
+    in the model metadata; serving passes the active model's recorded value,
+    so a model is always served the definition it was trained on."""
+    df = _attraction_type_from_name(df)
+    if curated and "attractionId" in df.columns:
+        from db import fetch_curated_attraction_facts
+
+        ids = df["attractionId"].dropna().astype(str).unique().tolist()
+        df = apply_curated_attraction_facts(df, fetch_curated_attraction_facts(ids))
+    return df
+
+
+# Curated attraction_kind values that are never a coaster or a water ride.
+_NOT_A_RIDE_KINDS = {"TRANSPORT", "SHOW", "WALKTHROUGH", "MAZE"}
+
+
+def apply_curated_attraction_facts(df: pd.DataFrame, facts: pd.DataFrame) -> pd.DataFrame:
+    """Overrule the name heuristics with curated values; NULL keeps the name's.
+
+    * indoor_outdoor: `indoor` -> is_indoor 1; `outdoor` and `covered_queue`
+      -> 0 (a covered queue shelters the line, the ride itself is outside).
+    * attraction_kind: TRANSPORT / SHOW / WALKTHROUGH / MAZE -> is_coaster and
+      is_water_ride 0. `RIDE` says nothing about which ride, so it keeps the
+      name's flags. is_wind_sensitive is left alone (a cable car is transport
+      and wind-sensitive).
+    """
+    if facts.empty:
+        return df
+    by_id = facts.set_index(facts["attractionId"].astype(str))
+    aid = df["attractionId"].astype(str)
+    io = aid.map(by_id["indoor_outdoor"])
+    kind = aid.map(by_id["attraction_kind"])
+    df.loc[io == "indoor", "is_indoor"] = 1
+    df.loc[io.isin(["outdoor", "covered_queue"]), "is_indoor"] = 0
+    not_ride = kind.isin(_NOT_A_RIDE_KINDS)
+    df.loc[not_ride, "is_coaster"] = 0
+    df.loc[not_ride, "is_water_ride"] = 0
+    return df
+
+
+def curated_attraction_coverage(facts: pd.DataFrame) -> Dict[str, int]:
+    """How many of `facts`' attractions carry a curated value (null = unjudged)."""
+    return {
+        "attractions": len(facts),
+        "attraction_kind": int(facts["attraction_kind"].notna().sum()),
+        "indoor_outdoor": int(facts["indoor_outdoor"].notna().sum()),
+    }
+
+
+def _attraction_type_from_name(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add attraction type heuristics based on attraction name.
     Useful since attractionType column is currently empty in DB.
@@ -1863,7 +1923,9 @@ def engineer_features(
     # Attraction and Park features (using available data only)
     attraction_start = time_module.time()
     df = add_park_attraction_count_feature(df, parks_metadata)
-    df = add_attraction_type_features(df)
+    df = add_attraction_type_features(
+        df, curated=get_settings().CATBOOST_CURATED_RIDE_TYPE
+    )
     print(f"   Attraction features: {time_module.time() - attraction_start:.2f}s")
 
     historical_start = time_module.time()
