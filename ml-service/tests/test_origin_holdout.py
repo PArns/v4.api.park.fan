@@ -168,3 +168,18 @@ def test_a_zero_week_lag_falls_back_to_the_profile_like_serving():
         out["avg_wait_last_1h"]
         == out["rolling_avg_weekend"].where(weekend, out["rolling_avg_weekday"])
     ).all()
+
+
+def test_far_origin_without_climatology_or_reading_reads_weathercode_0():
+    # 2026-10-24: a slot missing from the climatology whose own weatherCode is
+    # NaN made `.astype(int)` raise and failed every CatBoost training.
+    merged = pd.DataFrame({
+        "parkId": ["p1", "p2"], "month": [10, 10], "hour": [12, 12],
+        "weatherCode": [np.nan, 3.0], "precipitation": [0.0, 1.0],
+    })
+    clim = pd.DataFrame(
+        {"weatherCode": [61], "precipitation": [2.0]},
+        index=pd.MultiIndex.from_tuples([("p2", 10, 12)], names=["parkId", "month", "hour"]),
+    )
+    out = train._neutral_far_weather_and_schedule(merged, pd.Timedelta(days=61), clim)
+    assert out["weatherCode"].tolist() == [0, 61]

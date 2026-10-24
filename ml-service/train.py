@@ -443,7 +443,9 @@ def _neutral_far_weather_and_schedule(
             if c in merged.columns:
                 merged[c] = clim[c].fillna(merged[c]).values
         if "weatherCode" in merged.columns:
-            merged["weatherCode"] = merged["weatherCode"].astype(int)
+            # A slot with no climatology and no reading stays NaN; serving's
+            # climatology fills it with 0 (predict.py), so the stand-in does too.
+            merged["weatherCode"] = merged["weatherCode"].fillna(0).astype(int)
         if "precipitation" in merged.columns:
             merged["is_raining"] = (merged["precipitation"] > 0).astype(int)
         for c in ("is_rain_starting", "is_rain_stopping", "is_temp_extreme",
