@@ -14,11 +14,16 @@ import sys
 import gc
 
 from config import get_settings
-from db import fetch_training_data, fetch_attraction_accuracy
+from db import (
+    fetch_attraction_accuracy,
+    fetch_curated_attraction_facts,
+    fetch_training_data,
+)
 from features import (
     LAST_YEAR_LAG,
     LAST_YEAR_MIN_LEAD,
     LAST_YEAR_MIN_OBSERVED_DAYS,
+    curated_attraction_coverage,
     engineer_features,
     get_feature_columns,
 )
@@ -796,6 +801,18 @@ def train_model(
     feature_start = time.time()
     df = engineer_features(df, start_date, end_date)
     feature_time = time.time() - feature_start
+    try:
+        coverage = curated_attraction_coverage(
+            fetch_curated_attraction_facts(df["attractionId"].astype(str).unique().tolist())
+        )
+        logger.info(
+            f"   Curated ride type coverage (PAR-1045, flag "
+            f"{'on' if settings.CATBOOST_CURATED_RIDE_TYPE else 'off'}): "
+            f"attraction_kind {coverage['attraction_kind']}/{coverage['attractions']}, "
+            f"indoor_outdoor {coverage['indoor_outdoor']}/{coverage['attractions']}"
+        )
+    except Exception as e:  # a report, never a reason to fail training
+        logger.warning(f"   Curated ride type coverage unavailable: {e}")
     timings["features"] = {
         "seconds": round(feature_time, 1),
         "rows_in": rows_before_features,
@@ -1222,6 +1239,9 @@ def train_model(
     # 9. Save model
     timings["total_seconds"] = round(time.perf_counter() - run_start, 1)
     model.metadata["training_timings"] = timings
+    # Serving builds is_indoor / is_coaster / is_water_ride the way this model
+    # learnt them (PAR-1045).
+    model.metadata["curated_ride_type"] = bool(settings.CATBOOST_CURATED_RIDE_TYPE)
     logger.info(
         "⏱️  Phases: fetch %.0fs · features %.0fs · fit %.0fs · refit %.0fs · total %.0fs (excl. range query and save)"
         % (

@@ -20,6 +20,13 @@ from db import (
     fetch_attraction_ids_for_park,
 )
 from config import get_settings
+from features import (
+    LAST_YEAR_LAG,
+    LAST_YEAR_MIN_LEAD,
+    LAST_YEAR_MIN_OBSERVED_DAYS,
+    LAST_YEAR_WATCH_LOOKBACK_DAYS,
+    add_attraction_type_features,
+)
 from uuid_params import uuid_list
 from holiday_features import (
     assign_holiday_features,
@@ -85,137 +92,6 @@ def quantile_minutes(
         return None
 
     return pick(0.8), pick(0.95)
-
-
-def add_attraction_type_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add attraction type heuristics based on attraction name.
-    """
-    if "attractionName" not in df.columns:
-        df["is_coaster"] = 0
-        df["is_water_ride"] = 0
-        df["is_indoor"] = 0
-        df["is_wind_sensitive"] = 0
-        return df
-
-    import re
-
-    # 1. Coasters (Achterbahnen)
-    coaster_patterns = [
-        r"coaster",
-        r"achterbahn",
-        r"montaña rusa",
-        r"grand huit",
-        r"express",
-        r"mountain",
-        r"roller",
-        r"spinning",
-        r"inverted",
-        r"hyper",
-        r"giga",
-        r"strata",
-        r"wooden",
-        r"steel",
-        r"taron",
-        r"f\.l\.y\.",
-        r"baron",
-        r"mamba",
-        r"karacho",
-        r"desert",
-        r"helix",
-        r"shambhala",
-        r"kondaa",
-        r"untamed",
-        r"velocicoaster",
-    ]
-    coaster_regex = re.compile("|".join(coaster_patterns), re.IGNORECASE)
-
-    # 2. Water Rides (Wasserbahnen)
-    water_patterns = [
-        r"water",
-        r"wasser",
-        r"splash",
-        r"river",
-        r"flume",
-        r"rapids",
-        r"log",
-        r"chiapas",
-        r"rafting",
-        r"pirates",
-        r"falls",
-        r"tidal",
-        r"wave",
-        r"bayou",
-        r"lagoon",
-        r"monsoon",
-        r"plunge",
-        r"chutes",
-        r"viking",
-        r"atlantis",
-    ]
-    water_regex = re.compile("|".join(water_patterns), re.IGNORECASE)
-
-    # 3. Indoor Rides (Themenfahrten / Shows)
-    indoor_patterns = [
-        r"cinema",
-        r"4d",
-        r"3d",
-        r"5d",
-        r"theater",
-        r"indoor",
-        r"dark",
-        r"mansion",
-        r"mous au chocolat",
-        r"hotel",
-        r"museum",
-        r"quest",
-        r"voyage",
-        r"haunted",
-        r"ghost",
-        r"secret",
-        r"adventure",
-        r"expedition",
-        r"tales",
-        r"piraten",
-        r"small world",
-        r"buzz lightyear",
-        r"spiderman",
-        r"transformers",
-    ]
-    indoor_regex = re.compile("|".join(indoor_patterns), re.IGNORECASE)
-
-    # Apply heuristics
-    names = df["attractionName"].astype(str)
-    df["is_coaster"] = names.apply(
-        lambda x: 1 if coaster_regex.search(x) else 0
-    ).astype(int)
-    df["is_water_ride"] = names.apply(
-        lambda x: 1 if water_regex.search(x) else 0
-    ).astype(int)
-    df["is_indoor"] = names.apply(lambda x: 1 if indoor_regex.search(x) else 0).astype(
-        int
-    )
-
-    # Wind sensitive: mostly high coasters and towers
-    wind_patterns = [
-        r"tower",
-        r"sky",
-        r"high",
-        r"drop",
-        r"starflyer",
-        r"giant",
-        r"loop",
-        r"swing",
-        r"flyer",
-        r"wheel",
-    ]
-    wind_regex = re.compile("|".join(wind_patterns), re.IGNORECASE)
-    df["is_wind_sensitive"] = (
-        (df["is_coaster"] == 1)
-        | names.apply(lambda x: 1 if wind_regex.search(x) else 0)
-    ).astype(int)
-
-    return df
 
 
 # Caches for the two history reads behind the prediction features (short-lived).
@@ -509,12 +385,6 @@ def fetch_recent_rolling_stats(
 # back from ~2026-11-24; parks added later stay on rolling_avg_7d until their
 # own 330 days. Revisit the 28-day cut (rows 8-28 d use a partial mean) then.
 # The constants live in features.py so train.as_known_at_origin reads the same.
-from features import (
-    LAST_YEAR_LAG,
-    LAST_YEAR_MIN_LEAD,
-    LAST_YEAR_MIN_OBSERVED_DAYS,
-    LAST_YEAR_WATCH_LOOKBACK_DAYS,
-)
 
 
 def last_year_slot_keys(df: pd.DataFrame, base_time: datetime) -> list:
@@ -1276,6 +1146,7 @@ def create_prediction_features(
     recent_wait_times: Dict[str, int] = None,
     feature_context: Optional[Dict[str, Any]] = None,
     timestamps_by_park: Optional[Dict[str, List[datetime]]] = None,
+    curated_ride_type: bool = False,
 ) -> pd.DataFrame:
     """
     Create feature DataFrame for predictions with all features from DB
@@ -1622,7 +1493,7 @@ def create_prediction_features(
             recent_data.groupby("attractionId")["attractionName"].first().to_dict()
         )
         df["attractionName"] = df["attractionId"].map(attr_names_map)
-        df = add_attraction_type_features(df)
+        df = add_attraction_type_features(df, curated=curated_ride_type)
 
         recent_data["date"] = pd.to_datetime(recent_data["date"])
         # Ensure timezone-naive for comparison with cutoff dates
@@ -2159,6 +2030,10 @@ def predict_wait_times(
         recent_wait_times,
         feature_context,
         timestamps_by_park=timestamps_by_park,
+        # The definition the active model was trained on (PAR-1045).
+        curated_ride_type=bool(
+            (getattr(model, "metadata", None) or {}).get("curated_ride_type")
+        ),
     )
 
     # OPTIMIZATION: Skip ML inference for CLOSED days when schedule exists.
