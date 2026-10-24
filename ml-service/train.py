@@ -406,11 +406,68 @@ def origin_occupancy_profile(df: pd.DataFrame) -> pd.Series:
     return df.groupby(["parkId", "day_of_week", "hour"])["park_occupancy_pct"].mean()
 
 
+# Beyond these leads serving has no forecast / no published schedule: weather
+# comes from climatology (Open-Meteo forecasts 16 days) and a day without
+# schedule rows reads open with no window. shortcut: the publishing horizon is
+# per park and unrecorded; 30 d is a conservative single cut-off — store when
+# each schedule row first appeared to make it per park.
+ORIGIN_WEATHER_FORECAST_DAYS = 16
+ORIGIN_SCHEDULE_KNOWN_DAYS = 30
+
+_ORIGIN_WEATHER_MEAN_COLUMNS = [
+    "temperature_avg",
+    "precipitation",
+    "precipitation_last_3h",
+    "windSpeedMax",
+    "snowfallSum",
+]
+
+
+def origin_weather_climatology(df: pd.DataFrame) -> pd.DataFrame:
+    """Observed weather per (parkId, month, hour), from rows older than the
+    hold-out: the stand-in for serving's monthly climatology beyond its forecast."""
+    cols = [c for c in _ORIGIN_WEATHER_MEAN_COLUMNS if c in df.columns]
+    keys = ["parkId", "month", "hour"]
+    clim = df.groupby(keys)[cols].mean()
+    if "weatherCode" in df.columns:
+        clim["weatherCode"] = df.groupby(keys)["weatherCode"].agg(
+            lambda x: x.mode().iloc[0] if len(x.mode()) else 0
+        )
+    return clim
+
+
+def _neutral_far_weather_and_schedule(
+    merged: pd.DataFrame, lead: pd.Timedelta, weather_clim: pd.DataFrame | None
+) -> pd.DataFrame:
+    if lead > pd.Timedelta(days=ORIGIN_WEATHER_FORECAST_DAYS) and weather_clim is not None:
+        keys = pd.MultiIndex.from_frame(merged[["parkId", "month", "hour"]])
+        clim = weather_clim.reindex(keys)
+        for c in clim.columns:
+            if c in merged.columns:
+                merged[c] = clim[c].fillna(merged[c]).values
+        if "weatherCode" in merged.columns:
+            merged["weatherCode"] = merged["weatherCode"].astype(int)
+        if "precipitation" in merged.columns:
+            merged["is_raining"] = (merged["precipitation"] > 0).astype(int)
+        for c in ("is_rain_starting", "is_rain_stopping", "is_temp_extreme",
+                  "is_wind_extreme", "temperature_deviation"):
+            if c in merged.columns:
+                merged[c] = 0
+    if lead > pd.Timedelta(days=ORIGIN_SCHEDULE_KNOWN_DAYS):
+        neutral = {"is_park_open": 1, "time_since_park_open_mins": 0.0,
+                   "has_extra_hours": 0, "has_special_event": 0}
+        for c, v in neutral.items():
+            if c in merged.columns:
+                merged[c] = v
+    return merged
+
+
 def as_known_at_origin(
     df_target: pd.DataFrame,
     df_source: pd.DataFrame,
     lead: pd.Timedelta,
     occ_profile: pd.Series,
+    weather_clim: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """The hold-out rows with the features they would have had if forecast
     `lead` ahead, i.e. built at origin = target - lead the way
@@ -439,7 +496,16 @@ def as_known_at_origin(
       nothing about a row hours later (PAR-1030/1032 serve 0 there too);
     * park_occupancy_pct is the (park, weekday, hour) profile, interactions
       recomputed from it.
-    Calendar, weather, holiday and schedule features are known ahead and stay.
+    * weather beyond ORIGIN_WEATHER_FORECAST_DAYS is the (park, month, hour)
+      climatology (`weather_clim`), and the schedule columns beyond
+      ORIGIN_SCHEDULE_KNOWN_DAYS read as serving reads a day without schedule
+      rows (open, no window, no event / extra hours).
+    Calendar and holiday features are known ahead and stay.
+
+    Still optimistic, on purpose of scope: within 16 d the row keeps the
+    OBSERVED weather where serving had a forecast, and within 30 d the FINAL
+    schedule where serving had whatever was published at the origin. The 12 h /
+    24 h / 7 d figures are therefore a lower bound on the served error.
     """
     from features import add_interaction_features
 
@@ -475,12 +541,16 @@ def as_known_at_origin(
         weekend, merged["_o_rolling_avg_weekday"]
     )
     if lead <= pd.Timedelta(days=7) and "wait_lag_1w" in merged.columns:
-        profile_1h = merged["wait_lag_1w"].where(merged["wait_lag_1w"].notna(), profile_1h)
+        # 0 is a filled miss, never a reading: serving's lookup only holds
+        # waits >= 5, so it falls back to the profile there.
+        lag_1w = merged["wait_lag_1w"]
+        profile_1h = lag_1w.where(lag_1w.notna() & (lag_1w > 0), profile_1h)
     merged["avg_wait_last_1h"] = profile_1h
     merged["wait_time_velocity"] = 0.0
 
     keys = pd.MultiIndex.from_frame(merged[["parkId", "day_of_week", "hour"]])
     merged["park_occupancy_pct"] = occ_profile.reindex(keys).fillna(100.0).values
+    merged = _neutral_far_weather_and_schedule(merged, lead, weather_clim)
     merged = add_interaction_features(merged)
     return merged.drop(
         columns=["_origin_ts", "_row", *[f"_o_{c}" for c in cols]]
@@ -717,6 +787,7 @@ def train_model(
         ["attractionId", "timestamp", *[c for c in _ORIGIN_VALUE_COLUMNS if c in df.columns]],
     ].copy()
     occ_profile = origin_occupancy_profile(df[~holdout_mask])
+    weather_clim = origin_weather_climatology(df[~holdout_mask])
     df_holdout = df[holdout_mask].copy().reset_index(drop=True)
     df = df[~holdout_mask].copy().reset_index(drop=True)
     gc.collect()
@@ -985,7 +1056,9 @@ def train_model(
         holdout_eval["origin_leads"] = {}
         logger.info("📊 Hold-out as known at origin (served leads):")
         for name, lead in ORIGIN_LEADS.items():
-            df_lead = as_known_at_origin(df_holdout, df_origin_source, lead, occ_profile)
+            df_lead = as_known_at_origin(
+                df_holdout, df_origin_source, lead, occ_profile, weather_clim
+            )
             if df_lead.empty:
                 holdout_eval["origin_leads"][name] = None
                 logger.info(f"   {name:>4}: no rows with a known origin")

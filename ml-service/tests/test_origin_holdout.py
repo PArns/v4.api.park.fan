@@ -116,3 +116,55 @@ def test_origin_rewrite_drops_rows_without_an_origin():
     profile = pd.Series(dtype=float, index=pd.MultiIndex.from_tuples([], names=["parkId", "day_of_week", "hour"]))
     out = train.as_known_at_origin(df, df, pd.Timedelta(days=61), profile)
     assert out.empty
+
+
+
+def _weathered(df):
+    return df.assign(
+        month=df["timestamp"].dt.month,
+        temperature_avg=30.0,
+        precipitation=5.0,
+        weatherCode=61,
+        is_raining=1,
+        is_park_open=0,
+        time_since_park_open_mins=120.0,
+        has_extra_hours=1,
+    )
+
+
+def _profile():
+    profile = pd.Series({("p1", d, h): 80.0 for d in range(7) for h in range(24)})
+    profile.index.names = ["parkId", "day_of_week", "hour"]
+    return profile
+
+
+def test_far_origin_reads_climatology_and_no_schedule():
+    df = _weathered(_frame())
+    target = df[df["timestamp"] >= df["timestamp"].max() - pd.Timedelta(days=5)]
+    clim = train.origin_weather_climatology(
+        df.assign(temperature_avg=18.0, precipitation=0.0, weatherCode=1)
+    )
+
+    far = train.as_known_at_origin(target, df, pd.Timedelta(days=61), _profile(), clim)
+    assert (far["temperature_avg"] == 18.0).all()
+    assert (far["precipitation"] == 0.0).all()
+    assert (far["is_raining"] == 0).all()
+    assert (far["weatherCode"] == 1).all()
+    assert (far["is_park_open"] == 1).all()
+    assert (far["time_since_park_open_mins"] == 0.0).all()
+    assert (far["has_extra_hours"] == 0).all()
+
+    near = train.as_known_at_origin(target, df, pd.Timedelta(hours=24), _profile(), clim)
+    assert (near["temperature_avg"] == 30.0).all()  # observed, within forecast
+    assert (near["is_park_open"] == 0).all()  # final schedule, within horizon
+
+
+def test_a_zero_week_lag_falls_back_to_the_profile_like_serving():
+    df = _frame().assign(wait_lag_1w=0.0)
+    target = df[df["timestamp"] >= df["timestamp"].max() - pd.Timedelta(days=5)]
+    out = train.as_known_at_origin(target, df, pd.Timedelta(hours=24), _profile())
+    weekend = out["day_of_week"] >= 5
+    assert (
+        out["avg_wait_last_1h"]
+        == out["rolling_avg_weekend"].where(weekend, out["rolling_avg_weekday"])
+    ).all()
