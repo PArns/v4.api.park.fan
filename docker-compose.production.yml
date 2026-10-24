@@ -229,14 +229,13 @@ services:
     # locks still held, which is what PAR-903 exists to avoid. `StopTimeout`
     # was `<nil>` on the container; this is the value those paths read.
     #
-    # It does not make the 20 s deadline reachable on a reboot. A daemon
-    # shutdown is bounded by dockerd's own `--shutdown-timeout` as well, unset
-    # on this host and therefore 15 s, and that budget cannot be set from this
-    # repo — it is `/etc/docker/daemon.json` plus a daemon restart, which is an
-    # API outage and Patrick's call (PAR-1055). What this value buys is the
-    # floor: a stop that used to be cut at exactly 10 s now gets at least 15,
-    # and the full 30 wherever the daemon is not the one stopping us. No path
-    # ends up with less head room than before.
+    # It covers a reboot too. dockerd's own `--shutdown-timeout` (15 s when
+    # unset) is only a floor: moby's `Daemon.ShutdownTimeout()` raises it to the
+    # largest container `StopTimeout` + 5 s, and each container is then stopped
+    # with its own timeout — so a daemon shutdown waits 35 s, inside systemd's
+    # 90 s for `docker.service`, and the 20 s deadline can fire. Not yet
+    # observed on this host; after a deploy, `docker inspect -f
+    # '{{.Config.StopTimeout}}' <api>` must print 30, not `<nil>`.
     stop_grace_period: 30s
     env_file:
       - .env
