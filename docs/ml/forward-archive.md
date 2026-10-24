@@ -106,6 +106,15 @@ and `is_headliner`, plus:
   picks it: the `getServingDailyPredictions` row for that ride whose
   `predictedTime.slice(0, 10)` is the date, TFT rows carrying
   `modelVersion: "tft"`. Internal only, not in the API.
+- `catboost_day_peak` (plan_day, PAR-1042): on a ride-day whose level is
+  `tft`, CatBoost's day level for the same ride-day — a **shadow**, never
+  served. `getServingDailyPredictions` starts from the CatBoost daily read
+  (`getParkPredictions(…, "daily")`) and drops its row wherever TFT has one;
+  the archive reads that same answer and keeps the dropped value, matched on
+  `predictedTime.slice(0, 10)` like the planner. Since the planner's `dayPeak`
+  IS the level's `predictedWaitTime`, this is the `dayPeak` the planner would
+  have shown had CatBoost levelled the day. NULL on every other row (a
+  CatBoost-levelled day already has CatBoost in `day_peak`).
 
 **Operating day.** A served 15-min slot before 04:00 park-local belongs to the
 previous date, so a park open until 01:00 keeps its evening in one row and is
@@ -173,6 +182,22 @@ per open park. Per capture the extra reads are one `getServingDailyPredictions`
 (single-flight, the call `buildPlanDay` makes anyway), one `DISTINCT ON` over the
 last 3 h of `queue_data` for the live anchor, and once a day per park the
 forward-filled q90 over 56 days of the hourly rollup (cached).
+
+**CatBoost shadow level (PAR-1042), measured at unit level** (the capture spec
+counts the calls): **one** extra `getParkPredictions(park, "daily")` per
+06:00 and 07:00 park capture, none at the intraday origins. That read is the
+Redis entry `getServingDailyPredictions` itself starts from, under the same
+single-flight key, so on the warm path it is one `parks` primary-key lookup
+(the timezone for the cache key) plus one Redis GET — no ml-service call and
+no `wait_time_predictions` read: ~200 parks × 2 captures ≈ 400 PK lookups a
+day. The stored `wait_time_predictions` daily rows were the alternative and
+were not taken: they are written by the prediction generator's own run
+(diff-written, so a row's age says nothing about which run made it), whereas
+the cached answer is by construction the set of rows the planner's level was
+chosen from, and reading the table would be a range query per park instead of
+a cache hit. Size: one nullable `smallint` on `forecast_archive_curves`,
+filled on TFT-levelled plan_day rows only (headliners d0–d60, a few thousand a
+day) — a few kB a day, nothing at the steady state's scale.
 
 **Not a hypertable, no foreign key.** At ~0.85 GB a plain table is fine, and
 retention is an app-side `DELETE` in 20,000-row batches with `lock_timeout` 2 s
@@ -550,8 +575,8 @@ spec builds the matrix from the real scorer and asserts it.
 | UC3 d0–d5 | `shadow_h5`, routed, `shadow_peak_scaled`, `weekday_avg`, `chronos2_grid` | `plan_day` | 06:00 |
 | UC3 d6, d7, d10 … d60 | the same without Chronos | `plan_day` | 06:00 / 07:00 |
 | D3 d0–d7 / d10–d30 | as UC3 d0–d5 / without Chronos; regret of every candidate and of served on the same slots (`n` = ride-days, Σ\|e\| = Σ regret) | `plan_day` | 06:00 / 07:00 |
-| PEAK dN | `weekday_avg`: \|peak − truth P90\| per ride-day, `all` and `headliner` | `plan_day` `dayPeak`, under **`served_tft` / `served_catboost`** by the model behind the level (PAR-1037) | 06:00 / 07:00 |
-| D7 dN | `weekday_avg` vs served `dayPeak`, headliners whose level is TFT's | `served_tft` | 06:00 / 07:00 |
+| PEAK dN | `weekday_avg`: \|peak − truth P90\| per ride-day, `all` and `headliner`; optional `catboost_shadow` (PAR-1042) on the same rows where the TFT-levelled ride-day has a CatBoost shadow level | `plan_day` `dayPeak`, under **`served_tft` / `served_catboost`** by the model behind the level (PAR-1037) | 06:00 / 07:00 |
+| D7 dN | `weekday_avg` vs served `dayPeak`, headliners whose level is TFT's; `catboost_shadow` likewise, its own rows | `served_tft` | 06:00 / 07:00 |
 
 The live candidates use, at a 10–18 h origin, the daily curves (H5, routed, the
 old composer, `chronos2_grid`) **issued at or before it** — the 06:00 one: none
@@ -587,6 +612,33 @@ question (`cal_far_90`, served by CatBoost beyond TFT's 60 days) with
 CatBoost's; CatBoost's live figure is its day peak against the weekday average
 on the days it levelled, shown under `comparisons` beside TFT's — two different
 sets of days, never subtracted.
+
+**CatBoost against TFT on the same days (PAR-1042).** To make "switch the
+CatBoost daily level off" decidable live, the capture keeps CatBoost's level on
+every TFT-levelled ride-day (`catboost_day_peak`, §1) and the scorer pairs it
+with the served TFT `dayPeak` as model **`catboost_shadow`**, reference
+`served_tft` — PEAK (`all`, `headliner`) and D7. It is optional like the
+nf-service shadows: written on the weekday average's PEAK / D7 rows where the
+ride-day has a shadow value, so the weekday-average rows are unchanged and the
+CatBoost cell's reference MAE differs from the weekday average's only by the
+ride-days without a shadow. The read path ranks D7 per model (`d7Aggregates`
+is called once per `model`): one series per park and lead mixing the two
+models' level sums would order one model's dates against the other's. The
+matrix columns `catboost` of `cal_rank`, `cal_busier` and `cal_far` read it
+(they were offline only before); `cal_far_90` stays CatBoost-served with the
+weekday average as its only live cell. `PAIRED_DEFINITION` stays 3: every key
+that existed keeps its meaning and its rows, and a bump would make the replay
+rescore 14 dates whose curves have no shadow (they were captured before the
+column existed) while restarting every other gate for nothing. The shadow's
+first rows are the first capture after deploy, so its cells' "frühestens"
+dates (`cellFloorDate`, counted from `ARCHIVE_START`) are optimistic by the
+time between 2026-10-09 and the deploy. Because the shadow rides on the
+weekday average's rows, it is scored only where that average exists — a
+quarter-hour needs `WEEKDAY_AVG_MIN_DAYS` = 2 earlier dates of the same
+weekday with a value — so for a park's (or a ride's) first two weeks in the archive the CatBoost cells collect
+nothing even while TFT's level is archived; their gate starts counting once
+the weekday average does. Kept that way on purpose: one row set per ride-day
+keeps the shadow and the weekday average on identical days.
 
 **D7 rows are levels, not errors**: per park, date and lead `n` headliners,
 `sae_model` = Σ weekday-average peak, `sae_ref` = Σ served `dayPeak`,
@@ -656,9 +708,11 @@ TFT levels the calendar up to 60 days and the d90 rows were CatBoost's while the
 question named TFT as served. The calendar questions
 read the planner's per-ride `dayPeak` — built on the same daily level the
 calendar reads (TFT ≤ 60 days, CatBoost beyond) — against the truth P90; the
-calendar's crowd level itself is not archived per model. **CatBoost** and
-**Toto 2.0 / TiRex** have no archived curve, so their cells are offline only
-(`checks.live = "open"`). The offline hit rate (+0.026 for TFT) answers
+calendar's crowd level itself is not archived per model. **Toto 2.0 /
+TiRex** have no archived curve, so their cells are offline only
+(`checks.live = "open"`); **CatBoost** has none either, but on the calendar
+questions its day level is archived as a shadow (PAR-1042, §9.1) and its
+`cal_rank` / `cal_busier` / `cal_far` cells are live against TFT. The offline hit rate (+0.026 for TFT) answers
 "which day is fuller", so since PAR-1038's review it is filed under the
 day-ranking question `cal_rank` (PAR-1037), with `metric = hit_rate`; it stays in
 the note, never in `offline.diff`, which would then be in another unit than the

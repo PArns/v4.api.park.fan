@@ -20,7 +20,15 @@ in that list are kept for the link but ignored in the derivation. The matrix
 is `ModelComparisonService.getMatrix(28, "ALL")` — the board's default, cached
 2 h per scoring run, so the overview adds no aggregation of its own.
 
-- **`ready`** — every cell `better`, with checks offline `yes` and live `yes`.
+- **`ready`** — every cell meets its expectation: by default `better`, with
+  checks offline `yes` and live `yes`. A cell with **`expect: "not_better"`**
+  (PAR-1042) instead needs live check `no` — the live gate is met and the model
+  does NOT beat what is served. That is for a decision to switch a model off on
+  cells that measure it against its replacement: `catboost_daily_off`'s
+  `cal_rank` / `cal_busier` / `cal_far` × `catboost` cells compare CatBoost with
+  the served TFT, so without it the decision could only become ready when
+  CatBoost wins — the evidence for keeping it. A `not_better` cell whose live
+  gate is not met yet counts towards `waiting_live`, whatever its offline check.
 - **`waiting_live`** — at least one cell is better offline (check `yes`, or
   `running` = an offline run is still going) while its live check is `running`
   or `open`.

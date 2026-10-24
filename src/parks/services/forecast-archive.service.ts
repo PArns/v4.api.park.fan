@@ -102,6 +102,7 @@ export type CurveDraft = Omit<
   | "laterWait"
   | "laterAt"
   | "levelSource"
+  | "catboostDayPeak"
 >;
 
 /** The in-force reading at the origin, per ride. */
@@ -517,6 +518,7 @@ export class ForecastArchiveService {
     // ---- planner curve and the park-day rows ----
     const parkDays: ForecastArchiveParkDay[] = [];
     const levelOf = new Map<string, string>();
+    let catboostLevels = new Map<string, number>();
     if (kind === "daily" || kind === "long") {
       const leads =
         kind === "daily"
@@ -526,17 +528,19 @@ export class ForecastArchiveService {
             )
           : [...ForecastArchiveService.LONG_LEADS];
       const lastDate = addIsoDays(localToday, leads[leads.length - 1]);
-      const [calendar, levelSources, typicalDayPeak] = await Promise.all([
-        this.predictedCrowdLevels(
-          park,
-          addIsoDays(localToday, leads[0]),
-          lastDate,
-        ),
-        this.levelSources(park),
-        this.analyticsService
-          .getTypicalDayPeakFromCache(park.id)
-          .catch(() => 0),
-      ]);
+      const [calendar, { sources: levelSources, catboost }, typicalDayPeak] =
+        await Promise.all([
+          this.predictedCrowdLevels(
+            park,
+            addIsoDays(localToday, leads[0]),
+            lastDate,
+          ),
+          this.levelSources(park),
+          this.analyticsService
+            .getTypicalDayPeakFromCache(park.id)
+            .catch(() => 0),
+        ]);
+      catboostLevels = catboost;
       for (const lead of leads) {
         const date = addIsoDays(localToday, lead);
         let plan: PlanDayDto | null = null;
@@ -645,6 +649,9 @@ export class ForecastArchiveService {
         d.surface === ARCHIVE_SURFACES.park_hourly ||
         d.surface === ARCHIVE_SURFACES.chronos_live ||
         isNextRide;
+      const dayKey = `${d.attractionId}|${d.targetDate}`;
+      const isPlanDay = d.surface === ARCHIVE_SURFACES.plan_day && !isNextRide;
+      const cb = catboostLevels.get(dayKey);
       return this.curveRepository.create({
         ...d,
         originAt,
@@ -656,9 +663,11 @@ export class ForecastArchiveService {
         liveAgeMin: hasAnchor ? (anchor?.ageMin ?? null) : null,
         laterWait: isNextRide ? (d.laterWait ?? null) : null,
         laterAt: isNextRide ? (d.laterAt ?? null) : null,
-        levelSource:
-          d.surface === ARCHIVE_SURFACES.plan_day && !isNextRide
-            ? (levelOf.get(`${d.attractionId}|${d.targetDate}`) ?? null)
+        levelSource: isPlanDay ? (levelOf.get(dayKey) ?? null) : null,
+        // PAR-1042: CatBoost's level beside TFT's, on the ride-days TFT levelled.
+        catboostDayPeak:
+          isPlanDay && levelOf.get(dayKey) === "tft" && cb !== undefined
+            ? Math.round(cb)
             : null,
       });
     });
@@ -1215,19 +1224,39 @@ export class ForecastArchiveService {
    * matched on `predictedTime.slice(0, 10)` exactly as it does (freshest row
    * wins), and the merged rows carry `modelVersion: "tft"` on the TFT side.
    * Reconstructed rather than exposed, because the payload has no field for it.
+   *
+   * `catboost` (PAR-1042): the CatBoost day level per `ride|date`, matched the
+   * same way, from `getParkPredictions(…, "daily")` — the read
+   * `getServingDailyPredictions` starts from and drops where TFT has a row.
+   * Redis-cached and single-flighted under the same key, so it costs one park
+   * lookup and one Redis GET, never a second ml-service call.
    */
-  private async levelSources(park: Park): Promise<Map<string, string>> {
-    const out = new Map<string, string>();
-    const serving = await this.mlService
-      .getServingDailyPredictions(park.id)
-      .catch(() => ({ predictions: [] as PredictionDto[] }));
+  private async levelSources(park: Park): Promise<{
+    sources: Map<string, string>;
+    catboost: Map<string, number>;
+  }> {
+    const empty = { predictions: [] as PredictionDto[] };
+    const [serving, raw] = await Promise.all([
+      this.mlService.getServingDailyPredictions(park.id).catch(() => empty),
+      this.mlService.getParkPredictions(park.id, "daily").catch(() => empty),
+    ]);
+    const sources = new Map<string, string>();
     for (const p of serving.predictions ?? []) {
-      out.set(
+      sources.set(
         `${p.attractionId}|${p.predictedTime.slice(0, 10)}`,
         p.modelVersion === "tft" ? "tft" : "catboost",
       );
     }
-    return out;
+    const catboost = new Map<string, number>();
+    for (const p of raw.predictions ?? []) {
+      if (Number.isFinite(p.predictedWaitTime)) {
+        catboost.set(
+          `${p.attractionId}|${p.predictedTime.slice(0, 10)}`,
+          p.predictedWaitTime,
+        );
+      }
+    }
+    return { sources, catboost };
   }
 
   /**

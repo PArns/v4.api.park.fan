@@ -131,6 +131,57 @@ describe("deriveDecisionState", () => {
   });
 });
 
+describe("deriveDecisionState with expect: not_better (PAR-1042 review)", () => {
+  // catboost_daily_off: CatBoost measured against served TFT. Switching it off
+  // needs CatBoost NOT to win, so a CatBoost win must never make it ready.
+  const notBetter = (over: Partial<ModelComparisonCellDto>) => ({
+    ...cell({ days: 20, parks: 30, ...over }),
+    expect: "not_better" as const,
+  });
+  const wkdGreen = cell({
+    state: "better",
+    checks: { offline: "yes", live: "yes", visible: true },
+    days: 20,
+    parks: 30,
+  });
+
+  it("is ready when CatBoost is measurably worse or not better than TFT", () => {
+    const worse = notBetter({
+      state: "worse",
+      checks: { offline: "no", live: "no", visible: false },
+    });
+    const unclear = notBetter({
+      state: "unclear",
+      checks: { offline: "open", live: "no", visible: false },
+    });
+    expect(deriveDecisionState([worse, unclear, wkdGreen])).toBe("ready");
+  });
+
+  it("is not ready when CatBoost beats TFT, and waits while live is still measuring", () => {
+    const wins = notBetter({
+      state: "better",
+      checks: { offline: "yes", live: "yes", visible: true },
+    });
+    expect(deriveDecisionState([wins, wkdGreen])).toBe("open");
+    const measuring = notBetter({
+      state: "unclear",
+      checks: { offline: "no", live: "running", visible: false },
+    });
+    expect(deriveDecisionState([measuring, wkdGreen])).toBe("waiting_live");
+  });
+
+  it("the shipped file expects CatBoost not to beat TFT where TFT is served", () => {
+    const f = decisionsJson as unknown as DecisionFile;
+    const off = f.decisions.find((d) => d.id === "catboost_daily_off")!;
+    for (const q of ["cal_rank", "cal_busier", "cal_far"]) {
+      expect(
+        off.cells.find((c) => c.questionId === q && c.modelId === "catboost")
+          ?.expect,
+      ).toBe("not_better");
+    }
+  });
+});
+
 describe("decisionProgress", () => {
   it("takes the least-measured cell, 0 where a cell has no live figure", () => {
     expect(
