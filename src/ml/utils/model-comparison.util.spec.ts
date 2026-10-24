@@ -772,6 +772,36 @@ describe("calendar questions (PAR-1037)", () => {
     expect(busier.cells.catboost.live).toBeNull();
   });
 
+  // PAR-1042: CatBoost's shadow level is a cell against served TFT.
+  it("gives CatBoost a live cell against TFT on the days TFT levelled", () => {
+    const res = buildModelComparison({
+      aggregates: Array.from({ length: 24 }, (_, i) => ({
+        useCase: "PEAK",
+        lead: "d30",
+        model: "catboost_shadow",
+        reference: "served_tft",
+        segment: "headliner",
+        parkId: `p${i % 12}`,
+        dates: [i < 12 ? "2026-10-08" : "2026-10-09"],
+        n: 5,
+        saeModel: 40,
+        saeRef: 25,
+      })),
+      since: new Map(),
+      verdicts: verdictsJson as unknown as OfflineVerdictFile,
+      window: { days: 28, firstDate: "2026-10-08", lastDate: "2026-10-09" },
+      today: "2026-10-10",
+      generatedAt: "2026-10-10T08:00:00.000Z",
+    });
+    const far = res.questions.find((x) => x.id === "cal_far")!;
+    // 8 vs 5 min per ride-day: CatBoost 3 minutes behind TFT.
+    expect(far.cells.catboost.live).toMatchObject({
+      modelMae: 8,
+      referenceMae: 5,
+      diff: 3,
+    });
+  });
+
   it("orders a park's days: D7 counts wrongly ordered day pairs, ties half", () => {
     const row = (date: string, wkd: number, served: number, truth: number) => ({
       parkId: "p1",

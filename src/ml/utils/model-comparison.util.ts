@@ -440,7 +440,10 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     segment: "headliner",
     reference: PAIRED_LEVEL_REFERENCES.tft,
     unit: "rate",
-    models: { catboost: null, wkd: [PAIRED_MODELS.weekdayAvg] },
+    models: {
+      catboost: [PAIRED_MODELS.catboostShadow],
+      wkd: [PAIRED_MODELS.weekdayAvg],
+    },
   },
   {
     id: "cal_busier",
@@ -453,7 +456,10 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     leads: CAL_NEAR_LEADS,
     segment: "headliner",
     reference: PAIRED_LEVEL_REFERENCES.tft,
-    models: { catboost: null, wkd: ["weekday_avg"] },
+    models: {
+      catboost: [PAIRED_MODELS.catboostShadow],
+      wkd: [PAIRED_MODELS.weekdayAvg],
+    },
     pairwise: CAL_PAIRWISE,
   },
   {
@@ -469,7 +475,10 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     leads: ["d30", "d45", "d60"],
     segment: "headliner",
     reference: PAIRED_LEVEL_REFERENCES.tft,
-    models: { catboost: null, wkd: ["weekday_avg"] },
+    models: {
+      catboost: [PAIRED_MODELS.catboostShadow],
+      wkd: [PAIRED_MODELS.weekdayAvg],
+    },
     pairwise: CAL_PAIRWISE,
   },
   {

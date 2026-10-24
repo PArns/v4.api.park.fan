@@ -54,11 +54,14 @@
     {
       "id": "catboost_daily_off",
       "title": "CatBoost-Tagesniveau abschalten",
-      "detail": "Macht die Prognose offline schlechter. Erst abschalten, wenn der Ersatz live bestätigt ist. Live entscheidet „Kalendertage 3 Monate voraus“ (dort liefert CatBoost das Tagesniveau) gegen den Wochentag-Durchschnitt.",
+      "detail": "Macht die Prognose offline schlechter. Erst abschalten, wenn der Ersatz live bestätigt ist. Live wird CatBoost jetzt an denselben Tagen gegen TFT gemessen: Wir speichern an jedem Tag, an dem TFT das Tagesniveau liefert, zusätzlich den CatBoost-Wert, ohne ihn anzuzeigen („Welcher Tag ist voller?“, „Wie hoch wird die Tagesspitze?“, „1 bis 2 Monate voraus“). Bei 3 Monaten liefert nur CatBoost; dort zählt der Vergleich mit dem Wochentag-Durchschnitt. Gemessen wird erst seit dem Einbau dieser Speicherung.",
       "state": "later",
       "dependsOn": ["planner_h5_slots", "live_chronos", "planner_chronos"],
       "evaluateOn": "2027-01-21",
       "cells": [
+        { "questionId": "cal_rank", "modelId": "catboost" },
+        { "questionId": "cal_busier", "modelId": "catboost" },
+        { "questionId": "cal_far", "modelId": "catboost" },
         { "questionId": "cal_far_90", "modelId": "catboost" },
         { "questionId": "cal_far_90", "modelId": "wkd" }
       ]
