@@ -729,6 +729,35 @@ describe("applyMergeDependencies", () => {
     expect(secondSql).toMatch(/^UPDATE prediction_accuracy/);
   });
 
+  it("skips a may-be-absent table that does not exist and still moves one that does", async () => {
+    // PAR-1041: `tft_forecasts_shadow` exists only after nf-service's first
+    // shadow write; before that the move was a 42P01 that rolled back every
+    // attraction merge.
+    const shadow = ATTRACTION_DEPENDENCIES.find(
+      (d) => d.table === "tft_forecasts_shadow",
+    )!;
+    expect(shadow.mayBeAbsent).toBe(true);
+
+    const runner = {
+      query: jest.fn((sql: string, params?: unknown[]) =>
+        Promise.resolve(
+          sql.includes("to_regclass")
+            ? [{ present: params?.[0] !== "tft_forecasts_shadow" }]
+            : [],
+        ),
+      ),
+    };
+    const served = { ...shadow, table: "tft_forecasts" };
+
+    await applyMergeDependencies(runner, [shadow, served], "w", "l");
+
+    const statements = runner.query.mock.calls.map(([sql]) => sql);
+    expect(statements.some((s) => /tft_forecasts_shadow/.test(s))).toBe(false);
+    expect(
+      statements.filter((s) => /^(DELETE FROM|UPDATE) tft_forecasts /.test(s)),
+    ).toHaveLength(2);
+  });
+
   it("dedupes park_slug_aliases on the whole path, so a shared last segment keeps its redirect", async () => {
     // The one entry here whose unique key spans four columns. On `slug` alone
     // the DELETE below read `("slug") IN (SELECT "slug" …)` and dropped every
