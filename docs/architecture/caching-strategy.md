@@ -86,6 +86,7 @@ Heavy analytical queries are cached with varying TTLs based on data volatility.
   - `park:p90:{parkId}` (TTL: 24 h) — Park P90 baseline from headliners (table: `park_p90_baselines`). JSON `{p90, confidence}`. Computed for free; no longer the crowd-level reference.
   - `attraction:p50:{attractionId}` (TTL: 24 h) — Per-attraction P50 baseline (table: `attraction_p50_baselines`). **Primary** for the live park load (`Σ latest ÷ Σ P50` across headliners).
   - `attraction:p90:{attractionId}` (TTL: 24 h) — Per-attraction P90 baseline (table: `attraction_p90_baselines`). Computed for free; no longer the crowd-level reference.
+  - `ml:tft-daily:{parkId}:{days}:{today}` (TTL: 13 h) — TFT daily read for the calendar. Evicted (SCAN `ml:tft-daily:*`) when `train-nf` completes, so a new run is served at once instead of after the previous entry expires (PAR-1053). Caches built on top of it (integrated park, calendar month) still run out on their own TTLs.
 
 > **Orphaned keys** — the previous P90 sliding-window precompute used `analytics:percentile:sliding:park:{parkId}` and `analytics:percentile:sliding:attraction:{attractionId}` to cache its 548-day live aggregation. Both the precompute job and the live-aggregation method have been removed; nothing writes or reads these keys any more. Existing entries TTL out within 24 h of deploy.
 

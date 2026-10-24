@@ -87,6 +87,19 @@ on `forecast_date`, `LIMIT 1` — the newest run that covered that day. A stoppe
 TFT leaves an older `created_at` there and the row reads `late`. `failed` when
 nf-service reports a failed run that finished after it.
 
+**PCN training (PAR-1053).** PCN keeps writing forecasts every 15 min from the
+previous model when a training run fails, so the forecast age alone never showed
+it. The row also reads pcn-service `GET /train/status` (3 s timeout; unreachable
+→ ignored, the age decides as before): `status: "failed"` overrides to `failed`
+with the error in the note, `is_training` adds "trainiert gerade". The status
+file carries no finish time, so a failure stands until the next run replaces it.
+
+**Feature drift (PAR-1050).** `detectFeatureDrift` returns
+`summary.status: "no_data"` (counts all 0) when no feature could be compared —
+which is production today: `prediction_accuracy.features` is never written. The
+hourly alert check then keeps a low `feature_drift` alert "Feature Drift: No
+Data" open instead of resolving it as healthy.
+
 **Chronos warming.** `ChronosShadowService` counts calls / ok / warming per
 archive run, and `ForecastArchiveService.captureDue` writes that summary to
 Redis (`forecast-archive:chronos:last-run`, 2 days) whenever the run asked

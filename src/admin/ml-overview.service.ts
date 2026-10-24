@@ -4,7 +4,11 @@ import { DataSource } from "typeorm";
 import { Redis } from "ioredis";
 import axios from "axios";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
-import { getMlServiceUrl, getNfServiceUrl } from "../config/ml-services.config";
+import {
+  getMlServiceUrl,
+  getNfServiceUrl,
+  getPcnServiceUrl,
+} from "../config/ml-services.config";
 import {
   addIsoDays,
   getCurrentDateInTimezone,
@@ -185,6 +189,7 @@ export class MlOverviewService {
       nfTrain,
       mlTrain,
       chronosStatus,
+      pcnTrain,
     ] = await Promise.all([
       // Backward scan of idx_pcn_forecasts_created_at, recent window only.
       this.probe<LatestRow[]>(
@@ -234,6 +239,7 @@ export class MlOverviewService {
       this.service(`${getNfServiceUrl()}/train/status`),
       this.service(`${getMlServiceUrl()}/train/status`),
       this.service(`${getNfServiceUrl()}/chronos/status`),
+      this.service(`${getPcnServiceUrl()}/train/status`),
     ]);
 
     let chronosRun: ChronosRunSummary | null = null;
@@ -255,6 +261,11 @@ export class MlOverviewService {
     // --- PCN -----------------------------------------------------------
     const pcnAt = toDate(pcn?.[0]?.at);
     const pcnServed = servePcnIntraday();
+    // PAR-1053: forecasts keep flowing from the previous model when a training
+    // run fails, so their age alone never shows it. pcn-service's status file
+    // carries no finish time, so a `failed` there stands until the next run.
+    const pcnFailed = trainingFailedAfter(pcnTrain, null);
+    const pcnNote = trainingNote(pcnTrain, pcnFailed, pcn?.[0]?.version);
 
     // --- TFT -----------------------------------------------------------
     const tftAt = toDate(tft?.[0]?.at);
@@ -302,10 +313,10 @@ export class MlOverviewService {
         role: pcnServed ? "served" : "shadow",
         lastRunAt: iso(pcnAt),
         expected: "alle 15 Min. (rund um die Uhr)",
-        status: status(pcnAt, LATE_AFTER_MS.pcn),
+        status: status(pcnAt, LATE_AFTER_MS.pcn, pcnFailed ? "failed" : null),
         note: pcnServed
-          ? versionNote(pcn?.[0]?.version)
-          : `nicht ausgeliefert (SERVE_PCN_INTRADAY aus)${pcn?.[0]?.version ? ` · Version ${pcn[0].version}` : ""}`,
+          ? pcnNote
+          : `nicht ausgeliefert (SERVE_PCN_INTRADAY aus)${pcnNote ? ` · ${pcnNote}` : ""}`,
       },
       {
         id: "tft",
