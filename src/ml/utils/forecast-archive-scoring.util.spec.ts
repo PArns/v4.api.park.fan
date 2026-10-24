@@ -15,6 +15,7 @@ import {
   scoreParkDay,
   scorePairedModels,
   scorePairedShadows,
+  shadowLevelAt,
   slotLeadBucket,
   spearman,
 } from "./forecast-archive-scoring.util";
@@ -1278,6 +1279,71 @@ describe("scorePairedModels — joint rows per question (PAR-855, PAR-1035)", ()
         .entries()
         .filter((e) => e.useCase === "D7"),
     ).toEqual([]);
+  });
+
+  it("pairs the grid TFT shadow with the served TFT level on PEAK and D7 (PAR-1041)", () => {
+    const run = (extra: Partial<ArchivedCurve>) => {
+      const paired = new PairedAccumulator();
+      scorePairedModels(planner(extra), truth, paired, weekday);
+      return paired;
+    };
+    // grid 48, served 45, truth P90 50.
+    const tft = run({ levelSource: "tft", tftGridPeak: 48 });
+    expect(
+      find(tft, "PEAK", "d0", "tft_grid", "served_tft", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 2, saeRef: 5 });
+    expect(find(tft, "PEAK", "d0", "tft_grid", "served_tft")).toMatchObject({
+      n: 1,
+    });
+    expect(
+      find(tft, "D7", "d0", "tft_grid", "served_tft", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 48, saeRef: 45, seModel: 50 });
+    // The weekday average's rows are unchanged by it.
+    expect(
+      find(tft, "PEAK", "d0", "weekday_avg", "served_tft", "headliner"),
+    ).toMatchObject({ n: 1, saeModel: 15, saeRef: 5 });
+    // Never on a CatBoost-levelled day, never without a shadow value.
+    for (const p of [
+      run({ levelSource: "catboost", tftGridPeak: 48 }),
+      run({ levelSource: "tft", tftGridPeak: null }),
+    ]) {
+      expect(p.entries().filter((e) => e.model === "tft_grid")).toEqual([]);
+    }
+  });
+
+  it("reads the shadow level as it stood at the origin", () => {
+    const at = Date.parse("2026-10-08T04:05:00Z");
+    const rows = [
+      {
+        attractionId: "a1",
+        forecastDate: "2026-10-04",
+        createdAt: 0,
+        peak: 10,
+      },
+      {
+        attractionId: "a1",
+        forecastDate: "2026-10-07",
+        createdAt: 0,
+        peak: 20.4,
+      },
+      // Written after the origin: never counts, although it is the freshest.
+      {
+        attractionId: "a1",
+        forecastDate: "2026-10-08",
+        createdAt: at + 1,
+        peak: 99,
+      },
+      {
+        attractionId: "a2",
+        forecastDate: "2026-10-08",
+        createdAt: 0,
+        peak: 77,
+      },
+    ];
+    expect(shadowLevelAt(rows, "a1", at, "2026-10-08")).toBe(20);
+    // Older than 3 days before the origin date: stale, like the served read.
+    expect(shadowLevelAt(rows.slice(0, 1), "a1", at, "2026-10-08")).toBeNull();
+    expect(shadowLevelAt(rows, "a3", at, "2026-10-08")).toBeNull();
   });
 
   it("uses no history at or after the origin's date", () => {

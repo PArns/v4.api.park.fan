@@ -284,6 +284,12 @@ export interface ArchivedCurve {
   laterAt?: number | null;
   /** plan_day: model behind the day level. */
   levelSource?: string | null;
+  /**
+   * plan_day: the calendar-grid TFT shadow's day peak for this ride-day as it
+   * stood at the origin (`tft_forecasts_shadow`, PAR-1041), read at scoring
+   * time; rounded like the served TFT level.
+   */
+  tftGridPeak?: number | null;
 }
 
 export interface ArchivedParkDay {
@@ -1108,6 +1114,8 @@ export const PAIRED_MODELS = {
   shadowPeak: "shadow_peak_scaled",
   chronosGrid: "chronos2_grid",
   weekdayAvg: "weekday_avg",
+  /** The calendar-grid TFT shadow (PAR-1041), on the TFT-levelled ride-days. */
+  tftGrid: "tft_grid",
 } as const;
 
 /** Ride-day use cases of the paired table besides the slot ones (UC1/2/3). */
@@ -1261,6 +1269,7 @@ export const PAIRED_OPTIONAL_MODELS: ReadonlySet<string> = new Set([
   PAIRED_MODELS.chronosLive,
   PAIRED_MODELS.chronosGrid,
   PAIRED_MODELS.shadowPeak,
+  PAIRED_MODELS.tftGrid,
 ]);
 
 /**
@@ -1531,19 +1540,73 @@ export function scorePairedModels(
         p90,
       );
     }
+    // The grid shadow is optional: on the same ride-days, where it has a value.
+    const grid = plan.levelSource === "tft" ? (plan.tftGridPeak ?? null) : null;
+    if (grid !== null) {
+      for (const seg of plan.isHeadliner ? ["all", "headliner"] : ["all"]) {
+        acc.add(
+          PAIRED_PEAK_USE_CASE,
+          lead,
+          PAIRED_MODELS.tftGrid,
+          levelRef,
+          seg,
+          grid,
+          plan.dayPeak,
+          p90,
+        );
+      }
+    }
     if (plan.isHeadliner && plan.levelSource === "tft") {
-      acc.addSums(
-        PAIRED_D7_USE_CASE,
-        lead,
-        PAIRED_MODELS.weekdayAvg,
-        PAIRED_LEVEL_REFERENCES.tft,
-        "headliner",
-        wkdPeak,
-        plan.dayPeak,
-        p90,
-      );
+      const d7: Array<[string, number | null]> = [
+        [PAIRED_MODELS.weekdayAvg, wkdPeak],
+        [PAIRED_MODELS.tftGrid, grid],
+      ];
+      for (const [model, pred] of d7) {
+        if (pred === null) continue;
+        acc.addSums(
+          PAIRED_D7_USE_CASE,
+          lead,
+          model,
+          PAIRED_LEVEL_REFERENCES.tft,
+          "headliner",
+          pred,
+          plan.dayPeak,
+          p90,
+        );
+      }
     }
   }
+}
+
+/** One `tft_forecasts_shadow` row for a ride and target date. */
+export interface ShadowLevelRow {
+  attractionId: string;
+  forecastDate: string;
+  createdAt: number;
+  peak: number;
+}
+
+/**
+ * The grid shadow's level for one archived plan_day curve, read the way the
+ * served TFT level is (`MLService.getTftDailyPredictions`): the freshest
+ * forecast_date no older than 3 days before the origin's park-local date —
+ * restricted to rows written at or before the origin, so a forecast made
+ * after it never counts. Rounded and floored at 0 like the served level.
+ */
+export function shadowLevelAt(
+  rows: ShadowLevelRow[],
+  attractionId: string,
+  originAt: number,
+  originDate: string,
+): number | null {
+  const oldest = addIsoDays(originDate, -3);
+  let best: ShadowLevelRow | null = null;
+  for (const r of rows) {
+    if (r.attractionId !== attractionId) continue;
+    if (r.createdAt > originAt || r.forecastDate < oldest) continue;
+    if (!best || r.forecastDate > best.forecastDate) best = r;
+  }
+  return best ? Math.max(0, Math.round(best.peak)) : null;
 }
 
 /**

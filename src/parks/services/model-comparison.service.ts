@@ -31,7 +31,7 @@ import {
   OfflineVerdictFile,
   PairedAggregate,
   buildModelComparison,
-  d7Aggregates,
+  d7AggregatesByModel,
 } from "../../ml/utils/model-comparison.util";
 import {
   ModelComparisonDayDto,
@@ -240,6 +240,7 @@ export class ModelComparisonService {
     );
     const d7 = await this.q<
       Array<{
+        model: string;
         parkId: string;
         lead: string;
         date: string;
@@ -249,7 +250,7 @@ export class ModelComparisonService {
         sumTruth: string | number;
       }>
     >(
-      `SELECT park_id AS "parkId", lead, target_date::text AS date, n,
+      `SELECT model, park_id AS "parkId", lead, target_date::text AS date, n,
               sae_model AS "sumModel", sae_ref AS "sumRef", se_model AS "sumTruth"
          FROM forecast_archive_paired
         WHERE target_date BETWEEN $1::date AND $2::date
@@ -266,8 +267,9 @@ export class ModelComparisonService {
         saeModel: Number(r.saeModel),
         saeRef: Number(r.saeRef),
       })),
-      ...d7Aggregates(
+      ...d7AggregatesByModel(
         d7.map((r) => ({
+          model: r.model,
           parkId: r.parkId,
           lead: r.lead,
           date: r.date,
