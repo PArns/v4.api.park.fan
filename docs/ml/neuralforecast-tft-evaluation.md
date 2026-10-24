@@ -477,20 +477,25 @@ and `build_future_frame` started every series at its own `last ds + 1` — a rid
   the last status and wait with a fresh timestamp; the forward archive's truth already drops
   them (`truthRowsSql`, PAR-1024), so the TFT target now matches what it is scored against.
   Also in `backtest_headliners.py` and `backtest_horizon.py`.
-- `is_peak_season` uses the park's latitude: south of the equator the months are the same
-  rule six months on (12, 1, 2, 6). No latitude = the northern months.
+- `is_peak_season` uses the park's latitude: south of 15°S the months are the same rule six
+  months on (12, 1, 2, 6). The tropics (Jakarta −6°, Singapore +1°) have no summer to shift
+  and keep the months they had, as does a park without a latitude; their seasonality is
+  carried by the school-holiday flags.
 
 **Behind `NF_CALENDAR_GRID` (default `false` = previous behaviour):** it changes the
 training data shape, so it is shadowed before it serves.
 - `to_calendar_grid`: every day from a series' first observation to park-local yesterday;
   absent days are `y=0` with `available_mask=0` (NeuralForecast 3.1.8 keeps them out of the
   scaler, the loss and the window sampler). `y` is 0 rather than NaN because TFT's forward
-  pass never reads the mask.
+  pass never reads the mask — it still READS those zeros as context. So the grid also adds
+  `is_observed` (1 = observed, 0 = masked) as a `hist_exog`: the encoder can tell a closed
+  day from a quiet one even past the schedule's publishing horizon, where `sched_closed` is 0.
 - Every series therefore ends on park-local yesterday, so every future frame starts
   park-local today (the day the reader serves first: `target_date >= today`).
 - A series last observed more than `NF_MAX_STALE_DAYS` (90 = `NF_INPUT_SIZE`) days ago is not
-  forecast: past that its whole context window is masked. CatBoost serves it, which is no
-  loss — on the old panel its frame lay mostly in the past.
+  forecast: past that its whole context window is masked. Its last TFT forecast keeps serving
+  for up to 3 more days (the reader takes `forecast_date >= today - 3`, `src/ml/ml.service.ts`)
+  before CatBoost takes over — no loss, since on the old panel its frame lay mostly in the past.
 - Four more futr_exog columns (`FUTR_EXOG_GRID`): `sched_open` / `sched_closed` from the
   published park schedule (both 0 = unknown, never closed) and the distance to the nearest
   school holiday.

@@ -55,7 +55,9 @@ def test_closed_day_is_a_masked_row_not_a_gap():
     assert list(tokyo.index) == list(pd.date_range("2026-10-20", "2026-10-23"))
     closed = tokyo.loc[pd.Timestamp("2026-10-21")]
     assert closed.available_mask == 0.0 and closed.y == 0.0
+    assert closed.is_observed == 0
     assert tokyo.available_mask.sum() == 3
+    assert (tokyo.is_observed == tokyo.available_mask).all()
 
 
 def test_every_series_ends_park_local_yesterday_and_stale_ones_drop():
@@ -78,11 +80,15 @@ def test_future_starts_park_local_today_for_every_series():
 
 def test_southern_hemisphere_peak_season_is_shifted():
     frame = pd.DataFrame({
-        "unique_id": ["tokyo", "tokyo", "gold_coast", "gold_coast"],
-        "ds": pd.to_datetime(["2026-07-15", "2026-01-15", "2026-07-15", "2026-01-15"]),
+        "unique_id": ["tokyo", "tokyo", "gold_coast", "gold_coast", "jakarta", "jakarta"],
+        "ds": pd.to_datetime(["2026-07-15", "2026-01-15"] * 3),
     })
-    out = db.add_calendar_covariates(frame, _meta(), pd.DataFrame())
-    assert out["is_peak_season"].tolist() == [1, 0, 0, 1]
+    meta = pd.concat([_meta(), pd.DataFrame([{
+        "unique_id": "jakarta", "park_id": "p4", "timezone": "Asia/Jakarta",
+        "country": "ID", "region": None, "influencing": None, "latitude": -6.1}])])
+    out = db.add_calendar_covariates(frame, meta, pd.DataFrame())
+    # Tropics (|lat| < 15) keep the northern months.
+    assert out["is_peak_season"].tolist() == [1, 0, 0, 1, 1, 0]
 
 
 def test_schedule_flags_leave_unknown_days_at_zero():
@@ -110,7 +116,9 @@ def test_school_holiday_distance():
 
 def test_grid_flag_switches_the_exog_list(monkeypatch):
     assert db.futr_exog() == db.FUTR_EXOG  # default: current inputs unchanged
+    assert db.hist_exog() == []
     monkeypatch.setattr(db.settings, "NF_CALENDAR_GRID", True)
+    assert db.hist_exog() == ["is_observed"]
     assert db.futr_exog()[-4:] == ["sched_open", "sched_closed",
                                    "days_until_school_holiday", "days_since_school_holiday"]
 

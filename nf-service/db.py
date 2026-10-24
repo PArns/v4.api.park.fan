@@ -231,11 +231,14 @@ def to_calendar_grid(
         parts.append(pd.DataFrame({
             "unique_id": uid, "ds": days, "y": y.fillna(0.0).to_numpy(),
             "available_mask": y.notna().astype(float).to_numpy(),
+            # The mask hides closed days from the scaler and loss, but TFT still
+            # READS their y=0 as input; this hist_exog lets it tell closed from quiet.
+            "is_observed": y.notna().astype(int).to_numpy(),
         }))
     logger.info("calendar grid: %d series kept, %d dropped as stale (>%dd)",
                 len(parts), stale, max_stale_days)
     if not parts:
-        return pd.DataFrame(columns=["unique_id", "ds", "y", "available_mask"])
+        return pd.DataFrame(columns=["unique_id", "ds", "y", "available_mask", "is_observed"])
     return pd.concat(parts, ignore_index=True)
 
 
@@ -279,7 +282,9 @@ def add_calendar_covariates(
     month = ds.dt.month
     df["season_code"] = (month % 12 // 3).astype(int)  # 0=winter..3=fall
     # Summer + December in the north; the same rule six months on in the south
-    # (PAR-1033). A park without a latitude keeps the northern months.
+    # (PAR-1033). Only south of 15°S: the tropics have no summer season to shift
+    # (Jakarta −6°, Singapore +1°), so they keep the months they had. A park
+    # without a latitude keeps them too.
     df["is_peak_season"] = month.isin([6, 7, 8, 12]).astype(int)
     # Day-of-week ONE-HOT: theme-park dow effect is step-like (Sa-peak), not smoothly
     # cyclical — explicit per-day columns help the model learn the jump directly
@@ -308,7 +313,7 @@ def add_calendar_covariates(
         meta_by_id = meta.drop_duplicates("unique_id").set_index("unique_id")
         df["_park"] = df["unique_id"].map(meta_by_id["park_id"].to_dict())
         if "latitude" in meta_by_id.columns:
-            south = df["unique_id"].map(meta_by_id["latitude"].to_dict()).lt(0).to_numpy()
+            south = df["unique_id"].map(meta_by_id["latitude"].to_dict()).lt(-15).to_numpy()
             df.loc[south, "is_peak_season"] = month[south].isin([12, 1, 2, 6]).astype(int)
 
     n_parks = 0
@@ -494,6 +499,11 @@ FUTR_EXOG_GRID = FUTR_EXOG + [
 
 def futr_exog() -> list[str]:
     return FUTR_EXOG_GRID if settings.NF_CALENDAR_GRID else FUTR_EXOG
+
+
+def hist_exog() -> list[str]:
+    """Past-only inputs: with the grid, whether the day was observed at all."""
+    return ["is_observed"] if settings.NF_CALENDAR_GRID else []
 
 
 def persist_forecast(

@@ -125,6 +125,8 @@ def _build_models(chunk_idx: int = 1, n_chunks: int = 1, stat_exog=None, loss=No
     )
     if stat_exog:
         common["stat_exog_list"] = stat_exog
+    if db.hist_exog():
+        common["hist_exog_list"] = db.hist_exog()
     # TFT only — it's the model under evaluation; NHITS was an unused baseline whose
     # training just doubled time + memory. (Re-add if a baseline is needed later.)
     return [
@@ -241,7 +243,7 @@ def train_and_forecast(version: str) -> pd.DataFrame:
 
     cols = ["unique_id", "ds", "y"] + db.futr_exog()
     if settings.NF_CALENDAR_GRID:
-        cols.append("available_mask")
+        cols += db.hist_exog() + ["available_mask"]
     parts = []
     skipped = 0
     for ci, chunk in enumerate(chunks, 1):
