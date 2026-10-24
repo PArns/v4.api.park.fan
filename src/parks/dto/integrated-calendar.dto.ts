@@ -368,6 +368,15 @@ export class CalendarDay {
   @ApiProperty()
   isSchoolVacation: boolean;
 
+  @ApiProperty({
+    description:
+      "`true` when `isSchoolVacation` is false only because the park's school-holiday " +
+      "data ends before this day (the next school year is not published yet, or the " +
+      "country publishes none): unknown, not 'no school vacation'. Absent otherwise.",
+    required: false,
+  })
+  schoolVacationUnknown?: boolean;
+
   @ApiProperty({ type: () => OperatingHours, required: false })
   hours?: OperatingHours;
 

@@ -60,7 +60,13 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from holiday_features import HolidayIndex, park_day_holiday_features
+from holiday_features import (
+    PUBLIC_HOLIDAY_TYPES,
+    HolidayIndex,
+    SchoolCoverage,
+    park_day_holiday_features,
+)
+from holiday_utils import normalize_region_code
 
 logger = logging.getLogger("nf.chronos")
 
@@ -225,11 +231,27 @@ def day_covariates(meta: ParkMeta, dates: list[dt.date], holidays: pd.DataFrame)
     return d.loc[[x for x in days if min(dates) <= x <= max(dates)], DAY_COVS]
 
 
+def holidays_through(holidays: pd.DataFrame, meta: ParkMeta) -> dt.date | None:
+    """The last day the park's holiday covariates rest on data, PER TYPE (PAR-1049):
+    the earlier of the country's last public-holiday row and the park's region's
+    last school-holiday row. Taken over all types at once, Spain looked covered to
+    2028 (its public calendar) while its school rows end 2026-09-11. None when
+    either type has no row — Sweden publishes no school holidays at all."""
+    if holidays.empty or not meta.country:
+        return None
+    own = holidays[holidays["country"] == meta.country]
+    public = own.loc[own["holiday_type"].isin(PUBLIC_HOLIDAY_TYPES), "date"]
+    school = SchoolCoverage(own).through(meta.country, normalize_region_code(meta.region))
+    if public.empty or school is None:
+        return None
+    return min(max(public), school)
+
+
 def holiday_coverage(holidays_through: dt.date | None, target: dt.date) -> str:
     """Whether the holiday covariates of a target day rest on data: ``none`` when
-    the holidays table has no row at all for the park's country (every flag
-    reads 0 — absence, not "no holiday"), ``short`` when its last row lies
-    before the target day (the sync has not reached it yet), else ``full``."""
+    the holidays table has no row for one of the park's holiday types (every such
+    flag reads 0 — absence, not "no holiday"), ``short`` when ``holidays_through``
+    (see ``holidays_through``) lies before the target day, else ``full``."""
     if holidays_through is None:
         return "none"
     return "full" if holidays_through >= target else "short"

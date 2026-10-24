@@ -8,12 +8,13 @@ from datetime import datetime, timedelta, time
 from typing import Dict, List
 from db import (
     fetch_holidays,
+    fetch_school_holiday_coverage,
     fetch_parks_metadata,
     fetch_park_schedules,
     fetch_attraction_baselines,
 )
 from holiday_utils import calculate_holiday_info
-from holiday_features import assign_holiday_features
+from holiday_features import SchoolCoverage, assign_holiday_features
 from config import get_settings
 from percentile_features import add_percentile_features
 from attraction_features import (
@@ -301,9 +302,13 @@ def add_holiday_features(
     start_date: datetime,
     end_date: datetime,
     cached_holidays_df: pd.DataFrame = None,
+    school_coverage: SchoolCoverage | None = None,
 ) -> pd.DataFrame:
     """
     Add multi-country and regional holiday features
+
+    ``school_coverage`` makes the school columns NaN past each location's last
+    stored school-holiday date (PAR-1049); inference passes the same one.
 
     For each park, checks holidays in:
     - Primary country/region (park's location)
@@ -355,7 +360,12 @@ def add_holiday_features(
             df["date_local"] = pd.to_datetime(df["timestamp"]).dt.date
 
     df = assign_holiday_features(
-        df, parks_metadata, holidays_df, park_col="parkId", date_col="date_local"
+        df,
+        parks_metadata,
+        holidays_df,
+        park_col="parkId",
+        date_col="date_local",
+        coverage=school_coverage,
     )
 
     # Drop temporary merge columns
@@ -1823,7 +1833,14 @@ def engineer_features(
 
     holiday_start = time_module.time()
     df = add_holiday_features(
-        df, parks_metadata, start_date, end_date, cached_holidays_df
+        df,
+        parks_metadata,
+        start_date,
+        end_date,
+        cached_holidays_df,
+        school_coverage=SchoolCoverage(
+            fetch_school_holiday_coverage(list(all_countries))
+        ),
     )
     print(f"   Holiday features: {time_module.time() - holiday_start:.2f}s")
 
