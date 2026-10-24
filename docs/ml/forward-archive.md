@@ -632,7 +632,13 @@ rescore 14 dates whose curves have no shadow (they were captured before the
 column existed) while restarting every other gate for nothing. The shadow's
 first rows are the first capture after deploy, so its cells' "frühestens"
 dates (`cellFloorDate`, counted from `ARCHIVE_START`) are optimistic by the
-time between 2026-10-09 and the deploy.
+time between 2026-10-09 and the deploy. Because the shadow rides on the
+weekday average's rows, it is scored only where that average exists — a
+quarter-hour needs `WEEKDAY_AVG_MIN_DAYS` = 2 earlier dates of the same
+weekday with a value — so for a park's (or a ride's) first two weeks in the archive the CatBoost cells collect
+nothing even while TFT's level is archived; their gate starts counting once
+the weekday average does. Kept that way on purpose: one row set per ride-day
+keeps the shadow and the weekday average on identical days.
 
 **D7 rows are levels, not errors**: per park, date and lead `n` headliners,
 `sae_model` = Σ weekday-average peak, `sae_ref` = Σ served `dayPeak`,
