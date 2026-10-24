@@ -119,5 +119,7 @@ describe("hourly weather across a DST change (PAR-818)", () => {
     );
     expect(hours[14].temperature).toBe(10); // local 14:00 = max
     expect(hours[2].temperature).toBe(0); // local 02:00 = min
+    // The ML service takes the daily max of the hourly wind (PAR-1031).
+    expect(hours.every((h) => h.windSpeed === 10)).toBe(true);
   });
 });

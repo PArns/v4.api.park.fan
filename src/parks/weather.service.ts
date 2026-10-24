@@ -1035,7 +1035,8 @@ export function parkLocalHourToUtcIso(time: string, timezone: string): string {
  * in the ML merge.
  *
  * Temperature follows a sinusoid with its minimum at 02:00 and maximum at
- * 14:00 local; precipitation, rain and snow are spread evenly over the day.
+ * 14:00 local; precipitation, rain and snow are spread evenly over the day;
+ * wind is the day's max on every hour. Only the ML service reads this.
  */
 export function synthesizeHourlyFromDaily(
   days: Array<
@@ -1087,7 +1088,9 @@ export function synthesizeHourlyFromDaily(
         rain: Number(day.rainSum || 0) / hoursInDay,
         snowfall: Number(day.snowfallSum || 0) / hoursInDay,
         weatherCode: day.weatherCode || 0,
-        windSpeed: Number(day.windSpeedMax || 0) / 2, // Assume avg is half max
+        // The day's max on every hour: the ML service reduces the forecast to
+        // the daily max training reads (PAR-1031); half of it halved the wind.
+        windSpeed: Number(day.windSpeedMax ?? 0),
       });
     }
   }
