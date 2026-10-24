@@ -1,0 +1,7 @@
+{
+  "_about": "PAR-1067: ml-bench model-name prefixes whose weights' licence excludes production use (docs/ml/foundation-models.md, 'Licence verdicts'). Read by mlbench/licences.py (refuse_benchmark_only, which every verdict writer such as served_verdicts must call before it emits an entry) and by src/ml/utils/benchmark-only-models.spec.ts (no verdict, decision or matrix entry may name one). Add a prefix here when a new benchmark-only model is benchmarked.",
+  "prefixes": {
+    "timesfm3": "TimesFM Non-Commercial License v1.0 (TimesFM 3.x): non-commercial and non-production use only",
+    "tabpfn": "TABPFN-3.5 License v1.0 (TabPFN-TS on TabPFN-3.5 weights): non-commercial, non-production"
+  }
+}

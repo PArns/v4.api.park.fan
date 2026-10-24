@@ -473,7 +473,9 @@ is the arm most likely to dominate the night — if the probe says so, run it in
 `--shard` set with the same `--pair-with` rather than shortening its context.
 `timesfm25_grid` is left out to keep the night; add `--model timesfm25_grid` if the night
 allows. Read `licences` in `run-*.json`: `tabpfn_ts` (and `timesfm3`, if added) are
-`benchmark-only`, `serving_candidate: false`.
+`benchmark-only`, `serving_candidate: false`. Any step that turns a run into an offline
+verdict must call `mlbench.licences.refuse_benchmark_only` on the model names it writes
+(see "Licence verdicts" in `docs/ml/foundation-models.md`).
 
 ## Level drivers (PAR-830)
 

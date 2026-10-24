@@ -627,7 +627,13 @@ days, a ~78-day over-reach of pre-origin covariates.
   (`servable` / `benchmark-only` / `unclear`) and `serving_candidate`, and a class that
   sets `serving_candidate = True` without `licence = "servable"` is refused when it is
   defined (`FoundationModel.__init_subclass__`). Every `run-*.json` records both per arm
-  under `licences`.
+  under `licences`. The block outside the class is
+  `ml-bench/mlbench/benchmark_only_models.json` (model-name prefixes `timesfm3`, `tabpfn`):
+  `mlbench.licences.refuse_benchmark_only(names)` raises for any of them and must be called
+  by every verdict writer before it emits an entry (`served_verdicts`, PAR-1043, included);
+  a class named like a listed prefix cannot declare another licence; and
+  `src/ml/utils/benchmark-only-models.spec.ts` fails CI if `src/ml/data/*.json` or the
+  model comparison matrix names one.
 
 
 ---

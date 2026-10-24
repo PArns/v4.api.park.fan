@@ -54,6 +54,21 @@ def test_a_benchmark_only_model_cannot_be_marked_servable():
         type("Typo", (FoundationModel,), {"name": "t", "licence": "apache"})
 
 
+def test_benchmark_only_registry_matches_the_classes():
+    from mlbench.licences import is_benchmark_only, refuse_benchmark_only
+    for n, m in REGISTRY.items():
+        if issubclass(m, FoundationModel):
+            assert is_benchmark_only(n) == (m.licence == "benchmark-only"), n
+    assert is_benchmark_only("timesfm3_owx") and is_benchmark_only("tabpfn_ts")
+    assert not is_benchmark_only("timesfm25") and not is_benchmark_only("chronos2")
+    refuse_benchmark_only(["chronos2", "timesfm25", "ttm_r2_ft"])
+    with pytest.raises(ValueError, match="tabpfn_ts"):
+        refuse_benchmark_only(["chronos2", "tabpfn_ts"])
+    # a class named like a listed model cannot claim another licence
+    with pytest.raises(TypeError, match="listed benchmark-only"):
+        type("Relabelled", (FoundationModel,), {"name": "timesfm3_x", "licence": "servable"})
+
+
 def test_run_metadata_labels_the_licence(synth_export, tmp_path):
     from mlbench.__main__ import main
 

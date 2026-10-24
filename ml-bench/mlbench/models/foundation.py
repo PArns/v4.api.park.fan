@@ -109,6 +109,7 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
+from ..licences import is_benchmark_only
 from .base import Model, Origin
 
 QUANTILES = (0.5, 0.8, 0.95)
@@ -881,6 +882,10 @@ class FoundationModel(Model):
             raise TypeError(f"{cls.__name__}: licence must be one of {LICENCES}, got {cls.licence!r}")
         if cls.serving_candidate and cls.licence != "servable":
             raise TypeError(f"{cls.__name__}: a {cls.licence} model can never be a serving candidate")
+        # the class and mlbench/benchmark_only_models.json may not drift apart
+        if is_benchmark_only(getattr(cls, "name", "")) and cls.licence != "benchmark-only":
+            raise TypeError(f"{cls.__name__}: {cls.name!r} is listed benchmark-only in "
+                            f"benchmark_only_models.json but declares licence {cls.licence!r}")
 
     def __init__(self):
         self.stats = {"slot_calls": 0, "slot_seconds": 0.0, "daily_calls": 0, "daily_seconds": 0.0}
