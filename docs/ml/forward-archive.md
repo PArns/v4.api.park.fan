@@ -694,8 +694,11 @@ lead has no rows. Because a lead without rows counts as 0 days, the
 **Fixed evaluation dates** (owner decision against daily re-testing): the
 decisions of the ML overview carry `evaluateOn` and are judged once, on the
 window ending the day before (`getMatrix(…, until)`); see
-[ml-overview.md](ml-overview.md). The matrix page itself keeps showing the
-latest window. No multiplicity correction across the ~45 cells is applied.
+[ml-overview.md](ml-overview.md). Since PAR-1059 that judgement is stored once
+in `ml_decision_reports` after the scoring on `evaluateOn`
+([ml-overview.md §1a](ml-overview.md#1a-frozen-decision-reports-par-1059)),
+so the 120-day retention of this table cannot move it. The matrix page itself
+keeps showing the latest window. No multiplicity correction across the ~45 cells is applied.
 
 State rule: the served model is `today`. A live comparison that meets the gate
 (≥ 10 parks with ≥ 14 scored dates **each** — `gateDays`, the 10th-best park's

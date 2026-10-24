@@ -9,10 +9,7 @@ import {
   getNfServiceUrl,
   getPcnServiceUrl,
 } from "../config/ml-services.config";
-import {
-  addIsoDays,
-  getCurrentDateInTimezone,
-} from "../common/utils/date.util";
+import { addIsoDays, formatInParkTimezone } from "../common/utils/date.util";
 import {
   StatementLimits,
   queryWithLimits,
@@ -27,7 +24,13 @@ import { ARCHIVE_SURFACES } from "../ml/entities/forecast-archive-curve.entity";
 import { serveChronosIntraday } from "../ml/chronos-serving";
 import { servePcnIntraday } from "../ml/pcn-serving.constants";
 import { ModelComparisonResponseDto } from "../ml/dto/model-comparison.dto";
-import { MlComponentDto, MlOverviewDto } from "../ml/dto/ml-overview.dto";
+import {
+  MlComponentDto,
+  MlDecisionReportDto,
+  MlDriftWatchDto,
+  MlOverviewDto,
+} from "../ml/dto/ml-overview.dto";
+import { DRIFT_WATCH_KEY } from "../parks/services/ml-decision-watch.service";
 import {
   DecisionFile,
   LATE_AFTER_MS,
@@ -114,13 +117,16 @@ export class MlOverviewService {
   }
 
   async build(now: Date): Promise<MlOverviewDto> {
-    const today = getCurrentDateInTimezone(ADMIN_TZ);
+    const today = formatInParkTimezone(now, ADMIN_TZ);
+    // PAR-1059: a frozen report is the verdict; its window is not re-read.
+    const reports = await this.reports();
     // A decision past its evaluation date reads the window ending the day
     // before it, so it does not drift (PAR-1036). Cached per `until` by the
     // comparison service.
     const due = [
       ...new Set(
         this.decisionFile.decisions
+          .filter((d) => !reports.has(`${d.id}|${d.evaluateOn}`))
           .map((d) => d.evaluateOn)
           .filter((d): d is string => !!d && d <= today),
       ),
@@ -137,7 +143,7 @@ export class MlOverviewService {
         ),
       ),
     );
-    const [matrix, components] = await Promise.all([
+    const [matrix, components, drift] = await Promise.all([
       // Cached 2 h per scoring run by the comparison service itself.
       this.modelComparison
         .getMatrix(MATRIX_DAYS, "ALL", now)
@@ -148,10 +154,17 @@ export class MlOverviewService {
           return null;
         }),
       this.components(now),
+      this.drift(),
     ]);
     return {
       generatedAt: now.toISOString(),
-      decisions: buildDecisions(this.decisionFile, matrix, today, frozen),
+      decisions: buildDecisions(
+        this.decisionFile,
+        matrix,
+        today,
+        frozen,
+        reports,
+      ),
       matrixSummary: matrix?.summary ?? {
         better: 0,
         pending: 0,
@@ -159,7 +172,33 @@ export class MlOverviewService {
         worse: 0,
       },
       components,
+      ...(drift ? { drift } : {}),
     };
+  }
+
+  /** Stored decision reports (PAR-1059), keyed `${decisionId}|${evaluateOn}`; empty when unreadable. */
+  private async reports(): Promise<Map<string, MlDecisionReportDto>> {
+    const rows = await this.probe<Array<{ report: MlDecisionReportDto }>>(
+      "decision reports",
+      `SELECT report FROM ml_decision_reports`,
+    );
+    return new Map(
+      (rows ?? []).map((r) => [
+        `${r.report.decisionId}|${r.report.evaluateOn}`,
+        r.report,
+      ]),
+    );
+  }
+
+  /** The daily drift watch (PAR-1059) from Redis; null before its first run. */
+  private async drift(): Promise<MlDriftWatchDto | null> {
+    const raw = await this.redis.get(DRIFT_WATCH_KEY).catch(() => null);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as MlDriftWatchDto;
+    } catch {
+      return null;
+    }
   }
 
   private probe<T>(name: string, sql: string): Promise<T | null> {

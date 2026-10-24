@@ -15,6 +15,7 @@ import { PlanDayCoverage } from "./entities/plan-day-coverage.entity";
 import { ForecastArchiveService } from "./services/forecast-archive.service";
 import { ForecastArchiveScoringService } from "./services/forecast-archive-scoring.service";
 import { ModelComparisonService } from "./services/model-comparison.service";
+import { MlDecisionWatchService } from "./services/ml-decision-watch.service";
 import { ForecastArchiveCurve } from "../ml/entities/forecast-archive-curve.entity";
 import { ForecastArchiveParkDay } from "../ml/entities/forecast-archive-park-day.entity";
 import { ForecastArchiveScore } from "../ml/entities/forecast-archive-score.entity";
@@ -104,6 +105,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     ForecastArchiveService,
     ForecastArchiveScoringService,
     ModelComparisonService,
+    MlDecisionWatchService,
     ChronosShadowService,
     ParkDayOperationService,
     BestDaysService,
@@ -124,6 +126,7 @@ import { PopularityModule } from "../popularity/popularity.module";
     ForecastArchiveService,
     ForecastArchiveScoringService,
     ModelComparisonService,
+    MlDecisionWatchService,
     ChronosShadowService,
     ParkDayOperationService,
     BestDaysService,

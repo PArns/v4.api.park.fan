@@ -3,6 +3,7 @@ import { Logger } from "@nestjs/common";
 import { Job } from "bull";
 import { ForecastArchiveService } from "../../parks/services/forecast-archive.service";
 import { ForecastArchiveScoringService } from "../../parks/services/forecast-archive-scoring.service";
+import { MlDecisionWatchService } from "../../parks/services/ml-decision-watch.service";
 
 /**
  * The forward archive of served intraday curves (PAR-831).
@@ -14,7 +15,8 @@ import { ForecastArchiveScoringService } from "../../parks/services/forecast-arc
  *   one hourly job reading every park's clock covers all offsets.
  * - `score` ({@link ForecastArchiveScoreProcessor}, its own queue) runs daily
  *   at 12:00 UTC, when yesterday (UTC) is over in every park's timezone,
- *   scores it against queue_data truth and prunes the archive.
+ *   scores it against queue_data truth and prunes the archive, then freezes
+ *   due decision reports and computes the drift watch (PAR-1059).
  */
 @Processor("forecast-archive")
 export class ForecastArchiveProcessor {
@@ -48,6 +50,7 @@ export class ForecastArchiveScoreProcessor {
   constructor(
     private readonly archiveService: ForecastArchiveService,
     private readonly scoringService: ForecastArchiveScoringService,
+    private readonly decisionWatch: MlDecisionWatchService,
   ) {}
 
   @Process("score")
@@ -76,6 +79,9 @@ export class ForecastArchiveScoreProcessor {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.warn(`Forward archive retention deferred: ${message}`);
       }
+      // PAR-1059: frozen decision reports + drift watch, after the scoring so
+      // a report's window ends on the date just scored. Never throws.
+      await this.decisionWatch.runDaily(new Date());
     }
   }
 }
