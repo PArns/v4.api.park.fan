@@ -33,8 +33,19 @@ IMG_SHA=$(docker run --rm --entrypoint cat "$IMAGE" /app/GIT_SHA 2>/dev/null)
   echo "                  --build-arg EXTRA_REQUIREMENTS=requirements-foundation.txt \\"
   echo "                  --build-context mlsvc=$CODE/ml-service $CODE/ml-bench"; exit 1; }
 
+# Production's GPU jobs (TFT training 03:00, CatBoost 06:00, nf/pcn/Chronos shadow) do
+# not take $LOCK, and a bench arm may reserve 0.6 x 16 GB: refuse to START inside
+# 00:55-09:30 UTC. Checked again while waiting for the lock. Only the start is guarded —
+# size a run (--probe) so it ends before 00:55. MLBENCH_IGNORE_WINDOW=1 overrides.
+busy_window() {
+  [ "${MLBENCH_IGNORE_WINDOW:-0}" = 1 ] && return 1
+  local t=$((10#$(date -u +%H%M)))
+  [ "$t" -ge 55 ] && [ "$t" -lt 930 ]
+}
+refuse_busy() { busy_window && { echo "FATAL: $(date -u +%H:%M) UTC is inside the production window 00:55-09:30 UTC — start later, or MLBENCH_IGNORE_WINDOW=1"; exit 3; }; return 0; }
+refuse_busy
 while ! (set -o noclobber; echo "PAR-828 $RUN $(date -u +%FT%TZ)" > $LOCK) 2>/dev/null; do
-  echo "waiting for GPU lock: $(cat $LOCK)"; sleep 60; done
+  refuse_busy; echo "waiting for GPU lock: $(cat $LOCK)"; sleep 60; done
 trap 'rm -f $LOCK' EXIT
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader
 
