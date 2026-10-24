@@ -129,7 +129,22 @@ detail's live fallback (`getAttractionPredictions`). Per park-local day:
   needs 10 measured days) and the same cached profile `/plan/day` uses for
   `hoursSource: "observed"`. Energylandia (open daily, no future schedule)
   therefore keeps its daytime forecast.
-- **No profile** (build failed, no measured hour) → no hourly slot that day.
+- **Frozen feed** → only the profile hours from the first to the last one in
+  which some ride's queue moved (P90 above P25) count; a flat hour inside that
+  span stays, because an opening window has no holes. A queue-times feed that
+  never closes (Beto Carrero, Cinecittà World, Le Parc du Petit Prince)
+  re-stamps its last snapshot all night and gives those parks a 0–23 profile
+  in which every ride is flat at night (`MLService.movingProfileHours`).
+  Measured on production 2026-10-24: Beto Carrero keeps 10–19, Petit Prince
+  9–16, Europa-Park all of 9–18, and Cinecittà World — 15 min in every cell
+  of every hour — keeps none. PAR-759 removes those night readings from the
+  published hourly values at the source; this gate keeps them out of
+  forecasts until it does.
+- **No measured hour** → no hourly slot that day.
+- **Profile cannot be read** (DB error, the fail-fast window after a failed
+  build) → the slots pass **ungated**. A trimmed answer would be cached for
+  30 min and the generator's replace mode would delete the stored rows of
+  those days, so an error never reads as "no measured hour".
 
 `bestVisitTimes` is computed from these slots and needs no gate of its own. The
 replace-mode diff write removes already-stored night slots on the generator's

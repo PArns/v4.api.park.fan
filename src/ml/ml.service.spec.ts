@@ -321,12 +321,17 @@ describe("MLService", () => {
       }) as never;
     const hoursOf = (preds: { predictedTime: string }[]) =>
       preds.map((p) => p.predictedTime.slice(11, 16));
+    // One ride whose queue moves (P90 above P25) in every listed hour.
+    const profileOf = (hours: number[]) => ({
+      hours,
+      attractions: [{ p25: hours.map(() => 5), p90: hours.map(() => 30) }],
+    });
 
     it("keeps only the measured hours when the schedule is UNKNOWN", async () => {
       mockScheduleEntryRepository.find.mockResolvedValue([]);
-      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue({
-        hours: [11, 12, 13, 14, 15, 16, 17],
-      });
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue(
+        profileOf([11, 12, 13, 14, 15, 16, 17]),
+      );
 
       const out = await service.withinKnownOpeningHours(park, [
         slot("03:00"),
@@ -354,10 +359,24 @@ describe("MLService", () => {
       ).not.toHaveBeenCalled();
     });
 
-    it("serves no hourly slot on an unscheduled day when the profile fails", async () => {
+    it("leaves the slots ungated when the profile cannot be read", async () => {
+      // Trimming on a read error would be cached for 30 min and delete the
+      // stored rows of those days through the generator's replace mode.
       mockScheduleEntryRepository.find.mockResolvedValue([]);
       mockParkHistoricalStats.getParkHourlyProfile.mockRejectedValue(
         new Error("db down"),
+      );
+      const preds = [slot("03:00"), slot("11:00"), slot("00:00", "daily")];
+
+      const out = await service.withinKnownOpeningHours(park, preds);
+
+      expect(out).toEqual(preds);
+    });
+
+    it("serves no hourly slot on an unscheduled day when no hour was measured", async () => {
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue(
+        profileOf([]),
       );
 
       const out = await service.withinKnownOpeningHours(park, [
@@ -366,6 +385,56 @@ describe("MLService", () => {
       ]);
 
       expect(hoursOf(out)).toEqual(["00:00"]);
+    });
+
+    it("drops the hours a never-closing frozen feed carries flat", async () => {
+      // Beto Carrero shape: the profile spans 0-23, but at night every ride
+      // repeats its last snapshot, so P25 equals P90.
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      const hours = Array.from({ length: 24 }, (_, h) => h);
+      const moving = (h: number) => h >= 10 && h <= 18;
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue({
+        hours,
+        attractions: [
+          {
+            p25: hours.map((h) => (moving(h) ? 5 : 20)),
+            p90: hours.map((h) => (moving(h) ? 40 : 20)),
+          },
+          { p25: hours.map(() => null), p90: hours.map(() => null) },
+        ],
+      });
+
+      const out = await service.withinKnownOpeningHours(park, [
+        slot("03:00"),
+        slot("05:45"),
+        slot("12:00"),
+        slot("21:00"),
+      ]);
+
+      expect(hoursOf(out)).toEqual(["12:00"]);
+    });
+
+    it("keeps a flat hour inside the moving span", async () => {
+      // Le Parc du Petit Prince shape: 10:00 sits still between moving hours.
+      mockScheduleEntryRepository.find.mockResolvedValue([]);
+      const hours = [9, 10, 11, 12];
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue({
+        hours,
+        attractions: [
+          {
+            p25: hours.map(() => 10),
+            p90: hours.map((h) => (h === 10 ? 10 : 30)),
+          },
+        ],
+      });
+
+      const out = await service.withinKnownOpeningHours(park, [
+        slot("08:00"),
+        slot("10:00"),
+        slot("12:00"),
+      ]);
+
+      expect(hoursOf(out)).toEqual(["10:00", "12:00"]);
     });
 
     it("is applied to the park read before it is cached", async () => {
@@ -391,9 +460,9 @@ describe("MLService", () => {
         },
       });
       mockScheduleEntryRepository.find.mockResolvedValue([]);
-      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue({
-        hours: [12],
-      });
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue(
+        profileOf([12]),
+      );
 
       const out = await service.getRawParkPredictions(park.id, "hourly");
 
@@ -430,9 +499,9 @@ describe("MLService", () => {
         modelVersion: "v1",
       });
       mockScheduleEntryRepository.find.mockResolvedValue([]);
-      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue({
-        hours: [12],
-      });
+      mockParkHistoricalStats.getParkHourlyProfile.mockResolvedValue(
+        profileOf([12]),
+      );
 
       const out = await service.getAttractionPredictions("looper", "hourly");
 
