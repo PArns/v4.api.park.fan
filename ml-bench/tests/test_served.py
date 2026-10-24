@@ -236,3 +236,28 @@ def test_cell_without_rows_is_left_alone(tmp_path):
     out = SV.apply({"questions": {"plan_d0_1": {"h5": {"state": "pending"}}}}, new)
     assert out["questions"]["plan_d0_1"]["h5"] == {"state": "pending"}
     assert "period" not in out["questions"]["plan_d0_1"]["chronos"]
+
+
+def test_accumulating_export_reads_only_new_origin_days(tmp_path, monkeypatch):
+    """scripts/accumulate-archive-curves.sh relies on `export` skipping the origin days its
+    persistent directory already holds: a second run queries only the days since."""
+    import argparse
+
+    from mlbench import export as E
+
+    asked = []
+
+    def fake_copy(self, sql, dest):
+        asked.append(dest.name)
+        with gzip.open(dest, "wt") as f:
+            f.write("origin_us\n")
+        return 0
+
+    monkeypatch.setattr(E.Psql, "copy_to", fake_copy)
+    p = argparse.ArgumentParser()
+    E.add_args(p)
+    base = ["--out", str(tmp_path), "--repo", str(tmp_path), "--git-sha", "t", "--pause", "0",
+            "--tables", "archive_curves", "--archive-from", "2026-10-09"]
+    E.run_export(p.parse_args(base + ["--queue-to", "2026-10-11"]))
+    E.run_export(p.parse_args(base + ["--queue-to", "2026-10-13"]))
+    assert asked == [f"archive_curves_2026-10-{d:02d}.csv.gz" for d in (9, 10, 11, 12, 13)]

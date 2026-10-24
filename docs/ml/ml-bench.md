@@ -421,17 +421,66 @@ tenths of a minute against `park_hourly` with that in mind. `plan_day` is archiv
 1-minute precision. The calendar questions (`cal_*`, served by TFT) are not covered:
 the arm has no daily level.
 
-**The window limitation.** A curve is deleted **14 days past its target date**, so an
-export taken on day X holds d0–d7 rows only for targets in X−14 … X−1, and the bench can
-only score a target whose truth is complete (≤ X−1). The archive started 2026-10-09, so
-lead L has its first scored target on 2026-10-09 + L (d30: 2026-11-08, d60: 2026-12-08)
-— the same floor as the live matrix (`cellFloorDate`). With ~14 scorable target days,
-the report's usual 30-origin-day LOW-N gate is never met; the generator's floor is
-`--min-origin-days 14`. Rows are never updated after their capture and an origin day is
-exported only once complete, so **the window can be lengthened by accumulating**:
-export `--tables archive_curves` into one persistent directory every week (finished
-days are skipped) and copy its `raw/archive_curves_*.csv.gz` over a new export's before
-`build` — for a day in both, the earlier file holds every row the later one does.
+**The window limitation, and the accumulation that lifts it.** A curve is deleted **14
+days past its target date**, so one export taken on day X holds d0–d7 rows only for
+targets in X−14 … X−1, and the bench can only score a target whose truth is complete.
+A single export on 2026-11-09 (`--queue-to 2026-11-08`, `--to 2026-11-07`) therefore
+holds d0/d1/intraday targets from ~2026-10-26 only — **13 paired origin days, below the
+generator's `--min-origin-days 14`**, so every `live_*`, `today_*` and `plan_d0_1` cell
+would be `unclear` by construction. The archive started 2026-10-09, so lead L has its
+first scored target on 2026-10-09 + L (d30: 2026-11-08, d60: 2026-12-08) — the same
+floor as the live matrix (`cellFloorDate`). The report's usual 30-origin-day LOW-N gate
+is not met for months; the generator's floor is `--min-origin-days 14`.
+
+Rows are never updated after their capture, so a complete UTC origin day exported once
+holds every row it will ever hold. **`ml-bench/scripts/accumulate-archive-curves.sh`**
+exports `--tables archive_curves` into one persistent directory (`MLBENCH_ARCHIVE_DIR`),
+from the archive's start through yesterday UTC; `export` skips the days that
+directory's manifest already holds, so each run reads only the origin days since the
+last one (`tests/test_served.py::test_accumulating_export_reads_only_new_origin_days`).
+Read-only, every query through `scripts/prod-psql.sh`, one COPY per origin day,
+system `python3`. **Run it at least weekly** — a gap longer than ~14 days loses
+short-lead rows for good. Not installed by this change; to install it on the database
+host as a systemd **user** timer (like the local Linear runner; needs linger):
+
+```ini
+# ~/.config/systemd/user/mlbench-archive-curves.service
+[Unit]
+Description=ml-bench: accumulate forecast_archive_curves (PAR-1043)
+[Service]
+Type=oneshot
+Environment=MLBENCH_ARCHIVE_DIR=/data/parkfan/ml-bench/archive-curves
+ExecStart=%h/<checkout>/ml-bench/scripts/accumulate-archive-curves.sh
+Nice=10
+
+# ~/.config/systemd/user/mlbench-archive-curves.timer
+[Unit]
+Description=weekly ml-bench archive-curves export
+[Timer]
+# Mondays 11:30 UTC: outside the 00:55–09:30 UTC quiet window and away from :05
+OnCalendar=Mon *-*-* 11:30:00 UTC
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now mlbench-archive-curves.timer
+systemctl --user start mlbench-archive-curves.service   # first run now, then weekly
+journalctl --user -u mlbench-archive-curves.service -n 50
+```
+
+**When a verdict run is achievable.** With accumulation first run on day S, the d0–d7
+targets held start at max(2026-10-09, S − 14); a verdict run on day R scores targets
+through R − 2. The short-lead questions (`live_*`, `today_*`, `plan_d0_1`, `plan_d2_5`)
+need ≥ 14 of them, i.e. S ≤ R − 1 at the very edge — install the timer **by 2026-11-01**
+and the 2026-11-09 run below has targets 2026-10-18 … 2026-11-07 (21 days) for them.
+`plan_besttime` reaches d30 and has its 14th d30 target on 2026-11-21 (run ≥ 2026-11-23);
+`plan_d6_60` reaches d60 and has its 14th d60 target on 2026-12-21, so **its first
+decidable run is ≥ 2026-12-23** (~75 days of accumulated curves). Before then those
+cells come out `unclear` by construction (a lead missing) — read the dry-run diff and
+keep those entries out of the `--write` until their run date.
 
 **Pairing.** `run --model served --pair-with served` writes paired sums of every model —
 baselines (`h5`, `lvlh5_tft`, `wt_med`, `persistence`) and plug-ins (`chronos2`,
@@ -456,21 +505,24 @@ triple against `served` from a named run.
 
 Outside the 00:55–09:30 UTC quiet window; the Chronos-2 plug-ins need the GPU lock.
 Dates below are for a run on 2026-11-09 (the `live_chronos` `evaluateOn`); move them
-with the day.
+with the day. **Gated:** do not run step 5 with `--write` before the accumulation timer
+above has been running since ≤ 2026-11-01 (≥ 14 paired origin days per short lead) and
+this PR's own-capture rule is in the image; `plan_d6_60` waits for ≥ 2026-12-23.
 
 ```bash
 cd ~/claude-worktrees/<checkout-at-the-PR-commit>
 EXP=20261109-served
 
 # 1. export (read-only, system python, every query through scripts/prod-psql.sh).
-#    Full queue history: Chronos-2 reads ~343 days of context. The archive from its start;
-#    on 2026-11-09 only targets from ~2026-10-26 on are still held (14-day retention), so
-#    the early origin days contribute their long-lead rows only.
+#    Full queue history: Chronos-2 reads ~343 days of context. The served curves come from
+#    the accumulated directory, never from this export: on 2026-11-09 the database alone
+#    holds d0 targets from ~2026-10-26 only (14-day retention).
+MLBENCH_ARCHIVE_DIR=/data/parkfan/ml-bench/archive-curves \
+  ml-bench/scripts/accumulate-archive-curves.sh            # brings it up to yesterday
 python3 ml-bench/mlbench/export.py --out /data/parkfan/ml-bench/exports/$EXP --repo $PWD \
-  --queue-to 2026-11-08 --archive-from 2026-10-09
-#    optional, to lengthen the window: an accumulated archive directory (see above)
-# cp /data/parkfan/ml-bench/archive-curves/raw/archive_curves_*.csv.gz \
-#    /data/parkfan/ml-bench/exports/$EXP/raw/
+  --queue-to 2026-11-08 --tables parks,attractions,schedule,holidays,weather,tft_forecasts,queue
+cp /data/parkfan/ml-bench/archive-curves/raw/archive_curves_*.csv.gz \
+   /data/parkfan/ml-bench/exports/$EXP/raw/
 
 # 2. image + build (CPU)
 docker build -t ml-bench:par-1043 --build-arg GIT_SHA=$(git rev-parse HEAD) \
