@@ -1,0 +1,27 @@
+# PAR-1067 — IBM Granite PatchTST-FM-r2 (`patchtst_fm*`), Granite TTM-r2 (`ttm_r2*`) and
+# TabPFN-TS (`tabpfn_ts`, daily level only) as ml-bench plug-ins, in the same image as
+# chronos2 / chronos2_lora / timesfm25 so every arm pairs inside one run. Build with
+#   --build-arg EXTRA_REQUIREMENTS=requirements-par1067.txt
+# on the default python:3.11-slim base. Every pin is at least two weeks old on 2026-10-24.
+#
+# torch: comes from the cu128 wheel in the Dockerfile and nothing here may replace it.
+# The cu128 index tops out at 2.11.0 (checked 2026-10-24), which satisfies granite-tsfm's
+# `torch<2.12,>=2.10`. Should cu128 ever serve 2.12+, granite-tsfm would make pip pull a
+# PyPI torch (a cu13 build) over it — `python -m mlbench gpu-check` after the build says so.
+-r requirements-par1063.txt
+#
+# granite-tsfm (Apache-2.0 code): PatchTST-FM-r2 needs >= 0.3.9 (model card). It asks for
+# pandas >= 2.3.3, so this image runs pandas 2.3.3 instead of requirements.txt's 2.2.3
+# (same numpy 1.26.4; pandas 2.3 supports numpy >= 1.23.2 on Python 3.11). Only images
+# built with this extra are affected.
+granite-tsfm==0.3.10
+pandas==2.3.3
+#
+# TabPFN-TS (Apache-2.0 code; the TabPFN-3.5 WEIGHTS are non-commercial and
+# non-production — benchmark-only, see docs/ml/foundation-models.md). The weights repo is
+# gated on Hugging Face: pass HF_TOKEN at `docker run`, never at build time.
+tabpfn-time-series==1.3.0
+tabpfn==9.1.0
+tabpfn-client==0.6.1
+# datasets 5.x needs pyarrow >= 24, requirements.txt pins 23.0.1
+datasets==4.8.5

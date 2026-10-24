@@ -177,5 +177,6 @@ def test_probe_runs_one_origin_and_records_timing(synth_export, tmp_path, fits):
     assert meta["origins"][0] == meta["origins"][1]          # exactly one origin
     p = meta["probe"]
     assert p["seconds"] > 0 and "gpu_peak_allocated_gb" in p
+    assert 0.01 < p["host_peak_rss_gb"] < 100 and p["host_peak_rss_children_gb"] >= 0   # GB, not KiB
     st = p["models"]["chronos2_lora"]
     assert st["finetune_calls"] == 1 and st["slot_calls"] >= 1
