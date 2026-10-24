@@ -31,6 +31,7 @@ import importlib
 import json
 import math
 import os
+import resource
 import sys
 import time
 from pathlib import Path
@@ -906,11 +907,16 @@ def parse_park_ids(raw: str) -> list[str]:
 
 
 def probe_report(models: list[Model], seconds: float) -> dict:
-    """Wall time, peak GPU memory (torch's allocator, if torch was loaded) and each
-    plug-in's own timing counters (``stats``) after a ``--probe`` run."""
+    """Wall time, peak GPU memory (torch's allocator, if torch was loaded), peak host RSS
+    (this process and its finished children, so a container OOM shows before the night) and
+    each plug-in's own timing counters (``stats``) after a ``--probe`` run."""
     torch = sys.modules.get("torch")
     gpu = bool(torch is not None and torch.cuda.is_available())
+    unit = 1 if sys.platform == "darwin" else 1024             # ru_maxrss: KiB on Linux, bytes on macOS
+    rss = lambda who: round(resource.getrusage(who).ru_maxrss * unit / 1e9, 3)  # noqa: E731
     return {"seconds": seconds,
+            "host_peak_rss_gb": rss(resource.RUSAGE_SELF),
+            "host_peak_rss_children_gb": rss(resource.RUSAGE_CHILDREN),
             "gpu_peak_allocated_gb": round(torch.cuda.max_memory_allocated() / 1e9, 3) if gpu else None,
             "gpu_peak_reserved_gb": round(torch.cuda.max_memory_reserved() / 1e9, 3) if gpu else None,
             "models": {type(m).scored_name(): dict(getattr(m, "stats", {})) for m in models}}

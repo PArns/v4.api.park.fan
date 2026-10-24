@@ -447,7 +447,8 @@ ARMS="--model chronos2 --model chronos2_ft --model chronos2_lora --model timesfm
 
 # 1. Probe first: ONE origin (October, the largest history), every arm. Read [probe] /
 #    run-0of1.json -> probe: finetune_seconds (chronos2_ft, chronos2_lora, ttm_r2_ft),
-#    slot/daily seconds per arm (tabpfn_ts: daily_seconds), gpu_peak_reserved_gb <= 10.
+#    slot/daily seconds per arm (tabpfn_ts: daily_seconds), gpu_peak_reserved_gb <= 10,
+#    host_peak_rss_gb well under run.sh's --memory 8g (DuckDB alone may take 5 GB).
 ml-bench/scripts-par828/run.sh 20261025-par1067-probe --parks @/app/subsets/par828-30parks.txt \
   --from 2026-10-01 --probe $ARMS
 
