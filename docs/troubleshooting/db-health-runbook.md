@@ -599,13 +599,17 @@ SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
 The API log line is `🧽 REINDEX pcn_forecasts_pkey in N s — X GB → Y GB`.
 
 **TFT retention.** `db-maintenance/prune-tft-forecasts`, cron `35 4 * * *` UTC, deletes
-rows with `forecast_date` older than 120 days from `tft_forecasts` and
-`tft_forecasts_shadow`. Neither had a retention before (27 M rows, 3.8 GB, +180 k a
+rows with `forecast_date` older than 120 days from `tft_forecasts`, then
+`tft_forecasts_shadow` (PAR-1041) and `tft_forecasts_shadow_drivers` (PAR-1057).
+The two shadows are `LIKE tft_forecasts` and created by nf-service on its first
+shadow write; until then `to_regclass` is null and the table is skipped (debug log,
+no error). None had a retention before (27 M rows, 3.8 GB, +180 k a
 day). 120 days is the oldest origin any reader asks for — the forward-archive shadow
-scoring at 14 + 90 + 3 = 107 days, the planner accuracy profile at 45 + 60 = 105 —
-plus 13 days; the full reader table is in `vacuum-plan.ts`. Batches of 200 k rows, each
+scoring at 14 + 90 + 3 = 107 days (the one reader of both shadows), the planner
+accuracy profile at 45 + 60 = 105 — plus 13 days; the full reader table is in `vacuum-plan.ts`. Batches of 200 k rows, each
 its own autocommitted `DELETE … WHERE ctid = ANY(ARRAY(SELECT ctid … LIMIT n))` (the
-PAR-873 pattern, plain tables only), at most 40 a table a night, 5 min
+PAR-873 pattern, plain tables only), at most 40 a night **for all three tables
+together** (one budget, served table first), 5 min
 `statement_timeout` per batch, `lock_timeout` 5 s. `forecast_date` has no index, so a
 batch is a sequential scan that stops once it has its rows; the last, short batch
 reads the table once (~4 GB). It runs before the 04:50 VACUUM, which then reclaims
@@ -650,8 +654,8 @@ ls -lh "$OUT"
 exit
 ```
 
-Deploy only after it printed `OK`. `tft_forecasts_shadow` needs no export: its
-first row is from PAR-1041, nowhere near 120 days old.
+Deploy only after it printed `OK`. Neither shadow needs an export: their first rows
+are from PAR-1041 / PAR-1057, nowhere near 120 days old.
 
 
 ---
