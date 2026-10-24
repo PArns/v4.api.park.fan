@@ -76,6 +76,18 @@
         { "questionId": "cal_far_90", "modelId": "catboost" },
         { "questionId": "cal_far_90", "modelId": "wkd" }
       ]
+    },
+    {
+      "id": "calendar_driver_level",
+      "title": "Kalender: Treiber-Niveau für die Reihenfolge der Tage",
+      "detail": "Der Wochentag-Wert, korrigiert um Ferien, Feiertage, Brückentage und die veröffentlichten Öffnungszeiten. Offline ordnet er die Tage ab einer Woche Vorlauf besser als jedes andere Tagesniveau, verliert aber im Frühjahr und im Sommer und bei der besten Besuchszeit; gemessen ist bisher nur ein Herbst. Läuft seit dem Deploy jede Nacht nebenher, nur im Archiv. Entschieden wird am 1. September 2027 über die vier Wochen davor, also im Hochsommer, wo er offline am deutlichsten verliert. Den Frühling bitte Ende Mai 2027 im Vergleich von Hand ablesen: ein Fenster von vier Wochen fasst nicht beide Jahreszeiten, und das Archiv hält die Paare nur 120 Tage.",
+      "evaluateOn": "2027-09-01",
+      "cells": [
+        { "questionId": "cal_rank", "modelId": "driver" },
+        { "questionId": "cal_busier", "modelId": "driver" },
+        { "questionId": "cal_far", "modelId": "driver" },
+        { "questionId": "cal_far_90", "modelId": "driver" }
+      ]
     }
   ]
 }

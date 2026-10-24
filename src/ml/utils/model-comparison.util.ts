@@ -94,6 +94,8 @@ export function cellFloorDate(questionId: string, modelId: string): string {
  */
 export const MODEL_ARCHIVE_START: Record<string, string> = {
   tft_grid: "2026-10-26",
+  // PAR-1058: the first capture after the first nightly driver-level run.
+  driver: "2026-10-27",
 };
 
 export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
@@ -148,6 +150,12 @@ export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
     label: "TFT mit Lücken-Raster",
     oneLiner:
       "Dasselbe Tagesmodell, aber es lernt auf jedem Kalendertag statt nur auf Öffnungstagen und kennt Öffnungsplan und Schulferien. Läuft jede Nacht nebenher, nicht in der App.",
+  },
+  {
+    id: "driver",
+    label: "Treiber-Niveau",
+    oneLiner:
+      "Der Wochentag-Wert, korrigiert um das, was man vorher weiß: Ferien, Feiertage, Brückentage und die veröffentlichten Öffnungszeiten. Läuft jede Nacht nebenher, nicht in der App.",
   },
   {
     id: "catboost",
@@ -461,6 +469,7 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     unit: "rate",
     models: {
       tft_grid: [PAIRED_MODELS.tftGrid],
+      driver: [PAIRED_MODELS.driverLevel],
       catboost: [PAIRED_MODELS.catboostShadow],
       wkd: [PAIRED_MODELS.weekdayAvg],
     },
@@ -478,6 +487,7 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     reference: PAIRED_LEVEL_REFERENCES.tft,
     models: {
       tft_grid: [PAIRED_MODELS.tftGrid],
+      driver: [PAIRED_MODELS.driverLevel],
       catboost: [PAIRED_MODELS.catboostShadow],
       wkd: [PAIRED_MODELS.weekdayAvg],
     },
@@ -498,6 +508,7 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     reference: PAIRED_LEVEL_REFERENCES.tft,
     models: {
       tft_grid: [PAIRED_MODELS.tftGrid],
+      driver: [PAIRED_MODELS.driverLevel],
       catboost: [PAIRED_MODELS.catboostShadow],
       wkd: [PAIRED_MODELS.weekdayAvg],
     },
@@ -514,7 +525,10 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     leads: ["d90"],
     segment: "headliner",
     reference: PAIRED_LEVEL_REFERENCES.catboost,
-    models: { wkd: ["weekday_avg"] },
+    models: {
+      driver: [PAIRED_MODELS.driverLevel],
+      wkd: ["weekday_avg"],
+    },
   },
 ];
 

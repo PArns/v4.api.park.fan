@@ -594,6 +594,17 @@ async def get_training_status():
     }
 
 
+@app.post("/driver-level/run", status_code=202)
+async def driver_level_run():
+    """The nightly driver-level shadow (PAR-1058), in its own process like /train:
+    a long fit or an OOM never touches the serving workers. Fire and forget — the
+    job replaces `driver_level_forecasts` itself and logs its result."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "driver_level.py")
+    proc = subprocess.Popen([sys.executable, script], cwd=os.path.dirname(script))
+    threading.Thread(target=proc.wait, daemon=True).start()  # reap, no zombie
+    return {"status": "started", "pid": proc.pid}
+
+
 @app.post("/predict", response_model=BulkPredictionResponse)
 def predict(request: PredictionRequest):
     """

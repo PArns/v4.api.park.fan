@@ -1,6 +1,8 @@
 import { Process, Processor } from "@nestjs/bull";
 import { Logger } from "@nestjs/common";
 import { Job } from "bull";
+import axios from "axios";
+import { getMlServiceUrl } from "../../config/ml-services.config";
 import { ForecastArchiveService } from "../../parks/services/forecast-archive.service";
 import { ForecastArchiveScoringService } from "../../parks/services/forecast-archive-scoring.service";
 
@@ -15,6 +17,9 @@ import { ForecastArchiveScoringService } from "../../parks/services/forecast-arc
  * - `score` ({@link ForecastArchiveScoreProcessor}, its own queue) runs daily
  *   at 12:00 UTC, when yesterday (UTC) is over in every park's timezone,
  *   scores it against queue_data truth and prunes the archive.
+ * - `driver-level` (PAR-1058) runs daily at 02:00 UTC and starts ml-service's
+ *   driver-level shadow, which replaces `driver_level_forecasts` before the
+ *   first 06:00 origin (Europe, 04:00 UTC in summer) reads it at capture.
  */
 @Processor("forecast-archive")
 export class ForecastArchiveProcessor {
@@ -33,6 +38,17 @@ export class ForecastArchiveProcessor {
           (result.failed > 0 ? `, ${result.failed} failed` : ""),
       );
     }
+  }
+
+  /** Fire and forget: the job runs in its own ml-service process. */
+  @Process("driver-level")
+  async handleDriverLevel(_job: Job): Promise<void> {
+    await axios.post(
+      `${getMlServiceUrl()}/driver-level/run`,
+      {},
+      { timeout: 30000 },
+    );
+    this.logger.log("🧮 Driver-level shadow started in ml-service");
   }
 }
 

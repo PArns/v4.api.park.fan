@@ -91,6 +91,7 @@ describe("merge dependency tables", () => {
     "attraction_rope_drop",
     "attraction_slug_aliases",
     "attraction_typical_waits",
+    "driver_level_forecasts",
     "forecast_archive_curves",
     "forecast_data",
     "headliner_attractions",

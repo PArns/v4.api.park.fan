@@ -1,5 +1,5 @@
 {
-  "_about": "Offline verdicts per question x model for the admin model comparison (PAR-855). Seeded from the approved mockup's matrix, whose notes summarise ml-bench PR #445 (full period), #447 (driver_level, H5 + TFT level) and #450 (Chronos-2). state: better|worse|unclear|pending, always against what is served today for that question. diff/ciLow/ciHigh only where the run reported them against that reference; never filled in otherwise. expectedBy only for runs still in progress. note: one German sentence, shown when live data does not decide the cell. servedNotes: the note of each question's served (today) cell. 2026-10-11: the Chronos cells come from the mixed-weekday re-run of #450 (--shard 0/5, 47 origins over all seven weekdays; the earlier --shard 0/7 run put every origin on a Thursday, which locked every lead to one target weekday). 2026-10-12: the Toto 2.0 / TiRex-2 cells (fm) come from PR #457's run 20261011-par853-toto-tirex-shard5 (47 origins over all seven weekdays, 30 parks, same origin set as the Chronos run). Neither model beats Chronos-2 except at a 15-minute horizon; both beat the hourly profile in the live bands and lose to it in the planner from two days out. They have no live source and are not archived, so the live columns stay empty for them by design, not pending. 2026-10-11 (PAR-855 follow-up): live_h0_1 x chronos is pending (offline worse only at 15 min, better at 30 and 60 min); notes that quoted the headline window or a lead outside the question as the full period were corrected, plan_d6_60 x tfth5 was judged against wt_med instead of served (now unclear), and the plan_d0_1 x tfth5 diff was against wt_med, not served (removed). 2026-10-24 (PAR-1038): every entry carries reference (what the offline figure was measured against: 'served' = the question's served model; 'persistence', 'wt_med', 'clim', 'chronos2', 'hourly_profile' or null when the note does not say), metric ('slot_mae', 'besttime_regret', 'daypeak_mae', 'hit_rate', null), runId (the ml-bench results directory, null when not recorded) and diff/ciLow/ciHigh (null until a bench export reports them against that reference). An offline 'better' whose reference is not 'served' cannot make a cell 'better' (model-comparison.util.ts cellState): the owner rule asks for a win over what is served, and a win over persistence or the weekday average is not one. reference was read from each note, never inferred; no number was added. 2026-10-24 (review of PAR-1038): the cal_far x wkd verdict is a hit rate of which day is fuller, i.e. the day ranking of cal_rank (PAR-1037), and moved there; today_h6_12 x persist was dropped with its column (no live wait at the 06:00 origin).",
+  "_about": "Offline verdicts per question x model for the admin model comparison (PAR-855). Seeded from the approved mockup's matrix, whose notes summarise ml-bench PR #445 (full period), #447 (driver_level, H5 + TFT level) and #450 (Chronos-2). state: better|worse|unclear|pending, always against what is served today for that question. diff/ciLow/ciHigh only where the run reported them against that reference; never filled in otherwise. expectedBy only for runs still in progress. note: one German sentence, shown when live data does not decide the cell. servedNotes: the note of each question's served (today) cell. 2026-10-11: the Chronos cells come from the mixed-weekday re-run of #450 (--shard 0/5, 47 origins over all seven weekdays; the earlier --shard 0/7 run put every origin on a Thursday, which locked every lead to one target weekday). 2026-10-12: the Toto 2.0 / TiRex-2 cells (fm) come from PR #457's run 20261011-par853-toto-tirex-shard5 (47 origins over all seven weekdays, 30 parks, same origin set as the Chronos run). Neither model beats Chronos-2 except at a 15-minute horizon; both beat the hourly profile in the live bands and lose to it in the planner from two days out. They have no live source and are not archived, so the live columns stay empty for them by design, not pending. 2026-10-11 (PAR-855 follow-up): live_h0_1 x chronos is pending (offline worse only at 15 min, better at 30 and 60 min); notes that quoted the headline window or a lead outside the question as the full period were corrected, plan_d6_60 x tfth5 was judged against wt_med instead of served (now unclear), and the plan_d0_1 x tfth5 diff was against wt_med, not served (removed). 2026-10-24 (PAR-1038): every entry carries reference (what the offline figure was measured against: 'served' = the question's served model; 'persistence', 'wt_med', 'clim', 'chronos2', 'hourly_profile' or null when the note does not say), metric ('slot_mae', 'besttime_regret', 'daypeak_mae', 'hit_rate', null), runId (the ml-bench results directory, null when not recorded) and diff/ciLow/ciHigh (null until a bench export reports them against that reference). An offline 'better' whose reference is not 'served' cannot make a cell 'better' (model-comparison.util.ts cellState): the owner rule asks for a win over what is served, and a win over persistence or the weekday average is not one. reference was read from each note, never inferred; no number was added. 2026-10-24 (review of PAR-1038): the cal_far x wkd verdict is a hit rate of which day is fuller, i.e. the day ranking of cal_rank (PAR-1037), and moved there; today_h6_12 x persist was dropped with its column (no live wait at the 06:00 origin). 2026-10-24 (PAR-1058): the driver cells (Treiber-Niveau) come from docs/ml/level-drivers.md §6.4/§6.7/§6.8 (run 20261009-par830-drivers, all 231 origins). diff stays null on all four: the doc's CI-backed margins are against the naive same-weekday level (lvl_naive4 / lvl_snaive7), which is not the served model, and its margins against TFT and CatBoost are point estimates without a CI (TFT at 68 % / 19 % coverage, CatBoost below the coverage gate); the numbers are quoted in the notes only. No daypeak_mae was measured for driver_level, so its PEAK cells carry no metric; the day-ranking figures they quote are a hit rate, which is filed under cal_rank only.",
   "questions": {
     "live_h0_1": {
       "persist": {
@@ -421,6 +421,18 @@
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Bis Tag 3 ist die heutige Tagesspitze sicher genauer (Tag 3: 0,42 Minuten), ab Tag 14 liegt der Wochentag-Durchschnitt leicht vorn, nicht sicher."
+      },
+      "driver": {
+        "state": "unclear",
+        "reference": null,
+        "metric": null,
+        "runId": "20261009-par830-drivers",
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
+        "source": "ml-bench PR #447 (driver_level, ganzer Zeitraum)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Die Tagesspitze in Minuten wurde offline nicht gemessen. Beim Ordnen der Tagesspitzen zweier Fahrgeschäfte gewinnt es an keinem Vorlauf; bis Tag 45 liegt dort das H5-Profil auf TFT-Niveau vorn."
       }
     },
     "cal_far": {
@@ -435,6 +447,18 @@
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Schlechter als TFT."
+      },
+      "driver": {
+        "state": "unclear",
+        "reference": "served",
+        "metric": null,
+        "runId": "20261009-par830-drivers",
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
+        "source": "ml-bench PR #447 (driver_level, ganzer Zeitraum)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "1 bis 3 Monate voraus ordnet es die Tage sicher besser als der einfache Wochentag-Wert (+0,094); gegen TFT ist das bei 19 % Abdeckung nicht vergleichbar. Im Frühjahr und Sommer verliert es offline an Genauigkeit in Minuten."
       }
     },
     "cal_rank": {
@@ -449,6 +473,32 @@
         "source": "ml-bench PR #445 (full period)",
         "period": "2026-02-19..2026-10-07",
         "note": "Offline schlechter als TFT in der Trefferquote."
+      },
+      "driver": {
+        "state": "unclear",
+        "reference": "served",
+        "metric": "hit_rate",
+        "runId": "20261009-par830-drivers",
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
+        "source": "ml-bench PR #447 (driver_level, ganzer Zeitraum)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Ab einer Woche Vorlauf ordnet es die Tage besser als der einfache Wochentag-Wert (+0,068, sicher) und als TFT (+0,069, nur Punktwert bei 68 % Abdeckung); in der ersten Woche nicht besser als der Wert von vor einer Woche."
+      }
+    },
+    "cal_far_90": {
+      "driver": {
+        "state": "unclear",
+        "reference": "served",
+        "metric": null,
+        "runId": "20261009-par830-drivers",
+        "diff": null,
+        "ciLow": null,
+        "ciHigh": null,
+        "source": "ml-bench PR #447 (driver_level, ganzer Zeitraum)",
+        "period": "2026-02-19..2026-10-07",
+        "note": "Bei 3 Monaten ordnet es die Tage sicher besser als der einfache Wochentag-Wert (+0,024 beim Andrang-Fach); gegen CatBoost nur ein Punktwert unter der Abdeckungsgrenze. Ab 4 Monaten verliert es sicher."
       }
     }
   },

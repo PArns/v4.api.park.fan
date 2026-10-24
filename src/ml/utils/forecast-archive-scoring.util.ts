@@ -292,6 +292,8 @@ export interface ArchivedCurve {
    * time; rounded like the served TFT level.
    */
   tftGridPeak?: number | null;
+  /** plan_day: the driver-level shadow's day level, any level source (PAR-1058). */
+  driverDayPeak?: number | null;
 }
 
 export interface ArchivedParkDay {
@@ -1124,6 +1126,12 @@ export const PAIRED_MODELS = {
   catboostShadow: "catboost_shadow",
   /** The calendar-grid TFT shadow (PAR-1041), on the TFT-levelled ride-days. */
   tftGrid: "tft_grid",
+  /**
+   * The driver-level shadow (PAR-1058, ml-bench `driver_level`): on every
+   * plan_day ride-day that has one, PEAK under the served level's reference
+   * (TFT or CatBoost), D7 on the TFT-levelled headliners like the others.
+   */
+  driverLevel: "driver_level",
 } as const;
 
 /** Ride-day use cases of the paired table besides the slot ones (UC1/2/3). */
@@ -1278,6 +1286,7 @@ export const PAIRED_OPTIONAL_MODELS: ReadonlySet<string> = new Set([
   PAIRED_MODELS.chronosGrid,
   PAIRED_MODELS.shadowPeak,
   PAIRED_MODELS.tftGrid,
+  PAIRED_MODELS.driverLevel,
 ]);
 
 /**
@@ -1548,6 +1557,9 @@ export function scorePairedModels(
     }
     if (plan.levelSource === "tft" && plan.tftGridPeak != null) {
       peaks.push([PAIRED_MODELS.tftGrid, plan.tftGridPeak]);
+    }
+    if (plan.driverDayPeak != null) {
+      peaks.push([PAIRED_MODELS.driverLevel, plan.driverDayPeak]);
     }
     for (const [model, peak] of peaks) {
       for (const seg of plan.isHeadliner ? ["all", "headliner"] : ["all"]) {

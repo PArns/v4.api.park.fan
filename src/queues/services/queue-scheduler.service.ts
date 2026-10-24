@@ -1117,6 +1117,21 @@ export class QueueSchedulerService implements OnModuleInit, OnModuleDestroy {
         },
       );
     }
+    // The driver-level shadow (PAR-1058): nightly, before Europe's 06:00 origin.
+    const hasDriverLevelCron = await this.hasRepeatableJob(
+      this.forecastArchiveQueue,
+      "driver-level-cron",
+    );
+    if (!hasDriverLevelCron) {
+      await this.forecastArchiveQueue.add(
+        "driver-level",
+        {},
+        {
+          repeat: { cron: "0 2 * * *" },
+          jobId: "driver-level-cron",
+        },
+      );
+    }
     const hasArchiveScoreCron = await this.hasRepeatableJob(
       this.forecastArchiveScoreQueue,
       "forecast-archive-score-cron",

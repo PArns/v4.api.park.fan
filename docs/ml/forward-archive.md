@@ -115,6 +115,12 @@ and `is_headliner`, plus:
   IS the level's `predictedWaitTime`, this is the `dayPeak` the planner would
   have shown had CatBoost levelled the day. NULL on every other row (a
   CatBoost-levelled day already has CatBoost in `day_peak`).
+- `driver_day_peak` (plan_day, PAR-1058): the driver-level **shadow** for the
+  ride-day, on every level source — the row of `driver_level_forecasts` for that
+  ride and date, read once per park capture and only where it was written at or
+  before the origin (`created_at <= origin_at`), rounded. NULL where the nightly
+  job has no row (ride without two same-weekday days in the last 56, park not
+  run, table unreadable — the capture itself never fails on it). See §9.1.
 
 **Operating day.** A served 15-min slot before 04:00 park-local belongs to the
 previous date, so a park open until 01:00 keeps its evening in one row and is
@@ -575,8 +581,8 @@ spec builds the matrix from the real scorer and asserts it.
 | UC3 d0–d5 | `shadow_h5`, routed, `shadow_peak_scaled`, `weekday_avg`, `chronos2_grid` | `plan_day` | 06:00 |
 | UC3 d6, d7, d10 … d60 | the same without Chronos | `plan_day` | 06:00 / 07:00 |
 | D3 d0–d7 / d10–d30 | as UC3 d0–d5 / without Chronos; regret of every candidate and of served on the same slots (`n` = ride-days, Σ\|e\| = Σ regret) | `plan_day` | 06:00 / 07:00 |
-| PEAK dN | `weekday_avg`: \|peak − truth P90\| per ride-day, `all` and `headliner`; optional on the TFT-levelled ride-days that have a value: `catboost_shadow` (PAR-1042), `tft_grid` (PAR-1041) | `plan_day` `dayPeak`, under **`served_tft` / `served_catboost`** by the model behind the level (PAR-1037) | 06:00 / 07:00 |
-| D7 dN | `weekday_avg` vs served `dayPeak`, headliners whose level is TFT's; `catboost_shadow`, `tft_grid` likewise, each on its own rows | `served_tft` | 06:00 / 07:00 |
+| PEAK dN | `weekday_avg`: \|peak − truth P90\| per ride-day, `all` and `headliner`; optional on the TFT-levelled ride-days that have a value: `catboost_shadow` (PAR-1042), `tft_grid` (PAR-1041); optional on every ride-day that has a value, under the served level's reference: `driver_level` (PAR-1058) | `plan_day` `dayPeak`, under **`served_tft` / `served_catboost`** by the model behind the level (PAR-1037) | 06:00 / 07:00 |
+| D7 dN | `weekday_avg` vs served `dayPeak`, headliners whose level is TFT's; `catboost_shadow`, `tft_grid`, `driver_level` likewise, each on its own rows | `served_tft` | 06:00 / 07:00 |
 
 The live candidates use, at a 10–18 h origin, the daily curves (H5, routed, the
 old composer, `chronos2_grid`) **issued at or before it** — the 06:00 one: none
@@ -653,6 +659,35 @@ formed within one model's rows (`d7AggregatesByModel`). **No
 `PAIRED_DEFINITION` bump:** no existing row changes meaning — the weekday
 average's PEAK/D7 rows are byte-identical, `tft_grid` is a new model key, and a
 replay of older dates would find no shadow rows to add.
+
+**The driver-level shadow (`driver_level`, PAR-1058).** ml-bench's
+`driver_level` plug-in (PAR-830, [level-drivers.md](level-drivers.md) §6.8:
+"shadow, not serve", scoped to the day-ranking surfaces) runs in production as
+`ml-service/driver_level.py`: at 02:00 UTC the `forecast-archive` queue's
+`driver-level` job calls ml-service `POST /driver-level/run`, which starts the
+job in its own process (like `/train`); it fits on ~400 days of ride-day P90s
+and replaces `driver_level_forecasts` with one level per ride for origin+1 …
+origin+91 (origin = the park-local date at run time). The capture copies it
+into `driver_day_peak` (§1) — a capture column rather than a read at scoring
+time like `tft_grid`, because the table keeps only the latest night. The scorer
+pairs it with the served `dayPeak` as model **`driver_level`** on **every**
+level source: PEAK under `served_tft` or `served_catboost` by the model behind
+the level, D7 on the TFT-levelled headliners like the other shadows. That is
+what lets `cal_far_90` (CatBoost-served, d90) carry a live driver cell beside
+`cal_rank`, `cal_busier` and `cal_far` (matrix column `driver`, „Treiber-
+Niveau“). It is optional (`PAIRED_OPTIONAL_MODELS`): rows only where the
+ride-day has a shadow value, on the weekday average's rows, which stay
+unchanged; **no `PAIRED_DEFINITION` bump** for the same reasons as `tft_grid`.
+Its lead is the archive's: a park whose 06:00 origin comes before the night's
+run in its own date (Asia, the Americas — 02:00 UTC is still the previous
+evening there, or already late morning) reads the level that run made at lead
+L+1. `MODEL_ARCHIVE_START.driver` = 2026-10-27 is the assumed first capture
+after deploy (shortcut, like `tft_grid`'s). The switch decision
+(`calendar_driver_level`, ML overview) is judged on **2027-09-01**: the bench
+found it losing in spring and summer and has seen one autumn, so it must be
+judged on a summer window; spring is a manual read in late May 2027, because a
+28-day window cannot hold both seasons and `forecast_archive_paired` keeps 120
+days.
 
 **D7 rows are levels, not errors**: per park, date and lead `n` headliners,
 `sae_model` = Σ weekday-average peak, `sae_ref` = Σ served `dayPeak`,

@@ -103,6 +103,7 @@ export type CurveDraft = Omit<
   | "laterAt"
   | "levelSource"
   | "catboostDayPeak"
+  | "driverDayPeak"
 >;
 
 /** The in-force reading at the origin, per ride. */
@@ -519,6 +520,7 @@ export class ForecastArchiveService {
     const parkDays: ForecastArchiveParkDay[] = [];
     const levelOf = new Map<string, string>();
     let catboostLevels = new Map<string, number>();
+    let driverLevels = new Map<string, number>();
     if (kind === "daily" || kind === "long") {
       const leads =
         kind === "daily"
@@ -528,19 +530,25 @@ export class ForecastArchiveService {
             )
           : [...ForecastArchiveService.LONG_LEADS];
       const lastDate = addIsoDays(localToday, leads[leads.length - 1]);
-      const [calendar, { sources: levelSources, catboost }, typicalDayPeak] =
-        await Promise.all([
-          this.predictedCrowdLevels(
-            park,
-            addIsoDays(localToday, leads[0]),
-            lastDate,
-          ),
-          this.levelSources(park),
-          this.analyticsService
-            .getTypicalDayPeakFromCache(park.id)
-            .catch(() => 0),
-        ]);
+      const [
+        calendar,
+        { sources: levelSources, catboost },
+        typicalDayPeak,
+        drivers,
+      ] = await Promise.all([
+        this.predictedCrowdLevels(
+          park,
+          addIsoDays(localToday, leads[0]),
+          lastDate,
+        ),
+        this.levelSources(park),
+        this.analyticsService
+          .getTypicalDayPeakFromCache(park.id)
+          .catch(() => 0),
+        this.driverLevels(park.id, originAt),
+      ]);
       catboostLevels = catboost;
+      driverLevels = drivers;
       for (const lead of leads) {
         const date = addIsoDays(localToday, lead);
         let plan: PlanDayDto | null = null;
@@ -652,6 +660,7 @@ export class ForecastArchiveService {
       const dayKey = `${d.attractionId}|${d.targetDate}`;
       const isPlanDay = d.surface === ARCHIVE_SURFACES.plan_day && !isNextRide;
       const cb = catboostLevels.get(dayKey);
+      const dl = driverLevels.get(dayKey);
       return this.curveRepository.create({
         ...d,
         originAt,
@@ -669,6 +678,8 @@ export class ForecastArchiveService {
           isPlanDay && levelOf.get(dayKey) === "tft" && cb !== undefined
             ? Math.round(cb)
             : null,
+        // PAR-1058: the driver-level shadow, on every level source.
+        driverDayPeak: isPlanDay && dl !== undefined ? Math.round(dl) : null,
       });
     });
 
@@ -1216,6 +1227,34 @@ export class ForecastArchiveService {
       );
     }
     return out;
+  }
+
+  /**
+   * The driver-level shadow (PAR-1058) per `ride|date` for one park, as it
+   * stood at the origin: `driver_level_forecasts` holds only the latest night,
+   * and a row written after the origin was not known at it. A failed read
+   * costs this capture its shadow, never the capture.
+   */
+  private async driverLevels(
+    parkId: string,
+    originAt: Date,
+  ): Promise<Map<string, number>> {
+    let rows: Array<{ id: string; date: string; level: number }> = [];
+    try {
+      rows = await this.curveRepository.manager.query(
+        `SELECT attraction_id::text AS id, target_date::text AS date, level
+           FROM driver_level_forecasts
+          WHERE park_id = $1 AND created_at <= $2`,
+        [parkId, originAt],
+      );
+    } catch {
+      rows = [];
+    }
+    return new Map(
+      rows
+        .filter((r) => Number.isFinite(Number(r.level)))
+        .map((r) => [`${r.id}|${r.date}`, Number(r.level)]),
+    );
   }
 
   /**
