@@ -10,6 +10,7 @@ import sys
 from datetime import datetime, timezone
 
 import pandas as pd
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -45,8 +46,14 @@ def test_frozen_rows_outside_the_window_are_dropped_on_both_paths():
 def test_measured_operation_days_are_admitted_on_both_paths():
     sql = _flat(db.TRAINING_DATA_SQL)
     assert "LEFT JOIN park_day_operations pdo" in sql
-    assert "OR pdo.measured_operation" in sql
+    assert "pdo.measured_operation" in sql
     assert "pdo.measured_operation" in _flat(predict._SERVING_QUEUE_FILTER)
+    # ... but only through a CLOSED / UNKNOWN / missing schedule row, never the
+    # EXTRA_HOURS copy the `se` join makes beside an OPERATING row.
+    measured = _flat(db.MEASURED_DAY_SCHEDULE_SQL)
+    assert measured in sql
+    assert measured in _flat(predict._SERVING_QUEUE_FILTER)
+    assert _flat(db.TRAINING_DAY_FILTER_SQL) in sql
 
 
 def test_downtime_survives_the_operating_only_label():
@@ -116,3 +123,77 @@ def test_a_fresh_after_hours_reading_marks_the_park_open():
 def test_a_day_without_a_window_reads_open_like_serving():
     out = _train(_frame(["2026-07-03 12:00"], waitTime=[8.0]))
     assert out["is_park_open"].tolist() == [1]
+
+
+# --- The day filter against a real Postgres (set ML_TEST_DATABASE_URL) ------
+#
+#     docker run -d --name pg -e POSTGRES_PASSWORD=t -p 5433:5432 postgres:16-alpine
+#     ML_TEST_DATABASE_URL=postgresql://postgres:t@localhost:5433/postgres \
+#         python3 -m pytest tests/test_training_rows.py -q
+
+PG_URL = os.environ.get("ML_TEST_DATABASE_URL")
+
+_SCHEMA = """
+CREATE TEMP TABLE queue_data ("attractionId" uuid, timestamp timestamptz,
+    "waitTime" int, status text, "queueType" text, is_heartbeat bool,
+    "lastUpdated" timestamptz);
+CREATE TEMP TABLE schedule_entries (id serial, "parkId" uuid, date date,
+    "attractionId" uuid, "scheduleType" text, "openingTime" timestamptz,
+    "closingTime" timestamptz);
+CREATE TEMP TABLE park_day_operations (park_id uuid, day date,
+    measured_operation bool);
+CREATE TEMP TABLE odh ("parkId" uuid, day date);
+"""
+
+# 10-31: OPERATING 10-18 plus EXTRA_HOURS 18-22, measured to have run.
+# 11-01: CLOSED, measured to have run. 11-02: CLOSED, not measured.
+_ROWS = f"""
+INSERT INTO schedule_entries ("parkId", date, "scheduleType", "openingTime", "closingTime") VALUES
+  ('{PARK}', '2026-10-31', 'OPERATING',   '2026-10-31 10:00Z', '2026-10-31 18:00Z'),
+  ('{PARK}', '2026-10-31', 'EXTRA_HOURS', '2026-10-31 18:00Z', '2026-10-31 22:00Z'),
+  ('{PARK}', '2026-11-01', 'CLOSED', NULL, NULL),
+  ('{PARK}', '2026-11-02', 'CLOSED', NULL, NULL);
+INSERT INTO park_day_operations VALUES
+  ('{PARK}', '2026-10-31', true), ('{PARK}', '2026-11-01', true),
+  ('{PARK}', '2026-11-02', false);
+INSERT INTO queue_data VALUES
+  ('{RIDE}', '2026-10-31 12:00Z', 30, 'OPERATING', 'STANDBY', false, '2026-10-31 11:58Z'),
+  ('{RIDE}', '2026-10-31 23:30Z', 30, 'OPERATING', 'STANDBY', false, '2026-10-31 18:00Z'),
+  ('{RIDE}', '2026-11-01 12:00Z', 20, 'OPERATING', 'STANDBY', false, '2026-11-01 11:58Z'),
+  ('{RIDE}', '2026-11-02 12:00Z', 20, 'OPERATING', 'STANDBY', false, '2026-11-02 11:58Z');
+"""
+
+_JOINS = f"""
+FROM queue_data qd
+LEFT JOIN schedule_entries se
+    ON se."parkId" = '{PARK}' AND se.date = DATE(qd.timestamp AT TIME ZONE 'UTC')
+    AND se."attractionId" IS NULL
+LEFT JOIN odh ON odh."parkId" = '{PARK}' AND odh.day = DATE(qd.timestamp AT TIME ZONE 'UTC')
+LEFT JOIN park_day_operations pdo
+    ON pdo.park_id = '{PARK}' AND pdo.day = DATE(qd.timestamp AT TIME ZONE 'UTC')
+"""
+
+EXPECTED = ["2026-10-31 12:00", "2026-11-01 12:00"]
+
+
+@pytest.mark.skipif(not PG_URL, reason="needs ML_TEST_DATABASE_URL")
+def test_each_reading_once_on_an_operating_plus_extra_hours_day():
+    """The EXTRA_HOURS copy must not re-admit the 12:00 reading (twice) or the
+    stale 23:30 one (out of the OPERATING window), on either path."""
+    from sqlalchemy import create_engine, text
+
+    with create_engine(PG_URL).connect() as conn:
+        for stmt in (_SCHEMA + _ROWS).split(";"):
+            if stmt.strip():
+                conn.execute(text(stmt))
+        fmt = "to_char(qd.timestamp AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI')"
+        training = conn.execute(text(
+            f"SELECT {fmt} {_JOINS} WHERE {db.FROZEN_OUT_OF_WINDOW_SQL}"
+            f" AND {db.TRAINING_DAY_FILTER_SQL} ORDER BY 1"
+        )).scalars().all()
+        serving = conn.execute(
+            text(f"SELECT {fmt} {_JOINS} WHERE {predict._SERVING_QUEUE_FILTER} ORDER BY 1"),
+            {"attraction_ids": "{" + RIDE + "}"},
+        ).scalars().all()
+    assert training == EXPECTED
+    assert serving == EXPECTED
