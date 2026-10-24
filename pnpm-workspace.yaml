@@ -15,12 +15,16 @@ onlyBuiltDependencies:
   - esbuild
 overrides:
   qs: '>=6.16.0'
-  # @nestjs/platform-express@11.1.28 pins `multer: 2.2.0` exactly, so the floor
-  # has to come from here. GHSA-3pph-fpjx-jg34 (an upload aborted before
-  # diskStorage assigns a path leaves the file on disk with nothing to remove
-  # it) is fixed in 2.4.0, which platform-express declares from 11.2.6 on —
-  # whoever next moves NestJS can drop this line after checking that.
-  multer: '>=2.4.0'
+  # @nestjs/platform-express pins multer exactly (12.2.0 pins `2.4.0`), so the
+  # floor has to come from here. GHSA-q7qp-rjg7-q26m (a pending async
+  # fileFilter after request teardown holds the request open, DoS) is fixed in
+  # 2.5.0; it supersedes the 2.4.0 floor for GHSA-3pph-fpjx-jg34. Whoever next
+  # moves NestJS can drop this line once platform-express pins >=2.5.0.
+  multer: '>=2.5.0'
+  # express@5.3.0 declares `body-parser: ^2.3.0`; GHSA-27r3-jxmh-p828 (trailing
+  # bytes after a compressed request body, DoS) is fixed in 2.4.0. This is the
+  # production request path, so the floor holds it until express raises its own.
+  body-parser: '>=2.4.0'
   # express@5.2.1 — the version platform-express pins — declares
   # `proxy-addr: ^2.0.7`, which already admits the patched 2.0.8, so this line
   # only holds the floor against a future re-resolve. GHSA-jqcg-44mw-7w3h: an
@@ -102,6 +106,8 @@ overrides:
   # GHSA-jvvf-x445-j334 + GHSA-hrr3-gc8f-f4qj (inconsistent host case, mailto
   # injection) in 4.1.5.
   undici: '>=8.10.2'
-  fast-uri: '>=4.1.5'
+  # fast-uri 4.2.3 additionally clears GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr,
+  # GHSA-xhq7-xmqj-769h and GHSA-333x-w4r6-6crp (scheme/host/path confusion).
+  fast-uri: '>=4.2.3'
   browserslist: '>=4.28.7'
   baseline-browser-mapping: '>=2.11.0'
