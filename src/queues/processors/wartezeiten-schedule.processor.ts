@@ -124,6 +124,10 @@ export class WartezeitenScheduleProcessor {
               await this.parksService.saveScheduleData(park.id, [
                 scheduleUpdate,
               ]);
+              await this.parksService.recordScheduleVersions(
+                park.id,
+                "wartezeiten",
+              );
               successCount++;
 
               this.logger.verbose(

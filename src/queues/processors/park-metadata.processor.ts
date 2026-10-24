@@ -117,6 +117,7 @@ export class ParkMetadataProcessor {
         scheduleResponse.coveredMonths,
       );
       await this.parksService.fillScheduleGaps(park.id);
+      await this.parksService.recordScheduleVersions(park.id, "themeparks");
       await this.parksService.invalidateCalendarMonthCache(park.id);
       this.logger.log(
         `sync-park-schedule: ${park.name} saved ${savedEntries} schedule entries`,
@@ -1168,6 +1169,7 @@ export class ParkMetadataProcessor {
         // day, the duplicate cleanup — needs the pass even for a park the feed
         // has gone quiet about.
         await this.parksService.fillScheduleGaps(park.id);
+        await this.parksService.recordScheduleVersions(park.id, "themeparks");
         await this.parksService.invalidateCalendarMonthCache(park.id);
 
         const tag = parkCacheTag(park);
@@ -1188,6 +1190,7 @@ export class ParkMetadataProcessor {
           // still got it (it arrived here as an empty list, not as a throw).
           try {
             await this.parksService.fillScheduleGaps(park.id);
+            await this.parksService.recordScheduleVersions(park.id, "gap_fill");
             await this.parksService.invalidateCalendarMonthCache(park.id);
             const tag = parkCacheTag(park);
             if (tag) revalidatedTags.push(tag);

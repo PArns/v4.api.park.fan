@@ -113,6 +113,21 @@ Operating hours for parks.
 - `visitingHours`: Open/Close times
 - `type`: `OPERATING`, `CLOSED`, `Ticketed Event`
 
+### 6. As-of fact logs (`weather_forecast_issues`, `schedule_day_versions`)
+Append-only, write-only logs (PAR-1061, [covariate source](../architecture/covariate-source.md) PRs 1–2).
+Nothing reads them yet. Plain tables, no FK, no hypertable; a park merge moves them
+(`PARK_DEPENDENCIES`, keyed on the target day).
+- `weather_forecast_issues` — PK `(park_id, target_date, issued_at)`; every daily
+  forecast the 12-hourly full weather sync stores, with `lead_days` from the park-local
+  date of `issued_at`. Insert-or-ignore, so a re-run within the client's 2 h cache adds
+  nothing. ~4,800 rows/day, **≈ 230 MB/yr**, no retention (D6).
+- `schedule_day_versions` — PK `(park_id, day, known_from)`, partial unique
+  `(park_id, day) WHERE known_to IS NULL`; one row per change of a park-day's derived
+  state (state, open/close, events), diff-written by `ParksService.recordScheduleVersions`
+  after the last schedule writer. A park's first versions are its backfill
+  (`known_from = max(updatedAt)`, `asof_exact = false`, ≈ 83 k rows); churn is
+  assumed ≈ 1 M rows / **≈ 160 MB/yr** until measured.
+
 ## Relationships
 
 - **One-to-Many**: Park -> Attractions

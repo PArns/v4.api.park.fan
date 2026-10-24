@@ -1,6 +1,6 @@
 # One covariate source, read as of an origin (PAR-1061)
 
-**Status: design, nothing built.** Every model reads schedules, holidays, weather
+**Status: design. PRs 1 and 2 of §4 are built (the two write-only logs, PAR-1061); nothing reads them yet.** Every model reads schedules, holidays, weather
 and events through its own SQL and its own derivation. This page proposes one set
 of fact tables that record **when** each fact became known, one derivation that
 turns those facts into covariates, and a migration that moves one service at a
