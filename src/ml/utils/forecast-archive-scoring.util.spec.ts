@@ -1177,12 +1177,12 @@ describe("scorePairedModels (PAR-855)", () => {
 describe("PairedAccumulator — served rounding (PAR-1024)", () => {
   it("rounds both arms of a slot use case like the served value", () => {
     const acc = new PairedAccumulator();
-    // truth 5: a raw 5 would be exact, served shows 10 (floor) — both arms
-    // are judged on what a visitor would see.
-    acc.add("UC1", "h0-1", "persistence", "served", "all", 5, 10, 5);
+    // truth 5: a raw 3 would be 2 off, served shows 5 (floor, PAR-1027) — both
+    // arms are judged on what a visitor would see; a 10 stays 10.
+    acc.add("UC1", "h0-1", "persistence", "served", "all", 3, 10, 5);
     acc.add("UC3", "d1", "shadow_h5", "served", "all", 23, 25, 25);
     const [a, b] = acc.entries();
-    expect(a.saeModel).toBe(5);
+    expect(a.saeModel).toBe(0);
     expect(a.saeRef).toBe(5);
     expect(b.saeModel).toBe(0); // 23 → 25
   });

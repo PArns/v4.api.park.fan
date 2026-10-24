@@ -147,13 +147,13 @@ def aggregate_leadcurve(df: pd.DataFrame, models: list[str]) -> list[dict]:
 
 def serve_round(x: np.ndarray) -> np.ndarray:
     """Serve-side wait quantization — mirror of ml-service round_to_nearest_5 + the
-    operating min-10 rule (and of the NestJS roundServedWait the PCN override uses).
+    operating min-5 rule (and of the NestJS roundServedWait the PCN override uses).
     CatBoost's stored preds are ALREADY quantized like this, so the board must score
     PCN's raw q0.5 through the same boundary or the head-to-head compares a served
     number against an unserved one (raw stays in pcn_forecasts on purpose)."""
     x = np.asarray(x, dtype=float)
     rounded = np.floor((x + 2.5) / 5.0) * 5.0
-    return np.where(rounded > 0, np.maximum(rounded, 10.0), 0.0)
+    return np.where(rounded > 0, np.maximum(rounded, 5.0), 0.0)
 
 
 def persistence_blend(

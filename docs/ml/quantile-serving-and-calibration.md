@@ -76,7 +76,7 @@ for the same ride on the same date. Neither is wrong: different rows, different
 purposes.
 
 The band is measured against the model's **raw** median, while the published wait
-is rounded to 5 and floored at 10 (`predict.py`). It is therefore the model's
+is rounded to 5 and floored at 5 (`predict.py`; 10 until PAR-1027). It is therefore the model's
 spread and not an interval to derive from the published number arithmetically —
 on a ride whose raw median sits below the floor, `wait − band` goes negative.
 Same on all three endpoints.

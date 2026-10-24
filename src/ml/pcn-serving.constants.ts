@@ -42,16 +42,17 @@ export function servePcnIntraday(): boolean {
 
 /**
  * Serve-side wait rounding — the EXACT mirror of ml-service `predict.py`
- * `round_to_nearest_5` + the operating min-10 rule (`predict.py` ~:1959-1969):
- * half-up to 5-minute steps (2.5→5, 7.5→10), then a floor of 10 for anything
- * positive. CatBoost applies this before storing, so every wait users ever saw is
- * 0 or a 5er-step ≥10; PCN's raw q0.5 must go through the same boundary or the
+ * `round_to_nearest_5` + the operating min-5 rule (`predict.py` ~:2037-2042) and of
+ * pcn-service `score.py` `serve_round`: half-up to 5-minute steps (2.5→5, 7.5→10),
+ * then a floor of 5 for anything positive (10 until PAR-1027 — a walk-on ride that
+ * shows 5 live was forecast as 10). CatBoost applies this before storing, so every
+ * served wait is 0 or a 5er-step ≥5; PCN's raw q0.5 must go through the same boundary or the
  * swap leaks 1-minute values into the UI. pcn_forecasts stays RAW on purpose —
  * scoring wants precision; only serving (and the scorer's served-fairness column)
  * quantizes. Slots reaching this code are always operating forecasts (CLOSED rows
- * are never stored), so the min-10 rule applies unconditionally here.
+ * are never stored), so the min-5 rule applies unconditionally here.
  */
 export function roundServedWait(value: number): number {
   const rounded = Math.floor((value + 2.5) / 5) * 5;
-  return rounded > 0 ? Math.max(10, rounded) : 0;
+  return rounded > 0 ? Math.max(5, rounded) : 0;
 }
