@@ -20,7 +20,13 @@ const OFFICIAL_HOSTS: Record<string, string[]> = {
   // Xinhua's authorised release ("受权发布") of the State Council notice.
   CN: ["www.news.cn", "www.gov.cn"],
   // The school districts themselves (PAR-1071).
-  US: ["www.ocps.net", "www.nisd.net", "www.lausd.org"],
+  US: [
+    "www.ocps.net",
+    "www.nisd.net",
+    "www.lausd.org",
+    // PAR-1074
+    "www.hershey.k12.pa.us",
+  ],
 };
 
 describe("curated holiday files (PAR-1065)", () => {
@@ -119,6 +125,9 @@ describe("curated holiday files (PAR-1065)", () => {
     expect(schoolCoverageThrough(coverage, "US", "FL")).toBe("2028-08-09");
     expect(schoolCoverageThrough(coverage, "US", "TX")).toBe("2028-07-31");
     expect(schoolCoverageThrough(coverage, "US", "CA")).toBe("2028-06-30");
-    expect(schoolCoverageThrough(coverage, "US", "OH")).toBeNull();
+    // PAR-1074: a district without a published next year stops on 06-30 of
+    // its last calendar (PA, OH, TN: 2026-27; MO, VA, NC: 2027-28).
+    expect(schoolCoverageThrough(coverage, "US", "PA")).toBe("2027-06-30");
+    expect(schoolCoverageThrough(coverage, "US", "IL")).toBeNull();
   });
 });

@@ -2,15 +2,16 @@ import { CuratedHoliday, CuratedHolidaySet } from "./curated-holidays.types";
 
 /**
  * United States — school days off from ONE school district per state, the one
- * nearest most of our parks there (PAR-1071). Neither Nager.Date nor
+ * nearest most of our parks there (PAR-1071, PAR-1074). Neither Nager.Date nor
  * OpenHolidays has US school data, and US school calendars are set per
  * district, not per state.
  *
  * Parks match holidays by state (`regionCode` FL/CA/TX → `US-FL`/…), so a
  * state carries one district's calendar for all its parks. That is a
  * simplification: Busch Gardens Tampa and LEGOLAND Florida get Orange County's
- * calendar too. Two districts under one key would be unioned, which overstates
- * every break that differs, so a second district is not added. A state with
+ * calendar too, and Kings Island gets Sandusky's. Two districts under one key
+ * would be unioned, which overstates every break that differs, so a second
+ * district is not added. A state with
  * no entry here reads as unknown, never as another state's calendar
  * (`REGION_ONLY_SCHOOL_COVERAGE`).
  *
@@ -67,6 +68,15 @@ const tx = district("US-TX", "Northside ISD");
 const LAUSD =
   "https://www.lausd.org/apps/pages/index.jsp?uREC_ID=4432518&type=d&pREC_ID=2672183";
 const ca = district("US-CA", "Los Angeles Unified");
+
+// Pennsylvania — Derry Township School District, Hershey (Hersheypark). The
+// district's "Year at a Glance" page shows 2026-27; 2025-26 and the end of
+// 2024-25 come from its event calendar (calendar-view, month by month), which
+// also shows the snow make-up day it used (2026-04-02). Days off for some
+// grades only (K-5 conferences, 6th-grade conferences) are not listed.
+const DTSD_EVENTS = "https://www.hershey.k12.pa.us/calendar/calendar-view";
+const DTSD_2026 = "https://www.hershey.k12.pa.us/calendar/accessible-calendar";
+const pa = district("US-PA", "Derry Township School District");
 
 export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
   country: "US",
@@ -192,5 +202,38 @@ export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
     ca("2028-05-29", "2028-05-29", "Memorial Day", LAUSD),
     // 2028-29 is not published: the calendar ends with June 2028.
     ca("2028-06-08", "2028-06-30", "Summer break", LAUSD),
+
+    // Pennsylvania 2025-26 (first day 2025-08-25, last day 2026-06-04). The
+    // 2024-25 year ended 2025-06-05 (district event calendar).
+    pa("2025-06-06", "2025-08-24", "Summer break", DTSD_EVENTS),
+    pa("2025-08-29", "2025-09-01", "Labor Day recess", DTSD_EVENTS),
+    pa("2025-10-02", "2025-10-02", "No school", DTSD_EVENTS),
+    pa("2025-10-13", "2025-10-13", "Columbus Day", DTSD_EVENTS),
+    pa("2025-11-26", "2025-11-28", "Thanksgiving recess", DTSD_EVENTS),
+    pa("2025-12-24", "2026-01-02", "Winter recess", DTSD_EVENTS),
+    pa("2026-01-16", "2026-01-19", "Teacher workday and MLK Day", DTSD_EVENTS),
+    pa("2026-02-09", "2026-02-09", "Staff in-service", DTSD_EVENTS),
+    pa("2026-02-16", "2026-02-16", "Presidents' Day", DTSD_EVENTS),
+    pa("2026-03-13", "2026-03-13", "Conferences / in-service", DTSD_EVENTS),
+    pa("2026-03-20", "2026-03-20", "Staff in-service", DTSD_EVENTS),
+    // 04-02 was planned as recess and used as a snow make-up day
+    pa("2026-04-03", "2026-04-06", "Spring recess", DTSD_EVENTS),
+    pa("2026-05-25", "2026-05-25", "Memorial Day", DTSD_EVENTS),
+    pa("2026-06-05", "2026-08-23", "Summer break", DTSD_2026),
+    // Pennsylvania 2026-27 (first day 2026-08-24, last day 2027-06-03)
+    pa("2026-09-04", "2026-09-07", "Labor Day recess", DTSD_2026),
+    pa("2026-09-21", "2026-09-21", "No school", DTSD_2026),
+    pa("2026-10-12", "2026-10-12", "Columbus Day", DTSD_2026),
+    pa("2026-11-25", "2026-11-27", "Thanksgiving recess", DTSD_2026),
+    pa("2026-12-23", "2027-01-01", "Winter recess", DTSD_2026),
+    pa("2027-01-15", "2027-01-18", "Teacher workday and MLK Day", DTSD_2026),
+    pa("2027-02-15", "2027-02-15", "Presidents' Day", DTSD_2026),
+    pa("2027-03-19", "2027-03-19", "Staff in-service", DTSD_2026),
+    // 03-25 is the planned snow make-up day
+    pa("2027-03-25", "2027-03-29", "Spring recess", DTSD_2026),
+    pa("2027-04-19", "2027-04-19", "Staff in-service", DTSD_2026),
+    pa("2027-05-31", "2027-05-31", "Memorial Day", DTSD_2026),
+    // 2027-28 is not published: the calendar ends with June 2027.
+    pa("2027-06-04", "2027-06-30", "Summer break", DTSD_2026),
   ],
 };

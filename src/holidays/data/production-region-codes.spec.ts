@@ -41,6 +41,9 @@ const PARKS: [slug: string, country: string, regionCode: string | null][] = [
   ["six-flags-over-texas", "US", "TX"],
   ["disneyland-park", "US", "CA"],
   ["universal-studios-hollywood", "US", "CA"],
+  // PAR-1074 (read 2026-10-25)
+  ["hersheypark", "US", "PA"],
+  ["kennywood", "US", "PA"],
 ];
 
 const toRow = (r: HolidayInput) => ({
@@ -92,7 +95,7 @@ describe("imported rows reach the parks' production region codes (PAR-1065)", ()
     },
   );
 
-  it("leaves a US state without a curated district unknown (cedar-point, OH)", () => {
+  it("leaves a US state without a curated district unknown (hurricane-harbor-chicago, IL)", () => {
     const coverage = buildSchoolCoverage(
       curated("US").map((r) => ({
         country: r.country,
@@ -100,10 +103,10 @@ describe("imported rows reach the parks' production region codes (PAR-1065)", ()
         through: r.date.toISOString().slice(0, 10),
       })),
     );
-    expect(schoolCoverageThrough(coverage, "US", "OH")).toBeNull();
+    expect(schoolCoverageThrough(coverage, "US", "IL")).toBeNull();
     expect(
       curated("US").some((r) =>
-        isLocalHoliday(toRow(r), { countryCode: "US", regionCode: "OH" }),
+        isLocalHoliday(toRow(r), { countryCode: "US", regionCode: "IL" }),
       ),
     ).toBe(false);
   });
