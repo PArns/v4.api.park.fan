@@ -10,6 +10,7 @@ describe("HolidaysProcessor", () => {
     synthesizeProjectedSummerHolidays: jest.fn(),
     saveRawHolidays: jest.fn(),
     deleteOldHolidays: jest.fn(),
+    logSchoolCoverageGaps: jest.fn(),
   };
   const nagerDateClient = {
     getHolidaysForYears: jest.fn(),
@@ -30,6 +31,7 @@ describe("HolidaysProcessor", () => {
     holidaysService.synthesizeProjectedSummerHolidays.mockResolvedValue(0);
     holidaysService.saveRawHolidays.mockResolvedValue(undefined);
     holidaysService.deleteOldHolidays.mockResolvedValue(0);
+    holidaysService.logSchoolCoverageGaps.mockResolvedValue([]);
     nagerDateClient.getHolidaysForYears.mockResolvedValue([]);
     nagerDateClient.getLongWeekends.mockResolvedValue([]);
     openHolidaysClient.getSchoolHolidays.mockResolvedValue([]);
@@ -49,6 +51,19 @@ describe("HolidaysProcessor", () => {
 
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  it("reports the synced countries' school-holiday coverage, and survives its failure (PAR-1049)", async () => {
+    parksService.getSyncCountryCodes.mockResolvedValue(["ES", "SE"]);
+    holidaysService.logSchoolCoverageGaps.mockRejectedValue(new Error("db"));
+
+    await run();
+
+    expect(holidaysService.logSchoolCoverageGaps).toHaveBeenCalledWith(
+      ["ES", "SE"],
+      "2026-06-15",
+    );
+    expect(parkMetadataQueue.add).toHaveBeenCalled();
   });
 
   it("does nothing when no country is relevant", async () => {

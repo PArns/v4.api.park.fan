@@ -177,11 +177,14 @@ export class HolidaysProcessor {
 
       // Which countries' school-holiday data runs out soon (PAR-1049). A UTC
       // "today" is close enough for a 90-day warning; nothing is decided by it.
-      await this.holidaysService
-        .logSchoolCoverageGaps(countries, new Date().toISOString().slice(0, 10))
-        .catch((error) =>
-          this.logger.warn(`School-coverage check failed: ${error}`),
+      try {
+        await this.holidaysService.logSchoolCoverageGaps(
+          countries,
+          new Date().toISOString().slice(0, 10),
         );
+      } catch (error) {
+        this.logger.warn(`School-coverage check failed: ${error}`);
+      }
 
       // 4. Easter Sunday — Nager.Date only returns it for Brandenburg (DE-BB), not as nationwide.
       //    However, Easter Sunday is one of the highest-traffic days for all European theme parks.
