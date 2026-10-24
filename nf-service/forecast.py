@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import contextmanager
 
 import pandas as pd
 
@@ -148,6 +149,20 @@ def _build_static_df(meta: pd.DataFrame, panel: pd.DataFrame):
     sdf["country_code"] = pd.factorize(sdf["country"].fillna("NA"))[0]
     sdf["region_code"] = pd.factorize(sdf["region"].fillna("NA"))[0]
     return sdf[["unique_id", "country_code", "region_code"]], ["country_code", "region_code"]
+
+
+@contextmanager
+def calendar_grid(on: bool):
+    """NF_CALENDAR_GRID set to `on` for the block, restored after it. Every grid
+    switch (panel, futr/hist exog, logs) reads the one shared settings object,
+    so this is how the grid shadow (PAR-1041) runs the grid variant while the
+    served run keeps the env value."""
+    prev = settings.NF_CALENDAR_GRID
+    settings.NF_CALENDAR_GRID = on
+    try:
+        yield
+    finally:
+        settings.NF_CALENDAR_GRID = prev
 
 
 def build_panel(park_ids: list[str]):

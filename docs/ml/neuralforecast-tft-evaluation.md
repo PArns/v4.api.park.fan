@@ -520,3 +520,30 @@ cannot hold both variants side by side — its key is `(attraction_id, target_da
 forecast_date)`, `model_version` is not part of it — so a same-night shadow needs either a
 shadow table or a run against a copy of the database; switching the flag for a fortnight
 and comparing against the fortnight before is cheaper but confounded by the season.
+
+### The grid as a nightly shadow (PAR-1041)
+
+The measurement plan above is built: `tft_forecasts_shadow` is the shadow table.
+
+- **nf-service.** With `NF_GRID_SHADOW` (default `true`) `train_runner.py` trains the grid
+  variant a second time after the served run (`run_grid_shadow`): grid forced on through
+  `forecast.calendar_grid(True)` whatever `NF_CALENDAR_GRID` says, model version
+  `<served>-grid`, written under the served run's `forecast_date`. Skipped when
+  `NF_CALENDAR_GRID` is already on (the served run is the grid then).
+- **Sequencing.** Same process, after the served forecast is persisted, never concurrently.
+  The `is_training` lock stays on through it (`phase: "grid_shadow"` in the status), so no
+  second `/train` and no Chronos-2 call shares the GPU, and the NestJS `train-nf` job waits
+  for both. A shadow failure (OOM included) is reported in `info.shadow.error` and logged by
+  the job; it never fails the night.
+- **Cost.** GPU time roughly doubles (~11 min served + the grid run, which reads more rows per
+  series: closed days are masked rows now). Peak memory of one fit is unchanged: the same
+  `NF_WINDOWS_BATCH_SIZE` / `NF_BATCH_SIZE` / park chunks, and the two fits never overlap.
+  Both stay well inside the 90-min job and 120-min runner deadlines, and 03:00 UTC leaves
+  three hours before the CatBoost training at 06:00. Kill switch: `NF_GRID_SHADOW=false`.
+- **Table.** `CREATE TABLE IF NOT EXISTS tft_forecasts_shadow (LIKE tft_forecasts INCLUDING
+  ALL)` in `nf-service/db.py` — same columns and key, cannot drift. Plain table, no FK,
+  no retention, like `tft_forecasts`; it grows by about one served night's rows per night.
+  Registered in the merge (`ATTRACTION_DEPENDENCIES`) and in the E2E schema.
+- **Comparison.** The forward archive reads it at scoring time as model `tft_grid` on the
+  calendar questions `cal_rank`, `cal_busier` and `cal_far` — see
+  [forward-archive.md §9.1](forward-archive.md#91-generalised-paired-scoring).
