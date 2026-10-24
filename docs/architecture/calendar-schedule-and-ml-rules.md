@@ -17,13 +17,14 @@ Related: [Schedule Sync & Calendar](schedule-sync-and-calendar.md), [ML Model Ov
 | Rule | Implementation |
 |------|----------------|
 | **Future:** OPEN/CLOSED from schedule | `status` comes from `schedule?.scheduleType`: OPERATING → `"OPERATING"`, CLOSED → `"CLOSED"`, UNKNOWN or no entry → `"UNKNOWN"`. |
-| **Future:** Days without schedule = UNKNOWN, but with crowd prediction | Future days without schedule keep `status: "UNKNOWN"`. They still get a **crowdLevel** (ML prediction or fallback `"moderate"`), not `"closed"`. |
+| **Future:** Days without schedule = UNKNOWN, but with crowd prediction | Future days without schedule keep `status: "UNKNOWN"`. They still get a **crowdLevel** (the headliner forecast, or `"unknown"` without one), not `"closed"`. |
 | **Past + Today:** With crowd level treated as OPEN | Only for Parks **without** OPERATING entries in `schedule_entries`: if `status === "UNKNOWN"` and crowd level ≠ `"closed"` → `status = "OPERATING"`. Parks with OPERATING schedules keep UNKNOWN for days without schedule (DB-check via `hasOperatingSchedule`). |
 
 ### 1.2 Crowd Level
 
 - **OPERATING:** `crowdLevel = inferredCrowdLevel` (historical: Redis/Stats/Queue/Analytics; future: ML).
-- **UNKNOWN + future:** `crowdLevel = inferredCrowdLevel` (ML prediction or fallback `"moderate"`) – **not** `"closed"`.
+- **UNKNOWN + future:** `crowdLevel = inferredCrowdLevel` – **not** `"closed"`.
+- **Where `inferredCrowdLevel` comes from (PAR-1028):** a strictly past day reads its measured level; otherwise, and for today and future days, the headliner forecast (`buildPredictedCrowdLevels`: average predicted headliner wait ÷ typical-day-peak). With neither it is **`"unknown"`** — never one ride's own `crowdLevel` (a ratio-vs-P50 on CatBoost rows, an unrated `"unknown"` on TFT rows) and never a placeholder `"moderate"`.
 - **CLOSED** or past without opening data: `crowdLevel = "closed"`.
 
 ### 1.3 Important
@@ -106,7 +107,7 @@ Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 - **Fallback:** If the park has **no** schedule integration (no OPERATING entry in the query), **all** daily predictions are kept (“no schedule” → keep all).
 - **Hourly predictions:** Only times **within** operating hours (openingTime–closingTime) are kept; times outside or days without OPERATING with times are filtered out.
 
-**Effect on calendar:** For **future UNKNOWN days** the ML API returns **no** daily prediction (because the day is not OPERATING). The calendar then uses the fallback `mlPrediction?.crowdLevel || "moderate"` for those days – they get a display crowd level (e.g. “moderate”) but not a real ML prediction for that day. To show real ML predictions for UNKNOWN days, the ML filter would need to be extended to optionally return predictions for UNKNOWN days (for parks with schedule).
+**Effect on calendar:** For **future UNKNOWN days** the ML API returns **no** daily prediction (because the day is not OPERATING). Without a headliner forecast those days read `crowdLevel: "unknown"` (PAR-1028; until then they borrowed one ride's `crowdLevel` or a placeholder `"moderate"`). To show real ML predictions for UNKNOWN days, the ML filter would need to be extended to optionally return predictions for UNKNOWN days (for parks with schedule).
 
 ### 4.3 predict.py (Inference)
 
@@ -119,8 +120,8 @@ Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 | Aspect | Calendar (API) | ML Service |
 |--------|----------------|------------|
 | CLOSED day | `status: “CLOSED”`, `crowdLevel: “closed”` | No inference run; filter_predictions_by_schedule removes anyway. |
-| UNKNOWN day (future) — park confirmed open via rides | `status: “UNKNOWN”`, `crowdLevel` = ML or fallback “moderate” | `parkLiveStatus=”OPERATING”` overrides `is_park_open=1` → real ML prediction returned. |
-| UNKNOWN day (future) — park not confirmed open | `status: “UNKNOWN”`, `crowdLevel` = fallback “moderate” | Inference skipped; calendar uses fallback. |
+| UNKNOWN day (future) — park confirmed open via rides | `status: “UNKNOWN”`, `crowdLevel` = headliner forecast, else `unknown` | `parkLiveStatus=”OPERATING”` overrides `is_park_open=1` → real ML prediction returned. |
+| UNKNOWN day (future) — park not confirmed open | `status: “UNKNOWN”`, `crowdLevel` = `unknown` | Inference skipped; no forecast to show. |
 | Past/today without schedule | With crowd level → `status: “OPERATING”` | Independent; calendar derives status from crowd data. |
 
 ---
@@ -128,7 +129,7 @@ Details: [Schedule Sync & Calendar](schedule-sync-and-calendar.md).
 ## 5. Implementation checklist
 
 - [x] Calendar: Status only from schedule + rule “past/today + crowd level = OPEN”; no status override by crowdLevel.
-- [x] Calendar: Future UNKNOWN days always have a crowdLevel (ML or “moderate”), never blanket “closed”.
+- [x] Calendar: Future UNKNOWN days always have a crowdLevel (headliner forecast or `unknown`), never blanket “closed”.
 - [x] Schedule sync: API type “Closed”/“CLOSED” is stored as `ScheduleType.CLOSED`.
 - [x] ML: Daily predictions only for OPERATING days (filter_predictions_by_schedule); fallback “no schedule integration” → keep all.
 - [x] ML: CLOSED/UNKNOWN in predict.py → `crowdLevel: "closed"` in response.

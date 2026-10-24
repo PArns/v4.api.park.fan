@@ -867,7 +867,8 @@ export function scoreParkDay(
       const truthOrd = crowdOrdinal(determineCrowdLevel(ratio))!;
       const lead = dayLead(parkDay.leadDays);
       // The planner's crowdLevel is a forecast only where the calendar had one;
-      // otherwise it is the fallback chain (ML crowd / placeholder moderate),
+      // otherwise it is no forecast (`unknown` since PAR-1028; older rows hold
+      // the ML crowd / placeholder moderate the calendar used to fall back to),
       // and on d0 it is overridden with the live reading at the origin.
       const planSource = parkDay.crowdLevelFallback
         ? "fallback"

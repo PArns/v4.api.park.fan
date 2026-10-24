@@ -977,6 +977,15 @@ describe("MLService", () => {
       expect(preds.map((p) => p.uncertaintyMinutes)).toEqual([24, 38, 46]);
     });
 
+    it("rates nothing: a TFT row's crowdLevel is unknown, never a placeholder (PAR-1028)", async () => {
+      mockForecastAccuracyService.getProfile.mockResolvedValue(new Map());
+      arrange([{ targetDate: plus(1), peak: 80 }]);
+
+      const preds = await service.getTftDailyPredictions(parkId, 60);
+
+      expect(preds.map((p) => p.crowdLevel)).toEqual(["unknown"]);
+    });
+
     it("filters the park as uuid, never by casting the indexed column (PAR-871)", async () => {
       mockForecastAccuracyService.getProfile.mockResolvedValue(new Map());
       arrange([]);
