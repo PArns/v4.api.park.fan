@@ -249,14 +249,22 @@ export class MlDecisionWatchService {
             AND pa."predictionType" = 'hourly'
             AND ${scoredSlotSql("pa", MAX_PLAUSIBLE_WAIT_TIME)}
        ),
+       -- One actual per ride-hour: r holds ~3.6 predictions per target hour,
+       -- so joining r to itself multiplied rows (23 M, 61 s on production) and
+       -- let a single week pass the two-week floor below.
+       h AS (
+         SELECT a, lt, avg(actual) AS actual, bool_or(judged) AS judged
+           FROM r
+          GROUP BY a, lt
+       ),
        base AS (
          SELECT s.a, s.lt,
                 percentile_cont(0.5) WITHIN GROUP (ORDER BY h.actual) AS b
-           FROM r s
+           FROM h s
           CROSS JOIN generate_series(1, 4) w
            -- Equi-join on (ride, hour): an IN list here became an OR join
            -- filter over every slot pair of a ride (review of PAR-1059).
-           JOIN r h ON h.a = s.a AND h.lt = s.lt - w * interval '7 days'
+           JOIN h ON h.a = s.a AND h.lt = s.lt - w * interval '7 days'
           WHERE s.judged
           GROUP BY s.a, s.lt
          HAVING count(*) >= 2

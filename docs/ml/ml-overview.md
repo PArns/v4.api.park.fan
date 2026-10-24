@@ -191,6 +191,9 @@ the last 63 days. Two windows: **recent** = the last 7 days, **previous** = the
 same park-local weekday and hour 7, 14, 21 and 28 days before (≥ 2 of them;
 four equi-join lookups on (ride, local hour) via `generate_series(1, 4)` — an
 `IN` list there became an OR join filter over every slot pair of a ride),
+each week counted once: the actuals are first folded to one value per ride and
+local hour (the table holds ~3.6 predictions per target hour, which made the
+self-join 23 M rows and 61 s; folded, 12 s on production on 2026-10-24),
 from the table's own actuals. Ex ante for every slot, so both windows are
 judged alike. `skill` = Σ model error ÷ Σ weekday-median error on the slots
 that have one; below 1 beats the weekday median. The ratio, not the MAE, is

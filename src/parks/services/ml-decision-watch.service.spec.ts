@@ -125,7 +125,12 @@ describe("MlDecisionWatchService.computeDrift", () => {
       .find((s) => s.includes("FROM prediction_accuracy"))!;
     expect(sql).toContain("CROSS JOIN generate_series(1, 4) w");
     expect(sql).toContain(
-      "JOIN r h ON h.a = s.a AND h.lt = s.lt - w * interval '7 days'",
+      "JOIN h ON h.a = s.a AND h.lt = s.lt - w * interval '7 days'",
+    );
+    // The self-join runs on one row per ride-hour, never on raw r.
+    expect(sql).toContain("FROM h s");
+    expect(sql).toMatch(
+      /h AS \(\s*SELECT a, lt, avg\(actual\)[\s\S]*GROUP BY a, lt/,
     );
     expect(sql).not.toMatch(/h\.lt IN \(/);
   });
