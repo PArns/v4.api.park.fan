@@ -81,6 +81,7 @@ describe("MLFeatureDriftService", () => {
 
       expect(result.driftedFeatures).toEqual([]);
       expect(result.summary).toEqual({
+        status: "no_data",
         totalFeatures: 0,
         healthyCount: 0,
         warningCount: 0,
@@ -90,7 +91,8 @@ describe("MLFeatureDriftService", () => {
       expect(accuracyRepo.find).not.toHaveBeenCalled();
     });
 
-    it("treats every feature as healthy when there's no recent prediction data", async () => {
+    // PAR-1050: production writes no features, so this was "75/75 healthy".
+    it("reports no_data, not all-healthy, when there's no recent prediction data", async () => {
       modelRepo.findOne.mockResolvedValue({ version: "v1", isActive: true });
       featureStatsRepo.find.mockResolvedValue([
         { featureName: "park_occupancy_pct", mean: 50, std: 10 },
@@ -100,10 +102,9 @@ describe("MLFeatureDriftService", () => {
 
       const result = await service.detectFeatureDrift();
 
-      // Two features, zero production samples → defaults to "all
-      // healthy" rather than emitting a false-positive alert.
+      expect(result.summary.status).toBe("no_data");
       expect(result.summary.totalFeatures).toBe(2);
-      expect(result.summary.healthyCount).toBe(2);
+      expect(result.summary.healthyCount).toBe(0);
       expect(result.summary.warningCount).toBe(0);
       expect(result.summary.criticalCount).toBe(0);
     });
@@ -137,6 +138,7 @@ describe("MLFeatureDriftService", () => {
       // The skipped feature is still in the total — we tried to score
       // it, just had too little data.
       expect(result.summary.totalFeatures).toBe(2);
+      expect(result.summary.status).toBe("ok");
     });
 
     it("skips features with fewer than 10 production samples (avoids false drift)", async () => {
@@ -160,6 +162,7 @@ describe("MLFeatureDriftService", () => {
       expect(result.driftedFeatures).toEqual([]);
       expect(result.summary.totalFeatures).toBe(1);
       expect(featureDriftRepo.save).not.toHaveBeenCalled();
+      expect(result.summary.status).toBe("no_data");
     });
 
     it("persists one MLFeatureDrift row per evaluated feature for historical trending", async () => {

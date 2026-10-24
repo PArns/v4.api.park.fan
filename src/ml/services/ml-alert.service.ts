@@ -79,7 +79,19 @@ export class MLAlertService {
     const criticalDrift = driftResult.driftedFeatures.filter(
       (f) => f.status === "critical",
     );
-    if (criticalDrift.length > 0) {
+    // PAR-1050: no comparable feature is not a healthy model. Say so (low)
+    // instead of resolving, so the admin alert list reads "no data".
+    if (driftResult.summary.status === "no_data") {
+      const alert = await this.createAlert({
+        alertType: "feature_drift",
+        severity: "low",
+        title: "Feature Drift: No Data",
+        message: `None of ${driftResult.summary.totalFeatures} features could be compared — no production feature values recorded`,
+        metrics: { ...driftResult.summary },
+        context: null,
+      });
+      if (alert) alerts.push(alert);
+    } else if (criticalDrift.length > 0) {
       const alert = await this.createAlert({
         alertType: "feature_drift",
         severity: "high",
@@ -148,6 +160,7 @@ export class MLAlertService {
         this.getSeverityLevel(existing.severity)
       ) {
         existing.severity = data.severity;
+        existing.title = data.title;
         existing.message = data.message;
         existing.metrics = data.metrics || null;
         existing.context = data.context || null;
