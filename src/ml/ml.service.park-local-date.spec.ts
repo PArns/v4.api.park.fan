@@ -111,4 +111,13 @@ describe("hourly weather across a DST change (PAR-818)", () => {
     expect(autumn).toHaveLength(25);
     expect(new Set(autumn.map((h) => h.time)).size).toBe(25);
   });
+
+  it("peaks at 14:00 local and bottoms out at 02:00 (PAR-1032)", () => {
+    const hours = synthesizeHourlyFromDaily(
+      [day("2026-07-01")],
+      "Europe/Berlin",
+    );
+    expect(hours[14].temperature).toBe(10); // local 14:00 = max
+    expect(hours[2].temperature).toBe(0); // local 02:00 = min
+  });
 });

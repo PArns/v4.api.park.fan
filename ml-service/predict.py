@@ -908,6 +908,207 @@ def apply_schedule_features(
     return df
 
 
+# A forecast day with fewer hours than this is not summed into a daily total:
+# its daily fields come from climatology. Sums of a day with at least this many
+# hours are scaled to 24 h (the GMT-aligned feed cuts the park's first and last
+# local day short).
+MIN_FORECAST_HOURS_PER_DAY = 12
+
+CLIMATOLOGY_COLUMNS = [
+    "parkId",
+    "month",
+    "temp_max",
+    "temp_min",
+    "temp_avg",
+    "precip_avg",
+    "wind_avg",
+    "snow_avg",
+    "weather_code_mode",
+]
+
+
+def fetch_weather_climatology(park_ids: list[str], months: list[int]) -> pd.DataFrame:
+    """Per-(park, month) averages of the daily `weather_data` rows, last 3 years.
+
+    One row per park and month asked for — the rows of a request can span
+    several months, and each row reads its own (PAR-1031: the whole request
+    used to read the month of its first row). Cached for an hour per
+    (park set, month set).
+    """
+    if not park_ids or not months:
+        return pd.DataFrame(columns=CLIMATOLOGY_COLUMNS)
+
+    import time
+
+    cache_key = f"{','.join(sorted(set(map(str, park_ids))))}:{','.join(map(str, months))}"
+    cached = _weather_historical_cache.get(cache_key)
+    if cached is not None and time.time() - cached[1] < _weather_historical_cache_ttl:
+        return cached[0].copy()
+
+    query = text("""
+        SELECT
+            "parkId"::text as "parkId",
+            EXTRACT(MONTH FROM date)::int as month,
+            AVG("temperatureMax") as temp_max,
+            AVG("temperatureMin") as temp_min,
+            AVG("temperatureMax" + "temperatureMin") / 2 as temp_avg,
+            AVG("precipitationSum") as precip_avg,
+            AVG("windSpeedMax") as wind_avg,
+            AVG("snowfallSum") as snow_avg,
+            MODE() WITHIN GROUP (ORDER BY "weatherCode") as weather_code_mode
+        FROM weather_data
+        WHERE "parkId" = ANY(CAST(:park_ids AS uuid[]))
+            AND EXTRACT(MONTH FROM date) = ANY(CAST(:months AS int[]))
+            AND date >= CURRENT_DATE - INTERVAL '3 years'
+        GROUP BY "parkId", EXTRACT(MONTH FROM date)
+    """)
+    try:
+        with get_db() as db:
+            result = db.execute(
+                query,
+                {
+                    "park_ids": uuid_list(set(park_ids), "weather historical averages"),
+                    "months": [int(m) for m in months],
+                },
+            )
+            clim = convert_df_types(pd.DataFrame(result.fetchall(), columns=result.keys()))
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            f"Failed to fetch historical weather data: {e}. Using defaults."
+        )
+        return pd.DataFrame(columns=CLIMATOLOGY_COLUMNS)
+
+    if clim.empty:
+        clim = pd.DataFrame(columns=CLIMATOLOGY_COLUMNS)
+    else:
+        clim["month"] = clim["month"].astype(int)
+    _weather_historical_cache[cache_key] = (clim.copy(), time.time())
+    return clim
+
+
+def _forecast_daily_equivalents(
+    forecast: pd.DataFrame, park_timezones: dict[str, str]
+) -> pd.DataFrame:
+    """The hourly forecast as the DAILY values training sees, per park-local date.
+
+    Training reads `weather_data`, one row per park-local day: precipitation and
+    snowfall are day sums, wind the day's maximum, the weather code Open-Meteo's
+    "most severe of the day". The hourly forecast is reduced the same way, so a
+    rainy hour (2 mm) is not read by the model as a dry day (PAR-1032).
+    """
+    rows = []
+    for park_id, tz in park_timezones.items():
+        local_date = (
+            forecast["time"].dt.tz_localize("UTC").dt.tz_convert(tz).dt.date
+        )
+        g = forecast.assign(_local_date=local_date).groupby("_local_date")
+        daily = pd.DataFrame(
+            {
+                "n_hours": g.size(),
+                "fc_precipitation": g["precipitation"].sum(min_count=1),
+                "fc_snowfall": g["snowfall"].sum(min_count=1),
+                "fc_wind": g["windSpeed"].max(),
+                "fc_code": g["weatherCode"].max(),
+            }
+        )
+        daily = daily[daily["n_hours"] >= MIN_FORECAST_HOURS_PER_DAY]
+        scale = 24.0 / daily["n_hours"]
+        daily["fc_precipitation"] *= scale
+        daily["fc_snowfall"] *= scale
+        daily = daily.drop(columns=["n_hours"]).reset_index()
+        daily["parkId"] = park_id
+        rows.append(daily)
+    if not rows:
+        return pd.DataFrame(
+            columns=["parkId", "_local_date", "fc_precipitation", "fc_snowfall", "fc_wind", "fc_code"]
+        )
+    return pd.concat(rows, ignore_index=True)
+
+
+def apply_weather_features(
+    df: pd.DataFrame,
+    forecast: pd.DataFrame | None,
+    climatology: pd.DataFrame,
+    park_timezones: dict[str, str],
+) -> pd.DataFrame:
+    """Weather columns for every prediction row, in training's units.
+
+    * Each row reads the climatology of its OWN park-local month (PAR-1031).
+    * Where the forecast reaches, temperature is the forecast hour's and the
+      daily fields (precipitation, snowfall, wind, weather code) are that
+      park-local day's totals/maximum from the forecast — training's
+      `weather_data` is daily (PAR-1032).
+    * Beyond the forecast every field comes from the month's climatology (the
+      temperature on training's 04:00-min / 14:00-max sinusoid) instead of
+      20 °C, 0 mm and weather code 0.
+    * `precipitation_last_3h` is the day's precipitation / 8 (mm per 3 h), the
+      definition training uses — it has no hourly observed weather to roll.
+    * `temperature_deviation` is against the (park, month) climatology mean.
+
+    Needs `parkId`, `timestamp`, `local_timestamp`, `hour`. Returns a frame
+    with a fresh RangeIndex (the merges reset it).
+    """
+    clim = climatology if climatology is not None else pd.DataFrame()
+    clim = clim.reindex(columns=CLIMATOLOGY_COLUMNS).rename(columns={"month": "_month"})
+    clim["parkId"] = clim["parkId"].astype(str)
+    clim["_month"] = pd.to_numeric(clim["_month"]).astype(float)
+
+    df = df.copy()
+    df["parkId"] = df["parkId"].astype(str)
+    df["_month"] = df["local_timestamp"].dt.month.astype(float)
+    df["_local_date"] = df["local_timestamp"].dt.date
+    df = df.merge(clim, on=["parkId", "_month"], how="left")
+
+    temp_min = df["temp_min"].astype(float).fillna(df["temp_max"].astype(float)).fillna(15.0)
+    temp_max = df["temp_max"].astype(float).fillna(25.0)
+    interpolation_factor = np.cos(((df["hour"] - 14) / 12) * np.pi) * 0.5 + 0.5
+    clim_temp = temp_min + interpolation_factor * (temp_max - temp_min)
+
+    df["temperature_avg"] = clim_temp
+    df["precipitation"] = df["precip_avg"].astype(float).fillna(0.0)
+    df["windSpeedMax"] = df["wind_avg"].astype(float).fillna(0.0)
+    df["snowfallSum"] = df["snow_avg"].astype(float).fillna(0.0)
+    df["weatherCode"] = df["weather_code_mode"].astype(float).fillna(0)
+
+    if forecast is not None and not forecast.empty and "time" in forecast.columns:
+        fc = forecast.copy()
+        fc["time"] = pd.to_datetime(fc["time"])
+        if fc["time"].dt.tz is not None:
+            fc["time"] = fc["time"].dt.tz_convert("UTC").dt.tz_localize(None)
+        # One row per hour (a DST night maps two wall-clock hours onto one instant — PAR-818).
+        fc = fc.drop_duplicates(subset="time", keep="first")
+        for col in ["temperature", "precipitation", "snowfall", "windSpeed", "weatherCode"]:
+            if col not in fc.columns:
+                fc[col] = np.nan
+            fc[col] = pd.to_numeric(fc[col], errors="coerce")
+
+        join_time = pd.to_datetime(df["timestamp"], utc=True).dt.round("h").dt.tz_localize(None)
+        hourly_temp = join_time.map(fc.set_index("time")["temperature"])
+        df["temperature_avg"] = hourly_temp.fillna(df["temperature_avg"])
+
+        daily = _forecast_daily_equivalents(fc, park_timezones)
+        df = df.merge(daily, on=["parkId", "_local_date"], how="left")
+        df["precipitation"] = df["fc_precipitation"].fillna(df["precipitation"])
+        df["snowfallSum"] = df["fc_snowfall"].fillna(df["snowfallSum"])
+        df["windSpeedMax"] = df["fc_wind"].fillna(df["windSpeedMax"])
+        df["weatherCode"] = df["fc_code"].fillna(df["weatherCode"])
+        df = df.drop(
+            columns=["fc_precipitation", "fc_snowfall", "fc_wind", "fc_code"]
+        )
+
+    df["weatherCode"] = df["weatherCode"].astype(int)
+    df["precipitation_last_3h"] = df["precipitation"] * 0.125
+    df["temperature_deviation"] = df["temperature_avg"] - df["temp_avg"].astype(
+        float
+    ).fillna(20.0)
+
+    return df.drop(
+        columns=["_month", "_local_date"] + CLIMATOLOGY_COLUMNS[2:], errors="ignore"
+    )
+
+
 def create_prediction_features(
     attraction_ids: List[str],
     park_ids: List[str],
@@ -1016,215 +1217,29 @@ def create_prediction_features(
 
     df = add_weekend_feature(df, parks_metadata)
 
-    # Weather features
-    # Logic: Use provided hourly forecast if available, otherwise fallback to historical daily averages
-
-    use_forecast = False
-    historical_temp_avg = {}  # Map for temperature deviation baseline
-
+    # Weather features: the hourly forecast where it reaches, the park's
+    # climatology for each row's own month everywhere else (PAR-1031).
+    wanted_parks = set(map(str, park_ids))
+    park_timezones_wx = {
+        str(row["park_id"]): row["timezone"]
+        for _, row in parks_metadata.iterrows()
+        if str(row["park_id"]) in wanted_parks and row.get("timezone")
+    }
+    climatology_df = fetch_weather_climatology(
+        park_ids, sorted(int(m) for m in df["local_timestamp"].dt.month.dropna().unique())
+    )
+    forecast_df = None
     if weather_forecast and len(weather_forecast) > 0:
         try:
-            # Convert forecast objects to dicts if needed
             wf_data = [w.dict() if hasattr(w, "dict") else w for w in weather_forecast]
-            wf_df = pd.DataFrame(wf_data)
-            wf_df["time"] = pd.to_datetime(wf_df["time"])
-
-            # Normalize both columns to timezone-naive UTC for robust merging
-            if wf_df["time"].dt.tz is not None:
-                wf_df["time"] = wf_df["time"].dt.tz_convert("UTC").dt.tz_localize(None)
-            # One row per hour, or the left merge below multiplies prediction
-            # rows (a wall-clock source maps a DST night's two hours onto one
-            # instant — PAR-818).
-            wf_df = wf_df.drop_duplicates(subset="time", keep="first")
-
-            df["join_time"] = df["timestamp"].dt.round("h")
-            if df["join_time"].dt.tz is not None:
-                df["join_time"] = (
-                    df["join_time"].dt.tz_convert("UTC").dt.tz_localize(None)
-                )
-
-            # Merge logic
-            df = df.merge(wf_df, left_on="join_time", right_on="time", how="left")
-
-            # Map columns and fill defaults
-            # Use sinusoidal interpolation if we have hour and potentially min/max
-            df["temperature_avg"] = df["temperature"].fillna(20.0)
-            df["precipitation"] = df["precipitation"].fillna(0.0)
-            df["windSpeedMax"] = df["windSpeed"].fillna(0.0)
-            df["snowfallSum"] = df["snowfall"].fillna(0.0)
-            df["weatherCode"] = df["weatherCode"].fillna(0).astype(int)
-
-            # Compute precipitation_last_3h as a proper 3h rolling sum — identical
-            # to the training pipeline (features.py groupby().rolling("3h").sum()).
-            # We have all hourly forecast rows, so we can do the real computation.
-            _orig_forecast_order = df.index
-            df = df.sort_values(["parkId", "timestamp"])
-            _df_sorted = df.set_index("timestamp")
-            df["precipitation_last_3h"] = (
-                _df_sorted.groupby("parkId")["precipitation"]
-                .rolling("3h", closed="left", min_periods=1)
-                .sum()
-                .reset_index(level=0, drop=True)
-                .values
-            )
-            df = df.loc[_orig_forecast_order]
-            df["precipitation_last_3h"] = df["precipitation_last_3h"].fillna(0)
-
-            # Cleanup join columns
-            df = df.drop(
-                columns=[
-                    "join_time",
-                    "time",
-                    "temperature",
-                    "windSpeed",
-                    "snowfall",
-                    "rain",
-                ],
-                errors="ignore",
-            )
-            use_forecast = True
+            forecast_df = pd.DataFrame(wf_data)
         except Exception as e:
             import logging
 
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                f"Failed to use weather forecast in features: {e}. Falling back to DB."
+            logging.getLogger(__name__).warning(
+                f"Failed to read weather forecast: {e}. Using climatology."
             )
-            use_forecast = False
-
-    if True:  # Always fetch DB weather for deviation baseline
-        # Get the month we're predicting for
-        if "local_timestamp" in df.columns and len(df) > 0:
-            prediction_month = df["local_timestamp"].iloc[0].month
-        elif timestamps:
-            prediction_month = timestamps[0].month
-        else:
-            prediction_month = datetime.now(timezone.utc).month
-
-        # OPTIMIZATION: Cache weather historical averages (1 hour TTL)
-        cache_key = f"{','.join(sorted(set(park_ids)))}:{prediction_month}"
-        weather_db_df = None
-
-        if cache_key in _weather_historical_cache:
-            cached_data, cache_time = _weather_historical_cache[cache_key]
-            import time
-
-            if time.time() - cache_time < _weather_historical_cache_ttl:
-                weather_db_df = cached_data.copy()
-
-        if weather_db_df is None:
-            # Cache miss - load from DB
-            # We now fetch Max/Min even for predict to allow sinusoidal fallback
-            weather_query = text("""
-                SELECT
-                    "parkId"::text as "parkId",
-                    AVG("temperatureMax") as temp_max,
-                    AVG("temperatureMin") as temp_min,
-                    AVG("temperatureMax" + "temperatureMin") / 2 as temp_avg,
-                    AVG("precipitationSum") as precip_avg,
-                    AVG("windSpeedMax") as wind_avg,
-                    AVG("snowfallSum") as snow_avg,
-                    MODE() WITHIN GROUP (ORDER BY "weatherCode") as weather_code_mode
-                FROM weather_data
-                WHERE "parkId" = ANY(CAST(:park_ids AS uuid[]))
-                    AND EXTRACT(MONTH FROM date) = :month
-                    AND date >= CURRENT_DATE - INTERVAL '3 years'
-                GROUP BY "parkId"
-            """)
-
-            try:
-                with get_db() as db:
-                    result = db.execute(
-                        weather_query,
-                        {
-                            "park_ids": uuid_list(
-                                set(park_ids), "weather historical averages"
-                            ),
-                            "month": prediction_month,
-                        },
-                    )
-                    weather_db_df = pd.DataFrame(
-                        result.fetchall(), columns=result.keys()
-                    )
-                    weather_db_df = convert_df_types(weather_db_df)
-                    import time
-
-                    _weather_historical_cache[cache_key] = (
-                        weather_db_df.copy(),
-                        time.time(),
-                    )
-            except Exception as e:
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.warning(
-                    f"Failed to fetch historical weather data: {e}. Using defaults."
-                )
-                weather_db_df = pd.DataFrame()
-
-        if not weather_db_df.empty:
-            historical_temp_avg = weather_db_df.set_index("parkId")[
-                "temp_avg"
-            ].to_dict()
-
-            if not use_forecast:
-                # Merge historical data as primary
-                df = df.merge(weather_db_df, on="parkId", how="left")
-
-                # Apply sinusoidal interpolation to historical fallback
-                # Min at 4am, Max at 2pm (14:00)
-                temp_min = df["temp_min"].fillna(df["temp_max"]).fillna(15.0)
-                temp_max = df["temp_max"].fillna(25.0)
-                temp_range = temp_max - temp_min
-
-                normalized_time = ((df["hour"] - 14) / 12) * np.pi
-                interpolation_factor = np.cos(normalized_time) * -0.5 + 0.5
-                df["temperature_avg"] = temp_min + (interpolation_factor * temp_range)
-
-                df["precipitation"] = df["precip_avg"].fillna(0.0)
-                df["windSpeedMax"] = df["wind_avg"].fillna(0.0)
-                df["snowfallSum"] = df["snow_avg"].fillna(0.0)
-                df["weatherCode"] = df["weather_code_mode"].fillna(0).astype(int)
-                # precipitation here is daily total (mm/day); divide by 8 (24h/3h)
-                # to get average mm per 3h period — matches training scale.
-                df["precipitation_last_3h"] = df["precipitation"] * 0.125
-
-                # Cleanup historical source columns but KEEP temperature_avg
-                df = df.drop(
-                    columns=[
-                        "temp_max",
-                        "temp_min",
-                        "temp_avg",
-                        "precip_avg",
-                        "wind_avg",
-                        "snow_avg",
-                        "weather_code_mode",
-                    ],
-                    errors="ignore",
-                )
-
-    # Ensure all weather columns are initialized with defaults
-    if "temperature_avg" not in df.columns:
-        df["temperature_avg"] = 20.0
-    if "precipitation" not in df.columns:
-        df["precipitation"] = 0.0
-    if "windSpeedMax" not in df.columns:
-        df["windSpeedMax"] = 0.0
-    if "snowfallSum" not in df.columns:
-        df["snowfallSum"] = 0.0
-    if "weatherCode" not in df.columns:
-        df["weatherCode"] = 0
-
-    # Calculate temperature deviation CORRECTLY against long-term averages
-    # Differentiates from simple variance within the forecasted batch.
-    df["_hist_temp_baseline"] = df["parkId"].map(historical_temp_avg).fillna(20.0)
-    df["temperature_deviation"] = df["temperature_avg"] - df["_hist_temp_baseline"]
-    df = df.drop(columns=["_hist_temp_baseline"])
-
-    # Ensure precipitation_last_3h is set (last-resort fallback; precipitation is
-    # a daily total here so /8 converts mm/day → avg mm per 3h block, matching training scale).
-    if "precipitation_last_3h" not in df.columns:
-        df["precipitation_last_3h"] = df["precipitation"] * 0.125
+    df = apply_weather_features(df, forecast_df, climatology_df, park_timezones_wx)
 
     df["is_raining"] = (df["precipitation"] > 0).astype(int)
 

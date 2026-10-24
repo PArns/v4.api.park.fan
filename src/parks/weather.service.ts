@@ -1068,8 +1068,8 @@ export function synthesizeHourlyFromDaily(
     ).getTime();
     const hoursInDay = Math.round((end - start) / 3_600_000);
 
-    const minTemp = Number(day.temperatureMin || 15);
-    const maxTemp = Number(day.temperatureMax || 25);
+    const minTemp = Number(day.temperatureMin ?? 15);
+    const maxTemp = Number(day.temperatureMax ?? 25);
     const tempRange = maxTemp - minTemp;
 
     for (let t = start; t < end; t += 3_600_000) {
@@ -1078,7 +1078,7 @@ export function synthesizeHourlyFromDaily(
       const normalizedTime = ((hour - 14) / 12) * Math.PI;
       const temp =
         Math.round(
-          ((Math.cos(normalizedTime) * -0.5 + 0.5) * tempRange + minTemp) * 10,
+          ((Math.cos(normalizedTime) * 0.5 + 0.5) * tempRange + minTemp) * 10,
         ) / 10;
       out.push({
         time: instant.toISOString(),

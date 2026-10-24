@@ -18,7 +18,15 @@ The ML Service is a standalone Python application responsible for predicting wai
   - `weather_condition`: Categorical code
   - `temperature`: Numerical (Celsius)
   - `temperature_deviation`: Difference from monthly average
-  - `precipitation`: Current & Last 3 Hours (accumulated)
+  - `precipitation`: the park-local DAY's total, `precipitation_last_3h` = that total / 8 (mm per 3 h)
+  - **Weather units (PAR-1031/PAR-1032)**: training reads `weather_data`, one row per park-local day, so the
+    model knows daily precipitation/snowfall sums, the daily wind maximum and the daily weather code, plus a
+    temperature on a sinusoid (min 02:00, max 14:00 local). Serving reduces the hourly forecast to those same
+    daily values per park-local day (`predict.apply_weather_features`; a day needs ≥ 12 forecast hours, sums are
+    scaled to 24 h) and keeps the hourly temperature. Every row past the forecast reads the climatology of its
+    OWN park-local month (`fetch_weather_climatology`, 3-year averages) — never 20 °C / 0 mm / code 0, and
+    never the first row's month. Intra-day rain timing is not a feature: training has no hourly observed
+    weather to learn it from.
   - `park_occupancy_pct`: Park-wide occupancy (current recent-peak ÷ **P50** baseline, 0–200%). Matches the API's live `getCurrentOccupancy` reading (ratio-vs-P50).
   - `wait_time_momentum`: Velocity of change over last 30 mins
   - `trend_7d`: Linear regression slope of last 7 days
