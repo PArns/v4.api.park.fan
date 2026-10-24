@@ -34,10 +34,10 @@ export const SHUTDOWN_SIGNALS: ShutdownSignal[] = [
  * fire: on 2026-10-21 the API was SIGKILLed 10.000 s after the signal, with
  * neither a `deadline-exceeded` nor an `exit` line to show for it (PAR-1004).
  *
- * On a reboot it still cannot fire. Stopping the daemon is additionally capped
- * by dockerd's `--shutdown-timeout`, 15 s on this host, which no setting in
- * this repo reaches. So 20 s is the budget on a deploy and a ceiling the other
- * paths never reach — do not read a surviving hook as proof it finished.
+ * A reboot gets the same 30 s: dockerd's `--shutdown-timeout` is only a floor,
+ * raised to the largest container `StopTimeout` + 5 s (moby
+ * `Daemon.ShutdownTimeout()`), and each container is stopped with its own
+ * timeout. So 20 s is the budget on every stop path.
  */
 export const SHUTDOWN_DEADLINE_MS = 20_000;
 
