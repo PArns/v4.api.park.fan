@@ -88,6 +88,9 @@ const NOT_A_WORKING_DAY = "holiday.holidayType <> 'working_day'";
  * the one difference is that `updatedAt` now moves only when a holiday actually
  * changed, which is what the column says. Nothing reads it.
  */
+/** Countries whose Nager.Date "School" tag is not a school holiday (PAR-1071). */
+const NAGER_SCHOOL_IGNORED: ReadonlySet<string> = new Set(["US"]);
+
 export const HOLIDAY_UPSERT_OPTIONS = {
   conflictPaths: ["externalId"],
   skipUpdateIfNoValuesChanged: true,
@@ -136,7 +139,7 @@ export class HolidaysService {
       isNationwide: boolean;
     }> = [];
     for (const holiday of holidays) {
-      let holidayType = this.mapHolidayType(holiday.types);
+      let holidayType = this.mapHolidayType(holiday.types, countryCode);
 
       // Fallback: If API marks known public holidays as "observance", correct them
       // This handles cases where Nager.Date API incorrectly classifies official holidays
@@ -246,14 +249,21 @@ export class HolidaysService {
    *
    * Note: If a holiday has multiple types (e.g., ["Public", "Bank"]),
    * we prioritize "Public" > "Bank" > "School" > "Authorities"
+   *
+   * In the US, Nager's "School" is ignored (PAR-1071): school days off are set
+   * per district, never per state, so a state-wide tag says nothing about a
+   * school. Truman Day (US-MO, ["School", "Authorities"]) is a state holiday,
+   * and a stored `school` row would also have counted as US school coverage.
    */
   private mapHolidayType(
     types: string[],
+    countryCode: string,
   ): "public" | "observance" | "school" | "bank" {
     // Priority order: Public > Bank > School > Authorities > Observance
     if (types.includes("Public")) return "public";
     if (types.includes("Bank")) return "bank";
-    if (types.includes("School")) return "school";
+    if (types.includes("School") && !NAGER_SCHOOL_IGNORED.has(countryCode))
+      return "school";
     // Authorities (government offices closed) should be treated as public holidays
     if (types.includes("Authorities")) return "public";
     return "observance";

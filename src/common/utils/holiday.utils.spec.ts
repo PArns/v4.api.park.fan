@@ -22,6 +22,15 @@ describe("holiday.utils › school-holiday coverage", () => {
     expect(schoolCoverageThrough(coverage, "SE", null)).toBeNull();
   });
 
+  it("never lends one US state's calendar to another (PAR-1071)", () => {
+    const us = buildSchoolCoverage([
+      { country: "US", region: "US-FL", through: "2028-08-09" },
+    ]);
+    expect(schoolCoverageThrough(us, "US", "FL")).toBe("2028-08-09");
+    expect(schoolCoverageThrough(us, "US", "OH")).toBeNull();
+    expect(schoolCoverageThrough(us, "US", null)).toBeNull();
+  });
+
   it("marks only the false days past the coverage", () => {
     const days = [
       { date: "2026-09-11", isSchoolVacation: true },

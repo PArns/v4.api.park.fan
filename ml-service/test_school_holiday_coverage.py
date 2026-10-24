@@ -86,3 +86,16 @@ def test_assign_keeps_nan_with_coverage_and_ints_without():
     for col in SCHOOL_FEATURE_COLUMNS:
         assert legacy[col].dtype.kind == "i"
     assert legacy["is_school_holiday_primary"].tolist() == [1, 0]
+
+
+def test_us_states_without_rows_are_unknown_not_covered_by_florida():
+    # PAR-1071: US school data is curated per state; Ohio is not on Orlando's calendar.
+    us = SchoolCoverage(
+        pd.DataFrame(
+            [("US", "2028-08-09", "US-FL", "school", False)],
+            columns=["country", "date", "region", "holiday_type", "is_nationwide"],
+        )
+    )
+    assert us.through("US", "FL") == dt.date(2028, 8, 9)
+    assert us.through("US", "OH") is None
+    assert us.through_any("US") is None

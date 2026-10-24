@@ -289,6 +289,39 @@ describe("HolidaysService", () => {
 
   // PAR-872: every sync re-sent the same calendar and rewrote every stored row
   // (22 M updates on 200 k rows). The upsert now skips a row nothing changed in.
+  describe("saveHolidaysFromApi: Nager types (PAR-1071)", () => {
+    const nager = (types: string[], counties: string[] | null) => ({
+      date: "2026-05-08",
+      localName: "Truman Day",
+      name: "Truman Day",
+      countryCode: "US",
+      fixed: false,
+      global: counties === null,
+      counties,
+      launchYear: null,
+      types,
+    });
+
+    const savedTypes = async (country: string, types: string[]) => {
+      await service.saveHolidaysFromApi(
+        [{ ...nager(types, [`${country}-MO`]), countryCode: country } as never],
+        country,
+      );
+      const rows = mockHolidayRepository.upsert.mock.calls[0][0];
+      return rows.map((r: { holidayType: string }) => r.holidayType);
+    };
+
+    it("stores Truman Day (US-MO, School+Authorities) as a public holiday, not a school one", async () => {
+      expect(await savedTypes("US", ["School", "Authorities"])).toEqual([
+        "public",
+      ]);
+    });
+
+    it("keeps Nager's School tag outside the US (Austrian patron saints' days)", async () => {
+      expect(await savedTypes("AT", ["School"])).toEqual(["school"]);
+    });
+  });
+
   describe("saveRawHolidays", () => {
     const h = {
       externalId: "x:DE:2026-10-03",
