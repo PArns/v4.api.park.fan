@@ -792,7 +792,7 @@ export class FavoritesService {
         // Every other branch has nothing it was rated against and says null,
         // exactly as the attraction detail payload does.
         const rated =
-          dto.effectiveStatus !== "CLOSED" &&
+          dto.effectiveStatus === "OPERATING" &&
           waitTimesReadable &&
           standby?.status === "OPERATING" &&
           standby.waitTime != null &&
@@ -806,11 +806,13 @@ export class FavoritesService {
             ? "closed"
             : !waitTimesReadable
               ? "unknown"
-              : standby?.status === "OPERATING" && standby.waitTime != null
+              : dto.effectiveStatus === "OPERATING" &&
+                  standby?.status === "OPERATING" &&
+                  standby.waitTime != null
                 ? !parkRatable
                   ? "unknown"
-                  : (rated?.rating ?? null)
-                : null;
+                  : (rated?.rating ?? "unknown")
+                : "unknown";
         const history = sparklinesMap.get(attraction.id) || [];
         dto.statistics = {
           avgWaitToday: null,
@@ -843,6 +845,7 @@ export class FavoritesService {
           dto.bestVisitTimes = computeBestVisitTimes(
             todayAttrPreds,
             closing ? closing.toISOString() : null,
+            dto.effectiveStatus === "OPERATING",
           );
         }
         // Rope-drop recommendation (headliners only). UTC instants resolved

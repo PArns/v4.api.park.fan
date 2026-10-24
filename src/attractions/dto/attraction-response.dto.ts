@@ -494,9 +494,10 @@ export class AttractionResponseDto {
 
   @ApiProperty({
     description:
-      "Current crowd level badge. `unknown` when there is nothing to rate " +
-      "against (thin park, or no P50 baseline for this ride); `closed` when " +
-      "the ride is not operating.",
+      "Live crowd level badge: the current wait rated against this ride's " +
+      "P50. `unknown` when there is nothing to rate (no live wait — DOWN or " +
+      "no reading — thin park, or no P50 baseline); `closed` when the ride " +
+      "is closed. Never a forecast. Leave `unknown` rides out of any aggregate.",
     enum: CROWD_LEVEL_WITH_CLOSED_VALUES,
     required: false,
     nullable: true,
@@ -575,7 +576,9 @@ export class AttractionResponseDto {
   @ApiProperty({
     description:
       "Recommended visit time slots for today based on 15-min ML predictions. " +
-      "Sorted by time. 'optimal' = global minimum wait, 'good' = within 40% of minimum.",
+      "Sorted by time. 'optimal' = global minimum wait, 'good' = within 25% " +
+      "(at least 5 min) of minimum. The current slot is offered only while " +
+      "the ride's `effectiveStatus` is OPERATING; later slots stay.",
     required: false,
     nullable: true,
   })

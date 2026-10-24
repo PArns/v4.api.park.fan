@@ -435,11 +435,6 @@ export class AttractionIntegrationService {
         : [];
 
     // --- Crowd level + baseline: fetch P50 once, reuse for both ---
-    const nowStr = new Date().toISOString().split(":")[0]; // "YYYY-MM-DDTHH"
-    const currentPred = enrichedPredictions.find((p) =>
-      p.predictedTime.startsWith(nowStr),
-    );
-
     // Ratability gate keys off the parent park (single source of truth): a
     // thin park (< 30 operating days → NULL typicalDayPeak) emits "unknown"
     // for every derived rating, including this live attraction crowd level.
@@ -461,8 +456,14 @@ export class AttractionIntegrationService {
       dto.baseline = null;
       dto.comparison = null;
     } else {
+      // Only a running ride's wait is rated: a DOWN row keeps a posted number
+      // or the 0 ingestion writes for a non-OPERATING status (PAR-1029).
       const wait = dto.queues?.[0]?.waitTime;
-      if (wait !== undefined && wait !== null) {
+      if (
+        dto.effectiveStatus === "OPERATING" &&
+        wait !== undefined &&
+        wait !== null
+      ) {
         try {
           // P50 baseline (median, "typical wait"). Peak-vs-median ratio:
           // 100% = current wait matches typical, >150% = busier than
@@ -501,21 +502,15 @@ export class AttractionIntegrationService {
             `Failed to get percentiles for crowd level/baseline:`,
             error,
           );
-          crowdLevel = currentPred?.crowdLevel
-            ? (currentPred.crowdLevel as CrowdLevel)
-            : "unknown";
+          crowdLevel = "unknown";
           dto.baseline = null;
           dto.comparison = null;
         }
       } else {
-        // A ride with no reading and no status has nothing to be rated on; the
-        // model's hour row for it is a prior, not an observation.
-        crowdLevel =
-          dto.effectiveStatus === "UNKNOWN"
-            ? "unknown"
-            : currentPred?.crowdLevel
-              ? (currentPred.crowdLevel as CrowdLevel)
-              : "very_low";
+        // No live wait (DOWN, no reading, …) has nothing to be rated on; the
+        // model's hour row is a prior, not an observation, and "very_low" read
+        // as "walk on" for a broken-down ride (PAR-1029).
+        crowdLevel = "unknown";
         dto.baseline = null;
         dto.comparison = null;
       }
@@ -697,6 +692,7 @@ export class AttractionIntegrationService {
           dto.bestVisitTimes = computeBestVisitTimes(
             todayOnlyPredictions,
             todayEntry?.closingTime ?? null,
+            dto.effectiveStatus === "OPERATING",
           );
         }
       } catch (error) {

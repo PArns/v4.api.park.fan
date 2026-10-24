@@ -56,15 +56,19 @@ export function ttlSecondsToNextBoundary(
  *
  * @param predictions  Raw 15-min ML predictions (may include past slots from cache)
  * @param closingTimeIso  Park closing time as ISO string for today, or null
+ * @param rideOperating  false when the ride's `effectiveStatus` is not OPERATING:
+ *   the current slot is then dropped, because "now" is not a time you can ride
+ *   a DOWN/CLOSED ride, whatever the forecast says (PAR-1029).
  */
 export function computeBestVisitTimes(
   predictions: PredictionInput[],
   closingTimeIso: string | null | undefined,
+  rideOperating = true,
 ): BestVisitSlot[] | null {
   // Slot-aligned cutoff: only include the current slot and future slots.
   // floor(now / 15min) * 15min gives the exact start of the active slot,
   // so the previous slot is excluded the moment the new slot begins.
-  const cutoff = currentSlotStartMs();
+  const cutoff = currentSlotStartMs() + (rideOperating ? 0 : SLOT_DURATION_MS);
   const closingMs = closingTimeIso ? new Date(closingTimeIso).getTime() : null;
 
   const future = predictions

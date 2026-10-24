@@ -10,7 +10,6 @@ import { QueueDataService } from "../../queue-data/queue-data.service";
 import { AnalyticsService } from "../../analytics/analytics.service";
 import { MLService } from "../../ml/ml.service";
 import { PredictionAccuracyService } from "../../ml/services/prediction-accuracy.service";
-import { PredictionDeviationService } from "../../ml/services/prediction-deviation.service";
 import { HolidaysService } from "../../holidays/holidays.service";
 import { ParkEnrichmentService } from "./park-enrichment.service";
 import { ThemeParksClient } from "../../external-apis/themeparks/themeparks.client";
@@ -219,12 +218,6 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
           },
         },
         { provide: PredictionAccuracyService, useValue: {} },
-        {
-          provide: PredictionDeviationService,
-          useValue: {
-            getBatchDeviationFlags: jest.fn().mockResolvedValue(new Map()),
-          },
-        },
         { provide: HolidaysService, useValue: {} },
         {
           provide: ParkEnrichmentService,
@@ -387,7 +380,8 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
           date: new Date("2026-10-20T12:00:00Z"),
         },
       ]);
-      // An open ride with no wait reading falls back to the current-hour forecast.
+      // An open ride with no wait reading: its best visit times come from the
+      // forecast, so they only exist if the evening slots survived the filter.
       queueDataService.findCurrentStatusByPark.mockResolvedValueOnce(
         new Map([
           [
@@ -412,7 +406,13 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
         predictions: [
           {
             attractionId: "ride-la",
-            predictedTime: "2026-10-21T01:00:00+00:00",
+            predictedTime: "2026-10-21T01:30:00+00:00",
+            predictedWaitTime: 20,
+            crowdLevel: "low",
+          },
+          {
+            attractionId: "ride-la",
+            predictedTime: "2026-10-21T02:30:00+00:00",
             predictedWaitTime: 70,
             crowdLevel: "high",
           },
@@ -423,7 +423,114 @@ describe("ParkIntegrationService › a park whose wait times are unknowable", ()
       const ride = dto.attractions?.find((a) => a.id === "ride-la");
 
       expect(ride?.effectiveStatus).toBe("OPERATING");
-      expect(ride?.crowdLevel).toBe("high");
+      expect(ride?.bestVisitTimes?.map((b) => b.time)).toContain(
+        "2026-10-21T01:30:00+00:00",
+      );
+      // No live wait: the forecast row is not a live crowd level (PAR-1029).
+      expect(ride?.crowdLevel).toBe("unknown");
+    });
+  });
+
+  describe("a DOWN ride with no live wait (PAR-1029)", () => {
+    afterEach(() => jest.useRealTimers());
+
+    const buildDownRide = async (waitTime: number | null = null) => {
+      jest.useFakeTimers({
+        now: new Date("2026-10-21T12:20:00Z"),
+        doNotFake: [
+          "setTimeout",
+          "setInterval",
+          "setImmediate",
+          "nextTick",
+          "queueMicrotask",
+        ],
+      });
+      const park = buildPark(true);
+      Object.assign(park, {
+        attractions: [
+          { id: "ride-down", name: "Ride Down", slug: "ride-down" },
+        ],
+      });
+      parksService.getUpcomingSchedule.mockResolvedValueOnce([
+        {
+          scheduleType: "OPERATING",
+          openingTime: new Date("2026-10-21T08:00:00Z"),
+          closingTime: new Date("2026-10-21T20:00:00Z"),
+          date: new Date("2026-10-21T12:00:00Z"),
+        },
+      ]);
+      queueDataService.findCurrentStatusByPark.mockResolvedValueOnce(
+        new Map([
+          [
+            "ride-down",
+            [
+              {
+                queueType: "STANDBY",
+                status: "DOWN",
+                waitTime,
+                lastUpdated: new Date(),
+                timestamp: new Date(),
+              },
+            ],
+          ],
+        ]),
+      );
+      // The current slot is the day's quietest, and the current hour carries
+      // a level: neither describes a ride that is down.
+      (
+        service as unknown as {
+          mlService: { getParkPredictions: jest.Mock };
+        }
+      ).mlService.getParkPredictions.mockResolvedValueOnce({
+        predictions: [
+          ["2026-10-21T12:15:00.000Z", 5, "very_low"],
+          ["2026-10-21T13:30:00.000Z", 20, "low"],
+          ["2026-10-21T15:00:00.000Z", 22, "low"],
+        ].map(([predictedTime, predictedWaitTime, crowdLevel]) => ({
+          attractionId: "ride-down",
+          predictedTime,
+          predictedWaitTime,
+          crowdLevel,
+        })),
+      });
+
+      const dto = await buildResponse(park);
+      return dto.attractions?.find((a) => a.id === "ride-down");
+    };
+
+    it("rates the live crowd level unknown, not the forecast or very_low", async () => {
+      const ride = await buildDownRide();
+
+      expect(ride?.effectiveStatus).toBe("DOWN");
+      expect(ride?.crowdLevel).toBe("unknown");
+    });
+
+    it.each([0, 45])(
+      "rates a DOWN ride carrying a %d-minute wait unknown",
+      async (waitTime) => {
+        analyticsService.getBatchAttractionP50s.mockResolvedValueOnce(
+          new Map([["ride-down", 20]]),
+        );
+        analyticsService.isParkRatable.mockResolvedValueOnce(true);
+        analyticsService.getLoadRating.mockReturnValueOnce({
+          rating: "very_low",
+          baseline: 20,
+        });
+
+        const ride = await buildDownRide(waitTime);
+
+        expect(ride?.effectiveStatus).toBe("DOWN");
+        expect(ride?.crowdLevel).toBe("unknown");
+      },
+    );
+
+    it("never offers the current slot as a best visit time", async () => {
+      const ride = await buildDownRide();
+
+      expect(ride?.bestVisitTimes?.length).toBeGreaterThan(0);
+      expect(ride?.bestVisitTimes?.map((b) => b.time)).not.toContain(
+        "2026-10-21T12:15:00.000Z",
+      );
     });
   });
 
