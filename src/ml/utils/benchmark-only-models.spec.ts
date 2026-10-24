@@ -1,7 +1,13 @@
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
-import { COMPARISON_MODELS, COMPARISON_QUESTIONS } from "./model-comparison.util";
-import { PAIRED_MODELS, PAIRED_QUESTION_MODELS } from "./forecast-archive-scoring.util";
+import {
+  COMPARISON_MODELS,
+  COMPARISON_QUESTIONS,
+} from "./model-comparison.util";
+import {
+  PAIRED_MODELS,
+  PAIRED_QUESTION_MODELS,
+} from "./forecast-archive-scoring.util";
 
 /**
  * PAR-1067: a model whose licence excludes production use (TimesFM 3.x,
@@ -9,15 +15,26 @@ import { PAIRED_MODELS, PAIRED_QUESTION_MODELS } from "./forecast-archive-scorin
  * list lives in ml-bench/mlbench/benchmark_only_models.json, which the bench's
  * verdict writers read too; no verdict, decision or matrix entry may name one.
  */
-const REGISTRY = join(__dirname, "../../../ml-bench/mlbench/benchmark_only_models.json");
+const REGISTRY = join(
+  __dirname,
+  "../../../ml-bench/mlbench/benchmark_only_models.json",
+);
 const DATA_DIR = join(__dirname, "../data");
 
 const prefixes = Object.keys(
-  (JSON.parse(readFileSync(REGISTRY, "utf8")) as { prefixes: Record<string, string> }).prefixes,
+  (
+    JSON.parse(readFileSync(REGISTRY, "utf8")) as {
+      prefixes: Record<string, string>;
+    }
+  ).prefixes,
 );
 // a model id, not prose: "TimesFM 3.0" in a note is a sentence, "timesfm3_owx" is a model
-const modelIdPattern = new RegExp(`\\b(?:${prefixes.join("|")})[a-z0-9_]*`, "g");
-const isBenchmarkOnly = (name: string) => prefixes.some((p) => name.toLowerCase().startsWith(p));
+const modelIdPattern = new RegExp(
+  `\\b(?:${prefixes.join("|")})[a-z0-9_]*`,
+  "g",
+);
+const isBenchmarkOnly = (name: string) =>
+  prefixes.some((p) => name.toLowerCase().startsWith(p));
 
 describe("benchmark-only models are never served (PAR-1067)", () => {
   it("the registry lists TimesFM 3 and TabPFN", () => {
@@ -29,7 +46,9 @@ describe("benchmark-only models are never served (PAR-1067)", () => {
   it.each(readdirSync(DATA_DIR).filter((f) => f.endsWith(".json")))(
     "src/ml/data/%s names none",
     (file) => {
-      expect(readFileSync(join(DATA_DIR, file), "utf8").match(modelIdPattern)).toBeNull();
+      expect(
+        readFileSync(join(DATA_DIR, file), "utf8").match(modelIdPattern),
+      ).toBeNull();
     },
   );
 
