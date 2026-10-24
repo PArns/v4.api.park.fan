@@ -73,6 +73,11 @@ import { HolidaysService } from "../holidays/holidays.service";
 import { ParksService } from "../parks/parks.service";
 import { forwardRef } from "@nestjs/common";
 import {
+  BAND_CALIBRATION_KEY,
+  BandCalibrationTable,
+  applyBandCalibration,
+} from "./utils/catboost-band-calibration.util";
+import {
   FeatureContext,
   QueueDataInfo,
 } from "../common/types/feature-context.type";
@@ -409,7 +414,7 @@ export class MLService {
       maxDays,
       liveStatus,
     );
-    if (!this.serveIntradayOverride || predictionType !== "hourly") {
+    if (predictionType !== "hourly") {
       return withoutInternalQuantiles(raw);
     }
 
@@ -422,7 +427,7 @@ export class MLService {
     // curve as it would be served without Chronos, so the live A/B keeps a
     // reference once Chronos is part of what is served. No endpoint passes it.
     const predictions = withoutInternalQuantiles(raw).predictions ?? [];
-    await this.applyServedIntradayOverride(
+    await this.serveHourlyRows(
       predictions,
       new Date(currentSlotStartMs()),
       options.chronos ?? true,
@@ -2219,11 +2224,8 @@ export class MLService {
       result.set(p.attractionId, list);
     }
 
-    if (this.serveIntradayOverride && predictionType === "hourly") {
-      await this.applyServedIntradayOverride(
-        [...result.values()].flat(),
-        startTime,
-      );
+    if (predictionType === "hourly") {
+      await this.serveHourlyRows([...result.values()].flat(), startTime);
     }
     return result;
   }
@@ -2236,9 +2238,52 @@ export class MLService {
    * Since PAR-911 the read paths ask whether EITHER served-model override is on:
    * the PCN champion swap or the Chronos-2 30–120 min window
    * (`SERVE_CHRONOS_INTRADAY`, also default OFF). With both off every read path
-   * returns CatBoost untouched, exactly as before. */
+   * returns CatBoost untouched apart from the PAR-1060 band factor. */
   private get serveIntradayOverride(): boolean {
     return servePcnIntradayFlag() || serveChronosIntraday();
+  }
+
+  private bandTableMemo: {
+    at: number;
+    table: BandCalibrationTable | null;
+  } | null = null;
+
+  /** The PAR-1060 factor table, memoised for five minutes per process (one GET
+   *  per serving read would otherwise ride every park page). */
+  private async bandCalibrationTable(): Promise<BandCalibrationTable | null> {
+    const now = Date.now();
+    if (this.bandTableMemo && now - this.bandTableMemo.at < 5 * 60_000) {
+      return this.bandTableMemo.table;
+    }
+    let table: BandCalibrationTable | null = null;
+    try {
+      const raw = await this.redis.get(BAND_CALIBRATION_KEY);
+      table = raw ? (JSON.parse(raw) as BandCalibrationTable) : null;
+    } catch {
+      table = null;
+    }
+    this.bandTableMemo = { at: now, table };
+    return table;
+  }
+
+  /**
+   * Every serving adjustment of hourly rows, in place: the served-model
+   * overrides (PCN, Chronos) where their flags are on, then the PAR-1060
+   * calibration of CatBoost's band on the rows that stayed CatBoost — never on
+   * a PCN slot (its band is null) or a Chronos slot (it sets its own).
+   */
+  private async serveHourlyRows(
+    preds: PredictionDto[],
+    startTime?: Date,
+    withChronos = true,
+  ): Promise<void> {
+    const overridden = this.serveIntradayOverride
+      ? await this.applyServedIntradayOverride(preds, startTime, withChronos)
+      : new Map<PredictionDto, "pcn" | "chronos">();
+    applyBandCalibration(
+      preds.filter((p) => !overridden.has(p)),
+      await this.bandCalibrationTable(),
+    );
   }
 
   /** Freshest forward PCN forecast per (attraction, slot) for upcoming slots, keyed by
@@ -2582,8 +2627,8 @@ export class MLService {
         modelVersion: p.modelVersion,
         status: p.status || undefined,
       }));
-      if (this.serveIntradayOverride && predictionType === "hourly") {
-        await this.applyServedIntradayOverride(dtos, startTime);
+      if (predictionType === "hourly") {
+        await this.serveHourlyRows(dtos, startTime);
       }
       return dtos;
     }
@@ -2594,8 +2639,8 @@ export class MLService {
       attractionId,
       predictionType,
     );
-    if (this.serveIntradayOverride && predictionType === "hourly") {
-      await this.applyServedIntradayOverride(live, startTime);
+    if (predictionType === "hourly") {
+      await this.serveHourlyRows(live, startTime);
     }
     return live;
   }

@@ -13,6 +13,15 @@ import { Redis } from "ioredis";
 import { REDIS_CLIENT } from "../../common/redis/redis.module";
 import { MAX_PLAUSIBLE_WAIT_TIME } from "../../common/utils/wait-time.utils";
 import { safeJsonParse } from "../../common/utils/json.util";
+import {
+  BAND_CALIBRATION_KEY,
+  BAND_CALIBRATION_TTL_SECONDS,
+  BAND_CALIBRATION_WINDOW_DAYS,
+  BandCalibrationTable,
+  SCORE_BIN,
+  SCORE_BIN_CLAMP,
+  fitBandCalibration,
+} from "../utils/catboost-band-calibration.util";
 import { closedParkDayExists } from "../../analytics/closed-park-days.sql";
 
 /** Per-prediction-type accuracy breakdown. mae/coveragePercent are null when the
@@ -488,6 +497,7 @@ export class PredictionAccuracyService {
       accuracy.features = prediction.features;
       accuracy.predictedQ80 = quantiles?.[i]?.q80 ?? null;
       accuracy.predictedQ95 = quantiles?.[i]?.q95 ?? null;
+      accuracy.uncertaintyMinutes = prediction.uncertaintyMinutes ?? null;
       const s = served?.[i];
       if (s) {
         accuracy.servedWaitTime = s.wait;
@@ -1724,6 +1734,67 @@ export class PredictionAccuracyService {
         return { days, rows: operatingAccuracyRows(rows) };
       },
     );
+  }
+
+  /**
+   * Split-conformal factor for CatBoost's hourly band (PAR-1060): a histogram
+   * of `(actual − predicted) / band` per (lead bucket, segment) over the last
+   * 28 days of scored slots the reader was served CatBoost on, fitted by
+   * {@link fitBandCalibration} and written to Redis for the serving read.
+   * `predicted_wait_time` and `uncertainty_minutes` are the raw CatBoost pair
+   * of the same run, so the score matches `served wait + k·band` exactly.
+   * Lead = target − the run that last wrote the slot (latest-write semantics).
+   */
+  async calibrateCatboostBands(
+    now: Date = new Date(),
+  ): Promise<BandCalibrationTable> {
+    const since = new Date(
+      now.getTime() - BAND_CALIBRATION_WINDOW_DAYS * 24 * 3600 * 1000,
+    );
+    const rows: Array<{
+      lead: string;
+      segment: string;
+      bin: string | number;
+      n: string | number;
+    }> = await this.accuracyRepository.query(
+      `SELECT CASE WHEN m <= 120 THEN 'h0-2' WHEN m <= 360 THEN 'h2-6'
+                   WHEN m <= 1440 THEN 'h6-24' ELSE 'h24+' END AS lead,
+              CASE WHEN w >= 60 THEN 'busy' WHEN w >= 30 THEN 'mid'
+                   ELSE 'quiet' END AS segment,
+              LEAST(GREATEST(CEIL(s), -$3::int), $3::int)::int AS bin,
+              COUNT(*) AS n
+         FROM (SELECT EXTRACT(EPOCH FROM pa.target_time - pa.prediction_time) / 60 AS m,
+                      pa.predicted_wait_time AS w,
+                      -- in bins, exact: numeric, never a float division by 0.05
+                      (pa.actual_wait_time - pa.predicted_wait_time)::numeric
+                        * $2::int / pa.uncertainty_minutes AS s
+                 FROM prediction_accuracy pa
+                WHERE pa.target_time >= $1
+                  AND pa."predictionType" = 'hourly'
+                  AND pa.score_class = 'scored'
+                  AND pa.served_source = 'catboost'
+                  AND pa.uncertainty_minutes > 0
+                  AND pa.target_time >= pa.prediction_time
+                  AND ${scoredSlotSql("pa", MAX_PLAUSIBLE_WAIT_TIME)}) x
+        GROUP BY 1, 2, 3`,
+      [since, Math.round(1 / SCORE_BIN), SCORE_BIN_CLAMP],
+    );
+    const table = fitBandCalibration(
+      rows.map((r) => ({
+        lead: r.lead,
+        segment: r.segment,
+        bin: Number(r.bin),
+        n: Number(r.n),
+      })),
+      now,
+    );
+    await this.redis.set(
+      BAND_CALIBRATION_KEY,
+      JSON.stringify(table),
+      "EX",
+      BAND_CALIBRATION_TTL_SECONDS,
+    );
+    return table;
   }
 
   /**

@@ -36,6 +36,10 @@ import {
   versionNote,
 } from "../ml/utils/ml-overview.util";
 import { dayMonthDe } from "../ml/utils/model-comparison.util";
+import {
+  BAND_CALIBRATION_KEY,
+  BandCalibrationTable,
+} from "../ml/utils/catboost-band-calibration.util";
 import decisionsJson from "../ml/data/ml-decisions.json";
 
 /**
@@ -137,7 +141,7 @@ export class MlOverviewService {
         ),
       ),
     );
-    const [matrix, components] = await Promise.all([
+    const [matrix, components, bandRaw] = await Promise.all([
       // Cached 2 h per scoring run by the comparison service itself.
       this.modelComparison
         .getMatrix(MATRIX_DAYS, "ALL", now)
@@ -148,7 +152,16 @@ export class MlOverviewService {
           return null;
         }),
       this.components(now),
+      this.redis.get(BAND_CALIBRATION_KEY).catch(() => null),
     ]);
+    let bandCalibration: BandCalibrationTable | null = null;
+    try {
+      bandCalibration = bandRaw
+        ? (JSON.parse(bandRaw) as BandCalibrationTable)
+        : null;
+    } catch {
+      bandCalibration = null;
+    }
     return {
       generatedAt: now.toISOString(),
       decisions: buildDecisions(this.decisionFile, matrix, today, frozen),
@@ -159,6 +172,7 @@ export class MlOverviewService {
         worse: 0,
       },
       components,
+      bandCalibration,
     };
   }
 
