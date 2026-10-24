@@ -110,6 +110,12 @@ const va = district("US-VA", "Williamsburg-James City County Public Schools");
 const SEVIER = "https://www.sevier.org/7073";
 const tn = district("US-TN", "Sevier County Schools");
 
+// North Carolina — Charlotte-Mecklenburg Schools (Carowinds). The page links
+// the 2026-27 and 2027-28 traditional calendars; 2024-25 and 2025-26 were read
+// from its May 2025 Wayback capture. Teacher workdays have no students.
+const CMS = "https://www.cmsk12.org/calendar";
+const nc = district("US-NC", "Charlotte-Mecklenburg Schools");
+
 export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
   country: "US",
   entries: [
@@ -438,5 +444,64 @@ export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
     tn("2027-05-27", "2027-05-27", "Administrative day", SEVIER),
     // 2027-28 is not published: the calendar ends with June 2027.
     tn("2027-05-29", "2027-06-30", "Summer break", SEVIER),
+
+    // North Carolina 2025-26 (first day 2025-08-25, last day 2026-06-10). The
+    // 2024-25 year ended 2025-06-10. No 2025-26 make-up day was used.
+    nc("2025-06-11", "2025-08-24", "Summer break", CMS),
+    nc("2025-09-01", "2025-09-01", "Labor Day", CMS),
+    nc("2025-09-09", "2025-09-09", "Teacher workday", CMS),
+    nc("2025-09-23", "2025-09-23", "Teacher workday", CMS),
+    nc("2025-10-02", "2025-10-02", "Teacher workday", CMS),
+    nc("2025-11-04", "2025-11-04", "Teacher workday", CMS),
+    nc("2025-11-11", "2025-11-11", "Veterans Day", CMS),
+    nc("2025-11-26", "2025-11-28", "Thanksgiving break", CMS),
+    nc("2025-12-22", "2026-01-02", "Winter break", CMS),
+    nc("2026-01-19", "2026-01-19", "Martin Luther King Jr. Day", CMS),
+    nc("2026-01-23", "2026-01-23", "Teacher workday", CMS),
+    nc("2026-02-16", "2026-02-16", "Teacher workday", CMS),
+    nc("2026-03-03", "2026-03-03", "Teacher workday", CMS),
+    nc("2026-03-20", "2026-03-20", "Teacher workday", CMS),
+    nc("2026-04-03", "2026-04-10", "Teacher workday and spring break", CMS),
+    nc("2026-05-25", "2026-05-25", "Memorial Day", CMS),
+    nc("2026-06-11", "2026-08-24", "Summer break", CMS),
+    // North Carolina 2026-27 (first day 2026-08-25, last day 2027-06-09).
+    // Teacher workdays that double as make-up days (01-18 is MLK Day,
+    // 02-15, 03-25, 06-10, 06-11) are listed as the holidays they are planned
+    // to be.
+    nc("2026-09-07", "2026-09-07", "Labor Day", CMS),
+    nc("2026-09-21", "2026-09-21", "Teacher workday", CMS),
+    nc("2026-10-02", "2026-10-02", "Teacher workday", CMS),
+    nc("2026-11-02", "2026-11-03", "Teacher workdays", CMS),
+    nc("2026-11-11", "2026-11-11", "Veterans Day", CMS),
+    nc("2026-11-25", "2026-11-27", "Thanksgiving break", CMS),
+    nc("2026-12-21", "2027-01-01", "Winter break", CMS),
+    nc("2027-01-18", "2027-01-18", "Martin Luther King Jr. Day", CMS),
+    nc("2027-01-22", "2027-01-22", "Teacher workday", CMS),
+    nc("2027-02-15", "2027-02-15", "Teacher workday", CMS),
+    nc(
+      "2027-03-25",
+      "2027-04-02",
+      "Teacher workday, Good Friday and spring break",
+      CMS,
+    ),
+    nc("2027-05-31", "2027-05-31", "Memorial Day", CMS),
+    nc("2027-06-10", "2027-08-23", "Summer break", CMS),
+    // North Carolina 2027-28 (first day 2027-08-24, last day 2028-06-07)
+    nc("2027-09-06", "2027-09-06", "Labor Day", CMS),
+    nc("2027-10-11", "2027-10-11", "Teacher workday", CMS),
+    nc("2027-10-29", "2027-11-02", "Teacher workdays", CMS),
+    nc("2027-11-11", "2027-11-11", "Veterans Day", CMS),
+    nc("2027-11-24", "2027-11-26", "Thanksgiving break", CMS),
+    nc("2027-12-20", "2027-12-31", "Winter break", CMS),
+    nc("2028-01-17", "2028-01-17", "Martin Luther King Jr. Day", CMS),
+    nc("2028-01-24", "2028-01-24", "Teacher workday", CMS),
+    nc("2028-02-21", "2028-02-22", "Teacher workdays", CMS),
+    nc("2028-03-07", "2028-03-07", "Teacher workday", CMS),
+    nc("2028-03-31", "2028-03-31", "Teacher workday", CMS),
+    nc("2028-04-10", "2028-04-14", "Spring break", CMS),
+    nc("2028-04-17", "2028-04-17", "Teacher workday", CMS),
+    nc("2028-05-29", "2028-05-29", "Memorial Day", CMS),
+    // 2028-29 is not published: the calendar ends with June 2028.
+    nc("2028-06-08", "2028-06-30", "Summer break", CMS),
   ],
 };

@@ -51,6 +51,7 @@ const PARKS: [slug: string, country: string, regionCode: string | null][] = [
   ["busch-gardens-williamsburg", "US", "VA"],
   ["kings-dominion", "US", "VA"],
   ["dollywood", "US", "TN"],
+  ["carowinds", "US", "NC"],
 ];
 
 const toRow = (r: HolidayInput) => ({

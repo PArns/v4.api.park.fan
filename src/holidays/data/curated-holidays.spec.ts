@@ -30,6 +30,7 @@ const OFFICIAL_HOSTS: Record<string, string[]> = {
     "www.nkcschools.org",
     "wjccschools.org",
     "www.sevier.org",
+    "www.cmsk12.org",
   ],
 };
 
@@ -136,6 +137,7 @@ describe("curated holiday files (PAR-1065)", () => {
     expect(schoolCoverageThrough(coverage, "US", "MO")).toBe("2028-06-30");
     expect(schoolCoverageThrough(coverage, "US", "VA")).toBe("2028-06-30");
     expect(schoolCoverageThrough(coverage, "US", "TN")).toBe("2027-06-30");
+    expect(schoolCoverageThrough(coverage, "US", "NC")).toBe("2028-06-30");
     expect(schoolCoverageThrough(coverage, "US", "IL")).toBeNull();
   });
 });
