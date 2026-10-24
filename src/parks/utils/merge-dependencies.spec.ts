@@ -165,9 +165,11 @@ describe("merge dependency tables", () => {
     "park_slug_aliases",
     "queue_data_aggregates",
     "restaurants",
+    "schedule_day_versions",
     "schedule_entries",
     "shows",
     "weather_data",
+    "weather_forecast_issues",
     "weather_warnings",
   ];
 

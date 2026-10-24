@@ -17,6 +17,7 @@ describe("WartezeitenScheduleProcessor — Wiki-park fallback", () => {
     const parksService = {
       getTodaySchedule: jest.fn().mockResolvedValue(todayRows),
       saveScheduleData: jest.fn().mockResolvedValue(1),
+      recordScheduleVersions: jest.fn().mockResolvedValue(0),
     };
     const client = {
       getOpeningTimes: jest.fn().mockResolvedValue([
@@ -46,6 +47,10 @@ describe("WartezeitenScheduleProcessor — Wiki-park fallback", () => {
     await processor.handleFetchOpeningTimes({} as never);
 
     expect(parksService.saveScheduleData).toHaveBeenCalledTimes(1);
+    expect(parksService.recordScheduleVersions).toHaveBeenCalledWith(
+      park.id,
+      "wartezeiten",
+    );
   });
 
   it("leaves a park alone whose Wiki schedule already answered today", async () => {

@@ -50,6 +50,7 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
         .fn()
         .mockImplementation((_id: string, rows: unknown[]) => rows.length),
       fillScheduleGaps: jest.fn().mockResolvedValue(0),
+      recordScheduleVersions: jest.fn().mockResolvedValue(0),
       invalidateCalendarMonthCache: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -151,6 +152,30 @@ describe("ParkMetadataProcessor — sync-schedules-only", () => {
     );
     expect(filled.sort()).toEqual([EMPTY.id, FULL.id, THROTTLED.id].sort());
     expect(parksService.invalidateCalendarMonthCache).toHaveBeenCalledTimes(3);
+  });
+
+  it("logs each park's schedule versions after its gap fill, not in between (PAR-1061)", async () => {
+    await processor.handleSyncSchedulesOnly({} as any);
+
+    const recorded = parksService.recordScheduleVersions.mock.calls;
+    expect(Object.fromEntries(recorded)).toEqual({
+      [EMPTY.id]: "themeparks",
+      [FULL.id]: "themeparks",
+      [THROTTLED.id]: "gap_fill",
+    });
+    // Last writer first: every record call follows that park's gap fill.
+    for (const [parkId] of recorded) {
+      const fill = parksService.fillScheduleGaps.mock.calls.findIndex(
+        (c: unknown[]) => c[0] === parkId,
+      );
+      expect(
+        parksService.fillScheduleGaps.mock.invocationCallOrder[fill],
+      ).toBeLessThan(
+        parksService.recordScheduleVersions.mock.invocationCallOrder[
+          recorded.findIndex((c: unknown[]) => c[0] === parkId)
+        ],
+      );
+    }
   });
 
   it("revalidates each park's frontend tag once, in one call", async () => {

@@ -1223,6 +1223,23 @@ export const PARK_DEPENDENCIES: MergeDependency[] = [
   // `"attractionId"` and the hour, and `parkId` is in neither.
   { table: "queue_data_aggregates", column: "parkId", strategy: "move" },
   { table: "ml_prediction_anomalies", column: "park_id", strategy: "move" },
+  // The as-of fact logs (PAR-1061). No FK, so a forgotten entry leaves silent
+  // orphans. Move, keyed on the target day: where both parks logged the same
+  // day the winner's history stays, which also keeps `schedule_day_versions`'
+  // one-open-version-per-day index intact (the loser's open row for that day
+  // goes with its history).
+  {
+    table: "weather_forecast_issues",
+    column: "park_id",
+    strategy: "move",
+    conflictColumns: ["target_date"],
+  },
+  {
+    table: "schedule_day_versions",
+    column: "park_id",
+    strategy: "move",
+    conflictColumns: ["day"],
+  },
 ];
 
 /**

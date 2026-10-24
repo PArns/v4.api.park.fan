@@ -262,6 +262,8 @@ Gap-fill uses **batch INSERT/UPDATE operations** to minimize database round-trip
 - **Behaviour**: Upsert by `(parkId, date, scheduleType)` over park-level rows — insert new, update if times/description/holiday changed. **Bidirectional cleanup** (batch operations): when saving OPERATING entries, delete CLOSED for those dates; when saving CLOSED entries, delete OPERATING for those dates. Also delete UNKNOWN placeholders when real data exists. All DELETE operations are **batched** using `date IN (:...dates)` to reduce database round-trips (reduces ~300 individual deletes to **3 batch deletes**, 99% reduction).
 - **Gaps**: After saving, `fillScheduleGaps(parkId, lookAheadDays, lookBackDays)` fills missing dates. Defaults: `lookAheadDays = 182`, `lookBackDays = 182` (~½ year each). Range: (today − lookBackDays) through (today + lookAheadDays). See **Gap-fill rules** above.
 
+- **Version log** (PAR-1061): after the last writer of a sync is done with a park (save + gap fill in the Wiki sync, the global gap fill, Wartezeiten, the live fallback), `ParksService.recordScheduleVersions(parkId, source)` diffs the park-level day state against `schedule_day_versions` and appends only the days that changed; a withdrawn day becomes a `NONE` version. Write-only; see [covariate source](covariate-source.md) §3.2.
+
 ## Calendar Endpoint & First-Request Slowness
 
 - **Endpoint**: `GET /v1/parks/:continent/:country/:city/:parkSlug/calendar?from=&to=`

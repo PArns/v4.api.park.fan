@@ -54,6 +54,10 @@ import {
   crossTypeConflictSql,
   sameTypeDuplicateSql,
 } from "./utils/schedule-dedup.sql";
+import {
+  recordScheduleDayVersions,
+  ScheduleVersionSource,
+} from "./utils/schedule-version-log";
 import { captureParkPath, samePath } from "./services/park-rename.service";
 import {
   DuplicatePair,
@@ -2473,6 +2477,30 @@ export class ParksService {
   }
 
   /**
+   * Append the park's changed days to `schedule_day_versions` (PAR-1061).
+   * Call after the last schedule writer of a sync is done with the park.
+   * Never throws: the log is write-only, and a failed write must not fail the
+   * sync that served the schedule.
+   */
+  async recordScheduleVersions(
+    parkId: string,
+    source: ScheduleVersionSource,
+  ): Promise<number> {
+    try {
+      return await recordScheduleDayVersions(
+        this.scheduleRepository.manager,
+        parkId,
+        source,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Schedule version log not written for park ${parkId}: ${error}`,
+      );
+      return 0;
+    }
+  }
+
+  /**
    * Refreshes holiday and bridge day metadata for ALL parks
    */
   async fillAllParksGaps(): Promise<number> {
@@ -2493,6 +2521,7 @@ export class ParksService {
       try {
         const count = await this.fillScheduleGaps(park.id);
         totalUpdated += count;
+        await this.recordScheduleVersions(park.id, "gap_fill");
       } catch (error) {
         this.logger.error(`Failed gap filling for ${park.name}: ${error}`);
       }

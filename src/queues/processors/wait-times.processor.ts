@@ -259,6 +259,10 @@ export class WaitTimesProcessor {
                         `Failed to save live schedule data for park ${park.id}: ${e?.message ?? e}`,
                       ),
                     );
+                  await this.parksService.recordScheduleVersions(
+                    park.id,
+                    "live_fallback",
+                  );
                 }
               }
 
