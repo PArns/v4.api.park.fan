@@ -33,6 +33,11 @@ export const SHUTDOWN_SIGNALS: ShutdownSignal[] = [
  * Before that it was Docker's default of 10 s, so this deadline could not
  * fire: on 2026-10-21 the API was SIGKILLed 10.000 s after the signal, with
  * neither a `deadline-exceeded` nor an `exit` line to show for it (PAR-1004).
+ *
+ * On a reboot it still cannot fire. Stopping the daemon is additionally capped
+ * by dockerd's `--shutdown-timeout`, 15 s on this host, which no setting in
+ * this repo reaches. So 20 s is the budget on a deploy and a ceiling the other
+ * paths never reach — do not read a surviving hook as proof it finished.
  */
 export const SHUTDOWN_DEADLINE_MS = 20_000;
 
