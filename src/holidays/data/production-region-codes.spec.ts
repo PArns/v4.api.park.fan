@@ -44,6 +44,8 @@ const PARKS: [slug: string, country: string, regionCode: string | null][] = [
   // PAR-1074 (read 2026-10-25)
   ["hersheypark", "US", "PA"],
   ["kennywood", "US", "PA"],
+  ["cedar-point", "US", "OH"],
+  ["kings-island", "US", "OH"],
 ];
 
 const toRow = (r: HolidayInput) => ({

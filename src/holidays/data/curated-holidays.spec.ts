@@ -26,6 +26,7 @@ const OFFICIAL_HOSTS: Record<string, string[]> = {
     "www.lausd.org",
     // PAR-1074
     "www.hershey.k12.pa.us",
+    "www.scs-k12.net",
   ],
 };
 
@@ -128,6 +129,7 @@ describe("curated holiday files (PAR-1065)", () => {
     // PAR-1074: a district without a published next year stops on 06-30 of
     // its last calendar (PA, OH, TN: 2026-27; MO, VA, NC: 2027-28).
     expect(schoolCoverageThrough(coverage, "US", "PA")).toBe("2027-06-30");
+    expect(schoolCoverageThrough(coverage, "US", "OH")).toBe("2027-06-30");
     expect(schoolCoverageThrough(coverage, "US", "IL")).toBeNull();
   });
 });

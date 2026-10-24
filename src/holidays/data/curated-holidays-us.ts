@@ -78,6 +78,16 @@ const DTSD_EVENTS = "https://www.hershey.k12.pa.us/calendar/calendar-view";
 const DTSD_2026 = "https://www.hershey.k12.pa.us/calendar/accessible-calendar";
 const pa = district("US-PA", "Derry Township School District");
 
+// Ohio — Sandusky City Schools (Cedar Point, Cedar Point Shores). The district
+// publishes its calendars as Google Sheets linked from scs-k12.net; the
+// 2024-25 and 2025-26 links were read from Wayback captures of its homepage,
+// the sheets themselves directly. A day counts as off when the sheet colours
+// it "No School" or "Professional Learning Day - No School".
+const SCS_HOME = "https://www.scs-k12.net/";
+const SCS_2026 =
+  "https://www.scs-k12.net/protected/ArticleView.aspx?iid=6I3UUB0&dasi=3GGI";
+const oh = district("US-OH", "Sandusky City Schools");
+
 export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
   country: "US",
   entries: [
@@ -235,5 +245,32 @@ export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
     pa("2027-05-31", "2027-05-31", "Memorial Day", DTSD_2026),
     // 2027-28 is not published: the calendar ends with June 2027.
     pa("2027-06-04", "2027-06-30", "Summer break", DTSD_2026),
+
+    // Ohio 2025-26 (first day 2025-09-02, last day 2026-06-05). The 2024-25
+    // year ended 2025-06-05.
+    oh("2025-06-06", "2025-09-01", "Summer break", SCS_HOME),
+    oh("2025-10-10", "2025-10-10", "NEOEA Day", SCS_HOME),
+    oh("2025-11-03", "2025-11-03", "Professional learning day", SCS_HOME),
+    oh("2025-11-26", "2025-11-28", "Fall break", SCS_HOME),
+    oh("2025-12-22", "2026-01-02", "Winter break", SCS_HOME),
+    oh("2026-01-16", "2026-01-19", "Semester grades day and MLK Day", SCS_HOME),
+    oh("2026-02-16", "2026-02-16", "Presidents' Day", SCS_HOME),
+    oh("2026-03-02", "2026-03-02", "Professional learning day", SCS_HOME),
+    oh("2026-04-03", "2026-04-10", "Good Friday and spring break", SCS_HOME),
+    oh("2026-05-25", "2026-05-25", "Memorial Day", SCS_HOME),
+    oh("2026-06-06", "2026-08-25", "Summer break", SCS_2026),
+    // Ohio 2026-27 (first day 2026-08-26, last day 2027-06-03)
+    oh("2026-09-07", "2026-09-07", "Labor Day", SCS_2026),
+    oh("2026-10-05", "2026-10-05", "Professional learning day", SCS_2026),
+    oh("2026-10-09", "2026-10-09", "NEOEA Day", SCS_2026),
+    oh("2026-11-25", "2026-11-27", "Fall break", SCS_2026),
+    oh("2026-11-30", "2026-11-30", "Professional learning day", SCS_2026),
+    oh("2026-12-21", "2027-01-01", "Winter break", SCS_2026),
+    oh("2027-01-15", "2027-01-18", "Semester grades day and MLK Day", SCS_2026),
+    oh("2027-02-15", "2027-02-15", "Presidents' Day", SCS_2026),
+    oh("2027-03-26", "2027-04-02", "Good Friday and spring break", SCS_2026),
+    oh("2027-05-31", "2027-05-31", "Memorial Day", SCS_2026),
+    // 2027-28 is not published: the calendar ends with June 2027.
+    oh("2027-06-04", "2027-06-30", "Summer break", SCS_2026),
   ],
 };
