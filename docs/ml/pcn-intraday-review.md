@@ -417,8 +417,33 @@ Rules since then:
   neither the Redis entry nor the stored rows ever carry a `+pcn` number. (Before the
   fix the cron called the served method — harmless only because the override was a
   no-op; fixing the keys alone would have written PCN into the CatBoost board.)
-- The blend anchor (`fetchCurrentWaits`, latest STANDBY wait within 3 h) is read
-  from `queue_data` per call, so it works identically on every path.
+- The blend anchor (`fetchCurrentWaits`, latest STANDBY reading within 3 h) is read
+  from `queue_data` per call, so it works identically on every path. Since PAR-1029
+  the reading in force must be OPERATING with a wait (the rule of
+  `ForecastArchiveService.liveWaits`); a ride that just went DOWN has no anchor.
+
+### 9.1 The first hour serves the current wait (PAR-1026, PAR-1029)
+
+Measured 2026-10-24: 94.3 % of live anchors are under `BLEND_GATE_MIN` (40 min), so
+the gate left almost every ride on raw PCN even 15 minutes ahead, and on the live
+forward archive persistence beat the served curve by 1.7 min MAE in the first hour.
+The rules of `persistenceBlendServe` since then:
+
+| lead (from now, not from the slot start) | anchor | served q0.5 |
+| --- | --- | --- |
+| ≤ 1 h | ≥ 5 min (`BLEND_FIRST_HOUR_MIN_ANCHOR`) | the anchor |
+| ≤ 1 h | < 5 min or none | raw PCN |
+| 1 – 3 h | ≥ 40 min (`BLEND_GATE_MIN`) | linear anchor → PCN |
+| 1 – 3 h | < 40 min or none | raw PCN |
+| ≥ 3 h | any | raw PCN |
+
+The crowd level's q0.8 goes through the same blend (same anchor, same α) and is
+still clamped to ≥ the shown wait, so the tier and the wait agree in the first
+hour. A PCN slot serves `uncertaintyMinutes: null`: `pcn_forecasts` holds only
+q0.5 and q0.8 (`PCN_SERVE_QUANTILES`), so there is no PCN band, and CatBoost's
+band beside a PCN wait described a different forecast. To check it live:
+`live_h0_1` persistence vs served in `forecast_archive_paired` (definition 2)
+should move toward 0.
 
 ## 10. `pcn_forecasts` write volume and retention (PAR-873, 2026-10-12)
 
