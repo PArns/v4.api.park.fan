@@ -14,8 +14,10 @@ RUN apt-get update && apt-get install -y \
 # runtime:nvidia the host driver libs are injected; the container only needs the
 # CUDA-compiled wheel. Override TORCH_INDEX=.../whl/cpu for CI / CPU-only hosts.
 # (Same base as nf-service so both GPU services share the toolchain.)
+# torch pinned to the newest cu128 build (2.11.0; 2.12+ ship as cu130 only, which needs a
+# driver check on the host first) so a rebuild cannot move it.
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cu128
-RUN pip install --no-cache-dir --index-url ${TORCH_INDEX} "torch>=2.7.0"
+RUN pip install --no-cache-dir --index-url ${TORCH_INDEX} "torch==2.11.0"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
