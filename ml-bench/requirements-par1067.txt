@@ -1,7 +1,7 @@
-# PAR-1066 — IBM Granite PatchTST-FM-r2 (`patchtst_fm*`), Granite TTM-r2 (`ttm_r2*`) and
+# PAR-1067 — IBM Granite PatchTST-FM-r2 (`patchtst_fm*`), Granite TTM-r2 (`ttm_r2*`) and
 # TabPFN-TS (`tabpfn_ts`, daily level only) as ml-bench plug-ins, in the same image as
 # chronos2 / chronos2_lora / timesfm25 so every arm pairs inside one run. Build with
-#   --build-arg EXTRA_REQUIREMENTS=requirements-par1066.txt
+#   --build-arg EXTRA_REQUIREMENTS=requirements-par1067.txt
 # on the default python:3.11-slim base. Every pin is at least two weeks old on 2026-10-24.
 #
 # torch: comes from the cu128 wheel in the Dockerfile and nothing here may replace it.

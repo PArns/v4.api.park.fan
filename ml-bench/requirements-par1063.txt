@@ -5,10 +5,8 @@
 # Dockerfile; nothing here may replace it. Every pin is at least two weeks old on
 # 2026-10-24 (re-checked by PAR-1066's upgrade).
 #
-# numpy is NOT held here: an image built from this file alone resolved numpy 2.4.6 +
-# ml_dtypes 0.6.0 (jax pulls the newest ml_dtypes), over requirements.txt's 1.26.4 —
-# a different numpy than every earlier bench run. The numpy / ml_dtypes pins land in
-# PAR-1067 (#569); build bench images from that head, not from this one alone.
+# numpy is NOT held here: it comes from requirements.txt (2.4.6 since PAR-1066), the
+# same numpy every image runs, and jax 0.10.2 / ml_dtypes 0.6.0 below resolve against it.
 #
 # Chronos-2 (Apache-2.0) and the timesfm package. timesfm 3.0.2 ships BOTH
 # `timesfm3` (TimesFM 3.0) and `timesfm.TimesFM_2p5_200M_torch` (TimesFM 2.5).

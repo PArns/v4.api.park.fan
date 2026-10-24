@@ -27,7 +27,7 @@ PAR-1066 (2026-10-24).
 | torch 2.11.0 (cu128) | the newest cu128 build; 2.12+ ship as cu130 only, and the RTX 5080 host's driver has to be checked for CUDA 13 first. The RTX 5080 (sm_120) needs cu128 or newer | the host driver is confirmed for cu130 |
 | catboost 1.2.10 | already the newest; stays CPU (GPU training collapses the high-cardinality categoricals) | — |
 | jax 0.10.2 (ml-bench PAR-1063 extra) | the newest jax that runs on Python 3.11 | ml-bench moves to 3.12 |
-| scikit-learn 1.7.2, pyarrow 25.0.1, datasets 4.8.5 (ml-bench PAR-1066 extra only) | granite-tsfm needs sklearn < 1.8; tabpfn-client caps pyarrow <= 25.0.1; fev (via tabpfn-time-series) needs datasets < 5 | those packages lift their caps |
+| scikit-learn 1.7.2, pyarrow 25.0.1, datasets 4.8.5 (ml-bench PAR-1067 extra only, `requirements-par1067.txt`) | granite-tsfm needs sklearn < 1.8; tabpfn-client caps pyarrow <= 25.0.1; fev (via tabpfn-time-series) needs datasets < 5 | those packages lift their caps |
 
 ## Stored artefacts across an upgrade
 
@@ -80,7 +80,7 @@ uv pip compile --python-version 3.11 --python-platform x86_64-manylinux_2_28 \
   ml-bench/requirements.txt ml-bench/requirements-par1063.txt torch.txt
 ```
 
-(`torch.txt` holds the Dockerfile's torch pin. The PAR-1066 extra deliberately downgrades
+(`torch.txt` holds the Dockerfile's torch pin. The PAR-1067 extra (`requirements-par1067.txt`) deliberately downgrades
 scikit-learn and pyarrow, so compile it against the base pins without those two.)
 
 ## Lint

@@ -1,4 +1,4 @@
-"""PAR-1066 (Granite PatchTST-FM-r2, Granite TTM-r2, TabPFN-TS), without GPU or weights.
+"""PAR-1067 (Granite PatchTST-FM-r2, Granite TTM-r2, TabPFN-TS), without GPU or weights.
 
 What can break on our side: the licence guard, the context / horizon bookkeeping and
 quantile columns of PatchTST-FM, TTM's scaling and exogenous channel layout, a TTM
@@ -52,6 +52,21 @@ def test_a_benchmark_only_model_cannot_be_marked_servable():
         type("Unclear", (FoundationModel,), {"name": "u", "licence": "unclear", "serving_candidate": True})
     with pytest.raises(TypeError, match="licence must be one of"):
         type("Typo", (FoundationModel,), {"name": "t", "licence": "apache"})
+
+
+def test_benchmark_only_registry_matches_the_classes():
+    from mlbench.licences import is_benchmark_only, refuse_benchmark_only
+    for n, m in REGISTRY.items():
+        if issubclass(m, FoundationModel):
+            assert is_benchmark_only(n) == (m.licence == "benchmark-only"), n
+    assert is_benchmark_only("timesfm3_owx") and is_benchmark_only("tabpfn_ts")
+    assert not is_benchmark_only("timesfm25") and not is_benchmark_only("chronos2")
+    refuse_benchmark_only(["chronos2", "timesfm25", "ttm_r2_ft"])
+    with pytest.raises(ValueError, match="tabpfn_ts"):
+        refuse_benchmark_only(["chronos2", "tabpfn_ts"])
+    # a class named like a listed model cannot claim another licence
+    with pytest.raises(TypeError, match="listed benchmark-only"):
+        type("Relabelled", (FoundationModel,), {"name": "timesfm3_x", "licence": "servable"})
 
 
 def test_run_metadata_labels_the_licence(synth_export, tmp_path):
@@ -199,6 +214,49 @@ def test_ttm_finetune_sees_only_the_context_and_builds_exogenous_config():
     for c in m.calls:
         assert c["pv"].shape == (4, 1536, 3) and c["fv"].shape == (4, 720, 3)
         assert np.abs(c["fv"]).max() <= zmax + 1e-4 and np.abs(c["pv"]).max() <= zmax + 1e-4
+        # the label is not an input: the target channel arrives as inference sends it
+        assert (c["fv"][..., 0] == 0).all() and c["fm"] is None
+
+
+def test_ttm_finetune_inputs_ignore_the_future_target_channel():
+    """Two fits whose future targets differ must feed the model identical inputs (inference
+    only ever sends 0 on the target channel of future_values)."""
+    T = 3000
+    y = np.sin(np.arange(T, dtype=np.float32) / 30)[None]
+    pc = (np.arange(T, dtype=np.float32) % 7)[None]
+    seen = []
+    for bump in (0.0, 5.0):
+        b = _ttm()
+        y2 = y.copy()
+        y2[:, 2000:] += bump * np.arange(T - 2000)                      # changes the targets only
+        b.finetune([(y2, pc, None)], ["a"], prediction_length=384, steps=2, context_length=2048,
+                   learning_rate=1e-3, batch_size=4)
+        seen.append([c["fv"] for c in b._ft_model.calls])
+    for a, c in zip(*seen):
+        assert (a[..., 0] == 0).all() and (c[..., 0] == 0).all()
+        np.testing.assert_array_equal(a[..., 1:], c[..., 1:])
+
+
+def test_real_ttm_output_is_invariant_to_the_future_target_channel():
+    """The same property on granite-tsfm's own model with forecast channel mixing (tiny
+    random config, no weights); skipped where granite-tsfm is not installed."""
+    tsfm = pytest.importorskip("tsfm_public")
+    cfg = tsfm.TinyTimeMixerConfig(
+        context_length=64, prediction_length=16, patch_length=8, patch_stride=8, d_model=16,
+        num_layers=1, decoder_num_layers=1, decoder_d_model=16, num_input_channels=3,
+        prediction_channel_indices=[0], exogenous_channel_indices=[1, 2],
+        enable_forecast_channel_mixing=True, decoder_mode="mix_channel", fcm_use_mixer=True,
+        fcm_mix_layers=2, fcm_context_length=1, fcm_prepend_past=True)
+    torch.manual_seed(0)
+    m = tsfm.TinyTimeMixerForPrediction(cfg).eval()
+    pv, pm = torch.randn(2, 64, 3), torch.ones(2, 64, 3, dtype=torch.bool)
+    fv = torch.randn(2, 16, 3)
+    fv2 = fv.clone()
+    fv2[..., 0] += 100.0
+    with torch.inference_mode():
+        a = m(past_values=pv, past_observed_mask=pm, future_values=fv, return_dict=True).prediction_outputs
+        b = m(past_values=pv, past_observed_mask=pm, future_values=fv2, return_dict=True).prediction_outputs
+    torch.testing.assert_close(a, b)
 
 
 def test_ttm_finetune_without_any_window_fails_loudly():

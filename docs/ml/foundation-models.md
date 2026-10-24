@@ -1,4 +1,4 @@
-# Foundation models in ml-bench — Chronos-2, TimesFM 3.0 (PAR-828), TiRex-2 and Toto 2.0 (PAR-853), Chronos-2 LoRA and TimesFM 2.5 (PAR-1063, PAR-1064), PatchTST-FM-r2, TTM-r2 and TabPFN-TS (PAR-1066)
+# Foundation models in ml-bench — Chronos-2, TimesFM 3.0 (PAR-828), TiRex-2 and Toto 2.0 (PAR-853), Chronos-2 LoRA and TimesFM 2.5 (PAR-1063, PAR-1064), PatchTST-FM-r2, TTM-r2 and TabPFN-TS (PAR-1067)
 
 Two pretrained time-series foundation models, plugged into the PAR-827 benchmark
 (`docs/ml/ml-bench.md`) through the same restricted plug-in interface as every
@@ -622,12 +622,18 @@ days, a ~78-day over-reach of pre-origin covariates.
   `1d952420`, `license: apache-2.0`; the timesfm README: "model weights up to version 2.5
   remain Apache-2.0"). Production serving would be allowed.
 - **Granite PatchTST-FM-r2, Granite TTM-r2 — servable; TabPFN-TS — benchmark-only**
-  (PAR-1066). The quoted lines and URLs are in "Licence verdicts (PAR-1066)" below. The
+  (PAR-1067). The quoted lines and URLs are in "Licence verdicts (PAR-1067)" below. The
   code enforces the verdict: every foundation plug-in declares `licence`
   (`servable` / `benchmark-only` / `unclear`) and `serving_candidate`, and a class that
   sets `serving_candidate = True` without `licence = "servable"` is refused when it is
   defined (`FoundationModel.__init_subclass__`). Every `run-*.json` records both per arm
-  under `licences`.
+  under `licences`. The block outside the class is
+  `ml-bench/mlbench/benchmark_only_models.json` (model-name prefixes `timesfm3`, `tabpfn`):
+  `mlbench.licences.refuse_benchmark_only(names)` raises for any of them and must be called
+  by every verdict writer before it emits an entry (`served_verdicts`, PAR-1043, included);
+  a class named like a listed prefix cannot declare another licence; and
+  `src/ml/utils/benchmark-only-models.spec.ts` fails CI if `src/ml/data/*.json` or the
+  model comparison matrix names one.
 
 
 ---
@@ -858,15 +864,15 @@ but is never a serving candidate, whatever it scores.
 
 ---
 
-# Granite PatchTST-FM-r2, Granite TTM-r2 and TabPFN-TS (PAR-1066)
+# Granite PatchTST-FM-r2, Granite TTM-r2 and TabPFN-TS (PAR-1067)
 
 **Implemented and tested, not measured.** No GPU run has been made; the combined run command
-(probe, `--shard 0/5` run, both report passes) is in `docs/ml/ml-bench.md`, "Running PAR-1066
-together with PAR-1063 / PAR-1064". Image: `requirements-par1066.txt`, which includes
+(probe, `--shard 0/5` run, both report passes) is in `docs/ml/ml-bench.md`, "Running PAR-1067
+together with PAR-1063 / PAR-1064". Image: `requirements-par1067.txt`, which includes
 `requirements-par1063.txt`, so `chronos2`, `chronos2_ft`, `chronos2_lora` and `timesfm25` pair
 with the new arms inside one run.
 
-## Licence verdicts (PAR-1066)
+## Licence verdicts (PAR-1067)
 
 Read from the primary sources on 2026-10-24.
 
@@ -991,7 +997,7 @@ lost where it matters — **`patchtst_fm` and `ttm_r2` are covariate-free refere
 - **No slot path** of its own (`slot_path = False`; the information-cut test checks the level
   path instead). `tabpfn_ts_x_h5` comes from the runner's level × H5 composition.
 
-## Dependencies — `requirements-par1066.txt`
+## Dependencies — `requirements-par1067.txt`
 
 Resolved on top of `requirements.txt` with torch 2.11.0 — the newest cu128 wheel on
 2026-10-24 — in a Python 3.11 venv, the Dockerfile's two-step install order, `pip check` clean.
