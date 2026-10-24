@@ -843,6 +843,7 @@ export class FavoritesService {
           dto.bestVisitTimes = computeBestVisitTimes(
             todayAttrPreds,
             closing ? closing.toISOString() : null,
+            dto.effectiveStatus === "OPERATING",
           );
         }
         // Rope-drop recommendation (headliners only). UTC instants resolved

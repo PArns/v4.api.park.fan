@@ -611,7 +611,6 @@ export class ParkIntegrationService {
       const [
         attractionP90s,
         attractionP50s,
-        deviationMap,
         attractionStatsMap,
         attractionHistoryMap,
         trendsMap,
@@ -624,7 +623,6 @@ export class ParkIntegrationService {
       ] = await Promise.all([
         this.analyticsService.getBatchAttractionP90Baselines(attractionIds),
         this.analyticsService.getBatchAttractionP50s(attractionIds),
-        this.predictionDeviationService.getBatchDeviationFlags(attractionIds),
         this.analyticsService.getBatchAttractionStatistics(
           attractionIds,
           startTime,
@@ -811,13 +809,6 @@ export class ParkIntegrationService {
         // Attach ML predictions
         const mlPreds = hourlyPredictions[attraction.id] || [];
 
-        // Enrich predictions with deviation data (using pre-fetched map)
-        const deviationFlag = deviationMap.get(attraction.id) || null;
-        const enrichedPreds = this.enrichPredictionsWithDeviationsSync(
-          mlPreds,
-          deviationFlag,
-        );
-
         // Determine crowd level for this attraction
         let crowdLevel: CrowdLevel | "closed" = "closed";
 
@@ -835,16 +826,8 @@ export class ParkIntegrationService {
           // "walk on, no queues" on the busiest Saturday of the year.
           crowdLevel = "unknown";
         } else {
-          // Find current hour prediction
-          // predictedTime from ML is stored as UTC. So we match with current UTC hour.
-          // The previous code `new Date().toISOString().split(":")[0]` returned the current UTC hour, which correctly matches `predictedTime.toISOString()`.
-          // We don't need to change `nowStr` here since ML prediction entity `predictedTime` is stored in UTC and queried by UTC.
-          const nowStr = new Date().toISOString().split(":")[0]; // "YYYY-MM-DDTHH" (in UTC)
-          const currentPred = enrichedPreds.find((p) =>
-            p.predictedTime.startsWith(nowStr),
-          );
-
-          // 1. Try to use REAL-TIME Wait Time first (Ground Truth)
+          // A live crowd level is a live wait rated against the ride's baseline;
+          // nothing else is one.
           const wait = attraction.queues?.[0]?.waitTime;
           if (wait !== undefined && wait !== null) {
             if (!parkRatable) {
@@ -863,17 +846,11 @@ export class ParkIntegrationService {
               );
               crowdLevel = rating;
             }
-          } else if (attraction.effectiveStatus === "UNKNOWN") {
-            // No reading and no status: nothing to rate, same as the detail page.
-            crowdLevel = "unknown";
           } else {
-            // 2. Fallback to ML Prediction if no live data
-            if (currentPred && currentPred.crowdLevel) {
-              crowdLevel = currentPred.crowdLevel as any;
-            } else {
-              // 3. Last resort default
-              crowdLevel = "very_low";
-            }
+            // No live wait (DOWN, no reading, …): nothing was measured. The
+            // model's hour row is a forecast, and "very_low" read as "walk on"
+            // for a broken-down ride (PAR-1029).
+            crowdLevel = "unknown";
           }
         }
         attraction.crowdLevel = crowdLevel;
@@ -1040,6 +1017,7 @@ export class ParkIntegrationService {
           attraction.bestVisitTimes = computeBestVisitTimes(
             todayOnlyPreds,
             closingTimeIso,
+            attraction.effectiveStatus === "OPERATING",
           );
         }
 
@@ -2028,41 +2006,6 @@ export class ParkIntegrationService {
       );
       return predictions;
     }
-  }
-
-  /**
-   * Sync version of enrichPredictionsWithDeviations using pre-fetched deviation flag
-   * OPTIMIZED: No Redis call - uses pre-fetched deviation map
-   */
-  private enrichPredictionsWithDeviationsSync(
-    predictions: PredictionDto[],
-    deviationFlag: {
-      actualWaitTime: number;
-      deviation: number;
-      percentageDeviation: number;
-      detectedAt: string;
-    } | null,
-  ): PredictionDto[] {
-    if (!predictions || predictions.length === 0) {
-      return predictions;
-    }
-
-    if (deviationFlag) {
-      return predictions.map((p) => ({
-        ...p,
-        currentWaitTime: deviationFlag.actualWaitTime,
-        confidenceAdjusted: servedAdjustedConfidence(p),
-        deviationDetected: true,
-        deviationInfo: {
-          message: `Current wait ${Math.abs(deviationFlag.deviation).toFixed(0)}min ${deviationFlag.deviation > 0 ? "higher" : "lower"} than predicted`,
-          deviation: deviationFlag.deviation,
-          percentageDeviation: deviationFlag.percentageDeviation,
-          detectedAt: deviationFlag.detectedAt,
-        },
-      }));
-    }
-
-    return predictions;
   }
 
   /**

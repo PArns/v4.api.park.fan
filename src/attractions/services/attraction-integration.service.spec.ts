@@ -966,6 +966,129 @@ describe("AttractionIntegrationService", () => {
     });
   });
 
+  describe("a ride's live crowd level and best times follow its status (PAR-1029)", () => {
+    const SLOT_MS = 15 * 60 * 1000;
+    const slotStart = Math.floor(Date.now() / SLOT_MS) * SLOT_MS;
+    // A timezone in which the next three hours are still today, so the
+    // today-only filter keeps every row whatever hour the suite runs at.
+    const timezone =
+      new Date().getUTCHours() < 20 ? "UTC" : "Pacific/Pago_Pago";
+    const park = {
+      id: "park-1",
+      slug: "test-park",
+      continentSlug: "europe",
+      countrySlug: "germany",
+      citySlug: "test-city",
+      timezone,
+      countryCode: "DE",
+    };
+    const at = (ms: number, wait: number, crowdLevel = "moderate") => ({
+      predictedTime: new Date(ms).toISOString(),
+      predictedWaitTime: wait,
+      confidence: 50,
+      crowdLevel,
+      baseline: 25,
+      trend: "stable",
+      modelVersion: "v1.0.0",
+    });
+
+    const buildRide = async (
+      status = "DOWN",
+      waitTime: number | null = null,
+    ) => {
+      mockRedis.get.mockResolvedValue(null);
+      mockQueueDataService.findCurrentStatusByAttraction.mockResolvedValue([
+        {
+          queueType: "STANDBY",
+          status,
+          waitTime,
+          lastUpdated: new Date(),
+          timestamp: new Date(),
+        },
+      ]);
+      mockQueueDataService.findForecastsByAttraction.mockResolvedValue([]);
+      mockParkRepository.findOne.mockResolvedValue(park);
+      mockParksService.getBatchParkStatus.mockResolvedValue(
+        new Map([["park-1", "OPERATING"]]),
+      );
+      mockParksService.getSchedule.mockResolvedValue([]);
+      mockDataSource.query.mockResolvedValue([]);
+      mockAnalyticsService.getEffectiveStartTime.mockResolvedValue(
+        new Date(slotStart - 3_600_000),
+      );
+      mockAnalyticsService.getAttractionStatistics.mockResolvedValue({
+        avgWaitToday: 20,
+        peakWaitToday: 30,
+        minWaitToday: 10,
+        typicalWaitThisHour: 20,
+        percentile95ThisHour: 30,
+        currentVsTypical: 0,
+        dataPoints: 60,
+        timestamp: new Date(),
+      });
+      mockPredictionAccuracyService.getAttractionAccuracyWithBadge.mockResolvedValue(
+        null,
+      );
+      // The model's current slot is the quietest of the day and its hour row
+      // carries a confident-looking level: neither describes a ride that is down.
+      mockMLService.getAttractionPredictionsWithFallback.mockResolvedValue([
+        at(slotStart, 5, "very_low"),
+        at(slotStart + 60 * 60 * 1000, 20),
+        at(slotStart + 2 * 60 * 60 * 1000, 22),
+        at(slotStart + 3 * 60 * 60 * 1000, 24),
+      ]);
+      return service.buildIntegratedResponse(
+        createTestAttraction("park-1", {
+          id: "attraction-down",
+          slug: "down-ride",
+          park: park as never,
+        }),
+      );
+    };
+
+    it("rates the live crowd level unknown, not the forecast or very_low", async () => {
+      const result = await buildRide();
+
+      expect(result.effectiveStatus).toBe("DOWN");
+      expect(result.crowdLevel).toBe("unknown");
+      expect(result.baseline).toBeNull();
+    });
+
+    it("never offers the current slot as a best visit time", async () => {
+      const result = await buildRide();
+
+      expect(result.bestVisitTimes?.length).toBeGreaterThan(0);
+      expect(
+        result.bestVisitTimes?.map((s) => new Date(s.time).getTime()),
+      ).not.toContain(slotStart);
+    });
+
+    it("still rates an OPERATING ride's live wait against its baseline", async () => {
+      mockAnalyticsService.getAttractionP50BaselineFromCache.mockResolvedValue(
+        20,
+      );
+      mockAnalyticsService.getAttractionCrowdLevel.mockReturnValue("high");
+
+      const getLoadRating = jest
+        .fn()
+        .mockReturnValue({ rating: "high", baseline: 20 });
+      (mockAnalyticsService as Record<string, unknown>).getLoadRating =
+        getLoadRating;
+      (mockAnalyticsService as Record<string, unknown>).getComparisonText = jest
+        .fn()
+        .mockReturnValue("busier than usual");
+
+      const result = await buildRide("OPERATING", 30);
+
+      expect(result.effectiveStatus).toBe("OPERATING");
+      expect(result.crowdLevel).toBe("high");
+      expect(mockAnalyticsService.getAttractionCrowdLevel).toHaveBeenCalledWith(
+        30,
+        20,
+      );
+    });
+  });
+
   describe("calculateAttractionHistory across a DST change", () => {
     const TZ = "Europe/Berlin";
 
