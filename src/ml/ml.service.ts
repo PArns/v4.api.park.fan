@@ -873,31 +873,9 @@ export class MLService {
         this.logger.warn(`Failed to get queue data: ${error}`);
       }
 
-      // 5. Get Bridge Day Status
-      let isBridgeDay: Record<string, boolean> = {};
-      try {
-        const park = await this.parkRepository.findOne({
-          where: { id: parkId },
-          select: {
-            id: true,
-            countryCode: true,
-            regionCode: true,
-          },
-        });
-
-        if (park?.countryCode) {
-          const now = new Date();
-          const isBridge = await this.holidaysService.isBridgeDay(
-            now,
-            park.countryCode,
-            park.regionCode,
-            park.timezone,
-          );
-          isBridgeDay[parkId] = isBridge;
-        }
-      } catch (error) {
-        this.logger.warn(`Failed to check bridge day status: ${error}`);
-      }
+      // 5. Bridge days: the ML service computes them per predicted date from
+      // the holidays it already reads. One flag for today, sent here, was
+      // applied to every row up to a year ahead (PAR-1030).
 
       // 6. Check if park has schedule data
       // This helps ML understand data quality: Parks with schedules have more reliable patterns
@@ -976,7 +954,6 @@ export class MLService {
         parkOpeningTimes,
         downtimeCache,
         queueData,
-        isBridgeDay,
         parkHasSchedule,
         isSchoolHoliday,
         parkLiveStatus,

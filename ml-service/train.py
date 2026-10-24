@@ -208,6 +208,10 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
                 df["rolling_avg_weekday"].values,
             )
             df.loc[r1h_mask, "avg_wait_last_1h"] = fallback_1h[r1h_mask]
+            # Serving pairs the profile with velocity 0 beyond its live lead
+            # (predict.LIVE_LAG_MAX_LEAD); teach the model that pairing.
+            if "wait_time_velocity" in df.columns:
+                df.loc[r1h_mask, "wait_time_velocity"] = 0.0
             log.info(
                 f"   Rolling-avg-1h dropout: {r1h_count:,} rows ({r1h_rate * 100:.0f}%) → weekend/weekday 7d historical"
             )
@@ -283,7 +287,12 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
                     f"   Holiday dropout: {h_count:,}/{holiday_count:,} holiday rows ({h_rate * 100:.0f}%) → historical proxies"
                 )
 
-    return df
+    # The interactions multiply park_occupancy_pct, which the passes above just
+    # replaced: computed before them, a dropped-out row kept the real
+    # occupancy inside its interactions (PAR-1032).
+    from features import add_interaction_features
+
+    return add_interaction_features(df)
 
 
 def compute_sample_weights(df: pd.DataFrame, accuracy_stats) -> "Optional[np.ndarray]":

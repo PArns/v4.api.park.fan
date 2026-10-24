@@ -365,6 +365,19 @@ def add_holiday_features(
     return df
 
 
+def _local_dayofweek(frame: pd.DataFrame) -> np.ndarray:
+    """Park-local weekday (pandas, 0=Mon) of each row of a timestamp-indexed frame.
+
+    The weekday/weekend split of the rolling features used the UTC index, so a
+    Saturday evening in Los Angeles counted as Sunday-or-weekday by its UTC
+    date (PAR-1032). The naive `local_timestamp` is the park's wall clock; a
+    frame without it (no convert_to_local_time) falls back to the index.
+    """
+    if "local_timestamp" in frame.columns:
+        return pd.to_datetime(frame["local_timestamp"]).dt.dayofweek.values
+    return frame.index.dayofweek.values
+
+
 def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add historical wait time features
@@ -423,11 +436,12 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
     # rolling_avg_weekday / rolling_avg_weekend: 7-day rolling mean split by day type.
     # Helps the model distinguish a ride's typical weekday vs weekend load.
     _df_indexed_dow = df_indexed.copy()
+    _dow = _local_dayofweek(_df_indexed_dow)
     _df_indexed_dow["_wait_weekday"] = _df_indexed_dow["waitTime"].where(
-        _df_indexed_dow.index.dayofweek < 5  # Mon-Fri
+        _dow < 5  # Mon-Fri
     )
     _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(
-        _df_indexed_dow.index.dayofweek >= 5  # Sat-Sun
+        _dow >= 5  # Sat-Sun
     )
     df["rolling_avg_weekday"] = (
         _df_indexed_dow.groupby("attractionId")["_wait_weekday"]
@@ -598,11 +612,12 @@ def add_historical_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Recreate weekday vs weekend masks
     _df_indexed_dow = df_indexed.copy()
+    _dow = _local_dayofweek(_df_indexed_dow)
     _df_indexed_dow["_wait_weekday"] = _df_indexed_dow["waitTime"].where(
-        _df_indexed_dow.index.dayofweek < 5  # Mon-Fri
+        _dow < 5  # Mon-Fri
     )
     _df_indexed_dow["_wait_weekend"] = _df_indexed_dow["waitTime"].where(
-        _df_indexed_dow.index.dayofweek >= 5  # Sat-Sun
+        _dow >= 5  # Sat-Sun
     )
 
     # Rolling std for weekday only
@@ -841,10 +856,14 @@ def add_park_occupancy_feature(
             )
             park_baselines = per_ride_p50.groupby(level="parkId").mean()
 
-        # 2. Calculate Instantaneous Park Average (per timestamp)
-        # Group by Park + Timestamp to get the average wait at that moment
-        current_park_avg = df.groupby(["parkId", "timestamp"])["waitTime"].transform(
-            "mean"
+        # 2. Instantaneous park average at that moment, WITHOUT the row's own
+        # wait: that wait is the training target, and a small park's mean was
+        # mostly the target itself (PAR-1032). A ride alone at its timestamp
+        # has no others to average and reads the neutral 100 %.
+        _grp = df.groupby(["parkId", "timestamp"])["waitTime"]
+        _others = _grp.transform("count") - 1
+        current_park_avg = (
+            (_grp.transform("sum") - df["waitTime"]) / _others.where(_others > 0)
         )
 
         # 3. Calculate Percentage
@@ -856,8 +875,8 @@ def add_park_occupancy_feature(
         )
 
         # Occupancy = (Current Avg / Baseline) * 100
-        df["park_occupancy_pct"] = (current_park_avg / df["_park_baseline"] * 100).clip(
-            0, 200
+        df["park_occupancy_pct"] = (
+            (current_park_avg / df["_park_baseline"] * 100).clip(0, 200).fillna(100.0)
         )
         df = df.drop(columns=["_park_baseline"])
 
@@ -869,56 +888,6 @@ def add_park_occupancy_feature(
         # apply_training_dropout() in train.py — NOT here.
         # This function runs during both training and inference, so adding dropout
         # here would corrupt real-time occupancy data at inference time.
-
-    return df
-
-
-def add_time_since_park_open(
-    df: pd.DataFrame, feature_context: Dict = None
-) -> pd.DataFrame:
-    """
-    Add time since park opening feature
-
-    Helps capture morning rush vs evening patterns
-
-    Args:
-        df: DataFrame with timestamp and parkId
-        feature_context: Optional dict with parkOpeningTimes data
-
-    Returns:
-        DataFrame with time_since_park_open_mins feature
-    """
-    # No need for copy - adding simple column
-
-    if feature_context and "parkOpeningTimes" in feature_context:
-        df["time_since_park_open_mins"] = 0.0  # reset only when context is provided
-        opening_times_map = feature_context["parkOpeningTimes"]
-
-        for park_id, opening_time_str in opening_times_map.items():
-            if not opening_time_str:
-                continue
-
-            try:
-                # Parse opening time
-                opening_time = pd.to_datetime(opening_time_str)
-
-                # Calculate minutes since opening for this park.
-                # `opening_time_str` is an ISO instant from the API
-                # (`schedule.openingTime.toISOString()`), so the difference is
-                # taken against `timestamp` (UTC) — the naive wall-clock
-                # `local_timestamp` is not an instant and must not be used here.
-                mask = df["parkId"] == park_id
-                if mask.any():
-                    ts = pd.to_datetime(df.loc[mask, "timestamp"], utc=True)
-                    if opening_time.tzinfo is None:
-                        ts = ts.dt.tz_localize(None)
-
-                    df.loc[mask, "time_since_park_open_mins"] = (
-                        (ts - opening_time).dt.total_seconds() / 60
-                    ).clip(lower=0)  # Negative = park not yet open, clip to 0
-
-            except Exception as e:
-                print(f"⚠️  Failed to parse opening time for park {park_id}: {e}")
 
     return df
 
@@ -1487,20 +1456,13 @@ def add_bridge_day_feature(
         parks_metadata: Metadata
         start_date: Start date for holiday fetch
         end_date: End date for holiday fetch
-        feature_context: Optional context for real-time override
+        feature_context: unused. Its `isBridgeDay` was ONE flag for today that
+            inference applied to every row, 12-48 h and 365 days ahead alike;
+            serving now calls this per row like training (PAR-1030).
     """
     # No need for copy - merge operations create new DataFrames
     df["is_bridge_day"] = 0
 
-    # 1. Use Feature Context if available (Inference)
-    if feature_context and "isBridgeDay" in feature_context:
-        bridge_map = feature_context["isBridgeDay"]
-        for park_id, is_bridge in bridge_map.items():
-            mask = df["parkId"] == park_id
-            df.loc[mask, "is_bridge_day"] = int(is_bridge)
-        return df
-
-    # 2. Compare with historical holidays (Training)
     # Use cached holidays if provided, otherwise fetch
     if cached_holidays_df is not None:
         holidays_df = cached_holidays_df.copy()
@@ -1531,14 +1493,14 @@ def add_bridge_day_feature(
     # Vectorized approach: Pre-compute bridge dates per country using holiday_utils
     # Create country mapping for df
     if "country" not in df.columns:
-        # Merge parks_metadata to get country
+        # Merge parks_metadata to get country (a left merge keeps row order)
         df_country = df.merge(
             parks_metadata[["park_id", "country"]],
             left_on="parkId",
             right_on="park_id",
             how="left",
         )
-        df["country"] = df_country["country"]
+        df["country"] = df_country["country"].values
 
     # Pre-compute bridge dates per country using holiday_utils
     # Build holiday map per country for utility function
@@ -1578,13 +1540,11 @@ def add_bridge_day_feature(
             right_on=["country", "bridge_date"],
             how="left",
         )
-        df["is_bridge_day"] = df_bridge["is_bridge"].fillna(0).astype(int)
+        df["is_bridge_day"] = df_bridge["is_bridge"].fillna(0).astype(int).values
     else:
         df["is_bridge_day"] = 0
 
-    # Clean up temporary country column if we added it
-    if "country" not in df.columns or "park_id" in df.columns:
-        df = df.drop(columns=["country", "park_id"], errors="ignore")
+    # `country` stays: add_holiday_distance_features merges by it.
     return df
 
 
@@ -1900,7 +1860,6 @@ def engineer_features(
     # Phase 2: Add context features (Training uses internal data, Inference uses feature_context)
     context_start = time_module.time()
     df = add_park_occupancy_feature(df, feature_context)
-    df = add_time_since_park_open(df, feature_context)
     df = add_downtime_features(df, feature_context)
     df = add_virtual_queue_feature(df, feature_context)
     df = add_park_has_schedule_feature(df, feature_context, cached_schedules_df)
