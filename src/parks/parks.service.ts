@@ -18,6 +18,7 @@ import { DestinationsService } from "../destinations/destinations.service";
 import { HolidaysService } from "../holidays/holidays.service";
 import { generateSlug, generateUniqueSlug } from "../common/utils/slug.util";
 import { normalizeSortDirection } from "../common/utils/query.util";
+import { normalizeRegionCode } from "../common/utils/region.util";
 import {
   formatInParkTimezone,
   getCurrentDateInTimezone,
@@ -3568,6 +3569,34 @@ export class ParksService {
     }
 
     return [...codes];
+  }
+
+  /**
+   * The region codes, as stored, that a country's holiday rows must carry for
+   * the parks to find them: each park's own `regionCode` there, and each
+   * influencing region there (normalised, without the country prefix).
+   */
+  async getSyncRegionCodes(countryCode: string): Promise<string[]> {
+    const parks = await this.parkRepository.find({
+      select: {
+        countryCode: true,
+        regionCode: true,
+        influencingRegions: true,
+      },
+    });
+    const codes = new Set<string>();
+    for (const park of parks) {
+      if (park.countryCode === countryCode) {
+        const own = normalizeRegionCode(park.regionCode);
+        if (own) codes.add(own);
+      }
+      for (const reg of park.influencingRegions ?? []) {
+        if (reg.countryCode !== countryCode) continue;
+        const code = normalizeRegionCode(reg.regionCode);
+        if (code) codes.add(code);
+      }
+    }
+    return [...codes].sort();
   }
 
   /**

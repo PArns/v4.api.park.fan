@@ -21,6 +21,9 @@ OpenHolidays itself holds no ES/IT/HU school holidays for 2026-09 … 2027-08
 (DE has 110), and returns none for SE even for 2025. So nothing is projected or
 invented: past the edge, the answer is **unknown**.
 
+Sources outside Europe (KR from NEIS, curated SG / AU-QLD / CN files) and
+how far each reaches: [Holiday sources outside Europe](holiday-sources-outside-europe.md).
+
 ## Coverage
 
 The coverage is derived from the stored rows, so there is no schema change: the

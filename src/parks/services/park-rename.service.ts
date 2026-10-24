@@ -8,6 +8,7 @@ import { RevalidationService } from "../../common/revalidation/revalidation.serv
 import { generateSlug } from "../../common/utils/slug.util";
 import { ParkSlugAlias } from "../entities/park-slug-alias.entity";
 import { Park } from "../entities/park.entity";
+import { GoogleGeocodingClient } from "../../external-apis/geocoding/google-geocoding.client";
 
 /** The four slugs that make up a park's public URL. */
 export interface ParkGeoPath {
@@ -110,6 +111,7 @@ export class ParkRenameService implements OnModuleInit {
     @InjectRepository(Park)
     private readonly parkRepository: Repository<Park>,
     private readonly revalidation: RevalidationService,
+    private readonly geocoding: GoogleGeocodingClient,
   ) {}
 
   /** Seeds {@link HISTORICAL_PARK_PATHS}. Idempotent; failures are logged, never fatal. */
@@ -266,6 +268,23 @@ export class ParkRenameService implements OnModuleInit {
     }
     if (location.latitude !== undefined) park.latitude = location.latitude;
     if (location.longitude !== undefined) park.longitude = location.longitude;
+
+    // The region came from the old coordinates' geocode (USH kept "FL" from
+    // its Bull Creek fix, PAR-1065), and the geocode job never revisits a park
+    // that has one — so re-derive it here. A failed lookup clears it rather
+    // than keep a region the park is not in; the geocode job then retries.
+    if (
+      (location.latitude !== undefined || location.longitude !== undefined) &&
+      park.latitude != null &&
+      park.longitude != null
+    ) {
+      const geo = await this.geocoding
+        .reverseGeocode(Number(park.latitude), Number(park.longitude))
+        .catch(() => null);
+      // The entity types these as string, the columns are nullable.
+      park.region = (geo?.region ?? null) as string;
+      park.regionCode = (geo?.regionCode?.substring(0, 50) ?? null) as string;
+    }
 
     await this.parkRepository.save(park);
 

@@ -3,6 +3,7 @@
  *
  * Used for creating/updating holiday records
  */
+import type { HolidayType } from "../../holidays/entities/holiday.entity";
 
 export interface HolidayInput {
   externalId: string;
@@ -11,6 +12,6 @@ export interface HolidayInput {
   localName?: string;
   country: string;
   region?: string;
-  holidayType: "public" | "observance" | "school" | "bank" | "bridge";
+  holidayType: HolidayType;
   isNationwide: boolean;
 }

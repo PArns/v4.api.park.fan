@@ -34,8 +34,12 @@ const HOLIDAY_ROW_COLUMNS = [
  */
 export type HolidayRow = Omit<
   Pick<Holiday, (typeof HOLIDAY_ROW_COLUMNS)[number]>,
-  "date"
-> & { date: string };
+  "date" | "holidayType"
+> & {
+  date: string;
+  // The range readers filter `working_day` out (NOT_A_WORKING_DAY).
+  holidayType: Exclude<Holiday["holidayType"], "working_day">;
+};
 
 function toHolidayRow(h: Holiday): HolidayRow {
   const date = h.date as Date | string;
@@ -48,7 +52,7 @@ function toHolidayRow(h: Holiday): HolidayRow {
     localName: h.localName,
     country: h.country,
     region: h.region,
-    holidayType: h.holidayType,
+    holidayType: h.holidayType as HolidayRow["holidayType"],
     isNationwide: h.isNationwide,
   };
 }
@@ -60,6 +64,12 @@ function toHolidayRow(h: Holiday): HolidayRow {
  * asked for, a few dozen in practice.
  */
 const HOLIDAY_YEAR_MEMO_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * A `working_day` row (China's 调休) is a weekend day people work — the
+ * opposite of a holiday. The readers that take every type leave it out.
+ */
+const NOT_A_WORKING_DAY = "holiday.holidayType <> 'working_day'";
 
 /**
  * Holidays Service
@@ -580,6 +590,7 @@ export class HolidaysService {
           startDate: `${year}-01-01`,
           endDate: `${year}-12-31`,
         })
+        .andWhere(NOT_A_WORKING_DAY)
         .orderBy("holiday.date", "ASC")
         .getMany();
       rows = entities.map(toHolidayRow);
@@ -605,6 +616,7 @@ export class HolidaysService {
         startDate,
         endDate,
       })
+      .andWhere(NOT_A_WORKING_DAY)
       .orderBy("holiday.date", "ASC")
       .addOrderBy("holiday.country", "ASC")
       .getMany();
@@ -638,7 +650,8 @@ export class HolidaysService {
     const query = this.holidayRepository
       .createQueryBuilder("holiday")
       .where("holiday.country = :countryCode", { countryCode })
-      .andWhere("holiday.date = :dateStr", { dateStr });
+      .andWhere("holiday.date = :dateStr", { dateStr })
+      .andWhere(NOT_A_WORKING_DAY);
 
     if (regionCode) {
       // Normalize region code to handle variants (e.g., NRW -> NW)
@@ -1030,6 +1043,33 @@ export class HolidaysService {
       .execute();
 
     return result.affected || 0;
+  }
+
+  /**
+   * Make the rows of one source (an externalId prefix) exactly `rows`: upsert
+   * them, then delete that source's rows on or after `fromDate` that are no
+   * longer in it — a corrected curated entry or a day a school took off its
+   * calendar must not linger as a holiday. An empty `rows` deletes nothing,
+   * so a fetch that came back empty cannot wipe a source.
+   */
+  async replaceHolidaysBySource(
+    prefix: string,
+    rows: HolidayInput[],
+    fromDate = "0001-01-01",
+  ): Promise<{ saved: number; removed: number }> {
+    if (rows.length === 0) return { saved: 0, removed: 0 };
+    const saved = await this.saveRawHolidays(rows);
+    const result = await this.holidayRepository
+      .createQueryBuilder()
+      .delete()
+      .from(Holiday)
+      .where(`"externalId" LIKE :pattern`, { pattern: `${prefix}%` })
+      .andWhere(`date >= :fromDate`, { fromDate })
+      .andWhere(`NOT ("externalId" = ANY(:ids))`, {
+        ids: rows.map((r) => r.externalId),
+      })
+      .execute();
+    return { saved, removed: result.affected || 0 };
   }
 
   /**

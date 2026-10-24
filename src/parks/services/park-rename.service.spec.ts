@@ -81,6 +81,7 @@ describe("ParkRenameService", () => {
       redis,
       parkRepository,
       revalidation,
+      { reverseGeocode: jest.fn().mockResolvedValue(null) } as any,
     );
   });
 
