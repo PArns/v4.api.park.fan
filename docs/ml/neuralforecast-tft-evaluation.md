@@ -459,3 +459,59 @@ check whether more seasonal coverage supports a longer horizon, recalibrate the 
    far-daily — a larger future refactor, not done here.
 </content>
 </invoke>
+
+## Calendar-day spacing, partial today, heartbeats (PAR-1033, 2026-10-24)
+
+`nf-service/db.py` builds the daily panel from operating days only, while the model runs
+with `freq="D"`. NeuralForecast reads rows by position, so `input_size=90` meant the last
+90 *operating* days and step k the k-th operating day after the last one. For a park with
+rest days or a closed season the spacing in training and serving was not calendar days,
+and `build_future_frame` started every series at its own `last ds + 1` — a ride last seen
+20 days ago got a frame that began in the past and reached only 40 days ahead.
+
+**Unconditional (default build):**
+- The panel excludes park-local today: `DATE(ts AT TIME ZONE tz) < DATE(NOW() AT TIME ZONE tz)`.
+  Training runs 03:00 UTC, late morning in Tokyo and Shanghai, so a partial morning P90
+  was the last context value and a training target. A wrong value, not a modelling choice.
+- Heartbeat rows are excluded (`NOT COALESCE(qd.is_heartbeat, false)`, PAR-1039). They copy
+  the last status and wait with a fresh timestamp; the forward archive's truth already drops
+  them (`truthRowsSql`, PAR-1024), so the TFT target now matches what it is scored against.
+  Also in `backtest_headliners.py` and `backtest_horizon.py`.
+- `is_peak_season` uses the park's latitude: south of the equator the months are the same
+  rule six months on (12, 1, 2, 6). No latitude = the northern months.
+
+**Behind `NF_CALENDAR_GRID` (default `false` = previous behaviour):** it changes the
+training data shape, so it is shadowed before it serves.
+- `to_calendar_grid`: every day from a series' first observation to park-local yesterday;
+  absent days are `y=0` with `available_mask=0` (NeuralForecast 3.1.8 keeps them out of the
+  scaler, the loss and the window sampler). `y` is 0 rather than NaN because TFT's forward
+  pass never reads the mask.
+- Every series therefore ends on park-local yesterday, so every future frame starts
+  park-local today (the day the reader serves first: `target_date >= today`).
+- A series last observed more than `NF_MAX_STALE_DAYS` (90 = `NF_INPUT_SIZE`) days ago is not
+  forecast: past that its whole context window is masked. CatBoost serves it, which is no
+  loss — on the old panel its frame lay mostly in the past.
+- Four more futr_exog columns (`FUTR_EXOG_GRID`): `sched_open` / `sched_closed` from the
+  published park schedule (both 0 = unknown, never closed) and the distance to the nearest
+  school holiday.
+
+**Known limit of the schedule flags:** in history almost every day of a scheduled park has
+an entry, in the future only the operator's publishing horizon does. Beyond it both flags are
+0, a state the model rarely saw in training. Measure before trusting the far leads.
+
+**Left as options, not changed:**
+- The target is the P90 over *rows*; `queue_data` is a change log, so a stable afternoon
+  weighs less than a busy morning. A time-weighted P90 like `rideQ90` in
+  `src/parks/services/forecast-archive.service.ts` would match the forward archive's truth.
+- Chunking by 10 parks in UUID order (`forecast.py`) mixes unrelated parks per model;
+  chunking by region or timezone would give each chunk's TFT a coherent calendar.
+- `backtest_horizon.py` feeds the realised weather into the future frame (oracle), so its
+  MAE is optimistic against serving, which gets the forecast.
+
+**Measurement plan before switching the flag on:** compare `cal_busier` / `cal_far` and
+`leadTimeMae` with the flag off and on, overall, for parks with weekly rest days and for the
+Asian parks (Tokyo, Shanghai), where partial-today and spacing hit hardest. `tft_forecasts`
+cannot hold both variants side by side — its key is `(attraction_id, target_date,
+forecast_date)`, `model_version` is not part of it — so a same-night shadow needs either a
+shadow table or a run against a copy of the database; switching the flag for a fortnight
+and comparing against the fortnight before is cheaper but confounded by the season.
