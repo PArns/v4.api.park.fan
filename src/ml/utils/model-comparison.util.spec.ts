@@ -196,6 +196,15 @@ describe("offline-model-verdicts.json — the PAR-1038 schema", () => {
       }
     }
   });
+  it("files a hit rate under the day-ranking question only, and no orphaned cell", () => {
+    const hitRates = Object.entries(file.questions).flatMap(([qid, models]) =>
+      Object.entries(models)
+        .filter(([, v]) => v.metric === "hit_rate")
+        .map(([mid]) => `${qid}/${mid}`),
+    );
+    expect(hitRates).toEqual(["cal_rank/wkd"]);
+    expect(file.questions.today_h6_12.persist).toBeUndefined();
+  });
   it("keeps the PCN questions from turning better on a win over persistence", () => {
     const v = file.questions.live_h1_2.chronos;
     expect(v.state).toBe("better");

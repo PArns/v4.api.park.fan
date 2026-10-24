@@ -573,9 +573,11 @@ read the planner's per-ride `dayPeak` — built on the same daily level the
 calendar reads (TFT ≤ 60 days, CatBoost beyond) — against the truth P90; the
 calendar's crowd level itself is not archived per model. **CatBoost** and
 **Toto 2.0 / TiRex** have no archived curve, so their cells are offline only
-(`checks.live = "open"`). Offline evidence for `cal_far` is a hit rate (+0.026
-for TFT); it stays in the note, never in `offline.diff`, which would then be in
-another unit than the live figure.
+(`checks.live = "open"`). The offline hit rate (+0.026 for TFT) answers
+"which day is fuller", so since PAR-1038's review it is filed under the
+day-ranking question `cal_rank` (PAR-1037), with `metric = hit_rate`; it stays in
+the note, never in `offline.diff`, which would then be in another unit than the
+live figure.
 
 ### 9.3 Cells
 
