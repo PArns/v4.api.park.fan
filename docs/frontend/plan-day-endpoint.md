@@ -65,7 +65,9 @@ in three places:
 side (seven dates, so the ISO week is within three of the target's), and the same
 again 104 weeks back. A date counts only when it sits in the **same holiday
 situation** as the planned day, read from the same calendar for both sides:
-`holiday` (public holiday or bridge day), `school_vacation`, or `regular`. A
+`holiday` (public holiday or bridge day), `school_vacation`, `regular`, or
+`school_unknown` (past the park's school-holiday data, `schoolVacationUnknown`;
+matches only other such days, PAR-1049). A
 planned day the calendar has no row for is not tried — its holiday situation is
 part of the key and unknown is not `regular`. The dates used are returned in
 `climatology.referenceDates`, the matched situation in `climatology.holidayState`.
