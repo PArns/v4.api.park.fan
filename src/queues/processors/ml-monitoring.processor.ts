@@ -33,6 +33,12 @@ export class MLMonitoringProcessor {
     this.logger.log("🔄 Starting feature drift detection...");
     try {
       const result = await this.featureDriftService.detectFeatureDrift(7);
+      if (result.summary.status === "no_data") {
+        this.logger.warn(
+          `⚠️ Feature drift: no data — none of ${result.summary.totalFeatures} features could be compared`,
+        );
+        return;
+      }
       this.logger.log(
         `✅ Feature drift detection complete: ${result.summary.healthyCount} healthy, ${result.summary.warningCount} warning, ${result.summary.criticalCount} critical`,
       );
