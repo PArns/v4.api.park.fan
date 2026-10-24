@@ -1,6 +1,7 @@
 import {
   persistenceBlendServe,
   BLEND_GATE_MIN,
+  BLEND_FIRST_HOUR_MIN_ANCHOR,
 } from "./persistence-blend.util";
 
 describe("persistenceBlendServe (anchor-gated piecewise, mirrors pcn-service score.py)", () => {
@@ -13,14 +14,28 @@ describe("persistenceBlendServe (anchor-gated piecewise, mirrors pcn-service sco
     expect(persistenceBlendServe(30, 70, 6.0)).toBe(30); // beyond → pure PCN
   });
 
-  it("gates: a below-threshold or missing anchor stays pure PCN (quiet-ride protection)", () => {
-    expect(persistenceBlendServe(30, BLEND_GATE_MIN - 1, 0.5)).toBe(30); // just under the gate
-    expect(persistenceBlendServe(30, 20, 1.0)).toBe(30); // quiet anchor
-    expect(persistenceBlendServe(30, undefined, 0.5)).toBe(30); // no anchor
-    expect(persistenceBlendServe(30, null, 0.5)).toBe(30);
+  it("first hour serves any anchor of at least 5 min, below the 40-min gate too (PAR-1026)", () => {
+    expect(persistenceBlendServe(30, 20, 0.25)).toBe(20); // quiet ride, 15 min ahead
+    expect(persistenceBlendServe(30, BLEND_GATE_MIN - 1, 1.0)).toBe(39); // at full_h
+    expect(persistenceBlendServe(30, BLEND_FIRST_HOUR_MIN_ANCHOR, 0.5)).toBe(5);
+    expect(
+      persistenceBlendServe(30, BLEND_FIRST_HOUR_MIN_ANCHOR - 1, 0.5),
+    ).toBe(30); // walk-on placeholder → PCN
+    expect(persistenceBlendServe(30, 0, 0)).toBe(30);
   });
 
-  it("at the gate boundary the ride does blend", () => {
-    expect(persistenceBlendServe(30, BLEND_GATE_MIN, 1.0)).toBe(BLEND_GATE_MIN); // anchor==gate → blends
+  it("ramp gates: a below-threshold anchor stays pure PCN past the first hour", () => {
+    expect(persistenceBlendServe(30, BLEND_GATE_MIN - 1, 1.5)).toBe(30); // just under the gate
+    expect(persistenceBlendServe(30, 20, 2.0)).toBe(30); // quiet anchor
+  });
+
+  it("a missing anchor stays pure PCN at every lead", () => {
+    expect(persistenceBlendServe(30, undefined, 0.5)).toBe(30);
+    expect(persistenceBlendServe(30, null, 0.5)).toBe(30);
+    expect(persistenceBlendServe(30, null, 2.0)).toBe(30);
+  });
+
+  it("at the gate boundary the ramp does blend", () => {
+    expect(persistenceBlendServe(30, BLEND_GATE_MIN, 2.0)).toBe(35); // anchor==gate → α=0.5
   });
 });

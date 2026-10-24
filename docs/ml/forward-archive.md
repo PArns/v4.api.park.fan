@@ -300,6 +300,15 @@ truth P90 − dayPeak ≤ band per ride-day — also one-sided, because the serv
 figure is the p95 of `actual − predicted peak`: an over-forecast is inside it
 however large. The two are different statistics and are never pooled.
 
+Since PAR-1029 a PCN-served slot carries `uncertaintyMinutes: null` (PCN publishes
+no q0.95, and CatBoost's band described a different forecast), so with
+`SERVE_PCN_INTRADAY` on the park_hourly band population (`nBand`) is the
+CatBoost- and Chronos-served slots only — much smaller than before, and not the
+same slots as the MAE population. The same null narrows `/plan/day`'s "widest
+band of the day" (`plan-day.service.ts`, the max over the served hourly bands —
+the fallback when the day-level row has no band) to the remaining CatBoost/Chronos
+slots, and to null when PCN served them all.
+
 ## 5. Admin board
 
 `GET /v1/admin/forecast-archive?days=14&region=ALL` (admin auth, read-only,
@@ -716,14 +725,16 @@ PCN/profiles at 30–120 min; persistence stays best at 15 min), is a flag flip.
 
 ### 10.1 Which model serves which lead
 
-Lead = slot start − the current slot start, the base the §7.7 persistence blend
-uses (`src/ml/chronos-serving.ts`, `MLService.applyServedIntradayOverride`):
+Lead = slot start − the current slot start for Chronos
+(`src/ml/chronos-serving.ts`, `MLService.applyServedIntradayOverride`); the §7.7
+persistence blend measures its own lead from the actual time (PAR-1026), which
+moves α within a slot on the 1–3 h ramp only:
 
 | lead | served with both flags on | Chronos only on (`SERVE_PCN_INTRADAY` off) |
 | --- | --- | --- |
-| 0 – 30 min | PCN + persistence blend (pure anchor for a ride with a ≥ 40 min wait) | CatBoost |
+| 0 – 30 min | PCN + persistence blend (pure anchor for a ride whose OPERATING reading is ≥ 5 min) | CatBoost |
 | 45 – 120 min | **Chronos-2** q50 | **Chronos-2** q50 |
-| > 120 min | PCN + blend (anchor share decays to 0 by 3 h) | CatBoost |
+| > 120 min | PCN + blend (anchor share decays to 0 by 3 h, for an anchor ≥ 40 min) | CatBoost |
 
 A ride without a cached curve, a curve older than **90 min**, or a slot the
 curve has no value for (outside the published window) keeps what the row

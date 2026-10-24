@@ -357,7 +357,9 @@ describe("MLService", () => {
         getRawMany: jest.fn().mockResolvedValue([]),
         getMany: jest
           .fn()
-          .mockResolvedValue([{ attractionId: "attr-1", waitTime: 100 }]),
+          .mockResolvedValue([
+            { attractionId: "attr-1", status: "OPERATING", waitTime: 100 },
+          ]),
       }));
     });
 
@@ -383,6 +385,90 @@ describe("MLService", () => {
       expect(at(nearSlot).modelVersion).toBe("v1+pcn");
       // Only the value is served; the time string the client sees is unchanged.
       expect(at(farSlot).predictedTime).toBe(pyIso(farSlot));
+    });
+
+    /** The reading in force for attr-1, as the anchor query returns it. */
+    const anchorIs = (status: string, waitTime: number | null) =>
+      mockQueueDataRepository.createQueryBuilder.mockImplementation(() => ({
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        distinctOn: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([]),
+        getMany: jest
+          .fn()
+          .mockResolvedValue([{ attractionId: "attr-1", status, waitTime }]),
+      }));
+    const servedAt = async (ms: number) =>
+      (await service.getParkPredictions(parkId, "hourly")).predictions.find(
+        (p) => Date.parse(p.predictedTime) === ms,
+      )!;
+
+    it("first hour serves a quiet ride's current wait too (PAR-1026)", async () => {
+      anchorIs("OPERATING", 20); // under the 40-min ramp gate
+
+      expect((await servedAt(nearSlot)).predictedWaitTime).toBe(20);
+      expect((await servedAt(farSlot)).predictedWaitTime).toBe(60); // pure PCN
+    });
+
+    it("never anchors on a ride whose reading in force is not OPERATING (PAR-1029)", async () => {
+      anchorIs("DOWN", 100); // went down, still carries its last wait
+
+      expect((await servedAt(nearSlot)).predictedWaitTime).toBe(60); // raw PCN
+    });
+
+    it("blends the crowd quantile with the display's α, so tier and wait agree (PAR-1029)", async () => {
+      anchorIs("OPERATING", 30);
+
+      const near = await servedAt(nearSlot);
+      expect(near.predictedWaitTime).toBe(30);
+      // q0.8 70 would read very_high; at α = 1 the crowd wait is the anchor: 30 / 40 = 75 %.
+      expect(near.crowdLevel).toBe("low");
+    });
+
+    it("drops CatBoost's band from a PCN slot (PAR-1029)", async () => {
+      const withBand = JSON.parse(catboostPayload);
+      for (const p of withBand.predictions) p.uncertaintyMinutes = 12;
+      mockRedis.get.mockResolvedValue(JSON.stringify(withBand));
+
+      const far = await servedAt(farSlot);
+      expect(far.modelVersion).toBe("v1+pcn");
+      expect(far.uncertaintyMinutes).toBeNull();
+    });
+
+    it("measures the ramp's lead from now, not from the start of the current slot", async () => {
+      const base = currentSlotStartMs();
+      const slot = base + 2 * HOUR; // grid-aligned, on the 1–3 h ramp
+      mockRedis.get.mockResolvedValue(
+        JSON.stringify({
+          ...JSON.parse(catboostPayload),
+          predictions: [
+            {
+              ...JSON.parse(catboostPayload).predictions[0],
+              predictedTime: pyIso(slot),
+            },
+          ],
+        }),
+      );
+      mockPredictionRepository.manager.query.mockResolvedValue([
+        {
+          aid: "attr-1",
+          predicted_time: new Date(slot),
+          quantile: 0.5,
+          wait: "60",
+        },
+      ]);
+      // 12 min into the slot: lead 1.8 h, α = 0.6 → 0.6·100 + 0.4·60 = 84 → 85.
+      const now = jest.spyOn(Date, "now").mockReturnValue(base + 12 * 60_000);
+      try {
+        // From the slot start (lead 2 h, α = 0.5) this would read 80.
+        expect((await servedAt(slot)).predictedWaitTime).toBe(85);
+      } finally {
+        now.mockRestore();
+      }
     });
 
     it("getRawParkPredictions returns CatBoost untouched (the store path)", async () => {
@@ -485,7 +571,9 @@ describe("MLService", () => {
         getRawMany: jest.fn().mockResolvedValue([]),
         getMany: jest
           .fn()
-          .mockResolvedValue([{ attractionId: "attr-1", waitTime: 100 }]),
+          .mockResolvedValue([
+            { attractionId: "attr-1", status: "OPERATING", waitTime: 100 },
+          ]),
       }));
     });
 
@@ -690,7 +778,9 @@ describe("MLService", () => {
         getRawMany: jest.fn().mockResolvedValue([]),
         getMany: jest
           .fn()
-          .mockResolvedValue([{ attractionId: "attr-1", waitTime: 100 }]),
+          .mockResolvedValue([
+            { attractionId: "attr-1", status: "OPERATING", waitTime: 100 },
+          ]),
       }));
     });
 

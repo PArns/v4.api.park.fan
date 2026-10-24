@@ -176,8 +176,9 @@ export class ForecastArchiveCurve {
 
   /**
    * park_hourly only: served `uncertaintyMinutes` per slot — CatBoost's
-   * q95 − q50, the upper half-width of the band. NULL when no slot had one,
-   * and always NULL on plan_day (see `peakBand`).
+   * q95 − q50, the upper half-width of the band (Chronos's on its slots).
+   * A PCN-served slot is NULL since PAR-1029 (PCN has no q95). NULL when no
+   * slot had one, and always NULL on plan_day (see `peakBand`).
    */
   @Column({ type: "smallint", array: true, nullable: true })
   bands: (number | null)[] | null;
