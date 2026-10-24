@@ -18,6 +18,7 @@ import {
 import verdictsJson from "../data/offline-model-verdicts.json";
 import {
   ArchivedCurve,
+  PAIRED_OPTIONAL_MODELS,
   PairedAccumulator,
   scorePairedModels,
 } from "./forecast-archive-scoring.util";
@@ -45,24 +46,25 @@ function rows(
   perDay: { n: number; a: number; b: number },
   key: Partial<PairedAggregate> = {},
 ): PairedAggregate[] {
+  // One row per park × date — the grain the service reads (PAR-1036).
   const out: PairedAggregate[] = [];
   for (let p = 0; p < parks; p++) {
-    out.push({
-      useCase: "UC3",
-      lead: "d2",
-      model: "shadow_h5",
-      segment: "all",
-      parkId: `p${p}`,
-      dates: Array.from(
-        { length: days },
-        (_, d) => `2026-10-${String(d + 1).padStart(2, "0")}`,
-      ),
-      // a little park-to-park spread so the bootstrap has a width
-      n: perDay.n * days,
-      saeModel: (perDay.a + (p % 3) * 0.1 * perDay.n) * days,
-      saeRef: perDay.b * days,
-      ...key,
-    });
+    for (let d = 0; d < days; d++) {
+      out.push({
+        useCase: "UC3",
+        lead: "d2",
+        model: "shadow_h5",
+        segment: "all",
+        parkId: `p${p}`,
+        dates: [`2026-10-${String(d + 1).padStart(2, "0")}`],
+        // a little park-to-park and day-to-day spread so both bootstraps
+        // have a width
+        n: perDay.n,
+        saeModel: perDay.a + ((p % 3) * 0.1 + (d % 2) * 0.05) * perDay.n,
+        saeRef: perDay.b,
+        ...key,
+      });
+    }
   }
   return out;
 }
@@ -71,6 +73,9 @@ describe("poolCell", () => {
   it("sums the minutes per park, then divides once; gate = 14 days and 10 parks", () => {
     const c = poolCell(rows(12, 14, { n: 10, a: 80, b: 100 }), 1)!;
     expect(c.n).toBe(12 * 14 * 10);
+    // Both intervals: the gate's two-way one and the park-only one beside it.
+    expect(c.parkCiHigh!).toBeLessThan(0);
+    expect(c.parkCiLow!).toBeLessThan(c.parkCiHigh!);
     expect(c.days).toBe(14);
     expect(c.parks).toBe(12);
     expect(c.referenceMae).toBe(10);
@@ -199,6 +204,21 @@ describe("cellNote — a live win offline does not back", () => {
 });
 
 describe("cellChecks", () => {
+  it("measures visibility in the question's unit (review of PAR-1037)", () => {
+    // 1.3 percentage points of wrongly ordered day pairs is not visible;
+    // the minute threshold would have called it so.
+    const won = live({ diff: -1.3 });
+    expect(cellChecks("better", true, won, offline("better")).visible).toBe(
+      true,
+    );
+    expect(
+      cellChecks("better", true, won, offline("better"), "rate").visible,
+    ).toBe(false);
+    expect(
+      cellChecks("better", true, live({ diff: -6 }), offline("better"), "rate")
+        .visible,
+    ).toBe(true);
+  });
   it("maps offline, live and visibility", () => {
     expect(cellChecks("better", true, live(), offline("better"))).toEqual({
       offline: "yes",
@@ -572,7 +592,7 @@ describe("one question, one set of rows (PAR-1035)", () => {
     return out;
   }
 
-  it("gives every cell of a question the same reference MAE, lead by lead", () => {
+  it("gives every core cell of a question the same reference MAE, lead by lead", () => {
     const res = buildModelComparison({
       aggregates: aggregates(),
       since: new Map(),
@@ -583,9 +603,15 @@ describe("one question, one set of rows (PAR-1035)", () => {
     });
     let checked = 0;
     for (const question of res.questions) {
-      const lives = Object.values(question.cells)
-        .map((c) => c.live)
-        .filter((l) => l !== null);
+      const q = COMPARISON_QUESTIONS.find((x) => x.id === question.id)!;
+      // Optional shadows (Chronos-2, the old composer) ride on the core rows
+      // where they have a value; their outage shows in `coverage` instead.
+      const core = Object.entries(question.cells)
+        .filter(([id]) =>
+          (q.models[id] ?? []).some((m) => !PAIRED_OPTIONAL_MODELS.has(m)),
+        )
+        .map(([, c]) => c.live);
+      const lives = core.filter((l) => l !== null);
       if (lives.length < 2) continue;
       checked++;
       const byLead = new Map<string, Set<number>>();
@@ -608,11 +634,14 @@ describe("one question, one set of rows (PAR-1035)", () => {
     }
     // live_h0_1, live_h1_2, plan_d0_1, plan_besttime at least.
     expect(checked).toBeGreaterThanOrEqual(4);
-    // …and the direct comparison sits on the same rows.
+    // Chronos missed one slot per park-day: its cell is below the joint rows,
+    // and the other cells keep all of them.
     const live = res.questions.find((x) => x.id === "live_h0_1")!;
+    expect(live.coverage!.cells.chronos).toBeLessThan(live.coverage!.jointRows);
+    expect(live.coverage!.cells.persist).toBe(live.coverage!.jointRows);
+    // …and the direct comparison sits on Chronos' rows.
     const pair = live.comparisons!.find((c) => c.model === "chronos")!;
     expect(pair.live!.modelMae).toBe(live.cells.chronos.live!.modelMae);
-    expect(pair.live!.referenceMae).toBe(live.cells.h5.live!.modelMae);
   });
 });
 
@@ -635,17 +664,17 @@ describe("calendar questions (PAR-1037)", () => {
 
   it("gives CatBoost a live figure against the weekday average on its own days", () => {
     const agg = (reference: string, a: number, b: number) =>
-      Array.from({ length: 12 }, (_, p) => ({
+      Array.from({ length: 24 }, (_, i) => ({
         useCase: "PEAK",
         lead: "d3",
         model: "weekday_avg",
         reference,
         segment: "headliner",
-        parkId: `p${p}`,
-        dates: ["2026-10-08"],
-        n: 10,
-        saeModel: a + p,
-        saeRef: b,
+        parkId: `p${i % 12}`,
+        dates: [i < 12 ? "2026-10-08" : "2026-10-09"],
+        n: 5,
+        saeModel: (a + (i % 12)) / 2,
+        saeRef: b / 2,
       }));
     const res = buildModelComparison({
       aggregates: [

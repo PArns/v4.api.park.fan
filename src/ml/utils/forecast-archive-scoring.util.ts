@@ -1239,13 +1239,28 @@ function buildQuestionModels(): Record<string, string[]> {
 
 /**
  * Per matrix question (use case × lead): the candidates whose cells it shows
- * (PAR-1035). A slot / ride-day is paired only when every one of them has a
- * value there, so all cells of one question at one lead are judged on the
+ * (PAR-1035). A slot / ride-day is paired only when every CORE candidate has a
+ * value there, so the core cells of one question at one lead are judged on the
  * SAME rows and share one reference MAE. The matrix questions
  * (`model-comparison.util.ts`) must name the same models; a spec pins it.
  */
 export const PAIRED_QUESTION_MODELS: Record<string, string[]> =
   buildQuestionModels();
+
+/**
+ * Candidates that do not define the joint rows (review of PAR-1035): the
+ * nf-service shadows (`chronos2`, `chronos2_grid`) and the old composer, which
+ * exists only where an old-composer curve AND an H5 profile do. An outage of
+ * any of them would otherwise blank every other cell of its question. They are
+ * written on the core joint rows where they have a value, so their cell's
+ * reference MAE differs from the core cells' only by their own missing rows —
+ * which the question's `coverage` (rows per cell vs joint rows) makes visible.
+ */
+export const PAIRED_OPTIONAL_MODELS: ReadonlySet<string> = new Set([
+  PAIRED_MODELS.chronosLive,
+  PAIRED_MODELS.chronosGrid,
+  PAIRED_MODELS.shadowPeak,
+]);
 
 /**
  * Direct candidate-vs-candidate rows on the same joint rows (PAR-1035):
@@ -1260,8 +1275,8 @@ export const PAIRED_PAIRWISE: Array<[string, string]> = [
 /**
  * The paired scoring the admin matrix reads (PAR-855, joint since PAR-1035):
  * every candidate of a question against WHAT IS SERVED for it, on the slots
- * or ride-days where truth, the served reference and EVERY candidate of that
- * question ({@link PAIRED_QUESTION_MODELS}) have a value. Reference
+ * or ride-days where truth, the served reference and every CORE candidate of
+ * that question ({@link PAIRED_QUESTION_MODELS}) have a value. Reference
  * {@link PAIRED_JOINT_REFERENCE}; segment `all`.
  *
  * - UC1/UC2 slot leads: at every `park_hourly` origin (the incumbent surface
@@ -1269,10 +1284,12 @@ export const PAIRED_PAIRWISE: Array<[string, string]> = [
  *   `chronos2` the `chronos_live` curve of the same origin; the daily curves
  *   (H5, routed, old composer, `chronos2_grid`) are the newest of their
  *   surface issued at or before the origin — at 10:00 the 06:00 curve, which
- *   is what would be shown at 10:00 (none of them reads anything after 06:00).
- *   Since `chronos2` exists at the 10–18 h origins only, the 06:00 origin no
- *   longer feeds `h0-1` … `h2-6`: its first hours are rope drop at the parks
- *   open that early, which is what made H5 look 9 minutes better on 7 parks.
+ *   is what would be shown at 10:00 (none of them reads anything after 06:00;
+ *   never yesterday's d1 curve). The 06:00 origin feeds only `h6-12`: its
+ *   first hours are rope drop at the parks open that early, which is what
+ *   made H5 look 9 minutes better on 7 parks.
+ * - Only CORE candidates define the joint rows; {@link PAIRED_OPTIONAL_MODELS}
+ *   are written on them where they have a value.
  * - UC3 dN slot MAE and D3 dN best-time regret against `plan_day` of the same
  *   06:00 / 07:00 origin; D3's regret of every candidate and of served is
  *   taken on the same slots.
@@ -1303,7 +1320,11 @@ export function scorePairedModels(
   }
   const sibling = (c: ArchivedCurve, surface: ArchiveSurface) =>
     byKey.get(`${c.originAt}|${c.attractionId}|${surface}`);
-  /** The newest daily curve of a surface issued at or before `at`. */
+  /**
+   * The same-day (lead 0) daily curve of a surface issued at or before `at`.
+   * Never yesterday's d1 curve: when today's capture failed, that ride-day
+   * has no candidate rather than an older forecast.
+   */
   const newest = (
     attractionId: string,
     surface: ArchiveSurface,
@@ -1311,40 +1332,63 @@ export function scorePairedModels(
   ) => {
     let best: ArchivedCurve | undefined;
     for (const c of daily.get(`${attractionId}|${surface}`) ?? []) {
-      if (c.originAt <= at && (!best || c.originAt > best.originAt)) best = c;
+      if (c.leadDays !== 0 || c.originAt > at) continue;
+      if (!best || c.originAt > best.originAt) best = c;
     }
     return best;
   };
   const routedOf = (h5: ArchivedCurve | undefined) =>
     h5 ? (sibling(h5, "plan_day_shadow_routed") ?? h5) : undefined;
 
-  /** Adds every candidate against served, and the pairwise rows. */
+  /**
+   * Adds every candidate with a value against served, and the pairwise rows.
+   * `values[i] === null` only for an optional candidate (see
+   * {@link PAIRED_OPTIONAL_MODELS}); a missing core value never gets here.
+   */
   const addJoint = (
     useCase: string,
     lead: string,
     models: string[],
-    values: number[],
+    values: (number | null)[],
     served: number,
     truthValue: number,
   ) => {
-    models.forEach((m, i) =>
+    models.forEach((m, i) => {
+      const v = values[i];
+      if (v === null) return;
       acc.add(
         useCase,
         lead,
         m,
         PAIRED_JOINT_REFERENCE,
         "all",
-        values[i],
+        v,
         served,
         truthValue,
-      ),
-    );
+      );
+    });
     for (const [m, ref] of PAIRED_PAIRWISE) {
       const i = models.indexOf(m);
       const j = models.indexOf(ref);
       if (i < 0 || j < 0) continue;
-      acc.add(useCase, lead, m, ref, "all", values[i], values[j], truthValue);
+      const a = values[i];
+      const b = values[j];
+      if (a === null || b === null) continue;
+      acc.add(useCase, lead, m, ref, "all", a, b, truthValue);
     }
+  };
+  /** Values per candidate; null when a CORE candidate lacks one. */
+  const jointValues = (
+    models: string[],
+    valueOf: (m: string) => number | null,
+  ): (number | null)[] | null => {
+    const out: (number | null)[] = [];
+    for (const m of models) {
+      const v = valueOf(m);
+      if (v === null && !PAIRED_OPTIONAL_MODELS.has(m)) return null;
+      out.push(v);
+    }
+    return out;
   };
 
   // UC1 / UC2: one pass per served hourly origin.
@@ -1369,21 +1413,17 @@ export function scorePairedModels(
       if (!r) continue;
       const bucket = slotLeadBucket((slot - at) / 60_000);
       if (!bucket) continue;
+      // The live questions (≤ 6 h) come from the 10–18 h origins only: the
+      // 06:00 origin's first hours are rope drop at parks open that early.
+      if (bucket.lead !== "h6-12" && hourly.originKind !== "intraday") continue;
       const models = PAIRED_QUESTION_MODELS[`${bucket.useCase}|${bucket.lead}`];
       if (!models) continue;
-      const values: number[] = [];
-      for (const m of models) {
-        const v =
-          m === PAIRED_MODELS.persistence
-            ? (anchor ?? null)
-            : (() => {
-                const c = sources[m];
-                return c ? (valueAt(c, slot)?.wait ?? null) : null;
-              })();
-        if (v === null) break;
-        values.push(v);
-      }
-      if (values.length !== models.length) continue;
+      const values = jointValues(models, (m) => {
+        if (m === PAIRED_MODELS.persistence) return anchor ?? null;
+        const c = sources[m];
+        return c ? (valueAt(c, slot)?.wait ?? null) : null;
+      });
+      if (!values) continue;
       addJoint(bucket.useCase, bucket.lead, models, values, r.wait, value);
     }
   }
@@ -1403,22 +1443,17 @@ export function scorePairedModels(
       [PAIRED_MODELS.chronosGrid]: sibling(plan, "chronos_grid"),
       [PAIRED_MODELS.weekdayAvg]: wkd,
     };
-    /** Slots where served and every model has a value: [slot, truth, served, values]. */
+    /** Slots where served and every core model has a value: [slot, truth, served, values]. */
     const jointSlots = (models: string[]) => {
-      const out: Array<[number, number, number, number[]]> = [];
-      const cs = models.map((m) => sources[m]);
-      if (cs.some((c) => !c)) return out;
+      const out: Array<[number, number, number, (number | null)[]]> = [];
       for (const [slot, value] of truthSlots) {
         const r = valueAt(plan, slot);
         if (!r) continue;
-        const values: number[] = [];
-        for (const c of cs) {
-          const v = valueAt(c!, slot);
-          if (!v) break;
-          values.push(v.wait);
-        }
-        if (values.length === cs.length)
-          out.push([slot, value, r.wait, values]);
+        const values = jointValues(models, (m) => {
+          const c = sources[m];
+          return c ? (valueAt(c, slot)?.wait ?? null) : null;
+        });
+        if (values) out.push([slot, value, r.wait, values]);
       }
       return out;
     };
@@ -1442,24 +1477,30 @@ export function scorePairedModels(
           band: null,
         })),
       );
+      // An optional candidate's regret needs a value on every joint slot.
       const outcomes = d3.map((_, i) =>
-        bestTimeOutcome(
-          slots.map(([slot, value, , values]) => ({
-            slot,
-            pred: values[i],
-            truth: value,
-            src: "",
-            band: null,
-          })),
-        ),
+        slots.some(([, , , values]) => values[i] === null)
+          ? null
+          : bestTimeOutcome(
+              slots.map(([slot, value, , values]) => ({
+                slot,
+                pred: values[i]!,
+                truth: value,
+                src: "",
+                band: null,
+              })),
+            ),
       );
-      if (servedOutcome && outcomes.every((o) => o !== null)) {
+      const coreOk = d3.every(
+        (m, i) => PAIRED_OPTIONAL_MODELS.has(m) || outcomes[i] !== null,
+      );
+      if (servedOutcome && coreOk) {
         // n = 1 ride-day; Σ|e| of each is its regret (regret ≥ 0, truth 0).
         addJoint(
           PAIRED_BEST_TIME_USE_CASE,
           lead,
           d3,
-          outcomes.map((o) => o!.regret),
+          outcomes.map((o) => (o ? o.regret : null)),
           servedOutcome.regret,
           0,
         );

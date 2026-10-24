@@ -1096,15 +1096,15 @@ describe("scorePairedModels — joint rows per question (PAR-855, PAR-1035)", ()
     });
   });
 
-  it("drops a slot for every candidate when one of them has no value there", () => {
+  it("drops a slot for every candidate when a core one has no value there", () => {
     const paired = new PairedAccumulator();
-    const chronos = flat(35) as (number | null)[];
-    chronos[1] = null;
+    const h5 = [...truthValues] as (number | null)[];
+    h5[1] = null;
     scorePairedModels(
       [
-        curve("plan_day_shadow_h5", truthValues),
+        curve("plan_day_shadow_h5", h5),
         curve("park_hourly", flat(30), { ...intraday, liveWait: 25 }),
-        curve("chronos_live", chronos, intraday),
+        curve("chronos_live", flat(35), intraday),
       ],
       truth,
       paired,
@@ -1112,6 +1112,67 @@ describe("scorePairedModels — joint rows per question (PAR-855, PAR-1035)", ()
     for (const m of ["persistence", "chronos2", "shadow_h5"]) {
       expect(find(paired, "UC1", "h0-1", m)?.n).toBe(4);
     }
+  });
+
+  it("lets an optional shadow's outage cost only its own cell", () => {
+    // Chronos-2 (nf-service) misses a slot, then is down altogether: the core
+    // candidates keep every slot.
+    const chronos = flat(35) as (number | null)[];
+    chronos[1] = null;
+    const run = (extra: ArchivedCurve[]) => {
+      const paired = new PairedAccumulator();
+      scorePairedModels(
+        [
+          curve("plan_day_shadow_h5", truthValues),
+          curve("park_hourly", flat(30), { ...intraday, liveWait: 25 }),
+          ...extra,
+        ],
+        truth,
+        paired,
+      );
+      return paired;
+    };
+    const partial = run([curve("chronos_live", chronos, intraday)]);
+    expect(find(partial, "UC1", "h0-1", "chronos2")?.n).toBe(4);
+    expect(find(partial, "UC1", "h0-1", "shadow_h5")?.n).toBe(5);
+    expect(find(partial, "UC1", "h0-1", "chronos2", "shadow_h5")?.n).toBe(4);
+    const down = run([]);
+    expect(find(down, "UC1", "h0-1", "chronos2")).toBeUndefined();
+    expect(find(down, "UC1", "h0-1", "persistence")?.n).toBe(5);
+  });
+
+  it("keeps the 06:00 origin out of the live questions even where a park is open", () => {
+    const paired = new PairedAccumulator();
+    scorePairedModels(
+      [
+        // A park already open at 06:00: live wait, H5 — still rope drop.
+        curve("park_hourly", flat(30), { liveWait: 25 }),
+        curve("plan_day_shadow_h5", truthValues),
+      ],
+      truth,
+      paired,
+    );
+    expect(
+      paired.entries().filter((e) => e.lead !== "h6-12" && e.useCase !== "UC3"),
+    ).toEqual([]);
+  });
+
+  it("never stands in yesterday's daily curve for today's", () => {
+    const paired = new PairedAccumulator();
+    scorePairedModels(
+      [
+        // only the d1 H5 curve from the day before exists
+        curve("plan_day_shadow_h5", truthValues, {
+          leadDays: 1,
+          originAt: daily - 86_400_000,
+        }),
+        curve("park_hourly", flat(30), { ...intraday, liveWait: 25 }),
+        curve("chronos_live", flat(35), intraday),
+      ],
+      truth,
+      paired,
+    );
+    expect(paired.entries().filter((e) => e.useCase === "UC1")).toEqual([]);
   });
 
   const clock = (ms: number) => new Date(ms).toISOString().slice(11, 16);
@@ -1168,17 +1229,25 @@ describe("scorePairedModels — joint rows per question (PAR-855, PAR-1035)", ()
       8,
     );
 
-    // Without the old-composer curve no planner row is written at all: a
-    // cell must never be judged on rides another cell of its question lacks.
-    const without = new PairedAccumulator();
+    // Without the old-composer curve (optional) the core cells keep the
+    // ride-day; without the weekday average (core) no planner row is written:
+    // a core cell is never judged on rides another core cell lacks.
+    const withoutPeak = new PairedAccumulator();
     scorePairedModels(
       planner().filter((c) => c.surface !== "plan_day_shadow_peak"),
       truth,
-      without,
+      withoutPeak,
       weekday,
     );
+    expect(find(withoutPeak, "UC3", "d0", "shadow_h5")?.n).toBe(8);
     expect(
-      without.entries().filter((e) => ["UC3", "D3"].includes(e.useCase)),
+      find(withoutPeak, "UC3", "d0", "shadow_peak_scaled"),
+    ).toBeUndefined();
+    expect(find(withoutPeak, "D3", "d0", "weekday_avg")?.n).toBe(1);
+    const withoutWkd = new PairedAccumulator();
+    scorePairedModels(planner(), truth, withoutWkd, null);
+    expect(
+      withoutWkd.entries().filter((e) => ["UC3", "D3"].includes(e.useCase)),
     ).toEqual([]);
   });
 

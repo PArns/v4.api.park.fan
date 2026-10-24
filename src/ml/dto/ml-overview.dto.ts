@@ -41,6 +41,13 @@ export interface MlDecisionDto {
   earliest: { date: string; label: string } | null;
   /** Matrix cells the decision rests on (for a link into the model comparison). */
   cells: { questionId: string; modelId: string }[];
+  /**
+   * PAR-1036: the fixed evaluation date (YYYY-MM-DD). Before it the decision
+   * is never `ready`; from it on (`evaluated: true`) it is judged on the
+   * matrix window ending the day before and no longer moves.
+   */
+  evaluateOn?: string;
+  evaluated?: boolean;
 }
 
 export type MlComponentRole = "served" | "shadow" | "measurement";

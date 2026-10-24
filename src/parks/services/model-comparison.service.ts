@@ -144,24 +144,32 @@ export class ModelComparisonService {
     return (await this.redis.get(BOARD_VERSION_KEY).catch(() => null)) ?? "0";
   }
 
-  /** The matrix over the last `days` scored target dates. */
+  /**
+   * The matrix over the last `days` scored target dates — ending at `until`
+   * (YYYY-MM-DD, inclusive) when given, so a decision evaluated on a fixed
+   * date reads the same window every day after it (ML overview, PAR-1036).
+   */
   async getMatrix(
     days: number,
     region = "ALL",
     now: Date = new Date(),
+    until?: string,
   ): Promise<ModelComparisonResponseDto> {
     const v = await this.version();
     return this.cached(
-      `model-comparison:v${v}:${region}:${days}`,
+      `model-comparison:v${v}:${region}:${days}${until ? `:until${until}` : ""}`,
       MATRIX_TTL_SECONDS,
       async () => {
         const [win] = await this.q<
           Array<{ first: string | null; last: string | null }>
         >(
-          `SELECT min(target_date)::text AS first, max(target_date)::text AS last
-             FROM forecast_archive_scores
-            WHERE target_date > (SELECT max(target_date) FROM forecast_archive_scores) - $1::int`,
-          [days],
+          `WITH s AS (
+             SELECT target_date FROM forecast_archive_scores
+              WHERE ($2::date IS NULL OR target_date <= $2::date))
+           SELECT min(target_date)::text AS first, max(target_date)::text AS last
+             FROM s
+            WHERE target_date > (SELECT max(target_date) FROM s) - $1::int`,
+          [days, until ?? null],
         );
         const window = {
           days,
@@ -215,8 +223,11 @@ export class ModelComparisonService {
         saeRef: string | number;
       }>
     >(
+      // One row per park × date × key (the table's own grain): the gate's
+      // two-way bootstrap resamples dates too (PAR-1036). Bounded by the
+      // window (≤ 90 days) and the matrix's references and segments.
       `SELECT use_case AS "useCase", lead, model, reference, segment, park_id AS "parkId",
-              array_agg(DISTINCT target_date::text) AS dates,
+              ARRAY[target_date::text] AS dates,
               sum(n)::bigint AS n, sum(sae_model) AS "saeModel", sum(sae_ref) AS "saeRef"
          FROM forecast_archive_paired
         WHERE target_date BETWEEN $1::date AND $2::date
@@ -224,7 +235,7 @@ export class ModelComparisonService {
           AND use_case <> 'D7'
           AND definition = ${PAIRED_DEFINITION}
           ${regionSql}
-        GROUP BY 1, 2, 3, 4, 5, 6`,
+        GROUP BY 1, 2, 3, 4, 5, 6, target_date`,
       params,
     );
     const d7 = await this.q<

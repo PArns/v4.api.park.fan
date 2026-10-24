@@ -27,6 +27,7 @@ import {
   PAIRED_JOINT_REFERENCE,
   PAIRED_LEVEL_REFERENCES,
   PAIRED_MODELS,
+  PAIRED_OPTIONAL_MODELS,
   PAIRED_QUESTION_MODELS,
 } from "./forecast-archive-scoring.util";
 import {
@@ -48,6 +49,39 @@ export const MIN_DAYS = CHRONOS_MIN_DAYS as 14;
 export const MIN_PARKS = CHRONOS_MIN_PARKS as 10;
 /** A confirmed live win counts as visible in the app from this many minutes. */
 export const VISIBLE_MIN_DIFF = 1;
+/**
+ * …and, for a `rate` question (D7, percentage points of wrongly ordered day
+ * pairs), from this many points. One minute is ~12 % of a typical slot MAE of
+ * 7–9 min; 5 points is about the same share of a ~30–40 % base rate of
+ * wrongly ordered pairs, i.e. one comparison of two days in twenty flips —
+ * the smallest change a visitor comparing calendar days could notice.
+ */
+export const VISIBLE_MIN_DIFF_RATE = 5;
+
+/**
+ * First park-local date the forward archive captured (PAR-831, #443). A lead
+ * of N days has its first scored target date on ARCHIVE_START + N, so a cell
+ * whose longest lead is N cannot reach 14 scored dates before
+ * ARCHIVE_START + N + 14, however the rows of its shorter leads look.
+ */
+export const ARCHIVE_START = "2026-10-09";
+
+const leadDays = (lead: string) =>
+  lead.startsWith("d") ? Number(lead.slice(1)) : 0;
+
+/**
+ * The earliest date a cell's live gate can be met at all: ARCHIVE_START + its
+ * longest lead + 14 (the review of PAR-1036: `days` is 0 while a lead has no
+ * row, which kept "today + 14" sliding forward every day).
+ */
+export function cellFloorDate(questionId: string, modelId: string): string {
+  const q = COMPARISON_QUESTIONS.find((x) => x.id === questionId);
+  if (!q) return ARCHIVE_START;
+  const names = q.models[modelId] ?? [];
+  const leads = names.length > 0 ? cellLeads(q, names) : q.leads;
+  const maxLead = Math.max(0, ...leads.map(leadDays));
+  return addIsoDays(ARCHIVE_START, maxLead + MIN_DAYS);
+}
 
 export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
   {
@@ -201,7 +235,7 @@ const CAL_PAIRWISE: PairwiseDef[] = [
       },
     ],
     swap: true,
-    note: "Nur an den Tagen, an denen CatBoost das Tagesniveau lieferte (TFT fehlte) – andere Tage als bei TFT.",
+    note: "Nur an den Hauptattraktions-Tagen, an denen TFT fehlte und CatBoost einsprang – eine schiefe Auswahl (Lücken in TFT, nicht typische Tage), andere Tage als bei TFT. Für CatBoost als Tagesniveau entscheidet „Kalendertage 3 Monate voraus“.",
   },
   {
     model: "tft",
@@ -292,9 +326,8 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     segment: "all",
     reference: PAIRED_JOINT_REFERENCE,
     // Only the 06:00 origin reaches 6–12 h, and at 06:00 almost no park has a
-    // live wait: persistence is not archived for this question.
+    // live wait: persistence is not a column of this question.
     models: {
-      persist: null,
       h5: ["shadow_h5"],
       tfth5: ["shadow_h5_routed"],
       chronos: ["chronos2_grid"],
@@ -556,8 +589,12 @@ export interface LiveComparison {
   diff: number;
   modelMae: number;
   referenceMae: number;
+  /** 95 % CI, two-way park × date bootstrap — the gate (owner, PAR-1036). */
   ciLow: number | null;
   ciHigh: number | null;
+  /** 95 % CI, park-cluster bootstrap — shown beside it. */
+  parkCiLow?: number | null;
+  parkCiHigh?: number | null;
   /** Every required lead meets the gate on its own. */
   enoughData: boolean;
   leads?: LeadComparison[];
@@ -644,21 +681,20 @@ export function poolCell(
   for (const x of perLead)
     for (const p of byLead.get(x.lead)!.parks) allParks.add(p);
   const missing = order.some((lead) => !covered.has(lead));
-  const ci = blockBootstrap(
-    rows
-      .filter((r) => r.n > 0 && covered.has(r.lead))
-      .map((r) => ({
-        park: r.parkId,
-        date: r.dates[0] ?? "",
-        stratum: r.lead,
-        n: r.n,
-        a: r.saeModel,
-        b: r.saeRef,
-      })),
-    { twoWay: false },
-    undefined,
-    seed,
-  );
+  // One row per park × date (the service reads them so); a row with several
+  // dates counts as its first one (D7: the later date of its pairs).
+  const cells = rows
+    .filter((r) => r.n > 0 && covered.has(r.lead))
+    .map((r) => ({
+      park: r.parkId,
+      date: r.dates[0] ?? "",
+      stratum: r.lead,
+      n: r.n,
+      a: r.saeModel,
+      b: r.saeRef,
+    }));
+  const ci = blockBootstrap(cells, { twoWay: true }, undefined, seed);
+  const parkCi = blockBootstrap(cells, { twoWay: false }, undefined, seed);
   return {
     n: perLead.reduce((s2, x) => s2 + x.n, 0),
     days: missing ? 0 : Math.min(...perLead.map((x) => x.days)),
@@ -668,6 +704,8 @@ export function poolCell(
     referenceMae: round(mean((l) => l.b / l.n)),
     ciLow: ci && allParks.size >= 2 ? round(ci.low) : null,
     ciHigh: ci && allParks.size >= 2 ? round(ci.high) : null,
+    parkCiLow: parkCi ? round(parkCi.low) : null,
+    parkCiHigh: parkCi ? round(parkCi.high) : null,
     enoughData: !missing && perLead.every((x) => x.enoughData),
     leads: perLead,
   };
@@ -784,6 +822,7 @@ export function cellChecks(
   archived: boolean,
   live: LiveComparison | null,
   offline: OfflineVerdict | null,
+  unit: "min" | "rate" = "min",
 ): ModelComparisonCellDto["checks"] {
   if (state === "today") {
     return { offline: "yes", live: "yes", visible: true };
@@ -808,7 +847,10 @@ export function cellChecks(
     offline: off,
     live: liveCheck,
     visible:
-      liveCheck === "yes" && live !== null && live.diff <= -VISIBLE_MIN_DIFF,
+      liveCheck === "yes" &&
+      live !== null &&
+      live.diff <=
+        -(unit === "rate" ? VISIBLE_MIN_DIFF_RATE : VISIBLE_MIN_DIFF),
   };
 }
 
@@ -891,6 +933,8 @@ export function cellExpectedBy(
   offline: OfflineVerdict | null,
   lastDate: string | null,
   today: string,
+  /** {@link cellFloorDate}: no date before it, whatever `days` says. */
+  floor?: string,
 ): ModelComparisonExpectedByDto | null {
   if (state === "today") return null;
   const options: ModelComparisonExpectedByDto[] = [];
@@ -902,14 +946,18 @@ export function cellExpectedBy(
     const parks = live?.parks ?? 0;
     const remaining = Math.max(0, MIN_DAYS - days);
     const base = lastDate ?? addIsoDays(today, -1);
+    const atLeast = (d: string) => {
+      const x = d < today ? today : d;
+      return floor && floor > x ? floor : x;
+    };
     if (remaining > 0) {
-      const date = addIsoDays(base, remaining + 1);
+      const date = atLeast(addIsoDays(base, remaining + 1));
       options.push({
-        date: date < today ? today : date,
-        label: `frühestens ${dayMonthDe(date < today ? today : date)} (noch ${remaining} von ${MIN_DAYS} Tagen)`,
+        date,
+        label: `frühestens ${dayMonthDe(date)} (noch ${remaining} von ${MIN_DAYS} Tagen)`,
       });
     } else {
-      const date = addIsoDays(base, 1) < today ? today : addIsoDays(base, 1);
+      const date = atLeast(addIsoDays(base, 1));
       options.push({
         date,
         label: `sobald ${MIN_PARKS} Parks dabei sind (bisher ${parks}), frühestens ${dayMonthDe(date)}`,
@@ -984,6 +1032,9 @@ function pairDto(
             diff: live.diff,
             ciLow: live.ciLow,
             ciHigh: live.ciHigh,
+            ci: "park_date",
+            parkCiLow: live.parkCiLow ?? null,
+            parkCiHigh: live.parkCiHigh ?? null,
             days: live.days,
             parks: live.parks,
             n: live.n,
@@ -1029,6 +1080,8 @@ export function buildModelComparison(
   const questions: ModelComparisonQuestionDto[] = COMPARISON_QUESTIONS.map(
     (q) => {
       const cells: Record<string, ModelComparisonCellDto> = {};
+      const coverage: Record<string, number> = {};
+      let jointRows = 0;
       const columns = [q.servedModel, ...Object.keys(q.models)];
       for (const modelId of COMPARISON_MODELS.map((m) => m.id)) {
         if (!columns.includes(modelId)) continue;
@@ -1055,13 +1108,28 @@ export function buildModelComparison(
           ? null
           : (input.verdicts.questions[q.id]?.[modelId] ?? null);
         const state = cellState(isServed, live, offline);
-        const checks = cellChecks(state, archived, live, offline);
+        const checks = cellChecks(
+          state,
+          archived,
+          live,
+          offline,
+          q.unit ?? "min",
+        );
+        if (live && archived) {
+          coverage[modelId] = live.n;
+          if (!(stored ?? []).every((m) => PAIRED_OPTIONAL_MODELS.has(m))) {
+            jointRows = Math.max(jointRows, live.n);
+          }
+        }
         const liveDto: ModelComparisonLiveDto | null =
           live && live.ciLow !== null && live.ciHigh !== null
             ? {
                 diff: live.diff,
                 ciLow: live.ciLow,
                 ciHigh: live.ciHigh,
+                ci: "park_date",
+                parkCiLow: live.parkCiLow ?? null,
+                parkCiHigh: live.parkCiHigh ?? null,
                 days: live.days,
                 parks: live.parks,
                 n: live.n,
@@ -1092,6 +1160,7 @@ export function buildModelComparison(
             offline,
             input.window.lastDate,
             input.today,
+            cellFloorDate(q.id, modelId),
           ),
         };
         if (state !== "today") summary[state]++;
@@ -1109,6 +1178,9 @@ export function buildModelComparison(
         metric: { unit: q.unit ?? "min", lowerIsBetter: true },
         cells,
         ...(comparisons.length > 0 ? { comparisons } : {}),
+        ...(Object.keys(coverage).length > 0
+          ? { coverage: { jointRows, cells: coverage } }
+          : {}),
       };
     },
   );

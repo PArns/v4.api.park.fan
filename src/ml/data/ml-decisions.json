@@ -1,10 +1,11 @@
 {
-  "_about": "The switch decisions on the admin ML overview (PAR-861), in the order shown. Each rests on cells of the model comparison matrix (PAR-855, docs/ml/forward-archive.md §9): questionId x modelId. Without `state`, the decision's state, progress and earliest date are derived from those cells (src/ml/utils/ml-overview.util.ts); a `state` here overrides that ('later' = waits on `dependsOn`, 'owner' = the owner's call, no measurement decides it). title/detail: plain German, shown as they are. Edit this file when a decision is taken, added or retired.",
+  "_about": "The switch decisions on the admin ML overview (PAR-861), in the order shown. Each rests on cells of the model comparison matrix (PAR-855, docs/ml/forward-archive.md §9): questionId x modelId. Without `state`, the decision's state, progress and earliest date are derived from those cells (src/ml/utils/ml-overview.util.ts); a `state` here overrides that ('later' = waits on `dependsOn`, 'owner' = the owner's call, no measurement decides it). title/detail: plain German, shown as they are. Edit this file when a decision is taken, added or retired. evaluateOn (PAR-1036, owner decision): the fixed date on which a decision is judged, once, on the matrix window ending the day before; before it the decision is never 'ready', after it the verdict no longer moves. Each date is at least the earliest the gate can be met (ARCHIVE_START 2026-10-09 + the longest lead of the decision's cells + 14 days; a spec checks it) and, for the short-lead decisions, two weeks after the paired-definition-3 deploy so it does not rest on the replay alone. To re-judge a decision, move its evaluateOn to a later date here; to stop the fixed date, remove the field.",
   "decisions": [
     {
       "id": "planner_h5_slots",
       "title": "Tagesplaner auf 15-Minuten-Slots umstellen (H5-Profil)",
       "detail": "Offline besser als heute bei jedem Abstand. TFT-Niveau nur für volle Fahrgeschäfte bis 2 Tage.",
+      "evaluateOn": "2026-12-22",
       "cells": [
         { "questionId": "plan_d0_1", "modelId": "h5" },
         { "questionId": "plan_d0_1", "modelId": "tfth5" },
@@ -20,6 +21,7 @@
       "id": "live_chronos",
       "title": "Live-Wartezeit 30 bis 120 Minuten: Chronos-2 statt PCN",
       "detail": "Offline 0,4 bis 2,3 Minuten besser als die aktuelle Wartezeit. Gegen PCN entscheidet erst das Live-Archiv.",
+      "evaluateOn": "2026-11-09",
       "cells": [
         { "questionId": "live_h0_1", "modelId": "chronos" },
         { "questionId": "live_h1_2", "modelId": "chronos" }
@@ -29,6 +31,7 @@
       "id": "planner_chronos",
       "title": "Tagesplaner 1 bis 7 Tage: Chronos-2 zusätzlich prüfen",
       "detail": "Offline besser als H5 bei 0, 1, 2 und 6 Tagen, nie schlechter. Nicht für „beste Besuchszeit“.",
+      "evaluateOn": "2026-11-09",
       "cells": [
         { "questionId": "plan_d0_1", "modelId": "chronos" },
         { "questionId": "plan_d2_5", "modelId": "chronos" }
@@ -38,7 +41,10 @@
       "id": "calendar_tft_headliners",
       "title": "Kalender: TFT nur noch für volle Fahrgeschäfte",
       "detail": "TFT verliert im Kalender leicht gegen den Wochentag-Durchschnitt, nicht sicher.",
+      "evaluateOn": "2026-12-22",
       "cells": [
+        { "questionId": "cal_rank", "modelId": "tft" },
+        { "questionId": "cal_rank", "modelId": "wkd" },
         { "questionId": "cal_busier", "modelId": "tft" },
         { "questionId": "cal_busier", "modelId": "wkd" },
         { "questionId": "cal_far", "modelId": "tft" },
@@ -48,12 +54,13 @@
     {
       "id": "catboost_daily_off",
       "title": "CatBoost-Tagesniveau abschalten",
-      "detail": "Macht die Prognose offline schlechter. Erst abschalten, wenn der Ersatz live bestätigt ist.",
+      "detail": "Macht die Prognose offline schlechter. Erst abschalten, wenn der Ersatz live bestätigt ist. Live entscheidet „Kalendertage 3 Monate voraus“ (dort liefert CatBoost das Tagesniveau) gegen den Wochentag-Durchschnitt.",
       "state": "later",
       "dependsOn": ["planner_h5_slots", "live_chronos", "planner_chronos"],
+      "evaluateOn": "2027-01-21",
       "cells": [
-        { "questionId": "cal_busier", "modelId": "catboost" },
-        { "questionId": "cal_far", "modelId": "catboost" }
+        { "questionId": "cal_far_90", "modelId": "catboost" },
+        { "questionId": "cal_far_90", "modelId": "wkd" }
       ]
     }
   ]

@@ -547,12 +547,24 @@ spec builds the matrix from the real scorer and asserts it.
 The live candidates use, at a 10–18 h origin, the daily curves (H5, routed, the
 old composer, `chronos2_grid`) **issued at or before it** — the 06:00 one: none
 of them reads anything after 06:00, so it is what would be shown at 10:00.
-Persistence is the origin's live wait. At the 06:00 origin there is no Chronos
-live curve, so it feeds no `h0-1` … `h2-6` row any more; and since almost no
-park has a live wait at 06:00, `today_h6_12` no longer shows persistence.
-A candidate that is missing (a new ride with no weekday average, a ride without
-an old-composer curve) removes that ride-day from every cell of its question —
-the price of comparing like with like.
+Only the lead-0 curve counts — never yesterday's d1 curve when today's capture
+failed. Persistence is the origin's live wait. The 06:00 origin feeds no
+`h0-1` … `h2-6` row (explicitly, also at a park open that early: rope drop); and
+since almost no park has a live wait at 06:00, `today_h6_12` has no persistence
+column.
+
+**Core and optional candidates** (review of PAR-1035). Only the core candidates
+define the joint rows. The nf-service shadows (`chronos2`, `chronos2_grid`) and
+the old composer (`shadow_peak_scaled`, which exists only where an old-composer
+curve and an H5 profile do) are **optional** (`PAIRED_OPTIONAL_MODELS`): they
+are written on the core rows where they have a value, so an nf-service outage
+costs the Chronos cell its rows and nothing else. Their reference MAE therefore
+differs from the core cells' by their own missing rows only; each question's
+`coverage` (`jointRows` and the rows per cell) shows how many. A missing CORE
+candidate (a new ride with no weekday average, a ride without an H5 profile)
+removes that row from every cell of its question — the price of comparing like
+with like. For D3 an optional candidate's regret is counted only on a ride-day
+where it has a value on every joint slot.
 
 **Direct comparisons** (`PAIRED_PAIRWISE`) on the same joint rows:
 `chronos2` / `chronos2_grid` vs `shadow_h5` and `shadow_h5_routed` vs
@@ -574,8 +586,16 @@ park's dates within the window at each lead: every two dates whose realised
 level (mean headliner truth P90) differs by ≥ 5 min are a pair, wrongly ordered
 when the forecast's order disagrees (a predicted tie counts half). The cell is
 the share of wrongly ordered pairs in percent, weekday average minus served,
-lower is better (`metric.unit = "rate"`). The headliner set is the one with all
-three values on each date, so it can differ between dates.
+lower is better (`metric.unit = "rate"`).
+
+D7 caveats. **Headliner composition:** the set is the headliners with all three
+values on that date, so it can differ between two dates of a pair — a headliner
+closed for a day leaves that date's level to the others, and a pair can flip on
+which rides were measured rather than on how full the park was. **Sparse
+strata:** a park contributes pairs only where it has ≥ 2 dates at that lead,
+and the pairs grow with the square of its dates, so parks open every day weigh
+more than seasonal ones; with equal lead weighting a long lead with few pairs
+weighs as much as d1, and its CI widens accordingly.
 
 The routed H5 curve falls back to plain H5 where it was not archived, as in the
 scores.
@@ -641,23 +661,30 @@ the same** (PAR-1036 — pooled by `n`, `plan_d6_60` was de facto d6/d7, the onl
 leads with rows in its first two months). The park-cluster bootstrap (1,000
 reps, per-cell seed) resamples parks and recomputes that lead-weighted figure,
 and draws the 95 % CI of `diff = modelMae − referenceMae`, **negative = better
-than served**. `live.leads` carries the per-lead figures. A cell's leads are the
+than served**. **The gate reads the two-way park × date block bootstrap**
+(owner decision, review of PAR-1036): `blockBootstrap(…, { twoWay: true })`
+resamples parks AND dates independently and weights each park × date cell by
+the product of the two multiplicities (pigeonhole bootstrap), so a day that
+moved every park at once is one draw, not ten. `live.ciLow`/`ciHigh` are that
+interval (`live.ci = "park_date"`); the park-cluster interval is shown beside it
+as `parkCiLow`/`parkCiHigh`; both use the same equal lead weighting. With one
+lead the park-only one is PAR-852's bootstrap draw for draw (a spec pins it).
+The matrix query therefore reads one row per park × date × key (the table's own
+grain), bounded by the window (≤ 90 days) and the matrix references and
+segments. `live.leads` carries the per-lead figures. A cell's leads are the
 question's leads at which one of its models is a candidate (`cellLeads`: the
 best-time Chronos cell is d0–d7), and **the gate holds only when every one of
 them meets it on its own**; `days` and `parks` are the weakest lead's, 0 while a
-lead has no rows. The "frühestens" date then still counts from the weakest
-lead's days, so for a lead without any row yet (d45/d60 in the first weeks) it is
-optimistic.
+lead has no rows. Because a lead without rows counts as 0 days, the
+"frühestens" date never falls before `cellFloorDate`: `ARCHIVE_START`
+(2026-10-09, the archive's first capture) + the cell's longest lead + 14 —
+22.12.2026 for a d60 cell, 21.01.2027 for d90.
 
-**Two-way bootstrap, built but not the gate (PAR-1036).** `blockBootstrap(…,
-{ twoWay: true })` resamples parks AND dates independently and weights each
-park × date cell by the product of the two multiplicities (pigeonhole
-bootstrap): a day that moved every park at once is one draw, not ten. With one
-lead and `twoWay: false` it is the park-cluster bootstrap draw for draw (a spec
-pins it). It needs one row per park × date, which the matrix query does not
-read (it pools per park); switching the gate to it is the owner's call, as is
-a fixed evaluation date or a multiplicity correction over the ~45 cells — see
-the PR.
+**Fixed evaluation dates** (owner decision against daily re-testing): the
+decisions of the ML overview carry `evaluateOn` and are judged once, on the
+window ending the day before (`getMatrix(…, until)`); see
+[ml-overview.md](ml-overview.md). The matrix page itself keeps showing the
+latest window. No multiplicity correction across the ~45 cells is applied.
 
 State rule: the served model is `today`. A live comparison that meets the gate
 (≥ 10 parks with ≥ 14 scored dates **each** — `gateDays`, the 10th-best park's
@@ -674,7 +701,10 @@ a run in progress → `pending` (waiting for live confirmation), offline `worse`
 
 `checks`: `offline` yes / no / running / open from the verdict file; `live`
 yes / no once the gate is met, `running` before, `open` when not archived;
-`visible` = the served model, or a confirmed live win of ≥ 1 minute.
+`visible` = the served model, or a confirmed live win of ≥ 1 minute — ≥ 5
+percentage points on the `rate` question (`VISIBLE_MIN_DIFF_RATE`: one minute is
+~12 % of a typical slot MAE of 7–9 min, five points about the same share of a
+~30–40 % base rate of wrongly ordered pairs, one day comparison in twenty).
 `expectedBy` (Europe/Berlin dates): for a live gate not met, lastDate + the
 missing days + 1 (a date is scored at 12:00 UTC the next day) — or, when only
 parks are missing, the next scoring; for an offline run in progress the file's

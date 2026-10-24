@@ -46,9 +46,19 @@ export interface ModelComparisonLiveDto {
    * Since PAR-1036 a multi-lead cell is the plain mean of its leads.
    */
   diff: number;
-  /** 95 % park-cluster bootstrap CI of `diff` (parks resampled with replacement). */
+  /**
+   * 95 % CI of `diff`. Since PAR-1036 (owner decision) the two-way park × date
+   * block bootstrap (`ci = "park_date"`): parks AND dates resampled, so a day
+   * that moved every park at once counts once. This is the interval the gate
+   * reads. Before: park-cluster, now in `parkCiLow`/`parkCiHigh`.
+   */
   ciLow: number;
   ciHigh: number;
+  /** Which bootstrap `ciLow`/`ciHigh` are; absent = park-cluster (before PAR-1036). */
+  ci?: "park_date";
+  /** 95 % park-cluster CI (parks resampled), shown beside the gate's interval; null with < 2 parks. */
+  parkCiLow?: number | null;
+  parkCiHigh?: number | null;
   /** The weakest lead's scored dates (reached by each of 10 parks) and park count; 0 when a lead of the cell has no rows yet. */
   days: number;
   parks: number;
@@ -135,6 +145,13 @@ export interface ModelComparisonQuestionDto {
   cells: Record<string, ModelComparisonCellDto>;
   /** PAR-1035/1037: direct comparisons that are not "against served"; absent when there are none. */
   comparisons?: ModelComparisonPairDto[];
+  /**
+   * Paired rows (slots or ride-days) behind each archived cell, summed over
+   * its leads, and `jointRows` — the rows every core candidate shared. A
+   * Chronos-2 or old-composer cell below `jointRows` shows that shadow's
+   * outage; it never removes rows from the other cells. Absent without data.
+   */
+  coverage?: { jointRows: number; cells: Record<string, number> };
 }
 
 export interface ModelComparisonResponseDto {
