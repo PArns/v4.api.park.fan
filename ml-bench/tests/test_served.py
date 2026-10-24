@@ -78,21 +78,22 @@ def test_intraday_cut_never_reads_a_later_capture(tmp_path):
     assert got == {T(10, 15): 20, T(13): 20}
 
 
-def test_nearest_origin_and_its_age_cap(tmp_path):
+def test_only_an_origins_own_capture_answers_it(tmp_path):
+    """Bench 08:00 / 20:00 have no capture of their own (the archive captures 06 and 10–18):
+    they stay UNPAIRED instead of being served the 06:00 / 18:00 curve two hours staler than
+    the truth the candidate sees, and origin_stats counts them (PAR-1043 review, fix 1)."""
     path = _write_curves(tmp_path, [
-        _row(T(6, 5), 1, 1, D, T(6, 15), 15, [10] * 56),
-        _row(T(5, 59), 1, 1, D, T(6, 15), 15, [11] * 56, aid="r2"),      # 2 h 01 before 08:00
+        _row(T(6, 5), 1, 1, D, T(6, 15), 15, [10] * 56),                 # 06:00, 14 h
+        _row(T(18, 6), 1, 2, D, T(18, 15), 15, [18] * 16),               # 18:00, 4 h
+        _row(T(9, 50), 1, 2, D, T(10), 15, [20] * 16),                   # 10:00, stamped 10 min early
     ])
-    # 08:00 has no capture of its own: the 06:00 one is the nearest, ≤ 2 h old
-    assert _predict(Served(path), "intraday", T(8), [T(8), T(9)]) == {T(8): 10, T(9): 10}
-    # ten o'clock: the 06:05 capture is now too old to stand for what was served
-    assert _predict(Served(path), "intraday", T(10), [T(10), T(11)]) == {}
-    origin = Origin(D, "intraday", 8, pd.DataFrame({"park_id": ["p1"], "timezone": ["UTC"],
-                                                    "origin_utc": [pd.Timestamp(T(8))]}),
-                    HistoryView(pd.DataFrame()))
-    grid = pd.DataFrame({"attraction_id": "r2", "park_id": "p1",
-                         "slot_start_utc": pd.to_datetime([T(9)], utc=True)})
-    assert Served(path).predict(origin, grid, pd.DataFrame()).empty
+    m = Served(path)
+    assert _predict(m, "intraday", T(8), [T(8, 15), T(9)]) == {}
+    assert _predict(m, "intraday", T(20), [T(20, 15), T(21)]) == {}
+    assert _predict(m, "intraday", T(10), [T(10), T(11)]) == {T(10): 20, T(11): 20}
+    assert _predict(m, "intraday", T(18), [T(18, 15)]) == {T(18, 15): 18}
+    assert m.origin_stats == {"intraday 08": [1, 0], "intraday 20": [1, 0],
+                              "intraday 10": [1, 1], "intraday 18": [1, 1]}
 
 
 def test_daily_reads_the_planner_as_a_step_with_its_long_leads(tmp_path):
@@ -176,6 +177,8 @@ def test_pair_with_served_end_to_end_and_the_generator(synth_export, tmp_path, c
 
     tdir = build_report(out, reps=50, vs=["served"])
     vs = pd.read_csv(tdir / "cells_vs_served.csv")
+    # m015 starts at the bench origin, before any capture (:05 or later): never paired
+    vs = vs[vs["lead"].astype(str) != "m015"]
     for uc, model in (("UC3", "h5"), ("UC1", "persistence"), ("D3", "h5")):
         row = vs[(vs["uc"] == uc) & (vs["model"] == model) & (vs["segment"] == "all")
                  & (vs["region"] == "all")]

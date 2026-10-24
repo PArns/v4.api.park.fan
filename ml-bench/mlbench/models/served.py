@@ -17,16 +17,19 @@ Surfaces, per bench origin kind:
   ``served_incumbent`` prefers surface 8 (what park_hourly would show without Chronos-2,
   archived only while ``SERVE_CHRONOS_INTRADAY`` is on) at the same capture.
 
-The nearest-origin rule and the information cut. A capture runs within the hour of its
+The own-capture rule and the information cut. A capture runs within the hour of its
 NOMINAL origin (the archive job fires at :05 UTC and reads each park's clock), so the curve
 read at 10:07 is the 10:00 origin's. For every (ride, target day) the arm takes the archived
-row with the LATEST nominal origin that is not after the bench origin, at most ``MAX_AGE``
-older (one intraday capture cadence: a bench origin with no capture of its own, 08:00 or
-20:00, is served the 06:00 / 18:00 curve; nothing staler — production would have shown a
-fresher curve that the archive does not hold). Kind 3 counts as the 06:00 origin it extends.
+row with the LATEST capture in ``[bench origin - MAX_AGE_MIN, bench origin + 60 min)``: the
+bench origin's OWN capture, nothing older. A bench origin the archive has no capture for
+(intraday 08:00 and 20:00 — the archive captures 06:00 and 10–18) is left UNPAIRED rather
+than answered by the 06:00 / 18:00 curve: that curve is two hours staler than the truth the
+candidate sees, which would favour the candidate. ``origin_stats`` counts, per origin kind
+and hour, how many park-origins had their own capture; the runner records it in
+``run-*.json`` (``served_origins``). Kind 3 counts as the 06:00 origin it extends.
 Because the capture itself happens up to an hour after the nominal origin, only slots that
 START at or after the capture instant are answered: no slot the served curve could have
-partly observed is ever scored. What remains is a head start of minutes (the served curve
+partly observed is scored. What remains is a head start of minutes (the served curve
 knew the live readings up to its capture), which favours SERVED — a candidate's win is, if
 anything, understated.
 
@@ -52,8 +55,9 @@ from .base import Model, Origin
 
 PLAN_DAY, PARK_HOURLY, PARK_HOURLY_INCUMBENT = 2, 1, 8
 KIND_DAILY, KIND_INTRADAY, KIND_LONG = 1, 2, 3
-#: oldest nominal origin still taken as "what was served at the bench origin"
-MAX_AGE_MIN = 120
+#: clock slack before the bench origin; captures run at or after their nominal origin, so
+#: this only absorbs a stamp a few minutes early — never a previous capture (PAR-1043 review)
+MAX_AGE_MIN = 15
 #: a capture belongs to the nominal origin of the hour it ran in
 CAPTURE_WINDOW_MIN = 60
 
@@ -68,14 +72,11 @@ def curves_path() -> Path:
     raise FileNotFoundError("served arm: set MLBENCH_SERVED_CURVES or MLBENCH_EXPORT")
 
 
-def served_sql(path: str, kinds: tuple[int, ...], surfaces: tuple[int, ...]) -> str:
-    """Archived served value per requested slot. ``o``: park_id, origin_utc (the bench
-    origin); ``g``: attraction_id, slot_start_utc. ``surfaces`` in order of preference
-    within one capture."""
-    prio = " ".join(f"WHEN {s} THEN {i}" for i, s in enumerate(surfaces))
+def _captures_cte(path: str, kinds: tuple[int, ...], surfaces: tuple[int, ...]) -> str:
+    """Archived curves of the requested surfaces whose capture is the bench origin's own."""
     return f"""
-    WITH c AS (
-      SELECT cv.aid, cv.target_date, cv.surface, cv.origin_utc, cv.slot_start_utc,
+    c0 AS (
+      SELECT cv.aid, cv.park_id, cv.target_date, cv.surface, cv.origin_utc, cv.slot_start_utc,
              cv.slot_minutes, cv.waits, o.origin_utc AS bench_utc,
              cv.origin_utc - CASE WHEN cv.origin_kind = {KIND_LONG} THEN INTERVAL 1 HOUR
                                   ELSE INTERVAL 0 HOUR END AS nominal_utc
@@ -84,10 +85,27 @@ def served_sql(path: str, kinds: tuple[int, ...], surfaces: tuple[int, ...]) -> 
         AND cv.origin_kind IN ({', '.join(map(str, kinds))})
         AND cv.origin_utc >= (SELECT min(origin_utc) FROM o) - INTERVAL {MAX_AGE_MIN} MINUTE
         AND cv.origin_utc < (SELECT max(origin_utc) FROM o) + INTERVAL {CAPTURE_WINDOW_MIN + 60} MINUTE),
+    c AS (
+      SELECT * FROM c0
+      WHERE nominal_utc < bench_utc + INTERVAL {CAPTURE_WINDOW_MIN} MINUTE
+        AND nominal_utc >= bench_utc - INTERVAL {MAX_AGE_MIN} MINUTE)"""
+
+
+def own_capture_sql(path: str, kinds: tuple[int, ...], surfaces: tuple[int, ...]) -> str:
+    """(park-origins asked, park-origins with their own capture) for one bench origin."""
+    return f"""WITH {_captures_cte(path, kinds, surfaces)}
+    SELECT (SELECT count(*) FROM o), (SELECT count(DISTINCT park_id) FROM c)"""
+
+
+def served_sql(path: str, kinds: tuple[int, ...], surfaces: tuple[int, ...]) -> str:
+    """Archived served value per requested slot. ``o``: park_id, origin_utc (the bench
+    origin); ``g``: attraction_id, slot_start_utc. ``surfaces`` in order of preference
+    within one capture."""
+    prio = " ".join(f"WHEN {s} THEN {i}" for i, s in enumerate(surfaces))
+    return f"""
+    WITH {_captures_cte(path, kinds, surfaces)},
     pick AS (
       SELECT * FROM c
-      WHERE nominal_utc < bench_utc + INTERVAL {CAPTURE_WINDOW_MIN} MINUTE
-        AND nominal_utc >= bench_utc - INTERVAL {MAX_AGE_MIN} MINUTE
       QUALIFY row_number() OVER (PARTITION BY aid, target_date
                                  ORDER BY nominal_utc DESC, CASE surface {prio} END) = 1)
     SELECT g.attraction_id, g.slot_start_utc,
@@ -112,6 +130,8 @@ class Served(Model):
     def __init__(self, path: str | Path | None = None):
         self._path = Path(path) if path else None
         self._con = None
+        #: "<kind> <hh>" -> [park-origins asked, of which had their own capture]
+        self.origin_stats: dict[str, list[int]] = {}
 
     def predict(self, origin: Origin, horizon_slots: pd.DataFrame,
                 known_future_covariates: pd.DataFrame) -> pd.DataFrame:
@@ -132,6 +152,10 @@ class Served(Model):
         con.register("o", origin.origin_utc[["park_id", "origin_utc"]])
         con.register("g", horizon_slots[["attraction_id", "slot_start_utc"]])
         try:
+            asked, own = con.execute(own_capture_sql(str(path), kinds, surfaces)).fetchone()
+            st = self.origin_stats.setdefault(f"{origin.kind} {origin.hour_local:02d}", [0, 0])
+            st[0] += asked
+            st[1] += own
             return con.execute(served_sql(str(path), kinds, surfaces)).df()
         finally:
             con.unregister("o")

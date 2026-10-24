@@ -46,7 +46,9 @@ PLAN = {"chronos": "chronos2_grid", "h5": "h5", "tfth5": "lvlh5_tft", "wkd": "wt
 # The intraday buckets are the report's (m015…m120, h2-4, h4-8, h8+); a question that
 # straddles a bucket takes every bucket it touches, which can only make `better` harder.
 QUESTIONS: dict[str, tuple[str, str, tuple[str, ...], list[str], dict[str, str]]] = {
-    "live_h0_1": ("MAE", "slot_mae", INTRADAY_UC, ["m015", "m030", "m045", "m060"],
+    # m015 is the slot starting AT the bench origin; the capture runs at :05 or later, so the
+    # served curve never answers it (it could have partly seen it) and it can never pair
+    "live_h0_1": ("MAE", "slot_mae", INTRADAY_UC, ["m030", "m045", "m060"],
                   {k: LIVE[k] for k in ("persist", "chronos", "h5")}),
     "live_h1_2": ("MAE", "slot_mae", INTRADAY_UC, ["m075", "m090", "m105", "m120"], LIVE),
     "today_h2_6": ("MAE", "slot_mae", INTRADAY_UC, ["h2-4", "h4-8"], LIVE),

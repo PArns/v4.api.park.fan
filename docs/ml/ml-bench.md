@@ -386,24 +386,31 @@ reads that file with its own DuckDB connection and never reads truth.
 | bench origin | surface | archived origins used |
 | --- | --- | --- |
 | daily, 06:00 (slot table: UC2 d0, UC3, D3) | `plan_day` — the planner, an hour served as a step over its four quarters | the 06:00 capture (d0–d7) and the 07:00 long-lead capture (d10–d90), which counts as the 06:00 origin it extends |
-| intraday 08–20 (intraday table: UC1, UC2-intraday) | `park_hourly` — CatBoost + PCN + blend (+ Chronos-2 where served) | the 06:00 capture (48 h) and the 10–18 captures (4 h) |
+| intraday 10–18 (intraday table: UC1, UC2-intraday) | `park_hourly` — CatBoost + PCN + blend (+ Chronos-2 where served) | that hour's own capture (4 h); 08 and 20 have none and stay unpaired |
 
 `served_incumbent` is the same arm preferring surface 8 at the same capture — what
 `park_hourly` would have shown without Chronos-2, archived only while
 `SERVE_CHRONOS_INTRADAY` is on; it is the reference once Chronos-2 is itself served.
 
-**Nearest origin, and the information cut** (`tests/test_served.py`). A capture runs
-within the hour of its *nominal* origin (the job fires at :05 UTC and reads each
-park's clock), so the curve read at 10:07 is the 10:00 origin's. Per (ride, target day)
-the arm takes the archived row with the **latest nominal origin not after the bench
-origin**, at most **2 h** older (one intraday capture cadence: 08:00 is answered by the
-06:00 curve, 20:00 by the 18:00 one, nothing staler — production would have shown a
-fresher curve the archive does not hold). The nearest row answers or nothing does: a
-slot past what it archived is not filled from an older curve. **A slot that starts
-before the capture instant is never answered**, so no slot the served curve could have
-partly observed is scored. What is left is a head start of minutes — the served curve
-knew the live readings up to its capture — which favours served: a candidate's win is,
-if anything, understated.
+**Own capture only, and the information cut** (`tests/test_served.py`). A capture runs
+within the hour of its *nominal* origin (the job fires at :05 UTC and reads each park's
+clock), so the curve read at 10:07 is the 10:00 origin's. Per (ride, target day) the arm
+takes the archived row whose capture lies in **[bench origin − 15 min, bench origin +
+60 min)** — the bench origin's **own** capture, nothing older. The bench's intraday
+origins are 08, 10 … 20 and the archive captures 06:00 and 10–18, so **08:00 and 20:00
+are left unpaired**: answering them with the 06:00 / 18:00 curve (as the first version
+of this arm did, `MAX_AGE_MIN = 120`) scored a curve two hours staler than the truth the
+candidate sees, which favours the candidate and inflated `live_h0_1` / `live_h1_2`. The
+run records, per origin kind and hour, how many park-origins were asked and how many had
+their own capture (`served_origins` in `run-*.json`, e.g. `"intraday 08": [n, 0]`); the
+rest are unpaired, so every paired cell compares like with like. The nearest row answers
+or nothing does: a slot past what it archived is not filled from an older curve. **A slot
+that starts before the capture instant is never answered**, so no slot the served curve
+could have partly observed is scored — which means **`m015` (the slot starting at the
+origin) never pairs**, since every capture runs at :05 or later; the generator's
+`live_h0_1` therefore reads `m030`–`m060`. What is left is a head start of minutes — the
+served curve knew the live readings up to its capture — which favours served: a
+candidate's win is, if anything, understated.
 
 **Known biases, documented and not corrected.** `park_hourly` is archived **rounded**
 (`roundServedWait`, 5-minute steps, floor 5) while every bench candidate is scored raw;

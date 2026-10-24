@@ -988,5 +988,10 @@ def main(args: argparse.Namespace) -> int:
     meta["finished_utc"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     meta["seconds"] = round(time.monotonic() - t0, 1)
     meta["origins"] = [str(c) for c in (r.origins[0], r.origins[-1])] if r.origins else []
+    # served arm (PAR-1043): park-origins asked vs answered by their own capture; the rest
+    # (intraday 08/20 — the archive captures 06, 10–18) are unpaired, never served stale
+    served = {type(m).scored_name(): m.origin_stats for m in models if hasattr(m, "origin_stats")}
+    if served:
+        meta["served_origins"] = served
     (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
     return 0
