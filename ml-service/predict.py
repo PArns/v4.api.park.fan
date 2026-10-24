@@ -19,6 +19,8 @@ from db import (
     fetch_school_holiday_coverage,
     convert_df_types,
     fetch_attraction_ids_for_park,
+    FROZEN_OUT_OF_WINDOW_SQL,
+    MEASURED_DAY_SCHEDULE_SQL,
 )
 from config import get_settings
 from features import (
@@ -150,23 +152,33 @@ def live_wait_velocity(current_wait: float, earlier_hourly_waits) -> float:
 # Rows the serving features are built from. Shared by both reads so the lookups
 # and the rolling statistics see the same population.
 #
-# It mirrors db.fetch_training_data's row filter (PAR-943): training accepts
-# `status = 'OPERATING' OR waitTime > 0` (beside `waitTime >= 5` that admits any
-# status) and days with no schedule or an UNKNOWN
+# It mirrors db.fetch_training_data's row filter (PAR-943): training reads
+# OPERATING rows with `waitTime >= 5`, minus frozen readings outside the
+# published window (PAR-1052), on days with no schedule or an UNKNOWN
 # one, so serving must too — the lags and rolling averages were learnt on that
 # population. shortcut: training additionally requires its park-wide
 # operating_days_heuristic on no-schedule/UNKNOWN days; replicating that CTE here
 # would scan every ride of the park per request. A day on which this ride posted
 # a >= 5 min wait passes that heuristic in practice; port the CTE if the two
 # populations are ever measured apart.
-_SERVING_QUEUE_FILTER = """
+_SERVING_QUEUE_FILTER = f"""
             qd."attractionId" = ANY(CAST(:attraction_ids AS uuid[]))
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 5
-                AND (qd.status = 'OPERATING' OR qd."waitTime" > 0)
+                AND qd.status = 'OPERATING'
+                AND {FROZEN_OUT_OF_WINDOW_SQL}
                 AND qd."queueType" = 'STANDBY'
                 AND NOT COALESCE(qd.is_heartbeat, false)
-                AND (se.id IS NULL OR se."scheduleType" IN ('OPERATING', 'UNKNOWN'))
+                AND (
+                    se.id IS NULL
+                    OR se."scheduleType" IN ('OPERATING', 'UNKNOWN')
+                    -- a day measured to have run, as training admits (PAR-1054)
+                    OR ({MEASURED_DAY_SCHEDULE_SQL} AND EXISTS (
+                        SELECT 1 FROM park_day_operations pdo
+                        WHERE pdo.park_id = se."parkId" AND pdo.day = se.date
+                            AND pdo.measured_operation
+                    ))
+                )
 """
 
 
