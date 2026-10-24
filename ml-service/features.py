@@ -930,27 +930,12 @@ def add_downtime_features(
             if mask.any() and downtime_mins > 0:
                 df.loc[mask, "had_downtime_today"] = 1
                 df.loc[mask, "downtime_minutes_today"] = float(downtime_mins)
-    elif "downtime_count" in df.columns:
-        # Training Mode: Reconstruct downtime from SQL signals
-        # Sort to ensure cumsum is chronological
-        original_index = df.index
-        df = df.sort_values(["attractionId", "timestamp"])
-
-        # Determine if there was ANY downtime earlier today for this attraction
-        # Convert downtime_count to minutes (approx 5 min per raw sample)
-        df["_mins_down"] = df["downtime_count"] * 5.0
-
-        # Group by attraction and date to get cumulative downtime for "today"
-        df["downtime_minutes_today"] = df.groupby(["attractionId", "date_local"])[
-            "_mins_down"
-        ].transform(lambda x: x.cumsum().shift(1).fillna(0))
-
-        # Binary flag: was it down at any point earlier today?
+    elif "downtime_count_before" in df.columns:
+        # Training Mode: DOWN samples in the earlier hours of the same local day,
+        # summed in SQL before the hours without an OPERATING reading are
+        # dropped (db.fetch_training_data). Approx 5 min per raw sample.
+        df["downtime_minutes_today"] = df["downtime_count_before"].astype(float) * 5.0
         df["had_downtime_today"] = (df["downtime_minutes_today"] > 0).astype(int)
-
-        # Cleanup
-        df = df.drop(columns=["_mins_down"])
-        df = df.loc[original_index]
 
     return df
 
@@ -1214,8 +1199,10 @@ def add_park_schedule_features(
             datetime.combine(end_date_local, time.max),
         )
 
-    # Initialize features
-    df["is_park_open"] = 0
+    # Initialize features. A day without a published window reads open, as
+    # serving reads it (predict.apply_schedule_features): training admits such a
+    # day only when rides were measured running on it (db.fetch_training_data).
+    df["is_park_open"] = 1
     df["has_special_event"] = 0  # TICKETED_EVENT or PRIVATE_EVENT
     df["has_extra_hours"] = 0  # EXTRA_HOURS (typically busier)
     df["time_since_park_open_mins"] = 0.0
@@ -1300,6 +1287,7 @@ def add_park_schedule_features(
                 return ts_compare, opening, valid, is_open
 
             ts_compare, opening, mask_valid, mask_open = window_of(df["schedule_date"])
+            has_window = mask_valid.copy()
             # A 10:00 -> 01:00 day owns the 00:00-00:45 slots that carry the
             # NEXT local date: also ask the previous date's window (PAR-943),
             # exactly as predict.apply_schedule_features does at serving time.
@@ -1310,7 +1298,8 @@ def add_park_schedule_features(
             mask_valid = mask_valid | use_prev
             mask_open = mask_open | mask_open_prev
 
-            df["is_park_open"] = mask_open.astype(int).values
+            # Outside its own date's window and not in the previous one: 0.
+            df["is_park_open"] = (mask_open | ~has_window).astype(int).values
 
             # Calculate time since open (vectorized), from the window the row is in
             time_since_open = (ts_compare - opening).dt.total_seconds() / 60.0
@@ -1375,14 +1364,12 @@ def add_park_schedule_features(
     # Clean up temporary columns (after all merges are done)
     df = df.drop(columns=["schedule_date"], errors="ignore")
 
-    # Correction Logic: Override "Closed" if we have evidence of "Open" (vectorized)
-    # Threshold ≥5 min: closed parks report 0, walk-ons and open parks report ≥5.
-    # 1. Training Override: Target data (waitTime) indicates open
-    if "waitTime" in df.columns:
-        mask_wait_time = (
-            (df["is_park_open"] == 0) & df["waitTime"].notna() & (df["waitTime"] >= 10)
-        )
-        df.loc[mask_wait_time, "is_park_open"] = 1
+    # 1. Training: a fresh reading more than an hour past the published window
+    # (db.fetch_training_data's after_hours_reading: an event evening) proves
+    # the park open. The label (waitTime) used to set this, which serving cannot
+    # see (PAR-1052).
+    if "after_hours_reading" in df.columns:
+        df.loc[df["after_hours_reading"].fillna(0) == 1, "is_park_open"] = 1
 
     # 2. Inference Override: Live Context (currentWaitTimes) indicates open
     if feature_context and "currentWaitTimes" in feature_context:

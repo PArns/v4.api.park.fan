@@ -160,6 +160,14 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
     n = len(df)
     log.info("🎲 Applying training dropout...")
 
+    # Built from the rows as they come in, before the passes below touch them.
+    h_rate = getattr(cfg, "HOLIDAY_DROPOUT_RATE", 0.0)
+    holiday_rows = pd.Series(False, index=df.index)
+    for flag in ("is_holiday_primary", "is_school_holiday_primary"):
+        if flag in df.columns:
+            holiday_rows |= df[flag].fillna(0).to_numpy() == 1
+    pre_break = holiday_pre_break_values(df, holiday_rows) if h_rate > 0 else None
+
     # --- 1. Occupancy dropout ---
     occ_rate = cfg.OCCUPANCY_DROPOUT_RATE
     if occ_rate > 0 and "park_occupancy_pct" in df.columns:
@@ -248,55 +256,24 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
 
     # --- 4. Holiday dropout ---
     # On rows where is_holiday_primary=1 OR is_school_holiday_primary=1, replace
-    # rolling averages + occupancy with historical proxies at a high rate.
-    # Without this, CatBoost sees that holiday rows always have elevated rolling
-    # averages and high occupancy, so it never needs is_holiday_primary (0% importance).
-    # With this dropout the model must use the holiday flag itself for those rows.
-    h_rate = getattr(cfg, "HOLIDAY_DROPOUT_RATE", 0.0)
-    if h_rate > 0:
-        holiday_rows = (df.get("is_holiday_primary", 0) == 1) | (
-            df.get("is_school_holiday_primary", 0) == 1
-        )
+    # the recent-history features with what serving feeds a holiday row it
+    # forecasts from BEFORE the break (holiday_pre_break_values). Without this
+    # the model sees holiday rows always carrying elevated rolling averages and
+    # occupancy and never needs the holiday flags (0% importance). The proxies
+    # used to come from 7-day windows that inside a multi-day break already hold
+    # the break, and left the 28d/90d means alone (PAR-1051).
+    if h_rate > 0 and pre_break is not None and len(pre_break):
         holiday_count = int(holiday_rows.sum())
-        if holiday_count > 0:
-            h_mask = holiday_rows & (rng.random(n) < h_rate)
-            h_count = int(h_mask.sum())
-            if h_count > 0:
-                is_weekend_mask = df["is_weekend"].values == 1
-
-                for col in ("avg_wait_last_24h", "avg_wait_last_1h"):
-                    if col in df.columns:
-                        fallback = np.where(
-                            is_weekend_mask,
-                            df["rolling_avg_weekend"].values,
-                            df["rolling_avg_weekday"].values,
-                        )
-                        df.loc[h_mask, col] = fallback[h_mask]
-
-                if "rolling_avg_7d" in df.columns:
-                    fallback_7d = np.where(
-                        is_weekend_mask,
-                        df["rolling_avg_weekend"].values,
-                        df["rolling_avg_weekday"].values,
-                    )
-                    # Snapshot original r7d BEFORE overwriting — needed for occupancy ratio below
-                    orig_r7d = df["rolling_avg_7d"].values.copy()
-                    df.loc[h_mask, "rolling_avg_7d"] = fallback_7d[h_mask]
-
-                if "park_occupancy_pct" in df.columns and "rolling_avg_7d" in df.columns:
-                    proxy = np.where(
-                        is_weekend_mask,
-                        df["rolling_avg_weekend"].values,
-                        df["rolling_avg_weekday"].values,
-                    )
-                    # Use original r7d so proxy/r7d reflects true holiday vs normal ratio
-                    r7d = orig_r7d.clip(1)
-                    hist_occ = (proxy / r7d) * df["park_occupancy_pct"].values
-                    df.loc[h_mask, "park_occupancy_pct"] = hist_occ[h_mask].clip(0, 400)
-
-                log.info(
-                    f"   Holiday dropout: {h_count:,}/{holiday_count:,} holiday rows ({h_rate * 100:.0f}%) → historical proxies"
-                )
+        h_mask = holiday_rows.to_numpy() & (rng.random(n) < h_rate)
+        h_idx = df.index[h_mask].intersection(pre_break.index)
+        if len(h_idx) > 0:
+            cols = [c for c in pre_break.columns if c in df.columns]
+            df.loc[h_idx, cols] = pre_break.loc[h_idx, cols].values
+        log.info(
+            f"   Holiday dropout: {len(h_idx):,}/{holiday_count:,} holiday rows "
+            f"({h_rate * 100:.0f}%, {int(h_mask.sum()) - len(h_idx):,} without pre-break history) "
+            f"→ as forecast from before the break"
+        )
 
     # The interactions multiply park_occupancy_pct, which the passes above just
     # replaced: computed before them, a dropped-out row kept the real
@@ -501,6 +478,126 @@ def _last_year_same_slot(
         merged["_origin_ts"] - pd.Timedelta(days=LAST_YEAR_MIN_OBSERVED_DAYS)
     )
     return vals.where(watched.fillna(False).astype(bool))
+
+
+def holiday_pre_break_values(df: pd.DataFrame, holiday_rows: pd.Series) -> pd.DataFrame:
+    """The features serving gives each holiday row when it forecasts that row
+    from before the break (PAR-1051).
+
+    Origin = local midnight after the park's last NON-holiday day before the
+    row's date (days the park has no rows on do not end a break). From there the
+    row is built the way predict.create_prediction_features builds a row beyond
+    its live window, the same rules as_known_at_origin applies at a fixed lead:
+
+    * the _ORIGIN_VALUE_COLUMNS (rolling 7d/weekday/weekend/28d/90d means,
+      trend, volatility, the base hour's lags, downtime) are the ride's last row
+      before the origin, within 7 d;
+    * avg_wait_same_dow_4w is the mean of the 1-4 weeks-back same-hour slots
+      that lie before the origin, else the origin's rolling_avg_7d. shortcut:
+      serving first tries the slot 52 weeks back (PAR-1045); add it here once a
+      year of history makes that path common;
+    * avg_wait_last_24h is the origin's within 24 h, else that same-dow value;
+    * avg_wait_last_1h is the slot one week back when it lies before the
+      origin, else the origin's weekday/weekend mean; wait_time_velocity 0.
+      shortcut: rows within 3 h of the origin (before 03:00) are live at
+      serving; nothing that early is a training row in practice;
+    * park_occupancy_pct is the park's mean in the same weekday and hour over
+      the 8 weeks before the origin (fetch_historical_park_occupancy's window),
+      100 where none.
+
+    Returns the replacement columns for the holiday rows that have such an
+    origin row; the others are absent.
+    """
+    need = {"attractionId", "parkId", "local_timestamp", "waitTime", "rolling_avg_7d"}
+    if not holiday_rows.any() or not need.issubset(df.columns):
+        return pd.DataFrame()
+
+    local = pd.to_datetime(df["local_timestamp"])
+    day = local.dt.normalize()
+    hour = local.dt.hour
+
+    park_days = (
+        pd.DataFrame({"parkId": df["parkId"].values, "day": day.values,
+                      "hol": holiday_rows.to_numpy()})
+        .groupby(["parkId", "day"])["hol"].max()
+        .reset_index()
+        .sort_values(["parkId", "day"])
+    )
+    park_days["anchor"] = park_days["day"].where(~park_days["hol"])
+    park_days["anchor"] = park_days.groupby("parkId")["anchor"].transform(
+        lambda s: s.shift().ffill()
+    )
+    anchor_of = park_days.set_index(["parkId", "day"])["anchor"]
+
+    tgt = pd.DataFrame(
+        {"attractionId": df["attractionId"], "parkId": df["parkId"], "_day": day,
+         "_hour": hour, "_local": local, "_weekend": local.dt.dayofweek >= 5}
+    )[holiday_rows.to_numpy()]
+    tgt["_anchor"] = anchor_of.reindex(
+        pd.MultiIndex.from_arrays([tgt["parkId"], tgt["_day"]])
+    ).values
+    tgt = tgt[tgt["_anchor"].notna()]
+    if tgt.empty:
+        return pd.DataFrame()
+    tgt["_origin"] = tgt["_anchor"] + pd.Timedelta(days=1)
+
+    cols = [c for c in _ORIGIN_VALUE_COLUMNS if c in df.columns]
+    src = df[["attractionId", *cols]].rename(columns={c: f"_o_{c}" for c in cols})
+    src["_origin"] = local.values
+    merged = pd.merge_asof(
+        tgt.reset_index().sort_values("_origin"),
+        src.sort_values("_origin"),
+        on="_origin",
+        by="attractionId",
+        direction="backward",
+        allow_exact_matches=False,
+        tolerance=pd.Timedelta(days=7),
+    ).set_index("index")
+    merged = merged[merged["_o_rolling_avg_7d"].notna()]
+    if merged.empty:
+        return pd.DataFrame()
+
+    out = pd.DataFrame({c: merged[f"_o_{c}"] for c in cols}, index=merged.index)
+    r7d = merged["_o_rolling_avg_7d"]
+    # Weeks back to the first same-weekday date at or before the anchor (>= 1).
+    k0 = np.ceil((merged["_day"] - merged["_anchor"]).dt.days / 7).astype(int)
+
+    def slot(table, key, weeks):
+        """`table`'s (key, date, hour) value `weeks` weeks before each row."""
+        idx = pd.MultiIndex.from_arrays(
+            [merged[key], merged["_day"] - pd.to_timedelta(7 * weeks, unit="D"), merged["_hour"]]
+        )
+        return pd.Series(table.reindex(idx).values, index=merged.index, dtype=float)
+
+    waits = df["waitTime"].groupby([df["attractionId"].values, day.values, hour.values]).mean()
+    known = [slot(waits, "attractionId", k).where(k0 <= k) for k in (1, 2, 3, 4)]
+    same_dow = pd.concat(known, axis=1).mean(axis=1)
+    same_dow = same_dow.where(same_dow.notna() & (same_dow > 0), r7d)
+    out["avg_wait_same_dow_4w"] = same_dow
+    lead = merged["_local"] - merged["_origin"]
+    if "_o_avg_wait_last_24h" in merged.columns:
+        out["avg_wait_last_24h"] = merged["_o_avg_wait_last_24h"].where(
+            lead <= pd.Timedelta(hours=24), same_dow
+        )
+    else:
+        out["avg_wait_last_24h"] = same_dow
+
+    profile_1h = merged["_o_rolling_avg_weekend"].where(
+        merged["_weekend"], merged["_o_rolling_avg_weekday"]
+    ) if "_o_rolling_avg_weekday" in merged.columns else r7d
+    lag_1w = known[0]
+    out["avg_wait_last_1h"] = lag_1w.where(lag_1w.notna() & (lag_1w > 0), profile_1h)
+    out["wait_time_velocity"] = 0.0
+
+    if "park_occupancy_pct" in df.columns:
+        occ_slots = df["park_occupancy_pct"].groupby(
+            [df["parkId"].values, day.values, hour.values]
+        ).mean()
+        occ = pd.concat(
+            [slot(occ_slots, "parkId", k0 + j) for j in range(8)], axis=1
+        ).mean(axis=1)
+        out["park_occupancy_pct"] = occ.fillna(100.0)
+    return out
 
 
 def as_known_at_origin(

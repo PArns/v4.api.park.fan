@@ -106,25 +106,35 @@ def apply_read_limits(db, statement_timeout_ms: int, lock_timeout_ms: int) -> No
     db.execute(text(f"SET LOCAL lock_timeout = {int(lock_timeout_ms)}"))
 
 
-def fetch_training_data(
-    start_date: datetime.datetime, end_date: datetime.datetime
-) -> pd.DataFrame:
-    """
-    Fetch historical queue data, weather, holidays for training
+# A reading outside its park's published window by more than an hour (PAR-1052).
+# Needs `qd` (queue_data) and `se` (that day's park-level schedule_entries row).
+# shortcut: only the row's own date's window is asked, so a slot after a
+# past-midnight close counts as outside; such a row is dropped only when also
+# stale, and a ride whose reading is 2 h old in an open park is frozen anyway.
+OUT_OF_WINDOW_SQL = """(
+    se."scheduleType" = 'OPERATING'
+    AND (qd.timestamp < se."openingTime" - INTERVAL '60 minutes'
+         OR qd.timestamp > se."closingTime" + INTERVAL '60 minutes')
+)"""
 
-    Returns DataFrame with columns:
-    - attraction_id
-    - park_id
-    - timestamp
-    - wait_time (target)
-    - hour, day_of_week, month, season
-    - temperature_max, precipitation, weather_code
-    - is_weekend, is_holiday_primary, is_holiday_neighbor_1/2/3
-    - avg_wait_last_24h, avg_wait_same_hour_last_week
-    """
+# The feed had not moved for over two hours when the row was written, or never
+# said when it moved. Measured on the PAR-1052 sample: frozen re-writes carry a
+# `lastUpdated` hours to ~30 days old (Ocean Park, Paultons, the pre-opening rows
+# at Kennywood / Traumatica / Toverland), while real after-close readings at
+# Halloween events were 13-64 min old - 60 min would cut the latter, 120 keeps
+# all of them. NULL is unproven, so it is treated as stale.
+STALE_FEED_SQL = """(
+    qd."lastUpdated" IS NULL
+    OR qd."lastUpdated" < qd.timestamp - INTERVAL '120 minutes'
+)"""
 
-    query = text(
-        """
+# Rows neither training nor serving reads: outside the window AND not fresh. A
+# fresh reading outside the window (an event evening) stays.
+FROZEN_OUT_OF_WINDOW_SQL = f"(NOT ({OUT_OF_WINDOW_SQL} AND {STALE_FEED_SQL}))"
+
+
+# The training read (fetch_training_data), built once at import.
+TRAINING_DATA_SQL = f"""
         WITH operating_days_heuristic AS (
             -- Identify days where the park was genuinely operating via ride heuristic
             -- even if the schedule says CLOSED or UNKNOWN.
@@ -158,10 +168,19 @@ def fetch_training_data(
                 a."parkId",
                 a."attractionType",
                 DATE_TRUNC('hour', qd.timestamp) as timestamp,
-                -- Use median for robustness against outliers
-                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime") as "waitTime",
-                -- NEW: Downtime signal (count occurrences of DOWN status in this hour)
+                -- Median of the OPERATING readings only (PAR-1052): a CLOSED,
+                -- REFURBISHMENT or DOWN row with a wait is a value the feed
+                -- left standing, not a queue. NULL when the hour has none.
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY qd."waitTime")
+                    FILTER (WHERE qd.status = 'OPERATING') as "waitTime",
+                -- Downtime signal (DOWN samples in this hour); summed over the
+                -- earlier hours of the day in hourly_labelled.
                 COUNT(CASE WHEN qd.status = 'DOWN' THEN 1 END) as downtime_count,
+                -- A fresh OPERATING reading more than an hour outside the
+                -- published window: the park ran past its hours (event evening).
+                MAX(CASE WHEN {OUT_OF_WINDOW_SQL} THEN 1 ELSE 0 END)
+                    FILTER (WHERE qd.status = 'OPERATING') as after_hours_reading,
+                MAX(DATE(qd.timestamp AT TIME ZONE p.timezone)) as local_day,
                 MAX(EXTRACT(HOUR FROM qd.timestamp AT TIME ZONE p.timezone)) as hour,
                 MAX(EXTRACT(DOW FROM qd.timestamp AT TIME ZONE p.timezone)) as day_of_week,
                 MAX(EXTRACT(MONTH FROM qd.timestamp AT TIME ZONE p.timezone)) as month,
@@ -193,20 +212,25 @@ def fetch_training_data(
             LEFT JOIN operating_days_heuristic odh
                 ON odh."parkId" = a."parkId"
                 AND odh.day = DATE(qd.timestamp AT TIME ZONE p.timezone)
+            -- The stored measured-operation verdict (park-local day, PAR-697):
+            -- a day the operator listed CLOSED but the rides measurably ran.
+            LEFT JOIN park_day_operations pdo
+                ON pdo.park_id = a."parkId"
+                AND pdo.day = DATE(qd.timestamp AT TIME ZONE p.timezone)
             WHERE qd."queueType" = 'STANDBY'
                 -- A heartbeat copies the previous status AND wait with a fresh
                 -- timestamp: it keeps a frozen reading alive, it never ends a
                 -- status, so it is neither a target nor context (PAR-1039).
                 AND NOT COALESCE(qd.is_heartbeat, false)
-                -- Relaxed: Accept OPERATING status OR any positive wait time (some parks report CLOSED but have wait times)
-                AND (qd.status = 'OPERATING' OR qd."waitTime" > 0)
                 AND qd.timestamp BETWEEN :start_date AND :end_date
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 5
+                AND {FROZEN_OUT_OF_WINDOW_SQL}
                 AND (
                     se."scheduleType" = 'OPERATING'        -- confirmed operating
                     OR (se."scheduleType" IS NULL AND odh.day IS NOT NULL) -- No schedule in DB + heuristic says open
                     OR (se."scheduleType" = 'UNKNOWN' AND odh.day IS NOT NULL) -- UNKNOWN schedule + heuristic says open
+                    OR pdo.measured_operation               -- measured to have run (PAR-1054)
                 )
             GROUP BY
                 qd."attractionId",
@@ -214,6 +238,18 @@ def fetch_training_data(
                 a."parkId",
                 a."attractionType",
                 DATE_TRUNC('hour', qd.timestamp)
+        ),
+        hourly_labelled AS (
+            -- DOWN samples in the earlier hours of the same local day, counted
+            -- before the hours without an OPERATING reading are dropped below.
+            SELECT
+                hq.*,
+                COALESCE(SUM(hq.downtime_count) OVER (
+                    PARTITION BY hq."attractionId", hq.local_day
+                    ORDER BY hq.timestamp
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                ), 0) AS downtime_count_before
+            FROM hourly_queue hq
         ),
         weather_daily AS (
             SELECT
@@ -237,7 +273,7 @@ def fetch_training_data(
             wd."snowfallSum" as "snowfallSum",
             wd."windSpeedMax" as "windSpeedMax",
             wd."weatherCode"
-        FROM hourly_queue hq
+        FROM hourly_labelled hq
         -- weather_data.date is the PARK-LOCAL calendar day (Open-Meteo is asked
         -- with timezone:"auto"), so the hour is joined on its park-local date.
         -- `DATE(hq.timestamp)` read the session (UTC) date and handed a Los
@@ -245,12 +281,32 @@ def fetch_training_data(
         JOIN parks hp ON hp.id = hq."parkId"
         LEFT JOIN weather_daily wd ON wd."parkId" = hq."parkId"
             AND DATE(hq.timestamp AT TIME ZONE hp.timezone) = wd.date
+        WHERE hq."waitTime" IS NOT NULL
         -- No ORDER BY: feature engineering re-sorts the DataFrame by its own keys
         -- (sort_values(["attractionId","timestamp"]) etc.), so ordering here is
         -- redundant work. Sorting ~2.1M rows by timestamp spilled ~320MB to disk
         -- (external merge) during the training window for no downstream benefit.
     """
-    )
+
+
+def fetch_training_data(
+    start_date: datetime.datetime, end_date: datetime.datetime
+) -> pd.DataFrame:
+    """
+    Fetch historical queue data, weather, holidays for training
+
+    Returns DataFrame with columns:
+    - attraction_id
+    - park_id
+    - timestamp
+    - wait_time (target)
+    - hour, day_of_week, month, season
+    - temperature_max, precipitation, weather_code
+    - is_weekend, is_holiday_primary, is_holiday_neighbor_1/2/3
+    - avg_wait_last_24h, avg_wait_same_hour_last_week
+    """
+
+    query = text(TRAINING_DATA_SQL)
 
     import time
 
