@@ -741,8 +741,11 @@ describe("calendar questions (PAR-1037)", () => {
   it("has a grid-TFT shadow column on the TFT calendar questions, live only (PAR-1041)", () => {
     for (const id of ["cal_rank", "cal_busier", "cal_far"]) {
       expect(q(id).models.tft_grid).toEqual(["tft_grid"]);
+      // PAR-1057: the drivers variant is its own column, not a replacement.
+      expect(q(id).models.tft_grid_drivers).toEqual(["tft_grid_drivers"]);
     }
     expect(q("cal_far_90").models.tft_grid).toBeUndefined();
+    expect(cellFloorDate("cal_far", "tft_grid_drivers")).toBe("2027-01-08");
     // Its rows begin with the shadow, not with the archive.
     expect(cellFloorDate("cal_far", "tft_grid")).toBe("2027-01-08");
     expect(cellFloorDate("cal_far", "wkd")).toBe("2026-12-22");

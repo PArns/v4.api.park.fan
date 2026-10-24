@@ -17,27 +17,28 @@ import forecast
 import db
 
 
-def run_grid_shadow(version: str, forecast_date) -> dict | None:
+def run_grid_shadow(version: str, forecast_date, drivers: bool = False) -> dict | None:
     """PAR-1041: the calendar-grid TFT as a shadow, after the served run and in
     the same process, written to `tft_forecasts_shadow` under the served run's
-    forecast_date. Never fails the night: the served forecast is already
-    persisted, so an error here is reported in the status and nothing else."""
-    if not main.settings.NF_GRID_SHADOW:
+    forecast_date. With `drivers` (PAR-1057) the grid + PAR-830 drivers +
+    time-weighted target variant instead, into `tft_forecasts_shadow_drivers`,
+    so each is paired on its own. Never fails the night: the served forecast is
+    already persisted, so an error here is reported in the status and nothing else."""
+    if not (main.settings.NF_SHADOW_DRIVERS if drivers else main.settings.NF_GRID_SHADOW):
         return None
-    if main.settings.NF_CALENDAR_GRID:
+    if main.settings.NF_CALENDAR_GRID and not drivers:
         # The served run already is the grid variant; a copy would compare it
-        # with itself.
+        # with itself. (The drivers variant still differs from it.)
         return {"skipped": "NF_CALENDAR_GRID is on"}
-    drivers = main.settings.NF_SHADOW_DRIVERS
-    # The suffix tells grid-only rows from grid + PAR-830 drivers (PAR-1057).
     shadow_version = f"{version}-grid{'-drivers' if drivers else ''}"
+    table = db.SHADOW_DRIVERS_TABLE if drivers else db.SHADOW_TABLE
     try:
         with forecast.calendar_grid(True, drivers=drivers):
             y_hat = forecast.train_and_forecast(shadow_version)
         tcol = main._tft_column(list(y_hat.columns))
         persisted = (
             db.persist_forecast(
-                y_hat, shadow_version, tcol, forecast_date, table=db.SHADOW_TABLE
+                y_hat, shadow_version, tcol, forecast_date, table=table
             )
             if tcol else 0
         )
@@ -88,6 +89,12 @@ def run(version: str) -> None:
             "error": None,
         })
         info["shadow"] = run_grid_shadow(version, forecast_date)
+        main._write_status({
+            "is_training": True, "status": "training", "version": version,
+            "started_at": started_at.isoformat(), "phase": "grid_shadow_drivers",
+            "error": None,
+        })
+        info["shadow_drivers"] = run_grid_shadow(version, forecast_date, drivers=True)
         main._write_status({
             "is_training": False, "status": "completed", "version": version,
             "finished_at": datetime.now(timezone.utc).isoformat(),

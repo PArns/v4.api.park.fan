@@ -290,6 +290,11 @@ export interface ArchivedCurve {
    * time; rounded like the served TFT level.
    */
   tftGridPeak?: number | null;
+  /**
+   * plan_day: the same for the grid + PAR-830 drivers shadow
+   * (`tft_forecasts_shadow_drivers`, PAR-1057), paired as its own model.
+   */
+  tftGridDriversPeak?: number | null;
 }
 
 export interface ArchivedParkDay {
@@ -1116,6 +1121,8 @@ export const PAIRED_MODELS = {
   weekdayAvg: "weekday_avg",
   /** The calendar-grid TFT shadow (PAR-1041), on the TFT-levelled ride-days. */
   tftGrid: "tft_grid",
+  /** The grid + drivers + time-weighted target TFT shadow (PAR-1057). */
+  tftGridDrivers: "tft_grid_drivers",
 } as const;
 
 /** Ride-day use cases of the paired table besides the slot ones (UC1/2/3). */
@@ -1270,6 +1277,7 @@ export const PAIRED_OPTIONAL_MODELS: ReadonlySet<string> = new Set([
   PAIRED_MODELS.chronosGrid,
   PAIRED_MODELS.shadowPeak,
   PAIRED_MODELS.tftGrid,
+  PAIRED_MODELS.tftGridDrivers,
 ]);
 
 /**
@@ -1540,14 +1548,22 @@ export function scorePairedModels(
         p90,
       );
     }
-    // The grid shadow is optional: on the same ride-days, where it has a value.
-    const grid = plan.levelSource === "tft" ? (plan.tftGridPeak ?? null) : null;
-    if (grid !== null) {
+    // The grid shadows are optional: on the same ride-days, where each has a value.
+    const tft = plan.levelSource === "tft";
+    const grids: Array<[string, number | null]> = [
+      [PAIRED_MODELS.tftGrid, tft ? (plan.tftGridPeak ?? null) : null],
+      [
+        PAIRED_MODELS.tftGridDrivers,
+        tft ? (plan.tftGridDriversPeak ?? null) : null,
+      ],
+    ];
+    for (const [model, grid] of grids) {
+      if (grid === null) continue;
       for (const seg of plan.isHeadliner ? ["all", "headliner"] : ["all"]) {
         acc.add(
           PAIRED_PEAK_USE_CASE,
           lead,
-          PAIRED_MODELS.tftGrid,
+          model,
           levelRef,
           seg,
           grid,
@@ -1556,10 +1572,10 @@ export function scorePairedModels(
         );
       }
     }
-    if (plan.isHeadliner && plan.levelSource === "tft") {
+    if (plan.isHeadliner && tft) {
       const d7: Array<[string, number | null]> = [
         [PAIRED_MODELS.weekdayAvg, wkdPeak],
-        [PAIRED_MODELS.tftGrid, grid],
+        ...grids,
       ];
       for (const [model, pred] of d7) {
         if (pred === null) continue;
@@ -1578,7 +1594,7 @@ export function scorePairedModels(
   }
 }
 
-/** One `tft_forecasts_shadow` row for a ride and target date. */
+/** One `tft_forecasts_shadow` (or `_shadow_drivers`) row for a ride and target date. */
 export interface ShadowLevelRow {
   attractionId: string;
   forecastDate: string;

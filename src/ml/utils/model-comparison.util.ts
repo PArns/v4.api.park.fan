@@ -94,6 +94,7 @@ export function cellFloorDate(questionId: string, modelId: string): string {
  */
 export const MODEL_ARCHIVE_START: Record<string, string> = {
   tft_grid: "2026-10-26",
+  tft_grid_drivers: "2026-10-26",
 };
 
 export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
@@ -148,6 +149,12 @@ export const COMPARISON_MODELS: ModelComparisonModelDto[] = [
     label: "TFT mit Lücken-Raster",
     oneLiner:
       "Dasselbe Tagesmodell, aber es lernt auf jedem Kalendertag statt nur auf Öffnungstagen und kennt Öffnungsplan und Schulferien. Läuft jede Nacht nebenher, nicht in der App.",
+  },
+  {
+    id: "tft_grid_drivers",
+    label: "TFT mit Lücken-Raster + Treibern",
+    oneLiner:
+      "Wie „TFT mit Lücken-Raster“, kennt zusätzlich längere oder kürzere Öffnungszeiten als sonst, den ersten Tag nach einer Schließung und Ferienanfang/-ende, und lernt die zeitgewichtete Tagesspitze. Läuft jede Nacht nebenher, nicht in der App.",
   },
   {
     id: "catboost",
@@ -461,6 +468,7 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     unit: "rate",
     models: {
       tft_grid: [PAIRED_MODELS.tftGrid],
+      tft_grid_drivers: [PAIRED_MODELS.tftGridDrivers],
       catboost: null,
       wkd: [PAIRED_MODELS.weekdayAvg],
     },
@@ -478,6 +486,7 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     reference: PAIRED_LEVEL_REFERENCES.tft,
     models: {
       tft_grid: [PAIRED_MODELS.tftGrid],
+      tft_grid_drivers: [PAIRED_MODELS.tftGridDrivers],
       catboost: null,
       wkd: ["weekday_avg"],
     },
@@ -498,6 +507,7 @@ export const COMPARISON_QUESTIONS: QuestionDef[] = [
     reference: PAIRED_LEVEL_REFERENCES.tft,
     models: {
       tft_grid: [PAIRED_MODELS.tftGrid],
+      tft_grid_drivers: [PAIRED_MODELS.tftGridDrivers],
       catboost: null,
       wkd: ["weekday_avg"],
     },

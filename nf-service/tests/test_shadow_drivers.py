@@ -164,3 +164,20 @@ def test_without_a_published_window_the_operating_span_is_the_window():
     out = db.time_weighted_p90(r, None, 0.9, 5)
     # Slots ending 10:15 … 11:15: 30, 30, 30, 30, 50 → P90 = 30 + 0.6 × 20.
     assert out["y"].tolist() == [pytest.approx(42.0)]
+
+
+def test_categorical_ids_and_status_give_the_same_target():
+    """fetch_time_weighted_panel casts ids/status to category for memory; the
+    result must equal the plain-str one and hold no empty id × day groups."""
+    stale = _readings([("10:00", "OPERATING", 40)], "stale")
+    down = _readings([("10:00", "OPERATING", 40), ("10:30", "DOWN", 0)], "down")
+    late = _readings([("10:00", "OPERATING", 20), ("16:00", "OPERATING", 80)], "late")
+    r = pd.concat([stale, down, late], ignore_index=True)
+    plain = db.time_weighted_p90(r, WINDOW, 0.9, 5)
+    cat = r.astype({"unique_id": "category", "park_id": "category", "status": "category"})
+    out = db.time_weighted_p90(cat, WINDOW, 0.9, 5)
+    out["unique_id"] = out["unique_id"].astype(str)
+    pd.testing.assert_frame_equal(
+        out.sort_values("unique_id").reset_index(drop=True),
+        plain.sort_values("unique_id").reset_index(drop=True),
+    )
