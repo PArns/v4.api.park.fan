@@ -12,7 +12,7 @@ pydantic-settings==2.15.0
 
 # ML & Data Processing
 catboost==1.2.10  # pinned: nightly retrain must not silently pick up a new major
-numpy==2.4.6  # newest that runs on Python 3.11 (2.5 needs >= 3.12); one numpy in every image, see docs/development/python-dependencies.md
+numpy==2.4.6  # held below 2.5: one numpy in every image, and nf/pcn/ml-bench run Python 3.11 (2.5 needs >= 3.12); see docs/development/python-dependencies.md
 pandas==2.3.3  # last 2.x; 3.x (copy-on-write, string dtype) is a separate migration of the feature code
 scikit-learn==1.9.1
 

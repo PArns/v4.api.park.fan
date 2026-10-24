@@ -9,8 +9,8 @@ pydantic==2.14.0
 pydantic-settings==2.15.0
 
 # Neural forecasting (Nixtla). Pulls PyTorch + Lightning.
-# torch CPU wheel is installed separately in the Dockerfile (from the cpu index)
-# so we don't drag in the multi-GB CUDA build.
+# torch is installed separately in the Dockerfile (torch==2.11.0 from the cu128 index),
+# so pip keeps that CUDA build instead of resolving its own.
 neuralforecast==3.3.0
 
 # Chronos-2 zero-shot SHADOW forecast for the forward archive (PAR-852).

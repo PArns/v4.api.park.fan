@@ -25,6 +25,9 @@ bind = "0.0.0.0:8000"
 worker_class = "uvicorn_worker.UvicornWorker"
 workers = int(os.environ.get("ML_WORKERS", "2"))
 preload_app = True
+# gunicorn >= 25.1 opens a gunicornc control socket by default (a runtime-management
+# surface that can resize or stop the service, restarted around every fork); unused here.
+control_socket_disable = True
 
 # Mirror the timeouts the service ran with under plain uvicorn — predicts plus
 # their DB queries can be slow, and we don't want gunicorn reaping a busy worker.
