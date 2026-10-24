@@ -1870,9 +1870,11 @@ export class PlanDayService {
    * The holiday situation of a calendar day, the key `climatology` matches on.
    * A public holiday and a bridge day are `holiday`; a day inside school
    * holidays that is neither is `school_vacation`. `null` for no row, which is
-   * "unknown" and not "regular" — and for a day past the park's school-holiday
-   * data (`schoolVacationUnknown`, PAR-1049): it may be a break nobody has
-   * published yet.
+   * "unknown" and not "regular". A day past the park's school-holiday data
+   * (`schoolVacationUnknown`, PAR-1049) is `school_unknown`: it may be a break
+   * nobody has published yet, so it matches only other such days. A country
+   * with no school data at all still looks back (unknown on both sides); a
+   * partly covered one does not compare its unpublished days with known ones.
    */
   private static holidayState(
     day: {
@@ -1885,7 +1887,7 @@ export class PlanDayService {
     if (!day) return null;
     if (day.isHoliday || day.isBridgeDay) return "holiday";
     if (day.isSchoolVacation) return "school_vacation";
-    if (day.schoolVacationUnknown) return null;
+    if (day.schoolVacationUnknown) return "school_unknown";
     return "regular";
   }
 
