@@ -19,6 +19,8 @@ const OFFICIAL_HOSTS: Record<string, string[]> = {
   AU: ["education.qld.gov.au"],
   // Xinhua's authorised release ("受权发布") of the State Council notice.
   CN: ["www.news.cn", "www.gov.cn"],
+  // The school districts themselves (PAR-1071).
+  US: ["www.ocps.net", "www.nisd.net"],
 };
 
 describe("curated holiday files (PAR-1065)", () => {
@@ -111,5 +113,11 @@ describe("curated holiday files (PAR-1065)", () => {
     expect(schoolCoverageThrough(coverage, "SG", null)).toBe("2027-12-31");
     // China: provinces set school holidays; none are curated, so unknown.
     expect(schoolCoverageThrough(coverage, "CN", "31")).toBeNull();
+    // US, one district per state (PAR-1071): Orange County has published
+    // 2028-29, so the 2028 summer ends the day before it starts; Northside
+    // ISD's 2027-28 calendar runs through July 2028.
+    expect(schoolCoverageThrough(coverage, "US", "FL")).toBe("2028-08-09");
+    expect(schoolCoverageThrough(coverage, "US", "TX")).toBe("2028-07-31");
+    expect(schoolCoverageThrough(coverage, "US", "OH")).toBeNull();
   });
 });

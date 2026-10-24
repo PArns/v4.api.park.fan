@@ -34,6 +34,11 @@ const PARKS: [slug: string, country: string, regionCode: string | null][] = [
   ["cn-31", "CN", "31"],
   ["cn-11", "CN", "11"],
   ["cn-tianjin", "CN", "Tianjin"],
+  // US parks store the bare state code (PAR-1071); curated rows are `US-FL`/….
+  ["magic-kingdom-park", "US", "FL"],
+  ["busch-gardens-tampa", "US", "FL"],
+  ["six-flags-fiesta-texas", "US", "TX"],
+  ["six-flags-over-texas", "US", "TX"],
 ];
 
 const toRow = (r: HolidayInput) => ({
@@ -84,6 +89,22 @@ describe("imported rows reach the parks' production region codes (PAR-1065)", ()
       ).not.toBeNull();
     },
   );
+
+  it("leaves a US state without a curated district unknown (cedar-point, OH)", () => {
+    const coverage = buildSchoolCoverage(
+      curated("US").map((r) => ({
+        country: r.country,
+        region: r.region ?? null,
+        through: r.date.toISOString().slice(0, 10),
+      })),
+    );
+    expect(schoolCoverageThrough(coverage, "US", "OH")).toBeNull();
+    expect(
+      curated("US").some((r) =>
+        isLocalHoliday(toRow(r), { countryCode: "US", regionCode: "OH" }),
+      ),
+    ).toBe(false);
+  });
 
   it("writes KR rows under the ISO form the readers build from 41/42/11", () => {
     expect([...new Set(kr.map((r) => r.region))].sort()).toEqual([
