@@ -60,6 +60,14 @@ const NISD_2026 = `${NISD_FILES}/2025/2026-2027-nisd-calendar.pdf`;
 const NISD_2027 = `${NISD_FILES}/2025/2027-2028-nisd-calendar.pdf`;
 const tx = district("US-TX", "Northside ISD");
 
+// California — Los Angeles Unified (Universal Studios Hollywood; the LA
+// basin is the main catchment for Disneyland, Knott's and Magic Mountain).
+// The district page links both years' PDFs (media.edlio.net, LAUSD's site
+// host); "Board Approved", adoption tentative pending union negotiations.
+const LAUSD =
+  "https://www.lausd.org/apps/pages/index.jsp?uREC_ID=4432518&type=d&pREC_ID=2672183";
+const ca = district("US-CA", "Los Angeles Unified");
+
 export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
   country: "US",
   entries: [
@@ -140,6 +148,36 @@ export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
     // 2028-29 is not published: the calendar runs through July 2028, so the
     // summer stops on the last day it shows and later days read as unknown.
     tx("2028-05-25", "2028-07-31", "Summer break", NISD_2027),
-    //CA
+
+    // California 2026-27 (first day 2026-08-12, last day 2027-06-04). The
+    // 2026-27 calendar shows July and August 2026 without instruction; the
+    // 2025-26 calendar was not read, so summer 2026 starts on 07-01.
+    ca("2026-07-01", "2026-08-11", "Summer break", LAUSD),
+    ca("2026-09-04", "2026-09-07", "Admission Day and Labor Day", LAUSD),
+    ca("2026-09-21", "2026-09-21", "Unassigned day", LAUSD),
+    ca("2026-11-11", "2026-11-11", "Veterans Day", LAUSD),
+    ca("2026-11-23", "2026-11-27", "Thanksgiving break", LAUSD),
+    ca("2026-12-21", "2027-01-08", "Winter recess", LAUSD),
+    ca("2027-01-18", "2027-01-18", "Martin Luther King Jr. Day", LAUSD),
+    ca("2027-02-15", "2027-02-15", "Presidents' Day", LAUSD),
+    ca("2027-03-22", "2027-03-26", "Spring recess", LAUSD),
+    ca("2027-03-31", "2027-03-31", "Farm Workers Day", LAUSD),
+    ca("2027-05-31", "2027-05-31", "Memorial Day", LAUSD),
+    ca("2027-06-05", "2027-08-11", "Summer break", LAUSD),
+    // California 2027-28 (first day 2027-08-12, last day 2028-06-07)
+    ca("2027-09-03", "2027-09-06", "Admission Day and Labor Day", LAUSD),
+    ca("2027-09-21", "2027-09-21", "Unassigned day", LAUSD),
+    ca("2027-10-11", "2027-10-11", "Unassigned day", LAUSD),
+    ca("2027-11-11", "2027-11-11", "Veterans Day", LAUSD),
+    ca("2027-11-22", "2027-11-26", "Thanksgiving break", LAUSD),
+    ca("2027-12-20", "2028-01-07", "Winter recess", LAUSD),
+    ca("2028-01-17", "2028-01-17", "Martin Luther King Jr. Day", LAUSD),
+    ca("2028-02-21", "2028-02-21", "Presidents' Day", LAUSD),
+    ca("2028-03-31", "2028-03-31", "Farm Workers Day", LAUSD),
+    ca("2028-04-10", "2028-04-14", "Spring recess", LAUSD),
+    ca("2028-04-24", "2028-04-24", "Armenian Genocide Remembrance Day", LAUSD),
+    ca("2028-05-29", "2028-05-29", "Memorial Day", LAUSD),
+    // 2028-29 is not published: the calendar ends with June 2028.
+    ca("2028-06-08", "2028-06-30", "Summer break", LAUSD),
   ],
 };
