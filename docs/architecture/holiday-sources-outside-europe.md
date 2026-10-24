@@ -76,6 +76,12 @@ weekday-checked).
 | FL | Orange County Public Schools ([2026-27](https://www.ocps.net/110680_3), [2027-28](https://www.ocps.net/school-calendar-2027-28), [2028-29](https://www.ocps.net/school-calendar-2028-29), [2024-25 / 2025-26](https://www.ocps.net/110681_3)) | the 13 Orlando parks (Disney, Universal, SeaWorld) | summer 2025, 2025-26, 2026-27, 2027-28; 2028-29's first day closes summer 2028 |
 | TX | Northside ISD, San Antonio ([calendars](https://www.nisd.net/schools/calendars)) | SeaWorld / Aquatica San Antonio, Six Flags Fiesta Texas (Schlitterbahn New Braunfels nearby) | 2025-26, 2026-27 (approved 12/09/25), 2027-28 (approved 12/10/25) |
 | CA | Los Angeles Unified ([calendar page](https://www.lausd.org/apps/pages/index.jsp?uREC_ID=4432518&type=d&pREC_ID=2672183), PDFs [2025-26](https://media.edlio.net/135dff18/8fc3b7d4/7659581d/517e3313317f408baf4c01d7f43b5582), [2026-27 rev 6.9.26](https://media.edlio.net/135dff18/cc2a29d3/f0dbab90/03abacb9bbd44b1c8b86d1828e9ad968?_=2026-27%20Instructional%20Cal_Eng_Month_rev%206.9.26.pdf) and [2027-28](https://media.edlio.net/135dff18/8fc3b7d4/7659581d/160a549f27d044bab5ea9fb555faddc1?_=2027-28%20Instructional%20Cal_Eng_Month.pdf)) | Universal Studios Hollywood, and the LA basin that feeds Disneyland, Knott's and Magic Mountain | 2025-26, 2026-27, 2027-28 ("Board Approved", adoption "tentative" pending union negotiations); summer 2025 from 07-01, the first month the 2025-26 calendar shows |
+| PA | Derry Township School District, Hershey ([2026-27 Year at a Glance](https://www.hershey.k12.pa.us/calendar/accessible-calendar), [event calendar](https://www.hershey.k12.pa.us/calendar/calendar-view) for 2025-26 and the end of 2024-25) | Hersheypark; Kennywood, Knoebels, Dorney Park and Sesame Place Langhorne get its calendar too | summer 2025, 2025-26, 2026-27; 2027-28 not published, so summer 2027 stops on 2027-06-30 |
+| OH | Sandusky City Schools ([2026-27 announcement](https://www.scs-k12.net/protected/ArticleView.aspx?iid=6I3UUB0&dasi=3GGI); calendars are Google Sheets linked from [scs-k12.net](https://www.scs-k12.net/), the 2024-25 and 2025-26 links read from Wayback captures of the homepage) | Cedar Point, Cedar Point Shores; Kings Island gets it too | summer 2025, 2025-26, 2026-27; summer 2027 stops on 2027-06-30 |
+| MO | North Kansas City Schools ([calendar page](https://www.nkcschools.org/calendar3): 2026-27 and 2027-28, both board-approved 2026-01-13; the [2025-26 PDF](https://resources.finalsite.net/images/v1746025243/nkcschoolsorg/wmwzhsobrfo09ejjifns/2025-26AcademicCalendar.pdf) and the revised [2024-25 PDF](https://resources.finalsite.net/images/v1706205818/nkcschoolsorg/gaewvmwdji6uqglgeelm/2024-25_Academic_Calendar_Traditional.pdf), linked from that page in 2025 per its Wayback captures, still on the district's file host) | Worlds of Fun, Oceans of Fun; the two Eureka parks (Six Flags St. Louis area) and Silver Dollar City get it too | summer 2025 through 2027-28; summer 2028 stops on 2028-06-30 |
+| VA | Williamsburg-James City County Public Schools ([2024-25](https://wjccschools.org/wp-content/uploads/2023/10/2024-25-Academic-Calendar.pdf), [2025-26](https://wjccschools.org/wp-content/uploads/2021/07/2025-26-Academic-Calendar.pdf), [2026-27](https://wjccschools.org/wp-content/uploads/2025/10/2026-27-Academic-Calendar.pdf), [2027-28 adopted 4/1/26](https://wjccschools.org/wp-content/uploads/2021/07/2027-28-Academic-Calendar-4-1-26.pdf)) | Busch Gardens Williamsburg, Water Country USA; Kings Dominion gets it too | summer 2025 through 2027-28; summer 2028 stops on 2028-06-30 |
+| TN | Sevier County Schools ([calendar page](https://www.sevier.org/7073): 2025-26 revised January 2026, 2026-27) | Dollywood | 2025-26 (summer 2025 from 08-01, see below), 2026-27; summer 2027 stops on 2027-06-30 |
+| NC | Charlotte-Mecklenburg Schools ([calendar page](https://www.cmsk12.org/calendar): 2026-27 approved 2025-04-08, 2027-28 approved 2026-04-14; 2024-25 revised 01.23.25 and 2025-26 read from its Wayback capture of 2025-05-22) | Carowinds | summer 2025 through 2027-28; summer 2028 stops on 2028-06-30 |
 
 **What is listed.** Every day students have no school: Thanksgiving, winter,
 spring and summer breaks, plus single student holidays (teacher workdays,
@@ -102,6 +108,63 @@ sync would have written `synth-summer:US:US-CA:` rows for 06-05..08-11, an
 invented break. Regions that appear in a curated file with `school` rows
 (`CURATED_SCHOOL_REGIONS`, `holidays.service.ts`) are skipped; synced
 countries (IT, ES, IE) are projected as before.
+
+### Wave 2: PA, OH, MO, VA, TN, NC (PAR-1074)
+
+The same rules, six more states, one district each. Production `regionCode`
+for all 18 parks was read on 2026-10-25 and is the bare state code (PA, OH,
+MO, VA, TN, NC).
+
+**Which district.** The one at the park our crowd data cares most about,
+where the choice was not obvious:
+
+- **OH — Sandusky, not Mason.** Cedar Point and Cedar Point Shores are two of
+  the three Ohio parks and Cedar Point is the larger draw; Kings Island
+  (Mason City Schools) gets Sandusky's calendar.
+- **MO — North Kansas City, not Branson or St. Louis.** Production has five
+  MO parks: Worlds of Fun and Oceans of Fun in Kansas City's Northland,
+  Hurricane Harbor and "Mid-America Parks" in Eureka (the Six Flags St. Louis
+  site), and Silver Dollar City in Branson. Kansas City and Eureka tie at two
+  parks. The Kansas City parks draw from their own metro, so a metro district
+  says something about their crowds; Silver Dollar City draws tourists from
+  across the Midwest, for whom Branson R-IV's calendar says little. North
+  Kansas City Schools also has 2027-28 approved. Rockwood (Eureka) is the
+  candidate if St. Louis ever needs its own key.
+- **PA — Derry Township (Hershey)** for Hersheypark; Kennywood (Pittsburgh)
+  and Dorney Park (Allentown) are far from it and get it anyway.
+- **VA — Williamsburg-James City County** (Busch Gardens, Water Country USA);
+  Kings Dominion is 80 km north.
+
+**What is not listed.** Days off for some grades only (Derry's K-5
+conference days and 6th-grade conference day, WJCC's PK-5 days), half days
+and early releases (they are school days), and WJCC's asynchronous remote
+learning day 2026-04-21 (instruction at home, not a day off). Derry
+Township's two sources disagree on 2027-03-09 and 2027-03-18 (the Year at a
+Glance says K-5 on 03-09 and all students on 03-18, the event calendar the
+reverse), so neither is listed; 03-19 is off in both. A district's own
+calendar wins over its plan: Derry's 2026-04-02 was planned as spring recess
+and became a snow make-up day (its event calendar says "School in Session"),
+so spring 2026 starts on 04-03. For the other districts the published 2025-26
+calendar is used as published; Charlotte-Mecklenburg waived its 2025-26
+make-up days (WFAE, 2026-03-17, a cross-check only). Make-up days scheduled
+after the last day (NKC, CMS) are inside the summer, as planned. In Sandusky's
+sheets a day is off when it is coloured "No School" or "Professional Learning
+Day - No School"; conference days (grey) are school days.
+
+**Where it stops.** No district has published the year after its last
+calendar, so each summer stops on June 30 of that calendar's last month
+(LAUSD's rule): PA, OH and TN on 2027-06-30, MO, VA and NC on 2028-06-30.
+Sevier County shows neither its 2024-25 calendar nor its last day anywhere
+on sevier.org (its event API is empty before 2026), so summer 2025 for TN
+starts on 2025-08-01, the first day its 2025-26 calendar shows; days before
+read as 0. Every other new state starts with the day after its 2024-25 last
+day.
+
+**Neighbours.** `REGION_INFLUENCES` (`src/common/region-influences.ts`) lists US neighbour states (`US-FL` →
+GA, AL, SC, **NC**, **TN**; `US-OH` → **PA**, …; `US-PA` → **OH**, …), so the
+new rows also reach `neighbor_school_holiday_count` and the calendar's
+`neighborHolidays` for parks in neighbouring states, not only the six states'
+own parks.
 
 ### One district per state
 
@@ -152,7 +215,8 @@ AU (where only QLD is curated) are therefore in `REGION_ONLY_SCHOOL_COVERAGE`
 region without rows has no coverage, and an influence given at country
 level (`{"countryCode": "US"}` from a Canadian or Mexican park) has none
 either. The 38 US parks outside FL/TX/CA and their neighbour states read as
-unknown — which they were not before this change, see below.
+unknown — which they were not before this change, see below. Since PAR-1074
+that is the 21 parks outside the nine curated states.
 
 ### Truman Day was a school holiday
 
@@ -184,8 +248,8 @@ May 8 in Missouri. After the sync and the 2024 fix:
 
 | Parks | CatBoost school columns | TFT `is_school_holiday` | Calendar | Chronos-2 `holidayDataThrough` |
 |---|---|---|---|---|
-| FL / TX / CA (39) | known 0 → real 0/1 inside the coverage, NaN past it | 0 → real 0/1 (`school_holiday_known` 1 inside, grid only) | breaks shown; `schoolVacationUnknown` past the coverage | ~2028-05-08 → the state's last school day |
-| the other ~38 US states' parks | known 0 → NaN | stays 0, `school_holiday_known` 1 → 0 | `schoolVacationUnknown: true` on every day | ~2028-05-08 → `none` |
+| FL / TX / CA (39), and since PAR-1074 PA / OH / MO / VA / TN / NC (18) | known 0 → real 0/1 inside the coverage, NaN past it | 0 → real 0/1 (`school_holiday_known` 1 inside, grid only) | breaks shown; `schoolVacationUnknown` past the coverage | ~2028-05-08 → the state's last school day |
+| the other US states' parks (~38 before PAR-1074, 21 after) | known 0 → NaN | stays 0, `school_holiday_known` 1 → 0 | `schoolVacationUnknown: true` on every day | ~2028-05-08 → `none` |
 | AU parks outside QLD, AU neighbours of QLD parks | known 0 (QLD fallback) → NaN | stays 0, `school_holiday_known` → 0 | unknown | QLD's date → `none` |
 
 Nothing is retrained for it: the current CatBoost model sends NaN to the side

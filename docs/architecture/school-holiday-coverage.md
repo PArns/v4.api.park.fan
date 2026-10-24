@@ -24,9 +24,9 @@ invented: past the edge, the answer is **unknown**.
 Sources outside Europe (KR from NEIS, curated SG / AU-QLD / CN / US files) and
 how far each reaches: [Holiday sources outside Europe](holiday-sources-outside-europe.md).
 
-| Country | School data (PAR-1071 update, 2026-10-25) |
+| Country | School data (PAR-1071 / PAR-1074 update, 2026-10-25) |
 |---|---|
-| US | curated, one district per state: FL (Orange County) through 2028-08-09, TX (Northside ISD) through 2028-07-31, CA (Los Angeles Unified) through 2028-06-30; every other state unknown |
+| US | curated, one district per state: FL (Orange County) through 2028-08-09, TX (Northside ISD) through 2028-07-31, CA (Los Angeles Unified) through 2028-06-30; MO (North Kansas City), VA (Williamsburg-James City County) and NC (Charlotte-Mecklenburg) through 2028-06-30; PA (Derry Township), OH (Sandusky) and TN (Sevier County) through 2027-06-30; every other state unknown |
 | AU | QLD through 2029-12-31; every other state unknown |
 
 ## Coverage
