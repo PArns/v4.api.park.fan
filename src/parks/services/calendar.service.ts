@@ -1473,8 +1473,11 @@ export class CalendarService {
     | "neutral"
     | "avoid"
     | "strongly_avoid"
-    | "closed" {
+    | "closed"
+    | undefined {
     if (crowdLevel === "closed" || status === "CLOSED") return "closed";
+    // No rating, no recommendation — same as /predictions/yearly (PAR-410, PAR-1028).
+    if (crowdLevel === "unknown") return undefined;
 
     const crowdScore: Record<string, number> = {
       very_low: 0,

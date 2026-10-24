@@ -1385,6 +1385,15 @@ describe("CalendarService › buildCalendarResponse day list across DST", () => 
         expect(built.crowdLevel).toBe("very_high");
       },
     );
+
+    it("gives an unrated future day no recommendation, like /predictions/yearly", async () => {
+      const day = offsetDay(10);
+      const unrated = await buildDay(day, [row("r2", day, 40, "high", "tft")]);
+      expect(unrated.recommendation).toBeUndefined();
+
+      const rated = await buildDay(day, [row("h1", day, 50, "high", "tft")]);
+      expect(rated.recommendation).toBeDefined();
+    });
   });
 
   describe("climate normals past the forecast's reach", () => {
