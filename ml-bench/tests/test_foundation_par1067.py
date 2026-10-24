@@ -1,4 +1,4 @@
-"""PAR-1066 (Granite PatchTST-FM-r2, Granite TTM-r2, TabPFN-TS), without GPU or weights.
+"""PAR-1067 (Granite PatchTST-FM-r2, Granite TTM-r2, TabPFN-TS), without GPU or weights.
 
 What can break on our side: the licence guard, the context / horizon bookkeeping and
 quantile columns of PatchTST-FM, TTM's scaling and exogenous channel layout, a TTM

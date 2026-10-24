@@ -22,7 +22,7 @@ peft==0.21.0
 jax==0.6.2
 jaxlib==0.6.2
 # jax pulls the newest ml_dtypes, and ml_dtypes 0.6 needs numpy >= 2: pip then silently
-# upgraded the image's numpy to 2.x (found in PAR-1066's resolve). Keep requirements.txt's
+# upgraded the image's numpy to 2.x (found in PAR-1067's resolve). Keep requirements.txt's
 # numpy and the last ml_dtypes that still supports it.
 numpy==1.26.4
 ml_dtypes==0.5.4

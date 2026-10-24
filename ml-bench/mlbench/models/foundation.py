@@ -87,7 +87,7 @@ Quantile head 0.1 … 0.9 (continuous head, horizon <= 1024): q95 = NaN.
 layer, the package default), on exactly the inputs and cadence of ``chronos2_ft`` — so
 the two differ only in full vs low-rank adaptation.
 
-**PAR-1066** — Granite PatchTST-FM-r2 (``patchtst_fm``, no covariate input, 99 quantiles),
+**PAR-1067** — Granite PatchTST-FM-r2 (``patchtst_fm``, no covariate input, 99 quantiles),
 Granite TTM-r2 (``ttm_r2`` zero-shot without covariates; ``ttm_r2_ft`` with the covariates
 as exogenous channels, which exist only after fine-tuning) and TabPFN-TS (``tabpfn_ts``,
 daily level only, BENCHMARK-ONLY weights). Every variant declares ``licence`` and
@@ -519,7 +519,7 @@ def _quantile_columns(levels, want=QUANTILES) -> list[int | None]:
 
 
 class PatchTSTFMBackend(_Backend):
-    """PAR-1066: Granite PatchTST-FM-r2 (385M; Apache-2.0 OR OpenMDW-1.0). Univariate: the
+    """PAR-1067: Granite PatchTST-FM-r2 (385M; Apache-2.0 OR OpenMDW-1.0). Univariate: the
     rides of a park are a batch of independent series. ``forward`` has no covariate input
     (``future_values`` is commented out as "future use" in granite-tsfm 0.3.10), so the
     model never sees one. NaN is masked natively (``past_observed_mask`` from NaN). The
@@ -586,7 +586,7 @@ def ttm_windows(T: int, C: int, H: int, min_past: int, stride: int) -> list[tupl
 
 
 class TTMBackend(_Backend):
-    """PAR-1066: Granite TinyTimeMixer r2 (Apache-2.0), branch ``1536-720-r2`` (context 1536,
+    """PAR-1067: Granite TinyTimeMixer r2 (Apache-2.0), branch ``1536-720-r2`` (context 1536,
     horizon 720, 15-min is in r2's "minutely to hourly" range). Point forecast only: q80 and
     q95 are NaN. Zero-shot it is channel-independent and takes no covariates; the
     exogenous path (``exogenous_channel_indices`` + forecast channel mixing) is a block the
@@ -708,7 +708,7 @@ class TTMBackend(_Backend):
 
 
 class TabPFNTSBackend(_Backend):
-    """PAR-1066: TabPFN-TS 1.3.0 on TabPFN-3.5 weights (NON-COMMERCIAL, NON-PRODUCTION
+    """PAR-1067: TabPFN-TS 1.3.0 on TabPFN-3.5 weights (NON-COMMERCIAL, NON-PRODUCTION
     licence: benchmark-only). Daily levels only (``wants_days``: the pipeline builds its
     calendar features from real dates). Every ride is its own series, the day covariates
     are known-future columns, NaN is TabPFN's own missing value. LOCAL mode only — the
@@ -1271,7 +1271,7 @@ class Toto2Grid(Toto2):
     daily = False
 
 
-# ---- PAR-1066: Granite PatchTST-FM-r2, Granite TTM-r2, TabPFN-TS
+# ---- PAR-1067: Granite PatchTST-FM-r2, Granite TTM-r2, TabPFN-TS
 
 class PatchTSTFM(FoundationModel):
     """PatchTST-FM-r2 zero-shot, compressed context (8192 steps minus the horizon). The

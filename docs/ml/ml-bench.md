@@ -359,7 +359,7 @@ records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 Model families benchmarked so far get their own document: the foundation models
 Chronos-2 and TimesFM 3.0 (PAR-828), TiRex-2 and Toto 2.0 (PAR-853), Chronos-2 LoRA
 plus TimesFM 2.5 (PAR-1063 / PAR-1064), and Granite PatchTST-FM-r2, Granite TTM-r2 and
-TabPFN-TS (PAR-1066) in `docs/ml/foundation-models.md`, with each model's licence verdict.
+TabPFN-TS (PAR-1067) in `docs/ml/foundation-models.md`, with each model's licence verdict.
 
 `run --probe` runs only the **first** origin of the selection and writes
 `probe` into `run-*.json` — wall time, torch's peak allocated / reserved GPU memory and
@@ -420,27 +420,27 @@ default, because it would no longer pair with `chronos2_ft` on cadence. `timesfm
 added as a benchmark-only arm (`--model timesfm3`); its weights' licence excludes
 production use, so whatever it scores it is never a serving candidate.
 
-### Running PAR-1066 together with PAR-1063 / PAR-1064 (celestrial) — not run yet
+### Running PAR-1067 together with PAR-1063 / PAR-1064 (celestrial) — not run yet
 
 This **replaces** the run above: ONE run with every new arm — `patchtst_fm`, `ttm_r2`,
-`ttm_r2_ft`, `tabpfn_ts` (PAR-1066) and `timesfm25`, `chronos2_lora`, `chronos2_ft`
+`ttm_r2_ft`, `tabpfn_ts` (PAR-1067) and `timesfm25`, `chronos2_lora`, `chronos2_ft`
 (PAR-1063 / PAR-1064) — next to `chronos2` and `driver_level`, so every margin is paired
 inside the run. The daily-level cells (UC4 / D6 / D7 / PEAK) compare every `lvl_*` source of
 the run against each other and the naive levels incl. `wt_med`'s, which is why
 `driver_level` is a `--model` here and not only a `--pair-with`. Image: the default Python
-3.11 base plus `requirements-par1066.txt` (it includes `requirements-par1063.txt`).
+3.11 base plus `requirements-par1067.txt` (it includes `requirements-par1063.txt`).
 `tabpfn_ts` is **benchmark-only** (TabPFN-3.5 licence) and needs two tokens, passed through
 by `run.sh` from the caller's environment — export them in the shell, never into a file in
 the repository (see `docs/ml/foundation-models.md`, "TabPFN-TS").
 
 ```bash
-cd ~/claude-worktrees/par-1066                  # a checkout of parns123/par-1066-more-bench-candidates
-export MLBENCH_REPO=$PWD MLBENCH_CODE=$PWD MLBENCH_IMAGE=ml-bench:par-1066
+cd ~/claude-worktrees/par-1067                  # a checkout of parns123/par-1066-more-bench-candidates
+export MLBENCH_REPO=$PWD MLBENCH_CODE=$PWD MLBENCH_IMAGE=ml-bench:par-1067
 export HF_TOKEN=... TABPFN_TOKEN=...            # read -s; gated TabPFN-3.5 weights (tabpfn_ts only)
-docker build -t ml-bench:par-1066 --build-arg GIT_SHA=$(git rev-parse HEAD) \
-  --build-arg EXTRA_REQUIREMENTS=requirements-par1066.txt \
+docker build -t ml-bench:par-1067 --build-arg GIT_SHA=$(git rev-parse HEAD) \
+  --build-arg EXTRA_REQUIREMENTS=requirements-par1067.txt \
   --build-context mlsvc=ml-service ml-bench
-docker run --rm --gpus all ml-bench:par-1066 gpu-check              # must list sm_120 AND torch 2.11.0+cu128
+docker run --rm --gpus all ml-bench:par-1067 gpu-check              # must list sm_120 AND torch 2.11.0+cu128
 
 ARMS="--model chronos2 --model chronos2_ft --model chronos2_lora --model timesfm25 \
   --model patchtst_fm --model ttm_r2 --model ttm_r2_ft --model tabpfn_ts --model driver_level"
@@ -448,22 +448,22 @@ ARMS="--model chronos2 --model chronos2_ft --model chronos2_lora --model timesfm
 # 1. Probe first: ONE origin (October, the largest history), every arm. Read [probe] /
 #    run-0of1.json -> probe: finetune_seconds (chronos2_ft, chronos2_lora, ttm_r2_ft),
 #    slot/daily seconds per arm (tabpfn_ts: daily_seconds), gpu_peak_reserved_gb <= 10.
-ml-bench/scripts-par828/run.sh 20261025-par1066-probe --parks @/app/subsets/par828-30parks.txt \
+ml-bench/scripts-par828/run.sh 20261025-par1067-probe --parks @/app/subsets/par828-30parks.txt \
   --from 2026-10-01 --probe $ARMS
 
 # 2. The run: 30-park subset, --shard 0/5 = 47 origins on all seven weekdays.
-ml-bench/scripts-par828/run.sh 20261025-par1066-shard5 --parks @/app/subsets/par828-30parks.txt \
+ml-bench/scripts-par828/run.sh 20261025-par1067-shard5 --parks @/app/subsets/par828-30parks.txt \
   --shard 0/5 --reference $ARMS \
   --pair-with chronos2,chronos2_x_h5,h5,lvlh5_tft,persistence,driver_level
 
 # 3. Both report passes (CPU).
-RUN=/app/results/20261025-par1066-shard5
+RUN=/app/results/20261025-par1067-shard5
 VS=chronos2,chronos2_x_h5,h5,lvlh5_tft,persistence,driver_level
 docker run --rm --user 1000:1000 -e HOME=/tmp -v /data/parkfan/ml-bench:/data \
-  -v $PWD/ml-bench/results:/app/results ml-bench:par-1066 report --run $RUN \
+  -v $PWD/ml-bench/results:/app/results ml-bench:par-1067 report --run $RUN \
   --target-from 2026-08-15 --target-to 2026-10-07 --vs $VS      # headline (common window)
 docker run --rm --user 1000:1000 -e HOME=/tmp -v /data/parkfan/ml-bench:/data \
-  -v $PWD/ml-bench/results:/app/results ml-bench:par-1066 report --run $RUN --vs $VS   # full period
+  -v $PWD/ml-bench/results:/app/results ml-bench:par-1067 report --run $RUN --vs $VS   # full period
 ```
 
 What to expect before the probe: `ttm_r2` reads 1536 steps and is cheap; `patchtst_fm` is
