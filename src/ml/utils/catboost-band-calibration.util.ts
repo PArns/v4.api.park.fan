@@ -50,7 +50,8 @@ export interface BandCalibrationCell {
   n: number;
   /** The factor served for this cell (own or pooled); null = band served raw. */
   k: number | null;
-  /** `cell` = fitted on its own slots, `pooled` = too few, borrowed. */
+  /** `cell` = fitted on its own slots, `pooled` = too few, borrowed from its
+   *  lead bucket's pool (never from another lead bucket). */
   source: "cell" | "pooled";
   /** In-sample share with actual − predicted ≤ band (the raw band). */
   coverageRaw: number;
@@ -63,7 +64,14 @@ export interface BandCalibrationTable {
   target: number;
   windowDays: number;
   minSample: number;
-  pooled: Omit<BandCalibrationCell, "source">;
+  /**
+   * Pooled over segments, PER LEAD BUCKET. A lead bucket never borrows from
+   * another: `prediction_accuracy` keeps the latest write per slot, so nearly
+   * every row is short-lead, and a short-lead factor on a long-lead band would
+   * leave it under-covered while claiming it is calibrated (PAR-1060 review).
+   * A lead bucket without its own pool serves the raw band.
+   */
+  pooledByLead: Record<string, Omit<BandCalibrationCell, "source">>;
   /** Keyed `lead|segment`. */
   cells: Record<string, BandCalibrationCell>;
 }
@@ -106,22 +114,30 @@ export function fitBandCalibration(
   rows: ScoreHistogramRow[],
   now: Date = new Date(),
 ): BandCalibrationTable {
-  const byCell = new Map<string, Map<number, number>>();
-  const pooledBins = new Map<number, number>();
-  for (const r of rows) {
-    const key = `${r.lead}|${r.segment}`;
-    const bins = byCell.get(key) ?? new Map<number, number>();
+  const add = (
+    m: Map<string, Map<number, number>>,
+    key: string,
+    r: ScoreHistogramRow,
+  ) => {
+    const bins = m.get(key) ?? new Map<number, number>();
     bins.set(r.bin, (bins.get(r.bin) ?? 0) + r.n);
-    byCell.set(key, bins);
-    pooledBins.set(r.bin, (pooledBins.get(r.bin) ?? 0) + r.n);
+    m.set(key, bins);
+  };
+  const byCell = new Map<string, Map<number, number>>();
+  const byLead = new Map<string, Map<number, number>>();
+  for (const r of rows) {
+    add(byCell, `${r.lead}|${r.segment}`, r);
+    add(byLead, r.lead, r);
   }
-  const pooledFit = fit(pooledBins);
-  const pooled =
-    pooledFit.n >= BAND_MIN_SAMPLE
-      ? pooledFit
-      : { ...pooledFit, k: null, coverageCalibrated: null };
+  const pooledByLead: BandCalibrationTable["pooledByLead"] = {};
+  for (const [lead, bins] of byLead) {
+    const f = fit(bins);
+    pooledByLead[lead] =
+      f.n >= BAND_MIN_SAMPLE ? f : { ...f, k: null, coverageCalibrated: null };
+  }
   const cells: Record<string, BandCalibrationCell> = {};
   for (const [key, bins] of byCell) {
+    const pooled = pooledByLead[key.split("|")[0]];
     const own = fit(bins);
     if (own.n >= BAND_MIN_SAMPLE && own.k !== null) {
       cells[key] = { ...own, source: "cell" };
@@ -147,12 +163,12 @@ export function fitBandCalibration(
     target: BAND_TARGET_COVERAGE,
     windowDays: BAND_CALIBRATION_WINDOW_DAYS,
     minSample: BAND_MIN_SAMPLE,
-    pooled,
+    pooledByLead,
     cells,
   };
 }
 
-/** The factor for one slot: its cell, else the pooled one, else null (serve raw). */
+/** The factor for one slot: its cell, else its lead bucket's pool, else null (serve raw). */
 export function bandFactor(
   table: BandCalibrationTable | null,
   leadMinutes: number,
@@ -160,9 +176,10 @@ export function bandFactor(
 ): number | null {
   // Optional chaining: the value comes from Redis and may not be a table at all.
   if (!table?.cells) return null;
-  const key = `${bandLeadBucket(leadMinutes)}|${ForecastAccuracyService.bandFor(predictedWait)}`;
-  const cell = table.cells[key];
-  const k = cell ? cell.k : table.pooled?.k;
+  const lead = bandLeadBucket(leadMinutes);
+  const cell =
+    table.cells[`${lead}|${ForecastAccuracyService.bandFor(predictedWait)}`];
+  const k = cell ? cell.k : table.pooledByLead?.[lead]?.k;
   return typeof k === "number" && k > 0 ? k : null;
 }
 

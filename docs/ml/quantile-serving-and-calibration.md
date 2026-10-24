@@ -242,9 +242,21 @@ PAR-1060, because `prediction_accuracy` has scored hourly slots to fit on.
   the smallest bin edge reaching 95 %. Lead buckets `h0-2`/`h2-6`/`h6-24`/`h24+`
   from `target_time − prediction_time` (the run that last wrote the slot);
   segments quiet < 30 ≤ mid < 60 ≤ busy on the predicted wait. A cell with fewer
-  than 500 slots borrows the pooled factor; a pool under 500 gives no factor. A
+  than 500 slots borrows its **lead bucket's** pool (all segments of that
+  bucket); a bucket pool under 500 gives no factor, and the band is served raw.
+  A lead bucket never borrows from another: `uq_pa_attraction_target` keeps one
+  row per slot and the latest run overwrites `prediction_time`, so nearly every
+  row lands in `h0-2`, and a short-lead factor on a long-lead band would leave
+  it under-covered while reading as calibrated. Long buckets therefore stay raw
+  until they have their own sample; fitting them from a lead-preserving source
+  (`prediction_lead_snapshots`, the forward archive's `park_hourly` origins) is
+  not built. A
   non-positive factor (the cell over-forecasts so far that 95 % of actuals sit
   under the median) is no factor, never a zero band.
+- **Deploying the column.** `ADD COLUMN` on `prediction_accuracy` (plain
+  table, ~16.7 M rows) is catalogue-only, but `synchronize` takes ACCESS
+  EXCLUSIVE without a lock timeout: deploy with no long query open on the table
+  and outside 04:00–07:30 UTC.
 - **The raw band is stored.** `prediction_accuracy.uncertainty_minutes` is the
   band CatBoost produced, before the factor, written beside `predicted_q95`.
   The fit reads only that, so it never fits its own output. It is NULL on rows

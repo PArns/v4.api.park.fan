@@ -177,7 +177,9 @@ export class PredictionAccuracyProcessor {
   async handleCalibrateBands(_job: Job): Promise<void> {
     const table = await this.predictionAccuracyService.calibrateCatboostBands();
     this.logger.log(
-      `📐 CatBoost band calibration: pooled k=${table.pooled.k ?? "none"} (n=${table.pooled.n}), ${Object.keys(table.cells).length} cells`,
+      `📐 CatBoost band calibration: ${Object.entries(table.cells)
+        .map(([key, c]) => `${key} k=${c.k ?? "raw"} n=${c.n}`)
+        .join(", ")}`,
     );
   }
 
