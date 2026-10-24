@@ -50,9 +50,9 @@ class _Fakes:
         self.fail_shadow = fail_shadow
 
     def train(self, version):
-        grid = forecast.settings.NF_CALENDAR_GRID
+        grid = (forecast.settings.NF_CALENDAR_GRID, getattr(forecast.db, "DRIVERS", False))
         self.calls.append(("train", version, grid))
-        if grid and self.fail_shadow:
+        if grid[0] and self.fail_shadow:
             raise RuntimeError("CUDA out of memory")
         df = pd.DataFrame({"unique_id": ["a"], "ds": pd.to_datetime(["2026-10-24"]),
                            "TFT": [30.0]})
@@ -84,11 +84,18 @@ def fakes(monkeypatch, tmp_path):
 def test_shadow_trains_with_the_grid_forced_on_and_writes_its_own_table(fakes):
     out = train_runner.run_grid_shadow("nf1", FD)
     assert fakes.calls == [
-        ("train", "nf1-grid", True),
-        ("persist", "nf1-grid", "tft_forecasts_shadow", FD),
+        ("train", "nf1-grid-drivers", (True, True)),
+        ("persist", "nf1-grid-drivers", "tft_forecasts_shadow", FD),
     ]
     assert out["persisted"] == 1
     assert main.settings.NF_CALENDAR_GRID is False  # restored
+    assert forecast.db.DRIVERS is False
+
+
+def test_shadow_drivers_off_is_the_grid_only_shadow(fakes, monkeypatch):
+    monkeypatch.setattr(main.settings, "NF_SHADOW_DRIVERS", False)
+    train_runner.run_grid_shadow("nf1", FD)
+    assert fakes.calls[0] == ("train", "nf1-grid", (True, False))
 
 
 def test_flag_off_or_grid_already_served_runs_nothing(fakes, monkeypatch):
@@ -104,9 +111,9 @@ def test_night_runs_served_first_then_shadow_and_a_shadow_failure_does_not_fail_
     fakes.fail_shadow = True
     train_runner.run("nf1")
     assert fakes.calls == [
-        ("train", "nf1", False),
+        ("train", "nf1", (False, False)),
         ("persist", "nf1", "tft_forecasts", datetime.now(timezone.utc).date()),
-        ("train", "nf1-grid", True),
+        ("train", "nf1-grid-drivers", (True, True)),
     ]
     st = main._read_status()
     assert st["status"] == "completed" and st["is_training"] is False

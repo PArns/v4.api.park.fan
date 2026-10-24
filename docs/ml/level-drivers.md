@@ -203,6 +203,11 @@ TFT `FUTR_EXOG` (nf-service `db.py`) has holidays, calendar and weather but
 5. **Weather forecast** (rain ≥ 10 mm −12 %) — both models have it; the gain is
    ≤ +0.03 R² even as ORACLE and limited to 16 d. Archive the forecasts (PAR-831)
    before claiming more.
+**Wired (PAR-1057), shadow only:** 1–4 are futr_exog of the TFT grid shadow, with the
+time-weighted daily P90 as its target — inputs, the as-of limit of a futr_exog and the
+target in [neuralforecast-tft-evaluation.md](neuralforecast-tft-evaluation.md#the-par-830-drivers-in-the-grid-shadow-par-1057).
+The served TFT has none of them.
+
 6. Bridge days / day before-after holidays — real but rare; TFT already has
    `is_bridge_day` and `days_until/since_holiday`.
 

@@ -28,9 +28,11 @@ def run_grid_shadow(version: str, forecast_date) -> dict | None:
         # The served run already is the grid variant; a copy would compare it
         # with itself.
         return {"skipped": "NF_CALENDAR_GRID is on"}
-    shadow_version = f"{version}-grid"
+    drivers = main.settings.NF_SHADOW_DRIVERS
+    # The suffix tells grid-only rows from grid + PAR-830 drivers (PAR-1057).
+    shadow_version = f"{version}-grid{'-drivers' if drivers else ''}"
     try:
-        with forecast.calendar_grid(True):
+        with forecast.calendar_grid(True, drivers=drivers):
             y_hat = forecast.train_and_forecast(shadow_version)
         tcol = main._tft_column(list(y_hat.columns))
         persisted = (
