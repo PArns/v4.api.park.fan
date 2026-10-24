@@ -27,6 +27,7 @@ const OFFICIAL_HOSTS: Record<string, string[]> = {
     // PAR-1074
     "www.hershey.k12.pa.us",
     "www.scs-k12.net",
+    "www.nkcschools.org",
   ],
 };
 
@@ -130,6 +131,7 @@ describe("curated holiday files (PAR-1065)", () => {
     // its last calendar (PA, OH, TN: 2026-27; MO, VA, NC: 2027-28).
     expect(schoolCoverageThrough(coverage, "US", "PA")).toBe("2027-06-30");
     expect(schoolCoverageThrough(coverage, "US", "OH")).toBe("2027-06-30");
+    expect(schoolCoverageThrough(coverage, "US", "MO")).toBe("2028-06-30");
     expect(schoolCoverageThrough(coverage, "US", "IL")).toBeNull();
   });
 });

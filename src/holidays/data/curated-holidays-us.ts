@@ -88,6 +88,13 @@ const SCS_2026 =
   "https://www.scs-k12.net/protected/ArticleView.aspx?iid=6I3UUB0&dasi=3GGI";
 const oh = district("US-OH", "Sandusky City Schools");
 
+// Missouri — North Kansas City Schools (Worlds of Fun, Oceans of Fun). The
+// page links the board-approved 2026-27 and 2027-28 PDFs; the 2024-25 and
+// 2025-26 PDFs (still on the district's file host) were linked from it in
+// 2025 (Wayback captures).
+const NKC = "https://www.nkcschools.org/calendar3";
+const mo = district("US-MO", "North Kansas City Schools");
+
 export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
   country: "US",
   entries: [
@@ -272,5 +279,48 @@ export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
     oh("2027-05-31", "2027-05-31", "Memorial Day", SCS_2026),
     // 2027-28 is not published: the calendar ends with June 2027.
     oh("2027-06-04", "2027-06-30", "Summer break", SCS_2026),
+
+    // Missouri 2025-26 (first day 2025-08-19, last day 2026-05-22). The
+    // 2024-25 year ended 2025-05-29 (revised calendar).
+    mo("2025-05-30", "2025-08-18", "Summer break", NKC),
+    mo("2025-09-01", "2025-09-01", "Labor Day", NKC),
+    mo("2025-09-19", "2025-09-19", "Professional development", NKC),
+    mo("2025-10-03", "2025-10-06", "No school", NKC),
+    mo("2025-11-24", "2025-11-28", "Thanksgiving break", NKC),
+    mo("2025-12-22", "2026-01-05", "Winter break", NKC),
+    mo("2026-01-19", "2026-01-19", "Martin Luther King Jr. Day", NKC),
+    mo("2026-02-16", "2026-02-16", "Presidents' Day", NKC),
+    mo("2026-03-13", "2026-03-13", "Professional development", NKC),
+    mo("2026-03-30", "2026-04-03", "Spring break", NKC),
+    mo("2026-04-17", "2026-04-17", "Professional development", NKC),
+    // 05-26..05-28 are make-up days if needed
+    mo("2026-05-23", "2026-08-24", "Summer break", NKC),
+    // Missouri 2026-27 (first day 2026-08-25, last day 2027-05-28)
+    mo("2026-09-07", "2026-09-07", "Labor Day", NKC),
+    mo("2026-09-25", "2026-09-25", "Professional development", NKC),
+    mo("2026-10-16", "2026-10-19", "No school", NKC),
+    mo("2026-11-23", "2026-11-27", "Thanksgiving break", NKC),
+    mo("2026-12-21", "2027-01-04", "Winter break", NKC),
+    mo("2027-01-18", "2027-01-18", "Martin Luther King Jr. Day", NKC),
+    mo("2027-02-15", "2027-02-15", "Presidents' Day", NKC),
+    mo("2027-03-12", "2027-03-12", "Teacher workday", NKC),
+    mo("2027-03-29", "2027-04-02", "Spring break", NKC),
+    mo("2027-04-19", "2027-04-19", "Professional development", NKC),
+    // 06-01..06-04 are make-up days if needed
+    mo("2027-05-29", "2027-08-23", "Summer break", NKC),
+    // Missouri 2027-28 (first day 2027-08-24, last day 2028-05-26)
+    mo("2027-09-06", "2027-09-06", "Labor Day", NKC),
+    mo("2027-09-24", "2027-09-24", "Professional development", NKC),
+    mo("2027-10-15", "2027-10-18", "No school", NKC),
+    mo("2027-11-22", "2027-11-26", "Thanksgiving break", NKC),
+    mo("2027-12-20", "2028-01-03", "Winter break", NKC),
+    mo("2028-01-17", "2028-01-17", "Martin Luther King Jr. Day", NKC),
+    mo("2028-02-21", "2028-02-21", "Presidents' Day", NKC),
+    mo("2028-03-10", "2028-03-10", "Teacher workday", NKC),
+    mo("2028-03-27", "2028-03-31", "Spring break", NKC),
+    mo("2028-04-17", "2028-04-17", "Professional development", NKC),
+    // 2028-29 is not published: the calendar ends with June 2028. 05-30..06-02
+    // are make-up days if needed.
+    mo("2028-05-27", "2028-06-30", "Summer break", NKC),
   ],
 };
