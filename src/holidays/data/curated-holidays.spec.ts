@@ -28,6 +28,7 @@ const OFFICIAL_HOSTS: Record<string, string[]> = {
     "www.hershey.k12.pa.us",
     "www.scs-k12.net",
     "www.nkcschools.org",
+    "wjccschools.org",
   ],
 };
 
@@ -132,6 +133,7 @@ describe("curated holiday files (PAR-1065)", () => {
     expect(schoolCoverageThrough(coverage, "US", "PA")).toBe("2027-06-30");
     expect(schoolCoverageThrough(coverage, "US", "OH")).toBe("2027-06-30");
     expect(schoolCoverageThrough(coverage, "US", "MO")).toBe("2028-06-30");
+    expect(schoolCoverageThrough(coverage, "US", "VA")).toBe("2028-06-30");
     expect(schoolCoverageThrough(coverage, "US", "IL")).toBeNull();
   });
 });

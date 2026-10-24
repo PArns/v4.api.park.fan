@@ -95,6 +95,15 @@ const oh = district("US-OH", "Sandusky City Schools");
 const NKC = "https://www.nkcschools.org/calendar3";
 const mo = district("US-MO", "North Kansas City Schools");
 
+// Virginia — Williamsburg-James City County Public Schools (Busch Gardens
+// Williamsburg, Water Country USA). Days off for PK-5 only are not listed.
+const WJCC_FILES = "https://wjccschools.org/wp-content/uploads";
+const WJCC_2024 = `${WJCC_FILES}/2023/10/2024-25-Academic-Calendar.pdf`;
+const WJCC_2025 = `${WJCC_FILES}/2021/07/2025-26-Academic-Calendar.pdf`;
+const WJCC_2026 = `${WJCC_FILES}/2025/10/2026-27-Academic-Calendar.pdf`;
+const WJCC_2027 = `${WJCC_FILES}/2021/07/2027-28-Academic-Calendar-4-1-26.pdf`;
+const va = district("US-VA", "Williamsburg-James City County Public Schools");
+
 export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
   country: "US",
   entries: [
@@ -322,5 +331,77 @@ export const US_CURATED_HOLIDAYS: CuratedHolidaySet = {
     // 2028-29 is not published: the calendar ends with June 2028. 05-30..06-02
     // are make-up days if needed.
     mo("2028-05-27", "2028-06-30", "Summer break", NKC),
+
+    // Virginia 2025-26 (first day 2025-08-25, last day 2026-06-10). The
+    // 2024-25 year ended 2025-06-11.
+    va("2025-06-12", "2025-08-24", "Summer break", WJCC_2024),
+    va(
+      "2025-08-29",
+      "2025-09-01",
+      "Student/teacher holiday and Labor Day",
+      WJCC_2025,
+    ),
+    va("2025-10-03", "2025-10-03", "Student holiday", WJCC_2025),
+    va(
+      "2025-11-03",
+      "2025-11-04",
+      "Student holiday (family conferences)",
+      WJCC_2025,
+    ),
+    va("2025-11-26", "2025-11-28", "Thanksgiving", WJCC_2025),
+    va("2025-12-22", "2026-01-02", "Winter break", WJCC_2025),
+    va("2026-01-19", "2026-01-19", "Martin Luther King Jr. Day", WJCC_2025),
+    va("2026-01-26", "2026-01-26", "Student holiday", WJCC_2025),
+    va("2026-02-16", "2026-02-16", "Presidents' Day", WJCC_2025),
+    va("2026-04-06", "2026-04-10", "Spring break", WJCC_2025),
+    va("2026-05-25", "2026-05-25", "Memorial Day", WJCC_2025),
+    va("2026-06-11", "2026-08-23", "Summer break", WJCC_2026),
+    // Virginia 2026-27 (first day 2026-08-24, last day 2027-06-09)
+    va(
+      "2026-09-04",
+      "2026-09-07",
+      "Student & teacher holiday and Labor Day",
+      WJCC_2026,
+    ),
+    va("2026-10-12", "2026-10-12", "Student holiday", WJCC_2026),
+    va(
+      "2026-11-02",
+      "2026-11-03",
+      "Student holiday (family conferences)",
+      WJCC_2026,
+    ),
+    va("2026-11-25", "2026-11-27", "Thanksgiving break", WJCC_2026),
+    va("2026-12-21", "2027-01-01", "Winter break", WJCC_2026),
+    va("2027-01-18", "2027-01-18", "Martin Luther King Jr. Day", WJCC_2026),
+    va("2027-01-25", "2027-01-25", "Student holiday", WJCC_2026),
+    va("2027-02-15", "2027-02-15", "Presidents' Day", WJCC_2026),
+    va("2027-03-05", "2027-03-05", "Student holiday", WJCC_2026),
+    va("2027-04-05", "2027-04-09", "Spring break", WJCC_2026),
+    va("2027-05-31", "2027-05-31", "Memorial Day", WJCC_2026),
+    va("2027-06-10", "2027-08-22", "Summer break", WJCC_2027),
+    // Virginia 2027-28 (first day 2027-08-23, last day 2028-06-08)
+    va(
+      "2027-09-03",
+      "2027-09-06",
+      "Student & teacher holiday and Labor Day",
+      WJCC_2027,
+    ),
+    va("2027-10-11", "2027-10-11", "Student holiday", WJCC_2027),
+    va(
+      "2027-11-01",
+      "2027-11-02",
+      "Student holiday (family conferences)",
+      WJCC_2027,
+    ),
+    va("2027-11-24", "2027-11-26", "Thanksgiving break", WJCC_2027),
+    va("2027-12-20", "2027-12-31", "Winter break", WJCC_2027),
+    va("2028-01-17", "2028-01-17", "Martin Luther King Jr. Day", WJCC_2027),
+    va("2028-01-27", "2028-01-28", "Student holiday", WJCC_2027),
+    va("2028-02-21", "2028-02-21", "Presidents' Day", WJCC_2027),
+    va("2028-03-07", "2028-03-07", "Student holiday", WJCC_2027),
+    va("2028-04-03", "2028-04-07", "Spring break", WJCC_2027),
+    va("2028-05-29", "2028-05-29", "Memorial Day", WJCC_2027),
+    // 2028-29 is not published: the calendar ends with June 2028.
+    va("2028-06-09", "2028-06-30", "Summer break", WJCC_2027),
   ],
 };
