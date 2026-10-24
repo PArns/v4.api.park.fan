@@ -230,6 +230,7 @@ def test_interactions_follow_the_dropped_out_occupancy():
         ROLLING_1H_DROPOUT_RATE = 0.0
         ROLLING_7D_DROPOUT_RATE = 0.0
         HOLIDAY_DROPOUT_RATE = 0.0
+        CATBOOST_RANDOM_SEED = 42  # read by apply_training_dropout after PAR-1040
 
     class _Log:
         def info(self, *_a, **_k):
@@ -369,3 +370,33 @@ def test_served_time_since_open_and_bridge_day_are_per_row(served):
         date(2026, 7, 4): 0,
     }
     assert np.isfinite(served["time_since_park_open_mins"]).all()
+
+
+def test_one_hour_dropout_also_zeroes_velocity_like_serving():
+    import train
+
+    class _Cfg:
+        OCCUPANCY_DROPOUT_RATE = 0.0
+        ROLLING_AVG_DROPOUT_RATE = 0.0
+        ROLLING_1H_DROPOUT_RATE = 1.0
+        ROLLING_7D_DROPOUT_RATE = 0.0
+        HOLIDAY_DROPOUT_RATE = 0.0
+        CATBOOST_RANDOM_SEED = 42
+
+    class _Log:
+        def info(self, *_a, **_k):
+            pass
+
+    df = pd.DataFrame(
+        {
+            "hour": [14],
+            "is_weekend": [0],
+            "avg_wait_last_1h": [55.0],
+            "wait_time_velocity": [4.5],
+            "rolling_avg_weekday": [20.0],
+            "rolling_avg_weekend": [60.0],
+        }
+    )
+    out = train.apply_training_dropout(df, _Cfg(), _Log())
+    assert out["avg_wait_last_1h"].iloc[0] == 20.0
+    assert out["wait_time_velocity"].iloc[0] == 0.0

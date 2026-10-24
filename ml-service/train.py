@@ -207,6 +207,10 @@ def apply_training_dropout(df: pd.DataFrame, cfg, log) -> pd.DataFrame:
                 df["rolling_avg_weekday"].values,
             )
             df.loc[r1h_mask, "avg_wait_last_1h"] = fallback_1h[r1h_mask]
+            # Serving pairs the profile with velocity 0 beyond its live lead
+            # (predict.LIVE_LAG_MAX_LEAD); teach the model that pairing.
+            if "wait_time_velocity" in df.columns:
+                df.loc[r1h_mask, "wait_time_velocity"] = 0.0
             log.info(
                 f"   Rolling-avg-1h dropout: {r1h_count:,} rows ({r1h_rate * 100:.0f}%) → weekend/weekday 7d historical"
             )
