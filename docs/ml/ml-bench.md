@@ -357,8 +357,67 @@ model's numbers are always paired against the same reference on the same rows.
 records both plus a sha256 of the `mlbench` sources in `run-*.json`.
 
 Model families benchmarked so far get their own document: the foundation models
-Chronos-2 and TimesFM 3.0 (PAR-828) plus TiRex-2 and Toto 2.0 (PAR-853) in
-`docs/ml/foundation-models.md`.
+Chronos-2 and TimesFM 3.0 (PAR-828), TiRex-2 and Toto 2.0 (PAR-853), and Chronos-2 LoRA
+plus TimesFM 2.5 (PAR-1063 / PAR-1064) in `docs/ml/foundation-models.md`.
+
+`run --probe` runs only the **first** origin of the selection and writes
+`probe` into `run-*.json` — wall time, torch's peak allocated / reserved GPU memory and
+every plug-in's own counters (`slot_calls`, `slot_seconds`, `daily_*`, and for a
+fine-tuned arm `finetune_calls` / `finetune_seconds`); the same object is printed as a
+`[probe]` log line. It is a sizing tool: a probe's scores are one origin and are never a
+result.
+
+### Running PAR-1063 / PAR-1064 (celestrial) — not run yet
+
+`chronos2_lora`, `timesfm25`, `timesfm25_grid` (and `timesfm25_x_h5`, which comes out of
+`timesfm25`'s daily path) in ONE run with `chronos2` and `chronos2_ft`, so every margin
+is paired inside the run. Image: the default Python 3.11 base plus
+`requirements-par1063.txt` (Chronos-2, timesfm 3.0.2 — which ships TimesFM 2.5 — peft,
+CPU jax for TimesFM's covariate regression). The GPU lock, quiet window and provenance
+gate are `scripts-par828/run.sh`'s, pointed at this checkout by its three env vars.
+
+```bash
+cd ~/claude-worktrees/par-1063-1064            # a checkout of parns123/par-1063-1064-bench-plugins
+export MLBENCH_REPO=$PWD MLBENCH_CODE=$PWD MLBENCH_IMAGE=ml-bench:par-1063
+docker build -t ml-bench:par-1063 --build-arg GIT_SHA=$(git rev-parse HEAD) \
+  --build-arg EXTRA_REQUIREMENTS=requirements-par1063.txt \
+  --build-context mlsvc=ml-service ml-bench
+docker run --rm --gpus all ml-bench:par-1063 gpu-check              # must list sm_120
+
+# 1. Probe: ONE origin, the largest (October) history, every arm. Read the [probe] line
+#    or run-0of1.json -> probe: finetune_seconds for chronos2_lora / chronos2_ft, slot
+#    seconds per arm, gpu_peak_reserved_gb (must stay under the 10 GB ceiling).
+ml-bench/scripts-par828/run.sh 20261025-par1063-probe --parks @/app/subsets/par828-30parks.txt \
+  --from 2026-10-01 --probe \
+  --model chronos2 --model chronos2_ft --model chronos2_lora --model timesfm25 --model timesfm25_grid
+
+# 2. The run: 30-park subset, --shard 0/5 = 47 origins on all seven weekdays (the
+#    PAR-853 / PAR-869 sample, so the numbers line up), paired against chronos2 and h5.
+ml-bench/scripts-par828/run.sh 20261025-par1063-1064-shard5 --parks @/app/subsets/par828-30parks.txt \
+  --shard 0/5 --reference \
+  --model chronos2 --model chronos2_ft --model chronos2_lora --model timesfm25 --model timesfm25_grid \
+  --pair-with chronos2,chronos2_x_h5,chronos2_ft,h5,lvlh5_tft,persistence
+
+# 3. Both report passes (CPU), paired against the same models.
+RUN=/app/results/20261025-par1063-1064-shard5
+docker run --rm --user 1000:1000 -e HOME=/tmp -v /data/parkfan/ml-bench:/data \
+  -v $PWD/ml-bench/results:/app/results ml-bench:par-1063 report --run $RUN \
+  --target-from 2026-08-15 --target-to 2026-10-07 \
+  --vs chronos2,chronos2_x_h5,chronos2_ft,h5,lvlh5_tft          # headline (common window)
+docker run --rm --user 1000:1000 -e HOME=/tmp -v /data/parkfan/ml-bench:/data \
+  -v $PWD/ml-bench/results:/app/results ml-bench:par-1063 report --run $RUN \
+  --vs chronos2,chronos2_x_h5,chronos2_ft,h5,lvlh5_tft          # full period
+```
+
+Sizing before the probe exists: the PAR-853 smoke put one origin of `chronos2` at
+28 s (daily slots) + 14 s per intraday task on 30 parks; `chronos2_ft` and
+`chronos2_lora` fit **once per 28 days** of origin date (~9 fits over the February–October
+origins, with or without `--shard 0/5`), so their cost is the inference plus a handful of fits — the probe
+says how long one fit is. If one LoRA fit is short enough that 231 of them fit in the
+night, a per-origin refit is a subclass with `finetune_every_days = 1`; it is not the
+default, because it would no longer pair with `chronos2_ft` on cadence. `timesfm3` can be
+added as a benchmark-only arm (`--model timesfm3`); its weights' licence excludes
+production use, so whatever it scores it is never a serving candidate.
 
 ## Level drivers (PAR-830)
 

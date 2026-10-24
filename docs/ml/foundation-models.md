@@ -1,4 +1,4 @@
-# Foundation models in ml-bench — Chronos-2, TimesFM 3.0 (PAR-828), TiRex-2 and Toto 2.0 (PAR-853)
+# Foundation models in ml-bench — Chronos-2, TimesFM 3.0 (PAR-828), TiRex-2 and Toto 2.0 (PAR-853), Chronos-2 LoRA and TimesFM 2.5 (PAR-1063, PAR-1064)
 
 Two pretrained time-series foundation models, plugged into the PAR-827 benchmark
 (`docs/ml/ml-bench.md`) through the same restricted plug-in interface as every
@@ -611,9 +611,16 @@ days, a ~78-day over-reach of pre-origin covariates.
 - **Chronos-2 — Apache-2.0.** Benchmarking, fine-tuning and production serving are all
   fine. No decision needed, which is a real practical advantage independent of accuracy.
 - **TimesFM 3.0 — weights under the TimesFM Non-Commercial License v1.0** (the code
-  package is Apache-2.0). park.fan is non-commercial, so the offline benchmark here is
-  covered. **Serving these weights in production is an explicit owner decision** and
-  needs the licence text re-read against the actual deployment before it happens.
+  package is Apache-2.0). **Benchmark-only; it can never be served on park.fan.** Re-read
+  on 2026-10-24 (PAR-1064), the licence grants "non-commercial **and non-production**
+  use" and states that use "in direct or indirect interactions with end users or
+  production systems … is not a Non-Commercial Purpose" — so park.fan being
+  non-commercial does not help, and this page's earlier "owner decision" was wrong.
+  Serving it would need a commercial licence from Google. The offline benchmark is
+  covered ("internal benchmarking").
+- **TimesFM 2.5 — Apache-2.0** (model card of `google/timesfm-2.5-200m-pytorch`, revision
+  `1d952420`, `license: apache-2.0`; the timesfm README: "model weights up to version 2.5
+  remain Apache-2.0"). Production serving would be allowed.
 
 
 ---
@@ -760,3 +767,84 @@ away for licence or operational reasons. Toto 2.0 adds nothing here that Chronos
 not do better.
 
 Full tables, both passes: `~/ml-review-2026-10/RESULTS-PAR-853.md`.
+
+
+---
+
+# Chronos-2 LoRA (PAR-1063) and TimesFM 2.5 (PAR-1064)
+
+**Implemented and tested, not measured.** No GPU run has been made; the run commands
+(probe, `--shard 0/5` run, both report passes) are in `docs/ml/ml-bench.md`, "Running
+PAR-1063 / PAR-1064". Every arm is meant to be scored in the same run as `chronos2` and
+`chronos2_ft`, because the harness pairs models inside a run only.
+
+## Variants registered
+
+| name | what it is | origins |
+|---|---|---|
+| `chronos2_lora` | Chronos-2 + a LoRA adapter, refit every 28 days on truth before the fit's origin | daily + intraday slots |
+| `timesfm25` | TimesFM 2.5 zero-shot, compressed context (8192), covariates via XReg | daily + intraday slots, daily level (→ `timesfm25_x_h5`) |
+| `timesfm25_grid` | the same on the regular 15-min grid (8192 steps = 85 days) | daily slots only |
+
+## Chronos-2 LoRA
+
+- **Mechanism:** chronos-forecasting 2.3.2's own `Chronos2Pipeline.fit(finetune_mode="lora")`
+  (peft; the package default: r = 8, alpha = 16, on `self_attention.q/k/v/o` and
+  `output_patch_embedding.output_layer`). A CPU smoke with the real weights trained
+  **1.21 M of 120.7 M** parameters and forecast through the returned `PeftModel`.
+- **Same as `chronos2_ft` in everything but the adaptation:** 400 steps, lr 1e-5 (the
+  package's recommended LoRA rate), context 2048, horizon 384, batch 64, the same inputs,
+  the same cadence. A test asserts the two classes agree on every one of those fields.
+- **Leakage boundary:** the fit runs inside `predict()` at a **daily** origin and trains on
+  the context the model is about to forecast from, which the runner has already cut at
+  that origin; intraday origins and the next 27 days reuse the adapter, so every later
+  forecast uses weights trained on strictly older truth. `test_lora_fit_sees_only_truth_before_its_origin`
+  poisons every truth slot after the origin and asserts the fit's inputs are unchanged,
+  and that it is fitted once per date, never at an intraday origin.
+- **Silent fall-back closed.** Without peft, `fit(finetune_mode="lora")` only *warns* and
+  runs a full fine-tune — which would have been scored as `chronos2_lora`. The backend
+  imports peft first and fails instead (tested).
+- **Why every 28 days and not per origin.** All 231 origins on the 30-park subset cost
+  ≈ 12.7 h of inference for four zero-shot variants. A per-origin refit adds 231 × (one
+  fit) on top; every 28 days adds ~9 fits. 28 days is also `chronos2_ft`'s cadence, so the
+  pair isolates full vs low-rank adaptation instead of confounding it with refit
+  frequency. `--probe` measures one fit; if it turns out short, a per-origin arm is a
+  one-line subclass.
+
+## TimesFM 2.5
+
+- **Weights:** `google/timesfm-2.5-200m-pytorch`, revision `1d952420`
+  (`MLBENCH_TFM25_REVISION`), **Apache-2.0** on the model card. The class
+  `timesfm.TimesFM_2p5_200M_torch` ships in the same `timesfm==3.0.2` wheel the PAR-828
+  image already installs.
+- **Covariates — supported, but not like Chronos-2.** TimesFM 2.5 is univariate and the
+  network takes no covariates; the package adds them through `forecast_with_covariates`
+  (in-context regression, "XReg"). Mode `xreg + timesfm`: a linear fit (OLS through
+  `pinv`, after per-series normalisation) of the target on the covariates over the
+  context, TimesFM forecasts the residual. The adapter calls it once per park, so the
+  regression is shared by the rides of a park. It needs jax + scikit-learn
+  (`timesfm[xreg]`); the image takes CPU jax 0.6.2 (`force_on_cpu=True`; jax 0.7+ needs
+  numpy 2). The covariates are `chronos2`'s, except `day_len_h` on the daily series —
+  there NaN means "beyond the publishing horizon", and XReg cannot mask, so it would read
+  as a 0-hour (closed) day. Other NaN covariates (the window-relative minutes off-window
+  on the grid, which `in_win` flags) enter as 0.
+- **NaN in the target** is cut at the front and interpolated linearly — what the package
+  does to every input anyway, done up front because the regression target may not hold
+  NaN. On the grid that turns every night into a ramp; `timesfm25_grid` exists to measure
+  what that costs, not on the assumption that it is free.
+- **Quantiles:** continuous quantile head 0.1 … 0.9, read at columns 5 (q0.5) and 8 (q0.8);
+  **no q95** (NaN, D8 reports it missing — the same gap that ruled TimesFM 3.0 out of the
+  uncertainty field). The head covers 1024 steps; the longest request is 768 (8 days on the
+  grid) or 366 (daily path), and a longer one raises rather than truncating.
+- **Runtime knobs:** `MLBENCH_TFM25_CONTEXT` (8192), `MLBENCH_TFM25_BATCH` (32);
+  `torch_compile=False`, because inductor needs a C compiler the slim image lacks (the
+  TiRex-2 trap).
+- **CPU smoke with the real weights** (synthetic two-ride task, context 1024): plain and
+  XReg paths both return finite q50/q80 for the rides that ran and NaN for the one that
+  never did; a 366-step daily horizon works.
+
+## TimesFM 3.0 is benchmark-only
+
+See "Licences — what is allowed" above: the weights' licence excludes production and
+end-user use outright, so `timesfm3` can be scored as a reference arm (`--model timesfm3`)
+but is never a serving candidate, whatever it scores.

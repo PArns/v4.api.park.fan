@@ -905,6 +905,17 @@ def parse_park_ids(raw: str) -> list[str]:
     return out
 
 
+def probe_report(models: list[Model], seconds: float) -> dict:
+    """Wall time, peak GPU memory (torch's allocator, if torch was loaded) and each
+    plug-in's own timing counters (``stats``) after a ``--probe`` run."""
+    torch = sys.modules.get("torch")
+    gpu = bool(torch is not None and torch.cuda.is_available())
+    return {"seconds": seconds,
+            "gpu_peak_allocated_gb": round(torch.cuda.max_memory_allocated() / 1e9, 3) if gpu else None,
+            "gpu_peak_reserved_gb": round(torch.cuda.max_memory_reserved() / 1e9, 3) if gpu else None,
+            "models": {type(m).scored_name(): dict(getattr(m, "stats", {})) for m in models}}
+
+
 def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--export", required=True, help="export dir (with parquet/)")
     p.add_argument("--out", default=None, help="results/<run-id> (default: ml-bench/results/<utc stamp>)")
@@ -931,6 +942,10 @@ def add_args(p: argparse.ArgumentParser) -> None:
                    help="additionally pair every model against these models (comma-separated), so "
                         "`report --vs <model>` can compare model against model; the reference the "
                         "report picks is not affected")
+    p.add_argument("--probe", action="store_true",
+                   help="run only the FIRST origin of the selection and record wall time, peak GPU "
+                        "memory and each plug-in's call/fit seconds in run-*.json (sizing before a "
+                        "long run; a probe's scores are not a result)")
     p.add_argument("--reference", action="store_true",
                    help="a run others compare against: refuse to start without git SHA and image id")
 
@@ -975,6 +990,8 @@ def main(args: argparse.Namespace) -> int:
     r = Runner(Path(args.export), out, cfg, models, (i, n), origins, park_ids=park_ids)
     r.resume = args.resume
     r.pair_with = pair_with
+    if getattr(args, "probe", False):
+        r.origins = r.origins[:1]
     # Refuse a weekday-aliased origin set, and record the census either way.
     meta["origin_weekdays"] = check_weekday_aliasing(
         r.origins, n, getattr(args, "allow_weekday_alias", False))
@@ -985,5 +1002,8 @@ def main(args: argparse.Namespace) -> int:
     meta["finished_utc"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     meta["seconds"] = round(time.monotonic() - t0, 1)
     meta["origins"] = [str(c) for c in (r.origins[0], r.origins[-1])] if r.origins else []
+    if getattr(args, "probe", False):
+        meta["probe"] = probe_report(models, meta["seconds"])
+        print(f"[probe] {json.dumps(meta['probe'])}", flush=True)
     (out / f"run-{i}of{n}.json").write_text(json.dumps(meta, indent=2, default=str))
     return 0
