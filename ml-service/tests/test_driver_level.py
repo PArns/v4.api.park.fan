@@ -157,6 +157,22 @@ def test_covariates_come_from_holiday_features_with_sunday_zero():
     assert cov.loc[dt.date(2026, 10, 4), "is_holiday_neighbor_1"] == 1
 
 
+def test_a_second_start_is_refused_while_the_first_run_lives(tmp_path):
+    lock = str(tmp_path / "driver_level.lock")
+    sleeper = [sys.executable, "-c", "import time; time.sleep(30)"]
+    first = DL.start_single_flight(sleeper, lock)
+    try:
+        assert first is not None
+        assert DL.start_single_flight(sleeper, lock) is None
+    finally:
+        first.kill()
+        first.wait()
+    # The lock dies with the child: no stale lock after a kill (an OOM looks the same).
+    again = DL.start_single_flight([sys.executable, "-c", "pass"], lock)
+    assert again is not None
+    assert again.wait() == 0
+
+
 def _generate() -> None:  # pragma: no cover — needs ml-bench + DuckDB
     from types import SimpleNamespace
 

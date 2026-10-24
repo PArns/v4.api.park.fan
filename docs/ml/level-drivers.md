@@ -1316,4 +1316,6 @@ flags past a location's stored school data become unknown once PAR-1049's
 `SchoolCoverage` is in ml-service. Cost: one daily-P90 scan of `queue_data`
 (the query nf-service already runs nightly, over 400 days), one schedule and
 one holiday read, and a fit on at most 300 000 rows with two threads — CPU,
-minutes, no GPU.
+minutes, no GPU. It runs at 01:30 UTC, between `generate-daily` and the 02:00
+`queue_data` readers, and one run at a time (`start_single_flight`, an `flock`
+held by the child) — [forward-archive.md](forward-archive.md) §9.1.

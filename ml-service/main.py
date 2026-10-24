@@ -599,8 +599,13 @@ async def driver_level_run():
     """The nightly driver-level shadow (PAR-1058), in its own process like /train:
     a long fit or an OOM never touches the serving workers. Fire and forget — the
     job replaces `driver_level_forecasts` itself and logs its result."""
+    from driver_level import start_single_flight
+
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "driver_level.py")
-    proc = subprocess.Popen([sys.executable, script], cwd=os.path.dirname(script))
+    lock = os.path.join(os.environ.get("MODEL_DIR", "/app/models"), "driver_level.lock")
+    proc = start_single_flight([sys.executable, script], lock, cwd=os.path.dirname(script))
+    if proc is None:  # a Bull retry, an overdue re-register or a manual call
+        raise HTTPException(status_code=409, detail="Driver-level run already in progress")
     threading.Thread(target=proc.wait, daemon=True).start()  # reap, no zombie
     return {"status": "started", "pid": proc.pid}
 

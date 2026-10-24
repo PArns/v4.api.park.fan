@@ -43,11 +43,20 @@ export class ForecastArchiveProcessor {
   /** Fire and forget: the job runs in its own ml-service process. */
   @Process("driver-level")
   async handleDriverLevel(_job: Job): Promise<void> {
-    await axios.post(
-      `${getMlServiceUrl()}/driver-level/run`,
-      {},
-      { timeout: 30000 },
-    );
+    try {
+      await axios.post(
+        `${getMlServiceUrl()}/driver-level/run`,
+        {},
+        { timeout: 30000 },
+      );
+    } catch (error) {
+      // 409: a run is still live (ml-service holds a single-flight lock).
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        this.logger.warn("🧮 Driver-level shadow already running, not started");
+        return;
+      }
+      throw error;
+    }
     this.logger.log("🧮 Driver-level shadow started in ml-service");
   }
 }

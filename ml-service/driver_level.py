@@ -374,6 +374,26 @@ def build_cov(parks_meta: pd.DataFrame, holidays: pd.DataFrame, start: dt.date, 
     return cov
 
 
+def start_single_flight(cmd: list[str], lock_path: str, cwd: str | None = None):
+    """Start ``cmd`` detached unless a previous start still runs. Returns the Popen,
+    or None when the lock is held. The child inherits the ``flock``ed descriptor and
+    holds it until it exits, so the lock spans every uvicorn worker and frees itself
+    when the run ends or is OOM-killed — no stale pidfile to clear."""
+    import fcntl
+    import os
+    import subprocess
+
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return None
+        return subprocess.Popen(cmd, cwd=cwd, pass_fds=(fd,))
+    finally:
+        os.close(fd)  # the child's copy keeps the lock
+
+
 def run(now: dt.datetime | None = None) -> int:
     """Read, fit, predict and replace ``driver_level_forecasts``. Returns rows written."""
     from zoneinfo import ZoneInfo
