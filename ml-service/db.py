@@ -132,6 +132,24 @@ STALE_FEED_SQL = """(
 # fresh reading outside the window (an event evening) stays.
 FROZEN_OUT_OF_WINDOW_SQL = f"(NOT ({OUT_OF_WINDOW_SQL} AND {STALE_FEED_SQL}))"
 
+# The schedule rows a measured-operation verdict (PAR-1054) may admit a day
+# through. A park-day can carry OPERATING plus EXTRA_HOURS / TICKETED_EVENT /
+# INFO rows, so the `se` join repeats each reading once per row; only the
+# OPERATING copy may pass the day filter, or a reading is counted twice and its
+# copy skips OUT_OF_WINDOW_SQL (which asks the OPERATING window only). On prod
+# every multi-row park-day has exactly one OPERATING row and no CLOSED/UNKNOWN.
+MEASURED_DAY_SCHEDULE_SQL = (
+    """COALESCE(se."scheduleType"::text, 'UNKNOWN') IN ('CLOSED', 'UNKNOWN')"""
+)
+
+# The training read's day filter. Needs `se`, `odh` and `pdo`.
+TRAINING_DAY_FILTER_SQL = f"""(
+                    se."scheduleType" = 'OPERATING'        -- confirmed operating
+                    OR (se."scheduleType" IS NULL AND odh.day IS NOT NULL) -- No schedule in DB + heuristic says open
+                    OR (se."scheduleType" = 'UNKNOWN' AND odh.day IS NOT NULL) -- UNKNOWN schedule + heuristic says open
+                    OR (pdo.measured_operation AND {MEASURED_DAY_SCHEDULE_SQL}) -- measured to have run (PAR-1054)
+                )"""
+
 
 # The training read (fetch_training_data), built once at import.
 TRAINING_DATA_SQL = f"""
@@ -226,12 +244,7 @@ TRAINING_DATA_SQL = f"""
                 AND qd."waitTime" IS NOT NULL
                 AND qd."waitTime" >= 5
                 AND {FROZEN_OUT_OF_WINDOW_SQL}
-                AND (
-                    se."scheduleType" = 'OPERATING'        -- confirmed operating
-                    OR (se."scheduleType" IS NULL AND odh.day IS NOT NULL) -- No schedule in DB + heuristic says open
-                    OR (se."scheduleType" = 'UNKNOWN' AND odh.day IS NOT NULL) -- UNKNOWN schedule + heuristic says open
-                    OR pdo.measured_operation               -- measured to have run (PAR-1054)
-                )
+                AND {TRAINING_DAY_FILTER_SQL}
             GROUP BY
                 qd."attractionId",
                 a.name,

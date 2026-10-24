@@ -19,6 +19,7 @@ from db import (
     convert_df_types,
     fetch_attraction_ids_for_park,
     FROZEN_OUT_OF_WINDOW_SQL,
+    MEASURED_DAY_SCHEDULE_SQL,
 )
 from config import get_settings
 from features import (
@@ -170,11 +171,11 @@ _SERVING_QUEUE_FILTER = f"""
                     se.id IS NULL
                     OR se."scheduleType" IN ('OPERATING', 'UNKNOWN')
                     -- a day measured to have run, as training admits (PAR-1054)
-                    OR EXISTS (
+                    OR ({MEASURED_DAY_SCHEDULE_SQL} AND EXISTS (
                         SELECT 1 FROM park_day_operations pdo
                         WHERE pdo.park_id = se."parkId" AND pdo.day = se.date
                             AND pdo.measured_operation
-                    )
+                    ))
                 )
 """
 
